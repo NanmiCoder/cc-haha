@@ -10,6 +10,19 @@ import {
 import { getAPIProvider } from './providers.js'
 import { resolveAgentModelSpec, usesNonClaudeAgentRouting } from './agentModelRouting.js'
 
+/**
+ * The model an Agent contributes when it runs as the main thread (`--agent`).
+ * A pinned provider's model is reachable only through a subagent's provider
+ * route, so sending it to the session's provider would name a model that
+ * provider does not serve; the session model stays instead.
+ */
+export function getMainThreadAgentModelSetting(
+  agent: { model?: string; provider?: string } | undefined,
+): string | undefined {
+  if (!agent?.model || agent.model === 'inherit' || agent.provider) return undefined
+  return agent.model
+}
+
 export const AGENT_MODEL_OPTIONS = [...MODEL_ALIASES, 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 

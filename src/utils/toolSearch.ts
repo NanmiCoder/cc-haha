@@ -34,6 +34,7 @@ import { getMergedBetas } from './betas.js'
 import { getContextWindowForModel } from './context.js'
 import { logForDebugging } from './debug.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from './envUtils.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 import {
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
@@ -81,7 +82,7 @@ function isAutoToolSearchMode(value: string | undefined): boolean {
  * Get the auto-enable percentage from env var or default.
  */
 function getAutoToolSearchPercentage(): number {
-  const value = process.env.ENABLE_TOOL_SEARCH
+  const value = readProviderEnv('ENABLE_TOOL_SEARCH')
   if (!value) return DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE
 
   if (value === 'auto') return DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE
@@ -178,11 +179,11 @@ export function getToolSearchMode(): ToolSearchMode {
   // explicit escape hatch for proxy gateways that the heuristic in
   // isToolSearchEnabledOptimistic doesn't cover.
   // github.com/anthropics/claude-code/issues/20031
-  if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
+  if (isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))) {
     return 'standard'
   }
 
-  const value = process.env.ENABLE_TOOL_SEARCH
+  const value = readProviderEnv('ENABLE_TOOL_SEARCH')
 
   // Handle auto:N syntax - check edge cases first
   const autoPercent = value ? parseAutoPercentage(value) : null
@@ -193,7 +194,7 @@ export function getToolSearchMode(): ToolSearchMode {
   }
 
   if (isEnvTruthy(value)) return 'tst'
-  if (isEnvDefinedFalsy(process.env.ENABLE_TOOL_SEARCH)) return 'standard'
+  if (isEnvDefinedFalsy(readProviderEnv('ENABLE_TOOL_SEARCH'))) return 'standard'
   return 'tst' // default: always defer MCP and shouldDefer tools
 }
 
@@ -273,7 +274,7 @@ export function isToolSearchEnabledOptimistic(): boolean {
     if (!loggedOptimistic) {
       loggedOptimistic = true
       logForDebugging(
-        `[ToolSearch:optimistic] mode=${mode}, ENABLE_TOOL_SEARCH=${process.env.ENABLE_TOOL_SEARCH}, result=false`,
+        `[ToolSearch:optimistic] mode=${mode}, ENABLE_TOOL_SEARCH=${readProviderEnv('ENABLE_TOOL_SEARCH')}, result=false`,
       )
     }
     return false
@@ -297,7 +298,7 @@ export function isToolSearchEnabledOptimistic(): boolean {
   // setup supports it. The falsy check (rather than === undefined) aligns
   // with getToolSearchMode(), which also treats "" as unset.
   if (
-    !process.env.ENABLE_TOOL_SEARCH &&
+    !readProviderEnv('ENABLE_TOOL_SEARCH') &&
     getAPIProvider() === 'firstParty' &&
     !isFirstPartyAnthropicBaseUrl()
   ) {
@@ -313,7 +314,7 @@ export function isToolSearchEnabledOptimistic(): boolean {
   if (!loggedOptimistic) {
     loggedOptimistic = true
     logForDebugging(
-      `[ToolSearch:optimistic] mode=${mode}, ENABLE_TOOL_SEARCH=${process.env.ENABLE_TOOL_SEARCH}, result=true`,
+      `[ToolSearch:optimistic] mode=${mode}, ENABLE_TOOL_SEARCH=${readProviderEnv('ENABLE_TOOL_SEARCH')}, result=true`,
     )
   }
   return true

@@ -80,6 +80,7 @@ import {
 import { sleep } from './sleep.js'
 import { jsonParse } from './slowOperations.js'
 import { clearToolSchemaCache } from './toolSchemaCache.js'
+import { getRequestProviderRoute } from './model/providerEnvScope.js'
 
 /** Default TTL for API key helper cache in milliseconds (5 minutes) */
 const DEFAULT_API_KEY_HELPER_TTL = 5 * 60 * 1000
@@ -1595,6 +1596,9 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 }
 
 export function isClaudeAISubscriber(): boolean {
+  // An Agent's request routed to a saved API provider never rides the Claude
+  // subscription, so subscriber-only request shapes must not reach it.
+  if (getRequestProviderRoute()) return false
   let anthropicAuthEnabled = false
   try {
     anthropicAuthEnabled = isAnthropicAuthEnabled()

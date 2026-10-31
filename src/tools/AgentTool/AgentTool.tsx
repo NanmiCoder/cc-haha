@@ -445,7 +445,13 @@ export const AgentTool = buildTool({
     }
 
     // Resolve agent params for logging (these are already resolved in runAgent)
-    const resolvedAgentModel = getAgentModel(getAgentModelSetting(selectedAgent, toolUseContext.options.mainLoopModel), toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
+    // A pinned provider owns the model (see runAgent); the system prompt and
+    // metadata must name that model, not the session's.
+    const resolvedAgentModel = selectedAgent.provider ? (await (await import('../../utils/model/agentProviderRoute.js')).resolveAgentProviderRoute({
+      agentType: selectedAgent.agentType,
+      providerId: selectedAgent.provider,
+      model: selectedAgent.model
+    })).model : getAgentModel(getAgentModelSetting(selectedAgent, toolUseContext.options.mainLoopModel), toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
     logEvent('tengu_agent_tool_selected', {
       agent_type: selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       model: resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

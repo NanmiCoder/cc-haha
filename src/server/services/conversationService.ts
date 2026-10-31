@@ -641,7 +641,9 @@ export class ConversationService {
         '--agent-name', options.teamWorker.name,
         '--team-name', options.teamWorker.teamName,
         '--parent-session-id', options.teamWorker.parentSessionId,
-        '--agents', JSON.stringify({ [options.teamWorker.name]: { ...options.teamWorker.agentDefinition, description: 'Approved team member', prompt: options.teamWorker.systemPrompt, model: options?.model, tools: options.teamWorker.tools } }),
+        // The member process already runs on its approved provider; a preset's
+        // pinned provider must not reroute the member's own model again.
+        '--agents', JSON.stringify({ [options.teamWorker.name]: { ...options.teamWorker.agentDefinition, description: 'Approved team member', prompt: options.teamWorker.systemPrompt, model: options?.model, provider: undefined, tools: options.teamWorker.tools } }),
         '--agent', options.teamWorker.name,
         ...(Array.isArray(options.teamWorker.agentDefinition?.disallowedTools) && options.teamWorker.agentDefinition.disallowedTools.length
           ? ['--disallowedTools', options.teamWorker.agentDefinition.disallowedTools.join(',')]

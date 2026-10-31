@@ -13,6 +13,10 @@ export type AgentDefinition = {
   agentType: string
   description?: string
   model?: string
+  /** Saved provider pinned for `model`; absent means the session's provider. */
+  provider?: string
+  /** Name of `provider`; absent when it is no longer a saved API provider. */
+  providerName?: string
   modelDisplay?: string
   effort?: string | number
   tools?: string[]
@@ -33,13 +37,14 @@ export type AgentDefinition = {
    */
   defaults?: { model?: string; effort?: string | number }
   /** Built-in agents only: the override currently in effect, if any. */
-  override?: { model?: string; effort?: string | number; source: AgentSource }
+  override?: { model?: string; provider?: string; effort?: string | number; source: AgentSource }
 }
 
 /** `null` clears that field; an omitted field is left unchanged. */
 export type AgentOverrideInput = {
   cwd?: string
   model?: string | null
+  provider?: string | null
   effort?: string | number | null
 }
 
@@ -53,6 +58,7 @@ export type AgentMutationInput = {
   description: string
   systemPrompt: string
   model?: string | null
+  provider?: string | null
   effort?: string | number | null
   tools?: string[] | null
   color?: string | null

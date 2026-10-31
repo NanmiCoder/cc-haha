@@ -15,6 +15,7 @@ import {
   getConfiguredModelContextWindow,
   getConfiguredOrBuiltInModelContextWindow,
 } from './model/modelContextWindows.js'
+import { readProviderEnvForModel } from './model/providerEnvScope.js'
 
 // Default fallback when the model-specific capability is unknown.
 export const MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
@@ -186,7 +187,7 @@ export function getEffectiveModelContextWindow(
 ): number {
   return applyAutoCompactWindowLimit(
     getContextWindowForModel(model, betas),
-    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+    readProviderEnvForModel(model, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
     isModelWindowKnownForAutoCompact(model),
   )
 }

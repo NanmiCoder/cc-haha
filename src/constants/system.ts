@@ -4,6 +4,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growt
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvDefinedFalsy } from '../utils/envUtils.js'
 import { getAPIProvider } from '../utils/model/providers.js'
+import { readProviderEnv } from '../utils/model/providerEnvScope.js'
 import { getWorkload } from '../utils/workloadContext.js'
 import { formatClaudeCodeBillingHeader } from './claudeCodeCompatibility.js'
 
@@ -50,7 +51,7 @@ export function getCLISyspromptPrefix(options?: {
  * Enabled by default, can be disabled via env var or GrowthBook killswitch.
  */
 function isAttributionHeaderEnabled(): boolean {
-  if (isEnvDefinedFalsy(process.env.CLAUDE_CODE_ATTRIBUTION_HEADER)) {
+  if (isEnvDefinedFalsy(readProviderEnv('CLAUDE_CODE_ATTRIBUTION_HEADER'))) {
     return false
   }
   return getFeatureValue_CACHED_MAY_BE_STALE('tengu_attribution_header', true)

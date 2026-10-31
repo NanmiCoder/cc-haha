@@ -1,4 +1,5 @@
 import { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
+import { resolvePresetProviderRuntime } from '../../utils/swarm/teamPlanPresetRuntime.js'
 import { getAgentModelSetting } from '../AgentTool/builtInAgentOverrides.js'
 export { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
 /**
@@ -1149,10 +1150,14 @@ export async function spawnTeammate(
     if (agentSnapshot.configurationError) throw new Error(agentSnapshot.configurationError)
     const leaderRuntime = existingPlan?.leaderRuntime ?? getTeamLeaderRuntime(context.getAppState().mainLoopModel ?? '')
     await ensureTeamDraft(teamName, getSessionId(), leaderRuntime, { workDir: getCwd(), agentCatalog })
-    const modelId = resolveTeammateModel(config.model, leaderRuntime.modelId, agentSnapshot.model, true)
-    const runtime = { ...leaderRuntime, modelId }
-    if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
-    else if (modelId !== leaderRuntime.modelId) delete runtime.effortLevel
+    const presetRuntime = resolvePresetProviderRuntime(agentSnapshot)
+    const modelId = presetRuntime?.modelId ?? resolveTeammateModel(config.model, leaderRuntime.modelId, agentSnapshot.model, true)
+    const runtime = presetRuntime ?? { ...leaderRuntime, modelId }
+    // A preset's own provider already carries the user's effort choice.
+    if (!presetRuntime) {
+      if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
+      else if (modelId !== leaderRuntime.modelId) delete runtime.effortLevel
+    }
     const draft = await stageMember(teamName, {
       id: config.name,
       name: config.name,

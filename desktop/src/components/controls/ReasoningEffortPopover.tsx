@@ -7,13 +7,15 @@ import type { ReasoningEffortLevel } from '../../types/settings'
 import { COMPOSER_MENU_SECTION, COMPOSER_POPOVER } from '@/components/chat/composerMenuStyles'
 import { Switch } from '@/components/ui/Switch'
 
-type Props = {
+type Props<T extends string> = {
   open: boolean
   anchorRef: React.RefObject<HTMLElement>
-  options: ReasoningEffortLevel[]
-  value: ReasoningEffortLevel
-  labels: Record<ReasoningEffortLevel, string>
-  onChange: (value: ReasoningEffortLevel) => void
+  /** Effort levels, optionally led by a non-level stop such as "inherit". */
+  options: T[]
+  /** `null` when nothing is chosen yet: no stop is highlighted. */
+  value: T | null
+  labels: Record<T, string>
+  onChange: (value: T) => void
   fastMode?: boolean
   onFastModeChange?: (enabled: boolean) => void
   onClose: () => void
@@ -30,7 +32,7 @@ const POPOVER_WIDTH = 320
 const VIEWPORT_MARGIN = 16
 const POPOVER_GAP = 8
 
-export function ReasoningEffortPopover({
+export function ReasoningEffortPopover<T extends string = ReasoningEffortLevel>({
   open,
   anchorRef,
   options,
@@ -41,7 +43,7 @@ export function ReasoningEffortPopover({
   onFastModeChange,
   onClose,
   ariaLabel,
-}: Props) {
+}: Props<T>) {
   const t = useTranslation()
   // The default used to be a hardcoded Chinese literal, so a caller that left
   // `ariaLabel` off announced the slider in Chinese under every locale.
@@ -50,7 +52,7 @@ export function ReasoningEffortPopover({
   const sliderRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
   const [position, setPosition] = useState<PopoverPosition | null>(null)
-  const selectedIndex = Math.max(0, options.indexOf(value))
+  const selectedIndex = value === null ? -1 : options.indexOf(value)
   const maxIndex = Math.max(0, options.length - 1)
 
   useLayoutEffect(() => {
@@ -85,16 +87,18 @@ export function ReasoningEffortPopover({
     }
   }, [anchorRef, open])
 
-  // Escape is deliberately left to the slider's own key handler below, which
-  // also returns focus to the anchor; letting the hook handle it too would fire
-  // `onClose` twice for one key press.
+  // Escape is taken during capture so it closes only this layer, never the
+  // dialog the popover can open inside, and focus returns to the anchor.
   useDismissable({
     open,
     refs: [popoverRef],
     triggerRef: anchorRef,
-    onDismiss: onClose,
+    onDismiss: (reason) => {
+      onClose()
+      if (reason === 'escape') anchorRef.current?.focus()
+    },
     capture: false,
-    closeOnEscape: false,
+    stopEscapePropagation: true,
   })
 
   if (!open || !position || options.length === 0) return null
@@ -136,8 +140,8 @@ export function ReasoningEffortPopover({
         aria-label={label}
         aria-valuemin={0}
         aria-valuemax={maxIndex}
-        aria-valuenow={selectedIndex}
-        aria-valuetext={labels[value]}
+        aria-valuenow={selectedIndex >= 0 ? selectedIndex : undefined}
+        aria-valuetext={value === null ? undefined : labels[value]}
         className="mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
         onClick={(event) => selectFromClientX(event.clientX)}
@@ -159,12 +163,6 @@ export function ReasoningEffortPopover({
           draggingRef.current = false
         }}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onClose()
-            anchorRef.current?.focus()
-            return
-          }
           if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
             event.preventDefault()
             moveBy(-1)

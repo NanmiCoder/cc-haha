@@ -1,5 +1,6 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
 import { isEnvTruthy } from '../envUtils.js'
+import { readProviderEnv } from './providerEnvScope.js'
 
 export type APIProvider =
   | 'firstParty'
@@ -30,7 +31,7 @@ export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS
  * (or api-staging.anthropic.com for ant users).
  */
 export function isFirstPartyAnthropicBaseUrl(): boolean {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL')
   if (!baseUrl) {
     return true
   }

@@ -26,6 +26,7 @@ export type OverriddenField<T> = {
 
 export type ResolvedBuiltInAgentOverride = {
   model?: OverriddenField<string>
+  provider?: OverriddenField<string>
   effort?: OverriddenField<EffortValue>
 }
 
@@ -67,13 +68,22 @@ export function resolveBuiltInAgentOverrides(): Map<
         typeof entry.model === 'string' && entry.model.trim().length > 0
           ? entry.model.trim()
           : undefined
+      const provider =
+        typeof entry.provider === 'string' && entry.provider.trim().length > 0
+          ? entry.provider.trim()
+          : undefined
       const effort = parseEffortValue(entry.effort)
       if (model === undefined && effort === undefined) continue
 
       const current = resolved.get(agentType) ?? {}
       // Later sources win, but only for the fields they actually specify — a
-      // project-level model must not erase a user-level effort.
-      if (model !== undefined) current.model = { value: model, source }
+      // project-level model must not erase a user-level effort. A provider only
+      // means something for the model saved beside it, so the two move together.
+      if (model !== undefined) {
+        current.model = { value: model, source }
+        if (provider !== undefined) current.provider = { value: provider, source }
+        else delete current.provider
+      }
       if (effort !== undefined) current.effort = { value: effort, source }
       resolved.set(agentType, current)
     }
@@ -128,6 +138,7 @@ export function applyBuiltInAgentOverrides(
     return {
       ...agent,
       ...(override.model ? { model: override.model.value } : {}),
+      ...(override.provider ? { provider: override.provider.value } : {}),
       ...(override.effort ? { effort: override.effort.value } : {}),
     }
   })

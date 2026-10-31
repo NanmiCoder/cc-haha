@@ -1,3 +1,5 @@
+import { readProviderEnv } from '../../utils/model/providerEnvScope.js'
+
 export const GROK_DEFAULT_MAIN_MODEL = 'grok-4.7'
 export const GROK_DEFAULT_SONNET_MODEL = GROK_DEFAULT_MAIN_MODEL
 export const GROK_DEFAULT_HAIKU_MODEL = GROK_DEFAULT_MAIN_MODEL
@@ -74,7 +76,7 @@ export function setGrokRuntimeModelCatalog(
 export function getGrokRuntimeModelCatalog(): readonly GrokModelCatalogEntry[] {
   if (
     runtimeCatalog === GROK_MODEL_CATALOG &&
-    process.env.CC_HAHA_GROK_OAUTH_PROVIDER === '1'
+    readProviderEnv('CC_HAHA_GROK_OAUTH_PROVIDER') === '1'
   ) {
     return parseRuntimeModelCatalog(process.env[GROK_MODEL_CATALOG_ENV_KEY]) ?? runtimeCatalog
   }

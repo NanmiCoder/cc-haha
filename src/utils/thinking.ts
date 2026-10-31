@@ -5,6 +5,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growt
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './model/providers.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 import { getSettingsWithErrors } from './settings/settings.js'
 import { isEnvTruthy } from './envUtils.js'
 
@@ -169,7 +170,7 @@ export function resolveModelThinkingEnabled(
 }
 
 function isMiniMaxAnthropicEndpoint(): boolean {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL?.toLowerCase() ?? ''
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL')?.toLowerCase() ?? ''
   return baseUrl.includes('minimax') || baseUrl.includes('minimaxi')
 }
 
@@ -246,5 +247,5 @@ export function shouldEnableThinkingByDefault(): boolean {
 }
 
 export function shouldSendExplicitDisabledThinking(): boolean {
-  return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
+  return isEnvTruthy(readProviderEnv('CC_HAHA_SEND_DISABLED_THINKING'))
 }

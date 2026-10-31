@@ -531,4 +531,121 @@ describe('getAnthropicClient', () => {
       else process.env.CLAUDE_CODE_SIMPLE = originalSimple
     }
   })
+  test('sends an Agent model to its routed provider while the session keeps its own endpoint', async () => {
+    const { getAnthropicClient } = await import('./client.js')
+    const { withAgentProviderRoute } = await import('../../utils/model/providerEnvScope.js')
+    const keys = [
+      'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS',
+      'CC_HAHA_LOCAL_ACCESS_TOKEN', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST', 'CLAUDE_CODE_SIMPLE',
+    ] as const
+    const previous = keys.map(key => process.env[key])
+    Object.assign(process.env, {
+      ANTHROPIC_API_KEY: 'fake-session-key',
+      ANTHROPIC_BASE_URL: 'https://session.example/anthropic',
+      ANTHROPIC_CUSTOM_HEADERS: 'X-Session-Only: session',
+      CC_HAHA_LOCAL_ACCESS_TOKEN: 'desktop-local-secret',
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+      CLAUDE_CODE_SIMPLE: '1',
+    })
+    process.env.ANTHROPIC_AUTH_TOKEN = 'fake-session-token'
+    const requests: Array<{ url: string; headers: Headers }> = []
+    const fetchOverride = async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: input instanceof Request ? input.url : String(input), headers: new Headers(init?.headers) })
+      return Response.json({
+        id: 'msg-route', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      })
+    }
+    const send = async (model: string) => {
+      const client = await getAnthropicClient({ maxRetries: 0, model, fetchOverride })
+      await client.messages.create({ model, max_tokens: 8, messages: [{ role: 'user', content: 'hi' }] })
+    }
+    const routes = [
+      {
+        providerId: 'deepseek-direct', providerName: 'DeepSeek', model: 'deepseek-v4-pro',
+        env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.example/anthropic', ANTHROPIC_API_KEY: '', ANTHROPIC_AUTH_TOKEN: 'fake-deepseek-token' },
+      },
+      {
+        providerId: 'chat-gateway', providerName: 'Gateway', model: 'gpt-gateway',
+        env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:41234/proxy/providers/chat-gateway', ANTHROPIC_API_KEY: 'proxy-managed' },
+      },
+      {
+        providerId: 'key-provider', providerName: 'Key Provider', model: 'key-model',
+        env: { ANTHROPIC_BASE_URL: 'https://keys.example/anthropic', ANTHROPIC_API_KEY: 'fake-route-key' },
+      },
+    ]
+
+    try {
+      for (const route of routes) {
+        for await (const _ of withAgentProviderRoute(route, (async function* () {
+          await send(route.model)
+          await send('session-haiku')
+          yield undefined
+        })())) { /* drain */ }
+      }
+      await send('deepseek-v4-pro')
+
+      const [deepSeek, deepSeekSide, proxied, proxiedSide, keyed, keyedSide, session] = requests
+      expect(deepSeek!.url).toBe('https://api.deepseek.example/anthropic/v1/messages')
+      expect(deepSeek!.headers.get('authorization')).toBe('Bearer fake-deepseek-token')
+      expect(deepSeek!.headers.has('x-api-key')).toBe(false)
+      expect(proxied!.url).toBe('http://127.0.0.1:41234/proxy/providers/chat-gateway/v1/messages')
+      expect(proxied!.headers.get('x-api-key')).toBe('proxy-managed')
+      expect(proxied!.headers.get('authorization')).toBe('Bearer desktop-local-secret')
+      expect(keyed!.url).toBe('https://keys.example/anthropic/v1/messages')
+      expect(keyed!.headers.get('x-api-key')).toBe('fake-route-key')
+      expect(keyed!.headers.has('authorization')).toBe(false)
+      for (const routed of [deepSeek, proxied, keyed]) {
+        expect(routed!.headers.has('x-session-only')).toBe(false)
+      }
+      for (const side of [deepSeekSide, proxiedSide, keyedSide, session]) {
+        expect(side!.url).toBe('https://session.example/anthropic/v1/messages')
+        expect(side!.headers.get('x-api-key')).toBe('fake-session-key')
+        expect(side!.headers.get('authorization')).toBe('Bearer fake-session-token')
+        expect(side!.headers.get('x-session-only')).toBe('session')
+      }
+    } finally {
+      keys.forEach((key, index) => {
+        const value = previous[index]
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      })
+    }
+  })
+
+  test('sends a routed Agent through its provider\'s own network proxy', async () => {
+    const { getAnthropicClient } = await import('./client.js')
+    const { withAgentProviderRoute } = await import('../../utils/model/providerEnvScope.js')
+    const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'CLAUDE_CODE_SIMPLE'] as const
+    const previous = keys.map(key => process.env[key])
+    for (const key of keys) delete process.env[key]
+    Object.assign(process.env, { HTTPS_PROXY: 'http://session-proxy.example:1', CLAUDE_CODE_SIMPLE: '1' })
+    const base = {
+      providerId: 'deepseek-direct', providerName: 'DeepSeek', model: 'deepseek-v4-pro',
+      env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.example/anthropic', ANTHROPIC_API_KEY: 'fake-route-key' },
+    }
+    const proxyFor = async (route: typeof base & { proxyUrl?: string | null }) => {
+      let proxy: unknown
+      for await (const _ of withAgentProviderRoute(route, (async function* () {
+        const client = await getAnthropicClient({ maxRetries: 0, model: route.model })
+        proxy = (client as unknown as { _options: { fetchOptions?: { proxy?: string } } })._options.fetchOptions?.proxy
+        yield undefined
+      })())) { /* drain */ }
+      return proxy
+    }
+
+    try {
+      expect(await proxyFor({ ...base, proxyUrl: 'http://agent-proxy.example:8080' })).toBe('http://agent-proxy.example:8080')
+      expect(await proxyFor({ ...base, proxyUrl: null })).toBeUndefined()
+      // Without its own setting the route keeps the session's process proxy.
+      expect(await proxyFor(base)).toBe('http://session-proxy.example:1')
+    } finally {
+      keys.forEach((key, index) => {
+        const value = previous[index]
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      })
+    }
+  })
 })
