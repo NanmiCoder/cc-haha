@@ -44,7 +44,8 @@ import { getFsImplementation } from '../../utils/fsOperations.js'
 import {
   compressImageBufferWithTokenLimit,
   createImageMetadataText,
-  detectImageFormatFromBuffer,
+  describeNonImageBytes,
+  detectImageFormatFromBufferOrNull,
   downsampleImageBufferToVisionTokenBudget,
   type ImageDimensions,
   ImageResizeError,
@@ -1118,6 +1119,31 @@ async function callInner(
 }
 
 /**
+ * A file with an image extension whose bytes carry no known image signature is
+ * accepted only if the image processor can still decode it (a BMP named .png,
+ * say). Everything else is refused with a readable preview instead of being
+ * sent to the model as image data.
+ */
+async function assertDecodableImage(
+  imageBuffer: Buffer,
+  filePath: string,
+): Promise<void> {
+  try {
+    const sharp = await getImageProcessor()
+    const metadata = await sharp(imageBuffer).metadata()
+    if (metadata.format && metadata.width && metadata.height) return
+  } catch {
+    // Undecodable bytes are reported below.
+  }
+  throw new ImageResizeError(
+    `${filePath} is not a valid image: the data has no PNG, JPEG, GIF or WebP signature and could not be decoded ` +
+      `(it starts with ${JSON.stringify(describeNonImageBytes(imageBuffer))}). ` +
+      'It may be an HTML or redirect page saved under an image name, or a truncated download. ' +
+      'Read it as text or download it again instead of sending it as an image.',
+  )
+}
+
+/**
  * Reads an image file and applies token-based compression if needed.
  * Reads the file ONCE, then applies standard resize. If the result exceeds
  * the token limit, applies aggressive compression from the same buffer.
@@ -1142,7 +1168,15 @@ export async function readImageWithTokenBudget(
     throw new Error(`Image file is empty: ${filePath}`)
   }
 
-  const detectedMediaType = detectImageFormatFromBuffer(imageBuffer)
+  // Validate by signature, then by decoding, before anything reaches the API
+  // as an image block. An HTML error page saved under an image name used to be
+  // sent as image/png, fail every later request with the same decode error,
+  // and surface as "this model does not support images".
+  const signatureMediaType = detectImageFormatFromBufferOrNull(imageBuffer)
+  if (signatureMediaType === null) {
+    await assertDecodableImage(imageBuffer, filePath)
+  }
+  const detectedMediaType = signatureMediaType ?? 'image/png'
   const detectedFormat = detectedMediaType.split('/')[1] || 'png'
 
   // Try standard resize

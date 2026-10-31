@@ -4043,6 +4043,7 @@ export const kr: Record<TranslationKey, string> = {
   'businessError.pdf_invalid': 'PDF 파일이 유효하지 않습니다. 텍스트로 변환하거나 다른 파일을 보내세요.',
   'businessError.image_too_large': '이미지가 선택한 모델에 비해 너무 큽니다. 크기를 조정하거나 더 작은 이미지를 보내세요.',
   'businessError.image_unsupported': '이 모델은 이미지를 지원하지 않습니다. 텍스트로 계속하거나, 비전 지원 모델로 전환하여 이미지를 다시 보내세요.',
+  'businessError.image_invalid': '대화에 포함된 이미지를 디코딩할 수 없습니다(파일 손상, 불완전한 다운로드 또는 이미지 파일이 아님). 이후 요청에서는 제외됩니다. 파일을 확인한 뒤 유효한 이미지를 다시 보내세요.',
   'businessError.request_too_large': '요청이 공급자 또는 중계 서버가 허용하는 크기를 초과했습니다. 다음 메시지에서 이전 이미지와 문서가 자동으로 제거됩니다. 그래도 실패하면 대화를 압축하거나 새 세션을 시작하세요.',
   'businessError.prompt_too_long': '프롬프트가 선택한 모델에 비해 너무 깁니다. 대화를 압축하거나 컨텍스트를 줄여 다시 시도하세요.',
   'businessError.autocompact_thrashing': '자동 압축을 중단했습니다: 3번 연속으로 압축 후에도 컨텍스트 대부분이 사용 중이었고 3턴 안에 다시 가득 찼습니다. 고정 컨텍스트(도구, MCP 서버, 스킬, CLAUDE.md)가 현재 컨텍스트 창에 비해 너무 큽니다. 사용하지 않는 MCP 서버나 스킬을 끄거나, CLAUDE.md를 줄이거나, 컨텍스트 창이 더 큰 모델로 바꾸거나, 새 대화를 시작하세요.',

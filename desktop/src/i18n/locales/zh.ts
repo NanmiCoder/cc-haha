@@ -4038,6 +4038,7 @@ export const zh: Record<TranslationKey, string> = {
   'businessError.pdf_invalid': '这个 PDF 文件无效。请先转成文本，或换一个文件发送。',
   'businessError.image_too_large': '这张图片超出了当前模型可处理的大小。请压缩图片，或换一张更小的图片。',
   'businessError.image_unsupported': '当前模型不支持图片。请继续使用文字，或切换到支持视觉的模型后重新发送图片。',
+  'businessError.image_invalid': '会话中有一张图片无法解码（文件损坏、下载不完整，或根本不是图片文件）。它已从后续请求中移除；请检查文件后重新发送有效的图片。',
   'businessError.request_too_large': '这次请求超出了服务商或中转站允许的大小。下一条消息会自动移除较早的图片和文档；如果仍然失败，请压缩会话或新开会话。',
   'businessError.prompt_too_long': '当前上下文超出了模型限制。请先压缩会话，或减少上下文后重试。',
   'businessError.autocompact_thrashing': '自动压缩已停止：连续 3 次压缩后上下文仍大部分被占用，不到 3 轮又满了。固定上下文（工具、MCP 服务、技能、CLAUDE.md）对当前上下文窗口来说过大。请关闭不用的 MCP 服务或技能、精简 CLAUDE.md、换用上下文窗口更大的模型，或新开对话。',

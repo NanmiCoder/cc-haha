@@ -47,6 +47,7 @@ import {
   getFeatureValue_CACHED_MAY_BE_STALE,
 } from '../services/analytics/growthbook.js'
 import {
+  getImageInvalidErrorMessage,
   getImageTooLargeErrorMessage,
   getImageUnsupportedErrorMessage,
   getPdfInvalidErrorMessage,
@@ -2119,6 +2120,7 @@ export function normalizeMessagesForAPI(
     [getPdfInvalidErrorMessage()]: new Set(['document']),
     [getImageTooLargeErrorMessage()]: new Set(['image']),
     [getImageUnsupportedErrorMessage()]: new Set(['image']),
+    [getImageInvalidErrorMessage()]: new Set(['image']),
   }
 
   // Walk the reordered messages to build a targeted strip map:

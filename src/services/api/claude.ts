@@ -74,7 +74,10 @@ import { resolveAppliedEffort } from "../../utils/effort.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { errorMessage } from "../../utils/errors.js";
 import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
-import { normalizeImagesForAPI } from '../../utils/imageValidation.js'
+import {
+  normalizeImagesForAPI,
+  replaceInvalidImagesForAPI,
+} from '../../utils/imageValidation.js'
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createSystemStreamingFallbackMessage,
@@ -1488,6 +1491,9 @@ async function* queryModel(
     API_MAX_MEDIA_PER_REQUEST,
   );
 
+  // Bytes that are not an image become a text note first: the dimension pass
+  // below cannot measure them, and history resends them every turn.
+  messagesForAPI = replaceInvalidImagesForAPI(messagesForAPI)
   const provider = getAPIProvider()
   messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
     countDocuments: provider === 'bedrock' || provider === 'vertex',

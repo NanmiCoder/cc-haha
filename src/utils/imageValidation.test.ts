@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import sharp from 'sharp'
-import { normalizeImagesForAPI } from './imageValidation.js'
+import {
+  INVALID_IMAGE_PLACEHOLDER,
+  normalizeImagesForAPI,
+  replaceInvalidImagesForAPI,
+} from './imageValidation.js'
 import * as imageResizer from './imageResizer.js'
 import * as imageProcessor from '../tools/FileReadTool/imageProcessor.js'
 
@@ -127,4 +131,43 @@ test('ambiguous old grids keep their prior mapping instead of guessing an image 
   } finally {
     resize.mockRestore()
   }
+})
+
+// An HTML error page saved as .png: the bytes carry no image signature.
+const notAnImage = { type: 'image', source: { type: 'base64', media_type: 'image/png',
+  data: Buffer.from('<html><body>302 Found: redirecting to /login</body></html>').toString('base64') } }
+
+test('bytes that are not an image become a text note so the request can still be normalized', async () => {
+  const image = await largeImage()
+  const messages = [
+    { message: { content: [{ ...notAnImage, cache_control: { type: 'ephemeral' } }, image] } },
+    { message: { content: [{ type: 'tool_result', tool_use_id: 'read', content: [
+      { type: 'text', text: 'Read diagram.png' }, notAnImage,
+    ] }] } },
+  ]
+  const before = JSON.stringify(messages)
+  // The dimension pass cannot measure such bytes; left in history they fail every request.
+  await expect(normalizeImagesForAPI(messages)).rejects.toThrow(imageResizer.ImageResizeError)
+
+  const replaced = replaceInvalidImagesForAPI(messages)
+  const first = replaced[0]!.message.content as unknown[]
+  expect(first[0]).toEqual({ type: 'text', text: INVALID_IMAGE_PLACEHOLDER, cache_control: { type: 'ephemeral' } })
+  expect(first[1]).toBe(image)
+  const tool = (replaced[1]!.message.content as Array<{ content: unknown[] }>)[0]!
+  expect(tool.content).toEqual([
+    { type: 'text', text: 'Read diagram.png' },
+    { type: 'text', text: INVALID_IMAGE_PLACEHOLDER },
+  ])
+  const output = await normalizeImagesForAPI(replaced)
+  expect(output[0]!.message.content).toEqual(first)
+  expect(JSON.stringify(messages)).toBe(before)
+})
+
+test('requests whose images all carry a signature pass through by identity', async () => {
+  const image = await largeImage()
+  const messages = [
+    { message: { content: [{ type: 'text', text: 'hello' }, image] } },
+    { message: { content: [{ type: 'tool_result', tool_use_id: 'read', content: [image] }] } },
+  ]
+  expect(replaceInvalidImagesForAPI(messages)).toBe(messages)
 })

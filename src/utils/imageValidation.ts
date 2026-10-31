@@ -7,7 +7,12 @@ import {
 import { logEvent } from '../services/analytics/index.js'
 import { getImageProcessor } from '../tools/FileReadTool/imageProcessor.js'
 import { formatFileSize } from './format.js'
-import { ImageResizeError, maybeResizeAndDownsampleImageBuffer, type ImageDimensions } from './imageResizer.js'
+import {
+  detectImageFormatFromBufferOrNull,
+  ImageResizeError,
+  maybeResizeAndDownsampleImageBuffer,
+  type ImageDimensions,
+} from './imageResizer.js'
 
 /**
  * Information about an oversized image.
@@ -121,6 +126,55 @@ function nestedContent(block: Record<string, unknown>): unknown {
   if (block.type === 'tool_result' || block.type === 'mcp_tool_result') return block.content
   const source = asRecord(block.source)
   if (block.type === 'document' && source?.type === 'content') return source.content
+}
+
+export const INVALID_IMAGE_PLACEHOLDER =
+  '[image omitted: the data is not a valid image (corrupted, truncated, or not an image file)]'
+
+/**
+ * Replace base64 image blocks whose bytes start with no image signature (an
+ * HTML error page saved as .png, a truncated download) with a text note. Run
+ * it before normalizeImagesForAPI: that pass cannot measure such bytes and
+ * throws, and because history is resent every turn the session would fail on
+ * every later request. Original message objects are never edited.
+ */
+export function replaceInvalidImagesForAPI<T extends { message: { content: unknown } }>(
+  messages: T[],
+): T[] {
+  function replace(content: unknown): unknown {
+    if (!Array.isArray(content)) return content
+    let changed = false
+    const result = content.map(value => {
+      const block = asRecord(value)
+      if (!block) return value
+      if (isBase64ImageBlock(block)) {
+        // 32 base64 characters decode to 24 bytes, enough for every signature.
+        const head = Buffer.from(block.source.data.slice(0, 32), 'base64')
+        if (detectImageFormatFromBufferOrNull(head) !== null) return value
+        changed = true
+        // Keep the cache breakpoint where the image had it.
+        return block.cache_control === undefined
+          ? { type: 'text', text: INVALID_IMAGE_PLACEHOLDER }
+          : { type: 'text', text: INVALID_IMAGE_PLACEHOLDER, cache_control: block.cache_control }
+      }
+      const nested = nestedContent(block)
+      const next = replace(nested)
+      if (next === nested) return value
+      changed = true
+      return block.type === 'document'
+        ? { ...block, source: { ...asRecord(block.source), content: next } }
+        : { ...block, content: next }
+    })
+    return changed ? result : content
+  }
+  let changed = false
+  const result = messages.map(message => {
+    const content = replace(message.message.content)
+    if (content === message.message.content) return message
+    changed = true
+    return { ...message, message: { ...message.message, content } }
+  })
+  return changed ? result : messages
 }
 
 /**

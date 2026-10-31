@@ -4040,6 +4040,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'businessError.pdf_invalid': 'The PDF file is not valid. Convert it to text or send a different file.',
   'businessError.image_too_large': 'The image is too large for the selected model. Resize it or send a smaller image.',
   'businessError.image_unsupported': 'This model does not support images. Continue with text, or switch to a vision-capable model and send the image again.',
+  'businessError.image_invalid': 'An image in the conversation could not be decoded (corrupted, truncated, or not an image file). It is left out of later turns; check the file and send a valid image.',
   'businessError.request_too_large': 'The request is too large for your provider or relay. Earlier images and documents are removed automatically on your next message; if it still fails, compact the conversation or start a new session.',
   'businessError.prompt_too_long': 'The prompt is too long for the selected model. Compact the conversation or retry with less context.',
   'businessError.autocompact_thrashing': 'Auto-compact stopped: after 3 compactions in a row, most of the context was still in use and it filled up again within 3 turns. The fixed context (tools, MCP servers, skills, CLAUDE.md) is too big for this context window. Turn off unused MCP servers or skills, shorten CLAUDE.md, switch to a model with a larger context window, or start a new conversation.',
