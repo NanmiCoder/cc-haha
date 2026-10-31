@@ -66,7 +66,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
   </tr>
   <tr>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/models-zh.webp" width="100%" alt="多模型：Claude、ChatGPT、Grok 账号登录，DeepSeek、Kimi、GLM 等预设，本地 Ollama、LM Studio">
+      <img src="docs/images/readme/models-zh.webp" width="100%" alt="多模型：输入框里的模型菜单，DeepSeek、Kimi、智谱 GLM 等按服务商分组；也支持 Claude、ChatGPT、Grok 账号登录和本地模型">
       <br><sub><a href="docs/start/models.md">多模型</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
