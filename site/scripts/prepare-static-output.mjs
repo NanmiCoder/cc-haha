@@ -239,9 +239,9 @@ async function main() {
 
   await createRouteEntry('/en', shell, {
     alternate: '/',
-    description: 'Write code, work across apps, and review every change. Give cc-haha a goal and put your ideas in motion.',
+    description: 'Parallel sessions, Agent Teams, Computer Use, and any model you like. Pair your phone to approve and start tasks away from your desk.',
     path: '/en',
-    title: 'cc-haha — Less busywork. More room for life.'
+    title: 'cc-haha — Claude Code on your desktop and in your pocket'
   })
 
   for (const legacy of legacyRoutes) {

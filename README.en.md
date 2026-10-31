@@ -66,7 +66,7 @@ cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: mu
   </tr>
   <tr>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/models-en.webp" width="100%" alt="Models: sign in to Claude, ChatGPT, or Grok, use presets for DeepSeek, Kimi, GLM and more, or run Ollama and LM Studio locally">
+      <img src="docs/images/readme/models-en.webp" width="100%" alt="Models: the composer's model menu groups DeepSeek, Kimi, Zhipu GLM and other providers; Claude, ChatGPT, and Grok sign-in and local models work too (Chinese interface)">
       <br><sub><a href="docs/en/start/models.md">Models</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
