@@ -27,6 +27,26 @@ export function splitStartupError(error: string) {
   }
 }
 
+/**
+ * A Windows child process that dies on an NTSTATUS failure reports it as a
+ * large unsigned exit code: 3221225477 is 0xC0000005 (access violation),
+ * 3221225725 is 0xC00000FD (stack overflow). A sidecar exiting that way before
+ * it logged anything was not misconfigured, its binary is damaged, typically
+ * because an interrupted update replaced it while it was running. Returns the
+ * code as "decimal (0xHEX)" for the hint, or null for ordinary exit codes.
+ */
+export function matchRuntimeCrashExitCode(text: string): string | null {
+  for (const match of text.matchAll(/code=(-?\d+)\b/g)) {
+    const signed = Number(match[1])
+    if (!Number.isSafeInteger(signed)) continue
+    const code = signed < 0 ? signed >>> 0 : signed
+    if (code >= 0xc0000000 && code <= 0xc0ffffff) {
+      return `${code} (0x${code.toString(16).toUpperCase()})`
+    }
+  }
+  return null
+}
+
 type StartupErrorViewProps = {
   error: string
 }
@@ -34,6 +54,7 @@ type StartupErrorViewProps = {
 export function StartupErrorView({ error }: StartupErrorViewProps) {
   const t = useTranslation()
   const { message, logs, diagnostics } = useMemo(() => splitStartupError(error), [error])
+  const crashExitCode = useMemo(() => matchRuntimeCrashExitCode(error), [error])
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -72,6 +93,15 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
               {message}
             </pre>
           </Card>
+
+          {crashExitCode ? (
+            <p
+              data-testid="startup-crash-hint"
+              className="text-[13px] leading-6 text-[var(--color-text-secondary)]"
+            >
+              {t('app.startupCrashHint', { code: crashExitCode })}
+            </p>
+          ) : null}
 
           {logs ? (
             <Card radius="md" surface="none" padding="sm" className="bg-[var(--color-code-bg)]">

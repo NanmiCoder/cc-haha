@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { splitStartupError, StartupErrorView } from './StartupErrorView'
+import { matchRuntimeCrashExitCode, splitStartupError, StartupErrorView } from './StartupErrorView'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 beforeEach(() => {
@@ -23,7 +23,40 @@ describe('splitStartupError', () => {
   })
 })
 
+describe('matchRuntimeCrashExitCode', () => {
+  it('recognizes Windows NTSTATUS crash codes in either sign and ignores ordinary exits', () => {
+    expect(matchRuntimeCrashExitCode(
+      "Error invoking remote method 'desktop:runtime:get-server-url': Error: server sidecar exited after spawn (code=3221225477, signal=null)",
+    )).toBe('3221225477 (0xC0000005)')
+    expect(matchRuntimeCrashExitCode('[exit] sidecar exited (code=-1073741571, signal=null)')).toBe('3221225725 (0xC00000FD)')
+    expect(matchRuntimeCrashExitCode('[exit] sidecar exited (code=1, signal=null)')).toBeNull()
+    expect(matchRuntimeCrashExitCode('[exit] sidecar exited (code=null, signal=SIGTERM)')).toBeNull()
+    expect(matchRuntimeCrashExitCode('desktop server did not start listening within 10 seconds')).toBeNull()
+  })
+})
+
 describe('StartupErrorView', () => {
+  it('explains a crashed sidecar as a damaged install and points at a reinstall', () => {
+    render(
+      <StartupErrorView
+        error={'server sidecar exited after spawn (code=3221225477, signal=null)\n\nRecent server logs:\n[exit] sidecar exited (code=3221225477, signal=null)'}
+      />,
+    )
+
+    const hint = screen.getByTestId('startup-crash-hint')
+    expect(hint).toHaveTextContent('3221225477 (0xC0000005)')
+    expect(hint).toHaveTextContent('完整安装包')
+    expect(hint).toHaveTextContent('~/.claude')
+  })
+
+  it('shows no crash hint for an ordinary startup failure', () => {
+    render(
+      <StartupErrorView error={'startup failed\n\nRecent server logs:\n[exit] sidecar exited (code=1, signal=null)'} />,
+    )
+
+    expect(screen.queryByTestId('startup-crash-hint')).not.toBeInTheDocument()
+  })
+
   it('shows diagnostics and copies the full payload with the legacy fallback', async () => {
     const originalClipboard = navigator.clipboard
     const originalExecCommand = document.execCommand

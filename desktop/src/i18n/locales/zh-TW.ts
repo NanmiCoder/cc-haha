@@ -4014,6 +4014,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── 應用外殼 ──────────────────────────────────────
   'app.serverFailed': '本地服務啟動失敗',
   'app.serverFailedHint': '反饋這個問題時，請把這塊診斷資訊截圖一起發到 issue 裡。',
+  'app.startupCrashHint': '執行時程序在啟動前就崩潰了（Windows 結束代碼 {code}）。這通常是它的檔案在執行中被替換造成的，例如一次被中斷的更新。請到 GitHub Releases 下載完整安裝包覆蓋安裝；會話和設定保存在 ~/.claude，不會遺失。',
   'app.startupError': '啟動錯誤',
   'app.serverLogs': '服務日誌',
   'app.copyDiagnostics': '複製診斷資訊',
