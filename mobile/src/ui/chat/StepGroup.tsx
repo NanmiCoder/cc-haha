@@ -11,10 +11,13 @@ import {
   formatInput,
   groupIsOpen,
   outputTail,
+  stepImages,
   stepInput,
   type ChatRow,
+  type NamedToolImage,
   type StepState,
 } from './steps'
+import { ToolImageStrip } from './ToolImages'
 
 export type StepContext = {
   workDir?: string | null
@@ -334,13 +337,16 @@ export const TurnFold = memo(function TurnFold({
   label,
   open,
   onToggle,
+  images,
 }: {
   label: string
   open: boolean
   onToggle(): void
+  /** 收起时仍要看得到的图片（让电脑截图发过来，就是为了看这张图）。 */
+  images?: NamedToolImage[]
 }) {
   const colors = useColors()
-  return (
+  const fold = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={open ? '收起处理过程' : `展开处理过程，${label}`}
@@ -360,6 +366,13 @@ export const TurnFold = memo(function TurnFold({
       <Text style={{ fontSize: 14, color: colors.ink3 }}>{label}</Text>
       <Icon name={open ? 'chevron-down' : 'chevron-right'} size={15} color={colors.ink3} strokeWidth={2.2} />
     </Pressable>
+  )
+  if (open || !images?.length) return fold
+  return (
+    <View>
+      {fold}
+      <ToolImageStrip images={images} />
+    </View>
   )
 })
 
@@ -394,6 +407,8 @@ export const StepGroup = memo(function StepGroup({
   ) : null
   if (!shown.length) return divider
   const tailColor = tail?.tone === 'err' ? colors.err : tail?.tone === 'run' ? colors.run : colors.attn
+  // 和桌面一致：展开时图挂在对应步骤下，收起后集中放在摘要行下方。
+  const folded = open ? [] : shown.flatMap(stepImages)
   return (
     <View>
       <Pressable
@@ -425,6 +440,7 @@ export const StepGroup = memo(function StepGroup({
           <Text style={{ fontSize: 12.5, color: tailColor, flexShrink: 0 }}>{tail.text}</Text>
         ) : null}
       </Pressable>
+      {folded.length ? <ToolImageStrip images={folded} /> : null}
       {open ? (
         <View
           style={{
@@ -435,15 +451,21 @@ export const StepGroup = memo(function StepGroup({
             paddingLeft: 14,
           }}
         >
-          {shown.map((item) =>
-            ui.expanded.has(item.id) ? (
-              <View key={item.id} style={{ marginVertical: 4 }}>
-                <StepCard item={item} live={row.live} context={context} onToggle={onToggleStep} />
+          {shown.map((item) => {
+            const images = stepImages(item)
+            return (
+              <View key={item.id}>
+                {ui.expanded.has(item.id) ? (
+                  <View style={{ marginVertical: 4 }}>
+                    <StepCard item={item} live={row.live} context={context} onToggle={onToggleStep} />
+                  </View>
+                ) : (
+                  <StepRow item={item} live={row.live} context={context} onToggle={onToggleStep} />
+                )}
+                {images.length ? <ToolImageStrip images={images} /> : null}
               </View>
-            ) : (
-              <StepRow key={item.id} item={item} live={row.live} context={context} onToggle={onToggleStep} />
             )
-          )}
+          })}
         </View>
       ) : null}
       {divider}

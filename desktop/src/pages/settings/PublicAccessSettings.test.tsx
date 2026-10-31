@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 
 const mocks = vi.hoisted(() => ({
-  status: { state: 'disabled', publicUrl: null, error: null, autoStart: false, consentVersion: 0, mode: 'quick', customUrl: '', localPort: 17463, tokenSet: false, phase: null, migrationRequired: false },
+  status: { state: 'disabled', publicUrl: null, error: null, autoStart: false, consentVersion: 0, mode: 'quick', customUrl: '', localPort: 17463, tokenSet: false, tunnelId: null, phase: null, migrationRequired: false },
   getStatus: vi.fn(), configure: vi.fn(), start: vi.fn(), stop: vi.fn(), setAutoStart: vi.fn(),
   open: vi.fn(), get: vi.fn(), pairing: vi.fn(), approve: vi.fn(), reject: vi.fn(), revoke: vi.fn(), qr: vi.fn(), copy: vi.fn(),
 }))
@@ -19,8 +19,12 @@ vi.mock('@/lib/clipboard', () => ({ copyTextToClipboard: mocks.copy }))
 vi.mock('qrcode', () => ({ default: { toDataURL: mocks.qr } }))
 const quickAddress = 'https://computer-fixture.trycloudflare.com'
 const fixedAddress = 'https://phone.example.com'
-const savedStatus = (mode: 'quick' | 'named' = 'quick') => ({ ...mocks.status, mode, customUrl: mode === 'named' ? fixedAddress : '', tokenSet: mode === 'named', consentVersion: PUBLIC_ACCESS_CONSENT_VERSION })
-const addressInput = () => screen.getByLabelText('Fixed HTTPS address')
+// The shape cloudflared decodes, with fabricated values.
+const tunnelId = '0d9c6c2e-4f5a-4b7e-9c1d-2e3f4a5b6c7d'
+const tunnelCredential = (id = tunnelId) => btoa(JSON.stringify({ a: '0123456789abcdef0123456789abcdef', t: id, s: btoa('fake-tunnel-secret-for-tests') }))
+const credential = tunnelCredential()
+const installCommand = `brew install cloudflared && \n\nsudo cloudflared service install ${credential}`
+const savedStatus = (mode: 'quick' | 'named' = 'quick') => ({ ...mocks.status, mode, tokenSet: mode === 'named', consentVersion: PUBLIC_ACCESS_CONSENT_VERSION })
 const tokenInput = () => screen.getByLabelText('Tunnel Token')
 const enableButton = () => screen.getByRole('button', { name: 'Enable connection' })
 const chooseNamed = () => fireEvent.click(screen.getByRole('radio', { name: 'Fixed domain' }))
@@ -48,13 +52,15 @@ beforeEach(() => {
   mocks.get.mockResolvedValue({ enabled: false, port: null, publicUrl: null, pending: [], devices: [] })
   mocks.configure.mockImplementation(async ({ tunnelToken, ...configuration }) => {
     const previous = await mocks.getStatus()
-    const next = { ...previous, ...configuration, state: 'disabled', error: null, phase: null, tokenSet: !!tunnelToken || previous.tokenSet, migrationRequired: false }
+    const next = { ...previous, ...configuration, state: 'disabled', error: null, phase: null, tokenSet: !!tunnelToken || previous.tokenSet,
+      tunnelId: tunnelToken ? JSON.parse(atob(tunnelToken)).t : previous.tunnelId, migrationRequired: false }
     mocks.getStatus.mockResolvedValue(next)
     return next
   })
   mocks.start.mockImplementation(async () => {
     const previous = await mocks.getStatus()
-    const next = { ...previous, state: 'online', phase: null, consentVersion: PUBLIC_ACCESS_CONSENT_VERSION, publicUrl: previous.mode === 'named' ? previous.customUrl : quickAddress }
+    // A named tunnel's address is the hostname its Cloudflare route sends to this computer.
+    const next = { ...previous, state: 'online', phase: null, consentVersion: PUBLIC_ACCESS_CONSENT_VERSION, publicUrl: previous.mode === 'named' ? fixedAddress : quickAddress }
     mocks.getStatus.mockResolvedValue(next)
     mocks.get.mockResolvedValue({ enabled: true, port: next.localPort, publicUrl: next.publicUrl, pending: [], devices: [] })
     return next
@@ -316,13 +322,18 @@ it('starts a quick connection after consent, without an account, address, token 
   expect(mocks.setAutoStart).not.toHaveBeenCalled()
 })
 
-it('guides fixed-domain setup, copies the exact gateway address, and saves a masked token once', async () => {
+it('enables a fixed domain from the pasted command alone, guides the route step, and pairs once Cloudflare routes it', async () => {
+  const pollTimer = vi.spyOn(globalThis, 'setInterval')
   render(<PublicAccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   chooseNamed()
   expect(enableButton()).toBeDisabled()
-  expect(screen.getByText(/Networking → Tunnels/)).toBeVisible()
-  expect(screen.getByText(/Published application route/)).toBeVisible()
+  expect(screen.queryByLabelText('Fixed HTTPS address')).not.toBeInTheDocument()
+  const steps = screen.getAllByRole('listitem').map(step => step.textContent ?? '')
+  expect(steps[1]).toMatch(/Networking → Tunnels.*You don't need to run it/)
+  // Cloudflare offers the route step only after it sees the connector, so enabling comes first.
+  expect(steps[2]).toMatch(/Tunnel Token.*Enable connection/)
+  expect(steps[3]).toMatch(/click Continue and add a Published application/)
   expect(screen.getByText('http://127.0.0.1:17463')).toBeVisible()
   fireEvent.click(screen.getByText('Change local port'))
   fireEvent.change(screen.getByLabelText('Local gateway port'), { target: { value: '18321' } })
@@ -335,39 +346,44 @@ it('guides fixed-domain setup, copies the exact gateway address, and saves a mas
   await waitFor(() => expect(screen.getByRole('button', { name: 'Official setup guide' })).not.toBeDisabled())
   fireEvent.click(screen.getByRole('button', { name: 'Official setup guide' }))
   expect(mocks.open).toHaveBeenCalledWith('https://developers.cloudflare.com/tunnel/get-started/')
-  await waitFor(() => expect(addressInput()).not.toBeDisabled())
-  fireEvent.change(addressInput(), { target: { value: fixedAddress } })
-  expect(enableButton()).toBeDisabled()
+  await waitFor(() => expect(tokenInput()).not.toBeDisabled())
   expect(tokenInput()).toHaveAttribute('type', 'password')
-  fireEvent.change(tokenInput(), { target: { value: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' } })
+  fireEvent.change(tokenInput(), { target: { value: installCommand } })
+  expect(screen.getByText(`Found tunnel ${tunnelId}`)).toBeVisible()
+  let routing: Record<string, unknown> = {}
+  mocks.start.mockImplementationOnce(async () => {
+    routing = { ...await mocks.getStatus(), state: 'connecting', phase: 'routing', consentVersion: PUBLIC_ACCESS_CONSENT_VERSION }
+    mocks.getStatus.mockResolvedValue(routing)
+    return routing
+  })
   fireEvent.click(enableButton())
   await confirm()
-  await screen.findByAltText('Scan to pair this phone')
-  expect(mocks.configure).toHaveBeenCalledWith({ mode: 'named', customUrl: fixedAddress, localPort: 18321, tunnelToken: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' })
-  expect(mocks.qr).toHaveBeenCalledWith(`${fixedAddress}/remote#pair=one-time`, expect.any(Object))
+  expect(await screen.findByText('Waiting for a Cloudflare route…')).toBeVisible()
+  expect(screen.getByText(/add a Published application with Service URL http:\/\/127\.0\.0\.1:18321\./)).toBeVisible()
+  expect(mocks.configure).toHaveBeenCalledWith({ mode: 'named', customUrl: '', localPort: 18321, tunnelToken: credential })
   expect(tokenInput()).toHaveValue('')
-  expect(screen.queryByText('eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0')).not.toBeInTheDocument()
+  // The Service URL is needed now, while the connection waits.
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Service address copied' })).not.toBeDisabled())
+  expect(screen.getByRole('button', { name: 'Open Cloudflare' })).not.toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Turn off' })).not.toBeDisabled()
+  expect(mocks.pairing).not.toHaveBeenCalled()
+  mocks.getStatus.mockResolvedValue({ ...routing, state: 'online', phase: null, publicUrl: fixedAddress })
+  mocks.get.mockResolvedValue({ enabled: true, port: 18321, publicUrl: fixedAddress, pending: [], devices: [] })
+  const poll = pollTimer.mock.calls.find(call => call[1] === 1000)![0] as () => void
+  await act(async () => { poll() })
+  await screen.findByAltText('Scan to pair this phone')
+  expect(mocks.qr).toHaveBeenCalledWith(`${fixedAddress}/remote#pair=one-time`, expect.any(Object))
+  expect(mocks.start).toHaveBeenCalledTimes(1)
+  expect(document.body.textContent).not.toContain(credential)
 })
 
 it.each([
-  'http://phone.example.com', 'https://phone.example.com/remote', 'https://phone.example.com#pair=secret',
-  'https://user:secret@phone.example.com', 'https://phone.example.com?token=secret',
-])('rejects an invalid fixed address before saving or starting: %s', async url => {
+  ['', 'a token-only setup'],
+  [fixedAddress, 'an address saved by an older version'],
+])('reuses a saved fixed-domain token without returning it to the input or requiring another save (%#: %s)', async customUrl => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), customUrl })
   render(<PublicAccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
-  chooseNamed()
-  fireEvent.change(addressInput(), { target: { value: url } })
-  fireEvent.change(tokenInput(), { target: { value: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' } })
-  expect(enableButton()).toBeDisabled()
-  expect(screen.getByRole('alert')).toHaveTextContent('Enter a full HTTPS address')
-  expect(mocks.configure).not.toHaveBeenCalled()
-  expect(mocks.start).not.toHaveBeenCalled()
-})
-
-it('reuses a saved fixed-domain token without returning it to the input or requiring another save', async () => {
-  mocks.getStatus.mockResolvedValue(savedStatus('named'))
-  render(<PublicAccessSettings />)
-  await waitFor(() => expect(addressInput()).toHaveValue(fixedAddress))
   expect(tokenInput()).toHaveValue('')
   expect(screen.getByText(/A token is saved on this computer/)).toBeVisible()
   fireEvent.click(enableButton())
@@ -376,28 +392,55 @@ it('reuses a saved fixed-domain token without returning it to the input or requi
   expect(mocks.configure).not.toHaveBeenCalled()
 })
 
-it('rejects a pasted installation command instead of treating it as a Tunnel Token', async () => {
+it.each([
+  ['no token', 'cloudflared service install private-token', 'No Tunnel Token found'],
+  ['tokens for two tunnels', `${installCommand}\ncloudflared tunnel run --token ${tunnelCredential('7f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f')}`, 'tokens for different tunnels'],
+])('refuses a paste with %s before saving or starting', async (_case, pasted, message) => {
   render(<PublicAccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   chooseNamed()
-  fireEvent.change(addressInput(), { target: { value: fixedAddress } })
-  fireEvent.change(tokenInput(), { target: { value: 'cloudflared service install private-token' } })
-  expect(screen.getByRole('alert')).toHaveTextContent('Paste a valid Tunnel Token')
+  fireEvent.change(tokenInput(), { target: { value: pasted } })
+  expect(screen.getByRole('alert')).toHaveTextContent(message)
+  expect(screen.queryByText(/Found tunnel/)).not.toBeInTheDocument()
   expect(enableButton()).toBeDisabled()
   expect(mocks.configure).not.toHaveBeenCalled()
   expect(mocks.start).not.toHaveBeenCalled()
+})
+
+it('names the tunnel whose token is saved so it can be matched in Cloudflare', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), tunnelId })
+  render(<PublicAccessSettings />)
+  expect(await screen.findByText(`The token for tunnel ${tunnelId} is saved on this computer. Leave this blank to keep it, or paste a new command to replace it.`)).toBeVisible()
+})
+
+it('tells the user to copy a fresh command when Cloudflare rejects the saved token', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), tunnelId, state: 'failed', error: 'token' })
+  render(<PublicAccessSettings />)
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Cloudflare rejected this Tunnel Token')
+  expect(alert).toHaveTextContent('Add a replica')
+  await waitFor(() => expect(enableButton()).not.toBeDisabled())
+})
+
+it('names the exact Service URL while the connected tunnel still routes nothing to this computer', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), localPort: 18321, state: 'connecting', phase: 'routing', error: 'route' })
+  render(<PublicAccessSettings />)
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'None of this tunnel\'s routes send traffic to http://127.0.0.1:18321 yet. In Cloudflare, add a Published application, or change the Service URL of an existing route to http://127.0.0.1:18321.',
+  )
+  expect(screen.getByRole('status')).toHaveTextContent('Waiting for a Cloudflare route…')
+  expect(enableButton()).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Turn off' })).not.toBeDisabled()
 })
 
 it('preserves the fixed-domain draft when switching to quick mode and back', async () => {
   render(<PublicAccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   chooseNamed()
-  fireEvent.change(addressInput(), { target: { value: fixedAddress } })
   fireEvent.change(tokenInput(), { target: { value: 'draft-token' } })
   fireEvent.click(screen.getByRole('radio', { name: 'Quick connection' }))
-  expect(screen.queryByLabelText('Fixed HTTPS address')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Tunnel Token')).not.toBeInTheDocument()
   chooseNamed()
-  expect(addressInput()).toHaveValue(fixedAddress)
   expect(tokenInput()).toHaveValue('draft-token')
   expect(mocks.configure).not.toHaveBeenCalled()
 })
@@ -430,11 +473,11 @@ it('enters phone connection on Quick and keeps the LAN path available without en
   expect(screen.getByRole('heading', { name: 'Cloudflare remote connection' })).toBeVisible()
   expect(screen.getByRole('radio', { name: 'Quick connection' })).toHaveAttribute('aria-checked', 'true')
   chooseNamed()
-  fireEvent.change(addressInput(), { target: { value: fixedAddress } })
+  fireEvent.change(tokenInput(), { target: { value: 'draft-token' } })
   fireEvent.click(screen.getByRole('tab', { name: 'Same Wi-Fi' }))
   expect(screen.getByRole('heading', { name: 'Local network' })).toBeVisible()
   fireEvent.click(screen.getByRole('tab', { name: 'Away from home' }))
-  expect(addressInput()).toHaveValue(fixedAddress)
+  expect(tokenInput()).toHaveValue('draft-token')
   expect(mocks.start).not.toHaveBeenCalled()
 })
 
@@ -460,9 +503,10 @@ it('moves phone-browser users to LAN and focuses its tab without enabling access
   const methods = document.getElementById(screen.getByRole('button', { name: 'Use phone browser' }).getAttribute('aria-controls')!)!
   const scrollIntoView = vi.fn()
   methods.scrollIntoView = scrollIntoView
-  expect(screen.getByRole('button', { name: 'Download Android APK' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Join TestFlight beta' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Download from GitHub' })).not.toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Join TestFlight beta' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Use phone browser' }))
+  expect(mocks.open).not.toHaveBeenCalled()
   expect(lan).toHaveAttribute('aria-selected', 'true')
   expect(lan).toHaveFocus()
   expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
@@ -471,11 +515,11 @@ it('moves phone-browser users to LAN and focuses its tab without enabling access
   expect(mocks.start).not.toHaveBeenCalled()
 })
 
-it('asks for confirmation when a saved fixed-domain address changes', async () => {
+it('asks for confirmation when a new command replaces the saved fixed-domain token', async () => {
   mocks.getStatus.mockResolvedValue(savedStatus('named'))
   render(<PublicAccessSettings />)
-  await waitFor(() => expect(addressInput()).toHaveValue(fixedAddress))
-  fireEvent.change(addressInput(), { target: { value: 'https://new.example.com' } })
+  await waitFor(() => expect(tokenInput()).not.toBeDisabled())
+  fireEvent.change(tokenInput(), { target: { value: installCommand } })
   expect(screen.getByRole('switch', { name: 'Restore connection when the desktop starts' })).toBeDisabled()
   fireEvent.click(enableButton())
   await screen.findByRole('dialog')
@@ -489,13 +533,13 @@ it.each(['rejected', 'stale'] as const)('retains the fixed-domain draft and neve
   if (result === 'rejected') mocks.configure.mockRejectedValueOnce(new Error('private upstream details'))
   else mocks.configure.mockResolvedValueOnce(previous)
   render(<PublicAccessSettings />)
-  await waitFor(() => expect(addressInput()).toHaveValue(fixedAddress))
-  fireEvent.change(addressInput(), { target: { value: 'https://new.example.com' } })
+  await waitFor(() => expect(tokenInput()).not.toBeDisabled())
+  fireEvent.change(tokenInput(), { target: { value: credential } })
   fireEvent.click(enableButton())
   await confirm()
   await screen.findByRole('alert')
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  expect(addressInput()).toHaveValue('https://new.example.com')
+  expect(tokenInput()).toHaveValue(credential)
   expect(mocks.start).not.toHaveBeenCalled()
   expect(mocks.pairing).not.toHaveBeenCalled()
   expect(screen.queryByText('private upstream details')).not.toBeInTheDocument()
@@ -564,7 +608,6 @@ it('keeps settings frozen and permits another close attempt when shutdown is unc
   await screen.findByText('Connection ready')
   fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Phones may still have access')
-  expect(addressInput()).toBeDisabled()
   expect(tokenInput()).toBeDisabled()
   expect(screen.getByLabelText('Local gateway port')).toBeDisabled()
   expect(enableButton()).toBeDisabled()
@@ -573,7 +616,7 @@ it('keeps settings frozen and permits another close attempt when shutdown is unc
   await screen.findByText('Off')
   expect(mocks.stop).toHaveBeenCalledTimes(2)
   expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-  expect(addressInput()).not.toBeDisabled()
+  expect(tokenInput()).not.toBeDisabled()
 })
 
 it('shows tunnel preparation and public verification without offering an early QR', async () => {

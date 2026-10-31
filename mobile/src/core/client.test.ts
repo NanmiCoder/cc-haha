@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ApiClient, type FetchAdapter, type FetchResponse } from './client'
+import { ApiClient, bytesToBase64, type FetchAdapter, type FetchResponse } from './client'
 import type { Host } from './types'
 
 const lan: Host = {
@@ -301,7 +301,7 @@ describe('host-scoped API transport', () => {
     await client.history('session-id', 'opaque/+==')
     expect(JSON.parse(calls[0].body!)).toEqual(input)
     expect(calls[1].url).toBe(
-      `${lan.url}/api/sessions/session-id/messages?cursor=opaque%2F%2B%3D%3D`
+      `${lan.url}/api/sessions/session-id/messages?media=ref&cursor=opaque%2F%2B%3D%3D`
     )
   })
 
@@ -378,5 +378,76 @@ describe('host-scoped API transport', () => {
     controller.abort()
     await expect(request).rejects.toMatchObject({ code: 'ABORTED' })
     expect(transportSignal?.aborted).toBe(true)
+  })
+})
+
+describe('slow links and tool images', () => {
+  const slowBody = (delayMs: number, body = '{"ok":true}'): FetchAdapter => async (_url, init) =>
+    response({}, 200, {
+      text: () => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(body), delayMs)
+        init.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('aborted')) }, { once: true })
+      }),
+    })
+
+  test('a body that keeps arriving after the computer answered is not reported as an offline computer', async () => {
+    const client = new ApiClient(lan, 'fake', { fetch: slowBody(40), timeoutMs: 10, bodyTimeoutMs: 200 })
+    await expect(client.get('/api/sessions')).resolves.toEqual({ ok: true })
+  })
+
+  test('headers and body time out separately with distinct messages', async () => {
+    const silent: FetchAdapter = async (_url, init) =>
+      new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+    await expect(new ApiClient(lan, 'fake', { fetch: silent, timeoutMs: 10, bodyTimeoutMs: 200 }).get('/api/sessions'))
+      .rejects.toMatchObject({ code: 'TIMEOUT', message: '连接超时，请检查电脑是否在线' })
+    await expect(new ApiClient(lan, 'fake', { fetch: slowBody(500), timeoutMs: 10, bodyTimeoutMs: 30 }).get('/api/sessions'))
+      .rejects.toMatchObject({ code: 'TIMEOUT', message: '网络太慢，内容没能及时传完，请稍后重试' })
+  })
+
+  test('history always asks for tool images by reference', async () => {
+    const urls: string[] = []
+    const client = new ApiClient(remote, 'fake', { fetch: async (url) => { urls.push(url); return response({ messages: [] }) } })
+    await client.history('session-id')
+    expect(urls).toEqual([`${remote.url}/api/sessions/session-id/messages?media=ref`])
+  })
+
+  test('downloads a referenced image as a data URI with the served type', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 250, 251])
+    const calls: { url: string; init: Parameters<FetchAdapter>[1] }[] = []
+    const client = new ApiClient(remote, 'fake-token', {
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        return response({}, 200, {
+          headers: { get: (name) => name.toLowerCase() === 'content-type' ? 'image/webp' : null },
+          arrayBuffer: async () => bytes.buffer,
+        })
+      },
+    })
+    const uri = await client.image('/api/sessions/s-1/tool-images/toolu_1/0', 'thumb')
+    expect(uri).toBe(`data:image/webp;base64,${Buffer.from(bytes).toString('base64')}`)
+    expect(calls[0].url).toBe(`${remote.url}/api/sessions/s-1/tool-images/toolu_1/0?variant=thumb`)
+    expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer fake-token', Origin: remote.url, Accept: 'image/*' })
+  })
+
+  test('refuses non-image paths, active image types and error bodies', async () => {
+    const client = (contentType: string, status = 200) => new ApiClient(lan, 'fake', {
+      fetch: async () => response({ error: 'Tool image not found' }, status, {
+        headers: { get: () => contentType },
+        arrayBuffer: async () => new Uint8Array([1]).buffer,
+      }),
+    })
+    await expect(client('image/png').image('/api/sessions/s/messages', 'full')).rejects.toMatchObject({ code: 'INVALID_PATH' })
+    await expect(client('image/png').image('/api/sessions/s/tool-images/t/0?variant=x', 'full')).rejects.toMatchObject({ code: 'INVALID_PATH' })
+    await expect(client('image/svg+xml').image('/api/sessions/s/tool-images/t/0', 'full')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+    await expect(client('text/html').image('/api/sessions/s/tool-images/t/0', 'full')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+    await expect(client('application/json', 404).image('/api/sessions/s/tool-images/t/0', 'full')).rejects.toMatchObject({ status: 404, message: 'Tool image not found' })
+  })
+
+  test('base64 encoding matches the platform encoder at every padding length', () => {
+    for (const length of [0, 1, 2, 3, 4, 5, 3 * 4096 - 1, 3 * 4096, 3 * 4096 + 1, 50_000]) {
+      const bytes = new Uint8Array(length)
+      for (let i = 0; i < length; i++) bytes[i] = (i * 131 + 7) & 255
+      expect(bytesToBase64(bytes)).toBe(Buffer.from(bytes).toString('base64'))
+    }
   })
 })

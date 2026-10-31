@@ -10,6 +10,40 @@ const run = (sessionId: string, overrides: Partial<TaskRun> = {}): TaskRun => ({
   startedAt: '2026-10-24T09:00:00Z', completedAt, status: 'completed', ...overrides,
 })
 
+describe('team plans waiting for review', () => {
+  test('a finished lead turn whose team plan waits is a decision, not a completed session', () => {
+    const rows = projectMobileSessionActivity([
+      { id: 'lead', activityState: 'idle', startedAt: 1, lastProgressAt: 2 },
+      { id: 'adding', activityState: 'running', startedAt: 3, lastProgressAt: 4 },
+      { id: 'approval', activityState: 'waiting', requestId: 'r1', toolName: 'Bash', preview: 'ls' },
+    ], [{ id: 'lead', state: 'completed', completedAt }], [], since, [
+      { sessionId: 'lead', addition: false },
+      { sessionId: 'adding', addition: true },
+      { sessionId: 'approval', addition: false },
+      { sessionId: 'not-open', addition: false },
+    ])
+    const byId = new Map(rows.map(row => [row.id, row]))
+    expect(byId.get('lead')).toEqual({ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认', startedAt: 1, lastProgressAt: 2 })
+    // Members already running keep working; the addition still needs the user.
+    expect(byId.get('adding')).toMatchObject({ activityState: 'waiting', decision: 'team_plan', preview: '要追加的成员等你确认' })
+    // A tool permission answerable from the list wins.
+    expect(byId.get('approval')).toEqual({ id: 'approval', activityState: 'waiting', requestId: 'r1', toolName: 'Bash', preview: 'ls' })
+    // The lead process may have exited; the plan still waits.
+    expect(byId.get('not-open')).toMatchObject({ activityState: 'waiting', decision: 'team_plan' })
+  })
+
+  test('the loader reads plan reviews after live state', async () => {
+    const rows = await loadMobileSessionActivity({
+      live: () => [{ id: 'lead', activityState: 'idle' }],
+      completions: async () => [],
+      runs: async () => ({ runs: [], revisionToken: 'r' }) as never,
+      teamReviews: async () => [{ sessionId: 'lead', addition: false }],
+      now: () => now,
+    })
+    expect(rows).toEqual([{ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认' }])
+  })
+})
+
 describe('persistent mobile completion projection', () => {
   test('runtime idle/finished clocks and old completed records never invent successful completion', () => {
     const rows = projectMobileSessionActivity([

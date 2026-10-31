@@ -6,6 +6,8 @@ export type CapsuleInput = {
   tone: 'run' | 'attention'
   /** 这一轮还在跑或有后台任务在跑。 */
   active: boolean
+  /** 团队方案刚确认、成员还在就位。 */
+  launching?: boolean
 }
 
 /** 胶囊里的主文字：有任务清单显示“完成/总数”，只有后台在跑时显示在跑的个数。 */
@@ -19,6 +21,7 @@ export function capsuleBadge({ progress, runningCount }: Pick<CapsuleInput, 'pro
 }
 
 export function capsuleLabel(input: CapsuleInput) {
+  if (input.launching && input.tone !== 'attention') return '团队启动中，点开看详情'
   const parts = [
     input.tone === 'attention' ? '等你批准' : input.active ? '运行中' : '任务',
     input.progress.total > 0 ? `任务 ${input.progress.done}/${input.progress.total}` : '',

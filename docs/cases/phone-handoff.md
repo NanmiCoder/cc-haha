@@ -9,7 +9,7 @@ order: 5
 
 电脑上有一条长任务正在跑，你要离开桌面一会儿。点击桌面左侧 **手机连接**，用手机浏览器扫码，就能看到同一条会话、回复问题和处理权限请求；任务仍在电脑上执行。
 
-cc-haha Android 正式签名 APK 待发布，iOS TestFlight 邀请待开放。下面的浏览器流程现在就能用，无需安装手机 App；同一 Wi-Fi 可直接连接，外出连接由桌面管理 Cloudflare 隧道，无需手机 VPN。
+也可以安装 cc-haha 手机 App：Android 在 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) 下载 APK，iPhone 通过 [TestFlight 公开链接](https://testflight.apple.com/join/Nd49JrWZ)安装，需要桌面端 v0.7.6 或更新版本。下面以手机浏览器为例，无需安装 App；同一 Wi-Fi 可直接连接，外出连接由桌面管理 Cloudflare 隧道，无需手机 VPN。
 
 ## 准备
 

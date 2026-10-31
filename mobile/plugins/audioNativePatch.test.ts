@@ -66,9 +66,9 @@ afterAll(() => {
 
 test('the pinned patch is installed and Android compiles the patched recorder sources', () => {
   const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-  expect(packageJson.dependencies['react-native-audio-api']).toBe('0.13.0')
-  expect(packageJson.patchedDependencies['react-native-audio-api@0.13.0']).toBe('patches/react-native-audio-api@0.13.0.patch')
-  const patch = readFileSync(new URL('../patches/react-native-audio-api@0.13.0.patch', import.meta.url), 'utf8')
+  expect(packageJson.dependencies['react-native-audio-api']).toBe('0.13.6')
+  expect(packageJson.patchedDependencies['react-native-audio-api@0.13.6']).toBe('patches/react-native-audio-api@0.13.6.patch')
+  const patch = readFileSync(new URL('../patches/react-native-audio-api@0.13.6.patch', import.meta.url), 'utf8')
   for (const file of ['AndroidAudioRecorder.cpp', 'MiniAudioFileWriter.cpp']) expect(patch).toContain(file)
   const recorder = readFileSync(join(root, 'android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp'), 'utf8')
   expect(method(recorder, 'AudioRecorder::StopResult AndroidAudioRecorder::stop()')).toContain('isIdle() && mStream_ == nullptr')
@@ -80,6 +80,15 @@ test('the pinned patch is installed and Android compiles the patched recorder so
   expect(cmake).toContain('file(GLOB_RECURSE ANDROID_CPP_SOURCES_ABS CONFIGURE_DEPENDS "${ANDROID_CPP_DIR}/audioapi/*.cpp")')
   expect(cmake).toContain('add_library(react-native-audio-api SHARED ${ANDROID_CPP_SOURCES} ${COMMON_CPP_SOURCES})')
   expect(cmake).not.toContain('REMOVE_ITEM ANDROID_CPP_SOURCES')
+})
+
+test('the audio worklets runner only calls WorkletRuntime methods the installed react-native-worklets exposes', () => {
+  const runner = readFileSync(join(root, 'common/cpp/audioapi/core/utils/worklets/WorkletsRunner.cpp'), 'utf8')
+  const calls = [...new Set([...runner.matchAll(/strongRuntime->(\w+)\(/g)].map(match => match[1]))]
+  expect(calls.length).toBeGreaterThan(0)
+  const worklets = dirname(fileURLToPath(import.meta.resolve('react-native-worklets/package.json')))
+  const runtime = readFileSync(join(worklets, 'Common/cpp/worklets/WorkletRuntime/WorkletRuntime.h'), 'utf8')
+  for (const name of calls) expect({ name, declared: new RegExp(`\\b${name}\\s*\\(`).test(runtime) }).toEqual({ name, declared: true })
 })
 
 for (const boundary of ['partial-start', 'tail-flush', 'disconnect']) {

@@ -8,6 +8,7 @@ import {
   newerTeamPlan,
   sameTeamRuntime,
   suggestionDiffers,
+  teamLaunchNotice,
   teamPlanErrorText,
   teamPlanReview,
   teamPlanSurface,
@@ -143,5 +144,35 @@ describe('team plan requests', () => {
     // 旧版电脑端没有放行这些接口。
     expect(teamPlanErrorText(new ApiError('Desktop-only capability', 403))).toContain('更新电脑端')
     expect(teamPlanErrorText(new Error('Team leader could not start: boom'))).toBe('Team leader could not start: boom')
+  })
+})
+
+describe('确认后的提示', () => {
+  test('等你确认 → 启动中 / 直接到运行中：按确认的成员数说一句', () => {
+    const before = plan()
+    expect(teamLaunchNotice(before, plan({ state: 'launching' }))).toBe('已确认，正在启动 2 名成员')
+    expect(teamLaunchNotice(before, plan({ state: 'running' }))).toBe('已确认，正在启动 2 名成员')
+    // 以确认那一刻的成员为准。
+    const approved = plan({
+      state: 'launching',
+      approvedSnapshot: {
+        revision: 3,
+        members: [before.members[0]!],
+        tasks: before.tasks,
+        leaderRuntime: before.leaderRuntime,
+        approvedAt: 3,
+        requestId: 'request-1',
+      },
+    })
+    expect(teamLaunchNotice(before, approved)).toBe('已确认，正在启动 1 名成员')
+    expect(teamLaunchNotice(before, plan({ state: 'launching', parentPlanId: 'plan-0' }))).toBe('已确认，正在加入 2 名成员')
+  })
+  test('打开会话时已在跑、退回、取消、换了方案、启动中 → 运行中：都不提示', () => {
+    expect(teamLaunchNotice(null, plan({ state: 'running' }))).toBeNull()
+    expect(teamLaunchNotice(plan(), plan({ state: 'draft' }))).toBeNull()
+    expect(teamLaunchNotice(plan(), plan({ state: 'cancelled' }))).toBeNull()
+    expect(teamLaunchNotice(plan(), plan({ planId: 'plan-2', state: 'launching' }))).toBeNull()
+    expect(teamLaunchNotice(plan({ state: 'launching' }), plan({ state: 'running' }))).toBeNull()
+    expect(teamLaunchNotice(plan(), null)).toBeNull()
   })
 })

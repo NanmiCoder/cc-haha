@@ -8,12 +8,13 @@
         "projectId": "4e75f835-1b64-463c-a196-cc181b4c83ec"
       }
     },
-    "version": "0.1.1",
+    "version": "0.1.2",
     "orientation": "portrait",
     "scheme": "cchaha",
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
     "ios": {
+      "icon": "./assets/icon-ios.png",
       "supportsTablet": true,
       "bundleIdentifier": "com.yunce.cchaha.mobile",
       "entitlements": {

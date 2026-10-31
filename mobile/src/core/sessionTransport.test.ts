@@ -1344,3 +1344,74 @@ describe('history kept across refreshes', () => {
     h.transport.dispose()
   })
 })
+
+describe('slow links', () => {
+  const one = entry('u1', 'user', 'One')
+  const first = entry('a1', 'assistant', 'First')
+
+  test('a large frame that delays the pong still counts as a live connection', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.timers.advance(15000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    // A multi-megabyte tool result arrives before the pong does.
+    socket.receive({ type: 'tool_result', toolUseId: 't', content: [], isError: false })
+    h.timers.advance(15000)
+    expect(h.transport.connection).toBe('ready')
+    expect(socket.closed).toBe(false)
+    // Real silence is still detected.
+    h.timers.advance(15000)
+    expect(h.transport.connection).toBe('reconnecting')
+    h.transport.dispose()
+  })
+
+  test('reconcile retries download each older page once', async () => {
+    const requested: (string | undefined)[] = []
+    const chain: Record<string, HistoryPage> = {
+      p4: history([entry('t4', 'assistant', 'Four')], 'v2', 'p3'),
+      p3: history([entry('t3', 'assistant', 'Three')], 'v2', 'p2'),
+      p2: history([entry('t2', 'assistant', 'Two')], 'v2', 'p1'),
+    }
+    let latest = history([one, first], 'v1')
+    const h = harness(async (_id, cursor) => {
+      requested.push(cursor)
+      return cursor ? chain[cursor]! : latest
+    }, latest)
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'Shots' })).toBe(true)
+    socket.receive({ type: 'user_message_replay', content: 'Shots' })
+    socket.receive({ type: 'content_delta', text: 'Done' })
+    socket.receive({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    // The prompt is more pages back than a refresh walks, so every attempt misses it.
+    latest = history([entry('t5', 'assistant', 'Done')], 'v2', 'p4')
+    for (const delay of [100, 500, 1500]) {
+      h.timers.advance(delay)
+      for (let i = 0; i < 6; i++) await flush()
+    }
+    expect(requested.filter((cursor) => cursor === undefined).length).toBeGreaterThanOrEqual(4)
+    expect(requested.filter(Boolean)).toEqual(['p4', 'p3', 'p2'])
+    h.transport.dispose()
+  })
+
+  test('a slow older page during sync no longer runs into the sync timeout', async () => {
+    const cached = history([one, first], 'v1')
+    const store = { page: cached as HistoryPage | undefined, read: () => store.page, write: (next: HistoryPage) => { store.page = next } }
+    const latest = history([entry('u3', 'user', 'Three'), entry('a3', 'assistant', 'Third')], 'v2', 'slow')
+    const h = harness(async (_id, cursor, options) => {
+      if (!cursor) return latest
+      // The page holding a large result trickles in far slower than the sync budget.
+      return new Promise<HistoryPage>((_resolve, reject) =>
+        options?.signal?.addEventListener('abort', () => reject(new ApiError('请求已取消', 0, 'ABORTED')), { once: true }))
+    }, latest, store)
+    await h.ready()
+    expect(h.transport.connection).toBe('syncing')
+    h.timers.advance(8000)
+    for (let i = 0; i < 4; i++) await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Three', 'Third'])
+    h.timers.advance(20000)
+    expect(h.errors.map((error) => (error as ApiError).code)).not.toContain('SYNC_TIMEOUT')
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+})

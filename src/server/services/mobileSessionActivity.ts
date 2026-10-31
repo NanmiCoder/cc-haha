@@ -14,12 +14,17 @@ export type MobileSessionActivity = {
   toolName?: string
   preview?: string
   autoAnswerDeadline?: number | null
+  /** A decision that is not a tool permission: the lead's team plan waits for approval. */
+  decision?: 'team_plan'
 }
+/** A team plan the lead submitted; its lead does nothing more until a person decides. */
+export type TeamPlanReview = { sessionId: string; addition: boolean }
 type ScheduledRun = Awaited<ReturnType<CronScheduler['getRunsPage']>>['runs'][number]
 type Dependencies = {
   live(): MobileSessionActivity[]
   completions(): Promise<SessionCompletionState[]>
   runs: CronScheduler['getRunsPage']
+  teamReviews?: () => Promise<TeamPlanReview[]>
   now?: () => number
 }
 
@@ -29,6 +34,7 @@ export function projectMobileSessionActivity(
   completions: SessionCompletionState[],
   runs: ScheduledRun[],
   since: number,
+  reviews: TeamPlanReview[] = [],
 ): MobileSessionActivity[] {
   const rows = new Map<string, MobileSessionActivity>()
   const outcomes = new Map<string, MobileSessionActivity['terminalOutcome']>()
@@ -69,6 +75,21 @@ export function projectMobileSessionActivity(
       ...(['idle', 'review'].includes(activity.activityState) && completedAt !== undefined ? { completedAt } : {}),
     })
   }
+  for (const review of reviews) {
+    const current = rows.get(review.sessionId)
+    // A pending tool permission is answerable from the list itself; keep it.
+    if (current?.activityState === 'waiting' && current.requestId) continue
+    // The lead's turn may have ended ("completed"), but nothing runs until the
+    // plan is approved, so the session waits on the user rather than being done.
+    rows.set(review.sessionId, {
+      id: review.sessionId,
+      activityState: 'waiting',
+      decision: 'team_plan',
+      preview: review.addition ? '要追加的成员等你确认' : '团队组好了，等你确认',
+      ...(current?.startedAt !== undefined ? { startedAt: current.startedAt } : {}),
+      ...(current?.lastProgressAt !== undefined ? { lastProgressAt: current.lastProgressAt } : {}),
+    })
+  }
   return [...rows.values()]
 }
 
@@ -93,5 +114,6 @@ export async function loadMobileSessionActivity(deps: Dependencies): Promise<Mob
   } while (cursor)
   // Read live state last so history I/O cannot age an approval snapshot.
   const completions = await deps.completions()
-  return projectMobileSessionActivity(deps.live(), completions, runs, since)
+  const reviews = deps.teamReviews ? await deps.teamReviews() : []
+  return projectMobileSessionActivity(deps.live(), completions, runs, since, reviews)
 }

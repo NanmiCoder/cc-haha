@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import appConfig, { withEasProject } from '../app.config'
 import app from '../app.json'
 import eas from '../eas.json'
@@ -31,6 +33,16 @@ test('iOS builds carry the time-sensitive notification entitlement through app.c
   // 加 entitlement 不能顶掉原有的 iOS 配置。
   expect(resolved.ios?.bundleIdentifier).toBe('com.yunce.cchaha.mobile')
   expect(resolved.ios?.infoPlist).toEqual(app.expo.ios.infoPlist)
+})
+
+test('the iOS home-screen icon is an opaque square, so Expo has no transparency to fill with white', () => {
+  const resolved = appConfig({ config: app.expo } as never)
+  const icon = resolved.ios?.icon
+  expect(typeof icon).toBe('string')
+  const png = readFileSync(join(import.meta.dir, '..', icon as string))
+  // IHDR: width, height, then color type at byte 25 (2 = RGB without alpha).
+  expect([png.readUInt32BE(16), png.readUInt32BE(20), png[25]]).toEqual([1024, 1024, 2])
+  expect(png.includes('tRNS')).toBe(false)
 })
 
 test('production builds use remote credentials, increasing build numbers, and installable APKs', () => {

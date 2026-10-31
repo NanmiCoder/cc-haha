@@ -174,6 +174,8 @@ export function buildSocketOptions(
   const url = new URL(normalizeHostUrl(host.url, host.auth))
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = `/ws/${encodeURIComponent(sessionId)}`
+  // Tool images arrive as references; the bytes are fetched only when drawn.
+  url.searchParams.set('media', 'ref')
   if (platform === 'web') {
     if (host.auth === 'remote')
       throw new ConnectionError('远程凭据需要原生 App，浏览器预览不支持此连接')

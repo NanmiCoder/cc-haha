@@ -15,7 +15,7 @@ import { useNow } from './parts'
 
 export type DecisionResponse = 'allow' | 'deny'
 
-/** “等你决定”里的一张卡：审批 / 提问 / 计划 / 其他等待。 */
+/** “等你决定”里的一张卡：审批 / 提问 / 计划 / 团队方案 / 其他等待。 */
 export function DecisionCard({
   row,
   onOpen,
@@ -134,9 +134,9 @@ export function DecisionCard({
         </View>
       ) : (
         <Button
-          title={kind === 'plan' ? '看完整计划' : '打开处理'}
+          title={openTitle(kind)}
           variant="secondary"
-          accessibilityLabel={`${kind === 'plan' ? '看完整计划' : '打开处理'}：${title}`}
+          accessibilityLabel={`${openTitle(kind)}：${title}`}
           onPress={onOpen}
           style={{ marginLeft: 26 }}
         />
@@ -144,6 +144,9 @@ export function DecisionCard({
     </Card>
   )
 }
+
+const openTitle = (kind: ReturnType<typeof decisionKind>) =>
+  kind === 'plan' ? '看完整计划' : kind === 'team' ? '查看并配置' : '打开处理'
 
 /** 环形图标 + “m:ss 后 AI 按推荐作答”，每秒走。 */
 function AutoAnswerCountdown({ deadline }: { deadline: number }) {

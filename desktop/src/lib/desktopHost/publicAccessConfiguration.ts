@@ -24,6 +24,43 @@ export function isCloudflareTunnelToken(value: unknown): value is string | undef
     (typeof value === 'string' && value.length >= 32 && value.length <= 8192 && /^[A-Za-z0-9_+/=-]+$/.test(value))
 }
 
+const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const TUNNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const BASE64_RUN = /[A-Za-z0-9+/]{32,}={0,2}/g
+
+/**
+ * Reads a credential the way cloudflared does: standard base64 of a JSON object with
+ * account tag `a`, tunnel UUID `t` and base64 secret `s`.
+ */
+export function readCloudflareTunnelToken(value: string): { tunnelId: string } | null {
+  if (value.length > 8192 || !STANDARD_BASE64.test(value)) return null
+  try {
+    const credential: unknown = JSON.parse(atob(value))
+    if (!credential || typeof credential !== 'object' || Array.isArray(credential)) return null
+    const { a, t, s } = credential as Record<string, unknown>
+    if (typeof a !== 'string' || !a || typeof t !== 'string' || !TUNNEL_ID.test(t)) return null
+    if (typeof s !== 'string' || !s || !STANDARD_BASE64.test(s)) return null
+    return { tunnelId: t.toLowerCase() }
+  } catch { return null }
+}
+
+export type CloudflareTunnelTokenInput =
+  | { status: 'found', token: string, tunnelId: string }
+  | { status: 'missing' | 'ambiguous' }
+
+/** Cloudflare shows the token only inside its install commands; any of them yields just the credential. */
+export function findCloudflareTunnelToken(text: string): CloudflareTunnelTokenInput {
+  const tokens = new Map<string, string>()
+  for (const [candidate] of text.matchAll(BASE64_RUN)) {
+    const credential = readCloudflareTunnelToken(candidate)
+    if (credential) tokens.set(candidate, credential.tunnelId)
+  }
+  const [found, ...others] = tokens
+  if (!found) return { status: 'missing' }
+  if (others.length) return { status: 'ambiguous' }
+  return { status: 'found', token: found[0], tunnelId: found[1] }
+}
+
 export function isPublicAccessConfiguration(value: unknown): value is DesktopPublicAccessConfiguration {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const config = value as Record<string, unknown>

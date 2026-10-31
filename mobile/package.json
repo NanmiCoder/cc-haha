@@ -1,6 +1,6 @@
 {
   "name": "cc-haha-mobile",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~58.0.22",
@@ -29,7 +29,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",
-    "react-native-audio-api": "0.13.0",
+    "react-native-audio-api": "0.13.6",
     "react-native-image-viewing": "0.2.2",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
@@ -56,6 +56,6 @@
   },
   "private": true,
   "patchedDependencies": {
-    "react-native-audio-api@0.13.0": "patches/react-native-audio-api@0.13.0.patch"
+    "react-native-audio-api@0.13.6": "patches/react-native-audio-api@0.13.6.patch"
   }
 }

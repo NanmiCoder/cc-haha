@@ -24,6 +24,14 @@ describe('胶囊文案', () => {
       '任务，任务 2/5，点开看详情'
     )
   })
+  test('团队启动中：说「团队启动中」；同时有待批准时以批准为先', () => {
+    expect(capsuleLabel({ progress: progress(0, 0), runningCount: 0, tone: 'run', active: false, launching: true })).toBe(
+      '团队启动中，点开看详情'
+    )
+    expect(capsuleLabel({ progress: progress(0, 0), runningCount: 0, tone: 'attention', active: false, launching: true })).toBe(
+      '等你批准，点开看详情'
+    )
+  })
 })
 
 describe('时间与状态', () => {

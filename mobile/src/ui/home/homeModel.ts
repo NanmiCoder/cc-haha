@@ -38,10 +38,11 @@ export function inProject(row: DashboardRow, key: string | null) {
 
 /* ───────────── 等你决定 ───────────── */
 
-export type DecisionKind = 'approval' | 'question' | 'plan' | 'other'
+export type DecisionKind = 'approval' | 'question' | 'plan' | 'team' | 'other'
 
 /** 只有带 requestId 的普通工具审批才能在首页直接允许/拒绝（与锁屏通知同一规则）。 */
 export function decisionKind(activity?: MobileActivity): DecisionKind {
+  if (activity?.decision === 'team_plan') return 'team'
   if (activity?.toolName === 'AskUserQuestion') return 'question'
   if (activity?.toolName === 'ExitPlanMode') return 'plan'
   if (activity?.requestId && activity.toolName && activity.toolName !== 'ComputerUse')
@@ -59,6 +60,8 @@ export function decisionAction(activity?: MobileActivity) {
       return '在问你'
     case 'plan':
       return '计划写好了，等你确认'
+    case 'team':
+      return activity?.preview?.trim() || '团队组好了，等你确认'
   }
   if (!tool) return '需要你决定'
   if (tool === 'Bash' || tool === 'PowerShell') return '想运行命令'
@@ -75,7 +78,13 @@ export function decisionAction(activity?: MobileActivity) {
 export function pendingWhileOffline(activity?: MobileActivity) {
   const kind = decisionKind(activity)
   const verb =
-    kind === 'question' ? '在等你回答' : kind === 'plan' ? '在等你确认计划' : '在等你批准'
+    kind === 'question'
+      ? '在等你回答'
+      : kind === 'plan'
+        ? '在等你确认计划'
+        : kind === 'team'
+          ? '团队在等你确认'
+          : '在等你批准'
   return `${verb} · 连上后才能处理`
 }
 

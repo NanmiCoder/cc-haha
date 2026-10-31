@@ -187,6 +187,7 @@ test('recent sub-lines read project and state, and never invent a result', () =>
 test('project rows only get a text status for states that need attention', () => {
   expect(waitingShort(act('waiting', { toolName: 'AskUserQuestion' }))).toBe('在问你')
   expect(waitingShort(act('waiting', { toolName: 'ExitPlanMode' }))).toBe('等你确认')
+  expect(waitingShort(act('waiting', { decision: 'team_plan', preview: '团队组好了，等你确认' }))).toBe('等你确认')
   expect(waitingShort(act('waiting', { toolName: 'Bash', requestId: 'r' }))).toBe('等你决定')
   expect(waitingShort(undefined)).toBe('等你决定')
   expect(projectTrailing(row('1', a, act('waiting', { toolName: 'AskUserQuestion' })))).toEqual({

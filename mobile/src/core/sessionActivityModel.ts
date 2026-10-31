@@ -7,6 +7,7 @@ import {
   loadTaskList,
   loadTeam,
   memberState,
+  taskProgress,
   memberTasks,
   taskState,
   teamMembers,
@@ -81,15 +82,40 @@ export type CommandRow = {
   lastLine?: string
   stopping: boolean
 }
+export type TeamTask = {
+  /** 列表内唯一：队长自己的清单和团队看板各有一套编号。 */
+  key: string
+  /** 团队看板的编号（#3），依赖说明里引用的就是它；队长自己的清单没有。 */
+  ref?: string
+  title: string
+  state: PlanTask['state']
+  detail?: string
+  /** 还没完成的前置任务编号。 */
+  waitingOn: string[]
+}
 export type TeamRow = {
   id: string
   name: string
+  /** 头像里的两个字母；队长是「队」。 */
+  mark: string
   lead: boolean
+  model?: string
   state: string
   detail?: string
   tone: 'run' | 'wait' | 'idle' | 'err'
+  /** 每个成员是一个 Agent，自己认领、自己推进的任务挂在自己名下。 */
+  tasks: TeamTask[]
 }
-export type TeamModel = { name: string; members: TeamRow[]; summary: string }
+export type TeamModel = {
+  name: string
+  incarnationId?: string
+  leadSessionId?: string
+  members: TeamRow[]
+  /** 团队看板里还没有人认领的任务。 */
+  unassigned: TeamTask[]
+  progress: { done: number; total: number }
+  summary: string
+}
 export type ActivityProgress = {
   done: number
   total: number
@@ -231,23 +257,73 @@ export function commandRows(
   )
 }
 
-/** 团队只在“活着”时出现；归档、已删除的团队不属于运行中。 */
-export function teamModel(timeline: TeamWorkbenchSessionTimeline | null): TeamModel | null {
+/**
+ * 头像里的两个字母：backend-dev → BD，reviewer → RE。同一个团队里不能撞：
+ * 已被占用时换成首字母加后面的某个字母（researcher 先拿到 RE，reviewer 就是 RV）。
+ */
+export function memberMark(name: string, taken: ReadonlySet<string> = new Set()) {
+  const words = name.split(/[-_\s@.]+/).filter(Boolean)
+  const word = words[0] ?? name
+  const candidates = [
+    words.length > 1 ? word[0]! + words[1]![0]! : word.slice(0, 2),
+    ...[...word.slice(1)].map((letter) => word[0]! + letter),
+  ].map((letters) => letters.toUpperCase())
+  return candidates.find((mark) => !taken.has(mark)) ?? (candidates[0] || '?')
+}
+
+/** `list` 里的任务，依赖在 `all` 里判断：成员的前置任务常常是别人的。 */
+function teamTasks(list: readonly TaskInfo[], all: readonly TaskInfo[], numbered: boolean): TeamTask[] {
+  const open = (id: string) => all.some((other) => other.id === id && other.status !== 'completed')
+  return list.map((task) => {
+    const state = taskState(task, [...all])
+    const detail = state === '进行中' ? textOf(task.activeForm) : undefined
+    return {
+      key: `${numbered ? 'team' : 'own'}:${task.id}`,
+      ...(numbered ? { ref: task.id } : {}),
+      title: task.subject,
+      state: state === '已完成' ? 'done' : state === '进行中' ? 'active' : state === '等待依赖' ? 'waiting' : 'todo',
+      ...(detail ? { detail } : {}),
+      waitingOn: state === '等待依赖' ? task.blockedBy.filter(open) : [],
+    }
+  })
+}
+
+/**
+ * 团队只在“活着”时出现；归档、已删除的团队不属于运行中。任务按负责人挂到成员下面，
+ * 队长名下是会话自己的清单（`ownTasks`）加上它认领的看板任务。
+ */
+export function teamModel(
+  timeline: TeamWorkbenchSessionTimeline | null,
+  ownTasks: readonly TaskInfo[] = [],
+  /** 成员页：团队收尾归档后仍要能看成员和它的记录。 */
+  options: { ended?: boolean } = {}
+): TeamModel | null {
   const snapshot = latestTeam(timeline)
-  if (!timeline || !snapshot || snapshot.deletedAt || timeline.source !== 'live') return null
+  if (!timeline || !snapshot) return null
+  if (!options.ended && (snapshot.deletedAt || timeline.source !== 'live')) return null
+  const board = snapshot.tasks
   const members = teamMembers(timeline)
+  const claimed = new Set<string>()
+  const marks = new Set<string>()
   const rows: TeamRow[] = members.map((member) => {
+    const lead = snapshot.team.leadAgentId === member.agentId
     const state = memberState(member)
-    const owned = memberTasks(member, snapshot.tasks)
+    const owned = memberTasks(member, board)
+    for (const task of owned) claimed.add(task.id)
     const current = owned.find((task) => task.status === 'in_progress')
-    const blocked = owned.find((task) => taskState(task, snapshot.tasks) === '等待依赖')
+    const blocked = owned.find((task) => taskState(task, board) === '等待依赖')
     const waiting = !current && !!blocked && state === '空闲'
     const label = waiting ? '等待依赖' : state
     const detail = current ? (textOf(current.activeForm) ?? current.subject) : undefined
+    const name = lead ? '队长' : member.name || member.agentId
+    const mark = lead ? '队' : memberMark(name, marks)
+    marks.add(mark)
     return {
       id: member.agentId,
-      name: snapshot.team.leadAgentId === member.agentId ? '队长' : member.name || member.agentId,
-      lead: snapshot.team.leadAgentId === member.agentId,
+      name,
+      mark,
+      lead,
+      ...(textOf(member.model) ? { model: textOf(member.model) } : {}),
       state: label,
       detail,
       tone:
@@ -258,16 +334,30 @@ export function teamModel(timeline: TeamWorkbenchSessionTimeline | null): TeamMo
             : label === '遇到错误'
               ? 'err'
               : 'idle',
+      tasks: [...(lead ? teamTasks(ownTasks, ownTasks, false) : []), ...teamTasks(owned, board, true)],
     }
   })
-  const working = rows.filter((row) => row.state === '工作中' && !row.lead).map((row) => row.name)
+  rows.sort((a, b) => Number(b.lead) - Number(a.lead))
+  const { completed, total } = taskProgress(board)
+  const progress = { done: completed, total }
   return {
     name: snapshot.team.name,
+    ...(snapshot.team.incarnationId ? { incarnationId: snapshot.team.incarnationId } : {}),
+    ...(snapshot.team.leadSessionId ? { leadSessionId: snapshot.team.leadSessionId } : {}),
     members: rows,
-    summary: [`${rows.length} 人`, working.length ? `${working.slice(0, 2).join('、')} 工作中` : '']
-      .filter(Boolean)
-      .join(' · '),
+    unassigned: teamTasks(board.filter((task) => !claimed.has(task.id)), board, true),
+    progress,
+    summary: [snapshot.team.name, progress.total ? `${progress.done}/${progress.total} 完成` : `${rows.length} 人`].join(' · '),
   }
+}
+
+/**
+ * 停止会暂停整组但不结束方案：方案还写着「运行中」，成员却可能都已停下或退出，
+ * 这时再给「停止」就没有意义（同桌面 areTeamMembersAllStopped）。没有名单可判断时为 false。
+ */
+export function teamMembersAllStopped(team: Pick<TeamModel, 'members'> | null | undefined) {
+  const members = team?.members.filter((row) => !row.lead) ?? []
+  return members.length > 0 && members.every((row) => row.state === '已停止' || row.state === '已退出')
 }
 
 export function capsuleVisible(input: {
@@ -291,11 +381,14 @@ export function deriveActivity(
     workDir?: string | null
   } = {}
 ): SessionActivityModel {
-  const team = teamModel(data.team)
-  // 会话自己的任务清单优先；它为空时用团队的任务看板。
-  const source = data.tasks.length ? data.tasks : (latestTeam(data.team)?.tasks ?? [])
-  const tasks = planTasks(source)
-  const progress = taskProgressOf(tasks, source)
+  const team = teamModel(data.team, data.tasks)
+  const board = latestTeam(data.team)?.tasks ?? []
+  // 团队在跑时看团队看板的进度，任务都挂在成员名下；否则会话自己的清单优先。
+  const source = team && board.length ? board : data.tasks.length ? data.tasks : board
+  const listed = planTasks(source)
+  const tasks = team ? [] : listed
+  const progress = taskProgressOf(listed, source)
+  const teamWorking = team?.members.some((row) => !row.lead && row.tone === 'run') === true
   const subagents = subagentRows(data.background, options.live, data.stopping, options.workDir)
   const commands = commandRows(data.background, data.stopping)
   const runningCount =
@@ -310,8 +403,8 @@ export function deriveActivity(
     commands,
     runningCount,
     tone: (options.pendingApprovals ?? 0) > 0 ? 'attention' : 'run',
-    capsuleVisible: capsuleVisible({ runningCount, progress, turnActive }),
-    active: turnActive || runningCount > 0,
+    capsuleVisible: teamWorking || capsuleVisible({ runningCount, progress, turnActive }),
+    active: turnActive || runningCount > 0 || teamWorking,
   }
 }
 
@@ -385,11 +478,13 @@ export type PollInput = {
   backgroundIds: number
   running: number
   teamActive: boolean
+  /** 团队方案已确认、成员还没全部就位。 */
+  teamLaunching?: boolean
 }
 /** 下一次轮询的间隔；null = 不轮询（空闲、页面不可见或未启用）。 */
 export function pollDelay(input: PollInput): number | null {
   if (!input.enabled || !input.visible) return null
-  return input.turnActive || input.backgroundIds > 0 || input.running > 0 || input.teamActive
+  return input.turnActive || input.backgroundIds > 0 || input.running > 0 || input.teamActive || input.teamLaunching
     ? ACTIVE_POLL_MS
     : null
 }
@@ -400,6 +495,10 @@ export type ActivityConfig = {
   turnActive: boolean
   /** 当前活动后台任务 id 的指纹；变化就立刻重读。 */
   backgroundKey: string
+  /** 团队方案的 `planId:state`；变化（比如刚确认）就立刻连团队一起重读。 */
+  teamPlanKey?: string
+  /** 团队正在启动：每次都读团队，成员就位能马上显示。 */
+  teamLaunching?: boolean
 }
 export type ActivityTimers = {
   set(callback: () => void, delay: number): unknown
@@ -464,6 +563,8 @@ export class ActivityStore {
   configure(next: ActivityConfig) {
     const previous = this.#config
     this.#config = next
+    // 方案状态变了（比如刚确认）：下一次读取连团队一起读，哪怕这会儿页面不可见。
+    if ((previous.teamPlanKey ?? '') !== (next.teamPlanKey ?? '')) this.#forceTeam = true
     if (!next.enabled) {
       this.#halt()
       return
@@ -473,10 +574,12 @@ export class ActivityStore {
       return
     }
     if (
+      this.#forceTeam ||
       !previous.enabled ||
       !previous.visible ||
       previous.turnActive !== next.turnActive ||
-      previous.backgroundKey !== next.backgroundKey
+      previous.backgroundKey !== next.backgroundKey ||
+      previous.teamLaunching !== next.teamLaunching
     )
       void this.refresh()
     else this.#schedule()
@@ -496,6 +599,7 @@ export class ActivityStore {
     this.#controller = controller
     const includeTeam =
       this.#forceTeam ||
+      this.#config.teamLaunching === true ||
       this.#teamAbsentAt === undefined ||
       this.#now() - this.#teamAbsentAt >= TEAM_RECHECK_MS
     this.#forceTeam = false
@@ -555,6 +659,7 @@ export class ActivityStore {
       backgroundIds: config.backgroundKey ? config.backgroundKey.split('\n').length : 0,
       running: data.background.filter((task) => task.status === 'running').length,
       teamActive: !!data.team && teamModel(data.team)?.members.some((row) => row.tone === 'run') === true,
+      teamLaunching: config.teamLaunching,
     })
     if (delay === null) return
     this.#poll = this.#timers.set(() => {

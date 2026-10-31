@@ -14,6 +14,7 @@ import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTask
 import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
+import { isTeamLeadNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { admitSessionUserTurn, emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
@@ -145,6 +146,7 @@ import {
 import type {
   SessionStreamState,
 } from './streamBlocks.js'
+import { projectLiveToolResult } from '../services/toolImageMedia.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -740,6 +742,8 @@ export type WebSocketData = {
   sdkToken: string | null
   serverPort: number
   serverHost: string
+  /** The client fetches tool-result images by reference (`?media=ref`). */
+  mediaRefs?: boolean
 }
 
 // Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can
@@ -4222,7 +4226,13 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       const replayText = extractReplayUserText(cliMsg)
       if (scheduledTask && replayText) {
         messages.push({ type: 'user_message_replay', content: String(scheduledTaskDisplayText(replayText)), scheduledTask })
-      } else if (replayText && !isShutdownTeamPrompt(cliMsg.message?.content) && (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))) {
+      } else if (
+        replayText &&
+        !isShutdownTeamPrompt(cliMsg.message?.content) &&
+        // The server's own team notices to the lead are not the user's words.
+        !isTeamLeadNotice(cliMsg.message?.content) &&
+        (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))
+      ) {
         const collaborationEnvelope = parseSessionCollaborationEnvelope(replayText)
         messages.push(collaborationEnvelope
           ? {
@@ -4734,9 +4744,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 
 
 function sendMessage(ws: SessionConnection, message: ServerMessage) {
-  const outgoing = ws.data.clientKind === 'pet'
+  let outgoing = ws.data.clientKind === 'pet'
     ? toPetServerMessage(message)
     : message
+  if (outgoing?.type === 'tool_result' && ws.data.mediaRefs) {
+    outgoing = projectLiveToolResult(outgoing, ws.data.sessionId)
+  }
   if (outgoing) ws.send(JSON.stringify(outgoing))
 }
 

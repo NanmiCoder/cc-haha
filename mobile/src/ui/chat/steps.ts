@@ -1,4 +1,4 @@
-import type { ChatItem } from '../../core/types'
+import type { ChatItem, ToolImage } from '../../core/types'
 import type { DiffLine } from '../../core/operations'
 import type { IconName } from '../icons'
 
@@ -34,7 +34,23 @@ export type ChatRow =
       label: string
       /** 折叠起来的行数（消息 + 步骤组）。 */
       hidden: number
+      /** 折起来的步骤里读到的图片：回合收起时仍显示在折叠条下面。 */
+      images?: NamedToolImage[]
     }
+
+export type NamedToolImage = { image: ToolImage; name: string }
+
+/** 工具结果里的图片，名字取自读取的文件。 */
+export function stepImages(item: ChatItem): NamedToolImage[] {
+  if (!item.images?.length) return []
+  const input = record(item.input)
+  const path = str(input?.file_path) ?? str(input?.path) ?? ''
+  const base = path.split(/[\\/]/).filter(Boolean).pop()
+  return item.images.map((image, index) => ({
+    image,
+    name: base ? (item.images!.length > 1 ? `${base} (${index + 1})` : base) : `图片 ${index + 1}`,
+  }))
+}
 
 const isStep = (item: ChatItem) => item.type === 'tool' || item.type === 'thinking'
 
@@ -314,11 +330,15 @@ export function buildChatRows(
       )
       const key = `turn:${turn.find((entry) => folded.has(entry.row))?.row.key}`
       const turnItems = items.slice(turn[0].index, end < base.length ? base[end].index : items.length)
+      const images = turn.flatMap((entry) =>
+        entry.row.kind === 'steps' && folded.has(entry.row) ? entry.row.steps.flatMap(stepImages) : []
+      )
       rows.push({
         kind: 'turn',
         key,
         label: turnFoldLabel(user, turnItems, end === base.length ? options.clock : undefined),
         hidden: folded.size,
+        ...(images.length ? { images } : {}),
       })
       turn.forEach((entry, position) => {
         if (!folded.has(entry.row)) rows.push(entry.row)

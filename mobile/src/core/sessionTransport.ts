@@ -62,6 +62,13 @@ export type SessionTransportOptions = {
 }
 /** 最新一页和已加载的历史之间隔着几页以内时补齐，超过就只留最新一页。 */
 const BRIDGE_PAGES = 3
+/**
+ * 同步阶段往回补页的总时长。补不上就先用最新一页进入就绪，更早的内容翻页时再取；
+ * 否则一页大的历史就能把 20 秒的同步时限耗光，变成反复重连。
+ */
+const SYNC_BRIDGE_BUDGET_MS = 8000
+/** 按游标记住的旧页：对账重试、重新同步时不再重复下载同一页。 */
+const OLDER_PAGE_MEMO = 16
 
 const defaultTimers: TransportTimers = {
   set: (callback, delay) => setTimeout(callback, delay),
@@ -118,6 +125,7 @@ export class SessionTransport {
   #refreshTimer?: unknown
   #configTimer?: unknown
   #requests = new Set<AbortController>()
+  #olderPages = new Map<string, HistoryPage>()
 
   constructor(options: SessionTransportOptions) {
     this.#options = { ...options }
@@ -441,6 +449,8 @@ export class SessionTransport {
       }
       socket.onmessage = ({ data }) => {
         if (!this.#valid(generation)) return
+        // 任何一帧都说明连接还活着：大消息在慢网上排在 pong 前面时，不能算心跳超时。
+        this.#awaitingPong = false
         const event = parseServerEvent(data)
         if (!event) return
         if (event.type === 'pong') {
@@ -491,7 +501,7 @@ export class SessionTransport {
         { signal: controller.signal }
       )
       if (!this.#valid(generation)) return
-      const history = await this.#joinLatest(latest, controller.signal)
+      const history = await this.#joinLatest(latest, controller.signal, SYNC_BRIDGE_BUDGET_MS)
       if (!this.#valid(generation)) return
       this.#setHistory(history)
       this.#historyEpoch++
@@ -699,6 +709,7 @@ export class SessionTransport {
       if (!this.#valid(generation) || historyEpoch !== this.#historyEpoch)
         return
       // 会话被改写过，旧的游标链作废，只用最新一页。
+      this.#olderPages.clear()
       this.#setHistory(history)
       this.#publish({
         ...this.state,
@@ -778,6 +789,7 @@ export class SessionTransport {
   }
 
   #cleanup() {
+    if (this.#disposed) this.#olderPages.clear()
     for (const timer of [
       this.#reconnectTimer,
       this.#heartbeatTimer,
@@ -891,32 +903,52 @@ export class SessionTransport {
    * 把重新读到的最新一页接到已加载的历史上。新增超过一页时往前补几页再接；
    * 最新一页的开头已在已加载范围里却对不上，说明会话被改写，只用最新的。
    */
-  async #joinLatest(latest: HistoryPage, signal: AbortSignal) {
+  async #joinLatest(latest: HistoryPage, signal: AbortSignal, budgetMs?: number) {
     let page = latest
-    for (let bridged = 0; ; bridged++) {
-      const loaded = this.historyPage
-      const joined = stitchLatestPage(loaded, page)
-      if (joined) return joined
-      const cursor = page.page?.nextCursor
-      const first = page.messages[0]?.id
-      if (
-        bridged >= BRIDGE_PAGES ||
-        !cursor ||
-        loaded?.messages.some((entry) => entry.id === first)
-      )
-        return page
-      try {
-        const older = await this.#options.client.history(
-          this.#options.sessionId,
-          cursor,
-          { signal }
+    // 补页有自己的时限；超时只是少接几页，不算同步失败。
+    const bridge = new AbortController()
+    const stop = () => bridge.abort()
+    signal.addEventListener('abort', stop, { once: true })
+    const deadline = budgetMs === undefined ? undefined : this.#timers.set(stop, budgetMs)
+    try {
+      for (let bridged = 0; ; bridged++) {
+        const loaded = this.historyPage
+        const joined = stitchLatestPage(loaded, page)
+        if (joined) return joined
+        const cursor = page.page?.nextCursor
+        const first = page.messages[0]?.id
+        if (
+          bridged >= BRIDGE_PAGES ||
+          !cursor ||
+          loaded?.messages.some((entry) => entry.id === first)
         )
-        page = mergeHistoryPages(page, older)
-      } catch (error) {
-        if (signal.aborted || this.#isUnauthorized(error)) throw error
-        return page
+          return page
+        try {
+          page = mergeHistoryPages(page, await this.#olderPage(cursor, bridge.signal))
+        } catch (error) {
+          if (signal.aborted || this.#isUnauthorized(error)) throw error
+          return page
+        }
       }
+    } finally {
+      signal.removeEventListener('abort', stop)
+      if (deadline !== undefined) this.#timers.clear(deadline)
     }
+  }
+  /**
+   * 同一个游标对应的旧页内容不变（会话被改写时最新一页会给出新游标），
+   * 对账重试和补页可以直接复用，不必在慢网上再下一遍。
+   */
+  async #olderPage(cursor: string, signal: AbortSignal) {
+    const known = this.#olderPages.get(cursor)
+    if (known) return known
+    const older = await this.#options.client.history(this.#options.sessionId, cursor, { signal })
+    this.#olderPages.set(cursor, older)
+    for (const oldest of this.#olderPages.keys()) {
+      if (this.#olderPages.size <= OLDER_PAGE_MEMO) break
+      this.#olderPages.delete(oldest)
+    }
+    return older
   }
   #setConnection(connection: ConnectionState) {
     this.connection = connection

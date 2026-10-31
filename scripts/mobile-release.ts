@@ -108,7 +108,8 @@ export function planDelivery(input: { platform: Platform, tag: string, commit: s
   }
   const latest = history.sort((a, b) => Date.parse(b.deliveredAt) - Date.parse(a.deliveredAt))[0]
   if (latest && compareVersions(input.version, latest.version) < 0) throw new Error('Refusing to deliver an older mobile version')
-  if (latest?.fingerprint === input.fingerprint) return { build: false, reason: `Unchanged since ${latest.tag} (mobile ${latest.version})`, previous: latest }
+  // An unchanged APK is still attached to this release, so the latest release always offers Android.
+  if (latest?.fingerprint === input.fingerprint) return { build: false, carry: input.platform === 'android', reason: `Unchanged since ${latest.tag} (mobile ${latest.version})`, previous: latest }
   if (latest && compareVersions(input.version, latest.version) === 0) throw new Error('Mobile inputs changed without a mobile version bump. Update mobile/app.json and mobile/package.json before tagging')
   return { build: true, reason: latest ? 'Mobile production inputs changed' : 'First mobile delivery', previous: latest }
 }
@@ -122,6 +123,14 @@ export async function deliverBuild(platform: Platform, build: Build, effects: { 
     const artifact = await effects.uploadApk(build)
     await effects.record({ buildId: build.id, ...artifact })
   }
+}
+
+export async function carryForwardApk(previous: Delivery, effects: { download: (previous: Delivery) => Promise<{ path: string, sha256: string }>, upload: (path: string) => Promise<void>, record: (details: { buildId: string, asset: string, sha256: string }) => Promise<void> }) {
+  if (previous.platform !== 'android' || !previous.asset || !previous.sha256) throw new Error('Only a recorded Android APK can be attached to a later release')
+  const apk = await effects.download(previous)
+  if (apk.sha256 !== previous.sha256) throw new Error('Previously delivered APK no longer matches its recorded checksum')
+  await effects.upload(apk.path)
+  await effects.record({ buildId: previous.buildId, asset: previous.asset, sha256: apk.sha256 })
 }
 
 export function buildMessage(platform: Platform, fingerprint: string) {
@@ -209,7 +218,29 @@ async function main() {
   const plan = planDelivery({ platform, tag, commit, fingerprint, version, deliveries })
   console.log(`${platform}: ${plan.reason}`)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### Mobile ${platform}\n\n${plan.reason}. Mobile version: ${version}.\n`)
-  if (!plan.build || dryRun) return
+  if (dryRun || (!plan.build && !plan.carry)) return
+  const outputDir = resolve(process.env.RUNNER_TEMP ?? root, `mobile-release-${platform}`)
+  mkdirSync(outputDir, { recursive: true })
+  const record = async (details: { buildId: string, asset?: string, sha256?: string }) => {
+    const delivery: Delivery = { schemaVersion: 1, platform, tag, commit, fingerprint, version, ...details, deliveredAt: new Date().toISOString(), destination: platform === 'ios' ? 'app-store-connect' : 'github-release' }
+    parseDelivery(delivery)
+    const path = resolve(outputDir, manifestName)
+    writeFileSync(path, JSON.stringify(delivery, null, 2) + '\n')
+    await gh('release', 'upload', tag, path, '--clobber', '--repo', repo)
+    console.log(`${platform}: delivered mobile ${version}, EAS build ${details.buildId}`)
+  }
+  if (!plan.build) {
+    await carryForwardApk(plan.previous!, {
+      download: async previous => {
+        await gh('release', 'download', previous.tag, '--pattern', previous.asset!, '--dir', outputDir, '--clobber', '--repo', repo)
+        const path = resolve(outputDir, previous.asset!)
+        return { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
+      },
+      upload: async path => { await gh('release', 'upload', tag, path, '--clobber', '--repo', repo) },
+      record,
+    })
+    return
+  }
   if (!process.env.EXPO_TOKEN) throw new Error('Configure EXPO_TOKEN before building')
   const easPath = resolve(mobile, 'eas.json')
   const originalEas = readFileSync(easPath, 'utf8')
@@ -230,8 +261,6 @@ async function main() {
       build = selectReusableBuild(result, input)
       if (!build) throw new Error('EAS did not return a successful build for the release inputs')
     }
-    const outputDir = resolve(process.env.RUNNER_TEMP ?? root, `mobile-release-${platform}`)
-    mkdirSync(outputDir, { recursive: true })
     await deliverBuild(platform, build, {
       submit: async id => {
         // Recover an upload that succeeded before the GitHub manifest could be saved.
@@ -262,14 +291,7 @@ async function main() {
         await gh('release', 'upload', tag, path, '--clobber', '--repo', repo)
         return { asset, sha256: createHash('sha256').update(bytes).digest('hex') }
       },
-      record: async details => {
-        const delivery: Delivery = { schemaVersion: 1, platform, tag, commit, fingerprint, version, ...details, deliveredAt: new Date().toISOString(), destination: platform === 'ios' ? 'app-store-connect' : 'github-release' }
-        parseDelivery(delivery)
-        const path = resolve(outputDir, manifestName)
-        writeFileSync(path, JSON.stringify(delivery, null, 2) + '\n')
-        await gh('release', 'upload', tag, path, '--clobber', '--repo', repo)
-        console.log(`${platform}: delivered mobile ${version}, EAS build ${details.buildId}`)
-      },
+      record,
     })
   } finally {
     writeFileSync(easPath, originalEas)

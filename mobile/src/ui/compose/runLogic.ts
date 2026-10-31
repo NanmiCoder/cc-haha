@@ -90,12 +90,14 @@ export type SendSlot = {
 
 /**
  * 输入框右下角那一个键：
- * 没有内容、正在运行、页面给了停止 → 实心停止方块；
+ * 没有内容、正在运行（或队长空闲而团队成员还在跑）、页面给了停止 → 实心停止方块；
  * 有内容 → 向上箭头（运行中且允许排队时是「排队发送」）；其余是置灰的箭头。
  */
 export function sendSlot(input: {
   hasContent: boolean
   busy: boolean
+  /** 这一轮已结束，但还有可停的后台工作（已确认的团队成员）；有内容时照常直接发送。 */
+  background?: boolean
   queueing: boolean
   disabled: boolean
   picking: boolean
@@ -105,7 +107,7 @@ export function sendSlot(input: {
 }): SendSlot {
   const idle = input.starting ? '开始任务' : '发送'
   if (!input.hasContent) {
-    if (input.busy && input.canStop) return { kind: 'stop', enabled: true, label: '停止' }
+    if ((input.busy || input.background) && input.canStop) return { kind: 'stop', enabled: true, label: '停止' }
     return { kind: 'idle', enabled: false, label: idle }
   }
   if (input.disabled || input.picking) return { kind: 'blocked', enabled: false, label: idle }
