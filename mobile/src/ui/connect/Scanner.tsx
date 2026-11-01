@@ -1,7 +1,8 @@
-import { useRef, useState, type ReactNode } from 'react'
-import { Linking, Pressable, StyleSheet, View } from 'react-native'
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
+import { AppState, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { CameraView, useCameraPermissions } from 'expo-camera'
+import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera'
+import { getPendingResultAsync, launchImageLibraryAsync, type ImagePickerResult } from 'expo-image-picker'
 import { BrandMark, Icon, useColors, type IconName } from '../kit'
 import { Text } from '../Text'
 import { dark } from '../palette'
@@ -14,7 +15,7 @@ const scannerBackground = '#121110'
 const frameSize = 240
 
 /**
- * 「首次打开 · 扫码」：全屏相机取景、扫描框、说明和底部白卡（粘贴 / 手动）。
+ * 「首次打开 · 扫码」：全屏相机取景、扫描框、说明和底部白卡（相册 / 粘贴 / 手动）。
  * 只识别二维码；扫到的内容交给 onScanned，同一内容被拒后不会反复触发。
  */
 export function Scanner({
@@ -46,10 +47,119 @@ export function Scanner({
   const [permission, requestPermission] = useCameraPermissions()
   const [cameraError, setCameraError] = useState('')
   const [torch, setTorch] = useState(false)
+  const [selectingPhoto, setSelectingPhoto] = useState(false)
+  const scanSession = useRef({ active, disposed: false, revision: 0, pending: 0 })
   const handled = useRef<string | null>(null)
-  const cameraOn = active && Boolean(permission?.granted) && !cameraError
+  const cameraOn = active && !selectingPhoto && Boolean(permission?.granted) && !cameraError
+
+  useEffect(() => {
+    const session = scanSession.current
+    session.disposed = false
+    return () => {
+      session.disposed = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const session = scanSession.current
+    session.active = active
+    if (active) void recoverPhoto()
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && session.active) void recoverPhoto()
+    })
+    return () => {
+      subscription.remove()
+      session.active = false
+      session.revision++
+    }
+  }, [active])
+
+  async function selectPhoto() {
+    const session = scanSession.current
+    if (!session.active || session.disposed || session.pending) return
+    const request = ++session.revision
+    const current = () => session.active && !session.disposed && request === session.revision
+    session.pending = request
+    setSelectingPhoto(true)
+    setTorch(false)
+    onNotice('')
+    try {
+      // The system photo picker grants access to the selected image only. It
+      // works even when camera permission was denied; keep the QR uncompressed.
+      const result = await launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: false,
+        quality: 1,
+      })
+      if (current()) await readPhoto(result, current)
+    } catch {
+      if (current()) onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+    } finally {
+      if (!session.disposed && session.pending === request) {
+        session.pending = 0
+        setSelectingPhoto(false)
+      }
+    }
+  }
+
+  async function readPhoto(result: ImagePickerResult, current: () => boolean) {
+    if (result.canceled || !result.assets[0]) return
+    const codes = await scanFromURLAsync(result.assets[0].uri, ['qr'])
+    if (!current()) return
+    const values = [...new Set(codes.map((code) => code.data).filter(Boolean))]
+    if (values.length === 0) {
+      onNotice('图片中没有识别到二维码，请选择清晰的二维码截图。')
+    } else if (values.length > 1) {
+      onNotice('图片中有多个二维码，请裁剪后只保留电脑的连接二维码。')
+    } else {
+      // Reuse the camera/paste parser and confirmation form. Importing a QR
+      // never makes a network request or saves credentials by itself.
+      onScanned(values[0])
+    }
+  }
+
+  // Android may recreate the Activity while its system picker is open. In
+  // that case Expo stores the result here instead of resolving the old promise.
+  const recoverPhoto = useEffectEvent(async () => {
+    const session = scanSession.current
+    const revision = session.revision
+    const current = () => session.active && !session.disposed && session.revision === revision
+    let result: Awaited<ReturnType<typeof getPendingResultAsync>>
+    try {
+      result = await getPendingResultAsync()
+    } catch {
+      if (current()) {
+        session.revision++
+        session.pending = 0
+        setSelectingPhoto(false)
+        onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+      }
+      return
+    }
+    if (!result || !current()) return
+    const request = ++session.revision
+    session.pending = request
+    const recoveredCurrent = () => session.active && !session.disposed && session.revision === request
+    setSelectingPhoto(true)
+    setTorch(false)
+    onNotice('')
+    try {
+      if ('code' in result) throw new Error('Image picker failed')
+      await readPhoto(result, recoveredCurrent)
+    } catch {
+      if (recoveredCurrent()) onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+    } finally {
+      if (!session.disposed && session.pending === request) {
+        session.pending = 0
+        setSelectingPhoto(false)
+      }
+    }
+  })
 
   const leave = (next: () => void) => () => {
+    scanSession.current.revision++
+    scanSession.current.pending = 0
+    setSelectingPhoto(false)
     setTorch(false)
     next()
   }
@@ -106,14 +216,15 @@ export function Scanner({
             setCameraError(`${event.message}。可以粘贴配对链接或手动输入地址。`)
           }}
           onBarcodeScanned={({ data }) => {
-            if (!active || data === handled.current) return
+            const session = scanSession.current
+            if (!session.active || session.disposed || session.pending || data === handled.current) return
             handled.current = data
             setTorch(false)
             onScanned(data)
           }}
         />
       )}
-      <View style={{ flex: 1, paddingTop: top }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, paddingTop: top }}>
         <View
           style={{
             height: 44,
@@ -191,16 +302,11 @@ export function Scanner({
             {'在电脑的 cc-haha 里打开\n「设置 → 手机连接」，选择局域网或 Cloudflare 外出连接'}
           </Text>
           {notice ? (
-            // Absolutely placed under the copy so the scan frame never jumps.
             <View
               accessibilityRole="alert"
               accessibilityLiveRegion="polite"
               style={{
-                position: 'absolute',
-                top: '100%',
-                left: 24,
-                right: 24,
-                marginTop: 12,
+                marginTop: 4,
                 flexDirection: 'row',
                 justifyContent: 'center',
                 gap: 6,
@@ -225,6 +331,13 @@ export function Scanner({
             padding: 8,
           }}
         >
+          <CardRow
+            icon="image"
+            title={selectingPhoto ? '正在识别图片…' : '从相册选择二维码'}
+            disabled={selectingPhoto}
+            onPress={() => void selectPhoto()}
+          />
+          <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 44 }} />
           <CardRow icon="link" title="粘贴配对链接" onPress={leave(onPaste)} />
           <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 44 }} />
           <CardRow icon="pencil" title="手动输入地址" chevron onPress={leave(onManual)} />
@@ -241,7 +354,7 @@ export function Scanner({
             只连你自己电脑上的 cc-haha，用不着模型的 API Key。
           </Text>
         </View>
-      </View>
+      </ScrollView>
     </View>
   )
 }
@@ -327,17 +440,21 @@ function CardRow({
   icon,
   title,
   chevron,
+  disabled,
   onPress,
 }: {
   icon: IconName
   title: string
   chevron?: boolean
+  disabled?: boolean
   onPress(): void
 }) {
   const colors = useColors()
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         height: 52,
@@ -347,6 +464,7 @@ function CardRow({
         paddingHorizontal: 12,
         borderRadius: 18,
         backgroundColor: pressed ? colors.fill : 'transparent',
+        opacity: disabled ? 0.6 : 1,
       })}
     >
       <Icon name={icon} size={20} color={colors.ink2} />
