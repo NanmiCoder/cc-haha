@@ -28,6 +28,7 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
  *   POST   /api/sessions/batch-delete — 批量删除会话
  *   DELETE /api/sessions/:id        — 删除会话
  *   PATCH  /api/sessions/:id        — 重命名会话
+ *   PATCH  /api/sessions/:id/archive — 归档或恢复会话（保留全部内容）
  */
 
 import * as path from 'node:path'
@@ -46,6 +47,7 @@ import {
   ensureCliSessionStartedForControl,
   getSlashCommands,
   listLiveSessionActivity,
+  assertSessionCanArchive,
 } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
@@ -191,6 +193,7 @@ export async function handleSessionsApi(
       if (limit !== null && !/^\d+$/.test(limit)) throw ApiError.badRequest('Invalid limit parameter')
       return Response.json(await sessionService.listProjectHistory({
         projectRoot: url.searchParams.get('projectRoot') ?? '',
+        archived: parseArchivedFilter(url),
         ...(limit !== null ? { limit: Number(limit) } : {}),
         ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
         ...(url.searchParams.has('beforeModifiedAt') ? { beforeModifiedAt: url.searchParams.get('beforeModifiedAt')! } : {}),
@@ -217,6 +220,19 @@ export async function handleSessionsApi(
     // -----------------------------------------------------------------------
     // Sub-resource routes: /api/sessions/:id/messages
     // -----------------------------------------------------------------------
+    if (subResource === 'archive') {
+      if (segments.length !== 4) throw ApiError.notFound('Archive route not found')
+      if (req.method !== 'PATCH') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
+      let body: unknown
+      try { body = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof (body as { archived?: unknown }).archived !== 'boolean') {
+        throw ApiError.badRequest('archived (boolean) is required in request body')
+      }
+      const archived = (body as { archived: boolean }).archived
+      await sessionService.setSessionArchived(sessionId, archived, () => assertSessionCanArchive(sessionId))
+      return Response.json({ success: true, archived })
+    }
+
     if (subResource === 'summary') {
       if (req.method !== 'GET') {
         return Response.json(
@@ -520,6 +536,7 @@ export async function handleSessionsApi(
 // ============================================================================
 
 async function listSessions(req: Request, url: URL): Promise<Response> {
+  const archived = parseArchivedFilter(url)
   const project = url.searchParams.get('project') || undefined
   const view = url.searchParams.get('view')
   const requestedLimit = parseInt(url.searchParams.get('limit') || '20', 10)
@@ -543,6 +560,7 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     }
     return Response.json({
       ...await sessionService.listProjectPreviews(perProjectLimit),
+      archivedSessionIds: sessionService.listArchivedSessionIds(),
       index: localIndexCoordinator.getPublicStatus(),
     })
   }
@@ -551,6 +569,7 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     ...(petAccess ? {} : { project }),
     limit,
     offset: petAccess ? 0 : offset,
+    archived: petAccess ? false : archived,
   })
   if (petAccess) {
     return Response.json({
@@ -571,6 +590,12 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     ...result,
     index: localIndexCoordinator.getPublicStatus(),
   })
+}
+
+function parseArchivedFilter(url: URL): boolean {
+  const value = url.searchParams.get('archived')
+  if (value !== null && value !== 'true' && value !== 'false') throw ApiError.badRequest('Invalid archived parameter')
+  return value === 'true'
 }
 
 async function getSession(sessionId: string): Promise<Response> {

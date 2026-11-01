@@ -88,6 +88,84 @@ test.each(['single', 'batch'] as const)('successful %s deletion cancels the dele
   }
 })
 
+test('archiving and restoring a caller preserves its pending allocation review and power ownership', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  const caller = (await sessionService.findSessionFile(sessionId))!
+  const transcript = await readFile(caller.filePath, 'utf8')
+  const catalog = await import('./sessionModelCatalog.js')
+  const handler = await import('../ws/handler.js')
+  const { handleSessionsApi } = await import('../api/sessions.js')
+  const { handleSessionCollaborationApi, handleSessionCollaborationUiApi } = await import('../api/sessionCollaboration.js')
+  const runtime = { providerId: 'fixture-provider', modelId: 'fixture-model' }
+  spyOn(catalog, 'resolveSessionRuntime').mockResolvedValue(runtime)
+  spyOn(catalog, 'listSessionModels').mockResolvedValue([])
+  const create = spyOn(sessionService, 'createSession').mockRejectedValue(new Error('Review must not create sessions'))
+  const start = spyOn(handler, 'submitSessionTurn').mockRejectedValue(new Error('Review must not start work'))
+  let dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    let service = await getSessionCollaborationService()
+    async function sessions(resource = '', method = 'GET', body?: unknown) {
+      const url = new URL(`http://127.0.0.1/api/sessions${resource}`)
+      const response = await handleSessionsApi(new Request(url, {
+        method,
+        ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      }), url, url.pathname.split('/').filter(Boolean))
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    async function delegation() {
+      const url = new URL(`http://127.0.0.1/api/session-collaboration/${sessionId}/delegation`)
+      const response = await handleSessionCollaborationUiApi(new Request(url), url, service)
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    const response = await handleSessionCollaborationApi(new Request('http://127.0.0.1/api/sessions/collaboration/create-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: 'archive-review', sessions: [{ prompt: 'Wait for user approval', runtime }] }),
+    }), 'create-batch', sessionId, service)
+    expect(response.status).toBe(200)
+    const proposal = await response.json()
+    expect(proposal).toMatchObject({ state: 'review', requiresReview: true })
+    await service.onSessionState(sessionId, 'completed', 'Please confirm the allocation', 'archive-review-result')
+    const before = (await delegation()).batches
+    expect(before).toHaveLength(1)
+    expect(before[0]).toMatchObject({ id: proposal.id, state: 'review', revision: proposal.revision })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).toContain(sessionId)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    expect(await sessions(`/${sessionId}/archive`, 'PATCH', { archived: true })).toEqual({ success: true, archived: true })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).not.toContain(sessionId)
+    expect((await sessions('?archived=true')).sessions).toContainEqual(expect.objectContaining({ id: sessionId, archived: true }))
+    expect(await sessionService.hasSessionStrict(sessionId)).toBe(true)
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    // Restart readiness must use the transcript, even though the caller is
+    // absent from the default list used by the sidebar.
+    dispose()
+    dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    service = await getSessionCollaborationService()
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    expect(await sessions(`/${sessionId}/archive`, 'PATCH', { archived: false })).toEqual({ success: true, archived: false })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).toContain(sessionId)
+    expect((await sessions('?archived=true')).sessions).toHaveLength(0)
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+    expect(await readFile(caller.filePath, 'utf8')).toBe(transcript)
+    expect(create).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
 test('startup excludes a restored review with a missing caller without writing until normal recovery', async () => {
   const previous = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = directory

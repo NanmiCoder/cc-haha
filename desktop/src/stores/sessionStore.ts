@@ -54,6 +54,7 @@ type SessionStore = {
   recentSessionIds: Set<string>
   recentProjectBoundaries: Record<string, RecentProjectBoundary>
   projectSessionTotals: Record<string, number>
+  projectArchivedTotals: Record<string, number>
   projectHistory: Record<string, ProjectHistoryState>
 
   fetchSessions: (project?: string) => Promise<void>
@@ -76,6 +77,7 @@ type SessionStore = {
   deselectSessions: (ids: string[]) => void
   clearSessionSelection: () => void
   renameSession: (id: string, title: string) => Promise<void>
+  setSessionArchived: (id: string, archived: boolean) => Promise<void>
   updateSessionTitle: (id: string, title: string) => void
   updateSessionMessageCount: (id: string, messageCount: number) => void
   updateSessionPermissionMode: (id: string, mode: PermissionMode) => void
@@ -111,6 +113,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   recentSessionIds: new Set(),
   recentProjectBoundaries: {},
   projectSessionTotals: {},
+  projectArchivedTotals: {},
   projectHistory: {},
 
   fetchSessions: async (project?: string) => {
@@ -124,6 +127,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const response = await sessionsApi.list(buildSessionListParams(project))
       if (requestId !== get().sessionListRequestId) return
       const raw = response.sessions
+      const archivedIds = response.archivedSessionIds ? new Set(response.archivedSessionIds) : null
       const indexStatus = response.index ?? null
       useSessionRuntimeStore.getState().syncFromSessions(raw, runtimeSelections)
       let syncedSessions: SessionListItem[] = []
@@ -137,7 +141,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         // page. Closing its tab releases it even while the index is building.
         const retainedSessions = state.sessions.filter((session) => (
           !state.historicalSessionIds.has(session.id) || historicalSessionIds.has(session.id) || projectSessionIds.has(session.id)
-        ))
+        )).map((session) => archivedIds && Boolean(session.archived) !== archivedIds.has(session.id)
+          ? { ...session, archived: archivedIds.has(session.id) }
+          : session)
         const incomingSessions = reconcilePendingCreatedSessions(raw, retainedSessions)
         const incomingIds = new Set(incomingSessions.map((session) => session.id))
         const retainedHistory = retainedSessions.filter((session) => (
@@ -160,6 +166,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           recentProjectBoundaries: shouldRetainRenderedSessions(indexStatus) ? {} : buildRecentProjectBoundaries(raw),
           projectSessionTotals: response.projects
             ? Object.fromEntries(response.projects.map((project) => [project.projectRoot, project.total]))
+            : {},
+          projectArchivedTotals: response.projects
+            ? Object.fromEntries(response.projects.map((project) => [project.projectRoot, project.archivedTotal ?? 0]))
             : {},
           indexStatus,
           isLoading: indexStatus?.state === 'building' && sessions.length === 0,
@@ -455,6 +464,45 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   })),
   clearSessionSelection: () => set({ selectedSessionIds: new Set() }),
 
+  setSessionArchived: async (id, archived) => {
+    // The restored row can be older than the sidebar preview and absent from
+    // the cache. Read its metadata before the mutation, so a failed read leaves
+    // the archive intact and a fully loaded project can regain the actual row.
+    const restored = archived ? null : { ...await sessionsApi.getSummary(id), archived: false }
+    const restoredRoot = restored && (restored.projectRoot || restored.workDir || restored.projectPath)
+    await sessionsApi.setArchived(id, archived)
+    // This is a reversible visibility change. Keep open tabs, workspace state,
+    // runtime selections and connections intact; only delete releases them.
+    if (archived) {
+      pendingCreatedSessionIds.delete(id)
+      excludeDeletedProjectSessions([id])
+    } else {
+      for (const request of projectHistoryRequests.values()) request.excludedSessionIds.delete(id)
+    }
+    invalidateRecentProjectsCache()
+    set((state) => ({
+      sessions: restored
+        ? mergeSessionList([restored, ...state.sessions.filter((session) => session.id !== id)], state.sessions)
+        : state.sessions.map((session) => session.id === id ? { ...session, archived } : session),
+      recentSessionIds: archived ? removeIdsFromSet(state.recentSessionIds, [id]) : state.recentSessionIds,
+      historicalSessionIds: getOpenSessionIds().has(id)
+        ? new Set([...state.historicalSessionIds, id])
+        : state.historicalSessionIds,
+      selectedSessionIds: removeIdsFromSet(state.selectedSessionIds, [id]),
+      projectHistory: archived
+        ? removeProjectHistorySessionIds(state.projectHistory, [id])
+        : Object.fromEntries(Object.entries(state.projectHistory).map(([root, history]) => [root, {
+          ...history,
+          sessionIds: root === restoredRoot ? new Set([...history.sessionIds, id]) : history.sessionIds,
+          excludedSessionIds: removeIdsFromSet(history.excludedSessionIds ?? new Set(), [id]),
+        }])),
+      // A response begun before this mutation may still contain the old flag.
+      sessionListRequestId: ++fetchSessionsRequestId,
+      isLoading: false,
+    }))
+    await get().fetchSessions()
+  },
+
   renameSession: async (id: string, title: string) => {
     await sessionsApi.rename(id, title)
     pendingSessionTitles.set(id, title)
@@ -584,7 +632,7 @@ export function reconcileSessionSnapshots(
   return snapshots.map((snapshot) => {
     const current = currentById.get(snapshot.id)
     return current && sessionModifiedTime(current) >= sessionModifiedTime(snapshot)
-      ? current
+      ? (snapshot.archived !== undefined ? { ...current, archived: snapshot.archived } : current)
       : snapshot
   })
 }

@@ -1,6 +1,19 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  "sidebar.archiveSession": "归档会话",
+  "sidebar.restoreSession": "恢复",
+  "sidebar.archivedSessions": "已归档会话",
+  "sidebar.archiveFailed": "无法归档会话。",
+  "sidebar.archiveBusy": "此会话正在运行或等待输入，请在任务结束后归档。",
+  "sidebar.archiveHint": "归档会话会完整保留历史记录和文件，可打开查看或继续对话，恢复后会重新显示在侧栏中。",
+  "sidebar.archiveEmpty": "暂无已归档会话",
+  "sidebar.archiveLoadFailed": "无法加载已归档会话。",
+  "sidebar.archiveRestoreFailed": "无法恢复会话。",
+  "sidebar.archiveLoadMore": "加载更多已归档会话",
+  "sidebar.archiveOpen": "查看已归档会话：{title}",
+  "sidebar.archiveRestoreNamed": "恢复会话：{title}",
+
   "scheduledChat.workspaceRequired": "请选择新聊天使用的工作目录。",
   "scheduledChat.prompt": "任务指令",
   "scheduledChat.once": "一次",
