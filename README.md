@@ -116,6 +116,16 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.kk-vibe.top/r/j8d6we">
+          <img src="docs/images/sponsors/kkvibe-logo.png" width="180" alt="kk-vibe">
+        </a>
+      </td>
+      <td valign="middle">
+        感谢 <a href="https://www.kk-vibe.top/r/j8d6we">kk-vibe</a> 对本项目的赞助！kk-vibe 覆盖 GPT、Claude、Gemini、DeepSeek 等主流模型，24 小时「鹈鹕骑车」实测，渠道状态随时可查。内置无限画布，支持 GPT、Nano Banana 生图，兼顾编程开发与视觉创作。模型表现看得见 · 无限画布自由创作。
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>中转站导航</b></a>
       </td>
       <td valign="middle">

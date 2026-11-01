@@ -116,6 +116,16 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://www.kk-vibe.top/r/j8d6we">
+          <img src="docs/images/sponsors/kkvibe-logo.png" width="180" alt="kk-vibe">
+        </a>
+      </td>
+      <td valign="middle">
+        Thanks to <a href="https://www.kk-vibe.top/r/j8d6we">kk-vibe</a> for sponsoring this project! kk-vibe covers leading models including GPT, Claude, Gemini, and DeepSeek, runs round-the-clock "pelican riding a bicycle" tests, and lets you check channel status at any time. Its built-in infinite canvas supports GPT and Nano Banana image generation, serving both coding and visual creation. See how models perform · Create freely on an infinite canvas.
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">
