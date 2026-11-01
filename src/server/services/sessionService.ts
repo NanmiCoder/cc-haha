@@ -3831,11 +3831,13 @@ export class SessionService {
 
   /** List all sessions, optionally filtered by physical project path. */
   async listSessions(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const scope = this.getConfigDir()
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const scope = this.getConfigDir()
       const archiveRevision = readSessionArchives(scope).revision
       const result = await this.listSessionsOnce(options)
-      if (scope === this.getConfigDir() && archiveRevision === readSessionArchives(scope).revision) return result
+      // A storage switch belongs to subsequent requests. Repeating this scan
+      // after a switch would replace its original scope with another config's sessions.
+      if (scope !== this.getConfigDir() || archiveRevision === readSessionArchives(scope).revision) return result
     }
     throw new ApiError(409, 'Session archives changed during loading; retry', 'SESSION_LIST_CHANGED')
   }
