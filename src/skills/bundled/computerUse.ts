@@ -93,7 +93,9 @@ App to learn what actually happened.
 Judge the screenshot as well as AX text: Chromium/CEF content
 can visibly change while the AX diff stays empty.
 
-If two consecutive screenshots leave the relevant UI unchanged, the approach is wrong.
+If two consecutive screenshots leave the relevant UI unchanged, the approach is wrong —
+unless the state says the window is on another Space or hidden: its picture can
+lag while the app still takes input, so judge from the accessibility state there.
 Change something real: switch from handle to coordinates, target a different
 element, re-read the full tree with \`app.getAXState({disableDiffing:true})\`, or take a different
 route through the UI such as the menu bar. Repeating the same call a third time

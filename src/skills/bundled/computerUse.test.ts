@@ -42,6 +42,16 @@ describe('computer-use skill content', () => {
     expect(prompt).toContain('menu bar')
   })
 
+  test('does not read a stale off-Space screenshot as a failed approach', async () => {
+    // Observed: a Chromium window behind the user's fullscreen app kept taking
+    // clicks and keys while every capture returned the same frame. The
+    // unchanged-screenshot rule alone sends the model to switch approaches
+    // against actions that worked.
+    const prompt = await computerUsePrompt()
+    expect(prompt).toContain('the approach is wrong —\nunless the state says the window is on another Space or hidden')
+    expect(prompt).toContain('judge from the accessibility state there')
+  })
+
   test('treats a timed-out paste as result-unknown and refreshes before retry', async () => {
     const prompt = await computerUsePrompt()
     expect(prompt).toContain('may have consumed the paste late')

@@ -214,6 +214,23 @@ final class TargetVisibilityPolicyTests: XCTestCase {
         }
     }
 
+    /// Behind the user's fullscreen app the same Chromium frame came back after
+    /// actions that changed the page. "Not covered, so coverage does not
+    /// explain it" would read those actions as failures.
+    func testAWindowOffTheShownSpacesBlamesThePictureNotTheAction() {
+        for liveStreamActive in [true, false] {
+            let notice = TargetVisibilityPolicy.identicalCaptureNotice(
+                windowIsCovered: false,
+                liveStreamActive: liveStreamActive,
+                windowIsOffScreen: true
+            )
+            XCTAssertTrue(notice.contains("not on a Space the user is looking at"))
+            XCTAssertTrue(notice.contains("judge it from the accessibility state"))
+            XCTAssertFalse(notice.contains("not fully covered"))
+            XCTAssertFalse(notice.contains("coverage does not"))
+        }
+    }
+
     func testAVisibleWindowIsToldTheActionMissedRatherThanOfferedAnExcuse() {
         // The first draft said "the action missed OR the window is not
         // repainting — you cannot tell". The window was repainting the whole

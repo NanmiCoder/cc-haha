@@ -137,6 +137,12 @@ enum SyntheticWindowFocus {
         var isActive: @MainActor @Sendable (pid_t) -> Bool
         var hasFocus: @MainActor @Sendable (pid_t) -> Bool
         var acceptsInput: @MainActor @Sendable (pid_t) -> Bool
+        /// True only when the app answered that it is not active. A timeout is
+        /// not an answer, so it can never trigger a fresh activation.
+        var deniesActivation: @MainActor @Sendable (pid_t) -> Bool = { _ in false }
+        /// A hidden app drops input until it is shown, and a full synthetic
+        /// activation is what shows it — without taking the user's foreground.
+        var isHidden: @MainActor @Sendable (pid_t) -> Bool = { _ in false }
         var post: @MainActor @Sendable (Establishment, pid_t, Window?) -> Bool
         var pause: @Sendable () async throws -> Void
         var attempts: Int = 20
@@ -163,8 +169,27 @@ enum SyntheticWindowFocus {
             }
             let active = runtime.isActive(pid)
             let focused = runtime.hasFocus(pid)
-            let (establishment, generation) = state.withLock {
+            let cached = state.withLock {
                 $0.prepare(pid: pid, identity: identity, applicationIsActive: active, applicationHasFocus: focused)
+            }
+            // A cached focus the target itself contradicts is stale. Minimizing
+            // and restoring its window dropped the synthetic activation with no
+            // focus notification (measured on Chromium: AXFrontmost 0 while the
+            // belief still held focus), so establish it again rather than fail.
+            // Never for the user's real frontmost app, and never on a timeout:
+            // the activation click would land in the window they are using.
+            // A hidden app needs the full activation whatever the cache says:
+            // with focus cached, a click into it was dropped and it stayed
+            // hidden (measured on Chromium behind a fullscreen app).
+            let isStale = cached.0 != .activate && !active && (
+                runtime.isHidden(pid) || (cached.0 == .none && runtime.deniesActivation(pid))
+            )
+            let (establishment, generation) = !isStale ? cached : state.withLock {
+                $0.invalidate(pid: pid, identity: identity)
+                return $0.prepare(
+                    pid: pid, identity: identity,
+                    applicationIsActive: active, applicationHasFocus: focused
+                )
             }
             try Task.checkCancellation()
             try runtime.validateContinuity()
@@ -257,12 +282,16 @@ enum SyntheticWindowFocus {
             isActive: { NSWorkspace.shared.frontmostApplication?.processIdentifier == $0 },
             hasFocus: { monitor.isAppCurrentlyFocused(pid: $0) },
             acceptsInput: { acceptsInput(pid: $0) },
+            deniesActivation: { deniesActivation(pid: $0) },
+            isHidden: { NSRunningApplication(processIdentifier: $0)?.isHidden == true },
             post: { establishment, pid, window in
                 switch establishment {
                 case .none: return true
                 case .returnFocus: return post(.keyFocusReturned, to: pid)
                 case .activate:
-                    guard let events = activationEvents(window: window) else { return false }
+                    guard let events = activationEvents(window: activationWindow(
+                        window, appIsHidden: NSRunningApplication(processIdentifier: pid)?.isHidden == true
+                    )) else { return false }
                     for event in events { WindowTargetedEvent.post(event, to: pid) }
                     return true
                 }
@@ -308,6 +337,14 @@ enum SyntheticWindowFocus {
         guard let receipt, monitor.isRegistrationCurrent(receipt) else {
             throw CUError("focus_monitor_interrupted", "Focus monitoring changed before input could be sent.")
         }
+    }
+
+    /// A hidden app's window ignored the window-bound activation and stayed
+    /// hidden, so the click that followed was dropped. The app-level
+    /// activation shows the app again without taking the user's foreground
+    /// (measured on Chromium behind a fullscreen app).
+    static func activationWindow(_ window: Window?, appIsHidden: Bool) -> Window? {
+        appIsHidden ? nil : window
     }
 
     /// The reference's window-bound AppKit activation protocol. The 0xc0000
@@ -362,6 +399,16 @@ enum SyntheticWindowFocus {
         guard pid > 0, let event = notificationEvent(notification) else { return false }
         WindowTargetedEvent.post(event, to: pid)
         return true
+    }
+
+    private static func deniesActivation(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.1)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFrontmostAttribute as CFString, &value) == .success else {
+            return false
+        }
+        return (value as? NSNumber)?.boolValue == false
     }
 
     private static func acceptsInput(pid: pid_t) -> Bool {

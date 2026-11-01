@@ -10,8 +10,9 @@ import XCTest
 /// between the two was a silent fallback to an unbound event that custom
 /// renderers discard.
 ///
-/// These tests hold both halves of the fix in place: the refusal, and the fact
-/// that the model is told why.
+/// These tests hold the on-screen binding refusal in place and what the model
+/// is told when the target is off the shown Spaces. Binding a window on
+/// another Space is covered by `OffScreenActuationTests`.
 final class OffScreenTargetTests: XCTestCase {
     private let point = CGPoint(x: 410, y: 50)
 
@@ -103,42 +104,53 @@ final class OffScreenTargetTests: XCTestCase {
 
     // MARK: - What the model is told
 
-    func testTheModelIsToldWhenTheTargetCannotBeActedOn() {
-        let notice = OffScreenTargetAdvice.noticeIfUnreachable(hasWindowOnScreen: false)
-        XCTAssertNotNil(notice)
-        // The model's instinct on a dead click is to try different coordinates.
-        // Against an off-screen window that is an infinite loop, so the notice
-        // has to close it explicitly rather than merely describe the state.
-        XCTAssertTrue(notice!.contains("no window on screen"))
-        XCTAssertTrue(notice!.contains("Do not retry with different coordinates"))
-        // And it must name the way out, or the model has nothing to do next.
-        XCTAssertTrue(notice!.contains("ask the user to bring it"))
+    func testEachOffScreenReasonIsNamed() {
+        XCTAssertNil(OffScreenTargetAdvice.reason(hasWindowOnScreen: true, appIsHidden: false, keyWindowIsParked: false))
+        XCTAssertEqual(OffScreenTargetAdvice.reason(hasWindowOnScreen: false, appIsHidden: false, keyWindowIsParked: false), .otherSpace)
+        XCTAssertEqual(OffScreenTargetAdvice.reason(hasWindowOnScreen: false, appIsHidden: true, keyWindowIsParked: false), .hidden)
+        // A parked window refuses input even if the app also has another
+        // window on screen; that outranks everything.
+        XCTAssertEqual(OffScreenTargetAdvice.reason(hasWindowOnScreen: true, appIsHidden: false, keyWindowIsParked: true), .parked)
     }
 
-    func testTheNoticeKeepsElementActionsOpen() {
-        // Only coordinate actuation needs on-screen geometry — it is the only
-        // half that hit-tests. Element actions address a node directly and work
-        // on a window in the Dock, which IS the background automation this
-        // feature exists to provide.
-        //
-        // The first draft of this notice said "NOTHING can be clicked or typed".
-        // That reads as a tidy warning and is a capability switch: the model
-        // would stop at the exact moment it should reach for element_index.
-        let notice = try! XCTUnwrap(
-            OffScreenTargetAdvice.noticeIfUnreachable(hasWindowOnScreen: false)
-        )
-        XCTAssertTrue(notice.contains("Element actions still work"))
-        for tool in ["element_index", "set_value", "select_text", "perform_secondary_action"] {
-            XCTAssertTrue(notice.contains(tool), "\(tool) must be named as still usable")
+    func testAnotherSpaceKeepsTheModelWorkingWithoutBringingTheAppForward() {
+        let notice = OffScreenTargetAdvice.notice(for: .otherSpace)
+        XCTAssertTrue(notice.contains("Space the user is not looking at"))
+        XCTAssertTrue(notice.contains("Keep working in the background"))
+        XCTAssertTrue(notice.contains("Do not activate, raise, or reopen"))
+        XCTAssertFalse(notice.contains("Do not retry with different coordinates"))
+        XCTAssertFalse(notice.contains("ask the user to bring it"))
+    }
+
+    func testAPictureThatLagsIsNotReadAsAFailedApproach() {
+        // Chromium stopped repainting on another Space: the same frame came
+        // back across three actions that changed the page.
+        for reason in [OffScreenTargetAdvice.Reason.otherSpace, .hidden] {
+            let notice = OffScreenTargetAdvice.notice(for: reason)
+            XCTAssertTrue(notice.contains("may be older than the accessibility state"), "\(reason)")
+            XCTAssertTrue(notice.contains("does not\nmean an action failed or that the approach is wrong")
+                || notice.contains("does not mean an action failed or that the approach is wrong"), "\(reason)")
+            XCTAssertTrue(notice.contains("bare shell"), "\(reason)")
         }
-        // And it must not overclaim in the other direction either: a shell tree
-        // has no elements to address, so that case needs its own sentence.
-        XCTAssertTrue(notice.contains("bare shell"))
     }
 
-    func testNothingIsSaidWhenTheTargetIsReachable() {
-        // Every get_app_state carries this check; a notice on the normal path
-        // would be noise in every single turn.
-        XCTAssertNil(OffScreenTargetAdvice.noticeIfUnreachable(hasWindowOnScreen: true))
+    func testAHiddenAppIsReadAsItIs() {
+        let notice = OffScreenTargetAdvice.notice(for: .hidden)
+        XCTAssertTrue(notice.contains("hidden (⌘H) and was read as it is"))
+        XCTAssertTrue(notice.contains("without bringing it forward"))
+        // The first click into a window just shown this way did not land.
+        XCTAssertTrue(notice.contains("only shows it again"))
+        XCTAssertTrue(notice.contains("read its state after that, then act"))
+    }
+
+    /// Restored from the Dock behind the user's fullscreen app, the window
+    /// refused clicks until its Space was shown. The model must not believe
+    /// "Action completed" there, nor keep retrying.
+    func testAParkedWindowIsReportedAsRefusingInput() {
+        let notice = OffScreenTargetAdvice.notice(for: .parked)
+        XCTAssertTrue(notice.contains("does not deliver clicks or keys to it"))
+        XCTAssertTrue(notice.contains("actions on it are refused"))
+        XCTAssertTrue(notice.contains("Tell the user"))
+        XCTAssertFalse(notice.contains("still delivered"))
     }
 }
