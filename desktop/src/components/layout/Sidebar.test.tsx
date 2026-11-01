@@ -421,6 +421,7 @@ describe('Sidebar', () => {
   const createSession = vi.fn()
   const deleteSession = vi.fn()
   const deleteSessions = vi.fn()
+  const setSessionArchived = vi.fn()
   const addToast = vi.fn()
 
   beforeEach(() => {
@@ -430,6 +431,7 @@ describe('Sidebar', () => {
     createSession.mockReset()
     deleteSession.mockReset()
     deleteSessions.mockReset()
+    setSessionArchived.mockReset()
     addToast.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockReset()
@@ -482,6 +484,7 @@ describe('Sidebar', () => {
       sessions: [],
       projectHistory: {},
       projectSessionTotals: {},
+      projectArchivedTotals: {},
       recentSessionIds: new Set(),
       recentProjectBoundaries: {},
       historicalSessionIds: new Set(),
@@ -495,6 +498,7 @@ describe('Sidebar', () => {
       createSession,
       deleteSession,
       deleteSessions,
+      setSessionArchived,
     })
     useChatStore.setState({
       connectToSession,
@@ -520,6 +524,42 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_COLLAPSED_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_ORGANIZATION_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
+  })
+
+  it('hides archived rows but keeps an archive-only project discoverable after reload', async () => {
+    useSessionStore.setState({
+      sessions: [{ ...makeSession('archived-1', 'Archived conversation', '/workspace/alpha', '2026-01-01'), archived: true }],
+      projectArchivedTotals: { '/workspace/alpha': 1 },
+    })
+    render(<Sidebar />)
+    expect(screen.queryByText('Archived conversation')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archivedSessions' }))
+    await waitFor(() => expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ projectRoot: '/workspace/alpha', archived: true }), expect.anything(),
+    ))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('archives through the session menu and leaves a rejected session usable', async () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-target', 'Archive target', '/workspace/alpha', '2026-01-01')] })
+    setSessionArchived.mockRejectedValueOnce(new Error('fixture write failure'))
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Archive target'))
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.archiveSession' }))
+    await waitFor(() => expect(setSessionArchived).toHaveBeenCalledWith('archive-target', true))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' })))
+    expect(screen.getByText('Archive target')).toBeInTheDocument()
+    expect(disconnectSession).not.toHaveBeenCalled()
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('disables archiving when the session is waiting for approval', () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-waiting', 'Waiting session', '/workspace/alpha', '2026-01-01')] })
+    useChatStore.setState({ sessions: { 'archive-waiting': makeChatSessionState(openRequest) } })
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Waiting session'))
+    expect(screen.getByRole('button', { name: 'sidebar.archiveSession' })).toBeDisabled()
   })
 
   it('opens an editable draft without allocating a session from the sidebar', async () => {

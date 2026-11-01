@@ -63,6 +63,7 @@ import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
+import { readSessionArchives, withSessionArchiveLock, writeSessionArchive } from '../../utils/sessionArchiveStore.js'
 import {
   extractGoalCreationTitle,
   extractTranscriptUserTitle,
@@ -120,7 +121,10 @@ export type SessionListItem = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
+  archived?: boolean
 }
+
+type SessionListOptions = { project?: string; limit?: number; offset?: number; archived?: boolean }
 
 export type SubagentTranscriptFragment = {
   historyComplete?: boolean
@@ -900,14 +904,15 @@ export class SessionService {
       now: this.now,
       scope: () => this.getConfigDir(),
       revision: () => this.projectHistoryRevision(),
-      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}`,
+      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}:${readSessionArchives(this.getConfigDir()).revision}`,
       load: () => this.loadProjectHistoryRows(),
-      hydrate: async (row) => {
+      archiveIds: () => readSessionArchives(this.getConfigDir()).ids,
+      hydrate: async (row, archived) => {
         try {
           await this.validateIndexedTranscriptPath(
             row.transcriptPath, row.projectPath, row.id, await fs.realpath(this.getProjectsDir()),
           )
-          return await this.hydrateIndexedSession(row)
+          return await this.hydrateIndexedSession(row, undefined, archived)
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           this.markIndexReadFailure()
@@ -923,16 +928,14 @@ export class SessionService {
       : fallback
   }
 
-  private sessionListCacheKey(options: {
-    project?: string
-    limit?: number
-    offset?: number
-  } | undefined, scope = this.getConfigDir()): string {
+  private sessionListCacheKey(options: SessionListOptions | undefined, scope = this.getConfigDir()): string {
     return JSON.stringify({
       scope,
       project: options?.project ?? null,
       limit: options?.limit ?? 50,
       offset: options?.offset ?? 0,
+      archived: options?.archived ?? false,
+      archiveRevision: readSessionArchives(scope).revision,
     })
   }
 
@@ -3698,6 +3701,7 @@ export class SessionService {
     const status = indexed ? this.localIndexGateway.getPublicStatus() : null
     const degradedPlan = indexed ? null : this.getDegradedListPlan()
     return JSON.stringify([scope, this.sessionListCacheGeneration,
+      readSessionArchives(scope).revision,
       indexed && (status?.state === 'ready' || status?.state === 'building')
         ? status.lastUpdatedAt
         : degradedPlan
@@ -3826,11 +3830,19 @@ export class SessionService {
   }
 
   /** List all sessions, optionally filtered by physical project path. */
-  async listSessions(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+  async listSessions(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const scope = this.getConfigDir()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const archiveRevision = readSessionArchives(scope).revision
+      const result = await this.listSessionsOnce(options)
+      // A storage switch belongs to subsequent requests. Repeating this scan
+      // after a switch would replace its original scope with another config's sessions.
+      if (scope !== this.getConfigDir() || archiveRevision === readSessionArchives(scope).revision) return result
+    }
+    throw new ApiError(409, 'Session archives changed during loading; retry', 'SESSION_LIST_CHANGED')
+  }
+
+  private async listSessionsOnce(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
     this.syncSharedMutationEpoch()
     const routingMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
     const hasInvalidPagination = [options?.limit, options?.offset]
@@ -3879,11 +3891,52 @@ export class SessionService {
     return await this.tryListSessionsFromIndex(options) ?? this.listSessionsFromFiles(options)
   }
 
-  private async listSessionsFromFiles(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+  private readArchiveFilteredIndexPage(options: SessionListOptions): { sessions: IndexedSessionRow[]; total: number } {
+    const archiveIds = readSessionArchives(this.getConfigDir()).ids
+    if (archiveIds.size === 0) return options.archived
+      ? { sessions: [], total: 0 }
+      : this.localIndexGateway.listSessions(options)
+    const offset = options.offset ?? 0
+    const limit = options.limit ?? 50
+    const sessions: IndexedSessionRow[] = []
+    let total = 0
+    // Filter cheap index metadata before paginating. Only the returned page is
+    // hydrated; archiving cannot turn a 20-row request into a transcript scan.
+    for (let pageOffset = 0; ; pageOffset += 500) {
+      const page = this.localIndexGateway.listSessions({ project: options.project, offset: pageOffset, limit: 500 })
+      for (const row of page.sessions) {
+        if (archiveIds.has(row.id) !== Boolean(options.archived)) continue
+        if (total >= offset && sessions.length < limit) sessions.push(row)
+        total += 1
+      }
+      if (page.sessions.length === 0 || pageOffset + page.sessions.length >= page.total) break
+    }
+    return { sessions, total }
+  }
+
+  isSessionArchived(sessionId: string): boolean {
+    return readSessionArchives(this.getConfigDir()).ids.has(sessionId)
+  }
+
+  listArchivedSessionIds(): string[] {
+    return [...readSessionArchives(this.getConfigDir()).ids]
+  }
+
+  async setSessionArchived(sessionId: string, archived: boolean, assertIdle: () => void = () => {}): Promise<void> {
+    const scope = this.getConfigDir()
+    await withSessionArchiveLock(scope, async () => {
+      const found = await this.findSessionFile(sessionId)
+      if (!found) throw ApiError.notFound(`Session not found: ${sessionId}`)
+      if (scope !== this.getConfigDir()) throw ApiError.conflict('Session storage changed; retry')
+      // No asynchronous boundary between the final check and the atomic state
+      // write. Cleanup cannot remove the file checked under the same lock.
+      if (archived) assertIdle()
+      writeSessionArchive(scope, sessionId, archived)
+      this.invalidateSessionListCache()
+    })
+  }
+
+  private async listSessionsFromFiles(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
     this.syncSharedMutationEpoch()
     const scope = this.getConfigDir()
     this.prepareSessionListCaches(scope)
@@ -3919,14 +3972,10 @@ export class SessionService {
     }
   }
 
-  private async tryListSessionsFromIndex(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }, requireReady = false): Promise<{ sessions: SessionListItem[]; total: number } | null> {
+  private async tryListSessionsFromIndex(options?: SessionListOptions, requireReady = false): Promise<{ sessions: SessionListItem[]; total: number } | null> {
     const indexedMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
     try {
-      const indexedPage = this.localIndexGateway.listSessions({
+      const indexedPage = this.readArchiveFilteredIndexPage({
         ...(options?.project
           ? {
               project: this.sanitizePath(
@@ -3936,6 +3985,7 @@ export class SessionService {
           : {}),
         ...(options?.limit !== undefined ? { limit: options.limit } : {}),
         ...(options?.offset !== undefined ? { offset: options.offset } : {}),
+        archived: options?.archived,
       })
       if (!this.indexStatusRemainsUsable()) {
         this.markIndexReadFailure()
@@ -3962,7 +4012,7 @@ export class SessionService {
             row.id,
             projectsRoot,
           )
-          sessions.push(await this.hydrateIndexedSession(row, pathExists))
+          sessions.push(await this.hydrateIndexedSession(row, pathExists, Boolean(options?.archived)))
         } catch {
           // Drop a single stale/unreadable row instead of scanning every JSONL.
         }
@@ -3990,7 +4040,7 @@ export class SessionService {
    * in the index's own order before paginating.
    */
   private async tryListSessionsFromDegradedIndex(
-    options: { project?: string; limit?: number; offset?: number } | undefined,
+    options: SessionListOptions | undefined,
     plan: DegradedListPlan,
   ): Promise<{ sessions: SessionListItem[]; total: number } | null> {
     const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
@@ -4016,7 +4066,9 @@ export class SessionService {
       }
       rows.push(...await this.readExcludedTranscriptRows(plan, scope, project))
       if (rows.length === 0) return null
-      rows.sort(compareIndexedListRows)
+      const archiveIds = readSessionArchives(scope).ids
+      const visibleRows = rows.filter(row => archiveIds.has(row.id) === Boolean(options?.archived))
+      visibleRows.sort(compareIndexedListRows)
 
       // Same defaults as the index and file lists.
       const offset = options?.offset ?? 0
@@ -4024,17 +4076,17 @@ export class SessionService {
       const sessions: SessionListItem[] = []
       const pathExists = this.createCachedPathExists()
       const projectsRoot = await fs.realpath(this.getProjectsDir())
-      for (const row of rows.slice(offset, offset + limit)) {
+      for (const row of visibleRows.slice(offset, offset + limit)) {
         try {
           await this.validateIndexedTranscriptPath(row.transcriptPath, row.projectPath, row.id, projectsRoot)
-          sessions.push(await this.hydrateIndexedSession(row, pathExists))
+          sessions.push(await this.hydrateIndexedSession(row, pathExists, Boolean(options?.archived)))
         } catch {
           // Drop a single stale/unreadable row, like the healthy index list.
         }
       }
       if (mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch) return null
-      if (sessions.length === 0) return null
-      return { sessions, total: rows.length }
+      if (sessions.length === 0 && visibleRows.length > 0) return null
+      return { sessions, total: visibleRows.length }
     } catch {
       this.markIndexReadFailure()
       return null
@@ -4044,6 +4096,7 @@ export class SessionService {
   private async hydrateIndexedSession(
     row: IndexedSessionRow,
     pathExists = (targetPath: string | null) => this.pathExists(targetPath),
+    archived = this.isSessionArchived(row.id),
   ): Promise<SessionListItem> {
     const workDir = row.workDir
     const projectRoot = await this.resolveProjectRootFromSessionMetadata({
@@ -4061,6 +4114,7 @@ export class SessionService {
     })
     return {
       id: row.id,
+      ...(archived ? { archived: true } : {}),
       title: row.title,
       createdAt: row.createdAt,
       modifiedAt: row.modifiedAt,
@@ -4156,17 +4210,15 @@ export class SessionService {
   }
 
   private async loadSessionList(
-    options: {
-      project?: string
-      limit?: number
-      offset?: number
-    } | undefined,
+    options: SessionListOptions | undefined,
     cacheKey: string,
     cacheGeneration: number,
     sharedMutationEpoch: number,
     scope: string,
   ): Promise<{ sessions: SessionListItem[]; total: number }> {
-    const sessionFiles = await this.discoverSessionFiles(options?.project, scope)
+    const archiveIds = readSessionArchives(scope).ids
+    const sessionFiles = (await this.discoverSessionFiles(options?.project, scope))
+      .filter(file => archiveIds.has(file.sessionId) === Boolean(options?.archived))
     if (!options?.project && this.activeSessionListCacheScope === scope) {
       const discoveredPaths = new Set(sessionFiles.map(file => file.filePath))
       for (const filePath of this.sessionListSummaryCache.keys()) {
@@ -4237,6 +4289,7 @@ export class SessionService {
 
         items.push({
           id: sessionId,
+          ...(archiveIds.has(sessionId) ? { archived: true } : {}),
           title: summary.title,
           createdAt: summary.createdAt,
           modifiedAt: summary.modifiedAt,
@@ -4346,6 +4399,7 @@ export class SessionService {
     return {
       id: sessionId,
       title,
+      ...(this.isSessionArchived(sessionId) ? { archived: true } : {}),
       createdAt,
       modifiedAt: this.resolveTranscriptModifiedAtFromEntries(entries) ?? stat.mtime.toISOString(),
       messageCount: messages.length,

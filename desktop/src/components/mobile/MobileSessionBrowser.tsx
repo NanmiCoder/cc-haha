@@ -78,9 +78,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
     [projectDisplayNameRevision],
   )
   const visibleSessions = useMemo(
-    () => hiddenProjectKeys.size === 0
-      ? sessions
-      : sessions.filter((session) => !hiddenProjectKeys.has(getSessionProjectKey(session))),
+    () => sessions.filter((session) => !session.archived && !hiddenProjectKeys.has(getSessionProjectKey(session))),
     [hiddenProjectKeys, sessions],
   )
   const projectFilters = useMemo(

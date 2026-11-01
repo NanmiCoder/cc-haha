@@ -137,6 +137,14 @@ describe('MobileShell', () => {
     expect(screen.queryByTestId('mobile-top-bar')).not.toBeInTheDocument()
   })
 
+  it('keeps a viewed archived session out of the mobile default list and project filters', async () => {
+    seed({ sessions: [session('active', 'Active conversation'), { ...session('archived', 'Archived conversation', 90, '/work/archive-only'), archived: true }] })
+    renderShell()
+    expect(await screen.findByText('Active conversation')).toBeInTheDocument()
+    expect(screen.queryByText('Archived conversation')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'archive-only' })).not.toBeInTheDocument()
+  })
+
   it('opens a new task over the list in the filtered project, and the back gesture closes it', async () => {
     seed({
       sessions: [
