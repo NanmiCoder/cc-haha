@@ -1451,6 +1451,16 @@ export const jp: Record<TranslationKey, string> = {
   'settings.activity.modelDetails': 'モデル詳細',
 
   // Settings > Terminal
+  'settings.terminal.fontExample': 'MesloLGS NF',
+  'settings.terminal.fontSizeValue': '{size}px',
+  'settings.terminal.appearance': 'ターミナルの外観',
+  'settings.terminal.appearanceHint': '保存した変更は開いているターミナルにすぐ反映されます。チャットのフォントは独立しています。',
+  'settings.terminal.fontFamily': 'ターミナルのフォント名',
+  'settings.terminal.fontFamilyHint': 'MesloLGS NF や Hack Nerd Font Mono など、インストール済みのフォント名を1つ入力します。空欄は既定値です。フォントや字形がない場合は代替フォントを使います。',
+  'settings.terminal.fontSize': 'ターミナルの文字サイズ',
+  'settings.terminal.saveFont': 'フォント設定を保存',
+  'settings.terminal.fontSaved': 'フォント設定を保存しました',
+  'settings.terminal.resetFont': 'フォントをリセット',
   'settings.terminal.title': 'ターミナル',
   'settings.terminal.description': 'プラグイン、スキル、MCP のセットアップ用にホストマシンのコマンドを実行します。デスクトップアプリには claude-haha が含まれています。ドキュメントの claude <args> を claude-haha <args> に置き換えてください。例: claude-haha plugin install ... や claude-haha mcp add ...',
   'settings.terminal.infoLabel': 'ターミナルセットアップのヘルプ',

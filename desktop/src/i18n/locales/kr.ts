@@ -1453,6 +1453,16 @@ export const kr: Record<TranslationKey, string> = {
   'settings.activity.modelDetails': '모델 상세',
 
   // Settings > Terminal
+  'settings.terminal.fontExample': 'MesloLGS NF',
+  'settings.terminal.fontSizeValue': '{size}px',
+  'settings.terminal.appearance': '터미널 모양',
+  'settings.terminal.appearanceHint': '저장한 변경 사항은 열린 터미널에 즉시 적용됩니다. 채팅 글꼴은 별도로 유지됩니다.',
+  'settings.terminal.fontFamily': '터미널 글꼴 이름',
+  'settings.terminal.fontFamilyHint': 'MesloLGS NF 또는 Hack Nerd Font Mono 등 설치된 글꼴 이름 하나를 입력하세요. 비워 두면 기본값을 사용합니다. 글꼴이나 글리프가 없으면 대체 글꼴을 사용합니다.',
+  'settings.terminal.fontSize': '터미널 글꼴 크기',
+  'settings.terminal.saveFont': '글꼴 설정 저장',
+  'settings.terminal.fontSaved': '글꼴 설정이 저장되었습니다',
+  'settings.terminal.resetFont': '글꼴 초기화',
   'settings.terminal.title': '터미널',
   'settings.terminal.description': '플러그인, 스킬, MCP 설정을 위해 호스트 컴퓨터의 명령을 실행합니다. 데스크톱 앱에는 claude-haha가 포함되어 있습니다. 문서의 claude <args>를 claude-haha <args>로 바꾸세요. 예: claude-haha plugin install ... 또는 claude-haha mcp add ...',
   'settings.terminal.infoLabel': '터미널 설정 도움말',

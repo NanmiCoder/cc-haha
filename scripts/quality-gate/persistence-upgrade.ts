@@ -31,6 +31,11 @@ const checks: Check[] = [
     cwd: 'desktop',
   },
   {
+    title: 'Desktop terminal font settings upgrade shell-only fixtures without rewriting user settings',
+    command: ['bun', 'run', 'test', '--', '--run', 'src/stores/settingsStore.test.ts', '-t', 'desktop terminal'],
+    cwd: 'desktop',
+  },
+  {
     title: 'WebSearch legacy settings remain compatible with the DeepSeek backend',
     command: ['bun', 'test', './src/tools/WebSearchTool/deepseekSearch.test.ts'],
   },

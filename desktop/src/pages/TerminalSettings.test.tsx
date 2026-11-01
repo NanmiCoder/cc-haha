@@ -6,6 +6,8 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { destroyTerminalRuntime, getTerminalRuntime } from '../lib/terminalRuntime'
 import { browserHost } from '../lib/desktopHost/browserHost'
+import { useChatAppearanceStore } from '../stores/chatAppearanceStore'
+import { settingsApi } from '../api/settings'
 
 const terminalMocks = vi.hoisted(() => {
   const terminalInstance = {
@@ -14,7 +16,7 @@ const terminalMocks = vi.hoisted(() => {
     element: null as HTMLElement | null,
     // Real xterm terminals always expose `options`; the theme bridge assigns
     // `options.theme` when the app theme changes.
-    options: {} as { theme?: Record<string, string> },
+    options: {} as { theme?: Record<string, string>; fontFamily?: string; fontSize?: number },
     loadAddon: vi.fn(),
     open: vi.fn(),
     dispose: vi.fn(),
@@ -72,6 +74,8 @@ vi.mock('../api/terminal', () => ({
 
 import { TerminalSettings } from './TerminalSettings'
 
+const realSetDesktopTerminal = useSettingsStore.getState().setDesktopTerminal
+
 describe('TerminalSettings', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -80,6 +84,8 @@ describe('TerminalSettings', () => {
       desktopTerminal: {
         startupShell: 'system',
         customShellPath: '',
+        fontFamily: '',
+        fontSize: 13,
       },
       setDesktopTerminal: vi.fn().mockResolvedValue(undefined),
     })
@@ -161,6 +167,105 @@ describe('TerminalSettings', () => {
     expect(runtime.title).toBe('')
     unmount()
     expect(runtime.restart).toBeNull()
+  })
+
+  it('offers independent terminal typography on macOS and saves through desktopTerminal', async () => {
+    const chatAppearance = useChatAppearanceStore.getState().appearance
+    const save = useSettingsStore.getState().setDesktopTerminal
+    render(<TerminalSettings showPreferences />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal font family' }), {
+      target: { value: 'MesloLGS NF' },
+    })
+    fireEvent.change(screen.getByRole('slider', { name: 'Terminal font size' }), {
+      target: { value: '18' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save font settings' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ fontFamily: 'MesloLGS NF', fontSize: 18 }))
+    expect(useChatAppearanceStore.getState().appearance).toEqual(chatAppearance)
+  })
+
+  it('starts with the saved font, hot-updates and refits without restarting the shell', async () => {
+    terminalMocks.available = true
+    useSettingsStore.setState({ desktopTerminal: {
+      startupShell: 'system', customShellPath: '', fontFamily: 'MesloLGS NF', fontSize: 16,
+    } })
+    document.documentElement.style.setProperty('--font-mono', '"Test Mono", monospace')
+    render(<TerminalSettings />)
+    const host = screen.getByTestId('settings-terminal-host')
+    Object.defineProperties(host, { clientWidth: { value: 800 }, clientHeight: { value: 400 } })
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalledTimes(1))
+    const { Terminal } = await import('@xterm/xterm')
+    expect(Terminal).toHaveBeenLastCalledWith(expect.objectContaining({
+      fontFamily: '"MesloLGS NF", "Test Mono", monospace', fontSize: 16,
+    }))
+    terminalMocks.fitInstance.fit.mockClear()
+    terminalMocks.resize.mockClear()
+    act(() => useSettingsStore.setState({ desktopTerminal: {
+      startupShell: 'system', customShellPath: '', fontFamily: 'Hack Nerd Font Mono', fontSize: 20,
+    } }))
+    expect(terminalMocks.terminalInstance.options).toMatchObject({
+      fontFamily: '"Hack Nerd Font Mono", "Test Mono", monospace', fontSize: 20,
+    })
+    expect(terminalMocks.fitInstance.fit).toHaveBeenCalled()
+    expect(terminalMocks.resize).toHaveBeenCalledWith(7, 80, 24)
+    expect(terminalMocks.spawn).toHaveBeenCalledTimes(1)
+    expect(terminalMocks.kill).not.toHaveBeenCalled()
+    document.documentElement.style.removeProperty('--font-mono')
+  })
+
+  it('reports a failed font save and lets the user restore the defaults', async () => {
+    vi.mocked(useSettingsStore.getState().setDesktopTerminal).mockRejectedValueOnce(new Error('Could not save settings'))
+    render(<TerminalSettings showPreferences />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal font family' }), { target: { value: 'Menlo' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save font settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save settings')
+    expect(screen.queryByText('Font settings saved')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Reset font' }))
+    await waitFor(() => expect(useSettingsStore.getState().setDesktopTerminal).toHaveBeenLastCalledWith({ fontFamily: '', fontSize: 13 }))
+  })
+
+  it('keeps unsaved Windows shell edits when saving terminal typography', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32')
+    vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    useSettingsStore.setState({
+      desktopTerminal: { startupShell: 'custom', customShellPath: 'C:\\old-shell.exe', fontFamily: '', fontSize: 13 },
+      setDesktopTerminal: realSetDesktopTerminal,
+    })
+    render(<TerminalSettings showPreferences />)
+    const shellPath = screen.getByRole('textbox', { name: 'Custom shell path' })
+    fireEvent.change(shellPath, { target: { value: 'C:\\new-shell.exe' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Terminal font family' }), { target: { value: 'Menlo' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save font settings' }))
+    await screen.findByText('Font settings saved')
+    expect(shellPath).toHaveValue('C:\\new-shell.exe')
+    // Saving the independent shell form must also keep the persisted font.
+    fireEvent.click(screen.getByRole('button', { name: 'Save shell' }))
+    await waitFor(() => expect(settingsApi.updateUser).toHaveBeenLastCalledWith({ desktopTerminal: {
+      startupShell: 'custom', customShellPath: 'C:\\new-shell.exe', fontFamily: 'Menlo', fontSize: 13,
+    } }))
+  })
+
+  it('updates hidden terminal typography without shrinking its PTY and applies changes on reattach', async () => {
+    terminalMocks.available = true
+    const first = render(<TerminalSettings runtimeId="font-runtime" preserveOnUnmount active={false} />)
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalledTimes(1))
+    terminalMocks.fitInstance.fit.mockClear()
+    terminalMocks.resize.mockClear()
+    act(() => useSettingsStore.setState({ desktopTerminal: {
+      startupShell: 'system', customShellPath: '', fontFamily: 'Menlo', fontSize: 18,
+    } }))
+    expect(terminalMocks.terminalInstance.options.fontSize).toBe(18)
+    expect(terminalMocks.resize).not.toHaveBeenCalled()
+    expect(terminalMocks.fitInstance.fit).not.toHaveBeenCalled()
+    first.unmount()
+    act(() => useSettingsStore.setState({ desktopTerminal: {
+      startupShell: 'system', customShellPath: '', fontFamily: '', fontSize: 13,
+    } }))
+    render(<TerminalSettings runtimeId="font-runtime" />)
+    expect(terminalMocks.terminalInstance.options.fontSize).toBe(13)
+    expect(terminalMocks.terminalInstance.options.fontFamily).not.toContain('Menlo')
+    expect(terminalMocks.spawn).toHaveBeenCalledTimes(1)
+    destroyTerminalRuntime('font-runtime')
   })
 
   it('shows a desktop-runtime empty state outside Tauri', () => {
