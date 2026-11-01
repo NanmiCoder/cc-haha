@@ -11,7 +11,7 @@ import {
   resolveSubagentRunFromMessages,
   truncateSubagentMessages,
 } from './subagentRunService.js'
-import { sessionService, type MessageEntry } from './sessionService.js'
+import { SessionService, sessionService, type MessageEntry } from './sessionService.js'
 
 let tmpDir: string | null = null
 
@@ -961,7 +961,7 @@ describe('getSubagentRunByTool', () => {
         uuid: `root-terminal-parent-result-${index}`,
         timestamp: `2026-01-01T00:00:0${index + 2}.500Z`,
       })),
-      ...parents.map((parent, index) => makeTaskNotificationEntry(
+      ...parents.flatMap((parent, index) => [0, 1].map(() => makeTaskNotificationEntry(
         leafToolUseId,
         parent.childAgentId,
         parent.status,
@@ -970,7 +970,7 @@ describe('getSubagentRunByTool', () => {
           summary: parent.summary,
           timestamp: `2026-01-01T00:00:1${index}.000Z`,
         },
-      )),
+      ))),
     ])
     for (const [index, parent] of parents.entries()) {
       await writeSubagentTranscriptFile(projectDir, sessionId, parent.agentId, [{
@@ -1521,6 +1521,77 @@ describe('getSubagentRunByTool', () => {
       canSendMessage: true,
     })
   })
+
+  for (const status of ['completed', 'failed', 'stopped'] as const) {
+    it(`keeps a background Agent ${status} when its terminal notification is persisted and replayed`, async () => {
+      await setupTmpConfigDir()
+      const sessionId = crypto.randomUUID()
+      const projectDir = '-tmp-subagent-replayed-terminal'
+      const toolUseId = 'finished-agent-tool'
+      const agentId = 'finished-agent'
+      const entries = [
+        makeAgentToolUseEntry(toolUseId),
+        {
+          ...makeAgentToolUseEntry('still-running-tool'),
+          uuid: 'still-running-use',
+        },
+        {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: toolUseId,
+              content: `Async agent launched successfully.\nagentId: ${agentId}\nThe agent is working in the background.`,
+            }],
+          },
+          uuid: 'background-launch-result',
+          timestamp: '2026-01-01T00:00:02.000Z',
+        },
+      ]
+      await writeSessionFile(projectDir, sessionId, entries)
+      expect(await getSubagentRunByTool(sessionId, toolUseId)).toMatchObject({ status: 'running' })
+
+      const terminal = {
+        taskId: agentId,
+        toolUseId,
+        status,
+        summary: `Agent ${status}`,
+        timestamp: '2026-01-01T00:00:03.000Z',
+      }
+      await sessionService.appendSessionTaskNotification(sessionId, terminal)
+      expect(await getSubagentRunByTool(sessionId, toolUseId)).toMatchObject({ status, canSendMessage: false })
+
+      // The same CLI terminal event is also saved when the parent queues and
+      // drains its XML notification, alongside the desktop's persisted event.
+      const xmlStatus = status === 'stopped' ? 'killed' : status
+      const xml = `<task-notification><task-id>${agentId}</task-id><tool-use-id>${toolUseId}</tool-use-id><status>${xmlStatus}</status><summary>Agent ${status}</summary></task-notification>`
+      const replayEntries = [
+        { type: 'queue-operation', content: xml },
+        { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: xml } },
+        { type: 'user', uuid: 'delivered-notification', message: { role: 'user', content: xml } },
+      ]
+      for (const entry of replayEntries) {
+        await fs.appendFile(
+          path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`),
+          `${JSON.stringify({ ...entry, timestamp: terminal.timestamp })}\n`,
+        )
+        expect(await getSubagentRunByTool(sessionId, toolUseId)).toMatchObject({
+          status,
+          summary: terminal.summary,
+          canSendMessage: false,
+        })
+      }
+
+      // A reconnect/new service must rebuild the same terminal identity from
+      // disk; the unrelated Agent in this session remains active.
+      const reloadedService = new SessionService()
+      const lookup = await reloadedService.getSubagentRunLookup(sessionId, toolUseId)
+      expect(lookup.taskNotifications).toEqual(await reloadedService.getSessionTaskNotifications(sessionId))
+      expect(lookup.taskNotifications).toEqual([terminal])
+      expect(await getSubagentRunByTool(sessionId, 'still-running-tool')).toMatchObject({ status: 'running' })
+    })
+  }
 
   it('ignores unsafe live task ids instead of using them as transcript paths', async () => {
     await setupTmpConfigDir()

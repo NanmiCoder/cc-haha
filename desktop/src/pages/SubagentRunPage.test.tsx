@@ -318,6 +318,59 @@ describe('SubagentRunPage', () => {
     expect(conversation).toHaveTextContent('live file contents')
   })
 
+  it.each(['completed', 'failed', 'stopped'] as const)(
+    'settles a %s ordinary SubAgent from durable history after its stream disconnects',
+    async (status) => {
+      vi.mocked(subagentsApi.getRunByTool)
+        .mockResolvedValueOnce(subagentRun({ status: 'running', messages: [] }))
+        .mockResolvedValue(subagentRun({ status }))
+      const view = render(
+        <SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary SubAgent" />,
+      )
+      const conversation = await screen.findByTestId('subagent-conversation')
+      act(() => {
+        const send = (
+          event: Extract<import('../types/chat').ServerMessage, { type: 'agent_run_event' }>['event'],
+        ) => useChatStore.getState().handleServerMessage('session-1', {
+          type: 'agent_run_event',
+          runAgentId: 'abc123',
+          streamId: `disconnected-${status}`,
+          targetAgentId: 'abc123',
+          event,
+        })
+        send({ type: 'thinking', text: 'Checking the final answer' })
+        send({ type: 'content_start', blockType: 'text' })
+        send({ type: 'content_delta', text: 'Partial answer before disconnect' })
+      })
+      const runSessionId = `${SUBAGENT_TAB_PREFIX}session-1__tool-1`
+      await waitFor(() => expect(conversation).toHaveTextContent('Partial answer before disconnect'))
+      expect(useChatStore.getState().sessions[runSessionId]?.chatState).not.toBe('idle')
+
+      // The socket missed its terminal event. A fresh read of the persisted
+      // terminal must settle the tab without depending on Agent Teams state.
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+      await waitFor(() => expect(useChatStore.getState().sessions[runSessionId]).toMatchObject({
+        chatState: 'idle',
+        agentStreamRevision: 0,
+        streamingText: '',
+        streamingToolInput: '',
+        activeToolUseId: null,
+        activeToolName: null,
+        activeThinkingId: null,
+      }))
+      expect(conversation).toHaveTextContent('Finding')
+      expect(conversation).not.toHaveTextContent('Partial answer before disconnect')
+      expect(within(screen.getByTestId('session-header')).getByText(
+        status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : 'Stopped',
+      )).toBeInTheDocument()
+
+      view.unmount()
+      render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary SubAgent" />)
+      expect(await screen.findByText('Finding')).toBeInTheDocument()
+      expect(useChatStore.getState().sessions[runSessionId]?.chatState).toBe('idle')
+    },
+  )
+
   it('keeps a live SubAgent turn across a stale poll, then reconciles the next durable poll', async () => {
     const stalePoll = deferred<SubagentRunResponse>()
     vi.mocked(subagentsApi.getRunByTool)

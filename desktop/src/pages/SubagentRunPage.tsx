@@ -239,8 +239,12 @@ export function SubagentRunPage({
         preferCurrent: (existing.historyMutationEpoch ?? 0) !== responseActivityEpoch,
       })
       const currentStreamRevision = existing.agentStreamRevision ?? 0
+      const isTerminal = effectiveStatus === 'completed' ||
+        effectiveStatus === 'failed' || effectiveStatus === 'stopped'
+      // A reconnect can miss the stream's idle event. A fresh durable terminal
+      // settles that stream; an older poll must still preserve a newer turn.
       const preserveLiveConversation = currentStreamRevision > 0 && (
-        existing.chatState !== 'idle' ||
+        (existing.chatState !== 'idle' && !isTerminal) ||
         currentStreamRevision !== responseStreamRevision
       )
       return {
