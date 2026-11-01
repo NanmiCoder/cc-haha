@@ -752,6 +752,22 @@ function advanceAgentStreamRevision(sessionId: string): void {
   }))
 }
 
+/** Settle a durable terminal only if its read still describes this stream. */
+export function settleAgentRunSession(sessionId: string, requestedStreamRevision: number): void {
+  const session = useChatStore.getState().sessions[sessionId]
+  if (!session || (session.agentStreamRevision ?? 0) !== requestedStreamRevision) return
+
+  const streamId = activeAgentStreamIdBySession.get(sessionId)
+  if (streamId) retireAgentStream(sessionId, streamId)
+  activeAgentStreamIdBySession.delete(sessionId)
+  clearPendingToolInputDelta(sessionId)
+  clearPendingTaskToolUseIds(sessionId)
+  clearPendingToolParentUseIds(sessionId)
+  // Reuse the live idle boundary to drain buffered text, stop the elapsed
+  // timer, clear retry/fallback activity and settle the tab's running marker.
+  useChatStore.getState().handleServerMessage(sessionId, { type: 'status', state: 'idle' })
+}
+
 function dispatchAgentRunEvent(
   sourceSessionId: string,
   event: Extract<ServerMessage, { type: 'agent_run_event' }>,
