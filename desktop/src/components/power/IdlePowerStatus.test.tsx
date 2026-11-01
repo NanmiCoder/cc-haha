@@ -6,6 +6,7 @@ import { DEFAULT_IDLE_POWER_SETTINGS, type IdlePowerState } from '@/lib/idlePowe
 import { useIdlePowerStore } from '@/stores/idlePowerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { usePowerSettingsStore } from '@/stores/powerSettingsStore'
+import { createDefaultSessionState, settleAgentRunSession, useChatStore } from '@/stores/chatStore'
 import { IdlePowerStatus } from './IdlePowerStatus'
 import { App } from '@/App'
 
@@ -85,6 +86,55 @@ describe('global idle power status', () => {
     expect(screen.getByText(text)).toBeInTheDocument()
     unmount()
     expect(unlisten).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps App power status owned by the host when a local SubAgent settles or remains stale', async () => {
+    const previousSessions = useChatStore.getState().sessions
+    const tabId = '__subagent__power-boundary__tool-1'
+    const configure = vi.fn(async () => nativeState)
+    const readState = vi.fn(async () => nativeState)
+    nativeState = { ...nativeState, countdown: null }
+    window.desktopHost!.power = {
+      ...window.desktopHost!.power,
+      getIdleActionState: readState,
+      configureIdleAction: configure,
+    }
+    useIdlePowerStore.setState({ snapshot: null })
+    useChatStore.setState({ sessions: {
+      ...previousSessions,
+      [tabId]: { ...createDefaultSessionState(), chatState: 'thinking', agentStreamRevision: 1 },
+    } })
+    const view = render(<App />)
+    try {
+      await waitFor(() => expect(useIdlePowerStore.getState().snapshot).toEqual(nativeState))
+      expect(listen).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('region', { name: 'After-task system action' })).not.toBeInTheDocument()
+
+      act(() => settleAgentRunSession(tabId, 1))
+      expect(useChatStore.getState().sessions[tabId]?.chatState).toBe('idle')
+      expect(useIdlePowerStore.getState().snapshot).toEqual(nativeState)
+      expect(screen.queryByRole('button', { name: 'Cancel idle action' })).not.toBeInTheDocument()
+      expect(readState).toHaveBeenCalledTimes(1)
+      expect(configure).not.toHaveBeenCalled()
+      expect(cancel).not.toHaveBeenCalled()
+
+      // This mocked bridge proves only renderer ownership. The real HTTP
+      // server/controller regression proves background work and approvals
+      // prevent eligibility. A stale renderer marker cannot override the host.
+      act(() => useChatStore.setState({ sessions: {
+        ...useChatStore.getState().sessions,
+        [tabId]: { ...useChatStore.getState().sessions[tabId]!, chatState: 'thinking' },
+      } }))
+      nativeState = { ...nativeState, countdown: { id: 'host-authorized', action: 'sleep', deadline: Date.now() + 60_000 } }
+      act(() => listener?.(nativeState))
+      expect(screen.getByText('Sleep in 60 seconds.')).toBeInTheDocument()
+      expect(useChatStore.getState().sessions[tabId]?.chatState).toBe('thinking')
+      expect(configure).not.toHaveBeenCalled()
+      expect(cancel).not.toHaveBeenCalled()
+    } finally {
+      view.unmount()
+      useChatStore.setState({ sessions: previousSessions })
+    }
   })
 
   it.each([

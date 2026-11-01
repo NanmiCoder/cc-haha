@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createQualityGateSandbox, type QualityGateSandbox } from '../../../scripts/quality-gate/sandbox.js'
 import { createOfflineTestEnvironment } from '../../../scripts/pr/test-environment.js'
@@ -36,12 +36,15 @@ afterEach(async () => {
 })
 
 async function waitFor(condition: () => boolean | Promise<boolean>, label: string): Promise<void> {
-  const deadline = Date.now() + 5_000
-  while (!(await condition()) && Date.now() < deadline) await Bun.sleep(5)
+  const deadline = performance.now() + 5_000
+  while (!(await condition()) && performance.now() < deadline) await Bun.sleep(5)
   if (!(await condition())) throw new Error(`Timed out waiting for ${label}`)
 }
 
-async function startHarness(scope: IdlePowerSettings['scope']) {
+async function startHarness(scope: IdlePowerSettings['scope'], options: {
+  countdownSeconds?: IdlePowerSettings['countdownSeconds']
+  quietPeriodMs?: number
+} = {}) {
   const { handleSessionsApi } = await import('../api/sessions.js')
   const { cronScheduler } = await import('../services/cronScheduler.js')
   const { CronService } = await import('../services/cronService.js')
@@ -93,12 +96,12 @@ async function startHarness(scope: IdlePowerSettings['scope']) {
   let lastAction: IdlePowerRecord | null = null
   let prepareDispatch: (() => Promise<void>) | undefined
   const idleSince = Date.now() - 100_000
-  const sessionId = `idle-power-main-${crypto.randomUUID()}`
+  const sessionId = crypto.randomUUID()
   const backgroundSessionId = `idle-power-background-${crypto.randomUUID()}`
 
   function startController() {
     const service = new IdlePowerService({
-      settings: { action: 'sleep', scope, countdownSeconds: 0 },
+      settings: { action: 'sleep', scope, countdownSeconds: options.countdownSeconds ?? 0 },
       lastAction,
       capabilities: { lock: true, sleep: true, hibernate: false, shutdown: true },
       async readActivity(signal) {
@@ -122,7 +125,7 @@ async function startHarness(scope: IdlePowerSettings['scope']) {
       onChange: () => {},
       getIdleSeconds: () => Math.floor((Date.now() - idleSince) / 1000),
       pollIntervalMs: 10,
-      quietPeriodMs: 20,
+      quietPeriodMs: options.quietPeriodMs ?? 20,
     })
     services.push(service)
     service.start()
@@ -260,3 +263,151 @@ test('the final HTTP recheck cancels when new work starts and finishes during pl
   expect(h.dispatch).not.toHaveBeenCalled()
   expect(service.getState().countdown).toBeNull()
 }, 10_000)
+
+test('replayed subagent completion preserves live ownership and new work resets quiet time and cancels countdown', async () => {
+  const h = await startHarness('any', { countdownSeconds: 30, quietPeriodMs: 1_000 })
+  const { SessionService } = await import('../services/sessionService.js')
+  const { getSubagentRunByTool } = await import('../services/subagentRunService.js')
+  const { conversationService } = await import('../services/conversationService.js')
+  const toolUseId = 'ordinary-agent-tool'
+  const agentId = 'ordinary-agent'
+  const project = join(sandbox.configDir, 'projects', 'idle-power-subagent')
+  const transcript = join(project, `${h.sessionId}.jsonl`)
+  const subagents = join(project, h.sessionId, 'subagents')
+  await mkdir(subagents, { recursive: true })
+  await writeFile(transcript, [
+    { type: 'session-meta', workDir: sandbox.home },
+    { type: 'assistant', uuid: 'agent-use', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: toolUseId, name: 'Agent', input: { description: 'Offline exploration', prompt: 'Read fixture files' } },
+    ] } },
+    { type: 'user', uuid: 'agent-launch', message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: toolUseId, content: `Async agent launched successfully.\nagentId: ${agentId}\nThe agent is working in the background.` },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+  await writeFile(join(subagents, `agent-${agentId}.jsonl`), JSON.stringify({
+    type: 'assistant', uuid: 'agent-answer', timestamp: '2026-01-01T00:00:02.000Z',
+    message: { role: 'assistant', content: 'Fixture exploration complete' },
+  }) + '\n')
+
+  let cliOutput: (message: Record<string, unknown>) => void = () => { throw new Error('CLI output not attached') }
+  spyOn(conversationService, 'hasSession').mockImplementation(id => id === h.sessionId)
+  spyOn(conversationService, 'getActiveSessions').mockReturnValue([h.sessionId])
+  spyOn(conversationService, 'onOutput').mockImplementation((_id, callback) => { cliOutput = callback })
+  spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+  const socket = {
+    data: { sessionId: h.sessionId, channel: 'client', clientKind: 'full', connectedAt: Date.now(), sdkToken: null, serverPort: 0, serverHost: '127.0.0.1' },
+    send: mock(() => {}), close: mock(() => {}),
+  } as unknown as Parameters<typeof h.handleWebSocket.open>[0]
+  h.handleWebSocket.open(socket)
+  const startTask = (taskId: string, taskType = 'local_bash', tool = `tool-${taskId}`) => cliOutput({
+    type: 'system', subtype: 'task_started', task_id: taskId, task_type: taskType, tool_use_id: tool,
+  })
+  async function completeTask(taskId: string, tool = `tool-${taskId}`) {
+    const terminal = { type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: tool,
+      status: 'completed', summary: 'Fixture task complete', timestamp: '2026-01-01T00:00:03.000Z', uuid: `terminal-${taskId}` }
+    cliOutput(terminal)
+    await h.__persistCliTaskNotificationForTests(h.sessionId, terminal, { propagateFailure: true })
+    return terminal
+  }
+  let now = Date.now()
+  spyOn(Date, 'now').mockImplementation(() => now)
+  const service = h.startController()
+  try {
+    await h.observePolls(2)
+    const baseline = h.snapshots.at(-1)!
+    h.markSessionChatQueued(h.sessionId)
+    cliOutput({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+    startTask(agentId, 'local_agent', toolUseId)
+    startTask('still-live-shell')
+    cliOutput({ type: 'result', is_error: false, result: 'Root finished; background work remains' })
+    expect(await getSubagentRunByTool(h.sessionId, toolUseId)).toMatchObject({ status: 'running' })
+    const terminal = await completeTask(agentId, toolUseId)
+    const xml = `<task-notification><task-id>${agentId}</task-id><tool-use-id>${toolUseId}</tool-use-id><status>completed</status><summary>${terminal.summary}</summary></task-notification>`
+    for (const entry of [
+      { type: 'queue-operation', content: xml },
+      { type: 'attachment', attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: xml } },
+      { type: 'user', uuid: 'delivered-terminal', message: { role: 'user', content: xml } },
+    ]) await appendFile(transcript, JSON.stringify({ ...entry, timestamp: terminal.timestamp }) + '\n')
+    const reloaded = new SessionService()
+    const lookup = await reloaded.getSubagentRunLookup(h.sessionId, toolUseId)
+    expect(lookup.taskNotifications).toEqual(await reloaded.getSessionTaskNotifications(h.sessionId))
+    expect(lookup.taskNotifications).toHaveLength(1)
+    expect(await getSubagentRunByTool(h.sessionId, toolUseId)).toMatchObject({
+      status: 'completed', canSendMessage: false, source: 'subagent-jsonl',
+      messages: [{ content: 'Fixture exploration complete' }],
+    })
+    cliOutput(terminal)
+    await h.observePolls(2)
+    expect(h.snapshots.at(-1)).toMatchObject({ busy: true, completionSequence: baseline.completionSequence + 2 })
+    expect(h.notifications).not.toHaveBeenCalled()
+
+    // A durable ordinary-agent terminal cannot manufacture the missing raw
+    // CLI idle boundary, even after its last background task finishes.
+    await completeTask('still-live-shell')
+    await h.observePolls(2)
+    expect(h.activeBackgroundTaskIds.has(h.sessionId)).toBe(false)
+    expect(h.snapshots.at(-1)?.busy).toBe(true)
+    expect(h.getSessionChatActivityState(h.sessionId)).toBe('running')
+    // After that boundary arrives, detached background work still owns busy.
+    startTask('independent-shell')
+    cliOutput({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
+    await h.observePolls(2)
+    expect(h.snapshots.at(-1)?.busy).toBe(true)
+    expect(h.activeBackgroundTaskIds.get(h.sessionId)).toEqual(new Set(['independent-shell']))
+    const approvalId = `subagent-power-approval-${crypto.randomUUID()}`
+    const approval = h.computerUseApprovalService.requestApproval(h.sessionId, {
+      requestId: approvalId, reason: 'Independent fixture decision', apps: [], requestedFlags: {}, screenshotFiltering: 'none',
+    }).catch(error => error)
+    await completeTask('independent-shell')
+    await h.observePolls(2)
+    expect(h.activeBackgroundTaskIds.has(h.sessionId)).toBe(false)
+    expect(h.snapshots.at(-1)?.busy).toBe(true)
+    expect(h.notifications).not.toHaveBeenCalled()
+    expect(h.computerUseApprovalService.resolveApproval(approvalId, {
+      granted: [], denied: [], flags: { clipboardRead: false, clipboardWrite: false, systemKeyCombos: false },
+    })).toBe(true)
+    await approval
+    await h.observePolls(2)
+    expect(h.snapshots.at(-1)?.busy).toBe(false)
+
+    now += 500
+    startTask('quiet-period-work')
+    await h.observePolls(2)
+    now += 2_000
+    await h.observePolls(2)
+    expect(h.notifications).not.toHaveBeenCalled()
+    await completeTask('quiet-period-work')
+    await h.observePolls(2)
+    now += 999
+    await h.observePolls(2)
+    expect(service.getState().countdown).toBeNull()
+    now += 1
+    await waitFor(() => service.getState().countdown !== null, 'quiet period after fresh work')
+    expect(h.notifications).toHaveBeenCalledTimes(1)
+    expect(service.getState().countdown?.deadline).toBe(now + 30_000)
+
+    startTask('countdown-work')
+    await waitFor(() => service.getState().notice === 'new-work', 'live task cancels countdown')
+    expect(service.getState().countdown).toBeNull()
+    now += 30_001
+    await h.observePolls(2)
+    expect(h.dispatch).not.toHaveBeenCalled()
+    const finalTerminal = await completeTask('countdown-work')
+    await h.observePolls(2)
+    now += 1_000
+    await waitFor(() => service.getState().countdown !== null, 'new completion countdown')
+    expect(h.notifications).toHaveBeenCalledTimes(2)
+    now += 30_000
+    await waitFor(() => service.getState().lastAction?.result === 'accepted', 'one guarded dispatch after final completion')
+    expect(h.dispatch).toHaveBeenCalledTimes(1)
+    expect(h.recheckRequests).toEqual([1])
+    cliOutput(terminal)
+    cliOutput(finalTerminal)
+    await h.observePolls(8)
+    expect(h.snapshots.at(-1)).toMatchObject({ busy: false, completionSequence: baseline.completionSequence + 6 })
+    expect(h.notifications).toHaveBeenCalledTimes(2)
+    expect(h.dispatch).toHaveBeenCalledTimes(1)
+  } finally {
+    h.handleWebSocket.close(socket, 1000, 'fixture complete')
+  }
+}, 15_000)
