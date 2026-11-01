@@ -4,6 +4,7 @@ import { settingsApi } from '../api/settings'
 import { modelsApi } from '../api/models'
 import { h5AccessApi } from '../api/h5Access'
 import { tracesApi } from '../api/traces'
+import { DEFAULT_TERMINAL_FONT_SIZE, normalizeTerminalFontSize } from '../lib/terminalTheme'
 import {
   isMaxConcurrentSubagents,
   type AppMode,
@@ -129,7 +130,7 @@ type SettingsStore = {
   setOutputStyle: (outputStyle: string, workDir?: string | null) => Promise<void>
   setSkipWebFetchPreflight: (enabled: boolean) => Promise<void>
   setDesktopNotificationsEnabled: (enabled: boolean) => Promise<void>
-  setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
+  setDesktopTerminal: (settings: Partial<DesktopTerminalSettings>) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
   setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
@@ -168,6 +169,8 @@ const DEFAULT_H5_ACCESS_SETTINGS: H5AccessSettings = {
 const DEFAULT_DESKTOP_TERMINAL_SETTINGS: DesktopTerminalSettings = {
   startupShell: 'system',
   customShellPath: '',
+  fontFamily: '',
+  fontSize: DEFAULT_TERMINAL_FONT_SIZE,
 }
 let desktopTerminalSaveQueue: Promise<void> = Promise.resolve()
 let desktopTerminalSaveVersion = 0
@@ -591,7 +594,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   setDesktopTerminal: async (settings) => {
-    const next = normalizeDesktopTerminalSettings(settings)
+    const next = normalizeDesktopTerminalSettings({ ...get().desktopTerminal, ...settings })
     const saveVersion = ++desktopTerminalSaveVersion
     set({ desktopTerminal: next })
     const save = desktopTerminalSaveQueue
@@ -939,6 +942,10 @@ function normalizeDesktopTerminalSettings(
     customShellPath: typeof settings?.customShellPath === 'string'
       ? settings.customShellPath
       : DEFAULT_DESKTOP_TERMINAL_SETTINGS.customShellPath,
+    // Forward read migration for shell-only settings. Do not rewrite the
+    // user-owned JSON until a preference is explicitly saved.
+    fontFamily: typeof settings?.fontFamily === 'string' ? settings.fontFamily.trim() : '',
+    fontSize: normalizeTerminalFontSize(settings?.fontSize),
   }
 }
 

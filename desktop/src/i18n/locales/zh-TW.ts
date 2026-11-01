@@ -1450,6 +1450,16 @@ export const zh: Record<TranslationKey, string> = {
   'settings.activity.modelDetails': '模型明細',
 
   // Settings > Terminal
+  'settings.terminal.fontExample': 'MesloLGS NF',
+  'settings.terminal.fontSizeValue': '{size}px',
+  "settings.terminal.appearance": "終端外觀",
+  "settings.terminal.appearanceHint": "儲存後立即套用至已開啟的終端，聊天字體不受影響。",
+  "settings.terminal.fontFamily": "終端字體家族",
+  "settings.terminal.fontFamilyHint": "填入一個已安裝的字體家族，如 MesloLGS NF 或 Hack Nerd Font Mono。留空使用預設字體；字體或字形缺失時使用替代字體。",
+  "settings.terminal.fontSize": "終端字號",
+  "settings.terminal.saveFont": "儲存字體設定",
+  "settings.terminal.fontSaved": "字體設定已儲存",
+  "settings.terminal.resetFont": "重設字體",
   'settings.terminal.title': '終端',
   'settings.terminal.description': '直接執行宿主機命令，用於安裝外掛、Skills、MCP 等擴充套件。桌面端已內建 claude-haha；文件裡的 claude <引數> 可替換成 claude-haha <引數>，例如 claude-haha plugin install ... 或 claude-haha mcp add ...',
   'settings.terminal.infoLabel': '終端安裝說明',
