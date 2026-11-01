@@ -135,7 +135,7 @@ let idlePowerInitialization: Promise<IdlePowerService> | null = null
 async function getIdlePowerService(): Promise<IdlePowerService> {
   const rendererGeneration = idlePowerRendererGeneration
   idlePowerInitialization ??= createIdlePowerHost({
-    app, monitor: powerMonitor, screen, NotificationClass: Notification,
+    app, blocker: powerSaveBlocker, monitor: powerMonitor, screen, NotificationClass: Notification,
     locale: () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
     readActivity: signal => {
       if (isQuitting || dataMigration?.running || areStorageWritesFrozen()) throw new Error('Desktop is unavailable')
@@ -155,6 +155,7 @@ const preventSleepService = new PreventSleepService({
   blocker: powerSaveBlocker,
   readActivity: signal => readPreventSleepActivity(resolveMainRendererServerAccess(), signal),
   onError: () => console.warn('[desktop] failed to refresh prevent-sleep activity'),
+  beforeIdleRelease: () => idlePowerService?.prepareIdleHandoff(),
 })
 
 // Must run before anything logs: a Finder/Dock launch inherits unreadable

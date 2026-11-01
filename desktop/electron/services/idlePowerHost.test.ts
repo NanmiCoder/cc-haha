@@ -44,6 +44,7 @@ async function fixture() {
   const app = { getPath: (_name: 'userData') => home }
   const options = {
     app,
+    blocker: { start: vi.fn(() => 1), stop: vi.fn(() => true) },
     NotificationClass: FakeNotification,
     locale: () => 'zh' as const,
     monitor: { getSystemIdleTime: () => Math.floor(Date.now() / 1000) },
@@ -68,12 +69,14 @@ describe('native idle-power integration with mocked OS and notification boundary
     await advanceTime(0)
     f.complete()
     await advanceTime(6000)
+    expect(f.options.blocker.start).toHaveBeenCalledWith('prevent-app-suspension')
     expect(f.notifications[0]!.options.body).toContain('30')
     expect(f.notifications[0]!.options.body).toContain('关机')
     f.notifications[0]!.emit('click')
     await advanceTime(31_000)
     expect(f.dispatch).not.toHaveBeenCalled()
     expect(f.service.getState().notice).toBe('cancelled')
+    expect(f.options.blocker.stop).toHaveBeenCalledTimes(1)
     f.complete()
     await advanceTime(37_000)
     expect(f.dispatch).toHaveBeenCalledTimes(1)

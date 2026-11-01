@@ -19,6 +19,8 @@ type PreventSleepOptions = {
   blocker: Pick<PowerSaveBlocker, 'start' | 'stop'>
   readActivity: (signal: AbortSignal) => Promise<boolean>
   onError: () => void
+  /** Synchronously acquire a successor assertion before releasing an idle task blocker. */
+  beforeIdleRelease?: () => void
   pollIntervalMs?: number
 }
 
@@ -70,6 +72,7 @@ export class PreventSleepService {
         AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       ]))
       if (generation !== this.generation) return
+      if (!active && this.blockerId !== null) this.options.beforeIdleRelease?.()
       this.setBlocked(active)
       this.failed = false
     } catch {

@@ -1,4 +1,4 @@
-import type { PowerMonitor, Screen, WebContents } from 'electron'
+import type { PowerMonitor, PowerSaveBlocker, Screen, WebContents } from 'electron'
 import { en } from '../../src/i18n/locales/en'
 import { zh } from '../../src/i18n/locales/zh'
 import { zh as zhTW } from '../../src/i18n/locales/zh-TW'
@@ -14,6 +14,7 @@ import { sendDesktopNotification, type ElectronNotificationConstructor } from '.
 const dictionaries: Record<Locale, Record<string, string>> = { en, zh, 'zh-TW': zhTW, jp, kr }
 export async function createIdlePowerHost(options: {
   app: PowerPreferenceApp
+  blocker: Pick<PowerSaveBlocker, 'start' | 'stop'>
   monitor: Pick<PowerMonitor, 'getSystemIdleTime'>
   screen: Pick<Screen, 'getCursorScreenPoint'>
   NotificationClass: ElectronNotificationConstructor
@@ -33,6 +34,7 @@ export async function createIdlePowerHost(options: {
   const capabilities = await (options.detectCapabilities ?? detectPowerCapabilities)()
   const service = new IdlePowerService({
     settings: preferences.settings,
+    blocker: options.blocker,
     lastAction: preferences.lastAction,
     capabilities,
     readActivity: options.readActivity,

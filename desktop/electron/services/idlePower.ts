@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { PowerSaveBlocker } from 'electron'
 import type { PreviewLocalAccess } from './previewSession'
 import {
   isIdlePowerSettings,
@@ -38,6 +39,7 @@ export async function readIdlePowerActivity(
 
 type Options = {
   settings: IdlePowerSettings
+  blocker?: Pick<PowerSaveBlocker, 'start' | 'stop'>
   lastAction: IdlePowerRecord | null
   capabilities: IdlePowerCapabilities
   readActivity(signal: AbortSignal): Promise<PowerActivitySnapshot>
@@ -57,6 +59,8 @@ type Options = {
 export class IdlePowerService {
   private state: IdlePowerState
   private running = false
+  private blockerId: number | null = null
+  private dispatchGeneration: number | null = null
   private disposed = false
   private generation = 0
   private observed: PowerActivitySnapshot | null = null
@@ -84,6 +88,32 @@ export class IdlePowerService {
       if (this.state.countdown && this.hasUserInput()) this.cancel('user-activity')
     }, 250)
     this.schedule(0)
+  }
+
+  /** Called synchronously before PreventSleep releases its final task assertion. */
+  prepareIdleHandoff(): void {
+    const action = this.state.settings.action
+    if (!this.running || this.disposed || !this.options.blocker
+      || action === 'none' || !this.state.capabilities[action] || this.dispatchGeneration === this.generation) return
+    this.setBlocked(true)
+    // A read started before this handoff may still describe the old busy state.
+    // Preserve the completion baseline but validate ownership using a new read.
+    this.generation += 1
+    this.request?.abort()
+    this.request = null
+    if (this.timer !== null) clearTimeout(this.timer)
+    this.timer = null
+    this.schedule(0)
+  }
+
+  private setBlocked(blocked: boolean): void {
+    if (blocked && this.blockerId === null && this.options.blocker) {
+      this.blockerId = this.options.blocker.start('prevent-app-suspension')
+    } else if (!blocked && this.blockerId !== null) {
+      const id = this.blockerId
+      this.blockerId = null
+      this.options.blocker!.stop(id)
+    }
   }
 
   configure(settings: IdlePowerSettings): IdlePowerState {
@@ -134,6 +164,7 @@ export class IdlePowerService {
     this.countdownInput = null
     this.pendingCompletion = false
     this.quietSince = null
+    this.setBlocked(false)
   }
 
   private schedule(delay = this.options.pollIntervalMs ?? 1000): void {
@@ -178,6 +209,7 @@ export class IdlePowerService {
         if (this.state.countdown) this.cancel('unavailable')
         this.pendingCompletion = false
         this.quietSince = null
+        this.setBlocked(false)
         return
       }
       if (this.state.countdown) {
@@ -189,7 +221,11 @@ export class IdlePowerService {
       const sequence = this.state.settings.scope === 'scheduled' ? 'scheduledCompletionSequence' : 'completionSequence'
       if (snapshot[sequence] > previous[sequence]) this.pendingCompletion = true
       if (snapshot.busy || snapshot.revision !== previous.revision) this.quietSince = null
-      if (!this.pendingCompletion || snapshot.busy) return
+      if (!this.pendingCompletion || snapshot.busy) {
+        this.setBlocked(false)
+        return
+      }
+      this.setBlocked(true)
       this.quietSince ??= Date.now()
       if (Date.now() - this.quietSince < (this.options.quietPeriodMs ?? 5000)) return
       const action = this.state.settings.action
@@ -239,6 +275,10 @@ export class IdlePowerService {
         this.countdownInput = null
         this.pendingCompletion = false
         this.emit()
+        // The final fresh check and durable journal are complete. Releasing here
+        // lets the selected OS action proceed without suppressing manual sleep.
+        this.dispatchGeneration = generation
+        this.setBlocked(false)
       })
       if (!dispatched) throw new Error('Power backend did not validate dispatch')
       this.state.lastAction = { ...this.state.lastAction!, result: 'accepted' }
