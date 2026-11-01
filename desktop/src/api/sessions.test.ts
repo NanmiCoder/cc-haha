@@ -8,6 +8,22 @@ describe('sessionsApi', () => {
     vi.restoreAllMocks()
   })
 
+  it('queries archived sessions separately and changes archive state without deleting history', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{}', {
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await sessionsApi.list({ archived: true, limit: 50 })
+    await sessionsApi.listProjectHistory({ projectRoot: '/workspace/repo', archived: true, limit: 50 })
+    await sessionsApi.setArchived('session-1', true)
+    await sessionsApi.setArchived('session-1', false)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions?limit=50&archived=true')
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/project-history?projectRoot=%2Fworkspace%2Frepo&limit=50&archived=true')
+    expect(fetchMock.mock.calls.slice(2).map(([url, init]) => [url, init?.method, init?.body])).toEqual([
+      ['http://127.0.0.1:3456/api/sessions/session-1/archive', 'PATCH', '{"archived":true}'],
+      ['http://127.0.0.1:3456/api/sessions/session-1/archive', 'PATCH', '{"archived":false}'],
+    ])
+  })
+
   it('lists a project history page without excluding sessions older than 30 days', async () => {
     const session = {
       id: 'old-session',

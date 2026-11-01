@@ -9,15 +9,16 @@ export type ProjectHistoryOptions = {
   cursor?: string
   beforeModifiedAt?: string
   beforeId?: string
+  archived?: boolean
 }
 export type ProjectHistoryPage = { sessions: SessionListItem[]; nextCursor: string | null }
 export type ProjectSessionPreviews = {
   sessions: SessionListItem[]
-  projects: Array<{ projectRoot: string; total: number }>
+  projects: Array<{ projectRoot: string; total: number; archivedTotal?: number }>
   total: number
 }
 export type ProjectHistoryRow = IndexedSessionRow & { logicalProjectRoot: string }
-type Snapshot = { scope: string; root: string; expiresAt: number; rows: ProjectHistoryRow[] }
+type Snapshot = { scope: string; root: string; archived: boolean; expiresAt: number; rows: ProjectHistoryRow[] }
 
 const SNAPSHOT_TTL_MS = 5 * 60_000
 const SNAPSHOT_LIMIT = 16
@@ -35,7 +36,8 @@ export class ProjectSessionHistory {
     revision: () => string
     mutation: () => string
     load: () => Promise<ProjectHistoryRow[]>
-    hydrate: (row: ProjectHistoryRow) => Promise<SessionListItem | null>
+    hydrate: (row: ProjectHistoryRow, archived: boolean) => Promise<SessionListItem | null>
+    archiveIds: () => ReadonlySet<string>
   }) {}
 
   async list(options: ProjectHistoryOptions): Promise<ProjectHistoryPage> {
@@ -65,22 +67,23 @@ export class ProjectSessionHistory {
       offset = decoded.offset
       const found = this.snapshots.get(snapshotId)
       if (!found) throw this.expired()
-      if (found.scope !== scope || found.root !== projectRoot) throw ApiError.badRequest('Cursor does not belong to this project')
+      if (found.scope !== scope || found.root !== projectRoot || found.archived !== Boolean(options.archived)) throw ApiError.badRequest('Cursor does not belong to this project or archive view')
       if (offset > found.rows.length) throw ApiError.badRequest('Invalid cursor position')
       snapshot = found
     } else {
       const catalog = await this.loadCatalog()
       if (scope !== this.source.scope()) throw this.expired()
       const seen = new Set<string>()
+      const archiveIds = this.source.archiveIds()
       const rows = catalog.filter((row) => {
-        if (row.logicalProjectRoot !== projectRoot || seen.has(row.id)) return false
+        if (row.logicalProjectRoot !== projectRoot || seen.has(row.id) || archiveIds.has(row.id) !== Boolean(options.archived)) return false
         seen.add(row.id)
         if (beforeTime === null) return true
         const time = Date.parse(row.modifiedAt)
         return row.id !== beforeId && (time < beforeTime || (time === beforeTime && row.id.localeCompare(beforeId!) > 0))
       })
       snapshotId = randomUUID()
-      snapshot = { scope, root: projectRoot, expiresAt: this.source.now() + SNAPSHOT_TTL_MS, rows }
+      snapshot = { scope, root: projectRoot, archived: Boolean(options.archived), expiresAt: this.source.now() + SNAPSHOT_TTL_MS, rows }
       this.snapshots.set(snapshotId, snapshot)
       this.prune(scope)
     }
@@ -89,10 +92,13 @@ export class ProjectSessionHistory {
     // position but not a rendered row, so sparse pages still make progress.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const mutation = this.source.mutation()
+      const archiveIds = this.source.archiveIds()
       const sessions: SessionListItem[] = []
       let nextOffset = offset
       while (nextOffset < snapshot.rows.length && sessions.length < limit && nextOffset - offset < limit * 2) {
-        const session = await this.source.hydrate(snapshot.rows[nextOffset++]!)
+        const row = snapshot.rows[nextOffset++]!
+        if (archiveIds.has(row.id) !== snapshot.archived) continue
+        const session = await this.source.hydrate(row, snapshot.archived)
         if (session) sessions.push(session)
       }
       if (mutation !== this.source.mutation()) continue
@@ -123,16 +129,21 @@ export class ProjectSessionHistory {
       const mutation = this.source.mutation()
       const catalog = await this.loadCatalog()
       if (scope !== this.source.scope()) throw this.expired()
+      const archiveIds = this.source.archiveIds()
 
-      const grouped = new Map<string, { total: number; rows: ProjectHistoryRow[]; seen: Set<string> }>()
+      const grouped = new Map<string, { total: number; archivedTotal: number; rows: ProjectHistoryRow[]; seen: Set<string> }>()
       for (const row of catalog) {
         let project = grouped.get(row.logicalProjectRoot)
         if (!project) {
-          project = { total: 0, rows: [], seen: new Set() }
+          project = { total: 0, archivedTotal: 0, rows: [], seen: new Set() }
           grouped.set(row.logicalProjectRoot, project)
         }
         if (project.seen.has(row.id)) continue
         project.seen.add(row.id)
+        if (archiveIds.has(row.id)) {
+          project.archivedTotal += 1
+          continue
+        }
         project.total += 1
         // Keep a bounded fallback tail so a handful of stale index rows do not
         // leave an otherwise healthy project preview empty.
@@ -143,7 +154,7 @@ export class ProjectSessionHistory {
       for (const project of grouped.values()) {
         let hydrated = 0
         for (const row of project.rows) {
-          const session = await this.source.hydrate(row)
+          const session = await this.source.hydrate(row, false)
           if (session) {
             sessions.push(session)
             hydrated += 1
@@ -158,6 +169,7 @@ export class ProjectSessionHistory {
       const projects = [...grouped.entries()].map(([projectRoot, project]) => ({
         projectRoot,
         total: project.total,
+        ...(project.archivedTotal > 0 ? { archivedTotal: project.archivedTotal } : {}),
       }))
       return {
         sessions,

@@ -1,4 +1,17 @@
 export const en = {
+  "sidebar.archiveSession": "Archive session",
+  "sidebar.restoreSession": "Restore",
+  "sidebar.archivedSessions": "Archived sessions",
+  "sidebar.archiveFailed": "Could not archive the session.",
+  "sidebar.archiveBusy": "This session is running or waiting for input. Archive it after its work finishes.",
+  "sidebar.archiveHint": "Archived sessions keep their full history and files. Open one to view or continue it; restore it to show it in the sidebar again.",
+  "sidebar.archiveEmpty": "No archived sessions",
+  "sidebar.archiveLoadFailed": "Could not load archived sessions.",
+  "sidebar.archiveRestoreFailed": "Could not restore the session.",
+  "sidebar.archiveLoadMore": "Load more archived sessions",
+  "sidebar.archiveOpen": "Open archived session: {title}",
+  "sidebar.archiveRestoreNamed": "Restore session: {title}",
+
   "scheduledChat.workspaceRequired": "Choose a workspace folder for new chats.",
   "scheduledChat.prompt": "Task instructions",
   "scheduledChat.once": "Once",

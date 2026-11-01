@@ -1,6 +1,19 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  "sidebar.archiveSession": "封存對話",
+  "sidebar.restoreSession": "還原",
+  "sidebar.archivedSessions": "已封存對話",
+  "sidebar.archiveFailed": "無法封存對話。",
+  "sidebar.archiveBusy": "此對話正在執行或等待輸入，請在任務結束後封存。",
+  "sidebar.archiveHint": "封存對話會完整保留歷史記錄和檔案，可開啟查看或繼續對話，還原後會重新顯示在側欄中。",
+  "sidebar.archiveEmpty": "尚無已封存對話",
+  "sidebar.archiveLoadFailed": "無法載入已封存對話。",
+  "sidebar.archiveRestoreFailed": "無法還原對話。",
+  "sidebar.archiveLoadMore": "載入更多已封存對話",
+  "sidebar.archiveOpen": "檢視已封存對話：{title}",
+  "sidebar.archiveRestoreNamed": "還原對話：{title}",
+
   "scheduledChat.workspaceRequired": "請選擇新聊天使用的工作目錄。",
   "scheduledChat.prompt": "任務指令",
   "scheduledChat.once": "一次",

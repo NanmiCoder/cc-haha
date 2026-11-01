@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { branchMock, createMock, deleteMock, batchDeleteMock, listMock, projectHistoryMock, invalidateRecentProjectsCacheMock } = vi.hoisted(() => ({
+const { branchMock, createMock, deleteMock, batchDeleteMock, listMock, projectHistoryMock, archiveMock, summaryMock, invalidateRecentProjectsCacheMock } = vi.hoisted(() => ({
   branchMock: vi.fn(),
   createMock: vi.fn(),
   deleteMock: vi.fn(),
   batchDeleteMock: vi.fn(),
   listMock: vi.fn(),
   projectHistoryMock: vi.fn(),
+  archiveMock: vi.fn(),
+  summaryMock: vi.fn(),
   invalidateRecentProjectsCacheMock: vi.fn(),
 }))
 
@@ -19,6 +21,8 @@ vi.mock('../api/sessions', () => ({
     delete: deleteMock,
     batchDelete: batchDeleteMock,
     rename: vi.fn(),
+    setArchived: archiveMock,
+    getSummary: summaryMock,
   },
 }))
 
@@ -86,6 +90,8 @@ describe('sessionStore', () => {
     batchDeleteMock.mockReset()
     listMock.mockReset()
     projectHistoryMock.mockReset()
+    archiveMock.mockReset()
+    summaryMock.mockReset()
     invalidateRecentProjectsCacheMock.mockReset()
     useSessionStore.setState({
       ...initialState,
@@ -106,6 +112,77 @@ describe('sessionStore', () => {
     useSettingsStore.setState({ permissionMode: 'default' })
     useTabStore.setState({ tabs: [], activeTabId: null })
     useSessionRuntimeStore.setState({ selections: {} })
+  })
+
+  it('archives a loaded session without releasing its open tab or runtime selection, and rejects a stale list', async () => {
+    const item = makeSession('archive-open', '2026-10-01T00:00:00Z')
+    useSessionStore.getState().openHistoricalSession(item)
+    useSessionRuntimeStore.getState().setSelection(item.id, { providerId: 'fixture', modelId: 'test' })
+    useSessionStore.setState({ recentSessionIds: new Set([item.id]), projectSessionTotals: { '/workspace/project': 1 } })
+    const pending = createDeferred<{ sessions: typeof item[]; total: number }>()
+    listMock.mockReturnValueOnce(pending.promise).mockResolvedValue({ sessions: [], total: 0, projects: [{ projectRoot: '/workspace/project', total: 0, archivedTotal: 1 }] })
+    const refresh = useSessionStore.getState().fetchSessions()
+    archiveMock.mockResolvedValue({ success: true, archived: true })
+    await useSessionStore.getState().setSessionArchived(item.id, true)
+    pending.resolve({ sessions: [item], total: 1 })
+    await refresh
+    expect(useSessionStore.getState().sessions.find(s => s.id === item.id)?.archived).toBe(true)
+    expect(useSessionStore.getState().recentSessionIds.has(item.id)).toBe(false)
+    expect(useSessionStore.getState().projectArchivedTotals['/workspace/project']).toBe(1)
+    expect(useTabStore.getState().tabs.some(tab => tab.type === 'session' && tab.sessionId === item.id)).toBe(true)
+    expect(useSessionRuntimeStore.getState().selections[item.id]).toEqual({ providerId: 'fixture', modelId: 'test' })
+    expect(deleteMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves a session on archive rejection and can restore archived metadata', async () => {
+    const item = makeSession('archive-restore', '2026-10-01T00:00:00Z')
+    useSessionStore.getState().openHistoricalSession(item)
+    archiveMock.mockRejectedValueOnce(new ApiError(409, { code: 'SESSION_ACTIVE', message: 'Session is active' }))
+    await expect(useSessionStore.getState().setSessionArchived(item.id, true)).rejects.toMatchObject({ status: 409 })
+    expect(useSessionStore.getState().sessions[0]?.archived).not.toBe(true)
+    useSessionStore.setState({ sessions: [{ ...item, archived: true }] })
+    archiveMock.mockResolvedValue({ success: true, archived: false })
+    summaryMock.mockResolvedValue({ ...item, archived: true })
+    listMock.mockResolvedValue({ sessions: [{ ...item, archived: false }], total: 1 })
+    await useSessionStore.getState().setSessionArchived(item.id, false)
+    expect(useSessionStore.getState().sessions[0]?.archived).toBe(false)
+    expect(archiveMock).toHaveBeenLastCalledWith(item.id, false)
+  })
+
+  it('refreshes archive flags on cached historical tabs when another client archives or restores them', async () => {
+    const item = makeSession('archive-other-client', '2020-01-01T00:00:00Z')
+    useSessionStore.getState().openHistoricalSession(item)
+    listMock.mockResolvedValueOnce({ sessions: [], total: 0, archivedSessionIds: [item.id] })
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions.find(s => s.id === item.id)?.archived).toBe(true)
+    listMock.mockResolvedValueOnce({ sessions: [], total: 100, archivedSessionIds: [] })
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions.find(s => s.id === item.id)?.archived).toBe(false)
+  })
+
+  it('honors an archive browser snapshot while preserving newer cached session metadata', () => {
+    const item = makeSession('archive-open-snapshot', '2026-10-01T00:00:00Z', 'Newer local title')
+    useSessionStore.setState({ sessions: [item] })
+    useSessionStore.getState().openHistoricalSession({ ...item, title: 'Old title', modifiedAt: '2020-01-01T00:00:00Z', archived: true })
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({ id: item.id, title: item.title, archived: true })
+  })
+
+  it('puts a restored old session back into an expanded project even after its final history page', async () => {
+    const root = '/workspace/project'
+    const recent = Array.from({ length: 6 }, (_, index) => makeSession(`archive-recent-${index}`, `2026-10-0${index + 1}T00:00:00Z`))
+    const old = makeSession('archive-old-last-page', '2020-01-01T00:00:00Z')
+    listMock.mockResolvedValue({ sessions: recent, total: 7, projects: [{ projectRoot: root, total: 7 }] })
+    projectHistoryMock.mockResolvedValue({ sessions: [old], nextCursor: null })
+    archiveMock.mockResolvedValue({ success: true })
+    summaryMock.mockResolvedValue({ ...old, archived: true })
+    await useSessionStore.getState().fetchSessions()
+    await useSessionStore.getState().loadMoreProjectSessions(root)
+    await useSessionStore.getState().setSessionArchived(old.id, true)
+    expect(useSessionStore.getState().sessions.some(session => session.id === old.id)).toBe(false)
+    await useSessionStore.getState().setSessionArchived(old.id, false)
+    expect(useSessionStore.getState().sessions.find(session => session.id === old.id)).toMatchObject({ archived: false })
+    expect(useSessionStore.getState().projectHistory[root]?.sessionIds.has(old.id)).toBe(true)
+    expect(useSessionStore.getState().projectHistory[root]?.hasMore).toBe(false)
   })
 
   it('returns a new session id before the background refresh completes', async () => {

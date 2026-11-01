@@ -545,6 +545,14 @@ function hasActiveSessionWork(sessionId: string): boolean {
     hasActiveTeamWorkForParent(sessionId)
 }
 
+/** Archiving changes visibility only; it must never hide work at admission or
+ * require stopping a CLI, permission request, background task, or team. */
+export function assertSessionCanArchive(sessionId: string): void {
+  if (hasActiveSessionWork(sessionId) || getSessionChatActivityState(sessionId) === 'waiting' || legacyQueuedSessionChats.has(sessionId)) {
+    throw new ApiError(409, 'Wait for this session to finish before archiving it', 'SESSION_ACTIVE')
+  }
+}
+
 export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
   // An explicit stop wins over permission queues that the CLI has not emitted
   // cancellation events for yet. Otherwise the stopped pet would remain stuck

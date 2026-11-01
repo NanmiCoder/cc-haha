@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Session archive metadata migration and transcript-preserving restart recovery',
+    command: ['bun', 'test', './src/server/__tests__/session-archive.test.ts', './src/utils/cleanup.sessionArchive.test.ts'],
+  },
+  {
     title: 'Issue router shared SQLite schema migration and consistent backup recovery',
     command: ['bun', '--no-env-file', 'test', './scripts/issue-router/persistence.test.ts'],
   },
