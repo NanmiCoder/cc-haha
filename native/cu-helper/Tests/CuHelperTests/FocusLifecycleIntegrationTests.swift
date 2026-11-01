@@ -138,11 +138,74 @@ final class FocusLifecycleIntegrationTests: XCTestCase {
         XCTAssertEqual(external.snapshot.actions, ["recovered"])
     }
 
-    func testCachedFocusStillRequiresTheTargetToAcceptInput() async throws {
+    /// Minimizing and restoring a Chromium window dropped its synthetic
+    /// activation without any focus notification. The cached belief is stale,
+    /// so it is established again in the same request instead of failing it.
+    func testCachedFocusTheTargetContradictsIsEstablishedAgain() async throws {
         let coordinator = SyntheticWindowFocus.Coordinator()
         let external = FocusExternalRuntime()
         try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
         external.update { $0.acceptsInput = false }
+
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.recordAction("click")
+
+        XCTAssertEqual(external.snapshot.posts, ["activate", "activate"])
+        XCTAssertEqual(external.snapshot.actions, ["click"])
+    }
+
+    /// A timeout says nothing about the target's activation, so it must not
+    /// post a fresh activation (and its activation click).
+    func testATimedOutReadNeverTriggersAFreshActivation() async throws {
+        let coordinator = SyntheticWindowFocus.Coordinator()
+        let external = FocusExternalRuntime()
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.update { $0.acceptsInput = false; $0.axAnswers = false }
+        do {
+            try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+            external.recordAction("must-not-run")
+            XCTFail("an unanswered read is not an acknowledgement")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "focus_not_accepted")
+        }
+        XCTAssertEqual(external.snapshot.posts, ["activate"])
+        XCTAssertTrue(external.snapshot.actions.isEmpty)
+    }
+
+    /// A hidden app with focus cached dropped a click and stayed hidden. The
+    /// full activation is what shows it again, without taking the foreground.
+    func testAHiddenAppIsActivatedAgainWhateverTheCacheSays() async throws {
+        let coordinator = SyntheticWindowFocus.Coordinator()
+        let external = FocusExternalRuntime()
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.update { $0.isHidden = true }
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.recordAction("click")
+        XCTAssertEqual(external.snapshot.posts, ["activate", "activate"])
+        XCTAssertEqual(external.snapshot.actions, ["click"])
+    }
+
+    /// The activation click would land in the window the user is working in.
+    func testTheUsersRealFrontmostAppIsNeverReactivated() async throws {
+        let coordinator = SyntheticWindowFocus.Coordinator()
+        let external = FocusExternalRuntime()
+        external.update { $0.isActive = true; $0.hasFocus = true; $0.acceptsInput = true }
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.update { $0.acceptsInput = false }
+        do {
+            try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+            XCTFail("a frontmost app that does not acknowledge must not receive input")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "focus_not_accepted")
+        }
+        XCTAssertTrue(external.snapshot.posts.isEmpty)
+    }
+
+    func testCachedFocusStillRequiresTheTargetToAcceptInput() async throws {
+        let coordinator = SyntheticWindowFocus.Coordinator()
+        let external = FocusExternalRuntime()
+        try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
+        external.update { $0.acceptsInput = false; $0.acceptOnPost = false }
         do {
             try await coordinator.prepare(pid: targetPID, window: nil, runtime: external.runtime())
             external.recordAction("must-not-run")
@@ -151,7 +214,7 @@ final class FocusLifecycleIntegrationTests: XCTestCase {
             XCTAssertEqual(error.code, "focus_not_accepted")
         }
         XCTAssertTrue(external.snapshot.actions.isEmpty)
-        XCTAssertEqual(external.snapshot.posts, ["activate"])
+        XCTAssertEqual(external.snapshot.posts, ["activate", "activate"])
     }
 
     func testFailedEventConstructionDoesNotCommitBeliefAndCanRetry() async throws {
@@ -465,6 +528,9 @@ private final class FocusExternalRuntime: @unchecked Sendable {
         var isActive = false
         var hasFocus = false
         var acceptsInput = false
+        /// False models an AX timeout: no answer about AXFrontmost at all.
+        var axAnswers = true
+        var isHidden = false
         var acceptOnPost = true
         var postSucceeds = true
         var posts: [String] = []
@@ -494,6 +560,8 @@ private final class FocusExternalRuntime: @unchecked Sendable {
             isActive: { [self] _ in snapshot.isActive },
             hasFocus: { [self] _ in snapshot.hasFocus },
             acceptsInput: { [self] _ in snapshot.acceptsInput },
+            deniesActivation: { [self] _ in snapshot.axAnswers && !snapshot.acceptsInput },
+            isHidden: { [self] _ in snapshot.isHidden },
             post: { [self] establishment, _, _ in
                 state.withLock { state in
                     switch establishment {

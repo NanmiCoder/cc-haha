@@ -1,7 +1,10 @@
+import AppKit
 import XCTest
 
 @testable import cc_haha_computer_use
 
+/// Drives `Runtime.live` — the wiring `get_app_state` uses — through fake AX
+/// and window-server answers, so reverting any part of that wiring fails here.
 @MainActor
 final class TargetWindowRecoveryTests: XCTestCase {
     private let pid: pid_t = 72_041
@@ -11,213 +14,222 @@ final class TargetWindowRecoveryTests: XCTestCase {
         launchTime: 44
     )
 
-    func testMinimizedNativeWindowIsDeminimizedBeforeActivationCanReportRecovery() async throws {
-        let window = AXWindowHarness(minimized: true)
+    // MARK: - What counts as actionable
 
-        var activationPIDs: [pid_t] = []
-        let nativeRuntime = TargetWindowRecovery.NativeRuntime(
-            application: { [identity] requestedPID in
-                XCTAssertEqual(requestedPID, self.pid)
-                return TargetWindowRecovery.NativeApplication(
-                    identity: identity,
-                    isTerminated: { false },
-                    isHidden: { false },
-                    unhide: { XCTFail("a minimized visible app must not be unhidden"); return false },
-                    windows: {
-                        [TargetWindowRecovery.NativeWindow(
-                            isMinimized: { window.minimized },
-                            setMinimized: { minimized in
-                                window.minimizedWrites.append(minimized)
-                                window.minimized = minimized
-                                return true
-                            }
-                        )]
-                    },
-                    activateAllWindows: {
-                        activationPIDs.append(requestedPID)
-                        return true
-                    }
-                )
-            }
-        )
-        var pauseCount = 0
-        let runtime = TargetWindowRecovery.Runtime(
-            currentIdentity: { [identity] _ in identity },
-            hasOnScreenWindow: { _ in window.isOnScreen },
-            requestRecovery: { target in
-                TargetWindowRecovery.requestNativeRecovery(
-                    target: target,
-                    runtime: nativeRuntime
-                )
-            },
-            pause: { pauseCount += 1 }
-        )
-
-        let result = try await TargetWindowRecovery.recoverIfNeeded(
-            target: try target(),
-            runtime: runtime
-        )
-
-        XCTAssertEqual(result, .recovered)
-        XCTAssertFalse(window.minimized)
-        XCTAssertTrue(window.isOnScreen)
-        XCTAssertEqual(window.minimizedWrites, [false])
-        XCTAssertEqual(activationPIDs, [pid])
-        XCTAssertEqual(pauseCount, 0)
+    func testAWindowOffTheShownSpacesIsActionableUnlessMinimized() {
+        // Another Space, or a hidden app: AX still reports a non-minimized
+        // window, and input reaches it.
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: false, windowMinimizedStates: [false]), .actionable)
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: false, windowMinimizedStates: [true, nil]), .actionable)
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: false, windowMinimizedStates: [true, true]), .notActionable)
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: false, windowMinimizedStates: []), .notActionable)
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: true, windowMinimizedStates: []), .actionable)
     }
 
-    func testPIDReuseIsRejectedBeforeAnyNativeWindowMutation() throws {
+    func testNoAnswerFromAccessibilityIsNotANo() {
+        XCTAssertEqual(TargetWindowRecovery.actionability(onScreen: false, windowMinimizedStates: nil), .unknown)
+        XCTAssertTrue(TargetWindowRecovery.answered(.success))
+        XCTAssertTrue(TargetWindowRecovery.answered(.noValue))
+        XCTAssertTrue(TargetWindowRecovery.answered(.attributeUnsupported))
+        XCTAssertFalse(TargetWindowRecovery.answered(.cannotComplete))
+        XCTAssertFalse(TargetWindowRecovery.answered(.apiDisabled))
+    }
+
+    func testMainAndFocusedWindowsFillInWhatAXWindowsMisses() {
+        // AXWindows listed nothing for an Electron window behind the user's
+        // fullscreen app; AXMainWindow still named it.
+        XCTAssertEqual(
+            TargetWindowRecovery.mergedWindows(listed: [String](), main: "behind", focused: "behind", same: ==),
+            ["behind"]
+        )
+        XCTAssertEqual(
+            TargetWindowRecovery.mergedWindows(listed: ["a"], main: "b", focused: "a", same: ==),
+            ["a", "b"]
+        )
+    }
+
+    // MARK: - get_app_state's live runtime
+
+    /// The reported failure: once the user switched to our fullscreen window,
+    /// every read activated the target and dragged them back to its Space.
+    func testTargetOnAnotherSpaceIsReadWhereItIs() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: false)])
+        app.onScreen = true
+        let runtime = app.runtime(pid: pid)
+        let onScreen = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: runtime)
+        XCTAssertEqual(onScreen, .alreadyActionable)
+
+        app.onScreen = false
+        for _ in 0..<3 {
+            let later = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: runtime)
+            XCTAssertEqual(later, .alreadyActionable)
+        }
+        XCTAssertEqual(app.events, [], "nothing may be restored, reopened, or guarded")
+    }
+
+    func testHiddenAppIsReadAsItIs() async throws {
+        // Hidden apps keep reporting their windows to AX, and an action shows
+        // them again; a read must not.
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: false)])
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid))
+        XCTAssertEqual(outcome, .alreadyActionable)
+        XCTAssertEqual(app.events, [])
+    }
+
+    func testUnansweredAccessibilityChangesNothing() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.answers = false
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid))
+        XCTAssertEqual(outcome, .unknown)
+        XCTAssertEqual(app.events, [], "a timeout is not a reason to reopen or restore")
+    }
+
+    func testMinimizedWindowIsRestoredInTheBackgroundAndMadeMain() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.restoreShowsOnScreen = true
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid))
+
+        XCTAssertEqual(outcome, .recovered)
+        XCTAssertEqual(app.events, ["guard", "unminimize 9", "main 9", "release"])
+        XCTAssertFalse(app.parked.isParked(pid: pid, identity: identity, windowID: 9))
+    }
+
+    /// Restored while the user sat in a fullscreen Space, the window refused
+    /// input until that Space was shown. It must be refused, not "delivered".
+    func testWindowRestoredOntoAHiddenSpaceIsParkedUntilShown() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        let runtime = app.runtime(pid: pid)
+
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: runtime)
+        XCTAssertEqual(outcome, .restoredOffScreen)
+        XCTAssertEqual(
+            TargetWindowRecovery.windowState(pid: pid, windowID: 9, native: app.native(), parked: app.parked),
+            .parked
+        )
+
+        app.onScreen = true
+        _ = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: runtime)
+        XCTAssertEqual(
+            TargetWindowRecovery.windowState(pid: pid, windowID: 9, native: app.native(), parked: app.parked),
+            .takesInput
+        )
+    }
+
+    func testWindowStateNamesWhatBlocksInput() {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true), FakeWindow(id: 10, minimized: false)])
+        XCTAssertEqual(TargetWindowRecovery.windowState(pid: pid, windowID: 9, native: app.native(), parked: app.parked), .minimized)
+        XCTAssertEqual(TargetWindowRecovery.windowState(pid: pid, windowID: 10, native: app.native(), parked: app.parked), .takesInput)
+        XCTAssertEqual(TargetWindowRecovery.windowState(pid: pid, windowID: 11, native: app.native(), parked: app.parked), .gone)
+        app.answers = false
+        XCTAssertEqual(TargetWindowRecovery.windowState(pid: pid, windowID: 10, native: app.native(), parked: app.parked), .unknown)
+    }
+
+    func testOnlyAnAppThatSaysItHasNoWindowIsReopened() async throws {
+        let app = FakeApp(identity: identity, windows: [])
+        app.reopenAdds = FakeWindow(id: 12, minimized: false)
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid))
+        XCTAssertEqual(outcome, .recovered)
+        XCTAssertEqual(app.events, ["guard", "reopen", "release"])
+    }
+
+    func testRecoveryStopsAsSoonAsTheAppStopsAnswering() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.stopAnsweringAfterRequest = true
+        do {
+            _ = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid))
+            XCTFail("an app that stopped answering cannot be confirmed restored")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "target_window_offscreen")
+            XCTAssertTrue(error.message.contains("stopped answering"))
+        }
+        XCTAssertEqual(app.pauses, 0, "no polling against an app that does not answer")
+        XCTAssertEqual(app.events.last, "release")
+    }
+
+    func testAcceptedRestoreThatNeverProducesAWindowFailsClosed() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.unminimizeSticks = false
+        do {
+            _ = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: app.runtime(pid: pid, attempts: 2))
+            XCTFail("an accepted request is not proof that a window became available")
+        } catch let error as CUError {
+            XCTAssertEqual(error.code, "target_window_offscreen")
+        }
+        XCTAssertEqual(app.pauses, 2)
+    }
+
+    func testPIDReuseIsRejectedBeforeAnyNativeWindowMutation() {
         let replacement = AXTreeProcessIdentity(
             bundleID: identity.bundleID,
             executablePath: identity.executablePath,
             launchTime: 45
         )
-        let window = AXWindowHarness(minimized: true)
-        var activated = false
-        let runtime = TargetWindowRecovery.NativeRuntime(
-            application: { [replacement] _ in
-                TargetWindowRecovery.NativeApplication(
-                    identity: replacement,
-                    isTerminated: { false },
-                    isHidden: { false },
-                    unhide: { XCTFail("a replacement process must not be unhidden"); return true },
-                    windows: {
-                        window.readCount += 1
-                        return [TargetWindowRecovery.NativeWindow(
-                            isMinimized: { window.minimized },
-                            setMinimized: { value in
-                                window.minimizedWrites.append(value)
-                                window.minimized = value
-                                return true
-                            }
-                        )]
-                    },
-                    activateAllWindows: {
-                        activated = true
-                        return true
-                    }
-                )
-            }
-        )
-
-        XCTAssertFalse(TargetWindowRecovery.requestNativeRecovery(
-            target: try target(),
-            runtime: runtime
-        ))
-        XCTAssertEqual(window.readCount, 0)
-        XCTAssertTrue(window.minimizedWrites.isEmpty)
-        XCTAssertTrue(window.minimized)
-        XCTAssertFalse(activated)
-    }
-
-    func testHiddenAndOtherSpaceTargetsTransitionBackOnScreen() async throws {
-        for placement in RecoveryHarness.Placement.activationCases {
-            let harness = RecoveryHarness(pid: pid, identity: identity, placement: placement)
-
-            let result = try await TargetWindowRecovery.recoverIfNeeded(
-                target: try target(),
-                runtime: harness.runtime()
-            )
-
-            XCTAssertEqual(result, .recovered, "placement: \(placement)")
-            XCTAssertEqual(harness.activationPIDs, [pid], "placement: \(placement)")
-            XCTAssertEqual(harness.placement, .onScreen, "placement: \(placement)")
-        }
-    }
-
-    func testAlreadyOnScreenBackgroundTargetIsNotActivated() async throws {
-        let harness = RecoveryHarness(pid: pid, identity: identity, placement: .onScreen)
-
-        let result = try await TargetWindowRecovery.recoverIfNeeded(
-            target: try target(),
-            runtime: harness.runtime()
-        )
-
-        XCTAssertEqual(result, .alreadyOnScreen)
-        XCTAssertTrue(harness.activationPIDs.isEmpty)
-        XCTAssertEqual(harness.pauseCount, 0)
-    }
-
-    func testAcceptedActivationThatNeverProducesAWindowFailsClosed() async throws {
-        let harness = RecoveryHarness(
-            pid: pid,
-            identity: identity,
-            placement: .otherSpace,
-            transitionAfterPauses: nil,
-            activationAccepted: true
-        )
-
-        do {
-            _ = try await TargetWindowRecovery.recoverIfNeeded(
-                target: try target(),
-                runtime: harness.runtime(attempts: 2)
-            )
-            XCTFail("an accepted activation is not proof that a window became available")
-        } catch let error as CUError {
-            XCTAssertEqual(error.code, "target_window_offscreen")
-        }
-
-        XCTAssertEqual(harness.activationPIDs, [pid])
-        XCTAssertEqual(harness.pauseCount, 2)
-        XCTAssertEqual(harness.placement, .otherSpace)
-    }
-
-    func testRejectedActivationNeverReportsRecovery() async throws {
-        let harness = RecoveryHarness(
-            pid: pid,
-            identity: identity,
-            placement: .minimized,
-            transitionAfterPauses: nil,
-            activationAccepted: false
-        )
-
-        do {
-            _ = try await TargetWindowRecovery.recoverIfNeeded(
-                target: try target(),
-                runtime: harness.runtime(attempts: 1)
-            )
-            XCTFail("a rejected activation must fail")
-        } catch let error as CUError {
-            XCTAssertEqual(error.code, "target_window_offscreen")
-            XCTAssertTrue(error.message.contains("refused"))
-        }
-
-        XCTAssertEqual(harness.activationPIDs, [pid])
-        XCTAssertEqual(harness.placement, .minimized)
+        let app = FakeApp(identity: replacement, windows: [FakeWindow(id: 9, minimized: true)])
+        XCTAssertEqual(TargetWindowRecovery.requestNativeRecovery(target: try! target(), runtime: app.native()), .refused)
+        XCTAssertEqual(app.events, [])
     }
 
     func testProcessReplacementDuringRecoveryCannotInheritSuccess() async throws {
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.restoreShowsOnScreen = true
+        var runtime = app.runtime(pid: pid)
         let replacement = AXTreeProcessIdentity(
-            bundleID: identity.bundleID,
-            executablePath: identity.executablePath,
-            launchTime: 45
+            bundleID: identity.bundleID, executablePath: identity.executablePath, launchTime: 45
         )
-        let harness = RecoveryHarness(
-            pid: pid,
-            identity: identity,
-            placement: .hidden,
-            transitionAfterPauses: 1,
-            replacementAfterPauses: (1, replacement)
-        )
-
+        runtime.currentIdentity = { [app] _ in app.events.contains("unminimize 9") ? replacement : app.identity }
         do {
-            _ = try await TargetWindowRecovery.recoverIfNeeded(
-                target: try target(),
-                runtime: harness.runtime()
-            )
+            _ = try await TargetWindowRecovery.recoverIfNeeded(target: try target(), runtime: runtime)
             XCTFail("a replacement process must not inherit the original recovery")
         } catch let error as CUError {
             XCTAssertEqual(error.code, "stale_process")
         }
     }
 
-    func testGetAppStateJoinsRecoveryBeforePublishingANewSnapshot() throws {
-        let source = try String(
-            contentsOf: sourceURL("CommandRouter.swift"),
-            encoding: .utf8
+    // MARK: - Foreground guard
+
+    /// An app may answer a restore by activating itself. The guard hands the
+    /// foreground back to the user's app through the real ForegroundLease.
+    func testForegroundGuardHandsTheForegroundBack() async throws {
+        let userApp = try XCTUnwrap(ProvenProcessTarget(pid: 22, identity: AXTreeProcessIdentity(
+            bundleID: "com.example.user", executablePath: "/Applications/User.app/Contents/MacOS/User", launchTime: 3
+        )))
+        let target = try target()
+        var frontmost = userApp
+        var activated: [pid_t] = []
+        let leaseRuntime = ForegroundLeaseRuntime(
+            inputSnapshot: { PhysicalInputEpochSnapshot(epoch: 7, available: true) },
+            frontmostTarget: { frontmost },
+            currentIdentity: { $0 == userApp.pid ? userApp.identity : target.identity },
+            activate: { expected in
+                activated.append(expected.pid)
+                frontmost = expected
+                return true
+            },
+            verifyFrontmost: { frontmost == $0 }
         )
-        let start = try XCTUnwrap(source.range(of: "private func handleGetAppState"))
-        let body = String(source[start.lowerBound...].prefix(8_000))
+        let app = FakeApp(identity: identity, windows: [FakeWindow(id: 9, minimized: true)])
+        app.restoreShowsOnScreen = true
+        app.onRestore = { frontmost = target }
+        var runtime = app.runtime(pid: pid)
+        runtime.guardForeground = TargetWindowRecovery.foregroundGuard(runtime: leaseRuntime)
+
+        let outcome = try await TargetWindowRecovery.recoverIfNeeded(target: target, runtime: runtime)
+        XCTAssertEqual(outcome, .recovered)
+        XCTAssertEqual(activated, [userApp.pid])
+        XCTAssertEqual(frontmost, userApp)
+    }
+
+    func testGetAppStateUsesTheLiveRuntimeWithTheLeaseGuard() throws {
+        let body = try handleGetAppStateBody()
+        let runtime = try XCTUnwrap(body.range(of: "TargetWindowRecovery.Runtime.live()"))
+        let guardWiring = try XCTUnwrap(body.range(of: "TargetWindowRecovery.foregroundGuard(runtime: foregroundRuntime)"))
+        let recovery = try XCTUnwrap(body.range(of: "TargetWindowRecovery.recoverIfNeeded(target: target, runtime: recovery)"))
+        XCTAssertLessThan(runtime.lowerBound, guardWiring.lowerBound)
+        XCTAssertLessThan(guardWiring.lowerBound, recovery.lowerBound)
+    }
+
+    func testGetAppStateJoinsRecoveryBeforePublishingANewSnapshot() throws {
+        let body = try handleGetAppStateBody()
         let recovery = try XCTUnwrap(body.range(of: "TargetWindowRecovery.recoverIfNeeded"))
         let snapshot = try XCTUnwrap(body.range(of: "AXTree.appState"))
         let authorization = try XCTUnwrap(body.range(of: "authorizeResolvedTarget"))
@@ -230,8 +242,37 @@ final class TargetWindowRecoveryTests: XCTestCase {
         )
     }
 
+    // MARK: - Never foreground
+
+    func testBackgroundReopenNeverActivatesOrSubstitutesAnotherCopy() {
+        let configuration = TargetWindowRecovery.backgroundReopenConfiguration()
+        XCTAssertFalse(configuration.activates)
+        XCTAssertFalse(configuration.allowsRunningApplicationSubstitution)
+        XCTAssertFalse(configuration.createsNewApplicationInstance)
+    }
+
+    func testReadingHasNoActivationOrUnhidePath() throws {
+        for file in ["TargetWindowRecovery.swift", "AXTree.swift"] {
+            let source = try String(contentsOf: sourceURL(file), encoding: .utf8)
+            let code = source.split(separator: "\n").filter {
+                !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//")
+            }.joined(separator: "\n")
+            for call in [".activate(", "activateAllWindows", "activateIgnoringOtherApps", ".unhide("] {
+                XCTAssertFalse(code.contains(call), "\(file) must not call \(call)")
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
     private func target() throws -> ProvenProcessTarget {
         try XCTUnwrap(ProvenProcessTarget(pid: pid, identity: identity))
+    }
+
+    private func handleGetAppStateBody() throws -> String {
+        let source = try String(contentsOf: sourceURL("CommandRouter.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "private func handleGetAppState"))
+        return String(source[start.lowerBound...].prefix(8_000))
     }
 
     private func sourceURL(_ name: String) -> URL {
@@ -244,91 +285,90 @@ final class TargetWindowRecoveryTests: XCTestCase {
     }
 }
 
-/// Stateful stand-in for the exact AXMinimized read/write seam used in
-/// production. Visibility is derived from the attribute transition; neither
-/// activation nor the polling harness can manufacture an on-screen result.
+/// One AX window with the AXMinimized/AXMain seams production writes.
 @MainActor
-private final class AXWindowHarness {
-    var minimized: Bool
-    var minimizedWrites: [Bool] = []
-    var readCount = 0
+private final class FakeWindow {
+    let id: CGWindowID
+    var minimized: Bool?
 
-    init(minimized: Bool) {
+    init(id: CGWindowID, minimized: Bool?) {
+        self.id = id
         self.minimized = minimized
     }
-
-    var isOnScreen: Bool { !minimized }
 }
 
+/// A target app as AX and the window server describe it. Every native write
+/// is recorded in `events`; visibility follows from those writes only.
 @MainActor
-private final class RecoveryHarness {
-    enum Placement: CaseIterable {
-        case onScreen
-        case hidden
-        case minimized
-        case otherSpace
-
-        static let activationCases: [Placement] = [.hidden, .otherSpace]
-    }
-
-    let pid: pid_t
+private final class FakeApp {
     var identity: AXTreeProcessIdentity
-    var placement: Placement
-    var activationPIDs: [pid_t] = []
-    var pauseCount = 0
+    var windows: [FakeWindow]
+    var onScreen = false
+    var answers = true
+    var restoreShowsOnScreen = false
+    var unminimizeSticks = true
+    var stopAnsweringAfterRequest = false
+    var reopenAdds: FakeWindow?
+    var onRestore: () -> Void = {}
+    var events: [String] = []
+    var pauses = 0
+    let parked = TargetWindowRecovery.ParkedWindows()
 
-    private let transitionAfterPauses: Int?
-    private let activationAccepted: Bool
-    private let replacementAfterPauses: (count: Int, identity: AXTreeProcessIdentity)?
-    private let originalIdentity: AXTreeProcessIdentity
-    private var recoveryRequested = false
-
-    init(
-        pid: pid_t,
-        identity: AXTreeProcessIdentity,
-        placement: Placement,
-        transitionAfterPauses: Int? = 1,
-        activationAccepted: Bool = true,
-        replacementAfterPauses: (Int, AXTreeProcessIdentity)? = nil
-    ) {
-        self.pid = pid
+    init(identity: AXTreeProcessIdentity, windows: [FakeWindow]) {
         self.identity = identity
-        self.placement = placement
-        self.transitionAfterPauses = transitionAfterPauses
-        self.activationAccepted = activationAccepted
-        self.replacementAfterPauses = replacementAfterPauses
-        self.originalIdentity = identity
+        self.windows = windows
     }
 
-    func runtime(attempts: Int = 20) -> TargetWindowRecovery.Runtime {
-        TargetWindowRecovery.Runtime(
-            currentIdentity: { [self] requestedPID in
-                XCTAssertEqual(requestedPID, pid)
-                return identity
-            },
-            hasOnScreenWindow: { [self] requestedPID in
-                XCTAssertEqual(requestedPID, pid)
-                return placement == .onScreen
-            },
-            requestRecovery: { [self] target in
-                activationPIDs.append(target.pid)
-                recoveryRequested = true
-                return activationAccepted
-            },
-            pause: { [self] in
-                pauseCount += 1
-                if let replacementAfterPauses,
-                   pauseCount == replacementAfterPauses.count {
-                    identity = replacementAfterPauses.identity
+    func native() -> TargetWindowRecovery.NativeRuntime {
+        TargetWindowRecovery.NativeRuntime(application: { [self] _ in
+            TargetWindowRecovery.NativeApplication(
+                identity: identity,
+                isTerminated: { false },
+                windows: { [self] in answers ? windows.map { nativeWindow($0) } : nil },
+                reopenInBackground: { [self] in
+                    events.append("reopen")
+                    if let reopenAdds { windows.append(reopenAdds) }
+                    return true
                 }
-                if recoveryRequested,
-                   let transitionAfterPauses,
-                   pauseCount == transitionAfterPauses,
-                   identity == originalIdentity {
-                    placement = .onScreen
+            )
+        })
+    }
+
+    private func nativeWindow(_ window: FakeWindow) -> TargetWindowRecovery.NativeWindow {
+        TargetWindowRecovery.NativeWindow(
+            id: { window.id },
+            isMinimized: { window.minimized },
+            setMinimized: { [self] value in
+                events.append(value ? "minimize \(window.id)" : "unminimize \(window.id)")
+                if unminimizeSticks { window.minimized = value }
+                if !value {
+                    if restoreShowsOnScreen { onScreen = true }
+                    if stopAnsweringAfterRequest { answers = false }
+                    onRestore()
                 }
+                return true
             },
-            attempts: attempts
+            makeMain: { [self] in
+                events.append("main \(window.id)")
+                return true
+            }
         )
+    }
+
+    func runtime(pid: pid_t, attempts: Int = 20) -> TargetWindowRecovery.Runtime {
+        var runtime = TargetWindowRecovery.Runtime.live(
+            native: native(),
+            parked: parked,
+            onScreen: { [self] _ in onScreen }
+        )
+        runtime.currentIdentity = { [self] _ in identity }
+        runtime.pause = { [self] in pauses += 1 }
+        runtime.attempts = attempts
+        runtime.settleAttempts = 2
+        runtime.guardForeground = { [self] _ in
+            events.append("guard")
+            return { [self] in events.append("release") }
+        }
+        return runtime
     }
 }

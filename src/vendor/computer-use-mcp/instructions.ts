@@ -115,7 +115,9 @@ from the JS App to know.
 
 Judge success from the screenshot as well as the AX text. An empty AX diff does
 not mean a Chromium/CEF interface stayed unchanged. If two consecutive screenshots
-leave the relevant UI unchanged, the approach is wrong.
+leave the relevant UI unchanged, the approach is wrong — unless the state says the
+window is on another Space or hidden: its picture can lag while the app still takes
+input, so judge from the accessibility state there.
 Change something real: switch from element handle to coordinates, target a
 different element, re-read the full tree with \`app.getAXState({disableDiffing:true})\`, or take a
 different route through the UI. Repeating the same call a third time never helps.

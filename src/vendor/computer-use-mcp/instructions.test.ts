@@ -17,4 +17,11 @@ describe('macOS action and observation guidance', () => {
     expect(COMPUTER_USE_INSTRUCTIONS).toContain('treat the result as unknown and call')
     expect(COMPUTER_USE_INSTRUCTIONS).toContain('stop and re-observe')
   })
+
+  test('exempts a window on another Space from the unchanged-screenshot rule', () => {
+    // A Chromium window behind the user's fullscreen app takes input but stops
+    // repainting; its frozen frame is not evidence that the approach failed.
+    expect(COMPUTER_USE_INSTRUCTIONS).toContain('the approach is wrong — unless the state says the\nwindow is on another Space or hidden')
+    expect(COMPUTER_USE_INSTRUCTIONS).toContain('judge from the accessibility state there')
+  })
 })
