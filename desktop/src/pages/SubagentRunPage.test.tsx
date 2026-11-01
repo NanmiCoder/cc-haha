@@ -5,6 +5,7 @@ import type { SubagentRunResponse } from '../api/subagents'
 import { useSettingsStore } from '../stores/settingsStore'
 import { setComposerText } from '../components/chat/composerTestUtils'
 import type { ReconstructedWorkflowRun } from '../types/workflow'
+import type { ServerMessage } from '../types/chat'
 
 const {
   getMemberTranscriptMock,
@@ -126,6 +127,16 @@ function deferred<T>() {
   return { promise, reject, resolve }
 }
 
+function sendRunEvent(streamId: string, event: Extract<ServerMessage, { type: 'agent_run_event' }>['event']) {
+  useChatStore.getState().handleServerMessage('session-1', {
+    type: 'agent_run_event',
+    runAgentId: 'abc123',
+    targetAgentId: 'abc123',
+    streamId,
+    event,
+  })
+}
+
 function expectSharedSessionSurface(agentRunKind: 'subagent' | 'team-member') {
   const surface = screen.getByTestId('session-chat-surface')
   expect(surface).toHaveAttribute('data-session-chat-kind', 'agent')
@@ -160,6 +171,9 @@ describe('SubagentRunPage', () => {
   })
 
   afterEach(() => {
+    for (const session of Object.values(useChatStore.getState().sessions)) {
+      if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+    }
     cleanup()
     vi.useRealTimers()
     vi.mocked(subagentsApi.getRunByTool).mockReset()
@@ -316,6 +330,138 @@ describe('SubagentRunPage', () => {
     })
     expect(conversation).toHaveTextContent(`Live answer from ${agentId}`)
     expect(conversation).toHaveTextContent('live file contents')
+  })
+
+  it.each(['completed', 'failed', 'stopped'] as const)(
+    'settles a %s ordinary SubAgent from durable history after its stream disconnects',
+    async (status) => {
+      vi.mocked(subagentsApi.getRunByTool)
+        .mockResolvedValueOnce(subagentRun({ status: 'running', messages: [] }))
+        .mockResolvedValue(subagentRun({ status }))
+      const view = render(
+        <SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary SubAgent" />,
+      )
+      const conversation = await screen.findByTestId('subagent-conversation')
+      act(() => {
+        const send = (
+          event: Extract<import('../types/chat').ServerMessage, { type: 'agent_run_event' }>['event'],
+        ) => useChatStore.getState().handleServerMessage('session-1', {
+          type: 'agent_run_event',
+          runAgentId: 'abc123',
+          streamId: `disconnected-${status}`,
+          targetAgentId: 'abc123',
+          event,
+        })
+        send({ type: 'thinking', text: 'Checking the final answer' })
+        send({ type: 'content_start', blockType: 'text' })
+        send({ type: 'content_delta', text: 'Partial answer before disconnect' })
+      })
+      const runSessionId = `${SUBAGENT_TAB_PREFIX}session-1__tool-1`
+      await waitFor(() => expect(conversation).toHaveTextContent('Partial answer before disconnect'))
+      expect(useChatStore.getState().sessions[runSessionId]?.chatState).not.toBe('idle')
+
+      // The socket missed its terminal event. A fresh read of the persisted
+      // terminal must settle the tab without depending on Agent Teams state.
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+      await waitFor(() => expect(useChatStore.getState().sessions[runSessionId]).toMatchObject({
+        chatState: 'idle',
+        agentStreamRevision: 0,
+        streamingText: '',
+        streamingToolInput: '',
+        activeToolUseId: null,
+        activeToolName: null,
+        activeThinkingId: null,
+      }))
+      expect(conversation).toHaveTextContent('Finding')
+      expect(conversation).not.toHaveTextContent('Partial answer before disconnect')
+      expect(within(screen.getByTestId('session-header')).getByText(
+        status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : 'Stopped',
+      )).toBeInTheDocument()
+
+      view.unmount()
+      render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary SubAgent" />)
+      expect(await screen.findByText('Finding')).toBeInTheDocument()
+      expect(useChatStore.getState().sessions[runSessionId]?.chatState).toBe('idle')
+    },
+  )
+
+  it.each(['completed', 'failed', 'stopped'] as const)(
+    'clears retry activity and its timer when durable status is %s', async (status) => {
+      vi.mocked(subagentsApi.getRunByTool)
+        .mockResolvedValueOnce(subagentRun({ status: 'running', messages: [] }))
+        .mockResolvedValue(subagentRun({ status }))
+      useTabStore.getState().openTab('session-1', 'Parent')
+      const tabId = useTabStore.getState().openSubagentTab('session-1', 'tool-1')
+      render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary" />)
+      await screen.findByTestId('subagent-conversation')
+      act(() => sendRunEvent(`retry-${status}`, {
+        type: 'api_retry', attempt: 2, maxRetries: 3, retryDelayMs: 60000, errorStatus: 429,
+      }))
+      expect(screen.getByTestId('api-retry-indicator')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+      await waitFor(() => expect(useChatStore.getState().sessions[tabId]?.chatState).toBe('idle'))
+      expect(screen.queryByTestId('api-retry-indicator')).not.toBeInTheDocument()
+      expect(useChatStore.getState().sessions[tabId]?.elapsedTimer).toBeNull()
+      expect(useTabStore.getState().tabs.find(tab => tab.sessionId === tabId)?.status).toBe('idle')
+    },
+  )
+
+  it('clears fallback activity when a terminal transcript replaces a disconnected stream', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ status: 'running' }))
+      .mockResolvedValue(subagentRun())
+    useTabStore.getState().openTab('session-1', 'Parent')
+    useTabStore.getState().openSubagentTab('session-1', 'tool-1')
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary" />)
+    await screen.findByTestId('subagent-conversation')
+    act(() => sendRunEvent('fallback-terminal', { type: 'streaming_fallback', cause: 'watchdog' }))
+    expect(screen.getByTestId('streaming-fallback-indicator')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(screen.queryByTestId('streaming-fallback-indicator')).not.toBeInTheDocument())
+  })
+
+  it('settles queued deltas and ignores late events from the terminal stream', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ status: 'running' }))
+      .mockResolvedValue(subagentRun())
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary" />)
+    await screen.findByTestId('subagent-conversation')
+    const tabId = `${SUBAGENT_TAB_PREFIX}session-1__tool-1`
+    vi.useFakeTimers()
+    act(() => {
+      sendRunEvent('queued-terminal', { type: 'thinking', text: 'Checking' })
+      sendRunEvent('queued-terminal', { type: 'content_start', blockType: 'text' })
+      sendRunEvent('queued-terminal', { type: 'content_delta', text: 'Queued text' })
+      sendRunEvent('queued-terminal', { type: 'content_delta', toolInput: '{"file_path":' })
+    })
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' })))
+    const elapsed = useChatStore.getState().sessions[tabId]?.elapsedSeconds
+    act(() => {
+      sendRunEvent('queued-terminal', { type: 'thinking', text: 'Late thinking' })
+      sendRunEvent('queued-terminal', { type: 'content_delta', text: 'Late text' })
+      vi.advanceTimersByTime(1000)
+    })
+    expect(useChatStore.getState().sessions[tabId]).toMatchObject({
+      chatState: 'idle', streamingText: '', streamingToolInput: '',
+      activeThinkingId: null, elapsedTimer: null, elapsedSeconds: elapsed,
+    })
+    expect(screen.getByTestId('subagent-conversation')).toHaveTextContent('Finding')
+    expect(screen.getByTestId('subagent-conversation')).not.toHaveTextContent('Late thinking')
+  })
+
+  it('preserves a teammate stream when its completed launch still has a live inbox', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({ canSendMessage: true }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Teammate" />)
+    const conversation = await screen.findByTestId('subagent-conversation')
+    act(() => {
+      sendRunEvent('teammate-live', { type: 'content_start', blockType: 'text' })
+      sendRunEvent('teammate-live', { type: 'content_delta', text: 'Current teammate answer' })
+    })
+    await waitFor(() => expect(conversation).toHaveTextContent('Current teammate answer'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2))
+    expect(conversation).toHaveTextContent('Current teammate answer')
+    expect(useChatStore.getState().sessions[`${SUBAGENT_TAB_PREFIX}session-1__tool-1`]?.chatState).toBe('streaming')
   })
 
   it('keeps a live SubAgent turn across a stale poll, then reconciles the next durable poll', async () => {

@@ -30,6 +30,7 @@ import {
   mergeReconstructedRunActivity,
   registerAgentRunSession,
   reconstructRunActivityFromTranscript,
+  settleAgentRunSession,
   useChatStore,
 } from '../stores/chatStore'
 import { SUBAGENT_TAB_PREFIX, useTabStore } from '../stores/tabStore'
@@ -211,6 +212,12 @@ export function SubagentRunPage({
 
   useEffect(() => {
     if (!data) return
+    // A teammate's completed launch still has a live inbox; it is not the
+    // terminal of that member's current turn.
+    const isTerminal = data.canSendMessage !== true && (
+      effectiveStatus === 'completed' || effectiveStatus === 'failed' || effectiveStatus === 'stopped'
+    )
+    if (isTerminal) settleAgentRunSession(tabId, responseStreamRevision)
     const transcriptMessages = buildSubagentConversationMessages(data)
     const runActivity = reconstructRunActivityFromTranscript(
       data.activityMessages ?? data.messages,
@@ -239,8 +246,10 @@ export function SubagentRunPage({
         preferCurrent: (existing.historyMutationEpoch ?? 0) !== responseActivityEpoch,
       })
       const currentStreamRevision = existing.agentStreamRevision ?? 0
+      // A reconnect can miss the stream's idle event. A fresh durable terminal
+      // settles that stream; an older poll must still preserve a newer turn.
       const preserveLiveConversation = currentStreamRevision > 0 && (
-        existing.chatState !== 'idle' ||
+        (existing.chatState !== 'idle' && !isTerminal) ||
         currentStreamRevision !== responseStreamRevision
       )
       return {

@@ -4629,7 +4629,7 @@ export class SessionService {
     if (cached?.version === version) return cached.transcript
     return withHistoryReadBudget(undefined, async () => {
       const entries: RawEntry[] = []
-      const taskNotifications: SessionTaskNotification[] = []
+      const taskNotifications = new Map<string, SessionTaskNotification>()
       let bytes = 0
       let incomplete = false
       const scan = await streamBoundedHistory(filePath, raw => {
@@ -4643,17 +4643,22 @@ export class SessionService {
         if (selected?.bodyTruncated) incomplete = true
         const selectedBytes = (selected ? Buffer.byteLength(JSON.stringify(selected)) : 0) +
           (notices.length ? Buffer.byteLength(JSON.stringify(notices)) : 0)
-        if (bytes + selectedBytes > 2 * 1024 * 1024 || entries.length + taskNotifications.length + (selected ? 1 : 0) + notices.length > 2048) {
+        if (bytes + selectedBytes > 2 * 1024 * 1024 || entries.length + taskNotifications.size + (selected ? 1 : 0) + notices.length > 2048) {
           incomplete = true
           return
         }
         bytes += selectedBytes
         if (selected) entries.push(selected as RawEntry)
-        taskNotifications.push(...notices)
+        // A terminal event can appear as the desktop's persisted notification
+        // and again when the CLI queues/drains it. Match full-history replay's
+        // owner/tool identity so these copies do not look like competing runs.
+        for (const notice of notices) {
+          taskNotifications.set(sessionTaskNotificationIdentity(notice), notice)
+        }
       }, undefined, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES })
       // A skipped record may be unrelated to this Agent. Preserve the evidence
       // we did read without claiming that absence proves a missing run.
-      const transcript = { messages: this.entriesToMessages(entries), taskNotifications, historyComplete: !incomplete && scan.omittedRecords === 0 }
+      const transcript = { messages: this.entriesToMessages(entries), taskNotifications: [...taskNotifications.values()], historyComplete: !incomplete && scan.omittedRecords === 0 }
       this.subagentLookupCache.delete(key)
       this.subagentLookupCache.set(key, { version, transcript })
       while (this.subagentLookupCache.size > 4) this.subagentLookupCache.delete(this.subagentLookupCache.keys().next().value!)
