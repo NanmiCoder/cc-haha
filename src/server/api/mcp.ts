@@ -16,6 +16,7 @@ import {
   getMcpConfigByName,
   isMcpServerDisabled,
   isMcpServerDisabledForExecution,
+  parseMcpConfig,
   projectDirDeclaresMcpServers,
   registerCwdProjectIfDeclaresMcpServers,
   removeMcpConfig,
@@ -586,6 +587,22 @@ async function assertHostPrerequisites(config: McpServerConfig) {
   }
 }
 
+async function checkProjectHostPrerequisites(name: string, config: McpServerConfig, cwd: string): Promise<boolean> {
+  if ((config.type ?? 'stdio') !== 'stdio') return true
+  return runWithCwdOverride(cwd, async () => {
+    try {
+      // Inspect the same expanded in-memory view used by runtime loading. The
+      // service keeps the separate raw configuration for the actual file write.
+      const parsed = parseMcpConfig({ configObject: { mcpServers: { [name]: config } }, expandVars: true, scope: 'project' })
+      const expanded = parsed.config?.mcpServers[name]
+      return !!expanded && await getHostPreflightStatus(expanded, true) === null
+    } catch {
+      // Expanded commands and environment values must not reach target errors.
+      return false
+    }
+  })
+}
+
 async function createServer(body: Record<string, unknown>): Promise<Response> {
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   if (!name) {
@@ -641,9 +658,15 @@ async function updateServerProjects(name: string, body: Record<string, unknown>)
   })
   if (!targets.length) return Response.json({ results: [] })
   const config = buildServerConfig(body.config)
-  if (targets.some(target => target.selected)) await assertHostPrerequisites(config)
   try {
-    const results = await updateProjectMcpSelections(name, config, targets, optionalString(body.sourceCwd), body.sourceConfig)
+    const results = await updateProjectMcpSelections(
+      name,
+      config,
+      targets,
+      optionalString(body.sourceCwd),
+      body.sourceConfig,
+      (rawConfig, projectPath) => checkProjectHostPrerequisites(name, rawConfig, projectPath),
+    )
     return Response.json({ results })
   } catch {
     throw ApiError.badRequest('MCP server name or configuration is not allowed')

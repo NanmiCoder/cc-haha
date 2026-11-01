@@ -137,4 +137,39 @@ describe('project MCP file mutation boundaries', () => {
       expect(JSON.parse(await fs.readFile(join(directory, '.mcp.json'), 'utf8')).mcpServers.unicode.url).toBe('https://fixture.invalid')
     }
   })
+
+  it('isolates a target preflight rejection, passes raw config and skips preflight for removal', async () => {
+    const first = join(fixture, 'first')
+    const second = join(fixture, 'second')
+    await fs.mkdir(first)
+    await fs.mkdir(second)
+    const firstFile = join(first, '.mcp.json')
+    const raw = { type: 'stdio' as const, command: '${ISSUE1765_RAW_COMMAND}', args: ['${ISSUE1765_RAW_ARGUMENT}'], env: { PATH: '${ISSUE1765_RAW_PATH}' } }
+    const original = JSON.stringify({ mcpServers: { shared: raw }, futureTop: true })
+    await fs.writeFile(firstFile, original)
+    const initial = readProjectMcpJsonSnapshot(firstFile)
+    const checked: Array<{ config: unknown; directory: string }> = []
+    const preflight = async (config: unknown, directory: string) => {
+      checked.push({ config, directory })
+      return directory !== first
+    }
+
+    const results = await updateProjectMcpSelections('shared', raw, [
+      { projectPath: first, selected: true, expectedRevision: initial.revision },
+      { projectPath: second, selected: true, expectedRevision: null },
+    ], undefined, raw, preflight)
+
+    expect(results.map(result => result.success)).toEqual([false, true])
+    expect(results[0]?.error).toContain('executable')
+    expect(await fs.readFile(firstFile, 'utf8')).toBe(original)
+    expect(checked).toEqual([{ config: raw, directory: first }, { config: raw, directory: second }])
+    expect(JSON.parse(await fs.readFile(join(second, '.mcp.json'), 'utf8')).mcpServers.shared).toEqual(raw)
+
+    const removed = await updateProjectMcpSelections('shared', raw, [
+      { projectPath: second, selected: false, expectedRevision: results[1]!.revision ?? null },
+    ], undefined, raw, preflight)
+    expect(removed[0]).toMatchObject({ success: true, configHash: null })
+    expect(checked).toHaveLength(2)
+    expect(JSON.parse(await fs.readFile(join(second, '.mcp.json'), 'utf8'))).toEqual({ mcpServers: {} })
+  })
 })

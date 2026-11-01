@@ -22,6 +22,14 @@ describe('MCP project identity', () => {
     ])
   })
 
+  it('keeps literal POSIX backslashes and trailing filename spaces distinct', () => {
+    expect(dedupeMcpProjectPaths(['/workspace/a\\b', '/workspace/a/b', '/workspace/a ', '/workspace/a'])).toEqual([
+      '/workspace/a\\b', '/workspace/a/b', '/workspace/a ', '/workspace/a',
+    ])
+    expect(mcpProjectPathKey('/workspace/a\\b')).toBe('/workspace/a\\b')
+    expect(mcpProjectPathKey('/workspace/a ')).toBe('/workspace/a ')
+  })
+
   it('includes the declaring project in local and project server identities', () => {
     expect(getMcpServerIdentityKey({
       name: 'shared',

@@ -114,4 +114,15 @@ describe('useMcpProjectSharing', () => {
     expect(result.current.sourceConfig).toEqual(raw)
     expect(result.current.targets).toEqual([{ projectPath: '/b', selected: true, expectedRevision: 'b2' }])
   })
+
+  it('changes only the chosen POSIX target when another path differs by a literal backslash', async () => {
+    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ projects: [
+      { projectPath: '/projects/a\\b', revision: null, selected: false },
+      { projectPath: '/projects/a/b', revision: null, selected: false },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    act(() => result.current.toggle('/projects/a\\b'))
+    expect(result.current.targets).toEqual([{ projectPath: '/projects/a\\b', selected: true, expectedRevision: null }])
+  })
 })

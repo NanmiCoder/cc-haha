@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { getGlobalConfig, refreshGlobalConfigFromDisk, saveGlobalConfig } from '../../utils/config.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import {
@@ -66,6 +66,7 @@ function describeError(error: unknown): string {
     'A different MCP server already uses this name in the project',
     'Project MCP server configuration is invalid',
     'Project MCP configuration lock was lost',
+    'STDIO MCP executable is unavailable in this project; check command, PATH and executable permissions',
   ].includes(message) ? message : 'Could not update project MCP configuration'
 }
 
@@ -172,6 +173,7 @@ export async function updateProjectMcpSelections(
   targets: ProjectMcpSelectionTarget[],
   sourceCwd?: string,
   sourceConfig?: unknown,
+  preflight?: (config: McpServerConfig, projectPath: string) => Promise<boolean>,
 ): Promise<ProjectMcpSelectionResult[]> {
   if (!targets.length) return []
   const validated = targets.some(target => target.selected) ? await validateMcpConfigForWrite(name, config) : config
@@ -227,6 +229,11 @@ export async function updateProjectMcpSelections(
             if (stableConfig(existing) !== stableConfig(validated)) {
               throw new Error('A different MCP server already uses this name in the project')
             }
+          }
+          if (preflight && !await preflight(validated, dirname(file))) {
+            throw new Error('STDIO MCP executable is unavailable in this project; check command, PATH and executable permissions')
+          }
+          if (exists && !sourceCwd && sourceConfig === undefined) {
             persisted = true
             savedConfigHash = hashRawConfig(existing)
             return snapshot.revision
