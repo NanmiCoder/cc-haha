@@ -1,6 +1,19 @@
 import type { TranslationKey } from './en'
 
 export const jp: Record<TranslationKey, string> = {
+  "sidebar.archiveSession": "セッションをアーカイブ",
+  "sidebar.restoreSession": "復元",
+  "sidebar.archivedSessions": "アーカイブ済みセッション",
+  "sidebar.archiveFailed": "セッションをアーカイブできませんでした。",
+  "sidebar.archiveBusy": "このセッションは実行中または入力待ちです。作業が終了してからアーカイブしてください。",
+  "sidebar.archiveHint": "アーカイブしても履歴とファイルはすべて保持されます。開いて閲覧や会話の続行ができ、復元するとサイドバーに再表示されます。",
+  "sidebar.archiveEmpty": "アーカイブ済みセッションはありません",
+  "sidebar.archiveLoadFailed": "アーカイブ済みセッションを読み込めませんでした。",
+  "sidebar.archiveRestoreFailed": "セッションを復元できませんでした。",
+  "sidebar.archiveLoadMore": "アーカイブ済みセッションをさらに読み込む",
+  "sidebar.archiveOpen": "アーカイブ済みセッションを開く：{title}",
+  "sidebar.archiveRestoreNamed": "セッションを復元：{title}",
+
   "scheduledChat.workspaceRequired": "新しいチャットの作業フォルダーを選択してください。",
   "scheduledChat.prompt": "タスクの指示",
   "scheduledChat.once": "1 回",

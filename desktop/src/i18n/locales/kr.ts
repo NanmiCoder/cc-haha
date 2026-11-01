@@ -1,6 +1,19 @@
 import type { TranslationKey } from './en'
 
 export const kr: Record<TranslationKey, string> = {
+  "sidebar.archiveSession": "세션 보관",
+  "sidebar.restoreSession": "복원",
+  "sidebar.archivedSessions": "보관된 세션",
+  "sidebar.archiveFailed": "세션을 보관할 수 없습니다.",
+  "sidebar.archiveBusy": "이 세션은 실행 중이거나 입력을 기다리고 있습니다. 작업이 끝난 후 보관하세요.",
+  "sidebar.archiveHint": "보관된 세션의 기록과 파일은 모두 유지됩니다. 열어서 확인하거나 대화를 계속할 수 있으며, 복원하면 사이드바에 다시 표시됩니다.",
+  "sidebar.archiveEmpty": "보관된 세션이 없습니다",
+  "sidebar.archiveLoadFailed": "보관된 세션을 불러올 수 없습니다.",
+  "sidebar.archiveRestoreFailed": "세션을 복원할 수 없습니다.",
+  "sidebar.archiveLoadMore": "보관된 세션 더 불러오기",
+  "sidebar.archiveOpen": "보관된 세션 열기: {title}",
+  "sidebar.archiveRestoreNamed": "세션 복원: {title}",
+
   "scheduledChat.workspaceRequired": "새 채팅에 사용할 작업 폴더를 선택하세요.",
   "scheduledChat.prompt": "작업 지침",
   "scheduledChat.once": "한 번",

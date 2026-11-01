@@ -1,6 +1,6 @@
 import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, X } from 'lucide-react'
+import { Archive, Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -18,6 +18,8 @@ import { ProjectEditorModal, type ProjectEditorSubmission } from './ProjectEdito
 import { SidebarTaskList } from './SidebarTaskList'
 import { SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT } from '../../lib/sessionListPagination'
 import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
+import { ArchivedSessionsDialog } from '@/components/layout/ArchivedSessionsDialog'
+import { ApiError } from '@/api/client'
 import {
   buildSidebarTaskGroups,
   getSessionProjectKey,
@@ -132,6 +134,7 @@ export function Sidebar({
   const sessions = useSessionStore((s) => s.sessions)
   const projectHistory = useSessionStore((s) => s.projectHistory)
   const projectSessionTotals = useSessionStore((s) => s.projectSessionTotals)
+  const projectArchivedTotals = useSessionStore((s) => s.projectArchivedTotals)
   const isLoading = useSessionStore((s) => s.isLoading)
   const indexStatus = useSessionStore((s) => s.indexStatus)
   const indexBuilding = indexStatus?.mode === 'on' && indexStatus.state === 'building'
@@ -146,6 +149,7 @@ export function Sidebar({
   const selectSessions = useSessionStore((s) => s.selectSessions)
   const deselectSessions = useSessionStore((s) => s.deselectSessions)
   const renameSession = useSessionStore((s) => s.renameSession)
+  const setSessionArchived = useSessionStore((s) => s.setSessionArchived)
   const addToast = useUIStore((s) => s.addToast)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
@@ -174,6 +178,7 @@ export function Sidebar({
   ))
   const ensureOpenTargets = useOpenTargetStore((s) => s.ensureTargets)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [archiveBrowser, setArchiveBrowser] = useState<{ projectRoot?: string } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
   const [projectHeaderSubmenu, setProjectHeaderSubmenu] = useState<{ type: 'organize' | 'sort'; x: number; y: number } | null>(null)
@@ -275,12 +280,12 @@ export function Sidebar({
     onDismiss: closeAllSidebarMenus,
   })
 
-  // Title filtering moved into the global search modal (Cmd+K); the list shows all sessions.
-  const filteredSessions = sessions
+  // Open archive tabs keep their metadata in the store, outside the default list.
+  const filteredSessions = useMemo(() => sessions.filter((session) => !session.archived), [sessions])
 
   const projectGroups = useMemo(
-    () => groupByProject(filteredSessions, projectSortBy, resolveProjectDisplayName),
-    [filteredSessions, projectDisplayNameRevision, projectSortBy],
+    () => groupByProject(filteredSessions, projectSortBy, resolveProjectDisplayName, projectArchivedTotals),
+    [filteredSessions, projectDisplayNameRevision, projectSortBy, projectArchivedTotals],
   )
   const orderedProjectGroups = useMemo(
     () => applyProjectOrder(projectGroups, projectOrder, pinnedProjectKeys, projectOrganization, projectSortBy),
@@ -829,6 +834,23 @@ export function Sidebar({
     setPendingDeleteSessionId(id)
   }, [])
 
+  const handleArchive = useCallback(async (id: string) => {
+    setContextMenu(null)
+    try {
+      await setSessionArchived(id, true)
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: t(error instanceof ApiError && error.status === 409 ? 'sidebar.archiveBusy' : 'sidebar.archiveFailed'),
+      })
+    }
+  }, [addToast, setSessionArchived, t])
+
+  const openArchiveBrowser = useCallback((projectRoot?: string) => {
+    closeAllSidebarMenus()
+    setArchiveBrowser({ projectRoot })
+  }, [closeAllSidebarMenus])
+
   const confirmDelete = useCallback(async () => {
     if (!pendingDeleteSessionId) return
     await deleteSession(pendingDeleteSessionId)
@@ -1213,7 +1235,7 @@ export function Sidebar({
                 <div className="px-2 py-4 text-center text-[12px] text-[var(--color-text-tertiary)]">
                   {t('common.loading')}
                 </div>
-              ) : filteredSessions.length === 0 && (
+              ) : filteredSessions.length === 0 && (isTaskView || visibleProjectGroups.length === 0) && (
                 <div className="px-2 py-2">
                   <EmptyState variant="inline" title={t('sidebar.noSessions')} />
                 </div>
@@ -1459,6 +1481,16 @@ export function Sidebar({
                             </div>
                           ))}
                         </ProjectSessionList>
+                        {(projectArchivedTotals[project.key] ?? 0) > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={<Archive size={13} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+                            onClick={() => openArchiveBrowser(project.key)}
+                          >
+                            {t('sidebar.archivedSessions')} ({projectArchivedTotals[project.key]})
+                          </Button>
+                        )}
                         {showSessionFoldControl && (
                           <div className="mt-px flex justify-start">
                             <button
@@ -1537,6 +1569,15 @@ export function Sidebar({
             {t('common.rename')}
           </button>
           <button
+            type="button"
+            disabled={runningSessionIds.has(contextMenu.id) || attentionSessionIds.has(contextMenu.id)}
+            title={runningSessionIds.has(contextMenu.id) || attentionSessionIds.has(contextMenu.id) ? t('sidebar.archiveBusy') : undefined}
+            onClick={() => void handleArchive(contextMenu.id)}
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          >
+            {t('sidebar.archiveSession')}
+          </button>
+          <button
             onClick={() => handleDelete(contextMenu.id)}
             className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
           >
@@ -1566,6 +1607,12 @@ export function Sidebar({
                 {t('sidebar.projectEditor.editTitle')}
               </ProjectMenuItem>
             )}
+            <ProjectMenuItem
+              icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+              onClick={() => openArchiveBrowser(project.key)}
+            >
+              {t('sidebar.archivedSessions')}
+            </ProjectMenuItem>
             <ProjectMenuItem
               icon={pinned ? <PinOff size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <Pin size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
               onClick={() => togglePinnedProject(project.key)}
@@ -1603,6 +1650,7 @@ export function Sidebar({
           onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
+          onOpenArchives={() => openArchiveBrowser()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
         />
@@ -1622,11 +1670,15 @@ export function Sidebar({
           onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
+          onOpenArchives={() => openArchiveBrowser()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
         />
       )}
 
+      {archiveBrowser && (
+        <ArchivedSessionsDialog projectRoot={archiveBrowser.projectRoot} onClose={() => setArchiveBrowser(null)} />
+      )}
       {projectEditor?.mode === 'create' && (
         <ProjectEditorModal
           open
@@ -1846,6 +1898,7 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
   onCreateBlank: () => void
   onUseExistingFolder: () => void
   onRestoreHiddenProjects: () => void
+  onOpenArchives: () => void
   hiddenProjectCount: number
   t: ReturnType<typeof useTranslation>
 }>(function ProjectHeaderMenu({
@@ -1860,6 +1913,7 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
   onCreateBlank,
   onUseExistingFolder,
   onRestoreHiddenProjects,
+  onOpenArchives,
   hiddenProjectCount,
   t,
 }, ref) {
@@ -1935,6 +1989,9 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
           {t('sidebar.restoreHiddenProjects', { count: hiddenProjectCount })}
         </HeaderMenuItem>
       )}
+      <HeaderMenuItem icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />} onClick={onOpenArchives}>
+        {t('sidebar.archivedSessions')}
+      </HeaderMenuItem>
     </div>
   )
 })
@@ -1978,6 +2035,7 @@ function groupByProject(
   sessions: SessionListItem[],
   sortBy: SidebarProjectSortBy,
   displayNameForProject: (projectKey: string) => string | null,
+  archivedTotals: Record<string, number>,
 ): ProjectGroup[] {
   const groupsByKey = new Map<string, SessionListItem[]>()
   for (const session of sessions) {
@@ -1985,6 +2043,9 @@ function groupByProject(
     const items = groupsByKey.get(key) ?? []
     items.push(session)
     groupsByKey.set(key, items)
+  }
+  for (const [root, count] of Object.entries(archivedTotals)) {
+    if (count > 0 && !groupsByKey.has(root)) groupsByKey.set(root, [])
   }
 
   const groups = [...groupsByKey.entries()].map(([key, items]) => {
