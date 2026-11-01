@@ -12,6 +12,7 @@ import { useTheme } from '../ui/theme'
 import { Platform, View } from 'react-native'
 import { useEffect } from 'react'
 import { Text } from '../ui/Text'
+import { installWebViewport } from '../ui/webKeyboard'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 
 // web 预览：输入框的聚焦反馈由设计自己画（光标、描边），去掉浏览器默认的蓝色外框。
@@ -19,6 +20,8 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   const style = document.createElement('style')
   style.textContent = 'input:focus, textarea:focus { outline: none; }'
   document.head.appendChild(style)
+  // 应用高度跟着可见区域走，软键盘弹起时缩到键盘上方。
+  installWebViewport()
 }
 
 /** 浏览器地址栏、状态栏和整页底色跟着当前外观走，不然深色下会露出浅色的边。 */
