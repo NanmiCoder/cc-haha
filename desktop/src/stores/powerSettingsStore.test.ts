@@ -10,7 +10,7 @@ describe('desktop power preference', () => {
     localStorage.clear()
     setEnabled.mockReset().mockResolvedValue(undefined)
     window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true,
-      power: { setPreventSleepWhileRunning: setEnabled } }
+      power: { ...browserHost.power, setPreventSleepWhileRunning: setEnabled } }
     usePowerSettingsStore.setState({ preventSleepWhileRunning: false, saving: false, error: false })
   })
   afterEach(() => { Reflect.deleteProperty(window, 'desktopHost'); vi.restoreAllMocks() })

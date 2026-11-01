@@ -9,6 +9,11 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Idle power preferences migrate disabled and preserve the last action record',
+    command: ['bun', 'run', 'test', '--', '--run', 'electron/services/idlePowerPersistence.test.ts'],
+    cwd: 'desktop',
+  },
+  {
     title: 'Issue router shared SQLite schema migration and consistent backup recovery',
     command: ['bun', '--no-env-file', 'test', './scripts/issue-router/persistence.test.ts'],
   },

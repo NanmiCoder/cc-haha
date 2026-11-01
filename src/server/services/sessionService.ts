@@ -2991,14 +2991,19 @@ export class SessionService {
 
   private async findSessionFilesFromFiles(
     sessionId: string,
+    strict = false,
   ): Promise<Array<{ filePath: string; projectDir: string }>> {
-
+    const onReadError = (error: unknown): 'drop' => {
+      if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return 'drop'
+    }
     const projectsDir = this.getProjectsDir()
     let projectDirs: string[]
 
     try {
       projectDirs = await fs.readdir(projectsDir)
-    } catch {
+    } catch (error) {
+      onReadError(error)
       return []
     }
 
@@ -3006,14 +3011,19 @@ export class SessionService {
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
+        // Project roots can contain ordinary files. They are not uncertain
+        // directories, and must not turn a strict absence check into ENOTDIR.
+        if (strict && !(await fs.stat(path.join(projectsDir, dir))).isDirectory()) continue
         const stat = await fs.stat(filePath)
+        if (strict && !stat.isFile()) throw Object.assign(new Error('Session transcript is not a regular file'), { code: 'INVALID_SESSION_TRANSCRIPT' })
         matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
-      } catch {
+      } catch (error) {
+        onReadError(error)
         continue
       }
     }
 
-    const ranked = await this.rankSessionFileMatches(matches, () => 'drop')
+    const ranked = await this.rankSessionFileMatches(matches, onReadError)
     return ranked!.map(({ filePath, projectDir }) => ({ filePath, projectDir }))
   }
 
@@ -3022,6 +3032,16 @@ export class SessionService {
   ): Promise<{ filePath: string; projectDir: string } | null> {
     if (isSideChatId(sessionId)) return null
     return (await this.findSessionFiles(sessionId))[0] ?? null
+  }
+
+  /** Authoritative absence for decision cleanup; UI/index fallbacks stay forgiving. */
+  async hasSessionStrict(sessionId: string): Promise<boolean> {
+    if (isSideChatId(sessionId)) {
+      const side = getSideChat(sessionId)
+      return !!side && !side.closed
+    }
+    if (!this.isValidSessionId(sessionId)) return false
+    return (await this.findSessionFilesFromFiles(sessionId, true)).length > 0
   }
 
   private isValidSessionId(id: string): boolean {

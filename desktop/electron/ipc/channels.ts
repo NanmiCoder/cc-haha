@@ -6,6 +6,9 @@ export const ELECTRON_IPC_CHANNELS = {
   publicAccessSetAutoStart: 'desktop:public-access:set-auto-start',
   appGetVersion: 'desktop:app:get-version',
   powerSetPreventSleepWhileRunning: 'desktop:power:set-prevent-sleep-while-running',
+  powerGetIdleActionState: 'desktop:power:get-idle-action-state',
+  powerConfigureIdleAction: 'desktop:power:configure-idle-action',
+  powerCancelIdleAction: 'desktop:power:cancel-idle-action',
   appGetLocalePreference: 'desktop:app:get-locale-preference',
   appSetLocalePreference: 'desktop:app:set-locale-preference',
   appGetPreferredSystemLanguages: 'desktop:app:get-preferred-system-languages',
@@ -92,6 +95,7 @@ export const ELECTRON_IPC_CHANNELS = {
 } as const
 
 export const ELECTRON_EVENT_CHANNELS = {
+  powerIdleActionState: 'desktop:power:idle-action-state',
   event: 'desktop:event',
   appLocaleChanged: 'desktop:app:locale-changed',
   webviewDragDrop: 'desktop:webview:drag-drop',
