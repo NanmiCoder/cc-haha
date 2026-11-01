@@ -1339,7 +1339,7 @@ describe('SessionService', () => {
     ))).toBe(true)
   })
 
-  it('should not coalesce in-flight session list scans across config scopes', async () => {
+  it.each([false, true])('should not coalesce in-flight session list scans across config scopes (archived=%s)', async (archived) => {
     const scopeRoot = path.join(tmpDir, 'session-list-request-scopes')
     const firstConfigDir = path.join(scopeRoot, 'first')
     const secondConfigDir = path.join(scopeRoot, 'second')
@@ -1362,6 +1362,17 @@ describe('SessionService', () => {
       '24300001-bbbb-cccc-dddd-eeeeeeeeeeee',
       'Second in-flight scope',
     )
+    if (archived) {
+      for (const [configDir, id] of [
+        [firstConfigDir, '24300000-bbbb-cccc-dddd-eeeeeeeeeeee'],
+        [secondConfigDir, '24300001-bbbb-cccc-dddd-eeeeeeeeeeee'],
+      ] as const) {
+        await fs.mkdir(path.join(configDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(path.join(configDir, 'cc-haha', 'session-archives.json'), JSON.stringify({
+          schemaVersion: 1, sessions: { [id]: { archived: true } },
+        }))
+      }
+    }
 
     const serviceWithSpy = service as unknown as {
       scanSessionListSummary: (...args: unknown[]) => Promise<unknown>
@@ -1384,10 +1395,10 @@ describe('SessionService', () => {
     }
 
     process.env.CLAUDE_CONFIG_DIR = firstConfigDir
-    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await firstScanStarted
     process.env.CLAUDE_CONFIG_DIR = secondConfigDir
-    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await new Promise(resolve => setTimeout(resolve, 10))
     releaseFirstScan()
 
