@@ -203,6 +203,23 @@ export function getProjectMcpDirectoryIdentity(projectPath: string): string {
   return getPlatform() === 'windows' ? normalizePathForConfigKey(projectPath).toLowerCase() : projectPath
 }
 
+/** Reuse existing registry aliases without migrating their keys or project state. */
+export function findProjectMcpRegistryKey(
+  projectPath: string,
+  projects: Record<string, unknown>,
+): string | undefined {
+  const fs = getFsImplementation()
+  const physicalIdentity = (directory: string) => {
+    try {
+      return getProjectMcpDirectoryIdentity(fs.realpathSync(directory))
+    } catch {
+      return getProjectMcpDirectoryIdentity(directory)
+    }
+  }
+  const identity = physicalIdentity(projectPath)
+  return Object.keys(projects).find(key => physicalIdentity(key) === identity)
+}
+
 /** All project writers share the same lock, including legacy add/remove callers. */
 export async function withProjectMcpConfigLock<T>(
   projectPath: string,
@@ -1105,7 +1122,8 @@ export function projectDirDeclaresMcpServers(dir: string): boolean {
  * registered. (GH #1126)
  */
 export function registerCwdProjectIfDeclaresMcpServers(): void {
-  if (getGlobalConfig().projects?.[getProjectPathForConfig(getCwd())]) return
+  const projects = getGlobalConfig().projects ?? {}
+  if (projects[getProjectPathForConfig(getCwd())] || findProjectMcpRegistryKey(getCwd(), projects)) return
   if (!projectDirDeclaresMcpServers(getCwd())) return
   saveMcpProjectConfig(current => ({ ...current }))
 }

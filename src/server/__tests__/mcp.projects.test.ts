@@ -12,8 +12,8 @@ import { getGlobalClaudeFile } from '../../utils/env.js'
 import { handleMcpApi } from '../api/mcp.js'
 import * as mcpHostPreflight from '../services/mcpHostPreflight.js'
 
-type ProjectState = { projectPath: string; revision: string | null; selected: boolean; conflict?: boolean; error?: string }
-type ProjectResult = { projectPath: string; selected: boolean; success: boolean; revision?: string | null; error?: string }
+type ProjectState = { projectPath: string; revision: string | null; selected: boolean; conflict?: boolean; error?: string; configHash?: string }
+type ProjectResult = { projectPath: string; selected: boolean; success: boolean; revision?: string | null; error?: string; configHash?: string | null }
 
 const config = { type: 'http', url: 'https://example.invalid/mcp', headers: { Authorization: 'Bearer ${FIXTURE_TOKEN}' } }
 let fixture: string
@@ -47,10 +47,11 @@ async function read(dir: string) {
   return JSON.parse(await fs.readFile(path.join(dir, '.mcp.json'), 'utf8'))
 }
 
-async function preview(paths: string[], sourceCwd?: string) {
+async function preview(paths: string[], sourceCwd?: string, configHashes?: string[]) {
   const query = new URLSearchParams()
   for (const dir of paths) query.append('projectPath', dir)
   if (sourceCwd) query.set('sourceCwd', sourceCwd)
+  for (const hash of configHashes ?? []) query.append('configHash', hash)
   const result = await request('GET', `/api/mcp/shared/projects?${query}`)
   expect(result.status).toBe(200)
   return result
@@ -95,6 +96,9 @@ describe('MCP project sharing API', () => {
 
     expect(result.status).toBe(200)
     expect(result.body.config.headers.Authorization).toBe('Bearer ${FIXTURE_TOKEN}')
+    expect(result.body.sourceConfig).toEqual(sourceRaw)
+    expect(result.body.projects.find((state: ProjectState) => state.projectPath === matching).configHash)
+      .toBe(result.body.projects.find((state: ProjectState) => state.projectPath === source).configHash)
     expect(result.body.projects).toEqual(expect.arrayContaining([
       expect.objectContaining({ projectPath: source, selected: true }),
       expect.objectContaining({ projectPath: matching, selected: true }),
@@ -256,6 +260,7 @@ describe('MCP project sharing API', () => {
     ] })
 
     expect(retry.body.results.every((result: ProjectResult) => result.success)).toBe(true)
+    expect(retry.body.results[0].configHash).toBe(firstSave.body.results[0].configHash)
     expect((await read(first)).mcpServers.shared).toEqual(config)
     expect(await read(second)).toEqual({ inputs: [{ id: 'external' }], mcpServers: { shared: config } })
   })
@@ -317,11 +322,104 @@ describe('MCP project sharing API', () => {
       register.mockRestore()
     }
     expect(failed.body.results[0]).toMatchObject({ success: false, persisted: true })
+    expect(failed.body.results[0].configHash).toMatch(/^[0-9a-f]{64}$/)
     expect(failed.body.results[0].revision).toBe(createHash('sha256').update(await fs.readFile(path.join(destination, '.mcp.json'))).digest('hex'))
     expect(JSON.stringify(failed.body)).not.toContain('fixture provider secret')
     expect((await read(destination)).mcpServers.shared).toEqual(config)
     const retry = await request('PUT', '/api/mcp/shared/projects', { config, targets: [{ projectPath: destination, selected: true, expectedRevision: failed.body.results[0].revision }] })
     expect(retry.body.results[0].success).toBe(true)
+    expect(retry.body.results[0].configHash).toBe(failed.body.results[0].configHash)
     expect(JSON.parse(await fs.readFile(getGlobalClaudeFile(), 'utf8')).projects[destination]).toBeTruthy()
+  })
+
+  it('retries copying immutable source extensions after the original declaration was removed', async () => {
+    const sourceRaw = { ...config, futureField: { keep: true }, oauth: { xaa: true, futureOAuth: 'keep' } }
+    const source = await project('source', { mcpServers: { shared: sourceRaw } })
+    const first = await project('first')
+    const second = await project('second')
+    const initial = (await preview([source, first, second], source)).body
+    expect(initial.sourceConfig).toEqual(sourceRaw)
+    expect(initial.projects.find((state: ProjectState) => state.projectPath === source).configHash).toMatch(/^[0-9a-f]{64}$/)
+    await fs.writeFile(path.join(second, '.mcp.json'), JSON.stringify({ mcpServers: {}, futureTop: true }))
+    const save = await request('PUT', '/api/mcp/shared/projects', { config, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: initial.projects.map((state: ProjectState) => target(state, state.projectPath !== source)) })
+    expect(save.body.results.map((result: ProjectResult) => result.success)).toEqual([true, true, false])
+    expect(save.body.results[0].configHash).toBeNull()
+    const knownHashes = [initial.projects[0].configHash, save.body.results[1].configHash]
+    const replacement = { type: 'http', url: 'https://replacement.invalid/mcp', futureField: { keep: false } }
+    await fs.writeFile(path.join(source, '.mcp.json'), JSON.stringify({ mcpServers: { shared: replacement } }))
+    const refreshed = (await preview([source, first, second], source, knownHashes)).body
+    expect(refreshed.projects.find((state: ProjectState) => state.projectPath === source)).toMatchObject({ selected: false, conflict: true })
+    const secondState = refreshed.projects.find((state: ProjectState) => state.projectPath === second) as ProjectState
+    const retry = await request('PUT', '/api/mcp/shared/projects', { config, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: [target(secondState, true)] })
+
+    expect(retry.body.results[0].success).toBe(true)
+    expect((await read(second)).mcpServers.shared).toEqual(sourceRaw)
+    expect(retry.body.results[0].configHash).toBe(save.body.results[1].configHash)
+  })
+
+  it('uses only supplied membership hashes when refreshing a partially updated group', async () => {
+    const source = await project('source', { mcpServers: { shared: config } })
+    const other = await project('other', { mcpServers: { shared: config } })
+    const initial = (await preview([source, other], source)).body
+    const oldHash = initial.projects[0].configHash
+    expect(oldHash).toMatch(/^[0-9a-f]{64}$/)
+    await fs.writeFile(path.join(other, '.mcp.json'), JSON.stringify({ mcpServers: { shared: config }, futureTop: true }))
+    const edited = { ...config, url: 'https://edited.invalid/mcp' }
+    const save = await request('PUT', '/api/mcp/shared/projects', { config: edited, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: initial.projects.map((state: ProjectState) => target(state, true)) })
+    expect(save.body.results.map((result: ProjectResult) => result.success)).toEqual([true, false])
+    const oldOnly = (await preview([source, other], source, [oldHash])).body.projects as ProjectState[]
+    expect(oldOnly.find(state => state.projectPath === source)).toMatchObject({ selected: false, conflict: true })
+    expect(oldOnly.find(state => state.projectPath === other)).toMatchObject({ selected: true })
+    const current = (await preview([source, other], source, [oldHash, save.body.results[0].configHash])).body.projects as ProjectState[]
+    expect(current.every(state => state.selected && !state.conflict)).toBe(true)
+    const retry = await request('PUT', '/api/mcp/shared/projects', { config: edited, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: [target(current.find(state => state.projectPath === other)!, true)] })
+    expect(retry.body.results[0].success).toBe(true)
+    expect(await read(other)).toEqual({ mcpServers: { shared: edited }, futureTop: true })
+  })
+
+  it('does not promote an external replacement to membership through a new sourceCwd', async () => {
+    const source = await project('source', { mcpServers: { shared: config } })
+    const other = await project('other', { mcpServers: { shared: config } })
+    const initial = (await preview([source, other], source)).body
+    const oldHash = initial.projects[0].configHash
+    expect(oldHash).toMatch(/^[0-9a-f]{64}$/)
+    const replacement = { type: 'http', url: 'https://replacement.invalid/mcp' }
+    await fs.writeFile(path.join(other, '.mcp.json'), JSON.stringify({ mcpServers: { shared: replacement } }))
+    const save = await request('PUT', '/api/mcp/shared/projects', { config, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: initial.projects.map((state: ProjectState) => target(state, false)) })
+    expect(save.body.results.map((result: ProjectResult) => result.success)).toEqual([true, false])
+    const refreshed = (await preview([source, other], other, [oldHash])).body.projects as ProjectState[]
+    expect(refreshed.find(state => state.projectPath === other)).toMatchObject({ selected: false, conflict: true })
+    expect((await read(other)).mcpServers.shared).toEqual(replacement)
+  })
+
+  it('rejects invalid ephemeral source snapshots without exposing their contents or writing targets', async () => {
+    const destination = await project('destination')
+    for (const sourceConfig of [null, [], 42, { type: 'http', url: 42, futureSecret: 'fixture-secret' }]) {
+      const save = await request('PUT', '/api/mcp/shared/projects', { config, sourceConfig, targets: [{ projectPath: destination, selected: true, expectedRevision: null }] })
+      expect(save.status).toBe(400)
+      expect(JSON.stringify(save.body)).not.toContain('fixture-secret')
+      await expect(fs.stat(path.join(destination, '.mcp.json'))).rejects.toThrow()
+    }
+  })
+
+  it('reuses a physical registry alias and exposes one project identity through API list contexts', async () => {
+    const destination = await project('physical', { mcpServers: { shared: config } })
+    const alias = path.join(fixture, 'alias')
+    await fs.symlink(destination, alias, 'dir')
+    await fs.writeFile(getGlobalClaudeFile(), JSON.stringify({ futureGlobal: true, projects: { [alias]: { futureProject: true } } }))
+    const initial = (await preview([destination], destination)).body
+    const save = await request('PUT', '/api/mcp/shared/projects', { config, sourceCwd: destination, sourceConfig: initial.sourceConfig, targets: [target(initial.projects[0], true)] })
+    expect(save.body.results[0].success).toBe(true)
+    const global = JSON.parse(await fs.readFile(getGlobalClaudeFile(), 'utf8'))
+    expect(global).toEqual({ futureGlobal: true, projects: { [alias]: { futureProject: true } } })
+    const registry = await request('GET', '/api/mcp/project-paths')
+    expect(registry.body.projectPaths).toEqual([alias])
+    const aliasList = await request('GET', `/api/mcp?cwd=${encodeURIComponent(alias)}`)
+    const physicalList = await request('GET', `/api/mcp?cwd=${encodeURIComponent(destination)}`)
+    const records = [...aliasList.body.servers, ...physicalList.body.servers].filter(server => server.name === 'shared')
+    expect(records).toHaveLength(2)
+    expect(records.every(server => server.projectPath === destination)).toBe(true)
+    expect(new Set(records.map(server => JSON.stringify([server.name, server.scope, server.projectPath]))).size).toBe(1)
+    expect(JSON.parse(await fs.readFile(getGlobalClaudeFile(), 'utf8'))).toEqual({ futureGlobal: true, projects: { [alias]: { futureProject: true } } })
   })
 })

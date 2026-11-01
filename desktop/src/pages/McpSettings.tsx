@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton } from '@/components/ui/IconButton'
 import { mcpStatusTone } from '@/lib/mcpStatus'
-import { getMcpServerIdentityKey } from '@/lib/mcpIdentity'
+import { getMcpServerIdentityKey, mcpProjectPathKey } from '@/lib/mcpIdentity'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
 import { McpProjectTargets } from './mcp/McpProjectTargets'
 import { useMcpProjectSharing } from './mcp/useMcpProjectSharing'
@@ -808,6 +808,7 @@ export function McpSettings() {
         const result = await saveProjectSharing(draft.name.trim(), {
           config: payload.config,
           ...(sharedSource?.projectPath ? { sourceCwd: sharedSource.projectPath } : {}),
+          ...(projectSharing.sourceConfig ? { sourceConfig: projectSharing.sourceConfig } : {}),
           targets: projectSharing.targets,
         }, currentWorkDir)
         projectSharing.applyResults(result)
@@ -937,7 +938,11 @@ export function McpSettings() {
     const targetServer = editing ? view.server : null
     const transportLocked = editing
     const isBusy = isSaving || isDeleting
-    const sharedScopeLocked = !!sharedSource && draft.scope === 'project' && (!projectSharing.ready || projectSharing.projects.filter(project => project.selected).length > 1)
+    const savedProjectTargets = projectSharing.projects.filter(project => project.selected)
+    const sharedScopeLocked = !!sharedSource && draft.scope === 'project' && (
+      !projectSharing.ready || savedProjectTargets.length !== 1 ||
+      mcpProjectPathKey(savedProjectTargets[0]?.projectPath) !== mcpProjectPathKey(sharedSource.projectPath)
+    )
     const targetProjectPath = draft.projectPath.trim()
     const needsProjectTarget = scopeRequiresProject(draft.scope)
     const targetProjectHint = draft.scope === 'local'

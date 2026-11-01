@@ -29,7 +29,7 @@ describe('useMcpProjectSharing', () => {
       ? new Promise(resolve => { finishOld = resolve })
       : { projects: [{ projectPath: '/new-project', revision: null, selected: false }] })
     const { result, rerender } = renderHook(({ name }) => useMcpProjectSharing({ enabled: true, name, onSourceConfig: vi.fn() }), { initialProps: { name: 'old' } })
-    await waitFor(() => expect(mcpApi.projectSharing).toHaveBeenCalledWith('old', [], undefined))
+    await waitFor(() => expect(mcpApi.projectSharing).toHaveBeenCalledWith('old', [], undefined, []))
     rerender({ name: 'new' })
     await waitFor(() => expect(result.current.ready).toBe(true))
     await act(async () => { finishOld({ projects: [{ projectPath: '/old-project', revision: null, selected: true }] }) })
@@ -48,5 +48,70 @@ describe('useMcpProjectSharing', () => {
     }] }))
     expect(result.current.targets).toEqual([{ projectPath: 'C:/Work/Project', selected: true, expectedRevision: 'written-revision' }])
     expect(result.current.projects[0]?.saveError).toBe('Saved, discovery failed')
+  })
+
+  it('never adopts an externally replaced failed removal as the original source', async () => {
+    vi.mocked(mcpApi.projectSharing).mockResolvedValueOnce({ projects: [
+      { projectPath: '/a', revision: 'a1', selected: true, configHash: 'original' },
+      { projectPath: '/b', revision: 'b1', selected: true, configHash: 'original' },
+    ] }).mockResolvedValueOnce({ projects: [
+      { projectPath: '/a', revision: 'a2', selected: false, configHash: null },
+      { projectPath: '/b', revision: 'b2', selected: false, conflict: true, configHash: 'external-replacement' },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', sourceCwd: '/a', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    act(() => { result.current.toggle('/a'); result.current.toggle('/b') })
+    act(() => result.current.applyResults({ results: [
+      { projectPath: '/a', selected: false, success: true, revision: 'a2', configHash: null },
+      { projectPath: '/b', selected: false, success: false, error: 'Changed' },
+    ] }))
+    await act(async () => { await result.current.reload() })
+    expect(mcpApi.projectSharing).toHaveBeenLastCalledWith('shared', ['/a', '/b'], '/a', ['original'])
+    expect(result.current.projects.find(project => project.projectPath === '/b')).toMatchObject({ checked: false, conflict: true })
+    expect(result.current.targets).toEqual([])
+    expect(result.current.canSave).toBe(false)
+  })
+
+  it('retains both original and successfully edited membership when refreshing a partial update', async () => {
+    vi.mocked(mcpApi.projectSharing).mockResolvedValueOnce({ projects: [
+      { projectPath: '/a', revision: 'a1', selected: true, configHash: 'original' },
+      { projectPath: '/b', revision: 'b1', selected: true, configHash: 'original' },
+    ] }).mockResolvedValueOnce({ projects: [
+      { projectPath: '/a', revision: 'a2', selected: true, configHash: 'edited' },
+      { projectPath: '/b', revision: 'b2', selected: true, configHash: 'original' },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', sourceCwd: '/a', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    act(() => result.current.applyResults({ results: [
+      { projectPath: '/a', selected: true, success: true, revision: 'a2', configHash: 'edited' },
+      { projectPath: '/b', selected: true, success: false, error: 'Sibling changed' },
+    ] }))
+    await act(async () => { await result.current.reload() })
+    expect(mcpApi.projectSharing).toHaveBeenLastCalledWith('shared', ['/a', '/b'], '/a', ['original', 'edited'])
+    expect(result.current.targets).toEqual([
+      { projectPath: '/a', selected: true, expectedRevision: 'a2' },
+      { projectPath: '/b', selected: true, expectedRevision: 'b2' },
+    ])
+  })
+
+  it('keeps the raw copy snapshot and failed selection after the original source was removed', async () => {
+    const raw = { type: 'http', url: 'http://127.0.0.1/fixture', futureField: { keep: true }, oauth: { xaa: true } }
+    vi.mocked(mcpApi.projectSharing).mockResolvedValueOnce({ sourceConfig: raw, projects: [
+      { projectPath: '/a', revision: 'a1', selected: true, configHash: 'original' },
+      { projectPath: '/b', revision: null, selected: false },
+    ] }).mockResolvedValueOnce({ projects: [
+      { projectPath: '/a', revision: 'a2', selected: false, configHash: null },
+      { projectPath: '/b', revision: 'b2', selected: false },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', sourceCwd: '/a', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    act(() => { result.current.toggle('/a'); result.current.toggle('/b') })
+    act(() => result.current.applyResults({ results: [
+      { projectPath: '/a', selected: false, success: true, revision: 'a2', configHash: null },
+      { projectPath: '/b', selected: true, success: false, error: 'Target unavailable' },
+    ] }))
+    await act(async () => { await result.current.reload() })
+    expect(result.current.sourceConfig).toEqual(raw)
+    expect(result.current.targets).toEqual([{ projectPath: '/b', selected: true, expectedRevision: 'b2' }])
   })
 })

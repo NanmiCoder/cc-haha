@@ -1,8 +1,10 @@
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { getGlobalConfig, refreshGlobalConfigFromDisk, saveGlobalConfig } from '../../utils/config.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import {
   getProjectMcpDirectoryIdentity,
+  findProjectMcpRegistryKey,
   readProjectMcpJsonSnapshot,
   resolveProjectMcpDirectory,
   validateMcpConfigForWrite,
@@ -18,6 +20,7 @@ export type ProjectMcpSelection = {
   selected: boolean
   conflict?: boolean
   error?: string
+  configHash?: string
 }
 
 export type ProjectMcpSelectionTarget = {
@@ -33,6 +36,7 @@ export type ProjectMcpSelectionResult = {
   revision?: string | null
   persisted?: boolean
   error?: string
+  configHash?: string | null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -43,6 +47,10 @@ function stableConfig(value: unknown): string {
   return jsonStringify(value, (_key, entry: unknown) => isRecord(entry)
     ? Object.fromEntries(Object.entries(entry).sort(([left], [right]) => left.localeCompare(right)))
     : entry)
+}
+
+function hashRawConfig(value: unknown): string {
+  return createHash('sha256').update(stableConfig(value)).digest('hex')
 }
 
 function describeError(error: unknown): string {
@@ -77,7 +85,8 @@ export async function listProjectMcpSelections(
   name: string,
   projectPaths: string[],
   sourceCwd?: string,
-): Promise<{ projects: ProjectMcpSelection[]; config?: McpServerConfig }> {
+  configHashes?: string[],
+): Promise<{ projects: ProjectMcpSelection[]; config?: McpServerConfig; sourceConfig?: Record<string, unknown> }> {
   refreshGlobalConfigFromDisk()
   const candidates = [...projectPaths, ...Object.keys(getGlobalConfig().projects ?? {}), ...(sourceCwd ? [sourceCwd] : [])]
   let source: Awaited<ReturnType<typeof readSource>>
@@ -86,6 +95,9 @@ export async function listProjectMcpSelections(
   } catch {
     // The source's own project row reports the precise read/parse error below.
   }
+  // Reloads keep the editor's original and successfully saved fingerprints.
+  // Today's source file must not silently add a replacement to that membership.
+  const membership = new Set(configHashes ?? (source?.raw ? [hashRawConfig(source.raw)] : []))
   const seen = new Set<string>()
   const projects: ProjectMcpSelection[] = []
   for (const candidate of candidates) {
@@ -97,14 +109,16 @@ export async function listProjectMcpSelections(
       seen.add(identity)
       const snapshot = readProjectMcpJsonSnapshot(join(projectPath, '.mcp.json'))
       const exists = Object.hasOwn(snapshot.servers, name)
-      const selected = exists && source?.raw !== undefined && stableConfig(snapshot.servers[name]) === stableConfig(source.raw)
+      const configHash = exists ? hashRawConfig(snapshot.servers[name]) : undefined
+      const selected = configHash !== undefined && membership.has(configHash)
       const isSource = sourceCwd && getProjectMcpDirectoryIdentity(source?.projectPath ?? sourceCwd) === identity
-      const invalidSource = isSource && (!source?.config || !exists)
+      const invalidSource = configHashes === undefined && isSource && (!source?.config || !exists)
       projects.push({
         projectPath,
         ...(candidate !== projectPath ? { requestedPath: candidate } : {}),
         revision: snapshot.revision,
         selected,
+        ...(configHash ? { configHash } : {}),
         ...(exists && !selected ? { conflict: true } : {}),
         ...(invalidSource ? { error: 'Project MCP server configuration is missing or invalid' } : {}),
       })
@@ -115,7 +129,7 @@ export async function listProjectMcpSelections(
       projects.push({ projectPath, ...(candidate !== projectPath ? { requestedPath: candidate } : {}), revision: null, selected: false, error: describeError(error) })
     }
   }
-  return { projects, ...(source?.config ? { config: source.config } : {}) }
+  return { projects, ...(source?.config ? { config: source.config, sourceConfig: source.raw } : {}) }
 }
 
 /** Editable fields change together; extension fields and unexposed OAuth fields survive. */
@@ -134,8 +148,13 @@ function mergeEditableConfig(base: Record<string, unknown> | undefined, config: 
 }
 
 function registerTarget(projectPath: string) {
+  let existingRegistration = false
   saveGlobalConfig(current => {
-    if (current.projects?.[projectPath]) return current
+    const alias = findProjectMcpRegistryKey(projectPath, current.projects ?? {})
+    if (alias) {
+      existingRegistration = true
+      return current
+    }
     return {
       ...current,
       projects: {
@@ -144,7 +163,7 @@ function registerTarget(projectPath: string) {
       },
     }
   })
-  if (!getGlobalConfig().projects?.[projectPath]) throw new Error('Project discovery registration failed')
+  if (!existingRegistration && !getGlobalConfig().projects?.[projectPath]) throw new Error('Project discovery registration failed')
 }
 
 export async function updateProjectMcpSelections(
@@ -152,14 +171,22 @@ export async function updateProjectMcpSelections(
   config: McpServerConfig,
   targets: ProjectMcpSelectionTarget[],
   sourceCwd?: string,
+  sourceConfig?: unknown,
 ): Promise<ProjectMcpSelectionResult[]> {
   if (!targets.length) return []
   const validated = targets.some(target => target.selected) ? await validateMcpConfigForWrite(name, config) : config
   let sourceRaw: Record<string, unknown> | undefined
-  try {
-    sourceRaw = (await readSource(name, sourceCwd))?.raw
-  } catch {
-    // Partial retries remain possible when a previously saved source changed or disappeared.
+  if (sourceConfig !== undefined) {
+    if (!isRecord(sourceConfig) || !McpServerConfigSchema().safeParse(sourceConfig).success) {
+      throw new Error('Invalid source MCP configuration snapshot')
+    }
+    sourceRaw = sourceConfig
+  } else {
+    try {
+      sourceRaw = (await readSource(name, sourceCwd))?.raw
+    } catch {
+      // Legacy callers can still retry without an ephemeral source snapshot.
+    }
   }
   const resolved = await Promise.all(targets.map(async target => {
     try {
@@ -185,6 +212,7 @@ export async function updateProjectMcpSelections(
     }
     let persisted = false
     let registering = false
+    let savedConfigHash: string | null | undefined
     try {
       result.revision = await withProjectMcpConfigLock(projectPath, async (file, assertLockHeld) => {
         const snapshot = readProjectMcpJsonSnapshot(file)
@@ -195,28 +223,35 @@ export async function updateProjectMcpSelections(
         if (target.selected) {
           const existing = snapshot.servers[name]
           if (exists && !isRecord(existing)) throw new Error('Project MCP server configuration is invalid')
-          if (exists && !sourceCwd) {
+          if (exists && !sourceCwd && sourceConfig === undefined) {
             if (stableConfig(existing) !== stableConfig(validated)) {
               throw new Error('A different MCP server already uses this name in the project')
             }
             persisted = true
+            savedConfigHash = hashRawConfig(existing)
             return snapshot.revision
           }
           snapshot.servers[name] = mergeEditableConfig(isRecord(existing) ? existing : sourceRaw, validated)
           snapshot.config.mcpServers = snapshot.servers
         } else {
-          if (!exists) return snapshot.revision
+          if (!exists) {
+            savedConfigHash = null
+            return snapshot.revision
+          }
           delete snapshot.servers[name]
         }
         await writeMcpjsonFile(snapshot.config, file, { expectedRevision: snapshot.revision, assertLockHeld })
         persisted = true
-        return readProjectMcpJsonSnapshot(file).revision
+        const saved = readProjectMcpJsonSnapshot(file)
+        savedConfigHash = Object.hasOwn(saved.servers, name) ? hashRawConfig(saved.servers[name]) : null
+        return saved.revision
       })
       if (target.selected) {
         registering = true
         registerTarget(projectPath)
       }
       result.success = true
+      result.configHash = savedConfigHash
     } catch (error) {
       result.error = persisted
         ? registering
@@ -224,8 +259,13 @@ export async function updateProjectMcpSelections(
           : 'MCP configuration was saved, but finalization failed; reload and retry'
         : describeError(error)
       if (persisted) result.persisted = true
+      if (persisted && savedConfigHash !== undefined) result.configHash = savedConfigHash
       if (persisted && result.revision === undefined) {
-        try { result.revision = readProjectMcpJsonSnapshot(join(projectPath, '.mcp.json')).revision } catch { /* No trustworthy revision is available. */ }
+        try {
+          const saved = readProjectMcpJsonSnapshot(join(projectPath, '.mcp.json'))
+          result.revision = saved.revision
+          result.configHash = Object.hasOwn(saved.servers, name) ? hashRawConfig(saved.servers[name]) : null
+        } catch { /* No trustworthy revision is available. */ }
       }
     }
     results.push(result)

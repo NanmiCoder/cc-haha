@@ -49,6 +49,7 @@ export type McpProjectSnapshot = {
   projectPath: string
   requestedPath?: string
   revision: string | null
+  configHash?: string | null
   selected: boolean
   conflict?: boolean
   error?: string
@@ -57,11 +58,13 @@ export type McpProjectSnapshot = {
 export type McpProjectSharingSnapshot = {
   projects: McpProjectSnapshot[]
   config?: McpEditableConfig
+  sourceConfig?: Record<string, unknown>
 }
 
 export type McpProjectSharingPayload = {
   config: McpEditableConfig
   sourceCwd?: string
+  sourceConfig?: Record<string, unknown>
   targets: Array<{ projectPath: string; selected: boolean; expectedRevision: string | null }>
 }
 
@@ -72,6 +75,7 @@ export type McpProjectSharingResult = {
     success: boolean
     persisted?: boolean
     revision?: string | null
+    configHash?: string | null
     error?: string
   }>
 }

@@ -34,7 +34,9 @@ import type {
 import { describeMcpConfigFilePath, ensureConfigScope } from '../../services/mcp/utils.js'
 import { enableConfigs, getGlobalConfig, getProjectPathForConfig } from '../../utils/config.js'
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
+import { getFsImplementation } from '../../utils/fsOperations.js'
 import { normalizePathForConfigKey } from '../../utils/path.js'
+import { getPlatform } from '../../utils/platform.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { conversationService } from '../services/conversationService.js'
 import { sessionService } from '../services/sessionService.js'
@@ -235,7 +237,14 @@ function describeServerConfigLocation(name: string, scope: ConfigScope): string 
 function describeServerProjectPath(name: string, scope: string): string | undefined {
   if (scope === 'project') {
     const configPath = findProjectMcpConfigPath(name)
-    return configPath ? normalizePathForConfigKey(dirname(configPath)) : undefined
+    if (!configPath) return undefined
+    const directory = dirname(configPath)
+    try {
+      const physical = getFsImplementation().realpathSync(directory)
+      return getPlatform() === 'windows' ? normalizePathForConfigKey(physical) : physical
+    } catch {
+      return directory
+    }
   }
   if (scope === 'local') {
     return normalizePathForConfigKey(getProjectPathForConfig(getCwd()))
@@ -606,10 +615,16 @@ async function createServer(body: Record<string, unknown>): Promise<Response> {
 }
 
 async function listServerProjects(name: string, url: URL): Promise<Response> {
-  const result = await listProjectMcpSelections(name, url.searchParams.getAll('projectPath'), optionalString(url.searchParams.get('sourceCwd')))
+  const result = await listProjectMcpSelections(
+    name,
+    url.searchParams.getAll('projectPath'),
+    optionalString(url.searchParams.get('sourceCwd')),
+    url.searchParams.has('configHash') ? url.searchParams.getAll('configHash') : undefined,
+  )
   return Response.json({
     projects: result.projects,
     ...(result.config ? { config: serializeEditableConfig({ ...result.config, scope: 'project' }) } : {}),
+    ...(result.sourceConfig ? { sourceConfig: result.sourceConfig } : {}),
   })
 }
 
@@ -628,7 +643,7 @@ async function updateServerProjects(name: string, body: Record<string, unknown>)
   const config = buildServerConfig(body.config)
   if (targets.some(target => target.selected)) await assertHostPrerequisites(config)
   try {
-    const results = await updateProjectMcpSelections(name, config, targets, optionalString(body.sourceCwd))
+    const results = await updateProjectMcpSelections(name, config, targets, optionalString(body.sourceCwd), body.sourceConfig)
     return Response.json({ results })
   } catch {
     throw ApiError.badRequest('MCP server name or configuration is not allowed')

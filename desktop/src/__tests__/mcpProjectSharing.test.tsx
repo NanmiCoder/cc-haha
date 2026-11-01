@@ -149,15 +149,17 @@ describe('MCP project sharing from settings', () => {
   })
 
   it('keeps raw source variables when the discovered runtime config had expanded them', async () => {
-    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ projects, config: { ...config, env: { FIXTURE_TOKEN: '${FIXTURE_TOKEN}' } } })
+    const sourceConfig = { ...config, env: { FIXTURE_TOKEN: '${FIXTURE_TOKEN}' }, futureField: { keep: true } }
+    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ projects, config: sourceConfig, sourceConfig })
     await openEditor()
     fireEvent.keyDown(document, { key: 'Escape' })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })) })
     expect(saveProjectSharing.mock.calls[0]![1].config.env).toEqual({ FIXTURE_TOKEN: '${FIXTURE_TOKEN}' })
+    expect(saveProjectSharing.mock.calls[0]![1].sourceConfig).toEqual(sourceConfig)
   })
 
-  it('uses a surviving project to reload after a partial removal deleted the source', async () => {
-    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ config, projects: projects.slice(0, 2).map(project => ({ ...project, selected: true })) })
+  it('retains the original membership fingerprint when reloading after source removal', async () => {
+    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ config, projects: projects.slice(0, 2).map(project => ({ ...project, selected: true, configHash: 'original-config' })) })
     saveProjectSharing.mockResolvedValueOnce({ results: [
       { projectPath: '/projects/a', selected: false, success: true, revision: 'a2' },
       { projectPath: '/projects/b', selected: false, success: false, error: 'Target changed' },
@@ -168,7 +170,7 @@ describe('MCP project sharing from settings', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })) })
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reload project status' })) })
-    expect(mcpApi.projectSharing).toHaveBeenLastCalledWith('shared-tools', expect.arrayContaining(['/projects/a', '/projects/b']), '/projects/b')
+    expect(mcpApi.projectSharing).toHaveBeenLastCalledWith('shared-tools', expect.arrayContaining(['/projects/a', '/projects/b']), '/projects/a', ['original-config'])
   })
 
   it('disables saving when project status could not be read', async () => {

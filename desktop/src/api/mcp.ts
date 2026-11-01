@@ -11,10 +11,11 @@ export const mcpApi = {
     return api.get<{ projectPaths: string[] }>('/api/mcp/project-paths')
   },
 
-  projectSharing: (name: string, projectPaths: string[], sourceCwd?: string) => {
+  projectSharing: (name: string, projectPaths: string[], sourceCwd?: string, configHashes?: string[]) => {
     const query = new URLSearchParams()
     for (const path of projectPaths) query.append('projectPath', path)
     if (sourceCwd) query.set('sourceCwd', sourceCwd)
+    for (const hash of configHashes ?? []) query.append('configHash', hash)
     return api.get<McpProjectSharingSnapshot>(`/api/mcp/${encodeURIComponent(name)}/projects?${query}`)
   },
 

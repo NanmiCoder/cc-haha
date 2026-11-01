@@ -12,6 +12,7 @@ describe('McpProjectTargets', () => {
     const sharing: ReturnType<typeof useMcpProjectSharing> = {
       projects: [{ projectPath: 'C:/work/project', revision: '1', selected: true, checked: true }],
       loading: false, ready: true, error: undefined, canSave: true, targets: [],
+      sourceConfig: undefined,
       addProject: vi.fn(), reload: vi.fn(), toggle, applyResults: vi.fn(),
     }
     render(<McpProjectTargets sharing={sharing} disabled={false} />)
