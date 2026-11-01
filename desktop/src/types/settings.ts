@@ -137,6 +137,9 @@ export type DesktopTerminalStartupShell =
 export type DesktopTerminalSettings = {
   startupShell: DesktopTerminalStartupShell
   customShellPath: string
+  /** An installed font family name; empty keeps the built-in monospace stack. */
+  fontFamily: string
+  fontSize: number
 }
 
 export type ModelInfo = {
