@@ -72,9 +72,12 @@ export function SubagentRunPage({
   title: string
 }) {
   const t = useTranslation()
-  const [data, setData] = useState<SubagentRunResponse | null>(null)
-  const [responseActivityEpoch, setResponseActivityEpoch] = useState(0)
-  const [responseStreamRevision, setResponseStreamRevision] = useState(0)
+  const [response, setResponse] = useState<{
+    tabId: string
+    data: SubagentRunResponse
+    activityEpoch: number
+    streamRevision: number
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
@@ -84,6 +87,12 @@ export function SubagentRunPage({
       ? activeTab.sessionId
       : `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
   })
+  // A reused page retains state while switching tabs. Stream revisions are
+  // local to each session, so another tab's data must not reach its consumers.
+  const currentResponse = response?.tabId === tabId ? response : null
+  const data = currentResponse?.data ?? null
+  const responseActivityEpoch = currentResponse?.activityEpoch ?? 0
+  const responseStreamRevision = currentResponse?.streamRevision ?? 0
   const discoveredTaskId = useChatStore((state) => {
     const session = state.sessions[sourceSessionId]
     const liveTask = Object.values(session?.backgroundAgentTasks ?? {})
@@ -180,7 +189,7 @@ export function SubagentRunPage({
     const requestedStreamRevision = requestedSession?.agentStreamRevision ?? 0
     setLoading(true)
     setError(null)
-    if (options?.resetData) setData(null)
+    if (options?.resetData) setResponse(null)
     try {
       // A workflow agent has no parent Agent tool call, so it is addressed by
       // agent id. Everything downstream of this line is identical.
@@ -188,9 +197,12 @@ export function SubagentRunPage({
         ? await subagentsApi.getRunByAgent(sourceSessionId, readAgentIdRef(toolUseId))
         : await subagentsApi.getRunByTool(sourceSessionId, toolUseId, resolvedTaskId)
       if (requestIdRef.current !== requestId) return
-      setData(nextData)
-      setResponseActivityEpoch(requestedActivityEpoch)
-      setResponseStreamRevision(requestedStreamRevision)
+      setResponse({
+        tabId,
+        data: nextData,
+        activityEpoch: requestedActivityEpoch,
+        streamRevision: requestedStreamRevision,
+      })
     } catch (err) {
       if (requestIdRef.current !== requestId) return
       setError(err instanceof Error ? err.message : String(err))
