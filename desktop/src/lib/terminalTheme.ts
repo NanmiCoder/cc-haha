@@ -104,11 +104,25 @@ export function readTerminalPalette(root?: HTMLElement): TerminalPalette {
   return palette
 }
 
-/** Resolve custom properties before passing fonts to xterm's canvas renderer. */
-export function readTerminalFontFamily(root?: HTMLElement): string {
+export const DEFAULT_TERMINAL_FONT_SIZE = 13
+export const MIN_TERMINAL_FONT_SIZE = 8
+export const MAX_TERMINAL_FONT_SIZE = 32
+
+export function normalizeTerminalFontSize(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, value)))
+    : DEFAULT_TERMINAL_FONT_SIZE
+}
+
+/** Resolve CSS tokens and retain fallbacks for unavailable fonts or missing glyphs. */
+export function readTerminalFontFamily(fontFamily = '', root?: HTMLElement): string {
   const element = root ?? (typeof document === 'undefined' ? null : document.documentElement)
   const fallback = "'SFMono-Regular', Consolas, monospace"
-  if (!element || typeof getComputedStyle !== 'function') return fallback
-  const font = getComputedStyle(element).getPropertyValue('--font-mono').trim()
-  return font && !font.includes('var(') ? font : fallback
+  const font = element && typeof getComputedStyle === 'function'
+    ? getComputedStyle(element).getPropertyValue('--font-mono').trim()
+    : ''
+  const defaults = font && !font.includes('var(') ? font : fallback
+  const custom = fontFamily.trim()
+  // Treat the input as one family name, including spaces, quotes or commas.
+  return custom ? `${JSON.stringify(custom)}, ${defaults}` : defaults
 }

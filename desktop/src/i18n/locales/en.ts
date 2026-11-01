@@ -1437,6 +1437,16 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.activity.modelDetails': 'Model details',
 
   // Settings > Terminal
+  'settings.terminal.fontExample': 'MesloLGS NF',
+  'settings.terminal.fontSizeValue': '{size}px',
+  "settings.terminal.appearance": "Terminal appearance",
+  "settings.terminal.appearanceHint": "Saved changes apply to open terminals immediately. Chat fonts are independent.",
+  "settings.terminal.fontFamily": "Terminal font family",
+  "settings.terminal.fontFamilyHint": "Enter one installed font family, such as MesloLGS NF or Hack Nerd Font Mono. Leave blank for the default. Missing fonts or glyphs use fallback fonts.",
+  "settings.terminal.fontSize": "Terminal font size",
+  "settings.terminal.saveFont": "Save font settings",
+  "settings.terminal.fontSaved": "Font settings saved",
+  "settings.terminal.resetFont": "Reset font",
   'settings.terminal.title': 'Terminal',
   'settings.terminal.description': 'Run host-machine commands for plugin, skill, and MCP setup. The desktop app includes claude-haha; replace documented claude <args> with claude-haha <args>, for example: claude-haha plugin install ... or claude-haha mcp add ...',
   'settings.terminal.infoLabel': 'Terminal setup help',
