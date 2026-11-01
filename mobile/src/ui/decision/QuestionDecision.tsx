@@ -212,6 +212,7 @@ function OptionRow({
           accessibilityRole="button"
           accessibilityLabel={`${expanded ? '收起' : '展开'}“${display.label}”的详细说明`}
           accessibilityState={{ expanded }}
+          aria-expanded={expanded}
           onPress={() => {
             if (!disabled) onInspect()
             setExpanded((value) => !value)
