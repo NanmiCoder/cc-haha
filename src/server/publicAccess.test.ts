@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessStore } from './publicAccess.js'
 import { handleVoiceApi } from './api/voice.js'
+import { fakeProviderRecord, fakeTargets } from './services/voice/__tests__/fakeCorrection.js'
 import { FakeProvider, makeWav, memoryPreferencesStore } from './services/voice/__tests__/fakeProvider.js'
 import { VoiceServiceError } from './services/voice/errors.js'
 import { VoiceProviderRegistry } from './services/voice/registry.js'
@@ -678,11 +679,26 @@ test('paired browsers keep the full agent view while connectors stay projected',
 })
 
 describe('paired phone voice input', () => {
+  const DESKTOP_ONLY_VOICE_ROUTES: Array<[string, string]> = [
+    ['/api/voice/correct', 'POST'],
+    ['/api/voice/correct', 'GET'],
+    ['/api/voice/vocabulary', 'GET'],
+    ['/api/voice/vocabulary/terms', 'POST'],
+    ['/api/voice/vocabulary/terms', 'PUT'],
+    ['/api/voice/vocabulary/terms?term=Codex', 'DELETE'],
+    ['/api/voice/vocabulary/suggestions/dismiss', 'POST'],
+    ['/api/voice/vocabulary/history/sources', 'GET'],
+    ['/api/voice/vocabulary/history/suggest', 'POST'],
+  ]
+
   function voiceFixture(provider: SpeechProvider) {
     const preferences = memoryPreferencesStore({ language: 'zh' })
     const service = new VoiceService({
       registry: new VoiceProviderRegistry().register(provider),
       preferences,
+      // The catalog resolves correction targets; keep it off the real provider index.
+      correctionTargets: fakeTargets({ defaultProvider: fakeProviderRecord('fixture-provider') }),
+      completeText: async () => ({ ok: true, text: 'never reached from a phone' }),
     })
     const calls: string[] = []
     const f = fixture(async (request, url) => {
@@ -719,6 +735,8 @@ describe('paired phone voice input', () => {
       ['/api/voice/transcribe?downloadSource=mirror', 'POST'],
       ['/api/voice/transcribe?provider=one&provider=two', 'POST'],
       ['/api/voice/transcribe?language=zh&language=en', 'POST'],
+      // AI correction, the vocabulary and history scanning are desktop-only.
+      ...DESKTOP_ONLY_VOICE_ROUTES,
     ]) expect(allowed(route!, method!)).toBe(false)
   })
 
@@ -764,6 +782,7 @@ describe('paired phone voice input', () => {
       ['/api/voice/providers/sensevoice-local/prepare', 'POST'],
       ['/api/voice/providers/sensevoice-local/cancel', 'POST'],
       ['/api/voice/providers/sensevoice-local/assets', 'DELETE'],
+      ...DESKTOP_ONLY_VOICE_ROUTES,
     ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
     expect(f.calls).toHaveLength(beforeBlocked)
     expect(provider.prepareCalls).toBe(0)

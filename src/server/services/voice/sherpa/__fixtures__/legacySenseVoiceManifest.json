@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "name": "runtime/1.13.8/node_modules/sherpa-onnx-node/sherpa-onnx.js",
+      "bytes": 2080,
+      "sha256": "120bb60c0f9042236573236abf44935c8403fa7e27cd6cbb3cbd08fe3900271a"
+    },
+    {
+      "name": "runtime/1.13.8/node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node",
+      "bytes": 644448,
+      "sha256": "e37e09b2b21e0b07abf0c37d7423884a8ff161fdba8c67407bc99bfe99af8a55"
+    },
+    {
+      "name": "models/model.int8.onnx",
+      "bytes": 239233841,
+      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+    },
+    {
+      "name": "models/tokens.txt",
+      "bytes": 315894,
+      "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+    },
+    {
+      "name": "models/silero_vad.onnx",
+      "bytes": 1807522,
+      "sha256": "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28"
+    }
+  ]
+}

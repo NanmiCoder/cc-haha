@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   voiceApi,
   type VoiceCatalog,
+  type VoiceCorrectionTarget,
   type VoicePreferences,
   type VoiceProviderStatus,
 } from '@/api/voice'
@@ -10,6 +11,11 @@ const POLL_INTERVAL_MS = 500
 // A blip must not freeze the progress of a download the server is still running.
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const TERMINAL_PHASES = new Set(['ready', 'failed', 'cancelled', 'unprepared'])
+const CORRECTION_FIELDS: ReadonlyArray<keyof VoicePreferences> = [
+  'correctionEnabled',
+  'correctionProviderId',
+  'correctionModelId',
+]
 
 const pollTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // Bumped on every stop so a status request already in flight when the user
@@ -105,6 +111,15 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
     updatePreferences: async (patch) => {
       const { preferences } = await voiceApi.updatePreferences(patch)
       set(state => ({ catalog: state.catalog ? { ...state.catalog, preferences } : state.catalog }))
+      // The server resolves which model correction will use; a changed choice
+      // (or switching it on) has to be read back rather than guessed here.
+      if (!CORRECTION_FIELDS.some(field => field in patch)) return
+      try {
+        const { correction } = await voiceApi.catalog()
+        set(state => ({ catalog: state.catalog ? { ...state.catalog, correction } : state.catalog }))
+      } catch {
+        // Keep the previous resolution; the next catalog load corrects it.
+      }
     },
 
     prepare: async (providerId) => {
@@ -150,6 +165,17 @@ export function selectVoiceInputReady(state: Pick<VoiceInputState, 'catalog'>): 
   const catalog = state.catalog
   if (!catalog?.supported || !catalog.preferences.enabled) return false
   return selectActiveVoiceProvider(state)?.preparation.phase === 'ready'
+}
+
+/**
+ * The model AI correction will call after each dictation, or null when
+ * correction is off or has nothing usable to call. Older catalogs (and test
+ * fixtures written before correction existed) carry no `correction` block.
+ */
+export function selectVoiceCorrectionTarget(state: Pick<VoiceInputState, 'catalog'>): VoiceCorrectionTarget | null {
+  const catalog = state.catalog
+  if (!catalog?.preferences.correctionEnabled) return null
+  return (catalog.correction as VoiceCatalog['correction'] | undefined)?.target ?? null
 }
 
 /**
