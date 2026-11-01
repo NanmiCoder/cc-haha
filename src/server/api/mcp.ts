@@ -22,6 +22,7 @@ import {
   setMcpServerEnabled,
 } from '../../services/mcp/config.js'
 import { inspectMcpHostCommand } from '../services/mcpHostPreflight.js'
+import { listProjectMcpSelections, updateProjectMcpSelections, type ProjectMcpSelectionTarget } from '../../services/mcp/projectSharing.js'
 import type {
   ConfigScope,
   McpHTTPServerConfig,
@@ -604,6 +605,36 @@ async function createServer(body: Record<string, unknown>): Promise<Response> {
   return Response.json({ server: serializeServerSnapshot(name, created) }, { status: 201 })
 }
 
+async function listServerProjects(name: string, url: URL): Promise<Response> {
+  const result = await listProjectMcpSelections(name, url.searchParams.getAll('projectPath'), optionalString(url.searchParams.get('sourceCwd')))
+  return Response.json({
+    projects: result.projects,
+    ...(result.config ? { config: serializeEditableConfig({ ...result.config, scope: 'project' }) } : {}),
+  })
+}
+
+async function updateServerProjects(name: string, body: Record<string, unknown>): Promise<Response> {
+  if (!Array.isArray(body.targets)) throw ApiError.badRequest('Missing or invalid project targets')
+  const targets = body.targets.map((entry): ProjectMcpSelectionTarget => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw ApiError.badRequest('Invalid project target')
+    const target = entry as Record<string, unknown>
+    if (typeof target.projectPath !== 'string' || typeof target.selected !== 'boolean' ||
+      !(target.expectedRevision === null || typeof target.expectedRevision === 'string')) {
+      throw ApiError.badRequest('Project targets require projectPath, selected and expectedRevision')
+    }
+    return { projectPath: target.projectPath, selected: target.selected, expectedRevision: target.expectedRevision }
+  })
+  if (!targets.length) return Response.json({ results: [] })
+  const config = buildServerConfig(body.config)
+  if (targets.some(target => target.selected)) await assertHostPrerequisites(config)
+  try {
+    const results = await updateProjectMcpSelections(name, config, targets, optionalString(body.sourceCwd))
+    return Response.json({ results })
+  } catch {
+    throw ApiError.badRequest('MCP server name or configuration is not allowed')
+  }
+}
+
 async function updateServer(name: string, body: Record<string, unknown>): Promise<Response> {
   const targetCwd = getCwd()
   const previousCwd = optionalString(body.previousCwd)
@@ -788,6 +819,11 @@ export async function handleMcpApi(
 
       if (req.method === 'GET' && !serverName) {
         return listServers()
+      }
+
+      if (serverName && action === 'projects') {
+        if (req.method === 'GET') return listServerProjects(serverName, url)
+        if (req.method === 'PUT') return updateServerProjects(serverName, body ?? {})
       }
 
       if (req.method === 'GET' && serverName && action === 'status') {
