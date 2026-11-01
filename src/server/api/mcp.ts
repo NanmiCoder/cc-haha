@@ -19,6 +19,7 @@ import {
   parseMcpConfig,
   projectDirDeclaresMcpServers,
   registerCwdProjectIfDeclaresMcpServers,
+  resolveProjectMcpDirectorySync,
   removeMcpConfig,
   setMcpServerEnabled,
 } from '../../services/mcp/config.js'
@@ -35,9 +36,7 @@ import type {
 import { describeMcpConfigFilePath, ensureConfigScope } from '../../services/mcp/utils.js'
 import { enableConfigs, getGlobalConfig, getProjectPathForConfig } from '../../utils/config.js'
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
-import { getFsImplementation } from '../../utils/fsOperations.js'
 import { normalizePathForConfigKey } from '../../utils/path.js'
-import { getPlatform } from '../../utils/platform.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { conversationService } from '../services/conversationService.js'
 import { sessionService } from '../services/sessionService.js'
@@ -79,6 +78,7 @@ type McpServerDto = {
   canToggle: boolean
   config: McpEditableConfigDto
   projectPath?: string
+  error?: string
 }
 
 type McpMutationBody = {
@@ -235,29 +235,28 @@ function describeServerConfigLocation(name: string, scope: ConfigScope): string 
   return describeMcpConfigFilePath(scope)
 }
 
-function describeServerProjectPath(name: string, scope: string): string | undefined {
+function describeServerProjectLocation(name: string, scope: string): { projectPath?: string; error?: string } {
   if (scope === 'project') {
     const configPath = findProjectMcpConfigPath(name)
-    if (!configPath) return undefined
+    if (!configPath) return {}
     const directory = dirname(configPath)
     try {
-      const physical = getFsImplementation().realpathSync(directory)
-      return getPlatform() === 'windows' ? normalizePathForConfigKey(physical) : physical
-    } catch {
-      return directory
+      return { projectPath: resolveProjectMcpDirectorySync(directory) }
+    } catch (error) {
+      return { projectPath: directory, error: error instanceof Error ? error.message : 'Project directory is unavailable' }
     }
   }
   if (scope === 'local') {
-    return normalizePathForConfigKey(getProjectPathForConfig(getCwd()))
+    return { projectPath: normalizePathForConfigKey(getProjectPathForConfig(getCwd())) }
   }
-  return undefined
+  return {}
 }
 
 function getServerIdentity(name: string, config: ScopedMcpServerConfig): McpServerIdentity {
   return {
     name,
     scope: config.scope,
-    projectPath: describeServerProjectPath(name, config.scope),
+    projectPath: describeServerProjectLocation(name, config.scope).projectPath,
   }
 }
 
@@ -405,6 +404,8 @@ function buildServerDto(
 ): McpServerDto {
   const enabled = !isMcpServerDisabledForExecution(name)
   if (!enabled) status = getInitialStatus(false)
+  const location = describeServerProjectLocation(name, config.scope)
+  if (location.error) status = { status: 'failed', statusLabel: getStatusLabel('failed'), statusDetail: location.error }
   const transport = config.type ?? 'stdio'
   const canEdit = EDITABLE_SCOPES.has(config.scope) && (transport === 'stdio' || transport === 'http' || transport === 'sse')
 
@@ -418,12 +419,12 @@ function buildServerDto(
     statusDetail: status.statusDetail,
     configLocation: describeServerConfigLocation(name, config.scope),
     summary: getSummary(config),
-    canEdit,
-    canRemove: EDITABLE_SCOPES.has(config.scope),
-    canReconnect: enabled,
-    canToggle: true,
+    canEdit: canEdit && !location.error,
+    canRemove: EDITABLE_SCOPES.has(config.scope) && !location.error,
+    canReconnect: enabled && !location.error,
+    canToggle: !location.error,
     config: serializeEditableConfig(config),
-    projectPath: describeServerProjectPath(name, config.scope),
+    ...location,
   }
 }
 

@@ -76,6 +76,7 @@ export function useMcpProjectSharing({
     if (!key) return
     const existing = projects.find(project => mcpProjectPathKey(project.projectPath) === key)
     if (existing) {
+      setError(existing.error)
       if (!existing.error && !existing.conflict) {
         setProjects(current => current.map(project => project === existing ? { ...project, checked: true } : project))
       }
@@ -87,15 +88,16 @@ export function useMcpProjectSharing({
     try {
       const snapshot = await mcpApi.projectSharing(name, [path], sourceCwd, [...memberHashes.current])
       if (id !== requestId.current) return
+      const requested = snapshot.projects.find(project => mcpProjectPathKey(project.projectPath) === key || mcpProjectPathKey(project.requestedPath) === key)
+      setError(requested?.error)
       setProjects(current => {
         const known = new Set(current.map(project => mcpProjectPathKey(project.projectPath)))
-        const requested = snapshot.projects.find(project => mcpProjectPathKey(project.projectPath) === key || mcpProjectPathKey(project.requestedPath) === key)
         const updated = current.map(project => requested && mcpProjectPathKey(project.projectPath) === mcpProjectPathKey(requested.projectPath)
           ? { ...project, checked: !requested.error && !requested.conflict, conflict: requested.conflict, error: requested.error }
           : project)
         return [...updated, ...snapshot.projects.filter(project => !known.has(mcpProjectPathKey(project.projectPath))).map(project => ({
           ...project,
-          checked: project.selected || ((mcpProjectPathKey(project.projectPath) === key || mcpProjectPathKey(project.requestedPath) === key) && !project.error && !project.conflict),
+          checked: !project.error && !project.conflict && (project.selected || mcpProjectPathKey(project.projectPath) === key || mcpProjectPathKey(project.requestedPath) === key),
         }))]
       })
     } catch (failure) {

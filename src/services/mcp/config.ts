@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'crypto'
-import { chmod, open, realpath, stat, unlink } from 'fs/promises'
+import { realpathSync } from 'fs'
+import { chmod, open, stat, unlink } from 'fs/promises'
 import mapValues from 'lodash-es/mapValues.js'
 import memoize from 'lodash-es/memoize.js'
-import { dirname, isAbsolute, join, parse, resolve } from 'path'
+import { dirname, isAbsolute, join, parse } from 'path'
 import { getPlatform } from 'src/utils/platform.js'
 import type { PluginError } from '../../types/plugin.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
@@ -185,18 +186,35 @@ export function readProjectMcpJsonSnapshot(mcpJsonPath: string): ProjectMcpJsonS
   }
 }
 
-/** File targets stay distinct from git-root identities used by local settings. */
-export async function resolveProjectMcpDirectory(projectPath: string): Promise<string> {
+function readProjectMcpDirectoryIdentity(projectPath: string): { directory: string; dev: number; ino: number } {
   if (!projectPath || !isAbsolute(projectPath) || projectPath.includes('\0')) {
     throw new Error('Project path must be an absolute directory path')
   }
   try {
-    const canonical = await realpath(resolve(projectPath))
-    if (!(await stat(canonical)).isDirectory()) throw new Error('not a directory')
-    return getPlatform() === 'windows' ? normalizePathForConfigKey(canonical) : canonical
-  } catch {
+    const fs = getFsImplementation()
+    const requested = fs.statSync(projectPath)
+    if (!requested.isDirectory()) throw new Error('not a directory')
+    // Use the unnormalized native result: the shared FS wrapper folds Unicode
+    // to NFC, which can denote a different physical directory on POSIX.
+    const canonical = realpathSync(projectPath)
+    const physical = fs.statSync(canonical)
+    if (!physical.isDirectory() || requested.dev !== physical.dev || requested.ino !== physical.ino) {
+      throw new Error('Project directory identity could not be verified')
+    }
+    return { directory: getPlatform() === 'windows' ? normalizePathForConfigKey(canonical) : canonical, dev: requested.dev, ino: requested.ino }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Project directory identity could not be verified') throw error
     throw new Error('Project directory is unavailable')
   }
+}
+
+/** File targets must prove physical identity before realpath may redirect them. */
+export function resolveProjectMcpDirectorySync(projectPath: string): string {
+  return readProjectMcpDirectoryIdentity(projectPath).directory
+}
+
+export async function resolveProjectMcpDirectory(projectPath: string): Promise<string> {
+  return resolveProjectMcpDirectorySync(projectPath)
 }
 
 export function getProjectMcpDirectoryIdentity(projectPath: string): string {
@@ -208,16 +226,19 @@ export function findProjectMcpRegistryKey(
   projectPath: string,
   projects: Record<string, unknown>,
 ): string | undefined {
-  const fs = getFsImplementation()
-  const physicalIdentity = (directory: string) => {
-    try {
-      return getProjectMcpDirectoryIdentity(fs.realpathSync(directory))
-    } catch {
-      return getProjectMcpDirectoryIdentity(directory)
-    }
+  let identity: string
+  try {
+    identity = getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(projectPath))
+  } catch {
+    return undefined
   }
-  const identity = physicalIdentity(projectPath)
-  return Object.keys(projects).find(key => physicalIdentity(key) === identity)
+  return Object.keys(projects).find(key => {
+    try {
+      return getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(key)) === identity
+    } catch {
+      return false
+    }
+  })
 }
 
 /** All project writers share the same lock, including legacy add/remove callers. */
@@ -225,11 +246,23 @@ export async function withProjectMcpConfigLock<T>(
   projectPath: string,
   update: (mcpJsonPath: string, assertLockHeld: () => void) => Promise<T>,
 ): Promise<T> {
-  const directory = await resolveProjectMcpDirectory(projectPath)
+  const initial = readProjectMcpDirectoryIdentity(projectPath)
+  const directory = initial.directory
   const file = join(directory, '.mcp.json')
   let compromised = false
   const assertLockHeld = () => {
     if (compromised) throw new Error('Project MCP configuration lock was lost')
+    try {
+      const fs = getFsImplementation()
+      for (const path of [projectPath, directory]) {
+        const current = fs.statSync(path)
+        if (!current.isDirectory() || current.dev !== initial.dev || current.ino !== initial.ino) {
+          throw new Error('changed')
+        }
+      }
+    } catch {
+      throw new Error('Project directory identity changed')
+    }
   }
   const release = await lockfile.lock(file, {
     realpath: false,
@@ -240,16 +273,20 @@ export async function withProjectMcpConfigLock<T>(
       logForDebugging(`Project MCP config lock compromised: ${getErrnoCode(error) ?? 'unknown'}`, { level: 'error' })
     },
   })
+  let updateFailed = false
   try {
     assertLockHeld()
     const result = await update(file, assertLockHeld)
     assertLockHeld()
     return result
+  } catch (error) {
+    updateFailed = true
+    throw error
   } finally {
     try {
       await release()
     } catch (error) {
-      if (!compromised) throw error
+      if (!compromised && !updateFailed) throw error
     }
   }
 }
@@ -1122,6 +1159,11 @@ export function projectDirDeclaresMcpServers(dir: string): boolean {
  * registered. (GH #1126)
  */
 export function registerCwdProjectIfDeclaresMcpServers(): void {
+  try {
+    resolveProjectMcpDirectorySync(getCwd())
+  } catch {
+    return
+  }
   const projects = getGlobalConfig().projects ?? {}
   if (projects[getProjectPathForConfig(getCwd())] || findProjectMcpRegistryKey(getCwd(), projects)) return
   if (!projectDirDeclaresMcpServers(getCwd())) return

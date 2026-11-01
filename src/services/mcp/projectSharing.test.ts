@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'fs/promises'
 import { writeFileSync } from 'fs'
+import * as nativeFs from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { _setGlobalConfigCacheForTesting, getProjectPathForConfig } from '../../utils/config.js'
@@ -9,7 +10,7 @@ import { getGlobalClaudeFile } from '../../utils/env.js'
 import { getFsImplementation, setFsImplementation } from '../../utils/fsOperations.js'
 import * as lockfile from '../../utils/lockfile.js'
 import * as platform from '../../utils/platform.js'
-import { addMcpConfig, getProjectMcpDirectoryIdentity, readProjectMcpJsonSnapshot, resolveProjectMcpDirectory, withProjectMcpConfigLock, writeMcpjsonFile } from './config.js'
+import { addMcpConfig, findProjectMcpRegistryKey, getProjectMcpDirectoryIdentity, readProjectMcpJsonSnapshot, resolveProjectMcpDirectory, resolveProjectMcpDirectorySync, withProjectMcpConfigLock, writeMcpjsonFile } from './config.js'
 import { updateProjectMcpSelections } from './projectSharing.js'
 
 let fixture: string
@@ -171,5 +172,41 @@ describe('project MCP file mutation boundaries', () => {
     expect(removed[0]).toMatchObject({ success: true, configHash: null })
     expect(checked).toHaveLength(2)
     expect(JSON.parse(await fs.readFile(join(second, '.mcp.json'), 'utf8'))).toEqual({ mcpServers: {} })
+  })
+
+  it('refuses to write into a different directory substituted while the project lock is held', async () => {
+    const directory = join(fixture, 'project')
+    const retired = join(fixture, 'retired-project')
+    await fs.mkdir(directory)
+    const original = JSON.stringify({ mcpServers: { kept: { command: 'node' } } })
+    await fs.writeFile(join(directory, '.mcp.json'), original)
+    await expect(withProjectMcpConfigLock(directory, async (file, assertLockHeld) => {
+      await fs.rename(directory, retired)
+      await fs.mkdir(directory)
+      await writeMcpjsonFile({ mcpServers: { unintended: { command: 'node' } } }, file, { assertLockHeld })
+    })).rejects.toThrow('Project directory identity changed')
+    expect(await fs.readFile(join(retired, '.mcp.json'), 'utf8')).toBe(original)
+    await expect(fs.stat(join(directory, '.mcp.json'))).rejects.toThrow()
+  })
+
+  it('rejects a realpath result for a different existing inode and never reuses that registry alias', async () => {
+    const requested = join(fixture, 'requested')
+    const substitute = join(fixture, 'substitute')
+    await fs.mkdir(requested)
+    await fs.mkdir(substitute)
+    const left = await fs.stat(requested)
+    const right = await fs.stat(substitute)
+    expect([left.dev, left.ino]).not.toEqual([right.dev, right.ino])
+    const originalRealpath = nativeFs.realpathSync
+    const realpath = spyOn(nativeFs, 'realpathSync').mockImplementation(path => path === requested ? substitute : originalRealpath(path))
+    try {
+      expect(() => resolveProjectMcpDirectorySync(requested)).toThrow('Project directory identity could not be verified')
+      await expect(resolveProjectMcpDirectory(requested)).rejects.toThrow('Project directory identity could not be verified')
+      expect(findProjectMcpRegistryKey(substitute, { [requested]: { futureProject: true } })).toBeUndefined()
+      expect(findProjectMcpRegistryKey(requested, { [requested]: { futureProject: true } })).toBeUndefined()
+      expect(getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(substitute))).toBe(getProjectMcpDirectoryIdentity(substitute))
+    } finally {
+      realpath.mockRestore()
+    }
   })
 })

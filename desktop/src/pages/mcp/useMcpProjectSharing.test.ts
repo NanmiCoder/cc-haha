@@ -125,4 +125,37 @@ describe('useMcpProjectSharing', () => {
     act(() => result.current.toggle('/projects/a\\b'))
     expect(result.current.targets).toEqual([{ projectPath: '/projects/a\\b', selected: true, expectedRevision: null }])
   })
+
+  it('surfaces the directory identity error when the picker selects an existing unavailable target', async () => {
+    const error = 'Project directory identity could not be verified'
+    vi.mocked(mcpApi.projectSharing).mockResolvedValue({ projects: [
+      { projectPath: '/projects/a\\b', revision: null, selected: false, error },
+      { projectPath: '/projects/a/b', revision: null, selected: false },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    await act(async () => { await result.current.addProject('/projects/a\\b') })
+    expect(result.current.error).toBe(error)
+    expect(result.current.targets).toEqual([])
+    expect(result.current.projects.every(project => !project.checked)).toBe(true)
+    expect(mcpApi.projectSharing).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a rejected picker path visible without selecting the distinct nested target', async () => {
+    const error = 'Project directory identity could not be verified'
+    vi.mocked(mcpApi.projectSharing).mockResolvedValueOnce({ projects: [
+      { projectPath: '/projects/a/b', revision: null, selected: false },
+    ] }).mockResolvedValueOnce({ projects: [
+      { projectPath: '/projects/a\\b', revision: null, selected: false, error },
+      { projectPath: '/projects/a/b', revision: null, selected: false },
+    ] })
+    const { result } = renderHook(() => useMcpProjectSharing({ enabled: true, name: 'shared', onSourceConfig: vi.fn() }))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    await act(async () => { await result.current.addProject('/projects/a\\b') })
+    expect(result.current.error).toBe(error)
+    expect(result.current.projects.find(project => project.projectPath === '/projects/a\\b')).toMatchObject({ checked: false, error })
+    expect(result.current.projects.find(project => project.projectPath === '/projects/a/b')?.checked).toBe(false)
+    expect(result.current.targets).toEqual([])
+    expect(result.current.canSave).toBe(false)
+  })
 })

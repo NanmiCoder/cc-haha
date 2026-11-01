@@ -7,6 +7,7 @@ import {
   findProjectMcpRegistryKey,
   readProjectMcpJsonSnapshot,
   resolveProjectMcpDirectory,
+  resolveProjectMcpDirectorySync,
   validateMcpConfigForWrite,
   withProjectMcpConfigLock,
   writeMcpjsonFile,
@@ -59,6 +60,8 @@ function describeError(error: unknown): string {
   return [
     'Project path must be an absolute directory path',
     'Project directory is unavailable',
+    'Project directory identity could not be verified',
+    'Project directory identity changed',
     'Cannot read project .mcp.json',
     'Project .mcp.json must contain a valid JSON object',
     'Project .mcp.json mcpServers must be an object',
@@ -149,6 +152,7 @@ function mergeEditableConfig(base: Record<string, unknown> | undefined, config: 
 }
 
 function registerTarget(projectPath: string) {
+  resolveProjectMcpDirectorySync(projectPath)
   let existingRegistration = false
   saveGlobalConfig(current => {
     const alias = findProjectMcpRegistryKey(projectPath, current.projects ?? {})
