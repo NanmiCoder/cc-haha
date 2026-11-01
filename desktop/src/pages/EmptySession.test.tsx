@@ -36,8 +36,9 @@ const mocks = vi.hoisted(() => ({
   voiceCatalog: vi.fn(async () => ({
     supported: false,
     providers: [],
-    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
     limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+    correction: { defaultTarget: null, target: null },
   })),
 }))
 
@@ -2760,8 +2761,9 @@ describe('EmptySession', () => {
             info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto', 'zh'] },
             preparation: { phase: 'ready' },
           }],
-          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
+          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
           limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+          correction: { defaultTarget: null, target: null },
         },
       })
       mocks.voiceStartRecording.mockImplementation(async () => activeRecording)

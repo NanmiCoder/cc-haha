@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'r
 import { ArrowUp, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
+import { Spinner } from '@/components/ui/Spinner'
 import { useTranslation } from '@/i18n'
 import type { ComposerDictation } from './useComposerDictation'
 import { VoiceTrail } from './VoiceTrail'
@@ -112,10 +113,12 @@ export function VoiceRecordingBar({ dictation, mobile = false }: VoiceRecordingB
   const { phase, startedAt, limitSeconds, sendRequested, getLevel, focusComposer } = dictation
   const barRef = useRef<HTMLDivElement>(null)
   const stopRef = useRef<HTMLButtonElement>(null)
+  const skipRef = useRef<HTMLButtonElement>(null)
   /** Focus entered the bar: the user is driving it from the keyboard. */
   const focusedRef = useRef(false)
   const starting = phase === 'starting'
   const transcribing = phase === 'transcribing'
+  const correcting = phase === 'correcting'
 
   // Started from the keyboard, the microphone button that had focus is now
   // hidden; hand focus to the control that ends the recording. Ending it hides
@@ -133,7 +136,51 @@ export function VoiceRecordingBar({ dictation, mobile = false }: VoiceRecordingB
     }
   }, [focusComposer])
 
+  // The stop button that held keyboard focus is gone once correction starts;
+  // the one control left is "skip", so focus follows there.
+  useEffect(() => {
+    if (!correcting || !focusedRef.current) return
+    const current = document.activeElement
+    if (!current || current === document.body || barRef.current?.contains(current)) skipRef.current?.focus()
+  }, [correcting])
+
   if (phase === 'idle') return null
+
+  if (correcting) {
+    return (
+      <div
+        ref={barRef}
+        role="group"
+        aria-label={t('voice.composer.recordingBar')}
+        data-testid="voice-recording-bar"
+        data-phase={phase}
+        onFocus={() => { focusedRef.current = true }}
+        className={`flex min-w-0 flex-1 items-center ${mobile ? 'min-h-11 gap-2' : 'min-h-8 gap-3'}`}
+      >
+        {/* What was heard, quietly, so the wait has something to read. */}
+        <span
+          data-testid="voice-correcting-text"
+          className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-tertiary)]"
+        >
+          {dictation.correctingText}
+        </span>
+        <span role="status" className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-[var(--color-text-secondary)]">
+          <Spinner size={14} />
+          {sendRequested ? t('voice.composer.correctingThenSend') : t('voice.composer.correcting')}
+        </span>
+        <Button
+          ref={skipRef}
+          variant="secondary"
+          size={mobile ? 'lg' : 'sm'}
+          className="shrink-0"
+          onMouseDown={keepCaret}
+          onClick={() => dictation.skipCorrection()}
+        >
+          {t('voice.composer.skipCorrection')}
+        </Button>
+      </div>
+    )
+  }
 
   const iconSize = mobile ? 20 : 16
   const size = mobile ? '2xl' : 'md'
