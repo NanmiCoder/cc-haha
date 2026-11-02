@@ -124,7 +124,7 @@ SectionEnd
     expect(availability).toBeGreaterThan(reset)
   })
 
-  test.skipIf(process.platform !== 'win32')('keeps PowerShell usable when setup inherits a foreign PSModulePath in native NSIS', () => {
+  test.skipIf(process.platform !== 'win32')('drops an inherited foreign PSModulePath before PowerShell children start in native NSIS', () => {
     const compiler = process.env.CC_HAHA_TEST_MAKENSIS ?? path.join(
       process.env.LOCALAPPDATA ?? '', 'electron-builder', 'Cache', 'nsis',
       'nsis-3.0.4.1-nsis-3.0.4.1', 'Bin', 'makensis.exe',
@@ -165,14 +165,15 @@ SectionEnd
     // Microsoft.PowerShell.Security by name cannot tell the two apart: 5.1 loads
     // its in-box core modules from $PSHOME, so that import succeeds either way,
     // while command auto-loading (Get-ExecutionPolicy) still picks the foreign
-    // copy. Only the inherited fixture also runs the full check: after the reset
-    // it would scan every module under Program Files with the sandbox's cold
-    // analysis cache, which takes minutes on CI runners.
+    // copy. electron-builder's full IS_POWERSHELL_AVAILABLE check is left out:
+    // it starts PowerShell without -NoProfile against the sandbox's cold module
+    // analysis cache, and on CI runners it took from 8 s to over 30 s, too
+    // variable for the release smoke this test gates.
     const backtick = '`'
     try {
       for (const fixture of [
-        { name: 'inherited-module-path', reset: false, expected: ['foreign=1', 'powershell=1'] },
-        { name: 'reset-module-path', reset: true, expected: ['foreign=0'] },
+        { name: 'inherited-module-path', reset: false, expected: 'foreign=1' },
+        { name: 'reset-module-path', reset: true, expected: 'foreign=0' },
       ]) {
         const executable = path.join(root, `${fixture.name}.exe`)
         const journal = path.join(root, `${fixture.name}.log`)
@@ -201,8 +202,6 @@ Section
   nsExec::Exec ${backtick}"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -Command "if ($$env:PSModulePath -like '*foreign-modules*') { exit 1 } else { exit 0 }"${backtick}
   Pop $0
   FileWrite $journalHandle "foreign=$0$\n"
-  ${fixture.reset ? '' : '!insertmacro IS_POWERSHELL_AVAILABLE'}
-  ${fixture.reset ? '' : 'FileWrite $journalHandle "powershell=$IsPowerShellAvailable$\\n"'}
   FileClose $journalHandle
 SectionEnd
 `
@@ -214,10 +213,9 @@ SectionEnd
         const run = spawnSync(executable, ['/S'], { env, timeout: 30_000, windowsHide: true })
         expect(run.error).toBeUndefined()
         expect(run.status, fixture.name).toBe(0)
-        // Without the reset the foreign module breaks the availability check,
-        // proving the fixture reproduces the failure the reset fixes.
-        const recorded = readFileSync(journal, 'utf8')
-        for (const line of fixture.expected) expect(recorded, fixture.name).toContain(line)
+        // Without the reset the child still sees the foreign path, proving the
+        // fixture reproduces the inheritance the reset removes.
+        expect(readFileSync(journal, 'utf8'), fixture.name).toContain(fixture.expected)
       }
     } finally {
       rmSync(root, { recursive: true, force: true })
