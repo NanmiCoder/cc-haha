@@ -73,6 +73,8 @@ type TabPersistence = {
 type TabStore = {
   tabs: Tab[]
   activeTabId: string | null
+  /** Last chat tab that was active, even while a settings/market tab is open. */
+  lastSessionTabId: string | null
   /** Chat tabs closed in this run, newest last. Kept in memory only. */
   closedSessionTabs: ClosedSessionTab[]
 
@@ -164,6 +166,7 @@ function getPersistedSessionId(tab: PersistedTab): string | null {
 export const useTabStore = create<TabStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  lastSessionTabId: null,
   closedSessionTabs: [],
 
   openTab: (sessionId, title, type) => {
@@ -171,22 +174,26 @@ export const useTabStore = create<TabStore>((set, get) => ({
     const { tabs } = get()
     const existing = tabs.find((t) => t.sessionId === sessionId)
     if (existing) {
+      const nextType = type ?? existing.type ?? 'session'
       set({
         tabs: tabs.map((tab) =>
           tab.sessionId === sessionId
             ? {
                 ...tab,
                 title,
-                type: type ?? tab.type ?? 'session',
+                type: nextType,
               }
             : tab,
         ),
         activeTabId: sessionId,
+        lastSessionTabId: nextType === 'session' ? sessionId : get().lastSessionTabId,
       })
     } else {
+      const nextType = type ?? 'session'
       set({
-        tabs: [...tabs, { sessionId, title, type: type ?? 'session', status: 'idle' }],
+        tabs: [...tabs, { sessionId, title, type: nextType, status: 'idle' }],
         activeTabId: sessionId,
+        lastSessionTabId: nextType === 'session' ? sessionId : get().lastSessionTabId,
       })
     }
     get().saveTabs()
@@ -341,7 +348,14 @@ export const useTabStore = create<TabStore>((set, get) => ({
       }
     }
 
-    set({ tabs: newTabs, activeTabId: newActiveId })
+    const activeTab = newTabs.find((tab) => tab.sessionId === newActiveId)
+    const remainingSessionTabs = newTabs.filter((tab) => tab.type === 'session')
+    const fallbackSessionId = remainingSessionTabs[remainingSessionTabs.length - 1]?.sessionId ?? null
+    const lastSessionTabId = get().lastSessionTabId === sessionId
+      ? (activeTab?.type === 'session' ? activeTab.sessionId : fallbackSessionId)
+      : get().lastSessionTabId
+
+    set({ tabs: newTabs, activeTabId: newActiveId, lastSessionTabId })
     get().saveTabs()
     const closedTab = tabs[index]
     if (closedTab?.type === 'session') {
@@ -354,7 +368,11 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   setActiveTab: (sessionId) => {
-    set({ activeTabId: sessionId })
+    const tab = get().tabs.find((item) => item.sessionId === sessionId)
+    set({
+      activeTabId: sessionId,
+      lastSessionTabId: tab?.type === 'session' ? sessionId : get().lastSessionTabId,
+    })
     get().saveTabs()
   },
 
@@ -372,12 +390,13 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   replaceTabSession: (oldSessionId, newSessionId) => {
-    const { activeTabId } = get()
+    const { activeTabId, lastSessionTabId } = get()
     set((s) => ({
       tabs: s.tabs.map((t) =>
         t.sessionId === oldSessionId ? { ...t, sessionId: newSessionId } : t,
       ),
       activeTabId: activeTabId === oldSessionId ? newSessionId : activeTabId,
+      lastSessionTabId: lastSessionTabId === oldSessionId ? newSessionId : lastSessionTabId,
     }))
     get().saveTabs()
   },
@@ -493,7 +512,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
         activeTabId: normalizeLegacyActiveTabId(parsed.activeTabId),
       }
       if (data.openTabs.length === 0) {
-        set({ tabs: [], activeTabId: null })
+        set({ tabs: [], activeTabId: null, lastSessionTabId: null })
         localStorage.removeItem(TAB_STORAGE_KEY)
         return
       }
@@ -565,7 +584,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
 
       const uniqueTabs = validTabs.filter((tab, index) => validTabs.findIndex(other => other.sessionId === tab.sessionId) === index)
       if (uniqueTabs.length === 0) {
-        set({ tabs: [], activeTabId: null })
+        set({ tabs: [], activeTabId: null, lastSessionTabId: null })
         // A restore attempt is not permission to discard the last saved layout.
         // Keep it available for another attempt, even if every lookup was 404.
         if (data.openTabs.some((tab) => getPersistedSessionId(tab))) {
@@ -578,8 +597,13 @@ export const useTabStore = create<TabStore>((set, get) => ({
       const activeType = legacyActive && getPersistentSpecialTabType(legacyActive)
       const normalizedActive = activeType ? PERSISTENT_SPECIAL_TAB_IDS[activeType] : data.activeTabId
       const activeId = normalizedActive && uniqueTabs.some(tab => tab.sessionId === normalizedActive) ? normalizedActive : uniqueTabs[0]!.sessionId
+      const activeTab = uniqueTabs.find((tab) => tab.sessionId === activeId)
+      const sessionTabs = uniqueTabs.filter((tab) => tab.type === 'session')
+      const lastSessionTabId = activeTab?.type === 'session'
+        ? activeId
+        : sessionTabs[sessionTabs.length - 1]?.sessionId ?? null
 
-      set({ tabs: uniqueTabs, activeTabId: activeId })
+      set({ tabs: uniqueTabs, activeTabId: activeId, lastSessionTabId })
     } catch (error) {
       console.error('[tabs] Restoring tabs failed:', error)
       useUIStore.getState().addToast({
