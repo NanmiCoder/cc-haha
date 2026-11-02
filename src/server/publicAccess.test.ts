@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessStore } from './publicAccess.js'
@@ -67,6 +67,41 @@ function fixture(
   })
   return { service, storePath, base, control, remote, pair, pairNative, native, messages, advance: (ms: number) => { clock += ms } }
 }
+
+describe('pairing outlives the listener', () => {
+  test('a stopped listener makes a device inactive but still paired; revoking or expiry ends the pairing', async () => {
+    const remote = fixture()
+    const { claim } = await remote.pairNative()
+    // Paired up front: a new listener after enable() has a port the fixture does not know.
+    const second = await remote.pairNative()
+    expect([remote.service.isDeviceActive(claim.deviceId), remote.service.isDevicePaired(claim.deviceId)]).toEqual([true, true])
+    // cloudflared restarts: the desktop stops the listener until the tunnel is back.
+    remote.service.disable()
+    expect([remote.service.isDeviceActive(claim.deviceId), remote.service.isDevicePaired(claim.deviceId)]).toEqual([false, true])
+    remote.service.enable('https://fixture.trycloudflare.com')
+    expect(remote.service.isDeviceActive(claim.deviceId)).toBe(true)
+    await remote.control('revoke', { id: claim.deviceId })
+    expect(remote.service.isDevicePaired(claim.deviceId)).toBe(false)
+    expect(remote.service.isDevicePaired(second.claim.deviceId)).toBe(true)
+    remote.advance(31 * 24 * 60 * 60_000)
+    expect(remote.service.isDevicePaired(second.claim.deviceId)).toBe(false)
+  })
+
+  test('before the listener ever starts, pairing is read from disk without creating the store', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-paired-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const storePath = path.join(dir, 'devices.json')
+    const service = (now = 1000) => new PublicAccessServer({ storePath, now: () => now, serverPort: () => 3456, handleApiRequest: async () => new Response(), handleStatic: async () => null, websocket: { message() {} } })
+    expect(service().isDevicePaired('phone')).toBe(false)
+    expect(existsSync(storePath)).toBe(false)
+    writeFileSync(storePath, JSON.stringify({ version: 1, devices: [{ id: 'phone', name: 'Phone', createdAt: 1, expiresAt: 5000, tokenHash: 'a'.repeat(64) }] }))
+    expect(service().isDevicePaired('phone')).toBe(true)
+    expect(service(6000).isDevicePaired('phone')).toBe(false)
+    // A store from a newer version is not evidence that the pairing is gone.
+    writeFileSync(storePath, JSON.stringify({ version: 9, devices: [] }))
+    expect(service().isDevicePaired('phone')).toBe(true)
+  })
+})
 
 describe('public transport boundary', () => {
   test('Cloudflare origin retains application pairing, revocation and origin checks behind loopback proxy', async () => {
@@ -512,6 +547,10 @@ test('push route allowlist refuses extra segments and unsupported methods', () =
   expect(allowed('/api/sessions/mobile-push/test', 'POST')).toBe(true)
   expect(allowed('/api/sessions/mobile-push/test', 'GET')).toBe(false)
   expect(allowed('/api/sessions/mobile-push/test', 'PUT')).toBe(false)
+  // The Android foreground service's long poll for alerts held by this computer.
+  expect(allowed('/api/sessions/mobile-push/pull', 'POST')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/pull', 'GET')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/pull/extra', 'POST')).toBe(false)
   expect(allowed('/api/sessions/mobile-push/id', 'POST')).toBe(false)
   expect(allowed('/api/sessions/mobile-push/test/extra', 'POST')).toBe(false)
 })

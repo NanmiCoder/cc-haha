@@ -40,3 +40,35 @@ export async function getDevicePushToken(): Promise<string> {
     clearTimeout(timer)
   }
 }
+
+/**
+ * The Expo Push Service token. Expo holds this app's APNs / FCM credentials, so
+ * a computer without them can still reach the phone. Asking Expo for the token
+ * needs the network, unlike the native token. The EAS project ID comes from the
+ * build's `extra.eas.projectId`, which expo-notifications reads itself.
+ */
+export async function getExpoPushToken(): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const token = await Promise.race([
+      Notifications.getExpoPushTokenAsync(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new DevicePushTokenError('TIMEOUT')),
+          10000
+        )
+      }),
+    ])
+    if (typeof token.data !== 'string' || !token.data)
+      throw new DevicePushTokenError('UNAVAILABLE')
+    return token.data
+  } catch (error) {
+    if (error instanceof DevicePushTokenError) throw error
+    // A build without an EAS project can never get one; anything else is the network.
+    if ((error as { code?: string } | null)?.code === 'ERR_NOTIFICATIONS_NO_EXPERIENCE_ID')
+      throw new DevicePushTokenError('NOT_CONFIGURED')
+    throw new DevicePushTokenError('UNAVAILABLE')
+  } finally {
+    clearTimeout(timer)
+  }
+}

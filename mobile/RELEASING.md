@@ -27,7 +27,7 @@
 
 `eas.json` 固定 EAS CLI 版本，使用 `production` 环境、远程签名凭据、自动递增构建号，Android 产物明确设为 APK。不要使用本地默认 debug keystore 作为公开分发签名。
 
-Android FCM 如果需要启用，在 EAS production 环境设置文件变量 `CC_HAHA_GOOGLE_SERVICES_FILE`，内容是匹配 `app.cchaha.mobile` 的 Firebase Android 客户端 JSON。服务账户私钥不能放进应用。未配置时不宣称后台推送可用。详见 [推送说明](PUSH_NOTIFICATIONS.md)。
+Android FCM 如果需要启用，在 EAS production 环境设置文件变量 `CC_HAHA_GOOGLE_SERVICES_FILE`，内容是匹配 `app.cchaha.mobile` 的 Firebase Android 客户端 JSON。服务账户私钥不能放进应用。可选：Android 默认走手机拉取，不需要 FCM。详见 [推送说明](PUSH_NOTIFICATIONS.md)。
 
 ## 日常发版
 
@@ -67,7 +67,7 @@ GitHub Actions → `Release Mobile` → `Run workflow`：
 
 该 App 依赖桌面配对，审核说明需要提供可实际访问的隔离测试环境与操作步骤。内部 fixture 服务不是已经可用的正式审核入口。TestFlight 真机验证通过后，再选择构建提交 App Review；CI 上传成功不能替代此步骤。
 
-后台推送目前要求桌面配置 APNs / FCM 服务端凭据。普通用户开箱即用的后台推送需要单独的受控服务方案，不可把开发者私钥打包进桌面端或移动端。
+后台推送不需要桌面配置凭据：iOS 经 Expo 推送服务中转（需要在 EAS 项目凭据里配好 APNs Push Key，并保持 Enhanced Push Security 关闭），Android 由 App 的前台服务直接向已配对电脑拉取。不可把开发者私钥打包进桌面端或移动端。详见 [推送说明](PUSH_NOTIFICATIONS.md)。
 
 ## 确定性检查
 

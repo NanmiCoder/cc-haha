@@ -1,8 +1,11 @@
 import { ApiError } from '../core/client'
+import type { PushProvider } from './pushProvider'
 
 export type PushStatus = 'loading' | 'registered' | 'notConfigured' | 'permissionRequired' | 'unsupported' | 'error'
-export type PushIssue = 'network' | 'authorization' | 'hostUnsupported' | 'deviceNotConfigured' | 'deviceUnavailable' | 'storage' | 'unknown'
-export type PushInfo = { status: PushStatus; issue?: PushIssue; error?: string }
+/** `relayFailing`: registered, but the computer's last Expo send failed, so alerts are not arriving. */
+export type PushIssue = 'network' | 'authorization' | 'hostUnsupported' | 'deviceNotConfigured' | 'deviceUnavailable' | 'storage' | 'relayFailing' | 'unknown'
+/** `provider`: how a registered computer reaches this phone; tests and the settings card use it. */
+export type PushInfo = { status: PushStatus; issue?: PushIssue; error?: string; provider?: PushProvider }
 export type PushStage = 'permission' | 'device' | 'host' | 'registration'
 type AttemptResult = { info: PushInfo; retry?: boolean }
 
