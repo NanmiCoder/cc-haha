@@ -320,7 +320,9 @@ FunctionEnd
     ; uninstaller with no message. Image names are all this fallback matches; a
     ; same-named process of another user only makes it block setup with the
     ; close-manually message, the fail-closed direction. The timeout turns any
-    ; other stall into the enumeration-failed message below.
+    ; other stall into the enumeration-failed message below: nsExec then pushes
+    ; "timeout" (or "error") instead of an exit code, so the result checks must
+    ; stay string tests (== / !=); an integer test reads those words as 0.
     nsExec::Exec /TIMEOUT=30000 '"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\cc-haha-processes.csv"'
     Pop ${_RETURN}
     ${If} ${_RETURN} != 0
@@ -330,7 +332,7 @@ FunctionEnd
       nsExec::Exec /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "$PLUGINSDIR\cc-haha-processes.csv"'
       Pop ${_RETURN}
       ${If} ${_RETURN} == 0
-        StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path. Close it manually."
+        StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path, possibly in another user's session. Close it manually."
       ${ElseIf} ${_RETURN} == 1
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; exact-image fallback found no main app, known sidecar, or bundled terminal/search helper. Differently named child processes cannot be attributed without path data."
       ${Else}

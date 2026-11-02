@@ -239,6 +239,16 @@ SectionEnd
     expect(installerHook).toMatch(
       /fallback process filtering failed[\s\S]*StrCpy \$\{_RETURN\} 0/,
     )
+    // A timed-out or unlaunchable nsExec pushes "timeout"/"error". LogicLib's
+    // == and != compare strings, so those block setup; an integer test (= or
+    // <>) would read them as 0 and let setup continue on a partial CSV.
+    expect(installerHook).toMatch(
+      /tasklist \/FO CSV \/NH > [^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} != 0\n/,
+    )
+    expect(installerHook).toMatch(
+      /findstr\.exe[^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} == 0\n[^\n]*\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
+    )
+    expect(installerHook).toContain('possibly in another user\'s session')
     expect(installerHook).toContain('claude-sidecar-x86_64-pc-windows-msvc.exe')
     expect(installerHook).toContain('claude-sidecar-aarch64-pc-windows-msvc.exe')
     expect(installerHook).toContain('/C:"OpenConsole.exe"')
