@@ -32,6 +32,35 @@ describe('agent effort parsing', () => {
     expect(markdownAgent?.effort).toBe('xhigh')
   })
 
+  test('reads a pinned provider from JSON and Markdown definitions', () => {
+    const jsonAgent = parseAgentFromJson('json-agent', {
+      description: 'JSON agent',
+      prompt: 'Run the JSON agent.',
+      model: 'deepseek-v4-pro',
+      provider: 'deepseek-direct',
+    })
+    const markdownAgent = parseAgentFromMarkdown(
+      '/tmp/markdown-agent.md',
+      '/tmp',
+      { name: 'markdown-agent', description: 'Markdown agent', provider: ' deepseek-direct ' },
+      'Run the Markdown agent.',
+      'projectSettings',
+    )
+    // An unusable provider keeps the Agent visible; running it reports why.
+    const invalidProvider = parseAgentFromMarkdown(
+      '/tmp/invalid-provider.md',
+      '/tmp',
+      { name: 'invalid-provider', description: 'Invalid provider agent', provider: 42 },
+      'Still loads.',
+      'projectSettings',
+    )
+
+    expect(jsonAgent?.provider).toBe('deepseek-direct')
+    expect(markdownAgent?.provider).toBe('deepseek-direct')
+    expect(invalidProvider).not.toBeNull()
+    expect(invalidProvider?.provider).toBeUndefined()
+  })
+
   test('rejects an invalid Markdown effort instead of silently inheriting', () => {
     const agent = parseAgentFromMarkdown(
       '/tmp/invalid-agent.md',

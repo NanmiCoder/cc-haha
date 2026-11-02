@@ -1,0 +1,10 @@
+This distribution includes cloudflared 2026.10.6, published by Cloudflare, Inc.
+
+Source: https://github.com/cloudflare/cloudflared/tree/2026.10.6
+Official release: https://github.com/cloudflare/cloudflared/releases/tag/2026.10.6
+License: Apache License 2.0 (the accompanying LICENSE file).
+
+The connector is distributed from Cloudflare's official release assets.
+Release assets are checked against pinned SHA-256 digests before packaging.
+The Windows ARM64 desktop package includes the official Windows amd64
+connector, which requires Windows x64 emulation; it is not a native ARM64 build.

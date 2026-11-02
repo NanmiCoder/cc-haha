@@ -34,7 +34,7 @@ Claude Code loads Skills from 6 different sources, ordered by priority from high
 
 ### 1. Bundled (Built-in Skills)
 
-Compiled into the CLI binary and available to all users. Defined in TypeScript and registered via `registerBundledSkill()`.
+Compiled into the CLI binary, with availability determined by the runtime environment and feature gates. Defined in TypeScript and registered via `registerBundledSkill()`.
 
 **Current Built-in Skills:**
 
@@ -48,10 +48,14 @@ Compiled into the CLI binary and available to all users. Defined in TypeScript a
 | `/stuck` | Help when stuck | -- |
 | `/skillify` | Create a new Skill | -- |
 | `/keybindings` | Custom keyboard shortcuts | -- |
-| `/loop` | Timed loop tasks | AGENT_TRIGGERS feature gate |
-| `/schedule` | Remote agent scheduling | AGENT_TRIGGERS_REMOTE feature gate |
+| `/loop` | In-process CLI recurring tasks | AGENT_TRIGGERS gate; not registered when desktop scheduling is available |
+| `/schedule` | Desktop scheduling and result queries; remote agent scheduling outside desktop | Local implementation with an authenticated desktop bridge and a non-lean profile; otherwise the remote implementation still requires AGENT_TRIGGERS_REMOTE and its account/policy conditions |
 | `/claude-api` | Claude API integration | BUILDING_CLAUDE_APPS feature gate |
 | `/dream` | Automatic memory organization | KAIROS feature gate |
+
+Desktop `/schedule` is registered by `src/skills/bundled/scheduleDesktop.ts` and guides the model to the native `ScheduledTask` tool. Natural-language requests can call the tool directly without invoking the skill first. `src/skills/bundled/index.ts` registers the local and remote versions mutually exclusively so desktop requests are not accidentally sent to the cloud.
+
+`ScheduledTask` uses a session-authenticated local bridge to the existing desktop `CronService`, sharing storage with the task page. The server derives the caller's session identity from authentication. The tool supports task CRUD, execution-history listings, and bounded, paginated result reads. Successful results are serialized as versioned JSON in the actual `tool_result.content`, allowing live chat and reloaded history to render the same cards. The original CLI Cron tools and project-local task file retain separate semantics; desktop scheduling does not require enabling AGENT_TRIGGERS. For user instructions, see [Scheduled tasks](../desktop/schedule.md).
 
 ### 2. Managed (Policy-Managed Skills)
 

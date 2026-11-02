@@ -427,13 +427,20 @@ public enum AXTree {
             axText += "\n\n" + ShellTreeAdvice.advice
         }
 
-        // Said last, because it outranks everything above it: when the window is
-        // off screen, the shell advice's "read coordinates off the screenshot"
-        // is advice the model cannot act on.
-        if let notice = OffScreenTargetAdvice.noticeIfUnreachable(
-            hasWindowOnScreen: WindowGeometry.hasWindowOnScreen(pid: pid)
+        // After the shell advice, because it qualifies it: off the shown
+        // Spaces the screenshot may be stale, so "read coordinates off the
+        // screenshot" needs that caveat. The router may still append capture
+        // notices after this one.
+        if let reason = OffScreenTargetAdvice.reason(
+            hasWindowOnScreen: WindowGeometry.hasWindowOnScreen(pid: pid),
+            appIsHidden: running?.isHidden == true,
+            keyWindowIsParked: keyWindowID.map {
+                TargetWindowRecovery.parked.isParked(
+                    pid: pid, identity: processIdentity, windowID: $0
+                )
+            } ?? false
         ) {
-            axText += "\n\n" + notice
+            axText += "\n\n" + OffScreenTargetAdvice.notice(for: reason)
         }
 
         // Replace the entire internal tree even when only a textual diff is
@@ -840,16 +847,18 @@ public enum AXTree {
     // MARK: - Window resolution (blueprint §2: not-minimized + recover)
 
     /// All usable top-level windows in stable order; the array index is the
-    /// `windowIndex` an element's locator refers to. Hidden/minimized Electron
-    /// windows are recovered (unhide / un-minimize / raise) before giving up.
+    /// `windowIndex` an element's locator refers to. Reading never changes
+    /// window state: a minimized window is restored only by
+    /// `TargetWindowRecovery`, under the foreground guard, and a hidden app is
+    /// read as it is.
     private static func resolveWindows(app: AXUIElement) -> [AXUIElement] {
-        var windows = usableWindows(app)
-        if windows.isEmpty {
-            recoverHiddenWindows(app: app, windows: rawWindows(app))
-            windows = usableWindows(app)
-        }
-        if windows.isEmpty, let focused = copyElement(app, kAXFocusedWindowAttribute) {
-            return [focused]
+        let windows = usableWindows(app)
+        // AXWindows lists only the Spaces on screen; a window behind the
+        // user's fullscreen app is still reachable as the focused/main window.
+        if windows.isEmpty,
+           let window = copyElement(app, kAXFocusedWindowAttribute)
+            ?? copyElement(app, kAXMainWindowAttribute) {
+            return [window]
         }
         return windows
     }
@@ -880,30 +889,6 @@ public enum AXTree {
             return main
         }
         return windows.first
-    }
-
-    /// Best-effort recovery for apps that minimize/hide their window (common with
-    /// Electron). Mirrors the iFurySt recover step but kept minimal.
-    private static func recoverHiddenWindows(app: AXUIElement, windows: [AXUIElement]) {
-        var pidValue: pid_t = 0
-        AXUIElementGetPid(app, &pidValue)
-        // Un-hide (Cmd+H) — this does NOT steal the foreground. We deliberately no
-        // longer call `running.activate(.activateAllWindows)` here: that was the
-        // foreground-stealing behaviour removed everywhere else. Computer Use runs
-        // in the background.
-        if pidValue > 0, let running = NSRunningApplication(processIdentifier: pidValue) {
-            _ = running.unhide()
-        }
-        if let window = windows.first ?? copyElement(app, kAXFocusedWindowAttribute) {
-            // Un-minimize the window so it's back on the on-screen list — without
-            // bringing the whole app to the foreground.
-            if boolValue(window, kAXMinimizedAttribute) == true {
-                _ = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-            }
-        }
-        // (Removed the 0.7s Thread.sleep — it froze the daemon run loop / glow /
-        // AXObserver, contradicting this file's own rule. The warm-up poll in
-        // appState already gives a recovered window time to rebuild its tree.)
     }
 
     private static func preferredFocusedElement(

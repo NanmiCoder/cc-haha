@@ -12,6 +12,7 @@ import * as queryModule from '../../query.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId, type SessionId } from '../../types/ids.js'
+import { getAgentProfile, setAgentProfile } from '../../utils/agentProfile.js'
 import type { Message } from '../../types/message.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import {
@@ -28,8 +29,13 @@ import {
 } from '../../utils/sessionStorage.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { runAgent } from './runAgent.js'
+import * as agentRunner from './runAgent.js'
+import * as agentToolUtils from './agentToolUtils.js'
+import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import { resumeAgentBackground } from './resumeAgent.js'
 
 const AGENT_ID = asAgentId('aworker-00112233445566aa')
+const originalProfile = getAgentProfile()
 const writeAgentMetadata = sessionStorage.writeAgentMetadata
 const savedEnv = {
   configDir: process.env.CLAUDE_CONFIG_DIR,
@@ -79,6 +85,7 @@ afterEach(async () => {
     }
   } finally {
     mock.restore()
+    setAgentProfile(originalProfile)
     resetProjectForTesting()
     restoreEnv('CLAUDE_CONFIG_DIR', savedEnv.configDir)
     restoreEnv('TEST_ENABLE_SESSION_PERSISTENCE', savedEnv.persistence)
@@ -168,6 +175,29 @@ async function runTurn(params: {
 }
 
 describe('a teammate transcript kept across runs', () => {
+  test('immediately resumes a completed lean subagent while its transcript is still buffered', async () => {
+    setAgentProfile('lean')
+    const initial = createUserMessage({ content: 'Inspect the parser.' })
+    const answer = createAssistantMessage({ content: 'The parser accepts empty arrays.' })
+    // Recording resolves after enqueueing; the normal disk drain runs later.
+    await sessionStorage.recordSidechainTranscript([initial, answer], AGENT_ID)
+    await sessionStorage.writeAgentMetadata(AGENT_ID, { agentType: 'general-purpose' })
+    spyOn(localAgentTask, 'registerAsyncAgent').mockReturnValue({ agentId: AGENT_ID, abortController: new AbortController() } as never)
+    let lifecycle: Parameters<typeof agentToolUtils.runAsyncAgentLifecycle>[0] | undefined
+    spyOn(agentToolUtils, 'runAsyncAgentLifecycle').mockImplementation(async params => { lifecycle = params })
+    const runner = spyOn(agentRunner, 'runAgent').mockImplementation(async function* () {})
+
+    const result = await resumeAgentBackground({
+      agentId: AGENT_ID, prompt: 'Check the related tests.',
+      toolUseContext: parentContext(), canUseTool: (async () => ({ behavior: 'allow' })) as never,
+    })
+    expect(result.agentId).toBe(AGENT_ID)
+    lifecycle?.makeStream(undefined)
+    const messages = runner.mock.calls[0]?.[0].promptMessages
+    expect(messages?.map(message => message.uuid).slice(0, 2)).toEqual([initial.uuid, answer.uuid])
+    expect(JSON.stringify(messages?.at(-1))).toContain('Check the related tests.')
+  })
+
   test('appends each turn once and keeps one parent chain', async () => {
     const recordedUuids = new Set<UUID>()
     const firstPrompt = createUserMessage({ content: 'Investigate the failing build' })

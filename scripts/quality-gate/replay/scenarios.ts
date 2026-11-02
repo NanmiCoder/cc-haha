@@ -470,14 +470,11 @@ const agentTeam: LiveScenarioRunner = async (ctx) => {
     // Done means the whole team wound down, not just that the file appeared:
     // the lead keeps working (and asking for permissions) after that, and a
     // replay runs far faster than the recording did, so stopping on the file
-    // alone leaves the lead's later requests unmade.
+    // alone leaves the lead's later requests unmade. Stopped members are not
+    // the end either: the idle lead is then reminded to delete the team.
     const total = join(ctx.workRoot, 'total.txt')
     const teamConfig = join(ctx.configDir, 'teams', plan.teamName, 'config.json')
-    const membersDone = () => {
-      if (!existsSync(teamConfig)) return true
-      const members = (JSON.parse(readFileSync(teamConfig, 'utf8')) as { members?: Array<{ name?: string; terminated?: boolean }> }).members ?? []
-      return members.filter((member) => member.name !== 'team-lead').every((member) => member.terminated === true)
-    }
+    const teamEnded = () => !existsSync(teamConfig)
     const deadline = Date.now() + ctx.stepTimeoutMs * 2
     let quietSince = Date.now()
     let seen = socket.messages.length
@@ -493,11 +490,11 @@ const agentTeam: LiveScenarioRunner = async (ctx) => {
       }
       const leadIdle = socket.messages.at(-1)?.type !== 'permission_request' && socket.messages.slice(start).some((m) => m.type === 'message_complete')
       const fileDone = existsSync(total) && readFileSync(total, 'utf8').includes('262')
-      if (fileDone && membersDone() && leadIdle && Date.now() - quietSince > 2_000) break
+      if (fileDone && teamEnded() && leadIdle && Date.now() - quietSince > 2_000) break
       await Bun.sleep(250)
     }
     if (!existsSync(total) || !readFileSync(total, 'utf8').includes('262')) throw new Error('the team never wrote total.txt with 262')
-    if (!membersDone()) throw new Error('the team members were never shut down')
+    if (!teamEnded()) throw new Error('the team was never shut down and deleted')
   } finally {
     socket.close()
   }

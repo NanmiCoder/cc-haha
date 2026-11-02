@@ -16,11 +16,13 @@
  * for callers that explicitly asked for fresh data.
  */
 
-export interface ModelCatalogCacheOptions {
+export interface ModelCatalogCacheOptions<T = unknown> {
   /** How long a successful refresh stays authoritative. */
   ttlMs: number
   /** How long to stop retrying after a failed refresh. */
   failureBackoffMs: number
+  /** Publish only the currently selected account's accepted catalog, including its initial fallback. */
+  onChange?: (models: T) => void
 }
 
 export interface ResolveCatalogInput<T> {
@@ -32,6 +34,8 @@ export interface ResolveCatalogInput<T> {
   fallback: T
   /** Await the upstream request instead of refreshing in the background. */
   forceRefresh?: boolean
+  /** An explicit user refresh must report failures instead of claiming fallback data is fresh. */
+  throwOnError?: boolean
 }
 
 export interface ModelCatalogCache<T> {
@@ -41,43 +45,59 @@ export interface ModelCatalogCache<T> {
 }
 
 export function createModelCatalogCache<T>(
-  { ttlMs, failureBackoffMs }: ModelCatalogCacheOptions,
+  { ttlMs, failureBackoffMs, onChange }: ModelCatalogCacheOptions<T>,
 ): ModelCatalogCache<T> {
   let cached: { accountKey: string; expiresAt: number; models: T } | null = null
-  let inFlight: Promise<void> | null = null
+  let inFlight: Promise<T> | null = null
   let retryAfter = 0
+  let activeAccountKey: string | null = null
+  let revision = 0
 
   const store = (accountKey: string, models: T) => {
     cached = { accountKey, expiresAt: Date.now() + ttlMs, models }
     retryAfter = 0
+    onChange?.(models)
   }
 
-  const revalidate = (accountKey: string, fetchCatalog: () => Promise<T>): Promise<void> => {
+  const revalidate = (accountKey: string, fetchCatalog: () => Promise<T>): Promise<T> => {
     // Callers arrive in bursts (`/api/models` and `/api/models/current` are
     // requested in the same tick), so a single refresh serves all of them.
     if (inFlight) return inFlight
-    inFlight = fetchCatalog()
+    const requestRevision = revision
+    inFlight = Promise.resolve().then(fetchCatalog)
       .then((models) => {
-        store(accountKey, models)
+        if (requestRevision === revision) store(accountKey, models)
+        return models
       })
-      .catch(() => {
-        retryAfter = Date.now() + failureBackoffMs
+      .catch((error) => {
+        if (requestRevision === revision) retryAfter = Date.now() + failureBackoffMs
+        throw error
       })
       .finally(() => {
-        inFlight = null
+        if (requestRevision === revision) inFlight = null
       })
     return inFlight
   }
 
   return {
-    async resolve({ accountKey, fetchCatalog, fallback, forceRefresh }) {
+    async resolve({ accountKey, fetchCatalog, fallback, forceRefresh, throwOnError }) {
+      if (activeAccountKey !== accountKey) {
+        activeAccountKey = accountKey
+        revision += 1
+        cached = null
+        inFlight = null
+        retryAfter = 0
+        onChange?.(fallback)
+      }
       if (forceRefresh) {
+        // A refresh supersedes any earlier request, including a startup fetch
+        // still in flight. Its late response must not restore an older listing.
+        revision += 1
+        inFlight = null
         try {
-          const models = await fetchCatalog()
-          store(accountKey, models)
-          return models
-        } catch {
-          retryAfter = Date.now() + failureBackoffMs
+          return await revalidate(accountKey, fetchCatalog)
+        } catch (error) {
+          if (throwOnError) throw error
           // The last listing this account got still beats the bundled catalog.
           return cached?.accountKey === accountKey ? cached.models : fallback
         }
@@ -87,13 +107,15 @@ export function createModelCatalogCache<T>(
       if (usable && usable.expiresAt > Date.now()) return usable.models
 
       if (Date.now() >= retryAfter) {
-        void revalidate(accountKey, fetchCatalog)
+        void revalidate(accountKey, fetchCatalog).catch(() => {})
       }
       // Stale data still beats the bundled fallback for the account in question.
       return usable ? usable.models : fallback
     },
 
     clear() {
+      revision += 1
+      activeAccountKey = null
       cached = null
       inFlight = null
       retryAfter = 0

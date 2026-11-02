@@ -202,4 +202,6 @@ bun run build
 bun run build:electron
 ```
 
+After Vite, `bun run build` runs `build:h5-mobile`, which exports `mobile/` as the H5 for phone browsers (`dist/m`); install the `mobile/` dependencies (Node 22) first. `dist/m/assets/node_modules/**` is listed again in electron-builder's `files`, which would otherwise exclude it.
+
 `electron:package` runs electron-builder on top of that. Verifying a packaged artifact only proves the asset and installer structure is correct. User flows that touch windows, permissions, terminals, preview, updates, or Computer Use still need a real desktop smoke test.

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { isExpectedRoutingCliExit } from './agentModelRouting'
+import { forwardProvenanceRequest } from './leanSkillProvenance'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
 import { decideReply, UPSTREAM_ERROR_MESSAGE, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER, type MockRequest } from './scriptedModel'
@@ -14,6 +15,13 @@ function agentRequest(messages: MockRequest['messages']): MockRequest {
 }
 
 describe('scripted model', () => {
+  test('sends task ownership requests and exposes rejected assignment results', () => {
+    const messages: MockRequest['messages'] = [{ role: 'user', content: 'MOCK_TEAM_OWNER {"tool":"TaskUpdate","input":{"taskId":"1","owner":"patcher"}}' }]
+    const request = { ...agentRequest(messages), tools: [...AGENT_TOOLS, { name: 'TaskUpdate' }] }
+    expect(decideReply(request)).toMatchObject({ content: [{ type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', owner: 'patcher' } }] })
+    expect(decideReply({ ...request, messages: [...messages, { role: 'user', content: [{ type: 'tool_result', content: "No teammate named 'patcher'" }] }] }))
+      .toMatchObject({ content: [{ type: 'text', text: "Tool result: No teammate named 'patcher'" }] })
+  })
   test('answers side calls without tools with neutral text', () => {
     const reply = decideReply({ messages: [{ role: 'user', content: 'Create a file called a.txt containing the word X' }] })
     expect(reply).toEqual({ kind: 'message', content: [{ type: 'text', text: 'Mock title' }], stopReason: 'end_turn' })
@@ -324,6 +332,59 @@ describe('mock Anthropic endpoint', () => {
     const deadline = Date.now() + 2_000
     while (server!.requests[0]!.outcome === 'pending' && Date.now() < deadline) await Bun.sleep(20)
     expect(server!.requests[0]!.outcome).toBe('cancelled')
+  })
+})
+
+describe('lean provenance request gate', () => {
+  test('forwards to the upstream authority while preserving the request and response', async () => {
+    let gateCalls = 0
+    let upstreamCalls = 0
+    let gateHost = ''
+    const upstream = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        upstreamCalls++
+        return Response.json({
+          method: request.method,
+          path: new URL(request.url).pathname + new URL(request.url).search,
+          host: request.headers.get('host'),
+          contentType: request.headers.get('content-type'),
+          apiKey: request.headers.get('x-api-key'),
+          body: await request.text(),
+        }, { status: 201, headers: { 'x-mock-upstream': 'reached' } })
+      },
+    })
+    const gate = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        gateCalls++
+        // Fail a forwarding loop immediately instead of waiting for the CLI timeout.
+        if (gateCalls > 1) return new Response('recursive forwarding', { status: 508 })
+        const response = await forwardProvenanceRequest(`http://127.0.0.1:${upstream.port}`, request, await request.text())
+        gateHost = request.headers.get('host') ?? ''
+        return response
+      },
+    })
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'mock-api-key' },
+        body: '{"messages":[]}',
+        signal: AbortSignal.timeout(2000),
+      })
+      expect(response.status).toBe(201)
+      expect(response.headers.get('x-mock-upstream')).toBe('reached')
+      expect(await response.json()).toEqual({
+        method: 'POST', path: '/v1/messages?beta=true', host: `127.0.0.1:${upstream.port}`,
+        contentType: 'application/json', apiKey: 'mock-api-key', body: '{"messages":[]}',
+      })
+      expect(gateCalls).toBe(1)
+      expect(upstreamCalls).toBe(1)
+      expect(gateHost).toBe(`127.0.0.1:${gate.port}`)
+    } finally {
+      await gate.stop(true)
+      await upstream.stop(true)
+    }
   })
 })
 

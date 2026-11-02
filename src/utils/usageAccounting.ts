@@ -201,6 +201,74 @@ export function usageRecordKey(
 }
 
 /**
+ * What one reply's content-block lines add to a ledger of already-counted usage.
+ *
+ * The lines of one reply do not necessarily agree: the first block can be written with an
+ * all-zero or partial `usage` (output_tokens still 0) and a later line carries the final numbers.
+ * Keeping "the first line wins" therefore recorded some replies as ~0 output tokens. Instead each
+ * field keeps the largest value any line reported, and a line only contributes what exceeds what
+ * was already counted. Identical repeats add nothing; a late-arriving final line adds the rest.
+ *
+ * `previous` is what had been counted before this line (null for a first sighting) and `total` is
+ * the reply's running figure, so tiered pricing can be applied to the whole reply and billed as
+ * `cost(total) - cost(previous)` instead of pricing each fragment as a tiny prompt.
+ */
+export type UsageIncrement = {
+  previous: Required<PricedTokens> | null
+  total: Required<PricedTokens>
+  delta: Required<PricedTokens>
+  isEmpty: boolean
+}
+
+export type UsageLedger = Map<string, Required<PricedTokens>>
+
+function withWebSearch(tokens: PricedTokens): Required<PricedTokens> {
+  return { ...tokens, webSearchRequests: tokens.webSearchRequests ?? 0 }
+}
+
+export function claimUsageIncrement(
+  ledger: UsageLedger,
+  key: string | null,
+  current: PricedTokens,
+): UsageIncrement {
+  const next = withWebSearch(current)
+  const previous = key === null ? undefined : ledger.get(key)
+  const total: Required<PricedTokens> = previous
+    ? {
+        inputTokens: Math.max(previous.inputTokens, next.inputTokens),
+        outputTokens: Math.max(previous.outputTokens, next.outputTokens),
+        cacheReadInputTokens: Math.max(previous.cacheReadInputTokens, next.cacheReadInputTokens),
+        cacheCreationInputTokens: Math.max(
+          previous.cacheCreationInputTokens,
+          next.cacheCreationInputTokens,
+        ),
+        webSearchRequests: Math.max(previous.webSearchRequests, next.webSearchRequests),
+      }
+    : next
+  if (key !== null) ledger.set(key, total)
+  const base = previous ?? withWebSearch({
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+  })
+  const delta: Required<PricedTokens> = {
+    inputTokens: total.inputTokens - base.inputTokens,
+    outputTokens: total.outputTokens - base.outputTokens,
+    cacheReadInputTokens: total.cacheReadInputTokens - base.cacheReadInputTokens,
+    cacheCreationInputTokens: total.cacheCreationInputTokens - base.cacheCreationInputTokens,
+    webSearchRequests: total.webSearchRequests - base.webSearchRequests,
+  }
+  const isEmpty =
+    delta.inputTokens === 0 &&
+    delta.outputTokens === 0 &&
+    delta.cacheReadInputTokens === 0 &&
+    delta.cacheCreationInputTokens === 0 &&
+    delta.webSearchRequests === 0
+  return { previous: previous ?? null, total, delta, isEmpty }
+}
+
+/**
  * Time actually worked between two consecutive messages, or 0 when the gap is a break rather than
  * a stretch of work. Non-positive gaps (out-of-order timestamps) contribute nothing.
  */

@@ -56,6 +56,8 @@ cd ..
 bun run src/server/index.ts
 ```
 
+`bun run build` 最后会把手机 App（`mobile/`）导出成网页放进 `desktop/dist/m`，所以构建前要先在 `mobile/` 里 `bun install`。手机和平板浏览器在桌面 H5 入口完成令牌验证或远程配对后，会跳到 `/m/` 使用这套界面；`/m/*` 的刷新由 Server 回落到 `dist/m/index.html`。没有构建 `dist/m` 时，`/m/*` 的页面请求重定向回 `/`，入口保留桌面版自带的手机布局。
+
 Server 会自动查找仓库的 `desktop/dist`。从其他目录启动时，用绝对路径指定构建产物：
 
 ```bash

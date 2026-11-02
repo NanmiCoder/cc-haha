@@ -1,4 +1,5 @@
 import type { APIError } from '@anthropic-ai/sdk'
+import { redactSecrets } from '../teamMemorySync/secretScanner.js'
 
 // SSL/TLS error codes from OpenSSL (used by both Node.js and Bun)
 // See: https://www.openssl.org/docs/man3.1/man3/X509_STORE_CTX_get_error.html
@@ -257,4 +258,21 @@ export function formatAPIError(error: APIError): string {
   return sanitizedMessage !== error.message && sanitizedMessage.length > 0
     ? sanitizedMessage
     : error.message
+}
+
+/** Bounded text safe to copy into a diagnostic report. */
+export function sanitizeRetryDiagnosticText(value: string): string {
+  return redactSecrets(value)
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+    .replace(
+      /((?:api[_-]?key|auth[_-]?token|access[_-]?token|token|password)\s*["']?\s*[:=]\s*)("(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|[^\s,"';&]+)/gi,
+      (_match, prefix: string, credential: string) => {
+        const quote = credential[0] === '"' || credential[0] === "'" ? credential[0] : ''
+        return `${prefix}${quote}[REDACTED]${quote}`
+      },
+    )
+    .replace(/(https?:\/\/)[^/\s@]+@/gi, '$1[REDACTED]@')
+    .replace(/([?&](?:api[_-]?key|token|auth|access_token|refresh_token|key)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9._-]{8,}\b/g, '[REDACTED]')
+    .slice(0, 2000)
 }

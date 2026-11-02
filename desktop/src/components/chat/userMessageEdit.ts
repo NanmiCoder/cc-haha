@@ -1,6 +1,14 @@
 import { stripAgentTeamRequest, withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { splitSessionReferenceContext } from '@/lib/sessionReferences'
 import { parseUserMessageSegments } from '@/lib/userMessageCapabilities'
+import {
+  findMentionRanges,
+  mentionModelText,
+  mentionToken,
+  tokenOccurrences,
+  type ComposerMention,
+  type NewComposerMention,
+} from '@/lib/composerMentions'
 import { capabilityKey, useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import {
   extractLeadingFileReferences,
@@ -28,11 +36,9 @@ export type UserMessageEditDraft = {
   sessionReferences: Array<{ sessionId: string }>
   /** The message was sent with the composer's Agent Team switch on. */
   agentTeam?: boolean
-  /** Skill/plugin pills shown as `@label` in `text`, with the model text each one sends. */
-  mentions?: CapabilityDraftMention[]
+  /** Skill/plugin pills shown as `@label` in `text`, in the shape the composer keeps them. */
+  mentions?: ComposerMention[]
 }
-
-export type CapabilityDraftMention = { label: string, modelText: string }
 
 export type UserMessageResendPayload = {
   content: string
@@ -169,31 +175,50 @@ export function createUserMessageEditDraft(
 }
 
 /** Show skill/plugin sentences as the `@label` the user picked, remembering what each sends. */
-function projectCapabilityPills(body: string): { text: string, mentions: CapabilityDraftMention[] } {
-  const mentions: CapabilityDraftMention[] = []
+function projectCapabilityPills(body: string): { text: string, mentions: ComposerMention[] } {
   const catalog = useCapabilityCatalogStore.getState().entries
-  const text = parseUserMessageSegments(body).map((segment) => {
-    if (segment.type === 'text') return segment.text
-    if (segment.type === 'command') return segment.name
-    if (!segment.modelText) return `Skill(${segment.id})`
-    const label = `@${catalog[capabilityKey(segment.type, segment.id)]?.label ?? segment.label}`
-    mentions.push({ label, modelText: segment.modelText })
-    return label
-  }).join('')
+  const pending: Array<{ mention: NewComposerMention, start: number }> = []
+  let text = ''
+  for (const segment of parseUserMessageSegments(body)) {
+    if (segment.type === 'text') {
+      text += segment.text
+    } else if (segment.type === 'command') {
+      text += segment.name
+    } else if (!segment.modelText) {
+      text += `Skill(${segment.id})`
+    } else {
+      const known = catalog[capabilityKey(segment.type, segment.id)]
+      const mention: NewComposerMention = {
+        kind: segment.type,
+        id: segment.id,
+        label: known?.label ?? segment.label,
+        ...(known?.icon ? { icon: known.icon } : {}),
+        modelText: segment.modelText,
+        path: '',
+        isDirectory: false,
+      }
+      pending.push({ mention, start: text.length })
+      text += mentionToken(mention)
+    }
+  }
+  // The ordinal says which occurrence of the token is the pill, so a literal
+  // `@label` typed earlier in the prompt cannot take its place.
+  const mentions = pending.map(({ mention, start }) => ({
+    ...mention,
+    tokenOrdinal: tokenOccurrences(text, mentionToken(mention)).filter((position) => position < start).length,
+  }))
   return { text, mentions }
 }
 
-/** Put back the model text of every pill the user kept; a deleted `@label` sends nothing. */
-function expandCapabilityPills(text: string, mentions: CapabilityDraftMention[]): string {
-  let result = text
-  let searchFrom = 0
-  for (const mention of mentions) {
-    const index = result.indexOf(mention.label, searchFrom)
-    if (index < 0) continue
-    result = result.slice(0, index) + mention.modelText + result.slice(index + mention.label.length)
-    searchFrom = index + mention.modelText.length
+/** Put back the model text of every pill still in the draft; a deleted pill sends nothing. */
+function expandCapabilityPills(text: string, mentions: ComposerMention[]): string {
+  let result = ''
+  let cursor = 0
+  for (const range of findMentionRanges(text, mentions)) {
+    result += text.slice(cursor, range.start) + mentionModelText(range.mention)
+    cursor = range.end
   }
-  return result
+  return result + text.slice(cursor)
 }
 
 function hasReferenceContext(attachment: UIAttachment): boolean {

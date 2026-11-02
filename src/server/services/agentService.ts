@@ -23,6 +23,7 @@ export type AgentDefinition = {
   name: string
   description?: string
   model?: string
+  provider?: string
   effort?: string | number
   tools?: string[]
   systemPrompt?: string
@@ -31,9 +32,10 @@ export type AgentDefinition = {
 
 export type AgentUpdate = Omit<
   Partial<AgentDefinition>,
-  'model' | 'effort' | 'tools' | 'color'
+  'model' | 'provider' | 'effort' | 'tools' | 'color'
 > & {
   model?: string | null
+  provider?: string | null
   effort?: string | number | null
   tools?: string[] | null
   color?: string | null
@@ -666,6 +668,7 @@ export class AgentService {
 
     setIfPresent('description')
     setIfPresent('model')
+    setIfPresent('provider')
     setIfPresent('effort')
     setIfPresent('tools')
     setIfPresent('color')
@@ -681,6 +684,7 @@ export class AgentService {
       description:
         typeof data.description === 'string' ? data.description : undefined,
       model: typeof data.model === 'string' ? data.model : undefined,
+      provider: typeof data.provider === 'string' ? data.provider : undefined,
       effort:
         typeof data.effort === 'string' || typeof data.effort === 'number'
           ? data.effort

@@ -141,6 +141,27 @@ describe('ReasoningEffortPopover', () => {
     expect(onChange.mock.calls).toEqual([['medium'], ['max']])
   })
 
+  it('closes only itself on Escape when it opens inside a dialog', () => {
+    const onDialogEscape = vi.fn()
+    const dialogListener = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onDialogEscape()
+    }
+    // Modal listens on the document in the bubble phase.
+    document.addEventListener('keydown', dialogListener)
+    try {
+      const { onClose, anchorRef } = renderPopover()
+      anchorRef.current?.focus()
+
+      fireEvent.keyDown(anchorRef.current!, { key: 'Escape' })
+
+      expect(onClose).toHaveBeenCalledTimes(1)
+      expect(onDialogEscape).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(anchorRef.current)
+    } finally {
+      document.removeEventListener('keydown', dialogListener)
+    }
+  })
+
   it('closes on Escape and outside pointer interaction', () => {
     const { onClose } = renderPopover()
     const slider = screen.getByRole('slider', { name: '推理强度' })

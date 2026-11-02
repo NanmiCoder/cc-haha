@@ -1,11 +1,10 @@
+import { describeTaskSchedule } from '@/lib/scheduledTask'
 import { Fragment, useCallback, useState, useRef } from 'react'
 import { CirclePause, CirclePlay, Clock, Ellipsis, LoaderCircle, Pencil, Play, ScrollText, Trash2 } from 'lucide-react'
 import type { CronTask } from '../../types/task'
 import { useTaskStore } from '../../stores/taskStore'
 import { useTranslation } from '../../i18n'
-import { describeCron } from '../../lib/cronDescribe'
 import { TaskRunsPanel } from './TaskRunsPanel'
-import { NewTaskModal } from './NewTaskModal'
 import { ConfirmPopover } from '@/components/tasks/ConfirmPopover'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
@@ -22,7 +21,7 @@ type ConfirmAction = 'run' | 'toggle' | 'delete' | null
 export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
   const { deleteTask, updateTask, runTask } = useTaskStore()
   const t = useTranslation()
-  const [showEdit, setShowEdit] = useState(false)
+  const openTaskEditor = useTaskStore(state => state.openTaskEditor)
   const [showMenu, setShowMenu] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
@@ -55,16 +54,27 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
     }
   }
 
-  const handleToggle = () => {
+  // A finished one-time task has no future run to resume; it is not "disabled".
+  const finished = task.scheduleState === 'completed'
+
+  const handleToggle = async () => {
     setConfirmAction(null)
     setShowMenu(false)
-    updateTask(task.id, { enabled: !task.enabled })
+    try {
+      await updateTask(task.id, { enabled: !task.enabled })
+    } catch (err) {
+      console.error('Failed to update task:', err)
+    }
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     setConfirmAction(null)
     setShowMenu(false)
-    deleteTask(task.id)
+    try {
+      await deleteTask(task.id)
+    } catch (err) {
+      console.error('Failed to delete task:', err)
+    }
   }
 
   const menuItem = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors'
@@ -88,7 +98,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
         <StatusDot
           tone={task.enabled ? 'success' : 'neutral'}
           size="md"
-          label={task.enabled ? t('tasks.active') : t('tasks.disabled')}
+          label={finished ? t('scheduledChat.completed') : task.enabled ? t('tasks.active') : t('tasks.disabled')}
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{task.name}</div>
@@ -108,7 +118,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
         {/* Right: schedule + actions. The schedule is a sentence, not code, so
             it is not set in mono; the raw cron stays on hover. */}
         <Badge title={task.cron} icon={<Clock size={11} strokeWidth={2} aria-hidden="true" />}>
-          {describeCron(task.cron, t)}
+          {describeTaskSchedule(task, t)}
         </Badge>
 
         <div className="flex shrink-0 items-center gap-0.5">
@@ -166,7 +176,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
               <div className="glass-panel absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-lg)] p-1">
                 {/* Edit */}
                 <button
-                  onClick={() => { setShowMenu(false); setShowEdit(true) }}
+                  onClick={() => { setShowMenu(false); openTaskEditor(task.id) }}
                   className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                 >
                   <Pencil size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
@@ -174,15 +184,17 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                 </button>
 
                 {/* Toggle */}
-                <button
-                  onClick={() => setConfirmAction('toggle')}
-                  className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
-                >
-                  {task.enabled
-                    ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
-                    : <CirclePlay size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />}
-                  {task.enabled ? t('common.disable') : t('common.enable')}
-                </button>
+                {!finished && (
+                  <button
+                    onClick={() => setConfirmAction('toggle')}
+                    className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
+                  >
+                    {task.enabled
+                      ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
+                      : <CirclePlay size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />}
+                    {task.enabled ? t('common.disable') : t('common.enable')}
+                  </button>
+                )}
 
                 <div className="mx-1 my-1 h-px bg-[var(--color-border)]" />
 
@@ -234,9 +246,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
       )}
 
       {/* Edit modal */}
-      {showEdit && (
-        <NewTaskModal open editTask={task} onClose={() => setShowEdit(false)} />
-      )}
+
     </div>
   )
 }

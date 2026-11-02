@@ -40,7 +40,7 @@ import {
   saveCurrentProjectConfig,
 } from './utils/config.js'
 import {
-  getContextWindowForModel,
+  getEffectiveModelContextWindow,
   getModelMaxOutputTokens,
 } from './utils/context.js'
 import { isFastModeEnabled } from './utils/fastMode.js'
@@ -138,7 +138,7 @@ export function getStoredSessionCosts(
         model,
         {
           ...usage,
-          contextWindow: getContextWindowForModel(model, getSdkBetas()),
+          contextWindow: getEffectiveModelContextWindow(model, getSdkBetas()),
           maxOutputTokens: getModelMaxOutputTokens(model).default,
         },
       ]),
@@ -342,7 +342,7 @@ function addToTotalModelUsage(
   modelUsage.webSearchRequests +=
     usage.server_tool_use?.web_search_requests ?? 0
   modelUsage.costUSD += cost
-  modelUsage.contextWindow = getContextWindowForModel(model, getSdkBetas())
+  modelUsage.contextWindow = getEffectiveModelContextWindow(model, getSdkBetas())
   modelUsage.maxOutputTokens = getModelMaxOutputTokens(model).default
   return modelUsage
 }

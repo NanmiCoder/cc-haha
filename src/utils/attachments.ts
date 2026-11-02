@@ -132,7 +132,7 @@ import {
   applyTaskOffsetsAndEvictions,
 } from './task/framework.js'
 import { getTaskOutputPath } from './task/diskOutput.js'
-import { drainPendingMessages } from '../tasks/LocalAgentTask/LocalAgentTask.js'
+import { drainPendingAgentMessages } from '../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { TaskType, TaskStatus } from '../Task.js'
 import {
   getOriginalCwd,
@@ -1052,7 +1052,6 @@ const peripheralAttachmentProducers = new Set([
   'todo_reminders',
   'teammate_mailbox',
   'team_context',
-  'agent_pending_messages',
 ])
 
 async function maybe<A>(label: string, f: () => Promise<A[]>): Promise<A[]> {
@@ -1143,14 +1142,20 @@ export function getAgentPendingMessageAttachments(
 ): Attachment[] {
   const agentId = toolUseContext.agentId
   if (!agentId) return []
-  const drained = drainPendingMessages(
+  const drained = drainPendingAgentMessages(
     agentId,
     toolUseContext.getAppState,
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
   )
-  return drained.map(msg => ({
+  const latest = drained.at(-1)
+  if (getAgentProfile() === 'lean' && latest && toolUseContext.skillSelectionState) {
+    // These instructions become visible in this tool round. Apply the latest
+    // request's trusted selection only now, including an empty selection.
+    toolUseContext.skillSelectionState.messages = latest.skillSelectionMessages ?? []
+  }
+  return drained.map(({ message }) => ({
     type: 'queued_command' as const,
-    prompt: msg,
+    prompt: message,
     origin: { kind: 'coordinator' as const },
     isMeta: true,
   }))

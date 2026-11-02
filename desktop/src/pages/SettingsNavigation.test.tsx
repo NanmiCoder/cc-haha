@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -53,6 +53,20 @@ describe('Settings section navigation', () => {
     })
     const railEntry = screen.getByRole('button', { name: 'Diagnostics', current: 'page' })
     expect(railEntry).toBeInTheDocument()
+  })
+
+  it('shows the installation entry at the top when phone connection is requested from an already scrolled settings page', async () => {
+    render(<Settings />)
+    const scroller = screen.getByTestId('settings-page-frame').parentElement!
+    scroller.scrollTop = 900
+    act(() => useUIStore.getState().setPendingSettingsTab('h5Access'))
+    await screen.findByRole('heading', { name: 'Get cc-haha on your phone' })
+    expect(scroller.scrollTop).toBe(0)
+    // Re-entering the current section must bring its installation card back too.
+    scroller.scrollTop = 600
+    act(() => useUIStore.getState().setPendingSettingsTab('h5Access'))
+    expect(scroller.scrollTop).toBe(0)
+    expect(useUIStore.getState().pendingSettingsTab).toBeNull()
   })
 
   it('no longer offers a Trace section; per-session traces live in the chat', () => {

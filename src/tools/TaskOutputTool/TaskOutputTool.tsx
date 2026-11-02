@@ -15,6 +15,7 @@ import type { RemoteAgentTaskState } from '../../tasks/RemoteAgentTask/RemoteAge
 import type { TaskState } from '../../tasks/types.js';
 import { AbortError } from '../../utils/errors.js';
 import { lazySchema } from '../../utils/lazySchema.js';
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { extractTextContent } from '../../utils/messages.js';
 import { semanticBoolean } from '../../utils/semanticBoolean.js';
 import { sleep } from '../../utils/sleep.js';
@@ -170,6 +171,9 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     return input.task_id;
   },
   async prompt() {
+    if (getAgentProfile() === 'lean') {
+      return 'Retrieve a background task result and status using the task_id returned when it started. block=true waits up to timeout milliseconds; block=false returns immediately. Background completion also sends a notification. Continue independent work while waiting and avoid repeated polling.'
+    }
     return `DEPRECATED: Prefer using the Read tool on the task's output file path instead. Background tasks return their output file path in the tool result, and you receive a <task-notification> with the same path when the task completes — Read that file directly.
 
 - Retrieves output from a running or completed task (background shell, agent, or remote session)

@@ -130,6 +130,10 @@ function installIOSKeyboardCollapseFix(win: WindowLike) {
  * right above the keyboard with the transcript still readable. The pan is then
  * redundant and gets snapped back. On browsers that already resize layout for
  * the keyboard (Android Chrome default) the variable simply equals 100dvh.
+ *
+ * Dialogs and bottom sheets are portaled to <body> and laid out against the
+ * full page, not the shell; an input in one only becomes visible through that
+ * pan, so the pan stays while focus is outside #root.
  */
 const KEYBOARD_VISIBLE_MIN_GAP_PX = 80
 
@@ -138,21 +142,35 @@ function installVisualViewportFit(win: WindowLike) {
   if (!viewport) return
   const root = win.document.documentElement
 
-  const sync = () => {
-    const height = viewport.height
-    if (!Number.isFinite(height) || height <= 0) return
-    root.style.setProperty(TOUCH_H5_VIEWPORT_HEIGHT_VAR, `${Math.round(height)}px`)
+  const focusedInApp = () => {
+    const active = win.document.activeElement
+    return !!active && !!win.document.getElementById('root')?.contains(active)
+  }
 
-    const keyboardVisible = win.innerHeight - height > KEYBOARD_VISIBLE_MIN_GAP_PX
+  const sync = () => {
+    // In layout pixels: pinch zoom shrinks visualViewport.height by its scale
+    // while the screen still shows the same area, which is not a keyboard.
+    const height = viewport.height * (viewport.scale || 1)
+    if (!Number.isFinite(height) || height <= 0) return
+
+    // Measure against the layout height: iOS 26 Safari shrinks innerHeight to
+    // the visible height once it pans the page, which read as "keyboard closed"
+    // and left the composer pushed above the screen. Read before writing the
+    // variable so a scroll event does not force a layout.
+    const keyboardVisible = root.clientHeight - height > KEYBOARD_VISIBLE_MIN_GAP_PX
+    root.style.setProperty(TOUCH_H5_VIEWPORT_HEIGHT_VAR, `${Math.round(height)}px`)
     root.toggleAttribute(TOUCH_H5_KEYBOARD_ATTRIBUTE, keyboardVisible)
 
-    if (keyboardVisible && (win.scrollX !== 0 || win.scrollY !== 0)) {
+    if (keyboardVisible && (win.scrollX !== 0 || win.scrollY !== 0) && focusedInApp()) {
       win.scrollTo(0, 0)
     }
   }
 
   viewport.addEventListener('resize', sync)
   viewport.addEventListener('scroll', sync)
+  // iOS pans once more when the keyboard animation ends and reports it only
+  // as a window scroll.
+  win.addEventListener('scroll', sync)
   sync()
 }
 

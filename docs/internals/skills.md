@@ -34,7 +34,7 @@ Claude Code 从 6 个不同来源加载 Skills，按优先级从高到低：
 
 ### 1. Bundled（内置 Skills）
 
-编译到 CLI 二进制中，所有用户可用。以 TypeScript 定义，通过 `registerBundledSkill()` 注册。
+编译到 CLI 二进制中，按运行环境和特性开关决定是否可用。以 TypeScript 定义，通过 `registerBundledSkill()` 注册。
 
 **当前内置 Skills：**
 
@@ -48,10 +48,14 @@ Claude Code 从 6 个不同来源加载 Skills，按优先级从高到低：
 | `/stuck` | 卡住时求助 | — |
 | `/skillify` | 创建新 Skill | — |
 | `/keybindings` | 自定义快捷键 | — |
-| `/loop` | 定时循环任务 | AGENT_TRIGGERS 特性门控 |
-| `/schedule` | 远程代理调度 | AGENT_TRIGGERS_REMOTE 特性门控 |
+| `/loop` | CLI 进程内定时循环 | AGENT_TRIGGERS 特性门控；桌面调度入口可用时不注册 |
+| `/schedule` | 桌面定时任务管理与结果查询；非桌面环境可为远程代理调度 | 桌面认证 bridge 可用且非 lean profile 时使用本地实现；否则远程实现仍受 AGENT_TRIGGERS_REMOTE、账号与策略限制 |
 | `/claude-api` | Claude API 集成 | BUILDING_CLAUDE_APPS 特性门控 |
 | `/dream` | 自动记忆整理 | KAIROS 特性门控 |
+
+桌面 `/schedule` 由 `src/skills/bundled/scheduleDesktop.ts` 注册，指导模型调用原生 `ScheduledTask` 工具；自然语言请求也可直接调用该工具，不依赖先调用 skill。`src/skills/bundled/index.ts` 对本地和远程同名 skill 采用互斥注册，避免桌面任务被误发到云端。
+
+`ScheduledTask` 通过会话认证的本地 bridge 调用已有桌面 `CronService`，与任务页共享存储。当前会话身份由服务端认证提供；工具支持任务 CRUD、运行记录列表和有长度限制的结果分页读取。成功结果以版本化 JSON 写入实际 `tool_result.content`，供实时聊天和历史重载渲染卡片。CLI 原有 Cron 工具及项目级任务文件保留独立语义，桌面入口无需启用 AGENT_TRIGGERS。用户操作见[定时任务](../desktop/schedule.md)。
 
 ### 2. Managed（策略管理 Skills）
 

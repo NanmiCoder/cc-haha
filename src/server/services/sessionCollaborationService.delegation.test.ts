@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionCollaborationService, type SessionCollaborationDependencies, type CollaborationMessage } from './sessionCollaborationService.js'
 import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
-import { handleSessionCollaborationUiApi } from '../api/sessionCollaboration.js'
+import { handleSessionCollaborationApi, handleSessionCollaborationUiApi } from '../api/sessionCollaboration.js'
 
 let directory: string
 let service: SessionCollaborationService
@@ -27,6 +27,27 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 
 const input = () => ({ requestId: 'batch', sessions: [{ id: 'a', prompt: 'task a' }, { id: 'b', prompt: 'task b' }] })
+
+test('CreateSessions review holds power after the root finishes until the user cancels the decision', async () => {
+  const response = await handleSessionCollaborationApi(new Request('http://127.0.0.1/api/sessions/collaboration/create-batch', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input()),
+  }), 'create-batch', 'root', service)
+  expect(response.status).toBe(200)
+  const proposal = await response.json()
+  expect(proposal).toMatchObject({ state: 'review', requiresReview: true })
+  await service.onSessionState('root', 'completed', 'Please confirm the allocation card', 'root-result')
+  expect(created).toBe(0)
+  expect(started).toHaveLength(0)
+  expect(service.hasPendingPowerWork()).toBe(true)
+
+  service = new SessionCollaborationService(deps)
+  await service.recover()
+  expect(service.hasPendingPowerWork()).toBe(true)
+  const cancelled = await uiPost(`batches/${encodeURIComponent(proposal.id)}/cancel`, { expectedRevision: proposal.revision })
+  expect(cancelled.status).toBe(200)
+  expect((await cancelled.json()).state).toBe('cancelled')
+  expect(service.hasPendingPowerWork()).toBe(false)
+})
 
 test('default proposal is durable review without creating sessions; confirmation starts once', async () => {
   const proposal = await service.propose('root', input())
@@ -65,21 +86,32 @@ test('partial creation failure holds every child and retries only definite failu
   const batch = await service.propose('root', input())
   const failed = await service.confirmBatch('root', batch.id, batch.revision)
   expect(failed.state).toBe('failed')
+  expect(service.hasPendingPowerWork()).toBe(true)
   expect(created).toBe(1)
   expect(started).toHaveLength(0)
   fail = false
   expect((await service.confirmBatch('root', batch.id, failed.revision)).state).toBe('launched')
   expect(created).toBe(2)
   expect(started).toHaveLength(2)
+  for (const message of started) await service.onMessageConsumed(message.id)
+  expect(service.hasPendingPowerWork()).toBe(false)
 })
 
 test('cancellation and group Stop prevent deferred proposal launch', async () => {
   const batch = await service.propose('root', input())
   await service.cancelBatch('root', batch.id, batch.revision)
+  expect(service.hasPendingPowerWork()).toBe(false)
   await expect(service.confirmBatch('root', batch.id, 2)).rejects.toThrow('cannot be started')
   const next = await service.propose('root', { ...input(), requestId: 'next' })
-  await service.stopGroup('root')
+  expect(service.hasPendingPowerWork()).toBe(true)
+  await service.onStopped('root')
+  expect(service.hasPendingPowerWork()).toBe(false)
   await service.resume('root')
+  expect(service.hasPendingPowerWork()).toBe(true)
+  await service.stopGroup('root')
+  expect(service.hasPendingPowerWork()).toBe(false)
+  await service.resume('root')
+  expect(service.hasPendingPowerWork()).toBe(false)
   await expect(service.confirmBatch('root', next.id, next.revision)).rejects.toThrow('stopped')
   expect(created).toBe(0)
 })
@@ -89,6 +121,7 @@ test('after-turn change waits for completion and never creates a continuation fo
   await service.onMessageConsumed(child.messageId)
   const pending = await service.changeModels('root', { requestId: 'change', selections: [{ sessionId: child.sessionId, runtime: { ...runtime, modelId: 'better' } }] })
   expect(pending.state).toBe('pending')
+  expect(service.hasPendingPowerWork()).toBe(true)
   expect(applied).toEqual([])
   await service.onSessionState(child.sessionId, 'completed', 'done')
   expect(applied).toEqual([child.sessionId])
@@ -116,6 +149,7 @@ test('failed batch switch keeps every child paused without continuation', async 
   deps.runtime.apply = async id => { if (id === second.sessionId) throw new Error('apply failed'); applied.push(id) }
   const change = await service.changeModels('root', { requestId: 'change', mode: 'immediate', selections: [first, second].map(item => ({ sessionId: item.sessionId, runtime })) })
   expect(change.state).toBe('failed')
+  expect(service.hasPendingPowerWork()).toBe(false)
   expect((await service.status()).members.filter(member => member.parentSessionId).every(member => member.stopped)).toBe(true)
   expect((await service.status()).messages).toHaveLength(2)
 })
@@ -132,8 +166,11 @@ test('migration of an old fixture preserves unknown fields and has empty delegat
 
 test('pending change cancellation and retry identity are strict', async () => {
   const child = await service.create('root', { prompt: 'work', runtime })
+  await service.onMessageConsumed(child.messageId)
   const change = await service.changeModels('root', { requestId: 'change', selections: [{ sessionId: child.sessionId, runtime }] })
+  expect(service.hasPendingPowerWork()).toBe(true)
   await service.cancelModelChange('root', change.id, change.revision)
+  expect(service.hasPendingPowerWork()).toBe(false)
   await service.onSessionState(child.sessionId, 'completed')
   expect(applied).toEqual([])
   await expect(service.changeModels('root', { requestId: 'change', resume: false, selections: [{ sessionId: child.sessionId, runtime }] })).rejects.toThrow('different input')
@@ -392,6 +429,9 @@ test('UI Start still refuses a stale revision, and a launch failing later is rec
   const [failed] = await until(() => service.listBatches('root'), batches => batches[0]?.state === 'failed')
   expect(failed?.error).toContain('workspace failure')
   expect(started).toHaveLength(0)
+  expect(service.hasPendingPowerWork()).toBe(true)
+  expect((await uiPost(`batches/${encodeURIComponent(failed!.id)}/cancel`, { expectedRevision: failed!.revision })).status).toBe(200)
+  expect(service.hasPendingPowerWork()).toBe(false)
 })
 
 test('UI immediate change answers before running sessions are stopped and restarted', async () => {
@@ -403,6 +443,7 @@ test('UI immediate change answers before running sessions are stopped and restar
   const response = await uiPost('model-changes', { requestId: 'ui', mode: 'immediate', selections: [{ sessionId: child.sessionId, runtime: { ...runtime, modelId: 'better' } }] })
   expect(response.status).toBe(200)
   expect(['pending', 'applying']).toContain((await response.json()).state)
+  expect(service.hasPendingPowerWork()).toBe(true)
   expect(applied).toEqual([])
   release()
   await until(() => service.listModelChanges('root'), changes => changes[0]?.state === 'applied')

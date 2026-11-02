@@ -1,5 +1,5 @@
 import { getAgentProfile, isLeanCompatibleSkill } from '../../utils/agentProfile.js'
-import { isExplicitSkillRequest } from './explicitSkillRequest.js'
+import { getSkillSelectionMessages, isExplicitSkillRequest } from './explicitSkillRequest.js'
 import { feature } from 'bun:bundle'
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -376,7 +376,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       ? trimmed.substring(1)
       : trimmed
 
-    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(context.messages ?? [], normalizedCommandName)) {
+    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(getSkillSelectionMessages(context), normalizedCommandName)) {
       return { result: false, message: 'Lean mode requires an explicit user skill selection for this request.', errorCode: 7 }
     }
 
@@ -608,7 +608,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     // Remove leading slash if present (for compatibility)
     const commandName = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed
 
-    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(context.messages ?? [], commandName)) {
+    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(getSkillSelectionMessages(context), commandName)) {
       throw new Error('Lean mode requires an explicit user skill selection for this request.')
     }
 

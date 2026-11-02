@@ -15,6 +15,10 @@ import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useProviderStore } from '@/stores/providerStore'
 import type { RuntimeSelection } from '@/types/runtime'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
+import { getBundledPresetReasoningProviderKind } from '@/config/providerPresets'
+import { getProviderModelCapabilityOverride } from '@/lib/runtimeSelection'
+import type { ReasoningEffortLevel } from '@/types/settings'
+import { normalizeModelReasoningEffort } from '../../../../src/shared/modelReasoning'
 import { isValidTeamMemberName, type TeamPlanRecord, type TeamPlanRuntime, type TeamPlanMember } from '../../../../src/shared/teamPlan'
 
 function selection(runtime: TeamPlanRuntime): RuntimeSelection {
@@ -73,8 +77,10 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   }, [approved])
 
   // Keep polling for failed launches and subsequent reviews, but release the
-  // composer once approval has handed control to the running team.
-  if (!plan || approved) return null
+  // composer once approval has handed control to the running team, or once the
+  // user cancelled a team's plan: nothing is left on it to decide. A cancelled
+  // addition to a running team keeps the card for that team's Stop.
+  if (!plan || approved || (plan.state === 'cancelled' && !plan.parentPlanId)) return null
   const leaderRuntime = currentLeaderSelection ? runtimeFor(currentLeaderSelection) : plan.leaderRuntime
   const agents = Object.entries(plan.agentCatalog ?? {}).map(([agentType, definition]) => ({ agentType, ...definition }))
   const draft = entry.draft
@@ -98,6 +104,24 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   }
   const batchRuntime = (runtime: RuntimeSelection) => {
     edit(sessionId, { members: members.map(member => selected.includes(member.id) ? { ...member, runtime: runtimeFor(runtime) } : member) })
+  }
+  // Batch effort keeps each member's provider and model; a level a member's
+  // model does not accept leaves that member's effort as it was.
+  const batchEffort = (level: ReasoningEffortLevel) => {
+    edit(sessionId, { members: members.map(member => {
+      if (!selected.includes(member.id)) return member
+      const provider = providers.find(item => item.id === member.runtime.providerId)
+      const effortLevel = provider
+        ? normalizeModelReasoningEffort(
+            member.runtime.modelId,
+            level,
+            provider.apiFormat,
+            getProviderModelCapabilityOverride(provider, member.runtime.modelId),
+            getBundledPresetReasoningProviderKind(provider.presetId),
+          )
+        : level
+      return effortLevel ? { ...member, runtime: { ...member.runtime, effortLevel } } : member
+    }) })
   }
   const openEditor = () => {
     beginEdit(sessionId)
@@ -148,7 +172,11 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
               setStoppingPlanId(plan.planId)
               useChatStore.getState().stopGeneration(sessionId)
             }}>{stoppingPlanId === plan.planId ? t('teamPlan.stopping') : t('teamPlan.stop')}</Button>}
-            {plan.state === 'launch_failed' && <Button disabled={entry.busy} onClick={() => void act(sessionId, 'retry')}>{t('teamPlan.retry')}</Button>}
+            {plan.state === 'launch_failed' && <>
+              <Button data-testid="team-plan-cancel-failed" variant="ghost" disabled={entry.busy} onClick={() => void act(sessionId, 'cancel')}>{t('teamPlan.cancel')}</Button>
+              <Button disabled={entry.busy} onClick={() => void act(sessionId, 'retry')}>{t('teamPlan.retry')}</Button>
+            </>}
+            {plan.state === 'interrupted' && <Button data-testid="team-plan-end" variant="danger-outline" disabled={entry.busy} onClick={() => void act(sessionId, 'end')}>{t('teamPlan.end')}</Button>}
           </div>
         </div>
       )}>
@@ -160,7 +188,8 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
             </div>
             <Badge tone={stateTone} size="sm">{stateLabel}</Badge>
           </div>
-          {plan.launch?.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
+          {/* A member that crashed while starting reports its own output, line by line. */}
+          {plan.launch?.error && <p role="alert" data-testid="team-plan-launch-error" className="mb-4 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
           {entry.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{entry.error}</p>}
           {plan.state === 'review_pending' && invalidNames.length > 0 && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{t('teamPlan.invalidMemberNames', { names: invalidNames.join(', ') })}</p>}
           {entry.conflict && <div role="alert" className="mb-4 space-y-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] p-3 text-[var(--color-on-warning-container)]">
@@ -194,7 +223,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
               {plan.state === 'review_pending' && <div className="mt-4 space-y-3">
                 {selected.length > 0 && <div className="team-plan-batch space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
                   <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('teamPlan.selectedCount', { count: selected.length })}</p>
-                  <ModelSelector appearance="field" fluid ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} disabled={!editable} />
+                  <ModelSelector appearance="field" fluid effortEditable ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} onEffortChange={batchEffort} disabled={!editable} />
                   <Button block size="base" variant="ghost" disabled={!editable} onClick={() => batchRuntime(selection(leaderRuntime))}>{t('teamPlan.followLeader')}</Button>
                 </div>}
                 <Button block size="base" variant="ghost" disabled={!editable} onClick={() => edit(sessionId, { members: members.map(member => ({ ...member, runtime: member.suggestedRuntime ?? member.runtime })) })}>{t('teamPlan.restore')}</Button>
@@ -218,8 +247,8 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                     ]} onChange={agentType => updateMember(activeMember.id, { agentType })} trigger={<Button block variant="secondary" size="lg" aria-label={`${activeMember.name} · ${t('teamPlan.agent')}`} disabled={!editable || agents.length === 0}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{activeMember.agentType}</span>{CHEVRON}</span></Button>} />
                   </div>
                   <div className="min-w-0 space-y-2">
-                    <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.model')}</p>
-                    <ModelSelector appearance="field" fluid ariaLabel={`${activeMember.name} · ${t('teamPlan.model')}`} runtimeSelection={selection(activeMember.runtime)} onRuntimeSelectionChange={runtime => updateMember(activeMember.id, { runtime: runtimeFor(runtime) })} disabled={!editable} />
+                    <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.runtime')}</p>
+                    <ModelSelector appearance="field" fluid effortEditable ariaLabel={`${activeMember.name} · ${t('teamPlan.model')}`} runtimeSelection={selection(activeMember.runtime)} onRuntimeSelectionChange={runtime => updateMember(activeMember.id, { runtime: runtimeFor(runtime) })} disabled={!editable} />
                   </div>
                 </div>
                 {presetChanged && <p role="status" className="mt-3 text-xs text-[var(--color-text-secondary)]">{t('teamPlan.savePreset')}</p>}

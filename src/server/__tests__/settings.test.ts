@@ -14,6 +14,7 @@ import { handleStatusApi, resetUsage, addUsage } from '../api/status.js'
 import { ProviderService } from '../services/providerService.js'
 import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
+import * as claudeModelCatalog from '../services/claudeModelCatalog.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import {
   clearOpenAICodexModelCatalogCache,
@@ -311,6 +312,7 @@ describe('SettingsService', () => {
     )
 
     const svc = new SettingsService()
+    await svc.updateUserSettings({ desktopTerminal: { fontFamily: 'MesloLGS NF', fontSize: 18 } })
     await svc.updateUserSettings({
       desktopTerminal: {
         startupShell: 'pwsh',
@@ -323,12 +325,16 @@ describe('SettingsService', () => {
         startupShell: 'pwsh',
         customShellPath: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
         legacyEncoding: 'utf-8',
+        fontFamily: 'MesloLGS NF',
+        fontSize: 18,
         futureProfile: {
           id: 'work',
           inheritEnvironment: false,
         },
       },
     })
+    expect(JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8')).desktopTerminal)
+      .toMatchObject({ fontFamily: 'MesloLGS NF', fontSize: 18, startupShell: 'pwsh', legacyEncoding: 'utf-8' })
   })
 
   it('should not let cached CLI settings overwrite desktop settings updates', async () => {
@@ -999,6 +1005,14 @@ describe('POST /api/settings/session-cleanup', () => {
 describe('Models API', () => {
   beforeEach(setup)
   afterEach(teardown)
+  let claudeCatalogSpy: ReturnType<typeof spyOn<typeof claudeModelCatalog, 'getDesktopClaudeModelCatalog'>>
+  beforeEach(() => {
+    // These cases exercise settings/defaults. Real catalog wiring is covered by
+    // models.catalog.test.ts; fake OAuth tokens must never reach a public host.
+    claudeCatalogSpy = spyOn(claudeModelCatalog, 'getDesktopClaudeModelCatalog')
+      .mockResolvedValue(claudeModelCatalog.CLAUDE_MODEL_CATALOG)
+  })
+  afterEach(() => claudeCatalogSpy.mockRestore())
 
   it('GET /api/models should return available models', async () => {
     const { req, url, segments } = makeRequest('GET', '/api/models')
@@ -1628,7 +1642,7 @@ describe('Models API', () => {
     expect(body.model).toMatchObject({ id: 'grok-4.5', name: 'Grok 4.5' })
   })
 
-  it('GET /api/models lists the account models, not the API-key preset ids, when DeepSeek Account is active', async () => {
+  it('GET /api/models deduplicates the default Flash aliases and retains the account catalog', async () => {
     const providerSvc = new ProviderService()
     await providerSvc.activateProvider('deepseek-account')
 
@@ -1639,28 +1653,31 @@ describe('Models API', () => {
       provider: { id: string; name: string }
     }
     expect(body.provider).toEqual({ id: 'deepseek-account', name: 'DeepSeek Account' })
-    // Signed out, so the bundled account catalog names the alias rows; the
-    // account listing does not include `deepseek-v4-flash`, and the `[1m]` alias
-    // is the same model as the listed `deepseek-v4-pro`.
+    // All five default slots collapse to one Flash row with its 1M marker;
+    // Pro remains available as an explicit choice from the account catalog.
     expect(body.models.map((model) => [model.id, model.name])).toEqual([
-      ['deepseek-v4-pro[1m]', 'DeepSeek-V4-Pro'],
-      ['deepseek-flash', 'DeepSeek-V4.1-Flash'],
+      ['deepseek-flash[1m]', 'DeepSeek-V4.1-Flash'],
+      ['deepseek-v4-pro', 'DeepSeek-V4-Pro'],
     ])
-    expect(body.models[1]?.description).toBe('Haiku model')
+    expect(body.models[0]?.description).toBe('Main model')
     expect(body.models[1]?.supportedReasoningEfforts).toEqual(
       body.models[0]?.supportedReasoningEfforts,
     )
   })
 
-  it('persists and reads a DeepSeek Account model from managed settings', async () => {
+  it.each(['deepseek-flash', 'deepseek-flash[1m]', 'deepseek-v4-pro[1m]'])('preserves the DeepSeek Account selection and catalog metadata for %s', async (modelId) => {
     const providerSvc = new ProviderService()
     await providerSvc.activateProvider('deepseek-account')
-    const put = makeRequest('PUT', '/api/models/current', { modelId: 'deepseek-flash' })
+    const put = makeRequest('PUT', '/api/models/current', { modelId })
     expect((await handleModelsApi(put.req, put.url, put.segments)).status).toBe(200)
 
     const get = makeRequest('GET', '/api/models/current')
     const body = await (await handleModelsApi(get.req, get.url, get.segments)).json()
-    expect(body.model).toMatchObject({ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' })
+    expect(body.model).toMatchObject({
+      id: modelId,
+      name: modelId.startsWith('deepseek-flash') ? 'DeepSeek-V4.1-Flash' : 'DeepSeek-V4-Pro',
+      context: '1000000',
+    })
   })
 
   describe('GET /api/models/catalog', () => {

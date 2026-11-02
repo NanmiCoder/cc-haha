@@ -4,6 +4,8 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isValidTeamMemberName, teamPlanRecordSchema, type TeamPlanRecord, type TeamPlanMember, type TeamPlanTask } from '../../shared/teamPlan.js'
 import { conversationService } from './conversationService.js'
+import type { TeamPlanLeaderNotice } from './teamPlanService.js'
+import { teamLaunchFailedNotice, teamLaunchedNotice, teamPlanNotice, teamStoppedNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { ProviderService } from './providerService.js'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '../types/provider.js'
 import { normalizeExplicitClaudeOfficialModelId } from './claudeOfficialRuntime.js'
@@ -14,11 +16,13 @@ import { readTeamPlan, findTeamPlanForSession, mutateTeamPlan } from '../../util
 import { cleanupTeamDirectories, getTeamDir, mutateTeamFileAsync, readTeamFile, writeTeamFileAsync, type TeamFile } from '../../utils/swarm/teamHelpers.js'
 import { getTeamsDir as getTeamsDirectory } from '../../utils/envUtils.js'
 import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
-import { createTask, listTasks, updateTask, withTaskListLifecycleLock, getCanonicalTeamTaskListId, type Task } from '../../utils/tasks.js'
+import { createTask, deleteTask, listTasks, updateTask, withTaskListLifecycleLock, getCanonicalTeamTaskListId, type Task } from '../../utils/tasks.js'
 import { readUnreadMessages, readMailboxHistory, markMessagesAsReadByPredicate, writeToMailbox, createIdleNotification, formatTeammateMessages, isShutdownRequest, type TeammateMessage } from '../../utils/teammateMailbox.js'
 import { formatTeammateAutoContinuePrompt, isTransientTurnFailure, summarizeTurnFailure, TEAMMATE_AUTO_CONTINUE_DELAYS_MS } from '../../utils/swarm/turnFailure.js'
 import { getClaudeAgentModelFamily } from '../../utils/model/agentModelRouting.js'
 import { getCanonicalName } from '../../utils/model/model.js'
+import { powerActivityClock } from './powerActivityClock.js'
+import { teamService } from './teamService.js'
 
 const providerService = new ProviderService()
 const essentialTools = ['SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate']
@@ -49,11 +53,15 @@ type WorkerRuntime = {
   starting?: Promise<boolean>
   autoContinueAttempts: number
   autoContinueTimer?: ReturnType<typeof setTimeout>
+  powerOperations?: number
+  powerTurnPending?: boolean
   restartHistory: number[]
   /** Automatic restarts stopped after a crash loop; only an explicit message retries. */
   restartsExhausted: boolean
   /** The user's Stop ended this process; resuming it is not a crash restart. */
   stoppedByUser?: boolean
+  /** The app or its server restarted while the member was still at work, ending its process. */
+  stoppedByRestart?: boolean
   /** Why the member's last turn ended in a failure nothing retries any more. */
   failure?: string
   /** The lead has not yet been told, with the user's next message, that this member waits to be woken. */
@@ -91,9 +99,29 @@ type TeamLaunch = {
    */
   resumeAllowedAt?: number
   permissionMode: string
+  /** Tasks this launch created. A launch that released no member takes them back. */
+  createdTaskIds: string[]
 }
 
 const launches = new Map<string, TeamLaunch>()
+const stoppingOperations = new Set<Promise<void>>()
+
+/** Keep async handoffs owned after a retry timer fires and before a roster write. */
+function trackWorkerPowerOperation<T>(worker: WorkerRuntime, operation: () => Promise<T>): Promise<T> {
+  worker.powerOperations = (worker.powerOperations ?? 0) + 1
+  powerActivityClock.changed()
+  return operation().finally(() => {
+    worker.powerOperations = (worker.powerOperations ?? 1) - 1
+    powerActivityClock.changed()
+  })
+}
+/**
+ * How much of a failed launch's error the lead is told. The error can carry a
+ * crashed process's output; the team card shows all of it.
+ */
+const LAUNCH_ERROR_NOTICE_CHARS = 1_500
+/** Failed launches (plan id and revision) whose lead has been told. */
+const failedLaunchesNoticed = new Set<string>()
 
 function incarnationOf(team: Pick<TeamFile, 'name' | 'leadSessionId' | 'createdAt'>): string {
   return createHash('sha256').update(JSON.stringify([team.name, team.leadSessionId || '', team.createdAt])).digest('hex')
@@ -169,16 +197,21 @@ export async function startTeamWorkersBarrier<T>(
   return ids
 }
 
-async function materializeTasks(plan: TeamPlanRecord): Promise<Record<string, string>> {
+async function materializeTasks(plan: TeamPlanRecord, created: string[]): Promise<Record<string, string>> {
   const existing = await listTasks(getCanonicalTeamTaskListId(plan.teamName))
   const mapping: Record<string, string> = {}
   for (const task of plan.approvedSnapshot!.tasks) {
     const old = existing.find(entry => entry.metadata?.teamPlanId === plan.planId && entry.metadata?.teamPlanTaskId === task.id)
       ?? existing.find(entry => entry.id === task.id && entry.subject === task.subject && !entry.metadata?.teamPlanId)
-    mapping[task.id] = old?.id ?? await createTask(getCanonicalTeamTaskListId(plan.teamName), {
+    if (old) {
+      mapping[task.id] = old.id
+      continue
+    }
+    mapping[task.id] = await createTask(getCanonicalTeamTaskListId(plan.teamName), {
       subject: task.subject, description: task.description ?? '', status: 'pending', blocks: [], blockedBy: [],
       metadata: { teamPlanId: plan.planId, teamPlanTaskId: task.id },
     })
+    created.push(mapping[task.id]!)
   }
   for (const task of plan.approvedSnapshot!.tasks) {
     const owner = plan.approvedSnapshot!.members.find(member => member.id === task.ownerId)
@@ -317,8 +350,13 @@ async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, res
     throw error
   }
   conversationService.onOutput(worker.sessionId, message => {
-    if (message?.type !== 'result') return
-    void migrationMaintenance.track(handleWorkerResult(launch, worker, message)).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
+    if (message?.type !== 'result' || message.parent_tool_use_id) return
+    const completed = worker.powerTurnPending && message.is_error === false && (!message.subtype || message.subtype === 'success')
+    worker.powerTurnPending = false
+    void migrationMaintenance.track(trackWorkerPowerOperation(worker, async () => {
+      await handleWorkerResult(launch, worker, message)
+      if (completed && !launch.stopped && !launch.pausedAt && !worker.stoppedByUser) powerActivityClock.completed()
+    })).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
   })
 }
 
@@ -346,14 +384,20 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
   if (reason === 'user') worker.restartsExhausted = false
   const start = (async () => {
     try {
+      // The member is on its way back to work. Until its process is up, a
+      // roster that still called it stopped would let the lead end the team
+      // (TeamDelete only waits for running members) under the restart.
+      await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: true, terminated: false }))
       await startWorkerProcess(launch, worker, true)
       // The team was ended, or the user pressed Stop while this process was
       // starting and Stop's kill pass could not see it yet.
       if (launch.stopped || worker.stoppedByUser) {
         await conversationService.stopSessionAndWait(worker.sessionId)
+        if (!launch.stopped) await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, terminated: true }))
         return false
       }
-      await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, terminated: false }))
+      // Busy again once the next pass hands it what it was restarted for.
+      await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false, terminated: false }))
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -362,9 +406,11 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
       return false
     } finally {
       worker.starting = undefined
+      powerActivityClock.changed()
     }
   })()
   worker.starting = start
+  powerActivityClock.changed()
   return start
 }
 
@@ -386,6 +432,7 @@ async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, rea
   const entry = readTeamFile(launch.plan.teamName)?.members.find(member => member.sessionId === worker.sessionId)
   if (entry?.isActive) return
   await updateWorkerEntry(launch, worker, current => ({ ...current, isActive: true }))
+  worker.powerTurnPending = true
   const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt))
   if (sent) return
   // No retry is scheduled any more: report the failure instead of leaving a
@@ -433,7 +480,7 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     const delay = timing.autoContinueDelaysMs[attempt - 1]!
     cancelAutoContinue(worker)
     worker.autoContinueTimer = setTimeout(() => {
-      void migrationMaintenance.track(autoContinueWorker(launch, worker, reason, attempt)).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
+      void migrationMaintenance.track(trackWorkerPowerOperation(worker, () => autoContinueWorker(launch, worker, reason, attempt))).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
     }, delay)
     worker.autoContinueTimer.unref?.()
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
@@ -490,11 +537,16 @@ async function notifyFailure(launch: TeamLaunch, worker: WorkerRuntime, failureR
 function clearFailure(worker: WorkerRuntime): void {
   worker.failure = undefined
   worker.wakeNoticePending = false
+  worker.stoppedByRestart = false
 }
 
 // ── Supervisor ──────────────────────────────────────────────────────────────
 
 async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
+  return trackWorkerPowerOperation(worker, () => deliverToWorkerOnce(launch, worker, messages))
+}
+
+async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
   cancelAutoContinue(worker)
   // A new instruction starts a fresh retry budget: the lead or the user has
   // looked at the failure and decided the member should go on.
@@ -507,6 +559,7 @@ async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messag
   const starts = worker.brief !== undefined && !messages.every(message => isShutdownRequest(message.text))
   if (messages.some(message => isShutdownRequest(message.text))) worker.shutdownRequestedAt = Date.now()
   const text = formatTeammateMessages(messages)
+  worker.powerTurnPending = true
   const accepted = await conversationService.sendMessage(worker.sessionId, starts ? `${worker.brief}\n\n${text}` : text)
   if (!accepted) {
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
@@ -578,6 +631,15 @@ async function startWhenReady(launch: TeamLaunch, worker: WorkerRuntime, tasks: 
   }])
 }
 
+function hasPausedLaunchResumeMessage(launch: TeamLaunch, messages: TeammateMessage[]): boolean {
+  if (launch.pausedAt === undefined) return false
+  return messages.some(message => {
+    const at = Date.parse(message.timestamp)
+    if (message.from === 'user') return at >= launch.pausedAt!
+    return message.from === TEAM_LEAD_NAME && launch.resumeAllowedAt !== undefined && at >= launch.resumeAllowedAt
+  })
+}
+
 async function superviseLaunch(launch: TeamLaunch): Promise<void> {
   if (migrationMaintenance.isActive) return
   const team = readTeamFile(launch.plan.teamName)
@@ -601,14 +663,10 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
     if (launch.pausedAt) {
       // Only a new instruction resumes a paused team: the user's own message to
       // a member, or the lead's once the user has spoken to it again.
-      const resume = messages.some(message => {
-        const at = Date.parse(message.timestamp)
-        if (message.from === 'user') return at >= launch.pausedAt!
-        return message.from === TEAM_LEAD_NAME && launch.resumeAllowedAt !== undefined && at >= launch.resumeAllowedAt
-      })
-      if (!resume) continue
+      if (!hasPausedLaunchResumeMessage(launch, messages)) continue
       launch.pausedAt = undefined
       launch.resumeAllowedAt = undefined
+      powerActivityClock.changed()
     }
     // A member that waits on dependencies is started by its tasks, or by the
     // user writing to it. What the lead or a teammate sends it meanwhile (a
@@ -659,6 +717,7 @@ function pauseLaunchesForLead(parentSessionId: string): boolean {
     if (launch.parentId !== parentSessionId || launch.stopped || !launch.running) continue
     paused = true
     launch.pausedAt = Date.now()
+    powerActivityClock.changed()
     launch.resumeAllowedAt = undefined
     for (const worker of launch.workers.values()) {
       cancelAutoContinue(worker)
@@ -679,26 +738,39 @@ function pauseLaunchesForLead(parentSessionId: string): boolean {
 
 /**
  * The user just sent the lead a message. After a Stop this is what allows the
- * lead to resume the team. And whether the team was stopped or members ran
- * into errors (a usage limit, billing, the network, a crash), the lead is told
- * once which members are not running: they keep their saved conversations and
- * do nothing until messaged, so a lead told to "continue" would otherwise wait
- * for them, or redo their work. The lead decides from the user's words whether
+ * lead to resume the team. And whether the team was stopped, members ran into
+ * errors (a usage limit, billing, the network, a crash) or an app restart ended
+ * them, the lead is told once which members are not running: they keep their
+ * saved conversations and do nothing until messaged, so a lead told to
+ * "continue" would otherwise wait for them, or redo their work. The lead decides from the user's words whether
  * they go on; nothing is said at the Stop or failure itself, which would start
- * a lead turn the user did not ask for.
+ * a lead turn the user did not ask for. A launch that failed is reported the
+ * same way, once per failure: the lead is not told when it happens and would
+ * otherwise take the team it proposed for one that is running.
  */
 export async function noteLeadUserMessage(parentSessionId: string): Promise<void> {
+  const plan = await findTeamPlanForSession(parentSessionId).catch(() => null)
+  if (plan?.state === 'launch_failed' && !failedLaunchesNoticed.has(`${plan.planId}:${plan.revision}`)) {
+    failedLaunchesNoticed.add(`${plan.planId}:${plan.revision}`)
+    const error = plan.launch?.error?.trim()
+    const failure = error && error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error
+    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure))
+  }
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped) continue
     if (launch.pausedAt) launch.resumeAllowedAt = Date.now()
     const waiting = [...launch.workers.values()].filter(worker => worker.released && worker.wakeNoticePending)
     if (waiting.length === 0) continue
     for (const worker of waiting) worker.wakeNoticePending = false
+    const stoppedByUser = waiting.some(worker => worker.stoppedByUser)
+    const stoppedByRestart = !stoppedByUser && waiting.every(worker => worker.stoppedByRestart && !worker.failure)
     const tasks = await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [] as Task[])
     const unresolved = unresolvedTaskIds(tasks)
     const lines = waiting.map(worker => {
       const open = tasks.filter(task => task.owner === worker.member.name && task.status !== 'completed')
-      const label = worker.failure ? `${worker.member.name} (stopped on an error: ${worker.failure})` : worker.member.name
+      const label = worker.failure ? `${worker.member.name} (stopped on an error: ${worker.failure})`
+        : worker.stoppedByRestart && !stoppedByRestart ? `${worker.member.name} (stopped when the app restarted)` : worker.member.name
+      worker.stoppedByRestart = false
       // A member whose start failed is reported like any other failure.
       if (worker.brief !== undefined && !worker.failure) {
         const ready = readyTasksOf(worker.member.name, tasks)
@@ -711,14 +783,10 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
         ? `- ${label}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
         : `- ${label}: no unfinished task`
     })
-    const stoppedByUser = waiting.some(worker => worker.stoppedByUser)
-    await conversationService.sendMessage(parentSessionId, [
-      stoppedByUser
-        ? `[Team runtime notice] The user's Stop also stopped your team ${launch.plan.teamName}. These members are stopped and keep their work so far:`
-        : `[Team runtime notice] These members of your team ${launch.plan.teamName} stopped on an error and keep their work so far:`,
-      ...lines,
-      'A stopped member does nothing until it is messaged: if the work should go on, SendMessage each member that still has work, and it resumes from its saved conversation where it left off. Do not spawn replacements or redo their tasks. If a woken member fails again with the same error (a usage limit, billing, the network), tell the user instead of retrying. If the user wants the team to stay stopped, leave them.',
-    ].join('\n'))
+    await conversationService.sendMessage(
+      parentSessionId,
+      teamStoppedNotice(launch.plan.teamName, stoppedByUser ? 'user' : stoppedByRestart ? 'restart' : 'error', lines),
+    )
   }
 }
 
@@ -746,10 +814,22 @@ function ensureRuntimeHooks(): void {
 
 // ── Public lifecycle ────────────────────────────────────────────────────────
 
-export async function stopTeamPlanRuntime(planId: string): Promise<void> {
+export function stopTeamPlanRuntime(planId: string): Promise<void> {
+  if (!launches.has(planId)) return Promise.resolve()
+  const operation = stopTeamPlanRuntimeOnce(planId)
+  stoppingOperations.add(operation)
+  void operation.finally(() => {
+    stoppingOperations.delete(operation)
+    powerActivityClock.changed()
+  }).catch(() => {})
+  return operation
+}
+
+async function stopTeamPlanRuntimeOnce(planId: string): Promise<void> {
   const launch = launches.get(planId)
   if (!launch) return
   launch.stopped = true
+  powerActivityClock.changed()
   if (launch.timer) clearInterval(launch.timer)
   for (const worker of launch.workers.values()) cancelAutoContinue(worker)
   launches.delete(planId)
@@ -763,6 +843,14 @@ export async function stopTeamPlanRuntime(planId: string): Promise<void> {
       return launch.released ? [{ ...member, isActive: false, terminated: true }] : []
     })
     await writeTeamFileAsync(plan.teamName, team)
+    if (launch.released) return
+    // Nothing started, so the team goes back to how it was before approval.
+    // Tasks left behind read as work in progress, and a plan revised before it
+    // is approved again would leave them unfinished for good.
+    for (const id of launch.createdTaskIds) {
+      await deleteTask(getCanonicalTeamTaskListId(plan.teamName), id)
+        .catch(error => console.error(`[TeamPlanRuntime] cannot take back task #${id} of a launch that did not start`, error))
+    }
   })
   if (launch.released) {
     const tasks = await listTasks(getCanonicalTeamTaskListId(plan.teamName))
@@ -785,9 +873,10 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
   const members = approved.members
   const launch: TeamLaunch = {
     parentId: plan.sessionId, plan, createdAt: 0, released: false, running: false, children: [], workers: new Map(),
-    supervising: false, stopped: false, permissionMode: conversationService.getSessionPermissionMode(plan.sessionId),
+    supervising: false, stopped: false, permissionMode: conversationService.getSessionPermissionMode(plan.sessionId), createdTaskIds: [],
   }
   launches.set(plan.planId, launch)
+  powerActivityClock.changed()
   const memberIds: Record<string, string> = {}
   let taskMapping: Record<string, string> = {}
   let executionStarted = false
@@ -799,7 +888,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
       launch.createdAt = team.createdAt
       await writeTeamFileAsync(plan.teamName, team)
     })
-    taskMapping = await materializeTasks(plan)
+    taskMapping = await materializeTasks(plan, launch.createdTaskIds)
     // Every member's process starts now, but one whose tasks all wait on other
     // tasks gets its instructions only once one of them is ready. Handing them
     // out at once let members start before the work they depend on existed.
@@ -812,7 +901,10 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
       memberIds[member.id] = id
       const worker: WorkerRuntime = { member, sessionId: id, released: false, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() }
       launch.workers.set(member.id, worker)
-      await startWorkerProcess(launch, worker, false)
+      // Which of possibly many members failed is what the user needs first.
+      await startWorkerProcess(launch, worker, false).catch(error => {
+        throw new Error(`${member.name} did not start: ${error instanceof Error ? error.message : String(error)}`)
+      })
       return id
     }, async (member, id) => {
       if (launch.stopped || !conversationService.hasSession(plan.sessionId)) throw new Error('Team launch cancelled')
@@ -831,7 +923,9 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
           }
           await writeTeamFileAsync(plan.teamName, team)
         })
-        await sendTeamSnapshot(plan.sessionId, plan.teamName, launch.createdAt)
+        await sendTeamSnapshot(plan.sessionId, plan.teamName, launch.createdAt).catch(error => {
+          throw new Error(`The team lead did not take over the team: ${error instanceof Error ? error.message : String(error)}`)
+        })
       }
       const brief = memberBrief(member, members, approved.tasks, taskMapping)
       await withTaskListLifecycleLock(getCanonicalTeamTaskListId(plan.teamName), async () => {
@@ -848,6 +942,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
           }
           return
         }
+        if (worker) worker.powerTurnPending = true
         const sent = await conversationService.sendMessage(id, brief, undefined, { canSend: () => !launch.stopped })
         if (!sent) throw new Error(`Failed to release ${member.name}`)
         if (worker) worker.released = true
@@ -857,18 +952,37 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     // One supervisor owns each worker inbox. SDK serializes user turns; a worker
     // remains connected while idle and wakes when another teammate writes.
     launch.running = true
+    powerActivityClock.changed()
     startSupervisor(launch)
     const waitingNames = members.filter(member => waiting.has(member.id)).map(member => member.name)
-    const waitingNote = waitingNames.length > 0
-      ? ` Every task of ${waitingNames.join(', ')} waits on other tasks: such a member gets its instructions automatically once one of its tasks is ready. Messages sent to it before that wait in its inbox and arrive with those instructions. Each member is told to send its result to the members whose tasks depend on it before completing, so forward a result yourself only when a member says one is missing.`
-      : ''
-    await conversationService.sendMessage(plan.sessionId, `Approved team ${plan.teamName} is running. Members and their shared tasks are ready.${waitingNote} Continue coordinating the approved team; do not spawn these members again. Members report back automatically when they finish or fail; you do not need to poll or wait in a loop.`)
+    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames))
     return { memberIds }
   } catch (error) {
     await stopTeamPlanRuntime(plan.planId)
     if (executionStarted) throw new TeamPlanExecutionInterruptedError(error instanceof Error ? error.message : String(error))
     throw error
   }
+}
+
+/**
+ * A launch whose owner was lost: the app or its server stopped mid-launch.
+ * Members join the roster just before the first of them is instructed, so with
+ * none of them there and none of its tasks touched, nothing started. Its tasks
+ * are taken back, as a failed launch's are, and it can be approved again.
+ * Returns whether it had not started.
+ */
+export async function reclaimUnstartedLaunch(plan: TeamPlanRecord): Promise<boolean> {
+  const listId = getCanonicalTeamTaskListId(plan.teamName)
+  return withTaskListLifecycleLock(listId, async () => {
+    const team = readTeamFile(plan.teamName)
+    if (!team || incarnationOf(team) !== plan.incarnationId) return false
+    const names = new Set((plan.approvedSnapshot?.members ?? plan.members).map(member => member.name))
+    if (team.members.some(member => names.has(member.name))) return false
+    const tasks = (await listTasks(listId)).filter(task => task.metadata?.teamPlanId === plan.planId)
+    if (tasks.some(task => task.status !== 'pending')) return false
+    for (const task of tasks) await deleteTask(listId, task.id)
+    return true
+  })
 }
 
 /** Keep released teams resumable while preventing every supervisor wake. */
@@ -910,6 +1024,13 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
     const entry = team.members.find(candidate => candidate.sessionId === sessionId)
     if (!entry) continue
     const worker: WorkerRuntime = { member, sessionId, released: true, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() }
+    // The restart ended a member that was still at work. Nothing wakes it by
+    // itself, and the lead would wait for its report: the user's next message
+    // tells the lead to wake it (noteLeadUserMessage).
+    if (entry.terminated !== true && !conversationService.hasSession(sessionId)) {
+      worker.wakeNoticePending = true
+      worker.stoppedByRestart = true
+    }
     // Still waiting for its first ready task: rebuild the instructions it was approved with.
     if (entry.awaitingDependencies === true) {
       taskMapping ??= Object.fromEntries((await listTasks(getCanonicalTeamTaskListId(plan.teamName)).catch(() => [] as Task[]))
@@ -926,7 +1047,7 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
   const launch: TeamLaunch = {
     parentId: plan.sessionId, plan, createdAt: team.createdAt, released: true, running: true,
     children: [...workers.values()].map(worker => worker.sessionId), workers, supervising: false, stopped: false,
-    permissionMode: conversationService.getSessionPermissionMode(plan.sessionId),
+    permissionMode: conversationService.getSessionPermissionMode(plan.sessionId), createdTaskIds: [],
   }
   launches.set(plan.planId, launch)
   await mutateTeamFileAsync(plan.teamName, current => {
@@ -963,12 +1084,10 @@ export async function rehydrateTeamPlanRuntimesForSession(sessionId: string): Pr
   return restored
 }
 
-export async function notifyTeamPlanLeader(plan: TeamPlanRecord, kind: 'approved' | 'returned' | 'cancelled'): Promise<void> {
+export async function notifyTeamPlanLeader(plan: TeamPlanRecord, kind: TeamPlanLeaderNotice): Promise<void> {
   // Approval wakes the leader only after launch's readiness barrier and snapshot.
   if (kind === 'approved' || !conversationService.hasSession(plan.sessionId)) return
-  await conversationService.sendMessage(plan.sessionId, kind === 'returned'
-    ? `The user returned team plan ${plan.teamName} for revision. No members were launched. Feedback: ${plan.feedback ?? 'Revise the team proposal.'}`
-    : `The user cancelled team plan ${plan.teamName}. Do not launch its members. Wait for new user instructions.`)
+  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback))
 }
 
 export class TeamPlanExecutionInterruptedError extends Error {
@@ -991,6 +1110,11 @@ export function isTeamPlanRuntimeActive(planId: string): boolean {
   return !!launch && !launch.stopped
 }
 
+/** Runtime ownership outlives a lead CLI; callers still check whether its team has work. */
+export function listTeamPlanRuntimeParentIds(): string[] {
+  return [...new Set([...launches.values()].map(launch => launch.parentId))]
+}
+
 /** Whether a lead's approved team has a member mid-turn (keeps an unattended lead alive). */
 export function hasActiveTeamWorkForParent(parentSessionId: string): boolean {
   for (const launch of launches.values()) {
@@ -998,9 +1122,39 @@ export function hasActiveTeamWorkForParent(parentSessionId: string): boolean {
     if (!launch.running) return true
     const team = readTeamFile(launch.plan.teamName)
     for (const worker of launch.workers.values()) {
-      if (worker.autoContinueTimer) return true
+      if (worker.autoContinueTimer || worker.starting || worker.powerOperations) return true
       if (!conversationService.hasSession(worker.sessionId)) continue
       if (team?.members.find(entry => entry.sessionId === worker.sessionId)?.isActive) return true
+    }
+  }
+  return false
+}
+
+/** Include queued mail and dependency-ready work before the supervisor admits it. */
+export async function hasPendingTeamPowerWork(): Promise<boolean> {
+  if (stoppingOperations.size > 0 || teamService.hasPendingMemberMessages()) return true
+  for (const launch of launches.values()) {
+    // Stopping can still be draining worker I/O; do not call that completed.
+    if ([...launch.workers.values()].some(worker => worker.starting || worker.powerOperations)) return true
+    if (launch.stopped) continue
+    if (hasActiveTeamWorkForParent(launch.parentId)) return true
+    let tasks: Task[] | undefined
+    const leadAlive = conversationService.hasSession(launch.parentId)
+    for (const worker of launch.workers.values()) {
+      if (!worker.released) continue
+      const mail = await readUnreadMessages(worker.member.name, launch.plan.teamName)
+      if (launch.pausedAt) {
+        // The same queued instruction that resumes the supervisor must block
+        // power actions before that supervisor's next timer tick.
+        if (hasPausedLaunchResumeMessage(launch, mail)) return true
+        continue
+      }
+      if (mail.length > 0 && (leadAlive || mail.some(message => message.from === 'user'))) return true
+      if (leadAlive) {
+        tasks ??= await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName))
+        if (readyTasksOf(worker.member.name, tasks).some(task =>
+          worker.brief !== undefined || (task.blockedBy.length > 0 && !worker.wokenForTaskIds.has(task.id)))) return true
+      }
     }
   }
   return false
@@ -1057,6 +1211,29 @@ export async function endTeamsForParent(parentSessionId: string): Promise<void> 
     if (!team || team.leadSessionId !== parentSessionId || !team.reviewRequired) continue
     await cleanupTeamDirectories(name).catch(error => console.error(`[TeamPlanRuntime] cannot remove ended team ${name}`, error))
   }
+}
+
+/**
+ * End one team at the user's request (cancelling a launch that never started,
+ * or ending an interrupted team), as /clear does for every team of a lead but
+ * keeping the conversation: its members stop, its directories go, and a lead
+ * still running drops the team so it can form another. With `unlessStarted`,
+ * a team that any member already joined (one a follow-up plan was adding to)
+ * is left as it is.
+ */
+export async function endTeamOfPlan(plan: TeamPlanRecord, options: { unlessStarted?: boolean } = {}): Promise<boolean> {
+  const team = readTeamFile(plan.teamName)
+  if (!team || team.leadSessionId !== plan.sessionId || incarnationOf(team) !== plan.incarnationId) return false
+  if (options.unlessStarted && team.members.some(member => member.agentId !== team.leadAgentId)) return false
+  for (const [planId, launch] of [...launches]) {
+    if (launch.parentId === plan.sessionId && launch.plan.teamName === plan.teamName) await stopTeamPlanRuntime(planId)
+  }
+  await cleanupTeamDirectories(plan.teamName)
+  if (conversationService.hasSession(plan.sessionId)) {
+    await conversationService.requestControl(plan.sessionId, { subtype: 'team_runtime_ended', team_name: plan.teamName })
+      .catch(error => console.error(`[TeamPlanRuntime] the lead could not drop ended team ${plan.teamName}`, error))
+  }
+  return true
 }
 
 // Restarts of a lead (and of the server itself) must find the hooks in place

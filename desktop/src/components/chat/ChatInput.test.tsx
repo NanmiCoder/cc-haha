@@ -48,8 +48,9 @@ const mocks = vi.hoisted(() => ({
   voiceCatalog: vi.fn(async () => ({
     supported: false,
     providers: [],
-    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
     limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+    correction: { defaultTarget: null, target: null },
   })),
 }))
 
@@ -703,6 +704,30 @@ describe('ChatInput file mentions', () => {
     }))
     const message = useChatStore.getState().sessions[sessionId]!.messages.findLast((row) => row.type === 'user_text')
     expect(message).toMatchObject({ attachments: [expect.objectContaining({ diffSide: 'new', hunkId: 'hunk-1' })] })
+  })
+
+  it('restores file mention pills from a draft prefill', async () => {
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'review @README.md please',
+      mentions: [{
+        label: 'README.md',
+        path: '/repo/README.md',
+        isDirectory: false,
+        tokenOrdinal: 0,
+      }],
+    }))
+
+    await waitFor(() => expect(getComposerText()).toBe('review @README.md please'))
+    expect(getComposerElement().querySelector('.composer-mention')).toHaveAttribute(
+      'data-mention-path',
+      '/repo/README.md',
+    )
+
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      content: 'review @"/repo/README.md" please',
+    }))
   })
 
   it('restores an unsent composer draft after the composer unmounts', async () => {
@@ -3983,8 +4008,9 @@ describe('ChatInput file mentions', () => {
             info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto', 'zh'] },
             preparation: { phase: 'ready' },
           }],
-          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
+          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
           limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+          correction: { defaultTarget: null, target: null },
         },
       })
       mocks.voiceStartRecording.mockImplementation(async () => activeRecording)
@@ -4028,7 +4054,7 @@ describe('ChatInput file mentions', () => {
 
     it('does not render the microphone until dictation is ready', () => {
       useVoiceInputStore.setState({
-        catalog: { ...useVoiceInputStore.getState().catalog!, preferences: { enabled: false, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' } },
+        catalog: { ...useVoiceInputStore.getState().catalog!, preferences: { enabled: false, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null } },
       })
       render(<ChatInput />)
       expect(screen.queryByTestId('voice-input')).toBeNull()

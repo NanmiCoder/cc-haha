@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises'
 import { homedir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { logEvent } from '../services/analytics/index.js'
 import { CACHE_PATHS } from './cachePaths.js'
 import { logForDebugging } from './debug.js'
@@ -19,6 +19,7 @@ import {
 } from './settings/settings.js'
 import { TOOL_RESULTS_SUBDIR } from './toolResultStorage.js'
 import { cleanupStaleAgentWorktrees } from './worktree.js'
+import { readSessionArchives, withSessionArchiveLock } from './sessionArchiveStore.js'
 
 /** Subagent transcripts live under `<projectsDir>/<project>/<sessionId>/subagents`. */
 const SUBAGENTS_SUBDIR = 'subagents'
@@ -156,13 +157,16 @@ async function unlinkIfOld(
   cutoffDate: Date,
   fsImpl: FsOperations,
   dryRun = false,
+  archiveSessionId?: string,
 ): Promise<boolean> {
   const stats = await fsImpl.stat(filePath)
   if (stats.mtime < cutoffDate) {
-    if (!dryRun) {
-      await fsImpl.unlink(filePath)
+    const remove = async () => {
+      if (archiveSessionId && readSessionArchives(getClaudeConfigHomeDir()).ids.has(archiveSessionId)) return false
+      if (!dryRun) await fsImpl.unlink(filePath)
+      return true
     }
-    return true
+    return archiveSessionId ? withSessionArchiveLock(getClaudeConfigHomeDir(), remove) : remove()
   }
   return false
 }
@@ -195,6 +199,9 @@ export async function cleanupOldSessionFiles(
   const result: CleanupResult = { messages: 0, errors: 0 }
   const projectsDir = getProjectsDir()
   const fsImpl = getFsImplementation()
+  // A saved archive is an explicit retention choice. If its metadata cannot be
+  // read, stop this sweep rather than silently deleting protected history.
+  const archivedIds = readSessionArchives(getClaudeConfigHomeDir()).ids
   const removeEmptyDir = async (dirPath: string): Promise<void> => {
     if (!dryRun) {
       await tryRmdir(dirPath, fsImpl)
@@ -202,7 +209,7 @@ export async function cleanupOldSessionFiles(
   }
 
   /** Recursively unlink expired files under a nested session directory. */
-  const cleanupNestedDir = async (dirPath: string): Promise<void> => {
+  const cleanupNestedDir = async (dirPath: string, sessionId: string): Promise<void> => {
     let entries
     try {
       entries = await fsImpl.readdir(dirPath)
@@ -212,11 +219,11 @@ export async function cleanupOldSessionFiles(
     for (const entry of entries) {
       const entryPath = join(dirPath, entry.name)
       if (entry.isDirectory()) {
-        await cleanupNestedDir(entryPath)
+        await cleanupNestedDir(entryPath, sessionId)
         await removeEmptyDir(entryPath)
       } else if (entry.isFile()) {
         try {
-          if (await unlinkIfOld(entryPath, cutoffDate, fsImpl, dryRun)) {
+          if (await unlinkIfOld(entryPath, cutoffDate, fsImpl, dryRun, sessionId)) {
             result.messages++
           }
         } catch {
@@ -229,6 +236,7 @@ export async function cleanupOldSessionFiles(
   /** `tool-results/<toolDir>/*` — a flat file or a directory per tool call. */
   const cleanupToolResultsDir = async (
     toolResultsDir: string,
+    sessionId: string,
   ): Promise<void> => {
     let toolDirs
     try {
@@ -245,6 +253,7 @@ export async function cleanupOldSessionFiles(
               cutoffDate,
               fsImpl,
               dryRun,
+              sessionId,
             )
           ) {
             result.messages++
@@ -254,7 +263,7 @@ export async function cleanupOldSessionFiles(
         }
       } else if (toolEntry.isDirectory()) {
         const toolDirPath = join(toolResultsDir, toolEntry.name)
-        await cleanupNestedDir(toolDirPath)
+        await cleanupNestedDir(toolDirPath, sessionId)
         await removeEmptyDir(toolDirPath)
       }
     }
@@ -286,6 +295,7 @@ export async function cleanupOldSessionFiles(
         if (!entry.name.endsWith('.jsonl') && !entry.name.endsWith('.cast')) {
           continue
         }
+        if (archivedIds.has(entry.name.replace(/\.(jsonl|cast)$/, ''))) continue
         try {
           if (
             await unlinkIfOld(
@@ -293,6 +303,7 @@ export async function cleanupOldSessionFiles(
               cutoffDate,
               fsImpl,
               dryRun,
+              entry.name.replace(/\.(jsonl|cast)$/, ''),
             )
           ) {
             result.messages++
@@ -301,14 +312,15 @@ export async function cleanupOldSessionFiles(
           result.errors++
         }
       } else if (entry.isDirectory()) {
+        if (archivedIds.has(entry.name)) continue
         // Session directory — subagent transcripts and tool results live
         // beneath it; both follow the same mtime rule so the reported count
         // matches what disappears. Other session subdirectories (workflows,
         // remote-agents, session-memory) are left alone and can keep the
         // directory itself alive.
         const sessionDir = join(projectDir, entry.name)
-        await cleanupNestedDir(join(sessionDir, SUBAGENTS_SUBDIR))
-        await cleanupToolResultsDir(join(sessionDir, TOOL_RESULTS_SUBDIR))
+        await cleanupNestedDir(join(sessionDir, SUBAGENTS_SUBDIR), entry.name)
+        await cleanupToolResultsDir(join(sessionDir, TOOL_RESULTS_SUBDIR), entry.name)
         await removeEmptyDir(sessionDir)
       }
     }
@@ -368,6 +380,7 @@ export async function cleanupOldFileHistoryBackups(): Promise<CleanupResult> {
   const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
+  const archivedIds = readSessionArchives(getClaudeConfigHomeDir()).ids
 
   try {
     const configDir = getClaudeConfigHomeDir()
@@ -381,7 +394,7 @@ export async function cleanupOldFileHistoryBackups(): Promise<CleanupResult> {
     }
 
     const fileHistorySessionsDirs = dirents
-      .filter(dirent => dirent.isDirectory())
+      .filter(dirent => dirent.isDirectory() && !archivedIds.has(dirent.name))
       .map(dirent => join(fileHistoryStorageDir, dirent.name))
 
     await Promise.all(
@@ -389,11 +402,14 @@ export async function cleanupOldFileHistoryBackups(): Promise<CleanupResult> {
         try {
           const stats = await fsImpl.stat(fileHistorySessionDir)
           if (stats.mtime < cutoffDate) {
-            await fsImpl.rm(fileHistorySessionDir, {
-              recursive: true,
-              force: true,
+            await withSessionArchiveLock(configDir, async () => {
+              if (readSessionArchives(configDir).ids.has(basename(fileHistorySessionDir))) return
+              await fsImpl.rm(fileHistorySessionDir, {
+                recursive: true,
+                force: true,
+              })
+              result.messages++
             })
-            result.messages++
           }
         } catch {
           result.errors++
@@ -413,6 +429,7 @@ export async function cleanupOldSessionEnvDirs(): Promise<CleanupResult> {
   const cutoffDate = getGeneralCleanupCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
   const fsImpl = getFsImplementation()
+  const archivedIds = readSessionArchives(getClaudeConfigHomeDir()).ids
 
   try {
     const configDir = getClaudeConfigHomeDir()
@@ -426,15 +443,18 @@ export async function cleanupOldSessionEnvDirs(): Promise<CleanupResult> {
     }
 
     const sessionEnvDirs = dirents
-      .filter(dirent => dirent.isDirectory())
+      .filter(dirent => dirent.isDirectory() && !archivedIds.has(dirent.name))
       .map(dirent => join(sessionEnvBaseDir, dirent.name))
 
     for (const sessionEnvDir of sessionEnvDirs) {
       try {
         const stats = await fsImpl.stat(sessionEnvDir)
         if (stats.mtime < cutoffDate) {
-          await fsImpl.rm(sessionEnvDir, { recursive: true, force: true })
-          result.messages++
+          await withSessionArchiveLock(configDir, async () => {
+            if (readSessionArchives(configDir).ids.has(basename(sessionEnvDir))) return
+            await fsImpl.rm(sessionEnvDir, { recursive: true, force: true })
+            result.messages++
+          })
         }
       } catch {
         result.errors++

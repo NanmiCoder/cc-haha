@@ -7,7 +7,7 @@ import {
   isSameMcpServer,
   mcpProjectPathKey,
 } from '../lib/mcpIdentity'
-import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload, McpProjectSharingPayload, McpProjectSharingResult } from '../types/mcp'
 
 type McpStore = {
   servers: McpServerRecord[]
@@ -18,6 +18,7 @@ type McpStore = {
   fetchServersForKnownProjects: (currentWorkDir?: string) => Promise<void>
   createServer: (name: string, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
   updateServer: (server: McpServerRecord, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
+  saveProjectSharing: (name: string, payload: McpProjectSharingPayload, currentWorkDir?: string) => Promise<McpProjectSharingResult>
   deleteServer: (server: McpServerRecord, cwd?: string) => Promise<void>
   toggleServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpToggleResult>
   reconnectServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpReconnectResult>
@@ -201,6 +202,19 @@ export const useMcpStore = create<McpStore>((set, get) => ({
           : state.selectedServer,
       error: null,
     }))
+  },
+
+  saveProjectSharing: async (name, payload, currentWorkDir) => {
+    const result = await mcpApi.saveProjectSharing(name, payload)
+    // Read actual files again after partial success too. Never remove or add
+    // rows optimistically for targets whose write failed.
+    const knownPaths = await collectKnownProjectPaths(currentWorkDir)
+    await get().fetchServers(dedupeMcpProjectPaths([
+      ...knownPaths,
+      ...payload.targets.map(target => target.projectPath),
+      ...get().servers.map(server => server.projectPath),
+    ]), currentWorkDir)
+    return result
   },
 
   toggleServer: async (server, cwd, sessionId) => {

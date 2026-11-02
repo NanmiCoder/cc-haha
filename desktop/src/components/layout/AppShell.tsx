@@ -1,3 +1,5 @@
+import { TaskEditorHost } from '@/components/tasks/TaskEditorHost'
+import { useScheduledTasksSync } from '@/hooks/useScheduledTasksSync'
 import { useCallback, useEffect, useState } from 'react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
@@ -13,6 +15,7 @@ import {
   initializeDesktopServerUrl,
   isDesktopRuntime,
   isH5ConnectionRequiredError,
+  readStoredH5Connection,
 } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import {
@@ -34,6 +37,9 @@ import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { MobileShell } from '../mobile/MobileShell'
 import { useMobileShellLayout } from '../mobile/mobileShellLayout'
+import { phoneAppCanAuthenticate, useMobileH5Handoff } from '../mobile/mobileH5Handoff'
+import { getAuthToken, getBaseUrl } from '../../api/client'
+import { isLocalStoragePersistent } from '../../lib/browserStorage'
 import type { Tab } from '../../stores/tabStore'
 
 function isChatTab(tab: Tab | undefined) {
@@ -44,6 +50,7 @@ export function AppShell() {
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const [ready, setReady] = useState(false)
+  useScheduledTasksSync(ready)
   const [startupError, setStartupError] = useState<string | null>(null)
   const [h5StartupError, setH5StartupError] = useState<H5ConnectionRequiredError | null>(null)
   const [bootstrapNonce, setBootstrapNonce] = useState(0)
@@ -64,6 +71,21 @@ export function AppShell() {
     : null
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
   const sidebarResize = useSidebarResize(shellLayout === 'desktop')
+  // Phones and tablets use the phone app once the connection is ready; this
+  // app's own phone shell remains wherever that app cannot take over.
+  const mobileHandoff = useMobileH5Handoff({
+    ready,
+    eligible: () =>
+      !desktopRuntime &&
+      shellLayout !== 'desktop' &&
+      phoneAppCanAuthenticate({
+        storagePersistent: isLocalStoragePersistent(),
+        authToken: getAuthToken(),
+        stored: readStoredH5Connection(),
+        pageOrigin: window.location.origin,
+      }),
+    serverUrl: getBaseUrl,
+  })
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
   const isActiveChatTab = isChatTab(activeTab)
 
@@ -211,7 +233,7 @@ export function AppShell() {
     return <StartupErrorView error={startupError} />
   }
 
-  if (!ready) {
+  if (!ready || (shellLayout !== 'desktop' && mobileHandoff !== 'unavailable')) {
     return (
       <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[13px] text-[var(--color-text-tertiary)]">
         {t('app.launching')}
@@ -220,7 +242,7 @@ export function AppShell() {
   }
 
   if (shellLayout !== 'desktop') {
-    return <MobileShell layout={shellLayout} preferencesRequest={desktopUiPreferencesRequest} />
+    return <><MobileShell layout={shellLayout} preferencesRequest={desktopUiPreferencesRequest} /><TaskEditorHost /></>
   }
 
   return (
@@ -260,6 +282,7 @@ export function AppShell() {
       </main>
       <ToastContainer />
       <UpdateChecker />
+      <TaskEditorHost />
     </div>
   )
 }

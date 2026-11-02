@@ -73,6 +73,10 @@ if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
 
   echo "[build-linux] Installing desktop dependencies..."
   (cd "${DESKTOP_DIR}" && bun install)
+
+  # `bun run build` exports the phone app (mobile/) into dist/m as the phone H5.
+  echo "[build-linux] Installing mobile dependencies..."
+  (cd "${REPO_ROOT}/mobile" && bun install --frozen-lockfile)
 fi
 
 echo "[build-linux] Cleaning stale Electron outputs..."
@@ -84,6 +88,7 @@ rm -f "${DESKTOP_DIR}/tsconfig.tsbuildinfo"
 rm -rf "${DESKTOP_DIR}/src-tauri/binaries/claude-sidecar-"*
 
 echo "[build-linux] Building sidecars for ${TARGET_TRIPLE}..."
+(cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run prepare:cloudflared)
 (cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run build:sidecars)
 
 echo "[build-linux] Building renderer and Electron main/preload bundles..."

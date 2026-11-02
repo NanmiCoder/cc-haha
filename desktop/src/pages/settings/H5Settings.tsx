@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Lock, Server, Unplug } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Lock, Server, Unplug, UserRound } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '@/i18n'
 import { useUIStore } from '@/stores/uiStore'
 import { useProviderStore } from '@/stores/providerStore'
@@ -9,6 +9,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { clearStoredH5Connection, getServerBaseUrl } from '@/lib/desktopRuntime'
 import { ProviderSettings } from './ProviderSettings'
 import { H5GeneralSettings } from './H5GeneralSettings'
+import { ActivitySettings } from '../ActivitySettings'
+
+type DetailPage = 'providers' | 'activity' | null
+const detailPage = (tab: string | null): DetailPage => tab === 'providers' || tab === 'activity' ? tab : null
 
 /**
  * The settings a computer keeps that a phone can see but not change: they
@@ -42,15 +46,15 @@ export function H5Settings() {
   ))
   const fetchProviders = useProviderStore((state) => state.fetchProviders)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
-  // Settings always opens on the list. The provider page is a step into it,
+  // Settings always opens on the list. Each detail page is a step into it,
   // kept here rather than in the remembered settings tab, so coming back to
-  // Settings later starts from the list again. A link asking for the providers
-  // page (no provider configured yet) still lands there.
-  const [showingProviders, setShowingProviders] = useState(pending === 'providers')
+  // Settings later starts from the list again. An explicit link still lands
+  // directly on the requested page.
+  const [page, setPage] = useState<DetailPage>(() => detailPage(pending))
 
   useEffect(() => {
     if (!pending) return
-    setShowingProviders(pending === 'providers')
+    setPage(detailPage(pending))
     useUIStore.getState().setPendingSettingsTab(null)
   }, [pending])
 
@@ -58,9 +62,9 @@ export function H5Settings() {
     void fetchProviders().catch(() => undefined)
   }, [fetchProviders])
 
-  const openList = () => setShowingProviders(false)
+  const openList = () => setPage(null)
 
-  if (showingProviders) {
+  if (page) {
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
         <div className="shrink-0 border-b border-[var(--color-border)] px-1 py-1">
@@ -74,7 +78,7 @@ export function H5Settings() {
           </Button>
         </div>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5">
-          <ProviderSettings browserMode />
+          {page === 'providers' ? <ProviderSettings browserMode /> : <ActivitySettings browserMode />}
         </div>
       </div>
     )
@@ -90,7 +94,22 @@ export function H5Settings() {
 
   return (
     <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-[var(--color-surface)] px-4 py-5">
-      <SettingsSection className="mt-0" title={t('h5Settings.connection')}>
+      <SettingsGroup>
+        <button
+          type="button"
+          onClick={() => setPage('activity')}
+          className="flex min-h-16 w-full items-center gap-3 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
+        >
+          <UserRound size={22} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[14px] font-semibold text-[var(--color-text-primary)]">{t('settings.tab.activity')}</span>
+            <span className="mt-1 block text-xs text-[var(--color-text-tertiary)]">{t('settings.activity.entryDescription')}</span>
+          </span>
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </button>
+      </SettingsGroup>
+
+      <SettingsSection title={t('h5Settings.connection')}>
         <SettingsGroup>
           <SettingsRow title={t('h5Settings.connectedTo')} description={<span className="font-mono">{host}</span>}>
             <Button
@@ -110,7 +129,7 @@ export function H5Settings() {
           <button
             type="button"
             data-testid="h5-settings-providers"
-            onClick={() => setShowingProviders(true)}
+            onClick={() => setPage('providers')}
             className="flex min-h-12 w-full items-center gap-3 px-4 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] active:bg-[var(--color-surface-hover)]"
           >
             <Server size={18} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />

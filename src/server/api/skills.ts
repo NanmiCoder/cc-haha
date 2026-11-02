@@ -5,6 +5,7 @@ import { isLeanCompatibleSkill } from '../../utils/agentProfile.js'
  * GET /api/skills              — List all installed skills (metadata only)
  * GET /api/skills/detail       — Full skill data (tree + files)
  *       ?source=user&name=xxx
+ * GET /api/skills/commands     — Draft slash commands (?cwd=&agentProfile=lean)
  * GET /api/skills/mentions     — Composer @ candidates (?cwd=&providerId=)
  */
 
@@ -570,6 +571,17 @@ export async function handleSkillsApi(
     switch (sub) {
       case undefined:
         return await listSkills(url)
+      case 'commands': {
+        const cwd = getRequestedCwd(url)
+        if (!path.isAbsolute(cwd) || cwd.includes('\0')) throw ApiError.badRequest('cwd must be an absolute directory path')
+        const directory = await fs.stat(cwd).catch(() => null)
+        if (!directory?.isDirectory()) throw ApiError.badRequest('cwd must be an existing directory')
+        const lean = url.searchParams.get('agentProfile') === 'lean'
+        return Response.json({ commands: await listSkillSlashCommands(cwd, {
+          includeCompiledIn: !lean,
+          agentProfile: lean ? 'lean' : undefined,
+        }) })
+      }
       case 'mentions': {
         const { listCapabilityMentions } = await import('../services/capabilityMentionService.js')
         return Response.json(await listCapabilityMentions(url.searchParams.get('cwd') || getCwd(), {

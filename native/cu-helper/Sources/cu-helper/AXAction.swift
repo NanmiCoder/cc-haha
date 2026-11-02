@@ -461,7 +461,49 @@ public enum AXAction {
         pid: pid_t, window: WindowGeometry.Window? = nil,
         beforeFocus: (@MainActor (FocusEventMonitor.RegistrationReceipt) async throws -> Void)? = nil
     ) async throws -> FocusEventMonitor.RegistrationReceipt {
-        try await SyntheticWindowFocus.prepareInput(pid: pid, window: window, beforeFocus: beforeFocus)
+        let wasHidden = NSRunningApplication(processIdentifier: pid)?.isHidden == true
+        let receipt = try await SyntheticWindowFocus.prepareInput(pid: pid, window: window, beforeFocus: beforeFocus)
+        guard wasHidden, let window else { return receipt }
+        try await requireShownWindow(pid: pid, window: window)
+        // The first click into a window just shown this way did not land,
+        // while the same click after a fresh read did (measured on Chromium).
+        // Showing the app is this action's whole effect; say so.
+        throw shownAgainError
+    }
+
+    static let shownAgainError = CUError(
+        "stale_window",
+        """
+        The target app was hidden. It is shown again, without taking the \
+        user's foreground or keyboard, and nothing else was sent. Call \
+        get_app_state, then repeat the action.
+        """
+    )
+
+    /// The synthetic activation shows a hidden app without taking the user's
+    /// foreground, and its window returns to its own Space. Behind the user's
+    /// fullscreen app, clicks then did not reliably land (measured on Chromium;
+    /// on a shown Space they did). Such a window is parked like one restored
+    /// from the Dock, and the action is refused rather than reported as sent.
+    static func requireShownWindow(
+        pid: pid_t,
+        window: WindowGeometry.Window,
+        isOnScreen: ((CGWindowID) -> Bool)? = nil,
+        identity: AXTreeProcessIdentity? = nil,
+        parked: TargetWindowRecovery.ParkedWindows = TargetWindowRecovery.parked,
+        attempts: Int = 5,
+        pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(100)) }
+    ) async throws {
+        let onScreen = isOnScreen ?? { WindowGeometry.isOnScreen(id: $0, pid: pid) }
+        for attempt in 0...max(0, attempts) {
+            if onScreen(window.id) { return }
+            if attempt < attempts { try await pause() }
+        }
+        if let identity = identity ?? AXTree.currentProcessIdentity(pid: pid),
+           let target = ProvenProcessTarget(pid: pid, identity: identity) {
+            parked.park(target, windowID: window.id)
+        }
+        throw windowStateError(.parked)
     }
 
     /// Synthetic pointer click at a GLOBAL (Quartz, top-left) point, posted to the
@@ -492,8 +534,8 @@ public enum AXAction {
                 validate: {
                     _ = try Injection.validateAuthorizedTarget(target)
                     try SyntheticWindowFocus.validate(receipt)
-                    guard WindowGeometry.window(id: window.id, pid: pid) == window else {
-                        throw CUError("stale_window", "The pointer target window moved or closed. Read its current state before retrying.")
+                    guard isStillBound(window, pid: pid) else {
+                        throw CUError("stale_window", "The pointer target window moved, closed, or was minimized. Read its current state before retrying.")
                     }
                 },
                 post: { WindowTargetedEvent.post($0, to: pid) }
@@ -593,30 +635,121 @@ public enum AXAction {
         at point: CGPoint,
         pid: pid_t
     ) throws -> WindowGeometry.Window {
-        switch WindowGeometry.binding(at: point, pid: pid) {
-        case .success(let window):
+        try bindableWindow(
+            at: point,
+            pid: pid,
+            snapshotWindowID: AXTree.snapshotEvidence(pid: pid)?.keyWindowID,
+            windowState: liveWindowState(pid: pid)
+        )
+    }
+
+    /// The window a coordinate action may name: the frontmost on-screen window
+    /// of `pid` under the point, else the snapshot's own window when it sits
+    /// on a Space the user is not looking at. The model read its coordinates
+    /// off that window's screenshot, so no other off-screen window may take
+    /// the point. Such a window takes PID/window-targeted clicks and keys —
+    /// measured on Chromium while the user stayed in a fullscreen app — unless
+    /// it is minimized or was restored while its Space was hidden.
+    static func bindableWindow(
+        at point: CGPoint,
+        pid: pid_t,
+        snapshotWindowID: CGWindowID?,
+        onScreenList: () -> [[CFString: Any]]? = WindowGeometry.systemWindowList,
+        allSpacesList: () -> [[CFString: Any]]? = WindowGeometry.allSpacesWindowList,
+        windowState: (CGWindowID) -> TargetWindowRecovery.WindowState = { _ in .unknown }
+    ) throws -> WindowGeometry.Window {
+        if case .success(let window) = WindowGeometry.binding(at: point, pid: pid, windowList: onScreenList) {
             return window
-        case .failure(.noWindowOnScreen):
-            throw CUError(
+        }
+        if let id = snapshotWindowID, id != kCGNullWindowID,
+           !WindowGeometry.isOnScreen(id: id, pid: pid, windowList: onScreenList),
+           let window = WindowGeometry.window(id: id, pid: pid, windowList: allSpacesList) {
+            try requireInput(windowState(id))
+            guard window.bounds.contains(point) else { throw pointOutsideWindowError }
+            return window
+        }
+        if WindowGeometry.hasWindowOnScreen(pid: pid, windowList: onScreenList) {
+            throw pointOutsideWindowError
+        }
+        throw windowStateError(.minimized)
+    }
+
+    private static func liveWindowState(pid: pid_t) -> (CGWindowID) -> TargetWindowRecovery.WindowState {
+        { TargetWindowRecovery.windowState(pid: pid, windowID: $0) }
+    }
+
+    static func requireInput(_ state: TargetWindowRecovery.WindowState) throws {
+        guard state == .takesInput else { throw windowStateError(state) }
+    }
+
+    /// Each refusal names what is actually wrong, so the model's next step can
+    /// work: get_app_state restores a minimized window, nothing restores a
+    /// parked one without the user, and an unanswered query is worth one retry.
+    static func windowStateError(_ state: TargetWindowRecovery.WindowState) -> CUError {
+        switch state {
+        case .takesInput:
+            return CUError("internal", "The target window takes input.")
+        case .minimized, .gone:
+            return CUError(
                 "target_window_offscreen",
                 """
-                The target app has no window on screen, so no click or keystroke \
-                can reach it. It is minimized, hidden, or on another Space. \
-                Call get_app_state so Computer Use can restore the explicitly \
-                selected app before retrying the action.
+                The target window is minimized or closed, so no click or keystroke \
+                can reach it. Call get_app_state: it restores a minimized window \
+                in the background without activating the app, then retry.
                 """
             )
-        case .failure(.pointOutsideWindows):
-            throw CUError(
-                "point_outside_target_window",
+        case .parked:
+            return CUError(
+                "target_window_offscreen",
                 """
-                The coordinate does not fall inside any window of the target \
-                app, so the action was not sent. Call get_app_state and re-read \
-                the coordinate off the fresh screenshot; the window has probably \
-                moved or resized.
+                The target window came back onto a Space the user is not \
+                looking at (restored from the Dock, or shown after being \
+                hidden), and macOS holds its input until that Space is shown. \
+                The action was not sent. Tell the user the app is waiting on \
+                another desktop; do not retry it or bring it forward.
+                """
+            )
+        case .unknown:
+            return CUError(
+                "target_window_offscreen",
+                """
+                The target app did not answer accessibility queries, so Computer \
+                Use could not confirm its window can take input. The action was \
+                not sent; call get_app_state before retrying.
                 """
             )
         }
+    }
+
+    private static let pointOutsideWindowError = CUError(
+        "point_outside_target_window",
+        """
+        The coordinate does not fall inside any window of the target \
+        app, so the action was not sent. Call get_app_state and re-read \
+        the coordinate off the fresh screenshot; the window has probably \
+        moved or resized.
+        """
+    )
+
+    /// Right before posting: a window bound on the shown Spaces must still be
+    /// there unchanged; one on another Space must still exist unchanged and
+    /// still take input. A window minimized after binding fails here instead
+    /// of swallowing the events behind an "Action completed".
+    static func isStillBound(
+        _ window: WindowGeometry.Window,
+        pid: pid_t,
+        onScreenList: () -> [[CFString: Any]]? = WindowGeometry.systemWindowList,
+        allSpacesList: () -> [[CFString: Any]]? = WindowGeometry.allSpacesWindowList,
+        windowState: ((CGWindowID) -> TargetWindowRecovery.WindowState)? = nil
+    ) -> Bool {
+        if WindowGeometry.window(id: window.id, pid: pid, windowList: onScreenList) == window {
+            return true
+        }
+        guard WindowGeometry.window(id: window.id, pid: pid, windowList: allSpacesList) == window else {
+            return false
+        }
+        let state = windowState ?? liveWindowState(pid: pid)
+        return state(window.id) == .takesInput
     }
 
     /// Coordinate click that prefers the AX path. The model gives a
@@ -651,13 +784,27 @@ public enum AXAction {
         }
         return try await CoordinateClickRouting.click(
             point: point,
-            preferAccessibility: button == .left,
+            preferAccessibility: coordinateClickPrefersAccessibility(
+                at: point, pid: pid, button: button
+            ),
             hitTest: { hitTest(pid: pid, at: $0) },
             press: { pressPrimary($0, times: reps) },
             settle: { settle() },
             syntheticClick: { target in
                 try await clickPoint(pid: pid, x: target.x, y: target.y, clickCount: reps, button: button)
             }
+        )
+    }
+
+    static func coordinateClickPrefersAccessibility(
+        at point: CGPoint,
+        pid: pid_t,
+        button: MouseButton,
+        onScreenList: () -> [[CFString: Any]]? = WindowGeometry.systemWindowList
+    ) -> Bool {
+        CoordinateClickRouting.prefersAccessibility(
+            button: button,
+            pointIsOnVisibleWindow: WindowGeometry.window(at: point, pid: pid, windowList: onScreenList) != nil
         )
     }
 
@@ -832,8 +979,8 @@ public enum AXAction {
         let focusReceipt = try await ensureTargetAcceptsInput(pid: pid, window: window)
         _ = try Injection.validateAuthorizedTarget(target)
         try SyntheticWindowFocus.validate(focusReceipt)
-        guard WindowGeometry.window(id: window.id, pid: pid) == window else {
-            throw CUError("stale_window", "The scroll target moved or closed. Read its current state before retrying.")
+        guard isStillBound(window, pid: pid) else {
+            throw CUError("stale_window", "The scroll target moved, closed, or was minimized. Read its current state before retrying.")
         }
         let delta = try NativeScroll.delta(direction: dir, pages: pages, frameSize: (elementFrame ?? window.bounds).size)
         guard let eventSource,
@@ -917,9 +1064,10 @@ public enum AXAction {
             // the injection gradient.
         }
 
-        // ── Fallback 1: Unicode keyboard, only into an actual text field/area
-        //    (reliable for native AppKit fields). ───────────────────────────────
-        if let focused, isTextEntry(focused) {
+        // ── Fallback 1: Unicode keyboard into an actual text field/area
+        //    (reliable for native AppKit fields), or into a window on another
+        //    Space, whose in-app focus AX does not report. ────────────────────
+        if textFallback(focused: focused, isTextEntry: isTextEntry, windowID: window.id, pid: pid) == .unicodeKeys {
             try SyntheticWindowFocus.validate(focusReceipt)
             do {
                 try postUnicodeText(pid: pid, text: text)
@@ -938,6 +1086,39 @@ public enum AXAction {
         //    clipboard so we don't clobber it. (This replaces the old hard
         //    `no_focus` throw that stranded every CEF text-input task.)
         try await typeViaClipboard(target: target, text)
+    }
+
+    enum TextFallback: Equatable {
+        case unicodeKeys
+        case clipboardPaste
+    }
+
+    /// Measured on a Chromium textarea behind the user's fullscreen app: after a
+    /// window-targeted click, Unicode key events landed while AX reported no
+    /// focused element and ⌘V did not land. Only that case changes: a focused
+    /// element AX does report (a button, a list) keeps the paste path, so a
+    /// space or return in the text cannot press it. On a visible window the
+    /// paste path stays, since CEF fields there take ⌘V but not Unicode keys.
+    static func textFallback(
+        focusedIsTextEntry: Bool,
+        hasFocusedElement: Bool,
+        windowIsOnScreen: Bool
+    ) -> TextFallback {
+        focusedIsTextEntry || (!hasFocusedElement && !windowIsOnScreen) ? .unicodeKeys : .clipboardPaste
+    }
+
+    static func textFallback<Element>(
+        focused: Element?,
+        isTextEntry: (Element) -> Bool,
+        windowID: CGWindowID,
+        pid: pid_t,
+        onScreenList: () -> [[CFString: Any]]? = WindowGeometry.systemWindowList
+    ) -> TextFallback {
+        textFallback(
+            focusedIsTextEntry: focused.map(isTextEntry) ?? false,
+            hasFocusedElement: focused != nil,
+            windowIsOnScreen: WindowGeometry.isOnScreen(id: windowID, pid: pid, windowList: onScreenList)
+        )
     }
 
     /// Explicit Codex-compatible paste path. Unlike `typeText`, this does not
@@ -1016,17 +1197,38 @@ public enum AXAction {
     }
 
     private static func keyboardWindow(pid: pid_t) throws -> WindowGeometry.Window {
-        try SnapshotKeyboardWindow.resolve(
+        try keyboardWindow(
             pid: pid,
             snapshot: AXTree.snapshotEvidence(pid: pid),
             currentIdentity: AXTree.currentProcessIdentity(pid: pid),
-            windowForID: { WindowGeometry.window(id: $0, pid: $1) }
+            windowState: liveWindowState(pid: pid)
         )
     }
 
+    /// The snapshot's window, on any Space, as long as it can take input.
+    static func keyboardWindow(
+        pid: pid_t,
+        snapshot: AXTreeSnapshotEvidence?,
+        currentIdentity: AXTreeProcessIdentity?,
+        onScreenList: () -> [[CFString: Any]]? = WindowGeometry.systemWindowList,
+        allSpacesList: () -> [[CFString: Any]]? = WindowGeometry.allSpacesWindowList,
+        windowState: (CGWindowID) -> TargetWindowRecovery.WindowState
+    ) throws -> WindowGeometry.Window {
+        let window = try SnapshotKeyboardWindow.resolve(
+            pid: pid,
+            snapshot: snapshot,
+            currentIdentity: currentIdentity,
+            windowForID: { WindowGeometry.window(id: $0, pid: $1, windowList: allSpacesList) }
+        )
+        if !WindowGeometry.isOnScreen(id: window.id, pid: pid, windowList: onScreenList) {
+            try requireInput(windowState(window.id))
+        }
+        return window
+    }
+
     private static func validateKeyboardWindow(_ window: WindowGeometry.Window, pid: pid_t) throws {
-        guard WindowGeometry.window(id: window.id, pid: pid) == window else {
-            throw CUError("stale_window", "The keyboard target window moved or closed. Read its current state before retrying.")
+        guard isStillBound(window, pid: pid) else {
+            throw CUError("stale_window", "The keyboard target window moved, closed, or was minimized. Read its current state before retrying.")
         }
     }
 
@@ -1118,8 +1320,8 @@ public enum AXAction {
             validate: {
                 _ = try Injection.validateAuthorizedTarget(target)
                 try SyntheticWindowFocus.validate(focusReceipt)
-                guard WindowGeometry.window(id: window.id, pid: target.pid) == window else {
-                    throw CUError("stale_window", "The target window moved or closed. Read its current state before retrying.")
+                guard isStillBound(window, pid: target.pid) else {
+                    throw CUError("stale_window", "The target window moved, closed, or was minimized. Read its current state before retrying.")
                 }
             },
             post: { WindowTargetedEvent.post($0, to: target.pid) },
@@ -1127,7 +1329,11 @@ public enum AXAction {
                 // A canceled gesture still needs its up, but never at a new
                 // process that happened to reuse the original PID.
                 _ = try Injection.validateAuthorizedTarget(target)
-                guard let liveWindow = WindowGeometry.window(id: window.id, pid: target.pid),
+                // The up must reach a window on another Space as well.
+                guard let liveWindow = WindowGeometry.window(
+                        id: window.id, pid: target.pid,
+                        windowList: WindowGeometry.allSpacesWindowList
+                      ),
                       let nsType = Injection.nsEventType(for: button.up),
                       let up = WindowTargetedEvent.makeMouseEvent(
                         type: button.up, nsType: nsType, point: point, button: button,

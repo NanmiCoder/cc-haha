@@ -3,7 +3,6 @@ import * as path from 'node:path'
 import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
-import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
 import {
   formatImHelp,
@@ -51,7 +50,7 @@ const botToken = config.wechat.botToken
 const bridge = new WsBridge(config.serverUrl, 'wechat')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.wechat)
+const { httpClient, defaultWorkDir, enqueue } = createAdapterClient(config, config.wechat)
 const attachmentStore = new AttachmentStore()
 const media = new WechatMediaService(attachmentStore)
 const pendingProjectSelection = new Map<string, boolean>()

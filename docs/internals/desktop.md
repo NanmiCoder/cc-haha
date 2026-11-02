@@ -206,4 +206,6 @@ bun run build
 bun run build:electron
 ```
 
+`bun run build` 在 Vite 构建后运行 `build:h5-mobile`，把 `mobile/` 导出成手机浏览器用的 H5（`dist/m`），因此需要先安装 `mobile/` 的依赖（Node 22）。`dist/m/assets/node_modules/**` 在 electron-builder 的 `files` 里显式放回，否则会被它默认排除。
+
 `electron:package` 在此基础上运行 electron-builder。打包产物验证只能证明资源和安装包结构正确；涉及窗口、权限、终端、预览、更新或 Computer Use 的用户流程，还需要真实桌面 Smoke 验证。

@@ -41,7 +41,11 @@ export const tasksApi = {
   },
 
   update(id: string, updates: Partial<CronTask>) {
-    return api.put<TaskResponse>(`/api/scheduled-tasks/${id}`, updates)
+    const { revision, ...fields } = updates
+    return api.put<TaskResponse>(`/api/scheduled-tasks/${id}`, {
+      ...fields,
+      ...(revision === undefined ? {} : { expectedRevision: revision }),
+    })
   },
 
   delete(id: string) {

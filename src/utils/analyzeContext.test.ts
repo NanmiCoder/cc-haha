@@ -134,4 +134,35 @@ describe('analyzeContextUsage', () => {
       category.name === 'Free space')?.tokens ?? 0
     expect(result.totalTokens + reserved + free).toBe(result.rawMaxTokens)
   })
+
+  test('reports the window capped by the provider fallback window, like compaction does', async () => {
+    const { analyzeContextUsage } = await import('./analyzeContext.js')
+    const originalAutoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    const run = () => analyzeContextUsage(
+      [],
+      'deepseek-v4-flash',
+      async () => ({ mode: 'default' }),
+      [],
+      { activeAgents: [], allAgents: [] },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { estimateOnly: true },
+    )
+
+    try {
+      delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+      expect((await run()).rawMaxTokens).toBe(1_000_000)
+
+      process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '200000'
+      expect((await run()).rawMaxTokens).toBe(200_000)
+    } finally {
+      if (originalAutoCompactWindow === undefined) {
+        delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+      } else {
+        process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = originalAutoCompactWindow
+      }
+    }
+  })
 })
