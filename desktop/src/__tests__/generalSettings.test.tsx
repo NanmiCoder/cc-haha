@@ -1519,6 +1519,36 @@ describe('Settings > General tab', () => {
     }
   })
 
+  it('keeps next-message suggestions off and reports it when saving the choice fails', async () => {
+    useSettingsStore.setState({ nextPromptSuggestionsEnabled: false })
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockRejectedValue(new Error('disk full'))
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+      const agentSection = screen.getByRole('heading', { name: 'Agent preferences' }).closest('section')!
+
+      fireEvent.click(within(agentSection).getByRole('switch', { name: 'Next-message suggestions' }))
+      const dialog = screen.getByRole('dialog', { name: 'Turn on next-message suggestions?' })
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }))
+      })
+      expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(false)
+      expect(within(agentSection).getByRole('switch', { name: 'Next-message suggestions' })).not.toBeChecked()
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({ type: 'error' })
+
+      // Turning it off can fail too: the switch stays on and the user is told.
+      useSettingsStore.setState({ nextPromptSuggestionsEnabled: true })
+      await act(async () => {
+        fireEvent.click(within(agentSection).getByRole('switch', { name: 'Next-message suggestions' }))
+      })
+      expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(true)
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({ type: 'error' })
+    } finally {
+      updateUser.mockRestore()
+      useSettingsStore.setState({ nextPromptSuggestionsEnabled: false })
+    }
+  })
+
   it('lets the user disable Auto-dream without a confirmation dialog', async () => {
     useSettingsStore.setState({ autoDreamEnabled: true })
     render(<Settings />)
