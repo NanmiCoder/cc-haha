@@ -93,6 +93,14 @@ test('set_prompt_suggestions turns on suggestions at runtime and emits the clean
   expect(suggestionIndex).toBeGreaterThan(resultIndex)
   // The "建议：" label is stripped and the two-character CJK suggestion survives the word-count filter.
   expect(events[suggestionIndex].suggestion).toBe(SUGGESTION)
+  const activity = events.filter(event => event.subtype === 'prompt_suggestion_activity')
+  expect(activity).toHaveLength(2)
+  expect(activity.map(event => event.active)).toEqual([true, false])
+  expect(activity[1].generation_id).toBe(activity[0].generation_id)
+  const idleIndex = events.findIndex(event => event.subtype === 'session_state_changed' && event.state === 'idle')
+  if (idleIndex >= 0) expect(events.indexOf(activity[0])).toBeLessThan(idleIndex)
+  expect(events.indexOf(activity[0])).toBeGreaterThan(resultIndex)
+  expect(events.indexOf(activity[1])).toBeGreaterThan(suggestionIndex)
 }, 30_000)
 
 test('suggestions stay off by default and after being turned back off', async () => {

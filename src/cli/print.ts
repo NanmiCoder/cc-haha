@@ -1132,6 +1132,7 @@ export async function runHeadless(
           message.subtype === 'task_notification' ||
           message.subtype === 'task_started' ||
           message.subtype === 'task_progress' ||
+          message.subtype === 'prompt_suggestion_activity' ||
           message.subtype === 'post_turn_summary')
       ) &&
       message.type !== 'stream_event' &&
@@ -2268,6 +2269,14 @@ function runHeadlessStreaming(
           getAppState,
           isResultHeld: () => heldBackResult !== null,
           emit: message => output.enqueue(message),
+          onActivity: (generationId, active) => output.enqueue({
+            type: 'system',
+            subtype: 'prompt_suggestion_activity',
+            generation_id: generationId,
+            active,
+            uuid: randomUUID(),
+            session_id: getSessionId(),
+          }),
         })
 
       // Extract command processing into a named function for the do-while pattern.
