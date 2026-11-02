@@ -229,6 +229,7 @@ describe('provider presets API', () => {
     const minimax = PROVIDER_PRESETS.find((preset) => preset.id === 'minimax')
     const shengsuanyun = PROVIDER_PRESETS.find((preset) => preset.id === 'shengsuanyun')
     const atlascloud = PROVIDER_PRESETS.find((preset) => preset.id === 'atlascloud')
+    const runcrate = PROVIDER_PRESETS.find((preset) => preset.id === 'runcrate')
     const xuanshuapi = PROVIDER_PRESETS.find((preset) => preset.id === 'xuanshuapi')
     const fennoai = PROVIDER_PRESETS.find((preset) => preset.id === 'fennoai')
     const qiniuai = PROVIDER_PRESETS.find((preset) => preset.id === 'qiniuai')
@@ -295,6 +296,20 @@ describe('provider presets API', () => {
       opus: 'deepseek-ai/deepseek-v4-pro',
     })
     expect(atlascloud?.modelContextWindows?.['deepseek-ai/deepseek-v4-pro']).toBe(1000000)
+    expect(runcrate?.baseUrl).toBe('https://api.runcrate.ai')
+    expect(runcrate?.apiFormat).toBe('openai_chat')
+    expect(runcrate?.authStrategy).toBe('api_key')
+    expect(runcrate?.needsApiKey).toBe(true)
+    expect(runcrate?.apiKeyUrl).toBe('https://runcrate.ai/dashboard/api-keys')
+    expect(runcrate?.defaultModels).toEqual({
+      main: 'deepseek-ai/DeepSeek-V4.1-Flash',
+      haiku: 'zai-org/GLM-5.3-Flash',
+      sonnet: 'deepseek-ai/DeepSeek-V4.1-Flash',
+      opus: 'zai-org/GLM-5.3',
+    })
+    expect(runcrate?.modelContextWindows?.['deepseek-ai/DeepSeek-V4.1-Flash']).toBe(1048576)
+    expect(runcrate?.modelContextWindows?.['zai-org/GLM-5.3']).toBe(1048576)
+    expect(runcrate?.modelContextWindows?.['zai-org/GLM-5.3-Flash']).toBe(1048576)
     expect(xuanshuapi?.baseUrl).toBe('https://www.xuanshuapi.com')
     expect(xuanshuapi?.apiFormat).toBe('anthropic')
     expect(xuanshuapi?.authStrategy).toBe('auth_token')

@@ -471,6 +471,27 @@
     }
   },
   {
+    "id": "runcrate",
+    "name": "Runcrate",
+    "baseUrl": "https://api.runcrate.ai",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "haiku": "zai-org/GLM-5.3-Flash",
+      "sonnet": "deepseek-ai/DeepSeek-V4.1-Flash",
+      "opus": "zai-org/GLM-5.3"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://runcrate.ai",
+    "apiKeyUrl": "https://runcrate.ai/dashboard/api-keys",
+    "authStrategy": "api_key",
+    "modelContextWindows": {
+      "deepseek-ai/DeepSeek-V4.1-Flash": 1048576,
+      "zai-org/GLM-5.3": 1048576,
+      "zai-org/GLM-5.3-Flash": 1048576
+    }
+  },
+  {
     "id": "lmstudio",
     "name": "LM Studio",
     "baseUrl": "http://localhost:1234",
