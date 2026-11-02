@@ -10,7 +10,7 @@
  * - Providers whose wire format needs local handling go through the in-process
  *   proxy, which owns the per-model protocol choice and the preset's headers.
  * - Everything else is a direct Anthropic Messages call.
- * Thinking is disabled first; a 4xx answer is retried once without it.
+ * Thinking is disabled first; a rejected request (400/422) is retried once without it.
  */
 
 import type { SavedProvider, ProviderAuthStrategy } from '../types/provider.js'
@@ -56,8 +56,8 @@ export type ProviderTextCompletionRequest = {
   user: string
   maxTokens: number
   /**
-   * Sent with the first (thinking-disabled) attempt only; the 4xx retry drops it
-   * along with `thinking`, since some models reject a fixed temperature.
+   * Sent with the first (thinking-disabled) attempt only; the 400/422 retry drops
+   * it along with `thinking`, since some models reject a fixed temperature.
    */
   temperature?: number
   /**
@@ -103,6 +103,17 @@ export function classifyProviderStatus(status: number): ProviderTextCompletionFa
   if (status === 401 || status === 403) return 'auth'
   if (status === 429) return 'rate-limit'
   return 'upstream'
+}
+
+/**
+ * Whether the provider rejected the request's shape, which dropping the first
+ * attempt's `thinking: disabled` and extras can fix. Other 4xx answers (rate
+ * limit, auth, missing endpoint) are returned as they are: resending without
+ * `thinking` would turn a reasoning model's thinking back on, and DeepSeek
+ * Flash then spends the whole budget reasoning and answers with no text.
+ */
+function rejectedRequestShape(response: Response): boolean {
+  return response.status === 400 || response.status === 422
 }
 
 /** Removes reasoning a model inlined into its text (`<think>…</think>`, or an unclosed tail). */
@@ -335,10 +346,7 @@ async function sendThroughProxy(
   ), overall)
 
   const response = await send({ ...requestBody, ...firstAttempt })
-  if (!response.ok && response.status >= 400 && response.status < 500) {
-    return send(requestBody)
-  }
-  return response
+  return rejectedRequestShape(response) ? send(requestBody) : response
 }
 
 async function sendAnthropicDirect(
@@ -360,8 +368,5 @@ async function sendAnthropicDirect(
   })
 
   const response = await send({ ...requestBody, ...firstAttempt })
-  if (!response.ok && response.status >= 400 && response.status < 500) {
-    return send(requestBody)
-  }
-  return response
+  return rejectedRequestShape(response) ? send(requestBody) : response
 }
