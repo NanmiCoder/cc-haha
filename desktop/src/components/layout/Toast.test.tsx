@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -61,5 +61,24 @@ describe('ToastContainer accessibility', () => {
     expect(icon).toHaveAttribute('aria-hidden', 'true')
     expect(icon?.getAttribute('class')).toContain(color)
     expect(toast.className).not.toMatch(/border-l-/)
+  })
+
+  it('runs its one follow-up action once and dismisses the toast', () => {
+    const undo = vi.fn()
+    useUIStore.setState({
+      toasts: [
+        { id: 'archived', type: 'success', message: 'Archived', action: { label: 'Undo', onClick: undo } },
+        { id: 'plain', type: 'info', message: 'Plain' },
+      ],
+    })
+
+    render(<ToastContainer />)
+
+    expect(screen.getAllByRole('button', { name: 'Undo' })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+
+    expect(undo).toHaveBeenCalledOnce()
+    expect(screen.queryByText('Archived')).not.toBeInTheDocument()
+    expect(screen.getByText('Plain')).toBeInTheDocument()
   })
 })

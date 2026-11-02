@@ -41,6 +41,9 @@ type CreateSessionOptions = {
 
 type BranchSessionResult = Pick<BranchSessionResponse, 'sessionId' | 'title' | 'workDir'>
 
+export type ArchiveSessionsFailure = { id: string; error: unknown }
+export type ArchiveSessionsResult = { successes: string[]; failures: ArchiveSessionsFailure[] }
+
 type SessionStore = {
   sessions: SessionListItem[]
   activeSessionId: string | null
@@ -78,6 +81,8 @@ type SessionStore = {
   clearSessionSelection: () => void
   renameSession: (id: string, title: string) => Promise<void>
   setSessionArchived: (id: string, archived: boolean) => Promise<void>
+  /** Archives or restores each id in order and refreshes the list once. */
+  setSessionsArchived: (ids: string[], archived: boolean) => Promise<ArchiveSessionsResult>
   updateSessionTitle: (id: string, title: string) => void
   updateSessionMessageCount: (id: string, messageCount: number) => void
   updateSessionPermissionMode: (id: string, mode: PermissionMode) => void
@@ -465,42 +470,74 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   clearSessionSelection: () => set({ selectedSessionIds: new Set() }),
 
   setSessionArchived: async (id, archived) => {
-    // The restored row can be older than the sidebar preview and absent from
-    // the cache. Read its metadata before the mutation, so a failed read leaves
-    // the archive intact and a fully loaded project can regain the actual row.
-    const restored = archived ? null : { ...await sessionsApi.getSummary(id), archived: false }
-    const restoredRoot = restored && (restored.projectRoot || restored.workDir || restored.projectPath)
-    await sessionsApi.setArchived(id, archived)
+    const { failures } = await get().setSessionsArchived([id], archived)
+    if (failures.length > 0) throw failures[0]!.error
+  },
+
+  setSessionsArchived: async (ids, archived) => {
+    const successes: string[] = []
+    const failures: ArchiveSessionsFailure[] = []
+    const restoredSessions: SessionListItem[] = []
+    // One request at a time: each archive is checked against the session's
+    // activity on the server, and a batch must not race its own refresh.
+    for (const id of ids) {
+      try {
+        // The restored row can be older than the sidebar preview and absent
+        // from the cache. Read its metadata before the mutation, so a failed
+        // read leaves the archive intact and a fully loaded project can regain
+        // the actual row.
+        const restored = archived ? null : { ...await sessionsApi.getSummary(id), archived: false }
+        await sessionsApi.setArchived(id, archived)
+        if (restored) restoredSessions.push(restored)
+        successes.push(id)
+      } catch (error) {
+        failures.push({ id, error })
+      }
+    }
+    if (successes.length === 0) return { successes, failures }
+
     // This is a reversible visibility change. Keep open tabs, workspace state,
     // runtime selections and connections intact; only delete releases them.
     if (archived) {
-      pendingCreatedSessionIds.delete(id)
-      excludeDeletedProjectSessions([id])
+      for (const id of successes) pendingCreatedSessionIds.delete(id)
+      excludeDeletedProjectSessions(successes)
     } else {
-      for (const request of projectHistoryRequests.values()) request.excludedSessionIds.delete(id)
+      for (const request of projectHistoryRequests.values()) {
+        for (const id of successes) request.excludedSessionIds.delete(id)
+      }
     }
     invalidateRecentProjectsCache()
+    const changed = new Set(successes)
+    const openIds = getOpenSessionIds()
+    const restoredIdsByRoot = new Map<string, string[]>()
+    for (const session of restoredSessions) {
+      const root = session.projectRoot || session.workDir || session.projectPath
+      restoredIdsByRoot.set(root, [...restoredIdsByRoot.get(root) ?? [], session.id])
+    }
     set((state) => ({
-      sessions: restored
-        ? mergeSessionList([restored, ...state.sessions.filter((session) => session.id !== id)], state.sessions)
-        : state.sessions.map((session) => session.id === id ? { ...session, archived } : session),
-      recentSessionIds: archived ? removeIdsFromSet(state.recentSessionIds, [id]) : state.recentSessionIds,
-      historicalSessionIds: getOpenSessionIds().has(id)
-        ? new Set([...state.historicalSessionIds, id])
+      sessions: archived
+        ? state.sessions.map((session) => changed.has(session.id) ? { ...session, archived } : session)
+        : mergeSessionList([...restoredSessions, ...state.sessions.filter((session) => !changed.has(session.id))], state.sessions),
+      recentSessionIds: archived ? removeIdsFromSet(state.recentSessionIds, successes) : state.recentSessionIds,
+      historicalSessionIds: successes.some((id) => openIds.has(id))
+        ? new Set([...state.historicalSessionIds, ...successes.filter((id) => openIds.has(id))])
         : state.historicalSessionIds,
-      selectedSessionIds: removeIdsFromSet(state.selectedSessionIds, [id]),
+      selectedSessionIds: removeIdsFromSet(state.selectedSessionIds, successes),
       projectHistory: archived
-        ? removeProjectHistorySessionIds(state.projectHistory, [id])
+        ? removeProjectHistorySessionIds(state.projectHistory, successes)
         : Object.fromEntries(Object.entries(state.projectHistory).map(([root, history]) => [root, {
           ...history,
-          sessionIds: root === restoredRoot ? new Set([...history.sessionIds, id]) : history.sessionIds,
-          excludedSessionIds: removeIdsFromSet(history.excludedSessionIds ?? new Set(), [id]),
+          sessionIds: restoredIdsByRoot.has(root)
+            ? new Set([...history.sessionIds, ...restoredIdsByRoot.get(root)!])
+            : history.sessionIds,
+          excludedSessionIds: removeIdsFromSet(history.excludedSessionIds ?? new Set(), successes),
         }])),
       // A response begun before this mutation may still contain the old flag.
       sessionListRequestId: ++fetchSessionsRequestId,
       isLoading: false,
     }))
     await get().fetchSessions()
+    return { successes, failures }
   },
 
   renameSession: async (id: string, title: string) => {

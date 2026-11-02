@@ -422,6 +422,7 @@ describe('Sidebar', () => {
   const deleteSession = vi.fn()
   const deleteSessions = vi.fn()
   const setSessionArchived = vi.fn()
+  const setSessionsArchived = vi.fn()
   const addToast = vi.fn()
 
   beforeEach(() => {
@@ -432,6 +433,8 @@ describe('Sidebar', () => {
     deleteSession.mockReset()
     deleteSessions.mockReset()
     setSessionArchived.mockReset()
+    setSessionsArchived.mockReset()
+    setSessionsArchived.mockResolvedValue({ successes: [], failures: [] })
     addToast.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockReset()
@@ -499,6 +502,7 @@ describe('Sidebar', () => {
       deleteSession,
       deleteSessions,
       setSessionArchived,
+      setSessionsArchived,
     })
     useChatStore.setState({
       connectToSession,
@@ -526,29 +530,118 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
   })
 
-  it('hides archived rows but keeps an archive-only project discoverable after reload', async () => {
-    useSessionStore.setState({
-      sessions: [{ ...makeSession('archived-1', 'Archived conversation', '/workspace/alpha', '2026-01-01'), archived: true }],
-      projectArchivedTotals: { '/workspace/alpha': 1 },
-    })
+  it('keeps an archive-only project as a quiet row and browses its archive in place of the list', async () => {
+    const archived = { ...makeSession('archived-1', 'Archived conversation', '/workspace/alpha', '2026-01-01'), archived: true }
+    useSessionStore.setState({ sessions: [archived], projectArchivedTotals: { '/workspace/alpha': 1 } })
+    sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [archived], nextCursor: null })
     render(<Sidebar />)
-    expect(screen.queryByText('Archived conversation')).not.toBeInTheDocument()
+
+    const group = screen.getByTestId('sidebar-project-group-workspace-alpha')
+    expect(within(group).queryByText('Archived conversation')).not.toBeInTheDocument()
+    expect(within(group).getByText('sidebar.projectAllArchived')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-project-count-workspace-alpha')).not.toBeInTheDocument()
+    expect(within(group).queryByRole('button', { name: /sidebar\.archivedSessions/ })).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('button', { name: 'Project actions for alpha' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archivedSessions' }))
-    await waitFor(() => expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
+
+    const view = screen.getByTestId('sidebar-archive-view')
+    expect(await within(view).findByText('Archived conversation')).toBeInTheDocument()
+    expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
       expect.objectContaining({ projectRoot: '/workspace/alpha', archived: true }), expect.anything(),
-    ))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-projects-header')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-project-group-workspace-alpha')).not.toBeInTheDocument()
+
+    fireEvent.click(within(view).getByRole('button', { name: 'sidebar.archiveBack' }))
+    expect(screen.queryByTestId('sidebar-archive-view')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-projects-header')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-project-group-workspace-alpha')).toBeInTheDocument()
   })
 
-  it('archives through the session menu and leaves a rejected session usable', async () => {
+  it('offers no group selection for an archive-only project in batch mode', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/beta', '2026-01-02')],
+      projectArchivedTotals: { '/workspace/alpha': 2 },
+      isBatchMode: true,
+    })
+    render(<Sidebar />)
+
+    expect(screen.getByRole('button', { name: 'Select beta' })).toHaveTextContent('Select all')
+    expect(screen.queryByRole('button', { name: 'Select alpha' })).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('sidebar-project-group-workspace-alpha')).getByText('sidebar.projectAllArchived')).toBeInTheDocument()
+  })
+
+  it('does not put an archive entry inside a project that still has sessions', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/alpha', '2026-01-02')],
+      projectSessionTotals: { '/workspace/alpha': 1 },
+      projectArchivedTotals: { '/workspace/alpha': 5 },
+    })
+    render(<Sidebar />)
+
+    const group = screen.getByTestId('sidebar-project-group-workspace-alpha')
+    expect(within(group).getByText('Live session')).toBeInTheDocument()
+    expect(within(group).queryByText(/sidebar\.archivedSessions/)).not.toBeInTheDocument()
+    expect(within(group).queryByText('sidebar.projectAllArchived')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-project-count-workspace-alpha')).toHaveTextContent('1')
+  })
+
+  it('opens every archived session from the projects menu and leaves batch mode first', async () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/alpha', '2026-01-02')],
+      isBatchMode: true,
+    })
+    sessionsApiMock.list.mockResolvedValue({ sessions: [], total: 0 })
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project menu' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archivedSessions' }))
+
+    const view = screen.getByTestId('sidebar-archive-view')
+    expect(within(view).getByText('sidebar.archivedSessions')).toBeInTheDocument()
+    await waitFor(() => expect(sessionsApiMock.list).toHaveBeenCalledWith(
+      expect.objectContaining({ archived: true, offset: 0 }), expect.anything(),
+    ))
+    expect(useSessionStore.getState().isBatchMode).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Cancel batch mode' })).not.toBeInTheDocument()
+  })
+
+  it('archives from the session menu and offers one undo', async () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-target', 'Archive target', '/workspace/alpha', '2026-01-01')] })
+    setSessionArchived.mockResolvedValueOnce(undefined)
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Archive target'))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Rename', 'sidebar.archiveSession', 'Delete',
+    ])
+    expect(within(menu).getByRole('separator')).toBeInTheDocument()
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'sidebar.archiveSession' }))
+
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'success',
+      message: 'sidebar.archivedToast',
+      action: expect.objectContaining({ label: 'common.undo' }),
+    })))
+    expect(setSessionArchived).toHaveBeenCalledWith('archive-target', true)
+    expect(setSessionsArchived).not.toHaveBeenCalled()
+
+    await act(async () => addToast.mock.calls[0]![0].action.onClick())
+    expect(setSessionsArchived).toHaveBeenCalledWith(['archive-target'], false)
+  })
+
+  it('leaves a rejected session usable and without an undo', async () => {
     useSessionStore.setState({ sessions: [makeSession('archive-target', 'Archive target', '/workspace/alpha', '2026-01-01')] })
     setSessionArchived.mockRejectedValueOnce(new Error('fixture write failure'))
     render(<Sidebar />)
     fireEvent.contextMenu(screen.getByText('Archive target'))
-    fireEvent.click(screen.getByRole('button', { name: 'sidebar.archiveSession' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archiveSession' }))
     await waitFor(() => expect(setSessionArchived).toHaveBeenCalledWith('archive-target', true))
-    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' })))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'sidebar.archiveFailed' }))
+    expect(addToast).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Archive target')).toBeInTheDocument()
     expect(disconnectSession).not.toHaveBeenCalled()
     expect(deleteSession).not.toHaveBeenCalled()
@@ -559,7 +652,37 @@ describe('Sidebar', () => {
     useChatStore.setState({ sessions: { 'archive-waiting': makeChatSessionState(openRequest) } })
     render(<Sidebar />)
     fireEvent.contextMenu(screen.getByText('Waiting session'))
-    expect(screen.getByRole('button', { name: 'sidebar.archiveSession' })).toBeDisabled()
+    const archive = screen.getByRole('menuitem', { name: 'sidebar.archiveSession' })
+    expect(archive).toBeDisabled()
+    expect(archive).toHaveAttribute('title', 'sidebar.archiveBusy')
+  })
+
+  it('archives the batch selection, skips busy sessions, and undoes the archived ones together', async () => {
+    useSessionStore.setState({
+      sessions: [
+        makeSession('batch-1', 'First batch session', '/workspace/alpha', '2026-01-03'),
+        makeSession('batch-2', 'Second batch session', '/workspace/alpha', '2026-01-02'),
+        makeSession('batch-waiting', 'Waiting batch session', '/workspace/alpha', '2026-01-01'),
+      ],
+    })
+    useChatStore.setState({ sessions: { 'batch-waiting': makeChatSessionState(openRequest) } })
+    setSessionsArchived.mockResolvedValueOnce({ successes: ['batch-1', 'batch-2'], failures: [] })
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Batch manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+    expect(screen.getByText('3 selected')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.batchArchiveSelected' }))
+
+    await waitFor(() => expect(setSessionsArchived).toHaveBeenCalledWith(['batch-1', 'batch-2'], true))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'sidebar.batchArchiveFailed' }))
+    const success = addToast.mock.calls.find(([toast]) => toast.type === 'success')![0]
+    expect(success).toMatchObject({ message: 'sidebar.batchArchiveSucceeded', action: { label: 'common.undo' } })
+    // A refused session stays selected, so batch mode stays open for it.
+    expect(useSessionStore.getState().isBatchMode).toBe(true)
+
+    await act(async () => success.action.onClick())
+    expect(setSessionsArchived).toHaveBeenLastCalledWith(['batch-1', 'batch-2'], false)
   })
 
   it('opens an editable draft without allocating a session from the sidebar', async () => {
@@ -2271,7 +2394,7 @@ describe('Sidebar', () => {
 
     fireEvent.contextMenu(screen.getByRole('button', { name: /Open Session/ }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
 
     expect(deleteSession).not.toHaveBeenCalled()
     const dialog = screen.getByRole('dialog')

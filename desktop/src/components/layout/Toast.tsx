@@ -29,6 +29,18 @@ function ToastItem({ toast }: { toast: ToastType }) {
     >
       <Icon size={16} strokeWidth={1.75} className={`mt-0.5 shrink-0 ${color}`} aria-hidden="true" />
       <span className="min-w-0 flex-1 leading-5">{toast.message}</span>
+      {toast.action && (
+        <button
+          type="button"
+          onClick={() => {
+            removeToast(toast.id)
+            toast.action!.onClick()
+          }}
+          className="h-6 shrink-0 rounded-[var(--radius-sm)] px-1.5 text-[13px] font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        >
+          {toast.action.label}
+        </button>
+      )}
       <IconButton
         icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
         label={t('common.dismissNotification')}
