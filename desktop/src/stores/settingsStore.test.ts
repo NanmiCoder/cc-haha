@@ -1324,6 +1324,66 @@ describe('settingsStore workflow keyword persistence', () => {
   })
 })
 
+describe('settingsStore next-prompt suggestions', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  // Each suggestion costs an extra model request, so only an explicit `true`
+  // turns it on: an old settings file, or a malformed value, stays off.
+  it.each([
+    [{}, false],
+    [{ nextPromptSuggestionsEnabled: 'true' }, false],
+    [{ nextPromptSuggestionsEnabled: false }, false],
+    [{ nextPromptSuggestionsEnabled: true }, true],
+  ])('loads %j as enabled=%s', async (userSettings, expected) => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue(userSettings),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            token: null,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+            fixedPort: null,
+            disconnectGraceSeconds: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(expected)
+  })
+})
+
 describe('settingsStore Agent Teams persistence', () => {
   const updateUser = vi.fn()
   const getUser = vi.fn()

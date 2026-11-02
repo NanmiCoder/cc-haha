@@ -1,6 +1,7 @@
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import type { AppState } from '../../state/AppState.js'
 import type { Message } from '../../types/message.js'
+import type { QueuedCommand } from '../../types/textInputTypes.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { count } from '../../utils/array.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
@@ -91,6 +92,20 @@ export function shouldEnablePromptSuggestion(): boolean {
       'setting' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   })
   return enabled
+}
+
+/**
+ * True when a queued command came from the user typing a prompt, as opposed
+ * to task notifications, teammate/channel deliveries, scheduled tasks, host
+ * notices or other system-injected turns.
+ */
+export function isUserStartedCommand(
+  command: Pick<QueuedCommand, 'mode' | 'isMeta' | 'isSynthetic' | 'origin'>,
+): boolean {
+  if (command.mode !== 'prompt' || command.isMeta || command.isSynthetic) {
+    return false
+  }
+  return command.origin === undefined || command.origin.kind === 'human'
 }
 
 export function abortPromptSuggestion(): void {
@@ -282,7 +297,9 @@ NEVER SUGGEST:
 
 Stay silent if the next step isn't obvious from what the user said.
 
-Format: 2-12 words, match the user's style. Or nothing.
+Stay silent if a suggestion could be unsafe or inappropriate — including any sensitive topic (security incidents, credentials, harm, private data). Even when the user is doing legitimate security or cybersecurity work, do not predict potentially unsafe actions.
+
+Format: 2-12 words in the language the user writes in, matching their style. Or nothing.
 
 Reply with ONLY the suggestion, no quotes or explanation.`
 
@@ -338,10 +355,10 @@ export async function generateSuggestion(
       : null
 
   for (const msg of result.messages) {
-    if (msg.type !== 'assistant') continue
+    if (msg.type !== 'assistant' || msg.isApiErrorMessage) continue
     const textBlock = msg.message.content.find(b => b.type === 'text')
     if (textBlock?.type === 'text') {
-      const suggestion = textBlock.text.trim()
+      const suggestion = cleanSuggestionCandidate(textBlock.text)
       if (suggestion) {
         return { suggestion, generationRequestId }
       }
@@ -349,6 +366,71 @@ export async function generateSuggestion(
   }
 
   return { suggestion: null, generationRequestId }
+}
+
+/**
+ * Strip wrappers and labels models add around the bare suggestion, e.g.
+ * `<suggestion>run the tests</suggestion>` or `建议：运行测试`.
+ */
+export function cleanSuggestionCandidate(text: string): string {
+  return text
+    .trim()
+    .replace(
+      /^<(suggestion|response|output|answer|result)>([\s\S]*)<\/\1>$/i,
+      (whole, tag: string, inner: string) =>
+        inner.toLowerCase().includes(`</${tag.toLowerCase()}>`) ? whole : inner,
+    )
+    .replace(
+      /^\s*(suggested\s+(response|reply|input|prompt)|suggestion|response|reply|answer|output|result|提案|回答|返信|応答|出力|結果|建议|回复|答案|输出|结果|제안|답변|응답|출력|결과)\s*[:：]\s*/i,
+      '',
+    )
+    .trim()
+}
+
+const HAN_CHAR = /\p{Script=Han}/u
+const PHONETIC_CHAR =
+  /[\p{Script=Hiragana}\p{Script=Katakana}ーｰ\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u
+const HANGUL_CHAR = /\p{Script=Hangul}/u
+const OTHER_WORD_CHAR = /[\p{L}\p{N}]/u
+
+function countScripts(text: string): {
+  han: number
+  phonetic: number
+  hangul: number
+  other: number
+} {
+  const counts = { han: 0, phonetic: 0, hangul: 0, other: 0 }
+  for (const char of text) {
+    if (HAN_CHAR.test(char)) counts.han++
+    else if (PHONETIC_CHAR.test(char)) counts.phonetic++
+    else if (HANGUL_CHAR.test(char)) counts.hangul++
+    else if (OTHER_WORD_CHAR.test(char)) counts.other++
+  }
+  return counts
+}
+
+function countCjkChars(text: string): number {
+  const { han, phonetic, hangul } = countScripts(text)
+  return han + phonetic + hangul
+}
+
+/**
+ * Whitespace word count that also works for scripts written without spaces:
+ * a Han character counts as half a word and kana/Thai-like characters as a
+ * quarter, so "运行测试" counts as 2 words instead of 1.
+ */
+export function countSuggestionWords(text: string): number {
+  const trimmed = text.trim()
+  if (trimmed === '') return 0
+  let words = 0
+  for (const token of trimmed.split(/\s+/)) {
+    const { han, phonetic, hangul, other } = countScripts(token)
+    words +=
+      han === 0 && phonetic === 0
+        ? 1
+        : (other + hangul > 0 ? 1 : 0) + han / 2 + phonetic / 4
+  }
+  return Math.ceil(words)
 }
 
 export function shouldFilterSuggestion(
@@ -362,10 +444,15 @@ export function shouldFilterSuggestion(
   }
 
   const lower = suggestion.toLowerCase()
-  const wordCount = suggestion.trim().split(/\s+/).length
+  const wordCount = countSuggestionWords(suggestion)
 
   const filters: Array<[string, () => boolean]> = [
-    ['done', () => lower === 'done'],
+    [
+      'done',
+      () =>
+        lower === 'done' ||
+        /^\P{L}*(完了(しました)?|完成了?|완료됨?)\P{L}*$/u.test(suggestion),
+    ],
     [
       'meta_text',
       () =>
@@ -376,12 +463,21 @@ export function shouldFilterSuggestion(
         // Model spells out the prompt's "stay silent" instruction
         /\bsilence is\b|\bstay(s|ing)? silent\b/.test(lower) ||
         // Model outputs bare "silence" wrapped in punctuation/whitespace
-        /^\W*silence\W*$/.test(lower),
+        /^\W*silence\W*$/.test(lower) ||
+        /^\P{L}*(沈黙|沉默|静默|침묵|提案(なし|はありません)|特に(なし|ありません)|[无没沒]有?建[议議]|(제안|해당)\s*없음)\P{L}*$/u.test(
+          suggestion,
+        ) ||
+        // Phrasings around the same meta reply ("保持沉默", "暂无建议",
+        // "没有明显的下一步") that a user would never type as a message.
+        /沈黙|沉默|静默|침묵|(暂无|暫無|没有|沒有|无|無|不需要|不用)(明显的|明顯的|其他|任何|更多)?(建[议議]|下一步)/u.test(
+          suggestion,
+        ),
     ],
     [
       'meta_wrapped',
       // Model wraps meta-reasoning in parens/brackets: (silence — ...), [no suggestion]
-      () => /^\(.*\)$|^\[.*\]$/.test(suggestion),
+      () =>
+        /^(\(.*\)|\[.*\]|（.*）|［.*］|【.*】|〔.*〕)$/.test(suggestion),
     ],
     [
       'error_message',
@@ -399,6 +495,9 @@ export function shouldFilterSuggestion(
         if (wordCount >= 2) return false
         // Allow slash commands — these are valid user commands
         if (suggestion.startsWith('/')) return false
+        // CJK text needs at least two characters ("提交" is fine, "好" is not)
+        const cjkChars = countCjkChars(suggestion)
+        if (cjkChars > 0) return cjkChars < 2
         // Allow common single-word inputs that are valid user commands
         const ALLOWED_SINGLE_WORDS = new Set([
           // Affirmatives
@@ -427,19 +526,28 @@ export function shouldFilterSuggestion(
     ],
     ['too_many_words', () => wordCount > 12],
     ['too_long', () => suggestion.length >= 100],
-    ['multiple_sentences', () => /[.!?]\s+[A-Z]/.test(suggestion)],
+    [
+      'multiple_sentences',
+      () => /[.!?]\s+[A-Z]|[。！？]\s*[\p{L}\p{N}]/u.test(suggestion),
+    ],
     ['has_formatting', () => /[\n*]|\*\*/.test(suggestion)],
     [
       'evaluative',
       () =>
         /thanks|thank you|looks good|sounds good|that works|that worked|that's all|nice|great|perfect|makes sense|awesome|excellent/.test(
           lower,
+        ) ||
+        /^\P{L}*(ありがとう(ございます|ございました)?|助かりました|[谢謝][谢謝][你您]?|感谢[你您]?|感謝します|감사합니다|고마워요?)(\P{L}|的|$)/u.test(
+          suggestion,
+        ) ||
+        /(良さそう|よさそう|いいですね|看起来不错|太好了|完璧|完美|좋네요)(です|ですね|だね)?\P{L}*$/u.test(
+          suggestion,
         ),
     ],
     [
       'claude_voice',
       () =>
-        /^(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|that's|this is|this will|you can|you should|you could|sure,|of course|certainly)/i.test(
+        /^(let me|i'll|i've|i'm|i can|i would|i think|i notice|here's|here is|here are|that's|this is|this will|you can|you should|you could|sure,|of course|certainly|让我(?!们)|我来|我会|我将)/i.test(
           suggestion,
         ),
     ],

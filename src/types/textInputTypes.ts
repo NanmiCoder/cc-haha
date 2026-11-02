@@ -334,6 +334,13 @@ export type QueuedCommand = {
    */
   isMeta?: boolean
   /**
+   * System-generated input the user did not type (teammate mail, host
+   * notices sent as SDK user messages with `isSynthetic`). Unlike `isMeta`
+   * and `origin`, it is not stamped onto the transcript; it only keeps the
+   * turn from counting as user-started (e.g. for next-prompt suggestions).
+   */
+  isSynthetic?: boolean
+  /**
    * Provenance of this command. Stamped onto the resulting UserMessage so the
    * transcript records origin structurally (not just via XML tags in content).
    * undefined = human (keyboard).

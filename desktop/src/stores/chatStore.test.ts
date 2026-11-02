@@ -397,6 +397,67 @@ describe('chatStore tool settlement', () => {
   })
 })
 
+describe('chatStore prompt suggestions', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    useSettingsStore.setState({ locale: 'en' })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }) },
+    })
+  })
+
+  const suggestionOf = () => useChatStore.getState().sessions[TEST_SESSION_ID]?.promptSuggestion ?? null
+
+  it('keeps the suggestion for an idle composer until the user sends', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'run the tests' })
+    expect(suggestionOf()).toBe('run the tests')
+
+    // Idle housekeeping does not retire it.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'idle' })
+    expect(suggestionOf()).toBe('run the tests')
+
+    store.sendMessage(TEST_SESSION_ID, 'something else')
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('drops the suggestion when the next turn starts without a send from this composer', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'commit this' })
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    expect(suggestionOf()).toBeNull()
+
+    // A late prediction for a turn that is already running is ignored.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'stale' })
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('drops the suggestion as soon as another client sends into the session', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'run the tests' })
+    // Only the sending socket gets `status: thinking`; this window sees the replay.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'user_message_replay', content: 'from my phone' })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.chatState).toBe('idle')
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('clears on dismiss, stop, and clear', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.dismissPromptSuggestion(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.stopGeneration(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.clearMessages(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+  })
+})
+
 // #1108: a background (async) agent's tool activity bubbles into the main
 // message stream carrying parentToolUseId, but MessageList folds those into
 // the agent card instead of rendering them inline. Merging streamed blocks

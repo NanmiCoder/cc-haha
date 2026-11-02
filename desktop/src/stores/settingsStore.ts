@@ -68,6 +68,7 @@ type SettingsStore = {
   effortLevel: EffortLevel
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
+  nextPromptSuggestionsEnabled: boolean
   leanModeEnabled: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
@@ -117,6 +118,7 @@ type SettingsStore = {
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
+  setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
   setLeanModeEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
@@ -224,6 +226,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   effortLevel: 'low',
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
+  nextPromptSuggestionsEnabled: false,
   leanModeEnabled: false,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
@@ -315,6 +318,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
+        // Opt-in: every suggestion is an extra model request.
+        nextPromptSuggestionsEnabled: userSettings.nextPromptSuggestionsEnabled === true,
         // Forward read migration: older settings leave the experiment disabled.
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
@@ -405,6 +410,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ workflowKeywordTriggerEnabled: enabled })
     } catch (error) {
       set({ workflowKeywordTriggerEnabled: prev })
+      throw error
+    }
+  },
+
+  setNextPromptSuggestionsEnabled: async (enabled) => {
+    const prev = get().nextPromptSuggestionsEnabled
+    set({ nextPromptSuggestionsEnabled: enabled })
+    try {
+      await settingsApi.updateUser({ nextPromptSuggestionsEnabled: enabled })
+    } catch (error) {
+      set({ nextPromptSuggestionsEnabled: prev })
       throw error
     }
   },

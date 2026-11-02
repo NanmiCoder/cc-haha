@@ -487,6 +487,7 @@ export function startServer(port = PORT, host = HOST) {
               serverPort,
               serverHost: localConnectHost,
               mediaRefs: url.searchParams.get('media') === 'ref',
+              promptSuggestions: !petAccessAuthorized && url.searchParams.get('suggestions') === '1',
             },
           })
           if (upgraded) return undefined

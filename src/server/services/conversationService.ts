@@ -183,6 +183,12 @@ type SendMessageOptions = {
   canSend?: () => boolean
   messageUuid?: string
   onCommitted?: () => void
+  /**
+   * Server-generated input the user did not type (team runtime notices). The
+   * CLI then does not treat the turn as user-started, so it skips per-turn
+   * extras such as next-prompt suggestions.
+   */
+  synthetic?: boolean
 }
 
 type HandleSdkPayloadOptions = {
@@ -319,6 +325,8 @@ type SessionProcess = {
   pendingPermissionRequests: Map<string, TrackedPermissionRequest>
   autoResolvedRequestIds?: Set<string>
   pendingControlRequests: Map<string, (reason: Error) => void>
+  /** Last value sent with `set_prompt_suggestions`; the CLI starts disabled. */
+  promptSuggestionsEnabled?: boolean
 }
 
 export type PendingPermissionRequest = {
@@ -404,6 +412,8 @@ export class ConversationService {
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
+  private promptSuggestionClientSessions = new Set<string>()
+  private promptSuggestionsSettingEnabled = false
   private readonly processDeps: ConversationServiceProcessDeps
 
   constructor(processDeps: ConversationServiceProcessDeps = {}) {
@@ -677,6 +687,8 @@ export class ConversationService {
       )
     }
     if (this.sessions.has(sessionId)) return
+    // Re-read so an edit made outside the settings API applies to new CLIs.
+    this.promptSuggestionsSettingEnabled = await new SettingsService().getNextPromptSuggestionsEnabled()
 
     const side = getSideChat(sessionId)
     if (isSideChatId(sessionId) && (!side || side.closed || side.started)) {
@@ -920,6 +932,7 @@ export class ConversationService {
       pendingControlRequests: new Map(),
     }
     this.sessions.set(sessionId, session)
+    this.syncPromptSuggestions(sessionId)
 
     session.outputDrain = Promise.all([
       this.readProcessOutputStream(sessionId, proc.stdout, 'stdout'),
@@ -1088,6 +1101,7 @@ export class ConversationService {
       },
       parent_tool_use_id: null,
       session_id: '',
+      ...(options?.synthetic ? { isSynthetic: true } : {}),
     })
     if (sent) options?.onCommitted?.()
     return sent
@@ -1353,6 +1367,40 @@ export class ConversationService {
         subtype: 'set_max_thinking_tokens',
         max_thinking_tokens: maxThinkingTokens,
       },
+    })
+  }
+
+  /**
+   * Next-prompt suggestions cost one extra model request per turn, so the CLI
+   * only generates them while the user setting is on and a client that can
+   * show them (the desktop composer) is watching the session. IM adapters,
+   * the phone app and team workers never trigger the extra request.
+   */
+  setPromptSuggestionClientPresent(sessionId: string, present: boolean): void {
+    if (present) this.promptSuggestionClientSessions.add(sessionId)
+    else this.promptSuggestionClientSessions.delete(sessionId)
+    this.syncPromptSuggestions(sessionId)
+  }
+
+  async refreshPromptSuggestionsSetting(): Promise<void> {
+    this.promptSuggestionsSettingEnabled = await new SettingsService().getNextPromptSuggestionsEnabled()
+    for (const sessionId of this.sessions.keys()) {
+      this.syncPromptSuggestions(sessionId)
+    }
+  }
+
+  private syncPromptSuggestions(sessionId: string): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    const enabled = this.promptSuggestionsSettingEnabled &&
+      !session.teamWorker &&
+      this.promptSuggestionClientSessions.has(sessionId)
+    if ((session.promptSuggestionsEnabled ?? false) === enabled) return
+    session.promptSuggestionsEnabled = enabled
+    this.sendSdkMessage(sessionId, {
+      type: 'control_request',
+      request_id: crypto.randomUUID(),
+      request: { subtype: 'set_prompt_suggestions', enabled },
     })
   }
 
