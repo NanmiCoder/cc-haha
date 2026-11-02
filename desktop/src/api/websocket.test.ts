@@ -159,7 +159,7 @@ describe('wsManager reconnect buffering', () => {
     clientMocks.authToken = 'h5 token/with?chars'
 
     expect(buildSessionWebSocketUrl('session-reconnect')).toBe(
-      'ws://10.0.0.2:3456/ws/session-reconnect?token=h5+token%2Fwith%3Fchars',
+      'ws://10.0.0.2:3456/ws/session-reconnect?token=h5+token%2Fwith%3Fchars&suggestions=1',
     )
   })
 
@@ -167,7 +167,7 @@ describe('wsManager reconnect buffering', () => {
     clientMocks.baseUrl = 'https://remote.example.com'
 
     expect(buildSessionWebSocketUrl('secure-session')).toBe(
-      'wss://remote.example.com/ws/secure-session',
+      'wss://remote.example.com/ws/secure-session?suggestions=1',
     )
   })
 
@@ -175,7 +175,21 @@ describe('wsManager reconnect buffering', () => {
     clientMocks.baseUrl = 'https://public.example.com/app'
 
     expect(buildSessionWebSocketUrl('s1')).toBe(
-      'wss://public.example.com/app/ws/s1',
+      'wss://public.example.com/app/ws/s1?suggestions=1',
     )
+  })
+
+  it('opts the desktop composer in to prompt suggestions but not touch H5', () => {
+    clientMocks.baseUrl = 'http://127.0.0.1:3456'
+    clientMocks.authToken = null
+
+    expect(new URL(buildSessionWebSocketUrl('desk')).searchParams.get('suggestions')).toBe('1')
+
+    document.documentElement.setAttribute('data-touch-h5', '')
+    try {
+      expect(new URL(buildSessionWebSocketUrl('touch')).searchParams.has('suggestions')).toBe(false)
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
   })
 })

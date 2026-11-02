@@ -76,6 +76,16 @@ describe('validateSettingsFileContent', () => {
     expect(validateSettingsFileContent(content)).toEqual({ isValid: true })
   })
 
+  it('accepts the desktop next-prompt suggestion toggle in both states', () => {
+    // The desktop writes this key into ~/.claude/settings.json; an unknown key
+    // would switch off the settings edit guard the same way.
+    for (const enabled of [true, false]) {
+      expect(
+        validateSettingsFileContent(JSON.stringify({ nextPromptSuggestionsEnabled: enabled })),
+      ).toEqual({ isValid: true })
+    }
+  })
+
   it('still rejects genuinely unknown keys', () => {
     const result = validateSettingsFileContent(
       JSON.stringify({ notARealSetting: true }),

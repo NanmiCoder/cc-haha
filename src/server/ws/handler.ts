@@ -794,6 +794,8 @@ export type WebSocketData = {
   serverHost: string
   /** The client fetches tool-result images by reference (`?media=ref`). */
   mediaRefs?: boolean
+  /** The client shows next-prompt suggestions in its composer (`?suggestions=1`). */
+  promptSuggestions?: boolean
 }
 
 // Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can
@@ -4783,6 +4785,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       return []
     }
 
+    case 'prompt_suggestion': {
+      const suggestion = typeof cliMsg.suggestion === 'string' ? cliMsg.suggestion.trim() : ''
+      return suggestion ? [{ type: 'prompt_suggestion', suggestion }] : []
+    }
+
     default:
       // 未知类型 — 调试输出但不转发
       console.log(`[WS] Unknown CLI message type: ${cliMsg.type}`, JSON.stringify(cliMsg).substring(0, 200))
@@ -5242,6 +5249,7 @@ function addActiveClient(
     activeSessions.set(sessionId, clients)
   }
   clients.add(ws)
+  syncPromptSuggestionClient(sessionId)
 }
 
 function removeActiveClient(
@@ -5254,7 +5262,14 @@ function removeActiveClient(
   if (clients.size === 0) {
     activeSessions.delete(sessionId)
   }
+  syncPromptSuggestionClient(sessionId)
   return true
+}
+
+function syncPromptSuggestionClient(sessionId: string): void {
+  const clients = activeSessions.get(sessionId)
+  const present = clients ? [...clients].some((client) => client.data.promptSuggestions === true) : false
+  conversationService.setPromptSuggestionClientPresent(sessionId, present)
 }
 
 function hasActiveClients(sessionId: string): boolean {
@@ -6046,6 +6061,7 @@ export function closeSessionConnection(sessionId: string, reason = 'session clos
   if (!clients || clients.size === 0) return false
 
   activeSessions.delete(sessionId)
+  syncPromptSuggestionClient(sessionId)
   for (const ws of clients) {
     if (activePetClient === ws) activePetClient = null
     clientOutputCallbacks.delete(ws)

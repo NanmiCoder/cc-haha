@@ -125,6 +125,11 @@ export class SettingsService {
     return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
   }
 
+  /** Desktop composer next-prompt suggestions; opt-in because each turn costs an extra request. */
+  async getNextPromptSuggestionsEnabled(): Promise<boolean> {
+    return (await this.getUserSettings()).nextPromptSuggestionsEnabled === true
+  }
+
   /** Read-time upgrade for older settings that only stored the team env flag.
    * Keep the original file intact until the user explicitly saves a choice.
    */

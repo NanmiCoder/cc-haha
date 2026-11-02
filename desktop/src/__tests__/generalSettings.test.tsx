@@ -1477,6 +1477,48 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Enable Auto-dream')).toBeChecked()
   })
 
+  it('keeps next-message suggestions off by default and explains the token cost before enabling them', async () => {
+    useSettingsStore.setState({ nextPromptSuggestionsEnabled: false })
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      const agentSection = screen.getByRole('heading', { name: 'Agent preferences' }).closest('section')!
+      const toggle = within(agentSection).getByRole('switch', { name: 'Next-message suggestions' })
+      expect(toggle).not.toBeChecked()
+
+      // Cancel leaves it off and saves nothing.
+      fireEvent.click(toggle)
+      let dialog = screen.getByRole('dialog', { name: 'Turn on next-message suggestions?' })
+      expect(within(dialog).getByText(/uses additional tokens on every turn/i)).toBeInTheDocument()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByRole('dialog', { name: 'Turn on next-message suggestions?' })).not.toBeInTheDocument()
+      expect(updateUser).not.toHaveBeenCalled()
+      expect(toggle).not.toBeChecked()
+
+      fireEvent.click(toggle)
+      dialog = screen.getByRole('dialog', { name: 'Turn on next-message suggestions?' })
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }))
+      })
+      expect(updateUser).toHaveBeenCalledWith({ nextPromptSuggestionsEnabled: true })
+      expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(true)
+      expect(within(agentSection).getByRole('switch', { name: 'Next-message suggestions' })).toBeChecked()
+
+      // Turning it off needs no confirmation.
+      await act(async () => {
+        fireEvent.click(within(agentSection).getByRole('switch', { name: 'Next-message suggestions' }))
+      })
+      expect(screen.queryByRole('dialog', { name: 'Turn on next-message suggestions?' })).not.toBeInTheDocument()
+      expect(updateUser).toHaveBeenLastCalledWith({ nextPromptSuggestionsEnabled: false })
+      expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(false)
+    } finally {
+      updateUser.mockRestore()
+      useSettingsStore.setState({ nextPromptSuggestionsEnabled: false })
+    }
+  })
+
   it('lets the user disable Auto-dream without a confirmation dialog', async () => {
     useSettingsStore.setState({ autoDreamEnabled: true })
     render(<Settings />)

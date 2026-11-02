@@ -1862,6 +1862,19 @@ button, input, textarea, select, a, [role="button"] {
   pointer-events: none;
 }
 
+/* Predicted next prompt (MentionComposer ghost widget). Placeholder color, and
+   click-through so a click still lands the caret in the empty line. */
+.composer-prompt-suggestion {
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  user-select: none;
+}
+
+.composer-prompt-suggestion-key {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 /* Inline @-mention pill (an atom node in the document). */
 /* A chip, not a link: the sunken chip ground and the chip corner, so a mention
    reads as an inserted token without borrowing the brand color reserved for

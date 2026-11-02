@@ -93,6 +93,8 @@ export function GeneralSettings() {
     setThinkingEnabled,
     workflowKeywordTriggerEnabled,
     setWorkflowKeywordTriggerEnabled,
+    nextPromptSuggestionsEnabled,
+    setNextPromptSuggestionsEnabled,
     agentTeamsEnabled,
     setAgentTeamsEnabled,
     maxConcurrentSubagents,
@@ -157,6 +159,8 @@ export function GeneralSettings() {
   const [notificationPermission, setNotificationPermission] = useState<DesktopNotificationPermission>('default')
   const [notificationActionRunning, setNotificationActionRunning] = useState(false)
   const [autoDreamConfirmOpen, setAutoDreamConfirmOpen] = useState(false)
+  const [promptSuggestionsConfirmOpen, setPromptSuggestionsConfirmOpen] = useState(false)
+  const [promptSuggestionsSaving, setPromptSuggestionsSaving] = useState(false)
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
   const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
@@ -444,6 +448,29 @@ export function GeneralSettings() {
       return
     }
     void setAutoDreamEnabled(false)
+  }
+
+  const handlePromptSuggestionsToggle = (enabled: boolean) => {
+    // Each suggestion is an extra model request: explain the cost before saving.
+    if (enabled) {
+      setPromptSuggestionsConfirmOpen(true)
+      return
+    }
+    void setNextPromptSuggestionsEnabled(false).catch(() => {
+      addToast({ type: 'error', message: t('settings.general.promptSuggestionsSaveFailed') })
+    })
+  }
+
+  const confirmPromptSuggestionsEnable = async () => {
+    setPromptSuggestionsSaving(true)
+    try {
+      await setNextPromptSuggestionsEnabled(true)
+      setPromptSuggestionsConfirmOpen(false)
+    } catch {
+      addToast({ type: 'error', message: t('settings.general.promptSuggestionsSaveFailed') })
+    } finally {
+      setPromptSuggestionsSaving(false)
+    }
   }
 
   const confirmAutoDreamEnable = async () => {
@@ -981,6 +1008,16 @@ export function GeneralSettings() {
               items={CHAT_SEND_BEHAVIORS.map(({ value, label }) => ({ value, label }))}
             />
           </SettingsRow>
+          {/* The touch composer has no Tab key and never asks for suggestions. */}
+          {!isTouchH5Document() && (
+            <SettingsSwitchRow
+              title={t('settings.general.promptSuggestionsEnabled')}
+              description={t('settings.general.promptSuggestionsDescription')}
+              checked={nextPromptSuggestionsEnabled}
+              onChange={handlePromptSuggestionsToggle}
+              disabled={promptSuggestionsSaving}
+            />
+          )}
           <SettingsRow
             title={t('settings.general.defaultPermissionTitle')}
             description={t('settings.general.defaultPermissionHint')}
@@ -1725,6 +1762,24 @@ export function GeneralSettings() {
         cancelLabel={t('common.cancel')}
         confirmVariant="primary"
         loading={modeActionRunning}
+      />
+      <ConfirmDialog
+        open={promptSuggestionsConfirmOpen}
+        onClose={() => {
+          if (!promptSuggestionsSaving) setPromptSuggestionsConfirmOpen(false)
+        }}
+        onConfirm={() => void confirmPromptSuggestionsEnable()}
+        title={t('settings.general.promptSuggestionsConfirmTitle')}
+        body={(
+          <div className="space-y-2">
+            <p>{t('settings.general.promptSuggestionsConfirmHow')}</p>
+            <p>{t('settings.general.promptSuggestionsConfirmTokenCost')}</p>
+          </div>
+        )}
+        confirmLabel={t('settings.general.promptSuggestionsConfirmEnable')}
+        cancelLabel={t('common.cancel')}
+        confirmVariant="primary"
+        loading={promptSuggestionsSaving}
       />
       <ConfirmDialog
         open={autoDreamConfirmOpen}

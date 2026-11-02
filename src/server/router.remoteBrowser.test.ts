@@ -130,6 +130,17 @@ describe('remote browser API routing', () => {
     expect(SettingsService.prototype.updateUserSettings).not.toHaveBeenCalled()
   })
 
+  test('lets a remote browser read but not change next-prompt suggestions', async () => {
+    for (const enabled of [false, true]) {
+      spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({ language: 'en', nextPromptSuggestionsEnabled: enabled })
+      const remote = await (await request('/api/settings/user')).json()
+      expect(remote.nextPromptSuggestionsEnabled).toBe(enabled)
+    }
+    const rejected = await request('/api/settings/user', 'PUT', { nextPromptSuggestionsEnabled: true })
+    expect(rejected.status).toBe(400)
+    expect(SettingsService.prototype.updateUserSettings).not.toHaveBeenCalled()
+  })
+
   test('rechecks waiting questions after automatic answer settings are saved', async () => {
     const refresh = spyOn(conversationService, 'refreshAutoQuestionSettings').mockImplementation(() => {})
     const patch = { autoQuestion: { enabled: true, timeoutMinutes: 5 } }

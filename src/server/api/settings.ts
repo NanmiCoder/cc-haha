@@ -118,6 +118,9 @@ async function handleUserSettings(req: Request): Promise<Response> {
     if (Object.prototype.hasOwnProperty.call(body, 'autoQuestion')) {
       conversationService.refreshAutoQuestionSettings()
     }
+    if (Object.prototype.hasOwnProperty.call(body, 'nextPromptSuggestionsEnabled')) {
+      await conversationService.refreshPromptSuggestionsSetting()
+    }
     return Response.json({ ok: true })
   }
 
