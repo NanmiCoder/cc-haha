@@ -11,7 +11,10 @@ export const OPENAI_AUTH_ISSUER = 'https://auth.openai.com'
 export const OPENAI_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 export const OPENAI_CODEX_API_ENDPOINT =
   'https://chatgpt.com/backend-api/codex/responses'
-export const OPENAI_CODEX_CLIENT_VERSION = '0.157.0'
+// An official stable release (`npm view @openai/codex version`). Model
+// listings report the latest release when it can be looked up, with this as
+// the floor (see clientVersion.ts); every other request reports this one.
+export const OPENAI_CODEX_CLIENT_VERSION = '0.166.0'
 export const OPENAI_CODEX_ORIGINATOR = 'codex_cli_rs'
 export const OPENAI_CODEX_OAUTH_PORT = 1455
 export const OPENAI_CODEX_REDIRECT_PATH = '/auth/callback'
