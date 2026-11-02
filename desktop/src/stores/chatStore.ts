@@ -219,12 +219,13 @@ export type PerSessionState = {
   stopAllSubagentsRequested?: boolean
   awaitingReconnectSync?: boolean
   /**
-   * Summaries of background tasks that reached a terminal state since the last
-   * turn started. When the CLI then re-enters the model on its own (no send,
-   * no replayed user message), they explain the reply that would otherwise
-   * appear from nowhere. Cleared when any turn starts or completes.
+   * Background tasks that ended since the model last started an attempt and
+   * whose result goes back to the model. An attempt that starts while the
+   * session is idle was not sent by anyone: these results reopened the model.
    */
-  pendingBackgroundNotices?: string[]
+  pendingBackgroundContinue?: BackgroundContinueTask[]
+  /** The notice shown for the current turn, withdrawn if a user turn replays. */
+  backgroundContinueNoticeId?: string
   /** A socket gap started before this history lifecycle finished hydration. */
   preHydrationSocketGapPending?: boolean
   historyBootstrapDisabled?: boolean
@@ -1582,21 +1583,13 @@ function dropDuplicateTranscriptTextMessages(messages: UIMessage[]): UIMessage[]
   return changed ? deduped : messages
 }
 
-type SystemNoticeMessage = Extract<UIMessage, { type: 'system' }>
-
-/** Live and restored copies of the same notice sit next to each other. */
-function isSameSystemNoticeKind(a: SystemNoticeMessage, b: SystemNoticeMessage): boolean {
-  return (a.generationStopped === true && b.generationStopped === true) ||
-    (a.backgroundContinue === true && b.backgroundContinue === true)
-}
-
-export function collapseDuplicateSystemNotices(messages: UIMessage[]): UIMessage[] {
+function collapseDuplicateStoppedStatuses(messages: UIMessage[]): UIMessage[] {
   let changed = false
   const collapsed: UIMessage[] = []
   for (const message of messages) {
     const previous = collapsed.at(-1)
-    if (message.type === 'system' && previous?.type === 'system' &&
-      isSameSystemNoticeKind(message, previous)) {
+    if (message.type === 'system' && message.generationStopped &&
+      previous?.type === 'system' && previous.generationStopped) {
       changed = true
       if (message.transcriptMessageId && !previous.transcriptMessageId) {
         collapsed[collapsed.length - 1] = message
@@ -1738,7 +1731,7 @@ function mergeRestoredHistoryIntoLiveMessages(
   messages: UIMessage[],
   restoredMessages: UIMessage[],
 ): UIMessage[] {
-  return collapseDuplicateSystemNotices(mergeRestoredTerminalGoalEvents(
+  return collapseDuplicateStoppedStatuses(mergeRestoredTerminalGoalEvents(
     mergeRestoredParentToolMessages(
       dropDuplicateTranscriptTextMessages(
         mergeRestoredTranscriptMessageIds(messages, restoredMessages),
@@ -1787,6 +1780,11 @@ function strongHistoryMessageIdentities(message: UIMessage): string[] {
   if (message.type === 'background_task') {
     const taskId = nonEmptyHistoryIdentityPart(message.task.taskId)
     if (taskId) identities.push(`background-task:${taskId}`)
+  }
+
+  // The live notice and its transcript copy name the same finished tasks.
+  if (message.type === 'system' && message.backgroundContinueTaskIds?.length) {
+    identities.push(JSON.stringify(['background-continue', [...message.backgroundContinueTaskIds].sort()]))
   }
 
   if (message.type === 'permission_request') {
@@ -2215,7 +2213,7 @@ function mergeColdRestoredHistoryIntoLiveMessages(
     ordered.push(...(beforeRows.get(index)?.reverse() ?? []))
     if (index < restoredCount) ordered.push(merged[index]!)
   }
-  return collapseDuplicateSystemNotices(ordered)
+  return collapseDuplicateStoppedStatuses(ordered)
 }
 
 function needsTranscriptIdHydrationRetry(session: PerSessionState | undefined): boolean {
@@ -3590,8 +3588,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             messages: newMessages,
             scheduledTaskTurn: false,
             historyPageLoading: false,
-            pendingBackgroundNotices: [],
             chatState: 'thinking',
+            pendingBackgroundContinue: [],
+            backgroundContinueNoticeId: undefined,
             isPreparingTurn: false,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
             elapsedSeconds: 0,
@@ -4836,7 +4835,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       streamingFallback: null,
       replaceHistoryOnCompletion: false,
       queuedUserMessages: [],
-      pendingBackgroundNotices: [],
+      pendingBackgroundContinue: [],
+      backgroundContinueNoticeId: undefined,
     })) }))
   },
 
@@ -5138,7 +5138,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           } else {
             nextMessages = dropTailCompactingCompactSummary(nextMessages)
           }
+          // Results handed back mid-turn ride the next attempt of that turn.
+          // An attempt that starts while idle was opened by the results alone.
+          const continueTasks = msg.attemptStart ? session.pendingBackgroundContinue ?? [] : []
+          const notice = continueTasks.length > 0 && session.chatState === 'idle'
+            ? buildBackgroundContinueMessage(continueTasks, Date.now())
+            : null
+          if (notice) nextMessages = [...nextMessages, notice]
           return {
+            ...(continueTasks.length > 0 ? { pendingBackgroundContinue: [] } : {}),
+            ...(notice ? { backgroundContinueNoticeId: notice.id } : {}),
             chatState: preserveStreamingTurn ? 'streaming' : msg.state,
             statusVerb: msg.state === 'idle'
               ? ''
@@ -5229,8 +5238,6 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (msg.blockType === 'text') {
           update((s) => ({
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
-            messages: withBackgroundContinueNotice(s, s.messages, Date.now()),
-            pendingBackgroundNotices: [],
             chatState: 'streaming',
             activeThinkingId: null,
             apiRetry: null,
@@ -5242,10 +5249,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const toolUseId = msg.toolUseId ?? null
           const toolName = msg.toolName ?? 'unknown'
           update((s) => ({
-            pendingBackgroundNotices: [],
             ...(toolUseId
               ? {
-                  messages: upsertToolUseMessage(withBackgroundContinueNotice(s, s.messages, Date.now()), toolUseId, (existing) => ({
+                  messages: upsertToolUseMessage(s.messages, toolUseId, (existing) => ({
                     id: existing?.id ?? nextId(),
                     type: 'tool_use',
                     toolName,
@@ -5471,11 +5477,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
           const id = nextId()
           return {
-            messages: [
-              ...withBackgroundContinueNotice(s, base, Date.now()),
-              { id, type: 'thinking', content: msg.text, timestamp: Date.now() },
-            ],
-            pendingBackgroundNotices: [],
+            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
             chatState: 'thinking',
             activeThinkingId: id,
             streamingText: '',
@@ -5801,7 +5803,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           apiRetry: null,
           streamingFallback: null,
           replaceHistoryOnCompletion: false,
-          pendingBackgroundNotices: [],
+          backgroundContinueNoticeId: undefined,
           historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
         }))
         useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
@@ -5831,10 +5833,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       case 'user_message_replay': {
         update((session) => {
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
-          const baseMessages = pendingText.trim()
-            ? appendAssistantTextMessage(session.messages, pendingText, Date.now())
+          // Another client's prompt reaches this one only as the CLI's attempt
+          // and then this replay, so a notice shown for that attempt was wrong.
+          const withoutNotice = session.backgroundContinueNoticeId
+            ? session.messages.filter((message) => message.id !== session.backgroundContinueNoticeId)
             : session.messages
+          const baseMessages = pendingText.trim()
+            ? appendAssistantTextMessage(withoutNotice, pendingText, Date.now())
+            : withoutNotice
           return {
+            pendingBackgroundContinue: [],
+            backgroundContinueNoticeId: undefined,
             messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask),
             // A consumed human guide belongs to the existing scheduled turn;
             // only a new ordinary turn restores ordinary reply notifications.
@@ -5844,7 +5853,6 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
             stopAllSubagentsRequested: false,
-            pendingBackgroundNotices: [],
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
           }
         })
@@ -6235,6 +6243,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         ) {
           const data = msg.data as Record<string, unknown>
           useWorkflowStore.getState().handleTaskEvent(sessionId, 'task_notification', data)
+          const ownedBySubagent = Boolean(readNonEmptyString(data, 'owner_agent_id', 'ownerAgentId'))
           const targets = taskEventTargets(sessionId, data)
           if (targets.length === 0) {
             bufferUnroutedOwnedTaskEvent(sessionId, 'task_notification', data)
@@ -6265,8 +6274,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               const accepted = Boolean(task)
               const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
               delete stoppingBackgroundTaskIds[taskEvent.taskId]
+              // A task owned by a subagent reports to that subagent, not here.
+              const continuesModel = task && !ownedBySubagent &&
+                taskResultReachesModel(task, taskEvent.status)
               return {
                 ...buildBackgroundTaskSessionUpdate(session, backgroundAgentTasks, task, now),
+                ...(continuesModel
+                  ? {
+                      pendingBackgroundContinue: [
+                        ...(session.pendingBackgroundContinue ?? [])
+                          .filter((pending) => pending.taskId !== task.taskId),
+                        { taskId: task.taskId, summary: taskEvent.summary ?? task.description ?? '' },
+                      ],
+                    }
+                  : {}),
                 stoppingBackgroundTaskIds,
                 agentTaskNotifications: {
                   ...session.agentTaskNotifications,
@@ -6289,17 +6310,6 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                       }
                     : {}),
                 },
-                ...(accepted &&
-                (taskEvent.status === 'completed' ||
-                  taskEvent.status === 'failed' ||
-                  taskEvent.status === 'stopped')
-                  ? {
-                      pendingBackgroundNotices: [
-                        ...(session.pendingBackgroundNotices ?? []),
-                        taskEvent.summary ?? task?.description ?? '',
-                      ],
-                    }
-                  : {}),
                 historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
               }
               }),
@@ -6602,55 +6612,59 @@ function shouldHideCommandMetadataContent(content: unknown): boolean {
   return getCommandMetadataDisplayText(content) === null
 }
 
-function isTaskNotificationContent(content: unknown): boolean {
-  const textBlocks = extractHistoryTextBlocks(content)
-  return textBlocks.length > 0 && textBlocks.every((text) => extractTaskNotificationXml(text) !== null)
-}
+type BackgroundContinueTask = { taskId: string; summary: string }
 
-/** Every notification in a block: settled agents are batched into one prompt. */
-function extractAllTaskNotificationXml(text: string): string[] {
-  return [...text.matchAll(/<task-notification>\s*[\s\S]*?<\/task-notification>/gi)].map((match) => match[0])
-}
-
-function taskNotificationSummaries(content: unknown): string[] {
-  return extractHistoryTextBlocks(content)
-    .flatMap((text) => extractAllTaskNotificationXml(text))
-    .map((xml) => readXmlTag(xml, 'summary') ?? '')
-}
+const BACKGROUND_CONTINUE_SUMMARY_LIMIT = 160
 
 /**
- * The line shown where a hidden <task-notification> turn sits. The model did
- * not speak on its own: a background task finished (or was stopped) and the
- * CLI handed its result back. Without the line the reply looks like it came
- * from nowhere, long after the task card scrolled away, which reads as the
- * model "waking up" after the chat went idle.
+ * Whether the CLI hands this terminal result back to the model. stopTask
+ * suppresses a stopped shell's notification and only emits the SDK bookend,
+ * so no turn follows it; a stopped agent still reports its partial result.
  */
+function taskResultReachesModel(
+  task: BackgroundAgentTask,
+  status: BackgroundAgentTask['status'],
+): boolean {
+  if (status === 'completed' || status === 'failed') return true
+  return status === 'stopped' &&
+    (task.taskType === 'local_agent' || task.taskType === 'remote_agent')
+}
+
 function buildBackgroundContinueNotice(summaries: string[]): string {
-  const unique = [...new Set(summaries.map((summary) => summary.trim()).filter(Boolean))]
+  const unique = [...new Set(summaries.map((summary) => {
+    const trimmed = summary.trim()
+    return trimmed.length > BACKGROUND_CONTINUE_SUMMARY_LIMIT
+      ? `${trimmed.slice(0, BACKGROUND_CONTINUE_SUMMARY_LIMIT)}…`
+      : trimmed
+  }).filter(Boolean))]
   return unique.length > 0
     ? t('chat.backgroundContinue', { summary: unique.join(' · ') })
     : t('chat.backgroundContinueGeneric')
 }
 
 /**
- * Prepend the notice to a turn the client did not start. A send or a replayed
- * user message puts the session in a non-idle state (and clears the pending
- * notices) before any output, so an idle session receiving output right after
- * terminal task notifications is the CLI re-entering the model by itself.
+ * The line shown where a turn opened by background task results starts.
+ * Without it the reply looks like the model woke up on its own long after the
+ * chat went idle. The task ids match the live line to its transcript copy.
  */
-function withBackgroundContinueNotice(
-  session: PerSessionState,
-  messages: UIMessage[],
+function buildBackgroundContinueMessage(
+  tasks: BackgroundContinueTask[],
   timestamp: number,
-): UIMessage[] {
-  if (session.chatState !== 'idle' || !session.pendingBackgroundNotices?.length) return messages
-  return [...messages, {
-    id: nextId(),
+  transcriptMessageId?: string,
+): Extract<UIMessage, { type: 'system' }> {
+  return {
+    id: transcriptMessageId ?? nextId(),
     type: 'system',
-    content: buildBackgroundContinueNotice(session.pendingBackgroundNotices),
-    backgroundContinue: true,
+    content: buildBackgroundContinueNotice(tasks.map((task) => task.summary)),
+    backgroundContinueTaskIds: tasks.map((task) => task.taskId),
+    ...(transcriptMessageId ? { transcriptMessageId } : {}),
     timestamp,
-  }]
+  }
+}
+
+function isTaskNotificationContent(content: unknown): boolean {
+  const textBlocks = extractHistoryTextBlocks(content)
+  return textBlocks.length > 0 && textBlocks.every((text) => extractTaskNotificationXml(text) !== null)
 }
 
 function extractTaskNotificationXml(text: string): string | null {
@@ -8147,22 +8161,11 @@ export function mapHistoryMessagesToUiMessages(
   let pendingGoalCommand: { name: string; args: string } | null = null
 
   for (const msg of messages) {
-    // A task notification is a system-injected prompt. Its XML is never shown,
-    // but the turn it opens is: a one-line notice says which background task
-    // handed its result back, so the reply that follows has a visible cause.
-    // What the assistant does in that turn (thinking, text, tool calls) is
-    // ordinary transcript content and stays visible.
-    if (msg.type === 'user' && isTaskNotificationContent(msg.content)) {
-      uiMessages.push({
-        id: msg.id || nextId(),
-        type: 'system',
-        content: buildBackgroundContinueNotice(taskNotificationSummaries(msg.content)),
-        backgroundContinue: true,
-        ...(msg.id ? { transcriptMessageId: msg.id } : {}),
-        timestamp: new Date(msg.timestamp).getTime(),
-      })
-      continue
-    }
+    // A task notification is a system-injected prompt: the background task
+    // cards already stand for it. What the assistant does in the turn that
+    // answers it (thinking, text, tool calls) is ordinary transcript content
+    // and stays visible.
+    if (msg.type === 'user' && isTaskNotificationContent(msg.content)) continue
     if (msg.type === 'user') {
       const commandDisplayText = getCommandMetadataDisplayText(msg.content)
       if (commandDisplayText) {
@@ -8194,6 +8197,24 @@ export function mapHistoryMessagesToUiMessages(
         ...(msg.id ? { transcriptMessageId: msg.id } : {}),
         timestamp,
       })
+      continue
+    }
+    if (
+      msg.type === 'system' &&
+      msg.content && typeof msg.content === 'object' &&
+      (msg.content as { subtype?: unknown }).subtype === 'background_continue'
+    ) {
+      // The server projects the <task-notification> prompt that opened this
+      // turn; its XML never reaches the UI.
+      const notifications = (msg.content as { notifications?: unknown }).notifications
+      const tasks = (Array.isArray(notifications) ? notifications : []).flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const { taskId, summary } = item as { taskId?: unknown; summary?: unknown }
+        return typeof taskId === 'string' && taskId
+          ? [{ taskId, summary: typeof summary === 'string' ? summary : '' }]
+          : []
+      })
+      uiMessages.push(buildBackgroundContinueMessage(tasks, timestamp, msg.id || undefined))
       continue
     }
     if (msg.type === 'system' && typeof msg.content === 'string') {

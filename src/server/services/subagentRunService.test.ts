@@ -588,7 +588,7 @@ describe('getSubagentRunByTool', () => {
     )
   })
 
-  it('returns child shell notifications while hiding the notification turn but keeping the response to it', async () => {
+  it('returns child shell notifications, projects the notification turn as a status and keeps the response to it', async () => {
     await setupTmpConfigDir()
     const sessionId = '12121212-bbbb-cccc-dddd-eeeeeeeeeeee'
     const projectDir = '-tmp-subagent-run'
@@ -649,7 +649,19 @@ describe('getSubagentRunByTool', () => {
 
     const result = await getSubagentRunByTool(sessionId, toolUseId)
 
-    expect(result?.messages).toHaveLength(3)
+    expect(result?.messages.map(message => message.id)).toEqual([
+      'child-shell-use',
+      'child-shell-result',
+      'child-shell-notification',
+      'child-notification-response',
+    ])
+    expect(result?.messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'shell-task-1', status: 'stopped', summary: 'Child shell was stopped & cleaned up' }],
+      },
+    })
     expect(JSON.stringify(result?.messages)).not.toContain('<task-notification>')
     expect(JSON.stringify(result?.messages)).toContain('The child shell was stopped, continuing the review')
     expect(result?.taskNotifications).toEqual([{
@@ -1829,7 +1841,7 @@ describe('getSubagentRunByAgentId', () => {
     expect(result?.canSendMessage).toBe(false)
   })
 
-  it('returns workflow-agent task notifications beside its transcript without the notification turn', async () => {
+  it('returns workflow-agent task notifications beside its transcript with the notification turn as a status', async () => {
     await setupTmpConfigDir()
     const sessionId = '90909090-bbbb-cccc-dddd-ffffffffffff'
     const projectDir = '-tmp-workflow-agent'
@@ -1862,7 +1874,11 @@ describe('getSubagentRunByAgentId', () => {
 
     const result = await getSubagentRunByAgentId(sessionId, agentId)
 
-    expect(result?.messages.map(message => message.id)).toEqual(['wf-assistant', 'wf-notification-response'])
+    expect(result?.messages.map(message => message.id)).toEqual(['wf-assistant', 'wf-notification', 'wf-notification-response'])
+    expect(result?.messages[1]).toMatchObject({
+      type: 'system',
+      content: { subtype: 'background_continue', notifications: [{ taskId: 'wf-shell-task', status: 'completed' }] },
+    })
     expect(result?.taskNotifications).toEqual([{
       taskId: 'wf-shell-task',
       toolUseId: 'wf-shell-tool',
