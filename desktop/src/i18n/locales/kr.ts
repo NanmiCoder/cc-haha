@@ -3314,6 +3314,8 @@ export const kr: Record<TranslationKey, string> = {
   'chat.dismiss': '닫기',
   'chat.stopTitle': '생성 중지 (Cmd+.)',
   'chat.generationStopped': '중지됨',
+  'chat.backgroundContinue': '백그라운드 작업이 끝나 자동으로 계속: {summary}',
+  'chat.backgroundContinueGeneric': '백그라운드 작업이 끝나 자동으로 계속',
   'chat.jumpToLatest': '최신',
   'chat.memorySavedTitle': '{count}개의 메모리 파일을 저장했습니다',
   'chat.memorySavedFromToolsTitle': '{count}개의 메모리 항목을 저장했습니다',
@@ -4096,6 +4098,7 @@ export const kr: Record<TranslationKey, string> = {
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
   'app.serverFailedHint': '문제를 신고할 때 이 진단 패널의 스크린샷을 첨부해 주세요.',
+  'app.startupCrashHint': '런타임 프로세스가 시작 중에 충돌했습니다(Windows 종료 코드 {code}). 보안 소프트웨어가 차단했거나 런타임 파일이 손상되었거나 불완전할 수 있습니다. 먼저 앱 설치 폴더를 보안 소프트웨어의 허용 목록에 추가하고, 그래도 해결되지 않으면 GitHub Releases의 전체 설치 파일로 덮어쓰기 설치하세요. 세션과 설정은 유지됩니다.',
   'app.startupError': '시작 오류',
   'app.serverLogs': '서버 로그',
   'app.copyDiagnostics': '진단 정보 복사',

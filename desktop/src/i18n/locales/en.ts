@@ -3311,6 +3311,8 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.dismiss': 'dismiss',
   'chat.stopTitle': 'Stop generation (Cmd+.)',
   'chat.generationStopped': 'Stopped',
+  'chat.backgroundContinue': 'Continued automatically after a background task ended: {summary}',
+  'chat.backgroundContinueGeneric': 'Continued automatically after a background task ended',
   'chat.jumpToLatest': 'Latest',
   'chat.memorySavedTitle': 'Saved {count} memory file(s)',
   'chat.memorySavedFromToolsTitle': 'Saved {count} memory item(s)',
@@ -4093,6 +4095,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'Local server failed to start',
   'app.serverFailedHint': 'Please include a screenshot of this diagnostic panel when reporting the issue.',
+  'app.startupCrashHint': 'The runtime process crashed while starting (Windows exit code {code}). Security software may have blocked it, or its files may be damaged or incomplete. Add the app install folder to your security software allow list first; if it still fails, reinstall with the full installer from GitHub Releases. Your sessions and settings are kept.',
   'app.startupError': 'Startup error',
   'app.serverLogs': 'Server logs',
   'app.copyDiagnostics': 'Copy diagnostics',

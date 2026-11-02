@@ -3312,6 +3312,8 @@ export const jp: Record<TranslationKey, string> = {
   'chat.dismiss': '閉じる',
   'chat.stopTitle': '生成を停止 (Cmd+.)',
   'chat.generationStopped': '停止しました',
+  'chat.backgroundContinue': 'バックグラウンドタスクが終了したため自動的に続行：{summary}',
+  'chat.backgroundContinueGeneric': 'バックグラウンドタスクが終了したため自動的に続行',
   'chat.jumpToLatest': '最新',
   'chat.memorySavedTitle': '{count} 件のメモリファイルを保存しました',
   'chat.memorySavedFromToolsTitle': '{count} 件のメモリ項目を保存しました',
@@ -4094,6 +4096,7 @@ export const jp: Record<TranslationKey, string> = {
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'ローカルサーバーの起動に失敗しました',
   'app.serverFailedHint': '問題を報告する際は、この診断パネルのスクリーンショットを添付してください。',
+  'app.startupCrashHint': 'ランタイムプロセスが起動中にクラッシュしました（Windows 終了コード {code}）。セキュリティソフトにブロックされたか、ランタイムのファイルが破損または不完全な可能性があります。まずアプリのインストールフォルダーをセキュリティソフトの許可リストに追加し、それでも解決しない場合は GitHub Releases の完全版インストーラーで上書きインストールしてください。セッションと設定は失われません。',
   'app.startupError': '起動エラー',
   'app.serverLogs': 'サーバーログ',
   'app.copyDiagnostics': '診断情報をコピー',
