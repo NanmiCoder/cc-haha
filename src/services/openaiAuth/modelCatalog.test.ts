@@ -4,12 +4,26 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { OPENAI_CODEX_CLIENT_VERSION } from './client.js'
 import {
+  OPENAI_CODEX_RELEASE_SOURCES,
+  resolveOpenAICodexClientVersion,
+} from './clientVersion.js'
+import {
   clearOpenAICodexModelCatalogCache,
   fetchOpenAICodexModelCatalog,
   getOpenAICodexModelCatalog,
 } from './modelCatalog.js'
 import { OPENAI_CODEX_MODEL_CATALOG } from './models.js'
 import { clearOpenAIOAuthTokenCache } from './storage.js'
+import { order } from '../../utils/semver.js'
+
+const isReleaseLookup = (input: Parameters<typeof fetch>[0]) =>
+  (OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))
+
+/** A stable release `minors` minor versions after the pinned one. */
+function releaseAfterPinned(minors: number): string {
+  const [major, minor] = OPENAI_CODEX_CLIENT_VERSION.split('.').map(Number)
+  return `${major}.${minor! + minors}.0`
+}
 
 describe('OpenAI Codex model catalog', () => {
   let tmpDir: string
@@ -92,6 +106,69 @@ describe('OpenAI Codex model catalog', () => {
     ])
   })
 
+  // Live behavior: the endpoint lists a model only from its rollout gate, which
+  // for GPT-6.1 is client_version 0.159.0 though the entries report 0.153.0.
+  const gatedModelsEndpoint = (gates: Record<string, string>, seen: { versions: string[]; userAgents: (string | null)[] }) =>
+    (async (input, init) => {
+      if (isReleaseLookup(input)) throw new Error('release sources are unreachable')
+      const version = new URL(String(input)).searchParams.get('client_version') ?? '0.0.0'
+      seen.versions.push(version)
+      seen.userAgents.push(new Headers(init?.headers).get('User-Agent'))
+      return Response.json({
+        models: Object.entries(gates)
+          .filter(([, gate]) => order(version, gate) >= 0)
+          .map(([slug]) => ({ slug, visibility: 'list', minimal_client_version: '0.153.0' })),
+      })
+    }) as typeof fetch
+
+  test('the pinned version alone still sees the GPT-6.1 models', async () => {
+    const seen = { versions: [] as string[], userAgents: [] as (string | null)[] }
+    const models = await getOpenAICodexModelCatalog({
+      tokens: { accessToken: 'desktop-token', accountId: 'desktop-account' },
+      forceRefresh: true,
+      throwOnError: true,
+      fetchOverride: gatedModelsEndpoint(
+        { 'gpt-6.1-sol': '0.159.0', 'gpt-6.1-terra': '0.159.0', 'gpt-6-sol': '0.155.0' },
+        seen,
+      ),
+    })
+
+    expect(models.map(model => model.value)).toEqual(['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol'])
+    expect(seen.versions).toEqual([OPENAI_CODEX_CLIENT_VERSION])
+    expect(seen.userAgents).toEqual([`codex-cli/${OPENAI_CODEX_CLIENT_VERSION}`])
+  })
+
+  test('an explicit refresh reports the latest Codex release so newly gated models appear', async () => {
+    const seen = { versions: [] as string[], userAgents: [] as (string | null)[] }
+    const latest = releaseAfterPinned(5)
+    const listModels = gatedModelsEndpoint({ 'gpt-next': latest, 'gpt-6-sol': '0.155.0' }, seen)
+    const releaseProxies: (string | undefined)[] = []
+    const fetchOverride = (async (input, init) => {
+      if (!isReleaseLookup(input)) return listModels(input, init)
+      releaseProxies.push((init as RequestInit & { proxy?: string }).proxy)
+      // The mirror lags npm by a release.
+      return Response.json({ version: String(input).includes('npmmirror') ? releaseAfterPinned(4) : latest })
+    }) as typeof fetch
+    const tokens = { accessToken: 'desktop-token', accountId: 'desktop-account' }
+    // A release looked up earlier must not stand in for the refresh's own lookup.
+    await resolveOpenAICodexClientVersion({
+      fetchOverride: (async () => Response.json({ version: releaseAfterPinned(1) })) as typeof fetch,
+    })
+
+    const models = await getOpenAICodexModelCatalog({
+      tokens,
+      forceRefresh: true,
+      throwOnError: true,
+      resolveProxyUrl: async () => 'http://127.0.0.1:7890',
+      fetchOverride,
+    })
+
+    expect(models.map(model => model.value)).toEqual(['gpt-next', 'gpt-6-sol'])
+    expect(seen.versions).toEqual([latest])
+    expect(seen.userAgents).toEqual([`codex-cli/${latest}`])
+    expect(releaseProxies).toEqual(['http://127.0.0.1:7890', 'http://127.0.0.1:7890'])
+  })
+
   test('uses explicitly supplied credentials instead of CLI storage', async () => {
     const models = await getOpenAICodexModelCatalog({
       tokens: { accessToken: 'desktop-token', accountId: 'desktop-account' },
@@ -126,9 +203,10 @@ describe('OpenAI Codex model catalog', () => {
       tokens: { accessToken: 'desktop-token', accountId: 'same-account' },
       forceRefresh: true, throwOnError: true,
       resolveProxyUrl: async () => 'http://127.0.0.1:7890',
-      fetchOverride: (async (_url, init) => {
-        calls += 1
+      fetchOverride: (async (url, init) => {
         expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:7890')
+        if (isReleaseLookup(url)) return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+        calls += 1
         expect(init?.redirect).toBe('error')
         return calls === 3 ? new Response(null, { status: 503 })
           : Response.json({ models: [null, { slug: `codex-new-${calls}`, visibility: 'list' }] })
@@ -166,7 +244,12 @@ describe('OpenAI Codex model catalog', () => {
 
   test('stops re-requesting an endpoint that just failed', async () => {
     let calls = 0
-    const fetchOverride = async () => {
+    let releaseLookups = 0
+    const fetchOverride = async (input: Parameters<typeof fetch>[0]) => {
+      if (isReleaseLookup(input)) {
+        releaseLookups += 1
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
       calls += 1
       return new Response('unavailable', { status: 503 })
     }
@@ -178,5 +261,6 @@ describe('OpenAI Codex model catalog', () => {
     await new Promise((resolve) => setTimeout(resolve, 5))
 
     expect(calls).toBe(1)
+    expect(releaseLookups).toBe(OPENAI_CODEX_RELEASE_SOURCES.length)
   })
 })

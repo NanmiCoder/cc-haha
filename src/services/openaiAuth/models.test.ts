@@ -50,7 +50,7 @@ describe('openai auth model resolution', () => {
     expect(resolveOpenAICodexModel('claude-sonnet-5-5')).toBe(OPENAI_DEFAULT_SONNET_MODEL)
   })
 
-  test('supports GPT-6.1 Sol selection, metadata and OAuth context budgeting', () => {
+  test('supports GPT-6.1 Sol and Terra selection, metadata and OAuth context budgeting', () => {
     expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-6.1-sol')).toMatchObject({
       label: 'GPT-6.1-Sol',
       defaultReasoningEffort: 'low',
@@ -62,6 +62,18 @@ describe('openai auth model resolution', () => {
     expect(getOpenAICodexContextWindowForModel('gpt-6.1-sol')).toBe(258_400)
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', undefined)).toBe('low')
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', 'max')).toBe('max')
+
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-6.1-terra')).toMatchObject({
+      label: 'GPT-6.1 Terra',
+      defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      contextWindow: 475_000,
+    })
+    expect(resolveOpenAICodexModel('gpt-6.1-terra')).toBe('gpt-6.1-terra')
+    expect(getOpenAIModelDisplayName('gpt-6.1-terra')).toBe('GPT-6.1 Terra')
+    expect(getOpenAICodexContextWindowForModel('gpt-6.1-terra')).toBe(475_000)
+    expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', undefined)).toBe('low')
+    expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', 'max')).toBe('max')
   })
 
   test('provides Astra fallback metadata and effective Codex OAuth context', () => {
@@ -133,11 +145,12 @@ describe('openai auth model resolution', () => {
   })
 
   test('exposes GPT-6 Sol and Luna ahead of their GPT-5.6 predecessors', () => {
-    expect(OPENAI_CODEX_MODEL_CATALOG.slice(0, 7).map((model) => model.value)).toEqual([
+    expect(OPENAI_CODEX_MODEL_CATALOG.slice(0, 8).map((model) => model.value)).toEqual([
       'gpt-6-astra',
       'gpt-6-sol',
       'gpt-6-luna',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
