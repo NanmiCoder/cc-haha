@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
@@ -17,6 +17,8 @@ import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { DesktopUiPreferencesService } from '../services/desktopUiPreferencesService.js'
 import { SessionService } from '../services/sessionService.js'
+import { adapterService } from '../services/adapterService.js'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 const originalPath = process.env.PATH
@@ -760,6 +762,66 @@ describe('cron scheduler launcher resolution', () => {
     expect(await scheduler.getRunDetail(run.id)).toMatchObject({ status: 'failed', taskId: task.id, error: run.error })
     expect((await cron.getTask(task.id))?.lastFiredAt).toBe(run.startedAt)
     expect(scheduler.getProcessIds()).toEqual([])
+  })
+
+  it('disables a one-shot legacy task after an auxiliary directory preflight failure', async () => {
+    const workDir = path.join(tmpDir, 'main')
+    const extra = path.join(tmpDir, 'removed auxiliary')
+    await fs.mkdir(workDir)
+    await fs.mkdir(extra)
+    await new DesktopUiPreferencesService().updateProjectDirectories({ workDir, additionalDirectories: [extra] })
+    const cron = new CronService()
+    const scheduler = new CronScheduler(cron)
+    const task = await cron.createTask({ cron: '* * * * *', prompt: 'Check once', folderPath: workDir, recurring: false, enabled: true })
+    await fs.rm(extra, { recursive: true })
+
+    const run = await scheduler.executeTask(task)
+    expect(run.status).toBe('failed')
+    expect((await cron.getTask(task.id))?.enabled).toBe(false)
+    await scheduler.tick(new Date(Date.parse(run.startedAt) + 60_000))
+    await migrationMaintenance.drain()
+    expect(await scheduler.getTaskRuns(task.id)).toHaveLength(1)
+    expect(scheduler.getProcessIds()).toEqual([])
+  })
+
+  it.each(['failed', 'none'] as const)('honors the %s notification policy for auxiliary directory preflight failures', async (notificationPolicy) => {
+    const workDir = path.join(tmpDir, 'main')
+    const extra = path.join(tmpDir, 'removed auxiliary')
+    await fs.mkdir(workDir)
+    await fs.mkdir(extra)
+    await new DesktopUiPreferencesService().updateProjectDirectories({ workDir, additionalDirectories: [extra] })
+    const configSpy = spyOn(adapterService, 'getRawConfig').mockResolvedValue({ telegram: { botToken: 'fixture-token', allowedUsers: [42] } })
+    const originalFetch = globalThis.fetch
+    const deliveries: { url: string; body: { chat_id: number; text: string } }[] = []
+    globalThis.fetch = (async (input, init) => {
+      deliveries.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      return Response.json({ ok: true })
+    }) as typeof fetch
+    try {
+      const cron = new CronService()
+      const scheduler = new CronScheduler(cron)
+      const task = await cron.createTask({
+        cron: '* * * * *', prompt: 'Check sources', folderPath: workDir, recurring: true, enabled: true,
+        notificationPolicy, notification: { enabled: true, channels: ['telegram'] },
+      })
+      await fs.rm(extra, { recursive: true })
+      const run = await scheduler.executeTask(task)
+      await migrationMaintenance.drain()
+      expect(run.status).toBe('failed')
+      expect(deliveries).toHaveLength(notificationPolicy === 'failed' ? 1 : 0)
+      if (notificationPolicy === 'failed') {
+        expect(deliveries[0]!.url).toBe('https://api.telegram.org/botfixture-token/sendMessage')
+        expect(deliveries[0]!.body.chat_id).toBe(42)
+        expect(deliveries[0]!.body.text).toContain('**Status**: Failed')
+        expect(deliveries[0]!.body.text).toContain(run.error!)
+      }
+      expect((await cron.getTask(task.id))?.enabled).toBe(true)
+      expect(scheduler.getProcessIds()).toEqual([])
+    } finally {
+      await migrationMaintenance.drain()
+      globalThis.fetch = originalFetch
+      configSpy.mockRestore()
+    }
   })
 
   it('legacy automatic and manual CLIs receive current project folders and manual history retains the launched snapshot', async () => {

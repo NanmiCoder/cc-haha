@@ -912,6 +912,16 @@ export class CronScheduler {
         completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt),
       }
       await updateRun(failedRun, runLogTarget)
+      if (task.notification?.enabled && task.notification.channels.length > 0 && shouldNotifyScheduledRun(task, failedRun)) {
+        migrationMaintenance.track(sendTaskNotification(failedRun, task.notification)).catch((err) => {
+          console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
+        })
+      }
+      if (!task.recurring) {
+        await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
+          // Task may have been deleted.
+        })
+      }
       return failedRun
     }
 
