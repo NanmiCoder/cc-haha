@@ -3888,6 +3888,7 @@ export const jp: Record<TranslationKey, string> = {
   'agentTeams.communication.hideLifecycle': 'ステータス通知を隠す',
   'agentTeams.communication.expand': 'もっと見る',
   'agentTeams.communication.collapse': '折りたたむ',
+  'agentTeams.communication.showEarlier': '以前のメッセージを表示（残り {count} 件）',
   'agentTeams.inline.created': 'エージェントチーム · メンバー {count} 名',
   'agentTeams.inline.notStarted': '未開始',
   'agentTeams.inline.coordination': 'チーム編成ログ · {count} ステップ',

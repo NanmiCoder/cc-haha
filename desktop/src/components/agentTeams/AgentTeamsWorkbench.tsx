@@ -319,6 +319,8 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
   return (
     <section
       aria-label={t('agentTeams.title')}
+      // Find-in-page scope for the message lists' controller (useTranscriptFind).
+      data-agent-teams-workbench=""
       className="relative flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]"
     >
       {/* A narrow pane wraps the controls onto a row of their own instead of
