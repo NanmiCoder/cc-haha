@@ -9,8 +9,10 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { IconButton } from '@/components/ui/IconButton'
 import { mcpStatusTone } from '@/lib/mcpStatus'
-import { getMcpServerIdentityKey } from '@/lib/mcpIdentity'
+import { getMcpServerIdentityKey, mcpProjectPathKey } from '@/lib/mcpIdentity'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
+import { McpProjectTargets } from './mcp/McpProjectTargets'
+import { useMcpProjectSharing } from './mcp/useMcpProjectSharing'
 import {
   SettingsBlock,
   SettingsGroup,
@@ -275,9 +277,9 @@ function buildPayload(draft: McpDraft): McpUpsertPayload {
   }
 }
 
-function isDraftValid(draft: McpDraft) {
+function isDraftValid(draft: McpDraft, sharesProjects = false) {
   if (!isMcpServerNameValid(draft.name)) return false
-  if (scopeRequiresProject(draft.scope) && !draft.projectPath.trim()) return false
+  if (scopeRequiresProject(draft.scope) && !sharesProjects && !draft.projectPath.trim()) return false
   if (draft.transport === 'stdio') return draft.command.trim().length > 0
   return draft.url.trim().length > 0
 }
@@ -530,7 +532,7 @@ function ServerRow({
 }
 
 export function McpSettings() {
-  const { servers, selectedServer, isLoading, error, fetchServersForKnownProjects, createServer, updateServer, deleteServer, toggleServer, reconnectServer, refreshServerStatus, selectServer } = useMcpStore()
+  const { servers, selectedServer, isLoading, error, fetchServersForKnownProjects, createServer, updateServer, saveProjectSharing, deleteServer, toggleServer, reconnectServer, refreshServerStatus, selectServer } = useMcpStore()
   const addToast = useUIStore((s) => s.addToast)
   const sessions = useSessionStore((s) => s.sessions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -547,6 +549,18 @@ export function McpSettings() {
   const activeSession = sessions.find((session) => session.id === activeSessionId)
   const currentWorkDir = activeSession?.workDir || undefined
   const resolveOperationCwd = (server?: McpServerRecord) => server?.projectPath ?? currentWorkDir
+  const sharedSource = view.type === 'edit' && view.server.scope === 'project' ? view.server : undefined
+  const usesProjectSharing = draft.scope === 'project' && (view.type === 'create' || !!sharedSource)
+  const projectSharing = useMcpProjectSharing({
+    enabled: usesProjectSharing && isMcpServerNameValid(draft.name),
+    name: draft.name.trim(),
+    sourceCwd: sharedSource?.projectPath,
+    currentWorkDir,
+    onSourceConfig: config => {
+      if (!sharedSource) return
+      setDraft(current => ({ ...draftFromServer({ ...sharedSource, config }), scope: current.scope }))
+    },
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -786,10 +800,27 @@ export function McpSettings() {
   )
 
   const handleSave = async () => {
-    if (!isDraftValid(draft)) return
+    if (!isDraftValid(draft, usesProjectSharing) || (usesProjectSharing && !projectSharing.canSave)) return
     setIsSaving(true)
     try {
       const payload = buildPayload(draft)
+      if (usesProjectSharing) {
+        const result = await saveProjectSharing(draft.name.trim(), {
+          config: payload.config,
+          ...(sharedSource?.projectPath ? { sourceCwd: sharedSource.projectPath } : {}),
+          ...(projectSharing.sourceConfig ? { sourceConfig: projectSharing.sourceConfig } : {}),
+          targets: projectSharing.targets,
+        }, currentWorkDir)
+        projectSharing.applyResults(result)
+        if (result.results.some(target => !target.success)) {
+          addToast({ type: 'error', message: t('settings.mcp.projects.partialFailure') })
+          return
+        }
+        addToast({ type: 'success', message: t('settings.mcp.toast.saved', { name: draft.name.trim() }) })
+        setView({ type: 'list' })
+        selectServer(null)
+        return
+      }
       const operationCwd = scopeRequiresProject(draft.scope) ? draft.projectPath.trim() : undefined
       const saved = view.type === 'edit'
         ? await updateServer(view.server, payload, operationCwd)
@@ -907,6 +938,11 @@ export function McpSettings() {
     const targetServer = editing ? view.server : null
     const transportLocked = editing
     const isBusy = isSaving || isDeleting
+    const savedProjectTargets = projectSharing.projects.filter(project => project.selected)
+    const sharedScopeLocked = !!sharedSource && draft.scope === 'project' && (
+      !projectSharing.ready || savedProjectTargets.length !== 1 ||
+      mcpProjectPathKey(savedProjectTargets[0]?.projectPath) !== mcpProjectPathKey(sharedSource.projectPath)
+    )
     const targetProjectPath = draft.projectPath.trim()
     const needsProjectTarget = scopeRequiresProject(draft.scope)
     const targetProjectHint = draft.scope === 'local'
@@ -916,11 +952,7 @@ export function McpSettings() {
             ? t('settings.mcp.targetProject.emptyWithCurrent', { path: currentWorkDir })
             : t('settings.mcp.targetProject.localEmpty'))
       : draft.scope === 'project'
-        ? (targetProjectPath
-            ? t('settings.mcp.targetProject.projectSelected', { path: targetProjectPath })
-            : currentWorkDir
-              ? t('settings.mcp.targetProject.emptyWithCurrent', { path: currentWorkDir })
-              : t('settings.mcp.targetProject.projectEmpty'))
+        ? undefined
         : t('settings.mcp.targetProject.globalHint')
 
     return (
@@ -995,6 +1027,7 @@ export function McpSettings() {
                       key={scope}
                       type="button"
                       aria-pressed={active}
+                      disabled={isBusy || (sharedScopeLocked && scope !== 'project')}
                       onClick={() => setDraftField('scope', scope)}
                       className={cx(
                         'flex flex-col justify-start rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors duration-150',
@@ -1014,13 +1047,18 @@ export function McpSettings() {
                   )
                 })}
               </div>
+              {sharedScopeLocked && projectSharing.ready && (
+                <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">{t('settings.mcp.projects.scopeHint')}</p>
+              )}
             </SettingsBlock>
 
             <SettingsRow
-              title={needsProjectTarget ? t('settings.mcp.targetProject.title') : t('settings.mcp.targetProject.globalTitle')}
+              title={usesProjectSharing ? t('settings.mcp.projects.label') : needsProjectTarget ? t('settings.mcp.targetProject.title') : t('settings.mcp.targetProject.globalTitle')}
               description={targetProjectHint}
             >
-              {needsProjectTarget && (
+              {usesProjectSharing ? (
+                <McpProjectTargets sharing={projectSharing} disabled={isBusy} />
+              ) : needsProjectTarget && (
                 <DirectoryPicker
                   value={draft.projectPath}
                   onChange={(path) => setDraftField('projectPath', path)}
@@ -1046,111 +1084,113 @@ export function McpSettings() {
             </SettingsRow>
           </SettingsGroup>
 
-          {draft.transport === 'stdio' ? (
-            <>
-              <SettingsGroup className="mt-7">
-                <SettingsBlock className="py-3.5">
-                  <Input
-                    size="md"
-                    label={t('settings.mcp.form.command')}
-                    value={draft.command}
-                    onChange={(event) => setDraftField('command', event.target.value)}
-                    placeholder={t('settings.mcp.form.commandPlaceholder')}
-                    required
-                  />
-                  <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
-                    {t('settings.mcp.form.commandHostHint')}
-                  </p>
-                </SettingsBlock>
-              </SettingsGroup>
-
-              <ArraySection
-                title={t('settings.mcp.form.arguments')}
-                rows={draft.args}
-                onChange={(id, _field, value) => updateStringRows('args', id, value)}
-                onAdd={() => addRow('args')}
-                onRemove={(id) => removeRow('args', id)}
-                singleValue
-                displayValue={(_row, index) => displayMcpArgumentValue(draft.args, index)}
-                valuePlaceholder={t('settings.mcp.form.argumentPlaceholder')}
-                addLabel={t('settings.mcp.form.addArgument')}
-              />
-
-              <ArraySection
-                title={t('settings.mcp.form.environmentVariables')}
-                rows={draft.env}
-                onChange={(id, field, value) => updateKeyValueRows('env', id, field, value)}
-                onAdd={() => addRow('env')}
-                onRemove={(id) => removeRow('env', id)}
-                displayValue={(row) => ('key' in row ? displayMcpKeyValueRowValue(row) : row.value)}
-                keyPlaceholder={t('settings.mcp.form.keyPlaceholder')}
-                valuePlaceholder={t('settings.mcp.form.valuePlaceholder')}
-                addLabel={t('settings.mcp.form.addEnv')}
-              />
-            </>
-          ) : (
-            <>
-              <SettingsGroup className="mt-7">
-                <SettingsBlock className="py-3.5">
-                  <Input
-                    size="md"
-                    label={draft.transport === 'http' ? t('settings.mcp.form.url') : t('settings.mcp.form.sseUrl')}
-                    value={draft.url}
-                    onChange={(event) => setDraftField('url', event.target.value)}
-                    placeholder={t('settings.mcp.form.urlPlaceholder')}
-                    required
-                  />
-                </SettingsBlock>
-              </SettingsGroup>
-
-              <ArraySection
-                title={t('settings.mcp.form.headers')}
-                rows={draft.headers}
-                onChange={(id, field, value) => updateKeyValueRows('headers', id, field, value)}
-                onAdd={() => addRow('headers')}
-                onRemove={(id) => removeRow('headers', id)}
-                displayValue={(row) => ('key' in row ? displayMcpKeyValueRowValue(row) : row.value)}
-                keyPlaceholder={t('settings.mcp.form.keyPlaceholder')}
-                valuePlaceholder={t('settings.mcp.form.valuePlaceholder')}
-                addLabel={t('settings.mcp.form.addHeader')}
-              />
-
-              <SettingsGroup className="mt-7">
-                <SettingsBlock className="space-y-4 py-3.5">
-                  <div className="grid gap-4 md:grid-cols-2">
+          <fieldset className="min-w-0" disabled={isBusy || (!!sharedSource && draft.scope === 'project' && !projectSharing.ready)}>
+            {draft.transport === 'stdio' ? (
+              <>
+                <SettingsGroup className="mt-7">
+                  <SettingsBlock className="py-3.5">
                     <Input
                       size="md"
-                      label={t('settings.mcp.form.oauthClientId')}
-                      value={draft.oauthClientId}
-                      onChange={(event) => setDraftField('oauthClientId', event.target.value)}
-                      placeholder={t('settings.mcp.form.oauthClientIdPlaceholder')}
+                      label={t('settings.mcp.form.command')}
+                      value={draft.command}
+                      onChange={(event) => setDraftField('command', event.target.value)}
+                      placeholder={t('settings.mcp.form.commandPlaceholder')}
+                      required
                     />
+                    <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                      {t('settings.mcp.form.commandHostHint')}
+                    </p>
+                  </SettingsBlock>
+                </SettingsGroup>
+
+                <ArraySection
+                  title={t('settings.mcp.form.arguments')}
+                  rows={draft.args}
+                  onChange={(id, _field, value) => updateStringRows('args', id, value)}
+                  onAdd={() => addRow('args')}
+                  onRemove={(id) => removeRow('args', id)}
+                  singleValue
+                  displayValue={(_row, index) => displayMcpArgumentValue(draft.args, index)}
+                  valuePlaceholder={t('settings.mcp.form.argumentPlaceholder')}
+                  addLabel={t('settings.mcp.form.addArgument')}
+                />
+
+                <ArraySection
+                  title={t('settings.mcp.form.environmentVariables')}
+                  rows={draft.env}
+                  onChange={(id, field, value) => updateKeyValueRows('env', id, field, value)}
+                  onAdd={() => addRow('env')}
+                  onRemove={(id) => removeRow('env', id)}
+                  displayValue={(row) => ('key' in row ? displayMcpKeyValueRowValue(row) : row.value)}
+                  keyPlaceholder={t('settings.mcp.form.keyPlaceholder')}
+                  valuePlaceholder={t('settings.mcp.form.valuePlaceholder')}
+                  addLabel={t('settings.mcp.form.addEnv')}
+                />
+              </>
+            ) : (
+              <>
+                <SettingsGroup className="mt-7">
+                  <SettingsBlock className="py-3.5">
                     <Input
                       size="md"
-                      label={t('settings.mcp.form.oauthCallbackPort')}
-                      value={draft.oauthCallbackPort}
-                      onChange={(event) => setDraftField('oauthCallbackPort', event.target.value)}
-                      placeholder={t('settings.mcp.form.oauthCallbackPortPlaceholder')}
+                      label={draft.transport === 'http' ? t('settings.mcp.form.url') : t('settings.mcp.form.sseUrl')}
+                      value={draft.url}
+                      onChange={(event) => setDraftField('url', event.target.value)}
+                      placeholder={t('settings.mcp.form.urlPlaceholder')}
+                      required
                     />
-                  </div>
-                  <Input
-                    size="md"
-                    label={t('settings.mcp.form.headersHelper')}
-                    value={draft.headersHelper}
-                    onChange={(event) => setDraftField('headersHelper', event.target.value)}
-                    placeholder={t('settings.mcp.form.headersHelperPlaceholder')}
-                  />
-                </SettingsBlock>
-              </SettingsGroup>
-            </>
-          )}
+                  </SettingsBlock>
+                </SettingsGroup>
+
+                <ArraySection
+                  title={t('settings.mcp.form.headers')}
+                  rows={draft.headers}
+                  onChange={(id, field, value) => updateKeyValueRows('headers', id, field, value)}
+                  onAdd={() => addRow('headers')}
+                  onRemove={(id) => removeRow('headers', id)}
+                  displayValue={(row) => ('key' in row ? displayMcpKeyValueRowValue(row) : row.value)}
+                  keyPlaceholder={t('settings.mcp.form.keyPlaceholder')}
+                  valuePlaceholder={t('settings.mcp.form.valuePlaceholder')}
+                  addLabel={t('settings.mcp.form.addHeader')}
+                />
+
+                <SettingsGroup className="mt-7">
+                  <SettingsBlock className="space-y-4 py-3.5">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <Input
+                        size="md"
+                        label={t('settings.mcp.form.oauthClientId')}
+                        value={draft.oauthClientId}
+                        onChange={(event) => setDraftField('oauthClientId', event.target.value)}
+                        placeholder={t('settings.mcp.form.oauthClientIdPlaceholder')}
+                      />
+                      <Input
+                        size="md"
+                        label={t('settings.mcp.form.oauthCallbackPort')}
+                        value={draft.oauthCallbackPort}
+                        onChange={(event) => setDraftField('oauthCallbackPort', event.target.value)}
+                        placeholder={t('settings.mcp.form.oauthCallbackPortPlaceholder')}
+                      />
+                    </div>
+                    <Input
+                      size="md"
+                      label={t('settings.mcp.form.headersHelper')}
+                      value={draft.headersHelper}
+                      onChange={(event) => setDraftField('headersHelper', event.target.value)}
+                      placeholder={t('settings.mcp.form.headersHelperPlaceholder')}
+                    />
+                  </SettingsBlock>
+                </SettingsGroup>
+              </>
+            )}
+          </fieldset>
 
           <div className="mt-7 flex justify-end">
             <Button
               variant="primary"
               size="base"
               onClick={handleSave}
-              disabled={!isDraftValid(draft) || isBusy}
+              disabled={!isDraftValid(draft, usesProjectSharing) || isBusy || (usesProjectSharing && !projectSharing.canSave)}
               loading={isSaving}
             >
               {t('settings.mcp.form.save')}

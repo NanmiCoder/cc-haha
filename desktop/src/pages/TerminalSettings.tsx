@@ -20,6 +20,7 @@ import {
 } from '@/components/settings/SettingsSection'
 import type { DesktopTerminalStartupShell } from '../types/settings'
 import { getDesktopHost } from '../lib/desktopHost'
+import { TerminalAppearanceSettings } from './settings/TerminalAppearanceSettings'
 import {
   attachTerminalRuntime,
   createLocalTerminalRuntimeId,
@@ -131,7 +132,7 @@ export function TerminalSettings({
   useEffect(() => {
     setStartupShell(desktopTerminal?.startupShell ?? 'system')
     setCustomShellPath(desktopTerminal?.customShellPath ?? '')
-  }, [desktopTerminal])
+  }, [desktopTerminal?.startupShell, desktopTerminal?.customShellPath])
 
   useEffect(() => {
     if (!preferencesSaved) return
@@ -256,11 +257,13 @@ export function TerminalSettings({
       let exitUnlisten: (() => void) | null = null
 
       try {
+        // Read after lazy imports: preferences may change while xterm loads.
+        const preferences = useSettingsStore.getState().desktopTerminal
         terminal = new TerminalModule.Terminal({
           cursorBlink: true,
           convertEol: false,
-          fontFamily: readTerminalFontFamily(),
-          fontSize: 13,
+          fontFamily: readTerminalFontFamily(preferences.fontFamily),
+          fontSize: preferences.fontSize,
           letterSpacing: 0,
           lineHeight: 1.2,
           cursorStyle: 'bar',
@@ -421,16 +424,16 @@ export function TerminalSettings({
     }
   }, [active, resizeSession])
 
-  // Repaint an already-running terminal when the app theme changes. The
-  // runtime outlives this component, so a terminal started under one theme
-  // would otherwise keep that palette for the rest of the session.
+  // Apply settings to running, newly created and reattached terminals. A
+  // typography change must not restart the shell or shrink a hidden PTY.
   useEffect(() => {
     const terminal = runtime.terminal
     if (!terminal) return
     terminal.options.theme = readTerminalPalette()
-    terminal.options.fontFamily = readTerminalFontFamily()
+    terminal.options.fontFamily = readTerminalFontFamily(desktopTerminal.fontFamily)
+    terminal.options.fontSize = desktopTerminal.fontSize
     resizeSession()
-  }, [runtime, theme, resizeSession])
+  }, [runtime, runtime.terminal, theme, desktopTerminal.fontFamily, desktopTerminal.fontSize, resizeSession])
 
   useEffect(() => {
     const fonts = document.fonts
@@ -545,6 +548,8 @@ export function TerminalSettings({
           <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
+
+      {showPreferences && <TerminalAppearanceSettings />}
 
       {showPreferences && isWindows && (
         <>

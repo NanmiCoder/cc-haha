@@ -41,6 +41,7 @@ import {
   resolveOpenAICodexModel,
 } from '../../services/openaiAuth/models.js'
 import { capitalize } from '../stringUtils.js'
+import { getProviderRouteForModel } from './providerEnvScope.js'
 
 export type ModelShortName = string
 export type ModelName = string
@@ -194,6 +195,10 @@ export function getRuntimeMainLoopModel(params: {
 }): ModelName {
   const { permissionMode, mainLoopModel, exceeds200kTokens = false } = params
 
+  // An Agent pinned to a saved provider keeps its model in plan mode too: the
+  // plan-mode swaps below name the session provider's slots.
+  if (getProviderRouteForModel(mainLoopModel)) return mainLoopModel
+
   // opusplan uses Opus in plan mode without [1m] suffix.
   if (
     getUserSpecifiedModelSetting() === 'opusplan' &&
@@ -275,14 +280,16 @@ export function getDefaultMainLoopModel(): ModelName {
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
   // Special cases for Claude 4+ models to differentiate versions
-  // Order matters: check more specific versions first (4-5 before 4)
+  // Order matters: check more specific versions first (4-5 before 4).
+  // OpenRouter uses dotted 5.5 IDs; canonicalize only the internal identity,
+  // leaving the namespaced outbound model ID untouched.
   if (name.includes('claude-fable-5-1')) {
     return 'claude-fable-5-1'
   }
   if (name.includes('claude-fable-5')) {
     return 'claude-fable-5'
   }
-  if (name.includes('claude-opus-5-5')) {
+  if (name.includes('claude-opus-5-5') || name.includes('anthropic/claude-opus-5.5')) {
     return 'claude-opus-5-5'
   }
   if (name.includes('claude-opus-5')) {
@@ -303,7 +310,7 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-opus-4')) {
     return 'claude-opus-4'
   }
-  if (name.includes('claude-sonnet-5-5')) {
+  if (name.includes('claude-sonnet-5-5') || name.includes('anthropic/claude-sonnet-5.5')) {
     return 'claude-sonnet-5-5'
   }
   if (name.includes('claude-sonnet-5')) {
@@ -318,7 +325,7 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-sonnet-4')) {
     return 'claude-sonnet-4'
   }
-  if (name.includes('claude-haiku-5-5')) {
+  if (name.includes('claude-haiku-5-5') || name.includes('anthropic/claude-haiku-5.5')) {
     return 'claude-haiku-5-5'
   }
   if (name.includes('claude-haiku-4-5')) {

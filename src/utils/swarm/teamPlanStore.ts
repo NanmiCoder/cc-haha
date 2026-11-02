@@ -167,6 +167,27 @@ export async function findTeamPlanForSession(sessionId: string): Promise<TeamPla
   }))
   return plans.filter((plan): plan is TeamPlanRecord => plan !== null).sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
 }
+/** Every current plan whose lead is paused until a person approves it (one per session). */
+export async function listTeamPlansAwaitingReview(): Promise<TeamPlanRecord[]> {
+  let names: string[]
+  try { names = await readdir(getTeamsDir()) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  const plans = await Promise.all(names.map(async name => {
+    let plan: TeamPlanRecord | null
+    try { plan = await readTeamPlan(name) } catch { return null }
+    if (!plan || plan.state !== 'review_pending') return null
+    try { return await incarnation(name, plan.sessionId) === plan.incarnationId ? plan : null } catch { return null }
+  }))
+  const latest = new Map<string, TeamPlanRecord>()
+  for (const plan of plans) {
+    if (!plan) continue
+    const known = latest.get(plan.sessionId)
+    if (!known || plan.updatedAt > known.updatedAt) latest.set(plan.sessionId, plan)
+  }
+  return [...latest.values()]
+}
 export async function isTeamExecutionApproved(teamName: string, memberName?: string): Promise<boolean> {
   const plan = await readTeamPlan(teamName)
   if (!plan) return false

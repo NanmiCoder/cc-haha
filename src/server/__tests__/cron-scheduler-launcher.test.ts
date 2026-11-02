@@ -524,6 +524,90 @@ describe('cron scheduler launcher resolution', () => {
     }
   })
 
+  unixOnly('executeTask lets a provider proxy override beat the global proxy for its scheduled sidecar', async () => {
+    const appRoot = path.join(tmpDir, 'app-root')
+    const sidecarPath = path.join(tmpDir, 'claude-sidecar')
+    const sidecarEnvPath = path.join(tmpDir, 'sidecar.env')
+    const settingsPath = path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json')
+
+    await fs.mkdir(appRoot, { recursive: true })
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+    await fs.writeFile(
+      sidecarPath,
+      [
+        '#!/bin/sh',
+        `env | sort > "${sidecarEnvPath}"`,
+        'IFS= read -r turn',
+        'printf \'%s\\n\' \'{"type":"result","result":"provider proxy ok"}\'',
+        '/bin/cat >/dev/null',
+        'exit 0',
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.chmod(sidecarPath, 0o755)
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({ network: { proxy: { mode: 'manual', url: 'http://127.0.0.1:7890' } } }),
+      'utf-8',
+    )
+    resetSettingsCache()
+
+    process.env.CLAUDE_CLI_PATH = sidecarPath
+    process.env.CLAUDE_APP_ROOT = appRoot
+
+    const providerService = new ProviderService()
+    const direct = await providerService.addProvider({
+      presetId: 'custom',
+      name: 'Direct Provider',
+      apiKey: 'provider-key',
+      baseUrl: 'https://api.direct.example',
+      apiFormat: 'openai_chat',
+      models: { main: 'm', haiku: 'm', sonnet: 'm', opus: '' },
+      proxy: { mode: 'direct' },
+    })
+    const followGlobal = await providerService.addProvider({
+      presetId: 'custom',
+      name: 'Follow Provider',
+      apiKey: 'provider-key',
+      baseUrl: 'https://api.follow.example',
+      apiFormat: 'openai_chat',
+      models: { main: 'm', haiku: 'm', sonnet: 'm', opus: '' },
+    })
+
+    const cronService = new CronService()
+    const scheduler = new CronScheduler(cronService)
+    for (const [provider, expectedProxyUrl] of [
+      [direct, ''],
+      [followGlobal, 'http://127.0.0.1:7890'],
+    ] as const) {
+      const task = await cronService.createTask({
+        cron: '* * * * *',
+        prompt: 'cron provider proxy test',
+        name: `Proxy ${provider.name}`,
+        recurring: true,
+        folderPath: tmpDir,
+        model: 'm',
+        providerId: provider.id,
+      })
+
+      const run = await scheduler.executeTask(task)
+      expect(run.status).toBe('completed')
+
+      const env = Object.fromEntries(
+        (await fs.readFile(sidecarEnvPath, 'utf-8'))
+          .trim()
+          .split('\n')
+          .map((line) => {
+            const index = line.indexOf('=')
+            return [line.slice(0, index), line.slice(index + 1)]
+          }),
+      )
+      expect(env.HTTPS_PROXY).toBe(expectedProxyUrl)
+      expect(env.https_proxy).toBe(expectedProxyUrl)
+    }
+  })
+
   unixOnly('executeTask reloads the General team preference for each new scheduled process', async () => {
     const appRoot = path.join(tmpDir, 'app-root')
     const sidecarPath = path.join(tmpDir, 'claude-sidecar')

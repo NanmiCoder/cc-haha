@@ -1,4 +1,4 @@
-import { filterAgentProfileTools, validateAgentProfileControlRequest, validateAgentProfileInitialize } from '../utils/agentProfile.js'
+import { filterAgentProfileTools, getAgentProfile, validateAgentProfileControlRequest, validateAgentProfileInitialize } from '../utils/agentProfile.js'
 import { createSessionMessageInbox, isPendingSessionMessage, sessionMessageUuid } from '../utils/sessionMessageInbox.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
@@ -261,6 +261,13 @@ import {
   ElicitationCompleteNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { disableStaleMcpReconnect } from './mcpReconnectState.js'
+import {
+  computerUsePermissionContext,
+  createComputerUseMcpRefresh,
+  isComputerUseRuntimeTool,
+  readComputerUseRefreshConfiguration,
+} from './computerUseMcpRefresh.js'
+import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer } from '../utils/computerUse/common.js'
 import { getMcpPrefix } from 'src/services/mcp/mcpStringUtils.js'
 import {
   commandBelongsToServer,
@@ -277,7 +284,7 @@ import {
   toInternalMessages,
   toSDKRateLimitInfo,
 } from 'src/utils/messages/mappers.js'
-import { createModelSwitchBreadcrumbs } from 'src/utils/messages.js'
+import { createModelSwitchBreadcrumbs, createUserMessage } from 'src/utils/messages.js'
 import { PrintPartialOutputTracker } from './partialOutput.js'
 import { collectContextData } from 'src/commands/context/context-noninteractive.js'
 import { getSessionUsageSnapshot } from 'src/cost-tracker.js'
@@ -342,6 +349,7 @@ import {
 import { asSessionId } from 'src/types/ids.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { skillChangeDetector } from '../utils/skills/skillChangeDetector.js'
+import { invalidateComputerUseSkillGate } from '../utils/computerUse/skillGate.js'
 import { getCommands, clearCommandsCache } from '../commands.js'
 import { filterCommandsForHeadlessMode } from '../commands/headless.js'
 import {
@@ -359,7 +367,7 @@ import {
   waitForTeammatesToBecomeIdle,
 } from '../utils/teammate.js'
 import { TEAM_LEAD_NAME } from '../utils/swarm/constants.js'
-import { SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/teamShutdownPrompt.js'
+import { formatTeamFinishedPrompt, SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/teamShutdownPrompt.js'
 import {
   readUnreadMessages,
   claimMailboxMessages,
@@ -371,10 +379,11 @@ import {
   partitionLeadMailboxMessages,
   resolveTeammatePermissionRequests,
 } from '../utils/swarm/printLeaderPermissionBridge.js'
-import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath } from '../utils/swarm/teamHelpers.js'
-import { setLeaderTeamName } from '../utils/tasks.js'
+import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath, unregisterTeamForSessionCleanup } from '../utils/swarm/teamHelpers.js'
+import { clearLeaderTeamName, setLeaderTeamName } from '../utils/tasks.js'
+import { clearTeammateColors } from '../utils/swarm/teammateLayoutManager.js'
 import { buildTeamRuntimeSnapshot } from '../utils/swarm/teamRuntimeSnapshot.js'
-import { unassignTeammateTasks } from '../utils/tasks.js'
+import { getCanonicalTeamTaskListId, listTasks, unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
 import { stopTaskFromControlRequest } from '../tasks/stopTask.js'
@@ -523,6 +532,82 @@ export async function takeLeadMailboxBatch(
   return { kind: 'batch', messages: unread }
 }
 
+/**
+ * How long an approved team must stay finished before its lead is reminded.
+ * A member is marked idle a moment before its last report reaches the lead's
+ * inbox; reminding inside that gap would shut the team down unread.
+ */
+export const TEAM_FINISHED_SETTLE_MS = 3_000
+
+export type TeamFinishedReminderState = {
+  /** The finished state being watched, and when it was first seen. */
+  pending?: { signature: string; since: number }
+  /** The finished state the lead was already reminded about. */
+  remindedFor?: string
+}
+
+/**
+ * A non-interactive lead is told to shut its team down when its input closes.
+ * A desktop lead's input never closes, so a team it does not end by itself
+ * would stay in its finishing phase indefinitely, every member idle. Once an
+ * approved desktop team (`reviewRequired`) is finished -- every shared task
+ * completed, no member in a turn, and nothing unread in the lead's inbox --
+ * the lead is reminded once. Teammate mail after that (a member's report on
+ * more work, its shutdown approval) or a new task completing starts a new
+ * finished state, which earns a new reminder: a lead that stops after the
+ * members it shut down approve is still left to delete the team.
+ */
+export async function takeTeamFinishedPrompt(
+  state: TeamFinishedReminderState,
+  teamName: string | undefined,
+  now = Date.now(),
+): Promise<QueuedCommand | null> {
+  const team = teamName ? readTeamFile(teamName) : null
+  const members = team?.reviewRequired
+    ? team.members.filter(member => member.agentId !== team.leadAgentId)
+    : []
+  const working = members.some(member => (
+    member.terminated !== true &&
+    (member.isActive !== false || member.autoRetry !== undefined)
+  ))
+  const tasks = team && members.length > 0 && !working
+    ? (await listTasks(getCanonicalTeamTaskListId(team.name))).filter(
+        task => !task.metadata?._internal,
+      )
+    : []
+  if (
+    !team ||
+    tasks.length === 0 ||
+    tasks.some(task => task.status !== 'completed')
+  ) {
+    state.pending = undefined
+    return null
+  }
+
+  const signature = jsonStringify([
+    team.createdAt,
+    tasks.map(task => task.id).sort(),
+  ])
+  if (signature === state.remindedFor) return null
+  if (state.pending?.signature !== signature) {
+    state.pending = { signature, since: now }
+    return null
+  }
+  if (now - state.pending.since < TEAM_FINISHED_SETTLE_MS) return null
+
+  state.pending = undefined
+  state.remindedFor = signature
+  return {
+    mode: 'prompt',
+    value: formatTeamFinishedPrompt(
+      team.name,
+      members.filter(member => member.terminated !== true).map(member => member.name),
+    ),
+    uuid: randomUUID(),
+    isMeta: true,
+  }
+}
+
 // Track message UUIDs received during the current session runtime
 const MAX_RECEIVED_UUIDS = 10_000
 const receivedMessageUuids = new Set<UUID>()
@@ -604,6 +689,7 @@ export async function runHeadless(
     jsonSchema: Record<string, unknown> | undefined
     permissionPromptToolName: string | undefined
     allowedTools: string[] | undefined
+    computerUse?: boolean
     thinkingConfig: ThinkingConfig | undefined
     maxTurns: number | undefined
     maxBudgetUsd: number | undefined
@@ -1185,6 +1271,7 @@ function runHeadlessStreaming(
     permissionPromptToolName: string | undefined
     hostPermissionPromptAvailable?: boolean
     allowedTools: string[] | undefined
+    computerUse?: boolean
     thinkingConfig: ThinkingConfig | undefined
     maxTurns: number | undefined
     maxBudgetUsd: number | undefined
@@ -1214,6 +1301,7 @@ function runHeadlessStreaming(
   let inputClosed = false
   let shutdownPromptInjected = false
   const leadMailboxPoll = createLeadMailboxPollState()
+  const teamFinishedReminder: TeamFinishedReminderState = {}
   let heldBackResult: StdoutMessage | null = null
   const deferredAgentNotifications = new TaskNotificationFollowUpBatch()
   let abortController: AbortController | undefined
@@ -1689,17 +1777,46 @@ function runHeadlessStreaming(
     configs: {},
   }
 
+  const computerUseMcp = createComputerUseMcpRefresh({
+    readConfiguration: () => readComputerUseRefreshConfiguration(options.computerUse === true),
+    snapshot: () => ({
+      clients: uniqBy([...getAppState().mcp.clients, ...mcpClients], 'name'),
+      tools: getAppState().mcp.tools,
+    }),
+    connect: async (config, reconnect) => {
+      if (reconnect) return reconnectMcpServerImpl(COMPUTER_USE_MCP_SERVER_NAME, config)
+      const client = await connectToServer(COMPUTER_USE_MCP_SERVER_NAME, config)
+      return { client, tools: client.type === 'connected' ? await fetchToolsForClient(client) : [] }
+    },
+    retire: client => clearServerCache(COMPUTER_USE_MCP_SERVER_NAME, client.config),
+    publish: (client, currentTools, allowedTools) => {
+      // Startup and SDK pools can retain old objects after a configuration
+      // change. Keep one authoritative owner in AppState for this builtin.
+      mcpClients = mcpClients.filter(existing => !isComputerUseMCPServer(existing.name))
+      setAppState(prev => ({
+        ...prev,
+        toolPermissionContext: computerUsePermissionContext(prev.toolPermissionContext, allowedTools),
+        mcp: {
+          ...prev.mcp,
+          clients: [...prev.mcp.clients.filter(existing => !isComputerUseMCPServer(existing.name)), ...(client ? [client] : [])],
+          tools: [...prev.mcp.tools.filter(tool => !isComputerUseRuntimeTool(tool)), ...currentTools],
+        },
+      }))
+    },
+    onError: error => logForDebugging(`[Computer Use MCP] Refresh failed: ${errorMessage(error)}`),
+  })
+
   // Shared tool assembly for ask() and the get_context_usage control request.
   // Closes over the mutable sdkTools/dynamicMcpState bindings so both call
   // sites see late-connecting servers.
   const buildAllTools = (appState: AppState): Tools => {
     const assembledTools = assembleToolPool(
       appState.toolPermissionContext,
-      appState.mcp.tools,
+      [...appState.mcp.tools.filter(tool => !isComputerUseRuntimeTool(tool)), ...computerUseMcp.tools()],
     )
     let allTools = uniqBy(
       mergeAndFilterTools(
-        [...tools, ...sdkTools, ...dynamicMcpState.tools],
+        [...tools, ...sdkTools, ...dynamicMcpState.tools].filter(tool => !isComputerUseRuntimeTool(tool)),
         assembledTools,
         appState.toolPermissionContext.mode,
       ),
@@ -2223,11 +2340,23 @@ function runHeadlessStreaming(
           // per-server by main.tsx (mirrors useManageMCPConnections). Reading
           // fresh per-command means late-connecting servers are visible on the
           // next turn. registerElicitationHandlers is idempotent (tracking set).
+          // Settings can change after prewarm or any earlier turn. Reconcile
+          // the builtin before taking the per-query inventory, even when the
+          // config file did not exist when the CLI started watching skills.
+          const computerUseWasAvailable = computerUseMcp.tools().length > 0
+          await computerUseMcp.sync()
+          if (computerUseWasAvailable !== (computerUseMcp.tools().length > 0)) {
+            // The config may have been created after skill watchers started;
+            // make both explicit Skill calls and the menu fresh in this turn.
+            invalidateComputerUseSkillGate()
+            clearCommandsCache()
+            currentCommands = filterCommandsForHeadlessMode(await getCommands(cwd()))
+          }
           const appState = getAppState()
           const allMcpClients = [
             ...appState.mcp.clients,
-            ...sdkClients,
-            ...dynamicMcpState.clients,
+            ...sdkClients.filter(client => !isComputerUseMCPServer(client.name)),
+            ...dynamicMcpState.clients.filter(client => !isComputerUseMCPServer(client.name)),
           ]
           registerElicitationHandlers(allMcpClients)
           // Channel handlers for servers allowlisted via --channels at
@@ -2729,6 +2858,10 @@ function runHeadlessStreaming(
             logForDebugging(
               `[print.ts] Team-lead found ${unread.length} unread messages`,
             )
+            // The team moved on; whatever finishes after the lead reads this
+            // settles afresh and earns its own reminder.
+            teamFinishedReminder.pending = undefined
+            teamFinishedReminder.remindedFor = undefined
 
             const partitioned = partitionLeadMailboxMessages(unread)
 
@@ -2828,6 +2961,21 @@ function runHeadlessStreaming(
               '[print.ts] Input closed with active teammates, injecting shutdown prompt',
             )
             enqueue(createShutdownTeamPrompt())
+            void run()
+            return // run() will come back here after processing
+          }
+
+          // A desktop lead's input never closes: remind it once its approved
+          // team has finished instead.
+          const teamFinishedPrompt = await takeTeamFinishedPrompt(
+            teamFinishedReminder,
+            teamName,
+          )
+          if (teamFinishedPrompt) {
+            logForDebugging(
+              '[print.ts] Approved team finished, reminding the lead to shut it down',
+            )
+            enqueue(teamFinishedPrompt)
             void run()
             return // run() will come back here after processing
           }
@@ -3023,7 +3171,7 @@ function runHeadlessStreaming(
       }
 
       if (message.type === 'control_request') {
-        if (message.request.subtype === 'enqueue_session_message') {
+        if (message.request.subtype === 'enqueue_session_message' || message.request.subtype === 'enqueue_scheduled_task') {
           try {
             const deliveryUuid = sessionMessageUuid(message.request.message_id)
             const persisted = !isPendingSessionMessage(deliveryUuid) && await doesMessageExistInSession(
@@ -3044,6 +3192,18 @@ function runHeadlessStreaming(
           } catch (error) {
             sendControlResponseError(message, error instanceof Error ? error.message : String(error))
           }
+        } else if (message.request.subtype === 'team_runtime_ended') {
+          // The host ended this team and removed its directories (the user
+          // cancelled or ended it). Let go of it as TeamDelete would, or the
+          // lead could never form another team in this session.
+          const endedTeam = message.request.team_name
+          if (getAppState().teamContext?.teamName === endedTeam) {
+            unregisterTeamForSessionCleanup(endedTeam)
+            clearTeammateColors()
+            clearLeaderTeamName()
+            setAppState(prev => ({ ...prev, teamContext: undefined, inbox: { messages: [] } }))
+          }
+          sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'interrupt' || message.request.subtype === 'team_plan_pause') {
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
           if (message.request.subtype === 'team_plan_pause') leadMailboxPoll.held = true
@@ -4154,7 +4314,12 @@ function runHeadlessStreaming(
               isLocalAgentTask(task) &&
               !isMainSessionTask(task)
             ) {
-              queuePendingMessage(agentId, content, setAppState)
+              queuePendingMessage(
+                agentId,
+                content,
+                setAppState,
+                getAgentProfile() === 'lean' ? [createUserMessage({ content, origin: { kind: 'human' } })] : undefined,
+              )
               sendControlResponseSuccess(message, {
                 agent_id: agentId,
                 delivery: 'queued',

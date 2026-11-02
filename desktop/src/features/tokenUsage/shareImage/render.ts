@@ -36,9 +36,13 @@ export async function loadShareAssets(avatarUrl: string | null): Promise<ShareAs
   let avatar: PaintAssets['avatar'] = icon ? { image: icon, zoom: DEFAULT_AVATAR_ZOOM } : null
   if (avatarUrl) {
     try {
-      const blobUrl = await fetchServerImageBlobUrl(avatarUrl)
-      objectUrls.push(blobUrl)
-      avatar = { image: await loadImage(blobUrl), zoom: 1 }
+      if (/^data:image\/(?:png|jpeg|webp);base64,/.test(avatarUrl)) {
+        avatar = { image: await loadImage(avatarUrl), zoom: 1 }
+      } else {
+        const blobUrl = await fetchServerImageBlobUrl(avatarUrl)
+        objectUrls.push(blobUrl)
+        avatar = { image: await loadImage(blobUrl), zoom: 1 }
+      }
     } catch {
       // Keep the app icon.
     }

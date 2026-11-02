@@ -1,6 +1,7 @@
 import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
+import { powerActivityClock } from './powerActivityClock.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -21,6 +22,7 @@ import {
   isOpenAIOfficialProviderId,
 } from './openaiOfficialProvider.js'
 import {
+  GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
 } from './grokOfficialProvider.js'
@@ -72,7 +74,7 @@ import {
   resolveStreamToolInputDurationMs,
   SYSTEM_PROXY_URL_ENV,
   type NetworkSettings,
-} from './networkSettings.js'
+  resolveProviderNetworkSettings,} from './networkSettings.js'
 import { readTraceCaptureSettings, traceCaptureService } from './traceCaptureService.js'
 import {
   killWindowsProcessTree,
@@ -207,6 +209,7 @@ type TrackedPermissionRequest = {
   autoAnswerAbortController?: AbortController
   autoAnswerCancelled?: boolean
   autoAnswerCreatedAt?: number
+  autoAnswerDeadline?: number | null
   autoAnswerGeneration?: number
 }
 
@@ -326,6 +329,7 @@ export type PendingPermissionRequest = {
   input: Record<string, unknown>
   description?: string
   displayName?: string
+  autoAnswerDeadline?: number | null
 }
 
 export type TeamWorkerStart = {
@@ -418,14 +422,33 @@ export class ConversationService {
   }
 
   cancelAutoQuestionAnswer(sessionId: string, requestId: string): void {
-    const request = this.sessions.get(sessionId)?.pendingPermissionRequests.get(requestId)
-    if (request?.toolName !== 'AskUserQuestion') return
+    const session = this.sessions.get(sessionId)
+    const request = session?.pendingPermissionRequests.get(requestId)
+    if (request?.toolName !== 'AskUserQuestion' || request.autoAnswerCancelled) return
     this.clearAutoAnswerWait(request)
     request.autoAnswerTimer = undefined
     request.autoAnswerAbortController = undefined
     console.info(`[ConversationService] Automatic answer cancelled by user activity: session=${sessionId} request=${requestId}`)
     request.autoAnswerCancelled = true
     request.autoAnswerGeneration = (request.autoAnswerGeneration ?? 0) + 1
+    request.autoAnswerDeadline = null
+    if (session) this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+  }
+
+  private publishAutoQuestionDeadline(sessionId: string, session: SessionProcess, requestId: string, request: TrackedPermissionRequest): void {
+    const message = {
+      type: 'control_request', request_id: requestId,
+      request: {
+        subtype: 'can_use_tool', tool_name: request.toolName, tool_use_id: request.toolUseId,
+        input: request.input, description: request.description, display_name: request.displayName,
+        auto_answer_deadline: request.autoAnswerDeadline ?? null,
+      },
+    }
+    this.notifyOutputCallbacks(sessionId, session.outputCallbacks, message)
+    if (session.teamWorker) {
+      const parent = this.sessions.get(session.teamWorker.parentSessionId)
+      if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, message)
+    }
   }
 
   /** Apply setting changes to questions that are already waiting. */
@@ -454,12 +477,16 @@ export class ConversationService {
       const settings = normalizeAutoQuestionSettings(
         (await new SettingsService().getUserSettings()).autoQuestion,
       )
-      if (!settings.enabled || request.autoAnswerCancelled ||
+      if (request.autoAnswerCancelled ||
         (request.autoAnswerGeneration ?? 0) !== generation || this.sessions.get(sessionId) !== session ||
         session.pendingPermissionRequests.get(requestId) !== request) return
-
-      const remainingMs = Math.max(0, (request.autoAnswerCreatedAt ?? Date.now()) +
-        settings.timeoutMinutes * 60_000 - Date.now())
+      request.autoAnswerCreatedAt ??= Date.now()
+      request.autoAnswerDeadline = settings.enabled
+        ? request.autoAnswerCreatedAt + settings.timeoutMinutes * 60_000
+        : null
+      this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+      if (request.autoAnswerDeadline === null) return
+      const remainingMs = Math.max(0, request.autoAnswerDeadline - Date.now())
       console.info(`[ConversationService] Automatic answer scheduled: session=${sessionId} request=${requestId} remainingMs=${remainingMs}`)
       request.autoAnswerTimer = setTimeout(() => {
         request.autoAnswerTimer = undefined
@@ -615,7 +642,9 @@ export class ConversationService {
         '--agent-name', options.teamWorker.name,
         '--team-name', options.teamWorker.teamName,
         '--parent-session-id', options.teamWorker.parentSessionId,
-        '--agents', JSON.stringify({ [options.teamWorker.name]: { ...options.teamWorker.agentDefinition, description: 'Approved team member', prompt: options.teamWorker.systemPrompt, model: options?.model, tools: options.teamWorker.tools } }),
+        // The member process already runs on its approved provider; a preset's
+        // pinned provider must not reroute the member's own model again.
+        '--agents', JSON.stringify({ [options.teamWorker.name]: { ...options.teamWorker.agentDefinition, description: 'Approved team member', prompt: options.teamWorker.systemPrompt, model: options?.model, provider: undefined, tools: options.teamWorker.tools } }),
         '--agent', options.teamWorker.name,
         ...(Array.isArray(options.teamWorker.agentDefinition?.disallowedTools) && options.teamWorker.agentDefinition.disallowedTools.length
           ? ['--disallowedTools', options.teamWorker.agentDefinition.disallowedTools.join(',')]
@@ -1094,7 +1123,15 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    const settings = await loadNetworkSettings()
+    // The session may pin a provider whose proxy override diverges from the
+    // global network settings; the hot update must keep honoring it.
+    const sessionProvider = session.providerId
+      ? await this.providerService.getProvider(session.providerId).catch(() => null)
+      : null
+    const settings = resolveProviderNetworkSettings(
+      await loadNetworkSettings(),
+      sessionProvider?.proxy,
+    )
     const baseEnv = await getProcessEnvWithTerminalShellEnvironment()
     const networkEnv = buildNetworkEnvironment(settings, baseEnv)
     const fingerprint = networkRoutingFingerprint(settings, {
@@ -1160,7 +1197,7 @@ export class ConversationService {
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
     this.clearAutoAnswerWait(pendingRequest)
     if (session) {
-      session.pendingPermissionRequests.delete(requestId)
+      if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
     }
 
     return this.sendSdkMessage(sessionId, {
@@ -1400,6 +1437,7 @@ export class ConversationService {
     timeoutMs = 10_000,
     signal?: AbortSignal,
     canSend?: () => boolean,
+    beforeSend?: () => Promise<boolean>,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
@@ -1414,6 +1452,22 @@ export class ConversationService {
     if (!session) {
       throw new Error('CLI session is not running')
     }
+    if (request.subtype === 'enqueue_scheduled_task') {
+      // Scheduled work starts a user turn through the control channel. A live
+      // CLI must receive changed provider proxy/timeouts just like sendMessage.
+      // Refresh before the durable delivery receipt, and recheck ownership after
+      // the asynchronous settings read so cancellation cannot enqueue stale work.
+      if (signal?.aborted) throw controlRequestAbortReason(signal)
+      if (canSend && !canSend()) throw new Error('Scheduled delivery was cancelled')
+      if (!await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
+        throw new Error('CLI session is not running')
+      }
+      if (signal?.aborted) throw controlRequestAbortReason(signal)
+      if (this.sessions.get(sessionId) !== session || (canSend && !canSend())) {
+        throw new Error('Scheduled delivery was cancelled')
+      }
+    }
+    if (beforeSend && !await beforeSend()) throw new Error('Scheduled task changed before delivery')
     const responseTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt))
     const requestId = crypto.randomUUID()
     return new Promise((resolve, reject) => {
@@ -1518,6 +1572,7 @@ export class ConversationService {
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     }))
   }
 
@@ -1628,7 +1683,9 @@ export class ConversationService {
         if (sdkError) {
           void diagnosticsService.recordEvent({
             type: sdkError.type,
-            severity: sdkError.type === 'sdk_api_retry' ? 'warn' : 'error',
+            // A retry the CLI is still attempting is a recoverable state, not an error; the
+            // exhausted request is recorded separately as an error.
+            severity: sdkError.type === 'sdk_api_retry' ? 'info' : 'error',
             sessionId,
             summary: sdkError.summary,
             details: sdkError.details,
@@ -1684,6 +1741,7 @@ export class ConversationService {
           }
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
           session.pendingPermissionRequests.set(msg.request_id, request)
+          powerActivityClock.changed()
           void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
         }
         if (
@@ -1691,14 +1749,14 @@ export class ConversationService {
           typeof msg.request_id === 'string'
         ) {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
-          session.pendingPermissionRequests.delete(msg.request_id)
+          if (session.pendingPermissionRequests.delete(msg.request_id)) powerActivityClock.changed()
         }
         if (
           msg?.type === 'control_response' &&
           typeof msg.response?.request_id === 'string'
         ) {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.response.request_id))
-          session.pendingPermissionRequests.delete(msg.response.request_id)
+          if (session.pendingPermissionRequests.delete(msg.response.request_id)) powerActivityClock.changed()
         }
         if (session.teamWorker && msg?.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
           const parent = this.sessions.get(session.teamWorker.parentSessionId)
@@ -1997,6 +2055,8 @@ export class ConversationService {
     return Array.from(this.sessions.keys())
   }
 
+  hasPendingTeamStops(): boolean { return this.teamStopOperations.size > 0 }
+
   getProcessIds(): number[] {
     return [...this.sessions.values()].map(session => session.proc.pid).filter(pid => pid > 0)
   }
@@ -2103,16 +2163,22 @@ export class ConversationService {
       // processes, their messages queue in the lead's mailbox, and the next
       // lead start receives the team snapshot again. Explicit stops (close,
       // delete, /clear) still stop workers through stopSession.
-      this.cancelPendingControlRequests(
-        activeSession,
-        new Error('CLI session exited before the control request completed'),
-      )
       if (activeSession.startupPending) {
+        this.cancelPendingControlRequests(
+          activeSession,
+          new Error('CLI session exited before the control request completed'),
+        )
         activeSession.startupExitCode = code
         return
       }
       await this.waitForProcessOutputDrain(activeSession)
       const exitError = this.buildRuntimeExitMessage(sessionId, code)
+      // A caller waiting on the process (a team member's startup) has to say
+      // why it is gone, not only that it is.
+      this.cancelPendingControlRequests(
+        activeSession,
+        new Error(`CLI session exited before the control request completed. ${exitError}`),
+      )
       void diagnosticsService.recordEvent({
         type: 'cli_runtime_exit',
         severity: cliExitSeverity(code),
@@ -2225,6 +2291,7 @@ export class ConversationService {
       'CC_HAHA_OPENAI_FAST_MODE',
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
+      GROK_MODEL_CATALOG_ENV_KEY,
       DEEPSEEK_OAUTH_PROVIDER_ENV_KEY,
       DEEPSEEK_OAUTH_FILE_ENV_KEY,
       IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
@@ -2282,7 +2349,10 @@ export class ConversationService {
       : null
     if (explicitProviderEnv) delete explicitProviderEnv.CC_HAHA_OPENAI_FAST_MODE
     const networkEnv = buildNetworkEnvironment(
-      networkSettingsOverride ?? await loadNetworkSettings(),
+      resolveProviderNetworkSettings(
+        networkSettingsOverride ?? await loadNetworkSettings(),
+        explicitProvider?.proxy,
+      ),
       cleanEnv,
     )
     // The overall-duration cap has to scale with the user's "请求超时" or raising
@@ -2595,6 +2665,7 @@ export class ConversationService {
         OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
         GROK_OAUTH_PROVIDER_ENV_KEY,
         GROK_OAUTH_FILE_ENV_KEY,
+        GROK_MODEL_CATALOG_ENV_KEY,
         DEEPSEEK_OAUTH_PROVIDER_ENV_KEY,
         DEEPSEEK_OAUTH_FILE_ENV_KEY,
         IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
@@ -2737,13 +2808,12 @@ export class ConversationService {
     }
 
     const normalizedDetail = detail.trim()
-    // A Windows Bun that crashes before running any code almost always failed
-    // to commit memory for JavaScriptCore: the machine's commit limit (RAM +
-    // page file) is used up, which every extra CLI process (e.g. each team
-    // member) brings closer. The raw crash report alone points at Bun instead.
+    // A Bun crash report identifies a runtime failure, not its cause. Preserve
+    // the panic and report URL without inferring memory exhaustion from the
+    // platform, exit code, or process memory snapshot.
     if (/Bun has crashed/i.test(normalizedDetail) && /\bWindows\b/.test(normalizedDetail)) {
       return new ConversationStartupError(
-        `CLI runtime crashed during startup (code ${exitCode}). On Windows this usually means the system has run out of commit memory (RAM + page file). Close other programs, set the page file (virtual memory) to system managed, or start fewer team members, then retry. Crash output: ${normalizedDetail}`,
+        `CLI runtime crashed during startup (code ${exitCode}). Include the crash output and diagnostics when reporting this problem. Crash output: ${normalizedDetail}`,
         'CLI_START_FAILED',
         true,
       )

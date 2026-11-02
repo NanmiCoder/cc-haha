@@ -498,6 +498,69 @@ describe('reduceTranscript activity usage', () => {
     expect(result.activity?.daily[0]?.messageCount).toBe(12)
   })
 
+  it('counts the final usage of a reply whose first content-block line was written with zero output', () => {
+    // Real transcripts hold replies whose first line carries a zero/partial usage and whose last
+    // line carries the final numbers. "First line wins" recorded such replies as ~0 output tokens.
+    const lines = assistantBlockLines({
+      messageId: 'msg_zero_first',
+      requestId: 'req_zero_first',
+      timestamp: '2026-01-01T10:00:00.000Z',
+      usage: STANDARD_USAGE,
+      blocks: [
+        { type: 'thinking', thinking: 'planning' },
+        { type: 'text', text: 'here goes' },
+        { type: 'tool_use', id: 'toolu_a', name: 'Bash', input: {} },
+      ],
+    })
+    const partial = [
+      { input_tokens: 1000, output_tokens: 0, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0 },
+      { input_tokens: 1000, output_tokens: 3, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 300 },
+      STANDARD_USAGE,
+    ]
+    lines.forEach((line, index) => { line.message.usage = partial[index]! })
+
+    const result = reduceTranscript(completeChunks(lines), initialProjection())
+    const expected = reduceTranscript(completeChunks(assistantBlockLines({
+      messageId: 'msg_zero_first',
+      requestId: 'req_zero_first',
+      timestamp: '2026-01-01T10:00:00.000Z',
+      usage: STANDARD_USAGE,
+      blocks: [{ type: 'text', text: 'one line' }],
+    })), initialProjection())
+
+    expect(modelTotals(result)).toEqual([{
+      model: 'claude-opus-5',
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadInputTokens: 50_000,
+      cacheCreationInputTokens: 300,
+    }])
+    // Dollars follow the reply's final figure, not the sum of its fragments' tiers.
+    expect(result.activity?.models[0]?.costUSD).toBeCloseTo(expected.activity!.models[0]!.costUSD, 10)
+  })
+
+  it('keeps the ledger across an incremental read of a reply split over two chunks', () => {
+    const lines = assistantBlockLines({
+      messageId: 'msg_split',
+      requestId: 'req_split',
+      timestamp: '2026-01-01T10:00:00.000Z',
+      usage: STANDARD_USAGE,
+      blocks: [{ type: 'text', text: 'first block' }, { type: 'text', text: 'last block' }],
+    })
+    lines[0]!.message.usage = { ...STANDARD_USAGE, output_tokens: 0 }
+
+    const first = reduceTranscript(completeChunks([lines[0]!]), initialProjection())
+    const second = reduceTranscript(completeChunks([lines[1]!], first.indexedBytes), first)
+
+    expect(modelTotals(second)).toEqual([{
+      model: 'claude-opus-5',
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadInputTokens: 50_000,
+      cacheCreationInputTokens: 300,
+    }])
+  })
+
   it('counts a genuinely new reply separately', () => {
     const chunks = completeChunks([
       ...assistantBlockLines({

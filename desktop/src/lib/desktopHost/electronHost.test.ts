@@ -5,6 +5,46 @@ import { createElectronHost } from './electronHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type WorkspaceBrowserMenuOptions } from './types'
 
 describe('electron desktop host', () => {
+  it('only exposes validated configuration, status and cancellation for idle power actions', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const subscribe = vi.fn()
+    const host = createElectronHost({ invoke, subscribe })
+    const settings = { action: 'sleep' as const, scope: 'any' as const, countdownSeconds: 60 as const }
+    await host.power.getIdleActionState()
+    await host.power.configureIdleAction(settings)
+    await host.power.cancelIdleAction()
+    const handler = vi.fn()
+    await host.power.onIdleActionState(handler)
+    expect(invoke.mock.calls).toEqual([
+      [ELECTRON_IPC_CHANNELS.powerGetIdleActionState, undefined],
+      [ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, settings],
+      [ELECTRON_IPC_CHANNELS.powerCancelIdleAction, undefined],
+    ])
+    expect(subscribe).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.powerIdleActionState, handler)
+    for (const invalid of [{ ...settings, action: 'reboot' }, { ...settings, countdownSeconds: -1 }, { ...settings, command: 'shutdown' }]) {
+      await expect(host.power.configureIdleAction(invalid as never)).rejects.toThrow('Invalid Electron IPC payload')
+    }
+    const { isElectronIpcChannelAllowedForPetWindow } = await import('../../../electron/ipc/capabilities')
+    for (const channel of [ELECTRON_IPC_CHANNELS.powerGetIdleActionState, ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, ELECTRON_IPC_CHANNELS.powerCancelIdleAction]) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.power.configureIdleAction(settings)).rejects.toThrow('desktop app runtime')
+  })
+
+  it('routes prevent-sleep preferences through boolean-only IPC and excludes browser/pet callers', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    await host.power.setPreventSleepWhileRunning(true)
+    await host.power.setPreventSleepWhileRunning(false)
+    expect(invoke.mock.calls).toEqual([
+      [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, true],
+      [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, false],
+    ])
+    await expect(host.power.setPreventSleepWhileRunning('true' as never)).rejects.toThrow('Invalid Electron IPC payload')
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.power.setPreventSleepWhileRunning(true)).rejects.toThrow('desktop app runtime')
+  })
   it('routes migration preview, background start, status, cancellation and progress over narrow IPC', async () => {
     const invoke = vi.fn().mockResolvedValue(null)
     const unlisten = vi.fn()
@@ -29,18 +69,29 @@ describe('electron desktop host', () => {
   })
 
   it('routes public access through validated local IPC without exposing management in browsers', async () => {
-    const invoke = vi.fn().mockResolvedValue({ hasCredential: true })
+    const invoke = vi.fn().mockResolvedValue({ state: 'disabled' })
     const host = createElectronHost({ invoke, subscribe: vi.fn() })
-    await host.publicAccess.saveCredential('fixture-ngrok-token')
     await host.publicAccess.start(PUBLIC_ACCESS_CONSENT_VERSION)
     await host.publicAccess.setAutoStart(false)
     await host.publicAccess.stop()
-    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, 'fixture-ngrok-token')
-    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
-    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
-    expect(invoke).toHaveBeenNthCalledWith(4, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
+    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
+    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
     const { browserHost } = await import('./browserHost')
     await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
+  })
+
+  it('carries Cloudflare tunnel configuration through validated IPC and rejects unsafe local targets', async () => {
+    const invoke = vi.fn().mockResolvedValue(null)
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    const configuration = { mode: 'named' as const, customUrl: 'https://phone.example.test', localPort: 17463 }
+    await host.publicAccess.configure(configuration)
+    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.publicAccessConfigure, configuration)
+    await expect(host.publicAccess.configure({ ...configuration, customUrl: 'http://relay.example.test' })).rejects.toThrow('Invalid Electron IPC payload')
+    await expect(host.publicAccess.configure({ ...configuration, localHost: '0.0.0.0' } as never)).rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.publicAccess.configure(configuration)).rejects.toThrow('desktop app runtime')
   })
 
   it('carries a terminal startup identity through the production IPC validator and early events', async () => {

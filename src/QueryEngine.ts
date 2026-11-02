@@ -1,4 +1,4 @@
-import { consumeSessionMessage, isPendingSessionMessage } from './utils/sessionMessageInbox.js'
+import { consumeSessionMessage, isPendingSessionMessage, getPendingScheduledTask } from './utils/sessionMessageInbox.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID } from 'crypto'
@@ -501,17 +501,24 @@ export class QueryEngine {
     })
 
     const isSessionMessage = isPendingSessionMessage(options?.uuid)
+    const scheduledTask = getPendingScheduledTask(options?.uuid)
     // A prompt that is not the human's own input (a task notification starting
     // its own turn, a channel message) keeps its origin on the messages it
     // produces, as handlePromptSubmit does for the REPL. Without it the turn
     // reads as the user's: a lean session would take a `/skill` the model wrote
     // into a notification for the user's explicit selection.
     const origin: MessageOrigin | undefined = isSessionMessage
-      ? { kind: 'channel', server: 'session-collaboration' }
+      ? { kind: 'channel', server: scheduledTask ? 'scheduled-task' : 'session-collaboration' }
       : options?.origin
     if (origin) {
       for (const message of messagesFromUserInput) {
-        if (message.type === 'user') message.origin = origin
+        if (message.type === 'user') {
+          message.origin = origin
+          if (scheduledTask) {
+            message.scheduledTask = scheduledTask
+            message.isMeta = false
+          }
+        }
       }
     }
 
@@ -559,7 +566,7 @@ export class QueryEngine {
         (msg.type === 'user' &&
           !msg.isMeta && // Skip synthetic caveat messages
           !msg.toolUseResult && // Skip tool results (they'll be acked from query)
-          messageSelector().selectableUserMessagesFilter(msg)) || // Skip non-user-authored messages (task notifications, etc.)
+          (msg.scheduledTask || messageSelector().selectableUserMessagesFilter(msg))) || // Skip non-user-authored messages (task notifications, etc.)
         (msg.type === 'system' && msg.subtype === 'compact_boundary'), // Always ack compact boundaries
     )
     const messagesToAck = replayUserMessages ? replayableMessages : []
@@ -863,6 +870,7 @@ export class QueryEngine {
                 parent_tool_use_id: null,
                 uuid: msgToAck.uuid,
                 timestamp: msgToAck.timestamp,
+                ...(msgToAck.scheduledTask ? { scheduledTask: msgToAck.scheduledTask } : {}),
                 isReplay: true,
               } as SDKUserMessageReplay
             }

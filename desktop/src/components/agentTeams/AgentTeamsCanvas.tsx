@@ -273,9 +273,7 @@ function taskBelongsToMember(
   member: TeamMember,
   snapshot: TeamWorkbenchSnapshot,
 ): boolean {
-  if (taskOwnedByMember(task, member)) return true
-  const attribution = inferTaskOwner(task, snapshot)
-  return Boolean(attribution && memberMatches(member, attribution.identity))
+  return taskOwnedByMember(task, member, snapshot)
 }
 
 function memberInboxCount(member: TeamMember, messages: TeamWorkbenchMessage[]): number {
@@ -693,7 +691,9 @@ function TaskCard({
       : owner.name
     : task.status === 'completed'
       ? t('agentTeams.task.completedNoOwner')
-      : t('agentTeams.task.unclaimed')
+      : task.status === 'in_progress'
+        ? t('agentTeams.task.runningNoOwner')
+        : t('agentTeams.task.unclaimed')
 
   return (
     <button

@@ -1328,6 +1328,34 @@ describe('cc-switch candidate mapping', () => {
     expect(candidateById(candidates, 'claude:unknown').presetId).toBe('custom')
   })
 
+  test('matches the OpenRouter preset from any spelling of its root URL', async () => {
+    await writeFixtureDb([
+      { id: 'or', sortIndex: 1, env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }) },
+      { id: 'or-trailing', sortIndex: 2, env: claudeEnv({ ANTHROPIC_BASE_URL: 'HTTPS://OPENROUTER.AI/API/' }) },
+      {
+        id: 'or-guide-shape', sortIndex: 3,
+        // OpenRouter's Claude Code guide ships exactly this credential pair, and
+        // cc-switch records which header carries the key in meta.
+        meta: JSON.stringify({ apiFormat: 'anthropic', apiKeyField: 'ANTHROPIC_AUTH_TOKEN' }),
+        env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://openrouter.ai/api/', ANTHROPIC_API_KEY: '' }),
+      },
+    ])
+
+    const candidates = await scanCandidates()
+
+    for (const sourceId of ['claude:or', 'claude:or-trailing', 'claude:or-guide-shape']) {
+      const candidate = candidateById(candidates, sourceId)
+      expect(candidate.presetId, sourceId).toBe('openrouter')
+      expect(candidate.importable, sourceId).toBe(true)
+    }
+    // The preset's protocol and credential shape survive the import instead of
+    // being rewritten into a translated format or an x-api-key header.
+    expect(candidateById(candidates, 'claude:or-guide-shape')).toMatchObject({
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+    })
+  })
+
   test('carries range-checked context windows and boolean toggles into the provider input', async () => {
     await writeFixtureDb([{
       id: 'tuned',

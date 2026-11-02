@@ -64,4 +64,25 @@ describe('TaskRow', () => {
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
   })
+
+  it('shows a finished one-time task as completed and offers no enable action', () => {
+    renderRow({ task: { ...task, enabled: false, scheduleState: 'completed' } })
+    expect(screen.getByLabelText('Completed')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Disabled')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument()
+  })
+
+  it('does not leak an unhandled rejection when the server refuses to resume a task', async () => {
+    const updateTask = vi.fn().mockRejectedValue(new Error('One-time task must be scheduled in the future'))
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    useTaskStore.setState({ updateTask })
+    renderRow({ task: { ...task, enabled: false } })
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledWith('Failed to update task:', expect.any(Error)))
+    consoleError.mockRestore()
+  })
 })

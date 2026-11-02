@@ -10,6 +10,7 @@ import { CLAUDE_CODE_COMPAT_VERSION } from '../../constants/claudeCodeCompatibil
 import { enableConfigs } from '../../utils/config.js'
 import { get3PModelCapabilityOverride } from '../../utils/model/modelSupportOverrides.js'
 import { buildProviderManagedEnv } from '../../server/services/providerRuntimeEnv.js'
+import { PROVIDER_PRESETS } from '../../server/config/providerPresets.js'
 import type { SavedProvider } from '../../server/types/provider.js'
 import { queryModelWithStreaming, queryWithModel } from './claude.js'
 import { createUserMessage } from '../../utils/messages.js'
@@ -507,6 +508,54 @@ test('keeps required-thinking models enabled when the caller requests disabled t
   expect(requests[0]?.model).toBe('k3')
   expect(requests[0]?.thinking).toMatchObject({ type: 'enabled' })
 }, 10_000)
+
+for (const slot of ['sonnet', 'opus'] as const) {
+  test(`OpenRouter ${slot} preserves its model ID and required thinking when thinking is disabled`, async () => {
+    const preset = PROVIDER_PRESETS.find(candidate => candidate.id === 'openrouter')!
+    const model = preset.defaultModels[slot]
+    const { content, requests, requestHeaders } = await captureQueryRequest({
+      model,
+      provider: {
+        id: 'openrouter-request-fixture', presetId: preset.id, name: preset.name,
+        baseUrl: preset.baseUrl, apiFormat: preset.apiFormat, authStrategy: preset.authStrategy,
+        apiKey: 'fake-openrouter-key', models: preset.defaultModels,
+      },
+      configureCapabilityOverrides: false,
+      globalThinkingEnabled: false,
+    })
+
+    expect(content).toEqual([{ type: 'text', text: 'OK' }])
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.model).toBe(model)
+    expect(requests[0]?.thinking).toEqual({ type: 'adaptive' })
+    expect(requests[0]?.max_tokens).toBe(128_000)
+    expect(requestHeaders[0]?.get('authorization')).toBe('Bearer fake-openrouter-key')
+    expect(requestHeaders[0]?.get('x-api-key')).toBeNull()
+  }, 10_000)
+}
+
+for (const effortValue of ['xhigh', 'max'] as const) {
+  test(`OpenRouter Haiku caps ${effortValue} effort when thinking is disabled`, async () => {
+    const preset = PROVIDER_PRESETS.find(candidate => candidate.id === 'openrouter')!
+    const model = preset.defaultModels.haiku
+    const { content, requests } = await captureQueryRequest({
+      model,
+      provider: {
+        id: 'openrouter-haiku-fixture', presetId: preset.id, name: preset.name,
+        baseUrl: preset.baseUrl, apiFormat: preset.apiFormat, authStrategy: preset.authStrategy,
+        apiKey: 'fake-openrouter-key', models: preset.defaultModels,
+      },
+      configureCapabilityOverrides: false,
+      globalThinkingEnabled: false,
+      effortValue,
+    })
+    expect(content).toEqual([{ type: 'text', text: 'OK' }])
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.model).toBe(model)
+    expect(requests[0]?.thinking).toEqual({ type: 'disabled' })
+    expect(requests[0]?.output_config).toEqual({ effort: 'high' })
+  }, 10_000)
+}
 
 test('derives GLM 5.3 standard API request controls from the provider-managed environment', async () => {
   const provider = {

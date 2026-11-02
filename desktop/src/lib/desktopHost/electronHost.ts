@@ -62,8 +62,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
   return {
     publicAccess: {
       getStatus: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessGetStatus),
-      saveCredential: token => invoke(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, token),
-      deleteCredential: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential),
+      configure: configuration => invoke(ELECTRON_IPC_CHANNELS.publicAccessConfigure, configuration),
       start: consentVersion => invoke(ELECTRON_IPC_CHANNELS.publicAccessStart, consentVersion),
       stop: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessStop),
       setAutoStart: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, enabled),
@@ -96,6 +95,13 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     },
     commands: {
       invoke: (command, args) => invoke(ELECTRON_IPC_CHANNELS.commandInvoke, { command, args }),
+    },
+    power: {
+      getIdleActionState: () => invoke(ELECTRON_IPC_CHANNELS.powerGetIdleActionState),
+      configureIdleAction: settings => invoke(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, settings),
+      cancelIdleAction: () => invoke(ELECTRON_IPC_CHANNELS.powerCancelIdleAction),
+      onIdleActionState: handler => subscribe(ELECTRON_EVENT_CHANNELS.powerIdleActionState, handler),
+      setPreventSleepWhileRunning: enabled => invoke(ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, enabled),
     },
     clipboard: {
       readText: () => invoke(ELECTRON_IPC_CHANNELS.clipboardReadText),

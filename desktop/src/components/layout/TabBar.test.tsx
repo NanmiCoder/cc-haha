@@ -309,6 +309,7 @@ describe('TabBar', () => {
     const { useTeamStore } = await import('../../stores/teamStore')
     const { useWorkflowStore } = await import('../../stores/workflowStore')
     const { useWorkspaceStore } = await import('../../stores/workspaceStore')
+    const { useUIStore } = await import('../../stores/uiStore')
 
     useTabStore.setState({ tabs: [], activeTabId: null })
     useChatStore.setState({
@@ -327,6 +328,7 @@ describe('TabBar', () => {
     useCLITaskStore.setState(useCLITaskStore.getInitialState(), true)
     useTeamStore.setState(useTeamStore.getInitialState(), true)
     useWorkflowStore.setState({ runs: {} })
+    useUIStore.setState({ newSessionDraft: null, draftWorkspaceRequest: null })
 
     Reflect.deleteProperty(window, 'desktopHost')
     Reflect.deleteProperty(window, '__TAURI__')
@@ -379,6 +381,46 @@ describe('TabBar', () => {
     fireEvent.click(side)
     expect(useWorkspaceStore.getState().getSession('second-session').layout).toBe('split')
     expect(useWorkspaceStore.getState().getSession(sessionId).tabs).toEqual(before)
+  })
+
+  it('offers the project and workspace entry points on the retained new-session draft', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useUIStore } = await import('../../stores/uiStore')
+    const { useWorkspaceStore } = await import('../../stores/workspaceStore')
+    useUIStore.setState({
+      newSessionDraft: { workDir: '/repo/project', revision: 7, hasContent: false },
+      draftWorkspaceRequest: null,
+    })
+    render(<TabBar />)
+
+    expect(screen.getByTestId('open-project-menu')).toHaveTextContent('/repo/project')
+    const side = screen.getByTestId('workspace-toggle-side')
+    const bottom = screen.getByTestId('workspace-toggle-bottom')
+    expect(screen.queryByTestId('workspace-toggle-fullscreen')).not.toBeInTheDocument()
+
+    fireEvent.click(side)
+    fireEvent.click(bottom)
+
+    // The draft has no session yet, so the controls only record the intent.
+    expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+      action: 'toggle-bottom',
+      revision: 7,
+    })
+    expect(useWorkspaceStore.getState().bySession).toEqual({})
+  })
+
+  it('keeps the draft workspace controls when the draft has no project yet', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useUIStore } = await import('../../stores/uiStore')
+    useUIStore.setState({
+      newSessionDraft: { workDir: '', revision: 8, hasContent: false },
+      draftWorkspaceRequest: null,
+    })
+    render(<TabBar />)
+
+    expect(screen.queryByTestId('open-project-menu')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-toggle-side')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-toggle-bottom')).toBeInTheDocument()
   })
 
   it('hides the activity button for no-activity chat session tabs', async () => {

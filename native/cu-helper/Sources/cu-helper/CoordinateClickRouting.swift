@@ -3,6 +3,13 @@ import CoreGraphics
 /// The coordinate route is separate from an index click's AX-tree traversal.
 /// Dependencies allow routing tests without posting input or contacting apps.
 enum CoordinateClickRouting {
+    /// AX hit-testing resolves a screen position on the Spaces being shown.
+    /// For a window on another Space it answered with the app's menu bar, so a
+    /// point there goes to the bound window as a synthetic click instead.
+    static func prefersAccessibility(button: MouseButton, pointIsOnVisibleWindow: Bool) -> Bool {
+        button == .left && pointIsOnVisibleWindow
+    }
+
     @MainActor
     static func click<Element>(
         point: CGPoint,

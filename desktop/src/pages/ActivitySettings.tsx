@@ -63,11 +63,11 @@ function LoadingSkeleton() {
   return (
     <div aria-hidden="true" className="mt-10 animate-pulse">
       <div className="flex flex-wrap items-end justify-between gap-8">
-        <div className="flex items-center gap-6">
-          <div className="h-32 w-32 rounded-full bg-[var(--color-surface-container)]" />
-          <div className="grid gap-2">
-            <div className="h-5 w-40 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
-            <div className="h-3 w-48 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
+        <div className="flex min-w-0 items-center gap-4 @[560px]:gap-6">
+          <div className="h-16 w-16 shrink-0 rounded-full bg-[var(--color-surface-container)] @[560px]:h-32 @[560px]:w-32" />
+          <div className="grid min-w-0 gap-2">
+            <div className="h-5 w-32 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] @[560px]:w-40" />
+            <div className="h-3 w-40 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] @[560px]:w-48" />
           </div>
         </div>
         <div className="h-28 w-64 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]" />
@@ -77,10 +77,10 @@ function LoadingSkeleton() {
   )
 }
 
-export function ActivitySettings() {
+export function ActivitySettings({ browserMode = false }: { browserMode?: boolean }) {
   const t = useTranslation()
   const locale = useSettingsStore((state) => state.locale)
-  const profile = useActivityProfile()
+  const profile = useActivityProfile(browserMode)
   const [stats, setStats] = useState<ActivityStatsResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -152,7 +152,7 @@ export function ActivitySettings() {
     <div className="token-usage-root w-full min-w-0">
       <SettingsPageHeader
         title={t('settings.activity.title')}
-        description={t('settings.activity.subtitleLoading')}
+        description={t(profile.readOnly ? 'settings.activity.connectedSubtitle' : 'settings.activity.subtitleLoading')}
         action={
           <Button
             variant="secondary"
@@ -184,7 +184,7 @@ export function ActivitySettings() {
 
           {hasUsage ? (
             <>
-              <TokenStreamChart days={daily} models={models} activity={dayActivity} locale={locale} className="mt-14" />
+              <TokenStreamChart days={daily} models={models} activity={dayActivity} locale={locale} className="mt-10 @[560px]:mt-14" />
               <StatsRow tiles={tiles} />
               <div className="mt-14">
                 <TokenHeatmap stats={stats} locale={locale} />
@@ -204,7 +204,7 @@ export function ActivitySettings() {
         </>
       ) : null}
 
-      <ProfileEditModal profile={profile} />
+      {!profile.readOnly && <ProfileEditModal profile={profile} />}
 
       {stats && hasUsage ? (
         <ShareImageDialog

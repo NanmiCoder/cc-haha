@@ -45,6 +45,13 @@ export type DesktopProfilePreferences = {
   avatarUpdatedAt: string | null
 }
 
+/** Read-only identity shared with connected phones; no local paths or unrelated preferences. */
+export type DesktopProfileSummary = {
+  displayName: string
+  subtitle: string
+  avatarDataUrl: string | null
+}
+
 export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
@@ -673,6 +680,20 @@ export class DesktopUiPreferencesService {
       await this.writePreferences(nextPreferences)
       return nextPreferences
     })
+  }
+
+  async readProfileSummary(): Promise<DesktopProfileSummary> {
+    const { preferences } = await this.readPreferences()
+    const avatar = await this.readProfileAvatar()
+    return {
+      displayName: preferences.profile.displayName,
+      subtitle: preferences.profile.subtitle,
+      // Inline bytes keep authenticated native image loads inside the existing API transport.
+      // Out-of-band files must not bypass the managed avatar upload size limit.
+      avatarDataUrl: avatar && avatar.bytes.byteLength <= MAX_PROFILE_AVATAR_BYTES
+        ? `data:${avatar.contentType};base64,${Buffer.from(avatar.bytes).toString('base64')}`
+        : null,
+    }
   }
 
   async readProfileAvatar(): Promise<{ bytes: Uint8Array; contentType: string } | null> {

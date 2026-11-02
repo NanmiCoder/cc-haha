@@ -14,7 +14,6 @@ import {
 } from '@whiskeysockets/baileys'
 import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
-import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
 import {
   formatImHelp,
@@ -66,7 +65,7 @@ if (!hasWhatsAppAuth(authDir)) {
 const bridge = new WsBridge(config.serverUrl, 'whatsapp')
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.whatsapp)
+const { httpClient, defaultWorkDir, enqueue } = createAdapterClient(config, config.whatsapp)
 const attachmentStore = new AttachmentStore()
 attachmentStore.gc().catch((err) => {
   console.warn('[WhatsApp] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
@@ -440,6 +439,7 @@ async function routeUserMessage(
   displayName: string,
   text: string,
   attachments: AttachmentRef[],
+  loadAttachments?: () => Promise<AttachmentRef[]>,
 ): Promise<void> {
   if (!isAllowedUser('whatsapp', userId)) {
     const success = attachments.length === 0
@@ -454,7 +454,9 @@ async function routeUserMessage(
     return
   }
 
-  enqueue(chatId, async () => {
+  return enqueue(chatId, async () => {
+    if (loadAttachments) attachments = await loadAttachments()
+    if (!text.trim() && attachments.length === 0) return
     const command = text.trim()
     if (command === '/start' || command === '/help') {
       await sendHelp(chatId)
@@ -584,20 +586,19 @@ async function handleIncomingMessage(message: proto.IWebMessageInfo): Promise<vo
   if (!dedup.tryRecord(`${chatId}:${messageId}`)) return
 
   const text = extractText(message.message as proto.IMessage | undefined)
-  const { attachments, rejections } = await collectAttachments(message, chatId)
-  for (const rejection of rejections) {
-    await sendWhatsAppText(chatId, rejection).catch(() => {})
-  }
-  if (!text.trim() && attachments.length === 0) return
-
-  await sock.readMessages([{ remoteJid: chatId, id: messageId, fromMe: false }]).catch(() => {})
-  await sock.sendPresenceUpdate('composing', chatId).catch(() => {})
   await routeUserMessage(
     chatId,
     chatId,
     message.pushName || chatId,
     text,
-    attachments,
+    [],
+    async () => {
+      const { attachments, rejections } = await collectAttachments(message, chatId)
+      for (const rejection of rejections) await sendWhatsAppText(chatId, rejection).catch(() => {})
+      await sock.readMessages([{ remoteJid: chatId, id: messageId, fromMe: false }]).catch(() => {})
+      await sock.sendPresenceUpdate('composing', chatId).catch(() => {})
+      return attachments
+    },
   )
 }
 
@@ -673,4 +674,4 @@ if (import.meta.main || process.argv.includes('--whatsapp')) registerAdapterShut
   await waitForWhatsAppCredsSave(authDir)
 })
 
-export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, startNewSession }
+export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, handleIncomingMessage, startNewSession }

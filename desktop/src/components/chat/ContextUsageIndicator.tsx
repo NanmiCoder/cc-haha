@@ -11,6 +11,7 @@ import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { useDismissable } from '../../hooks/useDismissable'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { deriveSessionUsageMetrics } from '../../lib/sessionUsageMetrics'
+import { useContextUsageStore, type ContextUsageRevision } from '@/stores/contextUsageStore'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import {
   ContextUsageDetails,
@@ -22,6 +23,8 @@ type Props = {
   sessionId?: string
   chatState: ChatState
   messageCount: number
+  /** Changes with session content even when a bounded history keeps its display count unchanged. */
+  contentRevision?: number
   runtimeSelectionKey?: string
   fallbackModelLabel?: string
   draft?: boolean
@@ -45,11 +48,6 @@ export type ContextUsageIndicatorHandle = {
 }
 
 const ACTIVE_REFRESH_MS = 30_000
-// The server bounds the CLI control request at 20s. Keep the HTTP deadline
-// comfortably later so the server can return a transcript estimate instead of
-// racing a client abort that can strand loopback sockets on Windows.
-const CONTEXT_REQUEST_TIMEOUT_MS = 30_000
-const AUTO_REFRESH_MIN_INTERVAL_MS = 10_000
 // Lifetime totals only change when a turn completes, but a turn can run for minutes and the
 // user is staring at the panel while it does. Polling is scoped to the open popover/sheet —
 // a closed panel costs nothing — and the request it makes is the single-control `usageOnly`
@@ -168,6 +166,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   sessionId,
   chatState,
   messageCount,
+  contentRevision = 0,
   runtimeSelectionKey = '',
   fallbackModelLabel,
   draft = false,
@@ -184,103 +183,32 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
   // presentation so the breakdown is never clipped by chat-column overflow.
   const preferSheet = compact || isMobileBrowser
   const contextEnabled = shouldFetchContext(sessionId, draft, messageCount, chatState)
-  const [context, setContext] = useState<SessionContextSnapshot | null>(null)
-  const [contextSource, setContextSource] = useState<'live' | 'estimate' | null>(null)
-  const [loading, setLoading] = useState(contextEnabled)
-  const [error, setError] = useState<string | null>(null)
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
-  const [inspectionModel, setInspectionModel] = useState<string | null>(null)
+  const cached = useContextUsageStore((state) => sessionId ? state.bySession[sessionId] : undefined)
+  const context = contextEnabled ? cached?.context ?? null : null
+  const contextSource = cached?.source ?? null
+  const loading = contextEnabled && (!cached || cached.inFlight !== null)
+  const error = cached?.error ?? null
+  const updatedAt = cached?.updatedAt ?? null
+  const inspectionModel = cached?.model ?? null
   const [usage, setUsage] = useState<SessionUsageSnapshot | null>(null)
   const usageSessionIdRef = useRef<string | undefined>(undefined)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [popoverPosition, setPopoverPosition] = useState<PopoverPosition | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
-  const requestSeq = useRef(0)
-  const contextIdentityRef = useRef('')
-  const contextDataSessionIdRef = useRef<string | undefined>(undefined)
-  const inFlightRequestRef = useRef<Promise<boolean> | null>(null)
-  const inFlightIdentityRef = useRef<string | null>(null)
-  const lastAutoRefreshAtRef = useRef(0)
   const contextEnabledRef = useRef(contextEnabled)
   contextEnabledRef.current = contextEnabled
+  const revisionRef = useRef<ContextUsageRevision>({ runtimeSelectionKey, refreshNonce, messageCount, contentRevision, chatState })
+  revisionRef.current = { runtimeSelectionKey, refreshNonce, messageCount, contentRevision, chatState }
 
   const closeDetails = useCallback(() => {
     setDetailsOpen(false)
   }, [])
 
-  const refresh = useCallback(async (mode: 'auto' | 'manual' | 'force' = 'manual'): Promise<boolean> => {
-    if (!contextEnabledRef.current || !sessionId) {
-      setLoading(false)
-      return false
-    }
-    if (mode === 'auto' && !isDocumentVisible()) {
-      setLoading(false)
-      return false
-    }
-    if (mode === 'auto' && Date.now() - lastAutoRefreshAtRef.current < AUTO_REFRESH_MIN_INTERVAL_MS) {
-      return inFlightRequestRef.current ?? false
-    }
-    if (typeof sessionsApi.getInspection !== 'function') {
-      setLoading(false)
-      return false
-    }
-    const activeSessionId = sessionId
-    const activeContextIdentity = `${activeSessionId}:${runtimeSelectionKey}`
-    // 'force' must not reuse an in-flight request: one started just before a
-    // compact boundary would resolve with the pre-compact context.
-    if (mode !== 'force' && inFlightRequestRef.current && inFlightIdentityRef.current === activeContextIdentity) {
-      return inFlightRequestRef.current
-    }
-    const seq = requestSeq.current + 1
-    requestSeq.current = seq
-    if (mode === 'auto') lastAutoRefreshAtRef.current = Date.now()
-    setLoading(true)
-    setError(null)
-    const request = sessionsApi.getInspection(activeSessionId, {
-      includeContext: true,
-      contextOnly: true,
-      timeout: CONTEXT_REQUEST_TIMEOUT_MS,
-    })
-      .then((inspection) => {
-        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return false
-        const nextContext = inspection.context ?? inspection.contextEstimate ?? null
-        const nextSource = inspection.context ? 'live' : inspection.contextEstimate ? 'estimate' : null
-        const usageModel = inspection.usage?.models.find((model) => firstNonEmpty(model.displayName, model.model)) ?? null
-        setInspectionModel(firstNonEmpty(
-          inspection.context?.model,
-          inspection.contextEstimate?.model,
-          inspection.status?.model,
-          usageModel?.displayName,
-          usageModel?.model,
-        ) ?? null)
-        if (nextContext) {
-          contextDataSessionIdRef.current = activeSessionId
-          setContext(nextContext)
-          setContextSource(nextSource)
-          setError(null)
-          setUpdatedAt(Date.now())
-        } else {
-          setError(inspection.errors?.context ?? null)
-        }
-        return nextContext !== null
-      })
-      .catch((err) => {
-        if (seq !== requestSeq.current || activeContextIdentity !== contextIdentityRef.current) return false
-        setError(err instanceof Error ? err.message : String(err))
-        return false
-      })
-      .finally(() => {
-        if (inFlightRequestRef.current === request) {
-          inFlightRequestRef.current = null
-          inFlightIdentityRef.current = null
-        }
-        if (seq === requestSeq.current) setLoading(false)
-      })
-    inFlightRequestRef.current = request
-    inFlightIdentityRef.current = activeContextIdentity
-    return request
-  }, [runtimeSelectionKey, sessionId])
+  const refresh = useCallback(async (mode: 'restore' | 'auto' | 'manual' | 'force' = 'manual'): Promise<boolean> => {
+    if (!contextEnabledRef.current || !sessionId) return false
+    return useContextUsageStore.getState().refresh(sessionId, revisionRef.current, mode, isDocumentVisible())
+  }, [sessionId])
 
   const forceRefreshWithRetry = useCallback(() => {
     if (!contextEnabledRef.current) return () => {}
@@ -298,80 +226,44 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
     }
   }, [refresh])
 
-  // Compaction and runtime replacement both change context outside the normal
-  // message flow. Their completion signals bump this nonce so the meter reads
-  // the authoritative process.
-  const lastRefreshNonceRef = useRef(refreshNonce)
-  useEffect(() => {
-    if (refreshNonce === lastRefreshNonceRef.current) return
-    lastRefreshNonceRef.current = refreshNonce
-    return forceRefreshWithRetry()
-  }, [forceRefreshWithRetry, refreshNonce])
+  const cancelBoundaryRetryRef = useRef<(() => void) | null>(null)
+  const cancelBoundaryRetry = useCallback(() => {
+    cancelBoundaryRetryRef.current?.()
+    cancelBoundaryRetryRef.current = null
+  }, [])
+  // A normal streaming frame or history hydration must not cancel recovery
+  // for the boundary being inspected. Identity changes and unmount still do.
+  useEffect(() => cancelBoundaryRetry, [cancelBoundaryRetry, contextEnabled, runtimeSelectionKey, sessionId])
 
-  // A new session usually mounts while its first turn is already running.
-  // The eager inspection then races the CLI, and message-count refreshes can
-  // be swallowed by the auto-refresh throttle. The terminal idle transition
-  // is the first reliable point to request that session's real context.
-  const lastChatStateRef = useRef(chatState)
+  const previousRef = useRef<(ContextUsageRevision & { sessionId?: string; enabled: boolean }) | null>(null)
   useEffect(() => {
-    const previousChatState = lastChatStateRef.current
-    lastChatStateRef.current = chatState
-    if (chatState !== 'idle' || previousChatState === 'idle') return
-    return forceRefreshWithRetry()
-  }, [chatState, forceRefreshWithRetry])
-
-  useEffect(() => {
-    const contextIdentity = `${sessionId}:${runtimeSelectionKey}`
-    const identityChanged = contextIdentityRef.current !== contextIdentity
-    contextIdentityRef.current = contextIdentity
-    if (identityChanged) {
-      requestSeq.current += 1
-      lastAutoRefreshAtRef.current = 0
-      setError(null)
-      setInspectionModel(null)
-      if (contextDataSessionIdRef.current !== sessionId) {
-        contextDataSessionIdRef.current = undefined
-        setContext(null)
-        setContextSource(null)
-        setUpdatedAt(null)
-      }
-    }
-    void refresh('auto')
-  }, [refresh, runtimeSelectionKey, sessionId])
-
-  const lastContextEnabledRef = useRef(contextEnabled)
-  useEffect(() => {
-    const wasEnabled = lastContextEnabledRef.current
-    lastContextEnabledRef.current = contextEnabled
-    if (contextEnabled) {
-      if (!wasEnabled) void refresh('auto')
+    const previous = previousRef.current
+    previousRef.current = { sessionId, enabled: contextEnabled, ...revisionRef.current }
+    if (!contextEnabled) {
+      if (sessionId) useContextUsageStore.getState().clearSession(sessionId)
       return
     }
-    requestSeq.current += 1
-    inFlightRequestRef.current = null
-    inFlightIdentityRef.current = null
-    lastAutoRefreshAtRef.current = 0
-    contextDataSessionIdRef.current = undefined
-    setContext(null)
-    setContextSource(null)
-    setInspectionModel(null)
-    setUpdatedAt(null)
-    setError(null)
-    setLoading(false)
-  }, [contextEnabled, refresh])
-
-  const lastMessageCountRef = useRef(messageCount)
-  useEffect(() => {
-    if (lastMessageCountRef.current === messageCount) return
-    lastMessageCountRef.current = messageCount
-    void refresh('auto')
-  }, [messageCount, refresh])
+    // A tab switch restores that session's reading/request. Counters from two
+    // different sessions must never be compared as compaction or turn events.
+    if (!previous || previous.sessionId !== sessionId || !previous.enabled) {
+      void refresh('restore')
+    } else if (previous.refreshNonce !== refreshNonce || (previous.chatState !== 'idle' && chatState === 'idle')) {
+      // Turn completion, compaction and replacement-runtime readiness bypass
+      // both the throttle and requests issued before the boundary.
+      cancelBoundaryRetry()
+      cancelBoundaryRetryRef.current = forceRefreshWithRetry()
+    } else if (previous.runtimeSelectionKey !== runtimeSelectionKey) {
+      void refresh('restore')
+    } else if (previous.messageCount !== messageCount || previous.contentRevision !== contentRevision) {
+      void refresh('auto')
+    }
+  }, [cancelBoundaryRetry, chatState, contextEnabled, contentRevision, forceRefreshWithRetry, messageCount, refresh, refreshNonce, runtimeSelectionKey, sessionId])
 
   useEffect(() => {
     if (typeof document === 'undefined') return
     const refreshIfVisible = () => {
       if (!isDocumentVisible()) return
-      void refresh('auto')
+      void refresh('restore')
     }
     document.addEventListener('visibilitychange', refreshIfVisible)
     return () => document.removeEventListener('visibilitychange', refreshIfVisible)
@@ -438,7 +330,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
     return pickUsedContextCategory(context)
   }, [context])
 
-  const displayContext = contextEnabled && contextDataSessionIdRef.current === sessionId ? context : null
+  const displayContext = context
   const hasPlaceholderContext = !displayContext && (
     draft || (!loading && messageCount === 0 && (!error || isCliNotRunningError(error)))
   )
@@ -454,10 +346,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
       ? 'var(--color-warning)'
       : 'var(--color-text-tertiary)'
   const displayPercent = displayContext ? formatPercent(percentage) : '--'
-  const displayInspectionModel = !context || contextDataSessionIdRef.current === sessionId
-    ? inspectionModel
-    : null
-  const displayModel = firstNonEmpty(displayContext?.model, displayInspectionModel, fallbackModelLabel)
+  const displayModel = firstNonEmpty(displayContext?.model, inspectionModel, fallbackModelLabel)
   const modelLabel = displayModel ?? t('contextIndicator.modelUnknown')
   const ariaLabel = displayContext
     ? t('contextIndicator.ariaLabel', { percent: formatPercent(percentage) })

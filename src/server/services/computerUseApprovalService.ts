@@ -1,6 +1,7 @@
 import type { CuPermissionRequest, CuPermissionResponse } from '../../vendor/computer-use-mcp/types.js'
 import { getSessionTurnState, sendToSession } from '../ws/handler.js'
 import { emitSessionTurnEvent } from './sessionTurnEvents.js'
+import { powerActivityClock } from './powerActivityClock.js'
 
 type PendingApproval = {
   sessionId: string
@@ -18,6 +19,7 @@ export class ComputerUseApprovalService {
   constructor(private readonly timeoutMs = REQUEST_TIMEOUT_MS) {}
 
   private resolved(sessionId: string, requestId: string): void {
+    powerActivityClock.changed()
     emitSessionTurnEvent({ type: 'output', sessionId, message: { type: 'control_response', request_id: requestId } })
   }
 
@@ -50,6 +52,7 @@ export class ComputerUseApprovalService {
         reject,
         timeout,
       })
+      powerActivityClock.changed()
 
       const sent = sendToSession(sessionId, {
         type: 'computer_use_permission_request',
@@ -84,6 +87,10 @@ export class ComputerUseApprovalService {
     return Array.from(this.pending.values())
       .filter((pending) => pending.sessionId === sessionId)
       .map((pending) => pending.request)
+  }
+
+  getPendingSessionIds(): string[] {
+    return [...new Set([...this.pending.values()].map(entry => entry.sessionId))]
   }
 
   cancelSession(sessionId: string): void {

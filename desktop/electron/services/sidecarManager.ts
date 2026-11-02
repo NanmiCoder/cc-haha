@@ -24,6 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { isBrowserSafePort } from '../../src/lib/browserSafePort'
+import { redactDiagnosticText } from '../../../src/server/services/diagnosticRedaction'
 
 export const SERVER_BIND_HOST = '0.0.0.0'
 export const SERVER_CONTROL_HOST = '127.0.0.1'
@@ -505,7 +506,7 @@ function readHostDiagnosticsTail(filePath: string): string {
 }
 
 export function sanitizeHostDiagnostic(line: string, homeDir = os.homedir()): string {
-  let sanitized = line
+  let sanitized = redactDiagnosticText(line)
     .replace(/[\r\n]+/g, ' ')
     .replace(/https?:\/\/[^\s<>"')\]}]+/gi, candidate => sanitizeUrlUserinfo(candidate))
     .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')

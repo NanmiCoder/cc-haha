@@ -39,9 +39,91 @@
     <link rel="icon" href="/app-icon.png" type="image/png" />
     <!-- Fonts are self-hosted in /fonts/ and declared via @font-face in globals.css -->
     <script>
+      /*
+        Browsers that deny web storage outright (iOS Safari with "Block All
+        Cookies", some locked-down in-app browsers) throw on every access to
+        localStorage / sessionStorage, and the app reads them while its
+        modules load, before any error handling exists. Only there, swap in a
+        storage that lives in this page's memory: the app runs, nothing
+        survives a reload. A browser whose storage can be read keeps it
+        untouched. __CC_HAHA_MEMORY_STORAGE__ lists what was swapped, for code
+        that needs storage to outlive the page (src/lib/browserStorage.ts).
+      */
+      (function () {
+        function memoryStorage() {
+          var data = Object.create(null)
+          var storage = {
+            getItem: function (key) {
+              key = String(key)
+              return key in data ? data[key] : null
+            },
+            setItem: function (key, value) { data[String(key)] = String(value) },
+            removeItem: function (key) { delete data[String(key)] },
+            clear: function () { data = Object.create(null) },
+            key: function (index) {
+              var keys = Object.keys(data)
+              return index >= 0 && index < keys.length ? keys[index] : null
+            }
+          }
+          Object.defineProperty(storage, 'length', { get: function () { return Object.keys(data).length } })
+          return storage
+        }
+        var swapped = []
+        var names = ['localStorage', 'sessionStorage']
+        for (var i = 0; i < names.length; i++) {
+          try {
+            window[names[i]].getItem('cc-haha-storage-probe')
+            continue
+          } catch (_) {
+            /* Denied: replace it below. */
+          }
+          try {
+            Object.defineProperty(window, names[i], { configurable: true, value: memoryStorage() })
+            swapped.push(names[i])
+          } catch (_) {
+            /* Not replaceable here; the app's own error handling applies. */
+          }
+        }
+        if (swapped.length) window.__CC_HAHA_MEMORY_STORAGE__ = swapped
+      })()
+    </script>
+    <script>
       if (new URLSearchParams(window.location.search).get('petWindow') === '1') {
         document.documentElement.dataset.windowKind = 'pet'
       }
+    </script>
+    <script>
+      /*
+        Returning phones go straight to the phone app (/m/), before this
+        page downloads the desktop bundles it would only leave again. Only
+        when this browser already holds the H5 token it verified for this
+        server; a first visit, a scanned QR (it has a query), /remote and a
+        reconnect run the full entry, which hands off to /m/ itself once the
+        connection is ready (src/components/mobile/mobileH5Handoff.ts).
+        The layout test mirrors resolveMobileShellLayout: a phone-wide window,
+        or a wider one whose primary pointer is touch. A touch-screen laptop
+        (mouse or trackpad first) keeps the desktop app.
+      */
+      (function () {
+        try {
+          if (window.desktopHost || window.__TAURI_INTERNALS__) return
+          if (window.location.pathname !== '/' || window.location.search || window.location.hash) return
+          var narrow = window.matchMedia('(max-width: 767px)').matches
+          var coarse = window.matchMedia('(pointer: coarse)').matches
+          if (!narrow && !coarse) return
+          var server = window.localStorage.getItem('cc-haha-h5-server-url')
+          var token = window.localStorage.getItem('cc-haha-h5-token')
+          if (!server || !token || new URL(server).origin !== window.location.origin) return
+          // Landing back here right after leaving means /m/ could not take the
+          // page (not built into this server): let the app's entry decide.
+          var key = 'cc-haha-mobile-h5-handoff'
+          if (Date.now() - Number(window.sessionStorage.getItem(key) || 0) < 15000) return
+          window.sessionStorage.setItem(key, String(Date.now()))
+          window.location.replace('/m/')
+        } catch (_) {
+          /* Storage or matchMedia unavailable: the app's entry handles it. */
+        }
+      })()
     </script>
     <script>
       /*

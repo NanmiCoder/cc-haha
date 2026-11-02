@@ -7,6 +7,7 @@ import {
   ConversationService,
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
+import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
@@ -843,6 +844,24 @@ describe('ConversationService', () => {
     } finally { capture.mockRestore() }
   })
 
+  test('a retry still in progress is not recorded as a warning or error', () => {
+    const record = spyOn(diagnosticsService, 'recordEvent').mockResolvedValue({ ok: true } as never)
+    const capture = spyOn(traceCaptureService, 'recordEvent').mockResolvedValue(null)
+    try {
+      const service = new ConversationService() as any
+      const session = installNetworkTestSession(service, 'retry-severity', [])
+      Object.assign(session, { sdkMessages: [], sdkMessageBytes: 0, seenSdkMessageUuids: new Set(), initMessage: null })
+      service.handleSdkPayload('retry-severity', JSON.stringify({ type: 'system', subtype: 'api_retry',
+        attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: 529,
+        error: 'overloaded', error_message: 'Overloaded', request_id: 'req-severity', uuid: 'retry-severity-uuid',
+      }))
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ type: 'sdk_api_retry', severity: 'info' }))
+    } finally {
+      record.mockRestore()
+      capture.mockRestore()
+    }
+  })
+
   test('records recovered retry details in existing session diagnostics', () => {
     const service = new ConversationService() as any
     const event = service.extractSdkErrorEvent({ type: 'system', subtype: 'api_retry',
@@ -1476,6 +1495,23 @@ describe('ConversationService', () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
+  })
+
+  test('buildChildEnv replaces inherited Grok catalogs and removes them when selecting another provider', async () => {
+    const original = process.env.CC_HAHA_GROK_MODEL_CATALOG
+    process.env.CC_HAHA_GROK_MODEL_CATALOG = 'stale-parent-catalog'
+    try {
+      const service = new ConversationService() as any
+      const grokEnv = await service.buildChildEnv('/tmp', undefined, { providerId: 'grok-official' })
+      expect(JSON.parse(grokEnv.CC_HAHA_GROK_MODEL_CATALOG).some((entry: { value: string }) => entry.value === 'grok-4.7')).toBe(true)
+      const otherEnv = await service.buildChildEnv('/tmp', undefined, { providerId: 'deepseek-account' })
+      expect(otherEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+      const claudeEnv = await service.buildChildEnv('/tmp', undefined, { providerId: null })
+      expect(claudeEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_GROK_MODEL_CATALOG
+      else process.env.CC_HAHA_GROK_MODEL_CATALOG = original
+    }
   })
 
   test('buildChildEnv builds the DeepSeek account env for a session-scoped selection over another active provider', async () => {

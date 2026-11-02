@@ -17,8 +17,10 @@ import type {
   ToolUsageMap,
 } from './stats.js'
 
-export const STATS_CACHE_VERSION = 7
-const MIN_MIGRATABLE_VERSION = 7
+// 8: a reply's usage is the per-field maximum over its content-block lines. Cached v7 aggregates
+//    counted only the first line, so replies written with zero/partial first usage were under-counted.
+export const STATS_CACHE_VERSION = 8
+const MIN_MIGRATABLE_VERSION = 8
 const STATS_CACHE_FILENAME = 'stats-cache.json'
 
 /**

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { teamsApi } from '../api/teams'
+import { ApiError } from '../api/client'
 import type { TeamTaskAnchor } from '../api/teams'
 import type {
   TeamSummary,
@@ -19,6 +20,7 @@ import type {
 } from '../types/chat'
 import {
   useChatStore,
+  extractVisibleTeammateMessages,
   mapHistoryMessagesToUiMessages,
   mergeReconstructedRunActivity,
   reconstructRunActivityFromTranscript,
@@ -32,6 +34,7 @@ const MEMBER_POLL_INTERVAL_MS = 1500
 const MEMBER_TRANSCRIPT_MATCH_WINDOW_MS = 120_000
 const WORKBENCH_HISTORY_LIMIT = 200
 const TEAM_DISCOVERY_TTL_MS = 5_000
+const ABSENT_WORKBENCH_TTL_MS = 60_000
 
 /** Generate a synthetic sessionId for team member tabs */
 export const memberSessionId = teamMemberSessionId
@@ -75,6 +78,7 @@ const awaitingMemberReplies = new Map<string, AwaitingMemberReply[]>()
 const teamLifecycleGenerations = new Map<string, number>()
 const teamDiscoveryGenerations = new Map<string, number>()
 const teamDiscoveryCompletedAt = new Map<string, number>()
+const absentWorkbenchCheckedAt = new Map<string, number>()
 const deletedTeamNames = new Set<string>()
 const deletedTeamIncarnations = new Set<string>()
 const deletedTeamLifecycles = new Map<string, {
@@ -416,19 +420,57 @@ function isPendingMemberMessage(message: UIMessage): message is Extract<UIMessag
   return message.type === 'user_text' && message.pending === true
 }
 
+type MemberUserEcho = {
+  content: string
+  timestamp: number
+  mailbox: boolean
+  key: string
+}
+
+/** One mailbox prompt may contain several user sends mixed with peer traffic. */
+function memberUserEchoes(message: UIMessage): MemberUserEcho[] {
+  if (message.type !== 'user_text') return []
+  const key = memberMessageKey(message)
+  const envelopes = message.modelContent
+    ? extractVisibleTeammateMessages(message.modelContent)
+    : []
+  if (envelopes.length > 0) {
+    return envelopes.flatMap((envelope, index) => envelope.from === 'user' ? [{
+      content: envelope.content,
+      timestamp: message.timestamp,
+      mailbox: true,
+      key: `${key}:mailbox:${index}`,
+    }] : [])
+  }
+  if (message.teammateFrom && message.teammateFrom !== 'user') return []
+  return [{
+    content: message.content,
+    timestamp: message.timestamp,
+    mailbox: message.teammateFrom === 'user',
+    key,
+  }]
+}
+
+/**
+ * Mailbox echoes can arrive minutes later, but cannot predate their send.
+ * Direct-persisted rows keep the existing near-send timestamp window.
+ */
+function echoMatchesSend(echo: MemberUserEcho, content: string, sentAt: number): boolean {
+  return echo.content === content && (echo.mailbox
+    ? echo.timestamp >= sentAt
+    : Math.abs(echo.timestamp - sentAt) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS)
+}
+
 function pendingMessagesWithoutTranscriptEcho(
   pendingMessages: Array<Extract<UIMessage, { type: 'user_text' }> & { pending: true }>,
   transcriptMessages: UIMessage[],
 ): UIMessage[] {
-  const availableEchoes = transcriptMessages.filter((message): message is Extract<UIMessage, { type: 'user_text' }> => (
-    message.type === 'user_text' &&
-    message.pending !== true &&
-    !message.teammateFrom
-  ))
+  const availableEchoes = transcriptMessages
+    .filter(message => !isPendingMemberMessage(message))
+    .flatMap(memberUserEchoes)
   return pendingMessages.filter((pendingMessage) => {
-    const matchIndex = availableEchoes.findIndex((message) => (
-      message.content === pendingMessage.content &&
-      Math.abs(message.timestamp - pendingMessage.timestamp) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS
+    const matchIndex = availableEchoes.findIndex(echo => (
+      echoMatchesSend(echo, pendingMessage.content, pendingMessage.timestamp)
     ))
     if (matchIndex < 0) return true
     availableEchoes.splice(matchIndex, 1)
@@ -440,6 +482,9 @@ export function mergeMemberTranscriptMessages(
   existingMessages: UIMessage[],
   transcriptMessages: UIMessage[],
 ): UIMessage[] {
+  const existingDurableIds = new Set(
+    existingMessages.filter(message => !isPendingMemberMessage(message)).map(message => message.id),
+  )
   const seenIds = new Set<string>()
   const durableMessages = transcriptMessages.filter((message) => {
     if (seenIds.has(message.id)) return false
@@ -448,7 +493,9 @@ export function mergeMemberTranscriptMessages(
   })
   const pendingMessages = pendingMessagesWithoutTranscriptEcho(
     existingMessages.filter(isPendingMemberMessage),
-    durableMessages,
+    // Replaying a full transcript must not spend an already seen echo again
+    // on a later identical send (or on the second of two queued sends).
+    durableMessages.filter(message => !existingDurableIds.has(message.id)),
   )
 
   return pendingMessages.length > 0
@@ -551,31 +598,32 @@ function isMemberTurnMessage(message: UIMessage): boolean {
     message.type === 'error'
 }
 
-function memberReplySettlement(
+export function memberReplySettlement(
   messages: UIMessage[],
   awaiting: AwaitingMemberReply,
 ): { settled: boolean; promptKey?: string } {
   let promptIndex = -1
+  let promptKey: string | undefined
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!
-    if (
-      message.type === 'user_text' &&
-      message.pending !== true &&
-      !message.teammateFrom &&
-      !awaiting.baselineMessageKeys.has(memberMessageKey(message)) &&
-      message.content === awaiting.content &&
-      Math.abs(message.timestamp - awaiting.sentAt) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS
-    ) {
+    if (isPendingMemberMessage(message) || awaiting.baselineMessageKeys.has(memberMessageKey(message))) continue
+    const echo = memberUserEchoes(message).find(candidate => (
+      !awaiting.baselineMessageKeys.has(candidate.key) &&
+      echoMatchesSend(candidate, awaiting.content, awaiting.sentAt)
+    ))
+    if (echo) {
       promptIndex = index
+      promptKey = echo.key
       break
     }
   }
   if (promptIndex < 0) return { settled: false }
 
   let turnEnd = messages.length
-  const nextPromptOffset = messages.slice(promptIndex + 1).findIndex((message) => (
-    message.type === 'user_text' &&
-    !message.teammateFrom
+  // All envelopes in one durable prompt share its reply. Only another row
+  // starts a new turn; individual occurrences still settle distinct sends.
+  const nextPromptOffset = messages.slice(promptIndex + 1).findIndex(message => (
+    memberUserEchoes(message).length > 0
   ))
   if (nextPromptOffset >= 0) {
     turnEnd = promptIndex + 1 + nextPromptOffset
@@ -586,7 +634,7 @@ function memberReplySettlement(
   const lastMessage = turnMessages.at(-1)
   return {
     settled: lastMessage?.type === 'assistant_text' || lastMessage?.type === 'error',
-    promptKey: memberMessageKey(messages[promptIndex]!),
+    promptKey,
   }
 }
 
@@ -1116,6 +1164,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
   },
 
   fetchTeamForSession: async (sessionId, options) => {
+    const absentAt = absentWorkbenchCheckedAt.get(sessionId)
+    // Re-entering an ordinary session should not repeat a confirmed missing
+    // lookup. Reconnect forces a fresh read; expiry also recovers missed events.
+    if (!options?.force && absentAt !== undefined && Date.now() - absentAt < ABSENT_WORKBENCH_TTL_MS) return
+    absentWorkbenchCheckedAt.delete(sessionId)
     const known = get().workbenchesBySession[sessionId]
     if (known?.snapshots.length) {
       const latest = known.snapshots.at(-1)!
@@ -1240,9 +1293,23 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       }))
       syncTeamMemberSessions(detail, latest)
       teamDiscoveryCompletedAt.set(sessionId, Date.now())
-    } catch {
-      // Workbench discovery supplements the session; an ordinary conversation
-      // or a legacy sidecar must still open without an error surface.
+    } catch (err) {
+      // Only this endpoint's explicit absence is cacheable. Other 404s, server
+      // failures and timeouts retain their API diagnostics and remain retryable.
+      if (
+        teamStoreGeneration === storeGeneration &&
+        teamDiscoveryGenerations.get(sessionId) === discoveryGeneration &&
+        get().workbenchesBySession[sessionId] === known &&
+        err instanceof ApiError &&
+        err.status === 404 &&
+        err.body !== null &&
+        typeof err.body === 'object' &&
+        'error' in err.body && err.body.error === 'NOT_FOUND' &&
+        'message' in err.body && err.body.message === `No Agent Teams workbench for session: ${sessionId}`
+      ) {
+        absentWorkbenchCheckedAt.set(sessionId, Date.now())
+      }
+      // Discovery is supplementary; a failure must not prevent chat from opening.
     }
   },
 
@@ -1279,6 +1346,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       const snapshot: TeamWorkbenchSnapshot = { ...raw, team }
       const sessionId = team.leadSessionId
       if (!sessionId) return
+      absentWorkbenchCheckedAt.delete(sessionId)
 
       set((state) => ({
         activeTeam: team,
@@ -1734,6 +1802,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
     teamLifecycleGenerations.clear()
     teamDiscoveryGenerations.clear()
     teamDiscoveryCompletedAt.clear()
+    absentWorkbenchCheckedAt.clear()
     deletedTeamNames.clear()
     deletedTeamIncarnations.clear()
     deletedTeamLifecycles.clear()
@@ -1793,6 +1862,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       (teamDiscoveryGenerations.get(leadSessionId) ?? 0) + 1,
     )
     teamDiscoveryCompletedAt.delete(leadSessionId)
+    absentWorkbenchCheckedAt.delete(leadSessionId)
     clearTeamRetryTimers(teamName)
     set((s) => ({
       teams: [
@@ -2031,6 +2101,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
         (teamDiscoveryGenerations.get(leadSessionId) ?? 0) + 1,
       )
       teamDiscoveryCompletedAt.delete(leadSessionId)
+      absentWorkbenchCheckedAt.delete(leadSessionId)
     }
     const affectedMemberSessionIds = new Set(matchingTeams.flatMap((team) => (
       team.members.map((member) => memberSessionIdForTeam(team, member))

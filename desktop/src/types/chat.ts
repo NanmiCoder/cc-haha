@@ -1,3 +1,4 @@
+import type { ScheduledTaskTrigger } from './task'
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
 import type { TeamMemberActivity, TeamMemberAutoRetry } from './team'
@@ -132,8 +133,8 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
-  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
+  | { type: 'user_message_replay'; content: string; scheduledTask?: ScheduledTaskTrigger; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
+  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming; scheduledTask?: ScheduledTaskTrigger }
   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
   | { type: 'thinking'; text: string; complete?: boolean }
   | {
@@ -370,7 +371,7 @@ export type UIMessage =
    * the user's own prompt render identically, which is what flattened the
    * member transcript.
    */
-  | { id: string; type: 'user_text'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; awaitingReplay?: boolean; teammateFrom?: string }
+  | { id: string; type: 'user_text'; content: string; scheduledTask?: ScheduledTaskTrigger; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; awaitingReplay?: boolean; teammateFrom?: string }
   | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
   | { id: string; type: 'thinking'; content: string; timestamp: number }
   | {

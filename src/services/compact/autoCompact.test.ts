@@ -8,7 +8,7 @@ import {
   getRapidRefillDecision,
   shouldAutoCompact,
 } from './autoCompact.js'
-import { getContextWindowForModel } from '../../utils/context.js'
+import { getContextWindowForModel, getEffectiveModelContextWindow } from '../../utils/context.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
 let originalAutoCompactWindow: string | undefined
@@ -125,6 +125,25 @@ describe('model context window resolution', () => {
     const withOverride = getEffectiveContextWindowSize('gpt-5.5')
     delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
     expect(withOverride).toBe(getEffectiveContextWindowSize('gpt-5.5'))
+  })
+
+  test('the window shown to the user follows the same cap as compaction', () => {
+    // deepseek-v4-flash is 1M in the built-in table. The context ring used to
+    // keep reading 1M after the provider's fallback window was lowered, while
+    // compaction already fired at the lower value.
+    expect(getEffectiveModelContextWindow('deepseek-v4-flash')).toBe(1_000_000)
+
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '200000'
+    expect(getEffectiveModelContextWindow('deepseek-v4-flash')).toBe(200_000)
+    expect(getEffectiveContextWindowSize('deepseek-v4-flash')).toBe(200_000 - 20_000)
+
+    // A leftover higher value still cannot raise a known smaller window.
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '1000000'
+    expect(getEffectiveModelContextWindow('k3')).toBe(262_144)
+
+    // Unknown models have no other source, so the value applies directly.
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '500000'
+    expect(getEffectiveModelContextWindow('unknown-future-model')).toBe(500_000)
   })
 
   test('derives auto-compact thresholds from provider context windows', () => {

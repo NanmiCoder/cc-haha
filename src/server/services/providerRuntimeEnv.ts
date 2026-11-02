@@ -21,6 +21,7 @@ import type {
   ApiFormat,
   ModelApiFormat,
   ProviderAuthStrategy,
+  ProviderProxyConfig,
   ProvidersIndex,
   SavedProvider,
 } from '../types/provider.js'
@@ -43,6 +44,7 @@ import {
   isOpenAIOfficialProviderId,
 } from './openaiOfficialProvider.js'
 import {
+  GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
   buildGrokOfficialRuntimeEnv,
@@ -82,6 +84,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
+  GROK_MODEL_CATALOG_ENV_KEY,
   DEEPSEEK_OAUTH_PROVIDER_ENV_KEY,
   DEEPSEEK_OAUTH_FILE_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
@@ -146,7 +149,16 @@ function isSavedProvider(value: unknown): value is SavedProvider {
     ) &&
     isProviderModels(value.models) &&
     (value.model1mSupport === undefined || isProviderModel1mSupport(value.model1mSupport)) &&
-    (value.imageGeneration === undefined || isImageGenerationConfig(value.imageGeneration))
+    (value.imageGeneration === undefined || isImageGenerationConfig(value.imageGeneration)) &&
+    (value.proxy === undefined || isProviderProxyConfig(value.proxy))
+  )
+}
+
+function isProviderProxyConfig(value: unknown): value is ProviderProxyConfig {
+  if (!isRecord(value)) return false
+  return (
+    (value.mode === 'follow_global' || value.mode === 'direct' || value.mode === 'manual') &&
+    (value.url === undefined || typeof value.url === 'string')
   )
 }
 
@@ -237,22 +249,40 @@ function applyModel1mSupportMapping(
   }
 }
 
+/**
+ * Load-time guard for the per-provider proxy override. Invalid shapes and
+ * `manual` without a URL degrade to absent (follow global) rather than
+ * blocking the whole index from loading.
+ */
+export function normalizeProviderProxyConfig(value: unknown): ProviderProxyConfig | undefined {
+  if (!isProviderProxyConfig(value)) return undefined
+  if (value.mode === 'manual') {
+    const url = value.url?.trim()
+    if (!url) return undefined
+    return { mode: 'manual', url }
+  }
+  return { mode: value.mode }
+}
+
 export function normalizeSavedProvider(provider: SavedProvider): SavedProvider {
   const {
     disableExperimentalBetas: rawDisableExperimentalBetas,
     imageGeneration: rawImageGeneration,
     model1mSupport: rawModel1mSupport,
+    proxy: rawProxy,
     supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia,
     ...rest
-  } = provider
+  } = provider as SavedProvider & { proxy?: unknown }
   const rawProvider = provider as SavedProvider & Record<string, unknown>
   const model1mSupport = normalizeModel1mSupport(rawModel1mSupport)
   const imageGeneration = normalizeImageGeneration(rawImageGeneration)
+  const proxy = normalizeProviderProxyConfig(rawProxy)
   return {
     ...rest,
     apiFormat: provider.apiFormat ?? 'anthropic',
     runtimeKind: provider.runtimeKind ?? 'anthropic_compatible',
     models: normalizeModelMapping(provider.models),
+    ...(proxy !== undefined && { proxy }),
     toolSearchEnabled: normalizeToolSearchEnabled(rawProvider.toolSearchEnabled),
     ...(typeof rawSupportsNestedToolResultMedia === 'boolean'
       ? { supportsNestedToolResultMedia: rawSupportsNestedToolResultMedia }
@@ -613,6 +643,42 @@ export function readActiveProviderManagedEnv(
     return buildProviderManagedEnv(provider, {
       serverPort: options?.serverPort,
     })
+  } catch {
+    return null
+  }
+}
+
+export type SavedProviderRuntime = {
+  provider: SavedProvider
+  needsProxy: boolean
+}
+
+/**
+ * Read one saved API provider by id for a per-Agent route. Account sign-ins
+ * (OpenAI/Grok/DeepSeek) and Claude Official carry their credential in the
+ * process-wide transport, so they cannot serve a single request in a process
+ * that runs another provider; they are reported as missing here.
+ */
+export function readSavedProviderRuntime(
+  configDir: string,
+  providerId: string,
+): SavedProviderRuntime | null {
+  try {
+    const raw = fs.readFileSync(path.join(configDir, 'cc-haha', 'providers.json'), 'utf-8')
+    const index = normalizeProvidersIndex(JSON.parse(raw))
+    const provider = index?.providers.find((entry) => entry.id === providerId)
+    if (
+      !provider ||
+      provider.runtimeKind !== 'anthropic_compatible' ||
+      provider.presetId === 'official'
+    ) return null
+    return {
+      provider,
+      needsProxy: providerNeedsProxy(
+        resolveProviderApiFormat(provider),
+        provider.supportsNestedToolResultMedia,
+      ),
+    }
   } catch {
     return null
   }

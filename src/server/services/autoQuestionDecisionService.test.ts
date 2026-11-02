@@ -303,15 +303,22 @@ describe('autoQuestionDecisionService', () => {
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer fake-grok-token')
   })
 
-  test('answers with the DeepSeek account token header, never an API key', async () => {
+  test.each([false, true])('answers with the DeepSeek account token header, never an API key (thinking retry: %s)', async (retryThinking) => {
     await hahaDeepSeekOAuthService.saveTokens({
       token: 'dsh_test_account_token',
       issuer: 'https://platform.deepseek.com',
       deviceId: 'device-1',
     })
-    const calls: Array<{ url: string; headers: Headers }> = []
+    const calls: Array<{ url: string; headers: Headers; model: string }> = []
     globalThis.fetch = (async (input, init) => {
-      calls.push({ url: String(input), headers: new Headers(init?.headers) })
+      const body = JSON.parse(String(init?.body)) as { model: string }
+      calls.push({ url: String(input), headers: new Headers(init?.headers), model: body.model })
+      if (body.model !== 'deepseek-flash') {
+        return Response.json({ error: 'Model Not Exist' }, { status: 400 })
+      }
+      if (retryThinking && calls.length === 1) {
+        return Response.json({ error: 'thinking unsupported' }, { status: 400 })
+      }
       return Response.json({
         content: [{ type: 'text', text: '{"answers":[{"questionIndex":0,"optionLabels":["JSON"]}]}' }],
       })
@@ -320,7 +327,12 @@ describe('autoQuestionDecisionService', () => {
       questions: [undecided], conversationText: '', providerId: 'deepseek-account',
       signal: new AbortController().signal,
     })).toEqual({ 'Which format?': 'JSON' })
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(retryThinking ? 2 : 1)
+    expect(calls.map((call) => call.model)).toEqual(
+      Array(retryThinking ? 2 : 1).fill('deepseek-flash'),
+    )
+    expect((await new ProviderService().getProvider('deepseek-account')).models.haiku)
+      .toBe('deepseek-flash[1m]')
     expect(calls[0]!.url).toBe('https://api.deepseek.com/anthropic/v1/messages')
     expect(calls[0]!.headers.get('x-dsh-auth-token')).toBe('dsh_test_account_token')
     expect(calls[0]!.headers.get('x-api-key')).toBeNull()

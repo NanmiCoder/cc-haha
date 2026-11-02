@@ -128,6 +128,42 @@ describe('AgentTeamsMemberInspector', () => {
     expect(screen.getByText('1/1', { selector: 'dd' })).toBeTruthy()
   })
 
+  it.each(['pending', 'in_progress'] as const)('does not keep a transferred %s task on its former member', (status) => {
+    const before = snapshot('2026-08-08T07:00:00.000Z', status)
+    const after = snapshot('2026-08-08T07:05:00.000Z', 'in_progress')
+    after.tasks[0]!.owner = 'reviewer'
+    const { rerender } = renderInspector({ snapshots: [before, after] })
+
+    expect(screen.queryByTestId('agent-teams-member-task-7')).toBeNull()
+    expect(screen.queryByText('0/1', { selector: 'dd' })).toBeNull()
+
+    rerender(<AgentTeamsMemberInspector
+      snapshots={[before, after]} selectedIndex={1} snapshot={after} member={reviewer}
+      isLead={false} leadIsStreaming={false} onBack={vi.fn()} onClose={vi.fn()} onOpenExecution={vi.fn()}
+    />)
+    expect(screen.getByTestId('agent-teams-member-task-7').getAttribute('data-task-state')).toBe('running')
+
+    rerender(<AgentTeamsMemberInspector
+      snapshots={[before, after]} selectedIndex={0} snapshot={before} member={builder}
+      isLead={false} leadIsStreaming={false} onBack={vi.fn()} onClose={vi.fn()} onOpenExecution={vi.fn()}
+    />)
+    expect(screen.getByTestId('agent-teams-member-task-7').getAttribute('data-task-state')).toBe(status === 'pending' ? 'open' : 'running')
+  })
+
+  it('does not restore a cleared assignment from the member mailbox', () => {
+    const before = snapshot('2026-08-08T07:00:00.000Z', 'in_progress', [message({
+      id: 'assignment', from: 'team-lead', to: 'builder', recipients: ['builder'],
+      kind: 'system', protocolType: 'task_assignment', taskId: '7',
+    })])
+    const after = structuredClone(before)
+    after.tasks[0]!.owner = ''
+    renderInspector({ snapshots: [before, after] })
+
+    expect(screen.queryByTestId('agent-teams-member-task-7')).toBeNull()
+    expect(screen.getByText('0/0', { selector: 'dd' })).toBeTruthy()
+    expect(screen.getByTestId('agent-teams-member-message-assignment')).toBeTruthy()
+  })
+
   it('groups what a member is doing, will do next and has done, and says where a stopped member stopped', () => {
     const memberTask = (id: string, status: TeamWorkbenchTask['status'], blockedBy: string[] = []): TeamWorkbenchTask => ({
       id, subject: `Task ${id}`, description: '', owner: 'builder', status, blocks: [], blockedBy, taskListId: 'team-a',

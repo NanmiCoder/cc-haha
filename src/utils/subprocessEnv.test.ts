@@ -29,4 +29,16 @@ describe('subprocessEnv', () => {
     expect(env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBeUndefined()
     expect(process.env.CC_HAHA_LOCAL_ACCESS_TOKEN).toBe('desktop-local-secret')
   })
+
+  test('keeps the session collaboration token in-process only', () => {
+    const original = process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN
+    process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN = 'collaboration-secret'
+    try {
+      expect(subprocessEnv().CC_HAHA_SESSION_COLLABORATION_TOKEN).toBeUndefined()
+      expect(process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN).toBe('collaboration-secret')
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN
+      else process.env.CC_HAHA_SESSION_COLLABORATION_TOKEN = original
+    }
+  })
 })

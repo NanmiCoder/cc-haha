@@ -29,6 +29,7 @@ vi.mock('../api/mcp', async (importOriginal) => {
     mcpApi: {
       ...actual.mcpApi,
       projectPaths: vi.fn(),
+      projectSharing: vi.fn(),
     },
   }
 })
@@ -61,6 +62,9 @@ describe('McpSettings', () => {
     vi.mocked(mcpApi.projectPaths).mockResolvedValue({
       projectPaths: ['/workspace/config-project'],
     })
+    vi.mocked(mcpApi.projectSharing).mockImplementation(async (_name, paths, sourceCwd) => ({
+      projects: paths.map(projectPath => ({ projectPath, revision: null, selected: projectPath === sourceCwd })),
+    }))
     useSettingsStore.setState({ locale: 'en' })
     useSessionStore.setState({
       sessions: [
@@ -780,7 +784,7 @@ describe('McpSettings', () => {
     )
   })
 
-  it('updates project MCP servers using the explicitly selected target project', async () => {
+  it('moves local MCP servers to the explicitly selected shared project', async () => {
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({
       projects: [{
         projectPath: '/workspace/moved-project',
@@ -811,7 +815,7 @@ describe('McpSettings', () => {
     })
     const server = {
       name: 'shared-tools',
-      scope: 'project',
+      scope: 'local',
       transport: 'stdio',
       enabled: true,
       status: 'connected',
@@ -836,6 +840,8 @@ describe('McpSettings', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open shared-tools' }))
     })
+
+    fireEvent.click(screen.getByRole('button', { name: /^Project Shared/ }))
 
     expect(screen.getByText('project')).toBeInTheDocument()
 

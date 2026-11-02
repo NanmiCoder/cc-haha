@@ -23,6 +23,9 @@ const DEFAULT_VOICE_INPUT_PREFERENCES = {
   providerId: 'sensevoice-local',
   language: 'auto',
   downloadSource: 'auto',
+  correctionEnabled: false,
+  correctionProviderId: null,
+  correctionModelId: null,
 }
 
 async function setup() {
@@ -788,6 +791,46 @@ describe('desktop UI preferences API', () => {
     })
   })
 
+  test('reads a profile projection with an inline avatar without other desktop preferences', async () => {
+    const service = new DesktopUiPreferencesService()
+    await service.updateProfilePreferences({ displayName: 'Local Operator', subtitle: 'operator.example' })
+    await service.updateProjectDisplayName({ projectKey: '/private/workspace', displayName: 'Private project' })
+    await service.updateProfileAvatar(new Uint8Array([255, 216, 255]), 'image/jpeg')
+    const before = await readDesktopUiFile()
+    const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+    const response = await handleDesktopUiApi(request.req, request.url, request.segments)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      profile: { displayName: 'Local Operator', subtitle: 'operator.example', avatarDataUrl: 'data:image/jpeg;base64,/9j/' },
+    })
+    expect(await readDesktopUiFile()).toEqual(before)
+  })
+
+  test('reads a default profile when no profile or avatar has been saved', async () => {
+    const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+    const response = await handleDesktopUiApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      profile: { displayName: 'cc-haha', subtitle: 'github.com/NanmiCoder/cc-haha', avatarDataUrl: null },
+    })
+  })
+
+  test('keeps the profile readable when its managed avatar is missing or exceeds the upload limit', async () => {
+    const service = new DesktopUiPreferencesService()
+    await service.updateProfileAvatar(new Uint8Array([255, 216, 255]), 'image/jpeg')
+    const avatarPath = path.join(tmpDir, 'cc-haha', 'profile', 'avatar.jpg')
+    await fs.unlink(avatarPath)
+    const read = async () => {
+      const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+      return handleDesktopUiApi(request.req, request.url, request.segments)
+    }
+    expect(await (await read()).json()).toMatchObject({ profile: { avatarDataUrl: null } })
+    await fs.writeFile(avatarPath, new Uint8Array(2_000_001))
+    expect(await (await read()).json()).toMatchObject({ profile: { avatarDataUrl: null } })
+  })
+
   test('persists profile preferences and avatar uploads through the API', async () => {
     const profileReq = makeRequest('PUT', '/api/desktop-ui/preferences/profile', {
       displayName: '  Local Operator  ',
@@ -982,7 +1025,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
 
     const after = await service.updateVoiceInputPreferences({ enabled: true, language: 'zh' })
 
-    expect(after.voiceInput).toEqual({ enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' })
+    expect(after.voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'zh' })
     expect(await readDesktopUiFile()).toMatchObject({
       schemaVersion: 6,
       futureField: { keep: true },
@@ -1029,6 +1072,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     const after = await service.updateVoiceInputPreferences({ language: 'ko' })
 
     expect(after.voiceInput).toEqual({
+      ...DEFAULT_VOICE_INPUT_PREFERENCES,
       enabled: true,
       providerId: 'cloud-x',
       language: 'ko',
@@ -1046,6 +1090,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
 
     const service = new DesktopUiPreferencesService()
     expect((await service.readPreferences()).preferences.voiceInput).toEqual({
+      ...DEFAULT_VOICE_INPUT_PREFERENCES,
       enabled: true,
       providerId: 'sensevoice-local',
       language: 'zh',
@@ -1053,8 +1098,66 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     })
 
     const after = await service.updateVoiceInputPreferences({ downloadSource: 'mirror' })
-    expect(after.voiceInput).toEqual({ enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'mirror' })
+    expect(after.voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'zh', downloadSource: 'mirror' })
     expect((await readDesktopUiFile()).voiceInput).toEqual(after.voiceInput)
+  })
+
+  test('reads a voiceInput section saved before AI correction existed as off and keeps unknown fields', async () => {
+    // Shape every desktop wrote before the correction fields were added.
+    await writeDesktopUiFile({
+      schemaVersion: 6,
+      futureField: { keep: true },
+      voiceInput: {
+        enabled: true,
+        providerId: 'sensevoice-local',
+        language: 'zh',
+        downloadSource: 'mirror',
+        futureVoiceField: { keep: 'voice' },
+      },
+    })
+
+    const service = new DesktopUiPreferencesService()
+    expect((await service.readPreferences()).preferences.voiceInput).toEqual({
+      enabled: true,
+      providerId: 'sensevoice-local',
+      language: 'zh',
+      downloadSource: 'mirror',
+      correctionEnabled: false,
+      correctionProviderId: null,
+      correctionModelId: null,
+      futureVoiceField: { keep: 'voice' },
+    } as typeof DEFAULT_VOICE_INPUT_PREFERENCES)
+
+    const after = await service.updateVoiceInputPreferences({
+      correctionEnabled: true,
+      correctionProviderId: 'provider-1',
+      correctionModelId: 'model-fast',
+    })
+    expect(after.voiceInput).toMatchObject({ correctionEnabled: true, correctionProviderId: 'provider-1', correctionModelId: 'model-fast' })
+    const file = await readDesktopUiFile()
+    expect(file.futureField).toEqual({ keep: true })
+    expect(file.voiceInput).toEqual({
+      enabled: true,
+      providerId: 'sensevoice-local',
+      language: 'zh',
+      downloadSource: 'mirror',
+      correctionEnabled: true,
+      correctionProviderId: 'provider-1',
+      correctionModelId: 'model-fast',
+      futureVoiceField: { keep: 'voice' },
+    })
+    expect((await service.readPreferences()).preferences.voiceInput).toEqual(after.voiceInput)
+
+    // Half a fixed pair, or junk, reads as "follow the default provider".
+    await writeDesktopUiFile({
+      schemaVersion: 6,
+      voiceInput: { correctionEnabled: 'yes', correctionProviderId: 'provider-1', correctionModelId: '  ' },
+    })
+    expect((await service.readPreferences()).preferences.voiceInput).toMatchObject({
+      correctionEnabled: false,
+      correctionProviderId: null,
+      correctionModelId: null,
+    })
   })
 
   test('replaces malformed voiceInput values with defaults', async () => {
@@ -1083,12 +1186,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     await service.updateProjectDisplayName({ projectKey: '/workspace/alpha', displayName: 'Alpha' })
     await service.clearProfileAvatar()
 
-    expect((await readDesktopUiFile()).voiceInput).toEqual({
-      enabled: true,
-      providerId: 'sensevoice-local',
-      language: 'en',
-      downloadSource: 'auto',
-    })
+    expect((await readDesktopUiFile()).voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'en' })
   })
 
   test('keeps a newer schemaVersion while filling in voiceInput defaults', async () => {

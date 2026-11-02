@@ -43,6 +43,8 @@ enum WindowGeometry {
 
     /// Revalidate the original window after an async focus/pacing boundary;
     /// never replace it with whichever window is currently above the pointer.
+    /// Pass `allSpacesWindowList` to look past the shown Spaces; that list also
+    /// holds minimized windows, so callers must check the window's state too.
     static func window(
         id: CGWindowID, pid: pid_t,
         windowList: () -> [[CFString: Any]]? = systemWindowList
@@ -217,6 +219,14 @@ enum WindowGeometry {
         return true
     }
 
+    /// Is `id` among the windows on the Spaces the user is looking at?
+    static func isOnScreen(
+        id: CGWindowID, pid: pid_t,
+        windowList: () -> [[CFString: Any]]? = systemWindowList
+    ) -> Bool {
+        window(id: id, pid: pid, windowList: windowList) != nil
+    }
+
     /// Why a coordinate could not be bound to one of a process's windows.
     ///
     /// The distinction is the whole point: "your app is not on screen" and
@@ -224,14 +234,16 @@ enum WindowGeometry {
     /// collapsing them into a bare `nil` is what let an unreachable window look
     /// like a successful click for as long as it did.
     enum BindingFailure: Error, Equatable {
-        /// The process has no ordinary window on screen at all — minimized,
-        /// hidden, or on another Space. No coordinate can reach it.
+        /// The process has no ordinary window on the shown Spaces at all —
+        /// minimized, hidden, or on another Space.
         case noWindowOnScreen
         /// It has on-screen windows, but none of them covers this point.
         case pointOutsideWindows
     }
 
-    /// Resolve the window a coordinate action must name, or say why it cannot.
+    /// Resolve the on-screen window a coordinate action must name, or say why
+    /// it cannot. `AXAction` decides separately whether a window on another
+    /// Space may take the point.
     static func binding(
         at point: CGPoint,
         pid: pid_t,
@@ -275,9 +287,19 @@ enum WindowGeometry {
     }
 
     /// Front-to-back on-screen windows, as the window server reports them.
-    private static func systemWindowList() -> [[CFString: Any]]? {
+    static func systemWindowList() -> [[CFString: Any]]? {
         CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[CFString: Any]]
+    }
+
+    /// Every window the window server knows, including other Spaces. Only for
+    /// lookups by exact window ID: it also lists minimized windows and helper
+    /// surfaces, so it must never be hit-tested.
+    static func allSpacesWindowList() -> [[CFString: Any]]? {
+        CGWindowListCopyWindowInfo(
+            [.optionAll, .excludeDesktopElements],
             kCGNullWindowID
         ) as? [[CFString: Any]]
     }

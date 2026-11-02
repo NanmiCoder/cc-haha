@@ -355,6 +355,44 @@ test("a user's direct message resumes a stopped member without waiting for the l
   }
 }, 30_000)
 
+test('a member being restarted counts as running until its process is up', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const sessionId = h.memberIds.reader!
+    await h.service.stopSessionAndWait(sessionId)
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'stopped member to be recorded')
+    const start = h.service.startSession.bind(h.service)
+    let release!: () => void
+    const released = new Promise<void>(resolve => { release = resolve })
+    let restarting = false
+    const spy = spyOn(h.service, 'startSession').mockImplementation(async (...args: Parameters<typeof start>) => {
+      if (args[0] === sessionId) {
+        restarting = true
+        await released
+      }
+      return start(...args)
+    })
+    try {
+      const before = h.requests.length
+      await messageMember(h, 'reader', 'team-lead', 'Check one more file')
+      await h.waitFor(() => restarting, 'restart to begin')
+      // TeamDelete only waits for members that are not terminated, and a lead
+      // whose team looks finished is told to end it.
+      expect(await h.teamMember('reader')).toMatchObject({ isActive: true, terminated: false })
+      release()
+      await h.waitFor(() => h.requests.length > before, 'restarted member turn')
+      await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'restarted turn to end')
+      expect((await h.teamMember('reader'))?.terminated).toBe(false)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
 test('a Stop while a member is restarting leaves that member stopped', async () => {
   const h = await startHarness(['reader'])
   try {
@@ -540,6 +578,34 @@ test('a team whose owner was lost is rehydrated dormant and its members restart 
     expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
   } finally {
     releaseInitialMember()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("after a server restart, the user's next message tells the lead which members the restart stopped, once", async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    const { createShutdownRequestMessage } = await import('../../utils/teammateMailbox.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 2, 'initial turn reports')
+    // writer agreed to leave before the restart; reader was still at work.
+    await messageMember(h, 'writer', 'team-lead', JSON.stringify(createShutdownRequestMessage({ requestId: 'stop-writer', from: 'team-lead', reason: 'FIXTURE_APPROVE_SHUTDOWN' })))
+    await h.waitFor(async () => (await h.teamMember('writer'))?.terminated === true, 'writer gone')
+    const runtime = await import('./teamPlanRuntime.js')
+    // The server restarts: the in-memory owner and every process are gone, and
+    // nothing recorded reader's end (its supervisor died with the server).
+    runtime.forgetTeamPlanRuntimesForTests()
+    await h.service.stopSessionAndWait(h.memberIds.reader!)
+    expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
+
+    // Nothing wakes reader by itself; the lead, waiting for its report, is told.
+    const notices = await userMessagesLead(h)
+    await userMessagesLead(h, notices)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('[Team runtime notice] The app restarted, which stopped these members of your team')
+    expect(notices[0]).toMatch(/- reader: #\d+ Task for reader \(pending\)/)
+    expect(notices[0]).not.toContain('- writer')
+    expect(notices[0]).toContain('SendMessage each member that still has work')
+  } finally {
     await h.cleanup()
   }
 }, 30_000)

@@ -12,8 +12,9 @@ export const modelsApi = {
   },
 
   /** Models one built-in OAuth provider's account offers, whether or not it is the active provider. */
-  catalog(providerId: string) {
-    return api.get<ModelCatalogResponse>(`/api/models/catalog?provider=${encodeURIComponent(providerId)}`)
+  catalog(providerId: string, options?: { forceRefresh?: boolean }) {
+    const refresh = options?.forceRefresh ? '&refresh=true' : ''
+    return api.get<ModelCatalogResponse>(`/api/models/catalog?provider=${encodeURIComponent(providerId)}${refresh}`)
   },
 
   getCurrent() {

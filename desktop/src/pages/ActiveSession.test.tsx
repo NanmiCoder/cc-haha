@@ -1,3 +1,4 @@
+import { ApiError } from '../api/client'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,7 +23,7 @@ const teamApiMocks = vi.hoisted(() => ({
   getTeam: vi.fn(),
   listTeams: vi.fn(),
   getWorkbenchForSession: vi.fn(
-    (): Promise<TeamWorkbenchSessionTimeline> => Promise.reject(new Error('not a team session')),
+    (_sessionId: string): Promise<TeamWorkbenchSessionTimeline> => Promise.reject(new Error('not a team session')),
   ),
   getWorkbench: vi.fn(),
   sendMemberMessage: vi.fn(),
@@ -132,6 +133,8 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
+import { useTeamPlanStore } from '../stores/teamPlanStore'
+import type { TeamPlanRecord } from '../../../src/shared/teamPlan'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { useSessionDelegationStore } from '../stores/sessionDelegationStore'
 import { sessionCollaborationApi, type SessionDelegationSnapshot } from '../api/sessionCollaboration'
@@ -196,6 +199,44 @@ describe('ActiveSession trajectory view', () => {
     useSessionStore.setState({ sessions: [{ id, title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
     useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [{ id: 'm', type: 'assistant_text', content: 'main', timestamp: 1 }] } } })
   }
+
+  it('remembers an absent workbench when returning to an ordinary session and rediscovers on reconnect', async () => {
+    useTeamStore.getState().clearTeam()
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ plan: null })))
+    teamApiMocks.getWorkbenchForSession.mockImplementation(async (sessionId: string) => {
+      throw new ApiError(404, {
+        error: 'NOT_FOUND',
+        message: `No Agent Teams workbench for session: ${sessionId}`,
+      })
+    })
+    const connect = vi.spyOn(useChatStore.getState(), 'connectToSession').mockImplementation(() => {})
+    try {
+      seedSession('ordinary-a')
+      const view = render(<ActiveSession sessionId="ordinary-a" />)
+      await act(async () => {})
+      await act(async () => {
+        seedSession('ordinary-b')
+        view.rerender(<ActiveSession sessionId="ordinary-b" />)
+      })
+      await act(async () => {
+        seedSession('ordinary-a')
+        view.rerender(<ActiveSession sessionId="ordinary-a" />)
+      })
+      expect(teamApiMocks.getWorkbenchForSession.mock.calls).toEqual([
+        ['ordinary-a'], ['ordinary-b'],
+      ])
+      await act(async () => {
+        useChatStore.getState().handleServerMessage('ordinary-a', { type: 'connected', sessionId: 'ordinary-a' })
+      })
+      expect(teamApiMocks.getWorkbenchForSession.mock.calls).toEqual([
+        ['ordinary-a'], ['ordinary-b'], ['ordinary-a'],
+      ])
+      expect(screen.getByRole('heading', { name: 'Main' })).toBeInTheDocument()
+    } finally {
+      connect.mockRestore()
+      useTeamStore.getState().clearTeam()
+    }
+  })
 
   it('retains the known tab title when summary metadata is unavailable', async () => {
     const id = 'history-with-unavailable-summary'
@@ -1892,6 +1933,61 @@ describe('ActiveSession task polling', () => {
     })
     expect(screen.queryByTestId('agent-teams-workbench-panel')).not.toBeInTheDocument()
     expect(useTeamStore.getState().workbenchesBySession[sessionId]?.snapshots).toHaveLength(1)
+  })
+
+  it('shows an interrupted team as interrupted in the header strip, though its tasks read as running', () => {
+    const sessionId = 'team-interrupted-strip-session'
+    useTeamStore.setState({
+      workbenchesBySession: {
+        [sessionId]: {
+          teamName: 'cut-team', loading: false, error: null,
+          snapshots: [{
+            version: 'v1', generatedAt: '2026-10-27T00:00:00.000Z',
+            team: {
+              name: 'cut-team', leadAgentId: 'team-lead@cut-team', leadSessionId: sessionId,
+              members: [
+                { agentId: 'team-lead@cut-team', role: 'team-lead', status: 'idle' },
+                { agentId: 'lister@cut-team', name: 'lister', role: 'lister', status: 'idle' },
+              ],
+            },
+            tasks: [{ id: '1', subject: 'List files', description: '', status: 'pending', owner: 'lister', blocks: [], blockedBy: [], taskListId: 'cut-team' }],
+            messages: [],
+          }],
+        },
+      },
+    })
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Interrupted Team Session', createdAt: '2026-10-27T00:00:00.000Z', modifiedAt: '2026-10-27T00:00:00.000Z', messageCount: 1, projectPath: '/workspace/project', workDir: '/workspace/project', workDirExists: true }],
+      activeSessionId: sessionId, isLoading: false, error: null,
+    })
+    useTabStore.setState({ tabs: [{ sessionId, title: 'Interrupted Team Session', type: 'session', status: 'idle' }], activeTabId: sessionId })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [{ id: 'msg-1', type: 'assistant_text', content: 'hello', timestamp: 1 }],
+          chatState: 'idle', connectionState: 'connected', streamingText: '', streamingToolInput: '',
+          activeToolUseId: null, activeToolName: null, activeThinkingId: null, pendingPermission: null, pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 }, streamingResponseChars: 0, elapsedSeconds: 0, statusVerb: '',
+          slashCommands: [], backgroundAgentTasks: {}, agentTaskNotifications: {}, elapsedTimer: null,
+        },
+      },
+    })
+    try {
+      render(<ActiveSession />)
+      expect(screen.getByTestId('agent-teams-strip')).toHaveTextContent('Parallel execution')
+
+      act(() => {
+        useTeamPlanStore.setState({ bySession: { [sessionId]: {
+          plan: { teamName: 'cut-team', state: 'interrupted' } as TeamPlanRecord,
+          loading: false, busy: false, error: null, conflict: false,
+        } } })
+      })
+      const strip = screen.getByTestId('agent-teams-strip')
+      expect(strip).toHaveTextContent('Interrupted')
+      expect(strip).not.toHaveTextContent('Parallel execution')
+    } finally {
+      useTeamPlanStore.setState({ bySession: {} })
+    }
   })
 
   it('updates the Team workbench without leaking its DAG, roster, or transcript spawns into main Activity', async () => {

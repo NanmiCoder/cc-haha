@@ -2,7 +2,7 @@
 
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, sep, win32 } from 'node:path'
+import { dirname, join, relative, resolve, sep, win32 } from 'node:path'
 import { rootBunTestFilter } from '../pr/bun-test-filter'
 import { createSandboxedTestEnvironment, removeTestSandbox } from '../pr/test-environment'
 import { loadQuarantineManifest, quarantinedPathSet } from './quarantine'
@@ -374,12 +374,14 @@ export function parseBunTestFileCount(output: string) {
   return groupedTestFiles.size > 0 ? groupedTestFiles.size : null
 }
 
-export function buildRootCoverageCommand(outputDir: string, serverFiles: string[]) {
+export function buildRootCoverageCommand(outputDir: string, serverFiles: string[], rootDir = ROOT_DIR) {
   return [
     'bun',
     '--no-env-file',
     '--feature=TRANSCRIPT_CLASSIFIER',
     'test',
+    '--preload',
+    resolve(rootDir, 'preload.ts'),
     '--timeout=20000',
     '--coverage',
     '--coverage-reporter=lcov',
@@ -895,7 +897,7 @@ export async function runCoverageGate(options: {
   const coverageByFile = new Map<string, FileLineCoverage>()
 
   mkdirSync(join(outputDir, 'root-server'), { recursive: true })
-  const rootCommand = buildRootCoverageCommand(outputDir, serverFiles)
+  const rootCommand = buildRootCoverageCommand(outputDir, serverFiles, rootDir)
   const rootLogPath = join(outputDir, 'root-server', 'coverage.log')
   const rootResult = await runCommand(rootCommand, rootDir, rootLogPath)
   const rootLcovPath = join(outputDir, 'root-server', 'lcov.info')
