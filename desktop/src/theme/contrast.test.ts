@@ -110,7 +110,7 @@ function flatten(fg: Rgb, bg: Rgb): Rgb {
 function luminance({ r, g, b }: Rgb): number {
   const channel = (v: number) => {
     const s = v / 255
-    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
   }
   return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
 }
@@ -121,11 +121,73 @@ function contrast(fg: Rgb, bg: Rgb): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 }
 
-/** WCAG AA for text below 18.66px, which every badge and status label is. */
+/** WCAG AA for small text, including ordinary descriptions and metadata. */
 const AA_SMALL_TEXT = 4.5
 
 /** WCAG 1.4.11 for non-text UI boundaries (checkbox outlines and the like). */
 const AA_CONTROL_BOUNDARY = 3.0
+
+describe('default theme reading contrast', () => {
+  // These are the actual semantic grounds used by settings rows, sidebar
+  // titles, chat prose/user messages, hovered rows, and raised controls.
+  // Small explanatory text is not exempt from 4.5:1. In dark, tertiary text
+  // previously dropped to 4.20:1 on the hover/dialog ground and 3.59:1 on
+  // the highest container, despite passing the existing page/card checks.
+  const grounds = [
+    '--color-surface',
+    '--color-surface-sidebar',
+    '--color-surface-container-lowest',
+    '--color-surface-container',
+    '--color-surface-hover',
+    '--color-surface-selected',
+    '--color-surface-user-msg',
+    '--color-surface-dialog',
+    '--color-surface-container-highest',
+  ] as const
+
+  for (const theme of ['white', 'dark'] as const) {
+    const selectors = THEME_BLOCKS[theme]
+    const surface = parseColor(resolve('--color-surface', selectors))
+
+    for (const textToken of ['--color-text-primary', '--color-text-secondary', '--color-text-tertiary'] as const) {
+      it(`keeps ${theme} ${textToken} readable across reading and interaction surfaces`, () => {
+        for (const ground of grounds) {
+          const fill = flatten(parseColor(resolve(ground, selectors)), surface)
+          const text = flatten(parseColor(resolve(textToken, selectors)), fill)
+          // Aim beyond the minimum for the two main reading tiers on page,
+          // card and hover grounds; this is a readability target, not an AA
+          // requirement. Even the highest control fill must meet small-text AA.
+          const minimum = textToken !== '--color-text-tertiary' && ground !== '--color-surface-container-highest'
+            ? 7
+            : AA_SMALL_TEXT
+          expect(contrast(text, fill), `${theme}: ${textToken} on ${ground}`).toBeGreaterThanOrEqual(minimum)
+        }
+      })
+    }
+
+    it(`keeps ${theme} derived RGB text colors in sync with their opaque sources`, () => {
+      // Hovered primary buttons and the sidebar toggle use the RGB triplets.
+      // A hex-only palette edit would leave those states on the old colors.
+      for (const tier of ['t1', 't2'] as const) {
+        const source = parseColor(resolve(`--cc-${tier}`, selectors))
+        const derived = parseColor(`rgb(${resolve(`--cc-${tier}-rgb`, selectors)})`)
+        expect(derived).toEqual(source)
+      }
+    })
+
+    it(`keeps the ${theme} open sidebar toggle visible after alpha compositing`, () => {
+      // This is an icon (3:1), not a text description. Its token alpha and
+      // the chevron's own 0.95 opacity both reduce the final contrast.
+      const trough = parseColor(resolve('--color-surface-sidebar', selectors))
+      const value = resolve('--color-text-secondary-a68', selectors).replace(
+        /var\((--[\w-]+)\)/g,
+        (_, token: string) => resolve(token, selectors),
+      )
+      const icon = parseColor(value)
+      expect(contrast(flatten({ ...icon, a: icon.a * 0.95 }, trough), trough)).toBeGreaterThanOrEqual(AA_CONTROL_BOUNDARY)
+    })
+  }
+})
 
 const STATUS_PAIRS = [
   { name: 'success', fill: '--color-success-container', text: '--color-on-success-container' },
