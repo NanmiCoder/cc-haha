@@ -119,7 +119,7 @@ test('launch metadata, title, work directory and metadata appends never material
 })
 
 
-test('history pages hide the notification turn but keep its reply, preserve sidechain ownership, and index only appended bytes', async () => {
+test('history pages project the notification turn as a status and keep its reply, preserve sidechain ownership, and index only appended bytes', async () => {
   const notification = '<task-notification><task-id>task</task-id><tool-use-id>agent</tool-use-id><status>completed</status></task-notification>'
   await writeFile(file, [
     entry('assistant', 'owner', [{ type: 'tool_use', id: 'agent', name: 'Agent', input: {} }]),
@@ -131,7 +131,12 @@ test('history pages hide the notification turn but keep its reply, preserve side
   expect(latest.messages).toMatchObject([{ id: 'reply' }])
   expect(latest.page.contextScanBytes).toBeGreaterThan(0)
   const noticePage = await service.getSessionHistoryPage(id, { limit: 1, cursor: latest.page.nextCursor! })
-  expect(noticePage.messages).toEqual([])
+  expect(noticePage.messages).toEqual([{
+    id: 'notice',
+    type: 'system',
+    content: { subtype: 'background_continue', notifications: [{ taskId: 'task', status: 'completed' }] },
+    timestamp: '2026-01-01T00:00:00.000Z',
+  }])
   const childPage = await service.getSessionHistoryPage(id, { limit: 1, cursor: noticePage.page.nextCursor! })
   expect(childPage.messages).toMatchObject([{ id: 'child', parentToolUseId: 'agent' }])
   expect(childPage.page.contextScanBytes).toBe(0)
