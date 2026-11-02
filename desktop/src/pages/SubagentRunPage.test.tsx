@@ -182,6 +182,69 @@ describe('SubagentRunPage', () => {
     useTeamStore.getState().clearTeam()
   })
 
+  it.each(['completed', 'failed', 'stopped'] as const)('keeps a live SubAgent when returning from a %s run with the same revision', async (status) => {
+    const bRefresh = deferred<SubagentRunResponse>()
+    let aReads = 0
+    let bReads = 0
+    const bData = subagentRun({
+      toolUseId: `switch-${status}-tool-b`, agentId: `switch-${status}-agent-b`, status: 'running', canSendMessage: false,
+      prompt: 'B prompt', summary: undefined,
+      messages: [{ id: `switch-${status}-b-durable`, type: 'assistant', content: [{ type: 'text', text: 'B durable prefix' }], timestamp: TRANSCRIPT_TIMESTAMP }],
+    })
+    const aData = subagentRun({
+      toolUseId: `switch-${status}-tool-a`, agentId: `switch-${status}-agent-a`, status: 'running', canSendMessage: false,
+      prompt: 'A prompt', summary: undefined,
+      messages: [{ id: `switch-${status}-a-durable`, type: 'assistant', content: [{ type: 'text', text: 'A durable prefix' }], timestamp: TRANSCRIPT_TIMESTAMP }],
+    })
+    vi.mocked(subagentsApi.getRunByTool).mockImplementation(async (_source, tool) => {
+      if (tool === `switch-${status}-tool-b`) return ++bReads === 1 ? bData : bRefresh.promise
+      if (tool === `switch-${status}-tool-a`) return ++aReads === 1 ? aData : { ...aData, status }
+      throw new Error(`Unexpected tool ${tool}`)
+    })
+    const send = (agentId: string, streamId: string, event: Extract<ServerMessage, { type: 'agent_run_event' }>['event']) => {
+      useChatStore.getState().handleServerMessage('session-1', {
+        type: 'agent_run_event', runAgentId: agentId, targetAgentId: agentId, streamId, event,
+      })
+    }
+    useTabStore.getState().openTab('session-1', 'Parent')
+    const bId = useTabStore.getState().openSubagentTab('session-1', `switch-${status}-tool-b`, 'B')
+    const view = render(<SubagentRunPage sourceSessionId="session-1" toolUseId={`switch-${status}-tool-b`} title="B" />)
+    await screen.findByText('B durable prefix')
+    act(() => {
+      send(`switch-${status}-agent-b`, `switch-${status}-stream-b`, { type: 'content_start', blockType: 'text' })
+      send(`switch-${status}-agent-b`, `switch-${status}-stream-b`, { type: 'content_delta', text: 'B live before switch' })
+    })
+    await waitFor(() => expect(useChatStore.getState().sessions[bId]?.streamingText).toContain('B live before switch'))
+    expect(useChatStore.getState().sessions[bId]?.agentStreamRevision).toBe(1)
+    let aId = ''
+    act(() => {
+      aId = useTabStore.getState().openSubagentTab('session-1', `switch-${status}-tool-a`, 'A')
+      view.rerender(<SubagentRunPage sourceSessionId="session-1" toolUseId={`switch-${status}-tool-a`} title="A" />)
+    })
+    await screen.findByText('A durable prefix')
+    act(() => {
+      send(`switch-${status}-agent-a`, `switch-${status}-stream-a`, { type: 'content_start', blockType: 'text' })
+      send(`switch-${status}-agent-a`, `switch-${status}-stream-a`, { type: 'content_delta', text: 'A live before terminal' })
+    })
+    await waitFor(() => expect(useChatStore.getState().sessions[aId]?.streamingText).toContain('A live before terminal'))
+    expect(useChatStore.getState().sessions[aId]?.agentStreamRevision).toBe(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(within(screen.getByTestId('session-header')).getByText(status === 'completed' ? 'Completed' : status === 'failed' ? 'Failed' : 'Stopped')).toBeInTheDocument())
+    act(() => {
+      useTabStore.getState().setActiveTab(bId)
+      view.rerender(<SubagentRunPage sourceSessionId="session-1" toolUseId={`switch-${status}-tool-b`} title="B" />)
+    })
+    await waitFor(() => expect(bReads).toBe(2))
+    expect(useChatStore.getState().sessions[bId]?.chatState).toBe('streaming')
+    expect(useChatStore.getState().sessions[bId]?.agentStreamRevision).toBe(1)
+    expect(useChatStore.getState().sessions[bId]?.streamingText).toContain('B live before switch')
+    await act(async () => { bRefresh.resolve(bData); await bRefresh.promise })
+    act(() => send(`switch-${status}-agent-b`, `switch-${status}-stream-b`, { type: 'content_delta', text: ' B live after switch' }))
+    expect(useChatStore.getState().sessions[bId]?.chatState).toBe('streaming')
+    await waitFor(() => expect(useChatStore.getState().sessions[bId]?.streamingText).toContain('B live after switch'))
+    expect(JSON.stringify(useChatStore.getState().sessions[bId]?.messages)).not.toContain('A durable prefix')
+  })
+
   it('shows incomplete evidence without hiding content and can recover on refresh', async () => {
     vi.mocked(subagentsApi.getRunByTool)
       .mockResolvedValueOnce(subagentRun({ historyComplete: false, activityComplete: false, truncated: true, status: 'unknown' }))
@@ -2481,51 +2544,48 @@ describe('SubagentRunPage', () => {
     expect(screen.getByRole('button', { name: 'Refresh SubAgent run' })).toBeInTheDocument()
   })
 
-  it('ignores stale responses when the selected SubAgent changes before the first request resolves', async () => {
+  it.each(['completed', 'error'] as const)('ignores a late %s response from the previously selected SubAgent', async (outcome) => {
     const first = deferred<SubagentRunResponse>()
     const second = deferred<SubagentRunResponse>()
     vi.mocked(subagentsApi.getRunByTool).mockImplementation((sessionId) =>
-      sessionId === 'session-a' ? first.promise : second.promise
+      sessionId === 'session-a' ? first.promise : second.promise,
     )
-
     const { rerender } = render(<SubagentRunPage sourceSessionId="session-a" toolUseId="tool-a" title="First Agent" />)
     rerender(<SubagentRunPage sourceSessionId="session-b" toolUseId="tool-b" title="Second Agent" />)
-
+    const agentId = `late-response-b-${outcome}`
+    const streamId = `late-response-stream-${outcome}`
     await act(async () => {
       second.resolve(subagentRun({
-        sessionId: 'session-b',
-        toolUseId: 'tool-b',
-        summary: 'Second result',
-        messages: [{
-          id: 'second-finding',
-          type: 'assistant',
-          content: [{ type: 'text', text: 'Second finding' }],
-          timestamp: TRANSCRIPT_TIMESTAMP,
-        }],
+        sessionId: 'session-b', toolUseId: 'tool-b', agentId, status: 'running',
+        messages: [{ id: 'second-finding', type: 'assistant', content: [{ type: 'text', text: 'Second finding' }], timestamp: TRANSCRIPT_TIMESTAMP }],
       }))
       await second.promise
     })
-
-    expect(screen.getByText(/Second finding/)).toBeInTheDocument()
-
-    await act(async () => {
-      first.resolve(subagentRun({
-        sessionId: 'session-a',
-        toolUseId: 'tool-a',
-        summary: 'Stale first result',
-        messages: [{
-          id: 'stale-finding',
-          type: 'assistant',
-          content: [{ type: 'text', text: 'Stale finding' }],
-          timestamp: TRANSCRIPT_TIMESTAMP,
-        }],
-      }))
-      await first.promise
+    const send = (event: Extract<ServerMessage, { type: 'agent_run_event' }>['event']) => {
+      useChatStore.getState().handleServerMessage('session-b', {
+        type: 'agent_run_event', runAgentId: agentId, targetAgentId: agentId, streamId, event,
+      })
+    }
+    const tabB = `${SUBAGENT_TAB_PREFIX}session-b__tool-b`
+    act(() => {
+      send({ type: 'content_start', blockType: 'text' })
+      send({ type: 'content_delta', text: 'B ongoing stream' })
     })
-
+    await waitFor(() => expect(useChatStore.getState().sessions[tabB]?.streamingText).toContain('B ongoing stream'))
+    await act(async () => {
+      if (outcome === 'error') first.reject(new Error('Old A request failed'))
+      else first.resolve(subagentRun({
+        sessionId: 'session-a', toolUseId: 'tool-a', status: 'completed', summary: 'Stale first result',
+        messages: [{ id: 'stale-finding', type: 'assistant', content: [{ type: 'text', text: 'Stale finding' }], timestamp: TRANSCRIPT_TIMESTAMP }],
+      }))
+      await first.promise.catch(() => undefined)
+    })
     expect(screen.getByText(/Second finding/)).toBeInTheDocument()
     expect(screen.queryByText('Stale first result')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Stale finding/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Old A request failed')).not.toBeInTheDocument()
+    expect(useChatStore.getState().sessions[tabB]?.chatState).toBe('streaming')
+    act(() => send({ type: 'content_delta', text: ' and the next B delta' }))
+    await waitFor(() => expect(useChatStore.getState().sessions[tabB]?.streamingText).toContain('next B delta'))
   })
 
   it('keeps existing details visible when refresh fails', async () => {
