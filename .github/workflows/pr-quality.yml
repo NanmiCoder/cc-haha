@@ -355,6 +355,10 @@ jobs:
       - name: Prepare bundled Cloudflare connector build dependency
         working-directory: desktop
         run: bun run prepare:cloudflared
+      - name: Setup native Computer Use Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare native Computer Use dependencies
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml
       - name: Run desktop native checks
         run: bun run check:native
 

@@ -58,6 +58,8 @@ import type {
 } from "./types.js";
 import { DEFAULT_GRANT_FLAGS } from "./types.js";
 import { REPL_MAX_CODE_BYTES, type ComputerUseReplRuntime } from './replProtocol.js'
+import { buildAgentDesktopTools } from './agentDesktopTools.js'
+import { bindAgentDesktopSession } from './agentDesktopDispatch.js'
 
 const DEFAULT_LOCK_HELD_MESSAGE =
   "Another Claude session is currently using the computer. Wait for that " +
@@ -104,12 +106,14 @@ function mergePermissionResponse(
 export function buildPlatformComputerUseTools(
   caps: {
     screenshotFiltering: "native" | "none";
-    platform: "darwin" | "win32";
+    platform: "darwin" | "win32" | "linux";
+    agentDesktop?: boolean;
     teachMode?: boolean;
   },
   coordinateMode: CoordinateMode,
   installedAppNames?: string[],
 ): Tool[] {
+  if (caps.agentDesktop || caps.platform === 'linux') return buildAgentDesktopTools()
   return caps.platform === "win32"
     ? buildLegacyComputerUseTools(caps, coordinateMode, installedAppNames)
     : buildComputerUseTools(caps, coordinateMode, installedAppNames)
@@ -131,6 +135,9 @@ export function bindSessionContext(
   coordinateMode: CoordinateMode,
   ctx: ComputerUseSessionContext,
 ): (name: string, args: unknown, signal?: AbortSignal) => Promise<CuCallToolResult> {
+  if (adapter.executor.capabilities.agentDesktop || adapter.executor.capabilities.platform === 'linux') {
+    return bindAgentDesktopSession(adapter, ctx)
+  }
   const { logger, serverName } = adapter;
 
   // Screenshot blob persists here across calls — NOT on `ctx`. Hosts hold

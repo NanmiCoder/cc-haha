@@ -20,24 +20,31 @@ describe('setupComputerUseMCP runtime capability', () => {
     expect(result.allowedTools).toEqual(['mcp__computer-use__js', 'mcp__computer-use__js_reset'])
   })
 
-  test('keeps the Windows compatibility engine available without a macOS helper', () => {
+  test('advertises the complete native desktop dispatcher on Windows', () => {
     const result = setupComputerUseMCP({
       platform: 'win32',
+      resolveAgentDesktopBinary: () => '/bin/agent-desktop.exe',
       resolveMacosNativeBinary: () => {
         throw new Error('must not resolve a macOS helper on Windows')
       },
     })
 
     expect(Object.keys(result.mcpConfig)).toEqual(['computer-use'])
-    expect(result.allowedTools).toContain('mcp__computer-use__screenshot')
-    expect(result.allowedTools).not.toContain('mcp__computer-use__get_app_state')
-    expect(result.allowedTools).not.toContain('mcp__computer-use__sequence')
-    expect(result.allowedTools).not.toContain('mcp__computer-use__js')
+    expect(result.allowedTools).toEqual(['mcp__computer-use__desktop'])
+  })
+
+  test('requires the native runtime on both Windows and Linux', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      expect(setupComputerUseMCP({ platform, resolveAgentDesktopBinary: () => null }))
+        .toEqual({ mcpConfig: {}, allowedTools: [] })
+      expect(setupComputerUseMCP({ platform, resolveAgentDesktopBinary: () => '/bin/agent-desktop' }).allowedTools)
+        .toEqual(['mcp__computer-use__desktop'])
+    }
   })
 
   test('does not resolve a helper or advertise tools on unsupported platforms', () => {
     expect(setupComputerUseMCP({
-      platform: 'linux',
+      platform: 'freebsd',
       resolveMacosNativeBinary: () => {
         throw new Error('must not resolve a macOS helper on Linux')
       },

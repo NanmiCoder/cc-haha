@@ -25,6 +25,14 @@ mock.module(bridgePath, () => ({
     throw new Error('Native Computer Use must never execute in the mock lane')
   },
 }))
+const nativeBinaryPath = import.meta.resolve('../../../src/utils/computerUse/agentDesktopBinary.ts')
+const nativeBinary = await import(nativeBinaryPath)
+mock.module(nativeBinaryPath, () => ({
+  ...nativeBinary,
+  resolveAgentDesktopBinary: () => process.env.MOCK_COMPUTER_USE_HELPER_UNAVAILABLE === '1'
+    ? null
+    : '/mock-computer-use/no-native-desktop-binary',
+}))
 mock.module(import.meta.resolve('../../../src/utils/computerUse/mcpServer.ts'), () => ({
   async createComputerUseMcpServerForCli() {
     appendFileSync(log, JSON.stringify({ event: 'connect', pid: process.pid }) + '\n')
@@ -36,6 +44,7 @@ mock.module(import.meta.resolve('../../../src/utils/computerUse/mcpServer.ts'), 
           ? buildPlatformComputerUseTools({
               platform: process.platform === 'win32' ? 'win32' : 'darwin',
               screenshotFiltering: 'none',
+              ...(process.platform === 'win32' ? { agentDesktop: true } : {}),
             }, 'pixels')
           : [],
       }

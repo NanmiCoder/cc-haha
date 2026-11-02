@@ -9,7 +9,8 @@ describe('computer use platform helpers', () => {
   it('recognizes supported platforms', () => {
     expect(isComputerUseSupportedPlatform('darwin')).toBe(true)
     expect(isComputerUseSupportedPlatform('win32')).toBe(true)
-    expect(isComputerUseSupportedPlatform('linux')).toBe(false)
+    expect(isComputerUseSupportedPlatform('linux')).toBe(true)
+    expect(isComputerUseSupportedPlatform('freebsd')).toBe(false)
   })
 
   it('returns macOS capabilities with native screenshot filtering', () => {
@@ -23,6 +24,13 @@ describe('computer use platform helpers', () => {
     expect(getCliComputerUseCapabilities('win32')).toEqual({
       screenshotFiltering: 'none',
       platform: 'win32',
+      agentDesktop: true,
+    })
+  })
+
+  it('routes Linux through the same native desktop backend', () => {
+    expect(getCliComputerUseCapabilities('linux')).toEqual({
+      screenshotFiltering: 'none', platform: 'linux', agentDesktop: true,
     })
   })
 })

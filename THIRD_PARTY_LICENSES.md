@@ -2,6 +2,22 @@
 
 This project includes code and binaries from the following open source projects.
 
+## agent-desktop
+
+- Project: [agent-desktop](https://github.com/vercel-labs/agent-desktop), Vercel Labs
+- Included as: the vendored native Windows/Linux Computer Use implementation in `native/agent-desktop/`, built into desktop-distribution executables. The existing macOS Swift engine is separate.
+- Version: **1.0.2**
+- Upstream commit: [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d)
+- License: [Apache License 2.0](native/agent-desktop/LICENSE)
+- Source provenance: [UPSTREAM.json](native/agent-desktop/UPSTREAM.json), including the pinned revision and original SHA-256 hashes of copied files
+- Distribution notice: [NOTICE](native/agent-desktop/NOTICE)
+- Local modifications: [PATCHES.md](native/agent-desktop/PATCHES.md), including the product cursor presentation changes
+- Locked Rust dependency notices and license texts: [THIRD-PARTY-NOTICES](native/agent-desktop/THIRD-PARTY-NOTICES); dependency versions are recorded in [Cargo.lock](native/agent-desktop/Cargo.lock)
+
+Original upstream agent-desktop code remains available under Apache-2.0. The root cc-haha Community Source License does not narrow or replace those existing Apache grants. Local integration code and changes follow their applicable notices; dependencies retain their own licenses.
+
+`desktop/scripts/native-agent-desktop.ts` builds the vendored source and stages the CLI, plus the Linux clipboard-owner helper where applicable, under `desktop/src-tauri/binaries/`. It also stages `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES`, `UPSTREAM.json`, and `PATCHES.md` under `agent-desktop-licenses/` beside the executables. Desktop packages must retain these files.
+
 ## ripgrep
 
 - Project: ripgrep (https://github.com/BurntSushi/ripgrep)

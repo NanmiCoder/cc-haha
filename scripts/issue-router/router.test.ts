@@ -291,17 +291,26 @@ describe('version-bound merge gate', () => {
     failure(() => f.acquire(claimed.token, { head: 'd'.repeat(40), base }), 'Missing validation')
   })
 
-  test('merge and desktop smoke resources serialize and completion requires verified outcome', () => {
+  test('desktop smoke resources serialize between running issues', () => {
+    const f = setup([1, 2])
+    f.enqueue(1)
+    f.enqueue(2)
+    const first = f.claim(1)
+    const second = f.claim(2)
+    for (const claimed of [first, second]) f.bind(claimed)
+    f.call({ command: 'smoke-acquire', ...first.token })
+    failure(() => f.call({ command: 'smoke-acquire', ...second.token }), 'Resource desktop-smoke')
+    f.call({ command: 'smoke-release', ...first.token })
+    f.call({ command: 'smoke-acquire', ...second.token })
+  })
+
+  test('merge resources serialize and completion requires verified outcome', () => {
     const f = setup([1, 2])
     f.enqueue(1)
     f.enqueue(2)
     const first = f.claim(1)
     const second = f.claim(2)
     for (const claimed of [first, second]) { f.bind(claimed); f.evidence(claimed.token, claimed.run.issue_number + 100) }
-    f.call({ command: 'smoke-acquire', ...first.token })
-    failure(() => f.call({ command: 'smoke-acquire', ...second.token }), 'Resource desktop-smoke')
-    f.call({ command: 'smoke-release', ...first.token })
-    f.call({ command: 'smoke-acquire', ...second.token })
     const merge = f.acquire(first.token).action
     failure(() => f.acquire(second.token), 'Resource main-merge')
     f.call({ command: 'dispatch-start', ...first.token, action_key: merge.action_key, sender: 'sender' })
@@ -310,9 +319,19 @@ describe('version-bound merge gate', () => {
     f.call({ command: 'reconcile', ...first.token, action_key: merge.action_key, outcome: 'found', reference: 'fixture://merged', merge_sha: mergeSha })
     f.call(complete)
     expect(f.call({ command: 'status' }).runs).toHaveLength(1)
-    failure(() => f.acquire(second.token), 'Main advanced')
-    f.evidence(second.token, 102, { head, base: mergeSha })
-    expect(f.acquire(second.token, { head, base: mergeSha }).resource).toBe('main-merge')
+    expect(f.call({ command: 'status' }).main_head).toBe(mergeSha)
+  })
+
+  test('an advanced main requires fresh evidence before the next merge', () => {
+    const f = setup([2])
+    f.enqueue(2)
+    const claimed = f.claim(2)
+    f.bind(claimed)
+    f.evidence(claimed.token, 102)
+    f.call({ command: 'observe-main', ...provenance, observed_at: new Date(now + 1000).toISOString(), sha: mergeSha, previous: base, descendant_verified: true })
+    failure(() => f.acquire(claimed.token), 'Main advanced')
+    f.evidence(claimed.token, 102, { head, base: mergeSha })
+    expect(f.acquire(claimed.token, { head, base: mergeSha }).resource).toBe('main-merge')
   })
 })
 
