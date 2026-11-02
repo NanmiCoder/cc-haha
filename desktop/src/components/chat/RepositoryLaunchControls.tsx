@@ -21,6 +21,7 @@ import {
 } from '../../api/sessions'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
+import { desktopUiPreferencesApi } from '@/api/desktopUiPreferences'
 import { setProjectDisplayName, useProjectDisplayName } from '../../stores/projectDisplayNameStore'
 import { RecentProjectsPanel } from '@/components/composite/DirectoryPicker'
 import { resolveVerticalPlacement } from '@/lib/verticalPlacement'
@@ -641,7 +642,8 @@ export const RepositoryLaunchControls = forwardRef<RepositoryLaunchControlsHandl
   }
 
   const handleProjectCreateSubmit = async (submission: ProjectEditorSubmission) => {
-    await setProjectDisplayName(submission.sourceFolder, submission.name)
+    const project = await desktopUiPreferencesApi.updateProjectDirectories(submission.sourceFolder, submission.additionalDirectories)
+    await setProjectDisplayName(project.projectKey, submission.name)
     invalidateRecentProjectsCache()
     setProjectCreateOpen(false)
     // Naming the folder already in use only renames it.
