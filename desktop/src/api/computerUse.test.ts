@@ -21,6 +21,18 @@ describe('computerUseApi', () => {
     __resetAppIconCacheForTests()
   })
 
+  it('preserves native runtime failure details from the status endpoint', async () => {
+    const status = {
+      platform: 'linux',
+      engine: 'agent-desktop',
+      runtime: 'agent-desktop',
+      agentDesktop: { available: false, binaryPath: '/fixture/native', reason: 'accessibility_bus_unavailable' },
+    }
+    apiMock.get.mockResolvedValueOnce(status)
+    expect(await computerUseApi.getStatus()).toEqual(status)
+    expect(apiMock.post).not.toHaveBeenCalled()
+  })
+
   it('routes every Computer Use settings request through the expected API contract', async () => {
     const patch = {
       enabled: true,

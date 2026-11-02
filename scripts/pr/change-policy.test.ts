@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { codeOwnerLogins, evaluateChangePolicy } from './change-policy'
+import { createSandboxedTestEnvironment } from './test-environment'
 
 describe('evaluateChangePolicy', () => {
   test.each([
@@ -404,6 +405,62 @@ describe('evaluateChangePolicy', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+describe('change-policy NUL-delimited Git paths', () => {
+  test.each(['src/utils/quote"scope.ts', 'src/utils/tab\tscope.ts', 'src/utils/line\nscope.ts'])(
+    'keeps %j intact and enforces its selected checks', async file => {
+      const dir = mkdtempSync(join(tmpdir(), 'change-policy-nul-'))
+      try {
+        const filesPath = join(dir, 'files.nul')
+        const outputPath = join(dir, 'github-output.txt')
+        writeFileSync(filesPath, `${file}\0`)
+        const proc = Bun.spawn([
+          process.execPath, '--no-env-file', 'run', 'scripts/pr/change-policy.ts',
+          '--files0', filesPath, '--no-dependency-graph',
+        ], {
+          cwd: process.cwd(), env: createSandboxedTestEnvironment(join(dir, 'home'), { GITHUB_OUTPUT: outputPath }),
+          stdout: 'pipe', stderr: 'pipe',
+        })
+        const stdout = await new Response(proc.stdout).text()
+        const stderr = await new Response(proc.stderr).text()
+        expect(await proc.exited, stderr).toBe(1)
+        expect(stdout).toContain(file)
+        const outputs = readFileSync(outputPath, 'utf8')
+        for (const check of ['server', 'agent_e2e', 'coverage']) {
+          expect(outputs).toContain(`${check}_checks=true`)
+        }
+        expect(outputs).toContain('blocked=true')
+        expect(outputs).toContain('CLI core changes require')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(['src/utils/truncated.ts', 'src/utils/trailing.ts \0', 'src/utils/literal\\name.ts\0', '\0'])(
+    'fails closed for malformed or lossy Git path input %j', async input => {
+      const dir = mkdtempSync(join(tmpdir(), 'change-policy-invalid-nul-'))
+      try {
+        const filesPath = join(dir, 'files.nul')
+        const outputPath = join(dir, 'github-output.txt')
+        writeFileSync(filesPath, input)
+        const proc = Bun.spawn([
+          process.execPath, '--no-env-file', 'run', 'scripts/pr/change-policy.ts',
+          '--files0', filesPath, '--no-dependency-graph', '--plan-only',
+        ], {
+          cwd: process.cwd(), env: createSandboxedTestEnvironment(join(dir, 'home'), { GITHUB_OUTPUT: outputPath }),
+          stdout: 'pipe', stderr: 'pipe',
+        })
+        const stderr = await new Response(proc.stderr).text()
+        expect(await proc.exited, stderr).not.toBe(0)
+        expect(stderr).toContain('Invalid NUL-delimited Git paths')
+        expect(() => readFileSync(outputPath)).toThrow()
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe('change-policy CLI owner exemption', () => {

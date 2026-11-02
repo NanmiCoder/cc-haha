@@ -358,6 +358,10 @@ async function drainCollaboration() {
       record.status = 'consumed'
       emit(ws, { type: 'system', subtype: 'session_message_receipt', message_id: input.message_id, source_uuid: collaborationUuid(input.message_id), status: 'consumed', duplicate: false, session_id: sessionId, uuid: crypto.randomUUID() })
       emit(ws, { type: 'stream_event', event: { type: 'message_start' }, session_id: sessionId })
+      // The same explicit stream gate also holds independent-session turns.
+      if (input.text.startsWith('MOCK_RECONNECT_GATE ')) {
+        await new Promise<void>(resolve => { releaseReconnectStream = resolve })
+      }
       if (streamDelayMs > 0) await delay(streamDelayMs)
       if (epoch !== collaborationEpoch) break
       const reply = `Echo: ${input.text}`

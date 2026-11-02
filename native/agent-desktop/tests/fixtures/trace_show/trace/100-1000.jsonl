@@ -1,0 +1,5 @@
+{"event":"trace.meta","schema":1,"version":"0.0.0-test","os":"test","pid":100,"proc_start_ms":1000,"ts_ms":0,"seq":0}
+{"event":"snapshot.saved","snapshot_id":"snap-a","ref_count":2,"app":"Finder","ts_ms":10,"seq":1}
+{"event":"command.start","command":"click","ts_ms":20,"seq":2}
+{"event":"command.end","command":"click","ok":true,"duration_ms":5,"ts_ms":25,"seq":3}
+{"event":"partial

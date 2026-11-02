@@ -12,6 +12,8 @@ import { normalizeOsPermissions } from './permissions.js'
 import { callHelper } from './helperBridge.js'
 import { maybeShowNativePermissionCard } from './nativePermissionCard.js'
 import { ComputerUseRepl } from './replRuntime.js'
+import { createAgentDesktopBackend } from './agentDesktopBridge.js'
+import { isComputerUseEnabledForDispatch } from './skillGate.js'
 
 class DebugLogger implements Logger {
   silly(message: string, ...args: unknown[]): void {
@@ -35,15 +37,30 @@ let cached: ComputerUseHostAdapter | undefined
 
 export function getComputerUseHostAdapter(): ComputerUseHostAdapter {
   if (cached) return cached
-  cached = {
+  cached = createComputerUseHostAdapter()
+  return cached
+}
+
+export function createComputerUseHostAdapter(deps: {
+  platform?: NodeJS.Platform
+  executor?: ComputerUseHostAdapter['executor']
+  agentDesktop?: ComputerUseHostAdapter['agentDesktop']
+  enabled?: () => boolean
+} = {}): ComputerUseHostAdapter {
+  const platform = deps.platform ?? process.platform
+  const isDisabled = () => !getChicagoEnabled() || !(deps.enabled ?? isComputerUseEnabledForDispatch)()
+  return {
     serverName: COMPUTER_USE_MCP_SERVER_NAME,
     logger: new DebugLogger(),
     createReplRuntime: () => new ComputerUseRepl(),
-    executor: createCliExecutor({
+    executor: deps.executor ?? createCliExecutor({
       getMouseAnimationEnabled: () => getChicagoSubGates().mouseAnimation,
       getHideBeforeActionEnabled: () => getChicagoSubGates().hideBeforeAction,
     }),
+    ...(platform === 'win32' || platform === 'linux'
+      ? { agentDesktop: deps.agentDesktop ?? createAgentDesktopBackend({ isDisabled }) } : {}),
     ensureOsPermissions: async () => {
+      if (platform !== 'darwin') return { granted: true as const }
       const rawPerms = await callHelper<{ accessibility: boolean; screenRecording: boolean | null }>('check_permissions', {})
       const perms = normalizeOsPermissions(rawPerms)
       if (perms.granted) return { granted: true as const }
@@ -56,10 +73,13 @@ export function getComputerUseHostAdapter(): ComputerUseHostAdapter {
       })
       return { granted: false as const, accessibility: perms.accessibility, screenRecording: perms.screenRecording }
     },
-    isDisabled: () => !getChicagoEnabled(),
+    isDisabled,
     getSubGates: getChicagoSubGates,
     getAutoUnhideEnabled: () => true,
     cropRawPatch: () => null,
   }
-  return cached
+}
+
+export async function cleanupNativeDesktopCursor(): Promise<void> {
+  await cached?.agentDesktop?.cleanup()
 }

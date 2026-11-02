@@ -127,7 +127,7 @@ describe('headless Computer Use configuration gates', () => {
     process.env.CLAUDE_COMPUTER_USE_ENABLED = 'false'
     expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
     process.env.CLAUDE_COMPUTER_USE_ENABLED = 'true'
-    Object.defineProperty(process, 'platform', { ...previousPlatform, value: 'linux' })
+    Object.defineProperty(process, 'platform', { ...previousPlatform, value: 'freebsd' })
     expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
     expect(helper).not.toHaveBeenCalled()
   })

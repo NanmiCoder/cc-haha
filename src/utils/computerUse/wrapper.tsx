@@ -73,6 +73,7 @@ function formatLockHeld(holder: string): string {
 
 export function buildSessionContext(): ComputerUseSessionContext {
   return {
+    getAgentId: () => tuc().agentId ?? 'main',
     // ── Read state fresh via the per-call ref ─────────────────────────────
     // App authorization is feature-wide once Computer Use is enabled. Keep
     // returning the legacy shapes for protocol compatibility, but do not

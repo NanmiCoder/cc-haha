@@ -1,0 +1,46 @@
+{
+    "element_from_point_chromium":  {
+                                        "max_ms":  2.4926000000000004,
+                                        "median_ms":  2.1656,
+                                        "min_ms":  1.9802000000000002,
+                                        "n":  7,
+                                        "warmup_discarded":  true
+                                    },
+    "element_from_point_desktop":  {
+                                       "max_ms":  3.0902999999999996,
+                                       "median_ms":  2.5766,
+                                       "min_ms":  2.2011000000000003,
+                                       "n":  7,
+                                       "warmup_discarded":  true
+                                   },
+    "element_from_point_own":  {
+                                   "max_ms":  2.2643,
+                                   "median_ms":  2.1694,
+                                   "min_ms":  1.8947,
+                                   "n":  7,
+                                   "warmup_discarded":  true
+                               },
+    "element_from_point_wpf":  {
+                                   "max_ms":  3.4068,
+                                   "median_ms":  2.6273999999999997,
+                                   "min_ms":  2.5277,
+                                   "n":  7,
+                                   "warmup_discarded":  true
+                               },
+    "five_point_worst_case":  {
+                                  "max_ms":  11.5064,
+                                  "median_ms":  11.2524,
+                                  "min_ms":  10.992099999999999,
+                                  "n":  7,
+                                  "warmup_discarded":  true
+                              },
+    "methodology":  "min-of-seven discard warm-up (A15-13)",
+    "stack":  "uia3-com-product-CUIAutomation8",
+    "target_pre_read":  {
+                            "max_ms":  0.41800000000000004,
+                            "median_ms":  0.1547,
+                            "min_ms":  0.0996,
+                            "n":  7,
+                            "warmup_discarded":  true
+                        }
+}

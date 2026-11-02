@@ -64,7 +64,8 @@ export async function createComputerUseMcpServerForCli(): Promise<
   const coordinateMode = getChicagoCoordinateMode()
   const server = createComputerUseMcpServer(adapter, coordinateMode)
 
-  const installedAppNames = await tryGetInstalledAppNames()
+  const installedAppNames = adapter.executor.capabilities.agentDesktop
+    ? undefined : await tryGetInstalledAppNames()
   const tools = buildPlatformComputerUseTools(
     adapter.executor.capabilities,
     coordinateMode,

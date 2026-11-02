@@ -191,7 +191,7 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
       assert.ok(request, `${phase} never reached the model`)
       const tools = request.tools!.map(tool => tool.name!).sort()
       const workflowLoaded = Boolean(skillProbe?.messages?.includes(
-        process.platform === 'win32' ? 'Operating Windows apps' : 'Operating Mac apps',
+        process.platform === 'win32' ? 'Operating Windows and Linux apps' : 'Operating Mac apps',
       ))
       captures.push({
         profile: label,
@@ -214,7 +214,7 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
       if (enabled && profile === 'standard' && boundary === 'allowed') {
         const required = process.platform === 'darwin'
           ? ['mcp__computer-use__js', 'mcp__computer-use__js_reset']
-          : ['mcp__computer-use__screenshot']
+          : ['mcp__computer-use__desktop']
         for (const name of required) {
           assert.ok(
             computerTools.includes(name),
@@ -273,7 +273,7 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     await run('standard')
     await run('standard', 'cli-disabled')
     await run('standard', 'env-disabled')
-    if (process.platform === 'darwin') await run('standard', 'helper-unavailable')
+    await run('standard', 'helper-unavailable')
     await run('lean')
   } finally {
     writeFileSync(join(artifactDir, 'inventory.json'), JSON.stringify({

@@ -1,0 +1,34 @@
+{
+  "role": "window",
+  "name": "Test Window",
+  "children": [
+    {
+      "ref_id": "@e1",
+      "role": "group",
+      "name": "Sidebar",
+      "children_count": 26
+    },
+    {
+      "ref_id": "@e2",
+      "role": "group",
+      "description": "Channels and direct messages",
+      "children_count": 12
+    },
+    {
+      "role": "group",
+      "name": "Content",
+      "children": [
+        {
+          "ref_id": "@e3",
+          "role": "button",
+          "name": "Send"
+        },
+        {
+          "ref_id": "@e4",
+          "role": "textfield",
+          "name": "Message"
+        }
+      ]
+    }
+  ]
+}
