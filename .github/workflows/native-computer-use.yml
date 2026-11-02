@@ -1,0 +1,55 @@
+name: Native Computer Use
+
+on:
+  pull_request:
+    paths:
+      - 'native/agent-desktop/**'
+      - 'src/utils/computerUse/agentDesktop*'
+      - 'src/vendor/computer-use-mcp/agentDesktop*'
+      - 'desktop/scripts/native-agent-desktop*'
+      - 'scripts/pr/run-agent-desktop-checks*'
+      - '.github/workflows/native-computer-use.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'native/agent-desktop/**'
+      - 'src/utils/computerUse/agentDesktop*'
+      - 'src/vendor/computer-use-mcp/agentDesktop*'
+      - 'desktop/scripts/native-agent-desktop*'
+      - 'scripts/pr/run-agent-desktop-checks*'
+      - '.github/workflows/native-computer-use.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            adapter: agent-desktop-linux
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            adapter: agent-desktop-windows
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Prepare locked Rust dependencies
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml --target ${{ matrix.target }}
+      - name: Compile the platform adapter, CLI and test targets offline
+        run: cargo +stable check --locked --offline --manifest-path native/agent-desktop/Cargo.toml -p agent-desktop -p ${{ matrix.adapter }} --all-targets --target ${{ matrix.target }}
+      - name: Run deterministic core, cursor and CLI tests in an isolated home
+        run: bun run check:agent-desktop

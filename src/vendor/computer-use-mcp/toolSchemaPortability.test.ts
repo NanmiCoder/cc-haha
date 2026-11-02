@@ -16,12 +16,12 @@ import { buildComputerUseTools } from './tools.js'
  * So: keep the schemas boring.
  */
 
-const PLATFORMS = ['darwin', 'win32'] as const
+const PLATFORMS = ['darwin', 'win32', 'linux'] as const
 
 function allTools() {
   return PLATFORMS.flatMap(platform =>
     buildPlatformComputerUseTools(
-      { screenshotFiltering: 'native', platform },
+      { screenshotFiltering: 'native', platform, agentDesktop: platform !== 'darwin' },
       'pixels',
     ).map(tool => ({ platform, tool })),
   )

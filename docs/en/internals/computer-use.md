@@ -1,232 +1,132 @@
 ---
 title: Computer Use Architecture
 nav_title: Computer Use
-description: Tool registration, coordinate mapping, authorization gates, the Python bridge, and safety limits.
+description: The macOS native engine, Windows/Linux agent-desktop integration, sessions, and input boundaries.
 order: 12
 ---
 
 # Computer Use Architecture
 
-Between the model asking for a click and the mouse actually moving sit four gates: tool definitions, authorization checks, the Python bridge, and a platform helper. This page takes each one apart. For setup and everyday usage, start with the [Computer Use guide](../desktop/computer-use.md).
+Computer Use exposes interface observation and desktop actions to the Coding Agent through a built-in MCP server. macOS keeps its existing JavaScript session and Swift `cu-helper` engine; Windows and Linux use a pinned copy of Vercel Labs `agent-desktop`. Start with the [user guide](../desktop/computer-use.md) for setup.
 
-## Layers
+## Call paths
 
 ```text
 Model / MCP client
-  ↓
-Tool definitions and argument validation
-  src/vendor/computer-use-mcp/tools.ts
-  ↓
-Session authorization and safe dispatch
-  src/vendor/computer-use-mcp/toolCalls.ts
-  src/vendor/computer-use-mcp/mcpServer.ts
-  ↓
-cc-haha integration
-  src/utils/computerUse/
-  ↓
-Python bridge
-  src/utils/computerUse/pythonBridge.ts
-  ↓
-Platform helper
-  runtime/mac_helper.py
-  runtime/win_helper.py
+  → setup.ts: platform, native binary, global enablement
+  → MCP schema and wrapper.tsx: arguments, cancellation, current agent context
+  → product Computer Use session lock
+      ├─ macOS: JS / AX tools → cu-helper daemon → AX / targeted input / window capture
+      └─ Windows / Linux: desktop tool → agentDesktopBridge → agent-desktop CLI
+                                                    ├─ Windows: UI Automation
+                                                    └─ Linux: AT-SPI / X11 / Wayland capabilities
 ```
 
-The tool and authorization layers remain platform-independent where possible. Platform differences are concentrated in `ComputerExecutor` capabilities and the Python helpers.
+`setupComputerUseMCP()` registers tools only on supported platforms when the relevant binary resolves. The Settings API additionally performs a real native status probe: Windows/Linux return `engine: "agent-desktop"`, `runtime: "agent-desktop"`, and an `agentDesktop` status. A missing binary, denied accessibility service, or unresponsive Linux bus must not appear ready. Ready means the runtime is available, not that every command or app is supported.
 
-## Tool registration
+## One application authorization boundary
 
-`buildComputerUseTools()` creates the MCP tool definitions. The codebase contains 27 schemas:
+Enabling Computer Use in Settings and confirming its consent dialog authorizes all supported apps. Runtime calls do not add per-app prompts, application allowlists or denylists, or `read/click/full` permission tiers. Global disablement, OS permissions, and target-process/window validity still apply.
 
-- 24 base control tools
-- 3 Teach tools: `request_teach_access`, `teach_step`, and `teach_batch`
+`computer-use-config.json` preserves historical `authorizedApps`, `grantFlags`, `pythonPath`, and unknown fields instead of overwriting user configuration. Historical application records do not define another authorization boundary. Windows/Linux production entry points no longer detect or install Python; `/setup` returns a native-runtime explanation. macOS continues to use its native permission card for Accessibility and Screen Recording.
 
-Teach tools are gated by `caps.teachMode`. When a host does not enable that capability, `ListTools` returns only the base tools. “The code defines 27 tools” does not mean that every runtime always exposes all 27.
+## The macOS engine remains separate
 
-There are two MCP Server construction paths:
+The persistent macOS JS tool runs in an isolated child process and exposes `cua.getApp()`, App actions, and AX/screenshot reads. Native calls enter `native/cu-helper/` through an authenticated NDJSON daemon connection.
 
-- `src/utils/computerUse/mcpServer.ts` creates the CLI server and adds sanitized installed-application names to the access tool description.
-- `src/vendor/computer-use-mcp/mcpServer.ts` binds the real session context, including the latest screenshot and grant state.
+- Elements are resolved again using snapshot/window epochs, semantic fingerprints, and process identity, so an old index cannot silently bind to a new interface.
+- Actions prefer AX behavior. Synthetic events use `CGEvent.postToPid` and window targeting without moving the physical pointer or posting into the global HID input stream.
+- Synthetic focus lets background apps accept input. A foreground lease detects human interference and restores foreground only when evidence permits it after a target takes focus; it does not blindly retry.
+- Capture binds the window, process identity, and coordinate transform. ScreenCaptureKit streams handle covered windows; cached pixels are not treated as fresh evidence when freshness cannot be established.
+- The system clipboard remains shared. The paste path backs up content and uses a change-count guard. A user editing the same app can still interfere with the result.
 
-`src/utils/computerUse/setup.ts` creates the dynamic MCP configuration and allowed tool names. Calls are still controlled by Computer Use's own application authorization flow; being present in `allowedTools` is not permission to operate arbitrary applications.
+This path calls neither `agent-desktop` nor a Python fallback.
 
-## Session state
+## One desktop tool for Windows/Linux
 
-Each bound session tracks:
+`buildAgentDesktopTools()` exposes one MCP tool rather than turning CLI commands into 60 separate MCP tools:
 
-- authorized applications and permission tiers
-- clipboard and system-key grants
-- selected display
-- latest screenshot and coordinate geometry
-- Computer Use session lock
-- whether Teach mode is active
-
-The latest screenshot is the coordinate reference for later clicks. Screenshot dimensions, logical display size, scale factor, and display origin must move together or Retina and multi-display setups will target the wrong location.
-
-## Coordinates and screenshots
-
-Tool descriptions expose exactly one coordinate mode to the model:
-
-- `pixels`: coordinates come from the most recent screenshot seen by the model
-- `normalized_0_100`: coordinates are percentages of screen width and height
-
-The tool description and executor read the same frozen coordinate configuration so the model cannot be instructed in one mode while the host converts another.
-
-Typical mapping:
-
-```text
-Model screenshot coordinate
-  → map through screenshot size to logical display size
-  → add target display origin
-  → send to the platform helper
+```json
+{"command":"snapshot","args":["--app","APP","-i"]}
 ```
 
-Screenshots are resized to an image budget. Documentation should not hard-code a single output resolution.
+`command` accepts the pinned upstream version's complete **60 command names**: observation, ref actions, keyboard/mouse, apps/windows, notifications, clipboard, wait, batch, session, trace, status, permissions, and skills. An available command name does not imply platform support for its action; held-input commands, for example, explicitly refuse under upstream rules.
 
-## Authorization and action checks
+Before acting, load the embedded instructions through the same tool:
 
-Computer Use combines several checks before an action rather than relying on a single permission dialog.
-
-### Global switch and OS permissions
-
-- `CLAUDE_COMPUTER_USE_ENABLED=0` or managed configuration can disable the feature.
-- macOS requires Accessibility and Screen Recording.
-- Windows does not use macOS TCC, but it still follows application grants and action checks.
-
-### Session exclusion
-
-A session lock ensures that only one session controls system input at a time. The lock carries process and session information and supports stale-process recovery. Normal recovery should not require users to delete it manually.
-
-### Application allowlist and frontmost check
-
-Before input, Computer Use reads the frontmost application. If it is not in the session allowlist, the action is rejected. Grants use `read`, `click`, and `full` tiers.
-
-Screenshot behavior differs by platform:
-
-| Platform | `screenshotFiltering` | Behavior |
-|---|---|---|
-| macOS | `native` | Excludes unauthorized application windows at screenshot composition time |
-| Windows | `none` | May capture every visible window; the input allowlist still applies |
-
-“Input cannot target an unauthorized Windows application” does not imply that screenshots hide other Windows applications.
-
-### Clipboard and system keys
-
-Clipboard read, clipboard write, and system-level key combinations use separate grant flags. Multiline typing may use a clipboard fast path, and the executor attempts to preserve and restore clipboard contents, but only after the user grants the relevant capability.
-
-High-risk system key combinations also pass a dedicated key check. Ordinary application authorization does not automatically permit quitting applications, switching applications, locking the screen, or similar system actions.
-
-### Pixel staleness
-
-The tool layer retains pixel comparison support for detecting a UI that changed after the model saw it. `pixelValidation` is disabled in the current default configuration, so the model should take a fresh screenshot after UI changes.
-
-## Capabilities that are not currently provided
-
-### No global Escape abort
-
-`src/utils/computerUse/escHotkey.ts` does not register a system-wide Escape abort. The desktop host and documentation must not promise that Escape can stop Computer Use from every application.
-
-### No automatic window hiding
-
-The executor keeps `prepareForAction()` and `previewHideSet()` interfaces, but the current macOS and Windows helpers do not hide windows based on the allowlist. `unhideComputerUseApps()` is also a no-op.
-
-Consequences:
-
-- Do not present `hideBeforeAction` as an implemented privacy guarantee.
-- On Windows, users should close or minimize sensitive windows themselves.
-- On macOS, the privacy boundary comes from native screenshot filtering, not window hiding.
-
-## Teach flow
-
-Teach adds a guided overlay on top of the same authorization and action dispatcher:
-
-```text
-request_teach_access
-  → user approves teaching applications
-  → Teach session activates
-  → teach_step / teach_batch
-  → show guidance, wait for Next, run actions, return a new screenshot
-  → user exits or the turn ends
+```json
+{"command":"skills","args":["get","desktop"]}
+{"command":"skills","args":["get","platform"]}
 ```
 
-Important constraints:
+`args` is an argv string array, never a shell command. The host manages `--session`, `--agent-id`, trace paths, and image output paths. Callers request physical input for a command with `headed: true`; they cannot override host identity. `batch` runs entries in order through the same command and policy checks; it is not a transaction.
 
-- Teach has a separate authorization entry and does not inherit regular clipboard or system-key grants.
-- The `teach_step` explanation is the primary narration visible in the overlay.
-- `teach_batch` is appropriate for predictable consecutive steps; use individual steps when the UI outcome is uncertain.
-- A regular permission dialog cannot be requested while Teach is hiding the main window.
-- After the user exits, further Teach calls must stop.
-- The host capability decides whether Teach tools are exposed.
+Preserve complete refs from observations, such as `@s8f3k2p9:e1`. Actions check live identity again; `STALE_REF` and `AMBIGUOUS_TARGET` call for another observation. Bare `@e1` is invalid, and snapshots from another native session cannot be borrowed.
 
-## Python bridge
+### Headless behavior and side effects
 
-`src/utils/computerUse/pythonBridge.ts`:
+The default headless policy lets supported semantic ref actions run without moving the physical pointer and refuses actions needing disallowed physical input. It still requires a usable graphical user session. It is not a side-effect-free switch for every command.
 
-1. Resolves `.runtime` in the managed user configuration directory.
-2. Synchronizes the current platform helper and requirements.
-3. Creates a venv with the detected or configured Python.
-4. Installs or updates dependencies based on the requirements hash.
-5. invokes the helper with `command + JSON payload`.
-6. returns a uniform JSON result or error to TypeScript.
+| Path | Actual behavior |
+|---|---|
+| Windows semantic refs | UIA Invoke, Value, Selection, Toggle, and similar patterns; `set-value` is the background text-replacement path for supported controls |
+| Windows `type`, right-click, multiple clicks, focus | Require `headed: true`; `type` uses `SendInput`, not background per-process keyboard delivery |
+| Linux headless refs | AT-SPI semantic actions work on X11 and Wayland, subject to control capabilities and live identity |
+| Linux headed refs | `click`, `right-click`, and `type` try physical input first; semantic fallback is possible only after a supported refusal that proves no input was delivered |
+| Linux physical pointer | Ordinary apps require X11 and share the real pointer; Wayland explicitly refuses. Some Wayland keyboard paths depend on Mutter RemoteDesktop capabilities |
+| Bare `press`, `focus-window`, clipboard | Can send keys to the foreground, change foreground, or access the shared clipboard without headed; scoped press additionally verifies foreground ownership |
 
-Runtime files:
+Restore minimized Windows windows before observing and acting. `focus-window` takes foreground and should not be a routine prerequisite for background actions. Linux Wayland has extra window/capture limits: native windows cannot be moved or focused through X11 APIs, screenshots use a portal and may need a person's consent, and clipboard operations need `wl-clipboard`. X11 capture also depends on the compositor; full-screen capture is not universally available.
+
+Keep JSON envelope delivery, retry, and verification information. Unverified delivery, partial input, timeouts, and cancellation may leave an unknown result. Observe the current state before continuing; `ok` or an input dispatch alone is not a reason to replay a business action.
+
+## Sessions, traces, and per-agent cursors
+
+The bridge redirects `AGENT_DESKTOP_HOME` into `.runtime/agent-desktop/` beneath the product config directory. It does not use a standalone CLI user's `~/.agent-desktop`. The first operation needing a session creates a host-owned native session with default tracing and multi-agent cursors; metadata requests such as status, skills, and help do not start a cursor session for this purpose.
+
+Business commands retain the calling Agent's async `getCwd()` context, so relative image and file paths resolve in that working directory. `AGENT_DESKTOP_HOME` controls state independently. Every native process dispatch rechecks saved global consent, including the actual action after session initialization and cursor configuration. Revocation still permits necessary resource cleanup.
+
+Each product session maps to a native session. The host passes distinct `agent-id` values for the main agent and subagents, with stable hashes for invalid names. Native session namespaces scope snapshots and traces. Treat traces as user data because they can contain interface and action details. Images are read from a bounded host artifact directory and delivered as MCP images. Native trace export remains available.
+
+Cursors use the product's arrow shape and colors. Windows retains upstream animation; Linux X11 displays a static arrow at action positions. Wayland's `data.rendered: false` explicitly means no cursor was drawn. These are visual indicators, not separate mice, windows, or clipboards.
+
+The existing product `computer-use.lock` remains owned by product session. Only one product session holds it at a time, and turn completion or cancellation releases it. Main agents and subagents in one process share the binder, retain their own async context, and run through its queue. Upstream interaction leases additionally coordinate native actions. Agent identity and multiple cursors do not mean independent desktops can be written concurrently.
+
+Turn cleanup disables the native cursor. A teardown failure or timeout marks the host state unknown so the next action reconfigures it. Process shutdown cancels active native commands and ends every native session it owns, including sessions created before a product session switch. The session Stop button and CLI Ctrl+C propagate cancellation. POSIX cancellation preserves the upstream two-second input release budget and waits for the child to exit before advancing the queue. The current host does not provide a guaranteed global Escape shortcut across applications.
+
+## Build and distribution
+
+The pinned source is Vercel Labs `agent-desktop` **1.0.2**, commit `9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`. `native/agent-desktop/UPSTREAM.json` records the revision and original copied-file hashes; `PATCHES.md` records local changes such as the product cursor shape.
+
+Prepare the stable Rust toolchain, target standard library, system linker dependencies, and locked Cargo cache before the offline build. Initial cache preparation can use:
+
+```sh
+cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml
+```
+
+Build on the matching platform runner. For a Linux x64 development build:
+
+```sh
+bun desktop/scripts/native-agent-desktop.ts --target-triple x86_64-unknown-linux-gnu --debug
+```
+
+`desktop/scripts/build-sidecars.ts` integrates the script, builds with `cargo +stable build --locked --offline`, and stages the CLI under `desktop/src-tauri/binaries/`. Linux also requires `agent-desktop-linux-clipboard-owner` beside the CLI; Windows uses `.exe`. macOS packaging continues to build the Swift helper. Generated binaries, Cargo targets, and manifests are not committed.
+
+The development resolver can read the source tree's Cargo targets; the packaged resolver reads the app's binaries directory. Electron places these files in `app.asar.unpacked`, with `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES`, `UPSTREAM.json`, and `PATCHES.md` under `agent-desktop-licenses/`. Original upstream code remains licensed under Apache-2.0; the root Community Source License does not narrow those existing rights. Dependencies keep their own licenses. Distributing an executable alone does not replace the required notices.
+
+## Source entry points
 
 | Path | Responsibility |
 |---|---|
-| `runtime/mac_helper.py` | macOS screenshots, applications, mouse, keyboard, and clipboard |
-| `runtime/win_helper.py` | Windows equivalents |
-| `runtime/requirements.txt` | macOS Python dependencies |
-| `runtime/requirements-win.txt` | Windows Python dependencies |
+| `src/utils/computerUse/setup.ts`, `common.ts`, `gates.ts` | Platform capabilities, binary gate, tool registration |
+| `src/vendor/computer-use-mcp/mcpServer.ts`, `src/utils/computerUse/wrapper.tsx` | Session binding, async context, cancellation, product lock |
+| `src/vendor/computer-use-mcp/agentDesktopTools.ts`, `agentDesktopProtocol.ts`, `agentDesktopDispatch.ts` | Single MCP tool, complete command schema, queue |
+| `src/utils/computerUse/agentDesktopBridge.ts`, `agentDesktopBinary.ts`, `agentDesktopProcess.ts`, `agentDesktopResult.ts` | Native sessions, resolution, bounded child processes, image delivery |
+| `native/cu-helper/` | macOS AX, targeted events, focus, window capture |
+| `native/agent-desktop/` | Pinned upstream Rust workspace and platform implementations |
+| `src/server/api/computer-use.ts` | Runtime status, global config, macOS permission-card API |
+| `desktop/src/pages/ComputerUseSettings.tsx` | Platform status, global enablement consent, recovery guidance |
 
-Each helper invocation is a bounded subprocess request. Helpers do not read model state; TypeScript owns session authorization and action policy.
+Regression tests use temporary config directories, fake runners, or loopback transports to prove argument, state, and result boundaries. They must not use a person's desktop, live providers, or user configuration as fixtures. Platform smoke tests are separate evidence; macOS compilation or mocks do not establish Windows/Linux input behavior.
 
-## Host integration
-
-### CLI
-
-`src/utils/computerUse/` is responsible for:
-
-- macOS/Windows support detection
-- `ComputerExecutor` creation
-- dynamic MCP setup
-- permission UI and session state
-- preauthorized applications and Python selection
-
-### Desktop
-
-The desktop Settings page uses `src/server/api/computer-use.ts` to:
-
-- read and change the enabled state
-- inspect and install the Python runtime
-- check macOS system permissions
-- manage preauthorized applications
-- manage clipboard and system-key grants
-
-Settings is the configuration entry point. Actual calls still execute inside the CLI session's MCP and authorization boundaries.
-
-## Key source files
-
-| Path | Responsibility |
-|---|---|
-| `src/vendor/computer-use-mcp/tools.ts` | Tool schemas and Teach tools |
-| `src/vendor/computer-use-mcp/toolCalls.ts` | Dispatch, authorization, and safety checks |
-| `src/vendor/computer-use-mcp/mcpServer.ts` | MCP Server and session binding |
-| `src/vendor/computer-use-mcp/types.ts` | Capabilities, grants, and session types |
-| `src/utils/computerUse/common.ts` | Platform support and capabilities |
-| `src/utils/computerUse/gates.ts` | Global switch and sub-capability defaults |
-| `src/utils/computerUse/executor.ts` | Python bridge executor |
-| `src/utils/computerUse/pythonBridge.ts` | venv, dependencies, and subprocess protocol |
-| `src/utils/computerUse/wrapper.tsx` | CLI permission UI and session context |
-| `src/server/api/computer-use.ts` | Desktop Settings API |
-| `desktop/src/pages/ComputerUseSettings.tsx` | Desktop Settings UI |
-
-## Verification priorities
-
-- Keep tool schemas synchronized with dispatchable actions.
-- Keep model-facing coordinate descriptions aligned with executor conversion.
-- Do not mix macOS and Windows capability claims.
-- Reject input when the frontmost application is unauthorized.
-- Windows tests must not assume screenshot filtering.
-- Do not expose Teach tools when the host capability is off.
-- Preserve unknown fields during configuration migration.
-- Use temporary configuration directories in Python tests; never read the user's real runtime.
+Session identity belongs to the host. Run explicit `session start` / `session end` as standalone calls; lifecycle changes inside `batch` are rejected so later commands cannot retain an ended session or orphan a cursor.

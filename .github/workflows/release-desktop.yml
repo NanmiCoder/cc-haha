@@ -320,6 +320,16 @@ jobs:
           SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
         run: bun run prepare:cloudflared
 
+      - name: Setup native Computer Use Rust toolchain
+        if: matrix.smoke_platform != 'macos'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target_triple }}
+
+      - name: Prepare native Computer Use dependencies
+        if: matrix.smoke_platform != 'macos'
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml --target ${{ matrix.target_triple }}
+
       - name: Build sidecars
         working-directory: desktop
         env:
@@ -568,9 +578,11 @@ jobs:
           $sidecarName = "claude-sidecar-${{ matrix.target_triple }}.exe"
           $mainExecutable = Join-Path $unpackedDir "Claude Code Haha.exe"
           $sidecarExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/$sidecarName"
+          $agentDesktopExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe"
           New-Item -ItemType Directory -Path $stageDir | Out-Null
           Copy-Item -LiteralPath $mainExecutable -Destination (Join-Path $stageDir "Claude Code Haha.exe")
           Copy-Item -LiteralPath $sidecarExecutable -Destination (Join-Path $stageDir $sidecarName)
+          Copy-Item -LiteralPath $agentDesktopExecutable -Destination (Join-Path $stageDir "agent-desktop.exe")
           "stage_dir=$stageDir" >> $env:GITHUB_OUTPUT
           "unpacked_dir=$unpackedDir" >> $env:GITHUB_OUTPUT
           "sidecar_name=$sidecarName" >> $env:GITHUB_OUTPUT
@@ -609,8 +621,10 @@ jobs:
           $sidecarName = "${{ steps.stage-signpath-application.outputs.sidecar_name }}"
           $mainExecutable = Join-Path $unpackedDir "Claude Code Haha.exe"
           $sidecarExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/$sidecarName"
+          $agentDesktopExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe"
           Copy-Item -LiteralPath (Join-Path $signedDir "Claude Code Haha.exe") -Destination $mainExecutable -Force
           Copy-Item -LiteralPath (Join-Path $signedDir $sidecarName) -Destination $sidecarExecutable -Force
+          Copy-Item -LiteralPath (Join-Path $signedDir "agent-desktop.exe") -Destination $agentDesktopExecutable -Force
 
           function Assert-SignPathSignature([string] $Path) {
             $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -628,6 +642,7 @@ jobs:
 
           Assert-SignPathSignature $mainExecutable
           Assert-SignPathSignature $sidecarExecutable
+          Assert-SignPathSignature $agentDesktopExecutable
 
       - name: Package NSIS installer from signed Windows application
         if: matrix.smoke_platform == 'windows' && needs.signing-preflight.outputs.windows_signed == 'true'

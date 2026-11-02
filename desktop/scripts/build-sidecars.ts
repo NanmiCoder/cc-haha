@@ -2,6 +2,7 @@ import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { assertPreparedCloudflared } from './prepare-cloudflared'
 import { assertWindowsConsoleSubsystem } from './assert-windows-console-subsystem'
+import { buildNativeAgentDesktop } from './native-agent-desktop'
 import {
   getBundledRipgrepName,
   stageRipgrepLicenses,
@@ -57,6 +58,7 @@ if (scanExit !== 0) {
 await mkdir(binariesDir, { recursive: true })
 await stageRipgrepLicenses(binariesDir)
 await stageHostRipgrepForOfflineBuild()
+await buildNativeAgentDesktop({ repoRoot, binariesDir, targetTriple })
 
 // 单一合并 sidecar：server / cli 共享一份 bun runtime + 共享依赖代码。
 // 调用方（Electron sidecar manager / legacy Tauri host / conversationService）
@@ -71,8 +73,7 @@ await compileExecutable({
 console.log(`[build-sidecars] Built desktop sidecar for ${targetTriple} (${bunTarget})`)
 
 // macOS-only: build + bundle the native `cu-helper` Computer Use binary.
-// On Windows/Linux this is skipped entirely so the Python helper path is
-// preserved (helperBridge.ts routes non-darwin → python). We do NOT ad-hoc
+// Windows/Linux use the vendored agent-desktop CLI staged above. We do NOT ad-hoc
 // re-sign cu-helper here: native/cu-helper/build.sh already signs it with a
 // STABLE identity + hardened runtime, and re-signing would rotate its TCC
 // identity, dropping the user's Accessibility + Screen Recording grants.

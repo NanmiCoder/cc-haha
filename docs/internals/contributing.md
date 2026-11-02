@@ -369,6 +369,8 @@ Windows 签名走 SignPath，审批通过前默认关闭：tag 推送、手动�
 
 打开签名前，先把 SignPath 后台的 installer artifact configuration 改成和 `.github/signpath/windows-installer.xml` 一致（匹配 `Claude-Code-Haha-*-Windows-*-Setup.exe`），再用草稿试签一次。只要还可能发布未签名的 Windows 包，就不要在 `desktop/package.json` 里加 `publisherName` 或 `verifyUpdateCodeSignature`：加了之后，用该配置构建的客户端会拒收之后所有未签名的更新，而且无法自愈。
 
+application artifact configuration 也须与 `.github/signpath/windows-application.xml` 同步：除主程序与 sidecar，还包含从源码构建的 `agent-desktop.exe`。签名开启时，工作流会送签、恢复并验证这三个可执行文件后再制作安装包。添加原生运行组件后，应先同步 SignPath 后台配置并进行草稿试签；仅签安装包不会给内部的运行组件补签。
+
 ### 发版前检查
 
 ```bash

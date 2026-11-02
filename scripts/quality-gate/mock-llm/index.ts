@@ -24,6 +24,7 @@ import { runAgentModelRoutingScenario } from './agentModelRouting'
 import { runAgentProviderRoutingScenario } from './agentProviderRouting'
 import { runProviderMediaScenario } from './providerMedia'
 import { runComputerUseRefreshScenario } from './computerUseRefresh'
+import { runComputerUseAgentDesktopScenario } from './computerUseAgentDesktop'
 import { createMockOnlyRunners, describeRequests, MOCK_AGENT_SCENARIOS } from './scenarios'
 
 const MOCK_MODEL = 'mock-model'
@@ -33,6 +34,7 @@ const MODEL_ROUTING_SCENARIO = 'mock-agent-model-routing'
 const PROVIDER_ROUTING_SCENARIO = 'mock-agent-provider-routing'
 const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 const COMPUTER_USE_SCENARIO = 'mock-computer-use-hot-enable'
+const AGENT_DESKTOP_SCENARIO = 'mock-computer-use-agent-desktop'
 
 function listArg(argv: string[], name: string) {
   const index = argv.indexOf(name)
@@ -49,6 +51,7 @@ async function main() {
     console.log(`  ${PROVIDER_ROUTING_SCENARIO.padEnd(32)} Agent pinned to another saved provider, direct and proxied, with its effort`)
     console.log(`  ${PROVIDER_MEDIA_SCENARIO.padEnd(32)} DeepSeek request size, image upload, tool pairing and cached file reuse`)
     console.log(`  ${COMPUTER_USE_SCENARIO.padEnd(32)} Existing CLI refreshes authorized Computer Use tools at the next turn`)
+    console.log(`  ${AGENT_DESKTOP_SCENARIO.padEnd(32)} Native desktop ref actions, errors, interruption and cursor cleanup through the real CLI`)
     for (const scenario of MOCK_AGENT_SCENARIOS) console.log(`  ${scenario.id.padEnd(32)} ${scenario.title}`)
     return
   }
@@ -62,13 +65,18 @@ async function main() {
   const runProviderRouting = only.length === 0 || only.includes(PROVIDER_ROUTING_SCENARIO)
   const runProviderMedia = only.length === 0 || only.includes(PROVIDER_MEDIA_SCENARIO)
   const runComputerUse = only.length === 0 || only.includes(COMPUTER_USE_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse) {
+  const runAgentDesktop = only.length === 0 || only.includes(AGENT_DESKTOP_SCENARIO)
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
   const rootDir = resolve(import.meta.dir, '../../..')
   const artifactDir = join(rootDir, 'artifacts', 'agent-e2e')
   mkdirSync(artifactDir, { recursive: true })
+  if (runAgentDesktop) {
+    await runComputerUseAgentDesktopScenario(rootDir, join(artifactDir, 'computer-use-agent-desktop'))
+    console.log(`[agent-e2e] PASS ${AGENT_DESKTOP_SCENARIO}`)
+  }
   if (runComputerUse) {
     const status = await runComputerUseRefreshScenario(rootDir, join(artifactDir, 'computer-use-refresh'))
     console.log(

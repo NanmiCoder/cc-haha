@@ -21,6 +21,14 @@ describe('ComputerUseEnableDialog', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 
+  it('uses the same full-computer consent on Linux without macOS permission prompts', () => {
+    render(
+      <ComputerUseEnableDialog open platform="linux" onClose={() => {}} onConfirm={() => {}} />,
+    )
+    expect(screen.getByRole('dialog')).toHaveTextContent('all supported applications')
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('Accessibility and Screen Recording')
+  })
+
   it('adds the macOS system-permission distinction', () => {
     render(
       <ComputerUseEnableDialog
