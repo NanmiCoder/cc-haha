@@ -5,6 +5,8 @@ const DEFAULT_SLOW_REQUEST_MS = 1_000
 const DEFAULT_EVENT_LOOP_SAMPLE_MS = 1_000
 const DEFAULT_EVENT_LOOP_STALL_MS = 500
 const DEFAULT_STALL_REPORT_COOLDOWN_MS = 10_000
+/** Requests that wait on purpose; their duration is not latency. */
+const LONG_POLL_PATHS = new Set(['/api/sessions/mobile-push/pull'])
 
 type ActiveRequest = {
   id: string
@@ -106,7 +108,7 @@ export class ApiPerformanceMonitor {
         this.active.delete(id)
         const durationMs = this.now() - startedAt
         const cpu = this.cpuUsage(request.cpuStartedAt)
-        if (durationMs >= this.slowRequestMs && !path.startsWith('/api/diagnostics')) {
+        if (durationMs >= this.slowRequestMs && !path.startsWith('/api/diagnostics') && !LONG_POLL_PATHS.has(path)) {
           const declaredBytes = Number.parseInt(response.headers.get('content-length') ?? '', 10)
           this.report({
             type: 'api_request_slow',

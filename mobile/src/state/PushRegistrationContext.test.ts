@@ -46,7 +46,8 @@ function runCase(body: string) {
     const appListeners = new Set()
     const AppState = { currentState: 'active', addEventListener: (_name, callback) => { appListeners.add(callback); return { remove: () => appListeners.delete(callback) } } }
     const emit = state => { AppState.currentState = state; appListeners.forEach(callback => callback(state)) }
-    mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({ Platform: { OS: 'android' }, AppState }))
+    let platformOS = 'android'
+    mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({ Platform: { get OS() { return platformOS } }, AppState }))
     let permission = true, tokenListener, permissionListener
     mock.module(${JSON.stringify(import.meta.resolve('expo-notifications'))}, () => ({
       getPermissionsAsync: async () => ({ granted: permission }),
@@ -55,11 +56,12 @@ function runCase(body: string) {
     let hostCalls = 0, tokenCalls = 0, registerCalls = 0, revoked = 0
     let hostImpl = async () => ({ platforms: { android: true, ios: false }, status: 'configured' })
     let tokenImpl = async () => 'fixture-token'
+    const tokenProviders = [], duty = []
     let registerImpl = async () => ({ registered: true, status: 'registered', id: 'fixture-registration' })
     let revokeImpl = async () => {}
     const inputs = [], signals = []
     const client = {
-      host: { id: 'fixture-host' },
+      host: { id: 'fixture-host', name: 'Fixture Mac', url: 'http://192.168.1.8:3456', auth: 'lan' },
       get: async (_path, options) => { hostCalls++; signals.push(options.signal); return hostImpl() },
     }
     const preferences = {
@@ -70,16 +72,15 @@ function runCase(body: string) {
     let preferencesError = '', connected = true, connectionError = ''
     mock.module(${JSON.stringify(import.meta.resolve('./AppContext'))}, () => ({
       useApp: () => ({ registry: { hosts: [{ id: 'fixture-host' }] } }),
-      useConnection: () => ({ client: connected ? client : null, error: connectionError }),
+      useConnection: () => ({ client: connected ? client : null, error: connectionError, credential: 'fixture-credential' }),
       pushRegistrations: {
         register: async (_client, input, signal) => { registerCalls++; inputs.push(input); return registerImpl(signal) },
         clearRegistrations: async () => { revoked++; return revokeImpl() },
       },
+      pushTokens: { token: async provider => { tokenCalls++; tokenProviders.push(provider); return tokenImpl(provider) } },
+      backgroundDuty: { set: (id, host) => duty.push([id, host]), setAppActive: () => {} },
     }))
     mock.module(${JSON.stringify(import.meta.resolve('./PreferencesContext'))}, () => ({ usePreferences: () => ({ preferences, ready: true, error: preferencesError }) }))
-    mock.module(${JSON.stringify(import.meta.resolve('./devicePushToken'))}, () => ({
-      getDevicePushToken: async () => { tokenCalls++; return tokenImpl() },
-    }))
     mock.module(${JSON.stringify(import.meta.resolve('./notifyPromptGate'))}, () => ({ subscribePermissionDecided: listener => { permissionListener = listener; return () => { permissionListener = undefined } } }))
     mock.module(${JSON.stringify(import.meta.resolve('./notificationChannel'))}, () => ({ ensureNotificationChannel: async () => {} }))
     const module = await import(${JSON.stringify(import.meta.resolve('./PushRegistrationContext'))})
@@ -306,7 +307,7 @@ test('unavailable device tokens retry finitely without reporting missing build c
     await render()
     assert.equal(status().status, 'error')
     assert.equal(status().issue, 'deviceUnavailable')
-    assert.equal(hostCalls, 0, 'device capability is checked before computer connectivity')
+    assert.equal(hostCalls, 1, 'the computer is asked first: its channels decide which token to fetch')
     await advance(2000)
     assert.equal(status().status, 'registered')
   `)
@@ -388,5 +389,86 @@ test('a native token rotation in background registers once without starting retr
     assert.equal(timers.size, 0, 'failed background rotation must not start a retry timer')
     await advance(60000)
     assert.equal(hostCalls, 3)
+  `)
+})
+
+test('Android registers with a computer that offers the pull channel and hands it to the background service', () => {
+  runCase(`
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
+    tokenImpl = async provider => provider === 'desktop' ? 'p'.repeat(43) : 'unexpected'
+    await render()
+    assert.deepEqual(status(), { status: 'registered', provider: 'desktop' })
+    assert.deepEqual(tokenProviders, ['desktop'])
+    assert.equal(inputs[0].provider, 'desktop')
+    assert.equal(inputs[0].token, 'p'.repeat(43))
+    assert.deepEqual(duty.at(-1), ['fixture-host', { hostId: 'fixture-host', hostName: 'Fixture Mac', origin: 'http://192.168.1.8:3456', headers: { Authorization: 'Bearer fixture-credential' }, token: 'p'.repeat(43) }])
+    // A native token rotation does not change what the pull channel registers.\n    emit('background')
+    tokenListener({ data: 'rotated-native-token' })
+    await flush()
+    assert.equal(inputs.at(-1).token, 'p'.repeat(43))
+  `)
+})
+
+test('iOS without the computer keys registers through Expo and never starts the Android service', () => {
+  runCase(`
+    platformOS = 'ios'
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
+    tokenImpl = async provider => provider === 'expo' ? 'ExponentPushToken[fixture]' : 'unexpected'
+    await render()
+    assert.deepEqual(status(), { status: 'registered', provider: 'expo' })
+    assert.equal(inputs[0].provider, 'expo')
+    assert.equal(inputs[0].token, 'ExponentPushToken[fixture]')
+    assert.deepEqual(duty.at(-1), ['fixture-host', undefined])
+  `)
+})
+
+test('a computer from before relay providers keeps the direct registration body', () => {
+  runCase(`
+    await render()
+    assert.deepEqual(status(), { status: 'registered', provider: 'direct' })
+    assert.deepEqual(tokenProviders, ['direct'])
+    assert.equal('provider' in inputs[0], false, 'old computers reject unknown registration fields')
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, status: 'notConfigured' })
+    retry(); await flush()
+    assert.equal(status().status, 'notConfigured')
+    assert.deepEqual(duty.at(-1), ['fixture-host', undefined])
+  `)
+})
+
+test('the background service stops for a computer when every reminder is off or permission is revoked', () => {
+  runCase(`
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
+    tokenImpl = async () => 'p'.repeat(43)
+    preferences.notifications = { decisions: false, completed: false, errors: false }
+    await render()
+    assert.equal(status().status, 'registered')
+    assert.deepEqual(duty.at(-1), ['fixture-host', undefined])
+    preferences.notifications = { decisions: true, completed: false, errors: false }
+    await render()
+    assert.equal(duty.at(-1)[1].token, 'p'.repeat(43))
+    permission = false
+    retry(); await flush()
+    assert.equal(status().status, 'permissionRequired')
+    assert.deepEqual(duty.at(-1), ['fixture-host', undefined])
+    // A network failure is not a reason to drop the connection the service already holds.\n    permission = true
+    const kept = duty.length
+    hostImpl = async () => { throw new ApiError('offline', 0, 'NETWORK_ERROR') }
+    retry(); await flush()
+    assert.equal(status().issue, 'network')
+    assert.equal(duty.length, kept)
+  `)
+})
+
+test('an iPhone registered through Expo is told when the computer cannot send through it', () => {
+  runCase(`
+    platformOS = 'ios'
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, relayErrors: { expo: '电脑连不上 Expo 推送服务（exp.host）' }, status: 'configured' })
+    tokenImpl = async () => 'ExponentPushToken[fixture]'
+    await render()
+    assert.deepEqual(status(), { status: 'registered', provider: 'expo', issue: 'relayFailing', error: '电脑连不上 Expo 推送服务（exp.host）' })
+    assert.equal(registerCalls, 1, 'the registration itself still stands')
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
+    retry(); await flush()
+    assert.deepEqual(status(), { status: 'registered', provider: 'expo' })
   `)
 })

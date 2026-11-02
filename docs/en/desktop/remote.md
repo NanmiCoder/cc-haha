@@ -23,6 +23,8 @@ The mobile app works with desktop v0.7.6 or later. Its interface is currently Ch
 
 Keep the computer on, awake, and running cc-haha. Tasks always execute on the computer. Cloudflare Tunnel provides connectivity while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
 
+Approval, completion and error alerts after you leave the app need no setup on the computer. On iPhone, the Expo push service relays system notifications, so the computer must be able to reach `exp.host`. On Android, the persistent 「正在值守」 (on duty) notification keeps a direct connection to the computer without Google services; on Xiaomi, Huawei, OPPO, vivo and similar phones, also tap 「允许后台运行」 (allow background running) under the app's 设置 → 通知, and allow cc-haha to auto-start and stay locked in recent apps in the system settings.
+
 To chat from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, see **IM Adapters** at the end of this page.
 
 ## H5 Access
@@ -127,7 +129,7 @@ The computer's proxy handles its connection to Cloudflare; it does not enable a 
 | Fixed domain fails | Whether DNS for the HTTPS hostname has taken effect, and whether the computer's network and proxy work |
 | Computer says ready but phone cannot open the entry | Test the hostname on cellular data, and confirm the computer is running, online, and awake |
 | An old quick address stops working after restart | Scan the new code on the desktop, or use a fixed domain to keep a long-lived address |
-| No system notification while backgrounded | The tunnel provides connectivity; background push needs separate configuration. Reopen the app to synchronize task state |
+| No system notification while backgrounded | Check that the app's 设置 → 通知 shows 「通知已就绪」 (ready). On iPhone, the computer must reach `exp.host`; on Android, the 「正在值守」 notification must be present and background running and auto-start allowed. Reopening the app registers and reconnects again |
 
 The official connector's data connection uses outbound port `7844`. Restricted networks or proxies may block it. Choosing HTTP/2 does not change that data connection to port `443`. See [Cloudflare connection troubleshooting](https://developers.cloudflare.com/tunnel/troubleshooting/).
 

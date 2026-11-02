@@ -40,7 +40,8 @@ export function parseDelivery(value: unknown): Delivery {
 }
 
 export function isBuildInput(path: string, dependencies: ReadonlySet<string> = new Set()) {
-  if (/(^|\/)(node_modules|ios|android|\.expo|dist|artifacts)\//.test(path)) return false
+  // `mobile/ios` and `mobile/android` are generated; a local module's native sources are inputs.
+  if (/(^|\/)(node_modules|\.expo|dist|artifacts)\//.test(path) || /^mobile\/(ios|android)\//.test(path)) return false
   if (/\.(test|spec)\.[cm]?[jt]sx?$/.test(path) || /\.(md|mdx)$/.test(path)) return false
   if (path.startsWith('mobile/scripts/') || path.includes('/__tests__/') || path.includes('/__fixtures__/')) return false
   if (/(^|\/)(credentials\.json|google-services\.json|\.env(?:\..*)?)$/.test(path) || /\.(p8|p12|mobileprovision|jks|keystore)$/.test(path)) return false

@@ -285,7 +285,10 @@ export function startServer(port = PORT, host = HOST) {
     serverPort: () => serverPort,
   })
   publicAccessServers.add(publicAccess)
-  if (!migrationMaintenance.isActive) getMobilePushService().start(id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)))
+  if (!migrationMaintenance.isActive) getMobilePushService().start(
+    id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)),
+    id => [...publicAccessServers].some(remote => remote.isDevicePaired(id)),
+  )
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
   // Index startup runs after `Bun.serve` (see below), never before it. Opening
