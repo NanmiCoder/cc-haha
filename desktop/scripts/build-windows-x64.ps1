@@ -108,6 +108,18 @@ if ($env:SKIP_INSTALL -ne '1') {
   } finally {
     Pop-Location
   }
+
+  # `bun run build` exports the phone app (mobile/) into dist/m as the phone H5.
+  Write-Step 'Installing mobile dependencies...'
+  Push-Location (Join-Path $repoRoot 'mobile')
+  try {
+    & bun install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) {
+      throw "[build-windows-x64] bun install failed in mobile (exit $LASTEXITCODE)"
+    }
+  } finally {
+    Pop-Location
+  }
 }
 
 Write-Step 'Cleaning stale Electron outputs...'

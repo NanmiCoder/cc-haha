@@ -52,10 +52,20 @@
     "lint": "expo lint",
     "test": "bun test src plugins",
     "fixture": "bun scripts/fixture-server.ts",
-    "export": "expo export --platform all"
+    "export": "expo export --platform all",
+    "export:h5": "bun scripts/export-h5.ts"
   },
   "private": true,
+  "expo": {
+    "autolinking": {
+      "android": {
+        "buildFromSource": ["expo-camera"]
+      }
+    }
+  },
   "patchedDependencies": {
-    "react-native-audio-api@0.13.6": "patches/react-native-audio-api@0.13.6.patch"
+    "expo-camera@58.0.12": "patches/expo-camera@58.0.12.patch",
+    "react-native-audio-api@0.13.6": "patches/react-native-audio-api@0.13.6.patch",
+    "expo-router@58.0.25": "patches/expo-router@58.0.25.patch"
   }
 }

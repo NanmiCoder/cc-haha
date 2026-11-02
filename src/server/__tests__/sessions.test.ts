@@ -1339,7 +1339,7 @@ describe('SessionService', () => {
     ))).toBe(true)
   })
 
-  it('should not coalesce in-flight session list scans across config scopes', async () => {
+  it.each([false, true])('should not coalesce in-flight session list scans across config scopes (archived=%s)', async (archived) => {
     const scopeRoot = path.join(tmpDir, 'session-list-request-scopes')
     const firstConfigDir = path.join(scopeRoot, 'first')
     const secondConfigDir = path.join(scopeRoot, 'second')
@@ -1362,6 +1362,17 @@ describe('SessionService', () => {
       '24300001-bbbb-cccc-dddd-eeeeeeeeeeee',
       'Second in-flight scope',
     )
+    if (archived) {
+      for (const [configDir, id] of [
+        [firstConfigDir, '24300000-bbbb-cccc-dddd-eeeeeeeeeeee'],
+        [secondConfigDir, '24300001-bbbb-cccc-dddd-eeeeeeeeeeee'],
+      ] as const) {
+        await fs.mkdir(path.join(configDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(path.join(configDir, 'cc-haha', 'session-archives.json'), JSON.stringify({
+          schemaVersion: 1, sessions: { [id]: { archived: true } },
+        }))
+      }
+    }
 
     const serviceWithSpy = service as unknown as {
       scanSessionListSummary: (...args: unknown[]) => Promise<unknown>
@@ -1384,10 +1395,10 @@ describe('SessionService', () => {
     }
 
     process.env.CLAUDE_CONFIG_DIR = firstConfigDir
-    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await firstScanStarted
     process.env.CLAUDE_CONFIG_DIR = secondConfigDir
-    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await new Promise(resolve => setTimeout(resolve, 10))
     releaseFirstScan()
 
@@ -2316,7 +2327,7 @@ describe('SessionService', () => {
     ])
   })
 
-  it('should hide the task-notification turn itself but keep everything the assistant does after it', async () => {
+  it('should project the task-notification turn as a status and keep everything the assistant does after it', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const firstUserId = crypto.randomUUID()
     const firstAssistantId = crypto.randomUUID()
@@ -2391,6 +2402,7 @@ describe('SessionService', () => {
     expect(messages.map((message) => message.id)).toEqual([
       firstUserId,
       firstAssistantId,
+      taskNotificationId,
       taskAssistantId,
       taskToolUseMessageId,
       taskToolResultId,
@@ -2398,6 +2410,15 @@ describe('SessionService', () => {
       realFollowUpId,
       realAssistantId,
     ])
+    expect(messages[2]).toEqual({
+      id: taskNotificationId,
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'bg-1', status: 'completed', summary: 'Background command completed' }],
+      },
+      timestamp: '2026-01-01T00:01:00.000Z',
+    })
     expect(JSON.stringify(messages)).not.toContain('<task-notification>')
     expect(JSON.stringify(messages)).toContain('后台命令跑完了，我来重启服务')
     expect(JSON.stringify(messages)).toContain('server restarted')
@@ -2482,6 +2503,55 @@ describe('SessionService', () => {
     expect((await service.getSessionTaskNotifications(sessionId)).map((item) => item.taskId)).toEqual(
       expect.arrayContaining(['alpha', 'bravo']),
     )
+  })
+
+  it('projects the isMeta batch of settled agents as one status listing every agent', async () => {
+    // print.ts joins settled local_agent notifications into one isMeta prompt.
+    const sessionId = 'cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const userId = crypto.randomUUID()
+    const dispatchedId = crypto.randomUUID()
+    const batchId = crypto.randomUUID()
+    const replyId = crypto.randomUUID()
+    const notification = (taskId: string, status: string, summary: string) => [
+      '<task-notification>',
+      `<task-id>${taskId}</task-id>`,
+      `<tool-use-id>call_${taskId}</tool-use-id>`,
+      '<task-type>local_agent</task-type>',
+      `<status>${status}</status>`,
+      `<summary>${summary}</summary>`,
+      '<result>long agent report</result>',
+      '</task-notification>',
+    ].join('\n')
+
+    await writeSessionFile('-tmp-agent-batch', sessionId, [
+      makeSnapshotEntry(),
+      { ...makeUserEntry('review in parallel', userId), parentUuid: null },
+      { ...makeAssistantEntry('two agents started', userId), uuid: dispatchedId },
+      {
+        ...makeUserEntry([
+          notification('agent-a', 'completed', 'Agent "Review API" completed'),
+          notification('agent-b', 'killed', 'Agent "Review UI" was stopped'),
+        ].join('\n'), batchId),
+        isMeta: true,
+        parentUuid: dispatchedId,
+      },
+      { ...makeAssistantEntry('both reviews are in', batchId), uuid: replyId },
+    ])
+
+    const messages = await service.getSessionMessages(sessionId)
+
+    expect(messages.map((message) => message.id)).toEqual([userId, dispatchedId, batchId, replyId])
+    expect(messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [
+          { taskId: 'agent-a', status: 'completed', summary: 'Agent "Review API" completed' },
+          { taskId: 'agent-b', status: 'stopped', summary: 'Agent "Review UI" was stopped' },
+        ],
+      },
+    })
+    expect(JSON.stringify(messages)).not.toContain('long agent report')
   })
 
   it('uses bounded locators for snapshots and task notifications with safe fallback', async () => {
@@ -2584,7 +2654,10 @@ describe('SessionService', () => {
       serveWrongEmptyFingerprint = false
 
       const callsBeforeFullHistory = locatorCalls
-      expect(await indexedService.getSessionMessages(sessionId)).toHaveLength(1)
+      expect((await indexedService.getSessionMessages(sessionId)).map(message => message.id)).toEqual([
+        'task-notification-locator',
+        expect.any(String),
+      ])
       expect(locatorCalls).toBe(callsBeforeFullHistory)
 
       mode = 'shadow'
@@ -4659,12 +4732,19 @@ describe('Sessions API', () => {
       messages: unknown[]
       taskNotifications: unknown[]
     }
-    expect(body.messages).toHaveLength(3)
+    expect(body.messages).toHaveLength(4)
     expect(body.messages[1]).toMatchObject({
       type: 'assistant',
       usage: { input_tokens: 1234, output_tokens: 56 },
     })
     expect(body.messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'bg-1', status: 'failed', summary: 'Background command failed & stopped' }],
+      },
+    })
+    expect(body.messages[3]).toMatchObject({
       type: 'assistant',
       content: [{ type: 'text', text: 'the background command failed, investigating' }],
     })
@@ -4779,7 +4859,14 @@ describe('Sessions API', () => {
       prompt: 'Read session routes',
       source: 'subagent-jsonl',
     })
-    expect(body.messages).toHaveLength(3)
+    expect(body.messages).toHaveLength(4)
+    expect(body.messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'child-shell-task', status: 'stopped', summary: 'Child shell stopped' }],
+      },
+    })
     expect(JSON.stringify(body.messages)).not.toContain('<task-notification>')
     expect(JSON.stringify(body.messages)).toContain('Child shell stopped, continuing the review')
     expect(body.taskNotifications).toEqual([{

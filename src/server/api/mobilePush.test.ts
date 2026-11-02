@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { handleMobilePushApi } from './mobilePush.js'
 import { MobilePushService, type PushInput } from '../services/mobilePushService.js'
+import { DesktopPullTransport, MobilePushRouter } from '../services/mobilePushTransport.js'
 import { PublicAccessServer } from '../publicAccess.js'
 import type { ApiRequestContext } from '../remoteBrowserPolicy.js'
 
@@ -74,4 +75,25 @@ test('push test endpoint is POST-only, owner-scoped, strictly validated and neve
   expect((sent[0]!.payload.aps as { alert: { title: string } }).alert.title).toBe('测试通知 · cc-haha')
   // DELETE on the literal id "test" still means an id-scoped unregister, not the test route.
   expect((await call('DELETE', { token: body.token }, { remoteDeviceId: 'verified-a' })).status).toBe(404)
+})
+
+test('pull endpoint is POST-only, strictly validated and answers only the owner of a pull registration', async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'mobile-push-api-pull-'))
+  const desktop = new DesktopPullTransport()
+  const push = new MobilePushService({ directory, transport: new MobilePushRouter({ configured: () => false, send: async () => 'sent' }, { configured: () => true, send: async () => 'sent' }, desktop), pull: (token, ack, signal) => desktop.pull(token, ack, signal, 0), activities: () => [], summary: async () => null })
+  // A remote pairing only counts while the public listener still knows the device.
+  push.start(id => id === 'verified-a')
+  cleanups.push(() => { void push.stop(); rmSync(directory, { recursive: true, force: true }) })
+  const token = 'r'.repeat(43)
+  const call = (method: string, data?: unknown, context: ApiRequestContext = {}) => handleMobilePushApi(new Request('http://localhost/api/sessions/mobile-push/pull', { method, ...(data === undefined ? {} : { body: JSON.stringify(data) }) }), ['api', 'sessions', 'mobile-push', 'pull'], context, push)
+  expect((await call('POST', { token })).status).toBe(404)
+  const registered = await handleMobilePushApi(new Request('http://localhost/api/sessions/mobile-push', { method: 'PUT', body: JSON.stringify({ ...body, platform: 'android', provider: 'desktop', token }) }), ['api', 'sessions', 'mobile-push'], { remoteDeviceId: 'verified-a' }, push)
+  expect(await registered.json()).toMatchObject({ registered: true })
+  for (const data of [{ token, owner: 'verified-a' }, { token: 5 }, { token, ack: '' }, { token, ack: 'x'.repeat(65) }, []]) expect((await call('POST', data, { remoteDeviceId: 'verified-a' })).status).toBe(400)
+  expect((await call('GET', undefined, { remoteDeviceId: 'verified-a' })).status).toBe(405)
+  expect((await call('POST', { token }, { remoteDeviceId: 'verified-b' })).status).toBe(404)
+  expect(await (await push.sendTest(token, undefined, { remoteDeviceId: 'verified-a' }))).toEqual({ status: 'sent' })
+  const pulled = await (await call('POST', { token }, { remoteDeviceId: 'verified-a' })).json() as { notifications: { id: string; title: string }[] }
+  expect(pulled.notifications).toMatchObject([{ title: '测试通知 · cc-haha' }])
+  expect(await (await call('POST', { token, ack: pulled.notifications[0]!.id }, { remoteDeviceId: 'verified-a' })).json()).toEqual({ notifications: [] })
 })

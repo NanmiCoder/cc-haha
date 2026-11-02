@@ -1,3 +1,5 @@
+import { readProviderEnvForModel } from './providerEnvScope.js'
+
 export const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
 export const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 export const MODEL_CONTEXT_WINDOW_MIN = 16_000
@@ -146,8 +148,8 @@ export function getModelContextWindowFromEnvValue(
   }
 }
 
-function parseConfiguredContextWindows(): Record<string, number> {
-  const raw = process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+function parseConfiguredContextWindows(model: string): Record<string, number> {
+  const raw = readProviderEnvForModel(model, MODEL_CONTEXT_WINDOWS_ENV_KEY)
   if (!raw?.trim()) {
     return {}
   }
@@ -162,7 +164,7 @@ function parseConfiguredContextWindows(): Record<string, number> {
 export function getConfiguredModelContextWindow(
   model: string,
 ): number | undefined {
-  return findConfiguredModelContextWindow(model, parseConfiguredContextWindows())
+  return findConfiguredModelContextWindow(model, parseConfiguredContextWindows(model))
 }
 
 export function getBuiltInModelContextWindow(model: string): number | undefined {

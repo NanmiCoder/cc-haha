@@ -312,6 +312,7 @@ describe('SettingsService', () => {
     )
 
     const svc = new SettingsService()
+    await svc.updateUserSettings({ desktopTerminal: { fontFamily: 'MesloLGS NF', fontSize: 18 } })
     await svc.updateUserSettings({
       desktopTerminal: {
         startupShell: 'pwsh',
@@ -324,12 +325,16 @@ describe('SettingsService', () => {
         startupShell: 'pwsh',
         customShellPath: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
         legacyEncoding: 'utf-8',
+        fontFamily: 'MesloLGS NF',
+        fontSize: 18,
         futureProfile: {
           id: 'work',
           inheritEnvironment: false,
         },
       },
     })
+    expect(JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8')).desktopTerminal)
+      .toMatchObject({ fontFamily: 'MesloLGS NF', fontSize: 18, startupShell: 'pwsh', legacyEncoding: 'utf-8' })
   })
 
   it('should not let cached CLI settings overwrite desktop settings updates', async () => {

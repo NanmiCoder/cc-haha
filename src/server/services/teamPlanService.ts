@@ -2,6 +2,7 @@ import { sessionService } from './sessionService.js'
 import { z } from 'zod/v4'
 import { teamPlanRuntimeSchema, type TeamPlanAction, type TeamPlanIdentity, type TeamPlanRecord } from '../../shared/teamPlan.js'
 import { approveTeamPlan, findTeamPlanForSession, mutateTeamPlan, readTeamPlan, replaceTeamPlan, TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
+import { resolvePresetProviderRuntime } from '../../utils/swarm/teamPlanPresetRuntime.js'
 
 const identitySchema = z.object({
   sessionId: z.string().min(1), planId: z.string().min(1), incarnationId: z.string().min(1), expectedRevision: z.number().int().positive(),
@@ -44,6 +45,7 @@ export class TeamPlanService {
   /** Approvals whose plan may already read `launching` before its launch is registered. */
   private approving = new Set<string>()
   constructor(private runtime: TeamPlanRuntimeAdapter = defaultRuntime) {}
+  hasActiveOperations(): boolean { return this.approving.size > 0 || this.launches.size > 0 }
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
     // A server restart lost ownership of an unfinished launch. Never silently replay it.
@@ -79,7 +81,8 @@ export class TeamPlanService {
       const inheritedModel = member.runtime.providerId === current.leaderRuntime.providerId
         ? current.leaderRuntime.modelId : member.runtime.modelId
       const presetModel = snapshot.model && snapshot.model !== 'inherit' ? snapshot.model : inheritedModel
-      const suggestedRuntime = { providerId: member.runtime.providerId, modelId: presetModel, ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}) }
+      const suggestedRuntime = resolvePresetProviderRuntime(snapshot)
+        ?? { providerId: member.runtime.providerId, modelId: presetModel, ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}) }
       return { ...member, agentType, agentSnapshot: structuredClone(snapshot),
         ...(presetChanged ? { suggestedRuntime } : {}),
         ...(presetChanged && !edit.runtime && member.runtimeSource !== 'human' ? { runtime: suggestedRuntime } : {}),

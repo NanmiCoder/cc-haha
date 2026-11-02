@@ -177,6 +177,17 @@ export const SDKControlSetMaxThinkingTokensRequestSchema = lazySchema(() =>
     ),
 )
 
+export const SDKControlSetPromptSuggestionsRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('set_prompt_suggestions'),
+      enabled: z.boolean(),
+    })
+    .describe(
+      'Turns next-prompt suggestions on or off for subsequent turns. Unlike the initialize option, it can be sent at any time.',
+    ),
+)
+
 export const SDKControlMcpStatusRequestSchema = lazySchema(() =>
   z
     .object({
@@ -656,6 +667,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSetComputerUseApprovalTokenRequestSchema(),
     SDKControlSetModelRequestSchema(),
     SDKControlSetMaxThinkingTokensRequestSchema(),
+    SDKControlSetPromptSuggestionsRequestSchema(),
     SDKControlMcpStatusRequestSchema(),
     SDKControlGetContextUsageRequestSchema(),
     SDKControlGetSessionUsageRequestSchema(),

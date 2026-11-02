@@ -39,6 +39,7 @@ import {
 import { InlineError, TextButton, goBack, useColors } from '../ui/kit'
 import { errorText } from '../ui/theme'
 import { TargetCard } from '../ui/newtask/TargetCard'
+import { simulatedPhoneChrome } from '../ui/webChrome'
 
 const repositoryUrl = (path: string) =>
   `/api/sessions/repository-context?workDir=${encodeURIComponent(path)}`
@@ -262,7 +263,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
       style={[
         { flex: 1, backgroundColor: colors.bg },
-        Platform.OS === 'web' && { paddingTop: 47 },
+        simulatedPhoneChrome && { paddingTop: 47 },
       ]}
     >
       <KeyboardViewport style={{ flex: 1 }}>

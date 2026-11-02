@@ -25,6 +25,7 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { isTouchH5Document } from '../../lib/touchH5'
 import {
   formatWorkspaceReferencePrompt,
   getAnnotationNumbers,
@@ -241,6 +242,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     removeQueuedUserMessage,
     sendQueuedUserMessage,
     setPreparingTurn,
+    dismissPromptSuggestion,
   } = useChatStore(useShallow((s) => ({
     sendMessage: s.sendMessage,
     stopGeneration: s.stopGeneration,
@@ -251,6 +253,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     removeQueuedUserMessage: s.removeQueuedUserMessage,
     sendQueuedUserMessage: s.sendQueuedUserMessage,
     setPreparingTurn: s.setPreparingTurn,
+    dismissPromptSuggestion: s.dismissPromptSuggestion,
   })))
   const selectedTabId = useTabStore((s) => s.activeTabId)
   const activeTabId = sessionId ?? selectedTabId
@@ -276,6 +279,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const composerPrefill = sessionState?.composerPrefill ?? null
   const composerInsertion = sessionState?.composerInsertion ?? null
   const queuedUserMessages = sessionState?.queuedUserMessages ?? []
+  const promptSuggestion = sessionState?.promptSuggestion ?? null
+  const nextPromptSuggestionsEnabled = useSettingsStore((state) => state.nextPromptSuggestionsEnabled)
   const runtimeSelection = useSessionRuntimeStore((state) =>
     activeTabId ? state.selections[activeTabId] : undefined,
   )
@@ -733,6 +738,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const filteredCommands = filteredCommandGroups.ordered
   const isSlashMenuVisible = !isMemberSession && slashMenuOpen && filteredCommands.length > 0
   const isReferenceMenuVisible = !isMemberSession && fileSearchOpen
+  // The predicted next prompt only shows on an idle desktop composer with
+  // nothing else claiming the empty draft. The touch composer has no Tab key.
+  const promptSuggestionGhost =
+    nextPromptSuggestionsEnabled && promptSuggestion && chatState === 'idle' && !dictationLive &&
+    !isTouchH5Document() && !isMemberSession && !composerDisabled &&
+    !isSlashMenuVisible && !isReferenceMenuVisible && !localSlashPanel && !plusMenuOpen &&
+    composerAttachments.length === 0 && queuedUserMessages.length === 0
+      ? promptSuggestion
+      : null
 
   const exactSlashCommand = useMemo(() => {
     const normalized = slashFilter.trim().toLowerCase()
@@ -1179,6 +1193,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       if (event.key === 'Escape') {
         event.preventDefault()
         setSlashMenuOpen(false)
+        return true
+      }
+    }
+
+    // Tab or → copies the predicted prompt into the empty draft for editing;
+    // it is never sent on the user's behalf. Esc hides it until the next turn.
+    if (
+      promptSuggestionGhost &&
+      inputRef.current.length === 0 &&
+      mentionsRef.current.length === 0 &&
+      !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+    ) {
+      if (event.key === 'Tab' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        composerRef.current?.insertTextAtOffsets(0, 0, promptSuggestionGhost)
+        return true
+      }
+      if (event.key === 'Escape' && activeTabId) {
+        event.preventDefault()
+        dismissPromptSuggestion(activeTabId)
         return true
       }
     }
@@ -1724,6 +1758,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 onCompositionStart={() => { composingRef.current = true; dictation.compositionHandlers.onCompositionStart() }}
                 onCompositionEnd={() => { composingRef.current = false; dictation.compositionHandlers.onCompositionEnd() }}
                 placeholder={composerPlaceholder}
+                ghostText={promptSuggestionGhost}
                 disabled={composerDisabled}
                 // `min-w-0`: a paragraph holding an unbreakable run (a long URL,
                 // a hash) has a huge min-content size, and `overflow-wrap:
@@ -1760,6 +1795,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               onCompositionStart={() => { composingRef.current = true; dictation.compositionHandlers.onCompositionStart() }}
               onCompositionEnd={() => { composingRef.current = false; dictation.compositionHandlers.onCompositionEnd() }}
               placeholder={composerPlaceholder}
+              ghostText={promptSuggestionGhost}
               disabled={composerDisabled}
               // Type follows the reader's chat size (`chat-reading-text`); the
               // insets put the first line 14px/16px in from the card edge.

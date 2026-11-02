@@ -1,27 +1,43 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react'
-import { ArrowUpRight, ArrowRight, ArrowDown, Upload, X, Check, Copy, Plus, Minus, Pause, Play, Code2, MousePointer2, GitCompareArrows, Download, Menu, FileText, FolderOpen, SlidersHorizontal, ScanEye, Monitor, Laptop, Command } from 'lucide-react'
+import type { KeyboardEvent } from 'react'
+import { ArrowUpRight, ArrowDown, X, Check, Copy, Plus, Minus, Pause, Play, Code2, MousePointer2, Download, Menu, FolderOpen, SlidersHorizontal, ScanEye, Monitor, Laptop, Command, UsersRound, Layers, PanelsTopLeft, Store, ShieldCheck, MessageCircleQuestion, Send, Smartphone, Wifi } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { DOWNLOAD_URL, GITHUB_URL } from '@/components/SiteHeader'
 import Icon from '@/components/icons'
 import ImageViewer from '@/components/ImageViewer'
 import { toSiteHref } from '@/content/docs'
 import { rememberLocale } from '@/lib/locale'
 import { setPageMeta } from '@/lib/meta'
-import { guideScreenshots } from './guideContent'
-import { landingContent } from './landingContent'
-import type { LandingLocale, TaskCategory } from './landingContent'
+import { currentDesktopPlatform } from '@/lib/platform'
+import { landingContent, MOBILE_LINKS } from './landingContent'
+import type { FeatureId, LandingLocale, TaskCategory } from './landingContent'
 import AmbientScene from './AmbientScene'
 import poster from './assets/wandor-poster.webp'
 import landscape from './assets/quiet-landscape.webp'
 import stillLife from './assets/quiet-moments.webp'
-import projectSession from './assets/project-session.png'
 import filmPoster from './assets/film-poster.webp'
+import heroDesktop from './assets/real/hero-desktop.webp'
+import phoneHome from './assets/real/phone-home.webp'
+import phoneApproval from './assets/real/phone-approval.webp'
+import phoneReply from './assets/real/phone-reply.webp'
+import teamsShot from './assets/real/agent-teams.webp'
+import computerUseShot from './assets/real/computer-use.webp'
+import modelsShot from './assets/real/models.webp'
+import workbenchShot from './assets/real/workbench.webp'
+import skillsShot from './assets/real/skills.webp'
 import './home.css'
 
 const VIDEO = 'https://pollen-batch-41236914.figma.site/_components/v2/f0ee2dae7671c170c34f12e31c4cb41418976c98/769c564298c132f7919405cd9f17c1b1231f341d.769c5642.mp4'
 // The film is hosted on the CDN; versioned keys keep cached copies from going stale.
 const FILM = 'https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v2.mp4'
-const featureIcons = [Code2, MousePointer2, GitCompareArrows]
+const featureIcons: Record<FeatureId, LucideIcon> = { teams: UsersRound, 'computer-use': MousePointer2, models: Layers, workbench: PanelsTopLeft, skills: Store }
+// Real captures from the desktop app and the Android app; both locales share the Chinese interface.
+const featureImages: Record<FeatureId, string> = { teams: teamsShot, 'computer-use': computerUseShot, models: modelsShot, workbench: workbenchShot, skills: skillsShot }
+const phoneScreens = [phoneHome, phoneApproval, phoneReply]
+const DESKTOP_SHOT_SIZE = { width: 2000, height: 1300 }
+const FEATURE_IMAGE_SIZE = { width: 2000, height: 1250 }
+const PHONE_SHOT_SIZE = { width: 900, height: 2000 }
+const abilityIcons = [ShieldCheck, MessageCircleQuestion, Send]
 const stepIcons = [Download, SlidersHorizontal, FolderOpen, ScanEye]
 const taskSteps = {
   zh: {
@@ -36,8 +52,7 @@ const taskSteps = {
   }
 }
 
-type Attachment = { id: string; name: string; size: number }
-type Preview = { text: string; category: TaskCategory; files: Attachment[] }
+type Preview = { text: string; category: TaskCategory }
 type EnlargedImage = { src: string; alt: string; opener: HTMLElement }
 
 function TaskPreview({ task, locale, onClose }: { task: Preview; locale: LandingLocale; onClose: () => void }) {
@@ -71,7 +86,6 @@ function TaskPreview({ task, locale, onClose }: { task: Preview; locale: Landing
     <h2 id="task-preview-title">{en ? 'A little plan. A real beginning.' : '把想法，变成下一步。'}</h2>
     <p className="wander-dialog__note">{en ? 'This is a workflow preview. Run your task in the desktop app with your own model.' : '这里预览工作流程。实际任务将在桌面端连接你的模型后执行。'}</p>
     <blockquote>{task.text}</blockquote>
-    {task.files.length > 0 && <p className="wander-dialog__files"><FileText size={16} />{task.files.map(file => file.name).join(' · ')}<small>{en ? 'Selected locally; add these files again in the desktop app.' : '仅在本页选择，请在桌面端重新添加这些文件。'}</small></p>}
     <ol>{taskSteps[locale][task.category].map((step, index) => <li key={step}><span>0{index + 1}</span>{step}</li>)}</ol>
     <div className="wander-dialog__actions"><button className="wander-secondary" onClick={copy}>{copied ? <Check size={17} /> : <Copy size={17} />}{copied ? (en ? 'Copied' : '已复制任务') : (en ? 'Copy task' : '复制任务')}</button><a className="wander-primary" href={DOWNLOAD_URL}>{en ? 'Get the desktop app' : '下载桌面端'}<ArrowUpRight size={18} /></a></div>
     <p role="status" className="wander-feedback">{error || (copied ? (en ? 'Task copied to clipboard.' : '任务已复制到剪贴板。') : '')}</p>
@@ -92,76 +106,53 @@ function Nav({ locale }: { locale: LandingLocale }) {
   return <header className="wander-header">
     <a className="wander-wordmark" href={toSiteHref(en ? '/en' : '/')} aria-label="cc-haha">cc-haha</a>
     <nav aria-label={en ? 'Main navigation' : '主导航'} id="wander-nav" className="wander-nav" data-open={open}>
+      <a href="#mobile" onClick={() => setOpen(false)}>{en ? 'Phone app' : '手机 App'}</a>
       <a href="#discover" onClick={() => setOpen(false)}>{en ? 'Discover' : '发现可能'}</a>
       <a href="#how-it-works" onClick={() => setOpen(false)}>{en ? 'How it works' : '如何开始'}</a>
       <a href="#faqs" onClick={() => setOpen(false)}>{en ? 'FAQs' : '常见问题'}</a>
       <a className="wander-nav__mobile-docs" href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'Documentation' : '使用文档'}</a>
     </nav>
-    <div className="wander-header__actions"><a className="wander-doc-link" href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'Docs' : '使用文档'}<ArrowUpRight size={15} /></a><a className="wander-locale" href={toSiteHref(en ? '/' : '/en')} lang={en ? 'zh-CN' : 'en'} aria-label={en ? 'Switch to Chinese' : '切换为英文'} onClick={() => rememberLocale(en ? 'zh' : 'en')}>{en ? '中文' : 'EN'}</a><a className="wander-primary" href={GITHUB_URL} target="_blank" rel="noreferrer"><Icon name="github" size={18} />{en ? 'GitHub' : 'GitHub 开源'}</a><button ref={toggleRef} className="wander-icon wander-menu" aria-label={en ? 'Toggle navigation' : '切换导航'} aria-expanded={open} aria-controls="wander-nav" onClick={() => setOpen(!open)}>{open ? <X /> : <Menu />}</button></div>
+    <div className="wander-header__actions"><a className="wander-doc-link" href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'Docs' : '使用文档'}<ArrowUpRight size={15} /></a><a className="wander-locale" href={toSiteHref(en ? '/' : '/en')} lang={en ? 'zh-CN' : 'en'} aria-label={en ? 'Switch to Chinese' : '切换为英文'} onClick={() => rememberLocale(en ? 'zh' : 'en')}>{en ? '中文' : 'EN'}</a><a className="wander-github-link" href={GITHUB_URL} target="_blank" rel="noreferrer"><Icon name="github" size={17} />GitHub</a><button ref={toggleRef} className="wander-icon wander-menu" aria-label={en ? 'Toggle navigation' : '切换导航'} aria-expanded={open} aria-controls="wander-nav" onClick={() => setOpen(!open)}>{open ? <X /> : <Menu />}</button></div>
   </header>
 }
 
-function Hero({ locale, paused, setPaused, onPreview }: { locale: LandingLocale; paused: boolean; setPaused: (value: boolean) => void; onPreview: (task: Preview) => void }) {
+function Hero({ locale, paused, setPaused }: { locale: LandingLocale; paused: boolean; setPaused: (value: boolean) => void }) {
   const c = landingContent[locale]
   const en = locale === 'en'
-  const [text, setText] = useState(c.hero.promptDefault)
-  const [selected, setSelected] = useState<TaskCategory>('code')
-  const [files, setFiles] = useState<Attachment[]>([])
-  const [error, setError] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
-  useEffect(() => { setText(c.hero.promptDefault); setFiles([]); setError(''); setSelected('code') }, [c])
-  function attach(event: ChangeEvent<HTMLInputElement>) {
-    const selectedFiles = Array.from(event.target.files || [])
-    const allowed = selectedFiles.filter(file => (file.type.startsWith('image/') || file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) && file.size <= 10 * 1024 * 1024)
-    const combined = [...files, ...allowed.map(file => ({ id: `${file.name}-${file.size}-${file.lastModified}`, name: file.name, size: file.size }))]
-    const unique = [...new Map(combined.map(file => [file.id, file])).values()]
-    setFiles(unique.slice(0, 3))
-    setError(allowed.length !== selectedFiles.length || unique.length > 3 ? (en ? 'Up to 3 images or PDFs, 10 MB each.' : '最多添加 3 个图片或 PDF，每个不超过 10 MB。') : '')
-    event.target.value = ''
-  }
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    if (!text.trim()) { setError(en ? 'Tell us what you want to do first.' : '先写下你想做的事。'); return }
-    setError('')
-    onPreview({ text: text.trim(), category: selected, files })
-  }
-  return <section className="wander-hero relative min-h-svh w-full overflow-hidden" aria-labelledby="wander-title">
+  const [platform] = useState(currentDesktopPlatform)
+  const download = platform ? (en ? `Download for ${platform}` : `下载 ${platform} 版`) : c.downloads.desktop
+  return <section className="wander-hero relative w-full overflow-hidden" aria-labelledby="wander-title">
     <AmbientScene src={VIDEO} poster={poster} paused={paused} className="wander-hero__scene" />
     <div className="wander-hero__wash" />
     <div className="relative z-[2] max-w-[1360px] mx-auto"><Nav locale={locale} />
       <div className="wander-hero__body flex flex-col items-center px-6 text-center">
         <span className="wander-eyebrow wander-hero__eyebrow"><i />{c.hero.eyebrow}</span>
-        <h1 id="wander-title">{c.hero.headline[0]}<br />{c.hero.headline[1]}</h1>
-        <p className="wander-hero__description">{c.hero.description}</p>
-        <form className="wander-prompt" onSubmit={submit}>
-          <label className="u-sr-only" htmlFor="task-prompt">{en ? 'What would you like to do?' : '你想完成什么任务？'}</label>
-          <textarea id="task-prompt" value={text} onChange={event => setText(event.target.value)} maxLength={2000} spellCheck={false} />
-          {files.length > 0 && <div className="wander-prompt__attachments">{files.map(file => <span key={file.id}><FileText size={12} /><span>{file.name}</span><button type="button" aria-label={`${en ? 'Remove' : '移除'} ${file.name}`} onClick={() => setFiles(files.filter(item => item.id !== file.id))}><X size={12} /></button></span>)}</div>}
-          <div className="wander-prompt__bottom"><div className="wander-prompt__tools"><input ref={fileRef} type="file" accept="image/*,.pdf" multiple hidden onChange={attach} /><button type="button" className="wander-upload" onClick={() => fileRef.current?.click()} aria-label={en ? 'Attach inspiration' : '添加参考图片或 PDF'}><Upload size={18} /></button><span>{en ? 'A little idea goes a long way' : '从一个小想法开始'}</span></div><button className="wander-primary" type="submit" disabled={!text.trim()}>{en ? 'See the workflow' : '看看怎么做'}<ArrowUpRight size={18} /></button></div>
-        </form>
-        <p className="wander-feedback" role="status">{error}</p>
-        <div className="wander-suggestions" aria-label={en ? 'Try an idea' : '试试这些想法'}>{c.taskSuggestions.map((item, index) => { const Symbol = featureIcons[index]; return <button key={item.category} aria-pressed={selected === item.category} onClick={() => { setText(item.prompt); setSelected(item.category) }}><Symbol size={14} />{item.label}</button> })}</div>
+        <h1 id="wander-title">{c.hero.headline[0]}<br />{c.hero.headline[1]}<em>{c.hero.accent}</em></h1>
+        <p className="wander-hero__description">{c.hero.description.map(sentence => <span key={sentence}>{sentence}</span>)}</p>
+        <div className="wander-hero__actions"><a className="wander-primary" href={DOWNLOAD_URL}><Download size={17} />{download}</a><a className="wander-secondary" href={GITHUB_URL} target="_blank" rel="noreferrer"><Icon name="github" size={17} />GitHub</a></div>
+        <p className="wander-hero__phone">{c.hero.phoneLabel}<a href={MOBILE_LINKS.android} aria-label={c.downloads.androidLabel}>Android APK</a><span aria-hidden="true">·</span><a href={MOBILE_LINKS.testFlight} aria-label={c.downloads.iphoneLabel}>iPhone TestFlight</a></p>
       </div>
+      <figure className="wander-hero__visual"><img className="wander-hero__desktop" src={heroDesktop} alt={c.hero.desktopAlt} width={DESKTOP_SHOT_SIZE.width} height={DESKTOP_SHOT_SIZE.height} fetchPriority="high" /><img className="wander-hero__phone-shot" src={phoneApproval} alt={c.hero.phoneAlt} width={PHONE_SHOT_SIZE.width} height={PHONE_SHOT_SIZE.height} /></figure>
     </div>
-    <div className="wander-hero__foot"><a href="#film"><ArrowDown size={16} />{en ? 'SCROLL TO EXPLORE' : '往下走，看看更多可能'}</a><span>macOS · Windows · Linux</span><button onClick={() => setPaused(!paused)} aria-pressed={paused}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? (en ? 'Play scenery' : '播放风景') : (en ? 'Pause scenery' : '暂停风景')}</button></div>
+    <div className="wander-hero__foot"><a href="#mobile"><ArrowDown size={16} />{en ? 'SCROLL TO EXPLORE' : '往下走，看看更多可能'}</a><button onClick={() => setPaused(!paused)} aria-pressed={paused}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? (en ? 'Play scenery' : '播放风景') : (en ? 'Pause scenery' : '暂停风景')}</button></div>
   </section>
 }
 
-function Film({ locale }: { locale: LandingLocale }) {
+function Mobile({ locale, onEnlarge }: { locale: LandingLocale; onEnlarge: (image: EnlargedImage) => void }) {
+  const c = landingContent[locale]
   const en = locale === 'en'
-  // The video element is only created after a click, so visitors who never play it download nothing.
-  const [started, setStarted] = useState(false)
-  const posterAlt = en ? 'Frame from the cc-haha film: an Agent Team with every task finished' : 'cc-haha 宣传片画面：Agent Teams 四项任务全部完成'
-  return <section className="wander-film wander-section" id="film" aria-labelledby="film-title">
-    <div className="wander-section__heading"><span className="wander-eyebrow">cc-haha / {en ? 'THE FILM · 1:02' : '62 秒短片'}</span><h2 id="film-title">{en ? <>One minute.<br />See it <em>at work.</em></> : <>一分钟，<br />看它<em>怎么做事。</em></>}</h2><p>{en ? 'A team splits the work, you mark up the page, it works on its own cursor, and every session keeps moving.' : '组队分工、边看边批注、用自己的光标操作应用，多个会话同时推进。'}</p></div>
-    <div className="wander-showcase wander-film__frame">
-      <div className="wander-showcase__bar"><span className="wander-window-dots"><i /><i /><i /></span><span>cc-haha / {en ? 'FILM' : '宣传片'}</span><span>{en ? 'NO NARRATION' : '无旁白 · 有配乐'}</span></div>
-      {started
-        ? <video className="wander-film__media" src={FILM} poster={filmPoster} controls autoPlay playsInline preload="metadata" aria-label={en ? 'cc-haha film' : 'cc-haha 宣传片'} />
-        : <button className="wander-film__media wander-film__start" onClick={() => setStarted(true)} aria-label={en ? 'Play the 62-second film' : '播放 62 秒宣传片'}><img src={filmPoster} alt={posterAlt} width={1600} height={900} loading="lazy" /><span className="wander-primary"><Play size={16} />{en ? 'Play the film' : '播放短片'}</span></button>}
+  return <section className="wander-mobile wander-section" id="mobile" aria-labelledby="mobile-title">
+    <div className="wander-mobile__copy">
+      <span className="wander-eyebrow">01 / {en ? 'THE PHONE APP' : '手机 App'}</span>
+      <h2 id="mobile-title">{en ? <>Step away.<br />Keep <em>going.</em></> : <>离开电脑，<br />也能<em>接着干。</em></>}</h2>
+      <p className="wander-mobile__lede">{c.mobile.description}</p>
+      <ul className="wander-mobile__abilities">{c.mobile.abilities.map((item, index) => { const Symbol = abilityIcons[index]; return <li key={item.title}><span className="wander-mobile__icon"><Symbol size={18} strokeWidth={1.6} /></span><strong>{item.title}</strong><span>{item.body}</span></li> })}</ul>
+      <p className="wander-mobile__connect"><Wifi size={15} />{c.mobile.connection}</p>
+      <div className="wander-mobile__actions"><a className="wander-primary" href={MOBILE_LINKS.android} aria-label={c.downloads.androidLabel}><Download size={16} />{c.downloads.android}</a><a className="wander-secondary" href={MOBILE_LINKS.testFlight} aria-label={c.downloads.iphoneLabel}><Smartphone size={16} />{c.downloads.iphone}</a></div>
+      <p className="wander-mobile__note">{c.downloads.requirement}</p>
+      <a className="wander-text-link" href={toSiteHref(c.mobile.route)}>{c.mobile.docs}<ArrowUpRight size={16} /></a>
     </div>
-    {en && <p className="wander-film__note">No narration; the film plays with music and sound effects. Demo data; on-screen times are staged.</p>}
-    {!en && <p className="wander-film__note">片中为演示数据，画面中的时间为演示设定。</p>}
+    <div className="wander-mobile__screens">{c.mobile.screens.map((screen, index) => <figure key={screen.caption}><button onClick={event => onEnlarge({ src: phoneScreens[index], alt: screen.alt, opener: event.currentTarget })} aria-label={`${en ? 'Enlarge' : '放大查看'}：${screen.caption}`}><img src={phoneScreens[index]} alt={screen.alt} width={PHONE_SHOT_SIZE.width} height={PHONE_SHOT_SIZE.height} loading="lazy" /></button><figcaption>{screen.caption}</figcaption></figure>)}</div>
   </section>
 }
 
@@ -169,33 +160,48 @@ function Discover({ locale, onEnlarge }: { locale: LandingLocale; onEnlarge: (im
   const c = landingContent[locale]
   const en = locale === 'en'
   const [active, setActive] = useState(0)
+  const count = c.features.length
   const item = c.features[active]
-  const images = { ...guideScreenshots[locale], session: projectSession }
-  const screenshot = images[item.imageKey]
-  const dimensions = {
-    session: { width: 3456, height: 2168 },
-    settings: { width: 2000, height: 1651 },
-    workspace: { width: 2000, height: 1255 },
-  }[item.imageKey]
-  const screenshotAlt = item.imageKey === 'session'
-    ? (en ? 'cc-haha with the real project and session list visible' : 'cc-haha 真实项目界面，完整展示左侧项目与会话列表')
-    : item.title
+  const image = featureImages[item.id]
   function onKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const choices: Record<string, number> = { ArrowRight: (index + 1) % 3, ArrowLeft: (index + 2) % 3, Home: 0, End: 2 }
+    const choices: Record<string, number> = { ArrowRight: (index + 1) % count, ArrowLeft: (index + count - 1) % count, Home: 0, End: count - 1 }
     if (!(event.key in choices)) return
     event.preventDefault()
     setActive(choices[event.key])
     ;(event.currentTarget.parentElement!.children[choices[event.key]] as HTMLButtonElement).focus()
   }
   return <section className="wander-discover wander-section" id="discover" aria-labelledby="discover-title">
-    <div className="wander-section__heading"><span className="wander-eyebrow">01 / {en ? 'MEET YOUR NEW COMPANION' : '认识你的新搭档'}</span><h2 id="discover-title">{en ? <>A little less doing.<br />A lot more <em>living.</em></> : <>少一点忙碌。<br />多一点<em>可能。</em></>}</h2><p>{en ? 'One place for your ideas, your apps, and every change along the way.' : '想法、应用和每一次改动，都在同一个工作空间里。'}</p></div>
-    <div className="wander-feature-tabs" role="tablist" aria-label={en ? 'Explore capabilities' : '探索产品能力'}>{c.features.map((feature, index) => { const Symbol = featureIcons[index]; return <button role="tab" key={feature.id} id={`feature-${feature.id}`} aria-controls="feature-panel" aria-selected={active === index} tabIndex={active === index ? 0 : -1} onClick={() => setActive(index)} onKeyDown={event => onKey(event, index)}><Symbol size={17} />{en ? ['Write code', 'Use apps', 'Review changes'][index] : ['写代码', '操作应用', '审阅改动'][index]}</button> })}</div>
+    <div className="wander-section__heading"><span className="wander-eyebrow">02 / {en ? 'MEET YOUR NEW COMPANION' : '认识你的新搭档'}</span><h2 id="discover-title">{en ? <>A little less doing.<br />A lot more <em>living.</em></> : <>少一点忙碌。<br />多一点<em>可能。</em></>}</h2><p>{en ? 'One place for your ideas, your apps, and every change along the way.' : '想法、应用和每一次改动，都在同一个工作空间里。'}</p></div>
+    <div className="wander-feature-tabs" role="tablist" aria-label={en ? 'Explore capabilities' : '探索产品能力'}>{c.features.map((feature, index) => { const Symbol = featureIcons[feature.id]; return <button role="tab" key={feature.id} id={`feature-${feature.id}`} aria-controls="feature-panel" aria-selected={active === index} tabIndex={active === index ? 0 : -1} onClick={() => setActive(index)} onKeyDown={event => onKey(event, index)}><Symbol size={17} />{feature.tab}</button> })}</div>
     <div className="wander-showcase" role="tabpanel" id="feature-panel" aria-labelledby={`feature-${item.id}`}>
-      <div className="wander-showcase__bar"><span className="wander-window-dots"><i /><i /><i /></span><span>cc-haha / {en ? 'YOUR WORKSPACE' : '你的工作空间'}</span><span className="wander-live"><i />{en ? 'REAL PRODUCT' : '真实产品界面'}</span></div>
-      <button className="wander-showcase__image" onClick={event => onEnlarge({ src: screenshot, alt: screenshotAlt, opener: event.currentTarget })} aria-label={en ? 'Enlarge product screenshot' : '放大查看产品截图'}><img key={item.imageKey} src={screenshot} alt={screenshotAlt} width={dimensions.width} height={dimensions.height} loading="lazy" /><span><Plus size={16} />{en ? 'A closer look' : '看看细节'}</span></button>
-      <div className="wander-showcase__caption"><div><span className="wander-eyebrow">{item.kicker}</span><h3>{item.title}</h3></div><div><p>{item.body}</p><a className="wander-text-link" href={toSiteHref(item.route)}>{en ? 'Explore this workflow' : '了解这个工作流'}<ArrowUpRight size={16} /></a></div></div>
+      <button className="wander-showcase__image" onClick={event => onEnlarge({ src: image, alt: item.alt, opener: event.currentTarget })} aria-label={en ? 'Enlarge this image' : '放大查看这张图'}><img key={image} src={image} alt={item.alt} width={FEATURE_IMAGE_SIZE.width} height={FEATURE_IMAGE_SIZE.height} loading="lazy" /><span><Plus size={16} />{en ? 'A closer look' : '看看细节'}</span></button>
+      <div className="wander-showcase__caption"><h3>{item.title}</h3><div><p>{item.body}</p><a className="wander-text-link" href={toSiteHref(item.route)}>{en ? 'Read the guide' : '查看使用说明'}<ArrowUpRight size={16} /></a></div></div>
     </div>
     <div className="wander-discover__note"><span><Check size={14} />{en ? 'Bring your own model' : '连接你自己的模型'}</span><span><Check size={14} />{en ? 'Work in your local project' : '在本地项目里工作'}</span><span><Check size={14} />{en ? 'Keep the final call' : '下一步，由你决定'}</span></div>
+  </section>
+}
+
+function Film({ locale }: { locale: LandingLocale }) {
+  const en = locale === 'en'
+  // The video element is only created after a click, so visitors who never play it download nothing.
+  const [started, setStarted] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  useEffect(() => { if (started) videoRef.current?.focus() }, [started])
+  const posterAlt = en ? 'Frame from the cc-haha film: an Agent Team with every task finished' : 'cc-haha 宣传片画面：Agent Teams 四项任务全部完成'
+  return <section className="wander-film wander-section" id="film" aria-labelledby="film-title">
+    <div className="wander-film__teaser" data-playing={started}>
+      <div className="wander-film__media">
+        {started
+          ? <video ref={videoRef} src={FILM} poster={filmPoster} controls autoPlay playsInline preload="metadata" aria-label={en ? 'cc-haha film' : 'cc-haha 宣传片'} />
+          : <button className="wander-film__start" onClick={() => setStarted(true)} aria-label={en ? 'Play the 62-second film' : '播放 62 秒宣传片'}><img src={filmPoster} alt={posterAlt} width={1600} height={900} loading="lazy" /><span className="wander-film__play"><Play size={18} /></span></button>}
+      </div>
+      <div className="wander-film__copy">
+        <span className="wander-eyebrow">cc-haha / {en ? 'THE FILM · 1:02' : '62 秒短片'}</span>
+        <h2 id="film-title">{en ? 'Want to see it move?' : '想看它动起来？'}</h2>
+        <p>{en ? 'A team splits the work, you mark up the page, it works on its own cursor, and every session keeps moving.' : '组队分工、边看边批注、用自己的光标操作应用，多个会话同时推进。'}</p>
+        <p className="wander-film__note">{en ? 'No narration; music and sound effects only. Demo data; on-screen times are staged.' : '无旁白，有配乐。片中为演示数据，画面中的时间为演示设定。'}</p>
+      </div>
+    </div>
   </section>
 }
 
@@ -208,7 +214,7 @@ function Journey({ locale }: { locale: LandingLocale }) {
   const descriptions = en ? ['Choose macOS, Windows, or Linux. Your next workspace starts right here.', 'An official account, your preferred API, or a local model. Make it your own.', 'A project folder, a clear goal, and the permissions you choose. Ready when you are.', 'Open the diff. Look at the preview. Leave a note. Good work gets better together.'] : ['选择 macOS、Windows 或 Linux 版本，让新搭档住进你的电脑。', '官方账号、熟悉的 API 服务或本地模型。用适合你的方式连接。', '一个项目文件夹、一个明确的目标，再选好权限。随时可以开始。', '打开文件差异，看看页面预览，留下具体反馈。让这一轮比上一轮更好。']
   return <section className="wander-journey" id="how-it-works" aria-labelledby="journey-title">
     <img className="wander-landscape" src={landscape} alt="" loading="lazy" />
-    <div className="wander-journey__inner"><div className="wander-section__heading"><span className="wander-eyebrow">02 / {en ? 'THE FIRST SMALL STEP' : '从这里出发'}</span><h2 id="journey-title">{en ? <>New companion.<br />Familiar rhythm.</> : <>新搭档，<br />你的老习惯。</>}</h2><p>{en ? 'Four small steps. Then, back to the things you love.' : '只需要四小步，然后，把时间还给你喜欢的事。'}</p></div>
+    <div className="wander-journey__inner"><div className="wander-section__heading"><span className="wander-eyebrow">03 / {en ? 'THE FIRST SMALL STEP' : '从这里出发'}</span><h2 id="journey-title">{en ? <>New companion.<br />Familiar rhythm.</> : <>新搭档，<br />你的老习惯。</>}</h2><p>{en ? 'Four small steps. Then, back to the things you love.' : '只需要四小步，然后，把时间还给你喜欢的事。'}</p></div>
       <div className="wander-route"><div className="wander-route__steps" aria-label={en ? 'Getting started steps' : '上手步骤'}>{c.workflowSteps.map((item, index) => <button key={item.route} aria-pressed={index === active} onClick={() => setActive(index)}><span>0{index + 1}</span><strong>{item.title}</strong><ArrowUpRight size={17} /></button>)}</div><div className="wander-route__detail" aria-live="polite"><div className="wander-route__stamp"><Symbol size={34} strokeWidth={1.2} /></div><span className="wander-eyebrow">STEP 0{active + 1} / 04</span><h3>{step.title}</h3><p>{descriptions[active]}</p><a className="wander-primary" href={toSiteHref(step.route)}>{en ? 'Show me how' : '带我开始'}<ArrowUpRight size={17} /></a></div></div>
     </div>
     <div className="wander-journey__caption"><span>{en ? 'LESS FRICTION. MORE FREEDOM.' : '少一点阻力，多一点自由。'}</span><span>cc-haha field notes / 02</span></div>
@@ -218,20 +224,23 @@ function Journey({ locale }: { locale: LandingLocale }) {
 function Possibilities({ locale, onPreview }: { locale: LandingLocale; onPreview: (task: Preview) => void }) {
   const en = locale === 'en'
   const c = landingContent[locale]
-  return <section className="wander-possibilities wander-section" aria-labelledby="possibilities-title"><div className="wander-possibilities__intro"><span className="wander-eyebrow">03 / {en ? 'MAKE IT YOURS' : '换成你想做的事'}</span><h2 id="possibilities-title">{en ? <>A fresh page.<br />A lighter day.</> : <>想法那么多，<br />一个个来。</>}</h2><a className="wander-text-link" href={toSiteHref(en ? '/en/cases' : '/cases')}>{en ? 'Browse the field notes' : '翻翻实战手册'}<ArrowUpRight size={18} /></a><img className="wander-stilllife" src={stillLife} alt="" width={900} height={600} loading="lazy" /></div><div className="wander-idea-list">{c.taskSuggestions.map((task, index) => <button className="wander-idea" key={task.category} onClick={() => onPreview({ text: task.prompt, category: task.category, files: [] })}><span className="wander-idea__number">0{index + 1}</span><span><small>{en ? ['SOMETHING TO BUILD', 'SOMETHING TO DELEGATE', 'SOMETHING TO IMPROVE'][index] : ['给灵感一个形状', '把重复留给搭档', '让结果更好一点'][index]}</small><strong>{task.label}</strong><span>{task.prompt}</span></span><span className="wander-idea__arrow"><ArrowUpRight size={22} /></span></button>)}</div></section>
+  return <section className="wander-possibilities wander-section" aria-labelledby="possibilities-title"><div className="wander-possibilities__intro"><span className="wander-eyebrow">04 / {en ? 'MAKE IT YOURS' : '换成你想做的事'}</span><h2 id="possibilities-title">{en ? <>A fresh page.<br />A lighter day.</> : <>想法那么多，<br />一个个来。</>}</h2><a className="wander-text-link" href={toSiteHref(en ? '/en/cases' : '/cases')}>{en ? 'Browse the field notes' : '翻翻实战手册'}<ArrowUpRight size={18} /></a><img className="wander-stilllife" src={stillLife} alt="" width={900} height={600} loading="lazy" /></div><div className="wander-idea-list">{c.taskSuggestions.map((task, index) => <button className="wander-idea" key={task.category} onClick={() => onPreview({ text: task.prompt, category: task.category })}><span className="wander-idea__number">0{index + 1}</span><span><small>{en ? ['SOMETHING TO BUILD', 'SOMETHING TO DELEGATE', 'SOMETHING TO IMPROVE'][index] : ['给灵感一个形状', '把重复留给搭档', '让结果更好一点'][index]}</small><strong>{task.label}</strong><span>{task.prompt}</span></span><span className="wander-idea__arrow"><ArrowUpRight size={22} /></span></button>)}</div></section>
 }
 
 function Faq({ locale }: { locale: LandingLocale }) {
   const en = locale === 'en'
   const [active, setActive] = useState<number | null>(0)
-  return <section className="wander-faq wander-section" id="faqs" aria-labelledby="faqs-title"><div className="wander-faq__intro"><span className="wander-eyebrow">04 / {en ? 'A FEW THINGS TO KNOW' : '出发前，聊几句'}</span><h2 id="faqs-title">{en ? <>Good questions.<br />Honest answers.</> : <>你可能<br />还想知道。</>}</h2><p>{en ? 'A little clarity before your first task.' : '把疑问解开，再轻松开始。'}</p><a className="wander-text-link" href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'More in the docs' : '更多答案在文档里'}<ArrowUpRight size={17} /></a></div><div className="wander-faq__list">{landingContent[locale].faqs.map((item, index) => <div className="wander-faq__item" data-open={active === index} key={item.question}><h3><button onClick={() => setActive(active === index ? null : index)} aria-expanded={active === index} aria-controls={`faq-answer-${index}`} id={`faq-question-${index}`}>{item.question}{active === index ? <Minus size={19} /> : <Plus size={19} />}</button></h3><div id={`faq-answer-${index}`} aria-labelledby={`faq-question-${index}`} role="region" hidden={active !== index}><p>{item.answer}</p></div></div>)}</div></section>
+  return <section className="wander-faq wander-section" id="faqs" aria-labelledby="faqs-title"><div className="wander-faq__intro"><span className="wander-eyebrow">05 / {en ? 'A FEW THINGS TO KNOW' : '出发前，聊几句'}</span><h2 id="faqs-title">{en ? <>Good questions.<br />Honest answers.</> : <>你可能<br />还想知道。</>}</h2><p>{en ? 'A little clarity before your first task.' : '把疑问解开，再轻松开始。'}</p><a className="wander-text-link" href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'More in the docs' : '更多答案在文档里'}<ArrowUpRight size={17} /></a></div><div className="wander-faq__list">{landingContent[locale].faqs.map((item, index) => <div className="wander-faq__item" data-open={active === index} key={item.question}><h3><button onClick={() => setActive(active === index ? null : index)} aria-expanded={active === index} aria-controls={`faq-answer-${index}`} id={`faq-question-${index}`}>{item.question}{active === index ? <Minus size={19} /> : <Plus size={19} />}</button></h3><div id={`faq-answer-${index}`} aria-labelledby={`faq-question-${index}`} role="region" hidden={active !== index}><p>{item.answer}</p></div></div>)}</div></section>
 }
 
 function Closing({ locale }: { locale: LandingLocale }) {
   const en = locale === 'en'
   const c = landingContent[locale]
-  const [platform, setPlatform] = useState('macOS')
-  return <footer className="wander-closing" id="download"><img className="wander-landscape" src={landscape} alt="" loading="lazy" /><div className="wander-closing__content"><span className="wander-eyebrow">{en ? 'YOUR TIME. YOUR POSSIBILITIES.' : '你的时间，你的可能。'}</span><h2>{en ? <>Your next idea<br />starts <em>here.</em></> : <>下一件想做的事，<br /><em>从这里开始。</em></>}</h2><p>{c.closing.body}</p><div className="wander-platforms" aria-label={en ? 'Choose your operating system' : '选择你的操作系统'}>{['macOS', 'Windows', 'Linux'].map((name, index) => { const Symbol = [Command, Monitor, Laptop][index]; return <button key={name} aria-pressed={platform === name} onClick={() => setPlatform(name)}><Symbol size={15} />{name}</button> })}</div><a className="wander-primary wander-download" href={DOWNLOAD_URL}><Download size={18} />{en ? `Get cc-haha for ${platform}` : `下载 ${platform} 版`}<ArrowUpRight size={18} /></a><span className="wander-closing__hint">{en ? 'Choose your architecture on GitHub Releases · Free & open source' : '前往 GitHub Releases 选择对应架构 · 免费开源'}</span></div><div className="wander-footer"><a className="wander-wordmark" href="#wander-title">cc-haha</a><span>{en ? 'A little more room for life.' : '给生活，多留一点空间。'}</span><nav aria-label={en ? 'Footer navigation' : '页脚导航'}><a href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'Docs' : '文档'}</a><a href={GITHUB_URL} target="_blank" rel="noreferrer"><Code2 size={14} />GitHub</a><a href={toSiteHref(en ? '/en/start/privacy' : '/start/privacy')}>{en ? 'Privacy' : '隐私'}</a><a href={toSiteHref(en ? '/' : '/en')} onClick={() => rememberLocale(en ? 'zh' : 'en')}>{en ? '中文' : 'English'}</a></nav></div></footer>
+  const [platform, setPlatform] = useState(() => currentDesktopPlatform() || 'macOS')
+  return <footer className="wander-closing" id="download"><img className="wander-landscape" src={landscape} alt="" loading="lazy" /><div className="wander-closing__content"><span className="wander-eyebrow">{en ? 'YOUR TIME. YOUR POSSIBILITIES.' : '你的时间，你的可能。'}</span><h2>{en ? <>Your next idea<br />starts <em>here.</em></> : <>下一件想做的事，<br /><em>从这里开始。</em></>}</h2><p>{c.closing.body}</p><div className="wander-closing__groups">
+      <div className="wander-closing__group" role="group" aria-labelledby="closing-desktop"><span className="wander-closing__label" id="closing-desktop"><Laptop size={14} />{en ? 'Desktop app' : '桌面端'}</span><div className="wander-platforms" aria-label={en ? 'Choose your operating system' : '选择你的操作系统'}>{['macOS', 'Windows', 'Linux'].map((name, index) => { const Symbol = [Command, Monitor, Laptop][index]; return <button key={name} aria-pressed={platform === name} onClick={() => setPlatform(name)}><Symbol size={15} />{name}</button> })}</div><a className="wander-primary wander-download" href={DOWNLOAD_URL}><Download size={18} />{en ? `Get cc-haha for ${platform}` : `下载 ${platform} 版`}<ArrowUpRight size={18} /></a><span className="wander-closing__hint">{en ? 'Choose your architecture on GitHub Releases · Free & open source' : '前往 GitHub Releases 选择对应架构 · 免费开源'}</span></div>
+      <div className="wander-closing__group" role="group" aria-labelledby="closing-phone"><span className="wander-closing__label" id="closing-phone"><Smartphone size={14} />{en ? 'Phone app' : '手机 App'}</span><a className="wander-secondary wander-download" href={MOBILE_LINKS.android} aria-label={c.downloads.androidLabel}><Download size={18} />{c.downloads.android}<ArrowUpRight size={18} /></a><a className="wander-secondary wander-download" href={MOBILE_LINKS.testFlight} aria-label={c.downloads.iphoneLabel}><Smartphone size={18} />{c.downloads.iphone}<ArrowUpRight size={18} /></a><span className="wander-closing__hint">{c.downloads.requirement}</span></div>
+    </div></div><div className="wander-footer"><a className="wander-wordmark" href="#wander-title">cc-haha</a><span>{en ? 'A little more room for life.' : '给生活，多留一点空间。'}</span><nav aria-label={en ? 'Footer navigation' : '页脚导航'}><a href={toSiteHref(en ? '/en/start' : '/start')}>{en ? 'Docs' : '文档'}</a><a href={GITHUB_URL} target="_blank" rel="noreferrer"><Code2 size={14} />GitHub</a><a href={toSiteHref(en ? '/en/start/privacy' : '/start/privacy')}>{en ? 'Privacy' : '隐私'}</a><a href={toSiteHref(en ? '/' : '/en')} onClick={() => rememberLocale(en ? 'zh' : 'en')}>{en ? '中文' : 'English'}</a></nav></div></footer>
 }
 
 export default function HomePage({ locale = 'en' }: { locale?: LandingLocale }) {
@@ -239,7 +248,7 @@ export default function HomePage({ locale = 'en' }: { locale?: LandingLocale }) 
   const [preview, setPreview] = useState<Preview | null>(null)
   const [enlargedImage, setEnlargedImage] = useState<EnlargedImage | null>(null)
   useEffect(() => {
-    setPageMeta({ alternate: locale === 'en' ? '/' : '/en', canonical: locale === 'en' ? '/en' : '/', description: landingContent[locale].hero.description, lang: locale === 'en' ? 'en' : 'zh-CN', title: locale === 'en' ? 'cc-haha — Less busywork. More room for life.' : 'cc-haha — 把琐碎交给 AI，把时间留给生活。' })
+    setPageMeta({ alternate: locale === 'en' ? '/' : '/en', canonical: locale === 'en' ? '/en' : '/', description: landingContent[locale].hero.description.join(locale === 'en' ? ' ' : ''), lang: locale === 'en' ? 'en' : 'zh-CN', title: locale === 'en' ? 'cc-haha — Claude Code on your desktop and in your pocket' : 'cc-haha — 把 Claude Code 装进桌面，也装进口袋' })
   }, [locale])
-  return <div className="wander-page font-sans"><a className="u-skip" href="#main">{locale === 'en' ? 'Skip to content' : '跳到正文'}</a><main id="main" tabIndex={-1}><Hero locale={locale} paused={paused} setPaused={setPaused} onPreview={setPreview} /><Film locale={locale} /><Discover locale={locale} onEnlarge={setEnlargedImage} /><Journey locale={locale} /><Possibilities locale={locale} onPreview={setPreview} /><Faq locale={locale} /></main><Closing locale={locale} />{preview && <TaskPreview task={preview} locale={locale} onClose={() => setPreview(null)} />}{enlargedImage && <ImageViewer image={enlargedImage} locale={locale} onClose={() => setEnlargedImage(null)} />}</div>
+  return <div className="wander-page font-sans"><a className="u-skip" href="#main">{locale === 'en' ? 'Skip to content' : '跳到正文'}</a><main id="main" tabIndex={-1}><Hero locale={locale} paused={paused} setPaused={setPaused} /><Mobile locale={locale} onEnlarge={setEnlargedImage} /><Discover locale={locale} onEnlarge={setEnlargedImage} /><Film locale={locale} /><Journey locale={locale} /><Possibilities locale={locale} onPreview={setPreview} /><Faq locale={locale} /></main><Closing locale={locale} />{preview && <TaskPreview task={preview} locale={locale} onClose={() => setPreview(null)} />}{enlargedImage && <ImageViewer image={enlargedImage} locale={locale} onClose={() => setEnlargedImage(null)} />}</div>
 }

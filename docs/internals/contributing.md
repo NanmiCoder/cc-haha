@@ -339,10 +339,22 @@ release 模式下 live lane 不允许静默跳过。缺少 provider、真实模�
 |---|---|---|
 | macOS arm64 / x64 | `dmg` 首次安装，`zip` 供 Squirrel.Mac 更新 | `latest-mac.yml` |
 | Windows x64 / ARM64 | NSIS `.exe` | `latest.yml` |
-| Linux x64 | `.AppImage` 自动更新，`.deb` 供手动安装 | `latest-linux.yml` |
-| Linux arm64 | `.AppImage` 自动更新，`.deb` 供手动安装 | `latest-linux-arm64.yml` |
+| Linux x64 | `.AppImage` 自动更新，`.deb`、`.rpm` 供手动安装 | `latest-linux.yml` |
+| Linux arm64 | `.AppImage` 自动更新，`.deb`、`.rpm` 供手动安装 | `latest-linux-arm64.yml` |
 
 Release workflow 先在各平台 matrix 里生成 `latest*.yml`，把同名 metadata 临时改名为 `latest-<platform>.yml`，最后由 `scripts/release-update-metadata.ts` 合并回 electron-updater 期望的标准文件名。不要改成各 matrix job 直接发布 GitHub Release，否则 metadata 会互相覆盖。
+
+### 产物命名
+
+文件名面向下载的用户：`Claude-Code-Haha-<版本>-macOS-Apple-Silicon.dmg` / `-macOS-Intel.dmg`、`-Windows-x64-Setup.exe` / `-Windows-arm64-Setup.exe`、`-Linux-x64` / `-Linux-arm64` 加 `.AppImage`、`.deb`、`.rpm`。Mac 自动更新用的 zip 叫 `-macOS-arm64-update.zip` / `-macOS-x64-update.zip`。默认名写在 `desktop/package.json` 的 `mac`、`dmg`、`nsis`、`linux` 的 `artifactName` 里；dmg 的芯片名和 Linux 统一的 `x64` 由 release matrix 的 `builder_args` 逐行覆盖，因为 electron-builder 的 `${arch}` 在 Linux 上会按格式变成 `x86_64`、`amd64`、`aarch64`。这些覆盖值必须用单引号包住，否则 shell 会先展开 `${version}`。
+
+改名时有三条硬约束，`scripts/pr/release-workflow.test.ts` 会按 electron-updater 的挑包逻辑逐一验证：
+
+- `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、`latest-linux-arm64.yml` 是已安装客户端写死请求的文件名，不能改。
+- Mac zip 名里，Apple 芯片的必须含 `arm64`，Intel 的不能含 `arm64`；否则 Apple 芯片的机器会被「更新」成 Intel 版。
+- 两个 Windows 安装包共用一份 `latest.yml`，updater 按名字里的 `x64` / `arm64` 选包；少了这两个词，ARM 设备会装上 x64 版。
+
+`.blockmap` 只在构建机上生成给 package-smoke 检查，不再发布：应用从 v0.4.7 起关闭了差分下载，更早的客户端找不到 blockmap 会自动改为完整下载。Release 也不再附 `install-macos-unsigned.sh`，正式版本的 Mac 包总是签名并公证过的。
 
 ### 签名 Secrets
 
@@ -358,14 +370,13 @@ APPLE_TEAM_ID
 
 `MACOS_CERTIFICATE` 是 Developer ID Application `.p12` 的 base64 内容。项目不发布 `.pkg`，不需要 Developer ID Installer 证书。
 
-Windows 签名是可选项：
+Windows 签名走 SignPath，审批通过前默认关闭：tag 推送、手动正式发布和手动草稿都会产出未签名的 Windows 安装包，自动更新照常可用，只是用户可能看到 SmartScreen 提示。开关是仓库变量 `WINDOWS_SIGNING_ENABLED`：
 
-```text
-WINDOWS_CERTIFICATE
-WINDOWS_CERTIFICATE_PASSWORD
-```
+- 未设置或不为 `true`：Windows 不签名，preflight 只打一条 notice。
+- 设为 `true`：要求 `SIGNPATH_*` 变量和 `SIGNPATH_API_TOKEN` 齐全，非草稿发布缺配置时拒绝发布。
+- 手动运行 `Release Desktop` 时，`windows_signing` 输入可以临时改写：`auto` 跟随变量，`unsigned` 本次不签，`signed` 本次一定签（配置不全直接失败），用来在打开变量前先拿草稿试签。
 
-缺少 Windows 签名时自动更新仍然可用，只是用户可能看到 SmartScreen 提示。
+打开签名前，先把 SignPath 后台的 installer artifact configuration 改成和 `.github/signpath/windows-installer.xml` 一致（匹配 `Claude-Code-Haha-*-Windows-*-Setup.exe`），再用草稿试签一次。只要还可能发布未签名的 Windows 包，就不要在 `desktop/package.json` 里加 `publisherName` 或 `verifyUpdateCodeSignature`：加了之后，用该配置构建的客户端会拒收之后所有未签名的更新，而且无法自愈。
 
 ### 发版前检查
 
@@ -383,6 +394,7 @@ bun run check:policy
 
 1. `bun run scripts/release.ts <version>` 在 `release/v<version>` 分支上提交版本号和 release notes，不打 tag。按脚本提示推送分支、开 PR，等 PR Quality 变绿后合并。
 2. 合并后运行 `bun run scripts/release.ts --tag <version>`。脚本会先确认 `origin/main` 上的桌面版本号就是 `<version>`、release notes 已经合入，再给合并后的提交打 tag，最后只推 tag：`git push origin v<version>`。
+3. tag 推送会触发 `Release Desktop`，这次运行直接完成构建和发布，手机端交付也接在它后面，不需要再手动运行 workflow。只有这次运行在发布之前失败时，才手动 `gh workflow run release-desktop.yml --ref v<version> -f draft=false` 重跑。Release 一旦发布，任何运行都会在 preflight 被拒绝，避免覆盖用户正在下载的安装包。
 
 ### 验证一条真实更新链路
 
@@ -395,7 +407,7 @@ bun run check:policy
 5. 重启后确认「关于」里的版本号正确，且服务商、会话、Skills、Agents、记忆、自定义宠物和自定义数据目录仍然可用。
 6. 确认历史附件上下文、子 Agent 详情和任务状态可以恢复；打开桌宠，验证悬浮窗口与当前会话导航。
 
-各平台的重点不同：macOS 要确认 release job 走的是签名产物且启动策略检查通过；Windows 要确认 `latest.yml`、`.exe`、`.exe.blockmap` 都在 Release 资产里，未签名时的 SmartScreen 提示不代表 updater 失败；Linux 优先用 AppImage 验证自动更新，`.deb` 只作手动安装包发布。
+各平台的重点不同：macOS 要确认 release job 走的是签名产物且启动策略检查通过；Windows 要确认 `latest.yml` 和两个 `-Setup.exe` 都在 Release 资产里，未签名时的 SmartScreen 提示不代表 updater 失败；Linux 优先用 AppImage 验证自动更新，`.deb`、`.rpm` 只作手动安装包发布。
 
 ## PR 提交流程
 

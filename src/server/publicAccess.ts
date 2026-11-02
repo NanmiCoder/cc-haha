@@ -72,7 +72,7 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       (parts[2] === 'authorized-apps' && (method === 'GET' || method === 'PUT')) ||
       (parts[2] === 'open-permission-card' && method === 'POST')
   }
-  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || (parts[3] === 'test' && method === 'POST'))
+  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || ((parts[3] === 'test' || parts[3] === 'pull') && method === 'POST'))
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {
@@ -194,6 +194,21 @@ export class PublicAccessServer {
   }
 
   isDeviceActive(id: string) { return this.authorizedDevice(id) }
+
+  /**
+   * Still paired, whether or not the listener runs right now (a tunnel restart
+   * stops it briefly). Read-only: never creates the store. An unreadable store
+   * answers true so callers do not discard data on a guess.
+   */
+  isDevicePaired(id: string) {
+    let devices = this.stored.devices
+    if (!this.loaded) {
+      try { devices = migratePublicAccessStore(JSON.parse(readFileSync(this.storePath, 'utf8'))).devices } catch (error) {
+        return (error as NodeJS.ErrnoException).code !== 'ENOENT'
+      }
+    }
+    return devices.some(d => d.id === id && d.expiresAt > this.now())
+  }
 
   private deviceFor(request: Request): Device | undefined {
     const authorization = request.headers.get('Authorization')

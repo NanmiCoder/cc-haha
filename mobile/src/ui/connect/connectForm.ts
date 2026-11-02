@@ -71,8 +71,13 @@ export function connectionBlocker(mode: ConnectMode, value: string): string {
 export function formFootnote(mode: ConnectMode, value: string) {
   if (mode === 'remote')
     return '在电脑的「外出连接」中开启 Cloudflare，选择快速连接或固定域名后扫码，再在电脑上批准。二维码过期或快速连接重建后，请重新扫码。'
-  if (inspectAddress(value)?.embeddedCredential)
-    return '二维码已包含局域网凭据。手机和电脑需要能通过这个地址互相访问。'
+  const parsed = parse(value)
+  const credential = parsed?.credential
+    ? '二维码已包含局域网凭据。手机和电脑需要能通过这个地址互相访问。'
+    : '手机需要能访问这个地址。令牌在电脑的「设置 → 手机连接」里。'
+  if (parsed?.url.startsWith('http:'))
+    return `HTTP 连接未加密，请仅在可信网络中使用。${credential}`
+  if (parsed?.credential) return credential
   return '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
 }
 

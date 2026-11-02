@@ -15,6 +15,10 @@ import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useProviderStore } from '@/stores/providerStore'
 import type { RuntimeSelection } from '@/types/runtime'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
+import { getBundledPresetReasoningProviderKind } from '@/config/providerPresets'
+import { getProviderModelCapabilityOverride } from '@/lib/runtimeSelection'
+import type { ReasoningEffortLevel } from '@/types/settings'
+import { normalizeModelReasoningEffort } from '../../../../src/shared/modelReasoning'
 import { isValidTeamMemberName, type TeamPlanRecord, type TeamPlanRuntime, type TeamPlanMember } from '../../../../src/shared/teamPlan'
 
 function selection(runtime: TeamPlanRuntime): RuntimeSelection {
@@ -100,6 +104,24 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   }
   const batchRuntime = (runtime: RuntimeSelection) => {
     edit(sessionId, { members: members.map(member => selected.includes(member.id) ? { ...member, runtime: runtimeFor(runtime) } : member) })
+  }
+  // Batch effort keeps each member's provider and model; a level a member's
+  // model does not accept leaves that member's effort as it was.
+  const batchEffort = (level: ReasoningEffortLevel) => {
+    edit(sessionId, { members: members.map(member => {
+      if (!selected.includes(member.id)) return member
+      const provider = providers.find(item => item.id === member.runtime.providerId)
+      const effortLevel = provider
+        ? normalizeModelReasoningEffort(
+            member.runtime.modelId,
+            level,
+            provider.apiFormat,
+            getProviderModelCapabilityOverride(provider, member.runtime.modelId),
+            getBundledPresetReasoningProviderKind(provider.presetId),
+          )
+        : level
+      return effortLevel ? { ...member, runtime: { ...member.runtime, effortLevel } } : member
+    }) })
   }
   const openEditor = () => {
     beginEdit(sessionId)
@@ -201,7 +223,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
               {plan.state === 'review_pending' && <div className="mt-4 space-y-3">
                 {selected.length > 0 && <div className="team-plan-batch space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
                   <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('teamPlan.selectedCount', { count: selected.length })}</p>
-                  <ModelSelector appearance="field" fluid ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} disabled={!editable} />
+                  <ModelSelector appearance="field" fluid effortEditable ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} onEffortChange={batchEffort} disabled={!editable} />
                   <Button block size="base" variant="ghost" disabled={!editable} onClick={() => batchRuntime(selection(leaderRuntime))}>{t('teamPlan.followLeader')}</Button>
                 </div>}
                 <Button block size="base" variant="ghost" disabled={!editable} onClick={() => edit(sessionId, { members: members.map(member => ({ ...member, runtime: member.suggestedRuntime ?? member.runtime })) })}>{t('teamPlan.restore')}</Button>
@@ -225,8 +247,8 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                     ]} onChange={agentType => updateMember(activeMember.id, { agentType })} trigger={<Button block variant="secondary" size="lg" aria-label={`${activeMember.name} · ${t('teamPlan.agent')}`} disabled={!editable || agents.length === 0}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{activeMember.agentType}</span>{CHEVRON}</span></Button>} />
                   </div>
                   <div className="min-w-0 space-y-2">
-                    <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.model')}</p>
-                    <ModelSelector appearance="field" fluid ariaLabel={`${activeMember.name} · ${t('teamPlan.model')}`} runtimeSelection={selection(activeMember.runtime)} onRuntimeSelectionChange={runtime => updateMember(activeMember.id, { runtime: runtimeFor(runtime) })} disabled={!editable} />
+                    <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.runtime')}</p>
+                    <ModelSelector appearance="field" fluid effortEditable ariaLabel={`${activeMember.name} · ${t('teamPlan.model')}`} runtimeSelection={selection(activeMember.runtime)} onRuntimeSelectionChange={runtime => updateMember(activeMember.id, { runtime: runtimeFor(runtime) })} disabled={!editable} />
                   </div>
                 </div>
                 {presetChanged && <p role="status" className="mt-3 text-xs text-[var(--color-text-secondary)]">{t('teamPlan.savePreset')}</p>}

@@ -290,6 +290,7 @@ import {
 } from "./promptCacheBreakDetection.js";
 import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
+import { readProviderEnv, withRequestProviderRoute } from "../../utils/model/providerEnvScope.js";
 import {
   type ApiAttemptBudget,
   CannotRetryError,
@@ -540,11 +541,11 @@ export function configureEffortParams(
 }
 
 function shouldSuppressEffortOutputConfig(): boolean {
-  if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
+  if (!isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))) {
     return false
   }
 
-  const baseUrl = process.env.ANTHROPIC_BASE_URL ?? ''
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL') ?? ''
   try {
     const url = new URL(baseUrl)
     const proxyPath = url.pathname.replace(/\/+$/, '')
@@ -828,14 +829,14 @@ export async function queryModelWithoutStreaming({
   for await (const message of withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -879,14 +880,14 @@ export async function* queryModelWithStreaming({
   return yield* withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -4077,7 +4078,7 @@ function isMaxTokensCapEnabled(): boolean {
 
 export function getMaxOutputTokensForModel(model: string): number {
   const maxOutputTokens = getModelMaxOutputTokens(model);
-  const providerBudget = getConfiguredProviderOutputBudget()
+  const providerBudget = getConfiguredProviderOutputBudget(undefined, model)
   const globalBudget = Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
   const hasValidGlobalBudget = Number.isSafeInteger(globalBudget) && globalBudget > 0
   if (!hasValidGlobalBudget && providerBudget !== undefined) {

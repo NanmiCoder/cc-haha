@@ -648,6 +648,42 @@ export function readActiveProviderManagedEnv(
   }
 }
 
+export type SavedProviderRuntime = {
+  provider: SavedProvider
+  needsProxy: boolean
+}
+
+/**
+ * Read one saved API provider by id for a per-Agent route. Account sign-ins
+ * (OpenAI/Grok/DeepSeek) and Claude Official carry their credential in the
+ * process-wide transport, so they cannot serve a single request in a process
+ * that runs another provider; they are reported as missing here.
+ */
+export function readSavedProviderRuntime(
+  configDir: string,
+  providerId: string,
+): SavedProviderRuntime | null {
+  try {
+    const raw = fs.readFileSync(path.join(configDir, 'cc-haha', 'providers.json'), 'utf-8')
+    const index = normalizeProvidersIndex(JSON.parse(raw))
+    const provider = index?.providers.find((entry) => entry.id === providerId)
+    if (
+      !provider ||
+      provider.runtimeKind !== 'anthropic_compatible' ||
+      provider.presetId === 'official'
+    ) return null
+    return {
+      provider,
+      needsProxy: providerNeedsProxy(
+        resolveProviderApiFormat(provider),
+        provider.supportsNestedToolResultMedia,
+      ),
+    }
+  } catch {
+    return null
+  }
+}
+
 export function activeProviderNeedsProxy(configDir: string): boolean {
   try {
     const raw = fs.readFileSync(path.join(configDir, 'cc-haha', 'providers.json'), 'utf-8')

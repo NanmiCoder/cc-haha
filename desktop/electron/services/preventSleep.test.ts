@@ -142,22 +142,18 @@ describe('prevent sleep activity transport', () => {
   const access = { serverUrl: 'http://127.0.0.1:12345', token: 'fixture-token' }
   const signal = new AbortController().signal
 
-  it('reads the authenticated aggregate endpoint, including unseen background/remote sessions and approvals', async () => {
-    const requestMock = vi.fn().mockResolvedValue(Response.json({ sessions: [
-      { id: 'idle', activityState: 'idle' },
-      { id: 'remote', activityState: 'running' },
-    ] }))
+  it('shares the authoritative power snapshot for schedules, background work and pending decisions', async () => {
+    const snapshot = { epoch: 'fixture', revision: 1, busy: true, completionSequence: 0, scheduledCompletionSequence: 0 }
+    const requestMock = vi.fn().mockResolvedValue(Response.json(snapshot))
     const request = requestMock as unknown as typeof fetch
     expect(await readPreventSleepActivity(access, signal, request)).toBe(true)
-    expect(request).toHaveBeenCalledWith(`${access.serverUrl}/api/sessions/live-status?includeTeamWorkers=1`, {
-      headers: { Authorization: 'Bearer fixture-token' }, signal, redirect: 'error',
+    expect(request).toHaveBeenCalledWith(`${access.serverUrl}/api/sessions/power-activity`, {
+      headers: { Authorization: 'Bearer fixture-token' }, signal, redirect: 'error', cache: 'no-store',
     })
-    requestMock.mockResolvedValue(Response.json({ sessions: [{ id: 'approval', activityState: 'waiting' }] }))
-    expect(await readPreventSleepActivity(access, signal, request)).toBe(true)
-    requestMock.mockResolvedValue(Response.json({ sessions: [] }))
+    requestMock.mockResolvedValue(Response.json({ ...snapshot, busy: false }))
     expect(await readPreventSleepActivity(access, signal, request)).toBe(false)
     expect(await readPreventSleepActivity(null, signal, request)).toBe(false)
-    expect(request).toHaveBeenCalledTimes(3)
+    expect(request).toHaveBeenCalledTimes(2)
   })
 
   it('rejects HTTP errors and malformed snapshots instead of treating them as active work', async () => {

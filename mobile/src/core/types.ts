@@ -17,6 +17,12 @@ export type Host = Readonly<{
   name: string
   url: string
   auth: 'lan' | 'remote'
+  /**
+   * The H5 page's own computer (never stored). The browser already loaded the
+   * page from this origin, so its cookie or loopback authentication can be used
+   * without going through the native access-token or device-pairing form.
+   */
+  page?: true
 }>
 export type RuntimeConfig = {
   providerId: string | null

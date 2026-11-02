@@ -41,6 +41,7 @@ import {
   resolveOpenAICodexModel,
 } from '../../services/openaiAuth/models.js'
 import { capitalize } from '../stringUtils.js'
+import { getProviderRouteForModel } from './providerEnvScope.js'
 
 export type ModelShortName = string
 export type ModelName = string
@@ -193,6 +194,10 @@ export function getRuntimeMainLoopModel(params: {
   exceeds200kTokens?: boolean
 }): ModelName {
   const { permissionMode, mainLoopModel, exceeds200kTokens = false } = params
+
+  // An Agent pinned to a saved provider keeps its model in plan mode too: the
+  // plan-mode swaps below name the session provider's slots.
+  if (getProviderRouteForModel(mainLoopModel)) return mainLoopModel
 
   // opusplan uses Opus in plan mode without [1m] suffix.
   if (

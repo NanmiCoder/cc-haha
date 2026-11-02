@@ -397,6 +397,67 @@ describe('chatStore tool settlement', () => {
   })
 })
 
+describe('chatStore prompt suggestions', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    useSettingsStore.setState({ locale: 'en' })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }) },
+    })
+  })
+
+  const suggestionOf = () => useChatStore.getState().sessions[TEST_SESSION_ID]?.promptSuggestion ?? null
+
+  it('keeps the suggestion for an idle composer until the user sends', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'run the tests' })
+    expect(suggestionOf()).toBe('run the tests')
+
+    // Idle housekeeping does not retire it.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'idle' })
+    expect(suggestionOf()).toBe('run the tests')
+
+    store.sendMessage(TEST_SESSION_ID, 'something else')
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('drops the suggestion when the next turn starts without a send from this composer', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'commit this' })
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'thinking', verb: 'Thinking' })
+    expect(suggestionOf()).toBeNull()
+
+    // A late prediction for a turn that is already running is ignored.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'stale' })
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('drops the suggestion as soon as another client sends into the session', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'run the tests' })
+    // Only the sending socket gets `status: thinking`; this window sees the replay.
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'user_message_replay', content: 'from my phone' })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.chatState).toBe('idle')
+    expect(suggestionOf()).toBeNull()
+  })
+
+  it('clears on dismiss, stop, and clear', () => {
+    const store = useChatStore.getState()
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.dismissPromptSuggestion(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.stopGeneration(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+
+    store.handleServerMessage(TEST_SESSION_ID, { type: 'prompt_suggestion', suggestion: 'push it' })
+    store.clearMessages(TEST_SESSION_ID)
+    expect(suggestionOf()).toBeNull()
+  })
+})
+
 // #1108: a background (async) agent's tool activity bubbles into the main
 // message stream carrying parentToolUseId, but MessageList folds those into
 // the agent card instead of rendering them inline. Merging streamed blocks
@@ -17478,5 +17539,243 @@ describe('chatStore discardUnconfirmedUserMessage', () => {
     seed([lost])
     expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'missing')).toBe(false)
     expect(messageIds()).toEqual(['lost'])
+  })
+})
+
+describe('chatStore background-continue notice (#1674)', () => {
+  const sessionId = 'background-continue-notice'
+  // Frames below are copied from a real desktop server + CLI run (DeepSeek
+  // Flash): a run_in_background Bash command finished after the turn ended.
+  const SHELL_SUMMARY = 'Background command "Sleep 20s then print BG_DONE_7731" completed (exit code 0)'
+  const REPLY = '后台任务已完成（退出码 0），输出为 `BG_DONE_7731`。'
+
+  beforeEach(() => {
+    vi.mocked(sessionsApi.getFullHistory).mockReset()
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [] })
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  afterEach(() => {
+    const timer = useChatStore.getState().sessions[sessionId]?.elapsedTimer
+    if (timer) clearInterval(timer)
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  const send = (message: ServerMessage) => useChatStore.getState().handleServerMessage(sessionId, message)
+  const messages = () => useChatStore.getState().sessions[sessionId]?.messages ?? []
+  const notices = () => messages().filter((message) =>
+    message.type === 'system' && message.backgroundContinueTaskIds !== undefined)
+  const timeline = () => messages().map((message) =>
+    message.type === 'system' || message.type === 'thinking' || message.type === 'assistant_text' || message.type === 'user_text'
+      ? `${message.type}: ${message.content}`
+      : message.type)
+
+  function seedIdle(overrides: Partial<PerSessionState> = {}) {
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({
+      chatState: 'idle',
+      historyHydrated: true,
+      historyStatus: 'ready',
+      messages: [
+        { id: 'user-1', type: 'user_text', content: 'start it in the background', timestamp: 1, transcriptMessageId: 'durable-user' },
+        { id: 'reply-1', type: 'assistant_text', content: '已在后台启动', timestamp: 2, transcriptMessageId: 'durable-started' },
+      ],
+      ...overrides,
+    }) } })
+  }
+
+  function startTask(taskId: string, taskType: string, description: string) {
+    send({
+      type: 'system_notification',
+      subtype: 'task_started',
+      message: description,
+      data: { type: 'system', subtype: 'task_started', task_id: taskId, tool_use_id: `call_${taskId}`, description, task_type: taskType },
+    })
+  }
+
+  function endTask(taskId: string, status: 'completed' | 'failed' | 'stopped', summary: string) {
+    send({
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: { type: 'system', subtype: 'task_notification', task_id: taskId, tool_use_id: `call_${taskId}`, status, output_file: '', summary },
+    })
+  }
+
+  // What the CLI streams when it re-enters the model on its own.
+  function cliStartedTurn(reply: string) {
+    send({ type: 'system_notification', subtype: 'init', message: 'Model: deepseek-flash', data: { model: 'deepseek-flash' } })
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    send({ type: 'status', state: 'thinking', verb: 'Thinking' })
+    send({ type: 'thinking', text: 'The background command completed.' })
+    send({ type: 'content_start', blockType: 'text' })
+    send({ type: 'content_delta', text: reply })
+    send({ type: 'message_complete', usage: { input_tokens: 212, output_tokens: 157 } })
+    send({ type: 'system_notification', subtype: 'session_state_changed', data: { type: 'system', subtype: 'session_state_changed', state: 'idle' } })
+  }
+
+  it('says which background task reopened an idle session, in the real frame order', async () => {
+    seedIdle()
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [
+      { id: 'durable-user', type: 'user', timestamp: '2026-11-02T01:00:00.000Z', content: 'start it in the background' },
+      { id: 'durable-started', type: 'assistant', timestamp: '2026-11-02T01:00:01.000Z', content: [{ type: 'text', text: '已在后台启动' }] },
+      {
+        id: 'durable-notification',
+        type: 'system',
+        timestamp: '2026-11-02T01:00:21.000Z',
+        content: { subtype: 'background_continue', notifications: [{ taskId: 'ba2prl5qw', status: 'completed', summary: SHELL_SUMMARY }] },
+      },
+      { id: 'durable-thinking', type: 'assistant', timestamp: '2026-11-02T01:00:22.000Z', content: [{ type: 'thinking', thinking: 'The background command completed.' }] },
+      { id: 'durable-reply', type: 'assistant', timestamp: '2026-11-02T01:00:23.000Z', content: [{ type: 'text', text: REPLY }] },
+    ] })
+    startTask('ba2prl5qw', 'local_bash', 'Sleep 20s then print BG_DONE_7731')
+    endTask('ba2prl5qw', 'completed', SHELL_SUMMARY)
+    cliStartedTurn(REPLY)
+
+    const expected = [
+      'user_text: start it in the background',
+      'assistant_text: 已在后台启动',
+      `system: ${t('chat.backgroundContinue', { summary: SHELL_SUMMARY })}`,
+      'thinking: The background command completed.',
+      `assistant_text: ${REPLY}`,
+    ]
+    expect(timeline().filter((row) => row !== 'background_task')).toEqual(expected)
+    expect(useChatStore.getState().sessions[sessionId]?.pendingBackgroundContinue).toEqual([])
+
+    // The completion reload brings the transcript copy; one line remains.
+    await vi.waitFor(() => expect(sessionsApi.getFullHistory).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(timeline().filter((row) => row !== 'background_task')).toEqual(expected)
+  })
+
+  it('adds no notice to a turn the user started, even with a result pending', () => {
+    seedIdle()
+    startTask('agent-a', 'local_agent', 'Review API')
+    endTask('agent-a', 'completed', 'Agent "Review API" completed')
+
+    useChatStore.getState().sendMessage(sessionId, 'what did the agent find?')
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    send({ type: 'content_start', blockType: 'text' })
+    send({ type: 'content_delta', text: 'It found two issues.' })
+    send({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+
+    expect(notices()).toEqual([])
+  })
+
+  it('does not credit a stopped shell, whose result never reaches the model', () => {
+    seedIdle()
+    startTask('dev-server', 'local_bash', 'npm run dev')
+    // stopTask suppresses the shell notification and only emits this bookend.
+    endTask('dev-server', 'stopped', 'npm run dev')
+    startTask('tests', 'local_bash', 'npm test')
+    endTask('tests', 'completed', 'Background command "npm test" completed (exit code 0)')
+    cliStartedTurn('Tests pass.')
+
+    expect(notices()).toMatchObject([{
+      content: t('chat.backgroundContinue', { summary: 'Background command "npm test" completed (exit code 0)' }),
+      backgroundContinueTaskIds: ['tests'],
+    }])
+  })
+
+  it('credits a stopped agent, which still reports its partial result', () => {
+    seedIdle()
+    startTask('agent-b', 'local_agent', 'Review UI')
+    endTask('agent-b', 'stopped', 'Agent "Review UI" was stopped')
+    cliStartedTurn('The UI review stopped halfway; here is what it found.')
+
+    expect(notices()).toMatchObject([{ backgroundContinueTaskIds: ['agent-b'] }])
+  })
+
+  it('lets a result that ends mid-turn ride that turn instead of labelling a later one', () => {
+    seedIdle({ chatState: 'tool_executing' })
+    startTask('lint', 'local_bash', 'npm run lint')
+    endTask('lint', 'completed', 'Background command "npm run lint" completed (exit code 0)')
+    // The next attempt of the running turn carries the queued result.
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    send({ type: 'content_start', blockType: 'text' })
+    send({ type: 'content_delta', text: 'Lint is clean too.' })
+    send({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    // Something else, such as a scheduled prompt, reopens the model later.
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+
+    expect(notices()).toEqual([])
+  })
+
+  it('labels the next turn when a result lands after the last attempt of a turn', () => {
+    seedIdle({ chatState: 'streaming' })
+    startTask('build', 'local_bash', 'npm run build')
+    endTask('build', 'failed', 'Background command "npm run build" failed with exit code 2')
+    send({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    cliStartedTurn('The build failed; reading the log.')
+
+    expect(notices()).toMatchObject([{ backgroundContinueTaskIds: ['build'] }])
+  })
+
+  it('withdraws the notice when the attempt turns out to be another client prompt', () => {
+    seedIdle()
+    startTask('agent-c', 'local_agent', 'Review docs')
+    endTask('agent-c', 'completed', 'Agent "Review docs" completed')
+    // A phone sends a prompt: this client sees the CLI attempt, then the replay.
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    expect(notices()).toHaveLength(1)
+    send({ type: 'user_message_replay', content: 'sent from my phone' })
+
+    expect(notices()).toEqual([])
+    expect(timeline()).toContain('user_text: sent from my phone')
+  })
+
+  it('maps the projected batch of settled agents to one notice listing each', () => {
+    const mapped = mapHistoryMessagesToUiMessages([
+      {
+        id: 'batch',
+        type: 'system',
+        timestamp: '2026-11-02T01:00:00.000Z',
+        content: {
+          subtype: 'background_continue',
+          notifications: [
+            { taskId: 'agent-a', status: 'completed', summary: 'Agent "Review API" completed' },
+            { taskId: 'agent-b', status: 'stopped', summary: 'Agent "Review UI" was stopped' },
+          ],
+        },
+      },
+      { id: 'reply', type: 'assistant', timestamp: '2026-11-02T01:00:01.000Z', content: [{ type: 'text', text: 'Both reviews are in.' }] },
+    ])
+
+    expect(mapped).toMatchObject([
+      {
+        id: 'batch',
+        type: 'system',
+        content: t('chat.backgroundContinue', { summary: 'Agent "Review API" completed · Agent "Review UI" was stopped' }),
+        backgroundContinueTaskIds: ['agent-a', 'agent-b'],
+        transcriptMessageId: 'batch',
+      },
+      { type: 'assistant_text', content: 'Both reviews are in.' },
+    ])
+  })
+
+  it('keeps one notice when a cold history load merges the live line with its transcript copy', async () => {
+    seedIdle({ historyHydrated: false, historyStatus: 'error' })
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    startTask('ba2prl5qw', 'local_bash', 'Sleep 20s then print BG_DONE_7731')
+    endTask('ba2prl5qw', 'completed', SHELL_SUMMARY)
+    cliStartedTurn(REPLY)
+    expect(notices()).toHaveLength(1)
+
+    resolveHistory({ messages: [
+      { id: 'durable-user', type: 'user', timestamp: new Date(Date.now() - 60_000).toISOString(), content: 'start it in the background' },
+      { id: 'durable-started', type: 'assistant', timestamp: new Date(Date.now() - 59_000).toISOString(), content: [{ type: 'text', text: '已在后台启动' }] },
+      {
+        id: 'durable-notification',
+        type: 'system',
+        timestamp: new Date(Date.now() - 2_000).toISOString(),
+        content: { subtype: 'background_continue', notifications: [{ taskId: 'ba2prl5qw', status: 'completed', summary: SHELL_SUMMARY }] },
+      },
+      { id: 'durable-thinking', type: 'assistant', timestamp: new Date(Date.now() - 1_000).toISOString(), content: [{ type: 'thinking', thinking: 'The background command completed.' }] },
+      { id: 'durable-reply', type: 'assistant', timestamp: new Date().toISOString(), content: [{ type: 'text', text: REPLY }] },
+    ] })
+    await vi.waitFor(() => expect(useChatStore.getState().sessions[sessionId]?.historyHydrated).toBe(true))
+
+    expect(notices()).toMatchObject([{ id: 'durable-notification', transcriptMessageId: 'durable-notification' }])
   })
 })

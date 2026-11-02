@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { BackHandler, Platform, ScrollView, View } from 'react-native'
-import { useFocusEffect } from 'expo-router'
+import { Redirect, useFocusEffect } from 'expo-router'
 import * as Notifications from 'expo-notifications'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useApp } from '../state/AppContext'
@@ -13,12 +13,18 @@ import {
 import { LockPreview } from '../ui/onboarding/LockPreview'
 import { Text } from '../ui/Text'
 import { Button, Icon, ScreenView, goBack, useColors } from '../ui/kit'
+import { isH5 } from '../state/h5'
+
+/** 推送通知只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+export default function NotifyPrimeRoute() {
+  return isH5 ? <Redirect href="/" /> : <NotifyPrime />
+}
 
 /**
  * 连上电脑后的「开启通知」引导页（Apple HIG 的授权前说明页）：
  * 只有一个「继续」，点了才弹系统授权框；允许或拒绝都回首页，拒绝不挡使用。
  */
-export default function NotifyPrime() {
+function NotifyPrime() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
   const { registry } = useApp()

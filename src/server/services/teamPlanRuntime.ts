@@ -21,6 +21,8 @@ import { readUnreadMessages, readMailboxHistory, markMessagesAsReadByPredicate, 
 import { formatTeammateAutoContinuePrompt, isTransientTurnFailure, summarizeTurnFailure, TEAMMATE_AUTO_CONTINUE_DELAYS_MS } from '../../utils/swarm/turnFailure.js'
 import { getClaudeAgentModelFamily } from '../../utils/model/agentModelRouting.js'
 import { getCanonicalName } from '../../utils/model/model.js'
+import { powerActivityClock } from './powerActivityClock.js'
+import { teamService } from './teamService.js'
 
 const providerService = new ProviderService()
 const essentialTools = ['SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate']
@@ -51,6 +53,8 @@ type WorkerRuntime = {
   starting?: Promise<boolean>
   autoContinueAttempts: number
   autoContinueTimer?: ReturnType<typeof setTimeout>
+  powerOperations?: number
+  powerTurnPending?: boolean
   restartHistory: number[]
   /** Automatic restarts stopped after a crash loop; only an explicit message retries. */
   restartsExhausted: boolean
@@ -100,6 +104,17 @@ type TeamLaunch = {
 }
 
 const launches = new Map<string, TeamLaunch>()
+const stoppingOperations = new Set<Promise<void>>()
+
+/** Keep async handoffs owned after a retry timer fires and before a roster write. */
+function trackWorkerPowerOperation<T>(worker: WorkerRuntime, operation: () => Promise<T>): Promise<T> {
+  worker.powerOperations = (worker.powerOperations ?? 0) + 1
+  powerActivityClock.changed()
+  return operation().finally(() => {
+    worker.powerOperations = (worker.powerOperations ?? 1) - 1
+    powerActivityClock.changed()
+  })
+}
 /**
  * How much of a failed launch's error the lead is told. The error can carry a
  * crashed process's output; the team card shows all of it.
@@ -335,8 +350,13 @@ async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, res
     throw error
   }
   conversationService.onOutput(worker.sessionId, message => {
-    if (message?.type !== 'result') return
-    void migrationMaintenance.track(handleWorkerResult(launch, worker, message)).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
+    if (message?.type !== 'result' || message.parent_tool_use_id) return
+    const completed = worker.powerTurnPending && message.is_error === false && (!message.subtype || message.subtype === 'success')
+    worker.powerTurnPending = false
+    void migrationMaintenance.track(trackWorkerPowerOperation(worker, async () => {
+      await handleWorkerResult(launch, worker, message)
+      if (completed && !launch.stopped && !launch.pausedAt && !worker.stoppedByUser) powerActivityClock.completed()
+    })).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
   })
 }
 
@@ -386,9 +406,11 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
       return false
     } finally {
       worker.starting = undefined
+      powerActivityClock.changed()
     }
   })()
   worker.starting = start
+  powerActivityClock.changed()
   return start
 }
 
@@ -410,6 +432,7 @@ async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, rea
   const entry = readTeamFile(launch.plan.teamName)?.members.find(member => member.sessionId === worker.sessionId)
   if (entry?.isActive) return
   await updateWorkerEntry(launch, worker, current => ({ ...current, isActive: true }))
+  worker.powerTurnPending = true
   const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt))
   if (sent) return
   // No retry is scheduled any more: report the failure instead of leaving a
@@ -457,7 +480,7 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     const delay = timing.autoContinueDelaysMs[attempt - 1]!
     cancelAutoContinue(worker)
     worker.autoContinueTimer = setTimeout(() => {
-      void migrationMaintenance.track(autoContinueWorker(launch, worker, reason, attempt)).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
+      void migrationMaintenance.track(trackWorkerPowerOperation(worker, () => autoContinueWorker(launch, worker, reason, attempt))).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
     }, delay)
     worker.autoContinueTimer.unref?.()
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
@@ -520,6 +543,10 @@ function clearFailure(worker: WorkerRuntime): void {
 // ── Supervisor ──────────────────────────────────────────────────────────────
 
 async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
+  return trackWorkerPowerOperation(worker, () => deliverToWorkerOnce(launch, worker, messages))
+}
+
+async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
   cancelAutoContinue(worker)
   // A new instruction starts a fresh retry budget: the lead or the user has
   // looked at the failure and decided the member should go on.
@@ -532,6 +559,7 @@ async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messag
   const starts = worker.brief !== undefined && !messages.every(message => isShutdownRequest(message.text))
   if (messages.some(message => isShutdownRequest(message.text))) worker.shutdownRequestedAt = Date.now()
   const text = formatTeammateMessages(messages)
+  worker.powerTurnPending = true
   const accepted = await conversationService.sendMessage(worker.sessionId, starts ? `${worker.brief}\n\n${text}` : text)
   if (!accepted) {
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
@@ -603,6 +631,15 @@ async function startWhenReady(launch: TeamLaunch, worker: WorkerRuntime, tasks: 
   }])
 }
 
+function hasPausedLaunchResumeMessage(launch: TeamLaunch, messages: TeammateMessage[]): boolean {
+  if (launch.pausedAt === undefined) return false
+  return messages.some(message => {
+    const at = Date.parse(message.timestamp)
+    if (message.from === 'user') return at >= launch.pausedAt!
+    return message.from === TEAM_LEAD_NAME && launch.resumeAllowedAt !== undefined && at >= launch.resumeAllowedAt
+  })
+}
+
 async function superviseLaunch(launch: TeamLaunch): Promise<void> {
   if (migrationMaintenance.isActive) return
   const team = readTeamFile(launch.plan.teamName)
@@ -626,14 +663,10 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
     if (launch.pausedAt) {
       // Only a new instruction resumes a paused team: the user's own message to
       // a member, or the lead's once the user has spoken to it again.
-      const resume = messages.some(message => {
-        const at = Date.parse(message.timestamp)
-        if (message.from === 'user') return at >= launch.pausedAt!
-        return message.from === TEAM_LEAD_NAME && launch.resumeAllowedAt !== undefined && at >= launch.resumeAllowedAt
-      })
-      if (!resume) continue
+      if (!hasPausedLaunchResumeMessage(launch, messages)) continue
       launch.pausedAt = undefined
       launch.resumeAllowedAt = undefined
+      powerActivityClock.changed()
     }
     // A member that waits on dependencies is started by its tasks, or by the
     // user writing to it. What the lead or a teammate sends it meanwhile (a
@@ -684,6 +717,7 @@ function pauseLaunchesForLead(parentSessionId: string): boolean {
     if (launch.parentId !== parentSessionId || launch.stopped || !launch.running) continue
     paused = true
     launch.pausedAt = Date.now()
+    powerActivityClock.changed()
     launch.resumeAllowedAt = undefined
     for (const worker of launch.workers.values()) {
       cancelAutoContinue(worker)
@@ -720,7 +754,7 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
     failedLaunchesNoticed.add(`${plan.planId}:${plan.revision}`)
     const error = plan.launch?.error?.trim()
     const failure = error && error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error
-    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure))
+    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure), undefined, { synthetic: true })
   }
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped) continue
@@ -752,6 +786,8 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
     await conversationService.sendMessage(
       parentSessionId,
       teamStoppedNotice(launch.plan.teamName, stoppedByUser ? 'user' : stoppedByRestart ? 'restart' : 'error', lines),
+      undefined,
+      { synthetic: true },
     )
   }
 }
@@ -780,10 +816,22 @@ function ensureRuntimeHooks(): void {
 
 // ── Public lifecycle ────────────────────────────────────────────────────────
 
-export async function stopTeamPlanRuntime(planId: string): Promise<void> {
+export function stopTeamPlanRuntime(planId: string): Promise<void> {
+  if (!launches.has(planId)) return Promise.resolve()
+  const operation = stopTeamPlanRuntimeOnce(planId)
+  stoppingOperations.add(operation)
+  void operation.finally(() => {
+    stoppingOperations.delete(operation)
+    powerActivityClock.changed()
+  }).catch(() => {})
+  return operation
+}
+
+async function stopTeamPlanRuntimeOnce(planId: string): Promise<void> {
   const launch = launches.get(planId)
   if (!launch) return
   launch.stopped = true
+  powerActivityClock.changed()
   if (launch.timer) clearInterval(launch.timer)
   for (const worker of launch.workers.values()) cancelAutoContinue(worker)
   launches.delete(planId)
@@ -830,6 +878,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     supervising: false, stopped: false, permissionMode: conversationService.getSessionPermissionMode(plan.sessionId), createdTaskIds: [],
   }
   launches.set(plan.planId, launch)
+  powerActivityClock.changed()
   const memberIds: Record<string, string> = {}
   let taskMapping: Record<string, string> = {}
   let executionStarted = false
@@ -895,6 +944,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
           }
           return
         }
+        if (worker) worker.powerTurnPending = true
         const sent = await conversationService.sendMessage(id, brief, undefined, { canSend: () => !launch.stopped })
         if (!sent) throw new Error(`Failed to release ${member.name}`)
         if (worker) worker.released = true
@@ -904,9 +954,10 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     // One supervisor owns each worker inbox. SDK serializes user turns; a worker
     // remains connected while idle and wakes when another teammate writes.
     launch.running = true
+    powerActivityClock.changed()
     startSupervisor(launch)
     const waitingNames = members.filter(member => waiting.has(member.id)).map(member => member.name)
-    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames))
+    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames), undefined, { synthetic: true })
     return { memberIds }
   } catch (error) {
     await stopTeamPlanRuntime(plan.planId)
@@ -1038,7 +1089,7 @@ export async function rehydrateTeamPlanRuntimesForSession(sessionId: string): Pr
 export async function notifyTeamPlanLeader(plan: TeamPlanRecord, kind: TeamPlanLeaderNotice): Promise<void> {
   // Approval wakes the leader only after launch's readiness barrier and snapshot.
   if (kind === 'approved' || !conversationService.hasSession(plan.sessionId)) return
-  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback))
+  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback), undefined, { synthetic: true })
 }
 
 export class TeamPlanExecutionInterruptedError extends Error {
@@ -1073,9 +1124,39 @@ export function hasActiveTeamWorkForParent(parentSessionId: string): boolean {
     if (!launch.running) return true
     const team = readTeamFile(launch.plan.teamName)
     for (const worker of launch.workers.values()) {
-      if (worker.autoContinueTimer) return true
+      if (worker.autoContinueTimer || worker.starting || worker.powerOperations) return true
       if (!conversationService.hasSession(worker.sessionId)) continue
       if (team?.members.find(entry => entry.sessionId === worker.sessionId)?.isActive) return true
+    }
+  }
+  return false
+}
+
+/** Include queued mail and dependency-ready work before the supervisor admits it. */
+export async function hasPendingTeamPowerWork(): Promise<boolean> {
+  if (stoppingOperations.size > 0 || teamService.hasPendingMemberMessages()) return true
+  for (const launch of launches.values()) {
+    // Stopping can still be draining worker I/O; do not call that completed.
+    if ([...launch.workers.values()].some(worker => worker.starting || worker.powerOperations)) return true
+    if (launch.stopped) continue
+    if (hasActiveTeamWorkForParent(launch.parentId)) return true
+    let tasks: Task[] | undefined
+    const leadAlive = conversationService.hasSession(launch.parentId)
+    for (const worker of launch.workers.values()) {
+      if (!worker.released) continue
+      const mail = await readUnreadMessages(worker.member.name, launch.plan.teamName)
+      if (launch.pausedAt) {
+        // The same queued instruction that resumes the supervisor must block
+        // power actions before that supervisor's next timer tick.
+        if (hasPausedLaunchResumeMessage(launch, mail)) return true
+        continue
+      }
+      if (mail.length > 0 && (leadAlive || mail.some(message => message.from === 'user'))) return true
+      if (leadAlive) {
+        tasks ??= await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName))
+        if (readyTasksOf(worker.member.name, tasks).some(task =>
+          worker.brief !== undefined || (task.blockedBy.length > 0 && !worker.wokenForTaskIds.has(task.id)))) return true
+      }
     }
   }
   return false

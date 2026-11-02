@@ -120,6 +120,7 @@ import { safeParseJSON } from './utils/json.js';
 import { logError } from './utils/log.js';
 import { getModelDeprecationWarning } from './utils/model/deprecation.js';
 import { getDefaultMainLoopModel, getUserSpecifiedModelSetting, normalizeModelStringForAPI, parseUserSpecifiedModel } from './utils/model/model.js';
+import { getMainThreadAgentModelSetting } from './utils/model/agent.js';
 import { ensureModelStringsInitialized } from './utils/model/modelStrings.js';
 import { PERMISSION_MODES } from './utils/permissions/PermissionMode.js';
 import { checkAndDisableBypassPermissions, getAutoModeEnabledStateIfCached, initializeToolPermissionContext, initialPermissionModeFromCLI, isDefaultPermissionModeAuto, parseToolListFromCLI, removeDangerousPermissions, stripDangerousPermissionsForAutoMode, verifyAutoModeGateAccess } from './utils/permissions/permissionSetup.js';
@@ -2146,8 +2147,12 @@ async function run(): Promise<CommanderCommand> {
     // Compute effective model early so hooks can run in parallel with MCP
     // If user didn't specify a model but agent has one, use the agent's model
     let effectiveModel = userSpecifiedModel;
-    if (!effectiveModel && mainThreadAgentDefinition?.model && mainThreadAgentDefinition.model !== 'inherit') {
-      effectiveModel = parseUserSpecifiedModel(mainThreadAgentDefinition.model);
+    const mainThreadAgentModel = getMainThreadAgentModelSetting(mainThreadAgentDefinition);
+    if (mainThreadAgentDefinition?.provider) {
+      logForDebugging(`Agent "${mainThreadAgentDefinition.agentType}" pins provider "${mainThreadAgentDefinition.provider}", which applies when it runs as a subagent. ` + `As the main thread it keeps the session's provider and model.`);
+    }
+    if (!effectiveModel && mainThreadAgentModel) {
+      effectiveModel = parseUserSpecifiedModel(mainThreadAgentModel);
     }
     setMainLoopModelOverride(effectiveModel);
     // An explicit CLI effort remains authoritative. Otherwise a selected

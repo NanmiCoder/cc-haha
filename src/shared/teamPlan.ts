@@ -23,6 +23,8 @@ export const teamPlanAgentSnapshotSchema = z.object({
   ]).optional(),
   description: z.string().optional(),
   model: z.string().optional(),
+  /** Saved provider the preset pins for `model`. */
+  provider: z.string().optional(),
   permissionMode: z.string().optional(),
   skills: z.array(z.string()).optional(),
   memory: z.string().optional(),

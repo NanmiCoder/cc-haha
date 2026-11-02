@@ -4,6 +4,8 @@ import type { Storage } from './storage'
 type PushClient = Pick<ApiClient, 'host' | 'request'>
 export type PushRegistrationInput = {
   platform: 'ios' | 'android'
+  /** Absent for the computer's own APNs / FCM; only sent to computers that list it. */
+  provider?: 'expo' | 'desktop'
   token: string
   hostId: string
   kind?: 'notification' | 'liveActivity'

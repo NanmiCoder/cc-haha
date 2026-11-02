@@ -1,5 +1,6 @@
 import type { ClientMessage, ServerMessage } from '../types/chat'
 import { getAuthToken, getBaseUrl } from './client'
+import { isTouchH5Document } from '../lib/touchH5'
 
 type MessageHandler = (msg: ServerMessage) => void
 export type WebSocketConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
@@ -258,6 +259,13 @@ export function buildSessionWebSocketUrl(sessionId: string) {
     url.searchParams.set('token', token)
   } else {
     url.searchParams.delete('token')
+  }
+  // Tells the server this composer can show next-prompt suggestions. The
+  // touch composer has no Tab key, so it never opts in to the extra request.
+  if (isTouchH5Document()) {
+    url.searchParams.delete('suggestions')
+  } else {
+    url.searchParams.set('suggestions', '1')
   }
 
   return url.toString()

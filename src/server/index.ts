@@ -238,6 +238,10 @@ function originFromUrl(value: string | null): string | null {
 }
 
 export function startServer(port = PORT, host = HOST) {
+  // Everything before this point is module loading. When a host reports that
+  // the sidecar "never started listening", this line splits that time from
+  // the work below that still runs before Bun.serve binds (#1746).
+  console.log(`[Server] modules loaded ${Math.round(performance.now())} ms after process start; binding ${host}:${port}`)
   if (process.env.CC_HAHA_MIGRATION_VALIDATION === '1') migrationMaintenance.beginValidation()
   if (!migrationMaintenance.isActive) enableConfigs()
   const trustedRendererOrigin = resolveTrustedRendererOrigin(process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN)
@@ -281,14 +285,18 @@ export function startServer(port = PORT, host = HOST) {
     serverPort: () => serverPort,
   })
   publicAccessServers.add(publicAccess)
-  if (!migrationMaintenance.isActive) getMobilePushService().start(id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)))
+  if (!migrationMaintenance.isActive) getMobilePushService().start(
+    id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)),
+    id => [...publicAccessServers].some(remote => remote.isDevicePaired(id)),
+  )
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
-  // Open SQLite before the first REST request. Discovery still runs in the
-  // background; without this, getPublicStatus() reports `off` and the sidebar
-  // falls through to a full JSONL scan that can exceed the 120s client timeout.
-  if (!migrationMaintenance.isActive) void localIndexCoordinator.start().catch(() => undefined)
-
+  // Index startup runs after `Bun.serve` (see below), never before it. Opening
+  // SQLite and scanning `source_files` happen before the first `await` inside
+  // `localIndexCoordinator.start()`, so doing that here kept the port unbound
+  // for the whole synchronous pass — every host probe then looked like a dead
+  // sidecar (issue #1746). Requests that need the index still await it in the
+  // `fetch` handler.
   try {
     server = Bun.serve<WebSocketData>({
       port,
@@ -477,10 +485,12 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'client',
               clientKind: petAccessAuthorized ? 'pet' : 'full',
+              powerActivityLeaseAuthorized: !petAccessAuthorized && isLocalAccessAuthorized(req, localTokenOverride),
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,
               mediaRefs: url.searchParams.get('media') === 'ref',
+              promptSuggestions: !petAccessAuthorized && url.searchParams.get('suggestions') === '1',
             },
           })
           if (upgraded) return undefined

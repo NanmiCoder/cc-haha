@@ -21,6 +21,8 @@ describe('macOS arm64 build dependency installation', () => {
     const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'cc-haha-macos-build-'))
     const desktopDir = path.join(fixtureRoot, 'desktop')
     const adaptersDir = path.join(fixtureRoot, 'adapters')
+    // `bun run build` exports the phone H5 from mobile/ into dist/m.
+    const mobileDir = path.join(fixtureRoot, 'mobile')
     const scriptsDir = path.join(desktopDir, 'scripts')
     const fakeBinDir = path.join(fixtureRoot, 'fake-bin')
     const buildScript = path.join(scriptsDir, 'build-macos-arm64.sh')
@@ -29,6 +31,7 @@ describe('macOS arm64 build dependency installation', () => {
       await Promise.all([
         mkdir(scriptsDir, { recursive: true }),
         mkdir(adaptersDir, { recursive: true }),
+        mkdir(mobileDir, { recursive: true }),
         mkdir(fakeBinDir, { recursive: true }),
       ])
       await copyFile(
@@ -53,7 +56,7 @@ if [[ "\${1:-}" == "install" ]]; then
 fi
 
 if [[ "\${*}" == *"build:sidecars"* ]]; then
-  for package_dir in "\${TEST_REPO_ROOT}" "\${TEST_REPO_ROOT}/desktop" "\${TEST_REPO_ROOT}/adapters"; do
+  for package_dir in "\${TEST_REPO_ROOT}" "\${TEST_REPO_ROOT}/desktop" "\${TEST_REPO_ROOT}/adapters" "\${TEST_REPO_ROOT}/mobile"; do
     [[ -d "\${package_dir}/node_modules" ]] || exit 42
   done
   exit 86
@@ -76,7 +79,8 @@ exit 0
         exists(path.join(fixtureRoot, 'node_modules')),
         exists(path.join(desktopDir, 'node_modules')),
         exists(path.join(adaptersDir, 'node_modules')),
-      ])).toEqual([false, false, false])
+        exists(path.join(mobileDir, 'node_modules')),
+      ])).toEqual([false, false, false, false])
 
       const result = spawnSync('/bin/bash', [buildScript], {
         cwd: desktopDir,
@@ -103,7 +107,8 @@ exit 0
         exists(path.join(fixtureRoot, 'node_modules')),
         exists(path.join(desktopDir, 'node_modules')),
         exists(path.join(adaptersDir, 'node_modules')),
-      ])).toEqual([true, true, true])
+        exists(path.join(mobileDir, 'node_modules')),
+      ])).toEqual([true, true, true, true])
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true })
     }

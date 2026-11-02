@@ -17,6 +17,7 @@ import { isVoiceCaptureSupported } from './recorder'
 import { selectActiveVoiceShortcut, useVoiceShortcutStore } from './shortcutPreference'
 import { voiceShortcutText } from './shortcutText'
 import type { ComposerDictation, DictationIssue } from './useComposerDictation'
+import { VoiceCorrectionNotice } from './VoiceCorrectionNotice'
 
 type VoiceInputButtonProps = {
   dictation: ComposerDictation
@@ -67,13 +68,13 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
   const [supported] = useState(() => isDesktopRuntime() && isVoiceCaptureSupported())
   const shortcut = useVoiceShortcutStore(selectActiveVoiceShortcut)
   const platform = useVoiceShortcutStore(state => state.platform)
-  const { phase, issue, pendingText } = dictation
+  const { phase, issue, pendingText, correctionNotice } = dictation
 
   useEffect(() => {
     if (supported) void loadCatalog()
   }, [loadCatalog, supported])
 
-  const engaged = phase !== 'idle' || pendingText !== null || issue !== null
+  const engaged = phase !== 'idle' || pendingText !== null || issue !== null || correctionNotice !== null
   if (!supported || (!ready && !needsModel && !engaged)) return null
 
   const openVoiceSettings = () => {
@@ -125,6 +126,8 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
           </button>
         </div>
       )}
+
+      {correctionNotice && <VoiceCorrectionNotice dictation={dictation} onOpenSettings={openVoiceSettings} />}
 
       {pendingText !== null && (
         <div

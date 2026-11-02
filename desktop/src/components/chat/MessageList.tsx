@@ -2759,6 +2759,7 @@ export function MessageList({
   const lastAutoScrollAtRef = useRef(0)
   const lastContentResizeFollowHeightRef = useRef<number | null>(null)
   const shouldAutoScrollRef = useRef(true)
+  const restoringBottomRef = useRef(false)
   const restoringScrollAnchorRef = useRef<SessionScrollAnchor | null>(null)
   const isProgrammaticScrollingRef = useRef(false)
   const ignoreProgrammaticScrollUntilRef = useRef(0)
@@ -2880,6 +2881,7 @@ export function MessageList({
 
   const scrollToBottom = useCallback(() => {
     restoringScrollAnchorRef.current = null
+    restoringBottomRef.current = true
     shouldAutoScrollRef.current = true
     isProgrammaticScrollingRef.current = true
     ignoreProgrammaticScrollUntilRef.current = performance.now() + 250
@@ -2942,6 +2944,16 @@ export function MessageList({
     })
   }, [resolvedSessionId])
 
+  const releaseBottomRestoration = useCallback(() => {
+    restoringBottomRef.current = false
+    // A reader action can arrive between ResizeObserver and its queued frame.
+    // Cancel only idle restoration; live output keeps its existing follow rules.
+    if (!shouldFollowContentResize && liveFollowFrameRef.current !== null) {
+      cancelAnimationFrame(liveFollowFrameRef.current)
+      liveFollowFrameRef.current = null
+    }
+  }, [shouldFollowContentResize])
+
   const flushMeasuredHeightVersion = useCallback(() => {
     setMeasuredItemsVersion((version) => version + 1)
   }, [])
@@ -2958,7 +2970,7 @@ export function MessageList({
     // A row changing height while the reader follows the tail moves the bottom.
     // Re-pin whatever caused it (a permission card, a reloaded transcript
     // measuring in after the reply, a tool result settling), not only live
-    // output: the content-resize follow below is off once the chat is idle.
+    // output: content-resize follow is otherwise off in idle reading sessions.
     // Growth the reader just asked for by opening a block stays theirs (#1177).
     if (shouldAutoScrollRef.current && performance.now() >= disclosureLayoutUntilRef.current) {
       requestLiveFollow()
@@ -2999,12 +3011,13 @@ export function MessageList({
     }
     syncVirtualViewportFromContainer(container)
     const isAtBottom = isNearScrollBottom(container)
-    const isPermissionLayoutShift =
-      hasPendingPermissionCard &&
+    const isFollowingLayoutShift =
       shouldAutoScrollRef.current &&
       !isAtBottom &&
-      performance.now() >= userScrollIntentUntilRef.current
-    if (isPermissionLayoutShift) return
+      (restoringBottomRef.current || (
+        hasPendingPermissionCard && performance.now() >= userScrollIntentUntilRef.current
+      ))
+    if (isFollowingLayoutShift) return
 
     shouldAutoScrollRef.current = isAtBottom
     setIsAwayFromLatest(!isAtBottom)
@@ -3030,6 +3043,7 @@ export function MessageList({
     const target = event.target
     if (!(target instanceof Element) || !target.closest(CHAT_DISCLOSURE_SELECTOR)) return
 
+    releaseBottomRestoration()
     restoringScrollAnchorRef.current = null
     disclosureLayoutUntilRef.current = performance.now() + DISCLOSURE_FOLLOW_SUPPRESS_MS
 
@@ -3048,12 +3062,13 @@ export function MessageList({
       setIsAwayFromLatest(!atBottom)
       syncVirtualViewportFromContainer(container)
     })
-  }, [syncVirtualViewportFromContainer])
+  }, [releaseBottomRestoration, syncVirtualViewportFromContainer])
 
   const markUserScrollIntent = useCallback(() => {
+    releaseBottomRestoration()
     restoringScrollAnchorRef.current = null
     userScrollIntentUntilRef.current = performance.now() + USER_SCROLL_INTENT_WINDOW_MS
-  }, [])
+  }, [releaseBottomRestoration])
 
   const handleWheelScrollIntent = useCallback((event: { deltaY: number }) => {
     markUserScrollIntent()
@@ -3088,6 +3103,7 @@ export function MessageList({
       const snapshot = resolvedSessionId ? sessionScrollSnapshots.get(resolvedSessionId) : undefined
       restoringScrollAnchorRef.current = snapshot?.wasAtBottom ? null : snapshot?.anchor ?? null
       shouldAutoScrollRef.current = snapshot?.wasAtBottom ?? true
+      restoringBottomRef.current = shouldAutoScrollRef.current
       lastSessionIdRef.current = resolvedSessionId
       setProgrammaticNavigationItemId(null)
       if (resolvedSessionId) getHeightsForSession(resolvedSessionId, appearanceSignature)
@@ -3203,7 +3219,16 @@ export function MessageList({
         }
         lastContentResizeFollowHeightRef.current = nextHeight
       }
-      if (!shouldFollowContentResize) return
+      if (restoringScrollAnchorRef.current) {
+        // Non-virtual rows can settle after the switch's layout effect too.
+        // Reapply the saved reading anchor before paint, as measured rows do.
+        flushSync(flushMeasuredHeightVersion)
+        return
+      }
+      // Short lists have no measured-row callback. Keep a restored tail pinned
+      // through late layout, until the reader interacts with the transcript.
+      // Idle disclosures can fetch more content long after their click frame.
+      if (!shouldFollowContentResize && !restoringBottomRef.current) return
       if (!shouldAutoScrollRef.current) return
       // The reader just opened something: the growth is theirs, not the model's.
       if (performance.now() < disclosureLayoutUntilRef.current) return
@@ -3212,7 +3237,7 @@ export function MessageList({
     observer.observe(content)
 
     return () => observer.disconnect()
-  }, [requestLiveFollow, shouldFollowContentResize])
+  }, [flushMeasuredHeightVersion, requestLiveFollow, shouldFollowContentResize])
 
   // Touch-H5 only: the visual-viewport fit (touchH5.ts) shrinks the scroll
   // container when the soft keyboard opens. If the user was reading the tail,

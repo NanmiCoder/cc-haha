@@ -87,11 +87,12 @@ describe('mobile release planning', () => {
     const context = { platform: 'ios' as const, projectId: buildId, owner: 'test', packageManager: 'bun@1.4.3' }
     const base = `100644 blob ${commit}\tmobile/app.json\0`
     const hash = fingerprintInputs(base, context, () => '')
-    for (const path of ['desktop/src/App.tsx', 'mobile/src/core/example.test.ts', 'mobile/README.md', 'mobile/scripts/fixture-server.ts', 'mobile/.env', 'mobile/credentials.json', 'mobile/android/build.gradle']) {
+    for (const path of ['desktop/src/App.tsx', 'mobile/src/core/example.test.ts', 'mobile/README.md', 'mobile/scripts/fixture-server.ts', 'mobile/.env', 'mobile/credentials.json', 'mobile/android/build.gradle', 'mobile/ios/Podfile', 'mobile/modules/cchaha-duty/node_modules/x/index.js']) {
       expect(isBuildInput(path)).toBe(false)
       expect(fingerprintInputs(`${base}100644 blob ${commit}\t${path}\0`, context, () => '')).toBe(hash)
     }
-    for (const path of ['mobile/src/app/index.tsx', 'mobile/plugins/withPinnedWebSockets.js', 'mobile/bun.lock', 'mobile/eas.json']) {
+    // A local Expo module's own native sources ship in the binary, unlike the generated projects.
+    for (const path of ['mobile/src/app/index.tsx', 'mobile/plugins/withPinnedWebSockets.js', 'mobile/bun.lock', 'mobile/eas.json', 'mobile/modules/cchaha-duty/android/src/main/java/app/cchaha/duty/DutyService.kt', 'mobile/modules/cchaha-duty/android/src/main/AndroidManifest.xml']) {
       expect(isBuildInput(path)).toBe(true)
       expect(fingerprintInputs(`${base}100644 blob ${commit}\t${path}\0`, context, () => '')).not.toBe(hash)
     }

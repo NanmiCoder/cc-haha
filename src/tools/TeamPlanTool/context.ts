@@ -10,6 +10,7 @@ import { listTasks, getCanonicalTeamTaskListId } from '../../utils/tasks.js'
 import { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
 import { getAgentModelSetting } from '../AgentTool/builtInAgentOverrides.js'
 import { isClaudeAgentModelSuggestion, usesNonClaudeAgentRouting } from '../../utils/model/agentModelRouting.js'
+import { resolvePresetProviderRuntime } from '../../utils/swarm/teamPlanPresetRuntime.js'
 
 const runtimeSchema = z.object({
   providerId: z.string().min(1),
@@ -50,6 +51,7 @@ export function snapshotTeamAgents(context: ToolUseContext) {
     // Only shipped defaults inherit here. Preserve manual model specs until
     // the member's provider is known, instead of freezing the leader's mapping.
     ...(agent.model ? { model: getAgentModelSetting(agent, context.options.mainLoopModel) === 'inherit' ? 'inherit' : agent.model } : {}),
+    ...(agent.provider ? { provider: agent.provider } : {}),
     ...(agent.effort !== undefined ? { effortLevel: String(agent.effort) } : {}),
     ...(agent.permissionMode ? { permissionMode: agent.permissionMode } : {}),
     ...(agent.skills ? { skills: [...agent.skills] } : {}),
@@ -101,11 +103,14 @@ export function resolveProposedTeamPlan(plan: ProposedTeamPlan, context: ToolUse
     // Claude tiers generated for the current provider follow the selected
     // Agent/session, just as Agent tool calls do. Concrete provider models and
     // other configured providers remain explicit choices in the review panel.
-    const runtime: TeamPlanRuntime = suggested && !normalizeSuggestion ? suggested : {
+    // A preset's own pinned provider is the user's choice and outranks any
+    // suggestion the lead makes, as it does when members are staged one by one.
+    const presetRuntime = resolvePresetProviderRuntime(agentSnapshot)
+    const runtime: TeamPlanRuntime = presetRuntime ?? (suggested && !normalizeSuggestion ? suggested : {
       ...leaderRuntime,
       modelId: resolveTeammateModel(normalizeSuggestion ? suggested?.modelId : undefined, leaderRuntime.modelId, agentSnapshot.model, true),
-    }
-    if (!suggested || normalizeSuggestion) {
+    })
+    if ((!suggested || normalizeSuggestion) && !presetRuntime) {
       if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
       else if (runtime.modelId !== leaderRuntime.modelId) delete runtime.effortLevel
     }

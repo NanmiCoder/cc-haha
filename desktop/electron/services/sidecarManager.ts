@@ -24,6 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { isBrowserSafePort } from '../../src/lib/browserSafePort'
+import { formatSidecarStartupTimeout } from '../../src/lib/sidecarStartupError'
 import { redactDiagnosticText } from '../../../src/server/services/diagnosticRedaction'
 
 export const SERVER_BIND_HOST = '0.0.0.0'
@@ -281,8 +282,34 @@ export async function waitForServer(host: string, port: number, timeoutMs = SERV
     await sleep(150)
   }
 
-  const reason = lastError ? `: ${lastError.message}` : ''
-  throw new Error(`desktop server did not report healthy at ${healthUrl} within ${Math.round(timeoutMs / 1000)} seconds${reason}`)
+  // Which failure this is decides what the user can do about it: a port that
+  // never opened means the sidecar is still before its bind, while an open port
+  // with a silent /health means the event loop is busy (typically a local index
+  // rebuild). Collapsing both into one message sent every reader of #1746 down
+  // the wrong path.
+  throw new Error(formatSidecarStartupTimeout({
+    listening: await isPortListening(host, port),
+    host,
+    port,
+    healthUrl,
+    timeoutMs,
+    lastProbeError: lastError?.message,
+  }))
+}
+
+/** Best-effort TCP connect probe: distinguishes "not bound yet" from "busy". */
+async function isPortListening(host: string, port: number): Promise<boolean> {
+  return await new Promise<boolean>(resolve => {
+    const socket = net.connect({ host, port })
+    const settle = (listening: boolean) => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(listening)
+    }
+    socket.setTimeout(500, () => settle(false))
+    socket.once('connect', () => settle(true))
+    socket.once('error', () => settle(false))
+  })
 }
 
 async function assertServerHealth(healthUrl: string, timeoutMs: number): Promise<void> {

@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Linking, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import Constants from 'expo-constants'
-import { useApp, useConnection } from '../state/AppContext'
+import { isH5 } from '../state/h5'
+import { pushTokens, useApp, useConnection } from '../state/AppContext'
 import { usePushRegistration, useRetryPushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
 import {
@@ -33,11 +34,11 @@ import {
   requestNotificationStatus,
   scheduleTestNotification,
 } from '../core/systemPermissions'
-import { getDevicePushToken } from '../state/devicePushToken'
 import { DeliveryCard } from '../ui/settings/DeliveryCard'
 import { ProfileEntry } from '../ui/profile/ProfileEntry'
 import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
 import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
+import { requestBackgroundRunning, useDutyStatus } from '../ui/settings/useDutyStatus'
 import {
   aboutLinks,
   channelFootnote,
@@ -82,6 +83,12 @@ export default function Settings() {
   const [linkError, setLinkError] = useState('')
   const [quietOpen, setQuietOpen] = useState(0)
   const [quietVisible, setQuietVisible] = useState(false)
+  const { decisions, completed, errors } = preferences.notifications
+  // Only when this computer reaches the phone through the background connection.
+  const duty = useDutyStatus(
+    push?.status === 'registered' && push.provider === 'desktop' &&
+      (decisions || completed || errors)
+  )
 
   const delivery = deliveryStatus({
     platform,
@@ -91,8 +98,9 @@ export default function Settings() {
     hasHost: Boolean(host),
     decisions: preferences.notifications.decisions,
     liveActivity: preferences.liveActivity,
+    duty,
   })
-  const note = deliveryNote(push)
+  const note = deliveryNote(push, duty)
   const remind = remindFootnote(permissions.notifications)
 
   /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
@@ -113,16 +121,21 @@ export default function Settings() {
       if (kind === 'request') await requestNotifications()
       else if (kind === 'settings') await openNotificationSettings()
       else if (kind === 'retry') retryPush()
+      else if (kind === 'battery') requestBackgroundRunning()
+      else if (kind === 'appSettings') await openAppSettings()
       else {
         if (host && !client) throw new Error('电脑还没连上，稍后再试')
         const outcome = await runTestNotification({
           hostId: host?.id,
-          getToken: getDevicePushToken,
+          // The test must reach the phone the same way the computer's real alerts do.
+          getToken: () => pushTokens.token(push?.provider ?? 'direct', host?.id ?? ''),
           postTest: (body) =>
             client!.post<PushTestResult>('/api/sessions/mobile-push/test', body),
           scheduleLocal: scheduleTestNotification,
         })
         setTestNote(outcome.note)
+        // The computer just sent through its relay: read the fresh delivery state.
+        if (outcome.via === 'remote') retryPush()
       }
     } catch (e) {
       setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))
@@ -179,90 +192,95 @@ export default function Settings() {
 
         <ProfileEntry />
 
-        <DeliveryCard
-          delivery={delivery}
-          busy={busy ?? (push?.status === 'loading' ? 'retry' : null)}
-          note={testNote || note}
-          error={deliveryError}
-          onAction={(kind) => void runAction(kind)}
-          onGuide={() => void open(aboutLinks.pushSetup)}
-        />
-        <SectionHeader title="提醒我" />
-        <Group>
-          {notificationRows.map((item, index) => (
-            <ListRowWithSwitch
-              key={item.key}
-              first={index === 0}
-              title={item.title}
-              detail={item.detail}
-              value={preferences.notifications[item.key]}
-              onChange={(value) => void notify(item.key, value)}
-            />
-          ))}
-          {Platform.OS === 'ios' && (
-            <ListRowWithSwitch
-              first={false}
-              title="专注模式下也提醒审批"
-              detail="标成时效性通知，不被专注模式拦下"
-              value={preferences.timeSensitive}
-              onChange={(value) =>
-                void update({ timeSensitive: value }).catch((e) => setNotifyError(errorText(e)))
-              }
-            />
-          )}
-          <Separator />
-          <ListRow
-            title="勿扰时段"
-            accessibilityLabel={`勿扰时段，${quietSummary(preferences.quietHours)}`}
-            value={<Value text={quietSummary(preferences.quietHours)} />}
-            trailing={<Chev />}
-            onPress={() => {
-              setQuietOpen((count) => count + 1)
-              setQuietVisible(true)
-            }}
-          />
-        </Group>
-        {notifyError ? (
-          <InlineError text={notifyError} style={{ marginTop: 8 }} />
-        ) : remind ? (
-          <Footnote>{remind}</Footnote>
-        ) : null}
-
-        {Platform.OS === 'ios' ? (
+        {/* 网页版收不到推送，也没有锁屏、系统权限：这些只在手机 App 里设置。 */}
+        {isH5 ? null : (
           <>
-            <SectionHeader title="锁屏与灵动岛" />
+            <DeliveryCard
+              delivery={delivery}
+              busy={busy ?? (push?.status === 'loading' ? 'retry' : null)}
+              note={testNote || note}
+              error={deliveryError}
+              onAction={(kind) => void runAction(kind)}
+              onGuide={() => void open(aboutLinks.pushSetup)}
+            />
+            <SectionHeader title="提醒我" />
             <Group>
+              {notificationRows.map((item, index) => (
+                <ListRowWithSwitch
+                  key={item.key}
+                  first={index === 0}
+                  title={item.title}
+                  detail={item.detail}
+                  value={preferences.notifications[item.key]}
+                  onChange={(value) => void notify(item.key, value)}
+                />
+              ))}
+              {Platform.OS === 'ios' && (
+                <ListRowWithSwitch
+                  first={false}
+                  title="专注模式下也提醒审批"
+                  detail="标成时效性通知，不被专注模式拦下"
+                  value={preferences.timeSensitive}
+                  onChange={(value) =>
+                    void update({ timeSensitive: value }).catch((e) => setNotifyError(errorText(e)))
+                  }
+                />
+              )}
+              <Separator />
               <ListRow
-                title="实时活动"
-                value={<Value text={liveActivityValue(preferences.liveActivity)} />}
+                title="勿扰时段"
+                accessibilityLabel={`勿扰时段，${quietSummary(preferences.quietHours)}`}
+                value={<Value text={quietSummary(preferences.quietHours)} />}
                 trailing={<Chev />}
-                onPress={() => router.push('/live-activity')}
+                onPress={() => {
+                  setQuietOpen((count) => count + 1)
+                  setQuietVisible(true)
+                }}
               />
             </Group>
-            <Footnote>锁屏上的允许和拒绝，都要先解锁才生效。</Footnote>
-          </>
-        ) : (
-          <>
-            <SectionHeader title="声音和震动" />
-            <Group>
-              {channelRows.map((row, index) => (
-                <View key={row.kind}>
-                  {index > 0 && <Separator />}
+            {notifyError ? (
+              <InlineError text={notifyError} style={{ marginTop: 8 }} />
+            ) : remind ? (
+              <Footnote>{remind}</Footnote>
+            ) : null}
+
+            {Platform.OS === 'ios' ? (
+              <>
+                <SectionHeader title="锁屏与灵动岛" />
+                <Group>
                   <ListRow
-                    title={row.title}
-                    accessibilityLabel={`${row.title}，${permissions.channels[row.kind] || '打开系统设置'}`}
-                    value={
-                      permissions.channels[row.kind] ? (
-                        <Value text={permissions.channels[row.kind]} />
-                      ) : undefined
-                    }
+                    title="实时活动"
+                    value={<Value text={liveActivityValue(preferences.liveActivity)} />}
                     trailing={<Chev />}
-                    onPress={() => void openPermission(() => openChannelSettings(row.kind))}
+                    onPress={() => router.push('/live-activity')}
                   />
-                </View>
-              ))}
-            </Group>
-            <Footnote>{channelFootnote}</Footnote>
+                </Group>
+                <Footnote>锁屏上的允许和拒绝，都要先解锁才生效。</Footnote>
+              </>
+            ) : (
+              <>
+                <SectionHeader title="声音和震动" />
+                <Group>
+                  {channelRows.map((row, index) => (
+                    <View key={row.kind}>
+                      {index > 0 && <Separator />}
+                      <ListRow
+                        title={row.title}
+                        accessibilityLabel={`${row.title}，${permissions.channels[row.kind] || '打开系统设置'}`}
+                        value={
+                          permissions.channels[row.kind] ? (
+                            <Value text={permissions.channels[row.kind]} />
+                          ) : undefined
+                        }
+                        trailing={<Chev />}
+                        onPress={() => void openPermission(() => openChannelSettings(row.kind))}
+                      />
+                    </View>
+                  ))}
+                </Group>
+                <Footnote>{channelFootnote}</Footnote>
+              </>
+            )}
           </>
         )}
 
@@ -283,27 +301,31 @@ export default function Settings() {
         />
         <InlineError text={appearanceError} style={{ marginTop: 8 }} />
 
-        <SectionHeader title="系统权限" />
-        <Group>
-          <PermissionRow
-            icon="camera"
-            title="相机"
-            detail="扫码连接电脑"
-            value={permissionLabel(permissions.camera)}
-            onPress={() => void openPermission(openAppSettings)}
-          />
-          <Separator inset={48} />
-          <PermissionRow
-            icon="image"
-            title="照片"
-            detail="给电脑发截图和图片"
-            value={permissionLabel(permissions.photos)}
-            onPress={() => void openPermission(openAppSettings)}
-          />
-        </Group>
-        <Footnote>
-          在系统设置中管理相机和照片权限。局域网连接需要允许本地网络访问。
-        </Footnote>
+        {isH5 ? null : (
+          <>
+            <SectionHeader title="系统权限" />
+            <Group>
+              <PermissionRow
+                icon="camera"
+                title="相机"
+                detail="扫码连接电脑"
+                value={permissionLabel(permissions.camera)}
+                onPress={() => void openPermission(openAppSettings)}
+              />
+              <Separator inset={48} />
+              <PermissionRow
+                icon="image"
+                title="照片"
+                detail="给电脑发截图和图片"
+                value={permissionLabel(permissions.photos)}
+                onPress={() => void openPermission(openAppSettings)}
+              />
+            </Group>
+            <Footnote>
+              在系统设置中管理相机和照片权限。局域网连接需要允许本地网络访问。
+            </Footnote>
+          </>
+        )}
 
         <SectionHeader title="电脑" />
         <Group>
@@ -343,15 +365,17 @@ export default function Settings() {
                   router.push({ pathname: '/computer', params: { host: host.id } })
                 }
               />
-              <Separator />
+              {isH5 ? null : <Separator />}
             </>
           )}
-          <ListRow
-            title="你的电脑"
-            value={<Value text={computersValue(registry.hosts.length)} />}
-            trailing={<Chev />}
-            onPress={() => router.push('/hosts')}
-          />
+          {isH5 ? null : (
+            <ListRow
+              title="你的电脑"
+              value={<Value text={computersValue(registry.hosts.length)} />}
+              trailing={<Chev />}
+              onPress={() => router.push('/hosts')}
+            />
+          )}
         </Group>
 
         <SectionHeader title="关于" />

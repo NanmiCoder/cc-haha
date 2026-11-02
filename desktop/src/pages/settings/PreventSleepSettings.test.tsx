@@ -3,6 +3,7 @@ import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserHost } from '@/lib/desktopHost/browserHost'
 import { PREVENT_SLEEP_STORAGE_KEY } from '@/lib/preventSleepPreference'
+import { DEFAULT_IDLE_POWER_SETTINGS } from '@/lib/idlePower'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useOpenTargetStore } from '@/stores/openTargetStore'
 import { usePowerSettingsStore } from '@/stores/powerSettingsStore'
@@ -22,7 +23,12 @@ describe('General settings prevent sleep', () => {
     localStorage.clear()
     setEnabled.mockReset().mockResolvedValue(undefined)
     window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true,
-      power: { setPreventSleepWhileRunning: setEnabled } }
+      power: { ...browserHost.power, setPreventSleepWhileRunning: setEnabled,
+        getIdleActionState: async () => ({
+          settings: { ...DEFAULT_IDLE_POWER_SETTINGS },
+          capabilities: { lock: false, sleep: false, hibernate: false, shutdown: false },
+          countdown: null, lastAction: null, notice: null,
+        }) } }
     usePowerSettingsStore.setState({ preventSleepWhileRunning: false, saving: false, error: false })
     useSettingsStore.setState({ locale: 'zh', fetchOutputStyles: async () => {}, fetchAppMode: async () => {} })
     useOpenTargetStore.setState({ ensureTargets: async () => {} })

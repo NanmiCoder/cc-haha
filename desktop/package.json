@@ -23,7 +23,6 @@
       "node_modules/semver/**",
       "src-tauri/binaries/**"
     ],
-    "artifactName": "Claude-Code-Haha-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
     "directories": {
       "output": "build-artifacts/electron"
@@ -32,6 +31,7 @@
       "dist/**",
       "electron-dist/**",
       "node_modules/node-pty/**",
+      "dist/m/assets/node_modules/**",
       "src-tauri/binaries/**",
       "src-tauri/icons/**",
       "src-tauri/resources/preview-agent.js",
@@ -57,7 +57,11 @@
         "cc-haha-computer-use\\.app",
         "claude-sidecar-[^/]+$"
       ],
-      "notarize": true
+      "notarize": true,
+      "artifactName": "Claude-Code-Haha-${version}-macOS-${arch}-update.${ext}"
+    },
+    "dmg": {
+      "artifactName": "Claude-Code-Haha-${version}-macOS-${arch}.${ext}"
     },
     "win": {
       "target": "nsis",
@@ -69,7 +73,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "artifactName": "Claude-Code-Haha-${version}-Windows-${arch}-Setup.${ext}"
     },
     "linux": {
       "target": [
@@ -78,7 +83,8 @@
       ],
       "icon": "src-tauri/icons",
       "category": "Development",
-      "maintainer": "NanmiCoder <relakkes@gmail.com>"
+      "maintainer": "NanmiCoder <relakkes@gmail.com>",
+      "artifactName": "Claude-Code-Haha-${version}-Linux-${arch}.${ext}"
     },
     "publish": [
       {
@@ -90,7 +96,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build && bun run build:h5-mobile",
+    "build:h5-mobile": "bun ../mobile/scripts/export-h5.ts ./dist/m",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
     "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",

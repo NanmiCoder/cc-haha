@@ -7,6 +7,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
 import { Text } from '../../ui/Text'
 import { useApp, useConnection } from '../../state/AppContext'
+import { isH5, reconnectH5 } from '../../state/h5'
 import { useDashboard } from '../../state/DashboardContext'
 import { createChatState } from '../../core/chat'
 import { ChatRecovery } from '../../core/chatRecovery'
@@ -104,6 +105,7 @@ import {
   sessionSubtitle,
   turnMeta,
 } from '../../ui/chat/session'
+import { simulatedPhoneChrome } from '../../ui/webChrome'
 
 const NativeSocket = WebSocket as unknown as new (
   url: string,
@@ -248,7 +250,8 @@ function ChatSession({
   }, [])
 
   useEffect(() => {
-    if (!client || !credential) return
+    // An H5 page authenticated by its cookie or loopback address has credential ''.
+    if (!client || credential === undefined) return
     let alive = true
     /** 本轮起止时间只在收到状态时记录：亲眼看到开始用本地时间，否则用消息时间。 */
     function trackTurn(value: ChatState) {
@@ -1081,13 +1084,14 @@ function ChatSession({
             {connectionProblem.text}
           </Text>
           <Button
-            title={connectionProblem.action === 'hosts' ? '管理电脑' : '重试'}
+            title={connectionProblem.action === 'hosts' ? (isH5 ? '重新连接' : '管理电脑') : '重试'}
             size="sm"
             variant="outline"
             pill
             onPress={() => {
-              if (connectionProblem.action === 'hosts') router.push('/hosts')
-              else reconnect()
+              if (connectionProblem.action !== 'hosts') reconnect()
+              else if (isH5) reconnectH5(host?.auth === 'remote')
+              else router.push('/hosts')
             }}
           />
         </View>
@@ -1184,7 +1188,7 @@ function ChatSession({
   const elapsed = runStartedAt && state.turnActive ? elapsedLabel(runStartedAt, sheetNow) : undefined
 
   // 菜单锚在导航栏下沿（kit 的 Menu 在 Android 上不覆盖状态栏）。
-  const menuTop = (Platform.OS === 'web' ? 54 : insets.top) + 46
+  const menuTop = (simulatedPhoneChrome ? 54 : insets.top) + 46
   const changedCount = latest?.code.filesChanged.length ?? 0
   const menuItems: ActionMenuItem[] = [
     {

@@ -3,14 +3,15 @@ import path from 'node:path'
 import { getMobileSessionActivity } from './mobileSessionActivityRuntime.js'
 import { sessionService } from './sessionService.js'
 import { MobilePushService } from './mobilePushService.js'
-import { DirectMobilePushTransport } from './mobilePushTransport.js'
+import { MobilePushRouter } from './mobilePushTransport.js'
 
 const services = new Map<string, MobilePushService>()
 export function getMobilePushService() {
   const directory = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'cc-haha')
   let service = services.get(directory)
   if (!service) {
-    service = new MobilePushService({ directory, transport: new DirectMobilePushTransport(), activities: getMobileSessionActivity, summary: id => sessionService.getSessionSummary(id) })
+    const transport = new MobilePushRouter()
+    service = new MobilePushService({ directory, transport, pull: (token, ack, signal) => transport.desktop.pull(token, ack, signal), activities: getMobileSessionActivity, summary: id => sessionService.getSessionSummary(id) })
     services.set(directory, service)
   }
   return service

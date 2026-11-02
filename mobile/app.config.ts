@@ -59,4 +59,28 @@ export function withEasProject(
   }
 }
 
-export default ({ config }: ConfigContext) => withGoogleServicesFile(withEasProject(config))
+/** Where the desktop server hosts this app for phone browsers. Keep in step with `src/server/staticH5.ts`. */
+export const H5_BASE_PATH = '/m'
+
+/**
+ * The H5 build: the same app, served by the desktop to phone browsers under
+ * {@link H5_BASE_PATH}. Expo also inlines `EXPO_PUBLIC_CC_HAHA_H5` into the
+ * bundle, which is how the app knows to treat the page's own computer as its
+ * only one (see `src/state/h5.ts`).
+ */
+export function withH5Build(
+  config: Partial<ExpoConfig>,
+  environment: { EXPO_PUBLIC_CC_HAHA_H5?: string } = {
+    EXPO_PUBLIC_CC_HAHA_H5: process.env.EXPO_PUBLIC_CC_HAHA_H5,
+  }
+): Partial<ExpoConfig> {
+  if (environment.EXPO_PUBLIC_CC_HAHA_H5 !== '1') return config
+  return {
+    ...config,
+    experiments: { ...config.experiments, baseUrl: H5_BASE_PATH },
+    web: { ...config.web, lang: 'zh-CN', name: 'cc-haha', themeColor: '#F4F3F0' },
+  }
+}
+
+export default ({ config }: ConfigContext) =>
+  withH5Build(withGoogleServicesFile(withEasProject(config)))

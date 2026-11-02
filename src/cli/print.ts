@@ -188,12 +188,17 @@ import {
   transitionPermissionMode,
 } from 'src/utils/permissions/permissionSetup.js'
 import {
-  tryGenerateSuggestion,
+  isUserStartedCommand,
   logSuggestionOutcome,
-  logSuggestionSuppressed,
-  type PromptVariant,
 } from 'src/services/PromptSuggestion/promptSuggestion.js'
-import { getLastCacheSafeParams } from 'src/utils/forkedAgent.js'
+import {
+  createSdkSuggestionState,
+  setSdkPromptSuggestions,
+  startSdkPushSuggestion,
+  takeOwedSdkSuggestionContext,
+  takeSdkSuggestionContext,
+} from 'src/services/PromptSuggestion/sdkPushSuggestion.js'
+import { getLastCacheSafeParams, type CacheSafeParams } from 'src/utils/forkedAgent.js'
 import {
   isLocalAgentTask,
   queuePendingMessage,
@@ -1375,33 +1380,7 @@ function runHeadlessStreaming(
   })
 
   // Prompt suggestion tracking (push model)
-  const suggestionState: {
-    abortController: AbortController | null
-    inflightPromise: Promise<void> | null
-    lastEmitted: {
-      text: string
-      emittedAt: number
-      promptId: PromptVariant
-      generationRequestId: string | null
-    } | null
-    pendingSuggestion: {
-      type: 'prompt_suggestion'
-      suggestion: string
-      uuid: UUID
-      session_id: string
-    } | null
-    pendingLastEmittedEntry: {
-      text: string
-      promptId: PromptVariant
-      generationRequestId: string | null
-    } | null
-  } = {
-    abortController: null,
-    inflightPromise: null,
-    lastEmitted: null,
-    pendingSuggestion: null,
-    pendingLastEmittedEntry: null,
-  }
+  const suggestionState = createSdkSuggestionState()
 
   // Set up AWS auth status listener if enabled
   let unsubscribeAuthStatus: (() => void) | undefined
@@ -2282,6 +2261,15 @@ function runHeadlessStreaming(
       let command: QueuedCommand | undefined
       let waitingForAgents = false
 
+      const startPushSuggestion = (cacheSafeParams: CacheSafeParams) =>
+        startSdkPushSuggestion(suggestionState, {
+          cacheSafeParams,
+          messages: mutableMessages,
+          getAppState,
+          isResultHeld: () => heldBackResult !== null,
+          emit: message => output.enqueue(message),
+        })
+
       // Extract command processing into a named function for the do-while pattern.
       // Drains the queue, batching consecutive prompt-mode commands into one
       // ask() call so messages that queued up during a long turn coalesce
@@ -2315,6 +2303,13 @@ function runHeadlessStreaming(
             }
           }
           const batchUuids = batch.map(c => c.uuid).filter(u => u !== undefined)
+          // A host notice can batch with the user's next message; the turn is
+          // still the user's when any batched command was typed by them.
+          const userStartedTurn = batch.some(isUserStartedCommand)
+          // Stop hooks save a fresh fork context only when a turn finishes
+          // normally; compare against this to spot interrupted turns and
+          // local slash commands that never reached the model.
+          const cacheSafeParamsAtTurnStart = getLastCacheSafeParams()
 
           // QueryEngine will emit a replay for command.uuid (the last uuid in
           // the batch) via its messagesToAck path. Emit replays here for the
@@ -2410,6 +2405,9 @@ function runHeadlessStreaming(
           suggestionState.abortController = null
           suggestionState.pendingSuggestion = null
           suggestionState.pendingLastEmittedEntry = null
+          // A new message from the user replaces a prediction still owed to
+          // an earlier turn that was waiting on background agents.
+          if (userStartedTurn) suggestionState.deferredUntilAgentsSettle = false
           if (suggestionState.lastEmitted) {
             if (command.mode === 'prompt') {
               // SDK user messages enqueue ContentBlockParam[], not a plain string
@@ -2583,92 +2581,17 @@ function runHeadlessStreaming(
             )
           }
 
-          // Generate and emit prompt suggestion for SDK consumers
-          if (
-            options.promptSuggestions &&
-            !isEnvDefinedFalsy(process.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION)
-          ) {
-            // TS narrows suggestionState to never in the while loop body;
-            // cast via unknown to reset narrowing.
-            const state = suggestionState as unknown as typeof suggestionState
-            state.abortController?.abort()
-            const localAbort = new AbortController()
-            suggestionState.abortController = localAbort
-
-            const cacheSafeParams = getLastCacheSafeParams()
-            if (!cacheSafeParams) {
-              logSuggestionSuppressed(
-                'sdk_no_params',
-                undefined,
-                undefined,
-                'sdk',
-              )
-            } else {
-              // Use a ref object so the IIFE's finally can compare against its own
-              // promise without a self-reference (which upsets TypeScript's flow analysis).
-              const ref: { promise: Promise<void> | null } = { promise: null }
-              ref.promise = (async () => {
-                try {
-                  const result = await tryGenerateSuggestion(
-                    localAbort,
-                    mutableMessages,
-                    getAppState,
-                    cacheSafeParams,
-                    'sdk',
-                  )
-                  if (!result || localAbort.signal.aborted) return
-                  const suggestionMsg = {
-                    type: 'prompt_suggestion' as const,
-                    suggestion: result.suggestion,
-                    uuid: randomUUID(),
-                    session_id: getSessionId(),
-                  }
-                  const lastEmittedEntry = {
-                    text: result.suggestion,
-                    emittedAt: Date.now(),
-                    promptId: result.promptId,
-                    generationRequestId: result.generationRequestId,
-                  }
-                  // Defer emission if the result is being held for background agents,
-                  // so that prompt_suggestion always arrives after result.
-                  // Only set lastEmitted when the suggestion is actually delivered
-                  // to the consumer; deferred suggestions may be discarded before
-                  // delivery if a new command arrives first.
-                  if (heldBackResult) {
-                    suggestionState.pendingSuggestion = suggestionMsg
-                    suggestionState.pendingLastEmittedEntry = {
-                      text: lastEmittedEntry.text,
-                      promptId: lastEmittedEntry.promptId,
-                      generationRequestId: lastEmittedEntry.generationRequestId,
-                    }
-                  } else {
-                    suggestionState.lastEmitted = lastEmittedEntry
-                    output.enqueue(suggestionMsg)
-                  }
-                } catch (error) {
-                  if (
-                    error instanceof Error &&
-                    (error.name === 'AbortError' ||
-                      error.name === 'APIUserAbortError')
-                  ) {
-                    logSuggestionSuppressed(
-                      'aborted',
-                      undefined,
-                      undefined,
-                      'sdk',
-                    )
-                    return
-                  }
-                  logError(toError(error))
-                } finally {
-                  if (suggestionState.inflightPromise === ref.promise) {
-                    suggestionState.inflightPromise = null
-                  }
-                }
-              })()
-              suggestionState.inflightPromise = ref.promise
-            }
-          }
+          // Generate and emit prompt suggestion for SDK consumers.
+          const suggestionContext = takeSdkSuggestionContext(suggestionState, {
+            enabled:
+              !!options.promptSuggestions &&
+              !isEnvDefinedFalsy(process.env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION),
+            userStartedTurn,
+            resultHeld: heldBackResult !== null,
+            cacheSafeParams: getLastCacheSafeParams(),
+            cacheSafeParamsAtTurnStart,
+          })
+          if (suggestionContext) startPushSuggestion(suggestionContext)
 
           // Log headless profiler metrics for this turn and start next turn
           logHeadlessProfilerTurn()
@@ -2724,6 +2647,14 @@ function runHeadlessStreaming(
       if (heldBackResult) {
         output.enqueue(heldBackResult)
         heldBackResult = null
+        // Agents settled without a follow-up turn: predict for the finished
+        // user turn now that its result is out.
+        const owedContext = takeOwedSdkSuggestionContext(
+          suggestionState,
+          !!options.promptSuggestions,
+          getLastCacheSafeParams(),
+        )
+        if (owedContext) startPushSuggestion(owedContext)
         if (suggestionState.pendingSuggestion) {
           output.enqueue(suggestionState.pendingSuggestion)
           // Now that the suggestion is actually delivered, record it for acceptance tracking
@@ -2948,6 +2879,7 @@ function runHeadlessStreaming(
               mode: 'prompt',
               value: formatted,
               uuid: randomUUID(),
+              isSynthetic: true,
             })
             void run()
             return // run() will come back here after processing
@@ -3330,6 +3262,10 @@ function runHeadlessStreaming(
           notifySessionMetadataChanged({ model })
           injectModelSwitchBreadcrumbs(requestedModel, model)
 
+          sendControlResponseSuccess(message)
+        } else if (message.request.subtype === 'set_prompt_suggestions') {
+          options.promptSuggestions = message.request.enabled
+          setSdkPromptSuggestions(suggestionState, message.request.enabled, setAppState)
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'set_max_thinking_tokens') {
           if (message.request.max_thinking_tokens === null) {
@@ -4675,6 +4611,7 @@ function runHeadlessStreaming(
         value: await resolveAndPrepend(message, message.message.content),
         uuid: message.uuid,
         priority: message.priority,
+        ...(message.isSynthetic ? { isSynthetic: true } : {}),
       })
       // Increment prompt count for attribution tracking and save snapshot
       // The snapshot persists promptCount so it survives compaction

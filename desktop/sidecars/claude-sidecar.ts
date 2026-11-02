@@ -34,7 +34,7 @@ if (process.argv[2] === '--computer-use-repl-worker') {
 // reads its private configuration from the environment, loads the downloaded
 // sherpa-onnx runtime by absolute path, and needs none of the desktop modes.
 if (process.argv[2] === '--voice-worker') {
-  const { runVoiceWorker } = await import('../../src/server/services/voice/sensevoice/worker')
+  const { runVoiceWorker } = await import('../../src/server/services/voice/sherpa/worker')
   await runVoiceWorker()
   process.exit(0)
 }

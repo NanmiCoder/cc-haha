@@ -12,10 +12,18 @@ import type { TeamPlanRecord } from '../../../../src/shared/teamPlan'
 
 vi.mock('@/api/teamPlans', () => ({ teamPlansApi: { get: vi.fn(), save: vi.fn(), act: vi.fn() } }))
 vi.mock('@/components/controls/ModelSelector', () => ({
-  ModelSelector: (props: { ariaLabel: string; runtimeSelection: { providerId: string | null; modelId: string }; onRuntimeSelectionChange: (value: { providerId: string | null; modelId: string }) => void; disabled?: boolean; runtimeKey?: string }) => (
-    <button aria-label={props.ariaLabel} disabled={props.disabled} data-runtime-key={props.runtimeKey} onClick={() => props.onRuntimeSelectionChange({ providerId: 'economy', modelId: 'cheap' })}>
-      {props.runtimeSelection.providerId ?? 'official'} / {props.runtimeSelection.modelId}
-    </button>
+  ModelSelector: (props: { ariaLabel: string; runtimeSelection: { providerId: string | null; modelId: string; effortLevel?: string }; onRuntimeSelectionChange: (value: { providerId: string | null; modelId: string; effortLevel?: string }) => void; onEffortChange?: (level: string) => void; disabled?: boolean; runtimeKey?: string; effortEditable?: boolean }) => (
+    <>
+      <button aria-label={props.ariaLabel} disabled={props.disabled} data-runtime-key={props.runtimeKey} onClick={() => props.onRuntimeSelectionChange({ providerId: 'economy', modelId: 'cheap' })}>
+        {props.runtimeSelection.providerId ?? 'official'} / {props.runtimeSelection.modelId}
+      </button>
+      {/* The real selector's effort pill: same runtime, new effort. */}
+      {props.effortEditable && (
+        <button aria-label={`${props.ariaLabel} effort`} disabled={props.disabled} onClick={() => props.onEffortChange ? props.onEffortChange('low') : props.onRuntimeSelectionChange({ ...props.runtimeSelection, effortLevel: 'low' })}>
+          {props.runtimeSelection.effortLevel ?? 'default'}
+        </button>
+      )}
+    </>
   ),
 }))
 
@@ -175,6 +183,32 @@ describe('AgentTeamsPlanCard', () => {
     expect(screen.queryByRole('button', { name: 'Approve and launch' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Review configuration' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('sets one effort for the selected members without copying a provider or model onto them', async () => {
+    await open()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all members' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set model for selected members effort' }))
+    const draft = useTeamPlanStore.getState().bySession.session!.draft!
+    expect(draft.members.map(member => member.runtime)).toEqual([
+      { providerId: 'fast', modelId: 'small', effortLevel: 'low' },
+      { providerId: 'strong', modelId: 'large', effortLevel: 'low' },
+    ])
+  })
+
+  it('lets the reviewer set a member effort and saves it with the provider and model before approval', async () => {
+    await open()
+    expect(screen.getByRole('button', { name: 'Builder · Provider and model effort' })).toHaveTextContent('default')
+    fireEvent.click(screen.getByRole('button', { name: 'Builder · Provider and model effort' }))
+    expect(screen.getByRole('button', { name: 'Builder · Provider and model effort' })).toHaveTextContent('low')
+    vi.mocked(teamPlansApi.save).mockResolvedValue({ plan: { ...fixture(), revision: 2 } })
+    vi.mocked(teamPlansApi.act).mockResolvedValue({ plan: { ...fixture(), revision: 3, state: 'launching' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and launch' }))
+
+    await waitFor(() => expect(teamPlansApi.act).toHaveBeenCalledOnce())
+    const [, edits] = vi.mocked(teamPlansApi.save).mock.calls[0]!
+    expect(edits.members[0]!.runtime).toEqual({ providerId: 'fast', modelId: 'small', effortLevel: 'low' })
+    expect(edits.members[1]!.runtime).toEqual({ providerId: 'strong', modelId: 'large' })
   })
 
   it('keeps local choices after background revision change and blocks stale approval', async () => {

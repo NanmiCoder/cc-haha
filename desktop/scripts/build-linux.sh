@@ -73,6 +73,10 @@ if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
 
   echo "[build-linux] Installing desktop dependencies..."
   (cd "${DESKTOP_DIR}" && bun install)
+
+  # `bun run build` exports the phone app (mobile/) into dist/m as the phone H5.
+  echo "[build-linux] Installing mobile dependencies..."
+  (cd "${REPO_ROOT}/mobile" && bun install --frozen-lockfile)
 fi
 
 echo "[build-linux] Cleaning stale Electron outputs..."

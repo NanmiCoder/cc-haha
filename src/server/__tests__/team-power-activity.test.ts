@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -35,6 +35,7 @@ afterEach(async () => {
     __resetWebSocketHandlerStateForTests()
     expect(sandbox.detectUserStateMutations()).toEqual([])
   } finally {
+    mock.restore()
     cleanupHarness = undefined
     for (const key of Object.keys(process.env)) delete process.env[key]
     Object.assign(process.env, originalEnv)
@@ -59,8 +60,16 @@ async function getLiveStatus(includeTeamWorkers = false) {
   return (await response.json() as { sessions: Array<{ id: string; activityState: string }> }).sessions
 }
 
+async function getPowerSnapshot() {
+  const { handleSessionsApi } = await import('../api/sessions.js')
+  const url = new URL('http://127.0.0.1/api/sessions/power-activity')
+  const response = await handleSessionsApi(new Request(url), url, ['api', 'sessions', 'power-activity'])
+  expect(response.status).toBe(200)
+  return response.json() as Promise<{ busy: boolean; completionSequence: number; scheduledCompletionSequence: number; revision: number }>
+}
+
 /** Exercise the real team launch and SDK handler, without synthetic activity marks. */
-async function startHarness() {
+async function startHarness(teamName = `Power.${crypto.randomUUID()}`) {
   const { resetTerminalShellEnvironmentCacheForTests } = await import('../../utils/terminalShellEnvironment.js')
   resetTerminalShellEnvironmentCacheForTests()
   const { conversationService } = await import('../services/conversationService.js')
@@ -131,7 +140,6 @@ async function startHarness() {
     models: { main: 'cheap', sonnet: 'cheap', opus: 'capable', haiku: 'cheap' },
   })
   const parentId = `power-lead-${crypto.randomUUID()}`
-  const teamName = `Power.${crypto.randomUUID()}`
   const createdAt = Date.now()
   await writeTeamFileAsync(teamName, {
     name: teamName, createdAt, leadAgentId: `team-lead@${teamName}`, leadSessionId: parentId, members: [],
@@ -175,9 +183,10 @@ async function startHarness() {
   const workerId = memberIds.reader!
   await waitFor(() => requests.length === 1 && states.get(workerId) === 'running' && states.get(parentId) === 'idle', 'running worker after lead idle')
   return {
-    conversationService, runtime, parentId, parentPid, planId, workerId, requests, states,
+    conversationService, runtime, parentId, parentPid, planId, workerId, requests, states, teamName,
     member: () => readTeamFile(teamName)?.members.find(entry => entry.sessionId === workerId),
     async expectWorkingTeam() {
+      expect((await getPowerSnapshot()).busy).toBe(true)
       expect(runtime.hasActiveTeamWorkForParent(parentId)).toBe(true)
       expect(getSessionChatActivityState(parentId)).toBe('idle')
       expect(await getLiveStatus()).toEqual([])
@@ -191,6 +200,7 @@ test('prevent sleep follows real team work through an idle lead, retry backoff, 
   const { setTeamRuntimeTimingForTests } = await import('../services/teamPlanRuntime.js')
   setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [500] })
   const h = await startHarness()
+  const initial = await getPowerSnapshot()
   await h.expectWorkingTeam()
 
   h.requests[0]!.reply('FIXTURE_ERROR:API Error: 502 Bad Gateway')
@@ -206,6 +216,151 @@ test('prevent sleep follows real team work through an idle lead, retry backoff, 
   expect(h.conversationService.hasSession(h.workerId)).toBe(true)
   expect(await getLiveStatus(true)).toEqual([])
   expect(await getLiveStatus()).toEqual([])
+  const completed = await getPowerSnapshot()
+  expect(completed.busy).toBe(false)
+  expect(completed.completionSequence).toBeGreaterThan(initial.completionSequence)
+  expect(completed.scheduledCompletionSequence).toBe(initial.scheduledCompletionSequence)
+}, 20_000)
+
+test('power remains busy after retry timer fires while its async roster handoff is blocked', async () => {
+  const runtime = await import('../services/teamPlanRuntime.js')
+  runtime.setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [150] })
+  const h = await startHarness()
+  h.requests[0]!.reply('FIXTURE_ERROR:API Error: 502 Bad Gateway')
+  await waitFor(() => h.member()?.autoRetry !== undefined && h.member()?.isActive === false, 'retry backoff')
+  const helpers = await import('../../utils/swarm/teamHelpers.js')
+  const original = helpers.mutateTeamFileAsync
+  let held = false
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const mutation = spyOn(helpers, 'mutateTeamFileAsync').mockImplementation(async (...args) => {
+    if (!held) { held = true; await gate }
+    return original(...args)
+  })
+  try {
+    await waitFor(() => held, 'retry roster write')
+    expect(h.member()?.isActive).toBe(false)
+    expect(h.runtime.hasActiveTeamWorkForParent(h.parentId)).toBe(true)
+    expect((await getPowerSnapshot()).busy).toBe(true)
+  } finally {
+    release()
+    mutation.mockRestore()
+  }
+  await waitFor(() => h.requests.length === 2, 'continued worker')
+  h.requests[1]!.reply('Retry finished')
+  await waitFor(async () => !(await getPowerSnapshot()).busy, 'completed team')
+}, 20_000)
+
+test('power owns a paused member message from admission through queued resume and completed delivery', async () => {
+  const h = await startHarness(`power-${crypto.randomUUID()}`)
+  h.conversationService.sendInterrupt(h.parentId)
+  await h.conversationService.waitForTeamWorkersStopped(h.parentId)
+  await waitFor(async () => !(await getPowerSnapshot()).busy, 'paused team to drain')
+  const initial = await getPowerSnapshot()
+  const { teamService } = await import('../services/teamService.js')
+  const mailbox = await import('../../utils/teammateMailbox.js')
+  const originalRead = mailbox.readUnreadMessages
+  const originalWrite = mailbox.writeToMailbox
+  const originalAcknowledge = mailbox.markMessagesAsReadByPredicate
+  let releaseSupervisor!: () => void
+  let releaseWrite!: () => void
+  let releaseAcknowledgement!: () => void
+  const supervisorGate = new Promise<void>(resolve => { releaseSupervisor = resolve })
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
+  const acknowledgementGate = new Promise<void>(resolve => { releaseAcknowledgement = resolve })
+  let supervisorHeld = false
+  let writeHeld = false
+  let acknowledgementHeld = false
+  // Hold one supervisor read. Activity snapshots still read the actual inbox.
+  const read = spyOn(mailbox, 'readUnreadMessages').mockImplementation(async (...args) => {
+    if (args[0] === 'reader' && args[1] === h.teamName && !supervisorHeld) {
+      supervisorHeld = true
+      await supervisorGate
+    }
+    return originalRead(...args)
+  })
+  const write = spyOn(mailbox, 'writeToMailbox').mockImplementation(async (...args) => {
+    if (args[0] === 'reader' && args[1].from === 'user' && args[2] === h.teamName) {
+      writeHeld = true
+      await writeGate
+    }
+    return originalWrite(...args)
+  })
+  const acknowledge = spyOn(mailbox, 'markMessagesAsReadByPredicate').mockImplementation(async (...args) => {
+    const result = await originalAcknowledge(...args)
+    if (args[0] === 'reader' && args[2] === h.teamName) {
+      acknowledgementHeld = true
+      await acknowledgementGate
+    }
+    return result
+  })
+  let sending: Promise<void> | undefined
+  try {
+    await waitFor(() => supervisorHeld, 'paused supervisor read')
+    sending = teamService.sendMemberMessage(h.teamName, h.member()!.agentId, 'Resume with the next task')
+    void sending.catch(() => {})
+    await waitFor(() => writeHeld, 'member message disk admission')
+    const admitted = await getPowerSnapshot()
+    expect(admitted.busy).toBe(true)
+    expect(admitted.revision).toBeGreaterThan(initial.revision)
+    expect(admitted.completionSequence).toBe(initial.completionSequence)
+    expect(await originalRead('reader', h.teamName)).toEqual([])
+
+    releaseWrite()
+    await sending
+    const queued = await getPowerSnapshot()
+    expect(queued.busy).toBe(true)
+    expect(queued.revision).toBeGreaterThan(admitted.revision)
+    expect(queued.completionSequence).toBe(initial.completionSequence)
+    expect(h.conversationService.hasSession(h.workerId)).toBe(false)
+    expect((await originalRead('reader', h.teamName)).some(message => message.from === 'user')).toBe(true)
+
+    releaseSupervisor()
+    await waitFor(() => acknowledgementHeld && h.requests.length === 2, 'resumed worker to consume queued message')
+    expect(await originalRead('reader', h.teamName)).toEqual([])
+    expect((await getPowerSnapshot()).busy).toBe(true)
+    h.requests[1]!.reply('Resumed task complete')
+    await waitFor(() => h.member()?.isActive === false && h.states.get(h.workerId) === 'idle', 'resumed result bookkeeping')
+    const delivering = await getPowerSnapshot()
+    expect(delivering.busy).toBe(true)
+    expect(delivering.completionSequence).toBeGreaterThan(initial.completionSequence)
+    releaseAcknowledgement()
+    await waitFor(async () => !(await getPowerSnapshot()).busy, 'completed mailbox handoff')
+    expect((await getPowerSnapshot()).completionSequence).toBe(delivering.completionSequence)
+  } finally {
+    releaseWrite()
+    releaseSupervisor()
+    releaseAcknowledgement()
+    await sending?.catch(() => {})
+    read.mockRestore()
+    write.mockRestore()
+    acknowledge.mockRestore()
+  }
+}, 20_000)
+
+test('paused teams ignore old user instructions and non-resuming teammate or lead mail', async () => {
+  const h = await startHarness()
+  h.conversationService.sendInterrupt(h.parentId)
+  await h.conversationService.waitForTeamWorkersStopped(h.parentId)
+  await waitFor(async () => !(await getPowerSnapshot()).busy, 'paused team to drain')
+  const initial = await getPowerSnapshot()
+  const { writeToMailbox } = await import('../../utils/teammateMailbox.js')
+  const { TEAM_LEAD_NAME } = await import('../../utils/swarm/constants.js')
+  for (const message of [
+    { from: 'user', text: 'Old user instruction', timestamp: new Date(Date.now() - 60_000).toISOString() },
+    { from: TEAM_LEAD_NAME, text: 'Old lead instruction', timestamp: new Date(Date.now() - 60_000).toISOString() },
+    { from: TEAM_LEAD_NAME, text: 'Lead has not received a new user instruction', timestamp: new Date().toISOString() },
+    { from: 'another-worker', text: 'New teammate result', timestamp: new Date().toISOString() },
+  ]) {
+    expect(await writeToMailbox('reader', message, h.teamName)).toBe(true)
+    expect((await getPowerSnapshot()).busy).toBe(false)
+  }
+  await new Promise(resolve => setTimeout(resolve, 350))
+  expect(h.conversationService.hasSession(h.workerId)).toBe(false)
+  expect(h.requests).toHaveLength(1)
+  const final = await getPowerSnapshot()
+  expect(final.busy).toBe(false)
+  expect(final.completionSequence).toBe(initial.completionSequence)
 }, 20_000)
 
 test('real worker permissions retain waiting priority in both power and default projections', async () => {
@@ -224,6 +379,31 @@ test('real worker permissions retain waiting priority in both power and default 
   expect(await getLiveStatus(true)).toEqual([])
 }, 20_000)
 
+test('power keeps ownership while a removed team launch is still stopping its worker process', async () => {
+  const h = await startHarness()
+  const initial = await getPowerSnapshot()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const original = h.conversationService.stopSessionAndWait.bind(h.conversationService)
+  const stopWorker = spyOn(h.conversationService, 'stopSessionAndWait').mockImplementation(async (...args) => {
+    await gate
+    return original(...args)
+  })
+  const stopping = h.runtime.stopTeamPlanRuntime(h.planId)
+  try {
+    expect(h.runtime.hasActiveTeamWorkForParent(h.parentId)).toBe(false)
+    expect(h.conversationService.hasSession(h.workerId)).toBe(true)
+    expect((await getPowerSnapshot()).busy).toBe(true)
+  } finally {
+    release()
+    await stopping
+    stopWorker.mockRestore()
+  }
+  const stopped = await getPowerSnapshot()
+  expect(stopped.busy).toBe(false)
+  expect(stopped.completionSequence).toBe(initial.completionSequence)
+}, 20_000)
+
 test.each(['completes', 'is stopped'] as const)('power retains real team work after the lead exits until its worker %s', async ending => {
   const h = await startHarness()
   await h.expectWorkingTeam()
@@ -239,7 +419,8 @@ test.each(['completes', 'is stopped'] as const)('power retains real team work af
 
   if (ending === 'completes') {
     h.requests[0]!.reply('Review finished without the lead')
-    await waitFor(() => h.member()?.isActive === false && h.states.get(h.workerId) === 'idle', 'independent worker completion')
+    await waitFor(() => h.member()?.isActive === false && h.states.get(h.workerId) === 'idle'
+      && !h.runtime.hasActiveTeamWorkForParent(h.parentId), 'independent worker completion and result bookkeeping')
     expect(h.conversationService.hasSession(h.workerId)).toBe(true)
   } else {
     await h.runtime.stopTeamPlanRuntime(h.planId)

@@ -70,10 +70,17 @@ describe('desktop connection contracts', () => {
   })
 
   test.each([
-    'http://public.invalid',
-    'http://172.15.1.1',
-    'http://172.32.0.1',
-    'http://192.168.0.1.public.invalid',
+    'http://workstation.fixture.ts.net',
+    'http://100.101.102.103:60506',
+    'http://nas:3456',
+    'http://custom.fixture.invalid',
+  ])('preserves an explicitly supplied HTTP origin for access-token authentication: %s', url => {
+    expect(parseConnectionInput(`${url}/`)).toEqual({ url, auth: 'lan' })
+    expect(parseConnectionInput(JSON.stringify({ serverUrl: `${url}/`, h5Token: 'fake-token' })))
+      .toEqual({ url, auth: 'lan', credential: 'fake-token' })
+  })
+
+  test.each([
     'https://user:password@fixture.invalid',
     'file:///tmp/example',
     'javascript:alert(1)',
@@ -85,7 +92,6 @@ describe('desktop connection contracts', () => {
     'https://fixture.invalid/#pair=one&other=two',
     'http://192.168.1.12/?h5Token=one&h5Token=two',
     'http://192.168.1.12/?h5Token=bad%0Avalue',
-    'http://192.168.1.12/?serverUrl=http%3A%2F%2Fpublic.invalid&h5Token=token',
   ])('rejects unsafe or ambiguous input %s', (input: string) => {
     expect(() => parseConnectionInput(input)).toThrow()
   })
@@ -154,5 +160,17 @@ describe('desktop connection contracts', () => {
     expect(() =>
       buildSocketOptions(lan, 'fake-token', '../other', 'native')
     ).toThrow('标识')
+  })
+
+  test('an H5 page without a token lets the browser cookie or loopback authenticate the socket', () => {
+    // Remote browser: the device cookie rides along on a same-origin socket.
+    expect(buildSocketOptions(remote, '', 'session-id', 'web')).toEqual({
+      url: 'wss://fixture.invalid/ws/session-id?media=ref',
+    })
+    expect(buildSocketOptions(lan, '', 'session-id', 'web')).toEqual({
+      url: 'ws://192.168.1.12:3456/ws/session-id?media=ref',
+    })
+    // Native clients still have nothing else to authenticate with.
+    expect(() => buildSocketOptions(remote, '', 'session-id', 'native')).toThrow('凭据')
   })
 })

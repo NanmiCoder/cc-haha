@@ -16,6 +16,17 @@ export async function handleMobilePushApi(req: Request, segments: string[], cont
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(input).some(key => key !== 'token' && key !== 'hostId') || typeof input.token !== 'string' || !input.token || input.hostId !== undefined && (typeof input.hostId !== 'string' || !input.hostId)) throw ApiError.badRequest('Device token required')
       return Response.json(await service.sendTest(input.token, input.hostId as string | undefined, context))
     }
+    if (segments.length === 4 && segments[3] === 'pull' && req.method === 'POST') {
+      const raw = await req.text()
+      if (raw.length > 4096) throw ApiError.badRequest('Mobile push pull request is too large')
+      let body: unknown
+      try { body = JSON.parse(raw) } catch { throw ApiError.badRequest('Invalid push pull request') }
+      const input = body as Record<string, unknown>
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(input).some(key => key !== 'token' && key !== 'ack') || typeof input.token !== 'string' || !input.token || input.ack !== undefined && (typeof input.ack !== 'string' || !input.ack || input.ack.length > 64)) throw ApiError.badRequest('Device token required')
+      const notifications = await service.pull(input.token, input.ack as string | undefined, context, req.signal)
+      // The phone's service stops pulling for this computer until the app registers again.
+      return notifications ? Response.json({ notifications }) : Response.json({ error: 'NO_REGISTRATION' }, { status: 404 })
+    }
     if (req.method !== 'PUT' && req.method !== 'DELETE') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
     const raw = await req.text()
     if (raw.length > 16384) throw ApiError.badRequest('Mobile push registration is too large')

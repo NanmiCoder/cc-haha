@@ -769,9 +769,11 @@
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
   --cc-tab-edge: #D7D5D1;
   --cc-tab-sep: #E6E4E1;
-  --cc-t1: #1F1E1C;
-  --cc-t2: #55524D;
-  --cc-t3: #6F6B65;
+  /* Reading tiers keep the warm neutral hue while leaving small descriptions
+     enough contrast on hover and raised control fills as well as the page. */
+  --cc-t1: #1A1917;
+  --cc-t2: #494640;
+  --cc-t3: #625E58;
 
   --cc-ac: #A24A2E;
   --cc-ac2: #8C3F26;
@@ -830,8 +832,8 @@
 
   --cc-bg-rgb: 255, 255, 255;
   --cc-s1-rgb: 241, 240, 238;
-  --cc-t1-rgb: 31, 30, 28;
-  --cc-t2-rgb: 85, 82, 77;
+  --cc-t1-rgb: 26, 25, 23;
+  --cc-t2-rgb: 73, 70, 64;
   --cc-bd2-rgb: 217, 215, 211;
   --cc-ac-rgb: 162, 74, 46;
   --cc-er-rgb: 196, 43, 60;
@@ -1107,9 +1109,11 @@
      that pure black is only 1.26:1 against it, so there is no room downward. */
   --cc-tab-edge: #353024;
   --cc-tab-sep: #2D281F;
-  --cc-t1: #EDE6D6;
-  --cc-t2: #A79B83;
-  --cc-t3: #918777;
+  /* Lift all reading tiers, including the small descriptions that previously
+     fell below 4.5:1 on the raised hover/dialog ground. */
+  --cc-t1: #F2EEE6;
+  --cc-t2: #C4BBA9;
+  --cc-t3: #AAA08E;
 
   --cc-ac: #D07B52;
   --cc-ac2: #DE8F66;
@@ -1168,8 +1172,8 @@
 
   --cc-bg-rgb: 32, 29, 23;
   --cc-s1-rgb: 43, 39, 31;
-  --cc-t1-rgb: 237, 230, 214;
-  --cc-t2-rgb: 167, 155, 131;
+  --cc-t1-rgb: 242, 238, 230;
+  --cc-t2-rgb: 196, 187, 169;
   --cc-bd2-rgb: 76, 68, 51;
   --cc-ac-rgb: 208, 123, 82;
   --cc-er-rgb: 224, 107, 82;
@@ -1860,6 +1864,19 @@ button, input, textarea, select, a, [role="button"] {
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+/* Predicted next prompt (MentionComposer ghost widget). Placeholder color, and
+   click-through so a click still lands the caret in the empty line. */
+.composer-prompt-suggestion {
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  user-select: none;
+}
+
+.composer-prompt-suggestion-key {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 /* Inline @-mention pill (an atom node in the document). */

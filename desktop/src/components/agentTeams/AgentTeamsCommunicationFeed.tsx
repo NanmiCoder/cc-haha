@@ -1,10 +1,13 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { ArrowRight, Megaphone, MessageSquare, Settings2 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import type { TeamMember, TeamWorkbenchMessage, TeamWorkbenchSnapshot } from '../../types/team'
+import { AgentTeamsRevealMore } from './AgentTeamsRevealMore'
 import { MEMBER_AVATARS, memberAccentColor } from './agentTeamsAvatars'
+import { useProgressiveReveal } from './useProgressiveReveal'
+import { useTranscriptFind } from './useTranscriptFind'
 import {
   formatWorkbenchMessageTime,
   getMemberAvatarKey,
@@ -26,6 +29,8 @@ type ParsedMessageRow = {
   body: WorkbenchMessageBody
   category: FeedCategory
 }
+
+type VisibleFeedRow = ParsedMessageRow & { repeats: number }
 
 type MessageParticipant = {
   member: TeamMember
@@ -148,6 +153,32 @@ function readableSystemText(
   return t('agentTeams.communication.system')
 }
 
+function rowDisplayText(
+  message: TeamWorkbenchMessage,
+  body: WorkbenchMessageBody,
+  category: FeedCategory,
+  t: TranslationFn,
+): string {
+  if (body.kind === 'lifecycle') return lifecycleNarration(body, t)
+  if (body.kind === 'assignment') return assignmentNarration(body, message, t)
+  return category === 'system' ? readableSystemText(body, t) : body.text
+}
+
+/** Protocol notices and system text get a single line; authored messages get a card. */
+function isCompactRow(body: WorkbenchMessageBody, category: FeedCategory): boolean {
+  return body.kind !== 'text' || category === 'system'
+}
+
+/** What a row shows, in on-screen order, for find-in-page over unmounted rows. */
+function feedRowFindText({ message, body, category }: VisibleFeedRow, t: TranslationFn): string {
+  const text = rowDisplayText(message, body, category, t)
+  const task = message.taskId ? `#${message.taskId}` : ''
+  const time = formatWorkbenchMessageTime(message.timestamp)
+  if (isCompactRow(body, category)) return [categoryLabel(category, t), text, task, time].join('\n')
+  const recipient = message.kind === 'broadcast' ? t('agentTeams.communication.everyone') : message.to
+  return [categoryLabel(category, t), task, time, message.from, recipient, text].join('\n')
+}
+
 export function AgentTeamsCommunicationFeed({
   snapshot,
   fill = false,
@@ -186,14 +217,15 @@ export function AgentTeamsCommunicationFeed({
     { key: 'report', label: categoryLabel('report', t), count: categoryCounts.report },
     { key: 'system', label: categoryLabel('system', t), count: categoryCounts.system },
   ]
-  const filteredRows = filter === 'all'
-    ? rows
-    : rows.filter(({ category }) => category === filter)
+  const filteredRows = useMemo(
+    () => (filter === 'all' ? rows : rows.filter(({ category }) => category === filter)),
+    [filter, rows],
+  )
 
   // A teammate waiting for work repeats the same idle notice every few seconds.
   // Keep the newest signal and fold adjacent duplicates into its repeat count.
   const visibleRows = useMemo(() => {
-    const collapsed: Array<ParsedMessageRow & { repeats: number }> = []
+    const collapsed: VisibleFeedRow[] = []
     for (const row of filteredRows) {
       const previous = collapsed[collapsed.length - 1]
       if (
@@ -210,6 +242,15 @@ export function AgentTeamsCommunicationFeed({
     }
     return collapsed
   }, [filteredRows])
+  const reveal = useProgressiveReveal(visibleRows.length, filter)
+  const mountedRows = visibleRows.slice(0, reveal.limit)
+  useTranscriptFind({
+    rows: visibleRows,
+    rowKey: (row) => row.message.id,
+    rowText: (row) => feedRowFindText(row, t),
+    revealThrough: reveal.revealThrough,
+    anchorRef: reveal.scrollRootRef,
+  })
 
   return (
     <section
@@ -263,14 +304,14 @@ export function AgentTeamsCommunicationFeed({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={reveal.scrollRootRef} className="min-h-0 flex-1 overflow-y-auto">
         {visibleRows.length === 0 ? (
           <div className="flex min-h-28 items-center justify-center px-6 text-center text-[11px] leading-5 text-[var(--color-text-tertiary)]">
             {t('agentTeams.communication.empty')}
           </div>
         ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {visibleRows.map(({ message, body, category, repeats }, index) => (
+          <div data-find-transcript="" className="divide-y divide-[var(--color-border)]">
+            {mountedRows.map(({ message, body, category, repeats }, index) => (
               <FeedRow
                 key={message.id}
                 message={message}
@@ -285,12 +326,17 @@ export function AgentTeamsCommunicationFeed({
             ))}
           </div>
         )}
+        <AgentTeamsRevealMore reveal={reveal} remaining={visibleRows.length - mountedRows.length} />
       </div>
     </section>
   )
 }
 
-function FeedRow({
+/**
+ * Memoized so the workbench's one-second clock and canvas hover focus, which
+ * re-render this feed without changing the snapshot, leave mounted rows alone.
+ */
+const FeedRow = memo(function FeedRow({
   message,
   body,
   category,
@@ -313,16 +359,11 @@ function FeedRow({
   const [expanded, setExpanded] = useState(false)
   const focusedTaskId = (body.kind === 'assignment' ? body.taskId : undefined) ?? message.taskId
   const time = formatWorkbenchMessageTime(message.timestamp)
-  const text = body.kind === 'lifecycle'
-    ? lifecycleNarration(body, t)
-    : body.kind === 'assignment'
-      ? assignmentNarration(body, message, t)
-      : category === 'system'
-        ? readableSystemText(body, t)
-        : body.text
-  const compact = body.kind !== 'text' || category === 'system'
+  const text = rowDisplayText(message, body, category, t)
+  const compact = isCompactRow(body, category)
   const rowProps = {
     'data-testid': `agent-teams-message-${message.id}`,
+    'data-find-row': message.id,
     'data-message-body': body.kind,
     'data-message-kind': message.kind,
     'data-message-category': category,
@@ -484,7 +525,7 @@ function FeedRow({
       ) : null}
     </article>
   )
-}
+})
 
 function ParticipantFigure({
   participant,

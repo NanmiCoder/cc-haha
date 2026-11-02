@@ -23,6 +23,8 @@ The mobile app works with desktop v0.7.6 or later. Its interface is currently Ch
 
 Keep the computer on, awake, and running cc-haha. Tasks always execute on the computer. Cloudflare Tunnel provides connectivity while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
 
+Approval, completion and error alerts after you leave the app need no setup on the computer. On iPhone, the Expo push service relays system notifications, so the computer must be able to reach `exp.host`. On Android, the persistent 「正在值守」 (on duty) notification keeps a direct connection to the computer without Google services; on Xiaomi, Huawei, OPPO, vivo and similar phones, also tap 「允许后台运行」 (allow background running) under the app's 设置 → 通知, and allow cc-haha to auto-start and stay locked in recent apps in the system settings.
+
 To chat from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, see **IM Adapters** at the end of this page.
 
 ## H5 Access
@@ -38,7 +40,7 @@ If an older configuration has no saved token, click **Generate token** to show a
 
 The scanned link carries the server address and token. Scan with your phone camera and open it in your usual Safari, Chrome, or system browser. Successful verification stores the connection in that browser's localStorage and removes the token from the address bar. Scanning again or opening a bookmark reconnects automatically. Temporary network failures do not forget pairing; choose **Retry** to use the saved credential. A revoked or regenerated token requires a fresh QR code.
 
-![Reading a real project conversation on mobile (Chinese interface)](../../images/app/en/h5-session.webp)
+![A conversation in a phone browser: the same interface as the cc-haha phone app (Chinese only)](../../images/app/en/h5-session.webp)
 
 ### The token is the credential
 
@@ -70,11 +72,11 @@ Only when a task is idle *and* nothing is connected does the CLI process stop, a
 
 ### What works on a phone
 
-Session list and project switching, sending messages, stopping, streaming replies, image and file attachments, permission buttons, questions from Claude, `@` file references, copy and fork — the whole conversation flow.
+A phone or tablet browser opens the same interface as the cc-haha phone app: home lists tasks under Recent and by project, and new tasks, conversations, tool approvals, questions, plan review, Agent Teams (plan review, member progress and run logs), context usage, changes and file preview, scheduled tasks, background activity and this computer's defaults for new tasks all work as in the app. The interface is currently Chinese only.
 
-The **Settings** entry at the bottom of the sidebar provides **Model providers** and **General**. Add, edit, delete, reorder, or switch providers on your phone. Existing API keys are never returned; leave a key blank while editing to keep it. Changing a model or image request URL requires entering the corresponding API key again, so saved credentials are not automatically sent to a new address. General settings include theme, interface language, response language, output style, reasoning effort, send behavior, thinking, and workflow keywords. Theme and interface language affect this browser; Agent preferences are shared with the computer.
+Compared with the app, a browser has no push notifications, lock-screen live activities or system permission settings, and cannot add or switch to another computer: the page only connects to the computer that served it. **Download file** in the file preview saves the file to the phone instead of the app's share sheet. Voice input needs HTTPS, so it is unavailable on a LAN `http://` address but works over the remote connection. A computer driven by a mouse or trackpad, including a laptop with a touch screen, still gets the desktop interface in a wide window.
 
-Provider website login, configuration import, and desktop administration remain on the computer. The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5. Remote terminal execution is deferred: the current terminal is owned by Electron and requires a separate device-authorized transport with reconnect and revocation support.
+Providers and API keys, MCP, skills and plugins, and configuration import remain on the computer. The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5. Remote terminal execution is deferred: the current terminal is owned by Electron and requires a separate device-authorized transport with reconnect and revocation support.
 
 ## Cloudflare remote connection
 
@@ -127,7 +129,7 @@ The computer's proxy handles its connection to Cloudflare; it does not enable a 
 | Fixed domain fails | Whether DNS for the HTTPS hostname has taken effect, and whether the computer's network and proxy work |
 | Computer says ready but phone cannot open the entry | Test the hostname on cellular data, and confirm the computer is running, online, and awake |
 | An old quick address stops working after restart | Scan the new code on the desktop, or use a fixed domain to keep a long-lived address |
-| No system notification while backgrounded | The tunnel provides connectivity; background push needs separate configuration. Reopen the app to synchronize task state |
+| No system notification while backgrounded | Check that the app's 设置 → 通知 shows 「通知已就绪」 (ready). On iPhone, the computer must reach `exp.host`; on Android, the 「正在值守」 notification must be present and background running and auto-start allowed. Reopening the app registers and reconnects again |
 
 The official connector's data connection uses outbound port `7844`. Restricted networks or proxies may block it. Choosing HTTP/2 does not change that data connection to port `443`. See [Cloudflare connection troubleshooting](https://developers.cloudflare.com/tunnel/troubleshooting/).
 

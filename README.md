@@ -66,7 +66,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
   </tr>
   <tr>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/models-zh.webp" width="100%" alt="多模型：Claude、ChatGPT、Grok 账号登录，DeepSeek、Kimi、GLM 等预设，本地 Ollama、LM Studio">
+      <img src="docs/images/readme/models-zh.webp" width="100%" alt="多模型：输入框里的模型菜单，DeepSeek、Kimi、智谱 GLM 等按服务商分组；也支持 Claude、ChatGPT、Grok 账号登录和本地模型">
       <br><sub><a href="docs/start/models.md">多模型</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
@@ -112,6 +112,16 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
       </td>
       <td valign="middle">
         感谢 <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> 对本项目的赞助！Moe API 是面向开发者与团队的统一大模型 API 平台，一个 Key 即可接入 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM、Qwen 等 120+ 模型，原生兼容 OpenAI（Chat / Responses）、Anthropic Messages 与 Gemini 协议，可直接用于 cc-haha、Claude Code、Codex 等工具。价格按 1 元 = 1 美元额度计费，Codex 自营号池倍率低至 0.1x，Gemini 自营 0.25x、Grok 0.2x、Claude Code 第三方号池 0.35x、DeepSeek / GLM / Kimi 0.5x 起，并支持 GPT Image、Gemini 生图。支持支付宝、微信扫码充值，余额实时到账；可按需开具发票，余额支持退款，团队采购与报销都方便。全球 CDN 线路，API 请求与响应正文不在平台持久化保存。
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
+        <a href="https://www.kk-vibe.top/r/j8d6we">
+          <img src="docs/images/sponsors/kkvibe-logo.png" width="180" alt="kk-vibe">
+        </a>
+      </td>
+      <td valign="middle">
+        感谢 <a href="https://www.kk-vibe.top/r/j8d6we">kk-vibe</a> 对本项目的赞助！kk-vibe 覆盖 GPT、Claude、Gemini、DeepSeek 等主流模型，24 小时「鹈鹕骑车」实测，渠道状态随时可查。内置无限画布，支持 GPT、Nano Banana 生图，兼顾编程开发与视觉创作。模型表现看得见 · 无限画布自由创作。
       </td>
     </tr>
     <tr>

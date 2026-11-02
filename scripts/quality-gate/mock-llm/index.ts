@@ -21,6 +21,7 @@ import { startMockLlmServer } from './server'
 import { searchTransportBunOptions } from './searchTransportOptions'
 import { runLeanNotificationProvenanceScenario, runLeanProfileScenario } from './leanProfile'
 import { runAgentModelRoutingScenario } from './agentModelRouting'
+import { runAgentProviderRoutingScenario } from './agentProviderRouting'
 import { runProviderMediaScenario } from './providerMedia'
 import { runComputerUseRefreshScenario } from './computerUseRefresh'
 import { createMockOnlyRunners, describeRequests, MOCK_AGENT_SCENARIOS } from './scenarios'
@@ -29,6 +30,7 @@ const MOCK_MODEL = 'mock-model'
 const STEP_TIMEOUT_MS = 60_000
 const LEAN_SCENARIO = 'mock-lean-profile'
 const MODEL_ROUTING_SCENARIO = 'mock-agent-model-routing'
+const PROVIDER_ROUTING_SCENARIO = 'mock-agent-provider-routing'
 const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 const COMPUTER_USE_SCENARIO = 'mock-computer-use-hot-enable'
 
@@ -44,6 +46,7 @@ async function main() {
   if (argv.includes('--list')) {
     console.log(`  ${LEAN_SCENARIO.padEnd(32)} Lean CLI tools, recovery, project instructions and request comparison`)
     console.log(`  ${MODEL_ROUTING_SCENARIO.padEnd(32)} Flash inheritance, saved Claude presets and explicit Agent model selection`)
+    console.log(`  ${PROVIDER_ROUTING_SCENARIO.padEnd(32)} Agent pinned to another saved provider, direct and proxied, with its effort`)
     console.log(`  ${PROVIDER_MEDIA_SCENARIO.padEnd(32)} DeepSeek request size, image upload, tool pairing and cached file reuse`)
     console.log(`  ${COMPUTER_USE_SCENARIO.padEnd(32)} Existing CLI refreshes authorized Computer Use tools at the next turn`)
     for (const scenario of MOCK_AGENT_SCENARIOS) console.log(`  ${scenario.id.padEnd(32)} ${scenario.title}`)
@@ -56,9 +59,10 @@ async function main() {
     : MOCK_AGENT_SCENARIOS
   const runLean = only.length === 0 || only.includes(LEAN_SCENARIO)
   const runModelRouting = only.length === 0 || only.includes(MODEL_ROUTING_SCENARIO)
+  const runProviderRouting = only.length === 0 || only.includes(PROVIDER_ROUTING_SCENARIO)
   const runProviderMedia = only.length === 0 || only.includes(PROVIDER_MEDIA_SCENARIO)
   const runComputerUse = only.length === 0 || only.includes(COMPUTER_USE_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderMedia && !runComputerUse) {
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
@@ -78,6 +82,10 @@ async function main() {
   if (runModelRouting) {
     await runAgentModelRoutingScenario(rootDir, join(artifactDir, 'model-routing'))
     console.log(`[agent-e2e] PASS ${MODEL_ROUTING_SCENARIO}`)
+  }
+  if (runProviderRouting) {
+    await runAgentProviderRoutingScenario(rootDir, join(artifactDir, 'provider-routing'))
+    console.log(`[agent-e2e] PASS ${PROVIDER_ROUTING_SCENARIO}`)
   }
   if (runLean) {
     await runLeanProfileScenario(rootDir, artifactDir)

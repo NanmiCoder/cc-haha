@@ -9,8 +9,17 @@ const catalog: VoiceCatalog = {
     info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto', 'zh'], downloadBytes: 1_000_000 },
     preparation: { phase: 'ready' },
   }],
-  preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'mirror' },
+  preferences: {
+    enabled: true,
+    providerId: 'sensevoice-local',
+    language: 'auto',
+    downloadSource: 'mirror',
+    correctionEnabled: false,
+    correctionProviderId: null,
+    correctionModelId: null,
+  },
   limits: { maxAudioSeconds: 120, maxAudioBytes: 4 * 1024 * 1024 },
+  correction: { defaultTarget: null, target: null },
 }
 const transcript = { text: '语音转写内容', audioSeconds: 2.5, inferenceSeconds: 0.4 }
 const response = (value: unknown, status = 200) => ({

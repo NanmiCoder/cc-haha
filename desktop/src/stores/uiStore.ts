@@ -231,6 +231,8 @@ export type Toast = {
   type: 'success' | 'error' | 'warning' | 'info'
   message: string
   duration?: number
+  /** One follow-up, such as undo. Running it also dismisses the toast. */
+  action?: { label: string; onClick: () => void }
 }
 
 export type MarketTarget = {

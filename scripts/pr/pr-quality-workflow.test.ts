@@ -7,7 +7,13 @@ type WorkflowJob = {
   'runs-on'?: string
   'continue-on-error'?: boolean
   needs?: string | string[]
-  steps?: Array<{ name?: string; run?: string; 'working-directory'?: string }>
+  steps?: Array<{
+    name?: string
+    run?: string
+    uses?: string
+    with?: Record<string, unknown>
+    'working-directory'?: string
+  }>
 }
 
 function workflowJobs(workflow: string) {
@@ -119,6 +125,29 @@ describe('PR quality workflow', () => {
     expect(check).toBeGreaterThanOrEqual(0)
     expect(install).toBeGreaterThanOrEqual(0)
     expect(install).toBeLessThan(check)
+  })
+
+  test('installs the phone app and Node 22 before any lane that builds desktop/dist', () => {
+    // desktop `bun run build` ends by exporting mobile/ into dist/m (the phone H5).
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    for (const [job, command] of [
+      ['desktop-checks', 'bun run check:desktop'],
+      ['desktop-native-checks', 'bun run check:native'],
+    ]) {
+      const steps = jobs[job].steps ?? []
+      const check = steps.findIndex(step => step.run === command)
+      const install = steps.findIndex(step =>
+        step['working-directory'] === 'mobile' && step.run === 'bun install --frozen-lockfile',
+      )
+      const node = steps.findIndex(step =>
+        step.uses?.startsWith('actions/setup-node@') && String(step.with?.['node-version']) === '22',
+      )
+      expect(check, job).toBeGreaterThanOrEqual(0)
+      expect(install, job).toBeGreaterThanOrEqual(0)
+      expect(install, job).toBeLessThan(check)
+      expect(node, job).toBeGreaterThanOrEqual(0)
+      expect(node, job).toBeLessThan(check)
+    }
   })
 
   test('requires macOS Swift checks alongside the selected Linux native packaging lane', () => {

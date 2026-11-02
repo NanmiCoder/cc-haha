@@ -96,6 +96,10 @@ if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
 
   echo "[build-macos-arm64] Installing adapter dependencies..."
   (cd "${ADAPTERS_DIR}" && bun install)
+
+  # `bun run build` exports the phone app (mobile/) into dist/m as the phone H5.
+  echo "[build-macos-arm64] Installing mobile dependencies..."
+  (cd "${REPO_ROOT}/mobile" && bun install --frozen-lockfile)
 fi
 
 echo "[build-macos-arm64] Cleaning stale Electron outputs..."

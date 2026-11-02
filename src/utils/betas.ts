@@ -28,6 +28,7 @@ import { isEnvDefinedFalsy, isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './model/providers.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 import { getInitialSettings } from './settings/settings.js'
 
 /**
@@ -248,7 +249,7 @@ export function shouldIncludeFirstPartyOnlyBetas(): boolean {
       isFirstPartyAnthropicBaseUrl() ||
       isClaudeAISubscriber()
     ) &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
+    !isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))
   )
 }
 
@@ -261,7 +262,7 @@ export function shouldUseGlobalCacheScope(): boolean {
   return (
     getAPIProvider() === 'firstParty' &&
     (isFirstPartyAnthropicBaseUrl() || isClaudeAISubscriber()) &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
+    !isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))
   )
 }
 
@@ -436,7 +437,7 @@ export function getMergedBetas(
     // Third-party Anthropic relays may require explicitly selected features
     // (e.g. 1M context). Keep those opt-ins without enabling first-party defaults.
     return [...new Set([
-      ...(!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) && has1mContext(model)
+      ...(!isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS')) && has1mContext(model)
         ? [CONTEXT_1M_BETA_HEADER] : []),
       ...getEnvironmentBetas(),
       ...(getSdkBetas() ?? []),

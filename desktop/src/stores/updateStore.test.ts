@@ -759,6 +759,62 @@ describe('updateStore', () => {
     }
   })
 
+  it('keeps the update retryable and brings the runtime back when the pre-install shutdown fails', async () => {
+    const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
+      onEvent?.({ event: 'Started', data: { contentLength: 100 } })
+      onEvent?.({ event: 'Finished' })
+    })
+    const install = vi.fn().mockResolvedValue(undefined)
+    const prepareInstall = vi.fn().mockRejectedValue(
+      new Error('The local runtime is still shutting down, so the update was not installed. Wait a moment and try again. (Runtime processes did not exit)'),
+    )
+    const cancelInstall = vi.fn().mockResolvedValue(undefined)
+    const relaunchHost = vi.fn().mockResolvedValue(undefined)
+    const getServerUrl = vi.fn().mockResolvedValue('http://127.0.0.1:3456')
+
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      capabilities: {
+        ...browserHost.capabilities,
+        updates: true,
+      },
+      runtime: {
+        ...browserHost.runtime,
+        getServerUrl,
+      },
+      updates: {
+        ...browserHost.updates,
+        check: vi.fn().mockResolvedValue({
+          version: '0.4.0',
+          body: 'Electron host update',
+          download,
+          install,
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+        prepareInstall,
+        cancelInstall,
+        relaunch: relaunchHost,
+      },
+    }
+
+    vi.resetModules()
+    const { useUpdateStore } = await import('./updateStore')
+
+    await useUpdateStore.getState().checkForUpdates()
+    await useUpdateStore.getState().installUpdate()
+
+    // The installer never starts while runtime processes are still alive.
+    expect(install).not.toHaveBeenCalled()
+    expect(relaunchHost).not.toHaveBeenCalled()
+    expect(cancelInstall).toHaveBeenCalledTimes(1)
+    expect(getServerUrl).toHaveBeenCalledTimes(1)
+    expect(useUpdateStore.getState().status).toBe('downloaded')
+    expect(useUpdateStore.getState().error).toContain('still shutting down')
+    expect(useUpdateStore.getState().shouldPrompt).toBe(true)
+  })
+
   it('refreshes the pending update when the proxy changes before install', async () => {
     const staleClose = vi.fn().mockResolvedValue(undefined)
     const freshDownload = vi.fn(async (onEvent?: (event: unknown) => void) => {

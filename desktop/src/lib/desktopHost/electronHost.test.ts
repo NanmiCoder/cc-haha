@@ -5,6 +5,33 @@ import { createElectronHost } from './electronHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type WorkspaceBrowserMenuOptions } from './types'
 
 describe('electron desktop host', () => {
+  it('only exposes validated configuration, status and cancellation for idle power actions', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
+    const subscribe = vi.fn()
+    const host = createElectronHost({ invoke, subscribe })
+    const settings = { action: 'sleep' as const, scope: 'any' as const, countdownSeconds: 60 as const }
+    await host.power.getIdleActionState()
+    await host.power.configureIdleAction(settings)
+    await host.power.cancelIdleAction()
+    const handler = vi.fn()
+    await host.power.onIdleActionState(handler)
+    expect(invoke.mock.calls).toEqual([
+      [ELECTRON_IPC_CHANNELS.powerGetIdleActionState, undefined],
+      [ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, settings],
+      [ELECTRON_IPC_CHANNELS.powerCancelIdleAction, undefined],
+    ])
+    expect(subscribe).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.powerIdleActionState, handler)
+    for (const invalid of [{ ...settings, action: 'reboot' }, { ...settings, countdownSeconds: -1 }, { ...settings, command: 'shutdown' }]) {
+      await expect(host.power.configureIdleAction(invalid as never)).rejects.toThrow('Invalid Electron IPC payload')
+    }
+    const { isElectronIpcChannelAllowedForPetWindow } = await import('../../../electron/ipc/capabilities')
+    for (const channel of [ELECTRON_IPC_CHANNELS.powerGetIdleActionState, ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, ELECTRON_IPC_CHANNELS.powerCancelIdleAction]) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.power.configureIdleAction(settings)).rejects.toThrow('desktop app runtime')
+  })
+
   it('routes prevent-sleep preferences through boolean-only IPC and excludes browser/pet callers', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     const host = createElectronHost({ invoke, subscribe: vi.fn() })

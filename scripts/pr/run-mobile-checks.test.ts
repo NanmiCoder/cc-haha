@@ -32,19 +32,25 @@ test.each([0, 7])('mobile checks execute in order and stop on a failing lint (%i
     typecheck: 'bun --no-env-file fixture.ts typecheck 0',
     lint: `bun --no-env-file fixture.ts lint ${lintExit}`,
     test: 'bun --no-env-file fixture.ts test 0',
+    'export:h5': 'bun --no-env-file fixture.ts export:h5 0',
   } }))
   writeFileSync(join(mobile, '.env'), 'MOBILE_TEST_LEAK=unexpected\n')
   writeFileSync(join(mobile, 'fixture.ts'), `
     import { appendFileSync } from 'node:fs'
     if (process.env.MOBILE_TEST_LEAK) process.exit(91)
-    appendFileSync('calls.txt', process.argv[2] + '\\n')
+    appendFileSync('calls.txt', process.argv.slice(2).filter((arg, index) => index !== 1).join(' ') + '\\n')
     process.exit(Number(process.argv[3]))
   `)
   try {
     expect(await runMobileChecks(root)).toBe(lintExit)
-    expect(readFileSync(join(mobile, 'calls.txt'), 'utf8')).toBe(
-      lintExit ? 'typecheck\nlint\n' : 'typecheck\nlint\ntest\n',
-    )
+    const calls = readFileSync(join(mobile, 'calls.txt'), 'utf8').trim().split('\n')
+    if (lintExit) {
+      expect(calls).toEqual(['typecheck', 'lint'])
+    } else {
+      expect(calls.slice(0, 3)).toEqual(['typecheck', 'lint', 'test'])
+      // The H5 export runs last, into the check's own temporary directory.
+      expect(calls[3]).toMatch(/^export:h5 .*mobile-checks-.*[\\/]h5$/)
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

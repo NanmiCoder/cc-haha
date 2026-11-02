@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { Alert, Animated, PanResponder, Pressable, RefreshControl, ScrollView, View } from 'react-native'
-import { router } from 'expo-router'
+import { Redirect, router } from 'expo-router'
 import { Text } from '../ui/Text'
 import { useApp } from '../state/AppContext'
 import type { Host } from '../core/types'
@@ -23,6 +23,7 @@ import { hostCheckBadge, hostCheckLine } from '../ui/home/homeModel'
 import { StatusDot, useNow, useToneColor } from '../ui/home/parts'
 import { connectionAddress, removeConfirmText } from '../ui/computer/computerModel'
 import { useHostCheck } from '../ui/home/useHostCheck'
+import { isH5 } from '../state/h5'
 
 const actionWidth = 84
 
@@ -159,7 +160,12 @@ function HostRow({
   )
 }
 
-export default function Hosts() {
+/** 管理多台电脑只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+export default function HostsRoute() {
+  return isH5 ? <Redirect href="/" /> : <Hosts />
+}
+
+function Hosts() {
   const { registry, select, remove, error: storageError } = useApp()
   const colors = useColors()
   const [error, setError] = useState('')

@@ -1,5 +1,6 @@
 import { isOpenAIReasoningModel } from '../../shared/modelReasoning.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
+import { readProviderEnv } from '../../utils/model/providerEnvScope.js'
 
 export const OPENAI_DEFAULT_MAIN_MODEL = 'gpt-6-sol'
 export const OPENAI_DEFAULT_SONNET_MODEL = 'gpt-6-sol'
@@ -216,7 +217,7 @@ export function resolveOpenAIReasoningEffortWithPriority(
 export function isOpenAIResponsesModel(model: string): boolean {
   // The official runtime selects the transport even for newly published IDs
   // and Claude tier aliases, so capability checks must follow that same route.
-  return isEnvTruthy(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER) ||
+  return isEnvTruthy(readProviderEnv('CC_HAHA_OPENAI_OAUTH_PROVIDER')) ||
     isOpenAIReasoningModel(model)
 }
 

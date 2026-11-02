@@ -10,6 +10,8 @@ import { FocusedRequests } from '../core/focusedRequests'
 import { useFocusedResource } from '../core/useFocusedResource'
 import { shareFocusedWorkspaceFile } from '../core/workspaceShare'
 import { downloadWorkspaceFile, type DownloadFetch } from '../core/workspaceDownload'
+import { fetchCredentials } from '../state/api'
+import { saveInBrowser } from '../ui/files/browserDownload'
 import {
   errorMessage,
   formatBytes,
@@ -78,7 +80,7 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
   )
 
   async function shareFile() {
-    if (!host || !credential || sharing) return
+    if (!host || credential === undefined || sharing) return
     const request = transfers.begin()
     if (!request) return
     setSharing(true)
@@ -91,7 +93,14 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
       }
     }, SHARE_TIMEOUT_MS)
     try {
-      if (Platform.OS === 'web') throw new Error('请在原生 App 中使用系统分享和存储文件')
+      if (Platform.OS === 'web') {
+        // 浏览器没有系统分享面板：直接下载到手机。
+        const result = await downloadWorkspaceFile(
+          host, credential, id, path, fetch as DownloadFetch, undefined, fetchCredentials
+        )
+        if (request.isCurrent()) saveInBrowser(result.bytes, result.name, result.mimeType)
+        return
+      }
       await shareFocusedWorkspaceFile(request, {
         download: (signal) =>
           downloadWorkspaceFile(host, credential, id, path, expoFetch as DownloadFetch, signal),
@@ -163,10 +172,10 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
         ) : (
           <IconButton
             icon="share"
-            label="存储或分享文件"
+            label={Platform.OS === 'web' ? '下载文件' : '存储或分享文件'}
             iconSize={20}
             color={colors.ink2}
-            disabled={!host || !credential}
+            disabled={!host || credential === undefined}
             onPress={() => void shareFile()}
           />
         )
