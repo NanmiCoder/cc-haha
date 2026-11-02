@@ -1,8 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentTeamsMemberInspector } from '@/components/agentTeams/AgentTeamsMemberInspector'
+import { FindInPageModal } from '@/components/search/FindInPageModal'
 import { formatWorkbenchMessageTime } from '@/components/agentTeams/agentTeamsModel'
+import { REVEAL_PAGE_SIZE } from '@/components/agentTeams/useProgressiveReveal'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type {
   TeamMember,
@@ -108,6 +110,122 @@ describe('AgentTeamsMemberInspector', () => {
     expect(screen.getByText(/Approved tasks are delivered directly; use the execution button below/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /execution/i }))
     expect(onOpenExecution).toHaveBeenCalledOnce()
+  })
+
+  describe('long message histories', () => {
+    function history(count: number): TeamWorkbenchMessage[] {
+      const start = Date.parse('2026-08-08T07:00:00.000Z')
+      return Array.from({ length: count }, (_, index) => message({
+        id: `m-${index}`,
+        text: `Update ${index}`,
+        timestamp: new Date(start + index * 1000).toISOString(),
+      }))
+    }
+
+    function mounted(): Array<string | null> {
+      return Array.from(
+        screen.getByTestId('agent-teams-member-messages').querySelectorAll('li'),
+      ).map((row) => row.getAttribute('data-find-row'))
+    }
+
+    function renderFor(member: TeamMember, messages: TeamWorkbenchMessage[]) {
+      const selected = snapshot('2026-08-08T08:00:00.000Z', 'in_progress', messages)
+      return (
+        <AgentTeamsMemberInspector
+          snapshots={[selected]}
+          selectedIndex={0}
+          snapshot={selected}
+          member={member}
+          isLead={false}
+          leadIsStreaming={false}
+          onBack={vi.fn()}
+          onClose={vi.fn()}
+          onOpenExecution={vi.fn()}
+        />
+      )
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('mounts a page at a time', () => {
+      renderInspector({ snapshots: [snapshot('2026-08-08T08:00:00.000Z', 'in_progress', history(474))] })
+
+      expect(mounted()).toHaveLength(REVEAL_PAGE_SIZE)
+      expect(mounted()[0]).toBe('m-473')
+
+      fireEvent.click(screen.getByRole('button', {
+        name: `Show earlier messages (${474 - REVEAL_PAGE_SIZE} more)`,
+      }))
+      expect(mounted()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+      expect(mounted()[0]).toBe('m-473')
+    })
+
+    it('mounts the next page as the end nears the inspector scroller', () => {
+      const observers: Array<{ callback: IntersectionObserverCallback; root: Element | Document | null | undefined; disconnected: boolean }> = []
+      vi.stubGlobal('IntersectionObserver', class {
+        private readonly record: (typeof observers)[number]
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          this.record = { callback, root: options?.root, disconnected: false }
+          observers.push(this.record)
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() { this.record.disconnected = true }
+        takeRecords() { return [] }
+      })
+      renderInspector({ snapshots: [snapshot('2026-08-08T08:00:00.000Z', 'in_progress', history(100))] })
+
+      const live = observers.filter((observer) => !observer.disconnected)
+      expect(live).toHaveLength(1)
+      // The drawer's own scroller, so the prefetch margin is measured there.
+      const root = live[0]!.root as HTMLElement
+      expect(root.className).toContain('overflow-y-auto')
+      expect(root.contains(screen.getByTestId('agent-teams-member-messages'))).toBe(true)
+
+      act(() => {
+        live[0]!.callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+      })
+      expect(mounted()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+    })
+
+    it('starts another member from their newest page', () => {
+      const messages = history(200)
+      const view = render(renderFor(builder, messages))
+      fireEvent.click(screen.getByRole('button', { name: /Show earlier messages/ }))
+      expect(mounted()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+
+      view.rerender(renderFor(reviewer, messages))
+      expect(mounted()).toHaveLength(REVEAL_PAGE_SIZE)
+    })
+
+    it('finds a message that is not mounted yet', async () => {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+      const highlights = new Map<string, { ranges: Range[] }>()
+      vi.stubGlobal('CSS', { highlights })
+      vi.stubGlobal('Highlight', class {
+        ranges: Range[] = []
+        priority?: number
+        add(range: Range) { this.ranges.push(range) }
+      })
+      const messages = history(REVEAL_PAGE_SIZE + 10)
+      messages[0] = { ...messages[0]!, text: 'Kickoff checklist for the release' }
+      render(<>
+        {renderFor(builder, messages)}
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+      expect(mounted()).not.toContain('m-0')
+
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'kickoff checklist' } })
+
+      await waitFor(() => expect(
+        document.querySelector('[data-find-bar] span.font-mono')?.textContent,
+      ).toBe('1 / 1'))
+      expect(mounted()).toContain('m-0')
+      expect(highlights.get('cc-find-active')?.ranges[0]?.startContainer.parentElement
+        ?.closest('[data-find-row]')?.getAttribute('data-find-row')).toBe('m-0')
+    })
   })
 
   it('derives the first start and elapsed duration from task state transitions', () => {

@@ -3889,6 +3889,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'agentTeams.communication.hideLifecycle': 'Hide status signals',
   'agentTeams.communication.expand': 'Show more',
   'agentTeams.communication.collapse': 'Show less',
+  'agentTeams.communication.showEarlier': 'Show earlier messages ({count} more)',
   'agentTeams.inline.created': 'Agent team · {count} teammates',
   'agentTeams.inline.notStarted': 'Not started',
   'agentTeams.inline.coordination': 'Team coordination · {count} steps',

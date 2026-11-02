@@ -5,9 +5,11 @@ import { useChatStore } from '@/stores/chatStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useTeamStore } from '@/stores/teamStore'
 import { useTabStore } from '@/stores/tabStore'
+import { FindInPageModal } from '@/components/search/FindInPageModal'
 import type { TeamWorkbenchSnapshot, TeamWorkbenchTask } from '@/types/team'
 
 import { AgentTeamsWorkbench } from './AgentTeamsWorkbench'
+import { REVEAL_PAGE_SIZE } from './useProgressiveReveal'
 
 const { getWorkbenchForSessionMock, getWorkbenchMock } = vi.hoisted(() => ({
   getWorkbenchForSessionMock: vi.fn(),
@@ -555,5 +557,55 @@ describe('AgentTeamsWorkbench', () => {
     const available = screen.getByTestId('agent-teams-canvas-task-2')
     expect(within(available).getByText('Waiting for a teammate')).toBeTruthy()
     expect(within(available).queryByText('Completed · owner not recorded')).toBeNull()
+  })
+
+  it('finds canvas text and unmounted messages together while the communication panel is open', async () => {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+    const highlights = new Map<string, { ranges: Range[] }>()
+    vi.stubGlobal('CSS', { highlights })
+    vi.stubGlobal('Highlight', class {
+      ranges: Range[] = []
+      priority?: number
+      add(range: Range) { this.ranges.push(range) }
+    })
+    try {
+      const snapshot = workbench('v1', ['completed', 'in_progress', 'pending'])
+      snapshot.tasks[2] = { ...snapshot.tasks[2]!, subject: 'Zebra migration' }
+      const start = Date.parse('2026-08-08T00:00:00.000Z')
+      snapshot.messages = Array.from({ length: REVEAL_PAGE_SIZE + 10 }, (_, index) => ({
+        id: `m-${index}`,
+        from: 'builder',
+        to: 'team-lead',
+        recipients: ['team-lead'],
+        kind: 'direct' as const,
+        text: index === 0 ? 'Zebra migration rollout notes' : `Update ${index}`,
+        timestamp: new Date(start + index * 1000).toISOString(),
+      }))
+      useTeamStore.setState({
+        workbenchesBySession: {
+          'lead-session': { teamName: 'visual-team', snapshots: [snapshot], loading: false, error: null },
+        },
+      })
+      render(<>
+        <AgentTeamsWorkbench sessionId="lead-session" />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+      fireEvent.click(screen.getByTestId('agent-teams-communication-rail'))
+      expect(screen.queryByTestId('agent-teams-message-m-0')).toBeNull()
+
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'zebra migration' } })
+
+      const counter = () => document.querySelector('[data-find-bar] span.font-mono')?.textContent
+      const active = () => highlights.get('cc-find-active')?.ranges[0]?.startContainer.parentElement
+      await waitFor(() => expect(counter()).toMatch(/^1 \/ \d+$/))
+      expect(active()?.closest('[data-testid="agent-teams-canvas-task-3"]')).toBeTruthy()
+
+      // Messages follow the rest of the page, so wrapping back lands on the oldest one.
+      fireEvent.click(screen.getByRole('button', { name: 'Previous match' }))
+      expect(screen.getByTestId('agent-teams-message-m-0')).toBeTruthy()
+      expect(active()?.closest('[data-find-row]')?.getAttribute('data-find-row')).toBe('m-0')
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

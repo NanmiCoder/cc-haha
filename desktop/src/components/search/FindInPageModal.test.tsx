@@ -149,6 +149,36 @@ describe('FindInPageModal', () => {
     }
   })
 
+  // A list mounting N rows reports N records that all target the list. Checking
+  // the list's subtree once per record made a 1,500-row mount spend 1.5s here.
+  it('checks each mutated element once per batch while watching for auxiliary surfaces', async () => {
+    vi.stubGlobal('CSS', { highlights: new Map() })
+    const search = vi.fn(() => 1)
+    const unregister = registerConversationFindController({ search, navigate: vi.fn(), clear: vi.fn() })
+    try {
+      render(<>
+        <div data-testid="growing-list" />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'needle' } })
+      await waitFor(() => expect(search).toHaveBeenCalledWith('needle', 0))
+
+      const list = screen.getByTestId('growing-list')
+      const subtreeQueries = vi.spyOn(Element.prototype, 'querySelector')
+      try {
+        await act(async () => {
+          for (let index = 0; index < 200; index += 1) list.appendChild(document.createElement('article'))
+          await Promise.resolve()
+        })
+        expect(subtreeQueries.mock.contexts.filter((context) => context === list)).toHaveLength(1)
+      } finally {
+        subtreeQueries.mockRestore()
+      }
+    } finally {
+      act(() => unregister())
+    }
+  })
+
   it('reruns an open query when the active conversation changes', async () => {
     vi.stubGlobal('CSS', { highlights: new Map() })
     const firstSearch = vi.fn(() => 2)

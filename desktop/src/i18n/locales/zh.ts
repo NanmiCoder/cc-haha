@@ -3887,6 +3887,7 @@ export const zh: Record<TranslationKey, string> = {
   'agentTeams.communication.hideLifecycle': '隐藏状态信号',
   'agentTeams.communication.expand': '展开',
   'agentTeams.communication.collapse': '收起',
+  'agentTeams.communication.showEarlier': '显示更早的消息（还有 {count} 条）',
   'agentTeams.inline.created': 'Agent 团队 · {count} 名成员',
   'agentTeams.inline.notStarted': '未启动',
   'agentTeams.inline.coordination': '团队编排记录 · {count} 步',

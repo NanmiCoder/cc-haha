@@ -7,6 +7,13 @@ import {
   subscribeConversationFindController,
   type ConversationFindController,
 } from './conversationFindBridge'
+import {
+  clearFindHighlights,
+  collectFindRanges,
+  FIND_ACTIVE_HIGHLIGHT,
+  FIND_RESULTS_HIGHLIGHT,
+  paintFindHighlights,
+} from './findHighlights'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '../../i18n'
 
@@ -17,11 +24,6 @@ import { useTranslation } from '../../i18n'
 // value, so the search box matches itself and steals focus/caret. Scoping sidesteps that.
 
 const FIND_DEBOUNCE_MS = 250
-const MAX_FIND_MATCHES = 1_000
-const RESULTS_HL = 'cc-find-results'
-const ACTIVE_HL = 'cc-find-active'
-// Subtrees never searched: sidebar, tab bar, this find bar, non-content tags.
-const SKIP_CLOSEST = '.sidebar-panel, [data-testid="tab-bar"], [data-find-bar], script, style, noscript'
 const CONVERSATION_AUXILIARY_CANDIDATES = [
   '[data-testid="workbench-panel"]',
   '[data-testid="session-activity-panel"]',
@@ -59,7 +61,7 @@ export function FindInPageModal({ open, onClose }: Props) {
     if (!open) {
       conversationControllerRef.current?.clear()
       conversationControllerRef.current = null
-      clearHighlights()
+      clearFindHighlights()
       rangesRef.current = []
       lastSearchQueryRef.current = ''
       setQuery('')
@@ -86,14 +88,14 @@ export function FindInPageModal({ open, onClose }: Props) {
   // Clear highlights on unmount.
   useEffect(() => () => {
     conversationControllerRef.current?.clear()
-    clearHighlights()
+    clearFindHighlights()
   }, [])
 
   useEffect(() => {
     if (!open || !conversationController || !debouncedQuery.trim() || typeof MutationObserver === 'undefined') return
     let refreshTimer: number | null = null
     const observer = new MutationObserver((mutations) => {
-      if (refreshTimer === null && mutations.some(mutationTouchesConversationAuxiliarySurface)) {
+      if (refreshTimer === null && mutationsTouchConversationAuxiliarySurface(mutations)) {
         refreshTimer = window.setTimeout(() => {
           refreshTimer = null
           setAuxiliaryRevision((current) => current + 1)
@@ -120,7 +122,7 @@ export function FindInPageModal({ open, onClose }: Props) {
     if (!q) {
       conversationControllerRef.current?.clear()
       conversationControllerRef.current = null
-      clearHighlights()
+      clearFindHighlights()
       rangesRef.current = []
       setCount(0)
       setActiveIndex(0)
@@ -133,7 +135,7 @@ export function FindInPageModal({ open, onClose }: Props) {
     const searchRoots = conversationController
       ? Array.from(document.querySelectorAll<HTMLElement>(CONVERSATION_AUXILIARY_SURFACES))
       : [document.body]
-    const ranges = collectRanges(q, searchRoots)
+    const ranges = collectFindRanges(q, searchRoots)
     if (ranges.length > 0) {
       const nextActiveIndex = lastSearchQueryRef.current === q && rangesRef.current.length > 0
         ? Math.min(activeIndexRef.current, ranges.length - 1)
@@ -144,7 +146,7 @@ export function FindInPageModal({ open, onClose }: Props) {
       setCount(ranges.length)
       setActiveIndex(nextActiveIndex)
       lastSearchQueryRef.current = q
-      paint(ranges, nextActiveIndex)
+      paintFindHighlights(ranges, nextActiveIndex)
       return
     }
     if (conversationController) {
@@ -152,7 +154,7 @@ export function FindInPageModal({ open, onClose }: Props) {
           lastSearchQueryRef.current === q && rangesRef.current.length === 0
         ? activeIndexRef.current
         : 0
-      clearHighlights()
+      clearFindHighlights()
       rangesRef.current = []
       conversationControllerRef.current = conversationController
       const matchCount = conversationController.search(q, preferredIndex)
@@ -167,7 +169,7 @@ export function FindInPageModal({ open, onClose }: Props) {
     setCount(ranges.length)
     setActiveIndex(0)
     lastSearchQueryRef.current = q
-    paint(ranges, 0)
+    paintFindHighlights(ranges, 0)
   }, [auxiliaryRevision, conversationRevision, debouncedQuery, open])
 
   // Next/previous — immediate, uses live state.
@@ -185,7 +187,7 @@ export function FindInPageModal({ open, onClose }: Props) {
     if (ranges.length === 0) return
     const next = forward ? (activeIndex + 1) % ranges.length : (activeIndex - 1 + ranges.length) % ranges.length
     setActiveIndex(next)
-    paint(ranges, next)
+    paintFindHighlights(ranges, next)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -207,8 +209,8 @@ export function FindInPageModal({ open, onClose }: Props) {
           these wash over arbitrary page content, not a brand-soft panel, so
           borrowing the brand chip tokens reads wrong on tinted surfaces. */}
       <style>{`
-        ::highlight(${RESULTS_HL}) { background-color: var(--color-search-highlight); color: var(--color-on-search-highlight); }
-        ::highlight(${ACTIVE_HL}) { background-color: var(--color-search-highlight-active); color: var(--color-on-search-highlight-active); }
+        ::highlight(${FIND_RESULTS_HIGHLIGHT}) { background-color: var(--color-search-highlight); color: var(--color-on-search-highlight); }
+        ::highlight(${FIND_ACTIVE_HIGHLIGHT}) { background-color: var(--color-search-highlight-active); color: var(--color-on-search-highlight-active); }
       `}</style>
       <div
         className="animate-overlay-in-top flex h-10 items-center gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-2.5 pr-1.5 shadow-[var(--shadow-dropdown)]"
@@ -257,80 +259,31 @@ export function FindInPageModal({ open, onClose }: Props) {
   )
 }
 
-// ---- search core (module scope, no React state) ----
-
-/** Walk visible text nodes outside skipped subtrees; return a Range per case-insensitive match. */
-function collectRanges(q: string, roots: ParentNode[]): Range[] {
-  const ranges: Range[] = []
-  const needle = q.toLowerCase()
-  for (const root of roots) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        const parent = node.parentElement
-        if (!parent || !node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
-        if (parent.closest(SKIP_CLOSEST)) return NodeFilter.FILTER_REJECT
-        if (parent.closest('[hidden], [aria-hidden="true"], .hidden, .invisible')) return NodeFilter.FILTER_REJECT
-        return NodeFilter.FILTER_ACCEPT
-      },
-    })
-    let textNode = walker.nextNode() as Text | null
-    while (textNode) {
-      const text = textNode.nodeValue!.toLowerCase()
-      let idx = text.indexOf(needle)
-      while (idx !== -1 && ranges.length < MAX_FIND_MATCHES) {
-        const range = document.createRange()
-        range.setStart(textNode, idx)
-        range.setEnd(textNode, idx + needle.length)
-        ranges.push(range)
-        idx = text.indexOf(needle, idx + needle.length)
-      }
-      if (ranges.length >= MAX_FIND_MATCHES) return ranges
-      textNode = walker.nextNode() as Text | null
-    }
-  }
-  return ranges
-}
-
 function elementTouchesConversationAuxiliarySurface(element: Element) {
   return element.matches(CONVERSATION_AUXILIARY_CANDIDATES) ||
     Boolean(element.closest(CONVERSATION_AUXILIARY_CANDIDATES)) ||
     Boolean(element.querySelector(CONVERSATION_AUXILIARY_CANDIDATES))
 }
 
-function mutationTouchesConversationAuxiliarySurface(mutation: MutationRecord) {
-  const targetElement = mutation.target instanceof Element
-    ? mutation.target
-    : mutation.target.parentElement
-  if (targetElement && elementTouchesConversationAuxiliarySurface(targetElement)) return true
-  return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => {
-    const element = node instanceof Element ? node : node.parentElement
-    return element ? elementTouchesConversationAuxiliarySurface(element) : false
-  })
-}
-
-/** Register CSS highlights for all matches + the active one, and scroll the active into view. */
-function paint(ranges: Range[], activeIndex: number) {
-  const highlights = (CSS as any).highlights as Map<string, unknown> | undefined
-  const HighlightCtor = (globalThis as any).Highlight
-  if (highlights && HighlightCtor) {
-    const results = new HighlightCtor()
-    for (const r of ranges) results.add(r)
-    highlights.set(RESULTS_HL, results)
-    const active = ranges[activeIndex]
-    if (active) {
-      const activeHl = new HighlightCtor()
-      activeHl.add(active)
-      activeHl.priority = 1 // paint over the results highlight
-      highlights.set(ACTIVE_HL, activeHl)
-    } else {
-      highlights.delete(ACTIVE_HL)
-    }
+/**
+ * Each element is checked once per batch. Mounting N rows into one list yields
+ * N records sharing that list as target, and its subtree query made the batch
+ * quadratic: a 1,500-row mount spent 1.5s here.
+ */
+function mutationsTouchConversationAuxiliarySurface(mutations: MutationRecord[]) {
+  const checked = new Set<Element>()
+  const touches = (element: Element | null) => {
+    if (!element || checked.has(element)) return false
+    checked.add(element)
+    return elementTouchesConversationAuxiliarySurface(element)
   }
-  ranges[activeIndex]?.startContainer.parentElement?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-}
-
-function clearHighlights() {
-  const highlights = (CSS as any).highlights as Map<string, unknown> | undefined
-  highlights?.delete(RESULTS_HL)
-  highlights?.delete(ACTIVE_HL)
+  return mutations.some((mutation) => {
+    const targetElement = mutation.target instanceof Element
+      ? mutation.target
+      : mutation.target.parentElement
+    if (touches(targetElement)) return true
+    return [...mutation.addedNodes, ...mutation.removedNodes].some((node) => (
+      touches(node instanceof Element ? node : node.parentElement)
+    ))
+  })
 }

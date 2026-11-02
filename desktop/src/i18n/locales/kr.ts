@@ -3892,6 +3892,7 @@ export const kr: Record<TranslationKey, string> = {
   'agentTeams.communication.hideLifecycle': '상태 신호 숨기기',
   'agentTeams.communication.expand': '더 보기',
   'agentTeams.communication.collapse': '접기',
+  'agentTeams.communication.showEarlier': '이전 메시지 보기 ({count}개 남음)',
   'agentTeams.inline.created': '에이전트 팀 · 팀원 {count}명',
   'agentTeams.inline.notStarted': '시작되지 않음',
   'agentTeams.inline.coordination': '팀 조정 기록 · {count}단계',

@@ -1,8 +1,19 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getConversationFindController } from '../search/conversationFindBridge'
+import { FindInPageModal } from '../search/FindInPageModal'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { TeamMember, TeamWorkbenchMessage, TeamWorkbenchSnapshot } from '../../types/team'
 import { AgentTeamsCommunicationFeed } from './AgentTeamsCommunicationFeed'
+import { formatWorkbenchMessageTime } from './agentTeamsModel'
+import { REVEAL_PAGE_SIZE } from './useProgressiveReveal'
+
+// Every mounted row formats its time once per render, which makes the spy a
+// count of row renders.
+vi.mock('./agentTeamsModel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./agentTeamsModel')>()
+  return { ...actual, formatWorkbenchMessageTime: vi.fn(actual.formatWorkbenchMessageTime) }
+})
 
 function message(overrides: Partial<TeamWorkbenchMessage> & { id: string }): TeamWorkbenchMessage {
   return {
@@ -42,6 +53,29 @@ function snapshot(
 
 function categoryOf(id: string): string | null {
   return screen.getByTestId(`agent-teams-message-${id}`).getAttribute('data-message-category')
+}
+
+/** Oldest first, as the server sends them; even ids report to the lead, odd ones go to a peer. */
+function longHistory(count: number): TeamWorkbenchMessage[] {
+  const start = Date.parse('2026-08-08T07:00:00.000Z')
+  return Array.from({ length: count }, (_, index) => message({
+    id: `m-${index}`,
+    text: `Update ${index}`,
+    timestamp: new Date(start + index * 1000).toISOString(),
+    ...(index % 2 === 0 ? { to: 'lead', recipients: ['lead'] } : {}),
+  }))
+}
+
+function mountedIds(): string[] {
+  return Array.from(document.querySelectorAll('article[data-message-category]'))
+    .map((row) => row.getAttribute('data-testid')!.replace('agent-teams-message-', ''))
+}
+
+type FakeObserver = {
+  callback: IntersectionObserverCallback
+  options: IntersectionObserverInit | undefined
+  targets: Element[]
+  disconnected: boolean
 }
 
 describe('AgentTeamsCommunicationFeed', () => {
@@ -277,5 +311,245 @@ describe('AgentTeamsCommunicationFeed', () => {
 
     expect(screen.getByTestId('agent-teams-message-unknown-from-avatar').getAttribute('data-avatar-key')).toBeTruthy()
     expect(screen.getByTestId('agent-teams-message-unknown-to-avatar').getAttribute('data-avatar-key')).toBeTruthy()
+  })
+
+  describe('long histories', () => {
+    // Opening the panel used to mount every message with its Markdown: 553
+    // messages took ~250ms and ~13k nodes on the click.
+    it('mounts the newest page on open and pages the rest in, keeping whole-history counts', () => {
+      render(<AgentTeamsCommunicationFeed snapshot={snapshot(longHistory(553))} />)
+
+      expect(screen.getByTestId('agent-teams-message-count').textContent).toBe('553 messages')
+      expect(screen.getByTestId('agent-teams-filter-all').getAttribute('data-count')).toBe('553')
+      const firstPage = mountedIds()
+      expect(firstPage).toHaveLength(REVEAL_PAGE_SIZE)
+      expect(firstPage[0]).toBe('m-552')
+      expect(firstPage.at(-1)).toBe(`m-${553 - REVEAL_PAGE_SIZE}`)
+
+      fireEvent.click(screen.getByRole('button', {
+        name: `Show earlier messages (${553 - REVEAL_PAGE_SIZE} more)`,
+      }))
+      expect(mountedIds()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+      expect(mountedIds().slice(0, REVEAL_PAGE_SIZE)).toEqual(firstPage)
+    })
+
+    // Kept small: mounting hundreds of Markdown rows in jsdom takes seconds and
+    // timed out under the parallel suite.
+    it('pages all the way to the oldest message, then stops offering more', () => {
+      render(<AgentTeamsCommunicationFeed snapshot={snapshot(longHistory(130))} />)
+
+      let pages = 1
+      while (screen.queryByRole('button', { name: /Show earlier messages/ })) {
+        fireEvent.click(screen.getByRole('button', { name: /Show earlier messages/ }))
+        pages += 1
+      }
+      expect(pages).toBe(Math.ceil(130 / REVEAL_PAGE_SIZE))
+      expect(mountedIds()).toHaveLength(130)
+      expect(mountedIds().at(-1)).toBe('m-0')
+    })
+
+    it('starts every filter from its own newest page', () => {
+      render(<AgentTeamsCommunicationFeed snapshot={snapshot(longHistory(200))} />)
+      fireEvent.click(screen.getByRole('button', { name: /Show earlier messages/ }))
+      expect(mountedIds()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+
+      fireEvent.click(screen.getByTestId('agent-teams-filter-report'))
+      const reports = mountedIds()
+      expect(reports).toHaveLength(REVEAL_PAGE_SIZE)
+      expect(reports[0]).toBe('m-198')
+      expect(reports.every((id) => categoryOf(id) === 'report')).toBe(true)
+      expect(screen.getByRole('button', { name: `Show earlier messages (${100 - REVEAL_PAGE_SIZE} more)` })).toBeTruthy()
+
+      fireEvent.click(screen.getByTestId('agent-teams-filter-all'))
+      expect(mountedIds()).toHaveLength(REVEAL_PAGE_SIZE)
+    })
+
+    it('leaves mounted rows alone when re-rendered with the same snapshot', () => {
+      const history = snapshot(longHistory(553))
+      const onFocusTask = vi.fn()
+      const view = render(<AgentTeamsCommunicationFeed snapshot={history} onFocusTask={onFocusTask} />)
+      const rowRenders = vi.mocked(formatWorkbenchMessageTime)
+
+      // The workbench re-renders the feed every second while following live.
+      rowRenders.mockClear()
+      view.rerender(<AgentTeamsCommunicationFeed snapshot={history} onFocusTask={onFocusTask} />)
+      expect(rowRenders).not.toHaveBeenCalled()
+
+      // A new snapshot re-renders what is mounted, and only that.
+      view.rerender(<AgentTeamsCommunicationFeed snapshot={{ ...history }} onFocusTask={onFocusTask} />)
+      expect(rowRenders).toHaveBeenCalledTimes(REVEAL_PAGE_SIZE)
+    })
+
+    describe('with a scroll observer', () => {
+      let observers: FakeObserver[]
+
+      beforeEach(() => {
+        observers = []
+        vi.stubGlobal('IntersectionObserver', class {
+          private readonly record: FakeObserver
+
+          constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+            this.record = { callback, options, targets: [], disconnected: false }
+            observers.push(this.record)
+          }
+
+          observe(target: Element) { this.record.targets.push(target) }
+          unobserve() {}
+          disconnect() { this.record.disconnected = true }
+          takeRecords() { return [] }
+        })
+      })
+
+      afterEach(() => {
+        vi.unstubAllGlobals()
+      })
+
+      function liveObserver(): FakeObserver {
+        const live = observers.filter((observer) => !observer.disconnected)
+        expect(live).toHaveLength(1)
+        return live[0]!
+      }
+
+      function report(observer: FakeObserver, isIntersecting: boolean) {
+        act(() => {
+          observer.callback(
+            [{ isIntersecting, target: observer.targets[0]! } as IntersectionObserverEntry],
+            {} as IntersectionObserver,
+          )
+        })
+      }
+
+      it('mounts the next page as the end of the list nears the viewport, until none is left', () => {
+        render(<AgentTeamsCommunicationFeed snapshot={snapshot(longHistory(100))} />)
+
+        expect(screen.queryByRole('button', { name: /Show earlier messages/ })).toBeNull()
+        const sentinel = screen.getByTestId('agent-teams-reveal-sentinel')
+        const first = liveObserver()
+        expect(first.targets).toEqual([sentinel])
+        // Watched against the feed's own scroller, not the window.
+        expect(first.options?.root).toBe(sentinel.parentElement)
+        expect(sentinel.parentElement?.className).toContain('overflow-y-auto')
+
+        report(first, false)
+        expect(mountedIds()).toHaveLength(REVEAL_PAGE_SIZE)
+
+        report(first, true)
+        expect(mountedIds()).toHaveLength(REVEAL_PAGE_SIZE * 2)
+        // A fresh observer reports a sentinel that is still in range, so a tall
+        // pane keeps filling instead of stalling after one page.
+        const second = liveObserver()
+        expect(second).not.toBe(first)
+
+        report(second, true)
+        expect(mountedIds()).toHaveLength(100)
+        expect(screen.queryByTestId('agent-teams-reveal-sentinel')).toBeNull()
+        expect(observers.every((observer) => observer.disconnected)).toBe(true)
+      })
+    })
+  })
+
+  // Find-in-page walks the DOM, so rows not mounted yet used to be unfindable.
+  describe('find in page', () => {
+    let highlights: Map<string, { ranges: Range[] }>
+
+    beforeEach(() => {
+      highlights = new Map()
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() })
+      vi.stubGlobal('CSS', { highlights })
+      vi.stubGlobal('Highlight', class {
+        ranges: Range[] = []
+        priority?: number
+        add(range: Range) { this.ranges.push(range) }
+      })
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    function findCount(): string | null | undefined {
+      return document.querySelector('[data-find-bar] span.font-mono')?.textContent
+    }
+
+    function activeRange(): Range | undefined {
+      return highlights.get('cc-find-active')?.ranges[0]
+    }
+
+    function activeRow(): string | null | undefined {
+      return activeRange()?.startContainer.parentElement?.closest('[data-find-row]')?.getAttribute('data-find-row')
+    }
+
+    function withOldest(count: number, text: string): TeamWorkbenchMessage[] {
+      const history = longHistory(count)
+      history[0] = { ...history[0]!, text }
+      return history
+    }
+
+    it('finds a message that is not mounted yet and mounts the page holding it', async () => {
+      render(<>
+        <AgentTeamsCommunicationFeed snapshot={snapshot(withOldest(REVEAL_PAGE_SIZE + 10, 'Kickoff checklist for the release'))} fill />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+      expect(screen.queryByTestId('agent-teams-message-m-0')).toBeNull()
+
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'kickoff checklist' } })
+
+      await waitFor(() => expect(findCount()).toBe('1 / 1'))
+      expect(screen.getByTestId('agent-teams-message-m-0')).toBeTruthy()
+      expect(activeRow()).toBe('m-0')
+      expect(activeRange()?.toString().toLowerCase()).toBe('kickoff checklist')
+    })
+
+    it('keeps the rest of the page searchable and steps from it into the messages', async () => {
+      render(<>
+        <AgentTeamsCommunicationFeed snapshot={snapshot(withOldest(REVEAL_PAGE_SIZE + 10, 'Communication plan approved'))} fill />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'communication' } })
+
+      // The panel title, then the unmounted oldest message.
+      await waitFor(() => expect(findCount()).toBe('1 / 2'))
+      expect(activeRange()?.startContainer.parentElement?.tagName).toBe('H3')
+      expect(screen.queryByTestId('agent-teams-message-m-0')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next match' }))
+
+      expect(findCount()).toBe('2 / 2')
+      expect(activeRow()).toBe('m-0')
+      expect(highlights.get('cc-find-results')?.ranges).toHaveLength(2)
+    })
+
+    it('reruns an open search when a new message arrives', async () => {
+      const history = longHistory(50)
+      const view = render(<>
+        <AgentTeamsCommunicationFeed snapshot={snapshot(history)} fill />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+      fireEvent.change(screen.getByPlaceholderText('Find'), { target: { value: 'deploy window' } })
+      await waitFor(() => expect(findCount()).toBe('0'))
+
+      view.rerender(<>
+        <AgentTeamsCommunicationFeed
+          snapshot={snapshot([
+            ...history,
+            message({ id: 'late', text: 'Deploy window moved to Friday', timestamp: '2026-08-08T09:00:00.000Z' }),
+          ])}
+          fill
+        />
+        <FindInPageModal open onClose={() => {}} />
+      </>)
+
+      await waitFor(() => expect(findCount()).toBe('1 / 1'))
+      expect(activeRow()).toBe('late')
+    })
+
+    it('hands find back to the page once the feed closes', () => {
+      const view = render(<AgentTeamsCommunicationFeed snapshot={snapshot(longHistory(5))} fill />)
+      expect(getConversationFindController()).not.toBeNull()
+
+      view.unmount()
+      expect(getConversationFindController()).toBeNull()
+    })
   })
 })

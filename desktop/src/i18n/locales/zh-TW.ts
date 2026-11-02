@@ -3889,6 +3889,7 @@ export const zh: Record<TranslationKey, string> = {
   'agentTeams.communication.hideLifecycle': '隱藏狀態訊號',
   'agentTeams.communication.expand': '展開',
   'agentTeams.communication.collapse': '收合',
+  'agentTeams.communication.showEarlier': '顯示更早的訊息（還有 {count} 則）',
   'agentTeams.inline.created': 'Agent 團隊 · {count} 名成員',
   'agentTeams.inline.notStarted': '未啟動',
   'agentTeams.inline.coordination': '團隊編排記錄 · {count} 步',
