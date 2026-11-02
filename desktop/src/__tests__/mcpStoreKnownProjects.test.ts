@@ -23,6 +23,7 @@ vi.mock('../api/mcp', async (importOriginal) => {
       toggle: vi.fn(),
       reconnect: vi.fn(),
       status: vi.fn(),
+      saveProjectSharing: vi.fn(),
     },
   }
 })
@@ -79,6 +80,40 @@ describe('fetchServersForKnownProjects', () => {
     const queried = vi.mocked(mcpApi.list).mock.calls.map(([cwd]) => cwd)
     expect(queried).toEqual(['/proj/current', '/proj/recent', '/proj/with-mcp'])
     expect(useMcpStore.getState().servers.map((s) => s.name)).toEqual(['shared-tools'])
+  })
+
+  it('reloads actual projects after a partial sharing save without optimistic changes', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
+    vi.mocked(mcpApi.projectPaths).mockResolvedValue({ projectPaths: ['/proj/a', '/proj/b'] })
+    vi.mocked(mcpApi.list).mockImplementation(async cwd => ({
+      servers: cwd === '/proj/a' ? [record('shared-tools', 'project', { projectPath: cwd })] : [],
+    }))
+    const result = { results: [
+      { projectPath: '/proj/a', selected: true, success: true, revision: 'a1' },
+      { projectPath: '/proj/b', selected: true, success: false, error: 'Not writable' },
+    ] }
+    vi.mocked(mcpApi.saveProjectSharing).mockResolvedValue(result)
+    const payload = { config: record('shared-tools', 'project').config, targets: [
+      { projectPath: '/proj/a', selected: true, expectedRevision: null },
+      { projectPath: '/proj/b', selected: true, expectedRevision: null },
+    ] }
+    expect(await useMcpStore.getState().saveProjectSharing('shared-tools', payload)).toEqual(result)
+    expect(mcpApi.saveProjectSharing).toHaveBeenCalledWith('shared-tools', payload)
+    expect(useMcpStore.getState().servers).toEqual([expect.objectContaining({ projectPath: '/proj/a' })])
+  })
+
+  it('still reads the saved target when registry discovery is temporarily unavailable', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockRejectedValue(new Error('Offline'))
+    vi.mocked(mcpApi.projectPaths).mockRejectedValue(new Error('Offline'))
+    vi.mocked(mcpApi.saveProjectSharing).mockResolvedValue({ results: [
+      { projectPath: '/proj/saved', selected: true, success: true, revision: 'saved' },
+    ] })
+    vi.mocked(mcpApi.list).mockResolvedValue({ servers: [record('shared', 'project', { projectPath: '/proj/saved' })] })
+    await useMcpStore.getState().saveProjectSharing('shared', { config: record('shared', 'project').config, targets: [
+      { projectPath: '/proj/saved', selected: true, expectedRevision: null },
+    ] })
+    expect(mcpApi.list).toHaveBeenCalledWith('/proj/saved')
+    expect(useMcpStore.getState().servers.map(server => server.projectPath)).toEqual(['/proj/saved'])
   })
 
   it('does not collapse the list to a single-project view when discovery sources fail (GH #1126)', async () => {

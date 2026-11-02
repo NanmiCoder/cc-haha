@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { isTouchH5Document } from '../../lib/touchH5'
 
 /**
  * Which shell the app draws.
@@ -7,9 +6,10 @@ import { isTouchH5Document } from '../../lib/touchH5'
  * - `desktop`: Electron, or a desktop browser at least a tablet wide.
  * - `phone`: anything narrower than a tablet outside Electron. One page at a
  *   time, a stack you go back through.
- * - `tablet`: a touch browser at least a tablet wide. The session list stays on
- *   the left and the page sits beside it, with the phone's touch controls —
- *   a touch screen gets no hover-only buttons or drag handles at any width.
+ * - `tablet`: a browser at least a tablet wide whose primary pointer is touch
+ *   (iPad, Android tablets). A laptop with a touch screen still has a mouse or
+ *   trackpad as its primary pointer and keeps the desktop app; its touch
+ *   styling comes from `data-touch-h5` (touchH5.ts), not from the layout.
  */
 export type MobileShellLayout = 'desktop' | 'phone' | 'tablet'
 
@@ -18,16 +18,29 @@ const PHONE_QUERY = `(max-width: ${TABLET_MIN_WIDTH_PX - 1}px)`
 
 export function resolveMobileShellLayout({
   desktopRuntime,
-  touch,
+  coarsePointer,
   narrow,
 }: {
   desktopRuntime: boolean
-  touch: boolean
+  /** The primary pointer is touch: `(pointer: coarse)`. */
+  coarsePointer: boolean
   narrow: boolean
 }): MobileShellLayout {
   if (desktopRuntime) return 'desktop'
   if (narrow) return 'phone'
-  return touch ? 'tablet' : 'desktop'
+  return coarsePointer ? 'tablet' : 'desktop'
+}
+
+/** Mirrored by the phone fast path in index.html. */
+export const COARSE_POINTER_QUERY = '(pointer: coarse)'
+
+function matchesCoarsePointer(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  try {
+    return window.matchMedia(COARSE_POINTER_QUERY).matches
+  } catch {
+    return false
+  }
 }
 
 function matchesPhoneWidth(): boolean {
@@ -47,5 +60,5 @@ export function useMobileShellLayout(desktopRuntime: boolean): MobileShellLayout
     return () => query.removeEventListener?.('change', update)
   }, [])
 
-  return resolveMobileShellLayout({ desktopRuntime, touch: isTouchH5Document(), narrow })
+  return resolveMobileShellLayout({ desktopRuntime, coarsePointer: matchesCoarsePointer(), narrow })
 }

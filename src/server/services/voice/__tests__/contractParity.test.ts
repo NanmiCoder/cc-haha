@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { VOICE_HISTORY_SOURCE_IDS } from '../history/scan.js'
 import { VOICE_DOWNLOAD_SOURCES, VOICE_LANGUAGES } from '../preferences.js'
 import { VOICE_LIMITS } from '../types.js'
+import { isVoiceVocabularySource } from '../vocabulary/store.js'
 import { makeWav } from './fakeProvider.js'
 
 // The desktop renderer keeps a hand-written mirror of the server contract. These
@@ -49,6 +51,10 @@ describe('voice contract parity (server types.ts vs desktop api/voice.ts)', () =
     'VoicePreparationStep',
     'VoiceFailureReason',
     'VoiceErrorCode',
+    'VoiceCorrectionFailureReason',
+    'VoiceVocabularySource',
+    'VoiceHistorySourceId',
+    'VoiceHistoryCategory',
   ])('%s has the same literals on both sides', name => {
     expect(literalUnion(desktopSource, name)).toEqual(literalUnion(serverSource, name))
   })
@@ -62,8 +68,49 @@ describe('voice contract parity (server types.ts vs desktop api/voice.ts)', () =
     'VoiceLimits',
     'VoiceCatalog',
     'VoiceTranscript',
+    'VoiceCorrectionTarget',
+    'VoiceCorrectionInfo',
+    'VoiceCorrectionChange',
+    'VoiceCorrection',
+    'VoiceVocabularyEntry',
+    'VoiceVocabularySuggestion',
+    'VoiceVocabularyHistory',
+    'VoiceVocabulary',
+    'VoiceVocabularyInput',
+    'VoiceVocabularyAddResult',
+    'VoiceHistorySource',
+    'VoiceHistoryTerm',
+    'VoiceHistoryGroup',
+    'VoiceHistorySuggestions',
   ])('%s has the same fields and field types on both sides', name => {
     expect(objectFields(desktopSource, name)).toEqual(objectFields(serverSource, name))
+  })
+
+  test('the runtime lists the server validates against match their types', () => {
+    expect<string[]>([...VOICE_HISTORY_SOURCE_IDS].sort()).toEqual(literalUnion(serverSource, 'VoiceHistorySourceId'))
+    for (const source of literalUnion(serverSource, 'VoiceVocabularySource')) {
+      expect(isVoiceVocabularySource(source)).toBe(true)
+    }
+    expect(isVoiceVocabularySource('robot')).toBe(false)
+  })
+
+  test('the desktop client takes the vocabulary size limit from the server instead of redefining it', () => {
+    expect(stripComments(desktopSource)).not.toContain('VOICE_VOCABULARY_MAX_TERMS')
+    expect(stripComments(desktopSource)).not.toMatch(/maxTerms\s*[:=]\s*\d/)
+  })
+
+  test('the desktop client posts to the routes the server serves', () => {
+    for (const route of [
+      "'/api/voice/correct'",
+      "'/api/voice/vocabulary'",
+      "'/api/voice/vocabulary/terms'",
+      '`/api/voice/vocabulary/terms?${',
+      "'/api/voice/vocabulary/suggestions/dismiss'",
+      "'/api/voice/vocabulary/history/sources'",
+      "'/api/voice/vocabulary/history/suggest'",
+    ]) {
+      expect(desktopSource).toContain(route)
+    }
   })
 
   test('the runtime language list used to validate preferences matches the VoiceLanguage type', () => {

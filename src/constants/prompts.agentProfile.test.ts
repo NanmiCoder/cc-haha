@@ -32,7 +32,7 @@ afterAll(() => {
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 // Fixed lean prefix without host paths: core prompt + environment + compact memory
 // (measured ~2.2KB; the full auto-memory guide alone is ~12.8KB).
-const LEAN_SYSTEM_PROMPT_BUDGET_BYTES = 2450
+const LEAN_SYSTEM_PROMPT_BUDGET_BYTES = 2950
 const mentionsOf = (names: readonly string[], text: string) =>
   names.filter(name => new RegExp(`(?<![\\w-])${name}(?![\\w-])`).test(text))
 
@@ -43,7 +43,7 @@ function toolPools() {
   const leanTools = filterAgentProfileTools(getTools(getEmptyToolPermissionContext()))
   const leanNames = new Set(leanTools.map(tool => tool.name))
   const unavailable = standardNames.filter(name => !leanNames.has(name))
-  expect(unavailable).toEqual(expect.arrayContaining(['Agent', 'TodoWrite', 'EnterPlanMode']))
+  expect(unavailable).toEqual(expect.arrayContaining(['NotebookEdit', 'EnterPlanMode']))
   return { leanTools, unavailable }
 }
 

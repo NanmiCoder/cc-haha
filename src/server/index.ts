@@ -1,6 +1,8 @@
+import { configureScheduledTaskHost } from './services/scheduledTaskHost.js'
 import { configureSessionCollaborationHost, getSessionCollaborationService } from './services/sessionCollaborationHost.js'
 import { authenticateCollaborationCaller, collaborationToolAction } from './sessionCollaborationAuth.js'
 import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
+import { handleScheduledTaskToolsApi } from './api/scheduledTaskTools.js'
 /**
  * Claude Code Desktop App — HTTP + WebSocket Server
  *
@@ -61,6 +63,8 @@ import {
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
+import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './services/remoteAccessConnectivity.js'
+import { getMobilePushService, stopMobilePushServices } from './services/mobilePushRuntime.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 function readArgValue(flag: string): string | undefined {
@@ -267,6 +271,8 @@ export function startServer(port = PORT, host = HOST) {
   const h5AccessService = new H5AccessService()
 
   const publicAccess = new PublicAccessServer({
+    resolveProxy: resolveRemoteAccessProxy,
+    verifyGateway: verifyRemoteAccessGateway,
     handleApiRequest: (request, url, context) => migrationMaintenance.isActive
       ? Promise.resolve(migrationUnavailableResponse())
       : migrationMaintenance.track(handleApiRequest(request, url, context)),
@@ -275,6 +281,7 @@ export function startServer(port = PORT, host = HOST) {
     serverPort: () => serverPort,
   })
   publicAccessServers.add(publicAccess)
+  if (!migrationMaintenance.isActive) getMobilePushService().start(id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)))
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
   // Open SQLite before the first REST request. Discovery still runs in the
@@ -334,6 +341,11 @@ export function startServer(port = PORT, host = HOST) {
         if (!migrationMaintenance.isActive) {
           await localIndexCoordinator.start().catch(() => undefined)
           await ensurePersistentStorageUpgraded()
+        }
+        if (url.pathname === '/api/scheduled-task-tools') {
+          const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
+          if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
+          return handleScheduledTaskToolsApi(req, caller)
         }
         const collaborationAction = collaborationToolAction(url.pathname)
         if (collaborationAction) {
@@ -465,9 +477,11 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'client',
               clientKind: petAccessAuthorized ? 'pet' : 'full',
+              powerActivityLeaseAuthorized: !petAccessAuthorized && isLocalAccessAuthorized(req, localTokenOverride),
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,
+              mediaRefs: url.searchParams.get('media') === 'ref',
             },
           })
           if (upgraded) return undefined
@@ -663,10 +677,12 @@ export function startServer(port = PORT, host = HOST) {
       websocket: handleWebSocket,
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
+    const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
+      disposeScheduledTaskHost()
       publicAccess.disable()
       publicAccessServers.delete(publicAccess)
       return stop(closeActiveConnections)
@@ -723,6 +739,7 @@ export function quiesceServerRuntimeForMigration(ignoreExternalProcesses = false
     const inventory = await migrationRuntimePreview()
     if (!ignoreExternalProcesses && inventory.externalProcesses > 0) throw new Error('Close external CLI sessions before migrating data')
     for (const remote of publicAccessServers) remote.disable()
+    await stopMobilePushServices()
     await quiesceTeamPlanRuntimesForMigration()
     await Promise.all([teamWatcher.stopAndWait(), cronScheduler.stopAndWait(), conversationService.stopForMigration()])
     await migrationMaintenance.drain()
@@ -754,6 +771,7 @@ export async function quiesceServerRuntimeForRecovery(): Promise<void> {
 export async function stopServerRuntimeForShutdown(
   options: { waitForCli?: boolean } = {},
 ): Promise<void> {
+  await stopMobilePushServices()
   for (const remote of publicAccessServers) remote.disable()
   publicAccessServers.clear()
   teamWatcher.stop()

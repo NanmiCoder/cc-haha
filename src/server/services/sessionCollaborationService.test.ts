@@ -58,6 +58,7 @@ describe('session collaboration', () => {
     await service.create(a.sessionId, { prompt: 'nested' })
     const queued = await service.create('root', { prompt: 'queued' })
     expect(queued).toMatchObject({ state: 'queued', delivery: 'queued' })
+    expect(service.hasPendingPowerWork()).toBe(true)
     expect(started).toHaveLength(3)
     expect((await service.status()).members.find(member => member.sessionId === queued.sessionId)?.state).toBe('queued')
     await service.onSessionState(a.sessionId, 'completed', 'done', 'completion-1')
@@ -69,6 +70,18 @@ describe('session collaboration', () => {
     expect((await service.status()).messages.filter(message => message.id === 'completion-1')).toHaveLength(1)
   })
 
+  test('power activity retains accepted collaboration messages until consumption and excludes cancelled queues', async () => {
+    expect(service.hasPendingPowerWork()).toBe(false)
+    const child = await service.create('root', { prompt: 'fixture' })
+    expect(service.hasPendingPowerWork()).toBe(true)
+    await service.onMessageConsumed(child.messageId)
+    expect(service.hasPendingPowerWork()).toBe(false)
+    await service.send('root', child.sessionId, 'next', 'pending-message')
+    expect(service.hasPendingPowerWork()).toBe(true)
+    await service.onStopped(child.sessionId)
+    expect(service.hasPendingPowerWork()).toBe(false)
+  })
+
   test('injects into existing busy sessions and deduplicates retry ids', async () => {
     deps.runtime.getState = () => 'running'
     await service.send('root', 'existing', 'hello', 'stable-id')
@@ -78,6 +91,12 @@ describe('session collaboration', () => {
     await service.onMessageConsumed('stable-id')
     expect((await service.status()).messages[0]?.status).toBe('consumed')
     await expect(service.send('root', 'existing', 'different', 'stable-id')).rejects.toThrow('different content')
+  })
+
+  test('rejects a session messaging itself instead of feeding its own turn', async () => {
+    await expect(service.send('root', 'root', 'ping')).rejects.toThrow('cannot send a message to itself')
+    expect(injected).toHaveLength(0)
+    expect(started).toHaveLength(0)
   })
 
   test('Stop fences automatic wakeups and survives restart; explicit input clears it', async () => {
@@ -149,6 +168,40 @@ describe('session collaboration', () => {
     const stored = JSON.parse(await readFile(deps.statePath, 'utf8'))
     expect(stored.version).toBe(1)
     expect(stored.futureField).toEqual({ preserve: true })
+  })
+
+  test('completion migration keeps old unknown dates and persists a real successful result across recovery', async () => {
+    let now = new Date('2026-10-24T01:00:00Z')
+    deps.now = () => now
+    await writeFile(deps.statePath, JSON.stringify({
+      version: 1, revision: 2, futureField: { keep: true }, messages: [],
+      members: { old: { sessionId: 'old', rootSessionId: 'old', parentSessionId: null, state: 'completed', stopped: false, extension: 'keep' } },
+    }))
+    service = new SessionCollaborationService(deps)
+    expect((await service.status(['old'])).members[0]?.completedAt).toBeUndefined()
+    await service.onUserInput('new')
+    await service.onSessionState('new', 'completed', 'Done', 'result-1')
+    expect((await service.status(['new'])).members[0]?.completedAt).toBe(now.toISOString())
+    now = new Date('2026-10-25T01:00:00Z')
+    await service.onSessionState('new', 'completed', 'Done', 'result-1')
+    service = new SessionCollaborationService(deps)
+    await service.recover()
+    expect((await service.status(['new'])).members[0]?.completedAt).toBe('2026-10-24T01:00:00.000Z')
+    const stored = JSON.parse(await readFile(deps.statePath, 'utf8'))
+    expect(stored.futureField).toEqual({ keep: true })
+    expect(stored.members.old.extension).toBe('keep')
+    expect(stored.members.old.completedAt).toBeUndefined()
+  })
+
+  test('failed and explicitly stopped results never gain a completion timestamp', async () => {
+    await service.onUserInput('failed')
+    await service.onSessionState('failed', 'failed', 'Error', 'failed-result')
+    await service.onUserInput('stopped')
+    await service.onStopped('stopped')
+    await service.onSessionState('stopped', 'completed', 'Partial response', 'late-result')
+    const rows = (await service.status()).members
+    expect(rows.find(row => row.sessionId === 'failed')?.completedAt).toBeUndefined()
+    expect(rows.find(row => row.sessionId === 'stopped')?.completedAt).toBeUndefined()
   })
 
   test('wait wakes on incoming messages and user input interrupts the caller wait', async () => {

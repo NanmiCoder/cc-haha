@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 
 export type SessionTurnEvent =
-  | { type: 'user-input' | 'input-committed' | 'stopped'; sessionId: string }
+  | { type: 'user-input' | 'input-committed' | 'stopped' | 'deleted'; sessionId: string }
   | { type: 'output'; sessionId: string; message: Record<string, any> }
 
 // The transport owns turn admission. Collaboration observes it without making

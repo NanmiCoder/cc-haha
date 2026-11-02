@@ -17,6 +17,7 @@ import {
   isOpenAIResponsesModel,
 } from 'src/services/openaiAuth/models.js'
 import { GROK_MODEL_CATALOG, getGrokRuntimeModelCatalog } from 'src/services/grokAuth/models.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 
 export type EffortLevel = RuntimeEffortLevel | 'xhigh'
 
@@ -70,6 +71,9 @@ export function modelSupportsEffort(model: string): boolean {
   if (grokEntry) {
     return grokEntry.supportsReasoningEffort !== false
   }
+  // Restored official sessions can start before discovery completes. Preserve
+  // their selected effort until actual Grok metadata can constrain it.
+  if (isEnvTruthy(readProviderEnv('CC_HAHA_GROK_OAUTH_PROVIDER'))) return true
   // Supported by a subset of Claude 4 models
   if (shouldTrustBuiltInClaudeCapabilityList() && (
     m.includes('opus-4-6') ||
@@ -118,6 +122,7 @@ export function modelSupportsXHighEffort(model: string): boolean {
   if (grokEntry) {
     return grokEntry.reasoningEfforts?.includes('xhigh') ?? false
   }
+  if (isEnvTruthy(readProviderEnv('CC_HAHA_GROK_OAUTH_PROVIDER'))) return true
   const m = model.toLowerCase()
   return shouldTrustBuiltInClaudeCapabilityList() && (
     m.includes('opus-4-7') ||
@@ -144,6 +149,7 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (grokEntry) {
     return grokEntry.reasoningEfforts?.includes('max') ?? false
   }
+  if (isEnvTruthy(readProviderEnv('CC_HAHA_GROK_OAUTH_PROVIDER'))) return true
   const m = model.toLowerCase()
   if (shouldTrustBuiltInClaudeCapabilityList() && (
     m.includes('opus-4-6') ||

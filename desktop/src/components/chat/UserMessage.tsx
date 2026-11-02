@@ -245,6 +245,7 @@ export const UserMessage = memo(function UserMessage({
         >
           <UserMessageEditor
             initialDraft={editAction.getDraft()}
+            sessionId={sessionId}
             submitting={editAction.submitting}
             disabled={editAction.disabled}
             onDraftChange={editAction.onDraftChange}

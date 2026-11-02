@@ -30,6 +30,7 @@ import {
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { hahaOAuthService } from './hahaOAuthService.js'
 import {
+  GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OFFICIAL_PROVIDER,
   isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
@@ -68,10 +69,13 @@ import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
   type NetworkSettings,
+
+  resolveProviderNetworkSettings,
 } from './networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import type {
   SavedProvider,
+  ProviderProxyConfig,
   ProvidersIndex,
   CreateProviderInput,
   UpdateProviderInput,
@@ -165,6 +169,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
     ...(input.requestCompatibility !== undefined && { requestCompatibility: input.requestCompatibility }),
     ...(imageGeneration !== undefined && { imageGeneration }),
+    ...(input.proxy !== undefined && { proxy: input.proxy }),
     ...(input.notes !== undefined && { notes: input.notes }),
   }
 }
@@ -415,7 +420,11 @@ export class ProviderService {
       ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
       ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
       ...(imageGeneration !== undefined && imageGeneration !== null && { imageGeneration }),
+      ...(input.proxy !== undefined && input.proxy !== null && { proxy: input.proxy }),
       ...(input.notes !== undefined && { notes: input.notes }),
+    }
+    if (input.proxy === null) {
+      delete updated.proxy
     }
     if (input.model1mSupport === null) {
       delete updated.model1mSupport
@@ -567,13 +576,17 @@ export class ProviderService {
       for (const key of getManagedEnvKeys()) {
         delete cleanedEnv[key]
       }
+      const providerEnv = this.buildManagedEnv(provider)
+      // Discovered capabilities belong to this server's launch snapshot, not
+      // persisted settings that outlive the authenticated catalog cache.
+      delete providerEnv[GROK_MODEL_CATALOG_ENV_KEY]
 
       return {
         settings: {
           ...settings,
           env: {
             ...cleanedEnv,
-            ...this.buildManagedEnv(provider),
+            ...providerEnv,
           },
         },
         result: undefined,
@@ -736,6 +749,7 @@ export class ProviderService {
     modelApiFormats: ModelApiFormatRule<ModelApiFormat>[]
     upstreamHeaders: Record<string, string>
     requestCompatibility?: RequestCompatibility
+    proxy?: ProviderProxyConfig
   } | null> {
     const toProxyConfig = (provider: SavedProvider) => {
       const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
@@ -750,6 +764,7 @@ export class ProviderService {
         modelApiFormats: getPresetModelApiFormats(provider.presetId),
         upstreamHeaders: getPresetUpstreamHeaders(provider.presetId),
         ...(provider.requestCompatibility !== undefined && { requestCompatibility: provider.requestCompatibility }),
+        ...(provider.proxy !== undefined && { proxy: provider.proxy }),
       }
     }
     if (providerId) {
@@ -815,6 +830,7 @@ export class ProviderService {
       authStrategy,
       apiFormat,
       presetId: provider.presetId,
+      proxy: provider.proxy,
       supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia,
       requestCompatibility: provider.requestCompatibility,
     })
@@ -824,7 +840,7 @@ export class ProviderService {
     const modelId = normalizeModelStringForAPI(input.modelId)
     const authStrategy = input.authStrategy ?? 'api_key'
     const base = input.baseUrl.replace(/\/+$/, '')
-    const networkSettings = await loadNetworkSettings()
+    const networkSettings = resolveProviderNetworkSettings(await loadNetworkSettings(), input.proxy)
 
     // The unsaved-config test has no saved provider to read a preset from, so the
     // caller passes its presetId and the server resolves the same rules the proxy

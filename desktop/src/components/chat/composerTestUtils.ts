@@ -51,3 +51,25 @@ export function setComposerSelection(offset: number): void {
     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(pos))))
   })
 }
+
+/**
+ * jsdom has no Range geometry, which ProseMirror reads whenever a transaction
+ * scrolls the selection into view. Returns the function that puts it back.
+ */
+export function stubRangeGeometry(): () => void {
+  const clientRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
+  const boundingRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
+  Object.defineProperties(Range.prototype, {
+    getClientRects: { configurable: true, value: () => [] },
+    getBoundingClientRect: {
+      configurable: true,
+      value: () => ({ x: 0, y: 0, top: 0, right: 0, bottom: 0, left: 0, width: 0, height: 0, toJSON: () => ({}) }),
+    },
+  })
+  return () => {
+    for (const [name, original] of [['getClientRects', clientRects], ['getBoundingClientRect', boundingRect]] as const) {
+      if (original) Object.defineProperty(Range.prototype, name, original)
+      else Reflect.deleteProperty(Range.prototype, name)
+    }
+  }
+}

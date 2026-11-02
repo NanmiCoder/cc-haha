@@ -11,8 +11,9 @@ import {
 } from './appZoom'
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
+import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 6
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 7
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -370,6 +371,15 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
   runMigrationStep(report, WORKSPACE_STORAGE_KEY, () => migrateWorkspaceState(storage, report))
   runMigrationStep(report, CHAT_APPEARANCE_STORAGE_KEY, () => {
     if (migrateChatAppearance(storage)) report.migratedKeys.push(CHAT_APPEARANCE_STORAGE_KEY)
+  })
+  // Schema 7 adds an opt-in power preference. Old installs stay off; upgrades
+  // preserve either explicit choice and normalize incomplete/invalid values.
+  runMigrationStep(report, PREVENT_SLEEP_STORAGE_KEY, () => {
+    const stored = storage.getItem(PREVENT_SLEEP_STORAGE_KEY)
+    if (stored !== '0' && stored !== '1') {
+      storage.setItem(PREVENT_SLEEP_STORAGE_KEY, '0')
+      report.migratedKeys.push(PREVENT_SLEEP_STORAGE_KEY)
+    }
   })
   try {
     storage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))

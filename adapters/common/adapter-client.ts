@@ -4,11 +4,14 @@ import {
   type AdapterPlatformConfig,
 } from './config.js'
 import { AdapterHttpClient } from './http-client.js'
+import { enqueueInboundPowerActivity } from './inbound-power-activity.js'
 
 export type AdapterWorkspace = {
   httpClient: AdapterHttpClient
   /** Where a new IM session starts. Guaranteed to sit inside the allowed roots. */
   defaultWorkDir: string
+  /** Authorized inbound work, including attachment download and queued commands. */
+  enqueue: (chatId: string, task: () => Promise<void>) => Promise<void>
 }
 
 /**
@@ -27,8 +30,10 @@ export function createAdapterClient(
   platformConfig: AdapterPlatformConfig,
 ): AdapterWorkspace {
   const { defaultWorkDir, allowedProjectRoots } = resolveAdapterWorkspace(config, platformConfig)
+  const httpClient = new AdapterHttpClient(config.serverUrl, { allowedProjectRoots })
   return {
-    httpClient: new AdapterHttpClient(config.serverUrl, { allowedProjectRoots }),
+    httpClient,
     defaultWorkDir,
+    enqueue: (chatId, task) => enqueueInboundPowerActivity(httpClient, chatId, task),
   }
 }

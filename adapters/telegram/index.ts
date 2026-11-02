@@ -10,7 +10,6 @@ import { Bot, InlineKeyboard, type Context } from 'grammy'
 import * as path from 'node:path'
 import { WsBridge, type ServerMessage } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
-import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
 import {
   formatImStatus,
@@ -57,7 +56,13 @@ const bridge = new WsBridge(config.serverUrl, 'tg')
 const streamDelivery = new TelegramStreamDelivery(bot.api)
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.telegram)
+const { httpClient, defaultWorkDir, enqueue } = createAdapterClient(config, config.telegram)
+bot.use((ctx, next) => {
+  if (!ctx.from || ctx.chat?.type !== 'private' || !isAllowedUser('telegram', ctx.from.id)) return next()
+  const identity = ctx.callbackQuery?.id ? `callback:${ctx.callbackQuery.id}` : `message:${ctx.chat.id}:${ctx.message?.message_id}`
+  if (!dedup.tryRecord(`telegram:power:${identity}`)) return Promise.resolve()
+  return enqueue(String(ctx.chat.id), async () => { await next() })
+})
 const attachmentStore = new AttachmentStore()
 const media = new TelegramMediaService(bot, attachmentStore)
 
@@ -493,7 +498,7 @@ const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', u
 
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void adapterMigrationLifecycle.track((async () => {
+  return adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -511,7 +516,7 @@ registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async
 
 registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void adapterMigrationLifecycle.track((async () => {
+  return adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -541,6 +546,7 @@ async function routeUserMessage(
   ctx: Context,
   text: string,
   attachments: AttachmentRef[],
+  loadAttachments?: () => Promise<AttachmentRef[]>,
 ): Promise<void> {
   if (!ctx.from || ctx.chat?.type !== 'private') return
   const chatId = String(ctx.chat.id)
@@ -564,6 +570,7 @@ async function routeUserMessage(
     ctx.message?.photo || ctx.message?.document || ctx.message?.video || ctx.message?.audio || ctx.message?.voice,
   )
   await enqueue(chatId, async () => {
+    if (loadAttachments) attachments = await loadAttachments()
     const permissionDecision = !hasAttachments
       ? parsePermissionCommand(text, pendingPermissions.get(chatId))
       : null
@@ -675,17 +682,20 @@ bot.on(
   ['message:photo', 'message:document', 'message:video', 'message:audio', 'message:voice'],
   async (ctx) => {
     const caption = ctx.message.caption ?? ''
-    const { attachments, rejections } = await collectAttachmentsFromCtx(ctx)
-    for (const r of rejections) {
-      await ctx.reply(r).catch(() => {})
-    }
-    if (attachments.length === 0 && !caption.trim()) return
-    await routeUserMessage(ctx, caption, attachments)
+    await routeUserMessage(ctx, caption, [], async () => {
+      const { attachments, rejections } = await collectAttachmentsFromCtx(ctx)
+      for (const rejection of rejections) await ctx.reply(rejection).catch(() => {})
+      return attachments
+    })
   },
 )
 
 bot.on('callback_query:data', async (ctx) => {
   if (!ctx.from || ctx.chat?.type !== 'private') return
+  if (!isAllowedUser('telegram', ctx.from.id)) {
+    await ctx.answerCallbackQuery('未授权')
+    return
+  }
   if (!dedup.tryRecord(`telegram:callback:${ctx.callbackQuery.id}`)) return
   const data = ctx.callbackQuery.data
   await enqueue(String(ctx.chat.id), async () => {

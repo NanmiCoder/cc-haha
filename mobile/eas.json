@@ -1,0 +1,25 @@
+{
+  "cli": {
+    "version": "25.3.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "production": {
+      "distribution": "store",
+      "credentialsSource": "remote",
+      "environment": "production",
+      "autoIncrement": true,
+      "bun": "1.4.3",
+      "android": {
+        "buildType": "apk"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6826961014"
+      }
+    }
+  }
+}

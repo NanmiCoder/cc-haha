@@ -1,4 +1,5 @@
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
+import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
 import { resolveOpenAICodexModel } from '../../services/openaiAuth/models.js'
 import { buildGrokIdentityHeaders, GROK_CLI_API_ENDPOINT } from '../../services/grokAuth/fetch.js'
@@ -178,7 +179,7 @@ async function askSmallModel({
   if (signal.aborted) return null
   const networkSettings = await loadNetworkSettings()
   if (signal.aborted) return null
-  const model = provider.models.haiku || provider.models.main
+  const model = normalizeModelStringForAPI(provider.models.haiku || provider.models.main)
   if (!model) return null
 
   const body: AnthropicRequest = {

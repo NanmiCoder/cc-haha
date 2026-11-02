@@ -56,6 +56,8 @@ cd ..
 bun run src/server/index.ts
 ```
 
+`bun run build` ends by exporting the phone app (`mobile/`) as a web app into `desktop/dist/m`, so run `bun install` in `mobile/` first. Phone and tablet browsers move to `/m/` once the desktop H5 entry has verified the token or finished remote pairing; the server answers reloads under `/m/*` with `dist/m/index.html`. Without a `dist/m` build, pages under `/m/*` redirect back to `/` and the entry keeps the desktop app's own phone layout.
+
 The server automatically finds `desktop/dist` in the repository. When starting from another directory, provide the absolute build path:
 
 ```bash
@@ -69,7 +71,7 @@ CLAUDE_H5_DIST_DIR=/absolute/path/to/desktop/dist \
 | `CLAUDE_H5_PUBLIC_BASE_URL` | Fixed public server URL |
 | `CLAUDE_H5_AUTO_PUBLIC_URL=1` | Try to derive a LAN URL while H5 access is enabled |
 
-Configure the H5 token and exact allowed browser origins in **Settings → H5 Access**. Treat the token like an API key and regenerate it to revoke existing browser access.
+Configure the H5 token and exact allowed browser origins in **Settings → Phone connection → Same Wi-Fi**. Treat the token like an API key and regenerate it to revoke existing browser access.
 
 ## Access control
 

@@ -49,4 +49,9 @@ describe('provider managed env compatibility', () => {
     expect(isProviderManagedEnvVar('CC_HAHA_IMAGE_PROTOCOL')).toBe(true)
     expect(isProviderManagedEnvVar('cc_haha_image_protocol')).toBe(true)
   })
+
+  test('protects the host Grok catalog snapshot from settings env overrides', () => {
+    expect(isProviderManagedEnvVar('CC_HAHA_GROK_MODEL_CATALOG')).toBe(true)
+    expect(isProviderManagedEnvVar('cc_haha_grok_model_catalog')).toBe(true)
+  })
 })

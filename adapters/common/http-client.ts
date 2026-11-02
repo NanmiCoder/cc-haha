@@ -111,6 +111,37 @@ export class AdapterHttpClient {
     return { controller, timer }
   }
 
+  /** A 404 covers older servers and source servers without native power authority. */
+  async acquirePowerActivityLease(leaseId: string): Promise<boolean> {
+    return this.setPowerActivityLease(leaseId, true)
+  }
+
+  async releasePowerActivityLease(leaseId: string): Promise<void> {
+    await this.setPowerActivityLease(leaseId, false)
+  }
+
+  private async setPowerActivityLease(leaseId: string, active: boolean): Promise<boolean> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const response = await this.request('/api/sessions/power-activity-lease', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leaseId, active }),
+        signal: controller.signal,
+        redirect: 'error',
+      })
+      if (response.status === 404) return false
+      if (!response.ok) throw new Error(`Activity lease request failed (${response.status})`)
+      const body: unknown = await response.json()
+      if (!body || typeof body !== 'object' || !('ok' in body) || body.ok !== true) {
+        throw new Error('Activity lease was not acknowledged')
+      }
+      return true
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async createSession(workDir: string): Promise<string> {
     const allowedWorkDir = this.resolveAllowedProjectPath(workDir)
     if (!allowedWorkDir) {

@@ -162,11 +162,38 @@ export function isLocalAgentTask(task: unknown): task is LocalAgentTaskState {
 export function isPanelAgentTask(t: unknown): t is LocalAgentTaskState {
   return isLocalAgentTask(t) && t.agentType !== 'main-session';
 }
-export function queuePendingMessage(taskId: string, msg: string, setAppState: (f: (prev: AppState) => AppState) => void): void {
-  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => ({
-    ...task,
-    pendingMessages: [...task.pendingMessages, msg]
-  }));
+// Authorization travels beside the string queue, never in its serialized form
+// or the agent's prompt/transcript. Keeping it on the array also preserves it
+// when registerTask carries pendingMessages into a replacement task. The array
+// owns its metadata; draining/evicting it needs no process-global registry.
+const pendingSkillSelections = Symbol('pendingSkillSelections')
+type PendingMessageQueue = string[] & {
+  [pendingSkillSelections]?: Array<readonly Message[] | undefined>
+}
+export type PendingAgentMessage = {
+  message: string
+  skillSelectionMessages?: readonly Message[]
+}
+
+export function queuePendingMessage(
+  taskId: string,
+  msg: string,
+  setAppState: (f: (prev: AppState) => AppState) => void,
+  skillSelectionMessages?: readonly Message[],
+): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    const previous = task.pendingMessages as PendingMessageQueue
+    const pendingMessages: PendingMessageQueue = [...previous, msg]
+    if (previous[pendingSkillSelections] || skillSelectionMessages !== undefined) {
+      Object.defineProperty(pendingMessages, pendingSkillSelections, {
+        value: [
+          ...previous.map((_, index) => previous[pendingSkillSelections]?.[index]),
+          skillSelectionMessages === undefined ? undefined : [...skillSelectionMessages],
+        ],
+      })
+    }
+    return { ...task, pendingMessages }
+  })
 }
 
 /**
@@ -182,16 +209,23 @@ export function appendMessageToLocalAgent(taskId: string, message: Message, setA
   }));
 }
 export function drainPendingMessages(taskId: string, getAppState: () => AppState, setAppState: (f: (prev: AppState) => AppState) => void): string[] {
-  const task = getAppState().tasks[taskId];
+  return drainPendingAgentMessages(taskId, getAppState, setAppState).map(entry => entry.message)
+}
+
+export function drainPendingAgentMessages(taskId: string, getAppState: () => AppState, setAppState: (f: (prev: AppState) => AppState) => void): PendingAgentMessage[] {
+  const task = getAppState().tasks[taskId]
   if (!isLocalAgentTask(task) || task.pendingMessages.length === 0) {
-    return [];
+    return []
   }
-  const drained = task.pendingMessages;
+  const drained = task.pendingMessages as PendingMessageQueue
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, t => ({
     ...t,
     pendingMessages: []
-  }));
-  return drained;
+  }))
+  return drained.map((message, index) => ({
+    message,
+    skillSelectionMessages: drained[pendingSkillSelections]?.[index],
+  }))
 }
 
 /**

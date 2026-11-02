@@ -4,6 +4,7 @@ import { getSessionId } from '../../bootstrap/state.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { isTodoV2Enabled } from '../../utils/tasks.js'
 import { TodoListSchema } from '../../utils/todo/types.js'
 import { VERIFICATION_AGENT_TYPE } from '../AgentTool/constants.js'
@@ -37,7 +38,9 @@ export const TodoWriteTool = buildTool({
     return DESCRIPTION
   },
   async prompt() {
-    return PROMPT
+    return getAgentProfile() === 'lean'
+      ? 'Replace the current task checklist with todos. Track complex multi-step work or a requested checklist; skip trivial tasks. Include all remaining items and update their status as work progresses. Mark an item completed only after it is done and verified.'
+      : PROMPT
   },
   get inputSchema(): InputSchema {
     return inputSchema()
@@ -103,7 +106,7 @@ export const TodoWriteTool = buildTool({
   },
   mapToolResultToToolResultBlockParam({ verificationNudgeNeeded }, toolUseID) {
     const base = `Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable`
-    const nudge = verificationNudgeNeeded
+    const nudge = verificationNudgeNeeded && getAgentProfile() !== 'lean'
       ? `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type="${VERIFICATION_AGENT_TYPE}"). You cannot self-assign PARTIAL by listing caveats in your summary \u2014 only the verifier issues a verdict.`
       : ''
     return {

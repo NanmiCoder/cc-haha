@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW,
   OPENAI_CODEX_MODEL_CATALOG,
@@ -18,6 +18,38 @@ import {
 } from './models.js'
 
 describe('openai auth model resolution', () => {
+  let originalProvider: string | undefined
+
+  beforeEach(() => {
+    originalProvider = process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+    delete process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+  })
+
+  afterEach(() => {
+    if (originalProvider === undefined) delete process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+    else process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = originalProvider
+  })
+
+  test('recognizes future model names only when the official OpenAI runtime is active', () => {
+    for (const value of ['0', 'false', '']) {
+      process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = value
+      expect(isOpenAIResponsesModel('codex-future')).toBe(false)
+      expect(isOpenAIResponsesModel('claude-opus-4-6')).toBe(false)
+    }
+    for (const value of ['1', 'true']) {
+      process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = value
+      expect(isOpenAIResponsesModel('codex-future')).toBe(true)
+      expect(isOpenAIResponsesModel('sonnet')).toBe(true)
+    }
+  })
+
+  test('forwards future upstream model ids without silently selecting an older default', () => {
+    expect(resolveOpenAICodexModel('  codex-next-preview  ')).toBe('codex-next-preview')
+    expect(resolveOpenAICodexModel('codex-sonnet-preview')).toBe('codex-sonnet-preview')
+    expect(resolveOpenAICodexModel('default')).toBe(OPENAI_DEFAULT_MAIN_MODEL)
+    expect(resolveOpenAICodexModel('claude-sonnet-5-5')).toBe(OPENAI_DEFAULT_SONNET_MODEL)
+  })
+
   test('supports GPT-6.1 Sol selection, metadata and OAuth context budgeting', () => {
     expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-6.1-sol')).toMatchObject({
       label: 'GPT-6.1-Sol',

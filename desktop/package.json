@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/NanmiCoder/cc-haha",
   "author": {
@@ -21,8 +21,7 @@
       "node_modules/@img/**",
       "node_modules/detect-libc/**",
       "node_modules/semver/**",
-      "src-tauri/binaries/**",
-      "node_modules/@ngrok/**"
+      "src-tauri/binaries/**"
     ],
     "artifactName": "Claude-Code-Haha-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
@@ -33,11 +32,11 @@
       "dist/**",
       "electron-dist/**",
       "node_modules/node-pty/**",
+      "dist/m/assets/node_modules/**",
       "src-tauri/binaries/**",
       "src-tauri/icons/**",
       "src-tauri/resources/preview-agent.js",
-      "package.json",
-      "node_modules/@ngrok/**"
+      "package.json"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -92,13 +91,15 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build && bun run build:h5-mobile",
+    "build:h5-mobile": "bun ../mobile/scripts/export-h5.ts ./dist/m",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
-    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty --external @ngrok/ngrok && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
+    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
     "prepare:ripgrep": "bun run ./scripts/prepare-ripgrep.ts",
+    "prepare:cloudflared": "bun run ./scripts/prepare-cloudflared.ts",
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
-    "test:compiled-sidecar-smoke": "CC_HAHA_RUN_COMPILED_SIDECAR_SMOKE=1 bun run test -- --run scripts/build-sidecars.test.ts scripts/image-processor-packaging.test.ts",
+    "test:compiled-sidecar-smoke": "CC_HAHA_RUN_COMPILED_SIDECAR_SMOKE=1 bun run test -- --run scripts/build-sidecars.test.ts scripts/image-processor-packaging.test.ts scripts/prepare-cloudflared.test.ts",
     "clean:electron-output": "bun run ./scripts/clean-electron-output.ts",
     "build:macos-arm64": "bash ./scripts/build-macos-arm64.sh",
     "build:windows-x64": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows-x64.ps1",
@@ -107,7 +108,7 @@
     "build:linux-arm64": "LINUX_ARCH=arm64 bash ./scripts/build-linux.sh",
     "electron:dev": "bun run build:electron && bun run ./scripts/electron-dev.ts",
     "electron:build": "bun run build:sidecars && bun run build && bun run build:electron",
-    "electron:package": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
+    "electron:package": "bun run prepare:cloudflared && bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --publish never",
     "electron:package:dir": "bun run clean:electron-output && bun run electron:build && node ./node_modules/electron-builder/out/cli/cli.js --dir --publish never",
     "check:electron": "node ./node_modules/typescript/bin/tsc -p electron/tsconfig.json && bun test ./electron && bun run build:electron",
     "preview": "vite preview",
@@ -119,7 +120,6 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@ngrok/ngrok": "^1.7.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/dompurify": "^3.2.0",
     "@xterm/addon-fit": "^0.11.0",

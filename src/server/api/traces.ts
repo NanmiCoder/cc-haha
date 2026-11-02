@@ -72,6 +72,12 @@ export async function handleTracesApi(
         throw ApiError.notFound(`Unknown traces endpoint: ${sub}`)
     }
   } catch (error) {
+    // A misconfigured trace directory is a configuration error the settings UI can show,
+    // not an opaque server failure.
+    const code = (error as { code?: string } | null)?.code
+    if (code === 'TRACE_INVALID_STORAGE_DIR' && error instanceof Error) {
+      return errorResponse(new ApiError(400, error.message, code))
+    }
     return errorResponse(error)
   }
 }

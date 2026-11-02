@@ -20,8 +20,11 @@ function fixtureRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'release-script-'))
   dirs.push(dir)
   mkdirSync(join(dir, 'desktop'))
+  mkdirSync(join(dir, 'mobile'))
   mkdirSync(join(dir, 'release-notes'))
   writeFileSync(join(dir, 'desktop/package.json'), '{\n  "name": "d",\n  "version": "1.2.3"\n}\n')
+  writeFileSync(join(dir, 'mobile/package.json'), JSON.stringify({ name: 'mobile', version: '0.1.0' }))
+  writeFileSync(join(dir, 'mobile/app.json'), JSON.stringify({ expo: { version: '0.1.0', extra: { keep: true } } }))
   writeFileSync(join(dir, 'release-notes/v1.2.4.md'), 'notes\n')
   git(dir, 'init', '-q', '-b', 'main')
   // The release script commits and tags in this repo itself; a CI runner has
@@ -54,6 +57,23 @@ describe('release script', () => {
     expect(git(dir, 'rev-list', '--count', 'main')).toBe('1')
     expect(git(dir, 'tag', '--list')).toBe('')
     expect(JSON.parse(readFileSync(join(dir, 'desktop/package.json'), 'utf8')).version).toBe('1.2.4')
+    expect(JSON.parse(readFileSync(join(dir, 'mobile/package.json'), 'utf8')).version).toBe('0.1.0')
+  })
+
+  test('mobile version bump is explicit, independent, and preserves app configuration', async () => {
+    const dir = fixtureRepo()
+    await prepareRelease(dir, 'patch', { mobileBump: 'minor', log: () => {} })
+    expect(JSON.parse(readFileSync(join(dir, 'desktop/package.json'), 'utf8')).version).toBe('1.2.4')
+    expect(JSON.parse(readFileSync(join(dir, 'mobile/package.json'), 'utf8')).version).toBe('0.2.0')
+    expect(JSON.parse(readFileSync(join(dir, 'mobile/app.json'), 'utf8'))).toEqual({ expo: { version: '0.2.0', extra: { keep: true } } })
+  })
+
+  test('mobile dry-run and invalid bump do not mutate or switch the repository', async () => {
+    const dir = fixtureRepo()
+    await prepareRelease(dir, 'patch', { mobileBump: 'patch', dryRun: true, log: () => {} })
+    await expect(prepareRelease(dir, 'patch', { mobileBump: '0.0.1', log: () => {} })).rejects.toThrow('must increase')
+    expect(git(dir, 'status', '--porcelain')).toBe('')
+    expect(git(dir, 'branch', '--show-current')).toBe('main')
   })
 
   test('refuses a release without notes and leaves the repository untouched', async () => {

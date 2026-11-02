@@ -384,6 +384,9 @@ describe('build-sidecars Windows x64 target mapping', () => {
     expect(desktopPackage.scripts?.['test:compiled-sidecar-smoke']).toContain(
       'scripts/image-processor-packaging.test.ts',
     )
+    expect(desktopPackage.scripts?.['test:compiled-sidecar-smoke']).toContain(
+      'scripts/prepare-cloudflared.test.ts',
+    )
     expect(rootPackage.scripts?.['check:native']).toContain(
       'test:compiled-sidecar-smoke',
     )

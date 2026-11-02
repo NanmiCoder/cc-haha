@@ -8,7 +8,7 @@ import { observeSessionTurns } from './sessionTurnEvents.js'
 import * as turnEvents from './sessionTurnEvents.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
-import { __resetWebSocketHandlerStateForTests, getSessionTurnState, getSessionChatActivityState, handleWebSocket, stopSessionTurn, submitSessionTurn } from '../ws/handler.js'
+import { __resetWebSocketHandlerStateForTests, getSessionTurnState, getSessionChatActivityState, handleWebSocket, stopSessionTurn, stopScheduledTaskTurn, submitSessionTurn, submitScheduledTaskTurn, translateCliMessage } from '../ws/handler.js'
 
 describe('background session turn admission', () => {
   afterEach(() => { __resetWebSocketHandlerStateForTests(); mock.restore() })
@@ -23,6 +23,56 @@ describe('background session turn admission', () => {
     spyOn(conversationService, 'removeOutputCallback').mockImplementation((_id, cb) => { callbacks.delete(cb) })
     return callbacks
   }
+
+  it('admits scheduled work through the normal guard and sends independent trusted provenance', async () => {
+    fixture()
+    const release = mock(async () => {})
+    const admission = spyOn(turnEvents, 'admitSessionUserTurn').mockResolvedValue({ release })
+    const beforeSend = async () => true
+    const control = spyOn(conversationService, 'requestControl').mockResolvedValue({ status: 'queued' })
+    const scheduledTask = { taskId: 'task', runId: 'run', scheduledFor: '2026-10-26T01:00:00Z', taskName: 'Check' }
+    expect(await submitScheduledTaskTurn('scheduled-target', '/clear', { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'occurrence', scheduledTask, beforeSend })).toEqual({ status: 'queued' })
+    expect(admission).toHaveBeenCalledTimes(1)
+    expect(control.mock.calls[0]?.[1]).toEqual({ subtype: 'enqueue_scheduled_task', message_id: 'occurrence', scheduled_task: scheduledTask, text: '/clear', start_if_idle: true })
+    expect(control.mock.calls[0]?.[5]).toBe(beforeSend)
+    expect(release).not.toHaveBeenCalled()
+    await expect(submitScheduledTaskTurn('scheduled-target', 'Again', { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'another', scheduledTask })).rejects.toThrow('active turn')
+  })
+
+  it.each([false, true])('keeps authoritative scheduled completion provenance across consumed guides and callback order (error=%s)', async (isError) => {
+    const callbacks = fixture()
+    spyOn(conversationService, 'requestControl').mockResolvedValue({ status: 'queued' })
+    const sessionId = 'scheduled-completion'
+    const scheduledTask = { taskId: 'task', runId: 'run', scheduledFor: '2026-10-26T01:00:00Z', taskName: 'Check' }
+    await submitScheduledTaskTurn(sessionId, 'Check', { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'occurrence', scheduledTask })
+    // A consumed human guide is part of this turn, even if it becomes the
+    // renderer's last user message after reconnecting and loading history.
+    for (const cb of [...callbacks]) cb({ type: 'user', isReplay: true, uuid: 'guide', message: { role: 'user', content: 'Also check tests' } })
+    const result = { type: 'result', result: 'Finished', is_error: isError }
+    const before = translateCliMessage(result, sessionId)
+    for (const cb of [...callbacks]) cb(result)
+    expect(getSessionTurnState(sessionId)).toBe('idle')
+    const after = translateCliMessage(result, sessionId)
+    for (const messages of [before, after]) {
+      expect(messages.find(message => message.type === 'message_complete')).toMatchObject({ scheduledTask })
+    }
+    // A subsequent ordinary result cannot inherit provenance or supply its own.
+    expect(translateCliMessage({ type: 'result', is_error: false, scheduledTask }, sessionId)
+      .find(message => message.type === 'message_complete')).not.toHaveProperty('scheduledTask')
+  })
+
+  it('cancels an acknowledged scheduled queue before consumption without stopping another turn', async () => {
+    fixture()
+    spyOn(conversationService, 'requestControl').mockResolvedValue({ status: 'queued' })
+    const interrupt = spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const scheduledTask = { taskId: 'task', runId: 'run', scheduledFor: '2026-10-26T01:00:00Z', taskName: 'Check' }
+    await submitScheduledTaskTurn('cancel-scheduled', 'Check', { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'queued-occurrence', scheduledTask })
+    stopScheduledTaskTurn('cancel-scheduled', 'older-occurrence')
+    expect(interrupt).not.toHaveBeenCalled()
+    stopScheduledTaskTurn('cancel-scheduled', 'queued-occurrence')
+    expect(interrupt).toHaveBeenCalledTimes(1)
+  })
 
   it('uses the shared control turn without any renderer and observes completion', async () => {
     const callbacks = fixture()

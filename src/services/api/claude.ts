@@ -74,6 +74,7 @@ import { resolveAppliedEffort } from "../../utils/effort.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { errorMessage } from "../../utils/errors.js";
 import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
+import { normalizeImagesForAPI } from '../../utils/imageValidation.js'
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createSystemStreamingFallbackMessage,
@@ -86,6 +87,7 @@ import {
   stripToolReferenceBlocksFromUserMessage,
 } from "../../utils/messages.js";
 import {
+  getCanonicalName,
   getDefaultOpusModel,
   getDefaultSonnetModel,
   getSmallFastModel,
@@ -288,6 +290,7 @@ import {
 } from "./promptCacheBreakDetection.js";
 import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
+import { readProviderEnv, withRequestProviderRoute } from "../../utils/model/providerEnvScope.js";
 import {
   type ApiAttemptBudget,
   CannotRetryError,
@@ -538,11 +541,11 @@ export function configureEffortParams(
 }
 
 function shouldSuppressEffortOutputConfig(): boolean {
-  if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
+  if (!isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))) {
     return false
   }
 
-  const baseUrl = process.env.ANTHROPIC_BASE_URL ?? ''
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL') ?? ''
   try {
     const url = new URL(baseUrl)
     const proxyPath = url.pathname.replace(/\/+$/, '')
@@ -826,14 +829,14 @@ export async function queryModelWithoutStreaming({
   for await (const message of withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -877,14 +880,14 @@ export async function* queryModelWithStreaming({
   return yield* withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -1485,6 +1488,11 @@ async function* queryModel(
     API_MAX_MEDIA_PER_REQUEST,
   );
 
+  const provider = getAPIProvider()
+  messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
+    countDocuments: provider === 'bedrock' || provider === 'vertex',
+  })
+
   // Instrumentation: Track message count after normalization
   logEvent("tengu_api_after_normalize", {
     postNormalizedMessageCount: messagesForAPI.length,
@@ -1786,7 +1794,7 @@ async function* queryModel(
 
     // Opus 5 and Haiku 5.5 reject disabled thinking above high effort. Preserve
     // the user's explicit thinking choice and use the highest compatible effort.
-    const modelId = options.model.toLowerCase()
+    const modelId = getCanonicalName(options.model)
     if (
       sendsExplicitDisabledThinking &&
       (modelId.includes('claude-opus-5') || modelId.includes('claude-haiku-5-5')) &&
@@ -4070,7 +4078,7 @@ function isMaxTokensCapEnabled(): boolean {
 
 export function getMaxOutputTokensForModel(model: string): number {
   const maxOutputTokens = getModelMaxOutputTokens(model);
-  const providerBudget = getConfiguredProviderOutputBudget()
+  const providerBudget = getConfiguredProviderOutputBudget(undefined, model)
   const globalBudget = Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
   const hasValidGlobalBudget = Number.isSafeInteger(globalBudget) && globalBudget > 0
   if (!hasValidGlobalBudget && providerBudget !== undefined) {

@@ -1,3 +1,4 @@
+import type { ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 /**
  * WebSocket event type definitions
  *
@@ -19,7 +20,7 @@ export type PermissionMode =
 export type ClientMessage =
   | { type: 'prewarm_session' }
   | { type: 'sync_state' }
-  | { type: 'user_message'; content: string; attachments?: AttachmentRef[]; sessionReferences?: { sessionId: string }[] }
+  | { type: 'user_message'; content: string; attachments?: AttachmentRef[]; sessionReferences?: { sessionId: string }[]; powerActivityLeaseId?: string }
   | {
       type: 'permission_response'
       requestId: string
@@ -89,6 +90,8 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
+      autoAnswerDeadline?: number | null
     }
   | {
       type: 'computer_use_permission_request'
@@ -107,8 +110,8 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[] }
-  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
+  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[]; scheduledTask?: ScheduledTaskMetadata }
+  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming; scheduledTask?: ScheduledTaskMetadata }
   /**
    * `text` is a fragment when the CLI streams `thinking_delta`, and a whole block when
    * it hands over a finished `thinking` block. The client has to concatenate the first

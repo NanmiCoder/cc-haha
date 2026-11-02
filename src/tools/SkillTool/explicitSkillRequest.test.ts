@@ -2,13 +2,37 @@ import { describe, expect, test } from 'bun:test'
 import type { QueuedCommand } from '../../types/textInputTypes.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from '../../utils/attachments.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
-import { isExplicitSkillRequest } from './explicitSkillRequest.js'
+import { getSkillSelectionMessages, isExplicitSkillRequest } from './explicitSkillRequest.js'
 
 const prompt = (text: string) => [createUserMessage({ content: text })]
 const toolTurn = () => [
   createAssistantMessage({ content: [{ type: 'tool_use', id: 'fixture-bash', name: 'Bash', input: { command: 'sleep 3' } }] }),
   createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'fixture-bash', content: 'slept' }] }),
 ]
+
+test('delegated selection keeps only the current human request and its queued additions', async () => {
+  const messages = [
+    ...prompt('$old'), ...prompt('$review the change'), ...toolTurn(),
+    await drained({ value: 'Also use $checks.' }),
+    await drained({ value: '$unselected', origin: { kind: 'coordinator' }, isMeta: true }),
+  ]
+  const selected = getSkillSelectionMessages({ messages })
+  expect(selected).toHaveLength(2)
+  expect(isExplicitSkillRequest(selected, 'review')).toBe(true)
+  expect(isExplicitSkillRequest(selected, 'checks')).toBe(true)
+  expect(isExplicitSkillRequest(selected, 'old')).toBe(false)
+  expect(isExplicitSkillRequest(selected, 'unselected')).toBe(false)
+  messages.push(createUserMessage({ content: '$later' }))
+  expect(isExplicitSkillRequest(selected, 'later')).toBe(false)
+})
+
+test('legacy child messages never stand in for a trusted parent selection', () => {
+  const child = { agentId: 'a0123456789abcdef' as never, messages: prompt('$unselected') }
+  expect(getSkillSelectionMessages(child)).toEqual([])
+  const selected = getSkillSelectionMessages({ ...child, skillSelectionState: { messages: prompt('$review') } })
+  expect(isExplicitSkillRequest(selected, 'review')).toBe(true)
+  expect(isExplicitSkillRequest(selected, 'unselected')).toBe(false)
+})
 // Same producer query.ts uses to drain commands that arrive while a turn runs.
 async function drained(command: Partial<QueuedCommand> & { value: QueuedCommand['value'] }) {
   const [attachment] = await getQueuedCommandAttachments([{ mode: 'prompt', ...command } as QueuedCommand])

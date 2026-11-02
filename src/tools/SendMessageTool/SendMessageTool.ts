@@ -12,6 +12,7 @@ import {
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'
 import { toAgentId } from '../../types/ids.js'
 import { formatAgentId, generateRequestId } from '../../utils/agentId.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -47,6 +48,7 @@ import {
   writeToMailbox,
 } from '../../utils/teammateMailbox.js'
 import { resumeAgentBackground } from '../AgentTool/resumeAgent.js'
+import { getSkillSelectionMessages } from '../SkillTool/explicitSkillRequest.js'
 import { SEND_MESSAGE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -72,7 +74,7 @@ const StructuredMessage = lazySchema(() =>
   ]),
 )
 
-const inputSchema = lazySchema(() =>
+const standardInputSchema = lazySchema(() =>
   z.object({
     to: z
       .string()
@@ -93,9 +95,26 @@ const inputSchema = lazySchema(() =>
     ]),
   }),
 )
+const leanInputSchema = lazySchema(() => z.strictObject({
+  to: z.string().describe('ID or name of a subagent started in this session'),
+  message: z.string().describe('Follow-up instructions for the subagent'),
+  summary: z.string().optional().describe('Short preview of the message'),
+}))
+function inputSchema() {
+  return getAgentProfile() === 'lean' ? leanInputSchema() : standardInputSchema()
+}
 type InputSchema = ReturnType<typeof inputSchema>
 
 export type Input = z.infer<InputSchema>
+
+function getLeanMessageError(input: Input): string | undefined {
+  if (typeof input.message !== 'string' || isStructuredProtocolMessage(input.message)) {
+    return 'Lean mode supports plain text follow-ups to ordinary subagents only.'
+  }
+  if (!input.to.trim() || input.to === '*' || input.to.includes('@') || parseAddress(input.to).scheme !== 'other') {
+    return 'Lean mode requires a subagent ID or name from this session; team and cross-session messaging are unavailable.'
+  }
+}
 
 export type MessageRouting = {
   sender: string
@@ -775,7 +794,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     shouldDefer: true,
 
     isEnabled() {
-      return isAgentSwarmsEnabled()
+      return getAgentProfile() === 'lean' || isAgentSwarmsEnabled()
     },
 
     isReadOnly(input) {
@@ -844,6 +863,10 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     },
 
     async validateInput(input, _context) {
+      if (getAgentProfile() === 'lean') {
+        const error = getLeanMessageError(input)
+        return error ? { result: false, message: error, errorCode: 9 } : { result: true }
+      }
       if (input.to.trim().length === 0) {
         return {
           result: false,
@@ -989,6 +1012,10 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     },
 
     async call(input, context, canUseTool, assistantMessage) {
+      if (getAgentProfile() === 'lean') {
+        const error = getLeanMessageError(input)
+        if (error) return { data: { success: false, message: error } }
+      }
       if (feature('UDS_INBOX') && typeof input.message === 'string') {
         const addr = parseAddress(input.to)
         if (addr.scheme === 'bridge') {
@@ -1061,6 +1088,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
                 agentId,
                 input.message,
                 context.setAppStateForTasks ?? context.setAppState,
+                getAgentProfile() === 'lean' ? getSkillSelectionMessages(context) : undefined,
               )
               return {
                 data: {
@@ -1074,6 +1102,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               const result = await resumeAgentBackground({
                 agentId,
                 prompt: input.message,
+                ...(getAgentProfile() === 'lean' && { promptOrigin: 'coordinator' as const }),
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId,
@@ -1101,6 +1130,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               const result = await resumeAgentBackground({
                 agentId,
                 prompt: input.message,
+                ...(getAgentProfile() === 'lean' && { promptOrigin: 'coordinator' as const }),
                 toolUseContext: context,
                 canUseTool,
                 invokingRequestId: assistantMessage?.requestId,
@@ -1121,6 +1151,10 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             }
           }
         }
+      }
+
+      if (getAgentProfile() === 'lean') {
+        return { data: { success: false, message: `Subagent '${input.to}' was not found in this session.` } }
       }
 
       if (typeof input.message === 'string') {
@@ -1170,3 +1204,6 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
     renderToolUseMessage,
     renderToolResultMessage,
   } satisfies ToolDef<InputSchema, SendMessageToolOutput>)
+
+// buildTool spreads the definition; retain profile selection until schema use.
+Object.defineProperty(SendMessageTool, 'inputSchema', { get: inputSchema, enumerable: true, configurable: true })

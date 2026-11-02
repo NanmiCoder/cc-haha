@@ -114,6 +114,22 @@ describe('release desktop workflow', () => {
     }
   })
 
+  test('desktop build workflows install the phone app before building the renderer', () => {
+    // `bun run build` exports mobile/ into dist/m; without its packages the build fails.
+    for (const workflowPath of [
+      '.github/workflows/build-desktop-dev.yml',
+      '.github/workflows/release-desktop.yml',
+    ]) {
+      const workflow = readFileSync(workflowPath, 'utf8')
+      const installStep = extractStep(workflow, 'Install mobile dependencies')
+
+      expect(installStep, workflowPath).toContain('working-directory: mobile')
+      expect(installStep, workflowPath).toContain('bun install --frozen-lockfile')
+      expect(workflow.indexOf('Install mobile dependencies'), workflowPath)
+        .toBeLessThan(workflow.indexOf('Build renderer and Electron bundles'))
+    }
+  })
+
   test('desktop build workflows prepare the pinned ripgrep asset before sidecars', () => {
     for (const workflowPath of [
       '.github/workflows/build-desktop-dev.yml',

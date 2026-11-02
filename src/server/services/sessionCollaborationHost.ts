@@ -13,6 +13,8 @@ import { listSessionModels, resolveSessionRuntime, validateSessionRuntime, type 
 import { matchesDelegationUserInstruction } from './sessionDelegationEvidence.js'
 import { applyCollaborationRuntime, stopCollaborationRuntime, getCollaborationRuntime } from '../ws/handler.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import { powerActivityClock } from './powerActivityClock.js'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 
 /** Explicit choices do not depend on a parent provider that may have been removed. */
 export async function resolveCollaborationRuntime(callerSessionId: string, input: SessionRuntimeInput) {
@@ -24,12 +26,23 @@ const searchService = new SearchService()
 const settingsService = new SettingsService()
 
 let endpoint = { serverHost: '127.0.0.1', serverPort: 0 }
-let current: { path: string; service: SessionCollaborationService; ready: Promise<void> } | undefined
+type CollaborationOwner = { path: string; service: SessionCollaborationService; ready: Promise<void>; loaded: boolean; recovery?: Promise<void>; recovering: boolean }
+let current: CollaborationOwner | undefined
 let unsubscribe: (() => void) | undefined
+let pendingTurnEvents = 0
+
+/** Startup reads persisted decisions; polling never recovers or dispatches work. */
+export function hasSessionCollaborationPowerActivity(): boolean {
+  return pendingTurnEvents > 0 || (!!current && (!current.loaded || current.recovering
+    || (current.recovery ? current.service.hasPendingPowerWork() : current.service.hasPendingPowerDecisions(true))))
+}
 
 export function configureSessionCollaborationHost(serverHost: string, serverPort: number): () => void {
   endpoint = { serverHost, serverPort }
   unsubscribe?.()
+  // A scheduled task may finish before the first renderer/session access.
+  // Read persisted decisions now, including in migration validation mode.
+  void getSessionCollaborationOwner().ready.catch(error => console.error('[SessionCollaboration] State load failed', error))
   let eventTail: Promise<void> = Promise.resolve()
   const removeGuard = registerSessionTurnAdmissionGuard(async (sessionId, canAdmit) => {
     // Previously emitted lifecycle events belong before this new reservation.
@@ -38,15 +51,19 @@ export function configureSessionCollaborationHost(serverHost: string, serverPort
   })
   let disposed = false
   unsubscribe = observeSessionTurns(event => {
+    pendingTurnEvents += 1
     eventTail = eventTail.then(async () => {
       if (disposed) return
       await handleSessionCollaborationEvent(await getSessionCollaborationService(), event)
-    }).catch(error => console.error('[SessionCollaboration] Event failed', error))
+    }).catch(error => console.error('[SessionCollaboration] Event failed', error)).finally(() => {
+      pendingTurnEvents -= 1
+      if (pendingTurnEvents === 0) powerActivityClock.changed()
+    })
   })
   return () => { disposed = true; removeGuard(); unsubscribe?.(); unsubscribe = undefined; current = undefined }
 }
 
-export async function getSessionCollaborationService(): Promise<SessionCollaborationService> {
+function getSessionCollaborationOwner(): CollaborationOwner {
   const path = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'cc-haha', 'session-collaboration', 'state.json')
   if (!current || current.path !== path) {
     const service = new SessionCollaborationService({
@@ -101,6 +118,7 @@ export async function getSessionCollaborationService(): Promise<SessionCollabora
         },
         read: (sessionId, options) => sessionService.getSessionHistoryPage(sessionId, { ...options, projectContext: false }),
         exists: async sessionId => Boolean(await sessionService.getSessionSummary(sessionId)),
+        existsForPower: sessionId => sessionService.hasSessionStrict(sessionId),
         titles: sessionIds => {
           const titles: Record<string, string> = {}
           // The index can briefly contain both the source placeholder and the
@@ -167,10 +185,32 @@ export async function getSessionCollaborationService(): Promise<SessionCollabora
         async stop(sessionId) { stopSessionTurn(sessionId) },
       },
     })
-    current = { path, service, ready: service.recover() }
+    const owner: CollaborationOwner = { path, service, ready: Promise.resolve(), loaded: false, recovering: false }
+    current = owner
+    powerActivityClock.changed()
+    owner.ready = service.loadForPowerActivity().then(() => {
+      owner.loaded = true
+      if (current === owner) powerActivityClock.changed()
+    })
   }
-  await current.ready
-  return current.service
+  return current
+}
+
+export async function getSessionCollaborationService(): Promise<SessionCollaborationService> {
+  const owner = getSessionCollaborationOwner()
+  await owner.ready
+  // Validation may inspect the loaded state but must not rewrite it. Normal
+  // API/admission access owns recovery, and migration drain waits for its writes.
+  if (!migrationMaintenance.isActive && !owner.recovery) {
+    owner.recovering = true
+    powerActivityClock.changed()
+    owner.recovery = migrationMaintenance.track(owner.service.recover().then(() => {
+      owner.recovering = false
+      if (current === owner) powerActivityClock.changed()
+    }))
+  }
+  await owner.recovery
+  return owner.service
 }
 
 export async function handleSessionCollaborationEvent(service: SessionCollaborationService, event: SessionTurnEvent): Promise<boolean> {
@@ -180,13 +220,17 @@ export async function handleSessionCollaborationEvent(service: SessionCollaborat
   if (event.type === 'user-input') { await service.onUserInput(event.sessionId, { dispatch: false }); return false }
   if (event.type === 'input-committed') { await service.onSessionState(event.sessionId, 'running'); return false }
   if (event.type === 'stopped') { await service.onStopped(event.sessionId); return false }
+  if (event.type === 'deleted') { await service.onDeleted(event.sessionId); return false }
   const message = event.message
   let collaborationStateChanged = false
   if (message.type === 'system' && message.subtype === 'session_message_receipt' && message.status === 'consumed') {
     await service.onMessageConsumed(message.message_id, event.sessionId)
     collaborationStateChanged = true
   } else if (message.type === 'result') {
-    await service.onSessionState(event.sessionId, message.is_error ? 'failed' : 'completed',
+    // Nested results and incomplete envelopes are not proof that the root turn succeeded.
+    if (message.parent_tool_use_id || typeof message.is_error !== 'boolean') return false
+    const succeeded = !message.is_error && (!message.subtype || message.subtype === 'success')
+    await service.onSessionState(event.sessionId, succeeded ? 'completed' : 'failed',
       String(message.result ?? message.errors?.join('\n') ?? '').slice(0, 8000), message.uuid)
     collaborationStateChanged = true
   } else if (message.type === 'control_request' && message.request?.subtype === 'can_use_tool') {

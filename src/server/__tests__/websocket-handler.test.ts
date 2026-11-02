@@ -10,6 +10,7 @@ import {
   __resetWebSocketHandlerStateForTests,
   __resolveRuntimeRestartWorkDirForTests,
   closeSessionConnection,
+  ensureCliSessionStartedForControl,
   getActiveSessionIds,
   getSessionTurnState,
   getRuntimeSettings,
@@ -35,6 +36,8 @@ import * as sideChatRegistry from '../services/sideChatRegistry.js'
 import { activeBackgroundTaskIds } from '../ws/agentTaskState.js'
 import * as teleportApi from '../../utils/teleport/api.js'
 import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
+import { clearGrokModelCatalogCache, getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 
 function makeClientSocket(sessionId: string, clientKind: 'full' | 'pet' = 'full') {
   const sent: string[] = []
@@ -96,6 +99,83 @@ function mockSavedDeepSeekProvider(): void {
 async function flushMicrotasks(count = 12): Promise<void> {
   for (let index = 0; index < count; index++) await Promise.resolve()
 }
+
+describe('WebSocket Grok catalog runtime selection', () => {
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    clearGrokModelCatalogCache()
+    mock.restore()
+  })
+
+  it('preserves a newly discovered model through WS selection and cold-cache session restoration', async () => {
+    const sessionId = `grok-future-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const launchInfo = {
+      filePath: '/tmp/grok-future.jsonl', projectDir: '/tmp', workDir: '/tmp',
+      transcriptMessageCount: 0, customTitle: null,
+      runtimeProviderId: 'grok-official', runtimeModelId: 'grok-4.7', effortLevel: 'high',
+    }
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => { Object.assign(launchInfo, metadata) })
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({ providers: [], activeId: 'grok-official', providerOrder: [] })
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(SettingsService.prototype, 'getPermissionMode').mockResolvedValue('default')
+    const credentials = spyOn(hahaGrokOAuthService, 'ensureFreshTokens').mockResolvedValue({
+      accessToken: 'desktop-grok-test-token', refreshToken: null, expiresAt: null, email: 'grok@example.test',
+    })
+    await getGrokModelCatalog({
+      accessToken: 'desktop-grok-test-token', forceRefresh: true, throwOnError: true,
+      fetchOverride: (async () => Response.json({ models: [{
+        id: 'grok-future-release', reasoningEffort: 'low', reasoningEfforts: ['low', 'xhigh'],
+      }] })) as typeof fetch,
+    })
+
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'set_runtime_config', providerId: 'grok-official', modelId: 'grok-future-release', effortLevel: 'xhigh',
+    }))
+    for (let attempt = 0; attempt < 30 && !ws.sent.some(payload => JSON.parse(payload).type === 'runtime_config_applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+      type: 'runtime_config_applied', modelId: 'grok-future-release', effortLevel: 'xhigh',
+    }))
+    expect(launchInfo).toMatchObject({ runtimeModelId: 'grok-future-release', effortLevel: 'xhigh' })
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-future-release', effort: 'xhigh' })
+
+    __resetWebSocketHandlerStateForTests()
+    clearGrokModelCatalogCache()
+    credentials.mockResolvedValue(null)
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-future-release', effort: 'xhigh' })
+  })
+
+  it('keeps a concrete uncatalogued ID and its legal effort on a cold WS selection', async () => {
+    const sessionId = `grok-cold-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
+    spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue()
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({ providers: [], activeId: 'grok-official', providerOrder: [] })
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(SettingsService.prototype, 'getPermissionMode').mockResolvedValue('default')
+    spyOn(hahaGrokOAuthService, 'ensureFreshTokens').mockResolvedValue(null)
+    clearGrokModelCatalogCache()
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'set_runtime_config', providerId: 'grok-official', modelId: 'grok-new-cold-model', effortLevel: 'max',
+    }))
+    for (let attempt = 0; attempt < 30 && !ws.sent.some(payload => JSON.parse(payload).type === 'runtime_config_applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+      type: 'runtime_config_applied', modelId: 'grok-new-cold-model', effortLevel: 'max',
+    }))
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-new-cold-model', effort: 'max' })
+  })
+})
 
 describe('translateCliMessage usage mapping', () => {
   afterEach(() => {
@@ -524,6 +604,7 @@ describe('WebSocket handler session isolation', () => {
       {
         requestId: 'request-ask-1',
         toolName: 'AskUserQuestion',
+        autoAnswerDeadline: 1_800_000_030_000,
         toolUseId: 'tool-ask-1',
         input: {
           questions: [
@@ -544,6 +625,7 @@ describe('WebSocket handler session isolation', () => {
       type: 'permission_request',
       requestId: 'request-ask-1',
       toolName: 'AskUserQuestion',
+      autoAnswerDeadline: 1_800_000_030_000,
       toolUseId: 'tool-ask-1',
       input: {
         questions: [
@@ -578,6 +660,142 @@ describe('WebSocket handler session isolation', () => {
     expect(ws.sent.map(payload => JSON.parse(payload)).filter(message => message.code === 'LEAN_CAPABILITY_UNAVAILABLE')).toHaveLength(2)
     expect(persist).not.toHaveBeenCalled()
     expect(setMode).not.toHaveBeenCalled()
+  })
+
+  for (const startupSource of ['user_message', 'prewarm_session', 'control'] as const) {
+    it(`applies an inactive permission switch before ${startupSource} startup`, async () => {
+      const prewarmFirst = startupSource === 'prewarm_session'
+      const sessionId = `inactive-permission-race-${crypto.randomUUID()}`
+      const ws = makeClientSocket(sessionId)
+      const workDir = process.env.TMPDIR || '/tmp'
+      const launchInfo = {
+        filePath: `${workDir}/permission-session.jsonl`, projectDir: workDir, workDir,
+        transcriptMessageCount: prewarmFirst ? 0 : 4, customTitle: 'Permission fixture',
+        permissionMode: 'default', runtimeProviderId: 'deepseek', runtimeModelId: 'deepseek-v4-pro',
+      }
+      let running = false
+      let runtimeMode = 'default'
+      let recordedMode = 'default'
+      let metadataStarted = false
+      let holdPrewarmRead = prewarmFirst
+      let releaseMetadata!: () => void
+      let releasePrewarm!: () => void
+      const pendingMetadata = new Promise<void>(resolve => { releaseMetadata = resolve })
+      const pendingPrewarm = new Promise<void>(resolve => { releasePrewarm = resolve })
+      const sentModes: string[] = []
+      let pendingControl: Promise<void> | undefined
+
+      mockSavedDeepSeekProvider()
+      spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(null)
+      spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+      spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Permission fixture')
+      spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue(workDir)
+      spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => {
+        if (holdPrewarmRead) {
+          holdPrewarmRead = false
+          await pendingPrewarm
+        }
+        return { ...launchInfo }
+      })
+      spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => {
+        metadataStarted = true
+        await pendingMetadata
+        Object.assign(launchInfo, metadata)
+      })
+      spyOn(conversationService, 'hasSession').mockImplementation(() => running)
+      spyOn(conversationService, 'getSessionWorkDir').mockReturnValue(workDir)
+      spyOn(conversationService, 'getSessionPermissionMode').mockImplementation(() => recordedMode)
+      spyOn(conversationService, 'startSession').mockImplementation(async (_id, _cwd, _url, options) => {
+        running = true
+        runtimeMode = options?.permissionMode || 'default'
+        recordedMode = runtimeMode
+      })
+      spyOn(conversationService, 'setPermissionMode').mockImplementation(async (_id, mode) => {
+        runtimeMode = mode
+        return true
+      })
+      spyOn(conversationService, 'recordSessionPermissionMode').mockImplementation((_id, mode) => {
+        recordedMode = mode
+        return true
+      })
+      spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+      spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+      spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+      spyOn(conversationService, 'sendMessage').mockImplementation(async () => {
+        sentModes.push(runtimeMode)
+        return true
+      })
+
+      try {
+        handleWebSocket.open(ws)
+        // Opening a blank tab prewarms it; restoring history waits for the user.
+        // Hold the prewarm's first metadata read before it registers startup.
+        if (prewarmFirst) handleWebSocket.message(ws, JSON.stringify({ type: 'prewarm_session' }))
+        handleWebSocket.message(ws, JSON.stringify({ type: 'set_permission_mode', mode: 'bypassPermissions' }))
+        await flushMicrotasks(30)
+        expect(metadataStarted).toBe(true)
+
+        if (prewarmFirst) {
+          releasePrewarm()
+        } else if (startupSource === 'control') {
+          pendingControl = ensureCliSessionStartedForControl(sessionId, new URL('http://127.0.0.1:1/api/sessions/control'))
+        } else {
+          handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Continue with the selected permission mode' }))
+        }
+        await flushMicrotasks(100)
+        const modesBeforePersistence = [...sentModes]
+        const runningBeforePersistence = running
+        releaseMetadata()
+        await flushMicrotasks(100)
+        await pendingControl
+        expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({
+          type: 'permission_mode_changed', mode: 'bypassPermissions',
+        })
+        // Background startup must also honor the mode shown before user input.
+        if (startupSource !== 'user_message') {
+          handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Use the confirmed permission mode' }))
+          await flushMicrotasks(100)
+        }
+        expect(runningBeforePersistence).toBe(false)
+        expect(modesBeforePersistence).toEqual([])
+        expect(sentModes).toEqual(['bypassPermissions'])
+        expect(runtimeMode).toBe('bypassPermissions')
+        expect(ws.sent.map(payload => JSON.parse(payload)).filter(message => message.type === 'error')).toEqual([])
+      } finally {
+        releasePrewarm()
+        releaseMetadata()
+        await flushMicrotasks(100)
+        await pendingControl
+      }
+    })
+  }
+
+  it('starts a control-requested CLI on the local endpoint even when the request came through the phone listener', async () => {
+    const sessionId = `control-remote-start-${crypto.randomUUID()}`
+    const phoneUrl = new URL('https://phone-tunnel.fixture.test/api/teams/taskboard/plan/approve')
+    const sdkUrls: string[] = []
+    spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(null)
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue('/fixture/control-remote-start')
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(conversationService, 'startSession').mockImplementation(async (_id, _cwd, url) => {
+      sdkUrls.push(url)
+    })
+
+    // Nobody watching: keep the request's own host (desktop calls are local).
+    await ensureCliSessionStartedForControl(sessionId, new URL('http://127.0.0.1:3456/api/teams/t/plan/approve'))
+    // The phone has the session open while it approves through the tunnel.
+    const ws = makeClientSocket(sessionId)
+    ;(ws.data as { serverPort: number }).serverPort = 4321
+    handleWebSocket.open(ws)
+    await ensureCliSessionStartedForControl(sessionId, phoneUrl)
+
+    expect(sdkUrls).toHaveLength(2)
+    expect(sdkUrls[0]!.startsWith(`ws://127.0.0.1:3456/sdk/${sessionId}?token=`)).toBe(true)
+    expect(sdkUrls[1]!.startsWith(`ws://127.0.0.1:4321/sdk/${sessionId}?token=`)).toBe(true)
   })
 
   it('gives pet clients only sanitized state and denies privileged client messages', () => {

@@ -16,6 +16,7 @@ vi.mock('../api/sessions', async (importOriginal) => {
 
 import { ActiveSession } from '../pages/ActiveSession'
 import { useChatStore } from '../stores/chatStore'
+import { useContextUsageStore } from '../stores/contextUsageStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -75,6 +76,14 @@ function baseContext(percentage: number, model: string) {
     memoryFiles: [],
     mcpTools: [],
     agents: [],
+  }
+}
+
+function inspection(sessionId: string, percentage: number) {
+  return {
+    active: true,
+    status: { sessionId, model: 'deepseek-chat', workDir: '/workspace/project', permissionMode: 'default' },
+    context: baseContext(percentage, 'deepseek-chat'),
   }
 }
 
@@ -177,7 +186,11 @@ function makeLedger() {
 
 describe('context usage across a session lifecycle', () => {
   beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('Network requests are blocked in the context usage lifecycle fixture')
+    }))
     vi.mocked(sessionsApi.getInspection).mockReset()
+    useContextUsageStore.setState({ bySession: {} })
     useSettingsStore.setState({ locale: 'en' })
     useSessionRuntimeStore.setState({ selections: {} })
     seedSessions([SESSION_A], SESSION_A)
@@ -185,6 +198,165 @@ describe('context usage across a session lifecycle', () => {
 
   afterEach(() => {
     cleanup()
+    for (const session of Object.values(useChatStore.getState().sessions)) {
+      if (session.elapsedTimer) clearInterval(session.elapsedTimer)
+    }
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    { label: 'equal', compactCount: 2 },
+    { label: 'different', compactCount: 5 },
+  ])('restores each unchanged session without another inspection ($label compaction counts)', async ({ compactCount }) => {
+    seedSessions([SESSION_A, SESSION_B], SESSION_A)
+    useSessionStore.getState().updateSessionMessageCount(SESSION_A, 1)
+    useSessionStore.getState().updateSessionMessageCount(SESSION_B, 3)
+    useChatStore.setState({
+      sessions: Object.fromEntries([SESSION_A, SESSION_B].map((id, index) => [id, {
+        ...emptyChatSession(),
+        messages: Array.from({ length: index === 0 ? 1 : 3 }, (_, messageIndex) => ({
+          id: `${id}-message-${messageIndex}`,
+          type: 'user_text' as const,
+          content: `Existing message ${messageIndex}`,
+          timestamp: messageIndex + 1,
+        })),
+        // Session-local counters must not look like compaction events merely
+        // because the neighboring tab has a different history.
+        compactCount: index === 0 ? 2 : compactCount,
+      }])),
+    })
+    vi.mocked(sessionsApi.getInspection).mockImplementation((async (sessionId: string) => ({
+      active: true,
+      status: { sessionId, model: 'deepseek-chat' },
+      context: baseContext(sessionId === SESSION_A ? 21 : 7, 'deepseek-chat'),
+    })) as never)
+
+    render(<ActiveSession />)
+    await waitFor(() => {
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%')
+    })
+
+    act(() => useTabStore.getState().setActiveTab(SESSION_B))
+    await waitFor(() => {
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('7%')
+    })
+
+    // This is the reported A -> B -> A path: the old component discarded A's
+    // result and displayed -- while asking the CLI to calculate it again.
+    act(() => useTabStore.getState().setActiveTab(SESSION_A))
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%')
+    await flush()
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+
+    act(() => useTabStore.getState().setActiveTab(SESSION_B))
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('7%')
+    await flush()
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(sessionsApi.getInspection).mock.calls.map(([id]) => id))
+      .toEqual([SESSION_A, SESSION_B])
+  })
+
+  it('refreshes a background turn in a bounded history even when the listed total masks added messages', async () => {
+    seedSessions([SESSION_A, SESSION_B], SESSION_A)
+    useSessionStore.getState().updateSessionMessageCount(SESSION_A, 1_000)
+    useSessionStore.getState().updateSessionMessageCount(SESSION_B, 1)
+    useChatStore.setState({
+      sessions: Object.fromEntries([SESSION_A, SESSION_B].map((id) => [id, {
+        ...emptyChatSession(),
+        historyHydrated: true,
+        historyStatus: 'ready' as const,
+        historyWindowed: id === SESSION_A,
+        messages: Array.from({ length: id === SESSION_A ? 50 : 1 }, (_, index) => ({
+          id: `${id}-message-${index}`,
+          type: 'user_text' as const,
+          content: `Existing message ${index}`,
+          timestamp: index + 1,
+        })),
+      }])),
+    })
+    let sessionAPercentage = 21
+    vi.mocked(sessionsApi.getInspection).mockImplementation(async (sessionId) =>
+      inspection(sessionId, sessionId === SESSION_A ? sessionAPercentage : 7))
+
+    render(<ActiveSession />)
+    await waitFor(() => expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%'))
+    act(() => useTabStore.getState().setActiveTab(SESSION_B))
+    await waitFor(() => expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('7%'))
+
+    // The entire running -> idle transition happens off-screen. The old cache
+    // compared Math.max(loaded rows, listed total), so 50 -> 52 still looked
+    // like an unchanged idle session with 1,000 messages.
+    act(() => {
+      const store = useChatStore.getState()
+      store.handleServerMessage(SESSION_A, { type: 'user_message_replay', content: 'Another question' })
+      store.handleServerMessage(SESSION_A, { type: 'status', state: 'thinking' })
+      store.handleServerMessage(SESSION_A, { type: 'content_start', blockType: 'text' })
+      store.handleServerMessage(SESSION_A, { type: 'content_delta', text: 'Another answer' })
+      store.handleServerMessage(SESSION_A, {
+        type: 'message_complete', usage: { input_tokens: 2_000, output_tokens: 500 },
+      })
+      store.handleServerMessage(SESSION_A, { type: 'status', state: 'idle' })
+    })
+    expect(useChatStore.getState().sessions[SESSION_A]?.messages).toHaveLength(52)
+    expect(useChatStore.getState().sessions[SESSION_A]?.chatState).toBe('idle')
+    expect(useSessionStore.getState().sessions.find((session) => session.id === SESSION_A)?.messageCount).toBe(1_000)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+
+    sessionAPercentage = 30
+    act(() => useTabStore.getState().setActiveTab(SESSION_A))
+    await waitFor(() => expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('30%'))
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(3)
+
+    act(() => useTabStore.getState().setActiveTab(SESSION_B))
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('7%')
+    act(() => useTabStore.getState().setActiveTab(SESSION_A))
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('30%')
+    await flush()
+    expect(vi.mocked(sessionsApi.getInspection).mock.calls.map(([id]) => id))
+      .toEqual([SESSION_A, SESSION_B, SESSION_A])
+  })
+
+  it('keeps the post-compaction retry when the next server frame starts streaming', async () => {
+    vi.useFakeTimers()
+    useSessionStore.getState().updateSessionMessageCount(SESSION_A, 1)
+    useChatStore.setState({
+      sessions: {
+        [SESSION_A]: {
+          ...emptyChatSession(),
+          chatState: 'thinking',
+          historyHydrated: true,
+          historyStatus: 'ready',
+          messages: [{ id: 'question', type: 'user_text', content: 'A long running question', timestamp: 1 }],
+        },
+      },
+    })
+    vi.mocked(sessionsApi.getInspection)
+      .mockResolvedValueOnce(inspection(SESSION_A, 21))
+      .mockRejectedValueOnce(new Error('CLI context is settling after compaction'))
+      .mockResolvedValueOnce(inspection(SESSION_A, 5))
+
+    render(<ActiveSession />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%')
+
+    act(() => useChatStore.getState().handleServerMessage(SESSION_A, {
+      type: 'system_notification', subtype: 'compact_boundary', message: 'Context compacted', data: {},
+    }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(useChatStore.getState().sessions[SESSION_A]?.compactCount).toBe(1)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%')
+
+    // This ordinary next frame used to clean up the compaction effect and
+    // cancel its only retry, leaving the pre-compaction reading on screen.
+    act(() => useChatStore.getState().handleServerMessage(SESSION_A, { type: 'content_start', blockType: 'text' }))
+    expect(useChatStore.getState().sessions[SESSION_A]?.chatState).toBe('streaming')
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_999) })
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('5%')
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(3)
   })
 
   it('never shows a percentage that belongs to another model, session, or nothing at all', async () => {

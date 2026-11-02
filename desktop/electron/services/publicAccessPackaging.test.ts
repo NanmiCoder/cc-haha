@@ -7,16 +7,35 @@ import { describe, expect, it } from 'vitest'
 const require = createRequire(import.meta.url)
 const manifest = require('../../package.json')
 const repositoryRoot = path.resolve(path.dirname(require.resolve('../../package.json')), '..')
-describe('ngrok native packaging', () => {
-  it('ships and unpacks SDK native dependencies instead of bundling the loader', () => {
-    expect(manifest.dependencies['@ngrok/ngrok']).toBeTruthy()
-    expect(manifest.build.asarUnpack).toContain('node_modules/@ngrok/**')
-    expect(manifest.build.files).toContain('node_modules/@ngrok/**')
-    expect(manifest.scripts['build:electron']).toContain('--external @ngrok/ngrok')
-    const sdkManifest = require('@ngrok/ngrok/package.json')
-    for (const target of ['darwin-arm64', 'darwin-x64', 'win32-x64-msvc', 'win32-arm64-msvc']) {
-      expect(sdkManifest.optionalDependencies[`@ngrok/ngrok-${target}`]).toBeTruthy()
-    }
+describe('remote access packaging', () => {
+  it('bundles the verified Cloudflare connector and notices in executable ASAR resources', () => {
+    expect(manifest.scripts['prepare:cloudflared']).toContain('scripts/prepare-cloudflared.ts')
+    expect(manifest.build.files).toContain('src-tauri/binaries/**')
+    expect(manifest.build.asarUnpack).toContain('src-tauri/binaries/**')
+    const sidecars = readFileSync(path.join(repositoryRoot, 'desktop/scripts/build-sidecars.ts'), 'utf8')
+    expect(sidecars).toContain('await assertPreparedCloudflared({ desktopRoot, targetTriple })')
+    expect(sidecars).not.toContain('await prepareCloudflared(')
+    expect(manifest.scripts['electron:package:dir']).not.toContain('prepare:cloudflared')
+  })
+
+  it.each(['release-desktop.yml', 'build-desktop-dev.yml'])('%s explicitly prepares the pinned connector before building sidecars', workflow => {
+    const source = parse(readFileSync(path.join(repositoryRoot, '.github', 'workflows', workflow), 'utf8'))
+    const jobs = Object.values(source.jobs) as { steps?: { name?: string, run?: string, env?: Record<string, string>, 'working-directory'?: string }[] }[]
+    const buildJob = jobs.find(job => job.steps?.some(step => step.name === 'Build sidecars'))
+    expect(buildJob).toBeDefined()
+    const steps = buildJob!.steps!
+    const prepared = steps.findIndex(step => step.name === 'Prepare bundled Cloudflare connector')
+    const built = steps.findIndex(step => step.name === 'Build sidecars')
+    expect(prepared).toBeGreaterThan(-1)
+    expect(prepared).toBeLessThan(built)
+    expect(steps[prepared]).toMatchObject({ 'working-directory': 'desktop', run: 'bun run prepare:cloudflared', env: { SIDECAR_TARGET_TRIPLE: '${{ matrix.target_triple }}' } })
+  })
+
+  it('does not ship the retired ngrok provider or its native loader', () => {
+    expect(manifest.dependencies['@ngrok/ngrok']).toBeUndefined()
+    expect(manifest.build.asarUnpack).not.toContain('node_modules/@ngrok/**')
+    expect(manifest.build.files).not.toContain('node_modules/@ngrok/**')
+    expect(manifest.scripts['build:electron']).not.toContain('--external @ngrok/ngrok')
   })
   it.each(['release-desktop.yml', 'build-desktop-dev.yml'])('%s installs native addons for cross-architecture packages', workflow => {
     const source = parse(readFileSync(path.join(repositoryRoot, '.github', 'workflows', workflow), 'utf8'))
@@ -25,19 +44,9 @@ describe('ngrok native packaging', () => {
     expect(desktopInstalls.length).toBeGreaterThan(0)
     for (const step of desktopInstalls) {
       expect(step['working-directory']).toBe('desktop')
-      // Windows ARM64 is built on the x64 runner. Host-only installation omits
-      // ngrok-win32-arm64-msvc, and npmRebuild:false cannot fetch it at packaging.
+      // Cross-architecture packages still need their other native dependencies
+      // installed before packaging because npmRebuild is disabled.
       expect(step.run).toContain('--cpu="*"')
     }
-  })
-  it('loads the current host native addon without opening an ngrok session', () => {
-    const sdk = require('@ngrok/ngrok')
-    expect(typeof sdk.forward).toBe('function')
-    expect(typeof sdk.disconnect).toBe('function')
-    const builder = new sdk.SessionBuilder()
-    expect(typeof builder.authtoken).toBe('function')
-    expect(typeof builder.handleDisconnection).toBe('function')
-    expect(typeof builder.handleHeartbeat).toBe('function')
-    expect(typeof builder.connect).toBe('function')
   })
 })

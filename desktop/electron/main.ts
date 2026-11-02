@@ -1,5 +1,6 @@
-import { PublicAccessManager } from './services/publicAccess'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
+import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
+import type { DesktopPublicAccessConfiguration } from '../src/lib/desktopHost/types'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
@@ -71,7 +72,11 @@ import {
 } from './services/nativeAppearance'
 import { createRendererUrlMatcher, installMicrophonePermissions } from './services/microphonePermissions'
 import { resolveRendererEntry } from './services/rendererEntry'
-import { installRendererLifecycle } from './services/rendererLifecycle'
+import { installRendererLifecycle, showRendererRecoveryFailure } from './services/rendererLifecycle'
+import type { IdlePowerSettings } from '../src/lib/idlePower'
+import { IdlePowerService, readIdlePowerActivity } from './services/idlePower'
+import { createIdlePowerHost, installIdlePowerLifecycle } from './services/idlePowerHost'
+import { installPreventSleepLifecycle, PreventSleepService, readPreventSleepActivity } from './services/preventSleep'
 import { writeWindowSmokeSnapshot } from './services/windowSmoke'
 import { loadAndRevealMainWindow } from './services/windowStartup'
 import {
@@ -124,6 +129,34 @@ let isQuitting = false
 let quitCleanupStarted = false
 let quitCleanupFinished = false
 let trayController: TrayController | null = null
+let idlePowerRendererGeneration = 0
+let idlePowerService: IdlePowerService | null = null
+let idlePowerInitialization: Promise<IdlePowerService> | null = null
+async function getIdlePowerService(): Promise<IdlePowerService> {
+  const rendererGeneration = idlePowerRendererGeneration
+  idlePowerInitialization ??= createIdlePowerHost({
+    app, blocker: powerSaveBlocker, monitor: powerMonitor, screen, NotificationClass: Notification,
+    locale: () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
+    readActivity: signal => {
+      if (isQuitting || dataMigration?.running || areStorageWritesFrozen()) throw new Error('Desktop is unavailable')
+      return readIdlePowerActivity(resolveMainRendererServerAccess(), signal)
+    },
+    onChange: state => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ELECTRON_EVENT_CHANNELS.powerIdleActionState, state)
+    },
+  }).then(service => { idlePowerService = service; return service }).catch(error => { idlePowerInitialization = null; throw error })
+  const service = await idlePowerInitialization
+  if (isQuitting) { service.dispose(); throw new Error('Application is quitting') }
+  if (rendererGeneration !== idlePowerRendererGeneration) { service.stop(); throw new Error('Desktop window changed') }
+  service.start()
+  return service
+}
+const preventSleepService = new PreventSleepService({
+  blocker: powerSaveBlocker,
+  readActivity: signal => readPreventSleepActivity(resolveMainRendererServerAccess(), signal),
+  onError: () => console.warn('[desktop] failed to refresh prevent-sleep activity'),
+  beforeIdleRelease: () => idlePowerService?.prepareIdleHandoff(),
+})
 
 // Must run before anything logs: a Finder/Dock launch inherits unreadable
 // stdio, and an unguarded write failure there surfaces as a crash dialog.
@@ -266,6 +299,7 @@ function getPublicAccessManager() {
   if (publicAccessManager) return publicAccessManager
   let queue: Promise<unknown> = Promise.resolve()
   publicAccessManager = new PublicAccessManager({
+    desktopRoot: unpackedRoot(),
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -280,8 +314,7 @@ function getPublicAccessManager() {
             body: body === undefined ? undefined : JSON.stringify(body),
             signal: AbortSignal.timeout(10_000),
           })
-          if (!response.ok) throw new Error('Public access configuration failed')
-          return await response.json() as T
+          return await readPublicAccessControlResponse<T>(response)
         })
         queue = operation
         return operation
@@ -478,6 +511,9 @@ function registerHandler<T>(
       throw new Error(`Invalid Electron IPC payload for ${channel}`)
     }
     const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    if (channel.startsWith('desktop:power:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame || isQuitting)) {
+      throw new Error('Power settings require the main desktop window')
+    }
     const migrationControl = channel.startsWith('desktop:app-mode:migration:')
     if (migrationControl && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Data migration requires the main desktop window')
@@ -551,12 +587,21 @@ function registerIpcHandlers() {
     void getPreviewService().sendMessageToRenderer(event.sender, raw, mainWindow?.webContents)
   })
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => getPublicAccessManager().getStatus())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, (_event, payload) => getPublicAccessManager().saveCredential(payload as string))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential, () => getPublicAccessManager().deleteCredential())
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessConfigure, (_event, payload) => getPublicAccessManager().configure(payload as DesktopPublicAccessConfiguration))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, (_event, payload) => getPublicAccessManager().start(payload as number))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, () => getPublicAccessManager().stop())
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => getPublicAccessManager().setAutoStart(payload as boolean))
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
+  registerHandler(ELECTRON_IPC_CHANNELS.powerGetIdleActionState, async () => (await getIdlePowerService()).getState())
+  registerHandler(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, async (_event, payload) => (await getIdlePowerService()).configure(payload as IdlePowerSettings))
+  registerHandler(ELECTRON_IPC_CHANNELS.powerCancelIdleAction, async () => { (await getIdlePowerService()).cancel() })
+  registerHandler(ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, (event, payload) => {
+    if (currentWindow(event) !== mainWindow || event.senderFrame !== event.sender.mainFrame) {
+      throw new Error('Prevent-sleep settings require the main desktop window')
+    }
+    if (isQuitting) throw new Error('Application is quitting')
+    preventSleepService.setEnabled(payload as boolean)
+  })
   registerHandler(
     ELECTRON_IPC_CHANNELS.appGetLocalePreference,
     () => readLocalePreference(app),
@@ -946,6 +991,8 @@ async function createMainWindow() {
     systemPreferences,
   })
   installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
+  installPreventSleepLifecycle(mainWindow.webContents, preventSleepService)
+  installIdlePowerLifecycle(mainWindow.webContents, () => idlePowerService, () => { idlePowerRendererGeneration += 1 })
   await installRendererContextMenu(
     mainWindow,
     () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
@@ -986,10 +1033,8 @@ async function createMainWindow() {
     },
     onRecoveryExhausted: detail => {
       console.error(`[desktop] Electron renderer recovery exhausted: ${detail}`)
-      dialog.showErrorBox(
-        '界面恢复失败 / Interface Recovery Failed',
-        `桌面界面意外退出或持续无响应，自动恢复未能解决问题。请重启应用；如果问题持续存在，请附上诊断日志反馈。\n\nThe desktop interface exited unexpectedly or remained unresponsive, and automatic recovery did not resolve it. Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
-      )
+      void showRendererRecoveryFailure({ window, isQuitting: () => isQuitting, dialog, app, detail })
+        .catch(error => recordRendererDiagnostic(`[recovery-dialog-failed] ${String(error)}`))
     },
   })
   writeWindowSmokeSnapshot(mainWindow, 'after-create')
@@ -1032,6 +1077,9 @@ app.whenReady().then(async () => {
     return
   }
   if (validation) process.env.CC_HAHA_MIGRATION_VALIDATION = '1'
+  powerMonitor.on('suspend', () => idlePowerService?.stop())
+  powerMonitor.on('resume', () => { if (!isQuitting) idlePowerService?.start() })
+  powerMonitor.on('lock-screen', () => { if (idlePowerService?.getState().countdown) idlePowerService.cancel('user-activity') })
   installSystemAppearanceWatch()
   screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
     if (changedMetrics.includes('scaleFactor') || changedMetrics.includes('bounds')) {
@@ -1065,7 +1113,6 @@ app.whenReady().then(async () => {
       }
     } else console.error('[desktop] failed to start Electron server sidecar', error)
   }
-  await getPublicAccessManager().restore().catch(() => {})
   await installApplicationMenu(app, () => mainWindow)
   if (shouldInstallTray(process.platform)) {
     trayController = await installTray({
@@ -1095,6 +1142,10 @@ app.whenReady().then(async () => {
     }
     void createMainWindow()
   })
+
+  // A saved tunnel can wait on cloudflared and public network verification.
+  // Finish local startup first so its settings and stop controls stay available.
+  if (!isQuitting) void getPublicAccessManager().restore().catch(() => {})
 })
 
 app.on('window-all-closed', () => {
@@ -1114,6 +1165,8 @@ app.on('before-quit', event => {
   if (quitCleanupStarted) return
   quitCleanupStarted = true
   const cleanupSteps = {
+    preventSleep: () => preventSleepService.dispose(),
+    idlePower: () => idlePowerService?.dispose(),
     window: () => { if (mainWindow) saveWindowState(app, mainWindow) },
     tray: () => { trayController?.dispose() },
     terminal: () => { terminalService?.killAll() },

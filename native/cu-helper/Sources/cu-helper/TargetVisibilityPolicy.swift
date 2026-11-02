@@ -52,10 +52,20 @@ enum TargetVisibilityPolicy {
 
     static func identicalCaptureNotice(
         windowIsCovered: Bool,
-        liveStreamActive: Bool
+        liveStreamActive: Bool,
+        windowIsOffScreen: Bool = false
     ) -> String {
         let cause: String
-        if liveStreamActive {
+        if windowIsOffScreen {
+            // Coverage is measured on the shown Spaces only; a window on
+            // another Space or of a hidden app is neither "covered" nor
+            // "visible", and Chromium stops repainting it.
+            cause = """
+            The target window is not on a Space the user is looking at, where \
+            Chromium and Electron apps stop repainting. Identical pixels do not \
+            show whether the action worked; judge it from the accessibility state.
+            """
+        } else if liveStreamActive {
             cause = windowIsCovered
                 ? """
                   The target is covered, but its long-lived window stream is \

@@ -42,6 +42,11 @@ export const IMAGE_TARGET_RAW_SIZE = (API_IMAGE_MAX_BASE64_SIZE * 3) / 4 // 3.75
 export const IMAGE_MAX_WIDTH = 8000
 export const IMAGE_MAX_HEIGHT = 8000
 
+// Applies to every image in the final request, including replayed/tool images.
+// https://platform.claude.com/docs/en/build-with-claude/vision#request-limits
+export const API_MANY_IMAGE_THRESHOLD = 20
+export const API_MANY_IMAGE_MAX_DIMENSION = 2000
+
 // =============================================================================
 // PDF LIMITS
 // =============================================================================

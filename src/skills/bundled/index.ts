@@ -2,6 +2,7 @@ import { feature } from 'bun:bundle'
 import type { Command } from '../../types/command.js'
 import { shouldAutoEnableClaudeInChrome } from 'src/utils/claudeInChrome/setup.js'
 import { getBundledSkills } from '../bundledSkills.js'
+import { isDesktopScheduleAvailable } from '../../tools/ScheduledTaskTool/gate.js'
 
 /**
  * Initialize all bundled skills.
@@ -34,14 +35,16 @@ export function initBundledSkills(): void {
     const { registerHunterSkill } = require('./hunter.js')
     registerHunterSkill()
   }
-  if (feature('AGENT_TRIGGERS')) {
+  if (feature('AGENT_TRIGGERS') && !isDesktopScheduleAvailable()) {
     const { registerLoopSkill } = require('./loop.js')
     // /loop's isEnabled delegates to isKairosCronEnabled() — same lazy
     // per-invocation pattern as the cron tools. Registered unconditionally;
     // the skill's own isEnabled callback decides visibility.
     registerLoopSkill()
   }
-  if (feature('AGENT_TRIGGERS_REMOTE')) {
+  if (isDesktopScheduleAvailable()) {
+    require('./scheduleDesktop.js').registerScheduleDesktopSkill()
+  } else if (feature('AGENT_TRIGGERS_REMOTE')) {
     const {
       registerScheduleRemoteAgentsSkill,
     } = require('./scheduleRemoteAgents.js')

@@ -80,6 +80,24 @@ test('idle peer input disables interpretation and acknowledges only after transc
   } finally { await iterator.return(); inbox.dispose() }
 })
 
+test('scheduled inputs persist trusted metadata and their own origin before acknowledging', async () => {
+  const receipts: unknown[] = []
+  const inbox = createSessionMessageInbox(() => {}, receipt => receipts.push(receipt))
+  const scheduledTask = { taskId: 'task', runId: 'run', scheduledFor: '2026-10-26T01:00:00Z', taskName: 'Check' }
+  inbox.accept({ subtype: 'enqueue_scheduled_task', message_id: 'scheduled', text: 'Check status', scheduled_task: scheduledTask })
+  const iterator = engine().submitMessage('Check status', { uuid: sessionMessageUuid('scheduled') })
+  try {
+    const next = iterator.next()
+    await untilFlush()
+    expect(writes[0]).toMatchObject({ scheduledTask, isMeta: false, origin: { kind: 'channel', server: 'scheduled-task' } })
+    expect(inputOptions).toMatchObject({ skipSlashCommands: true, skipAttachments: true })
+    expect(receipts).toHaveLength(0)
+    releaseFlush!()
+    await next
+    expect(receipts).toMatchObject([{ message_id: 'scheduled', status: 'consumed' }])
+  } finally { await iterator.return(); inbox.dispose() }
+})
+
 // print mode starts a turn from a finished background task's notification. The
 // REPL stamps that origin (handlePromptSubmit); here it has to arrive the same
 // way, or the turn reads as the user's own message and anything the model wrote

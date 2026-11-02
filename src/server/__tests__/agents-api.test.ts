@@ -227,6 +227,68 @@ describe('Agents API Markdown CRUD', () => {
     })
   })
 
+  it('pins a saved provider to an agent model and clears it when the agent follows the session again', async () => {
+    await writeSavedProviders(configDir)
+
+    const created = await api('POST', '/api/agents', {
+      scope: 'user',
+      cwd: projectCwd,
+      name: 'provider-reviewer',
+      description: 'Reviews with a pinned provider',
+      systemPrompt: 'Review with the pinned provider.',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      effort: 'max',
+    })
+    expect(created.status).toBe(201)
+    expect(created.data.agent).toMatchObject({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      providerName: 'DeepSeek',
+      effort: 'max',
+    })
+    const userFile = path.join(configDir, 'agents', 'provider-reviewer.md')
+    expect(await fs.readFile(userFile, 'utf-8')).toContain('provider: deepseek-direct')
+
+    for (const provider of ['missing-provider', 'openai-account']) {
+      const rejected = await api('PUT', '/api/agents/provider-reviewer', {
+        scope: 'user', cwd: projectCwd, provider,
+      })
+      expect(rejected.status).toBe(400)
+      expect(rejected.data.message).toContain(`not a saved API provider: ${provider}`)
+    }
+
+    // A provider that was deleted after saving does not block other edits.
+    const providersFile = path.join(configDir, 'cc-haha', 'providers.json')
+    const providers = JSON.parse(await fs.readFile(providersFile, 'utf-8'))
+    await fs.writeFile(providersFile, JSON.stringify({ ...providers, providers: [] }))
+    const descriptionOnly = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, description: 'Still editable', model: 'deepseek-v4-flash', provider: 'deepseek-direct',
+    })
+    expect(descriptionOnly.status).toBe(200)
+    expect(await fs.readFile(userFile, 'utf-8')).toContain('provider: deepseek-direct')
+    await fs.writeFile(providersFile, JSON.stringify(providers))
+
+    // A new model sent without a provider follows the session again.
+    const modelOnly = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: 'sonnet',
+    })
+    expect(modelOnly.status).toBe(200)
+    expect(await fs.readFile(userFile, 'utf-8')).not.toContain('provider:')
+    await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: 'deepseek-v4-flash', provider: 'deepseek-direct',
+    })
+
+    const followSession = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: null, provider: null,
+    })
+    expect(followSession.status).toBe(200)
+    expect(followSession.data.agent.provider).toBeUndefined()
+    const rewritten = await fs.readFile(userFile, 'utf-8')
+    expect(rewritten).not.toContain('provider:')
+    expect(rewritten).toContain('effort: max')
+  })
+
   it('creates, lists, updates, and deletes user and project agents', async () => {
     const userCreate = await api('POST', '/api/agents', {
       scope: 'user',
@@ -1604,6 +1666,33 @@ describe('Agents API built-in overrides', () => {
     expect(readOnlyDelete.data.error).toBe('READ_ONLY_AGENT')
   })
 
+  it('saves a built-in provider only together with its model', async () => {
+    await writeSavedProviders(configDir)
+
+    const missingModel = await api('PUT', '/api/agents/Explore/override', {
+      cwd: projectCwd, model: null, provider: 'deepseek-direct',
+    })
+    expect(missingModel.status).toBe(400)
+
+    const pinned = await api('PUT', '/api/agents/Explore/override', {
+      cwd: projectCwd, model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'low',
+    })
+    expect(pinned.status).toBe(200)
+    expect(pinned.data.agent).toMatchObject({
+      model: 'deepseek-v4-flash', provider: 'deepseek-direct', providerName: 'DeepSeek', effort: 'low',
+    })
+    expect(pinned.data.agent.override).toMatchObject({ model: 'deepseek-v4-flash', provider: 'deepseek-direct' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({
+      model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'low',
+    })
+
+    await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, model: 'haiku' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({ model: 'haiku', effort: 'low' })
+
+    await api('DELETE', `/api/agents/Explore/override?cwd=${encodeURIComponent(projectCwd)}`)
+    expect((await readUserSettings()).builtInAgentOverrides).toBeUndefined()
+  })
+
   it('writes only the requested field and leaves the rest of settings.json alone', async () => {
     await writeUserSettings({
       model: 'opus',
@@ -1878,6 +1967,25 @@ describe('Agents API built-in overrides', () => {
     ])
   })
 })
+
+async function writeSavedProviders(configDir: string): Promise<void> {
+  await fs.mkdir(path.join(configDir, 'cc-haha'), { recursive: true })
+  await fs.writeFile(path.join(configDir, 'cc-haha', 'providers.json'), JSON.stringify({
+    schemaVersion: 4,
+    activeId: null,
+    providers: [
+      {
+        id: 'deepseek-direct', presetId: 'deepseek', name: 'DeepSeek', apiKey: 'fake-deepseek-key',
+        baseUrl: 'https://api.deepseek.example/anthropic', apiFormat: 'anthropic',
+        models: { main: 'deepseek-v4-pro', haiku: 'deepseek-v4-flash', sonnet: 'deepseek-v4-pro', opus: 'deepseek-v4-pro' },
+      },
+      {
+        id: 'openai-account', presetId: 'openai', name: 'OpenAI', apiKey: '', runtimeKind: 'openai_oauth',
+        baseUrl: 'https://chatgpt.example', models: { main: 'gpt', haiku: 'gpt', sonnet: 'gpt', opus: 'gpt' },
+      },
+    ],
+  }))
+}
 
 async function api(
   method: string,
