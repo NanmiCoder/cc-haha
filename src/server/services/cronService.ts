@@ -12,6 +12,9 @@ import * as crypto from 'crypto'
 import { stripBOM } from '../../utils/jsonRead.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { isBlankFileContent } from './blankFileContent.js'
+import { parseCronExpression } from '../../utils/cron.js'
+import { migrateScheduledTasks } from './scheduledTaskMigrations.js'
+import { nextScheduledTime, validateTaskSchedule, type TaskSchedule } from './scheduledTaskSchedule.js'
 
 export type TaskNotificationConfig = {
   enabled: boolean
@@ -20,6 +23,15 @@ export type TaskNotificationConfig = {
 
 export type CronTask = {
   id: string
+  revision?: number
+  completedAt?: string
+  scheduleAnchorAt?: number
+  sourceSessionId?: string
+  execution?: { kind: 'session'; targetSessionId: string } | { kind: 'new-session' }
+  schedule?: TaskSchedule
+  notificationPolicy?: 'important' | 'all' | 'failed' | 'none'
+  nextRunAt?: number
+  scheduleState?: 'active' | 'paused' | 'completed'
   name?: string
   description?: string
   cron: string // 5-field cron expression
@@ -38,8 +50,13 @@ export type CronTask = {
 }
 
 type TasksFile = {
+  schemaVersion?: number
   tasks: CronTask[]
+  creations?: Record<string, { input: string; taskId: string }>
+  [key: string]: unknown
 }
+
+export type CreateCronTaskInput = Omit<CronTask, 'id' | 'createdAt' | 'cron'> & { cron?: string }
 
 const TASKS_FILE_WRITE_ATTEMPTS = 2
 
@@ -82,36 +99,50 @@ export class CronService {
   /** 获取所有任务 */
   async listTasks(): Promise<CronTask[]> {
     const data = await this.readTasksFile()
-    return data.tasks.map((task) => ({
-      ...task,
-      permissionMode: 'bypassPermissions',
-    }))
+    return data.tasks.map(task => this.snapshot(task))
   }
 
   /** 创建新任务 */
   async createTask(
-    task: Omit<CronTask, 'id' | 'createdAt'>,
+    task: CreateCronTaskInput,
+    options?: { sourceSessionId?: string; requestId?: string },
   ): Promise<CronTask> {
-    if (!task.cron || !task.prompt) {
+    if ((!task.cron && !task.schedule) || !task.prompt) {
       throw ApiError.badRequest('Fields "cron" and "prompt" are required')
     }
 
+    this.validateTask(task)
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
+      const creationKey = options?.requestId ? `${options.sourceSessionId ?? task.sourceSessionId ?? ''}:${options.requestId}` : undefined
+      const input = JSON.stringify(task)
+      const previous = creationKey ? data.creations?.[creationKey] : undefined
+      if (previous) {
+        if (previous.input !== input) throw ApiError.conflict('Request ID was already used with different task input')
+        const existing = data.tasks.find(item => item.id === previous.taskId)
+        if (!existing) throw ApiError.conflict('The task created by this request was deleted')
+        return this.snapshot(existing)
+      }
+      if (task.schedule?.kind === 'once' && Date.parse(task.schedule.runAt) <= Date.now()) throw ApiError.badRequest('One-time task must be scheduled in the future')
       const newTask: CronTask = {
         ...task,
-        permissionMode: 'bypassPermissions',
+        cron: task.schedule?.kind === 'cron' ? task.schedule.expression : task.cron ?? '',
+        ...(task.execution ? {} : { permissionMode: 'bypassPermissions' }),
+        sourceSessionId: options?.sourceSessionId ?? task.sourceSessionId,
+        recurring: task.schedule ? task.schedule.kind === 'cron' : task.recurring,
+        revision: 1,
         id: crypto.randomBytes(4).toString('hex'),
         createdAt: Date.now(),
       }
       data.tasks.push(newTask)
+      if (creationKey) (data.creations ??= {})[creationKey] = { input, taskId: newTask.id }
       await this.writeTasksFile(data)
-      return newTask
+      return this.snapshot(newTask)
     })
   }
 
   /** 更新已有任务 */
-  async updateTask(id: string, updates: Partial<CronTask>): Promise<CronTask> {
+  async updateTask(id: string, updates: Partial<CronTask>, options?: { expectedRevision?: number }): Promise<CronTask> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
       const index = data.tasks.findIndex((t) => t.id === id)
@@ -119,42 +150,79 @@ export class CronService {
         throw ApiError.notFound(`Task not found: ${id}`)
       }
 
+      if (options?.expectedRevision !== undefined && options.expectedRevision !== (data.tasks[index].revision ?? 1)) throw ApiError.conflict('Task was changed; reload before updating')
+      this.validateTask({ ...data.tasks[index], ...updates })
+      const onceSchedule = updates.schedule ?? data.tasks[index].schedule
+      if ((updates.schedule || updates.enabled === true) && onceSchedule?.kind === 'once' && Date.parse(onceSchedule.runAt) <= Date.now()) throw ApiError.badRequest('One-time task must be scheduled in the future')
       // 不允许修改 id 和 createdAt
-      const { id: _id, createdAt: _ca, ...safeUpdates } = updates
+      const { id: _id, createdAt: _ca, revision: _revision, nextRunAt: _next, scheduleState: _state, ...safeUpdates } = updates
       data.tasks[index] = {
         ...data.tasks[index],
         ...safeUpdates,
-        permissionMode: 'bypassPermissions',
+        ...((safeUpdates.execution ?? data.tasks[index].execution) ? {} : { permissionMode: 'bypassPermissions' }),
+        ...(safeUpdates.schedule ? { cron: safeUpdates.schedule.kind === 'cron' ? safeUpdates.schedule.expression : '', recurring: safeUpdates.schedule.kind === 'cron' } : {}),
+        ...(safeUpdates.schedule || (safeUpdates.enabled === true && data.tasks[index].enabled === false) ? { completedAt: undefined, scheduleAnchorAt: Math.max(Date.now(), data.tasks[index].lastFiredAt ? Date.parse(data.tasks[index].lastFiredAt) + 1 : 0) } : {}),
+        revision: (data.tasks[index].revision ?? 1) + 1,
       }
       await this.writeTasksFile(data)
-      return data.tasks[index]
+      return this.snapshot(data.tasks[index])
     })
   }
 
   /** 删除任务 */
-  async deleteTask(id: string): Promise<void> {
+  async deleteTask(id: string, options?: { expectedRevision?: number }): Promise<void> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
       const index = data.tasks.findIndex((t) => t.id === id)
       if (index === -1) {
         throw ApiError.notFound(`Task not found: ${id}`)
       }
+      if (options?.expectedRevision !== undefined && options.expectedRevision !== (data.tasks[index].revision ?? 1)) throw ApiError.conflict('Task was changed; reload before deleting')
       data.tasks.splice(index, 1)
       await this.writeTasksFile(data)
     })
   }
 
   /** 更新任务的最后执行时间 */
-  async updateLastFired(taskId: string, timestamp: string): Promise<void> {
+  async updateLastFired(taskId: string, timestamp: string, options?: { expectedRevision?: number }): Promise<void> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
       const index = data.tasks.findIndex((t) => t.id === taskId)
       if (index === -1) {
         return // Task may have been deleted; silently ignore
       }
-      data.tasks[index].lastFiredAt = timestamp
+      const task = data.tasks[index]
+      if (options?.expectedRevision !== undefined && options.expectedRevision !== (task.revision ?? 1)) return
+      // Recovery may race a later occurrence; an older receipt must not rewind it.
+      if (task.lastFiredAt && Date.parse(task.lastFiredAt) >= Date.parse(timestamp)) return
+      task.lastFiredAt = timestamp
       await this.writeTasksFile(data)
     })
+  }
+
+  async getTask(id: string): Promise<CronTask | undefined> {
+    return (await this.listTasks()).find(task => task.id === id)
+  }
+
+  private validateTask(task: CreateCronTaskInput): void {
+    if (typeof task.prompt !== 'string' || !task.prompt.trim()) throw ApiError.badRequest('Task prompt is required')
+    if (task.schedule) validateTaskSchedule(task.schedule)
+    else if (typeof task.cron !== 'string' || !parseCronExpression(task.cron)) throw ApiError.badRequest('Invalid 5-field cron expression')
+    if (task.execution && (task.execution.kind !== 'new-session' && (task.execution.kind !== 'session' || typeof task.execution.targetSessionId !== 'string' || !task.execution.targetSessionId.trim()))) throw ApiError.badRequest('Invalid task execution target')
+    if (task.notificationPolicy !== undefined && !['important', 'all', 'failed', 'none'].includes(task.notificationPolicy)) throw ApiError.badRequest('Invalid notification policy')
+  }
+
+  private snapshot(task: CronTask): CronTask {
+    const onceAlreadyClaimed = task.schedule?.kind === 'once' && !!task.lastFiredAt && Date.parse(task.lastFiredAt) >= (task.scheduleAnchorAt ?? task.createdAt)
+    const next = task.enabled !== false && task.schedule && !onceAlreadyClaimed
+      ? nextScheduledTime(task.schedule, Math.max(task.scheduleAnchorAt ?? task.createdAt, task.lastFiredAt ? Date.parse(task.lastFiredAt) : 0))
+      : null
+    return {
+      ...task, revision: task.revision ?? 1,
+      ...(task.execution ? {} : { permissionMode: 'bypassPermissions' }),
+      nextRunAt: next ?? undefined,
+      scheduleState: task.enabled === false ? (task.schedule?.kind === 'once' && task.completedAt ? 'completed' : 'paused') : 'active',
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -177,7 +245,8 @@ export class CronService {
       if (!Array.isArray(parsed.tasks)) {
         return { tasks: [] }
       }
-      return parsed
+      // Additive v1 migration: preserve legacy execution/time semantics and unknown fields.
+      return migrateScheduledTasks(parsed) as TasksFile
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { tasks: [] }
@@ -192,7 +261,7 @@ export class CronService {
   private async writeTasksFile(data: TasksFile): Promise<void> {
     const filePath = this.getTasksFilePath()
     const dir = path.dirname(filePath)
-    const contents = JSON.stringify(data, null, 2) + '\n'
+    const contents = JSON.stringify({ ...data, schemaVersion: 1 }, null, 2) + '\n'
     let lastError: Error | undefined
 
     for (let attempt = 0; attempt < TASKS_FILE_WRITE_ATTEMPTS; attempt++) {

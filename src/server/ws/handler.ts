@@ -1,3 +1,4 @@
+import { getMobileActivityTiming, mobileActivityClock } from './mobileActivityClock.js'
 import { getSideChat, isSideChatId } from '../services/sideChatRegistry.js'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 /**
@@ -9,9 +10,11 @@ import { migrationMaintenance } from '../migrationMaintenance.js'
  */
 
 import type { ServerWebSocket } from 'bun'
+import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
+import { isTeamLeadNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { admitSessionUserTurn, emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
@@ -34,7 +37,9 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
-import { endTeamsForParent, hasActiveTeamWorkForParent, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { powerActivityClock } from '../services/powerActivityClock.js'
+import { releasePowerActivityLease } from '../services/powerActivityLease.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
@@ -57,13 +62,13 @@ import {
   getOpenAIModelCatalogEntry,
   isOpenAIReasoningEffort,
 } from '../../services/openaiAuth/models.js'
-import { GROK_DEFAULT_MAIN_MODEL } from '../../services/grokAuth/models.js'
-import { getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
-import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
+import { GROK_DEFAULT_MAIN_MODEL, resolveGrokModel } from '../../services/grokAuth/models.js'
+import { getDesktopGrokModelCatalog } from '../services/grokModelCatalog.js'
 import { resolveClaudeOfficialRuntimeModel } from '../services/claudeOfficialRuntime.js'
 import {
   getModelReasoningCapabilityOverride,
   isModelReasoningEffort,
+  MODEL_REASONING_EFFORTS,
   normalizeModelReasoningEffort,
   resolveModelReasoningProfile,
 } from '../../shared/modelReasoning.js'
@@ -143,6 +148,7 @@ import {
 import type {
   SessionStreamState,
 } from './streamBlocks.js'
+import { projectLiveToolResult } from '../services/toolImageMedia.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -238,6 +244,7 @@ type RuntimeOverride = {
 const strictCollaborationRuntimeSessions = new Set<string>()
 
 type ActiveUserTurnState = {
+  powerCompletionRecorded?: boolean
   admissionPending?: boolean
   messageSent: boolean
   collaborationAck?: 'queued' | 'consumed'
@@ -245,6 +252,7 @@ type ActiveUserTurnState = {
   interruptBoundaryPending?: boolean
   replacementAfterStop?: boolean
   expectedReplayUuid?: string
+  scheduledTask?: ScheduledTaskMetadata
   expectedLocalCommand?: NonNullable<ReturnType<typeof parseSlashCommand>>
   cancelled?: boolean
 }
@@ -269,6 +277,7 @@ const activeCliRuns = new Set<string>()
 const cliRunsAwaitingBackgroundTasks = new Set<string>()
 const pendingInterruptedTurnResults = new Map<string, number>()
 const interruptedTurnResultMessages = new WeakMap<object, string>()
+const scheduledTurnResults = new WeakMap<object, { sessionId: string; metadata: ScheduledTaskMetadata }>()
 const sessionClearInProgress = new Set<string>()
 const deferredRuntimeRestarts = new Map<string, RuntimeOverride>()
 const deferredPermissionModes = new Map<string, PermissionMode>()
@@ -290,19 +299,32 @@ const legacyQueuedSessionChats = new Set<string>()
 const interruptedSessionChats = new Set<string>()
 
 function beginSessionChatActivity(sessionId: string): void {
+  powerActivityClock.changed()
+  mobileActivityClock.start(sessionId)
   terminalSessionChatStates.delete(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
 }
 
 function failSessionChatActivity(sessionId: string): void {
+  powerActivityClock.changed()
+  mobileActivityClock.finish(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
   terminalSessionChatStates.set(sessionId, 'failed')
 }
 
 function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
-  if (cliMsg?.type !== 'result') return
+  if (cliMsg?.type !== 'result' || isAgentRunMessageFrame(cliMsg)) return
+  const turn = activeUserTurns.get(sessionId)
+  const unsettled = turn ? !turn.powerCompletionRecorded : legacyQueuedSessionChats.has(sessionId)
+  if (unsettled) {
+    if (turn) turn.powerCompletionRecorded = true
+    if (!turn?.cancelled && !interruptedSessionChats.has(sessionId) && cliMsg.is_error === false
+      && (!cliMsg.subtype || cliMsg.subtype === 'success')) powerActivityClock.completed()
+    else powerActivityClock.changed()
+  }
+  mobileActivityClock.finish(sessionId)
 
   legacyQueuedSessionChats.delete(sessionId)
   if (interruptedSessionChats.has(sessionId)) {
@@ -376,6 +398,7 @@ function trackCliBackgroundTaskLifecycle(
       taskIds = new Set()
       activeBackgroundTaskIds.set(sessionId, taskIds)
     }
+    if (!taskIds.has(lifecycle.taskId)) powerActivityClock.changed()
     taskIds.add(lifecycle.taskId)
     if (isAgentTaskType(lifecycle.taskType)) {
       let sessionAgentTasks = activeAgentTasks.get(sessionId)
@@ -448,12 +471,17 @@ function trackCliBackgroundTaskLifecycle(
     void emitAuthoritativeNonAgentStopped(sessionId, existingNonAgentTask)
     return { ...lifecycle, suppressForward: true }
   }
+  if (activeBackgroundTaskIds.get(sessionId)?.has(lifecycle.taskId)) {
+    if (lifecycle.status === 'completed') powerActivityClock.completed()
+    else powerActivityClock.changed()
+  }
   untrackCliBackgroundTask(sessionId, lifecycle.taskId)
   return lifecycle
 }
 
 
 function trackCliRunState(sessionId: string, cliMsg: any): 'running' | 'idle' | null {
+  if (cliMsg?.type === 'result' && legacyQueuedSessionChats.has(sessionId)) settleSessionChatActivity(sessionId, cliMsg)
   if (
     cliMsg?.type === 'result' &&
     cliMsg.is_error === true &&
@@ -470,11 +498,13 @@ function trackCliRunState(sessionId: string, cliMsg: any): 'running' | 'idle' | 
     return null
   }
   if (cliMsg.state === 'running') {
+    if (!activeCliRuns.has(sessionId)) powerActivityClock.changed()
     activeCliRuns.add(sessionId)
     resumeCliRunForeground(sessionId)
     return 'running'
   }
   if (cliMsg.state === 'idle') {
+    if (activeCliRuns.has(sessionId)) powerActivityClock.changed()
     activeCliRuns.delete(sessionId)
     cliRunsAwaitingBackgroundTasks.delete(sessionId)
     return 'idle'
@@ -536,6 +566,14 @@ function hasActiveSessionWork(sessionId: string): boolean {
     hasActiveTeamWorkForParent(sessionId)
 }
 
+/** Archiving changes visibility only; it must never hide work at admission or
+ * require stopping a CLI, permission request, background task, or team. */
+export function assertSessionCanArchive(sessionId: string): void {
+  if (hasActiveSessionWork(sessionId) || getSessionChatActivityState(sessionId) === 'waiting' || legacyQueuedSessionChats.has(sessionId)) {
+    throw new ApiError(409, 'Wait for this session to finish before archiving it', 'SESSION_ACTIVE')
+  }
+}
+
 export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
   // An explicit stop wins over permission queues that the CLI has not emitted
   // cancellation events for yet. Otherwise the stopped pet would remain stuck
@@ -561,28 +599,87 @@ export type LiveSessionActivity = {
   activityState: Extract<SessionChatActivityState, 'running' | 'waiting'>
 }
 
+/** Power safety uses work ownership, never the visual Stop/failed projection. */
+export function hasSessionPowerActivity(): boolean {
+  if (conversationService.hasPendingTeamStops()) return true
+  const ids = new Set([
+    ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
+    ...activeCliRuns, ...legacyQueuedSessionChats, ...activeBackgroundTaskIds.keys(),
+    ...computerUseApprovalService.getPendingSessionIds(),
+    ...runtimeTransitionPromises.keys(), ...sessionStartupPromises.keys(), ...sessionClearInProgress,
+  ])
+  for (const id of ids) {
+    if (activeUserTurns.has(id) || activeCliRuns.has(id) || legacyQueuedSessionChats.has(id)
+      || runtimeTransitionPromises.has(id) || sessionStartupPromises.has(id) || sessionClearInProgress.has(id)
+      || hasActiveBackgroundTasks(id)
+      || conversationService.getPendingPermissionRequests(id).length > 0
+      || computerUseApprovalService.getPendingRequests(id).length > 0) return true
+  }
+  return false
+}
+
 /**
  * Every session that is working or waiting on the user right now, in one
  * answer. The phone's session list has to sort sessions it never opened a
  * socket to, and asking each one would cost a request per row. Team workers
- * are left out: their requests already surface on the lead.
+ * are left out by default: their requests already surface on the lead. The
+ * power aggregate also counts team runtime work, including retry backoff.
  */
-export function listLiveSessionActivity(): LiveSessionActivity[] {
+export function listLiveSessionActivity(options: { includeTeamWorkers?: boolean } = {}): LiveSessionActivity[] {
   const ids = new Set<string>([
     ...conversationService.getActiveSessions(),
     ...activeUserTurns.keys(),
     ...activeCliRuns,
     ...legacyQueuedSessionChats,
+    // Independent workers can keep working after their lead CLI exits.
+    ...(options.includeTeamWorkers ? listTeamPlanRuntimeParentIds() : []),
   ])
   const live: LiveSessionActivity[] = []
   for (const id of ids) {
-    if (conversationService.isTeamWorkerSession(id)) continue
+    // Power management must see workers even when their lead's turn is idle.
+    // The phone/pet projection still hides them by default.
+    if (!options.includeTeamWorkers && conversationService.isTeamWorkerSession(id)) continue
     const activityState = getSessionChatActivityState(id)
     if (activityState === 'running' || activityState === 'waiting') {
       live.push({ id, activityState })
+    } else if (options.includeTeamWorkers && hasActiveTeamWorkForParent(id)) {
+      // TeamPlanRuntime starts workers outside this handler's turn observer.
+      // Its own lifecycle also covers automatic continuation between turns.
+      live.push({ id, activityState: 'running' })
     }
   }
   return live
+}
+
+export function listMobileSessionActivity() {
+  const ids = new Set([
+    ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
+    ...activeCliRuns, ...legacyQueuedSessionChats, ...terminalSessionChatStates.keys(),
+    ...activeAgentTasks.keys(), ...activeNonAgentTasks.keys(),
+  ])
+  return [...ids].filter(id => !conversationService.isTeamWorkerSession(id)).map(id => {
+    const activityState = getSessionChatActivityState(id)
+    const request = activityState === 'waiting' ? conversationService.getPendingPermissionRequests(id)[0] : undefined
+    const computerUse = activityState === 'waiting' ? computerUseApprovalService.getPendingRequests(id)[0] : undefined
+    const timing = getMobileActivityTiming(id)
+    const questions = request?.toolName === 'AskUserQuestion' ? request.input.questions : undefined
+    const firstQuestion = Array.isArray(questions) ? questions[0] : undefined
+    const text = request?.toolName === 'Bash' ? request.input.command : firstQuestion && typeof firstQuestion === 'object' ? firstQuestion.question : undefined
+    // Project only the visible decision text; never serialize arbitrary tool input.
+    const preview = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+    return {
+      id, activityState, ...timing,
+      // Only a turn still in flight can stall; a finished turn kept "running" by a
+      // background task has no further output to wait for.
+      ...(timing ? { stalled: activityState === 'running' && timing.completedAt === undefined && Date.now() - timing.lastProgressAt >= 300000 } : {}),
+      ...(request ? {
+        requestId: request.requestId,
+        toolName: request.toolName,
+        preview: preview || (request.toolName === 'AskUserQuestion' ? '等待你回答问题' : request.toolName === 'ExitPlanMode' ? '计划等待确认' : '等待工具权限确认'),
+        ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
+      } : computerUse ? { requestId: computerUse.requestId, toolName: 'ComputerUse', preview: '等待电脑操作权限确认' } : {}),
+    }
+  })
 }
 
 /** Compatibility fallback for the legacy REST enqueue endpoint. */
@@ -690,9 +787,13 @@ export type WebSocketData = {
   connectedAt: number
   channel: 'client' | 'sdk'
   clientKind?: 'full' | 'pet'
+  /** Only a machine-token authenticated local socket may take over an IM lease. */
+  powerActivityLeaseAuthorized?: boolean
   sdkToken: string | null
   serverPort: number
   serverHost: string
+  /** The client fetches tool-result images by reference (`?media=ref`). */
+  mediaRefs?: boolean
 }
 
 // Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can
@@ -711,6 +812,11 @@ const taskNotificationPersistence = new Map<string, Map<string, Promise<void>>>(
 const sessionTranscriptEpochs = new Map<string, number>()
 
 export const handleWebSocket = {
+  // SDK user-message replay retains original images even when the provider
+  // request uses uploaded file references. Ten 5 MiB images plus their envelope
+  // exceed Bun's default 16 MiB frame limit and otherwise reconnect forever,
+  // preventing the following result from reaching the renderer.
+  maxPayloadLength: 64 * 1024 * 1024,
   open(ws: SessionConnection) {
     const { sessionId, channel, sdkToken } = ws.data
 
@@ -798,12 +904,20 @@ export const handleWebSocket = {
       return
     }
 
+    // Raising the SDK receive budget must not raise the renderer input budget.
+    // The public-access gateway applies its own smaller limit before this handler.
+    if (Buffer.byteLength(rawMessage) > 16 * 1024 * 1024) {
+      ws.close(1009, 'Client message exceeds 16 MiB')
+      return
+    }
+
     try {
       const message = JSON.parse(
         typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
       ) as ClientMessage
 
       if (migrationMaintenance.isActive && message.type !== 'ping' && message.type !== 'sync_state') {
+        if (message.type === 'user_message') releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
         sendError(ws, 'Data migration is in progress', 'MIGRATION_IN_PROGRESS')
         return
       }
@@ -820,6 +934,7 @@ export const handleWebSocket = {
       switch (message.type) {
         case 'user_message': {
           const activeTurn: ActiveUserTurnState = { messageSent: false }
+          const powerLeaseId = message.powerActivityLeaseId
           migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
@@ -850,7 +965,7 @@ export const handleWebSocket = {
               })
               sendMessage(ws, { type: 'status', state: 'idle' })
             }
-          })
+          }).finally(() => releaseAcceptedPowerLease(ws, powerLeaseId))
           break
         }
 
@@ -979,16 +1094,21 @@ export const handleWebSocket = {
 // Message handlers
 // ============================================================================
 
+function releaseAcceptedPowerLease(ws: SessionConnection, leaseId: unknown): void {
+  if (ws.data.powerActivityLeaseAuthorized === true) releasePowerActivityLease(leaseId)
+}
+
 async function handleUserMessage(
   ws: SessionConnection,
   message: Extract<ClientMessage, { type: 'user_message' }>,
   activeTurn: ActiveUserTurnState,
-  collaboration?: { messageId: string; sourceSessionId: string; canSend?: () => boolean },
+  delivery?: { messageId: string; sourceSessionId?: string; scheduledTask?: ScheduledTaskMetadata; canSend?: () => boolean; beforeSend?: () => Promise<boolean>; signal?: AbortSignal },
 ) {
   const persistTitleSource = sessionService.shouldPersistSession()
   const { sessionId } = ws.data
+  const collaboration = delivery && !delivery.scheduledTask
 
-  const desktopSlashCommand = collaboration ? null : getDesktopSlashCommand(message.content)
+  const desktopSlashCommand = delivery ? null : getDesktopSlashCommand(message.content)
   if (desktopSlashCommand?.commandName === 'clear' && desktopSlashCommand.args.trim()) {
     sendMessage(ws, {
       type: 'error',
@@ -1019,6 +1139,7 @@ async function handleUserMessage(
     sessionStopRequested.has(sessionId) || agentStopRequestedSessions.has(sessionId)
   activeTurn.admissionPending = !collaboration
   activeUserTurns.set(sessionId, activeTurn)
+  releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
   nonAgentStopRequestedSessions.delete(sessionId)
   clearBackgroundTaskDisconnectCeiling(sessionId)
 
@@ -1079,7 +1200,7 @@ async function handleUserMessage(
       }
       sessionTitleState.set(sessionId, titleState)
     }
-    const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
+    const titleInput = delivery?.scheduledTask ? '' : getTitleInputForUserMessage(message.content, desktopSlashCommand)
     let titleTurnNumber: number | null = null
     if (titleInput) {
       titleState.persistTitleSource &&= persistTitleSource
@@ -1093,8 +1214,12 @@ async function handleUserMessage(
       if (titleState.userMessageCount === 1) {
         titleState.firstUserMessage = titleInput
       }
-      triggerTitleGeneration(ws, sessionId, 'user-message')
+      // Finish the local title write before startup scans and replaces the
+      // empty transcript. Concurrent metadata I/O can invalidate those reads.
+      await triggerTitleGeneration(ws, sessionId, 'user-message')
     }
+
+    if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
 
     // 启动 CLI 子进程（如果还没有）
     try {
@@ -1174,13 +1299,14 @@ async function handleUserMessage(
     refreshDisconnectedTurnCleanupWatcher(sessionId)
 
     activeTurn.sendStarted = true
-    const sent = collaboration
+    const sent = delivery
       ? await (async () => {
           if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return false
-          const result = await conversationService.requestControl(sessionId, {
-            subtype: 'enqueue_session_message', message_id: collaboration.messageId,
-            sender_session_id: collaboration.sourceSessionId, text: content, start_if_idle: true,
-          }, 10_000, undefined, () => activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled && (collaboration.canSend?.() ?? true))
+          const request = delivery.scheduledTask
+            ? { subtype: 'enqueue_scheduled_task', message_id: delivery.messageId, text: content, scheduled_task: delivery.scheduledTask, start_if_idle: true }
+            : { subtype: 'enqueue_session_message', message_id: delivery.messageId, sender_session_id: delivery.sourceSessionId, text: content, start_if_idle: true }
+          const result = await conversationService.requestControl(sessionId, request, 10_000, delivery.signal,
+            () => activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled && (delivery.canSend?.() ?? true), delivery.beforeSend)
           if (result.status !== 'queued' && result.status !== 'consumed') return false
           activeTurn.collaborationAck = result.status
           activeTurn.messageSent = true
@@ -1203,7 +1329,7 @@ async function handleUserMessage(
         },
       },
     )
-    if (collaboration && sent && activeTurn.messageSent && !activeUserTurns.has(sessionId)) return
+    if (delivery && sent && activeTurn.messageSent && !activeUserTurns.has(sessionId)) return
     if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) {
       // Once onCommitted has run the SDK owns this turn and will still emit its
       // terminal result. Keep the completion callback long enough to consume
@@ -1237,7 +1363,7 @@ async function handleUserMessage(
     activeTurn.messageSent = true
     if (!collaboration) emitSessionTurnEvent({ type: 'input-committed', sessionId })
     // After the user's own words, so the lead weighs them first.
-    if (!collaboration) {
+    if (!delivery) {
       void noteLeadUserMessage(sessionId).catch(error =>
         console.error('[WS] cannot tell the lead about its stopped team members', error),
       )
@@ -1274,6 +1400,32 @@ export async function submitSessionTurn(
   return { status: turn.collaborationAck }
 }
 
+/** Host-only scheduled input uses normal admission and its own provenance. */
+export async function submitScheduledTaskTurn(
+  sessionId: string,
+  content: string,
+  options: { serverHost: string; serverPort: number; messageId: string; scheduledTask: ScheduledTaskMetadata; canSend?: () => boolean; beforeSend?: () => Promise<boolean>; signal?: AbortSignal },
+): Promise<{ status: 'queued' | 'consumed' }> {
+  if (options.signal?.aborted || (options.canSend && !options.canSend())) throw new Error('Scheduled delivery was cancelled')
+  if (getSessionTurnState(sessionId) !== 'idle') throw new Error('Session already has an active turn')
+  let failure: string | undefined
+  const connection = sessionTurnConnection(sessionId, options, message => {
+    if (message.type === 'error') failure = message.message
+  })
+  const turn: ActiveUserTurnState = { messageSent: false, expectedReplayUuid: sessionMessageUuid(options.messageId), scheduledTask: options.scheduledTask }
+  try {
+    await handleUserMessage(connection, { type: 'user_message', content }, turn, options)
+  } catch (error) {
+    if (activeUserTurns.get(sessionId) === turn) {
+      releaseUserTurnWithoutResult(sessionId, turn)
+      failSessionChatActivity(sessionId)
+    }
+    throw error
+  }
+  if (!turn.messageSent || !turn.collaborationAck) throw new Error(failure ?? 'CLI did not acknowledge the scheduled task')
+  return { status: turn.collaborationAck }
+}
+
 function sessionTurnConnection(
   sessionId: string,
   endpoint: { serverHost: string; serverPort: number },
@@ -1293,6 +1445,12 @@ function sessionTurnConnection(
 
 export function stopSessionTurn(sessionId: string): void {
   handleStopGeneration(sessionTurnConnection(sessionId, { serverHost: '127.0.0.1', serverPort: 0 }))
+}
+
+/** Cancel only the scheduled delivery that still owns this session's turn. */
+export function stopScheduledTaskTurn(sessionId: string, messageId: string): void {
+  if (activeUserTurns.get(sessionId)?.expectedReplayUuid !== sessionMessageUuid(messageId)) return
+  stopSessionTurn(sessionId)
 }
 
 /** Read the applied process snapshot; never substitute the global provider for a stale explicit choice. */
@@ -1442,6 +1600,7 @@ function clearSessionTurnObserver(sessionId: string): void {
 
 function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState): void {
   if (activeUserTurns.get(sessionId) === activeTurn) {
+    powerActivityClock.changed()
     activeUserTurns.delete(sessionId)
     refreshBackgroundTaskDisconnectCeiling(sessionId)
   }
@@ -1582,6 +1741,9 @@ function bindActiveUserTurnCompletion(
 ): () => void {
   const callback = (cliMsg: any) => {
     const interruptedResult = consumeInterruptedTurnResult(sessionId, cliMsg)
+    if (cliMsg?.type === 'result' && activeTurn.scheduledTask && !isAgentRunMessageFrame(cliMsg)) {
+      scheduledTurnResults.set(cliMsg, { sessionId, metadata: activeTurn.scheduledTask })
+    }
     if (activeTurn.cancelled) {
       if (cliMsg?.type === 'result') {
         const stillOwnsTurn = activeUserTurns.get(sessionId) === activeTurn
@@ -1603,6 +1765,7 @@ function bindActiveUserTurnCompletion(
 
     acknowledgeActiveTurnReplay(sessionId, cliMsg)
     if (activeTurn.replacementAfterStop || interruptedResult) return
+    mobileActivityClock.progress(sessionId)
     if (
       cliMsg?.type !== 'result' ||
       (!activeTurn.messageSent && !cliMsg.is_error)
@@ -2086,27 +2249,24 @@ async function handleSetPermissionMode(
     sendMessage(ws, { type: 'error', message: 'Plan mode is unavailable in lean sessions. Choose another permission mode.', code: 'LEAN_CAPABILITY_UNAVAILABLE' })
     return
   }
-  const pendingStartup = sessionStartupPromises.get(sessionId)
-
-  if (pendingStartup) {
-    await enqueueRuntimeTransition(sessionId, async () => {
+  // Cold sessions must participate in the same transition queue: a following
+  // turn or prewarm must not start with stale metadata while this write waits.
+  await enqueueRuntimeTransition(sessionId, async () => {
+    const pendingStartup = sessionStartupPromises.get(sessionId)
+    if (pendingStartup) {
       await pendingStartup.catch(() => undefined)
       if (!conversationService.hasSession(sessionId)) return
-      await applyPermissionModeToActiveSession(ws, sessionId, message.mode)
-    })
-    return
-  }
-
-  if (!conversationService.hasSession(sessionId)) {
-    if (await persistSessionPermissionMode(sessionId, message.mode)) {
-      sendMessage(ws, { type: 'permission_mode_changed', mode: message.mode })
     }
-    return
-  }
 
-  await enqueueRuntimeTransition(sessionId, () =>
-    applyPermissionModeToActiveSession(ws, sessionId, message.mode),
-  )
+    if (!conversationService.hasSession(sessionId)) {
+      if (await persistSessionPermissionMode(sessionId, message.mode)) {
+        sendMessage(ws, { type: 'permission_mode_changed', mode: message.mode })
+      }
+      return
+    }
+
+    await applyPermissionModeToActiveSession(ws, sessionId, message.mode)
+  })
 }
 
 const BYPASS_CAPABILITY_UNAVAILABLE =
@@ -3385,7 +3545,7 @@ function triggerTitleGeneration(
   sessionId: string,
   phase: TitleGenerationPhase,
   completedTurnCount?: number,
-): void {
+): void | Promise<void> {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle || state.hasExistingTranscript) return
   if (migrationMaintenance.isActive) return
@@ -3404,7 +3564,7 @@ function triggerTitleGeneration(
     if (state.startedGenerationKeys.has(key)) return
     state.startedGenerationKeys.add(key)
 
-    void migrationMaintenance.track((async () => {
+    return migrationMaintenance.track((async () => {
       try {
         const text = state.firstUserMessage
         const placeholder = deriveTitle(text)
@@ -3420,7 +3580,6 @@ function triggerTitleGeneration(
         console.error(`[Title] Failed to derive title for ${sessionId}:`, err)
       }
     })())
-    return
   }
 
   // Generate polished titles after assistant output completes on turn 1 and 3.
@@ -3706,6 +3865,7 @@ function cleanupSessionRuntimeState(
   sessionId: string,
   options?: { preserveRetryableAgentStops?: boolean },
 ) {
+  mobileActivityClock.delete(sessionId)
   cancelSessionDisconnectWatcher(sessionId)
   startupDeferredDisconnectCleanups.delete(sessionId)
   clearBackgroundTaskDisconnectCeiling(sessionId)
@@ -3854,6 +4014,12 @@ async function ensureCliSessionStarted(
   sessionId: string,
   reason: 'user_message' | 'prewarm_session',
 ): Promise<void> {
+  // Wait before registering startup; a transition may itself await an existing
+  // startup. Registering a startup that waits on that transition would deadlock.
+  while (runtimeTransitionPromises.has(sessionId)) {
+    await runtimeTransitionPromises.get(sessionId)
+  }
+
   const pendingStartup = sessionStartupPromises.get(sessionId)
   if (pendingStartup) {
     await pendingStartup
@@ -3896,6 +4062,10 @@ export async function ensureCliSessionStartedForControl(
   sessionId: string,
   requestUrl: URL,
 ): Promise<void> {
+  while (runtimeTransitionPromises.has(sessionId)) {
+    await runtimeTransitionPromises.get(sessionId)
+  }
+
   const pendingStartup = sessionStartupPromises.get(sessionId)
   if (pendingStartup) {
     await pendingStartup
@@ -3911,14 +4081,23 @@ export async function ensureCliSessionStartedForControl(
     const workDir = await resolveSessionWorkDir(sessionId)
     lastResolvedStartupWorkDirs.set(sessionId, workDir)
     const runtimeSettings = await getRuntimeSettings(sessionId)
-    const protocol = requestUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-    const authority = requestUrl.hostname === '0.0.0.0'
-      ? `127.0.0.1${requestUrl.port ? `:${requestUrl.port}` : ''}`
-      : requestUrl.host
-    const sdkUrl = new URL(
-      `${protocol}//${authority}/sdk/${encodeURIComponent(sessionId)}`,
-    )
-    sdkUrl.searchParams.set('token', crypto.randomUUID())
+    // A control request can arrive through the paired-phone listener, whose
+    // host the CLI cannot connect back to (/sdk needs a local, unpaired
+    // socket). A client watching this session already knows the local endpoint.
+    const watcher = activeSessions.get(sessionId)?.values().next().value as SessionConnection | undefined
+    let sdkUrl: URL
+    if (watcher) {
+      sdkUrl = new URL(buildSdkWebSocketUrl(watcher, sessionId))
+    } else {
+      const protocol = requestUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      const authority = requestUrl.hostname === '0.0.0.0'
+        ? `127.0.0.1${requestUrl.port ? `:${requestUrl.port}` : ''}`
+        : requestUrl.host
+      sdkUrl = new URL(
+        `${protocol}//${authority}/sdk/${encodeURIComponent(sessionId)}`,
+      )
+      sdkUrl.searchParams.set('token', crypto.randomUUID())
+    }
 
     console.log(`[WS] Starting CLI for ${sessionId} due to agent_message`)
     await conversationService.startSession(
@@ -4101,8 +4280,17 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         }
       }
 
+      const scheduledTask = readScheduledTaskMetadata(cliMsg.scheduledTask)
       const replayText = extractReplayUserText(cliMsg)
-      if (replayText && !isShutdownTeamPrompt(cliMsg.message?.content) && (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))) {
+      if (scheduledTask && replayText) {
+        messages.push({ type: 'user_message_replay', content: String(scheduledTaskDisplayText(replayText)), scheduledTask })
+      } else if (
+        replayText &&
+        !isShutdownTeamPrompt(cliMsg.message?.content) &&
+        // The server's own team notices to the lead are not the user's words.
+        !isTeamLeadNotice(cliMsg.message?.content) &&
+        (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))
+      ) {
         const collaborationEnvelope = parseSessionCollaborationEnvelope(replayText)
         messages.push(collaborationEnvelope
           ? {
@@ -4283,6 +4471,8 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               : undefined,
           input: cliMsg.request.input || {},
           description: cliMsg.request.description,
+          ...(cliMsg.request.auto_answer_deadline === null || (typeof cliMsg.request.auto_answer_deadline === 'number' && Number.isFinite(cliMsg.request.auto_answer_deadline))
+            ? { autoAnswerDeadline: cliMsg.request.auto_answer_deadline } : {}),
           ...(typeof cliMsg.request.display_name === 'string' &&
           cliMsg.request.display_name.trim()
             ? { displayName: cliMsg.request.display_name.trim() }
@@ -4323,6 +4513,19 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       // 对话结果（成功或错误）
       const usage = translateCliUsage(cliMsg.usage)
       const timing = translateCliTiming(cliMsg)
+      // Renderer reconnects and consumed human guides cannot recover the root
+      // trigger from the last user message. Keep host-owned provenance on the
+      // terminal frame, including when admission cleanup runs before forwarding.
+      const activeTurn = activeUserTurns.get(sessionId)
+      const remembered = scheduledTurnResults.get(cliMsg)
+      const scheduledTask = remembered?.sessionId === sessionId
+        ? remembered.metadata
+        : activeTurn?.scheduledTask
+      const completion: ServerMessage = {
+        type: 'message_complete', usage,
+        ...(timing ? { timing } : {}),
+        ...(scheduledTask ? { scheduledTask } : {}),
+      }
       // Buffered assistant blocks can arrive as a batch after all raw events
       // for one provider message. Keep deduplication active across the entire
       // batch, then clear it only at the terminal result boundary.
@@ -4337,7 +4540,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           interruptedTurnResultMessages.get(cliMsg) === sessionId ||
           sessionStopRequested.has(sessionId)
         ) {
-          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+          return [completion]
         }
 
         const resultMessage =
@@ -4347,7 +4550,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             : 'Unknown error')
         if (isDuplicateOfLastApiError(streamState.lastApiError, resultMessage)) {
           streamState.lastApiError = undefined
-          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+          return [completion]
         }
         // 错误和完成消息都发送
         return [
@@ -4356,12 +4559,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             message: resultMessage,
             code: classifyRuntimeErrorCode(resultMessage, 'CLI_ERROR'),
           },
-          { type: 'message_complete', usage, ...(timing ? { timing } : {}) },
+          completion,
         ]
       }
 
       streamState.lastApiError = undefined
-      return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+      return [completion]
     }
 
     case 'system': {
@@ -4599,9 +4802,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
 
 
 function sendMessage(ws: SessionConnection, message: ServerMessage) {
-  const outgoing = ws.data.clientKind === 'pet'
+  let outgoing = ws.data.clientKind === 'pet'
     ? toPetServerMessage(message)
     : message
+  if (outgoing?.type === 'tool_result' && ws.data.mediaRefs) {
+    outgoing = projectLiveToolResult(outgoing, ws.data.sessionId)
+  }
   if (outgoing) ws.send(JSON.stringify(outgoing))
 }
 
@@ -4916,6 +5122,7 @@ function replayPendingPermissionRequests(
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     })
   }
   return requests.map((request) => request.requestId)
@@ -5338,18 +5545,18 @@ async function getGrokReasoningEfforts(modelId: string): Promise<{
   defaultEffort?: string
   supportedEfforts: string[]
 }> {
-  const tokens = await hahaGrokOAuthService.ensureFreshTokens()
-  const catalog = await getGrokModelCatalog({
-    ...(tokens?.accessToken ? { accessToken: tokens.accessToken } : {}),
-    accountKey: tokens?.email ?? (tokens ? 'authenticated-default' : 'logged-out'),
-  })
-  const model = catalog.find((entry) => entry.value === modelId)
-    ?? catalog.find((entry) => entry.value === GROK_DEFAULT_MAIN_MODEL)
-    ?? catalog[0]
+  const catalog = await getDesktopGrokModelCatalog()
+  const resolvedModelId = resolveGrokModel(modelId)
+  const model = catalog.find((entry) => entry.value === resolvedModelId)
   return {
-    modelId: model?.value ?? GROK_DEFAULT_MAIN_MODEL,
+    // A refreshed selection can outlive the in-memory catalog. Only known
+    // compatibility aliases may change its ID; another model's metadata must
+    // never turn a concrete saved model into the bundled default.
+    modelId: resolvedModelId,
     ...(model?.reasoningEffort ? { defaultEffort: model.reasoningEffort } : {}),
-    supportedEfforts: model?.reasoningEfforts ?? [],
+    supportedEfforts: model?.supportsReasoningEffort === false
+      ? []
+      : model?.reasoningEfforts ?? [...MODEL_REASONING_EFFORTS],
   }
 }
 
@@ -5852,6 +6059,7 @@ export function getActiveSessionIds(): string[] {
 }
 
 export function __resetWebSocketHandlerStateForTests(): void {
+  mobileActivityClock.clear()
   strictCollaborationRuntimeSessions.clear()
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
   for (const timer of backgroundTaskCleanupTimers.values()) clearTimeout(timer)

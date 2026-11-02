@@ -1,7 +1,7 @@
 import type { McpServerRecord } from '@/types/mcp'
 
-function normalizeSeparators(path: string): string {
-  const trimmed = path.trim().replaceAll('\\', '/')
+function normalizeSeparators(path: string, isWindowsPath: boolean): string {
+  const trimmed = isWindowsPath ? path.trim().replaceAll('\\', '/') : path
   const isUnc = trimmed.startsWith('//')
   let normalized = trimmed.replace(/\/{2,}/g, '/')
   if (isUnc && !normalized.startsWith('//')) normalized = `/${normalized}`
@@ -21,8 +21,11 @@ function normalizeSeparators(path: string): string {
  */
 export function mcpProjectPathKey(path?: string): string {
   if (!path) return ''
-  const normalized = normalizeSeparators(path)
-  const isWindowsPath = /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//')
+  const windowsCandidate = path.trim().replaceAll('\\', '/')
+  const isWindowsPath = /^[A-Za-z]:\//.test(windowsCandidate) || windowsCandidate.startsWith('//')
+  // On POSIX a backslash or trailing space can be part of the filename. Do
+  // not turn a checkbox for that directory into a second directory's target.
+  const normalized = normalizeSeparators(path, isWindowsPath)
   return isWindowsPath ? normalized.toLocaleLowerCase('en-US') : normalized
 }
 

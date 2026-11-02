@@ -1,4 +1,5 @@
 import { SettingsService } from './settingsService.js'
+import type { ProviderProxyConfig } from '../types/provider.js'
 import { getProxyFetchOptions, getProxyUrl } from '../../utils/proxy.js'
 
 export type NetworkProxyMode = 'direct' | 'system' | 'manual'
@@ -110,6 +111,28 @@ export function normalizeNetworkSettings(settings: unknown): NetworkSettings {
     aiRequestTimeoutMs: parseTimeoutMs(network.aiRequestTimeoutMs),
     proxy: parseProxy(network.proxy),
   }
+}
+
+/**
+ * Overlay a saved provider's proxy override onto the global network settings.
+ *
+ * `follow_global` (or an absent override — every provider created before this
+ * field existed) keeps the global proxy untouched. `direct` pins the provider
+ * to a direct connection regardless of the global mode; `manual` routes it
+ * through the provider's own URL. Only the proxy block changes — the request
+ * timeout stays global.
+ */
+export function resolveProviderNetworkSettings(
+  base: NetworkSettings,
+  providerProxy: ProviderProxyConfig | undefined | null,
+): NetworkSettings {
+  if (!providerProxy || providerProxy.mode === 'follow_global') return base
+  if (providerProxy.mode === 'direct') {
+    return { ...base, proxy: { mode: 'direct', url: '' } }
+  }
+  const url = providerProxy.url?.trim() ?? ''
+  if (!url) return base
+  return { ...base, proxy: { mode: 'manual', url } }
 }
 
 export function getManualNetworkProxyUrl(settings: NetworkSettings): string | undefined {

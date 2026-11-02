@@ -48,6 +48,9 @@ import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
+import { PreventSleepSettings } from './PreventSleepSettings'
+import { IdlePowerSettings } from './IdlePowerSettings'
+import { SettingsHelpTopic } from './SettingsHelpTopic'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -1028,6 +1031,7 @@ export function GeneralSettings() {
           <SettingsSwitchRow
             title={t('settings.general.thinkingEnabled')}
             description={t('settings.general.thinkingDescription')}
+            help={<SettingsHelpTopic topic="thinking" />}
             checked={thinkingEnabled}
             onChange={(enabled) => void setThinkingEnabled(enabled)}
           />
@@ -1101,11 +1105,13 @@ export function GeneralSettings() {
           <SettingsSwitchRow
             title={t('settings.general.workflowKeywordEnabled')}
             description={t('settings.general.workflowKeywordDescription')}
+            help={<SettingsHelpTopic topic="ultracode" />}
             checked={workflowKeywordTriggerEnabled}
             onChange={(enabled) => void setWorkflowKeywordTriggerEnabled(enabled)}
           />
           <SettingsSwitchRow
             title={t('settings.general.agentTeamsEnabled')}
+            help={<SettingsHelpTopic topic="agentTeams" />}
             description={(
               <>
                 <span>{t('settings.general.agentTeamsDescription')}</span>{' '}
@@ -1123,6 +1129,7 @@ export function GeneralSettings() {
           <SettingsRow
             title={t('settings.general.subagentConcurrencyTitle')}
             description={t('settings.general.subagentConcurrencyDescription')}
+            help={<SettingsHelpTopic topic="subagents" />}
             data-testid="subagent-concurrency-setting"
             footer={(
               <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
@@ -1159,6 +1166,7 @@ export function GeneralSettings() {
           <SettingsSwitchRow
             title={t('settings.general.autoQuestionEnabled')}
             description={t('settings.general.autoQuestionHint')}
+            help={<SettingsHelpTopic topic="autoQuestion" />}
             checked={autoQuestion.enabled}
             onChange={(enabled) => void setAutoQuestion({ ...autoQuestion, enabled }).catch(() => {
               addToast({ type: 'error', message: t('settings.general.autoQuestionSaveFailed') })
@@ -1187,6 +1195,7 @@ export function GeneralSettings() {
           )}
           <SettingsSwitchRow
             title={t('settings.general.autoDreamEnabled')}
+            help={<SettingsHelpTopic topic="autoDream" />}
             description={autoDreamEnabled
               ? t('settings.general.autoDreamHintOn')
               : t('settings.general.autoDreamHintOff')}
@@ -1228,6 +1237,9 @@ export function GeneralSettings() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <PreventSleepSettings />
+      <IdlePowerSettings />
 
       <SettingsSection title={t('settings.general.networkTitle')} description={t('settings.general.networkDescription')}>
         <SettingsGroup>
@@ -1351,6 +1363,7 @@ export function GeneralSettings() {
 
           <SettingsSwitchRow
             title={t('settings.general.webFetchPreflightEnabled')}
+            help={<SettingsHelpTopic topic="webFetchPreflight" />}
             description={(
               <>
                 <span>{t('settings.general.webFetchPreflightDescription')}</span>{' '}
@@ -1496,6 +1509,7 @@ export function GeneralSettings() {
         <SettingsGroup>
           <SettingsSwitchRow
             title={t('settings.general.traceEnabled')}
+            help={<SettingsHelpTopic topic="trace" />}
             description={traceCapture.enabled ? t('settings.general.traceHintOn') : t('settings.general.traceHintOff')}
             checked={traceCapture.enabled}
             onChange={(enabled) => void setTraceCaptureEnabled(enabled)}

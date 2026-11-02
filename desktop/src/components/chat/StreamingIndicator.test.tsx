@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 vi.mock('../../api/websocket', () => ({
@@ -27,6 +27,9 @@ import { StreamingIndicator } from './StreamingIndicator'
 import { useChatStore, type PerSessionState } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
+
+const copyText = vi.fn(async (_text: string) => true)
+vi.mock('@/lib/clipboard', () => ({ copyTextToClipboard: (text: string) => copyText(text) }))
 
 const ACTIVE_TAB = 'active-tab'
 
@@ -85,6 +88,41 @@ describe('StreamingIndicator', () => {
     render(<StreamingIndicator />)
 
     expect(screen.getByText(/↓ 2\.2k tokens/)).toBeTruthy()
+  })
+
+  it('explains unclassified failures and copies actionable diagnostics', async () => {
+    useChatStore.setState({ sessions: {
+      [ACTIVE_TAB]: makeSession({ apiRetry: {
+        attempt: 2, maxRetries: 10, retryDelayMs: 1000, errorStatus: null,
+        errorType: 'unknown', errorMessage: 'Connection closed: ECONNRESET',
+        requestId: 'req-test-123', receivedAt: Date.now(),
+      } }),
+    } })
+    render(<StreamingIndicator />)
+    expect(screen.queryByText('unknown')).toBeNull()
+    expect(screen.getByText('Request interrupted')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Error details'))
+    expect(screen.getByText(/Connection closed: ECONNRESET/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }))
+    await waitFor(() => expect(copyText).toHaveBeenCalled())
+    const report = copyText.mock.calls.at(-1)?.[0]
+    expect(report).toContain(ACTIVE_TAB)
+    expect(report).toContain('req-test-123')
+    expect(report).toContain('Connection closed: ECONNRESET')
+    expect(report).toContain('2/10')
+  })
+
+  it('does not invent a network cause when the runtime supplied no reason', () => {
+    useChatStore.setState({ sessions: {
+      [ACTIVE_TAB]: makeSession({ apiRetry: {
+        attempt: 1, maxRetries: 10, retryDelayMs: 1000, errorStatus: null,
+        errorType: 'unknown', receivedAt: Date.now(),
+      } }),
+    } })
+    render(<StreamingIndicator />)
+    fireEvent.click(screen.getByText('Error details'))
+    expect(screen.getByText(/The runtime did not provide a specific cause/)).toBeInTheDocument()
+    expect(screen.queryByText('network error')).toBeNull()
   })
 
   it('draws the live line as a running ring, a sweeping verb and monospaced meta', () => {

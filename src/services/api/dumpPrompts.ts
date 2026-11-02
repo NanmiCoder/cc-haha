@@ -5,6 +5,7 @@ import { promises as fs } from 'fs'
 import { dirname, join } from 'path'
 import { getSessionId } from 'src/bootstrap/state.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { readProviderEnv } from '../../utils/model/providerEnvScope.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
 import {
   captureResponseTraceSnapshot,
@@ -73,9 +74,9 @@ function isLocalProviderProxyUrl(value: string): boolean {
 }
 
 function getTraceProviderFromEnv(): TraceProviderInfo | undefined {
-  const id = process.env.CC_HAHA_TRACE_PROVIDER_ID?.trim()
-  const name = process.env.CC_HAHA_TRACE_PROVIDER_NAME?.trim()
-  const format = process.env.CC_HAHA_TRACE_PROVIDER_FORMAT?.trim()
+  const id = readProviderEnv('CC_HAHA_TRACE_PROVIDER_ID')?.trim()
+  const name = readProviderEnv('CC_HAHA_TRACE_PROVIDER_NAME')?.trim()
+  const format = readProviderEnv('CC_HAHA_TRACE_PROVIDER_FORMAT')?.trim()
   if (!id && !name && !format) return undefined
 
   return {

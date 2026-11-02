@@ -1,4 +1,5 @@
 import { handleSideChatsRoute } from './sideChats.js'
+import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 /**
  * Session REST API Routes
  *
@@ -27,11 +28,17 @@ import { handleSideChatsRoute } from './sideChats.js'
  *   POST   /api/sessions/batch-delete — 批量删除会话
  *   DELETE /api/sessions/:id        — 删除会话
  *   PATCH  /api/sessions/:id        — 重命名会话
+ *   PATCH  /api/sessions/:id/archive — 归档或恢复会话（保留全部内容）
  */
 
 import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
 import { sessionService } from '../services/sessionService.js'
+import { loadRenderedToolImage } from '../services/toolImageMedia.js'
+import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
+import { getMobileSessionActivity } from '../services/mobileSessionActivityRuntime.js'
+import { getPowerActivitySnapshot } from '../services/powerActivityRuntime.js'
+import { handlePowerActivityLease } from '../services/powerActivityLease.js'
 import { conversationService } from '../services/conversationService.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -40,6 +47,7 @@ import {
   ensureCliSessionStartedForControl,
   getSlashCommands,
   listLiveSessionActivity,
+  assertSessionCanArchive,
 } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
@@ -153,15 +161,23 @@ export async function handleSessionsApi(
       return await batchDeleteSessions(req)
     }
 
+    if (sessionId === 'power-activity-lease') return handlePowerActivityLease(req)
+    if (sessionId === 'power-activity') {
+      if (req.method !== 'GET') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
+      return Response.json(await getPowerActivitySnapshot(), { headers: { 'Cache-Control': 'no-store' } })
+    }
+
     // Special collection route: /api/sessions/live-status
-    if (sessionId === 'live-status') {
+    if (sessionId === 'live-status' || sessionId === 'mobile-status') {
       if (req.method !== 'GET') {
         return Response.json(
           { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
           { status: 405 }
         )
       }
-      return Response.json({ sessions: listLiveSessionActivity() })
+      return Response.json({ sessions: sessionId === 'mobile-status'
+        ? await getMobileSessionActivity()
+        : listLiveSessionActivity({ includeTeamWorkers: url.searchParams.get('includeTeamWorkers') === '1' }) })
     }
 
     // Special collection route: /api/sessions/recent-projects
@@ -177,6 +193,7 @@ export async function handleSessionsApi(
       if (limit !== null && !/^\d+$/.test(limit)) throw ApiError.badRequest('Invalid limit parameter')
       return Response.json(await sessionService.listProjectHistory({
         projectRoot: url.searchParams.get('projectRoot') ?? '',
+        archived: parseArchivedFilter(url),
         ...(limit !== null ? { limit: Number(limit) } : {}),
         ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
         ...(url.searchParams.has('beforeModifiedAt') ? { beforeModifiedAt: url.searchParams.get('beforeModifiedAt')! } : {}),
@@ -203,6 +220,19 @@ export async function handleSessionsApi(
     // -----------------------------------------------------------------------
     // Sub-resource routes: /api/sessions/:id/messages
     // -----------------------------------------------------------------------
+    if (subResource === 'archive') {
+      if (segments.length !== 4) throw ApiError.notFound('Archive route not found')
+      if (req.method !== 'PATCH') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
+      let body: unknown
+      try { body = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+      if (!body || typeof body !== 'object' || Array.isArray(body) || typeof (body as { archived?: unknown }).archived !== 'boolean') {
+        throw ApiError.badRequest('archived (boolean) is required in request body')
+      }
+      const archived = (body as { archived: boolean }).archived
+      await sessionService.setSessionArchived(sessionId, archived, () => assertSessionCanArchive(sessionId))
+      return Response.json({ success: true, archived })
+    }
+
     if (subResource === 'summary') {
       if (req.method !== 'GET') {
         return Response.json(
@@ -223,6 +253,17 @@ export async function handleSessionsApi(
         )
       }
       return await getSessionMessages(req, sessionId, url)
+    }
+
+    if (subResource === 'tool-images') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      if (segments.length !== 6) throw ApiError.notFound('Tool image not found')
+      return await getToolImage(sessionId, segments[4], segments[5], url)
     }
 
     if (subResource === 'history-recovery' && req.method === 'GET') {
@@ -345,6 +386,25 @@ export async function handleSessionsApi(
 
     if (subResource === 'review') {
       return await handleSessionReviewRoute(req, sessionId, url, segments[4])
+    }
+
+    if (subResource === 'background-tasks') {
+      if (req.method !== 'GET') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
+      if (segments.length === 6 && segments[5] === 'output') {
+        if (url.search) throw ApiError.badRequest('Task output accepts only a session and task ID')
+        let taskId: string
+        try { taskId = decodeURIComponent(segments[4]!) } catch { throw ApiError.badRequest('Invalid task ID') }
+        const history = await sessionService.getSessionHistoryRecovery(sessionId, { signal: req.signal })
+        const found = await sessionService.findSessionFile(sessionId)
+        if (!found) throw ApiError.notFound('Session transcript is unavailable')
+        return Response.json(await readSessionBackgroundTaskOutputFromTranscript(sessionId, taskId, history.messages, found.filePath, req.signal), { headers: { 'Cache-Control': 'no-store' } })
+      }
+      if (segments.length !== 4) throw ApiError.notFound('Background task route not found')
+      const [history, recovery] = await Promise.all([
+        sessionService.getSessionHistoryPage(sessionId, { limit: 200, signal: req.signal }),
+        sessionService.getSessionHistoryRecovery(sessionId, { signal: req.signal }),
+      ])
+      return Response.json({ tasks: projectSessionBackgroundActivity(sessionId, [...recovery.messages, ...history.messages], history.taskNotifications), historyComplete: history.page.historyComplete })
     }
 
     if (subResource === 'subagents') {
@@ -476,6 +536,7 @@ export async function handleSessionsApi(
 // ============================================================================
 
 async function listSessions(req: Request, url: URL): Promise<Response> {
+  const archived = parseArchivedFilter(url)
   const project = url.searchParams.get('project') || undefined
   const view = url.searchParams.get('view')
   const requestedLimit = parseInt(url.searchParams.get('limit') || '20', 10)
@@ -499,6 +560,7 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     }
     return Response.json({
       ...await sessionService.listProjectPreviews(perProjectLimit),
+      archivedSessionIds: sessionService.listArchivedSessionIds(),
       index: localIndexCoordinator.getPublicStatus(),
     })
   }
@@ -507,6 +569,7 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
     ...(petAccess ? {} : { project }),
     limit,
     offset: petAccess ? 0 : offset,
+    archived: petAccess ? false : archived,
   })
   if (petAccess) {
     return Response.json({
@@ -529,6 +592,12 @@ async function listSessions(req: Request, url: URL): Promise<Response> {
   })
 }
 
+function parseArchivedFilter(url: URL): boolean {
+  const value = url.searchParams.get('archived')
+  if (value !== null && value !== 'true' && value !== 'false') throw ApiError.badRequest('Invalid archived parameter')
+  return value === 'true'
+}
+
 async function getSession(sessionId: string): Promise<Response> {
   const [summary, history] = await Promise.all([
     sessionService.getSessionSummary(sessionId),
@@ -545,13 +614,39 @@ async function getSessionMessages(req: Request, sessionId: string, url: URL): Pr
   // A full read always starts from the tail; mixing it with a cursor would
   // silently turn it back into a paged read with a larger budget.
   if (mode === 'full' && cursor) throw ApiError.badRequest('mode=full does not take a cursor')
+  const media = url.searchParams.get('media')
+  if (media !== null && media !== 'ref') throw ApiError.badRequest('Invalid history media mode')
+  if (media === 'ref' && mode === 'full') throw ApiError.badRequest('media=ref is only available for paged history')
   return Response.json(await sessionService.getSessionHistoryPage(sessionId, {
     cursor,
     // `mode=full` returns the whole transcript up to the reader's byte budget in
     // one response so the desktop timeline never stitches pages together.
     full: mode === 'full',
+    // Remote clients fetch tool images by reference instead of inline base64.
+    mediaRefs: media === 'ref',
     signal: req.signal,
   }))
+}
+
+async function getToolImage(sessionId: string, rawToolUseId: string | undefined, rawIndex: string | undefined, url: URL): Promise<Response> {
+  let toolUseId = ''
+  try { toolUseId = decodeURIComponent(rawToolUseId ?? '') } catch { /* rejected below */ }
+  // Subagent results use `parent/child` scoped ids.
+  if (!/^[\w./:-]{1,300}$/.test(toolUseId) || !/^\d{1,2}$/.test(rawIndex ?? '')) throw ApiError.badRequest('Invalid tool image reference')
+  const variant = url.searchParams.get('variant') ?? 'thumb'
+  if (variant !== 'thumb' && variant !== 'full') throw ApiError.badRequest('Invalid tool image variant')
+  const image = await loadRenderedToolImage(sessionId, toolUseId, Number(rawIndex), variant, async () =>
+    (await sessionService.findSessionFile(sessionId))?.filePath ?? null)
+  if (!image) throw ApiError.notFound('Tool image not found')
+  return new Response(new Uint8Array(image.bytes), {
+    headers: {
+      'Content-Type': image.mediaType,
+      'Content-Length': String(image.bytes.length),
+      // A tool result never changes once recorded.
+      'Cache-Control': 'private, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
 }
 
 async function getSessionTrace(req: Request, sessionId: string, url: URL): Promise<Response> {
@@ -706,6 +801,8 @@ async function handleSessionWorkspaceRoute(
       ))
     case 'raw':
       return await serveWorkspaceRaw(sessionId, requireWorkspacePath(url, 'raw'))
+    case 'download':
+      return await serveWorkspaceDownload(sessionId, requireWorkspacePath(url, 'download'), req.signal)
     case 'diff':
       return await runWorkspaceDiffRequest(() => workspaceService.getDiff(
         sessionId,
@@ -998,7 +1095,7 @@ async function requireSessionWorkspace(sessionId: string): Promise<string> {
   return workDir
 }
 
-function requireWorkspacePath(url: URL, route: 'file' | 'diff' | 'raw'): string {
+function requireWorkspacePath(url: URL, route: 'file' | 'diff' | 'raw' | 'download'): string {
   const filePath = url.searchParams.get('path')
   if (!filePath) {
     throw ApiError.badRequest(`path query parameter is required for workspace ${route}`)
@@ -1077,6 +1174,23 @@ async function serveWorkspaceRaw(sessionId: string, requestedPath: string): Prom
   })
 }
 
+async function serveWorkspaceDownload(sessionId: string, requestedPath: string, signal: AbortSignal): Promise<Response> {
+  try {
+    const file = await workspaceService.readDownloadFile(sessionId, requestedPath, signal)
+    const encodedName = encodeURIComponent(file.name).replace(/['()*]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+    return new Response(file.bytes, { headers: {
+      'Content-Type': file.mimeType,
+      'Content-Disposition': `attachment; filename="download"; filename*=UTF-8''${encodedName}`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "sandbox; default-src 'none'",
+    } })
+  } catch (error) {
+    throw mapWorkspaceError(error)
+  }
+}
+
 async function runWorkspaceDiffRequest<T extends { state?: string; error?: string }>(
   operation: () => Promise<T>,
 ): Promise<Response> {
@@ -1107,6 +1221,7 @@ async function deleteSession(sessionId: string): Promise<Response> {
     throw error
   }
   closeSessionConnection(sessionId, 'session deleted')
+  emitSessionTurnEvent({ type: 'deleted', sessionId })
   cleanupAdapterSessionMappings(sessionId)
   recentProjectsCache = null
   // A deleted lead ends its reviewed team for good; Stop and lead restarts only pause it.
@@ -1132,6 +1247,7 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
+    emitSessionTurnEvent({ type: 'deleted', sessionId })
     cleanupAdapterSessionMappings(sessionId)
     void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))
   }

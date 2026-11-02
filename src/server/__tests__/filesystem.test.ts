@@ -68,6 +68,32 @@ async function makeExternalFixtureDir(): Promise<string | null> {
 }
 
 describe('filesystem API', () => {
+  it('directory-only mobile browse decodes project paths and returns navigable canonical parents', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mobile-directory-browse-'))
+    cleanupDirs.add(root)
+    registerFilesystemAccessRoot(root)
+    const project = path.join(root, '项目 & app')
+    await fsp.mkdir(project)
+    await fsp.mkdir(path.join(project, 'src'))
+    await fsp.mkdir(path.join(project, '.project'))
+    await fsp.mkdir(path.join(project, '.git'))
+    await fsp.writeFile(path.join(project, 'private.txt'), 'fixture-only')
+    const response = await handleFilesystemRoute('/api/filesystem/browse', makeUrl('/api/filesystem/browse', { path: project }))
+    expect(response.status).toBe(200)
+    const body = await response.json() as { currentPath: string, parentPath: string, entries: Array<{ name: string, path: string, isDirectory: boolean }> }
+    const canonical = await fsp.realpath(project)
+    expect(body.currentPath).toBe(canonical)
+    expect(body.parentPath).toBe(path.dirname(canonical))
+    expect(body.entries.map(entry => entry.name).sort()).toEqual(['.project', 'src'])
+    expect(body.entries.every(entry => entry.isDirectory && entry.path === path.join(canonical, entry.name))).toBe(true)
+    const empty = await handleFilesystemRoute('/api/filesystem/browse', makeUrl('/api/filesystem/browse', { path: path.join(project, 'src') }))
+    expect((await empty.json() as { entries: unknown[] }).entries).toEqual([])
+    const missing = await handleFilesystemRoute('/api/filesystem/browse', makeUrl('/api/filesystem/browse', { path: path.join(project, 'deleted') }))
+    expect(missing.status).toBe(404)
+    const file = await handleFilesystemRoute('/api/filesystem/browse', makeUrl('/api/filesystem/browse', { path: path.join(project, 'private.txt') }))
+    expect(file.status).toBe(400)
+  })
+
   it('allows browsing a directory under the user home directory', async () => {
     const homeFixtureDir = await fsp.mkdtemp(path.join(os.homedir(), 'claude-filesystem-test-'))
     cleanupDirs.add(homeFixtureDir)

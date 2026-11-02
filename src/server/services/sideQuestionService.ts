@@ -1,5 +1,6 @@
 import { z } from 'zod/v4'
 import { ApiError } from '../middleware/errorHandler.js'
+import { powerActivityClock } from './powerActivityClock.js'
 
 export const sideQuestionInputSchema = z.strictObject({
   questionId: z.uuid(),
@@ -23,6 +24,8 @@ export class SideQuestionService {
   private pending = new Map<string, Pending>()
   private seen = new Map<string, Set<string>>()
   constructor(private dependencies: Dependencies, private timeoutMs = 300_000) {}
+
+  hasPendingWork(): boolean { return this.pending.size > 0 }
 
   private remember(sessionId: string, questionId: string): void {
     const seen = this.seen.get(sessionId) ?? new Set<string>()
@@ -61,6 +64,7 @@ export class SideQuestionService {
     this.remember(sessionId, input.questionId)
     const entry: Pending = { id: input.questionId, controller: new AbortController(), started: false }
     this.pending.set(sessionId, entry)
+    powerActivityClock.changed()
     let timedOut = false
     const cancel = () => { void this.abort(sessionId, entry) }
     signal.addEventListener('abort', cancel, { once: true })
@@ -81,6 +85,7 @@ export class SideQuestionService {
       }, this.timeoutMs, entry.controller.signal), aborted])
       if (entry.controller.signal.aborted) throw new Error('Side question aborted')
       if (typeof result.response !== 'string') throw new Error('CLI returned an invalid side question response')
+      powerActivityClock.completed()
       return { questionId: input.questionId, response: result.response }
     } catch (error) {
       if (entry.controller.signal.aborted) {
@@ -94,6 +99,7 @@ export class SideQuestionService {
       if (rejectAbort) entry.controller.signal.removeEventListener('abort', rejectAbort)
       await entry.cancel
       if (this.pending.get(sessionId) === entry) this.pending.delete(sessionId)
+      powerActivityClock.changed()
     }
   }
 }

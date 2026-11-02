@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
-import http from 'node:http'
-import type { AddressInfo, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,10 +8,10 @@ import { createFeishuHttpClient } from '../http-client.js'
 const fixture = fileURLToPath(new URL('./fixtures/proxy-client.ts', import.meta.url))
 const certificate = fileURLToPath(new URL('./fixtures/loopback-cert.fixture', import.meta.url))
 
-async function runFixture(mode: string, trustCertificate = true, fixturePath = fixture) {
+async function runFixture(mode: string, trustCertificate = true, fixturePath = fixture, executable = process.execPath) {
   const directory = await mkdtemp(join(tmpdir(), 'feishu-proxy-'))
   try {
-    const child = Bun.spawn([process.execPath, '--no-env-file', fixturePath, mode], {
+    const child = Bun.spawn([executable, ...(executable === process.execPath ? ['--no-env-file'] : ['--no-deprecation']), fixturePath, mode], {
       env: {
         PATH: globalThis.process.env.PATH ?? '',
         HOME: directory,
@@ -28,7 +26,7 @@ async function runFixture(mode: string, trustCertificate = true, fixturePath = f
       new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
     ])
     expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: '' })
-    return JSON.parse(stdout.trim().split('\n').findLast(line => line.startsWith('{'))!)
+    return JSON.parse(stdout.trim().split('\n').findLast(line => line.startsWith('{') || line.startsWith('['))!)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -45,66 +43,37 @@ describe('Feishu SDK HTTP proxy transport', () => {
     })
   })
 
-  it.each(['timeout', 'abort', 'unsupported-proxy'])('settles and cleans up a real in-process %s request', async mode => {
-    const keys = [
-      'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy',
-      'npm_config_proxy', 'npm_config_http_proxy', 'npm_config_https_proxy', 'npm_config_no_proxy',
-      'NPM_CONFIG_PROXY', 'NPM_CONFIG_HTTP_PROXY', 'NPM_CONFIG_HTTPS_PROXY', 'NPM_CONFIG_NO_PROXY',
-    ]
-    const saved = new Map(keys.map(key => [key, process.env[key]]))
-    for (const key of keys) process.env[key] = ''
-    const sockets = new Set<Socket>()
-    const proxy = http.createServer()
-    const controller = new AbortController()
-    const authorities: string[] = []
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    proxy.on('connection', socket => {
-      sockets.add(socket)
-      socket.on('close', () => sockets.delete(socket))
-    })
-    proxy.on('connect', (request, socket) => {
-      authorities.push(request.url ?? '')
-      // CONNECT upgrades the server socket to half-open mode. Respond to the
-      // client's FIN so the assertion measures client cleanup, not our fixture.
-      socket.resume()
-      socket.on('end', () => socket.end())
-      if (mode === 'abort') controller.abort()
-    })
+  it('settles and cleans up sequential Node agent requests as proxy configuration changes', async () => {
+    // Bun's node:http implements requests through native fetch and does not call
+    // Agent.connect. Test this Node-agent contract in Node; the Bun fixtures
+    // above independently cover the runtime's timeout/abort/redirect behavior.
+    const node = Bun.which('node')
+    if (!node) throw new Error('Node.js is required for the Feishu Node agent transport contract')
+    const directory = await mkdtemp(join(tmpdir(), 'feishu-node-transport-'))
     try {
-      await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve))
-      const port = (proxy.address() as AddressInfo).port
-      process.env.HTTPS_PROXY = `${mode === 'unsupported-proxy' ? 'unsupported' : 'http'}://127.0.0.1:${port}`
-      const options = { timeout: 100, signal: controller.signal }
-      const outcome = createFeishuHttpClient().get('https://127.0.0.1:1/', options).then(
-        () => ({ code: 'unexpected-success', message: '' }),
-        error => ({ code: error.code, message: error.message }),
-      )
-      const result = await Promise.race([
-        outcome,
-        new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => reject(new Error('Request did not settle')), 1000)
-        }),
-      ])
-      if (mode === 'unsupported-proxy') {
-        expect(result.message).toContain('Unsupported protocol for proxy URL: unsupported:')
-        expect(authorities).toEqual([])
-      } else {
-        expect(result.code).toBe(mode === 'timeout' ? 'ECONNABORTED' : 'ERR_CANCELED')
-        if (mode === 'timeout') expect(result.message).toBe('timeout of 100ms exceeded')
-        expect(authorities).toEqual(['127.0.0.1:1'])
+      const built = await Bun.build({
+        entrypoints: [fileURLToPath(new URL('./fixtures/node-http-client.ts', import.meta.url))],
+        target: 'node', format: 'cjs',
+      })
+      if (!built.success) throw new AggregateError(built.logs, 'Failed to build Node transport fixture')
+      const fixturePath = join(directory, 'node-http-client.cjs')
+      await Bun.write(fixturePath, built.outputs[0]!)
+      const results = await runFixture('all', true, fixturePath, node)
+      expect(results.map((result: { mode: string }) => result.mode)).toEqual(['timeout', 'abort', 'unsupported-proxy'])
+      for (const result of results) {
+        expect(result.connectCalls).toBe(1)
+        expect(result.openSockets).toBe(0)
+        if (result.mode === 'unsupported-proxy') {
+          expect(result.message).toContain('Unsupported protocol for proxy URL: unsupported:')
+          expect(result.authorities).toEqual([])
+        } else {
+          expect(result.code).toBe(result.mode === 'timeout' ? 'ECONNABORTED' : 'ERR_CANCELED')
+          if (result.mode === 'timeout') expect(result.message).toBe('timeout of 100ms exceeded')
+          expect(result.authorities).toEqual(['127.0.0.1:1'])
+        }
       }
-      const cleanupDeadline = Date.now() + 500
-      while (sockets.size && Date.now() < cleanupDeadline) await Bun.sleep(10)
-      expect(sockets.size).toBe(0)
     } finally {
-      clearTimeout(deadline)
-      controller.abort()
-      for (const socket of sockets) socket.destroy()
-      await new Promise<void>(resolve => proxy.close(() => resolve()))
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key]
-        else process.env[key] = value
-      }
+      await rm(directory, { recursive: true, force: true })
     }
   })
 

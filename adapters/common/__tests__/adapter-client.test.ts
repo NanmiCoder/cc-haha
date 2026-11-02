@@ -167,6 +167,8 @@ describe('IM adapter entrypoint wiring', () => {
       // Constructing a client here would bypass the resolved boundary entirely,
       // which is exactly how all five adapters shared the #1191 defect.
       expect(source).not.toMatch(/new\s+AdapterHttpClient/)
+      expect(source).not.toMatch(/from\s+['"]\.\.\/common\/chat-queue\.js['"]/)
+      expect(source).toMatch(/\{[^}]*\benqueue\b[^}]*\}\s*=\s*createAdapterClient/)
       // Nor may an entrypoint re-derive the boundary or the work dir itself.
       expect(source).not.toMatch(/resolveAllowedProjectRoots|getConfiguredWorkDir/)
     })

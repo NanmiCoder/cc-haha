@@ -25,6 +25,7 @@ type Props = {
   compact?: boolean
   embedded?: boolean
   browseReferences?: boolean
+  allowBelow?: boolean
   actions?: Array<{ key: string, label: string, description?: string, icon?: ReactNode, onSelect: () => void }>
   references: ComposerReferenceCandidate[]
   referencesLoading?: boolean
@@ -37,7 +38,7 @@ type Props = {
 export function getComposerReferenceOptionId(id: string, index: number): string { return `${id}-option-${index}` }
 
 export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Props>(function ComposerReferenceMenu({
-  id, cwd, filter = '', compact = false, embedded = false, browseReferences = false, actions = [], references, referencesLoading = false, referencesError,
+  id, cwd, filter = '', compact = false, embedded = false, browseReferences = false, allowBelow = false, actions = [], references, referencesLoading = false, referencesError,
   onSelect, onNavigate, onActiveChange,
 }, ref) {
   const t = useTranslation()
@@ -65,7 +66,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
   const [result, setResult] = useState<{ key: string, entries: FileEntry[], root: string, current: string, error?: 'denied' | 'failed' } | null>(null)
   const [selection, setSelection] = useState<{ query: string, key: string } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
+  const [roomRef, room, side] = useRoomAbove<HTMLDivElement>({ allowBelow })
   const rootRef = useRef({ cwd, path: cwd })
   if (rootRef.current.cwd !== cwd) rootRef.current = { cwd, path: cwd }
   const currentResult = !browseReferences && result?.key === queryKey ? result : null
@@ -163,7 +164,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
 
   let offset = 0
   return (
-    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: roomAbove }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `absolute bottom-full left-0 w-full z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] `} onMouseDown={event => event.preventDefault()}>
+    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: room }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 w-full z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] `} onMouseDown={event => event.preventDefault()}>
       <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
         {visibleGroups.map(group => {
           const start = offset

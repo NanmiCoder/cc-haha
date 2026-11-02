@@ -1,0 +1,14 @@
+diff --git a/android/src/main/java/expo/modules/camera/CameraViewModule.kt b/android/src/main/java/expo/modules/camera/CameraViewModule.kt
+--- a/android/src/main/java/expo/modules/camera/CameraViewModule.kt
++++ b/android/src/main/java/expo/modules/camera/CameraViewModule.kt
+@@ -129,7 +129,9 @@ class CameraViewModule : Module() {
+     }
+ 
+     AsyncFunction("scanFromURLAsync") { url: String, barcodeTypes: List<BarcodeType>, promise: Promise ->
+-      if (!CameraUtils.isMLKitAvailable(appContext.reactContext)) {
++      // cc-haha: image decoding uses the bundled ML Kit model, just like the
++      // camera analyzer. It does not need the Play Store / Google Code Scanner.
++      if (!CameraUtils.isMLKitBarcodeScannerAvailable()) {
+         promise.reject(CameraExceptions.MLKitUnavailableException())
+         return@AsyncFunction
+       }

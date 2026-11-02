@@ -1,8 +1,12 @@
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 
 export const DESCRIPTION = 'List all tasks in the task list'
 
 export function getPrompt(): string {
+  if (getAgentProfile() === 'lean') {
+    return 'List tasks in the current task list, including their IDs, subjects, statuses and unresolved dependencies. Check progress and avoid duplicates; read individual tasks for full details. Work on tasks whose dependencies are complete.'
+  }
   const teammateUseCase = isAgentSwarmsEnabled()
     ? `- Before assigning tasks to teammates, to see what's available
 `

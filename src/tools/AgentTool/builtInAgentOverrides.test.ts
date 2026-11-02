@@ -132,6 +132,23 @@ describe('built-in agent overrides', () => {
     expect(effective('Explore').effort).toBe('high')
   })
 
+  test('pins a provider together with the model saved beside it', () => {
+    writeUserSettings({
+      builtInAgentOverrides: {
+        Explore: { model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'max' },
+        Plan: { provider: 'deepseek-direct', effort: 'low' },
+      },
+    })
+
+    expect(effective('Explore')).toMatchObject({
+      model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'max',
+    })
+    // A provider means nothing without the model it was chosen for.
+    expect(effective('Plan').provider).toBeUndefined()
+    expect(effective('Plan').effort).toBe('low')
+    expect(baseline('Explore').provider).toBeUndefined()
+  })
+
   test('treats model "inherit" as a real override, not as a reset', () => {
     // Explore ships pinned to a small model externally, so "inherit" is a
     // meaningful and different choice. Collapsing it into "no override" would

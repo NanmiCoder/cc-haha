@@ -154,4 +154,16 @@ describe('MCP host preflight', () => {
         'Host command "npx" is not available in PATH. This STDIO MCP runs on the host machine. Install Node.js on this machine so "npx" is available in PATH, then retry.',
     })
   })
+
+  it('resolves explicit relative PATH entries from the requested project cwd', async () => {
+    const project = path.join(tmpDir, 'project')
+    const toolPath = path.join(project, 'bin', 'project-mcp-tool')
+    await mkdir(path.dirname(toolPath), { recursive: true })
+    await writeExecutable(toolPath, 'MCP access-check fixture; never execute\n')
+
+    await expect(inspectMcpHostCommand('project-mcp-tool', project, { PATH: 'bin' })).resolves.toEqual({
+      ok: true,
+      resolvedCommand: toolPath,
+    })
+  })
 })

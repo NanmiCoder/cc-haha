@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod/v4'
 import type { QueuedCommand } from '../types/textInputTypes.js'
+import { scheduledTaskMessageInputSchema, type ScheduledTaskMetadata } from './scheduledTaskMessage.js'
 import { formatSessionCollaborationPrompt } from './sessionCollaborationEnvelope.js'
 
 export const sessionMessageInputSchema = z.strictObject({
@@ -13,11 +14,17 @@ export const sessionMessageInputSchema = z.strictObject({
 
 type Receipt = { message_id: string; status: 'queued' | 'consumed'; duplicate: boolean }
 const consumers = new Map<string, () => void>()
+const scheduledMessages = new Map<string, ScheduledTaskMetadata>()
+
+export function getPendingScheduledTask(uuid: string | undefined): ScheduledTaskMetadata | undefined {
+  return uuid ? scheduledMessages.get(uuid) : undefined
+}
 
 /** Called only where the existing command lifecycle marks a prompt started. */
 export function consumeSessionMessage(uuid: string): void {
   consumers.get(uuid)?.()
   consumers.delete(uuid)
+  scheduledMessages.delete(uuid)
 }
 
 export function sessionMessageUuid(messageId: string): `${string}-${string}-${string}-${string}-${string}` {
@@ -44,13 +51,15 @@ export function createSessionMessageInbox(
   const messages = new Map<string, { sender: string; text: string; status: Receipt['status']; uuid: string }>()
   return {
     accept(raw: unknown, persisted = false): Receipt {
-      const input = sessionMessageInputSchema.parse(raw)
+      const input = z.union([sessionMessageInputSchema, scheduledTaskMessageInputSchema]).parse(raw)
+      const scheduled = input.subtype === 'enqueue_scheduled_task' ? input.scheduled_task : undefined
+      const sender = input.subtype === 'enqueue_session_message' ? input.sender_session_id : JSON.stringify(scheduled)
       if (persisted || consumedHistory.has(sessionMessageUuid(input.message_id))) {
         return { message_id: input.message_id, status: 'consumed', duplicate: true }
       }
       const existing = messages.get(input.message_id)
       if (existing) {
-        if (existing.sender !== input.sender_session_id || existing.text !== input.text) {
+        if (existing.sender !== sender || existing.text !== input.text) {
           throw new Error('Session message ID already belongs to different content')
         }
         return { message_id: input.message_id, status: existing.status, duplicate: true }
@@ -59,20 +68,22 @@ export function createSessionMessageInbox(
         throw new Error('Session message inbox is full')
       }
       const uuid = sessionMessageUuid(input.message_id)
-      const entry = { sender: input.sender_session_id, text: input.text, status: 'queued' as Receipt['status'], uuid }
+      const entry = { sender, text: input.text, status: 'queued' as Receipt['status'], uuid }
       messages.set(input.message_id, entry)
+      if (scheduled) scheduledMessages.set(uuid, scheduled)
       consumers.set(uuid, () => {
         entry.status = 'consumed'
         receipt({ message_id: input.message_id, status: 'consumed', duplicate: false })
       })
       try {
         enqueue({
-          mode: 'prompt', priority: 'next', uuid, isMeta: true, skipSlashCommands: true,
-          origin: { kind: 'channel', server: 'session-collaboration' },
-          value: formatSessionCollaborationPrompt({ senderSessionId: input.sender_session_id, messageId: input.message_id, text: input.text }),
+          mode: 'prompt', priority: 'next', uuid, isMeta: !scheduled, skipSlashCommands: true,
+          origin: { kind: 'channel', server: scheduled ? 'scheduled-task' : 'session-collaboration' },
+          value: input.subtype === 'enqueue_scheduled_task' ? input.text : formatSessionCollaborationPrompt({ senderSessionId: input.sender_session_id, messageId: input.message_id, text: input.text }),
         })
       } catch (error) {
         consumers.delete(uuid)
+        scheduledMessages.delete(uuid)
         messages.delete(input.message_id)
         throw error
       }
@@ -84,12 +95,16 @@ export function createSessionMessageInbox(
       for (const command of removed) {
         const id = queued.get(command.uuid!)!
         consumers.delete(command.uuid!)
+        scheduledMessages.delete(command.uuid!)
         messages.delete(id)
       }
       return removed.length
     },
     dispose() {
-      for (const { uuid } of messages.values()) consumers.delete(uuid)
+      for (const { uuid } of messages.values()) {
+        consumers.delete(uuid)
+        scheduledMessages.delete(uuid)
+      }
       messages.clear()
     },
   }

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
   OPENAI_CODEX_API_ENDPOINT,
   OPENAI_CODEX_CLIENT_VERSION,
@@ -45,6 +47,7 @@ type RemoteModelInfo = {
 
 function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry | null {
   if (
+    !model ||
     typeof model.slug !== 'string' ||
     !model.slug.trim() ||
     model.visibility !== 'list'
@@ -102,6 +105,7 @@ export type OpenAIModelCatalogTokens = {
 export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
   suppliedTokens?: OpenAIModelCatalogTokens | null,
+  proxyUrl?: string | null,
 ): Promise<OpenAIModelCatalogEntry[]> {
   const tokens = suppliedTokens === undefined
     ? await ensureFreshOpenAITokens()
@@ -125,7 +129,9 @@ export async function fetchOpenAICodexModelCatalog(
   const response = await fetchOverride(url, {
     method: 'GET',
     headers,
+    redirect: 'error',
     signal: AbortSignal.timeout(MODEL_CATALOG_TIMEOUT_MS),
+    ...(proxyUrl === undefined ? {} : getProxyFetchOptions({ proxyUrl, targetUrl: url })),
   })
   if (!response.ok) {
     throw new Error(`OpenAI models endpoint returned HTTP ${response.status}`)
@@ -144,17 +150,21 @@ export async function fetchOpenAICodexModelCatalog(
 export async function getOpenAICodexModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  throwOnError?: boolean
+  resolveProxyUrl?: () => Promise<string | null | undefined>
   /** Explicit desktop credentials; null must never fall through to CLI storage. */
   tokens?: OpenAIModelCatalogTokens | null
 }): Promise<OpenAIModelCatalogEntry[]> {
   const tokens = options?.tokens === undefined ? getOpenAIOAuthTokens() : options.tokens
   const accountKey = tokens
-    ? tokens.accountId ?? tokens.email ?? 'authenticated-default'
+    ? createHash('sha256').update(tokens.accessToken).digest('hex')
     : 'logged-out'
   return catalogCache.resolve({
     accountKey,
     fetchCatalog: async () => {
-      const models = await fetchOpenAICodexModelCatalog(options?.fetchOverride, options?.tokens)
+      const models = await fetchOpenAICodexModelCatalog(
+        options?.fetchOverride, options?.tokens, await options?.resolveProxyUrl?.(),
+      )
       if (models.length === 0) {
         throw new Error('OpenAI models endpoint returned no visible models')
       }
@@ -162,6 +172,7 @@ export async function getOpenAICodexModelCatalog(options?: {
     },
     fallback: OPENAI_CODEX_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(options?.throwOnError ? { throwOnError: true } : {}),
   })
 }
 

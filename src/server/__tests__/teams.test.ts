@@ -4392,11 +4392,19 @@ describe('TeamService', () => {
       { recursive: true },
     )
 
-    await expect(service.sendMemberMessage(
+    const { powerActivityClock } = await import('../services/powerActivityClock.js')
+    const before = powerActivityClock.read(false)
+    const sending = service.sendMemberMessage(
       'blocked-mailbox-team',
       'agent-worker',
       'Please review the latest diff',
-    )).rejects.toMatchObject({ statusCode: 503, code: 'MAILBOX_UNAVAILABLE' })
+    )
+    expect(service.hasPendingMemberMessages()).toBe(true)
+    await expect(sending).rejects.toMatchObject({ statusCode: 503, code: 'MAILBOX_UNAVAILABLE' })
+    expect(service.hasPendingMemberMessages()).toBe(false)
+    const after = powerActivityClock.read(false)
+    expect(after.revision).toBeGreaterThan(before.revision)
+    expect(after.completionSequence).toBe(before.completionSequence)
   })
 
   it('should send messages to inbox-discovered members', async () => {

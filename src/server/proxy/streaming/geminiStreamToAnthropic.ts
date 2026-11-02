@@ -31,6 +31,19 @@ const ERROR_FINISH_REASONS = new Set([
   'MALFORMED_RESPONSE',
 ])
 
+// A deliberate policy stop. Repeating the same request cannot change it, so with nothing
+// emitted it ends the turn as a refusal instead of an error the CLI would retry.
+const REFUSAL_FINISH_REASONS = new Set([
+  'SAFETY',
+  'RECITATION',
+  'BLOCKLIST',
+  'PROHIBITED_CONTENT',
+  'SPII',
+  'IMAGE_SAFETY',
+  'IMAGE_PROHIBITED_CONTENT',
+  'IMAGE_RECITATION',
+])
+
 export class GeminiUpstreamError extends Error {
   constructor(message: string, readonly status?: number) {
     super(message)
@@ -119,19 +132,19 @@ export class GeminiToAnthropicConverter {
   finish(): void {
     this.closeBlock()
     const reason = this.finishReason
-    if (reason === undefined) {
-      throw new GeminiUpstreamError(this.blockReason
-        ? `Gemini blocked the request (${this.blockReason})`
-        : 'Gemini upstream stream ended without a finish reason')
-    }
-    if (reason === CONTINUATION) {
-      throw new GeminiUpstreamError('Gemini continued the response without a continuation token')
-    }
     let stopReason: string
-    if (reason === 'STOP') {
+    if (reason === undefined) {
+      if (!this.blockReason) throw new GeminiUpstreamError('Gemini upstream stream ended without a finish reason')
+      // The prompt itself was blocked, which no retry can change.
+      stopReason = 'refusal'
+    } else if (reason === CONTINUATION) {
+      throw new GeminiUpstreamError('Gemini continued the response without a continuation token')
+    } else if (reason === 'STOP') {
       stopReason = this.hasToolCalls ? 'tool_use' : 'end_turn'
     } else if (reason === 'MAX_TOKENS') {
       stopReason = 'max_tokens'
+    } else if (REFUSAL_FINISH_REASONS.has(reason) && !this.emittedContent && !this.hasToolCalls) {
+      stopReason = 'refusal'
     } else if (ERROR_FINISH_REASONS.has(reason) || !this.emittedContent || this.hasToolCalls) {
       // A safety or recitation stop keeps partial text, like OpenAI Chat's
       // content_filter, but never becomes a silent empty reply or a

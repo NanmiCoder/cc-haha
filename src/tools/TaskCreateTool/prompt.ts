@@ -1,8 +1,12 @@
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
 
 export const DESCRIPTION = 'Create a new task in the task list'
 
 export function getPrompt(): string {
+  if (getAgentProfile() === 'lean') {
+    return 'Create a task with an actionable subject and description. Use a task list for complex multi-step work or when requested; skip trivial tasks. Check the existing list to avoid duplicates. New tasks start pending. Update status when starting and finishing work; mark completed only after the work is done and verified.'
+  }
   const teammateContext = isAgentSwarmsEnabled()
     ? ' and potentially assigned to teammates'
     : ''

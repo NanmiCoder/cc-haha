@@ -333,3 +333,72 @@ test('approved roster launches, materializes canonical tasks, wakes an idle memb
     upstream.stop(true)
   }
 }, 20_000)
+
+test('a member that dies while starting fails the launch by name and reason, and the launch takes its tasks back', async () => {
+  const { createHash } = await import('node:crypto')
+  const { writeFile } = await import('node:fs/promises')
+  const { conversationService: runtimeService } = await import('./conversationService.js')
+  const { launchTeamPlanRuntime, stopTeamPlanRuntime } = await import('./teamPlanRuntime.js')
+  const { writeTeamFileAsync, readTeamFile, getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
+  const { beginTaskListLifecycle, withTaskListLifecycleLock, getCanonicalTeamTaskListId, listTasks } = await import('../../utils/tasks.js')
+  let requests = 0
+  const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { requests++; return new Response('done') } })
+  const bridge = Bun.serve<{ id: string }>({ hostname: '127.0.0.1', port: 0,
+    fetch(request, server) {
+      const url = new URL(request.url)
+      const id = url.pathname.split('/').pop()!
+      if (!runtimeService.authorizeSdkConnection(id, url.searchParams.get('token'))) return new Response('denied', { status: 401 })
+      return server.upgrade(request, { data: { id } }) ? undefined : new Response('bad', { status: 400 })
+    },
+    websocket: { open(ws) { runtimeService.attachSdkConnection(ws.data.id, ws) }, message(ws, msg) { runtimeService.handleSdkPayload(ws.data.id, String(msg)) }, close(ws) { runtimeService.detachSdkConnection(ws.data.id, ws) } },
+  })
+  const oldPort = ProviderService.getServerPort()
+  ProviderService.setServerPort(bridge.port!)
+  const planId = 'failing-plan'
+  try {
+    process.env.CLAUDE_CLI_PATH = join(import.meta.dir, '__fixtures__', 'team-worker-cli.ts')
+    process.env.FIXTURE_EXIT_ON_SET_MODEL = 'writer'
+    const provider = await new ProviderService().addProvider({ presetId: 'custom', name: 'local', baseUrl: upstream.url.toString(), apiKey: 'fake', models: { main: 'cheap', sonnet: 'cheap', opus: 'capable', haiku: 'cheap' } })
+    const teamName = 'failing-team'
+    const createdAt = Date.now()
+    await writeTeamFileAsync(teamName, { name: teamName, createdAt, leadAgentId: `team-lead@${teamName}`, leadSessionId: 'failing-parent', members: [] })
+    const taskListId = getCanonicalTeamTaskListId(teamName)
+    await withTaskListLifecycleLock(taskListId, () => beginTaskListLifecycle(taskListId, { teamName, createdAt, leadSessionId: 'failing-parent' }))
+    await runtimeService.startSession('failing-parent', home, `ws://127.0.0.1:${bridge.port}/sdk/failing-parent?token=parent`, { providerId: provider.id, model: 'cheap', teamWorker: { ...worker, parentSessionId: 'external', name: 'leader' } })
+    const member = (id: string, name: string) => ({ id, name, agentType: 'research', prompt: `Work as ${name}`, runtime: { providerId: provider.id, modelId: 'cheap' }, agentSnapshot: { systemPrompt: 'Read only', tools: ['Read'] } })
+    const members = [member('m1', 'reader'), member('m2', 'writer')]
+    const tasks = [
+      { id: 'read', subject: 'Read the notes', ownerId: 'm1', dependencies: [] },
+      { id: 'write', subject: 'Write the summary', ownerId: 'm2', dependencies: ['read'] },
+    ]
+    const plan = { schemaVersion: 1, planId, sessionId: 'failing-parent', teamName, incarnationId: createHash('sha256').update(JSON.stringify([teamName, 'failing-parent', createdAt])).digest('hex'), revision: 2, state: 'launching', workDir: home, members, tasks, leaderRuntime: members[0]!.runtime, createdAt, updatedAt: createdAt, approvedSnapshot: { revision: 1, members, tasks, leaderRuntime: members[0]!.runtime, approvedAt: Date.now(), requestId: 'approve' } } as any
+    await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify(plan))
+
+    const failure = await launchTeamPlanRuntime(plan).then(() => { throw new Error('A launch with a dying member unexpectedly succeeded') }, (error: Error) => error.message)
+    // Of possibly many members, the one that failed, and what it said.
+    expect(failure).toContain('writer did not start')
+    expect(failure).toContain('code 2')
+    expect(failure).toContain('Error: fixture member could not load its settings')
+    // Nothing started: no member was instructed, none is left on the roster,
+    // and no task is left to read as work in progress.
+    expect(requests).toBe(0)
+    expect(readTeamFile(teamName)?.members).toEqual([])
+    expect(await listTasks(taskListId)).toEqual([])
+
+    // The plan is revised (the writer's task dropped) and approved again: only
+    // the revised tasks exist, so the team can finish.
+    delete process.env.FIXTURE_EXIT_ON_SET_MODEL
+    const revisedTasks = [{ id: 'read-again', subject: 'Read the notes again', ownerId: 'm1', dependencies: [] }]
+    Object.assign(plan, { revision: 4, tasks: revisedTasks, members: [members[0]] })
+    plan.approvedSnapshot = { ...plan.approvedSnapshot, revision: 3, requestId: 'second-approval', members: [members[0]], tasks: revisedTasks }
+    await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify(plan))
+    await launchTeamPlanRuntime(plan)
+    expect((await listTasks(taskListId)).map(task => task.subject)).toEqual(['Read the notes again'])
+  } finally {
+    await stopTeamPlanRuntime(planId)
+    await runtimeService.stopAllSessionsAndWait(1000)
+    ProviderService.setServerPort(oldPort)
+    bridge.stop(true)
+    upstream.stop(true)
+  }
+}, 20_000)

@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises'
+import { migrateScheduledTasks } from './scheduledTaskMigrations.js'
 import * as os from 'os'
 import * as path from 'path'
 import { randomBytes } from 'node:crypto'
@@ -14,10 +15,11 @@ import {
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION,
   PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION,
+  PROVIDER_PROXY_CONFIG_SCHEMA_VERSION,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_PROXY_CONFIG_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -427,6 +429,22 @@ async function migrateLegacyRootProviders(
 async function runPersistentStorageMigrations(configDir: string): Promise<MigrationReport> {
   const report: MigrationReport = { migratedEntries: [], failures: [] }
   const ccHahaDir = path.join(configDir, 'cc-haha')
+
+  // Task definitions are user-authored data: never quarantine/reset malformed JSON.
+  const tasksPath = path.join(configDir, 'scheduled_tasks.json')
+  try {
+    const current = await readJsonFile(tasksPath)
+    if (!current.missing) {
+      const migrated = migrateScheduledTasks(current.value)
+      if (stableStringify(migrated) !== stableStringify(current.value)) {
+        await backupFile(tasksPath, 'bak-before-migration')
+        await writeJsonFile(tasksPath, migrated)
+        report.migratedEntries.push('scheduled_tasks.json')
+      }
+    }
+  } catch (error) {
+    report.failures.push(`scheduled_tasks.json: ${error instanceof Error ? error.message : String(error)}`)
+  }
 
   await migrateLegacyRootProviders(configDir, ccHahaDir, report)
 

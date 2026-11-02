@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessStore } from './publicAccess.js'
+import { handleVoiceApi } from './api/voice.js'
+import { fakeProviderRecord, fakeTargets } from './services/voice/__tests__/fakeCorrection.js'
+import { FakeProvider, makeWav, memoryPreferencesStore } from './services/voice/__tests__/fakeProvider.js'
+import { VoiceServiceError } from './services/voice/errors.js'
+import { VoiceProviderRegistry } from './services/voice/registry.js'
+import { VOICE_LIMITS, type SpeechProvider } from './services/voice/types.js'
+import { VoiceService } from './services/voice/voiceService.js'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
@@ -10,6 +17,8 @@ afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 function fixture(
   handleApiRequest: (request: Request, url: URL) => Promise<Response> =
     async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
+  origin = 'https://fixture.trycloudflare.com',
+  connectivity: { resolveProxy?: () => Promise<{ proxyUrl: string | null }>, verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean> } = {},
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-test-'))
   const oldToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
@@ -18,12 +27,13 @@ function fixture(
   const messages: unknown[] = []
   const storePath = path.join(dir, 'devices.json')
   const service = new PublicAccessServer({
+    ...connectivity,
     storePath, now: () => clock, serverPort: () => 3456,
     handleApiRequest,
     handleStatic: async () => new Response('<html>fixture</html>'),
     websocket: { message: (_ws, payload) => { messages.push(payload) } },
   })
-  service.enable('https://fixture.ngrok-free.app')
+  service.enable(origin)
   const base = `http://127.0.0.1:${service.status().port}`
   cleanups.push(() => {
     service.disable()
@@ -34,8 +44,8 @@ function fixture(
   const control = async (route: string, body: unknown = {}, method = 'POST', authorized = true) => service.control(new Request(`http://localhost/api/public-access/${route}`, {
     method, headers: authorized ? { Authorization: 'Bearer fixture-process-credential' } : {}, ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   }))
-  const remote = (route: string, body?: unknown, cookie?: string, origin = 'https://fixture.ngrok-free.app') => fetch(`${base}${route}`, {
-    method: body === undefined ? 'GET' : 'POST', headers: { Origin: origin, ...(cookie ? { Cookie: cookie } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'manual',
+  const remote = (route: string, body?: unknown, cookie?: string, requestOrigin = origin) => fetch(`${base}${route}`, {
+    method: body === undefined ? 'GET' : 'POST', headers: { Origin: requestOrigin, ...(cookie ? { Cookie: cookie } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'manual',
   })
   const pair = async () => {
     const code = await (await control('pairing')).json() as { secret: string }
@@ -44,10 +54,122 @@ function fixture(
     const response = await remote('/api/public-access/claim', pending)
     return { cookie: response.headers.get('set-cookie')!.split(';')[0]!, response, pending, code }
   }
-  return { service, storePath, base, control, remote, pair, messages, advance: (ms: number) => { clock += ms } }
+  const pairNative = async () => {
+    const code = await (await control('pairing')).json() as { secret: string }
+    const pending = await (await remote('/api/public-access/pair', { secret: code.secret, name: 'Fixture native phone', clientType: 'native' })).json() as { id: string, claimSecret: string }
+    await control('approve', { id: pending.id })
+    const response = await remote('/api/public-access/claim', pending)
+    const claim = await response.json() as { status: string, token: string, tokenType: string, deviceId: string, expiresAt: number }
+    return { claim, response, pending, code }
+  }
+  const native = (route: string, token: string, init: RequestInit = {}) => fetch(`${base}${route}`, {
+    ...init, headers: { Origin: origin, Authorization: `Bearer ${token}`, ...init.headers }, redirect: 'manual',
+  })
+  return { service, storePath, base, control, remote, pair, pairNative, native, messages, advance: (ms: number) => { clock += ms } }
 }
 
 describe('public transport boundary', () => {
+  test('Cloudflare origin retains application pairing, revocation and origin checks behind loopback proxy', async () => {
+    const origin = 'https://workstation.trycloudflare.com'
+    const f = fixture(undefined, origin)
+    // Cloudflare forwarding headers are not application device credentials.
+    const headers = { Origin: origin, 'CF-Connecting-IP': '192.0.2.25', 'CF-Access-Authenticated-User-Email': 'fixture@example.test' }
+    expect((await fetch(`${f.base}/api/sessions`, { headers })).status).toBe(401)
+    const { claim } = await f.pairNative()
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token, { headers: { Origin: 'https://other.trycloudflare.com' } })).status).toBe(403)
+    await f.control('revoke', { id: claim.deviceId })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(401)
+  })
+
+  test('public readiness identifies this gateway and rotates on a new listener', async () => {
+    const f = fixture()
+    const before = f.service.status().gatewayId
+    expect(before).toBeString()
+    expect(await (await f.remote('/health')).json()).toEqual({ status: 'ok', gatewayId: before })
+    f.service.disable()
+    expect(f.service.status().gatewayId).toBeNull()
+    f.service.enable('https://fixture.trycloudflare.com')
+    expect(f.service.status().gatewayId).not.toBe(before)
+  })
+
+  test('proxy credentials and public verification remain authenticated desktop-only controls', async () => {
+    const calls: unknown[] = []
+    const f = fixture(undefined, 'https://fixture.trycloudflare.com', {
+      resolveProxy: async () => ({ proxyUrl: 'http://fixture:fake-private-password@127.0.0.1:8888' }),
+      verifyGateway: async (origin, gatewayId) => { calls.push([origin, gatewayId]); return true },
+    })
+    expect((await f.control('network', {}, 'GET', false)).status).toBe(403)
+    expect((await f.control('verify', {}, 'POST', false)).status).toBe(403)
+    expect(await (await f.control('network', {}, 'GET')).json()).toEqual({ proxyUrl: 'http://fixture:fake-private-password@127.0.0.1:8888' })
+    expect(await (await f.control('verify')).json()).toEqual({ ok: true })
+    expect(calls).toEqual([['https://fixture.trycloudflare.com', f.service.status().gatewayId]])
+    const { claim } = await f.pairNative()
+    for (const route of ['/api/public-access/network', '/api/public-access/verify']) {
+      const response = await f.native(route, claim.token)
+      expect(response.status).toBe(404)
+      expect(await response.text()).not.toContain('fake-private-password')
+    }
+  })
+
+  test('classifies unavailable system proxy routing without exposing its diagnostic', async () => {
+    const f = fixture(undefined, 'https://fixture.trycloudflare.com', {
+      resolveProxy: async () => { throw new Error('fake-user:fake-secret@broken-system-proxy') },
+    })
+    const response = await f.control('network', {}, 'GET')
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'Network proxy unavailable', code: 'proxy' })
+  })
+  test('custom tunnels use the requested fixed port across restarts without changing device credentials', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const port = f.service.status().port!
+    f.service.disable()
+    const enabled = await f.control('enable', { port, publicUrl: 'https://fixture.trycloudflare.com' })
+    expect(enabled.status).toBe(200)
+    expect(await enabled.json()).toMatchObject({ enabled: true, port, publicUrl: 'https://fixture.trycloudflare.com' })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    f.service.disable()
+    expect((await f.control('enable', { port, publicUrl: 'https://fixture.trycloudflare.com' })).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+  })
+
+  test.each([null, '17463', 0, 1023, 65536, 17463.5, true, {}, []].map(port => [port]))('rejects invalid explicit custom port %j without changing the running gateway', async port => {
+    const f = fixture()
+    const before = f.service.status()
+    const response = await f.control('enable', { port, publicUrl: 'https://other.example' })
+    expect(response.status).toBe(400)
+    expect(f.service.status()).toEqual(before)
+  })
+
+  test('a running gateway refuses a different port before changing its origin', async () => {
+    const f = fixture()
+    const before = f.service.status()
+    const port = before.port === 17463 ? 17464 : 17463
+    expect((await f.control('enable', { port, publicUrl: 'https://other.example' })).status).toBe(400)
+    expect(f.service.status()).toEqual(before)
+  })
+
+  test('an occupied fixed port fails closed instead of silently picking another port', async () => {
+    const f = fixture()
+    f.service.disable()
+    const occupied = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('other service') })
+    cleanups.push(() => { occupied.stop(true) })
+    const response = await f.control('enable', { port: occupied.port, publicUrl: 'https://fixture.trycloudflare.com' })
+    expect(response.status).toBe(400)
+    expect(f.service.status()).toMatchObject({ enabled: false, port: null })
+    expect(await (await fetch(`http://127.0.0.1:${occupied.port}`)).text()).toBe('other service')
+  })
+
+  test('custom tunnel setup never accepts a non-HTTPS origin or a path prefix', async () => {
+    const f = fixture()
+    f.service.disable()
+    for (const publicUrl of ['http://example.test', 'https://example.test/desktop/a', 'https://example.test?token=secret', 42, null]) {
+      expect((await f.control('enable', { publicUrl })).status).toBe(400)
+      expect(f.service.status().enabled).toBe(false)
+    }
+  })
+
   test('loopback Host and local bearer cannot bypass cookie authentication on remote listener', async () => {
     const f = fixture()
     const response = await f.service.fetch(new Request('http://localhost/api/sessions', { headers: { Host: 'localhost', Authorization: 'Bearer fixture-process-credential' } }), {} as never)
@@ -121,7 +243,7 @@ describe('public transport boundary', () => {
   test('revocation rejects subsequent requests and closes an existing WebSocket', async () => {
     const f = fixture()
     const { cookie, pending } = await f.pair()
-    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.ngrok-free.app', Cookie: cookie } })
+    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.trycloudflare.com', Cookie: cookie } })
     await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
     ws.send('fixture-message')
     await Bun.sleep(10)
@@ -135,7 +257,7 @@ describe('public transport boundary', () => {
   test('every WebSocket message rechecks expiry without waiting for the cleanup timer', async () => {
     const f = fixture()
     const { cookie } = await f.pair()
-    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.ngrok-free.app', Cookie: cookie } })
+    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.trycloudflare.com', Cookie: cookie } })
     await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
     f.advance(30 * 24 * 60 * 60_000 + 1)
     const closed = new Promise<void>(resolve => { ws.onclose = () => resolve() })
@@ -151,9 +273,9 @@ describe('public transport boundary', () => {
     expect(f.service.enable().port).toBe(firstPort)
     f.service.disable()
     expect(f.service.status().enabled).toBe(false)
-    f.service.enable('https://fixture.ngrok-free.app')
+    f.service.enable('https://fixture.trycloudflare.com')
     const restored = await fetch(`http://127.0.0.1:${f.service.status().port}/api/public-access/session`, { headers: { Cookie: cookie } })
-    expect(await restored.json()).toEqual({ authenticated: true })
+    expect(await restored.json()).toEqual({ authenticated: true, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
     f.advance(30 * 24 * 60 * 60_000 + 1)
     expect(f.service.status().devices).toHaveLength(0)
   })
@@ -163,6 +285,143 @@ describe('public transport boundary', () => {
     let status = 0
     for (let i = 0; i < 21; i++) status = (await f.remote('/api/public-access/pair', { secret: 'invalid' })).status
     expect(status).toBe(429)
+  })
+
+  test('native pairing requires approval and issues a one-time bearer claim without a browser cookie', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret, name: 'Native phone', clientType: 'native' })).json()
+    expect((await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'native' })).status).toBe(401)
+    expect(await (await f.remote('/api/public-access/claim', pending)).json()).toEqual({ status: 'pending' })
+    expect((await f.remote('/api/public-access/claim', { ...pending, claimSecret: 'incorrect' })).status).toBe(401)
+    await f.control('approve', { id: pending.id })
+    const response = await f.remote('/api/public-access/claim', pending)
+    const claim = await response.json()
+    expect(response.status).toBe(200)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(claim).toEqual({ status: 'approved', token: expect.stringMatching(/^native_[A-Za-z0-9_-]{43}$/), tokenType: 'Bearer', deviceId: pending.id, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
+    expect(readFileSync(f.storePath, 'utf8')).not.toContain(claim.token)
+    expect(JSON.stringify(f.service.status())).not.toContain(claim.token)
+    expect((await f.remote('/api/public-access/claim', pending)).status).toBe(401)
+    expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: true, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token, { method: 'POST', body: '{}' })).status).toBe(200)
+    expect(await (await f.native('/api/settings/user', claim.token)).json()).toEqual({ language: 'en' })
+  })
+
+  test('pairing fixes the credential kind and rejects unsupported kinds without consuming the pairing secret', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    expect((await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'unknown' })).status).toBe(400)
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret })).json()
+    await f.control('approve', { id: pending.id })
+    const response = await f.remote('/api/public-access/claim', { ...pending, clientType: 'native' })
+    expect(response.headers.get('set-cookie')).toContain('Secure; HttpOnly; SameSite=Strict')
+    expect(await response.json()).toEqual({ status: 'approved' })
+  })
+
+  test('native and cookie credentials do not substitute for each other or for local credentials', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const { cookie } = await f.pair()
+    const cookieToken = cookie.slice(cookie.indexOf('=') + 1)
+    for (const token of [cookieToken, 'fixture-process-credential', 'fake-lan-token', 'native_wrong', claim.token + 'extra']) {
+      expect((await f.native('/api/sessions', token)).status).toBe(401)
+      const socketResponse = await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${token}` } }), { upgrade: () => { throw new Error('Must not upgrade') } } as never)
+      expect(socketResponse?.status).toBe(401)
+    }
+    expect((await f.remote('/api/sessions', undefined, `__Host-haha-remote=${claim.token}`)).status).toBe(401)
+    expect((await f.remote(`/api/sessions?token=${encodeURIComponent(claim.token)}`)).status).toBe(401)
+    expect((await f.native('/api/sessions', 'invalid', { headers: { Cookie: cookie } })).status).toBe(401)
+    expect((await f.remote('/api/sessions', undefined, cookie)).status).toBe(200)
+  })
+
+  test('native bearer preserves origin checks and the remote business allowlist', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    expect((await f.native('/api/sessions', claim.token, { headers: { Origin: 'https://attacker.example' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { headers: { 'Sec-Fetch-Site': 'same-site' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { method: 'POST', headers: { Origin: '' }, body: '{}' })).status).toBe(403)
+    for (const route of ['/sdk/session', '/proxy/v1/messages', '/api/providers/settings', '/api/settings', '/api/diagnostics', '/api/h5-access', '/local-file/private', '/preview-fs/private']) {
+      expect((await f.native(route, claim.token)).status).toBe(403)
+    }
+    expect((await f.native('/api/permissions/mode', claim.token, { method: 'PUT', body: '{}' })).status).toBe(403)
+    expect((await f.native('/api/public-access/approve', claim.token, { method: 'POST', body: '{}' })).status).toBe(404)
+    // A valid token must not reach the upgrade function without a valid origin.
+    for (const origin of ['', 'https://attacker.example']) {
+      const response = await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers: { Origin: origin, Authorization: `Bearer ${claim.token}` } }), { upgrade: () => { throw new Error('Must not upgrade') } } as never)
+      expect(response?.status).toBe(403)
+    }
+  })
+
+  test('native sockets opt into tool image references and image reads stay on the session surface', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const upgrades: Array<{ mediaRefs?: boolean }> = []
+    const server = { upgrade: (_request: Request, options: { data: { mediaRefs?: boolean } }) => { upgrades.push(options.data); return true } }
+    const headers = { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` }
+    await f.service.fetch(new Request(`${f.base}/ws/fixture?media=ref`, { headers }), server as never)
+    await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers }), server as never)
+    expect(upgrades.map(data => data.mediaRefs)).toEqual([true, false])
+    expect(isPublicBusinessPathAllowed(new URL('https://x/api/sessions/s/tool-images/toolu_1/0?variant=full'), 'GET')).toBe(true)
+  })
+
+  test('rejected or expired native pairings never issue a bearer token', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'native' })).json()
+    await f.control('reject', { id: pending.id })
+    expect(await (await f.remote('/api/public-access/claim', pending)).json()).toEqual({ status: 'rejected' })
+    const nextCode = await (await f.control('pairing')).json()
+    const next = await (await f.remote('/api/public-access/pair', { secret: nextCode.secret, clientType: 'native' })).json()
+    await f.control('approve', { id: next.id })
+    f.advance(300_001)
+    expect((await f.remote('/api/public-access/claim', next)).status).toBe(401)
+    expect(f.service.status().devices).toHaveLength(0)
+  })
+
+  test.each(['revoke', 'expire', 'disable'] as const)('native WebSocket authentication and %s stop access', async (action) => {
+    const f = fixture()
+    const { claim, pending } = await f.pairNative()
+    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` } })
+    cleanups.push(() => ws.close())
+    await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
+    ws.send('native-message')
+    await Bun.sleep(10)
+    expect(f.messages).toEqual(['native-message'])
+    const closed = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
+    if (action === 'revoke') await f.control('revoke', { id: pending.id })
+    if (action === 'expire') {
+      f.advance(30 * 24 * 60 * 60_000 + 1)
+      ws.send('must-not-reach-agent')
+    }
+    if (action === 'disable') f.service.disable()
+    expect(await closed).toBe(action === 'disable' ? 1012 : 1008)
+    expect(f.messages).toEqual(['native-message'])
+    const response = await f.service.fetch(new Request(`${f.base}/api/sessions`, { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` } }), {} as never)
+    expect(response?.status).toBe(action === 'disable' ? 503 : 401)
+  })
+
+  test('native credentials reload from the existing hash-only device store and expire normally', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    f.service.disable()
+    let clock = 1000
+    const restored = new PublicAccessServer({
+      storePath: f.storePath, now: () => clock, serverPort: () => 3456,
+      handleApiRequest: async () => Response.json({ ok: true }), handleStatic: async () => null, websocket: { message() {} },
+    })
+    cleanups.push(() => restored.disable())
+    restored.enable('https://fixture.trycloudflare.com')
+    const request = () => restored.fetch(new Request('https://fixture.trycloudflare.com/api/sessions', { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` } }), {} as never)
+    expect((await request())?.status).toBe(200)
+    clock = claim.expiresAt
+    expect((await request())?.status).toBe(401)
+    const stored = JSON.parse(readFileSync(f.storePath, 'utf8'))
+    expect(stored.version).toBe(1)
+    expect(Object.keys(stored.devices[0]).sort()).toEqual(['createdAt', 'expiresAt', 'id', 'name', 'tokenHash'])
   })
 
   test('old store migration preserves unknown fields and never upgrades LAN token to remote access', () => {
@@ -185,4 +444,425 @@ describe('public transport boundary', () => {
     expect(isPublicBusinessPathAllowed(new URL('https://example.test/api/models/current'), 'PUT')).toBe(true)
     expect(isPublicBusinessPathAllowed(new URL('https://example.test/api/effort'), 'PUT')).toBe(true)
   })
+})
+
+
+test('remote scheduled task routes stay restricted to the scheduler contract', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  for (const [path, method] of [['/api/scheduled-tasks', 'GET'], ['/api/scheduled-tasks', 'POST'], ['/api/scheduled-tasks/id', 'PUT'], ['/api/scheduled-tasks/id', 'DELETE'], ['/api/scheduled-tasks/id/run', 'POST'], ['/api/scheduled-tasks/id/runs', 'GET'], ['/api/scheduled-tasks/runs', 'GET'], ['/api/scheduled-tasks/runs/run-id', 'GET']]) expect(allowed(path!, method!)).toBe(true)
+  for (const [path, method] of [['/api/scheduled-tasks', 'DELETE'], ['/api/scheduled-tasks/runs', 'POST'], ['/api/scheduled-tasks/id/run', 'PUT'], ['/api/scheduled-tasks/id/runs/extra', 'GET'], ['/api/scheduled-tasks/id/unknown', 'POST']]) expect(allowed(path!, method!)).toBe(false)
+})
+
+test('remote notification readiness is an exact read-only scheduler resource', () => {
+  const endpoint = '/api/scheduled-tasks/notification-capabilities'
+  const allowed = (path: string, method = 'GET') => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed(endpoint)).toBe(true)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) expect(allowed(endpoint, method)).toBe(false)
+  for (const path of [endpoint + '/extra', endpoint + '/', endpoint + '?include=secrets', '/api/adapters']) expect(allowed(path)).toBe(false)
+})
+
+test('session status exposes only the authenticated device expiry', async () => {
+  const f = fixture()
+  const { claim } = await f.pairNative()
+  expect(await (await f.remote('/api/public-access/session')).json()).toEqual({ authenticated: false })
+  expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: true, expiresAt: claim.expiresAt })
+  f.advance(30 * 24 * 60 * 60_000 + 1)
+  expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: false })
+})
+
+test('remote settings retain normalized auto-question settings through the second projection', async () => {
+  const f = fixture(async () => Response.json({ autoQuestion: { enabled: true, timeoutMinutes: 5, secret: 'never' }, env: { SECRET: 'never' } }))
+  const { claim } = await f.pairNative()
+  expect(await (await f.native('/api/settings/user', claim.token)).json()).toEqual({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })
+})
+
+test('profile projection is authenticated and the only desktop preference route available remotely', async () => {
+  const calls: string[] = []
+  const f = fixture(async (request, url) => {
+    calls.push(`${request.method} ${url.pathname}`)
+    return Response.json({ profile: { displayName: 'Fixture', subtitle: '', avatarDataUrl: null } })
+  })
+  const route = '/api/desktop-ui/preferences/profile'
+  expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  expect((await f.native(route, claim.token)).status).toBe(200)
+  for (const method of ['PUT', 'POST', 'DELETE', 'PATCH']) {
+    expect((await f.native(route, claim.token, { method })).status).toBe(403)
+  }
+  for (const blocked of [
+    '/api/desktop-ui/preferences',
+    '/api/desktop-ui/preferences/sidebar',
+    '/api/desktop-ui/preferences/profile/avatar',
+    '/api/desktop-ui/preferences/profile/extra',
+    '/api/desktop-ui/preferences/profile?include=sidebar',
+    '/api//desktop-ui/preferences/profile',
+    '/api/desktop-ui/preferences/profile/',
+  ]) expect((await f.native(blocked, claim.token)).status).toBe(403)
+  expect(calls).toEqual([`GET ${route}`])
+})
+
+test('push route allowlist refuses extra segments and unsupported methods', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/sessions/mobile-push', 'GET')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push', 'PUT')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/id', 'DELETE')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/id', 'GET')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/id/extra', 'DELETE')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push', 'POST')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test', 'POST')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/test', 'GET')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test', 'PUT')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/id', 'POST')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test/extra', 'POST')).toBe(false)
+})
+
+test('paired phones can browse directories without gaining file/search/write routes', async () => {
+  const calls: string[] = []
+  const f = fixture(async (_request, url) => {
+    calls.push(url.pathname + url.search)
+    return Response.json({ currentPath: '/fixture/project', parentPath: '/fixture', entries: [] })
+  })
+  const route = '/api/filesystem/browse?path=%2Ffixture%2F%E9%A1%B9%E7%9B%AE%20%26%20app'
+  expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  expect((await f.native(route, claim.token)).status).toBe(200)
+  expect(calls).toEqual([route])
+  for (const route of [
+    '/api/filesystem/file?path=/fixture/secret',
+    '/api/filesystem/browse/extra',
+    '/api//filesystem/browse',
+    '/api/filesystem/browse?includeFiles=true',
+    '/api/filesystem/browse?includeFiles=false&includeFiles=true',
+    '/api/filesystem/browse?search=secret',
+  ]) expect((await f.native(route, claim.token)).status).toBe(403)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    expect((await f.native('/api/filesystem/browse', claim.token, { method })).status).toBe(403)
+  }
+  expect(calls).toHaveLength(1)
+})
+
+test('paired phones can configure global computer-use consent and read composer mentions only', async () => {
+  const calls: { path: string, method: string, body?: unknown }[] = []
+  const f = fixture(async (request, url) => {
+    calls.push({ path: url.pathname + url.search, method: request.method,
+      ...(request.method === 'PUT' ? { body: await request.json() } : {}) })
+    return Response.json({ ok: true })
+  })
+  const allowed = [
+    ['/api/skills/mentions?cwd=%2Ffixture&providerId=fixture&agentProfile=lean', 'GET'],
+    ['/api/skills/commands?cwd=%2Ffixture&agentProfile=lean', 'GET'],
+    ['/api/computer-use/status', 'GET'],
+    ['/api/computer-use/authorized-apps', 'GET'],
+    ['/api/computer-use/authorized-apps', 'PUT'],
+    ['/api/computer-use/open-permission-card', 'POST'],
+  ] as const
+  const consent = { enabled: true, grantFlags: { clipboardRead: true, clipboardWrite: true, systemKeyCombos: true } }
+  for (const [route] of allowed) expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  for (const [route, method] of allowed) {
+    expect((await f.native(route, claim.token, { method,
+      ...(method === 'PUT' ? { body: JSON.stringify(consent), headers: { 'Content-Type': 'application/json' } } : {}),
+    })).status).toBe(200)
+  }
+  expect(calls.find(call => call.method === 'PUT')?.body).toEqual(consent)
+  for (const body of [{ pythonPath: '/fixture/python' }, { enabled: true, authorizedApps: [] }, { grantFlags: { unknown: true } }]) {
+    expect((await f.native('/api/computer-use/authorized-apps', claim.token, {
+      method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+    })).status).toBe(403)
+  }
+  for (const [route, method] of [
+    ['/api/skills', 'GET'], ['/api/skills/detail', 'GET'], ['/api/skills/mentions', 'POST'],
+    ['/api/skills/mentions/extra', 'GET'], ['/api/computer-use/status', 'POST'],
+    ['/api/skills/commands', 'POST'], ['/api/skills/commands/extra', 'GET'],
+    ['/api/computer-use/authorized-apps', 'DELETE'], ['/api/computer-use/authorized-apps/extra', 'PUT'],
+    ['/api/computer-use/setup', 'POST'], ['/api/computer-use/apps', 'GET'],
+    ['/api/computer-use/open-settings', 'POST'], ['/api/computer-use/open-permission-card', 'GET'],
+    ['/api/computer-use/execute', 'POST'],
+  ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+  expect(calls).toHaveLength(allowed.length)
+})
+
+const fixtureConnector = {
+  id: 'feishu', displayName: 'Feishu', description: 'Docs and calendar', category: 'office', transport: 'cli',
+  collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true,
+  connection: 'needs-auth', status: 'needs-auth', accountLabel: 'fixture-user',
+  packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://example.test/feishu', credentialMode: 'shared', platforms: ['darwin-arm64'],
+  setupFields: [{ key: 'appSecret', label: 'Secret', secret: true }], runtime: 'ready',
+  error: 'spawn /Users/fixture/.claude/connectors/feishu/bin failed: EACCES', failedPhase: 'authenticate',
+  operation: { id: 'op-1', kind: 'authenticate', phase: 'waiting-for-browser', startedAt: '2026-01-01T00:00:00Z', authUrl: 'https://accounts.example.test/oauth?state=fixture-secret' },
+}
+
+test('remote phones read the connector and workflow lists only', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/connectors', 'GET')).toBe(true)
+  expect(allowed('/api//connectors/', 'GET')).toBe(true)
+  expect(allowed('/api/workflows?cwd=%2Ffixture', 'GET')).toBe(true)
+  expect(allowed('/api/agents', 'GET')).toBe(true)
+  expect(allowed('/api/agents/reviewer', 'GET')).toBe(true)
+  for (const [path, method] of [
+    ['/api/connectors/feishu', 'GET'], ['/api/connectors', 'POST'], ['/api/connectors', 'DELETE'],
+    ['/api/connectors/feishu/authenticate', 'POST'], ['/api/connectors/feishu/prepare', 'POST'], ['/api/connectors/feishu/remove', 'POST'],
+    ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
+    ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
+    ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
+    // 路由器会忽略单项 Agent 名字后面多出来的段，放行它们等于绕过对手机的裁剪。
+    ['/api/agents/reviewer/override', 'GET'], ['/api/agents/reviewer/zzz', 'GET'], ['/api/agents/reviewer', 'DELETE'],
+  ]) expect(allowed(path!, method!)).toBe(false)
+})
+
+test('remote phones can review a submitted team plan but not drive its members', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/teams/session/s1/plan', 'GET')).toBe(true)
+  expect(allowed('/api/teams/taskboard/plan', 'PATCH')).toBe(true)
+  expect(allowed('/api/teams/%E4%BB%BB%E5%8A%A1/plan', 'PATCH')).toBe(true)
+  for (const action of ['approve', 'return', 'cancel', 'retry', 'end'])
+    expect(allowed(`/api/teams/taskboard/plan/${action}`, 'POST')).toBe(true)
+  for (const [path, method] of [
+    ['/api/teams/taskboard/plan', 'POST'], ['/api/teams/taskboard/plan', 'PUT'], ['/api/teams/taskboard/plan', 'DELETE'],
+    ['/api/teams/taskboard/plan/approve', 'PATCH'], ['/api/teams/taskboard/plan/launch', 'POST'],
+    // 路由器只看第 5 段动作名，多出来的段会被当成同一个动作，不能借此绕过。
+    ['/api/teams/taskboard/plan/approve/extra', 'POST'],
+    ['/api/teams/taskboard', 'DELETE'], ['/api/teams/taskboard/members/m1/messages', 'POST'],
+  ]) expect(allowed(path!, method!)).toBe(false)
+})
+
+test('paired phones get connector, workflow and agent lists without credentials, errors or local paths', async () => {
+  const f = fixture(async (_request, url) => {
+    if (url.pathname === '/api/connectors') return Response.json({ items: [fixtureConnector] })
+    if (url.pathname === '/api/workflows') return Response.json({ workflows: [
+      { name: 'ship', description: 'Ship it', whenToUse: 'release', source: 'user', phases: [{ title: 'Build' }], filePath: '/Users/fixture/.claude/workflows/ship.js' },
+    ] })
+    const agent = { agentType: 'reviewer', description: 'Reviews code', model: 'sonnet', modelDisplay: 'Sonnet', tools: ['Bash'], systemPrompt: 'fixture-secret-prompt', color: 'blue', source: 'userSettings', baseDir: '/Users/fixture/.claude', target: '/Users/fixture/.claude/agents/reviewer.md', isActive: true, editable: true }
+    if (url.pathname === '/api/agents/reviewer') return Response.json({ agent })
+    return Response.json({ availableTools: ['Bash'], activeAgents: [agent], allAgents: [{ ...agent, overriddenBy: 'projectSettings' }] })
+  })
+  const { claim } = await f.pairNative()
+  const read = async (route: string) => (await f.native(route, claim.token)).json()
+  expect(await read('/api/connectors')).toEqual({ items: [{
+    id: 'feishu', displayName: 'Feishu', description: 'Docs and calendar', category: 'office', transport: 'cli',
+    collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true,
+    connection: 'needs-auth', status: 'needs-auth', accountLabel: 'fixture-user',
+    operation: { kind: 'authenticate', phase: 'waiting-for-browser' },
+  }] })
+  expect(await read('/api/workflows')).toEqual({ workflows: [{ name: 'ship', description: 'Ship it', whenToUse: 'release', source: 'user' }] })
+  const agents = await read('/api/agents?cwd=%2Ffixture')
+  expect(agents).toEqual({
+    activeAgents: [{ agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true }],
+    allAgents: [{ agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true, overriddenBy: 'projectSettings' }],
+  })
+  expect(await read('/api/agents/reviewer')).toEqual({ agent: { agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true } })
+  const text = JSON.stringify([await read('/api/connectors'), await read('/api/workflows'), agents])
+  for (const secret of ['authUrl', 'fixture-secret', 'EACCES', '/Users/fixture', 'setupFields', 'homepage', 'packageName', 'systemPrompt', 'filePath', 'availableTools']) expect(text).not.toContain(secret)
+})
+
+test('connector actions and details never reach the desktop handler from a phone', async () => {
+  const calls: string[] = []
+  const f = fixture(async (request, url) => { calls.push(`${request.method} ${url.pathname}`); return Response.json({ items: [] }) })
+  const { claim } = await f.pairNative()
+  for (const [route, method] of [
+    ['/api/connectors/feishu', 'GET'], ['/api/connectors/feishu/authenticate', 'POST'],
+    ['/api/workflows/runs', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows', 'PUT'], ['/api/mcp', 'GET'],
+    ['/api/agents/reviewer/zzz', 'GET'],
+  ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+  expect((await f.remote('/api/connectors')).status).toBe(401)
+  expect(calls).toEqual([])
+})
+
+test('paired browsers keep the full agent view while connectors stay projected', async () => {
+  const full = { agentType: 'reviewer', systemPrompt: 'visible-to-browser', isActive: true }
+  const f = fixture(async (_request, url) => url.pathname === '/api/connectors'
+    ? Response.json({ items: [fixtureConnector] })
+    : Response.json({ activeAgents: [full], allAgents: [full] }))
+  const { cookie } = await f.pair()
+  expect(await (await f.remote('/api/agents', undefined, cookie)).json()).toEqual({ activeAgents: [full], allAgents: [full] })
+  expect(JSON.stringify(await (await f.remote('/api/connectors', undefined, cookie)).json())).not.toContain('authUrl')
+})
+
+describe('paired phone voice input', () => {
+  const DESKTOP_ONLY_VOICE_ROUTES: Array<[string, string]> = [
+    ['/api/voice/correct', 'POST'],
+    ['/api/voice/correct', 'GET'],
+    ['/api/voice/vocabulary', 'GET'],
+    ['/api/voice/vocabulary/terms', 'POST'],
+    ['/api/voice/vocabulary/terms', 'PUT'],
+    ['/api/voice/vocabulary/terms?term=Codex', 'DELETE'],
+    ['/api/voice/vocabulary/suggestions/dismiss', 'POST'],
+    ['/api/voice/vocabulary/history/sources', 'GET'],
+    ['/api/voice/vocabulary/history/suggest', 'POST'],
+  ]
+
+  function voiceFixture(provider: SpeechProvider) {
+    const preferences = memoryPreferencesStore({ language: 'zh' })
+    const service = new VoiceService({
+      registry: new VoiceProviderRegistry().register(provider),
+      preferences,
+      // The catalog resolves correction targets; keep it off the real provider index.
+      correctionTargets: fakeTargets({ defaultProvider: fakeProviderRecord('fixture-provider') }),
+      completeText: async () => ({ ok: true, text: 'never reached from a phone' }),
+    })
+    const calls: string[] = []
+    const f = fixture(async (request, url) => {
+      calls.push(`${request.method} ${url.pathname}`)
+      return handleVoiceApi(request, url, url.pathname.split('/').filter(Boolean), service)
+    })
+    return { ...f, preferences, calls }
+  }
+
+  test('exposes only exact voice catalog, provider status and transcription routes', () => {
+    const allowed = (route: string, method: string) =>
+      isPublicBusinessPathAllowed(new URL(route, 'https://fixture.example'), method)
+    for (const [route, method] of [
+      ['/api/voice/catalog', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status', 'GET'],
+      ['/api/voice/transcribe', 'POST'],
+      ['/api/voice/transcribe?provider=sensevoice-local&language=zh', 'POST'],
+    ]) expect(allowed(route!, method!)).toBe(true)
+    for (const [route, method] of [
+      ['/api/voice/catalog', 'POST'],
+      ['/api/voice/catalog/extra', 'GET'],
+      ['/api/voice/catalog?extra=true', 'GET'],
+      ['/api//voice/catalog', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status', 'PUT'],
+      ['/api/voice/providers/sensevoice-local/status/extra', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status?extra=true', 'GET'],
+      ['/api/voice/providers/sensevoice-local/prepare', 'POST'],
+      ['/api/voice/providers/sensevoice-local/cancel', 'POST'],
+      ['/api/voice/providers/sensevoice-local/assets', 'DELETE'],
+      ['/api/voice/preferences', 'GET'],
+      ['/api/voice/preferences', 'PUT'],
+      ['/api/voice/transcribe', 'GET'],
+      ['/api/voice/transcribe/extra', 'POST'],
+      ['/api/voice/transcribe?downloadSource=mirror', 'POST'],
+      ['/api/voice/transcribe?provider=one&provider=two', 'POST'],
+      ['/api/voice/transcribe?language=zh&language=en', 'POST'],
+      // AI correction, the vocabulary and history scanning are desktop-only.
+      ...DESKTOP_ONLY_VOICE_ROUTES,
+    ]) expect(allowed(route!, method!)).toBe(false)
+  })
+
+  test('a native bearer reaches the real voice service with unchanged WAV bytes and loses access after revocation', async () => {
+    const provider = new FakeProvider({ id: 'sensevoice-local', text: '手机语音结果' })
+    const transcribe = spyOn(provider, 'transcribe')
+    cleanups.push(() => transcribe.mockRestore())
+    const f = voiceFixture(provider)
+    const wav = makeWav(0.25)
+    wav.set([0, 255, 128, 65], 44)
+    const upload = { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav as BodyInit }
+    const route = '/api/voice/transcribe?provider=sensevoice-local&language=en'
+
+    expect((await fetch(`${f.base}/api/voice/catalog`)).status).toBe(401)
+    expect((await f.native(route, 'native_invalid', upload)).status).toBe(401)
+    const { claim } = await f.pairNative()
+    expect((await f.native(route, claim.token, {
+      ...upload, headers: { ...upload.headers, Origin: 'https://other.example' },
+    })).status).toBe(403)
+    expect(f.calls).toEqual([])
+
+    const catalog = await f.native('/api/voice/catalog', claim.token)
+    expect(catalog.status).toBe(200)
+    expect(await catalog.json()).toMatchObject({
+      supported: true,
+      preferences: { providerId: 'sensevoice-local', language: 'zh' },
+      limits: VOICE_LIMITS,
+    })
+    const status = '/api/voice/providers/sensevoice-local/status'
+    expect(await (await f.native(status, claim.token)).json()).toMatchObject({ preparation: { phase: 'unprepared' } })
+    provider.installed = true
+    expect(await (await f.native(status, claim.token)).json()).toMatchObject({ preparation: { phase: 'ready' } })
+    const response = await f.native(route, claim.token, upload)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ text: '手机语音结果', audioSeconds: 0.25, inferenceSeconds: 0.25 })
+    expect(transcribe.mock.calls[0]?.[0]).toEqual(wav)
+    expect(provider.transcribeCalls).toEqual([{ bytes: wav.byteLength, language: 'en' }])
+    expect(f.preferences.current.language).toBe('zh')
+
+    const beforeBlocked = f.calls.length
+    for (const [route, method] of [
+      ['/api/voice/preferences', 'PUT'],
+      ['/api/voice/providers/sensevoice-local/prepare', 'POST'],
+      ['/api/voice/providers/sensevoice-local/cancel', 'POST'],
+      ['/api/voice/providers/sensevoice-local/assets', 'DELETE'],
+      ...DESKTOP_ONLY_VOICE_ROUTES,
+    ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+    expect(f.calls).toHaveLength(beforeBlocked)
+    expect(provider.prepareCalls).toBe(0)
+    expect(provider.removeCalls).toBe(0)
+    await f.control('revoke', { id: claim.deviceId })
+    expect((await f.native('/api/voice/catalog', claim.token)).status).toBe(401)
+    expect((await f.native(route, claim.token, upload)).status).toBe(401)
+    expect(f.calls).toHaveLength(beforeBlocked)
+  })
+
+  test('preserves voice readiness, format, size, language and provider error responses', async () => {
+    const provider = new FakeProvider({ id: 'sensevoice-local' })
+    const f = voiceFixture(provider)
+    const { claim } = await f.pairNative()
+    // Early size rejections leave upload bytes unread; isolate each socket so
+    // it cannot affect the next error-response assertion.
+    const upload = (body: Uint8Array, query = '') => f.native(`/api/voice/transcribe${query}`, claim.token, {
+      method: 'POST', headers: { 'Content-Type': 'audio/wav', Connection: 'close' }, body: body as BodyInit,
+    })
+    const notReady = await upload(makeWav(0.25))
+    expect(notReady.status).toBe(409)
+    expect(await notReady.json()).toMatchObject({ error: 'voice/not-ready' })
+    provider.installed = true
+    for (const bytes of [new TextEncoder().encode('compressed audio is not WAV'), new Uint8Array(VOICE_LIMITS.maxAudioBytes + 1)]) {
+      const invalid = await upload(bytes)
+      expect(invalid.status).toBe(400)
+      expect(await invalid.json()).toMatchObject({ error: 'voice/invalid-audio' })
+    }
+    expect((await upload(makeWav(0.25), '?language=fr')).status).toBe(400)
+    const unknown = await upload(makeWav(0.25), '?provider=missing')
+    expect(unknown.status).toBe(404)
+    expect(await unknown.json()).toMatchObject({ error: 'voice/unknown-provider' })
+    expect(provider.transcribeCalls).toEqual([])
+    provider.transcribeError = new Error('fixture recognizer failed')
+    const failed = await upload(makeWav(0.25))
+    expect(failed.status).toBe(500)
+    expect(await failed.json()).toMatchObject({ error: 'voice/failed' })
+  })
+
+  test('passes cancellation from the authenticated gateway Request to the transcription provider', async () => {
+    const entered = Promise.withResolvers<void>()
+    const cancelled = Promise.withResolvers<void>()
+    let providerSignal: AbortSignal | undefined
+    const provider: SpeechProvider = {
+      info: { id: 'sensevoice-local', name: 'Fixture', location: 'local', languages: ['auto', 'zh'] },
+      transcribe: async (_wav, _options, signal) => {
+        providerSignal = signal
+        entered.resolve()
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            cancelled.resolve()
+            reject(signal.reason)
+          }, { once: true })
+        })
+      },
+    }
+    const f = voiceFixture(provider)
+    const { claim } = await f.pairNative()
+    const controller = new AbortController()
+    const request = new Request(`${f.base}/api/voice/transcribe`, {
+      method: 'POST',
+      headers: {
+        Origin: 'https://fixture.trycloudflare.com',
+        Authorization: `Bearer ${claim.token}`,
+        'Content-Type': 'audio/wav',
+      },
+      body: makeWav(0.25) as BodyInit,
+      signal: controller.signal,
+    })
+    // Pin Request.signal forwarding separately from the binary HTTP round-trip.
+    const response = f.service.fetch(request, {} as never)
+    try {
+      await entered.promise
+      controller.abort(new VoiceServiceError('voice/failed', 'Fixture transcription cancelled'))
+      await cancelled.promise
+      expect(providerSignal).toBe(request.signal)
+      expect(providerSignal?.aborted).toBe(true)
+      expect((await response)?.status).toBe(500)
+    } finally {
+      controller.abort()
+    }
+  }, 5000)
 })

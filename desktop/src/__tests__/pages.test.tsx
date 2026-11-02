@@ -7,6 +7,7 @@ import { skillsApi } from '../api/skills'
 import { mcpApi } from '../api/mcp'
 import { sessionsApi } from '../api/sessions'
 import { useUIStore } from '../stores/uiStore'
+import { useContextUsageStore } from '../stores/contextUsageStore'
 
 vi.mock('../api/skills', () => ({
   skillsApi: {
@@ -91,6 +92,7 @@ import { useTabStore } from '../stores/tabStore'
 import { useTaskStore } from '../stores/taskStore'
 
 beforeEach(() => {
+  useContextUsageStore.setState({ bySession: {} })
   useSettingsStore.setState({ locale: 'en' })
   useProviderStore.setState({
     providers: [],

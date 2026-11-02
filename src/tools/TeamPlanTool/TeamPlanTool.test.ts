@@ -134,6 +134,69 @@ describe('whole-team planning tools', () => {
       })
     }
 
+    test('a preset that pins a saved provider suggests that provider, its model slot and effort', async () => {
+      const { TeamPlanService } = await import('../../server/services/teamPlanService.js')
+      const { ProviderService } = await import('../../server/services/providerService.js')
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Reviewer provider', baseUrl: 'http://127.0.0.1:1', apiKey: 'fake-reviewer-key',
+        models: { main: 'reviewer-main', sonnet: 'reviewer-sonnet', opus: 'reviewer-opus', haiku: 'reviewer-haiku' },
+      })
+      context.options.agentDefinitions.activeAgents.push({
+        agentType: 'pinned-reviewer', source: 'flagSettings', whenToUse: 'Fixture',
+        rawSystemPrompt: 'Fixture instructions', getSystemPrompt: () => 'Fixture instructions',
+        model: 'haiku', provider: provider.id, effort: 'max',
+      })
+      expect(snapshotTeamAgents(context)['pinned-reviewer']).toMatchObject({ model: 'haiku', provider: provider.id })
+
+      // The lead's tier guess for its own provider does not outrank the preset.
+      const proposed = resolveProposedTeamPlan(proposal('opus', 'fake-provider', 'pinned-reviewer'), context).members[0]!
+      expect(proposed.runtime).toEqual({ providerId: provider.id, modelId: 'reviewer-haiku', effortLevel: 'max' })
+
+      const created = await TeamCreateTool.call({ team_name: 'review-team', plan: {
+        members: [{ id: 'worker', name: 'worker', prompt: 'Work' }],
+        tasks: [{ id: 'work', subject: 'Work', ownerId: 'worker', dependencies: [] }],
+      } }, context)
+      await TeamPlanTool.call({ team_name: 'review-team', operation: 'submit', expected_revision: created.data.plan!.revision }, context)
+      const pending = (await readTeamPlan('review-team'))!
+      const service = new TeamPlanService({ validate: async plan => plan, launch: async () => ({ memberIds: {} }), stop: async () => {} })
+      const switched = await service.update(pending.teamName, { ...pending, expectedRevision: pending.revision }, {
+        members: [{ id: 'worker', agentType: 'pinned-reviewer' }],
+      })
+      expect(switched.members[0]?.runtime).toEqual({ providerId: provider.id, modelId: 'reviewer-haiku', effortLevel: 'max' })
+      // The reviewer then lowers the effort; approval launches exactly that.
+      const lowered = await service.update(switched.teamName, { ...switched, expectedRevision: switched.revision }, {
+        members: [{ id: 'worker', runtime: { providerId: provider.id, modelId: 'reviewer-sonnet', effortLevel: 'low' } }],
+      })
+      const approved = await approveTeamPlan(lowered.teamName, { ...lowered, expectedRevision: lowered.revision }, 'fixture-approval', lowered)
+      expect(approved.plan.approvedSnapshot?.members[0]?.runtime).toEqual({
+        providerId: provider.id, modelId: 'reviewer-sonnet', effortLevel: 'low',
+      })
+    })
+
+    test('a pinned preset outranks a Claude lead\'s own suggestion and keeps the 1M mapping', async () => {
+      const { ProviderService } = await import('../../server/services/providerService.js')
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Pinned provider', baseUrl: 'http://127.0.0.1:1', apiKey: 'fake-pinned-key',
+        models: { main: 'pinned-main', sonnet: 'pinned-sonnet', opus: 'pinned-opus', haiku: 'pinned-haiku' },
+        model1mSupport: { main: false, haiku: true, sonnet: false, opus: false },
+      })
+      context.options.agentDefinitions.activeAgents.push({
+        agentType: 'pinned-reviewer', source: 'flagSettings', whenToUse: 'Fixture',
+        rawSystemPrompt: 'Fixture instructions', getSystemPrompt: () => 'Fixture instructions',
+        model: 'haiku', provider: provider.id, effort: 'max',
+      })
+      // A Claude Official lead: its tier suggestions are concrete choices, not
+      // something normalized away, yet the user's pin still wins.
+      for (const key of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL']) delete process.env[key]
+      process.env.CC_HAHA_TEAM_LEADER_RUNTIME = JSON.stringify({ providerId: 'claude-official', modelId: 'claude-opus-4-7' })
+      context.options.mainLoopModel = 'claude-opus-4-7'
+
+      const member = resolveProposedTeamPlan(proposal('sonnet', 'claude-official', 'pinned-reviewer'), context).members[0]!
+
+      expect(member.runtime).toEqual({ providerId: provider.id, modelId: 'pinned-haiku[1m]', effortLevel: 'max' })
+      expect(member.suggestedRuntime).toEqual(member.runtime)
+    })
+
     test('automatic suggestions preserve a manually configured Agent model and effort', () => {
       context.options.agentDefinitions.activeAgents.push({
         agentType: 'manual-pro', source: 'flagSettings', whenToUse: 'Fixture',

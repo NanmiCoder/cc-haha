@@ -1,11 +1,20 @@
 // Source: src/server/services/cronService.ts
 
-export type TaskNotificationConfig = {
-  enabled: boolean
-  channels: ('desktop' | 'telegram' | 'feishu')[]
+import type { TaskSchedule, TaskExecution, TaskNotificationPolicy, TaskNotificationConfig } from '../../../src/shared/taskSchedule'
+export type { TaskSchedule, TaskExecution, TaskNotificationPolicy, TaskNotificationConfig } from '../../../src/shared/taskSchedule'
+
+export type ScheduledTaskTrigger = { taskId: string; runId: string; scheduledFor: string; taskName: string }
+
+type TaskOptions = {
+  schedule?: TaskSchedule
+  execution?: TaskExecution
+  sourceSessionId?: string
+  revision?: number
+  notificationPolicy?: TaskNotificationPolicy
+  scheduleState?: 'active' | 'paused' | 'completed'
 }
 
-export type CronTask = {
+export type CronTask = TaskOptions & {
   id: string
   name: string
   description?: string
@@ -26,7 +35,7 @@ export type CronTask = {
   notification?: TaskNotificationConfig
 }
 
-export type CreateTaskInput = {
+export type CreateTaskInput = TaskOptions & {
   name: string
   description?: string
   cron: string
@@ -59,4 +68,5 @@ export type TaskRun = {
   exitCode?: number
   durationMs?: number
   sessionId?: string
+  notificationDecision?: 'notify' | 'silent'
 }

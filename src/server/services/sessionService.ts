@@ -2,6 +2,7 @@ import { getSideChat, isSideChatId, sideChatSummary } from './sideChatRegistry.j
 import { splitSessionReferenceContext } from './sessionReferenceContext.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
+import { isTeamLeadNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { readHistoryContexts } from './sessionHistoryContext.js'
 import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './sessionHistoryRecovery.js'
 /**
@@ -11,8 +12,10 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
+import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 import { streamSessionMetadata } from './sessionMetadataReader.js'
 import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+import { measureEntryWithMediaRefs, projectMessageMedia } from './toolImageMedia.js'
 import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
@@ -26,12 +29,15 @@ import { findCanonicalGitRoot } from '../../utils/git.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
+  applyAutoCompactWindowLimit,
   getContextWindowForModel,
   getModelMaxOutputTokens,
   hasKnownContextWindow,
   is1mContextDisabled,
+  isModelWindowKnownForAutoCompact,
 } from '../../utils/context.js'
 import {
+  AUTO_COMPACT_WINDOW_ENV_KEY,
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
   getModelContextWindowFromEnvValue,
 } from '../../utils/model/modelContextWindows.js'
@@ -57,6 +63,7 @@ import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
+import { readSessionArchives, withSessionArchiveLock, writeSessionArchive } from '../../utils/sessionArchiveStore.js'
 import {
   extractGoalCreationTitle,
   extractTranscriptUserTitle,
@@ -77,9 +84,13 @@ import type {
 import type { LocalIndexStatus } from './localIndex/types.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
+  claimUsageIncrement,
   isBillableUsageRecord,
   isForkInheritedUsageRecord,
   usageRecordKey,
+  type PricedTokens,
+  type UsageIncrement,
+  type UsageLedger,
 } from '../../utils/usageAccounting.js'
 import {
   ProjectSessionHistory,
@@ -110,7 +121,10 @@ export type SessionListItem = {
   runtimeModelId?: string
   effortLevel?: string
   openAIFastMode?: boolean
+  archived?: boolean
 }
+
+type SessionListOptions = { project?: string; limit?: number; offset?: number; archived?: boolean }
 
 export type SubagentTranscriptFragment = {
   historyComplete?: boolean
@@ -228,6 +242,7 @@ export type MessageEntry = {
   sessionReferences?: { sessionId: string }[]
   /** Present when this user-position message was delivered from another session. */
   collaboration?: { sourceSessionId: string; messageId: string }
+  scheduledTask?: ScheduledTaskMetadata
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown
@@ -438,6 +453,7 @@ export type TranscriptContextEstimate = {
 
 /** Raw entry parsed from a single JSONL line */
 type RawEntry = {
+  scheduledTask?: unknown
   type?: string
   subtype?: string
   content?: unknown
@@ -499,18 +515,23 @@ type TranscriptContextAccumulator = {
 }
 
 /**
- * Whether this line's `usage` is the first sighting of its reply.
+ * What this line's `usage` adds to its reply's running total, or null when the line is not
+ * billable (e.g. inherited by a fork).
  *
- * Claude Code writes one JSONL line per content block of an assistant message and repeats the
- * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
- * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
- * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
- * inherited only the fork check and so reported inflated totals to the context panel.
+ * Claude Code writes one JSONL line per content block of an assistant message, each carrying a
+ * `usage` object — a reply with thinking, text and 12 tool_use blocks is 14 lines. Summing raw
+ * lines overstated real transcripts by 2.2x, while keeping only the first line under-counted
+ * replies whose first line was written with zero/partial usage. Each field is therefore counted at
+ * the largest value any line reported and only the excess is billed.
  *
  * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
  * agrees about what one session cost.
  */
-function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+function claimUsageRecord(
+  entry: RawEntry,
+  ledger: UsageLedger,
+  tokens: PricedTokens,
+): UsageIncrement | null {
   const record = entry as unknown as Record<string, unknown>
   const identity = {
     version: record.version,
@@ -519,13 +540,12 @@ function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
     messageId: entry.message?.id,
     forkedFrom: record.forkedFrom,
   }
-  if (!isBillableUsageRecord(identity)) return false
+  if (!isBillableUsageRecord(identity)) return null
   const key = usageRecordKey(identity)
-  if (key === null) return true
-  if (countedKeys.has(key)) return false
-  if (countedKeys.size >= 50_000 || key.length > 4096) throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
-  countedKeys.add(key)
-  return true
+  if (key !== null && !ledger.has(key) && (ledger.size >= 50_000 || key.length > 4096)) {
+    throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
+  }
+  return claimUsageIncrement(ledger, key, tokens)
 }
 
 function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
@@ -884,14 +904,15 @@ export class SessionService {
       now: this.now,
       scope: () => this.getConfigDir(),
       revision: () => this.projectHistoryRevision(),
-      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}`,
+      mutation: () => `${this.getConfigDir()}:${getSharedSessionMutationState(this.localIndexGateway).epoch}:${readSessionArchives(this.getConfigDir()).revision}`,
       load: () => this.loadProjectHistoryRows(),
-      hydrate: async (row) => {
+      archiveIds: () => readSessionArchives(this.getConfigDir()).ids,
+      hydrate: async (row, archived) => {
         try {
           await this.validateIndexedTranscriptPath(
             row.transcriptPath, row.projectPath, row.id, await fs.realpath(this.getProjectsDir()),
           )
-          return await this.hydrateIndexedSession(row)
+          return await this.hydrateIndexedSession(row, undefined, archived)
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
           this.markIndexReadFailure()
@@ -907,16 +928,14 @@ export class SessionService {
       : fallback
   }
 
-  private sessionListCacheKey(options: {
-    project?: string
-    limit?: number
-    offset?: number
-  } | undefined, scope = this.getConfigDir()): string {
+  private sessionListCacheKey(options: SessionListOptions | undefined, scope = this.getConfigDir()): string {
     return JSON.stringify({
       scope,
       project: options?.project ?? null,
       limit: options?.limit ?? 50,
       offset: options?.offset ?? 0,
+      archived: options?.archived ?? false,
+      archiveRevision: readSessionArchives(scope).revision,
     })
   }
 
@@ -2143,7 +2162,8 @@ export class SessionService {
         }) ?? undefined
       : undefined
 
-    let content = msg.content
+    const scheduledTask = type === 'user' ? readScheduledTaskMetadata(entry.scheduledTask) : undefined
+    let content = scheduledTask ? scheduledTaskDisplayText(msg.content) : msg.content
     let sessionReferences: { sessionId: string }[] | undefined
     let collaboration: { sourceSessionId: string; messageId: string } | undefined
     if (type === 'user') {
@@ -2171,6 +2191,7 @@ export class SessionService {
       content,
       ...(sessionReferences ? { sessionReferences } : {}),
       ...(collaboration ? { collaboration } : {}),
+      ...(scheduledTask ? { scheduledTask } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
@@ -2356,6 +2377,7 @@ export class SessionService {
     if (role === 'user') {
       return (
         isShutdownTeamPrompt(content) ||
+        isTeamLeadNotice(content) ||
         shouldHideCommandMetadataContent(content) ||
         this.isTaskNotificationContent(content)
       )
@@ -2972,14 +2994,19 @@ export class SessionService {
 
   private async findSessionFilesFromFiles(
     sessionId: string,
+    strict = false,
   ): Promise<Array<{ filePath: string; projectDir: string }>> {
-
+    const onReadError = (error: unknown): 'drop' => {
+      if (strict && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return 'drop'
+    }
     const projectsDir = this.getProjectsDir()
     let projectDirs: string[]
 
     try {
       projectDirs = await fs.readdir(projectsDir)
-    } catch {
+    } catch (error) {
+      onReadError(error)
       return []
     }
 
@@ -2987,14 +3014,19 @@ export class SessionService {
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
+        // Project roots can contain ordinary files. They are not uncertain
+        // directories, and must not turn a strict absence check into ENOTDIR.
+        if (strict && !(await fs.stat(path.join(projectsDir, dir))).isDirectory()) continue
         const stat = await fs.stat(filePath)
+        if (strict && !stat.isFile()) throw Object.assign(new Error('Session transcript is not a regular file'), { code: 'INVALID_SESSION_TRANSCRIPT' })
         matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
-      } catch {
+      } catch (error) {
+        onReadError(error)
         continue
       }
     }
 
-    const ranked = await this.rankSessionFileMatches(matches, () => 'drop')
+    const ranked = await this.rankSessionFileMatches(matches, onReadError)
     return ranked!.map(({ filePath, projectDir }) => ({ filePath, projectDir }))
   }
 
@@ -3003,6 +3035,16 @@ export class SessionService {
   ): Promise<{ filePath: string; projectDir: string } | null> {
     if (isSideChatId(sessionId)) return null
     return (await this.findSessionFiles(sessionId))[0] ?? null
+  }
+
+  /** Authoritative absence for decision cleanup; UI/index fallbacks stay forgiving. */
+  async hasSessionStrict(sessionId: string): Promise<boolean> {
+    if (isSideChatId(sessionId)) {
+      const side = getSideChat(sessionId)
+      return !!side && !side.closed
+    }
+    if (!this.isValidSessionId(sessionId)) return false
+    return (await this.findSessionFilesFromFiles(sessionId, true)).length > 0
   }
 
   private isValidSessionId(id: string): boolean {
@@ -3014,10 +3056,15 @@ export class SessionService {
     return `$${cost > 0.5 ? (Math.round(cost * 100) / 100).toFixed(2) : cost.toFixed(4)}`
   }
 
+  /**
+   * `hints.autoCompactWindow` receives the fallback window of the provider the
+   * session runs on, so the shown window can honour the same cap compaction does.
+   */
   private async getProviderContextWindowForSession(
     sessionId: string,
     model: string,
     launchInfoOverride?: ProviderContextWindowHint | null,
+    hints: { autoCompactWindow?: string } = {},
   ): Promise<number | undefined> {
     const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
@@ -3052,8 +3099,17 @@ export class SessionService {
       'ANTHROPIC_DEFAULT_OPUS_MODEL',
     ] as const
 
+    // The provider the session actually runs on is the first one that still
+    // exists: a recorded provider that was deleted hands over to the active one.
+    let sessionProviderAutoCompactWindow: string | undefined
+    let sawSessionProvider = false
     for (const providerId of providerIds) {
       const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+      hints.autoCompactWindow = env?.[AUTO_COMPACT_WINDOW_ENV_KEY]
+      if (env && !sawSessionProvider) {
+        sawSessionProvider = true
+        sessionProviderAutoCompactWindow = hints.autoCompactWindow
+      }
       if (!env && providerId === recordedProviderId) {
         // The provider this session recorded no longer exists (deleted or
         // re-created under a new id). A resumed session is relaunched with the
@@ -3113,6 +3169,10 @@ export class SessionService {
         }
       }
     }
+
+    // Nothing matched: the model is resolved without provider configuration, and
+    // only the provider the session started on may cap it.
+    hints.autoCompactWindow = sessionProviderAutoCompactWindow
 
     // A session without recorded provider metadata always infers from saved
     // providers. When a provider was recorded but could not tell us the window
@@ -3197,17 +3257,23 @@ export class SessionService {
     model: string,
     launchInfo?: ProviderContextWindowHint | null,
   ): Promise<number> {
+    const hints: { autoCompactWindow?: string } = {}
     const providerContextWindow = await this.getProviderContextWindowForSession(
       sessionId,
       model,
       launchInfo,
+      hints,
     )
     if (providerContextWindow !== undefined) {
-      return providerContextWindow
+      return applyAutoCompactWindowLimit(providerContextWindow, hints.autoCompactWindow, true)
     }
 
     try {
-      return getContextWindowForModel(model)
+      return applyAutoCompactWindowLimit(
+        getContextWindowForModel(model),
+        hints.autoCompactWindow,
+        isModelWindowKnownForAutoCompact(model),
+      )
     } catch (err) {
       if (
         err instanceof Error &&
@@ -3400,7 +3466,7 @@ export class SessionService {
     let lastUsageAt: number | null = null
 
     const contextState = createTranscriptContextAccumulator()
-    const countedUsageKeys = new Set<string>()
+    const usageLedger: UsageLedger = new Map()
 
     await this.streamJsonlFile(found.filePath, (entry) => {
       if (typeof entry.message?.model === 'string') {
@@ -3480,34 +3546,43 @@ export class SessionService {
         ? usage.server_tool_use.web_search_requests
         : 0
 
-      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
-      // same class of over-count; `claimUsageRecord` rejects both.
-      if (!claimUsageRecord(entry, countedUsageKeys)) return
-
-      if (
-        inputTokens === 0 &&
-        outputTokens === 0 &&
-        cacheReadInputTokens === 0 &&
-        cacheCreationInputTokens === 0 &&
-        webSearchRequests === 0
-      ) {
-        return
-      }
+      // Fork-inherited lines are skipped, and the usage objects of a multi-block reply are folded
+      // into one running total so only the part not yet counted is billed.
+      const increment = claimUsageRecord(entry, usageLedger, {
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+        webSearchRequests,
+      })
+      if (!increment || increment.isEmpty) return
 
       const canonical = getCanonicalName(model)
       if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
         hasUnknownModelCost = true
       }
 
-      const costUsage = {
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cache_read_input_tokens: cacheReadInputTokens,
-        cache_creation_input_tokens: cacheCreationInputTokens,
-        server_tool_use: { web_search_requests: webSearchRequests },
-        speed: usage.speed,
-      } as Parameters<typeof calculateUSDCost>[1]
-      const costUSD = calculateUSDCost(model, costUsage)
+      const priceTokens = (tokens: Required<PricedTokens>) =>
+        calculateUSDCost(model, {
+          input_tokens: tokens.inputTokens,
+          output_tokens: tokens.outputTokens,
+          cache_read_input_tokens: tokens.cacheReadInputTokens,
+          cache_creation_input_tokens: tokens.cacheCreationInputTokens,
+          server_tool_use: { web_search_requests: tokens.webSearchRequests },
+          speed: usage.speed,
+        } as Parameters<typeof calculateUSDCost>[1])
+      // Billed as cost(running total) - cost(already counted) so a prompt-length tier is decided by
+      // the whole reply rather than by whichever fragment arrived last.
+      const costUSD =
+        priceTokens(increment.total) -
+        (increment.previous ? priceTokens(increment.previous) : 0)
+      const {
+        inputTokens: addedInput,
+        outputTokens: addedOutput,
+        cacheReadInputTokens: addedCacheRead,
+        cacheCreationInputTokens: addedCacheCreation,
+        webSearchRequests: addedWebSearch,
+      } = increment.delta
 
       let modelUsage = models.get(model)
       if (!modelUsage) {
@@ -3529,20 +3604,20 @@ export class SessionService {
         models.set(model, modelUsage)
       }
 
-      modelUsage.inputTokens += inputTokens
-      modelUsage.outputTokens += outputTokens
-      modelUsage.cacheReadInputTokens += cacheReadInputTokens
-      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
-      modelUsage.webSearchRequests += webSearchRequests
+      modelUsage.inputTokens += addedInput
+      modelUsage.outputTokens += addedOutput
+      modelUsage.cacheReadInputTokens += addedCacheRead
+      modelUsage.cacheCreationInputTokens += addedCacheCreation
+      modelUsage.webSearchRequests += addedWebSearch
       modelUsage.costUSD += costUSD
       modelUsage.costDisplay = this.formatCost(modelUsage.costUSD)
 
       totalCostUSD += costUSD
-      totalInputTokens += inputTokens
-      totalOutputTokens += outputTokens
-      totalCacheReadInputTokens += cacheReadInputTokens
-      totalCacheCreationInputTokens += cacheCreationInputTokens
-      totalWebSearchRequests += webSearchRequests
+      totalInputTokens += addedInput
+      totalOutputTokens += addedOutput
+      totalCacheReadInputTokens += addedCacheRead
+      totalCacheCreationInputTokens += addedCacheCreation
+      totalWebSearchRequests += addedWebSearch
 
       if (entry.timestamp) {
         const time = Date.parse(entry.timestamp)
@@ -3646,6 +3721,7 @@ export class SessionService {
     const status = indexed ? this.localIndexGateway.getPublicStatus() : null
     const degradedPlan = indexed ? null : this.getDegradedListPlan()
     return JSON.stringify([scope, this.sessionListCacheGeneration,
+      readSessionArchives(scope).revision,
       indexed && (status?.state === 'ready' || status?.state === 'building')
         ? status.lastUpdatedAt
         : degradedPlan
@@ -3774,11 +3850,19 @@ export class SessionService {
   }
 
   /** List all sessions, optionally filtered by physical project path. */
-  async listSessions(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+  async listSessions(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
+    const scope = this.getConfigDir()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const archiveRevision = readSessionArchives(scope).revision
+      const result = await this.listSessionsOnce(options)
+      // A storage switch belongs to subsequent requests. Repeating this scan
+      // after a switch would replace its original scope with another config's sessions.
+      if (scope !== this.getConfigDir() || archiveRevision === readSessionArchives(scope).revision) return result
+    }
+    throw new ApiError(409, 'Session archives changed during loading; retry', 'SESSION_LIST_CHANGED')
+  }
+
+  private async listSessionsOnce(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
     this.syncSharedMutationEpoch()
     const routingMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
     const hasInvalidPagination = [options?.limit, options?.offset]
@@ -3827,11 +3911,52 @@ export class SessionService {
     return await this.tryListSessionsFromIndex(options) ?? this.listSessionsFromFiles(options)
   }
 
-  private async listSessionsFromFiles(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }): Promise<{ sessions: SessionListItem[]; total: number }> {
+  private readArchiveFilteredIndexPage(options: SessionListOptions): { sessions: IndexedSessionRow[]; total: number } {
+    const archiveIds = readSessionArchives(this.getConfigDir()).ids
+    if (archiveIds.size === 0) return options.archived
+      ? { sessions: [], total: 0 }
+      : this.localIndexGateway.listSessions(options)
+    const offset = options.offset ?? 0
+    const limit = options.limit ?? 50
+    const sessions: IndexedSessionRow[] = []
+    let total = 0
+    // Filter cheap index metadata before paginating. Only the returned page is
+    // hydrated; archiving cannot turn a 20-row request into a transcript scan.
+    for (let pageOffset = 0; ; pageOffset += 500) {
+      const page = this.localIndexGateway.listSessions({ project: options.project, offset: pageOffset, limit: 500 })
+      for (const row of page.sessions) {
+        if (archiveIds.has(row.id) !== Boolean(options.archived)) continue
+        if (total >= offset && sessions.length < limit) sessions.push(row)
+        total += 1
+      }
+      if (page.sessions.length === 0 || pageOffset + page.sessions.length >= page.total) break
+    }
+    return { sessions, total }
+  }
+
+  isSessionArchived(sessionId: string): boolean {
+    return readSessionArchives(this.getConfigDir()).ids.has(sessionId)
+  }
+
+  listArchivedSessionIds(): string[] {
+    return [...readSessionArchives(this.getConfigDir()).ids]
+  }
+
+  async setSessionArchived(sessionId: string, archived: boolean, assertIdle: () => void = () => {}): Promise<void> {
+    const scope = this.getConfigDir()
+    await withSessionArchiveLock(scope, async () => {
+      const found = await this.findSessionFile(sessionId)
+      if (!found) throw ApiError.notFound(`Session not found: ${sessionId}`)
+      if (scope !== this.getConfigDir()) throw ApiError.conflict('Session storage changed; retry')
+      // No asynchronous boundary between the final check and the atomic state
+      // write. Cleanup cannot remove the file checked under the same lock.
+      if (archived) assertIdle()
+      writeSessionArchive(scope, sessionId, archived)
+      this.invalidateSessionListCache()
+    })
+  }
+
+  private async listSessionsFromFiles(options?: SessionListOptions): Promise<{ sessions: SessionListItem[]; total: number }> {
     this.syncSharedMutationEpoch()
     const scope = this.getConfigDir()
     this.prepareSessionListCaches(scope)
@@ -3867,14 +3992,10 @@ export class SessionService {
     }
   }
 
-  private async tryListSessionsFromIndex(options?: {
-    project?: string
-    limit?: number
-    offset?: number
-  }, requireReady = false): Promise<{ sessions: SessionListItem[]; total: number } | null> {
+  private async tryListSessionsFromIndex(options?: SessionListOptions, requireReady = false): Promise<{ sessions: SessionListItem[]; total: number } | null> {
     const indexedMutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
     try {
-      const indexedPage = this.localIndexGateway.listSessions({
+      const indexedPage = this.readArchiveFilteredIndexPage({
         ...(options?.project
           ? {
               project: this.sanitizePath(
@@ -3884,6 +4005,7 @@ export class SessionService {
           : {}),
         ...(options?.limit !== undefined ? { limit: options.limit } : {}),
         ...(options?.offset !== undefined ? { offset: options.offset } : {}),
+        archived: options?.archived,
       })
       if (!this.indexStatusRemainsUsable()) {
         this.markIndexReadFailure()
@@ -3910,7 +4032,7 @@ export class SessionService {
             row.id,
             projectsRoot,
           )
-          sessions.push(await this.hydrateIndexedSession(row, pathExists))
+          sessions.push(await this.hydrateIndexedSession(row, pathExists, Boolean(options?.archived)))
         } catch {
           // Drop a single stale/unreadable row instead of scanning every JSONL.
         }
@@ -3938,7 +4060,7 @@ export class SessionService {
    * in the index's own order before paginating.
    */
   private async tryListSessionsFromDegradedIndex(
-    options: { project?: string; limit?: number; offset?: number } | undefined,
+    options: SessionListOptions | undefined,
     plan: DegradedListPlan,
   ): Promise<{ sessions: SessionListItem[]; total: number } | null> {
     const mutationEpoch = getSharedSessionMutationState(this.localIndexGateway).epoch
@@ -3964,7 +4086,9 @@ export class SessionService {
       }
       rows.push(...await this.readExcludedTranscriptRows(plan, scope, project))
       if (rows.length === 0) return null
-      rows.sort(compareIndexedListRows)
+      const archiveIds = readSessionArchives(scope).ids
+      const visibleRows = rows.filter(row => archiveIds.has(row.id) === Boolean(options?.archived))
+      visibleRows.sort(compareIndexedListRows)
 
       // Same defaults as the index and file lists.
       const offset = options?.offset ?? 0
@@ -3972,17 +4096,17 @@ export class SessionService {
       const sessions: SessionListItem[] = []
       const pathExists = this.createCachedPathExists()
       const projectsRoot = await fs.realpath(this.getProjectsDir())
-      for (const row of rows.slice(offset, offset + limit)) {
+      for (const row of visibleRows.slice(offset, offset + limit)) {
         try {
           await this.validateIndexedTranscriptPath(row.transcriptPath, row.projectPath, row.id, projectsRoot)
-          sessions.push(await this.hydrateIndexedSession(row, pathExists))
+          sessions.push(await this.hydrateIndexedSession(row, pathExists, Boolean(options?.archived)))
         } catch {
           // Drop a single stale/unreadable row, like the healthy index list.
         }
       }
       if (mutationEpoch !== getSharedSessionMutationState(this.localIndexGateway).epoch) return null
-      if (sessions.length === 0) return null
-      return { sessions, total: rows.length }
+      if (sessions.length === 0 && visibleRows.length > 0) return null
+      return { sessions, total: visibleRows.length }
     } catch {
       this.markIndexReadFailure()
       return null
@@ -3992,6 +4116,7 @@ export class SessionService {
   private async hydrateIndexedSession(
     row: IndexedSessionRow,
     pathExists = (targetPath: string | null) => this.pathExists(targetPath),
+    archived = this.isSessionArchived(row.id),
   ): Promise<SessionListItem> {
     const workDir = row.workDir
     const projectRoot = await this.resolveProjectRootFromSessionMetadata({
@@ -4009,6 +4134,7 @@ export class SessionService {
     })
     return {
       id: row.id,
+      ...(archived ? { archived: true } : {}),
       title: row.title,
       createdAt: row.createdAt,
       modifiedAt: row.modifiedAt,
@@ -4104,17 +4230,15 @@ export class SessionService {
   }
 
   private async loadSessionList(
-    options: {
-      project?: string
-      limit?: number
-      offset?: number
-    } | undefined,
+    options: SessionListOptions | undefined,
     cacheKey: string,
     cacheGeneration: number,
     sharedMutationEpoch: number,
     scope: string,
   ): Promise<{ sessions: SessionListItem[]; total: number }> {
-    const sessionFiles = await this.discoverSessionFiles(options?.project, scope)
+    const archiveIds = readSessionArchives(scope).ids
+    const sessionFiles = (await this.discoverSessionFiles(options?.project, scope))
+      .filter(file => archiveIds.has(file.sessionId) === Boolean(options?.archived))
     if (!options?.project && this.activeSessionListCacheScope === scope) {
       const discoveredPaths = new Set(sessionFiles.map(file => file.filePath))
       for (const filePath of this.sessionListSummaryCache.keys()) {
@@ -4185,6 +4309,7 @@ export class SessionService {
 
         items.push({
           id: sessionId,
+          ...(archiveIds.has(sessionId) ? { archived: true } : {}),
           title: summary.title,
           createdAt: summary.createdAt,
           modifiedAt: summary.modifiedAt,
@@ -4294,6 +4419,7 @@ export class SessionService {
     return {
       id: sessionId,
       title,
+      ...(this.isSessionArchived(sessionId) ? { archived: true } : {}),
       createdAt,
       modifiedAt: this.resolveTranscriptModifiedAtFromEntries(entries) ?? stat.mtime.toISOString(),
       messageCount: messages.length,
@@ -4370,7 +4496,11 @@ export class SessionService {
     return { entries: visibleEntries, contextScanBytes: context.scannedBytes }
   }
 
-  async getSessionHistoryPage(sessionId: string, options: { cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; projectContext?: boolean } = {}): Promise<{
+  async getSessionHistoryPage(sessionId: string, options: {
+    cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; projectContext?: boolean
+    /** Replace tool-result image bytes with references and page by the projected size. */
+    mediaRefs?: boolean
+  } = {}): Promise<{
     messages: MessageEntry[]
     taskNotifications: SessionTaskNotification[]
     page: HistoryPageInfo
@@ -4388,7 +4518,8 @@ export class SessionService {
       }
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
-    const result = await readBoundedHistoryPage(found.filePath, options)
+    const mediaRefs = options.mediaRefs === true && !options.full
+    const result = await readBoundedHistoryPage(found.filePath, mediaRefs ? { ...options, measure: measureEntryWithMediaRefs } : options)
     // A referenced-session read only needs the records on this page. Building
     // the ownership index scans the transcript from the start, which is what
     // stalls the shared server while a model pages backward.
@@ -4396,7 +4527,12 @@ export class SessionService {
       ? { entries: result.entries.map(item => item.entry as RawEntry), contextScanBytes: 0 }
       : await this.projectHistoryPageEntries(found.filePath, result, options.signal)
     const entries = result.entries.map(item => item.entry as RawEntry)
-    const response = { messages: this.entriesToMessages(projection.entries), taskNotifications: this.taskNotificationsFromEntries(entries), page: { ...result.page, contextScanBytes: projection.contextScanBytes } }
+    const messages = this.entriesToMessages(projection.entries)
+    const response = {
+      messages: mediaRefs ? messages.map(message => projectMessageMedia(message, sessionId)) : messages,
+      taskNotifications: this.taskNotificationsFromEntries(entries),
+      page: { ...result.page, contextScanBytes: projection.contextScanBytes },
+    }
     // The full-history path is already bounded by the reader's own byte budget,
     // so only the single-record page path needs the "one oversized record"
     // envelope check.
@@ -4513,7 +4649,7 @@ export class SessionService {
     if (cached?.version === version) return cached.transcript
     return withHistoryReadBudget(undefined, async () => {
       const entries: RawEntry[] = []
-      const taskNotifications: SessionTaskNotification[] = []
+      const taskNotifications = new Map<string, SessionTaskNotification>()
       let bytes = 0
       let incomplete = false
       const scan = await streamBoundedHistory(filePath, raw => {
@@ -4527,17 +4663,22 @@ export class SessionService {
         if (selected?.bodyTruncated) incomplete = true
         const selectedBytes = (selected ? Buffer.byteLength(JSON.stringify(selected)) : 0) +
           (notices.length ? Buffer.byteLength(JSON.stringify(notices)) : 0)
-        if (bytes + selectedBytes > 2 * 1024 * 1024 || entries.length + taskNotifications.length + (selected ? 1 : 0) + notices.length > 2048) {
+        if (bytes + selectedBytes > 2 * 1024 * 1024 || entries.length + taskNotifications.size + (selected ? 1 : 0) + notices.length > 2048) {
           incomplete = true
           return
         }
         bytes += selectedBytes
         if (selected) entries.push(selected as RawEntry)
-        taskNotifications.push(...notices)
+        // A terminal event can appear as the desktop's persisted notification
+        // and again when the CLI queues/drains it. Match full-history replay's
+        // owner/tool identity so these copies do not look like competing runs.
+        for (const notice of notices) {
+          taskNotifications.set(sessionTaskNotificationIdentity(notice), notice)
+        }
       }, undefined, { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES })
       // A skipped record may be unrelated to this Agent. Preserve the evidence
       // we did read without claiming that absence proves a missing run.
-      const transcript = { messages: this.entriesToMessages(entries), taskNotifications, historyComplete: !incomplete && scan.omittedRecords === 0 }
+      const transcript = { messages: this.entriesToMessages(entries), taskNotifications: [...taskNotifications.values()], historyComplete: !incomplete && scan.omittedRecords === 0 }
       this.subagentLookupCache.delete(key)
       this.subagentLookupCache.set(key, { version, transcript })
       while (this.subagentLookupCache.size > 4) this.subagentLookupCache.delete(this.subagentLookupCache.keys().next().value!)

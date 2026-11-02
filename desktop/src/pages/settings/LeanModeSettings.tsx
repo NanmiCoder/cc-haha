@@ -3,6 +3,7 @@ import { SettingsBlock } from '@/components/settings/SettingsSection'
 import { Switch } from '@/components/ui/Switch'
 import { useTranslation } from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { SettingsHelpTopic } from './SettingsHelpTopic'
 
 export function LeanModeSettings() {
   const t = useTranslation()
@@ -27,6 +28,7 @@ export function LeanModeSettings() {
     <SettingsBlock>
       <Switch
         label={t('settings.general.leanModeEnabled')}
+        labelAdornment={<SettingsHelpTopic topic="leanMode" />}
         checked={enabled}
         disabled={saving}
         onChange={next => void changeEnabled(next)}

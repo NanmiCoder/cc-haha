@@ -11,7 +11,6 @@ import { DWClient, TOPIC_CARD, TOPIC_ROBOT } from 'dingtalk-stream'
 import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
-import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
 import { formatImHelp, formatImStatus, formatPermissionRequest, splitMessage } from '../common/format.js'
 import {
@@ -62,7 +61,7 @@ if (!config.dingtalk.clientId || !config.dingtalk.clientSecret) {
   console.error('[DingTalk] Missing DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET. Bind with QR auth in Desktop Settings or set env.')
   process.exit(1)
 }
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.dingtalk)
+const { httpClient, defaultWorkDir, enqueue } = createAdapterClient(config, config.dingtalk)
 
 const bridge = new WsBridge(config.serverUrl, 'dingtalk')
 const dedup = new MessageDedup()
@@ -491,8 +490,9 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   return sent
 }
 
-async function routeUserMessage(chatId: string, text: string, attachments: AttachmentRef[] = []): Promise<void> {
-  enqueue(chatId, async () => {
+async function routeUserMessage(chatId: string, text: string, attachmentsOrLoader: AttachmentRef[] | (() => Promise<AttachmentRef[]>) = []): Promise<void> {
+  return enqueue(chatId, async () => {
+    const attachments = typeof attachmentsOrLoader === 'function' ? await attachmentsOrLoader() : attachmentsOrLoader
     const trimmed = text.trim()
     const hasAttachments = attachments.length > 0
 
@@ -582,8 +582,7 @@ async function handleRobotMessage(data: DingTalkRobotMessage): Promise<void> {
   }
 
   aiCardTargets.set(chatId, { type: 'user', userId })
-  const attachments = await collectAttachments(chatId, mediaCandidates)
-  await routeUserMessage(chatId, text, attachments)
+  await routeUserMessage(chatId, text, () => collectAttachments(chatId, mediaCandidates))
 }
 
 async function handleCardCallback(raw: unknown): Promise<void> {

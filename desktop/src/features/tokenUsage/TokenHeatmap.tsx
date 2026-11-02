@@ -133,8 +133,8 @@ export function TokenHeatmap({ stats, locale }: { stats: ActivityStatsResponse; 
         />
       }
     >
-      <div ref={measureRef} className="min-w-0">
-        <div className="relative" style={{ width: totalWidth, maxWidth: '100%' }}>
+      <div ref={measureRef} className="min-w-0 overflow-x-auto pb-2">
+        <div className="relative" style={{ width: totalWidth }}>
           {/* Absolutely placed by week: grid auto-placement pushed a label whose
               4-column span ran past the last week onto a second row. */}
           <div

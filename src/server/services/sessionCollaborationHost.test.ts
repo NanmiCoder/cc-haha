@@ -1,17 +1,306 @@
 import { afterEach, beforeEach, expect, test, spyOn, mock } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { SessionCollaborationService, type CollaborationMessage } from './sessionCollaborationService.js'
-import { handleSessionCollaborationEvent, configureSessionCollaborationHost, getSessionCollaborationService } from './sessionCollaborationHost.js'
+import { handleSessionCollaborationEvent, configureSessionCollaborationHost, getSessionCollaborationService, hasSessionCollaborationPowerActivity } from './sessionCollaborationHost.js'
 import { sessionService } from './sessionService.js'
 import { admitSessionUserTurn, emitSessionTurnEvent } from './sessionTurnEvents.js'
 import { SearchService } from './searchService.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 
 let directory: string
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'collaboration-host-fixture-')) })
 afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
+
+async function saveReview(callerSessionId: string) {
+  const runtime = { providerId: 'fixture-provider', modelId: 'fixture-model' }
+  const seed = new SessionCollaborationService({
+    statePath: join(directory, 'cc-haha', 'session-collaboration', 'state.json'),
+    sessions: { exists: async () => true, list: async () => [], read: async () => [], create: async () => { throw new Error('Review must not create sessions') } },
+    models: { list: async () => [], parentRuntime: async () => runtime, resolve: async () => runtime, validate: async value => value },
+    runtime: { start: async () => { throw new Error('Recovery must not start work') }, enqueue: async () => {}, stop: async () => {} },
+  })
+  const proposal = await seed.propose(callerSessionId, { requestId: 'saved-review', sessions: [{ prompt: 'Wait for user approval' }] })
+  await seed.onSessionState(callerSessionId, 'completed', 'Please confirm the allocation', 'saved-result')
+  return proposal
+}
+
+test('collaboration startup stays read-only throughout migration validation', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const stateDirectory = join(directory, 'cc-haha', 'session-collaboration')
+  await mkdir(stateDirectory, { recursive: true })
+  const statePath = join(stateDirectory, 'state.json')
+  const before = JSON.stringify({ version: 1, revision: 1, members: {
+    root: { sessionId: 'root', rootSessionId: 'root', parentSessionId: null, state: 'running', stopped: false },
+  }, messages: [] })
+  await writeFile(statePath, before)
+  const create = spyOn(sessionService, 'createSession').mockRejectedValue(new Error('Validation cannot create sessions'))
+  const recovery = spyOn(SessionCollaborationService.prototype, 'recover')
+  migrationMaintenance.beginValidation()
+  const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    const service = await getSessionCollaborationService()
+    expect(await readFile(statePath, 'utf8')).toBe(before)
+    expect(recovery).not.toHaveBeenCalled()
+    expect((await service.status()).members[0]).toMatchObject({ state: 'running', stopped: false })
+    expect(create).not.toHaveBeenCalled()
+    migrationMaintenance.activateValidation()
+    await getSessionCollaborationService()
+    expect(recovery).toHaveBeenCalledTimes(1)
+    expect((await service.status()).members[0]).toMatchObject({ state: 'stopped', stopped: true })
+  } finally {
+    dispose()
+    migrationMaintenance.resetForTests()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+test.each(['single', 'batch'] as const)('successful %s deletion cancels the deleted caller’s unreachable review', async mode => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  await saveReview(sessionId)
+  const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    const service = await getSessionCollaborationService()
+    const { getPowerActivitySnapshot } = await import('./powerActivityRuntime.js')
+    const { handleSessionsApi } = await import('../api/sessions.js')
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+    const target = mode === 'single' ? sessionId : 'batch-delete'
+    const url = new URL(`http://127.0.0.1/api/sessions/${target}`)
+    const response = await handleSessionsApi(new Request(url, mode === 'single' ? { method: 'DELETE' } : {
+      method: 'POST', body: JSON.stringify({ sessionIds: [sessionId] }),
+    }), url, ['api', 'sessions', target])
+    expect(response.status).toBe(200)
+    for (let attempt = 0; attempt < 200 && (await getPowerActivitySnapshot()).busy; attempt++) await Bun.sleep(5)
+    expect((await getPowerActivitySnapshot()).busy).toBe(false)
+    expect((await service.listBatches(sessionId))[0]?.state).toBe('cancelled')
+    expect(await sessionService.findSessionFile(sessionId)).toBeNull()
+  } finally {
+    dispose()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+test('archiving and restoring a caller preserves its pending allocation review and power ownership', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  const caller = (await sessionService.findSessionFile(sessionId))!
+  const transcript = await readFile(caller.filePath, 'utf8')
+  const catalog = await import('./sessionModelCatalog.js')
+  const handler = await import('../ws/handler.js')
+  const { handleSessionsApi } = await import('../api/sessions.js')
+  const { handleSessionCollaborationApi, handleSessionCollaborationUiApi } = await import('../api/sessionCollaboration.js')
+  const runtime = { providerId: 'fixture-provider', modelId: 'fixture-model' }
+  spyOn(catalog, 'resolveSessionRuntime').mockResolvedValue(runtime)
+  spyOn(catalog, 'listSessionModels').mockResolvedValue([])
+  const create = spyOn(sessionService, 'createSession').mockRejectedValue(new Error('Review must not create sessions'))
+  const start = spyOn(handler, 'submitSessionTurn').mockRejectedValue(new Error('Review must not start work'))
+  let dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    let service = await getSessionCollaborationService()
+    async function sessions(resource = '', method = 'GET', body?: unknown) {
+      const url = new URL(`http://127.0.0.1/api/sessions${resource}`)
+      const response = await handleSessionsApi(new Request(url, {
+        method,
+        ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      }), url, url.pathname.split('/').filter(Boolean))
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    async function delegation() {
+      const url = new URL(`http://127.0.0.1/api/session-collaboration/${sessionId}/delegation`)
+      const response = await handleSessionCollaborationUiApi(new Request(url), url, service)
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+    const response = await handleSessionCollaborationApi(new Request('http://127.0.0.1/api/sessions/collaboration/create-batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: 'archive-review', sessions: [{ prompt: 'Wait for user approval', runtime }] }),
+    }), 'create-batch', sessionId, service)
+    expect(response.status).toBe(200)
+    const proposal = await response.json()
+    expect(proposal).toMatchObject({ state: 'review', requiresReview: true })
+    await service.onSessionState(sessionId, 'completed', 'Please confirm the allocation', 'archive-review-result')
+    const before = (await delegation()).batches
+    expect(before).toHaveLength(1)
+    expect(before[0]).toMatchObject({ id: proposal.id, state: 'review', revision: proposal.revision })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).toContain(sessionId)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    expect(await sessions(`/${sessionId}/archive`, 'PATCH', { archived: true })).toEqual({ success: true, archived: true })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).not.toContain(sessionId)
+    expect((await sessions('?archived=true')).sessions).toContainEqual(expect.objectContaining({ id: sessionId, archived: true }))
+    expect(await sessionService.hasSessionStrict(sessionId)).toBe(true)
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    // Restart readiness must use the transcript, even though the caller is
+    // absent from the default list used by the sidebar.
+    dispose()
+    dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    service = await getSessionCollaborationService()
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+
+    expect(await sessions(`/${sessionId}/archive`, 'PATCH', { archived: false })).toEqual({ success: true, archived: false })
+    expect((await sessions()).sessions.map((session: { id: string }) => session.id)).toContain(sessionId)
+    expect((await sessions('?archived=true')).sessions).toHaveLength(0)
+    expect((await delegation()).batches).toEqual(before)
+    expect((await sessions('/power-activity')).busy).toBe(true)
+    expect(await readFile(caller.filePath, 'utf8')).toBe(transcript)
+    expect(create).not.toHaveBeenCalled()
+    expect(start).not.toHaveBeenCalled()
+  } finally {
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+test('startup excludes a restored review with a missing caller without writing until normal recovery', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  await saveReview(sessionId)
+  await sessionService.deleteSession(sessionId)
+  const statePath = join(directory, 'cc-haha', 'session-collaboration', 'state.json')
+  const before = await readFile(statePath, 'utf8')
+  const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    const { getPowerActivitySnapshot } = await import('./powerActivityRuntime.js')
+    for (let attempt = 0; attempt < 200 && (await getPowerActivitySnapshot()).busy; attempt++) await Bun.sleep(5)
+    expect((await getPowerActivitySnapshot()).busy).toBe(false)
+    expect(await readFile(statePath, 'utf8')).toBe(before)
+    const service = await getSessionCollaborationService()
+    expect((await service.listBatches(sessionId))[0]?.state).toBe('cancelled')
+  } finally {
+    dispose()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+for (const target of ['projects', 'project'] as const) test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(`unreadable ${target} authority preserves the caller and pending review`, async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  const caller = await sessionService.findSessionFile(sessionId)
+  expect(caller).not.toBeNull()
+  await saveReview(sessionId)
+  const statePath = join(directory, 'cc-haha', 'session-collaboration', 'state.json')
+  const before = await readFile(statePath, 'utf8')
+  const inaccessible = target === 'projects' ? join(directory, 'projects') : dirname(caller!.filePath)
+  const originalMode = (await stat(inaccessible)).mode & 0o7777
+  const error = spyOn(console, 'error').mockImplementation(() => {})
+  let dispose = () => {}
+  try {
+    await chmod(inaccessible, 0)
+    await expect(readdir(inaccessible)).rejects.toMatchObject({ code: 'EACCES' })
+    dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    await expect(getSessionCollaborationService()).rejects.toMatchObject({ code: 'EACCES' })
+    const { getPowerActivitySnapshot } = await import('./powerActivityRuntime.js')
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+    expect(await readFile(statePath, 'utf8')).toBe(before)
+    expect(error).toHaveBeenCalled()
+
+    await chmod(inaccessible, originalMode)
+    expect(await readFile(caller!.filePath, 'utf8')).toContain('session-meta')
+    dispose()
+    dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    const recovered = await getSessionCollaborationService()
+    expect((await recovered.listBatches(sessionId))[0]?.state).toBe('review')
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+  } finally {
+    await chmod(inaccessible, originalMode)
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+test('host startup owns persisted review readiness before the first UI or session event', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const { sessionId } = await sessionService.createSession(directory)
+  const proposal = await saveReview(sessionId)
+  let release!: () => void
+  let loaded = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const originalLoad = SessionCollaborationService.prototype.loadForPowerActivity
+  const loading = spyOn(SessionCollaborationService.prototype, 'loadForPowerActivity').mockImplementation(async function (this: SessionCollaborationService) {
+    await gate
+    await originalLoad.call(this)
+    loaded = true
+  })
+  const recovery = spyOn(SessionCollaborationService.prototype, 'recover')
+  const create = spyOn(sessionService, 'createSession').mockRejectedValue(new Error('Recovery must not create sessions'))
+  const { getPowerActivitySnapshot } = await import('./powerActivityRuntime.js')
+  const { powerActivityClock } = await import('./powerActivityClock.js')
+  const before = powerActivityClock.read(false)
+  let dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    expect(loading).toHaveBeenCalledTimes(1)
+    expect(hasSessionCollaborationPowerActivity()).toBe(true)
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+    expect(loading).toHaveBeenCalledTimes(1)
+    expect(recovery).not.toHaveBeenCalled()
+    release()
+    for (let attempt = 0; attempt < 200 && !loaded; attempt++) await Bun.sleep(5)
+    expect(loaded).toBe(true)
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+    expect(recovery).not.toHaveBeenCalled()
+    const service = await getSessionCollaborationService()
+    expect((await service.listBatches(sessionId))[0]?.state).toBe('review')
+    expect(create).not.toHaveBeenCalled()
+    expect(powerActivityClock.read(false).completionSequence).toBe(before.completionSequence)
+
+    await service.cancelBatch(sessionId, proposal.id, proposal.revision)
+    expect((await getPowerActivitySnapshot()).busy).toBe(false)
+    dispose()
+    dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    await getSessionCollaborationService()
+    expect((await getPowerActivitySnapshot()).busy).toBe(false)
+    expect(powerActivityClock.read(false).completionSequence).toBe(before.completionSequence)
+  } finally {
+    release()
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
+
+test('an unreadable collaboration store keeps startup power readiness unavailable', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  const stateDirectory = join(directory, 'cc-haha', 'session-collaboration')
+  await mkdir(stateDirectory, { recursive: true })
+  await writeFile(join(stateDirectory, 'state.json'), '{broken')
+  const error = spyOn(console, 'error').mockImplementation(() => {})
+  const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+  try {
+    await expect(getSessionCollaborationService()).rejects.toThrow()
+    expect(hasSessionCollaborationPowerActivity()).toBe(true)
+    const { getPowerActivitySnapshot } = await import('./powerActivityRuntime.js')
+    expect((await getPowerActivitySnapshot()).busy).toBe(true)
+    expect(error).toHaveBeenCalled()
+  } finally {
+    dispose()
+    mock.restore()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
+})
 
 test('user input reopens the inbox only after the shared admission commits to a ready CLI', async () => {
   let ready = false
@@ -64,6 +353,26 @@ test('streaming output does not broadcast collaboration refreshes until collabor
     sessionId: 'worker',
     message: { type: 'result', is_error: false, result: 'done', uuid: 'result-1' },
   })).toBe(true)
+})
+
+test('only an explicit successful root result persists completion, and a stop fences its late result', async () => {
+  const service = new SessionCollaborationService({
+    statePath: join(directory, 'state.json'),
+    now: () => new Date('2026-10-24T01:00:00Z'),
+    sessions: { exists: async () => true, list: async () => [], read: async () => [], create: async () => ({ sessionId: 'unused' }) },
+    runtime: { start: async () => {}, enqueue: async () => {}, stop: async () => {} },
+  })
+  const output = (sessionId: string, message: Record<string, unknown>) => handleSessionCollaborationEvent(service, { type: 'output', sessionId, message })
+  await service.onUserInput('main')
+  expect(await output('main', { type: 'result', is_error: false, parent_tool_use_id: 'agent', uuid: 'child-result' })).toBe(false)
+  expect(await output('main', { type: 'result', uuid: 'incomplete-result' })).toBe(false)
+  expect((await service.listCompletionStates())[0]).toEqual({ id: 'main', state: 'running' })
+  await output('main', { type: 'result', is_error: false, result: 'Done', uuid: 'root-result' })
+  expect((await service.listCompletionStates())[0]).toEqual({ id: 'main', state: 'completed', completedAt: '2026-10-24T01:00:00.000Z' })
+  await handleSessionCollaborationEvent(service, { type: 'stopped', sessionId: 'stopped' })
+  await output('stopped', { type: 'result', is_error: false, result: 'Partial', uuid: 'late-result' })
+  await output('failed', { type: 'result', is_error: true, uuid: 'failed-result' })
+  expect((await service.listCompletionStates()).filter(row => row.completedAt)).toHaveLength(1)
 })
 
 test('host rejects unavailable source workspace explicitly instead of silently choosing another directory', async () => {

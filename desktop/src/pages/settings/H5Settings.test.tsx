@@ -12,6 +12,10 @@ import { settingsApi } from '@/api/settings'
 import { modelsApi } from '@/api/models'
 import type { SavedProvider } from '@/types/provider'
 
+vi.mock('../ActivitySettings', () => ({
+  ActivitySettings: ({ browserMode }: { browserMode?: boolean }) => <div>{browserMode ? 'Connected personal homepage' : 'Editable personal homepage'}</div>,
+}))
+
 const saved: SavedProvider = {
   id: 'fixture-provider', name: 'Fixture provider', presetId: 'custom', baseUrl: 'https://fixture.example', apiKey: '', apiFormat: 'anthropic',
   models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
@@ -48,6 +52,15 @@ it('shows one grouped list: connection, provider, phone-editable preferences, an
   expect(desktopOnly).toHaveTextContent('MCP')
   expect(within(desktopOnly).queryAllByRole('button')).toHaveLength(0)
 })
+it('explains thinking mode and Ultracode on the browser settings list too', () => {
+  render(<H5Settings />)
+  const thinking = screen.getByRole('button', { name: 'What is thinking mode?' })
+  expect(thinking.previousElementSibling).toHaveTextContent('Enable thinking mode')
+  expect(screen.getByRole('button', { name: 'What is Ultracode?' })).toBeInTheDocument()
+  fireEvent.click(thinking)
+  expect(screen.getByRole('dialog', { name: 'What is thinking mode?' })).toHaveTextContent('non-thinking mode')
+})
+
 it('opens the model provider page from the list and comes back', async () => {
   useUIStore.setState({ activeSettingsTab: 'general' })
   render(<H5Settings />)
@@ -60,6 +73,20 @@ it('opens on the list even when the providers page was the last one seen', () =>
   useUIStore.setState({ activeSettingsTab: 'providers' })
   render(<H5Settings />)
   expect(screen.getByTestId('h5-settings-providers')).toBeInTheDocument()
+})
+it('opens the token usage page from the list in browser mode and returns to settings', () => {
+  render(<H5Settings />)
+  fireEvent.click(screen.getByRole('button', { name: /Token usage/ }))
+  expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'All settings' }))
+  expect(screen.getByRole('button', { name: /Token usage/ })).toBeInTheDocument()
+})
+it('honours a link to the token usage page without changing the remembered desktop settings section', () => {
+  useUIStore.setState({ activeSettingsTab: 'general', pendingSettingsTab: 'activity' })
+  render(<H5Settings />)
+  expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()
+  expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+  expect(useUIStore.getState().activeSettingsTab).toBe('general')
 })
 it('honours a link that asks for the providers page', async () => {
   useUIStore.setState({ pendingSettingsTab: 'providers' })

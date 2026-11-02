@@ -8,6 +8,15 @@ describe('tasksApi', () => {
     vi.restoreAllMocks()
   })
 
+  it('sends the observed revision as a conflict guard instead of a writable field', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ task: { id: 'task' } }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    await tasksApi.update('task', { enabled: false, revision: 4 })
+    const request = fetchMock.mock.calls[0]?.[1]
+    expect(JSON.parse(String(request?.body))).toEqual({ enabled: false, expectedRevision: 4 })
+  })
+
   it('serializes the terminal completion floor with summary pagination', async () => {
     setBaseUrl('http://127.0.0.1:49237')
     const fetchMock = vi.spyOn(globalThis, 'fetch')

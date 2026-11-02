@@ -30,6 +30,16 @@ describe('team plan wire contract', () => {
     expect((vi.mocked(api.patch).mock.calls[0]![1] as { members: unknown[] }).members).toEqual([{ id: 'one', agentType: 'reviewer' }])
   })
 
+  it('sends an effort-only change as a human runtime choice', () => {
+    vi.mocked(api.patch).mockClear()
+    const member = { id: 'one', name: 'One', agentType: 'engineer', prompt: 'Implement', runtime: { providerId: 'provider', modelId: 'balanced' } }
+    const plan = { teamName: 'team', sessionId: 'session', planId: 'plan', incarnationId: 'incarnation', revision: 7, members: [member], tasks: [] } as unknown as TeamPlanRecord
+    teamPlansApi.save(plan, { members: [{ ...member, runtime: { ...member.runtime, effortLevel: 'max' } }], tasks: [] })
+    expect((vi.mocked(api.patch).mock.calls[0]![1] as { members: unknown[] }).members).toEqual([
+      { id: 'one', runtime: { providerId: 'provider', modelId: 'balanced', effortLevel: 'max' } },
+    ])
+  })
+
   it('scopes reads to the requested session and includes idempotency on actions', () => {
     teamPlansApi.get('session/one')
     expect(api.get).toHaveBeenCalledWith('/api/teams/session/session%2Fone/plan')
