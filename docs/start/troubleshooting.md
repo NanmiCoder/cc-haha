@@ -17,7 +17,7 @@ order: 4
 
 **为什么** — 文件没坏。macOS 会给从网上下载的包打一个隔离标记，遇到没有 Apple 签名的应用就拒绝启动，而报错文案写成了「已损坏」，非常有误导性。
 
-**怎么办** — 从同一个 Release 下载 `install-macos-unsigned.sh`，放到和 DMG 同一个文件夹，执行 `bash install-macos-unsigned.sh`；或者应用已经在「应用程序」里的话，直接执行 `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`。完整说明见 [下载与安装](./install.md)。
+**怎么办** — Releases 里的正式版本已经签名和公证，遇到这个提示多半是装了未签名的开发构建。把构建附带的 `install-macos-unsigned.sh` 放到和 DMG 同一个文件夹，执行 `bash install-macos-unsigned.sh`；或者应用已经在「应用程序」里的话，直接执行 `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`。完整说明见 [下载与安装](./install.md)。
 
 ### Windows 弹出 SmartScreen 蓝屏
 
@@ -46,7 +46,7 @@ order: 4
 
 ### 双击后什么都没发生
 
-**为什么** — 最常见的是下错了 CPU 架构：Apple Silicon 的机器装了 `mac-x64`，或者 ARM64 的 Windows 装了 `win-x64`。
+**为什么** — 最常见的是下错了 CPU 架构：Apple 芯片的 Mac 装了 `macOS-Intel`，或者 ARM64 的 Windows 装了 `Windows-x64`。
 
 **怎么办** — 对照 [下载与安装](./install.md) 重新确认架构，下对的那个包重装。旧版进程还在跑的话也会互相打架，先全部退掉。
 

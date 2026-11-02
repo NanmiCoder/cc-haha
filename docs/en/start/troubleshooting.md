@@ -17,7 +17,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 **Why** — The file isn't damaged. macOS quarantines downloads and refuses to launch anything without an Apple signature, but words the error as "damaged", which sends everyone down the wrong path.
 
-**What to do** — Download `install-macos-unsigned.sh` from the same Release, put it in the same folder as the DMG, and run `bash install-macos-unsigned.sh`. Or, if the app is already in Applications, run `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`. Full details in [Download and install](./install.md).
+**What to do** — Releases are signed and notarized, so this usually means an unsigned development build. Put the `install-macos-unsigned.sh` that ships with the build in the same folder as the DMG, and run `bash install-macos-unsigned.sh`. Or, if the app is already in Applications, run `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`. Full details in [Download and install](./install.md).
 
 ### Windows shows a SmartScreen warning
 
@@ -46,7 +46,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 ### Nothing happens when I launch it
 
-**Why** — Most often the wrong CPU architecture: `mac-x64` on Apple Silicon, or `win-x64` on ARM64 Windows.
+**Why** — Most often the wrong CPU architecture: `macOS-Intel` on Apple Silicon, or `Windows-x64` on ARM64 Windows.
 
 **What to do** — Re-check your architecture against [Download and install](./install.md) and reinstall the right package. An old version still running in the background can also block startup, so quit everything first.
 

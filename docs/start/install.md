@@ -17,16 +17,16 @@ order: 1
 
 | 你的系统 | 下载 |
 |---|---|
-| macOS，M 系列芯片 | `Claude-Code-Haha-<版本>-mac-arm64.dmg` |
-| macOS，Intel 芯片 | `Claude-Code-Haha-<版本>-mac-x64.dmg` |
-| Windows x64 | `Claude-Code-Haha-<版本>-win-x64.exe` |
-| Windows ARM64 | `Claude-Code-Haha-<版本>-win-arm64.exe` |
-| Linux x64 | `Claude-Code-Haha-<版本>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` |
-| Linux ARM64 | `Claude-Code-Haha-<版本>-linux-arm64.AppImage` 或 `-linux-arm64.deb` |
+| macOS，Apple 芯片（M 系列） | `Claude-Code-Haha-<版本>-macOS-Apple-Silicon.dmg` |
+| macOS，Intel 芯片 | `Claude-Code-Haha-<版本>-macOS-Intel.dmg` |
+| Windows x64 | `Claude-Code-Haha-<版本>-Windows-x64-Setup.exe` |
+| Windows ARM64 | `Claude-Code-Haha-<版本>-Windows-arm64-Setup.exe` |
+| Linux x64 | `Claude-Code-Haha-<版本>-Linux-x64.AppImage`、`.deb` 或 `.rpm` |
+| Linux ARM64 | `Claude-Code-Haha-<版本>-Linux-arm64.AppImage`、`.deb` 或 `.rpm` |
 
 不确定自己是哪种架构：macOS 看「关于本机」里的芯片型号，Windows 看「设置 → 系统 → 系统信息」里的系统类型。别只凭机器牌子猜。
 
-`.blockmap` 和 `latest*.yml` 是应用自动更新用的，不用手动下载。
+名字以 `-update.zip` 结尾的文件和 `latest*.yml` 是应用自动更新用的，不用手动下载。v0.7.6 及更早的版本用的是 `mac-arm64`、`win-x64`、`linux-x86_64` 这类旧文件名。
 
 ## macOS
 
@@ -36,11 +36,11 @@ order: 1
 
 ### 如果提示「已损坏，无法打开」
 
-这不是文件坏了。macOS 会给从网上下载的安装包打一个隔离标记（quarantine），遇到没有 Apple 签名的应用就直接拒绝启动，报错文案偏偏写成「已损坏」。经过签名和公证的正式版本不会有这一步；如果你拿到的是未签名构建，用下面两种办法之一放行。
+这不是文件坏了。macOS 会给从网上下载的安装包打一个隔离标记（quarantine），遇到没有 Apple 签名的应用就直接拒绝启动，报错文案偏偏写成「已损坏」。Releases 里的正式版本都经过签名和公证，不会有这一步；如果你拿到的是未签名的开发构建，用下面两种办法之一放行。
 
-**办法一：用官方脚本（推荐）**
+**办法一：用构建附带的脚本**
 
-从同一个 Release 里把 `install-macos-unsigned.sh` 下载到和 DMG **同一个文件夹**（比如「下载」），然后在终端里跑：
+未签名的开发构建会附带 `install-macos-unsigned.sh`。把它和 DMG 放在**同一个文件夹**（比如「下载」），然后在终端里跑：
 
 ```bash
 cd ~/Downloads
@@ -74,19 +74,25 @@ xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"
 **AppImage**（免安装，下载即用）：
 
 ```bash
-chmod +x Claude-Code-Haha-<版本>-linux-x86_64.AppImage
-./Claude-Code-Haha-<版本>-linux-x86_64.AppImage
+chmod +x Claude-Code-Haha-<版本>-Linux-x64.AppImage
+./Claude-Code-Haha-<版本>-Linux-x64.AppImage
 ```
 
 启动失败并提示 FUSE 相关错误时，装一下运行库：Ubuntu 22.04 及更早用 `sudo apt install libfuse2`，24.04 及以后用 `libfuse2t64`。
 
-**deb**（装进系统菜单）：
+**deb**（Ubuntu、Debian 等，装进系统菜单）：
 
 ```bash
-sudo apt install ./Claude-Code-Haha-<版本>-linux-amd64.deb
+sudo apt install ./Claude-Code-Haha-<版本>-Linux-x64.deb
 ```
 
-ARM64 机器换成对应的 `linux-arm64` 文件。
+**rpm**（Fedora、openSUSE 等）：
+
+```bash
+sudo dnf install ./Claude-Code-Haha-<版本>-Linux-x64.rpm
+```
+
+ARM64 机器换成对应的 `Linux-arm64` 文件。
 
 ## 从源码跑
 
