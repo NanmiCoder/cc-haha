@@ -31,7 +31,9 @@ export function isLocalHostname(hostname: string): boolean {
     a === 127 ||
     (a === 192 && b === 168) ||
     (a === 172 && b >= 16 && b <= 31) ||
-    (a === 169 && b === 254)
+    (a === 169 && b === 254) ||
+    // Tailscale CGNAT overlay (100.64.0.0/10): encrypted mesh, LAN-equivalent.
+    (a === 100 && b >= 64 && b <= 127)
   )
 }
 

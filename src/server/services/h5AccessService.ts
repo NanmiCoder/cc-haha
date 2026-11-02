@@ -512,7 +512,9 @@ function isPrivateIPv4(address: string): boolean {
     a === 10 ||
     is172PrivateIPv4(address) ||
     (a === 192 && b === 168) ||
-    (a === 169 && b === 254)
+    (a === 169 && b === 254) ||
+    // Tailscale CGNAT overlay (100.64.0.0/10): encrypted mesh, LAN-equivalent.
+    (a === 100 && b >= 64 && b <= 127)
   )
 }
 
