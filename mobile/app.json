@@ -23,7 +23,6 @@
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "连接同一局域网中运行 cc-haha 的电脑。",
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoads": true
         },
         "ITSAppUsesNonExemptEncryption": false

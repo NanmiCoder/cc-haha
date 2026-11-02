@@ -82,6 +82,17 @@ describe('manual connect fields', () => {
     expect(primaryTitle('remote')).toBe('请求电脑授权')
   })
 
+  test('an explicit HTTP hostname uses the token form and a non-blocking connection notice', () => {
+    const address = 'http://workstation.fixture.ts.net/'
+    expect(receivedConnection(address).mode).toBe('lan')
+    expect(connectionBlocker('lan', address)).toBe('')
+    expect(needsToken('lan', address)).toBe(true)
+    expect(formFootnote('lan', address)).toContain('HTTP 连接未加密')
+    expect(formFootnote('lan', address)).toContain('手机需要能访问这个地址')
+    expect(formFootnote('lan', `${address}?h5Token=fixture-only`)).toContain('二维码已包含')
+    expect(formFootnote('remote', pairLink)).not.toContain('HTTP 连接未加密')
+  })
+
   test('a mode that contradicts the address is explained before any request', () => {
     expect(connectionBlocker('remote', 'http://192.168.1.10:3456')).toContain(
       '这是局域网地址'

@@ -157,10 +157,10 @@ for (const origin of ['https://workstation-fixture.trycloudflare.com', 'https://
   })
 }
 
-test('public HTTP addresses and bare HTTPS origins cannot bypass device pairing', async () => {
+test('explicit HTTP still requires an access token and bare HTTPS still requires device pairing', async () => {
   const client = () => { throw new Error('must not contact') }
   for (const value of ['http://100.101.102.103:17463', 'http://workstation-fixture.trycloudflare.com']) {
-    await expect(connectHost({ ...input(), value }, { client })).rejects.toThrow('HTTPS')
+    await expect(connectHost({ ...input(), value }, { client })).rejects.toThrow('访问令牌')
   }
   await expect(connectHost({ ...input(), value: 'https://workstation-fixture.trycloudflare.com' }, { client })).rejects.toThrow('完整配对链接')
 })
