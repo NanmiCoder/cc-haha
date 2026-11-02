@@ -5,15 +5,26 @@
 
 // Global registry for cleanup functions
 const cleanupFunctions = new Set<() => Promise<void>>()
+const cleanupTimeouts = new Map<() => Promise<void>, number>()
 
 /**
  * Register a cleanup function to run during graceful shutdown.
  * @param cleanupFn - Function to run during cleanup (can be sync or async)
  * @returns Unregister function that removes the cleanup handler
  */
-export function registerCleanup(cleanupFn: () => Promise<void>): () => void {
+export function registerCleanup(cleanupFn: () => Promise<void>, options: { timeoutMs?: number } = {}): () => void {
   cleanupFunctions.add(cleanupFn)
-  return () => cleanupFunctions.delete(cleanupFn) // Return unregister function
+  if (options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs)) {
+    cleanupTimeouts.set(cleanupFn, Math.min(4_500, Math.max(2_000, options.timeoutMs)))
+  }
+  return () => {
+    cleanupFunctions.delete(cleanupFn)
+    cleanupTimeouts.delete(cleanupFn)
+  }
+}
+
+export function getCleanupTimeoutMs(): number {
+  return Math.max(2_000, ...cleanupTimeouts.values())
 }
 
 /**

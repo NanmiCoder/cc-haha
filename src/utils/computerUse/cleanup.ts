@@ -73,6 +73,11 @@ export async function cleanupComputerUseAfterTurn(
   const overlayHide =
     deps.overlayHide ??
     (async () => {
+      if (process.platform === 'win32' || process.platform === 'linux') {
+        const { cleanupNativeDesktopCursor } = await import('./hostAdapter.js')
+        await cleanupNativeDesktopCursor()
+        return
+      }
       const m = await import('./cuHelperDaemon.js')
       await m.overlayHide()
     })

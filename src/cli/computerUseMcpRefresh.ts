@@ -1,6 +1,6 @@
 import type { Tool, Tools, ToolPermissionContext } from '../Tool.js'
 import type { MCPServerConnection, ScopedMcpServerConfig } from '../services/mcp/types.js'
-import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer } from '../utils/computerUse/common.js'
+import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer, isComputerUseSupportedPlatform } from '../utils/computerUse/common.js'
 
 export type ComputerUseRefreshConfiguration = {
   config: ScopedMcpServerConfig
@@ -34,7 +34,7 @@ export async function readComputerUseRefreshConfiguration(cliEnabled = true): Pr
   if (!cliEnabled) return null
   const { isAgentProfileMcpEnabled } = await import('../utils/agentProfile.js')
   if (!isAgentProfileMcpEnabled()
-    || (process.platform !== 'darwin' && process.platform !== 'win32')) return null
+    || !isComputerUseSupportedPlatform()) return null
   const { getChicagoEnabled } = await import('../utils/computerUse/gates.js')
   if (!getChicagoEnabled()) return null
   const { loadStoredComputerUseConfigResult } = await import('../utils/computerUse/preauthorizedConfig.js')

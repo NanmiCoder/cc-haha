@@ -4,7 +4,6 @@ import '@testing-library/jest-dom'
 
 import { ComputerUseSettings } from './ComputerUseSettings'
 import { useSettingsStore } from '../stores/settingsStore'
-import { browserHost } from '../lib/desktopHost/browserHost'
 import type { ComputerUseStatus } from '../api/computerUse'
 
 const computerUseApiMock = vi.hoisted(() => ({
@@ -25,7 +24,9 @@ vi.mock('../api/computerUse', () => ({
 const readyStatus: ComputerUseStatus = {
   platform: 'win32',
   supported: true,
-  engine: 'windows-compat' as const,
+  engine: 'agent-desktop' as const,
+  runtime: 'agent-desktop',
+  agentDesktop: { available: true, binaryPath: '/fixture/agent-desktop', reason: null },
   systemVersion: null,
   arch: 'x64',
   cuHelper: {
@@ -176,80 +177,80 @@ describe('ComputerUseSettings', () => {
     expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
   })
 
-  it('saves a custom Python interpreter path and rechecks status', async () => {
-    render(<ComputerUseSettings />)
+  describe('agent-desktop native branch', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      it(`uses the native settings and single consent on ${platform}`, async () => {
+        computerUseApiMock.getStatus.mockResolvedValue({
+          ...readyStatus,
+          platform,
+          permissions: { accessibility: false, screenRecording: false },
+        })
+        computerUseApiMock.getAuthorizedApps.mockResolvedValue({ ...enabledConfig, enabled: false })
+        render(<ComputerUseSettings />)
 
-    const input = await screen.findByLabelText('Python Interpreter Path')
+        expect(await screen.findByRole('heading', { name: 'Computer Control' })).toBeInTheDocument()
+        expect(screen.getByText('The native runtime is ready. No Python environment is required.')).toBeInTheDocument()
+        expect(screen.getByText(platform === 'linux' ? /Background actions use AT-SPI/ : /Background actions work with controls/)).toBeInTheDocument()
+        expect(screen.queryByLabelText('Python Interpreter Path')).not.toBeInTheDocument()
+        expect(screen.queryByText('Install Environment')).not.toBeInTheDocument()
+        expect(screen.queryByText('Reopen authorization card')).not.toBeInTheDocument()
+        expect(computerUseApiMock.getInstalledApps).not.toHaveBeenCalled()
 
-    await act(async () => {
-      fireEvent.change(input, {
-        target: { value: '  C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe  ' },
+        const toggle = screen.getByRole('switch', { name: 'Enabled' })
+        fireEvent.click(toggle)
+        expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+        expect(screen.getByRole('dialog')).toHaveTextContent('all supported applications')
+        expect(screen.getByRole('dialog')).not.toHaveTextContent('Accessibility and Screen Recording')
+        fireEvent.click(screen.getByRole('button', { name: 'Enable Computer Use' }))
+
+        await waitFor(() => expect(toggle).toBeChecked())
+        expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
+          enabled: true,
+          grantFlags: { clipboardRead: true, clipboardWrite: true, systemKeyCombos: true },
+        })
+        expect(computerUseApiMock.openPermissionCard).not.toHaveBeenCalled()
+        expect(computerUseApiMock.runSetup).not.toHaveBeenCalled()
       })
-      fireEvent.click(screen.getByText('Apply'))
-      await Promise.resolve()
-    })
-
-    expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-      pythonPath: 'C:\\Users\\me\\miniconda3\\envs\\cu\\python.exe',
-    })
-    expect(computerUseApiMock.getStatus).toHaveBeenCalledTimes(2)
-  })
-
-  it('selects a custom Python interpreter through the injected desktop host', async () => {
-    const open = vi.fn().mockResolvedValue('/opt/python/bin/python3')
-    window.desktopHost = {
-      ...browserHost,
-      kind: 'electron',
-      isDesktop: true,
-      capabilities: {
-        ...browserHost.capabilities,
-        dialogs: true,
-      },
-      dialogs: {
-        ...browserHost.dialogs,
-        open,
-      },
     }
 
-    render(<ComputerUseSettings />)
+    it('shows a missing bundled binary and offers a recheck without Python installation', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue({
+        ...readyStatus,
+        agentDesktop: { available: false, binaryPath: null, reason: 'binary_missing' },
+      })
+      render(<ComputerUseSettings />)
 
-    await screen.findByLabelText('Python Interpreter Path')
-    await act(async () => {
-      fireEvent.click(screen.getByText('Browse'))
-      await Promise.resolve()
+      expect(await screen.findByText('Computer Use runtime is unavailable')).toBeInTheDocument()
+      expect(screen.getByText(/For a source build, build the bundled agent-desktop binary/)).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: 'Enabled' })).toBeInTheDocument()
+      expect(screen.queryByText('Download Python')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Recheck Status/ }))
+      await waitFor(() => expect(computerUseApiMock.getStatus).toHaveBeenCalledTimes(2))
     })
 
-    expect(open).toHaveBeenCalledWith({
-      multiple: false,
-      directory: false,
-      title: 'Select Python Interpreter',
-    })
-    expect(computerUseApiMock.setAuthorizedApps).toHaveBeenCalledWith({
-      pythonPath: '/opt/python/bin/python3',
-    })
-  })
+    it('surfaces the Linux accessibility failure instead of treating the desktop as ready', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue({
+        ...readyStatus,
+        platform: 'linux',
+        agentDesktop: {
+          available: false,
+          binaryPath: '/fixture/agent-desktop',
+          reason: 'accessibility_bus_unavailable',
+        },
+      })
+      render(<ComputerUseSettings />)
 
-  it('falls back to manual Python path entry when dialogs are unavailable', async () => {
-    window.desktopHost = {
-      ...browserHost,
-      kind: 'browser',
-      isDesktop: false,
-      capabilities: {
-        ...browserHost.capabilities,
-        dialogs: false,
-      },
-    }
-
-    render(<ComputerUseSettings />)
-
-    await screen.findByLabelText('Python Interpreter Path')
-    await act(async () => {
-      fireEvent.click(screen.getByText('Browse'))
-      await Promise.resolve()
+      expect(await screen.findByText(/accessibility_bus_unavailable/)).toBeInTheDocument()
+      expect(screen.queryByText('Ready')).not.toBeInTheDocument()
     })
 
-    expect(screen.getByText('Could not open the file picker. Paste the path manually.')).toBeInTheDocument()
-    expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+    it('fails closed on an old Windows compatibility response', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue({ ...readyStatus, engine: 'windows-compat', runtime: undefined })
+      render(<ComputerUseSettings />)
+
+      expect(await screen.findByText('Computer Use runtime is unavailable')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Python Interpreter Path')).not.toBeInTheDocument()
+    })
   })
 
   describe('native cu-helper branch', () => {

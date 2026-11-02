@@ -1,0 +1,29 @@
+[package]
+name    = "agent-desktop-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+agent-desktop-core.workspace = true
+serde_json.workspace         = true
+thiserror.workspace          = true
+libc.workspace               = true
+async-io                     = "=2.6.0"
+futures-lite                 = "=2.6.1"
+zbus                         = "=5.19.0"
+futures-util                 = { version = "=0.3.33", default-features = false, features = ["alloc"] }
+png                          = { version = "=0.18.1", default-features = false }
+rustix                       = { version = "=1.1.5", default-features = false, features = ["std", "process", "fs"] }
+x11rb                        = { version = "=0.14.0", default-features = false, features = ["composite", "damage", "randr", "res", "shape", "xkb", "xtest"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zbus = { version = "=5.19.0", features = ["p2p"] }
+
+[[bin]]
+name = "agent-desktop-linux-clipboard-owner"
+path = "src/bin/agent-desktop-linux-clipboard-owner.rs"

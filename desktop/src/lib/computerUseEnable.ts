@@ -16,6 +16,6 @@ export const COMPUTER_USE_ENABLE_REQUEST = {
 
 /** The native macOS engine still needs the OS permission card after consent. */
 export function needsComputerUsePermissionCard(status: ComputerUseStatus | null | undefined): boolean {
-  return status?.engine === 'macos-native'
+  return status?.platform === 'darwin' && status.engine === 'macos-native'
     && (status.permissions.accessibility === false || status.permissions.screenRecording === false)
 }

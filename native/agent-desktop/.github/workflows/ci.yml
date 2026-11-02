@@ -1,0 +1,794 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same ref so stale PR builds don't burn minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Deny all permissions at workflow level; each job declares only what it needs.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup component add rustfmt
+      - run: cargo fmt --all -- --check
+      - name: Check E2E scripts without running native automation
+        run: |
+          shellcheck -x -e SC2034,SC2154 tests/e2e/run.sh tests/e2e/electron-live.sh tests/e2e/permission-contract.sh tests/e2e/guard-command.sh tests/e2e-linux/run.sh scripts/*.sh .githooks/pre-commit
+          PYTHONPYCACHEPREFIX=/tmp/agent-desktop-pycache python3 -m py_compile tests/e2e/*.py tests/e2e-linux/runner/*.py tests/e2e-linux/test_*.py tests/e2e-linux/scenarios/*.py
+          PYTHONPYCACHEPREFIX=/tmp/agent-desktop-pycache python3 -m unittest discover -s tests/e2e -p 'test_*.py'
+          AGENT_DESKTOP_E2E_SKIP_LIVE=1 PYTHONPYCACHEPREFIX=/tmp/agent-desktop-pycache python3 -I -m unittest discover -s tests/e2e-linux -p 'test_*.py'
+          python3 scripts/check-linux-findings.py
+          shellcheck -x -e SC2034,SC2154 tests/real-apps/numbers-sheets.sh
+          PYTHONPYCACHEPREFIX=/tmp/agent-desktop-pycache python3 -m unittest discover -s tests/real-apps -p '*_test.py'
+          PYTHONPYCACHEPREFIX=/tmp/agent-desktop-pycache python3 scripts/perf_ab_probe_test.py
+          python3 -I -B scripts/test-linux-live-gate.py
+      - name: Validate GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+
+
+  msrv:
+    name: Rust 1.89 MSRV
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: cargo +1.89.0 check --locked -p agent-desktop-core -p agent-desktop-linux -p agent-desktop --all-targets
+
+  test:
+    name: Test
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup component add clippy
+
+      - name: Verify macOS Bash 3.2 compatibility
+        run: /bin/bash scripts/check-bash3-compat.sh
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/
+          key: ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-${{ hashFiles('crates/**/*.rs', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-
+            ${{ runner.os }}-build-ci-
+
+      - name: Check dependency isolation
+        run: |
+          TREE=$(cargo tree --locked -p agent-desktop-core --edges normal,build)
+          if printf '%s\n' "$TREE" | grep -E 'agent-desktop-(macos|windows|linux)'; then
+            echo "FAIL: core crate depends on platform crates"
+            exit 1
+          fi
+          echo "OK: core crate has no platform dependencies"
+
+      - name: Enforce Rust source rules
+        run: scripts/check-rust-file-size.sh
+
+      - name: Enforce architecture boundaries
+        run: scripts/check-architecture.sh
+
+      - name: Enforce no delivery-plan references in source
+        run: scripts/check-no-phase-references.sh
+
+      - name: Enforce the stale_ref constructors take only ref ids
+        run: scripts/check-stale-ref-constructor-misuse.sh
+
+      - name: Clippy
+        run: cargo clippy --locked -p agent-desktop-core -p agent-desktop-macos -p agent-desktop -p agent-desktop-ffi --all-targets -- -D warnings
+
+      - name: Core and macOS unit tests
+        run: scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-core -p agent-desktop-macos --lib
+
+      - name: Native cursor trail lifecycle
+        run: |
+          clang -fobjc-arc -Werror -framework AppKit -framework QuartzCore -framework CoreGraphics tests/native/cursor_overlay_trail_test.m -o "$RUNNER_TEMP/cursor-trail-test"
+          "$RUNNER_TEMP/cursor-trail-test"
+
+      - name: Native cursor image rendering
+        run: |
+          clang -fobjc-arc -Werror -framework AppKit -framework QuartzCore -framework CoreGraphics tests/native/cursor_overlay_image_test.m -o "$RUNNER_TEMP/cursor-image-test"
+          "$RUNNER_TEMP/cursor-image-test"
+
+      - name: Native AppKit inventory names
+        run: |
+          clang -fobjc-arc -fblocks -Wall -Wextra -Werror -framework AppKit tests/native/appkit_workspace_name_test.m -o "$RUNNER_TEMP/appkit-workspace-name-test"
+          "$RUNNER_TEMP/appkit-workspace-name-test"
+
+      - name: Locator benchmark adapter contract
+        run: scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-core --example locator_benchmark
+
+      - name: Deterministic permission acceptance contract
+        run: bash tests/e2e/permission-contract.sh
+
+      - name: Binary command tests
+        run: scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop
+
+      # The FFI crate ships integration harnesses under crates/ffi/tests/ that
+      # exercise the C-ABI from outside the crate (raw extern "C" decls, enum
+      # fuzzing, out-param zeroing, last-error lifetimes). The workspace --lib
+      # run skips them, so wire them in explicitly so regressions fail PR CI.
+      - name: FFI integration tests
+        run: scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-ffi --tests
+
+      - name: Build stripped release binary
+        run: |
+          cargo build --locked --release -p agent-desktop
+          cargo build --locked --release -p agent-desktop-macos --bin agent-desktop-macos-helper
+
+      - name: Verify shipped binary version flag
+        run: |
+          PACKAGE_ID=$(cargo pkgid -p agent-desktop)
+          EXPECTED_VERSION=${PACKAGE_ID##*@}
+          EXPECTED_OUTPUT="agent-desktop $EXPECTED_VERSION"
+          ACTUAL_OUTPUT=$(target/release/agent-desktop --version)
+          if [ "$ACTUAL_OUTPUT" != "$EXPECTED_OUTPUT" ]; then
+            echo "FAIL: expected '$EXPECTED_OUTPUT', got '$ACTUAL_OUTPUT'"
+            exit 1
+          fi
+
+      - name: Check shipped binary size
+        run: |
+          SIZE=$(stat -f%z target/release/agent-desktop)
+          HELPER_SIZE=$(stat -f%z target/release/agent-desktop-macos-helper)
+          LIMIT=$((15 * 1024 * 1024))
+          echo "Binary size: $(du -sh target/release/agent-desktop | cut -f1)"
+          echo "Helper size: $(du -sh target/release/agent-desktop-macos-helper | cut -f1)"
+          if [ "$SIZE" -gt "$LIMIT" ] || [ "$HELPER_SIZE" -gt "$LIMIT" ]; then
+            echo "FAIL: shipped executable exceeds 15MB limit (binary=${SIZE}, helper=${HELPER_SIZE} bytes)"
+            exit 1
+          fi
+          echo "OK: shipped executables are within the 15MB per-file limit"
+
+      - name: FFI cdylib build (release-ffi profile)
+        run: cargo build --locked --profile release-ffi -p agent-desktop-ffi
+
+      - name: FFI dylib-adjacent helper discovery smoke
+        run: |
+          scripts/ci-ffi-helper-discovery-smoke.sh
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: jev-desktop tests
+        run: |
+          node scripts/jev/run.test.mjs
+          node scripts/jev/act.test.mjs
+          node scripts/jev/run.integration.test.mjs
+          node scripts/jev/evidence.test.mjs
+
+      - name: NPM package contents
+        run: |
+          node --test tests/npm/*.test.js tests/release/*.test.js
+          node scripts/check-npm-package.js
+
+      - name: NPM wrapper smoke
+        run: scripts/ci-npm-wrapper-smoke.sh
+
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup component add clippy
+
+      - name: Install AT-SPI bus and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends at-spi2-core dbus-x11 xvfb
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/
+          key: ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-${{ hashFiles('crates/**/*.rs', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-
+            ${{ runner.os }}-build-ci-
+
+      - name: Check dependency isolation
+        run: |
+          PATTERN='agent-desktop-(macos|windows|linux)|\bzbus\b|\bzvariant\b|\basync-io\b|\btokio\b'
+          TREE=$(cargo tree --locked -p agent-desktop-core --edges normal,build,dev)
+          if printf '%s\n' "$TREE" | grep -E "$PATTERN"; then
+            echo "FAIL: core crate pulls platform or async-bus crates"
+            exit 1
+          fi
+          echo "OK: core crate has no platform or async-bus dependencies on normal, build, or dev edges"
+
+      - name: Clippy
+        run: cargo clippy --locked -p agent-desktop-core -p agent-desktop-linux -p agent-desktop -p agent-desktop-ffi --all-targets -- -D warnings
+
+      - name: Core, Linux, binary and FFI tests on a real session bus
+        run: dbus-run-session -- xvfb-run -a scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-core -p agent-desktop-linux -p agent-desktop -p agent-desktop-ffi
+
+      - name: Build stripped release binary
+        run: cargo build --locked --release -p agent-desktop
+
+      - name: Check shipped binary size
+        run: |
+          SIZE=$(stat -c%s target/release/agent-desktop)
+          LIMIT=$((15 * 1024 * 1024))
+          echo "Binary size: $(du -sh target/release/agent-desktop | cut -f1)"
+          if [ "$SIZE" -gt "$LIMIT" ]; then
+            echo "FAIL: shipped executable exceeds 15MB limit (binary=${SIZE} bytes)"
+            exit 1
+          fi
+          echo "OK: shipped executable is within the 15MB per-file limit"
+
+      - name: Build Linux clipboard owner helper
+        run: cargo build --locked --release -p agent-desktop-linux --bins
+
+      - name: glibc floor gate self-test
+        run: scripts/check-elf-glibc-floor-selftest.sh
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: NPM package contents
+        run: |
+          node --test tests/npm/*.test.js
+          scripts/check-linux-archive-contents.sh npm linux-x64
+
+      - name: Embedded visual viewer tests
+        run: node --test src/visual_debug/viewer_filter.test.js
+
+      - name: NPM wrapper smoke
+        run: scripts/ci-npm-wrapper-smoke.sh
+
+      - name: Status reports accessibility granted on a live bus
+        run: |
+          cat > "$RUNNER_TEMP/status-granted.sh" <<'SCRIPT'
+          set -eu
+          JSON=$(target/release/agent-desktop status)
+          printf '%s\n' "$JSON"
+          printf '%s' "$JSON" | python3 -c '
+          import json, sys
+          doc = json.load(sys.stdin)
+          assert doc.get("ok") is True, "status did not succeed"
+          state = doc["data"]["permissions"]["accessibility"]["state"]
+          assert state == "granted", "accessibility state is " + state
+          '
+          SCRIPT
+          dbus-run-session -- xvfb-run -a bash "$RUNNER_TEMP/status-granted.sh"
+
+      - name: Status and permissions report the missing bus as denied accessibility
+        run: |
+          XDG_RUNTIME_DIR=$(mktemp -d)
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent XDG_RUNTIME_DIR
+          for command in status permissions; do
+            JSON=$(target/release/agent-desktop "$command")
+            printf '%s\n' "$JSON"
+            printf '%s' "$JSON" | python3 -c '
+          import json, sys
+          doc = json.load(sys.stdin)
+          assert doc.get("ok") is True, "the diagnostic failed instead of reporting the bus"
+          data = doc["data"]
+          access = (data.get("permissions") or data)["accessibility"]
+          assert access["state"] == "denied", "accessibility state is " + access["state"]
+          assert "session bus" in access["suggestion"], "suggestion does not name the session bus"
+          '
+          done
+          RC=0
+          JSON=$(target/release/agent-desktop click @s8f3k2p9:e1) || RC=$?
+          test "$RC" -eq 1
+          printf '%s\n' "$JSON"
+          printf '%s' "$JSON" | python3 -c '
+          import json, sys
+          doc = json.load(sys.stdin)
+          assert doc.get("ok") is False, "click unexpectedly succeeded without a bus"
+          assert doc["error"]["code"] == "PERM_DENIED", "unexpected code " + doc["error"]["code"]
+          assert "session bus" in doc["error"]["suggestion"], "error does not carry the recovery step"
+          '
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      lib_tests: ${{ steps.unit_tests.outputs.lib_tests }}
+      lib_suites: ${{ steps.unit_tests.outputs.lib_suites }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      # Core resolves its home directory from HOME, then USERPROFILE (crates/core/src/refs/mod.rs), so the lane points both at a throwaway directory.
+      - name: Isolate HOME for the whole lane
+        shell: pwsh
+        run: |
+          $cargoHome  = if ($env:CARGO_HOME)  { $env:CARGO_HOME }  else { Join-Path $env:USERPROFILE '.cargo' }
+          $rustupHome = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
+          $testHome = Join-Path $env:RUNNER_TEMP ("agent-desktop-test-home-" + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $testHome | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "ORIGINAL_USERPROFILE=$env:USERPROFILE"
+          Add-Content -Path $env:GITHUB_ENV -Value "CARGO_HOME=$cargoHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTUP_HOME=$rustupHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "HOME=$testHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "USERPROFILE=$testHome"
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry/index/
+            ${{ env.CARGO_HOME }}/registry/cache/
+            ${{ env.CARGO_HOME }}/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/
+          key: ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-${{ hashFiles('crates/**/*.rs', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-build-ci-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}-
+            ${{ runner.os }}-build-ci-
+
+      - name: Check dependency isolation
+        shell: pwsh
+        run: |
+          $pattern = 'agent-desktop-(macos|windows|linux)|\bwindows-sys\b|\bwindows\b|\bwinapi\b'
+          foreach ($target in @('', 'x86_64-pc-windows-msvc')) {
+            $arguments = @('tree', '--locked', '-p', 'agent-desktop-core', '--edges', 'normal,build,dev')
+            if ($target) { $arguments += @('--target', $target) }
+            $tree = cargo @arguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $violations = @($tree | Select-String -Pattern $pattern)
+            if ($violations.Count -gt 0) {
+              $violations | ForEach-Object { Write-Host $_.Line }
+              Write-Host "FAIL: core crate pulls platform or Win32 binding crates (target: '$target')"
+              exit 1
+            }
+          }
+          Write-Host 'OK: core crate has no platform dependencies on normal, build, or dev edges'
+
+      - name: Check core source for Win32 leakage
+        shell: pwsh
+        run: |
+          $sources = Get-ChildItem -Path crates/core/src -Recurse -Filter *.rs
+          $forbidden = @($sources | Select-String -Pattern 'extern "system|std::os::windows|\bwinapi\b|\bwindows_sys\b')
+          if ($forbidden.Count -gt 0) {
+            $forbidden | ForEach-Object { Write-Host "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            Write-Host 'FAIL: core source declares a raw Win32 surface'
+            exit 1
+          }
+          $allowed = (Resolve-Path 'crates/core/src/storage/private_file.rs').Path
+          $cfgMatches = @($sources | Select-String -Pattern 'cfg\(windows\)|cfg\(target_os = "windows"\)' -AllMatches)
+          $outside = @($cfgMatches | Where-Object { $_.Path -ne $allowed })
+          if ($outside.Count -gt 0) {
+            $outside | ForEach-Object { Write-Host "$($_.Path):$($_.LineNumber): $($_.Line.Trim())" }
+            Write-Host 'FAIL: windows cfg outside the private_file.rs allowlist'
+            exit 1
+          }
+          $shimCount = [int]($cfgMatches | ForEach-Object { $_.Matches.Count } | Measure-Object -Sum).Sum
+          if ($shimCount -ne 2) {
+            Write-Host "FAIL: expected exactly 2 windows cfg shims in private_file.rs, found $shimCount"
+            exit 1
+          }
+          Write-Host 'OK: core source keeps windows conditionals to the 2 allowlisted shims'
+
+      - name: Check Win32_UI_Shell exclusion
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-win32-ui-shell-exclusion.ps1
+
+      - name: Clippy
+        run: cargo clippy --locked -p agent-desktop-core -p agent-desktop-windows -p agent-desktop -p agent-desktop-ffi --all-targets -- -D warnings
+
+      - name: Core and Windows unit tests
+        id: unit_tests
+        env:
+          AGENT_DESKTOP_LIVE_WPF: "1"
+        shell: pwsh
+        run: |
+          $output = cmd /c "cargo test --locked -p agent-desktop-core -p agent-desktop-windows --lib 2>&1"
+          $output | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passed = 0
+          $suites = 0
+          foreach ($line in @($output)) {
+            if ("$line" -match '^test result: ok\.\s+(\d+) passed;.*?(\d+) filtered out' -and [int]$Matches[2] -eq 0) {
+              $passed += [int]$Matches[1]
+              $suites += 1
+            }
+          }
+          Write-Host "Total lib tests passed: $passed across $suites whole-suite runs"
+          if ($suites -eq 0 -or $passed -eq 0) {
+            Write-Error "Parsed $passed passing tests across $suites suites; the lib-test output format changed and this counter measured nothing."
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "lib_tests=$passed"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "lib_suites=$suites"
+
+      - name: Windows example tests
+        run: cargo test --locked -p agent-desktop-windows --examples
+
+      - name: Binary command tests
+        run: cargo test --locked -p agent-desktop
+
+      - name: FFI integration tests
+        run: cargo test --locked -p agent-desktop-ffi --tests
+
+      - name: Build stripped release binary
+        run: cargo build --locked --release -p agent-desktop
+
+      - name: Windows E2E contract gate (scan and self-test halves)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-e2e-windows-contract.ps1 -SelfTest
+
+      - name: Seeded-failure run asserts a non-zero exit code
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\e2e-windows\Run-E2E.ps1 -SelfTestSeedFailure
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'FAIL: Run-E2E.ps1 -SelfTestSeedFailure exited 0; a failing leg must reach a non-zero exit code'
+            exit 1
+          }
+          Write-Host "OK: Run-E2E.ps1 -SelfTestSeedFailure exited $LASTEXITCODE"
+          exit 0
+
+      - name: Capture redaction gate
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-capture-redaction.ps1
+
+      - name: run-windows-e2e-ci.ps1 refusal-guard self-test
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\fixtures\run-windows-e2e-ci-refusal-selftest.ps1
+
+      - name: E2E fixture compile smoke
+        shell: powershell
+        run: |
+          $smokeOut = Join-Path $env:RUNNER_TEMP 'agent-desktop-fixture-smoke'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\fixture-app-windows\build.ps1 -OutputDir $smokeOut
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "FAIL: tests\fixture-app-windows\build.ps1 exited $LASTEXITCODE"
+            exit 1
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $smokeOut 'AgentDeskFixture.exe'))) {
+            Write-Host 'FAIL: build.ps1 reported success but AgentDeskFixture.exe is missing'
+            exit 1
+          }
+          Write-Host 'OK: the E2E fixture compiles under the pinned in-box csc.exe'
+
+      - name: Check shipped binary size
+        shell: pwsh
+        run: |
+          $binary = Get-Item target/release/agent-desktop.exe
+          $limit = 15MB
+          Write-Host "Binary size: $($binary.Length) bytes"
+          if ($binary.Length -gt $limit) {
+            Write-Host "FAIL: shipped executable exceeds 15MB limit (binary=$($binary.Length) bytes)"
+            exit 1
+          }
+          Write-Host 'OK: shipped executable is within the 15MB per-file limit'
+
+      - name: Guard profile isolation
+        shell: pwsh
+        run: |
+          if (-not $env:HOME -or -not $env:HOME.StartsWith($env:RUNNER_TEMP, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "FAIL: HOME is not under RUNNER_TEMP: $env:HOME"
+            exit 1
+          }
+          if (-not $env:USERPROFILE -or -not $env:USERPROFILE.StartsWith($env:RUNNER_TEMP, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "FAIL: USERPROFILE is not under RUNNER_TEMP: $env:USERPROFILE"
+            exit 1
+          }
+          $leak = Join-Path $env:ORIGINAL_USERPROFILE '.agent-desktop'
+          if (Test-Path $leak) {
+            Write-Host "FAIL: a test escaped the isolated HOME and wrote $leak"
+            exit 1
+          }
+          Write-Host 'OK: private artifacts stayed under RUNNER_TEMP'
+
+  test-windows-arm:
+    name: Test (Windows ARM64)
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      lib_tests: ${{ steps.unit_tests.outputs.lib_tests }}
+      lib_suites: ${{ steps.unit_tests.outputs.lib_suites }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Isolate HOME for the whole lane
+        shell: pwsh
+        run: |
+          $cargoHome  = if ($env:CARGO_HOME)  { $env:CARGO_HOME }  else { Join-Path $env:USERPROFILE '.cargo' }
+          $rustupHome = if ($env:RUSTUP_HOME) { $env:RUSTUP_HOME } else { Join-Path $env:USERPROFILE '.rustup' }
+          $testHome = Join-Path $env:RUNNER_TEMP ("agent-desktop-test-home-" + [guid]::NewGuid())
+          New-Item -ItemType Directory -Path $testHome | Out-Null
+          Add-Content -Path $env:GITHUB_ENV -Value "ORIGINAL_USERPROFILE=$env:USERPROFILE"
+          Add-Content -Path $env:GITHUB_ENV -Value "CARGO_HOME=$cargoHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "RUSTUP_HOME=$rustupHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "HOME=$testHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "USERPROFILE=$testHome"
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry/index/
+            ${{ env.CARGO_HOME }}/registry/cache/
+            ${{ env.CARGO_HOME }}/git/db/
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Clippy
+        run: cargo clippy --locked -p agent-desktop-core -p agent-desktop-windows -p agent-desktop -p agent-desktop-ffi --all-targets -- -D warnings
+
+      - name: Core and Windows unit tests
+        id: unit_tests
+        env:
+          AGENT_DESKTOP_LIVE_WPF: "1"
+        shell: pwsh
+        run: |
+          $output = cmd /c "cargo test --locked -p agent-desktop-core -p agent-desktop-windows --lib 2>&1"
+          $output | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $passed = 0
+          $suites = 0
+          foreach ($line in @($output)) {
+            if ("$line" -match '^test result: ok\.\s+(\d+) passed;.*?(\d+) filtered out' -and [int]$Matches[2] -eq 0) {
+              $passed += [int]$Matches[1]
+              $suites += 1
+            }
+          }
+          Write-Host "Total lib tests passed: $passed across $suites whole-suite runs"
+          if ($suites -eq 0 -or $passed -eq 0) {
+            Write-Error "Parsed $passed passing tests across $suites suites; the lib-test output format changed and this counter measured nothing."
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "lib_tests=$passed"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "lib_suites=$suites"
+
+      - name: Build release binary
+        run: cargo build --locked --release -p agent-desktop
+
+      - name: Install the packed npm package and run it through the shim
+        shell: pwsh
+        run: |
+          $env:AGENT_DESKTOP_BINARY_PATH = (Resolve-Path 'target/release/agent-desktop.exe').Path
+          Push-Location npm
+          npm pack
+          $tarball = Get-ChildItem -Filter 'agent-desktop-*.tgz' | Select-Object -First 1
+          if (-not $tarball) { Write-Host 'FAIL: npm pack produced no tarball'; exit 1 }
+          Pop-Location
+          $prefix = Join-Path $env:RUNNER_TEMP 'npm-arm64-prefix'
+          npm install -g $tarball.FullName --prefix $prefix
+          if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: npm install exited $LASTEXITCODE"; exit $LASTEXITCODE }
+          & (Join-Path $prefix 'agent-desktop.cmd') version
+          if ($LASTEXITCODE -ne 0) { Write-Host "FAIL: agent-desktop version through the npm shim exited $LASTEXITCODE"; exit $LASTEXITCODE }
+          Write-Host 'OK: the win32-arm64 table entry resolves and runs through the npm shim'
+
+      - name: Guard profile isolation
+        shell: pwsh
+        run: |
+          if (-not $env:HOME -or -not $env:HOME.StartsWith($env:RUNNER_TEMP, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "FAIL: HOME is not under RUNNER_TEMP: $env:HOME"
+            exit 1
+          }
+          if (-not $env:USERPROFILE -or -not $env:USERPROFILE.StartsWith($env:RUNNER_TEMP, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "FAIL: USERPROFILE is not under RUNNER_TEMP: $env:USERPROFILE"
+            exit 1
+          }
+          $leak = Join-Path $env:ORIGINAL_USERPROFILE '.agent-desktop'
+          if (Test-Path $leak) {
+            Write-Host "FAIL: a test escaped the isolated HOME and wrote $leak"
+            exit 1
+          }
+          Write-Host 'OK: private artifacts stayed under RUNNER_TEMP'
+
+  windows-lib-test-parity:
+    name: Windows lib-test parity (x64 vs ARM64)
+    runs-on: ubuntu-latest
+    needs: [test-windows, test-windows-arm]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Compare exported lib test counts
+        run: |
+          X64="${{ needs.test-windows.outputs.lib_tests }}"
+          ARM="${{ needs.test-windows-arm.outputs.lib_tests }}"
+          X64_SUITES="${{ needs.test-windows.outputs.lib_suites }}"
+          ARM_SUITES="${{ needs.test-windows-arm.outputs.lib_suites }}"
+          echo "x64 lane lib tests: ${X64}; ARM64 lane lib tests: ${ARM}"
+          if [ -z "$X64" ] || [ -z "$ARM" ]; then
+            echo "FAIL: a lane did not export its lib test count (x64='${X64}', arm64='${ARM}')"
+            exit 1
+          fi
+          if [ "$X64" = "0" ] || [ "$ARM" = "0" ]; then
+            echo "FAIL: a lane exported zero lib tests (x64='${X64}', arm64='${ARM}') - the count extraction stopped matching cargo's summary line"
+            exit 1
+          fi
+          if [ "$X64_SUITES" != "$ARM_SUITES" ]; then
+            echo "FAIL: the lanes summed different numbers of whole-suite runs (x64='${X64_SUITES}', arm64='${ARM_SUITES}') - one lane's summary line was not parsed, so the totals are not comparable"
+            exit 1
+          fi
+          if [ "$X64" != "$ARM" ]; then
+            echo "FAIL: ARM64 executed ${ARM} lib tests against the x64 lane's ${X64}"
+            exit 1
+          fi
+          echo "OK: both Windows lanes executed ${X64} lib tests across ${X64_SUITES} whole-suite runs"
+
+  # FFI gates, one matrix leg per release target:
+  #   - every leg asserts that [profile.release-ffi] keeps panic="unwind" (a
+  #     flip to "abort" defeats every trap_panic boundary in the dylib) and
+  #     loads the feature-gated cdylib panic entrypoint to prove a panic at an
+  #     exported boundary returns ErrInternal instead of aborting the host
+  #   - aarch64-apple-darwin also verifies the committed C header against what
+  #     the pinned cbindgen 0.29.4 generates, and runs the Python smoke harness
+  #     against a stub-adapter cdylib
+  #   - x86_64-unknown-linux-gnu also runs the stub-adapter passthrough tests:
+  #     each covered entrypoint must return PLATFORM_NOT_SUPPORTED, or the
+  #     documented ErrPermDenied for ad_check_permissions
+  ffi-panic-guard:
+    name: FFI Panic Guard (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.target == 'aarch64-apple-darwin' && 30 || 20 }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show
+          rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml', 'src/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install pinned cbindgen 0.29.4
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: cargo install cbindgen --version 0.29.4 --locked
+
+      - name: Verify header matches source (cbindgen --verify)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: >
+          cbindgen crates/ffi
+          --config crates/ffi/cbindgen.toml
+          --output crates/ffi/include/agent_desktop.h
+          --verify
+
+      - name: Build FFI dylib (stub adapter)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: >
+          cargo build --locked --profile release-ffi
+          -p agent-desktop-ffi --features stub-adapter
+
+      - name: Locate dylib
+        id: dylib
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          DYLIB=$(find target/release-ffi -name 'libagent_desktop_ffi.*' \
+                    \( -name '*.dylib' -o -name '*.so' -o -name '*.dll' \) | head -1)
+          if [ -z "$DYLIB" ]; then
+            echo "FAIL: dylib not found under target/release-ffi"
+            exit 1
+          fi
+          echo "path=$DYLIB" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: matrix.target == 'aarch64-apple-darwin'
+        with:
+          python-version: '3.12'
+
+      - name: Run FFI smoke harness
+        if: matrix.target == 'aarch64-apple-darwin'
+        env:
+          AD_EXPECT_STUB: "1"
+        run: >
+          python3 tests/ffi-python/smoke.py
+          "${{ steps.dylib.outputs.path }}"
+          crates/ffi/include/agent_desktop.h
+
+      - name: Run stub-adapter passthrough tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: >
+          scripts/cargo-test-isolated-home.sh test --locked -p agent-desktop-ffi
+          --features stub-adapter --test c_abi_passthrough
+
+      - name: Assert release-ffi profile keeps panic=unwind
+        shell: bash
+        run: |
+          if ! grep -A5 '\[profile\.release-ffi\]' Cargo.toml | grep -q 'panic.*=.*"unwind"'; then
+            echo "FAIL: [profile.release-ffi] must set panic=\"unwind\" — a flip to"
+            echo "      panic=\"abort\" defeats every trap_panic boundary in the dylib."
+            exit 1
+          fi
+          echo "OK: release-ffi profile retains panic=\"unwind\""
+
+      - name: Prove the shipped cdylib catches an exported-boundary panic
+        shell: bash
+        run: bash crates/ffi/tests/run_cdylib_panic_probe.sh ${{ matrix.target }}

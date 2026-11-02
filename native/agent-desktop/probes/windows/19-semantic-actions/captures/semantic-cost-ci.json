@@ -1,0 +1,46 @@
+{
+    "Invoke":  {
+                   "max_ms":  225.2671,
+                   "median_ms":  213.3373,
+                   "min_ms":  209.04829999999998,
+                   "n":  7,
+                   "warmup_discarded":  true
+               },
+    "Scroll":  {
+                   "max_ms":  231.567,
+                   "median_ms":  220.6852,
+                   "min_ms":  218.36610000000002,
+                   "n":  7,
+                   "warmup_discarded":  true
+               },
+    "Select":  {
+                   "max_ms":  263.3044,
+                   "median_ms":  253.7723,
+                   "min_ms":  247.42690000000002,
+                   "n":  7,
+                   "warmup_discarded":  true
+               },
+    "SetValue":  {
+                     "max_ms":  220.20690000000002,
+                     "median_ms":  210.01819999999998,
+                     "min_ms":  203.2137,
+                     "n":  7,
+                     "warmup_discarded":  true
+                 },
+    "Toggle":  {
+                   "max_ms":  217.32489999999999,
+                   "median_ms":  209.1746,
+                   "min_ms":  202.2327,
+                   "n":  7,
+                   "warmup_discarded":  true
+               },
+    "click_chain_worst_case":  {
+                                   "max_ms":  216.9357,
+                                   "median_ms":  210.8939,
+                                   "min_ms":  207.42340000000002,
+                                   "n":  7,
+                                   "warmup_discarded":  true
+                               },
+    "methodology":  "min-of-seven discard warm-up (A15-13)",
+    "stack":  "uia3-com-product-CUIAutomation8"
+}

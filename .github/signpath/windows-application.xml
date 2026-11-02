@@ -6,5 +6,8 @@
     <pe-file path="claude-sidecar-*.exe">
       <authenticode-sign/>
     </pe-file>
+    <pe-file path="agent-desktop.exe">
+      <authenticode-sign/>
+    </pe-file>
   </zip-file>
 </artifact-configuration>

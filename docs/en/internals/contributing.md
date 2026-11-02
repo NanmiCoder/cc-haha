@@ -378,6 +378,8 @@ Windows signing goes through SignPath and is off until approval lands: tag pushe
 
 Before turning signing on, update the installer artifact configuration in SignPath to match `.github/signpath/windows-installer.xml` (`Claude-Code-Haha-*-Windows-*-Setup.exe`), then trial-sign a draft. As long as unsigned Windows releases remain possible, never add `publisherName` or `verifyUpdateCodeSignature` to `desktop/package.json`: clients built with either would reject every later unsigned update, with no way to recover in place.
 
+The application artifact configuration must also match `.github/signpath/windows-application.xml`: it includes the source-built `agent-desktop.exe` alongside the main application and sidecar. When signing is enabled, the workflow submits, restores, and verifies all three executables before building the installer. After adding the native runtime, synchronize the SignPath configuration and trial-sign a draft first; signing the installer does not sign its embedded runtime executables.
+
 ### Pre-release checks
 
 ```bash

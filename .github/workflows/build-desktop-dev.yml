@@ -118,6 +118,16 @@ jobs:
           SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
         run: bun run prepare:cloudflared
 
+      - name: Setup native Computer Use Rust toolchain
+        if: matrix.smoke_platform != 'macos'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target_triple }}
+
+      - name: Prepare native Computer Use dependencies
+        if: matrix.smoke_platform != 'macos'
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml --target ${{ matrix.target_triple }}
+
       - name: Build sidecars
         working-directory: desktop
         env:

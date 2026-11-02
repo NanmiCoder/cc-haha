@@ -65,6 +65,17 @@ function writeFile(rootDir: string, relativePath: string, content: string | Uint
     for (const licenseName of ['COPYING', 'LICENSE-MIT', 'UNLICENSE']) {
       writeFileSync(join(licensesDir, licenseName), content)
     }
+    if (!fileName.includes('apple-darwin')) {
+      const nativeName = fileName.endsWith('.exe') ? 'agent-desktop.exe' : 'agent-desktop'
+      writeFileSync(join(dirname(fullPath), nativeName), content)
+      writeFileSync(join(dirname(fullPath), 'agent-desktop-manifest.json'), '{}')
+      if (fileName.includes('linux')) writeFileSync(join(dirname(fullPath), 'agent-desktop-linux-clipboard-owner'), content)
+      const nativeLicenses = join(dirname(fullPath), 'agent-desktop-licenses')
+      mkdirSync(nativeLicenses, { recursive: true })
+      for (const name of ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES', 'UPSTREAM.json', 'PATCHES.md']) {
+        writeFileSync(join(nativeLicenses, name), content)
+      }
+    }
     if (fileName.includes('apple-darwin')) {
       const helperRoot = join(dirname(fullPath), 'cc-haha-computer-use.app', 'Contents')
       mkdirSync(join(helperRoot, 'MacOS'), { recursive: true })
@@ -842,6 +853,13 @@ describe('packaged artifact inspection', () => {
     expect(report.passed).toBe(true)
     expect(report.notes.join('\n')).toContain('directory-only development package')
     expect(report.notes.join('\n')).toContain('Windows app-update.yml was not required')
+    const nativeRoot = join(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/src-tauri/binaries')
+    rmSync(join(nativeRoot, 'agent-desktop.exe'))
+    rmSync(join(nativeRoot, 'agent-desktop-licenses/LICENSE'))
+    const incomplete = await inspectPackagedArtifacts(rootDir, { platform: 'windows', packageKind: 'dir' })
+    expect(incomplete.passed).toBe(false)
+    expect(incomplete.missingChecks.map(check => check.label)).toContain('Windows native Computer Use binary')
+    expect(incomplete.missingChecks.map(check => check.label)).toContain('Windows native Computer Use license (LICENSE)')
   })
 
   test.each(['missing-icon', 'wrong-icon', 'wrong-executable'] as const)('rejects Windows branding with %s', async failure => {
@@ -1012,6 +1030,13 @@ describe('packaged artifact inspection', () => {
     expect(report.passed).toBe(true)
     expect(report.notes.join('\n')).toContain('directory-only development package')
     expect(report.notes.join('\n')).toContain('Linux app-update.yml was not required')
+    const nativeRoot = join(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/src-tauri/binaries')
+    rmSync(join(nativeRoot, 'agent-desktop-linux-clipboard-owner'))
+    rmSync(join(nativeRoot, 'agent-desktop-manifest.json'))
+    const incomplete = await inspectPackagedArtifacts(rootDir, { platform: 'linux', packageKind: 'dir' })
+    expect(incomplete.passed).toBe(false)
+    expect(incomplete.missingChecks.map(check => check.label)).toContain('Linux native Computer Use clipboard owner')
+    expect(incomplete.missingChecks.map(check => check.label)).toContain('Linux native Computer Use manifest')
   })
 
   test('fails Linux inspection when no packaged artifact is present', async () => {
