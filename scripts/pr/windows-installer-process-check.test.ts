@@ -160,10 +160,15 @@ SectionEnd
       ...baseEnv,
       PSModulePath: `${foreignModules};${systemRoot}\\system32\\WindowsPowerShell\\v1.0\\Modules`,
     }
+    // Both fixtures load Microsoft.PowerShell.Security by name, the module the
+    // availability check trips on. Only the inherited one also runs the full
+    // check: after the reset it would scan every module under Program Files with
+    // the sandbox's cold analysis cache, which takes minutes on CI runners.
+    const backtick = '`'
     try {
       for (const fixture of [
-        { name: 'inherited-module-path', reset: false, powershell: 1 },
-        { name: 'reset-module-path', reset: true, powershell: 0 },
+        { name: 'inherited-module-path', reset: false, expected: ['security=1', 'powershell=1'] },
+        { name: 'reset-module-path', reset: true, expected: ['security=0'] },
       ]) {
         const executable = path.join(root, `${fixture.name}.exe`)
         const journal = path.join(root, `${fixture.name}.log`)
@@ -188,9 +193,12 @@ Var journalHandle
 Section
   StrCpy $PowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   ${fixture.reset ? '!insertmacro CcHahaUseDefaultPowerShellModulePath' : ''}
-  !insertmacro IS_POWERSHELL_AVAILABLE
   FileOpen $journalHandle "${journal}" w
-  FileWrite $journalHandle "powershell=$IsPowerShellAvailable$\n"
+  nsExec::Exec ${backtick}"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -Command "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; exit 0"${backtick}
+  Pop $0
+  FileWrite $journalHandle "security=$0$\n"
+  ${fixture.reset ? '' : '!insertmacro IS_POWERSHELL_AVAILABLE'}
+  ${fixture.reset ? '' : 'FileWrite $journalHandle "powershell=$IsPowerShellAvailable$\\n"'}
   FileClose $journalHandle
 SectionEnd
 `
@@ -204,7 +212,8 @@ SectionEnd
         expect(run.status, fixture.name).toBe(0)
         // Without the reset the foreign module breaks the availability check,
         // proving the fixture reproduces the failure the reset fixes.
-        expect(readFileSync(journal, 'utf8'), fixture.name).toContain(`powershell=${fixture.powershell}`)
+        const recorded = readFileSync(journal, 'utf8')
+        for (const line of fixture.expected) expect(recorded, fixture.name).toContain(line)
       }
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -212,7 +221,8 @@ SectionEnd
   }, 90_000)
 
   test('uses a directory-boundary-aware process helper', () => {
-    const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8')
+    // A Windows checkout has CRLF line endings.
+    const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
     const processHelper = readFileSync(
       'desktop/build/check-install-processes.ps1',
       'utf8',
