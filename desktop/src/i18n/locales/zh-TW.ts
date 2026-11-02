@@ -4094,6 +4094,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── 應用外殼 ──────────────────────────────────────
   'app.serverFailed': '本地服務啟動失敗',
   'app.serverFailedHint': '反饋這個問題時，請把這塊診斷資訊截圖一起發到 issue 裡。',
+  'app.startupCrashHint': '執行時程序在啟動時崩潰了（Windows 結束代碼 {code}）。可能是被安全軟體攔截，或執行時檔案損壞、不完整。請先把應用程式的安裝目錄加入安全軟體的信任清單；仍然不行，再到 GitHub Releases 下載完整安裝包覆蓋安裝，會話和設定不會遺失。',
   'app.startupError': '啟動錯誤',
   'app.serverLogs': '服務日誌',
   'app.copyDiagnostics': '複製診斷資訊',

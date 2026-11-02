@@ -4092,6 +4092,7 @@ export const zh: Record<TranslationKey, string> = {
   // ─── 应用外壳 ──────────────────────────────────────
   'app.serverFailed': '本地服务启动失败',
   'app.serverFailedHint': '反馈这个问题时，请把这块诊断信息截图一起发到 issue 里。',
+  'app.startupCrashHint': '运行时进程在启动时崩溃了（Windows 退出码 {code}）。可能是被安全软件拦截，或运行时文件损坏、不完整。请先把应用的安装目录加入安全软件的信任列表；仍然不行，再到 GitHub Releases 下载完整安装包覆盖安装，会话和设置不会丢失。',
   'app.startupError': '启动错误',
   'app.serverLogs': '服务日志',
   'app.copyDiagnostics': '复制诊断信息',

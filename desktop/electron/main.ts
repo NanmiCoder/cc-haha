@@ -785,7 +785,23 @@ function registerIpcHandlers() {
     mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.updateDownloadEvent, event)
   }))
   registerHandler(ELECTRON_IPC_CHANNELS.updateInstall, () => getUpdaterService().stageDownloadedUpdate())
-  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => { await publicAccessManager?.stop(); getServerRuntime().stopAll() })
+  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => {
+    await publicAccessManager?.stop()
+    // stopAll() hands the runtime's children off without tracking them, so the
+    // before-quit stopAllAndWait() finds nothing left to wait for and the app
+    // can quit, and quitAndInstall start the installer, while the sidecar and
+    // its CLI children are still shutting down. Wait here, before the renderer
+    // asks for the relaunch. If they do not exit, fail the install so the
+    // renderer keeps the update retryable and brings the runtime back.
+    try {
+      await getServerRuntime().stopAllAndWait()
+    } catch (error) {
+      throw new Error(
+        'The local runtime is still shutting down, so the update was not installed. Wait a moment and try again. ' +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      )
+    }
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.updateCancelInstall, () => getUpdaterService().cancelInstall())
   registerHandler(ELECTRON_IPC_CHANNELS.updateRelaunch, () => {
     if (getUpdaterService().hasStagedUpdate()) {
