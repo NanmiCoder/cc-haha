@@ -713,6 +713,7 @@ describe('ProviderService', () => {
         expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toEqual({
           'gpt-6-sol': 258_400,
           'gpt-6.1-sol': 258_400,
+          'gpt-6.1-terra': 475_000,
           'gpt-6-luna': 258_400,
           'gpt-5.6-sol': 353_400,
           'gpt-5.6-terra': 353_400,

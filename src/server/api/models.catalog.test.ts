@@ -10,6 +10,8 @@ import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import { clearDesktopClaudeModelCatalogCache } from '../services/claudeModelCatalog.js'
 import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
+import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
+import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
 import { clearGrokModelCatalogCache } from '../../services/grokAuth/modelCatalog.js'
 import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { listSessionModels } from '../services/sessionModelCatalog.js'
@@ -80,11 +82,16 @@ describe('official model catalog API refresh', () => {
       const originalActive = (await providers.listProviders()).activeId
       const originalMapping = await providers.getOfficialProviderModels(fixture.provider)
       let generation = 1
+      let catalogRequests = 0
       fetchSpy.mockImplementation((async (input, init) => {
+        expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:7890')
+        if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+          return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+        }
+        catalogRequests += 1
         const url = new URL(String(input))
         expect(url.origin + url.pathname).toBe(fixture.url)
         expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer fake-${fixture.provider.split('-')[0]}`)
-        expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:7890')
         return Response.json(fixture.body(`${fixture.model}-${generation}`))
       }) as typeof fetch)
 
@@ -92,12 +99,12 @@ describe('official model catalog API refresh', () => {
       expect((await handleModelsApi(...request(`${path}&refresh=true`))).status).toBe(200)
       const cached = await (await handleModelsApi(...request(path))).json()
       expect(cached.models.map((model: { id: string }) => model.id)).toEqual([`${fixture.model}-1`])
-      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(catalogRequests).toBe(1)
       generation = 2
       const refreshed = await (await handleModelsApi(...request(`${path}&refresh=true`))).json()
       const modelId = `${fixture.model}-2`
       expect(refreshed.models.map((model: { id: string }) => model.id)).toEqual([modelId])
-      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      expect(catalogRequests).toBe(2)
       expect((await providers.listProviders()).activeId).toBe(originalActive)
       expect(await providers.getOfficialProviderModels(fixture.provider)).toEqual(originalMapping)
 
