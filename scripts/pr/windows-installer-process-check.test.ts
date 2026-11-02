@@ -160,15 +160,19 @@ SectionEnd
       ...baseEnv,
       PSModulePath: `${foreignModules};${systemRoot}\\system32\\WindowsPowerShell\\v1.0\\Modules`,
     }
-    // Both fixtures load Microsoft.PowerShell.Security by name, the module the
-    // availability check trips on. Only the inherited one also runs the full
-    // check: after the reset it would scan every module under Program Files with
-    // the sandbox's cold analysis cache, which takes minutes on CI runners.
+    // Both fixtures ask Windows PowerShell, without loading any module, whether
+    // the foreign module directory is still on its module path. Importing
+    // Microsoft.PowerShell.Security by name cannot tell the two apart: 5.1 loads
+    // its in-box core modules from $PSHOME, so that import succeeds either way,
+    // while command auto-loading (Get-ExecutionPolicy) still picks the foreign
+    // copy. Only the inherited fixture also runs the full check: after the reset
+    // it would scan every module under Program Files with the sandbox's cold
+    // analysis cache, which takes minutes on CI runners.
     const backtick = '`'
     try {
       for (const fixture of [
-        { name: 'inherited-module-path', reset: false, expected: ['security=1', 'powershell=1'] },
-        { name: 'reset-module-path', reset: true, expected: ['security=0'] },
+        { name: 'inherited-module-path', reset: false, expected: ['foreign=1', 'powershell=1'] },
+        { name: 'reset-module-path', reset: true, expected: ['foreign=0'] },
       ]) {
         const executable = path.join(root, `${fixture.name}.exe`)
         const journal = path.join(root, `${fixture.name}.log`)
@@ -194,9 +198,9 @@ Section
   StrCpy $PowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
   ${fixture.reset ? '!insertmacro CcHahaUseDefaultPowerShellModulePath' : ''}
   FileOpen $journalHandle "${journal}" w
-  nsExec::Exec ${backtick}"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -Command "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; exit 0"${backtick}
+  nsExec::Exec ${backtick}"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -Command "if ($$env:PSModulePath -like '*foreign-modules*') { exit 1 } else { exit 0 }"${backtick}
   Pop $0
-  FileWrite $journalHandle "security=$0$\n"
+  FileWrite $journalHandle "foreign=$0$\n"
   ${fixture.reset ? '' : '!insertmacro IS_POWERSHELL_AVAILABLE'}
   ${fixture.reset ? '' : 'FileWrite $journalHandle "powershell=$IsPowerShellAvailable$\\n"'}
   FileClose $journalHandle
