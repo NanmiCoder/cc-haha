@@ -11,6 +11,31 @@ import type { ProviderPreset } from '../types/providerPreset'
 import type { AppMode, ChatSendBehavior, PermissionMode, ThemeMode, UpdateProxySettings } from '../types/settings'
 import { browserHost } from '../lib/desktopHost/browserHost'
 import { settingsApi } from '../api/settings'
+import { isLanH5BaseUrl } from '../pages/settings/H5AccessSettings'
+
+describe('isLanH5BaseUrl', () => {
+  const url = (value: string) => new URL(value)
+
+  it('accepts RFC1918, loopback and link-local http origins with a port', () => {
+    expect(isLanH5BaseUrl(url('http://192.168.1.12:3456'))).toBe(true)
+    expect(isLanH5BaseUrl(url('http://10.200.64.7:3456'))).toBe(true)
+    expect(isLanH5BaseUrl(url('http://172.16.0.4:3456'))).toBe(true)
+    expect(isLanH5BaseUrl(url('http://127.0.0.1:3456'))).toBe(true)
+    expect(isLanH5BaseUrl(url('http://169.254.1.1:3456'))).toBe(true)
+  })
+
+  it('accepts the Tailscale CGNAT overlay (100.64.0.0/10)', () => {
+    expect(isLanH5BaseUrl(url('http://100.64.0.5:3456'))).toBe(true)
+    expect(isLanH5BaseUrl(url('http://100.127.255.254:3456'))).toBe(true)
+  })
+
+  it('rejects out-of-range CGNAT, https and portless origins', () => {
+    expect(isLanH5BaseUrl(url('http://100.63.255.254:3456'))).toBe(false)
+    expect(isLanH5BaseUrl(url('http://100.128.0.1:3456'))).toBe(false)
+    expect(isLanH5BaseUrl(url('https://192.168.1.12:8443'))).toBe(false)
+    expect(isLanH5BaseUrl(url('http://192.168.1.12'))).toBe(false)
+  })
+})
 
 const MOCK_DELETE_PROVIDER = vi.fn()
 const MOCK_GET_SETTINGS = vi.fn()

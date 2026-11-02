@@ -503,6 +503,12 @@ describe('H5AccessService', () => {
     expect(classifyH5PublicBaseUrl('http://192.168.0.105:55379')).toBe('plain-lan')
     expect(classifyH5PublicBaseUrl('http://10.0.0.5:8080')).toBe('plain-lan')
     expect(classifyH5PublicBaseUrl('http://172.20.16.1:39876')).toBe('plain-lan')
+    // Tailscale CGNAT overlay (100.64.0.0/10) is LAN-equivalent
+    expect(classifyH5PublicBaseUrl('http://100.64.0.5:8080')).toBe('plain-lan')
+    expect(classifyH5PublicBaseUrl('http://100.127.255.254:8080')).toBe('plain-lan')
+    // just outside the CGNAT block stays a proxy
+    expect(classifyH5PublicBaseUrl('http://100.63.255.254:8080')).toBe('proxy')
+    expect(classifyH5PublicBaseUrl('http://100.128.0.1:8080')).toBe('proxy')
     // proxy: https / custom path / hostname instead of IP
     expect(classifyH5PublicBaseUrl('https://h5.mydomain.com')).toBe('proxy')
     expect(classifyH5PublicBaseUrl('http://192.168.0.105:8080/h5')).toBe('proxy')

@@ -50,7 +50,7 @@ function buildH5LaunchUrl(baseUrl: string | null, token: string | null): string 
   }
 }
 
-function isLanH5BaseUrl(url: URL): boolean {
+export function isLanH5BaseUrl(url: URL): boolean {
   return url.protocol === 'http:' &&
     !!url.port &&
     (
@@ -59,7 +59,9 @@ function isLanH5BaseUrl(url: URL): boolean {
       url.hostname.startsWith('10.') ||
       url.hostname.startsWith('192.168.') ||
       /^172\.(1[6-9]|2\d|3[0-1])\./.test(url.hostname) ||
-      url.hostname.startsWith('169.254.')
+      url.hostname.startsWith('169.254.') ||
+      // Tailscale CGNAT overlay (100.64.0.0/10): 100.64.x – 100.127.x.
+      /^100\.(6[4-9]|[789]\d|1[01]\d|12[0-7])\./.test(url.hostname)
     )
 }
 
