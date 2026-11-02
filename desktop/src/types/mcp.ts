@@ -45,6 +45,41 @@ export type McpUpsertPayload = {
   config: McpEditableConfig
 }
 
+export type McpProjectSnapshot = {
+  projectPath: string
+  requestedPath?: string
+  revision: string | null
+  configHash?: string | null
+  selected: boolean
+  conflict?: boolean
+  error?: string
+}
+
+export type McpProjectSharingSnapshot = {
+  projects: McpProjectSnapshot[]
+  config?: McpEditableConfig
+  sourceConfig?: Record<string, unknown>
+}
+
+export type McpProjectSharingPayload = {
+  config: McpEditableConfig
+  sourceCwd?: string
+  sourceConfig?: Record<string, unknown>
+  targets: Array<{ projectPath: string; selected: boolean; expectedRevision: string | null }>
+}
+
+export type McpProjectSharingResult = {
+  results: Array<{
+    projectPath: string
+    selected: boolean
+    success: boolean
+    persisted?: boolean
+    revision?: string | null
+    configHash?: string | null
+    error?: string
+  }>
+}
+
 export type McpSessionSync = {
   applied: boolean
   reason?: 'not_running' | 'different_project' | 'failed' | 'no_session' | 'lean_profile'

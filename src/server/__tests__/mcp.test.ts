@@ -730,7 +730,7 @@ describe('MCP API', () => {
         scope: 'project',
         canRemove: true,
         configLocation: parentMcpJson,
-        projectPath: normalizePathForConfigKey(parent),
+        projectPath: await fs.realpath(parent),
       }),
     )
 
