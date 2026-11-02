@@ -63,6 +63,7 @@ const DEFAULT_MAX_WAIT_MS = 2_000
 const DEFAULT_SAFETY_SWEEP_MS = 5 * 60 * 1_000
 const DEFAULT_MAX_QUEUED_PATHS = 2_048
 const DEFAULT_BATCH_SIZE = 25
+const WATCH_SETUP_YIELD_EVERY = 25
 
 function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === 'ENOENT'
@@ -160,6 +161,7 @@ export function createReconciliationWatcher(
   let watchRetryTimer: ReturnType<typeof setTimeout> | undefined
   let watchRetryMs = watchRetryBaseMs
   let handles = new Map<string, ReconciliationWatchHandle>()
+  let refreshSequence = 0
   let processing: Promise<void> | undefined
   let pendingSnapshot: PendingReconciliationSnapshot | undefined
   const dirtyPaths = new Set<string>()
@@ -192,6 +194,11 @@ export function createReconciliationWatcher(
 
   const refreshWatchers = async (expectedGeneration: number): Promise<void> => {
     if (!active || expectedGeneration !== generation) return
+    // A newer refresh owns the directory set once it starts; an older one
+    // resuming after an await could reopen a directory that one dropped.
+    const sequence = ++refreshSequence
+    const superseded = (): boolean =>
+      !active || expectedGeneration !== generation || sequence !== refreshSequence
     let directories: string[]
     try {
       directories = await listWatchDirectories(options.scope)
@@ -202,7 +209,7 @@ export function createReconciliationWatcher(
       scheduleWatchRetry(expectedGeneration)
       return
     }
-    if (!active || expectedGeneration !== generation) return
+    if (superseded()) return
     const desired = new Set(directories.map(directory => resolve(directory)))
     for (const [directory, handle] of handles) {
       if (desired.has(directory)) continue
@@ -210,8 +217,19 @@ export function createReconciliationWatcher(
       handles.delete(directory)
     }
     let failed = false
+    let watchedSinceYield = 0
     for (const directory of desired) {
       if (handles.has(directory)) continue
+      // Each fs.watch is a synchronous call that grows with the number of
+      // project directories; hundreds of them kept /health silent right after
+      // startup (#1746). Hand the event loop back between small groups.
+      if (watchedSinceYield >= WATCH_SETUP_YIELD_EVERY) {
+        watchedSinceYield = 0
+        await yieldToForeground()
+        if (superseded()) return
+        if (handles.has(directory)) continue
+      }
+      watchedSinceYield += 1
       try {
         const handle = watchDirectory(
           directory,

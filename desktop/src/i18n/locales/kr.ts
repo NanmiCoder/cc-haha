@@ -4097,7 +4097,9 @@ export const kr: Record<TranslationKey, string> = {
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
+  'app.serverStillStarting': '로컬 서버가 아직 시작 중입니다',
   'app.serverFailedHint': '문제를 신고할 때 이 진단 패널의 스크린샷을 첨부해 주세요.',
+  'app.serverStillStartingHint': '로컬 서버 프로세스는 계속 실행 중이지만 아직 시작을 마치지 못했습니다. 로컬 인덱스를 다시 만드는 중일 수 있습니다(업데이트 후 첫 실행이거나 대화가 많으면 시간이 걸립니다). 잠시 기다린 뒤 "다시 시도"를 누르세요. 같은 서버를 계속 기다리며 완료된 진행 상황은 유지됩니다.',
   'app.startupCrashHint': '런타임 프로세스가 시작 중에 충돌했습니다(Windows 종료 코드 {code}). 보안 소프트웨어가 차단했거나 런타임 파일이 손상되었거나 불완전할 수 있습니다. 먼저 앱 설치 폴더를 보안 소프트웨어의 허용 목록에 추가하고, 그래도 해결되지 않으면 GitHub Releases의 전체 설치 파일로 덮어쓰기 설치하세요. 세션과 설정은 유지됩니다.',
   'app.startupError': '시작 오류',
   'app.serverLogs': '서버 로그',

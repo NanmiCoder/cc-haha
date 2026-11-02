@@ -1000,7 +1000,11 @@ describe('DiagnosticsService', () => {
       ])
 
       expect(exitCode).toBe(1)
-      expect(stdout).toBe('')
+      // The module-load marker is the only stdout line before the bind fails;
+      // the failure itself must stay on stderr.
+      expect(stdout.trim()).toMatch(
+        /^\[Server\] modules loaded \d+ ms after process start; binding 127\.0\.0\.1:\d+$/,
+      )
       expect(stderr).toContain('[Server] Uncaught exception:')
       expect(stderr).toContain(`Failed to start server. Is port ${port} in use?`)
 

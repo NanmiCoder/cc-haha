@@ -95,6 +95,13 @@ async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: number): 
   expect(mock).toHaveBeenCalledTimes(count)
 }
 
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20 && !predicate(); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+  expect(predicate()).toBe(true)
+}
+
 describe('ElectronServerRuntime', () => {
   it('drains the authenticated server and every adapter before stopping the server', async () => {
     const order: string[] = []
@@ -530,15 +537,74 @@ describe('ElectronServerRuntime', () => {
     expect(sidecarMocks.serverChildren).toHaveLength(2)
   })
 
-  it('kills the attempted server child when the health wait rejects', async () => {
+  it('keeps the attempted server child alive when the health wait rejects', async () => {
     sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
     const runtime = createRuntime()
 
     await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
 
+    // A slow sidecar is usually a local index rebuild that keeps making
+    // progress. Killing it restarts that work from zero on the next attempt, so
+    // the timeout must leave the process owned and probeable (#1746).
+    expect(sidecarMocks.serverChildren).toHaveLength(1)
+    expect(sidecarMocks.serverChildren[0]!.kill).not.toHaveBeenCalled()
+    expect(sidecarMocks.adapterChildren).toHaveLength(0)
+  })
+
+  it('retries the retained child instead of spawning a second one', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+
+    sidecarMocks.waitForServerImpl = () => Promise.resolve()
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49321')
+
+    expect(sidecarMocks.serverChildren).toHaveLength(1)
+    expect(sidecarMocks.serverChildren[0]!.kill).not.toHaveBeenCalled()
+  })
+
+  it('replaces a retained child that exits on its own at the next retry', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+    const retained = sidecarMocks.serverChildren[0]!
+
+    // The retained process dies between attempts; probing it again would only
+    // replay its exit, so the next retry must start a fresh sidecar.
+    retained.exitCode = 9
+    retained.emit('exit', 9, null)
+    sidecarMocks.waitForServerImpl = () => Promise.resolve()
+
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49322')
+    expect(sidecarMocks.serverChildren).toHaveLength(2)
+    expect(retained.kill).not.toHaveBeenCalled()
+  })
+
+  it('does not kill a retained child that already exited when the app stops', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+    const retained = sidecarMocks.serverChildren[0]!
+
+    // Nobody is probing when it exits. On Windows a later kill is
+    // `taskkill /F /T /PID`, which could hit a process that reused the PID.
+    retained.exitCode = 9
+    retained.emit('exit', 9, null)
+    runtime.stopAll(true)
+
+    expect(retained.kill).not.toHaveBeenCalled()
+  })
+
+  it('kills a retained startup child on stopAll', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+
+    runtime.stopAll(true)
+
     expect(sidecarMocks.serverChildren).toHaveLength(1)
     expect(sidecarMocks.serverChildren[0]!.kill).toHaveBeenCalledTimes(1)
-    expect(sidecarMocks.adapterChildren).toHaveLength(0)
+    await expect(runtime.getServerUrl()).rejects.toThrow('health wait timed out')
   })
 
   it('kills an unpublished server exactly once when stopAll runs during health wait', async () => {
@@ -603,10 +669,15 @@ describe('ElectronServerRuntime', () => {
 
     sidecarMocks.serverChildren[0]!.emit('exit', 24, null)
     await waitForServerChildren(2)
-    await waitForMockCalls(sidecarMocks.serverChildren[1]!.kill, 1)
+    await waitForCondition(() => replacementAttempts >= 1)
+    // Let the rejected immediate restart settle before asking for the URL.
+    await new Promise(resolve => setTimeout(resolve, 0))
 
-    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49323')
-    expect(sidecarMocks.serverChildren).toHaveLength(3)
+    // The transient failure no longer discards the replacement process, so the
+    // recovery request re-probes it instead of spawning a third child (#1746).
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49322')
+    expect(sidecarMocks.serverChildren).toHaveLength(2)
+    expect(sidecarMocks.serverChildren[1]!.kill).not.toHaveBeenCalled()
     expect(consoleError).toHaveBeenCalledWith(
       expect.stringContaining('failed to restart server sidecar after exit'),
     )

@@ -4094,7 +4094,9 @@ export const zh: Record<TranslationKey, string> = {
 
   // ─── 應用外殼 ──────────────────────────────────────
   'app.serverFailed': '本地服務啟動失敗',
+  'app.serverStillStarting': '本地服務仍在啟動',
   'app.serverFailedHint': '反饋這個問題時，請把這塊診斷資訊截圖一起發到 issue 裡。',
+  'app.serverStillStartingHint': '本地服務程序仍在執行，只是還沒完成啟動，可能正在重建本地索引（升級後首次啟動或對話較多時會比較久）。請稍等片刻再點「重試」，會繼續等待同一個服務，已完成的進度不會遺失。',
   'app.startupCrashHint': '執行時程序在啟動時崩潰了（Windows 結束代碼 {code}）。可能是被安全軟體攔截，或執行時檔案損壞、不完整。請先把應用程式的安裝目錄加入安全軟體的信任清單；仍然不行，再到 GitHub Releases 下載完整安裝包覆蓋安裝，會話和設定不會遺失。',
   'app.startupError': '啟動錯誤',
   'app.serverLogs': '服務日誌',

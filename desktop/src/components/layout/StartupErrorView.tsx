@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { DoctorPanel } from '../doctor/DoctorPanel'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { isRetainedSidecarStartupTimeout } from '@/lib/sidecarStartupError'
 
 const LOG_MARKER = '\n\nRecent server logs:\n'
 
@@ -55,6 +56,9 @@ type StartupErrorViewProps = {
 export function StartupErrorView({ error }: StartupErrorViewProps) {
   const t = useTranslation()
   const { message, logs, diagnostics } = useMemo(() => splitStartupError(error), [error])
+  // After a startup timeout the host keeps the sidecar running; Retry resumes
+  // waiting on it, so asking for an issue report would be the wrong advice.
+  const stillStarting = isRetainedSidecarStartupTimeout(message)
   const crashExitCode = useMemo(() => matchRuntimeCrashExitCode(error), [error])
   const [copied, setCopied] = useState(false)
 
@@ -79,10 +83,10 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
         <div className="flex flex-col gap-4">
           <div>
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-              {t('app.serverFailed')}
+              {t(stillStarting ? 'app.serverStillStarting' : 'app.serverFailed')}
             </h1>
             <p className="mt-1.5 text-[13px] leading-6 text-[var(--color-text-tertiary)]">
-              {t('app.serverFailedHint')}
+              {t(stillStarting ? 'app.serverStillStartingHint' : 'app.serverFailedHint')}
             </p>
           </div>
 
