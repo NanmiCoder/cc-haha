@@ -389,7 +389,16 @@ export type UIMessage =
     }
   | { id: string; type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }
   | { id: string; type: 'background_task'; task: BackgroundAgentTask; timestamp: number }
-  | { id: string; type: 'system'; content: string; generationStopped?: boolean; transcriptMessageId?: string; timestamp: number }
+  | {
+      id: string
+      type: 'system'
+      content: string
+      generationStopped?: boolean
+      /** Background tasks whose results started this turn without a user send. */
+      backgroundContinueTaskIds?: string[]
+      transcriptMessageId?: string
+      timestamp: number
+    }
   | {
       id: string
       type: 'compact_summary'
