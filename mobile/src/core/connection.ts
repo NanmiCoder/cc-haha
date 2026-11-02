@@ -7,7 +7,7 @@ export class ConnectionError extends Error {
   }
 }
 
-/** HTTP is allowed only for explicit private/LAN destinations. */
+/** Used to choose the default authentication flow for an HTTPS address. */
 export function isLocalHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (
@@ -46,10 +46,9 @@ export function normalizeHostUrl(input: string, auth: Host['auth']): string {
     throw new ConnectionError('地址不能包含用户名或密码')
   if (!['http:', 'https:'].includes(url.protocol))
     throw new ConnectionError('只支持 HTTP 或 HTTPS 连接')
-  if (
-    url.protocol === 'http:' &&
-    (auth === 'remote' || !isLocalHostname(url.hostname))
-  )
+  // Explicit HTTP addresses use the access-token flow, including private DNS
+  // names and VPN hosts. Device pairing still requires an HTTPS origin.
+  if (url.protocol === 'http:' && auth === 'remote')
     throw new ConnectionError('远程连接必须使用 HTTPS')
   if (url.pathname !== '/' || url.search || url.hash)
     throw new ConnectionError('主机地址只能包含协议、主机名和端口')

@@ -76,12 +76,13 @@ test('an unpaired remote browser goes back to remote pairing, a LAN page without
 })
 
 test('a LAN H5 reached over Tailscale or a bare host name still connects over plain http', async () => {
-  // The native app refuses http to public-looking hosts; the page was loaded from this origin anyway.
+  // Native token connections and the H5 page both preserve explicit HTTP origins.
   for (const location of [
     { origin: 'http://100.101.102.103:3456', hostname: '100.101.102.103' },
+    { origin: 'http://workstation.fixture.ts.net', hostname: 'workstation.fixture.ts.net' },
     { origin: 'http://nas:3456', hostname: 'nas' },
   ]) {
-    expect(() => normalizeHostUrl(location.origin, 'lan')).toThrow('HTTPS')
+    expect(normalizeHostUrl(location.origin, 'lan')).toBe(location.origin)
     const result = await resolveH5Session({ location, storage: desktopToken(location.origin), fetch: probe(403).fetch })
     if (!('host' in result)) throw new Error('expected a connection')
     const client = new ApiClient(result.host, h5CredentialValue(result.credential), { fetch: async () => { throw new Error('unused') } })
