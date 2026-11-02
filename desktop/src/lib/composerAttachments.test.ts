@@ -162,4 +162,37 @@ describe('composer attachment payloads', () => {
 
     expect(getDataTransferFiles(dataTransfer)).toEqual([markdown, spreadsheet])
   })
+
+  it('materializes a pasted clipboard image once instead of through both files and items', () => {
+    // Chromium re-reads the clipboard (and re-encodes a plain bitmap as PNG) on
+    // every `files` access and every `getAsFile()` call, so a 4K screenshot used
+    // to be read twice per paste (#1508).
+    const screenshot = new File(['png'], 'image.png', { type: 'image/png' })
+    let filesReads = 0
+    let getAsFileCalls = 0
+    const dataTransfer = {
+      get files() {
+        filesReads += 1
+        return [screenshot]
+      },
+      items: [
+        { kind: 'string', getAsFile: () => null },
+        { kind: 'file', getAsFile: () => { getAsFileCalls += 1; return screenshot } },
+      ],
+    } as unknown as DataTransfer
+
+    expect(getDataTransferFiles(dataTransfer)).toEqual([screenshot])
+    expect(getAsFileCalls).toBe(1)
+    expect(filesReads).toBe(0)
+  })
+
+  it('falls back to the files list when the browser exposes no file items', () => {
+    const markdown = new File(['# Notes'], 'notes.md', { type: 'text/markdown' })
+    const dataTransfer = {
+      files: [markdown],
+      items: [{ kind: 'string', getAsFile: () => null }],
+    } as unknown as DataTransfer
+
+    expect(getDataTransferFiles(dataTransfer)).toEqual([markdown])
+  })
 })

@@ -58,13 +58,19 @@ export function dataTransferHasFiles(dataTransfer: DataTransfer): boolean {
 }
 
 export function getDataTransferFiles(dataTransfer: DataTransfer): File[] {
-  const files = Array.from(dataTransfer.files ?? [])
+  // A clipboard image has no File behind it until it is asked for: Chromium
+  // materializes one on every `files` access and every `getAsFile()` call, each
+  // time reading the system clipboard again (and, for a plain bitmap, encoding
+  // it as PNG) synchronously on the renderer's main thread. Read the items once
+  // and only consult `files` for browsers that leave `items` empty for pasted
+  // files.
   const itemFiles = Array.from(dataTransfer.items ?? []).flatMap((item) => {
     if (item.kind !== 'file') return []
     const file = item.getAsFile()
     return file ? [file] : []
   })
-  return itemFiles.length > files.length ? itemFiles : files
+  if (itemFiles.length > 0) return itemFiles
+  return Array.from(dataTransfer.files ?? [])
 }
 
 export async function dataTransferToComposerAttachments(dataTransfer: DataTransfer): Promise<ComposerAttachment[]> {
