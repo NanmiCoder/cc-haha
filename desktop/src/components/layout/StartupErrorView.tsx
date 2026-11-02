@@ -30,10 +30,11 @@ export function splitStartupError(error: string) {
 /**
  * A Windows child process that dies on an NTSTATUS failure reports it as a
  * large unsigned exit code: 3221225477 is 0xC0000005 (access violation),
- * 3221225725 is 0xC00000FD (stack overflow). A sidecar exiting that way before
- * it logged anything was not misconfigured, its binary is damaged, typically
- * because an interrupted update replaced it while it was running. Returns the
- * code as "decimal (0xHEX)" for the hint, or null for ordinary exit codes.
+ * 3221225725 is 0xC00000FD (stack overflow). A sidecar exiting that way at
+ * startup crashed instead of rejecting its configuration, so the hint points at
+ * what the user can check: security software and the installed runtime files.
+ * Returns the code as "decimal (0xHEX)" for the hint, or null for ordinary
+ * exit codes.
  */
 export function matchRuntimeCrashExitCode(text: string): string | null {
   for (const match of text.matchAll(/code=(-?\d+)\b/g)) {

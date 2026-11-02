@@ -4095,7 +4095,7 @@ export const kr: Record<TranslationKey, string> = {
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
   'app.serverFailedHint': '문제를 신고할 때 이 진단 패널의 스크린샷을 첨부해 주세요.',
-  'app.startupCrashHint': '런타임 프로세스가 시작 전에 충돌했습니다(Windows 종료 코드 {code}). 보통 실행 중에 파일이 교체되어 발생하며, 중단된 업데이트가 대표적인 원인입니다. GitHub Releases에서 전체 설치 파일을 내려받아 덮어쓰기 설치하세요. 세션과 설정은 ~/.claude에 보존됩니다.',
+  'app.startupCrashHint': '런타임 프로세스가 시작 중에 충돌했습니다(Windows 종료 코드 {code}). 보안 소프트웨어가 차단했거나 런타임 파일이 손상되었거나 불완전할 수 있습니다. 먼저 앱 설치 폴더를 보안 소프트웨어의 허용 목록에 추가하고, 그래도 해결되지 않으면 GitHub Releases의 전체 설치 파일로 덮어쓰기 설치하세요. 세션과 설정은 유지됩니다.',
   'app.startupError': '시작 오류',
   'app.serverLogs': '서버 로그',
   'app.copyDiagnostics': '진단 정보 복사',

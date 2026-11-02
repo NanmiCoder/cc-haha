@@ -787,12 +787,12 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.updateInstall, () => getUpdaterService().stageDownloadedUpdate())
   registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => {
     await publicAccessManager?.stop()
-    // quitAndInstall spawns the NSIS installer right away, and the installer
-    // replaces the sidecar binaries in place. Wait here, before the renderer
-    // asks for the relaunch, until the runtime and its CLI children have
-    // exited: a kill-and-overwrite race left a half-written sidecar that
-    // crashed on the next start (exit 0xC0000005). If they do not exit, fail
-    // the install instead of handing the installer live processes to fight.
+    // stopAll() hands the runtime's children off without tracking them, so the
+    // before-quit stopAllAndWait() finds nothing left to wait for and the app
+    // can quit, and quitAndInstall start the installer, while the sidecar and
+    // its CLI children are still shutting down. Wait here, before the renderer
+    // asks for the relaunch. If they do not exit, fail the install so the
+    // renderer keeps the update retryable and brings the runtime back.
     try {
       await getServerRuntime().stopAllAndWait()
     } catch (error) {

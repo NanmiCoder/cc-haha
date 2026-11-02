@@ -36,7 +36,7 @@ describe('matchRuntimeCrashExitCode', () => {
 })
 
 describe('StartupErrorView', () => {
-  it('explains a crashed sidecar as a damaged install and points at a reinstall', () => {
+  it('explains a crashed sidecar and lists what to check before a reinstall', () => {
     render(
       <StartupErrorView
         error={'server sidecar exited after spawn (code=3221225477, signal=null)\n\nRecent server logs:\n[exit] sidecar exited (code=3221225477, signal=null)'}
@@ -45,8 +45,8 @@ describe('StartupErrorView', () => {
 
     const hint = screen.getByTestId('startup-crash-hint')
     expect(hint).toHaveTextContent('3221225477 (0xC0000005)')
+    expect(hint).toHaveTextContent('安全软件')
     expect(hint).toHaveTextContent('完整安装包')
-    expect(hint).toHaveTextContent('~/.claude')
   })
 
   it('shows no crash hint for an ordinary startup failure', () => {
