@@ -9,10 +9,15 @@ export const OPENAI_DEFAULT_OPUS_MODEL = 'gpt-6-astra'
 export const OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT = 95
 export const OPENAI_CODEX_STANDARD_CONTEXT_WINDOW = 272_000
 export const OPENAI_CODEX_FRONTIER_CONTEXT_WINDOW = 372_000
+export const OPENAI_CODEX_EXTENDED_CONTEXT_WINDOW = 500_000
 export const OPENAI_CODEX_LARGE_CONTEXT_WINDOW = 1_000_000
 export const OPENAI_CODEX_SPARK_CONTEXT_WINDOW = 128_000
 export const OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
   (OPENAI_CODEX_STANDARD_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
+    100,
+)
+export const OPENAI_CODEX_EXTENDED_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
+  (OPENAI_CODEX_EXTENDED_CONTEXT_WINDOW * OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
     100,
 )
 export const OPENAI_CODEX_LARGE_EFFECTIVE_CONTEXT_WINDOW = Math.floor(
@@ -101,6 +106,15 @@ export const OPENAI_CODEX_MODEL_CATALOG: OpenAIModelCatalogEntry[] = [
     defaultReasoningEffort: 'low',
     supportedReasoningEfforts: GPT_5_6_REASONING_EFFORTS,
     contextWindow: OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW,
+  },
+  {
+    value: 'gpt-6.1-terra',
+    label: 'GPT-6.1 Terra',
+    description: 'GPT-6.1 Terra Codex model',
+    descriptionForModel: 'GPT-6.1 Terra - Codex model with an extended context window',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: GPT_5_6_REASONING_EFFORTS,
+    contextWindow: OPENAI_CODEX_EXTENDED_EFFECTIVE_CONTEXT_WINDOW,
   },
   {
     value: 'gpt-5.6-sol',
@@ -265,6 +279,8 @@ export function getOpenAIModelDisplayName(model: string): string | null {
       return 'GPT-6 Astra'
     case 'gpt-6.1-sol':
       return 'GPT-6.1-Sol'
+    case 'gpt-6.1-terra':
+      return 'GPT-6.1 Terra'
     case 'gpt-6-sol':
       return 'GPT-6-Sol'
     case 'gpt-6-luna':
@@ -314,6 +330,10 @@ export function getOpenAICodexContextWindowForModel(
 
   if (normalized === 'gpt-6.1-sol' || normalized === 'gpt-6-sol' || normalized === 'gpt-6-luna') {
     return OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW
+  }
+
+  if (normalized === 'gpt-6.1-terra') {
+    return OPENAI_CODEX_EXTENDED_EFFECTIVE_CONTEXT_WINDOW
   }
 
   if (

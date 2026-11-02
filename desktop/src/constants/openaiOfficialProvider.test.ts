@@ -5,10 +5,16 @@ import {
 } from './openaiOfficialProvider'
 
 describe('ChatGPT Official fallback model catalog', () => {
-  it('offers GPT-6.1 Sol with OAuth context and reasoning metadata', () => {
+  it('offers GPT-6.1 Sol and Terra with OAuth context and reasoning metadata', () => {
     expect(OPENAI_OFFICIAL_MODELS.find(model => model.id === 'gpt-6.1-sol')).toMatchObject({
       name: 'GPT-6.1-Sol',
       context: '258400',
+      defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+    expect(OPENAI_OFFICIAL_MODELS.find(model => model.id === 'gpt-6.1-terra')).toMatchObject({
+      name: 'GPT-6.1 Terra',
+      context: '475000',
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
