@@ -81,13 +81,29 @@ describe('providerTextCompletion', () => {
     }])
   })
 
-  test('retries once without thinking when the provider rejects it with a 4xx', async () => {
+  test.each([400, 422])('retries once without thinking when the provider rejects the request with %i', async (status) => {
     const server = upstream((body) => body.thinking
-      ? Response.json({ error: 'thinking unsupported' }, { status: 400 })
+      ? Response.json({ error: 'thinking unsupported' }, { status })
       : reply('ok'))
 
     expect(await request(provider(server.url))).toEqual({ ok: true, text: 'ok' })
     expect(server.bodies.map(body => body.thinking)).toEqual([{ type: 'disabled' }, undefined])
+  })
+
+  test('answers a rate limit as is instead of resending with thinking back on', async () => {
+    // DeepSeek Flash thinks by default: without `thinking: disabled` it spends the
+    // whole budget reasoning and returns no text, which callers read as a bad answer.
+    const server = upstream((body) => body.thinking
+      ? Response.json({ error: { message: 'Rate limit reached' } }, { status: 429 })
+      : Response.json({ stop_reason: 'max_tokens', content: [{ type: 'thinking', thinking: 'still reasoning' }] }))
+
+    expect(await request(provider(server.url))).toEqual({
+      ok: false,
+      reason: 'rate-limit',
+      status: 429,
+      message: 'The provider answered HTTP 429',
+    })
+    expect(server.bodies.map(body => body.thinking)).toEqual([{ type: 'disabled' }])
   })
 
   test('sends a requested temperature with the first attempt and drops it with thinking on the retry', async () => {
@@ -120,8 +136,8 @@ describe('providerTextCompletion', () => {
     const server = upstream(() => Response.json({ error: 'nope' }, { status }))
 
     expect(await request(provider(server.url))).toMatchObject({ ok: false, reason, status })
-    // Only a 4xx earns the retry without thinking.
-    expect(server.bodies).toHaveLength(status < 500 ? 2 : 1)
+    // Only a rejected request (400/422) earns the retry without thinking.
+    expect(server.bodies).toHaveLength(1)
     expect(classifyProviderStatus(status)).toBe(reason)
   })
 
@@ -177,6 +193,39 @@ describe('providerTextCompletion', () => {
       timeoutMs: 100,
     })).toMatchObject({ ok: false, reason: 'timeout' })
     expect(calls).toBeGreaterThan(0)
+  })
+
+  test.each([
+    [400, { ok: true, text: 'ok' }, 2],
+    [429, { ok: false, reason: 'rate-limit', status: 429 }, 1],
+  ] as const)('through the local proxy, HTTP %i from the upstream ends as %o after %i request(s)', async (status, expected, requests) => {
+    const sent: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      if (sent.length === 1) return Response.json({ error: { message: 'rejected' } }, { status })
+      return Response.json({
+        id: 'chatcmpl-fixture',
+        object: 'chat.completion',
+        model: 'fast-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })
+    }) as unknown as typeof fetch
+    const proxied = await new ProviderService().addProvider({
+      presetId: 'custom',
+      name: 'Proxied chat',
+      apiKey: 'fake-key',
+      baseUrl: 'https://chat.fixture.invalid/v1',
+      apiFormat: 'openai_chat',
+      models: { main: 'fast-model', haiku: 'fast-model', sonnet: 'fast-model', opus: 'fast-model' },
+    })
+
+    expect(await providerTextCompletion({
+      provider: proxied, modelId: 'fast-model', system: 'SYSTEM', user: 'USER', maxTokens: 64, reasoningEffort: 'low',
+    })).toMatchObject(expected)
+    expect(sent).toHaveLength(requests)
+    // The retry goes out without the first attempt's extras.
+    expect(sent.map(body => body.reasoning_effort)).toEqual(['low', undefined].slice(0, requests))
   })
 
   test('asks proxied OpenAI-format models for low reasoning only when requested', async () => {
