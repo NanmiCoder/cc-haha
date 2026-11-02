@@ -13,7 +13,11 @@ await mkdir(configDir, { recursive: true })
 await writeFile(join(configDir, 'adapters.json'), JSON.stringify({
   feishu: { allowedUsers: ['fixture-user'], defaultWorkDir: process.env.HOME },
 }))
-globalThis.fetch = (() => { throw new Error('External network is forbidden in this fixture') }) as typeof fetch
+globalThis.fetch = (async (input: string | URL | Request) => {
+  const url = new URL(input instanceof Request ? input.url : String(input))
+  if (url.hostname === '127.0.0.1' && url.pathname === '/api/sessions/power-activity-lease') return Response.json({ ok: true })
+  throw new Error('External network is forbidden in this fixture')
+}) as unknown as typeof fetch
 
 type LoggedClient = { logger: { error(...args: unknown[]): void } }
 let startupWs!: LoggedClient

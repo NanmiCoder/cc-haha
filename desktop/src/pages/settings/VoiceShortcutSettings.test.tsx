@@ -141,8 +141,9 @@ describe('VoiceShortcutSettings', () => {
           info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto'] },
           preparation: { phase: 'ready' },
         }],
-        preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+        preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
         limits: { maxAudioSeconds: 60, maxAudioBytes: 10_000_000 },
+        correction: { defaultTarget: null, target: null },
       },
     })
     const target = { hasFocus: () => false, isActive: () => false, start: vi.fn(), stop: vi.fn(), cancel: vi.fn() }

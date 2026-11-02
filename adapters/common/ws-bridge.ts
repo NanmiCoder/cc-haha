@@ -7,6 +7,7 @@ import { adapterMigrationLifecycle } from './migration-lifecycle.js'
  */
 
 import WebSocket from 'ws'
+import { currentInboundPowerLease } from './inbound-power-activity.js'
 
 /** Attachment reference — mirrors src/server/ws/events.ts AttachmentRef.
  *  The server will either (a) write base64 `data` to
@@ -111,12 +112,18 @@ export class WsBridge {
     chatId: string,
     content: string,
     attachments?: AttachmentRef[],
+    powerActivityLeaseId?: string,
   ): boolean {
+    const lease = currentInboundPowerLease(chatId)
     const payload: Record<string, unknown> = { type: 'user_message', content }
     if (attachments && attachments.length > 0) {
       payload.attachments = attachments
     }
-    return this.send(chatId, payload)
+    const leaseId = powerActivityLeaseId ?? lease?.id
+    if (leaseId) payload.powerActivityLeaseId = leaseId
+    const sent = this.send(chatId, payload)
+    if (sent && lease && leaseId === lease.id) lease.transferred = true
+    return sent
   }
 
   /** Respond to a permission request.

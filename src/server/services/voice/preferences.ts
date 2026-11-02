@@ -9,6 +9,14 @@ export const VOICE_LANGUAGES: readonly VoiceLanguage[] = ['auto', 'zh', 'en', 'j
 export const VOICE_DOWNLOAD_SOURCES: readonly VoiceDownloadSource[] = ['auto', 'official', 'mirror']
 
 const MAX_PROVIDER_ID_LENGTH = 80
+const MAX_MODEL_ID_LENGTH = 200
+
+/** A saved id, or null when absent, blank or implausibly long. */
+function optionalId(value: unknown, max: number): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 && trimmed.length <= max ? trimmed : null
+}
 
 export function isVoiceLanguage(value: unknown): value is VoiceLanguage {
   return typeof value === 'string' && (VOICE_LANGUAGES as readonly string[]).includes(value)
@@ -29,6 +37,10 @@ export function normalizeVoicePreferences(value: unknown): VoicePreferences {
   }
   const record = value as Record<string, unknown>
   const providerId = typeof record.providerId === 'string' ? record.providerId.trim() : ''
+  const correctionProviderId = optionalId(record.correctionProviderId, MAX_PROVIDER_ID_LENGTH)
+  const correctionModelId = optionalId(record.correctionModelId, MAX_MODEL_ID_LENGTH)
+  // A fixed target needs both halves; a lone provider or model reads as "follow the default".
+  const fixed = correctionProviderId !== null && correctionModelId !== null
   return {
     ...record,
     enabled: typeof record.enabled === 'boolean' ? record.enabled : DEFAULT_VOICE_PREFERENCES.enabled,
@@ -40,5 +52,11 @@ export function normalizeVoicePreferences(value: unknown): VoicePreferences {
     downloadSource: isVoiceDownloadSource(record.downloadSource)
       ? record.downloadSource
       : DEFAULT_VOICE_PREFERENCES.downloadSource,
+    // Absent in files written before AI correction existed: those read as off.
+    correctionEnabled: typeof record.correctionEnabled === 'boolean'
+      ? record.correctionEnabled
+      : DEFAULT_VOICE_PREFERENCES.correctionEnabled,
+    correctionProviderId: fixed ? correctionProviderId : null,
+    correctionModelId: fixed ? correctionModelId : null,
   }
 }

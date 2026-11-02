@@ -97,6 +97,10 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       invoke: (command, args) => invoke(ELECTRON_IPC_CHANNELS.commandInvoke, { command, args }),
     },
     power: {
+      getIdleActionState: () => invoke(ELECTRON_IPC_CHANNELS.powerGetIdleActionState),
+      configureIdleAction: settings => invoke(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, settings),
+      cancelIdleAction: () => invoke(ELECTRON_IPC_CHANNELS.powerCancelIdleAction),
+      onIdleActionState: handler => subscribe(ELECTRON_EVENT_CHANNELS.powerIdleActionState, handler),
       setPreventSleepWhileRunning: enabled => invoke(ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, enabled),
     },
     clipboard: {

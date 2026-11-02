@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { WsBridge } from '../ws-bridge.js'
 import { restoreSelectedSession } from '../session-selection.js'
 import { restoreStoredSessionBinding } from '../session-recovery.js'
+import { enqueueInboundPowerActivity } from '../inbound-power-activity.js'
 import { WebSocketServer, type WebSocket as WsServerSocket } from 'ws'
 
 async function waitFor(
@@ -144,6 +145,53 @@ describe('WsBridge: handler serialization', () => {
     })
     return connections[0]!
   }
+
+  it('transfers only an acquired inbound power lease with the exact user message', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', 'fixture-token')
+    try {
+      bridge.connectSession('lease-chat', 'lease-session')
+      expect(await bridge.waitForOpen('lease-chat')).toBe(true)
+      const socket = await waitForServerConnection()
+      const messages: unknown[] = []
+      socket.on('message', raw => messages.push(JSON.parse(raw.toString())))
+      expect(bridge.sendUserMessage('lease-chat', 'protected', undefined, 'adapter:message')).toBe(true)
+      expect(bridge.sendUserMessage('lease-chat', 'legacy')).toBe(true)
+      expect(await waitFor(() => messages.length === 2)).toBe(true)
+      expect(messages).toEqual([
+        { type: 'user_message', content: 'protected', powerActivityLeaseId: 'adapter:message' },
+        { type: 'user_message', content: 'legacy' },
+      ])
+    } finally {
+      bridge.destroy()
+    }
+  })
+
+  it('hands off a legacy queued message using its async activity context', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', 'fixture-token')
+    const acquired: string[] = []
+    const released: string[] = []
+    const leaseClient = {
+      acquirePowerActivityLease: async (id: string) => { acquired.push(id); return true },
+      releasePowerActivityLease: async (id: string) => { released.push(id) },
+    }
+    try {
+      bridge.connectSession('legacy-chat', 'legacy-session')
+      expect(await bridge.waitForOpen('legacy-chat')).toBe(true)
+      const socket = await waitForServerConnection()
+      const messages: Array<{ powerActivityLeaseId?: string }> = []
+      socket.on('message', raw => messages.push(JSON.parse(raw.toString())))
+      await enqueueInboundPowerActivity(leaseClient, 'legacy-chat', async () => {
+        await Promise.resolve()
+        expect(bridge.sendUserMessage('legacy-chat', 'after attachment download')).toBe(true)
+      })
+      expect(await waitFor(() => messages.length === 1)).toBe(true)
+      expect(messages[0]?.powerActivityLeaseId).toBe(acquired[0])
+      expect(acquired).toHaveLength(1)
+      expect(released).toEqual([])
+    } finally {
+      bridge.destroy()
+    }
+  })
 
   it('authenticates websocket connections with the desktop local access token', async () => {
     let requestUrl = ''

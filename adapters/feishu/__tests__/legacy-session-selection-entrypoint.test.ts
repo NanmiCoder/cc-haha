@@ -8,6 +8,9 @@ import { enqueue } from '../../common/chat-queue.js'
 import { StreamingCard } from '../streaming-card.js'
 import { FeishuMediaService } from '../media.js'
 import { WechatMediaService } from '../../wechat/media.js'
+import { DingTalkMediaService } from '../../dingtalk/media.js'
+import { WhatsAppMediaService } from '../../whatsapp/media.js'
+import { currentInboundPowerLease } from '../../common/inbound-power-activity.js'
 
 type Platform = 'feishu' | 'dingtalk' | 'wechat' | 'whatsapp'
 const platforms: Platform[] = ['feishu', 'dingtalk', 'wechat', 'whatsapp']
@@ -26,6 +29,9 @@ let preflightGate: Promise<void> | undefined
 let preflightStarted: (() => void) | undefined
 const notices: string[] = []
 const sentPrompts: Array<{ sessionId: string; content: string }> = []
+const activeLeases = new Set<string>()
+const acceptedLeases: string[] = []
+const attachmentLeases: Array<{ platform: Platform; protected: boolean }> = []
 const spies: Array<{ mockRestore(): void }> = []
 const originalFetch = globalThis.fetch
 const environmentKeys = [
@@ -54,6 +60,12 @@ beforeAll(async () => {
       if (url.pathname.startsWith('/ws/')) {
         if (currentServer.upgrade(request, { data: { sessionId: url.pathname.slice(4) } })) return
         return new Response('upgrade required', { status: 400 })
+      }
+      if (url.pathname === '/api/sessions/power-activity-lease') {
+        const { leaseId, active } = await request.json() as { leaseId: string; active: boolean }
+        if (active) activeLeases.add(leaseId)
+        else activeLeases.delete(leaseId)
+        return Response.json({ ok: true })
       }
       if (url.pathname === '/api/sessions/recent-projects') {
         return Response.json({ projects: [{
@@ -93,7 +105,12 @@ beforeAll(async () => {
       },
       message(socket, raw) {
         const message = JSON.parse(String(raw))
-        if (message.type === 'user_message') sentPrompts.push({ sessionId: socket.data.sessionId, content: message.content })
+        if (message.type === 'user_message') {
+          sentPrompts.push({ sessionId: socket.data.sessionId, content: message.content })
+          if (typeof message.powerActivityLeaseId === 'string' && activeLeases.delete(message.powerActivityLeaseId)) {
+            acceptedLeases.push(message.powerActivityLeaseId)
+          }
+        }
       },
     },
   })
@@ -161,12 +178,22 @@ beforeAll(async () => {
     return { code: 0, data: { message_id: `fixture-${++sequence}` } }
   }))
   const attachment = { kind: 'image' as const, name: 'fixture.png', path: path.join(temporaryRoot, 'fixture.png'), buffer: Buffer.from('fixture'), size: 7, mimeType: 'image/png' }
-  spies.push(spyOn(FeishuMediaService.prototype, 'downloadResource').mockImplementation(async () => attachment))
-  spies.push(spyOn(WechatMediaService.prototype, 'downloadCandidate').mockImplementation(async () => attachment))
+  const protectedAttachment = async (platform: Platform) => {
+    const lease = currentInboundPowerLease(platform === 'whatsapp' ? 'whatsapp-chat@s.whatsapp.net' : chatFor(platform))
+    attachmentLeases.push({ platform, protected: !!lease && activeLeases.has(lease.id) })
+    return attachment
+  }
+  spies.push(spyOn(FeishuMediaService.prototype, 'downloadResource').mockImplementation(() => protectedAttachment('feishu')))
+  spies.push(spyOn(WechatMediaService.prototype, 'downloadCandidate').mockImplementation(() => protectedAttachment('wechat')))
+  spies.push(spyOn(DingTalkMediaService.prototype, 'downloadCandidate').mockImplementation(() => protectedAttachment('dingtalk')))
+  spies.push(spyOn(WhatsAppMediaService.prototype, 'downloadMessageMedia').mockImplementation(() => protectedAttachment('whatsapp')))
   spies.push(spyOn(StreamingCard.prototype, 'ensureCreated').mockImplementation(async () => {}))
   spies.push(spyOn(StreamingCard.prototype, 'abort').mockImplementation(async () => {}))
   spies.push(spyOn(StreamingCard.prototype, 'finalize').mockImplementation(async () => {}))
-  whatsapp.useWhatsAppSocket({ sendMessage: async (_chatId: string, message: { text: string }) => { notices.push(message.text) } } as any)
+  whatsapp.useWhatsAppSocket({
+    sendMessage: async (_chatId: string, message: { text: string }) => { notices.push(message.text) },
+    readMessages: async () => {}, sendPresenceUpdate: async () => {},
+  } as any)
 })
 
 afterAll(async () => {
@@ -240,6 +267,18 @@ async function send(platform: Platform, text: string, options: { unauthorized?: 
 
 for (const platform of platforms) {
   describe(`${platform} actual module session selection`, () => {
+    it('transfers an acquired inbound lease with the accepted WebSocket message', async () => {
+      const adapter = adapterFor(platform)
+      const chatId = chatFor(platform)
+      adapter.clearTransientChatState(chatId)
+      adapter.sessionSelectionController.clear(chatId)
+      const before = acceptedLeases.length
+      await send(platform, `leased inbound ${platform}`)
+      const deadline = Date.now() + 1000
+      while (acceptedLeases.length === before && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1))
+      expect(acceptedLeases.length).toBe(before + 1)
+    })
+
     it.each(['/status', '/stop', '/clear'])('preserves the binding when %s cannot reconnect and retries the command', async (command) => {
       const adapter = adapterFor(platform)
       const chatId = chatFor(platform)
@@ -366,7 +405,7 @@ for (const platform of platforms) {
       expect(adapter.sessionStore.get(chatId)?.sessionId).toStartWith('new-')
       await send(platform, '/sessions')
       if (platform === 'feishu') {
-        await feishu.handleCardAction({ context: { open_chat_id: chatId }, action: { value: { action: 'pick_project', realPath: temporaryRoot, projectName: 'Fixture' } } })
+        await feishu.handleCardAction({ operator: { open_id: 'fixture-user' }, context: { open_chat_id: chatId }, action: { value: { action: 'pick_project', realPath: temporaryRoot, projectName: 'Fixture' } } })
       } else {
         expect(await adapter.createSessionForChat(chatId, temporaryRoot)).toBe(true)
       }
@@ -445,6 +484,38 @@ for (const platform of platforms) {
   })
 }
 
+it('holds a lease before each legacy media download starts and refuses unpaired downloads', async () => {
+  attachmentLeases.length = 0
+  await send('feishu', 'protected media', { attachment: true })
+  await send('wechat', 'protected media', { attachment: true })
+  await dingtalk.handleRobotMessage({
+    conversationType: '1', senderStaffId: 'fixture-user', msgtype: 'picture',
+    content: { pictureUrl: 'https://fixture.invalid/image.png' }, sessionWebhook: `${httpOrigin}/dingtalk`,
+  })
+  // Use the real WhatsApp ingress; only its external media transport is mocked.
+  const configFile = path.join(temporaryRoot, '.claude', 'adapters.json')
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+  config.whatsapp.allowedUsers.push('whatsapp-chat@s.whatsapp.net')
+  fs.writeFileSync(configFile, JSON.stringify(config))
+  await whatsapp.handleIncomingMessage({
+    key: { remoteJid: 'whatsapp-chat@s.whatsapp.net', id: `media-${++sequence}`, fromMe: false },
+    message: { imageMessage: { caption: 'protected media' } },
+  })
+  expect(attachmentLeases).toEqual((['feishu', 'wechat', 'dingtalk', 'whatsapp'] as const).map(platform => ({ platform, protected: true })))
+  const before = attachmentLeases.length
+  await send('feishu', 'outsider media', { unauthorized: true, attachment: true })
+  await send('wechat', 'outsider media', { unauthorized: true, attachment: true })
+  await dingtalk.handleRobotMessage({
+    conversationType: '1', senderStaffId: 'outsider', msgtype: 'picture',
+    content: { pictureUrl: 'https://fixture.invalid/image.png' }, sessionWebhook: `${httpOrigin}/dingtalk`,
+  })
+  await whatsapp.handleIncomingMessage({
+    key: { remoteJid: 'outsider@s.whatsapp.net', id: `media-${++sequence}`, fromMe: false },
+    message: { imageMessage: { caption: 'outsider media' } },
+  })
+  expect(attachmentLeases).toHaveLength(before)
+})
+
 
 it('serializes Feishu project cards after an in-flight history selection', async () => {
   const chatId = chatFor('feishu')
@@ -456,7 +527,7 @@ it('serializes Feishu project cards after an in-flight history selection', async
   try {
     const resume = send('feishu', '/resume 1')
     await started
-    const card = feishu.handleCardAction({ context: { open_chat_id: chatId }, action: { value: { action: 'pick_project', realPath: temporaryRoot, projectName: 'Fixture' } } })
+    const card = feishu.handleCardAction({ operator: { open_id: 'fixture-user' }, context: { open_chat_id: chatId }, action: { value: { action: 'pick_project', realPath: temporaryRoot, projectName: 'Fixture' } } })
     release()
     await Promise.all([resume, card])
     expect(feishu.sessionStore.get(chatId)?.sessionId).toStartWith('new-')

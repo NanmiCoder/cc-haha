@@ -116,66 +116,125 @@ function OptionRow({
   multiple,
   disabled,
   onPress,
+  onInspect,
 }: {
   option: Question['options'][number]
   selected: boolean
   multiple: boolean
   disabled: boolean
   onPress(): void
+  onInspect(): void
 }) {
   const colors = useColors()
   const display = questionOptionPresentation(option.label)
+  const [expanded, setExpanded] = useState(false)
+  const [fullHeight, setFullHeight] = useState(0)
+  const [previewHeight, setPreviewHeight] = useState(0)
+  const truncated = previewHeight > 0 && fullHeight > previewHeight + 1
+  const descriptionStyle = { fontSize: 13, lineHeight: 18, color: colors.ink3 }
   return (
-    <Pressable
-      accessibilityRole={multiple ? 'checkbox' : 'radio'}
-      accessibilityLabel={option.description ? `${display.label}，${option.description}` : display.label}
-      accessibilityState={{ checked: selected, disabled }}
-      aria-checked={selected}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 60,
+    <View
+      style={{
         borderRadius: 16,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
         backgroundColor: selected ? colors.sel : colors.card,
         boxShadow: selected ? `inset 0 0 0 1.5px ${colors.run}` : `inset 0 0 0 1px ${colors.hair}`,
-        opacity: disabled ? 0.45 : pressed ? 0.8 : 1,
-      })}
+      }}
     >
-      <Mark multiple={multiple} selected={selected} />
-      <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={{ flexShrink: 1, fontSize: 17, lineHeight: 22, fontWeight: '500', color: colors.ink }}>
-            {display.label}
-          </Text>
-          {display.recommended ? (
-            <Text
-              style={{
-                fontSize: 11.5,
-                fontWeight: '600',
-                color: colors.attn,
-                backgroundColor: colors.attnSoft,
-                borderRadius: 6,
-                paddingHorizontal: 6,
-                paddingVertical: 1,
-                overflow: 'hidden',
-              }}
-            >
-              推荐
+      <Pressable
+        accessibilityRole={multiple ? 'checkbox' : 'radio'}
+        accessibilityLabel={option.description ? `${display.label}，${option.description}` : display.label}
+        accessibilityState={{ checked: selected, disabled }}
+        aria-checked={selected}
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          minHeight: 60,
+          borderRadius: 16,
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 14,
+          opacity: disabled ? 0.45 : pressed ? 0.8 : 1,
+        })}
+      >
+        <Mark multiple={multiple} selected={selected} />
+        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ flexShrink: 1, fontSize: 17, lineHeight: 22, fontWeight: '500', color: colors.ink }}>
+              {display.label}
             </Text>
+            {display.recommended ? (
+              <Text
+                style={{
+                  fontSize: 11.5,
+                  fontWeight: '600',
+                  color: colors.attn,
+                  backgroundColor: colors.attnSoft,
+                  borderRadius: 6,
+                  paddingHorizontal: 6,
+                  paddingVertical: 1,
+                  overflow: 'hidden',
+                }}
+              >
+                推荐
+              </Text>
+            ) : null}
+          </View>
+          {option.description ? (
+            <View style={{ overflow: 'hidden' }}>
+              <Text
+                numberOfLines={expanded ? undefined : 2}
+                onLayout={(event) => {
+                  if (!expanded) setPreviewHeight(event.nativeEvent.layout.height)
+                }}
+                style={descriptionStyle}
+              >
+                {option.description}
+              </Text>
+              {/* Measure the same width/font without a line limit on native and RN Web. */}
+              <Text
+                accessible={false}
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                aria-hidden
+                onLayout={(event) => setFullHeight(event.nativeEvent.layout.height)}
+                style={[descriptionStyle, { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0, pointerEvents: 'none' }]}
+              >
+                {option.description}
+              </Text>
+            </View>
           ) : null}
         </View>
-        {option.description ? (
-          <Text numberOfLines={2} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-            {option.description}
+      </Pressable>
+      {truncated || expanded ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${expanded ? '收起' : '展开'}“${display.label}”的详细说明`}
+          accessibilityState={{ expanded }}
+          aria-expanded={expanded}
+          onPress={() => {
+            if (!disabled) onInspect()
+            setExpanded((value) => !value)
+          }}
+          style={({ pressed }) => ({
+            alignSelf: 'flex-start',
+            marginLeft: 54,
+            paddingHorizontal: 16,
+            minHeight: 44,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Text style={{ fontSize: 13, fontWeight: '500', color: colors.run }}>
+            {expanded ? '收起详情' : '展开详情'}
           </Text>
-        ) : null}
-      </View>
-    </Pressable>
+          <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.run} />
+        </Pressable>
+      ) : null}
+    </View>
   )
 }
 
@@ -346,12 +405,13 @@ export function QuestionPage({
                   >
                     {current.options.map((option) => (
                       <OptionRow
-                        key={option.label}
+                        key={`${current.question}:${option.label}`}
                         option={option}
                         multiple={model.multiple}
                         disabled={locked}
                         selected={!model.customActive && Boolean(flow.answers[current.question]?.includes(option.label))}
                         onPress={() => choose(option.label)}
+                        onInspect={activity}
                       />
                     ))}
                     {showCustom ? (

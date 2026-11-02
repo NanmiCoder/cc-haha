@@ -78,6 +78,10 @@ export const browserHost: DesktopHost = {
     },
   },
   power: {
+    async getIdleActionState() { return unsupported('Power actions') },
+    async configureIdleAction() { return unsupported('Power actions') },
+    async cancelIdleAction() { return unsupported('Power actions') },
+    async onIdleActionState() { return noopUnlisten },
     async setPreventSleepWhileRunning() {
       unsupported('Preventing system sleep')
     },

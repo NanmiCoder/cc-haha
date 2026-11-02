@@ -1,5 +1,6 @@
 import type { PowerSaveBlocker, WebContents } from 'electron'
 import type { PreviewLocalAccess } from './previewSession'
+import { readIdlePowerActivity } from './idlePower'
 
 const POLL_INTERVAL_MS = 2_000
 const REQUEST_TIMEOUT_MS = 5_000
@@ -11,25 +12,15 @@ export async function readPreventSleepActivity(
   request: typeof fetch = fetch,
 ): Promise<boolean> {
   if (!access) return false
-  const response = await request(`${access.serverUrl}/api/sessions/live-status?includeTeamWorkers=1`, {
-    headers: { Authorization: `Bearer ${access.token}` },
-    signal,
-    redirect: 'error',
-  })
-  if (!response.ok) throw new Error('Session activity unavailable')
-  const body: unknown = await response.json()
-  if (!body || typeof body !== 'object' || !('sessions' in body) || !Array.isArray(body.sessions)) {
-    throw new Error('Invalid session activity')
-  }
-  return body.sessions.some((session: unknown) =>
-    !!session && typeof session === 'object' && 'activityState' in session
-    && (session.activityState === 'running' || session.activityState === 'waiting'))
+  return (await readIdlePowerActivity(access, signal, request)).busy
 }
 
 type PreventSleepOptions = {
   blocker: Pick<PowerSaveBlocker, 'start' | 'stop'>
   readActivity: (signal: AbortSignal) => Promise<boolean>
   onError: () => void
+  /** Synchronously acquire a successor assertion before releasing an idle task blocker. */
+  beforeIdleRelease?: () => void
   pollIntervalMs?: number
 }
 
@@ -81,6 +72,7 @@ export class PreventSleepService {
         AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       ]))
       if (generation !== this.generation) return
+      if (!active && this.blockerId !== null) this.options.beforeIdleRelease?.()
       this.setBlocked(active)
       this.failed = false
     } catch {

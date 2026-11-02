@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { ApiError } from '../middleware/errorHandler.js'
 import { SideQuestionService, sideQuestionInputSchema } from './sideQuestionService.js'
 import { SDKControlRequestSchema } from '../../entrypoints/sdk/controlSchemas.js'
+import { powerActivityClock } from './powerActivityClock.js'
 const url = new URL('http://127.0.0.1/api/sessions/s/side-question')
 const input = () => ({ questionId: crypto.randomUUID(), question: 'why?', history: [] })
 const tick = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -14,12 +15,16 @@ test('side questions use isolated controls, long timeout, and reject concurrent/
     return await new Promise(r => { resolve = r })
   } })
   const body = input()
+  const baseline = powerActivityClock.read(false)
   const pending = service.ask('s', body, url, new AbortController().signal)
+  expect(service.hasPendingWork()).toBe(true)
   await tick()
   await expect(service.ask('s', input(), url, new AbortController().signal)).rejects.toMatchObject({ statusCode: 409 })
   expect(calls[0]?.slice(0, 3)).toEqual(['s', { subtype: 'side_question', question_id: body.questionId, question: 'why?', history: [] }, 300_000])
   resolve({ response: 'because' })
   expect(await pending).toEqual({ questionId: body.questionId, response: 'because' })
+  expect(service.hasPendingWork()).toBe(false)
+  expect(powerActivityClock.read(false).completionSequence).toBe(baseline.completionSequence + 1)
   await expect(service.ask('s', body, url, new AbortController().signal)).rejects.toMatchObject({ statusCode: 409 })
   expect(calls).toHaveLength(1)
 })
@@ -36,6 +41,7 @@ test('cancel and disconnect target only the matching side question; late results
     const controller = new AbortController()
     const body = input()
     const pending = service.ask('s', body, url, controller.signal)
+    const completionBeforeCancel = powerActivityClock.read(false).completionSequence
     const rejected = pending.catch(error => error)
     await tick()
     expect(await service.cancel('other', body.questionId)).toBe(false)
@@ -43,6 +49,8 @@ test('cancel and disconnect target only the matching side question; late results
     if (disconnect) controller.abort()
     else expect(await service.cancel('s', body.questionId)).toBe(true)
     expect(await rejected).toMatchObject({ statusCode: 499 })
+    expect(service.hasPendingWork()).toBe(false)
+    expect(powerActivityClock.read(false).completionSequence).toBe(completionBeforeCancel)
     late({ response: 'must not appear' })
     expect(calls.map(call => call.subtype)).toEqual(['side_question', 'cancel_side_question'])
     expect(calls[1]?.question_id).toBe(body.questionId)

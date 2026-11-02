@@ -7,15 +7,18 @@ import type { TraceCallRecord, TraceSession } from '../types/trace'
 
 export type SessionsResponse = {
   sessions: SessionListItem[]
+  archivedSessionIds?: string[]
   total: number
   projects?: Array<{
     projectRoot: string
     total: number
+    archivedTotal?: number
   }>
   index?: LocalIndexStatus
 }
 export type ProjectSessionHistoryParams = {
   projectRoot: string
+  archived?: boolean
   limit?: number
   cursor?: string
   beforeModifiedAt?: string
@@ -451,6 +454,7 @@ export const sessionsApi = {
     offset?: number
     view?: 'sidebar'
     perProjectLimit?: number
+    archived?: boolean
   }, options?: ApiRequestOptions) {
     const query = new URLSearchParams()
     if (params?.project) query.set('project', params.project)
@@ -458,6 +462,7 @@ export const sessionsApi = {
     if (params?.offset) query.set('offset', String(params.offset))
     if (params?.view) query.set('view', params.view)
     if (params?.perProjectLimit) query.set('perProjectLimit', String(params.perProjectLimit))
+    if (params?.archived !== undefined) query.set('archived', String(params.archived))
     const qs = query.toString()
     return api.get<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ''}`, options)
   },
@@ -468,6 +473,7 @@ export const sessionsApi = {
     if (params.cursor) query.set('cursor', params.cursor)
     if (params.beforeModifiedAt) query.set('beforeModifiedAt', params.beforeModifiedAt)
     if (params.beforeId) query.set('beforeId', params.beforeId)
+    if (params.archived !== undefined) query.set('archived', String(params.archived))
     return api.get<ProjectSessionHistoryResponse>(`/api/sessions/project-history?${query.toString()}`, options)
   },
 
@@ -575,6 +581,10 @@ export const sessionsApi = {
 
   rename(sessionId: string, title: string) {
     return api.patch<{ ok: true }>(`/api/sessions/${sessionId}`, { title })
+  },
+
+  setArchived(sessionId: string, archived: boolean) {
+    return api.patch<{ success: true; archived: boolean }>(`/api/sessions/${sessionId}/archive`, { archived })
   },
 
   getRecentProjects(limit?: number, scan?: number) {

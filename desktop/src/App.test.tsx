@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const uninstallHiddenSessionRelease = vi.hoisted(() => vi.fn())
@@ -29,10 +29,10 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
-  it('restores the power preference when the desktop app starts without opening settings', () => {
+  it('restores the power preference when the desktop app starts without opening settings', async () => {
     window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
     const restore = vi.spyOn(usePowerSettingsStore.getState(), 'restore').mockResolvedValue(undefined)
-    render(<App />)
+    await act(async () => { render(<App />) })
     expect(restore).toHaveBeenCalledTimes(1)
   })
 

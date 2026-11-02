@@ -58,6 +58,7 @@ describe('session collaboration', () => {
     await service.create(a.sessionId, { prompt: 'nested' })
     const queued = await service.create('root', { prompt: 'queued' })
     expect(queued).toMatchObject({ state: 'queued', delivery: 'queued' })
+    expect(service.hasPendingPowerWork()).toBe(true)
     expect(started).toHaveLength(3)
     expect((await service.status()).members.find(member => member.sessionId === queued.sessionId)?.state).toBe('queued')
     await service.onSessionState(a.sessionId, 'completed', 'done', 'completion-1')
@@ -67,6 +68,18 @@ describe('session collaboration', () => {
     expect(snapshot.messages.filter(message => message.id === 'completion-1')).toHaveLength(1)
     await service.onSessionState(a.sessionId, 'completed', 'done', 'completion-1')
     expect((await service.status()).messages.filter(message => message.id === 'completion-1')).toHaveLength(1)
+  })
+
+  test('power activity retains accepted collaboration messages until consumption and excludes cancelled queues', async () => {
+    expect(service.hasPendingPowerWork()).toBe(false)
+    const child = await service.create('root', { prompt: 'fixture' })
+    expect(service.hasPendingPowerWork()).toBe(true)
+    await service.onMessageConsumed(child.messageId)
+    expect(service.hasPendingPowerWork()).toBe(false)
+    await service.send('root', child.sessionId, 'next', 'pending-message')
+    expect(service.hasPendingPowerWork()).toBe(true)
+    await service.onStopped(child.sessionId)
+    expect(service.hasPendingPowerWork()).toBe(false)
   })
 
   test('injects into existing busy sessions and deduplicates retry ids', async () => {

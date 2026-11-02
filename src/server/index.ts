@@ -482,6 +482,7 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'client',
               clientKind: petAccessAuthorized ? 'pet' : 'full',
+              powerActivityLeaseAuthorized: !petAccessAuthorized && isLocalAccessAuthorized(req, localTokenOverride),
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,

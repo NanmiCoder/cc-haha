@@ -49,6 +49,7 @@ import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
 import { PreventSleepSettings } from './PreventSleepSettings'
+import { IdlePowerSettings } from './IdlePowerSettings'
 import { SettingsHelpTopic } from './SettingsHelpTopic'
 
 /**
@@ -1238,6 +1239,7 @@ export function GeneralSettings() {
       </SettingsSection>
 
       <PreventSleepSettings />
+      <IdlePowerSettings />
 
       <SettingsSection title={t('settings.general.networkTitle')} description={t('settings.general.networkDescription')}>
         <SettingsGroup>

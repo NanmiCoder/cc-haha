@@ -17,7 +17,7 @@
  */
 
 import * as path from 'node:path'
-import { enqueue } from './chat-queue.js'
+import { enqueueInboundPowerActivity, type InboundPowerLease } from './inbound-power-activity.js'
 import { adapterMigrationLifecycle } from './migration-lifecycle.js'
 import {
   getConfiguredWorkDir,
@@ -194,7 +194,7 @@ export class ImChatRuntime {
    */
   handleInbound(message: InboundChatMessage): Promise<void> {
     const { chatId, dedupKey } = message
-    if (!chatId) return Promise.resolve()
+    if (!chatId || adapterMigrationLifecycle.isQuiescing) return Promise.resolve()
     if (dedupKey && !this.dedup.tryRecord(`${this.port.platform}:${dedupKey}`)) {
       return Promise.resolve()
     }
@@ -204,38 +204,47 @@ export class ImChatRuntime {
       ?? ((message.attachments?.length ?? 0) > 0 || Boolean(message.loadAttachments))
     if (!text && !hasAttachments) return Promise.resolve()
 
-    return enqueue(chatId, async () => {
-      try {
-        await this.routeInbound({ ...message, text }, hasAttachments)
-      } catch (err) {
+    // Unpaired strangers must not hold the host awake. Pair synchronously before
+    // admission so the next message can observe the newly authorized sender.
+    if (!isAllowedUser(this.port.platform, message.userId)) return this.handlePairing({ ...message, text })
+
+    return enqueueInboundPowerActivity(
+      this.httpClient,
+      chatId,
+      lease => this.routeInbound({ ...message, text }, hasAttachments, lease),
+      async err => {
         this.port.setBusy?.(chatId, false)
         const detail = err instanceof Error ? err.message : String(err)
         console.error(`${this.port.logPrefix} Failed to handle message for ${chatId}:`, err)
         await this.notifySafely(chatId, `处理消息失败：${detail}`)
-      }
-    })
+      },
+    )
+  }
+
+  private async handlePairing(message: InboundChatMessage): Promise<void> {
+    const { chatId, userId, displayName, text } = message
+    const paired = text ? tryPair(text, { userId, displayName }, this.port.platform) : false
+    await this.notifySafely(
+      chatId,
+      paired
+        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话，发送 /help 查看可用命令。'
+        : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
+    )
   }
 
   private async routeInbound(
     message: InboundChatMessage,
     hasAttachments: boolean,
+    lease?: InboundPowerLease,
   ): Promise<void> {
-    const { chatId, userId, displayName, text } = message
+    const { chatId, userId, text } = message
 
     if (!isAllowedUser(this.port.platform, userId)) {
-      const paired = text
-        ? tryPair(text, { userId, displayName }, this.port.platform)
-        : false
-      await this.port.sendNotice(
-        chatId,
-        paired
-          ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话，发送 /help 查看可用命令。'
-          : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
-      )
+      await this.handlePairing(message)
       return
     }
 
-    if (!hasAttachments && (await this.tryHandleCommand(chatId, text))) return
+    if (!hasAttachments && (await this.tryHandleCommand(chatId, text, lease))) return
 
     const decision = hasAttachments
       ? null
@@ -269,7 +278,11 @@ export class ImChatRuntime {
       chatId,
       effective,
       attachments.length > 0 ? attachments : undefined,
+      lease?.id,
     )
+    // Socket send is not admission: the server releases this exact id only after
+    // its own busy state takes over, including startup and rejection paths.
+    if (sent && lease) lease.transferred = true
     if (!sent) {
       this.port.setBusy?.(chatId, false)
       this.getRuntimeState(chatId).state = 'idle'
@@ -278,7 +291,7 @@ export class ImChatRuntime {
   }
 
   /** Returns true when `text` was a command and has been fully handled. */
-  private async tryHandleCommand(chatId: string, text: string): Promise<boolean> {
+  private async tryHandleCommand(chatId: string, text: string, lease?: InboundPowerLease): Promise<boolean> {
     if (HELP_ALIASES.has(text)) {
       await this.port.sendNotice(chatId, formatImHelp())
       return true
@@ -317,7 +330,8 @@ export class ImChatRuntime {
         return true
       }
       this.clearTransientChatState(chatId)
-      const sent = this.bridge.sendUserMessage(chatId, '/clear')
+      const sent = this.bridge.sendUserMessage(chatId, '/clear', undefined, lease?.id)
+      if (sent && lease) lease.transferred = true
       if (sent) this.getRuntimeState(chatId).state = 'thinking'
       await this.port.sendNotice(
         chatId,

@@ -45,6 +45,7 @@ export class TeamPlanService {
   /** Approvals whose plan may already read `launching` before its launch is registered. */
   private approving = new Set<string>()
   constructor(private runtime: TeamPlanRuntimeAdapter = defaultRuntime) {}
+  hasActiveOperations(): boolean { return this.approving.size > 0 || this.launches.size > 0 }
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
     // A server restart lost ownership of an unfinished launch. Never silently replay it.

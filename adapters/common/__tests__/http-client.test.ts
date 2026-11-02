@@ -63,6 +63,40 @@ describe('AdapterHttpClient', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer adapter-secret')
   })
 
+  it('acquires and releases local inbound activity with authenticated bounded requests', async () => {
+    client = new AdapterHttpClient('ws://127.0.0.1:3456', { localAccessToken: 'fixture-lease-token' })
+    const requests: RequestInit[] = []
+    globalThis.fetch = mock(async (url, init) => {
+      expect(String(url)).toBe('http://127.0.0.1:3456/api/sessions/power-activity-lease')
+      requests.push(init!)
+      return Response.json({ ok: true })
+    }) as unknown as typeof fetch
+    expect(await client.acquirePowerActivityLease('adapter:message')).toBe(true)
+    await client.releasePowerActivityLease('adapter:message')
+    expect(requests.map(init => JSON.parse(String(init.body)))).toEqual([
+      { leaseId: 'adapter:message', active: true }, { leaseId: 'adapter:message', active: false },
+    ])
+    for (const init of requests) {
+      expect(init.method).toBe('POST')
+      expect(init.redirect).toBe('error')
+      expect(init.signal).toBeInstanceOf(AbortSignal)
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer fixture-lease-token')
+    }
+  })
+
+  it('only treats a 404 lease response as an older server', async () => {
+    globalThis.fetch = mock(async () => new Response(null, { status: 404 })) as unknown as typeof fetch
+    expect(await client.acquirePowerActivityLease('adapter:message')).toBe(false)
+    for (const status of [401, 403, 429, 500]) {
+      globalThis.fetch = mock(async () => new Response(null, { status })) as unknown as typeof fetch
+      await expect(client.acquirePowerActivityLease('adapter:message')).rejects.toThrow(`(${status})`)
+    }
+    globalThis.fetch = mock(async () => Response.json({ ok: false })) as unknown as typeof fetch
+    await expect(client.acquirePowerActivityLease('adapter:message')).rejects.toThrow('not acknowledged')
+    globalThis.fetch = mock(async () => { throw new Error('fixture connection lost') }) as unknown as typeof fetch
+    await expect(client.acquirePowerActivityLease('adapter:message')).rejects.toThrow('fixture connection lost')
+  })
+
   it('listRecentProjects calls GET /api/sessions/recent-projects', async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'im-root-'))
     const projectDir = fs.mkdtempSync(path.join(rootDir, 'project-'))

@@ -24,6 +24,7 @@ export type SessionListItem = {
   /** Server-owned, immutable after creation; absent legacy values mean standard. */
   agentProfile?: AgentProfile
   id: string
+  archived?: boolean
   title: string
   createdAt: string
   modifiedAt: string
