@@ -28,26 +28,37 @@ afterEach(async () => {
  * The probe runs in a child process because the parent's event loop is what the
  * startup work blocks: an in-process fetch could only be answered after the
  * block either way, while a kernel-level connect to a listening socket succeeds
- * immediately. That difference is exactly what told #1746's reporter that the
- * sidecar "never started": before the fix, `Bun.serve` ran *after* the index
- * startup pass, so nothing was listening at all.
+ * immediately. Before the fix `Bun.serve` ran *after* the index startup pass,
+ * so nothing was listening at all and #1746 looked like a dead sidecar. HTTP
+ * `/health` is still answered only once that pass returns; the desktop host
+ * uses this TCP difference to report "listening but busy" instead.
  */
 const PROBE_SCRIPT = `
 const net = require('node:net')
-const started = Date.now()
-const port = Number(process.argv[2])
-const deadline = started + 10_000
+// \`bun -e <script> <port>\` passes [bun, port]: the port is the last argument.
+const port = Number(process.argv[process.argv.length - 1])
+if (!Number.isInteger(port) || port <= 0) {
+  console.log('bad-port')
+  process.exit(0)
+}
+const deadline = Date.now() + 15_000
+let announced = false
 function attempt() {
   const socket = net.connect({ host: '127.0.0.1', port })
   socket.once('connect', () => {
-    console.log(Date.now() - started)
+    console.log('connected ' + Date.now())
     socket.destroy()
     process.exit(0)
   })
   socket.once('error', () => {
     socket.destroy()
+    // Tell the parent the probe is live and polling before it boots the server.
+    if (!announced) {
+      announced = true
+      console.log('ready')
+    }
     if (Date.now() > deadline) {
-      console.log(-1)
+      console.log('timeout')
       process.exit(0)
     }
     setTimeout(attempt, 20)
@@ -55,6 +66,20 @@ function attempt() {
 }
 attempt()
 `
+
+async function readUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  predicate: (text: string) => boolean,
+): Promise<string> {
+  const decoder = new TextDecoder()
+  let text = ''
+  while (!predicate(text)) {
+    const { value, done } = await reader.read()
+    if (done) break
+    text += decoder.decode(value, { stream: true })
+  }
+  return text
+}
 
 test('binds the port before the synchronous part of index startup', async () => {
   const busyMs = 1_500
@@ -72,19 +97,41 @@ test('binds the port before the synchronous part of index startup', async () => 
       stdout: 'pipe',
       stderr: 'ignore',
     })
-    await Bun.sleep(150)
+    const reader = probe.stdout.getReader()
+    expect(await readUntil(reader, text => text.includes('\n'))).toBe('ready\n')
     expect(startSpy).not.toHaveBeenCalled()
 
+    const startedAt = Date.now()
     server = startServer(probePort, '127.0.0.1')
-    const [output] = await Promise.all([new Response(probe.stdout).text(), probe.exited])
+    const output = (await readUntil(reader, () => false)).trim()
+    await probe.exited
     // The listener accepts connections while the startup pass still owns the
-    // event loop, so the probe succeeds well inside the busy window.
-    const connectedAt = Number(output.trim())
-    expect(connectedAt).toBeGreaterThanOrEqual(0)
-    expect(connectedAt).toBeLessThan(busyMs)
+    // event loop. Measured from the startServer() call, a bind that waited for
+    // that pass lands at or after busyMs; a probe that crashed or timed out
+    // fails the format check instead of reading as a fast connect.
+    expect(output).toMatch(/^connected \d+$/)
+    const connectedAfter = Number(output.slice('connected '.length)) - startedAt
+    expect(connectedAfter).toBeLessThan(busyMs)
     expect(startSpy).toHaveBeenCalled()
     expect((await fetch(`http://127.0.0.1:${server.port}/health`)).status).toBe(200)
   } finally {
+    startSpy.mockRestore()
+  }
+})
+
+test('logs module load time before it binds, so a silent pre-bind phase is attributable', async () => {
+  const startSpy = spyOn(localIndexCoordinator, 'start').mockImplementation(() => Promise.resolve())
+  const logSpy = spyOn(console, 'log')
+  try {
+    server = startServer(0, '127.0.0.1')
+    const lines = logSpy.mock.calls.map(call => String(call[0]))
+    const loaded = lines.findIndex(line =>
+      /^\[Server\] modules loaded \d+ ms after process start; binding 127\.0\.0\.1:0$/.test(line))
+    const running = lines.findIndex(line => line.startsWith('[Server] Claude Code API server running'))
+    expect(loaded).toBeGreaterThanOrEqual(0)
+    expect(running).toBeGreaterThan(loaded)
+  } finally {
+    logSpy.mockRestore()
     startSpy.mockRestore()
   }
 })

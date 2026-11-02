@@ -36,15 +36,17 @@ Response shape:
 
 ## Startup order
 
-`Bun.serve` finishes binding the port before local index startup begins:
+`Bun.serve` binds the port before local index startup begins:
 
-1. The port is bound and starts accepting requests.
-2. Background work starts the session projection first, then the full-text backfill.
-3. REST requests that need the index await `localIndexCoordinator.start()` inside `fetch`; `/health` waits for no subsystem.
+1. The port is bound; from here the operating system accepts TCP connections.
+2. In the same synchronous call, background index startup begins. The session projection opens SQLite and reads `source_files` before its first `await`; the full-text backfill follows later.
+3. `/health` is answered once that synchronous part returns to the event loop. It does not wait for discovery, projection, or backfill; the file watchers that follow open 25 project directories at a time and yield in between. REST requests that need the index await `localIndexCoordinator.start()` inside `fetch`.
 
-The order matters because opening SQLite and scanning `source_files` run synchronously before the first `await` in the coordinator. Running them ahead of `Bun.serve` left the port unbound for the whole synchronous pass, so a host probe saw "not bound yet" and reported it as "the process is dead".
+Before any of this, `startServer` logs `[Server] modules loaded <ms> ms after process start; binding <host>:<port>`. In the desktop sidecar, the time between `[claude-sidecar] starting server mode` and that line is module loading; whatever follows until `[Server] Claude Code API server running` is startup work.
 
-Index rebuilds are resumable: every transcript commits its own transaction, so work already committed survives a restart. The first launch after a parser version bump (for example v12 → v13) re-projects every transcript, which scales with transcript volume. That pass logs `[local-index]` phase lines: `opening`, `opened`, `rebuilding <n> sources`, `discovery start`, throttled `projected <done>/<total>`, `discovery complete`, and `activity backfill start/complete`. The lines go to stdout, which the desktop host captures into the `Recent server logs` section of its startup-failure dialog.
+Binding first does not make `/health` answer sooner, because HTTP still waits for the synchronous part. What it changes is what the host can see: with the old order the port stayed unbound for the whole synchronous pass, which looked like a dead process. Now an open port with a silent `/health` reads as "alive but busy", and the desktop host words its timeout accordingly.
+
+Index rebuilds are resumable: every transcript commits its own transaction, so work already committed survives a restart. The first launch after a parser version bump (for example v12 → v13) re-projects every transcript, which scales with transcript volume. The first full sweep after startup logs `[local-index]` phase lines: `opening`, `opened`, `ready to reconcile`, `rebuilding <n> sources`, `discovery start`, `reprojected <n> sources (<checked>/<known> checked)` at most every 5 s, `discovery complete`, and `activity backfill start/complete`. Progress counts only files that were actually re-read. The periodic safety sweeps that follow stay silent unless they re-read files, and then log a single `discovery complete` line. The lines go to stdout, which the desktop host keeps in its diagnostics log and in the `Recent server logs` section of the startup-failure dialog.
 
 ## Startup options
 

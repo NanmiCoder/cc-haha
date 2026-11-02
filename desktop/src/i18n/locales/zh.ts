@@ -4011,7 +4011,9 @@ export const zh: Record<TranslationKey, string> = {
 
   // ─── 应用外壳 ──────────────────────────────────────
   'app.serverFailed': '本地服务启动失败',
+  'app.serverStillStarting': '本地服务仍在启动',
   'app.serverFailedHint': '反馈这个问题时，请把这块诊断信息截图一起发到 issue 里。',
+  'app.serverStillStartingHint': '本地服务进程仍在运行，只是还没完成启动，可能正在重建本地索引（升级后首次启动或会话较多时会比较久）。请稍等片刻再点「重试」，会继续等待同一个服务，已完成的进度不会丢失。',
   'app.startupError': '启动错误',
   'app.serverLogs': '服务日志',
   'app.copyDiagnostics': '复制诊断信息',

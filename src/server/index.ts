@@ -238,6 +238,10 @@ function originFromUrl(value: string | null): string | null {
 }
 
 export function startServer(port = PORT, host = HOST) {
+  // Everything before this point is module loading. When a host reports that
+  // the sidecar "never started listening", this line splits that time from
+  // the work below that still runs before Bun.serve binds (#1746).
+  console.log(`[Server] modules loaded ${Math.round(performance.now())} ms after process start; binding ${host}:${port}`)
   if (process.env.CC_HAHA_MIGRATION_VALIDATION === '1') migrationMaintenance.beginValidation()
   if (!migrationMaintenance.isActive) enableConfigs()
   const trustedRendererOrigin = resolveTrustedRendererOrigin(process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN)

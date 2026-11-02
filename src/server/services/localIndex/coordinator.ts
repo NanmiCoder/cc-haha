@@ -497,6 +497,10 @@ export function createLocalIndexCoordinator(
   let watcher: ReconciliationWatcher | undefined
   let watcherHealthy = true
   let storageLimited = false
+  // Only the first full sweep after start() narrates itself. Later sweeps run
+  // every few minutes and stay silent unless they actually re-project files,
+  // so lifecycle lines cannot crowd the host's bounded diagnostics log.
+  let startupSweepPending = false
   let failedPaths = new Map<string, string>()
   let fullSweepFailureCode: string | null = null
   // A code restored from the previous run's backfill state describes that
@@ -580,9 +584,15 @@ export function createLocalIndexCoordinator(
    * version bump invalidates every source fingerprint, so every transcript is
    * re-projected on one event loop. Say so once, with counts (#1746).
    */
-  const logPendingParserRebuild = (sources: readonly { parserVersion: number }[]): void => {
+  const logPendingParserRebuild = (sources: readonly {
+    parserVersion: number
+    lastErrorCode: string | null
+  }[]): void => {
+    // A size-limited source keeps the parser version of its last successful
+    // projection, so counting it would repeat this line on every launch.
     const pending = sources.filter(source =>
-      source.parserVersion !== SESSION_SUMMARY_PARSER_VERSION)
+      source.parserVersion !== SESSION_SUMMARY_PARSER_VERSION &&
+      source.lastErrorCode !== LOCAL_INDEX_SOURCE_LIMIT)
     if (pending.length === 0) return
     const previousVersions = [...new Set(pending.map(source => source.parserVersion))]
       .sort((left, right) => left - right)
@@ -683,6 +693,7 @@ export function createLocalIndexCoordinator(
     activeIndex: SessionIndex,
     activeProjector: SessionProjector,
     isActiveGeneration: () => boolean,
+    narrate = false,
   ): Promise<void> => {
     if (
       typeof activeIndex.listActivitySources !== 'function' ||
@@ -693,7 +704,7 @@ export function createLocalIndexCoordinator(
     }
     const existingSources = activeIndex.listActivitySources()
     const activityStartedAt = now()
-    log(`activity backfill start (${existingSources.length} known sources)`)
+    if (narrate) log(`activity backfill start (${existingSources.length} known sources)`)
     const discovery = await discoverActivitySources(activeScope, signal)
     if (!isActiveGeneration()) return
     const complete = discovery.complete && !(
@@ -767,10 +778,12 @@ export function createLocalIndexCoordinator(
         updatedAtMs: now(),
       })
     })
-    log(
-      `activity backfill complete: ${indexed}/${discovered} indexed, ${degraded} degraded ` +
-      `in ${Math.max(0, now() - activityStartedAt)} ms`,
-    )
+    if (narrate) {
+      log(
+        `activity backfill complete: ${indexed}/${discovered} indexed, ${degraded} degraded ` +
+        `in ${Math.max(0, now() - activityStartedAt)} ms`,
+      )
+    }
   }
 
   const runDiscoveryGeneration = async (
@@ -792,9 +805,11 @@ export function createLocalIndexCoordinator(
     if (!isActiveGeneration()) return
     refreshStorageStatus(activeDatabase)
     if (storageLimited) return
+    const narrate = startupSweepPending
+    startupSweepPending = false
     const discoveryStartedAt = now()
     const existingSources = activeIndex.listSources()
-    log(`discovery start (${existingSources.length} known sources)`)
+    if (narrate) log(`discovery start (${existingSources.length} known sources)`)
     const existingPaths = new Set(existingSources.map(source => source.path))
     const seenPaths = new Set<string>()
     const knownPaths = new Set(existingPaths)
@@ -808,16 +823,22 @@ export function createLocalIndexCoordinator(
       paths: sweepFailedPaths,
     }
     activeSweepFailures = sweepFailures
+    let checked = 0
+    let reprojected = 0
     let lastProgressAt = discoveryStartedAt
-    let projectedSinceLog = 0
-    /** Throttled progress: every 25 projected sources or 2 s, whichever first. */
-    const logProgress = (): void => {
-      projectedSinceLog += 1
-      const elapsed = now() - lastProgressAt
-      if (projectedSinceLog < 25 && elapsed < 2_000) return
-      projectedSinceLog = 0
+    /**
+     * Progress over files that were actually re-read, at most one line per
+     * 5 s and only while the startup sweep narrates. A time budget keeps the
+     * line count tied to how long the rebuild runs rather than to how many
+     * transcripts exist, so the host's bounded log keeps its earlier lines.
+     */
+    const logProgress = (action: string): void => {
+      checked += 1
+      if (action === 'unchanged') return
+      reprojected += 1
+      if (!narrate || now() - lastProgressAt < 5_000) return
       lastProgressAt = now()
-      log(`projected ${committedPaths.size}/${knownPaths.size}`)
+      log(`reprojected ${reprojected} sources (${checked}/${knownPaths.size} checked)`)
     }
 
     indexScopedFailureCode = null
@@ -908,7 +929,7 @@ export function createLocalIndexCoordinator(
                 ...status,
                 indexed: committedPaths.size,
               }
-              logProgress()
+              logProgress(result.kind === 'indexed' ? result.action : 'unchanged')
             }
           } catch (error) {
             if (!isActiveGeneration()) return
@@ -1008,10 +1029,12 @@ export function createLocalIndexCoordinator(
       }
       fullSweepFailureFromPreviousRun = false
       if (activeSweepFailures === sweepFailures) activeSweepFailures = null
-      log(
-        `discovery complete: ${knownPaths.size} discovered, ${committedPaths.size} indexed, ` +
-        `${degraded} degraded in ${Math.max(0, now() - discoveryStartedAt)} ms`,
-      )
+      if (narrate || reprojected > 0) {
+        log(
+          `discovery complete: ${knownPaths.size} discovered, ${committedPaths.size} indexed, ` +
+          `${reprojected} reprojected, ${degraded} degraded in ${Math.max(0, now() - discoveryStartedAt)} ms`,
+        )
+      }
       try {
         await runActivityDiscoveryGeneration(
           signal,
@@ -1020,6 +1043,7 @@ export function createLocalIndexCoordinator(
           activeIndex,
           activeProjector,
           isActiveGeneration,
+          narrate,
         )
       } catch (error) {
         if (isActiveGeneration()) {
@@ -1290,6 +1314,7 @@ export function createLocalIndexCoordinator(
       watcherHealthy = true
       storageLimited = false
       scheduling = { maxBatchSize: 0, yieldCount: 0 }
+      startupSweepPending = true
       const activeWatcher = createWatcher({
         scope: resolvedScope,
         yieldToForeground,

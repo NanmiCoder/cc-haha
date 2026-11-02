@@ -38,13 +38,15 @@ curl http://127.0.0.1:3456/health
 
 `Bun.serve` 先完成端口监听，之后才开始本地索引初始化：
 
-1. 端口绑定并开始接收请求。
-2. 后台按优先级启动本地索引投影与全文检索回填。
-3. 需要索引的 REST 请求在 `fetch` 内等待 `localIndexCoordinator.start()`；`/health` 不等待任何子系统。
+1. 端口绑定，从这里开始操作系统就会接受 TCP 连接。
+2. 在同一次同步调用里启动后台索引。会话投影在第一个 `await` 之前打开 SQLite、读取 `source_files`，全文检索回填随后才开始。
+3. 这段同步工作交还事件循环后，`/health` 就能应答，不等待发现、投影或回填；随后建立文件监听时每处理 25 个项目目录就让出一次事件循环。需要索引的 REST 请求在 `fetch` 内等待 `localIndexCoordinator.start()`。
 
-这样安排是因为打开 SQLite、读取 `source_files` 这些步骤在第一个 `await` 之前同步执行。若把它们放在 `Bun.serve` 之前，端口在整个同步初始化期间都不监听，宿主探针会把「还没 bind」误判成「进程已死」。
+在这一切之前，`startServer` 会先打印 `[Server] modules loaded <ms> ms after process start; binding <host>:<port>`。在桌面 sidecar 里，`[claude-sidecar] starting server mode` 到这一行之间是模块加载耗时；之后到 `[Server] Claude Code API server running` 是启动工作。
 
-索引重建是可续跑的：每份 transcript 单独提交事务，进程重启后已提交的部分不会重做。首次启动遇到 parser 版本升级（例如 v12 → v13）会全量重投影，耗时随数据量线性增长。这段过程会打印 `[local-index]` 前缀的分阶段日志：`opening`、`opened`、`rebuilding <n> sources`、`discovery start`、节流后的 `projected <done>/<total>`、`discovery complete`、`activity backfill start/complete`。日志写 stdout，桌面端会把它收进启动失败弹窗的 `Recent server logs`。
+先监听并不会让 `/health` 更早应答，HTTP 仍要等这段同步工作结束。它改变的是宿主能看到的状态：旧顺序下整个同步初始化期间端口都不监听，看起来像进程已死；现在端口已打开而 `/health` 没有应答，就能判断为「进程活着但很忙」，桌面端的超时文案也据此区分。
+
+索引重建是可续跑的：每份 transcript 单独提交事务，进程重启后已提交的部分不会重做。首次启动遇到 parser 版本升级（例如 v12 → v13）会全量重投影，耗时随数据量线性增长。启动后的第一轮全量扫描会打印 `[local-index]` 前缀的分阶段日志：`opening`、`opened`、`ready to reconcile`、`rebuilding <n> sources`、`discovery start`、最多每 5 秒一行的 `reprojected <n> sources (<checked>/<known> checked)`、`discovery complete`、`activity backfill start/complete`。进度只统计真正重新读取的文件。之后定期的兜底扫描保持安静，只有确实重新读取了文件时才打印一行 `discovery complete`。日志写 stdout，桌面端会把它记进诊断日志，也会放进启动失败弹窗的 `Recent server logs`。
 
 ## 启动参数
 

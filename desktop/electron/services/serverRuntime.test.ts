@@ -563,6 +563,38 @@ describe('ElectronServerRuntime', () => {
     expect(sidecarMocks.serverChildren[0]!.kill).not.toHaveBeenCalled()
   })
 
+  it('replaces a retained child that exits on its own at the next retry', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+    const retained = sidecarMocks.serverChildren[0]!
+
+    // The retained process dies between attempts; probing it again would only
+    // replay its exit, so the next retry must start a fresh sidecar.
+    retained.exitCode = 9
+    retained.emit('exit', 9, null)
+    sidecarMocks.waitForServerImpl = () => Promise.resolve()
+
+    await expect(runtime.getServerUrl()).resolves.toBe('http://127.0.0.1:49322')
+    expect(sidecarMocks.serverChildren).toHaveLength(2)
+    expect(retained.kill).not.toHaveBeenCalled()
+  })
+
+  it('does not kill a retained child that already exited when the app stops', async () => {
+    sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
+    const runtime = createRuntime()
+    await expect(runtime.startServer()).rejects.toThrow('health wait timed out')
+    const retained = sidecarMocks.serverChildren[0]!
+
+    // Nobody is probing when it exits. On Windows a later kill is
+    // `taskkill /F /T /PID`, which could hit a process that reused the PID.
+    retained.exitCode = 9
+    retained.emit('exit', 9, null)
+    runtime.stopAll(true)
+
+    expect(retained.kill).not.toHaveBeenCalled()
+  })
+
   it('kills a retained startup child on stopAll', async () => {
     sidecarMocks.waitForServerImpl = () => Promise.reject(new Error('health wait timed out'))
     const runtime = createRuntime()

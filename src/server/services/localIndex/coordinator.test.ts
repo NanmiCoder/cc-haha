@@ -20,6 +20,7 @@ import {
 } from './sessionIndex.js'
 import {
   createSessionProjector,
+  LOCAL_INDEX_SOURCE_LIMIT,
   MAX_PROJECTION_RECORD_BYTES,
   MAX_PROJECTION_RECORDS,
   type ProjectionProgress,
@@ -84,6 +85,22 @@ async function waitFor(
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('condition timed out')
     await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
+function idleWatcher(): ReconciliationWatcher {
+  return {
+    async start() {},
+    async stop() {},
+    queueTranscriptPath() {},
+    queueFullSweep() {},
+    getMetrics: () => ({
+      queuedPaths: 0,
+      maxBatchSize: 0,
+      yielded: 0,
+      fullSweeps: 0,
+      watchFailures: 0,
+    }),
   }
 }
 
@@ -1437,23 +1454,36 @@ describe('local index coordinator', () => {
     await restarted.stop()
   })
 
-  it('logs the startup timeline and names a pending parser rebuild', async () => {
+  it('narrates only the startup sweep and counts re-read files, not unchanged ones', async () => {
     const lines: string[] = []
-    const index = createFakeIndex([candidate(1), candidate(2)])
-    // Both sources were projected by an older parser, so the fingerprint
-    // comparison forces a full re-projection on the next start (#1746).
+    const candidates = Array.from({ length: 30 }, (_, offset) => candidate(offset + 1))
+    const index = createFakeIndex(candidates)
+    // Every source was projected by an older parser, so the next start
+    // re-projects all of them (#1746). A size-limited source keeps the version
+    // of its last successful projection forever and must not be counted.
     for (const source of index.listSources()) source.parserVersion = 12
+    const limited = index.listSources().find(source => source.path === candidates[29]!.path)!
+    limited.state = 'degraded'
+    limited.lastErrorCode = LOCAL_INDEX_SOURCE_LIMIT
+    let actionFor: (path: string) => 'rebuild' | 'append' | 'unchanged' = () => 'rebuild'
+    let watcherOptions!: ReconciliationWatcherOptions
+    // Each projection advances the clock, so the 5 s progress budget decides
+    // when a progress line is due.
+    let clock = 1_700_000_000_000
+    let msPerProjection = 1_000
     const coordinator = createLocalIndexCoordinator({
       resolveMode: () => ({ mode: 'on', warningCode: null }),
       resolveScope: () => '/tmp/config',
       resolveDatabasePath: () => '/tmp/config/index.sqlite',
       openDatabase: () => fakeDatabase(() => {}),
       createIndex: () => index,
+      now: () => clock,
       createProjector: () => ({
-        async projectSource() {
+        async projectSource(item) {
+          clock += msPerProjection
           return {
             kind: 'indexed',
-            action: 'unchanged',
+            action: actionFor(item.path),
             projection: {
               summary: {
                 title: 'existing',
@@ -1473,23 +1503,88 @@ describe('local index coordinator', () => {
           return { kind: 'deleted' }
         },
       }),
-      discoverSources: async () => [candidate(1), candidate(2)],
+      discoverSources: async () => candidates,
+      createWatcher: options => {
+        watcherOptions = options
+        return idleWatcher()
+      },
       log: line => lines.push(line),
     })
 
-    await coordinator.start()
-    // Committed rows already serve `ready`; wait for the background generation
-    // to finish so the phase-completion lines exist.
-    await waitFor(() => lines.some(line => line.startsWith('discovery complete')))
-    await coordinator.stop()
+    try {
+      await coordinator.start()
+      // Committed rows already serve `ready`; wait for the background
+      // generation so the phase-completion line exists.
+      await waitFor(() => lines.some(line => line.startsWith('discovery complete')))
+      expect(lines).toEqual([
+        expect.stringMatching(/^opening .*index\.sqlite$/),
+        'opened in 0 ms',
+        'ready to reconcile (30 indexed sources)',
+        `rebuilding 29 sources (parser v12 → v${SESSION_SUMMARY_PARSER_VERSION})`,
+        'discovery start (30 known sources)',
+        'reprojected 5 sources (5/30 checked)',
+        'reprojected 10 sources (10/30 checked)',
+        'reprojected 15 sources (15/30 checked)',
+        'reprojected 20 sources (20/30 checked)',
+        'reprojected 25 sources (25/30 checked)',
+        'reprojected 30 sources (30/30 checked)',
+        'discovery complete: 30 discovered, 30 indexed, 30 reprojected, 0 degraded in 30000 ms',
+      ])
 
-    expect(lines[0]).toMatch(/^opening .*index\.sqlite$/)
-    expect(lines).toContainEqual(expect.stringMatching(/^opened in \d+ ms$/))
-    expect(lines).toContain(`rebuilding 2 sources (parser v12 → v${SESSION_SUMMARY_PARSER_VERSION})`)
-    expect(lines).toContainEqual(expect.stringMatching(/^discovery start \(2 known sources\)$/))
-    expect(lines).toContainEqual(expect.stringMatching(
-      /^discovery complete: 2 discovered, 2 indexed, 0 degraded in \d+ ms$/,
-    ))
+      // The periodic safety sweep over unchanged files must stay silent: each
+      // line costs the desktop host a rewrite of its bounded diagnostics log.
+      lines.length = 0
+      actionFor = () => 'unchanged'
+      await watcherOptions.onBatch({ paths: [], fullSweep: true })
+      expect(lines).toEqual([])
+
+      // A later sweep that does re-read files reports only that it did, with
+      // no progress lines even when it runs past the progress interval.
+      actionFor = path => path === candidates[0]!.path ? 'append' : 'unchanged'
+      msPerProjection = 3_000
+      await watcherOptions.onBatch({ paths: [], fullSweep: true })
+      expect(lines).toEqual([
+        'discovery complete: 30 discovered, 30 indexed, 1 reprojected, 0 degraded in 90000 ms',
+      ])
+    } finally {
+      await coordinator.stop()
+    }
+  })
+
+  it('narrates the activity backfill only during the startup sweep', async () => {
+    const root = await createTempDir('coordinator-activity-narration')
+    const configDir = join(root, 'config')
+    const databasePath = join(configDir, 'cc-haha', 'db', 'index-v1.sqlite')
+    await createRealTranscript(configDir, '-repo', 'activity-narration', 'Initial')
+    rememberEnvironment()
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    const lines: string[] = []
+    let watcherOptions!: ReconciliationWatcherOptions
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => configDir,
+      resolveDatabasePath: () => databasePath,
+      createWatcher: options => {
+        watcherOptions = options
+        return idleWatcher()
+      },
+      log: line => lines.push(line),
+    })
+
+    try {
+      await coordinator.start()
+      await waitFor(() => lines.some(line => line.startsWith('activity backfill complete')))
+      expect(lines).toContainEqual(expect.stringMatching(/^activity backfill start \(\d+ known sources\)$/))
+      expect(lines).toContainEqual(expect.stringMatching(
+        /^activity backfill complete: 1\/1 indexed, 0 degraded in \d+ ms$/,
+      ))
+
+      lines.length = 0
+      await watcherOptions.onBatch({ paths: [], fullSweep: true })
+      expect(lines).toEqual([])
+    } finally {
+      await coordinator.stop()
+    }
   })
 
   it('keeps old rows when discovery fails transiently and exposes a sanitized degraded state', async () => {

@@ -4013,7 +4013,9 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'Local server failed to start',
+  'app.serverStillStarting': 'Local server is still starting',
   'app.serverFailedHint': 'Please include a screenshot of this diagnostic panel when reporting the issue.',
+  'app.serverStillStartingHint': 'The local server process is still running but has not finished starting; it may be rebuilding its local index, which can take a while on the first launch after an update or with many conversations. Wait a moment, then press Retry: it keeps waiting on the same server, and finished work is kept.',
   'app.startupError': 'Startup error',
   'app.serverLogs': 'Server logs',
   'app.copyDiagnostics': 'Copy diagnostics',

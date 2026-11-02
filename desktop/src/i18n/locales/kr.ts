@@ -4016,7 +4016,9 @@ export const kr: Record<TranslationKey, string> = {
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
+  'app.serverStillStarting': '로컬 서버가 아직 시작 중입니다',
   'app.serverFailedHint': '문제를 신고할 때 이 진단 패널의 스크린샷을 첨부해 주세요.',
+  'app.serverStillStartingHint': '로컬 서버 프로세스는 계속 실행 중이지만 아직 시작을 마치지 못했습니다. 로컬 인덱스를 다시 만드는 중일 수 있습니다(업데이트 후 첫 실행이거나 대화가 많으면 시간이 걸립니다). 잠시 기다린 뒤 "다시 시도"를 누르세요. 같은 서버를 계속 기다리며 완료된 진행 상황은 유지됩니다.',
   'app.startupError': '시작 오류',
   'app.serverLogs': '서버 로그',
   'app.copyDiagnostics': '진단 정보 복사',

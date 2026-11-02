@@ -4014,7 +4014,9 @@ export const jp: Record<TranslationKey, string> = {
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'ローカルサーバーの起動に失敗しました',
+  'app.serverStillStarting': 'ローカルサーバーはまだ起動中です',
   'app.serverFailedHint': '問題を報告する際は、この診断パネルのスクリーンショットを添付してください。',
+  'app.serverStillStartingHint': 'ローカルサーバーのプロセスは動作中ですが、まだ起動が完了していません。ローカルインデックスを再構築している可能性があります（アップデート後の初回起動や会話が多い場合は時間がかかります）。少し待ってから「再試行」を押してください。同じサーバーを待ち続けるため、完了した進捗は失われません。',
   'app.startupError': '起動エラー',
   'app.serverLogs': 'サーバーログ',
   'app.copyDiagnostics': '診断情報をコピー',

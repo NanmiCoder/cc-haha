@@ -24,6 +24,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { isBrowserSafePort } from '../../src/lib/browserSafePort'
+import { formatSidecarStartupTimeout } from '../../src/lib/sidecarStartupError'
 import { redactDiagnosticText } from '../../../src/server/services/diagnosticRedaction'
 
 export const SERVER_BIND_HOST = '0.0.0.0'
@@ -286,16 +287,14 @@ export async function waitForServer(host: string, port: number, timeoutMs = SERV
   // with a silent /health means the event loop is busy (typically a local index
   // rebuild). Collapsing both into one message sent every reader of #1746 down
   // the wrong path.
-  const listening = await isPortListening(host, port)
-  const reason = lastError ? ` (last probe: ${lastError.message})` : ''
-  if (listening) {
-    throw new Error(
-      `desktop server is listening on ${host}:${port} but did not answer ${healthUrl} within ${Math.round(timeoutMs / 1000)} seconds; the process is alive and may still be rebuilding its local index${reason}`,
-    )
-  }
-  throw new Error(
-    `desktop server never started listening on ${host}:${port} within ${Math.round(timeoutMs / 1000)} seconds; the process may still be initializing${reason}`,
-  )
+  throw new Error(formatSidecarStartupTimeout({
+    listening: await isPortListening(host, port),
+    host,
+    port,
+    healthUrl,
+    timeoutMs,
+    lastProbeError: lastError?.message,
+  }))
 }
 
 /** Best-effort TCP connect probe: distinguishes "not bound yet" from "busy". */
