@@ -1208,6 +1208,17 @@ export async function runHeadless(
   )
 }
 
+export function createPromptSuggestionActivityEmitter(structuredIO: StructuredIO) {
+  return (generationId: string, active: boolean) => structuredIO.outbound.enqueue({
+    type: 'system',
+    subtype: 'prompt_suggestion_activity',
+    generation_id: generationId,
+    active,
+    uuid: randomUUID(),
+    session_id: getSessionId(),
+  })
+}
+
 export function bindAgentRunMessageSink(structuredIO: StructuredIO): () => void {
   if (!(structuredIO instanceof RemoteIO)) return () => undefined
   return setAgentRunMessageSink(event => {
@@ -2269,14 +2280,7 @@ function runHeadlessStreaming(
           getAppState,
           isResultHeld: () => heldBackResult !== null,
           emit: message => output.enqueue(message),
-          onActivity: (generationId, active) => output.enqueue({
-            type: 'system',
-            subtype: 'prompt_suggestion_activity',
-            generation_id: generationId,
-            active,
-            uuid: randomUUID(),
-            session_id: getSessionId(),
-          }),
+          onActivity: createPromptSuggestionActivityEmitter(structuredIO),
         })
 
       // Extract command processing into a named function for the do-while pattern.
