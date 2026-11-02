@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -9,6 +9,7 @@ import { setScheduledSessionTaskExecutor, type ScheduledSessionTaskExecutor } fr
 import { nextScheduledTime, validateTaskSchedule } from './scheduledTaskSchedule.js'
 import { claimScheduledTaskReceipt, readScheduledTaskReceipts, scheduledTaskReceiptsDir } from './scheduledTaskReceipts.js'
 import { ensurePersistentStorageUpgraded, resetPersistentStorageMigrationsForTests } from './persistentStorageMigrations.js'
+import { powerActivityClock } from './powerActivityClock.js'
 
 let directory: string
 let service: CronService
@@ -47,6 +48,50 @@ async function until(check: () => Promise<boolean>) {
   for (let i = 0; i < 200; i++) { if (await check()) return; await Bun.sleep(2) }
   throw new Error('Timed out waiting for fixture')
 }
+
+test('power ownership spans scheduled admission and receipt/history finalization', async () => {
+  let admit!: () => void
+  let persist!: () => void
+  let bookkeeping = false
+  const admission = new Promise<void>(resolve => { admit = resolve })
+  const persistence = new Promise<void>(resolve => { persist = resolve })
+  const originalUpdate = service.updateTask.bind(service)
+  const update = spyOn(service, 'updateTask').mockImplementation(async (...args) => {
+    bookkeeping = true
+    await persistence
+    return originalUpdate(...args)
+  })
+  install({ canStart: async () => { await admission; return true }, execute: async () => ({ status: 'completed' }) })
+  const input = await task()
+  const baseline = powerActivityClock.read(false)
+  const running = scheduler.executeTask(input)
+  try {
+    expect(scheduler.hasActiveWork()).toBe(true)
+    expect(powerActivityClock.read(false).scheduledCompletionSequence).toBe(baseline.scheduledCompletionSequence)
+    admit()
+    await until(async () => bookkeeping)
+    expect(scheduler.hasActiveWork()).toBe(true)
+    expect(powerActivityClock.read(false).scheduledCompletionSequence).toBe(baseline.scheduledCompletionSequence)
+    persist()
+    expect((await running).status).toBe('completed')
+    await until(async () => !scheduler.hasActiveWork())
+    expect(powerActivityClock.read(false).scheduledCompletionSequence).toBe(baseline.scheduledCompletionSequence + 1)
+  } finally {
+    admit(); persist()
+    await running
+    update.mockRestore()
+  }
+})
+
+test.each(['failed', 'timeout'] as const)('scheduled %s terminal state changes revision without arming completion', async status => {
+  install({ canStart: async () => true, execute: async () => ({ status }) })
+  const baseline = powerActivityClock.read(false)
+  await scheduler.executeTask(await task())
+  await until(async () => !scheduler.hasActiveWork())
+  const final = powerActivityClock.read(false)
+  expect(final.revision).toBeGreaterThan(baseline.revision)
+  expect(final.scheduledCompletionSequence).toBe(baseline.scheduledCompletionSequence)
+})
 
 describe('scheduled task persistence', () => {
   test('creates idempotently, rejects changed retries and stale edits without elevating permissions', async () => {

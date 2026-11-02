@@ -1,3 +1,4 @@
+import { isIdlePowerSettings } from '../../src/lib/idlePower'
 import { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
 import { isPublicAccessConfiguration } from '../../src/lib/desktopHost/publicAccessConfiguration'
 import { ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './channels'
@@ -328,6 +329,9 @@ const localePreference: Validator = value =>
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
   [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.powerGetIdleActionState]: noPayload,
+  [ELECTRON_IPC_CHANNELS.powerConfigureIdleAction]: isIdlePowerSettings,
+  [ELECTRON_IPC_CHANNELS.powerCancelIdleAction]: noPayload,
   [ELECTRON_IPC_CHANNELS.appGetLocalePreference]: noPayload,
   [ELECTRON_IPC_CHANNELS.appSetLocalePreference]: localePreference,
   [ELECTRON_IPC_CHANNELS.appGetPreferredSystemLanguages]: noPayload,

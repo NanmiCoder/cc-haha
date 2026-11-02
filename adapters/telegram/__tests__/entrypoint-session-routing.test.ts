@@ -25,6 +25,9 @@ describe('Telegram entrypoint session routing', () => {
   const messages: Array<{ sessionId: string; message: any }> = []
   const sockets = new Map<string, Set<ServerWebSocket<{ sessionId: string }>>>()
   const sessionPaths = new Map<string, string>()
+  const activeLeases = new Set<string>()
+  const acceptedLeases: string[] = []
+  const protectedDownloads: boolean[] = []
 
   async function eventually(assertion: () => void): Promise<void> {
     const deadline = Date.now() + 2500
@@ -90,6 +93,12 @@ describe('Telegram entrypoint session routing', () => {
           if (server.upgrade(request, { data: { sessionId: url.pathname.split('/')[2] } })) return
           return new Response('upgrade failed', { status: 400 })
         }
+        if (url.pathname === '/api/sessions/power-activity-lease') {
+          const { leaseId, active } = await request.json() as { leaseId: string; active: boolean }
+          if (active) activeLeases.add(leaseId)
+          else activeLeases.delete(leaseId)
+          return Response.json({ ok: true })
+        }
         if (url.pathname === '/api/sessions/recent-projects') return Response.json({ projects: [{ projectName: 'repo', realPath: project, projectPath: '-fixture-repo', branch: 'main', sessionCount: 3 }] })
         if (url.pathname === '/api/sessions' && request.method === 'POST') {
           const body = await request.json() as { workDir: string }
@@ -118,6 +127,7 @@ describe('Telegram entrypoint session routing', () => {
         message(socket, raw) {
           const message = JSON.parse(String(raw))
           messages.push({ sessionId: socket.data.sessionId, message })
+          if (typeof message.powerActivityLeaseId === 'string' && activeLeases.delete(message.powerActivityLeaseId)) acceptedLeases.push(message.powerActivityLeaseId)
           if (message.content === '/clear') socket.send(JSON.stringify({ type: 'message_complete' }))
         },
         close(socket) { sockets.get(socket.data.sessionId)?.delete(socket) },
@@ -136,7 +146,11 @@ describe('Telegram entrypoint session routing', () => {
     entry.bot.botInfo = { id: 12345, is_bot: true, first_name: 'Fixture', username: 'fixture_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false, can_manage_bots: false, can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: false, allows_users_to_create_topics: false }
     entry.bot.api.config.use(async (_previous, method, payload) => {
       apiCalls.push({ method, payload })
-      if (method === 'getFile') throw new Error('Fixture download rejected before network')
+      if (method === 'getFile') {
+        // All media is deferred until the authorized inbound lease is held.
+        protectedDownloads.push(activeLeases.size > 0)
+        throw new Error('Fixture download rejected before network')
+      }
       return { ok: true, result: ['answerCallbackQuery', 'deleteMessage'].includes(method) ? true : { message_id: nextId++, date: 1, chat: { id: (payload as any).chat_id, type: 'private' }, text: (payload as any).text } } as any
     })
   })
@@ -176,6 +190,18 @@ describe('Telegram entrypoint session routing', () => {
     } finally {
       failedOpen.mockRestore()
     }
+  })
+
+  it('protects media before download and hands the lease to the accepted message', async () => {
+    const before = acceptedLeases.length
+    const downloadsBefore = protectedDownloads.length
+    await text(712, 'protected download caption', { photo: true })
+    await eventually(() => expect(acceptedLeases.length).toBe(before + 1))
+    expect(protectedDownloads.slice(downloadsBefore)).toEqual([true])
+    const requestsBefore = requests.length
+    await text(712, 'outsider download', { photo: true, userId: 99 })
+    expect(protectedDownloads).toHaveLength(downloadsBefore + 1)
+    expect(requests).toHaveLength(requestsBefore)
   })
 
   it.each(['status', 'stop', 'clear'] as const)('preserves the session and project when /%s cannot reconnect, then retries the original session', async (command) => {

@@ -1,3 +1,4 @@
+import type { IdlePowerSettings, IdlePowerState } from '../idlePower'
 import type {
   AppMode as SettingsAppMode,
   AppModeConfig as SettingsAppModeConfig,
@@ -440,6 +441,10 @@ export type DesktopHost = {
   }
   power: {
     setPreventSleepWhileRunning(enabled: boolean): Promise<void>
+    getIdleActionState(): Promise<IdlePowerState>
+    configureIdleAction(settings: IdlePowerSettings): Promise<IdlePowerState>
+    cancelIdleAction(): Promise<void>
+    onIdleActionState(handler: (state: IdlePowerState) => void): Promise<DesktopHostUnlisten>
   }
   clipboard: {
     readText(): Promise<string>

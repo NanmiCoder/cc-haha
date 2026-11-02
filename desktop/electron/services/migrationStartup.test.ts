@@ -36,6 +36,8 @@ function startupFixture(
     applyStartupPortableMode: () => step('applyRoot'), getDataMigration: () => migration,
     setStorageWritesFrozen: vi.fn(), dialog: { showErrorBox: vi.fn() },
     createMainWindow: vi.fn(async () => { step('window'); await options.createWindow }), installSystemAppearanceWatch: () => {},
+    powerMonitor: { on: vi.fn<(event: string, listener: () => void) => void>() },
+    idlePowerService: { stop: vi.fn(), start: vi.fn(), getState: vi.fn(() => ({ countdown: { id: 'fixture' } })), cancel: vi.fn() },
     screen: { on: vi.fn() }, mainWindow: null, workspaceBrowserService: null,
     getServerRuntime: () => runtime, serverRuntime: runtime as typeof runtime | null,
     getPublicAccessManager: vi.fn(() => ({ restore: async () => { step('publicAccess'); await options.restore } })),
@@ -75,6 +77,23 @@ describe('migration startup admission boundary', () => {
     expect(f.calls).not.toContain('activate')
     expect(f.calls).not.toContain('publicAccess')
     expect(f.calls.at(-1)).toBe('window')
+  })
+})
+
+describe('idle power system lifecycle during startup', () => {
+  it('invalidates suspended work and restarts only while the application is running', async () => {
+    const f = startupFixture()
+    await f.startup
+    const listeners = new Map(f.context.powerMonitor.on.mock.calls)
+    listeners.get('suspend')?.()
+    expect(f.context.idlePowerService.stop).toHaveBeenCalledTimes(1)
+    listeners.get('resume')?.()
+    expect(f.context.idlePowerService.start).toHaveBeenCalledTimes(1)
+    listeners.get('lock-screen')?.()
+    expect(f.context.idlePowerService.cancel).toHaveBeenCalledWith('user-activity')
+    f.context.isQuitting = true
+    listeners.get('resume')?.()
+    expect(f.context.idlePowerService.start).toHaveBeenCalledTimes(1)
   })
 })
 

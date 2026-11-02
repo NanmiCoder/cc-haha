@@ -39,7 +39,7 @@ sdk.onmessage = async event => {
       sdk.send(JSON.stringify({
         type: 'result',
         subtype: 'success',
-        ...(failed ? { is_error: true } : {}),
+        is_error: failed,
         result: failed ? text.slice('FIXTURE_ERROR:'.length) : text,
       }))
       sdk.send(JSON.stringify({ type: 'system', subtype: 'session_state_changed', state: 'idle' }))

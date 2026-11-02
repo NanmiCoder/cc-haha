@@ -16,6 +16,7 @@ import * as crypto from 'crypto'
 import { isBlankFileContent } from './blankFileContent.js'
 import { CronService, type CronTask } from './cronService.js'
 import { getScheduledSessionTaskExecutor } from './scheduledTaskExecution.js'
+import { powerActivityClock } from './powerActivityClock.js'
 import { nextScheduledTime } from './scheduledTaskSchedule.js'
 import { claimScheduledTaskReceipt, finishScheduledTaskReceipt, readScheduledTaskReceipts, pruneScheduledTaskReceipts, isReceiptOwnerAlive, scheduledTaskReceiptsDir, type ScheduledTaskReceipt } from './scheduledTaskReceipts.js'
 import { SessionService } from './sessionService.js'
@@ -557,9 +558,10 @@ export class CronScheduler {
   private intervalId: Timer | null = null
   private sessionTasks = new Map<string, AbortController>()
   private sessionTaskPromises = new Set<Promise<TaskRun | undefined>>()
+  private standaloneTaskPromises = new Set<Promise<TaskRun>>()
   private runningTasks = new Map<
     string,
-    { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string; resultReceived?: boolean; migrationInterrupted?: boolean }
+    { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string; resultReceived?: boolean; resultSucceeded?: boolean; migrationInterrupted?: boolean }
   >()
   /** Track which minute each task last fired (prevents same-process duplicate within a minute). */
   private lastFiredMinuteKey = new Map<string, string>()
@@ -678,7 +680,20 @@ export class CronScheduler {
       if (!run) throw new Error('Scheduled task target is busy or this occurrence was already claimed')
       return run
     }))
-    return migrationMaintenance.track(this.executeTaskOnce(task, options))
+    powerActivityClock.changed()
+    const promise = migrationMaintenance.track(this.executeTaskOnce(task, options))
+    this.standaloneTaskPromises.add(promise)
+    void promise.finally(() => {
+      this.standaloneTaskPromises.delete(promise)
+      powerActivityClock.changed()
+    }).catch(() => {})
+    return promise
+  }
+
+  /** Includes admission, session creation and durable completion bookkeeping. */
+  hasActiveWork(): boolean {
+    return this.sessionTasks.size > 0 || this.sessionTaskPromises.size > 0
+      || this.runningTasks.size > 0 || this.standaloneTaskPromises.size > 0
   }
 
   getProcessIds(): number[] {
@@ -710,9 +725,15 @@ export class CronScheduler {
   }
 
   private launchSessionTask(task: CronTask, scheduledFor: string, manual = false): Promise<TaskRun | undefined> {
+    powerActivityClock.changed()
     const promise = migrationMaintenance.track(this.executeSessionTask(task, scheduledFor, manual))
     this.sessionTaskPromises.add(promise)
-    void promise.finally(() => this.sessionTaskPromises.delete(promise)).catch(() => {})
+    void promise.then(run => {
+      if (run?.status === 'completed') powerActivityClock.completed(true)
+    }).finally(() => {
+      this.sessionTaskPromises.delete(promise)
+      powerActivityClock.changed()
+    }).catch(() => {})
     return promise
   }
 
@@ -905,7 +926,7 @@ export class CronScheduler {
       buildCronTaskSpawnOptions(workDir, childEnv),
     )
 
-    const runningEntry = { proc, startedAt: Date.now(), runId, resultReceived: false, migrationInterrupted: false }
+    const runningEntry = { proc, startedAt: Date.now(), runId, resultReceived: false, resultSucceeded: false, migrationInterrupted: false }
     this.runningTasks.set(task.id, runningEntry)
 
     // Keep the control stream open until the terminal result so migration can
@@ -948,6 +969,7 @@ export class CronScheduler {
                 const message = JSON.parse(line)
                 if (message.type === 'result' && !message.parent_tool_use_id) {
                   runningEntry.resultReceived = true
+                  runningEntry.resultSucceeded = message.is_error === false && (!message.subtype || message.subtype === 'success')
                   proc.stdin.end()
                 }
               } catch {
@@ -1016,6 +1038,8 @@ export class CronScheduler {
           // Task may have been deleted
         })
       }
+
+      if (completedRun.status === 'completed' && runningEntry.resultSucceeded) powerActivityClock.completed(true)
 
       return completedRun
     } catch (err) {

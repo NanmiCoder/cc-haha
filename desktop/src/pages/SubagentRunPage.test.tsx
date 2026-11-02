@@ -527,6 +527,58 @@ describe('SubagentRunPage', () => {
       .toBe(0)
   })
 
+  it.each(['thinking', 'api_retry'] as const)(
+    'keeps a newer active %s stream when an older transcript poll completes', async (activity) => {
+      const stalePoll = deferred<SubagentRunResponse>()
+      vi.mocked(subagentsApi.getRunByTool)
+        .mockResolvedValueOnce(subagentRun({ status: 'running', messages: [] }))
+        .mockReturnValueOnce(stalePoll.promise)
+      useTabStore.getState().openTab('session-1', 'Parent')
+      const tabId = useTabStore.getState().openSubagentTab('session-1', 'tool-1')
+      render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Ordinary" />)
+      const conversation = await screen.findByTestId('subagent-conversation')
+      act(() => sendRunEvent(`old-poll-${activity}`, { type: 'thinking', text: 'Earlier turn' }))
+      const requestedRevision = useChatStore.getState().sessions[tabId]!.agentStreamRevision
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+      await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2))
+      const newerStream = `newer-active-${activity}`
+      act(() => sendRunEvent(newerStream, activity === 'api_retry'
+        ? { type: 'api_retry', attempt: 2, maxRetries: 3, retryDelayMs: 60000, errorStatus: 429 }
+        : { type: 'thinking', text: 'Newer turn is still thinking' }))
+      const newerSession = useChatStore.getState().sessions[tabId]!
+      expect(newerSession.agentStreamRevision).toBeGreaterThan(requestedRevision!)
+      expect(newerSession.chatState).toBe('thinking')
+      expect(newerSession.elapsedTimer).not.toBeNull()
+      if (activity === 'api_retry') expect(screen.getByTestId('api-retry-indicator')).toBeInTheDocument()
+
+      // Unlike a completed newer turn, this turn still owns its running timer
+      // and possibly a retry. The old durable terminal must not settle either.
+      await act(async () => {
+        stalePoll.resolve(subagentRun({ status: 'completed' }))
+        await stalePoll.promise
+      })
+      expect(useChatStore.getState().sessions[tabId]).toMatchObject({
+        chatState: 'thinking',
+        agentStreamRevision: newerSession.agentStreamRevision,
+        elapsedTimer: newerSession.elapsedTimer,
+        apiRetry: newerSession.apiRetry,
+      })
+      expect(useTabStore.getState().tabs.find(tab => tab.sessionId === tabId)?.status).toBe('running')
+      expect(conversation).not.toHaveTextContent('Finding')
+      if (activity === 'api_retry') expect(screen.getByTestId('api-retry-indicator')).toBeInTheDocument()
+
+      // A mistaken settlement also retires the stream id. A real follow-up
+      // event proves the newer stream can still deliver its answer.
+      act(() => {
+        sendRunEvent(newerStream, { type: 'content_start', blockType: 'text' })
+        sendRunEvent(newerStream, { type: 'content_delta', text: `Answer from protected ${activity} stream` })
+      })
+      await waitFor(() => expect(conversation).toHaveTextContent(`Answer from protected ${activity} stream`))
+      expect(useChatStore.getState().sessions[tabId]?.agentStreamRevision).toBe(newerSession.agentStreamRevision)
+    },
+  )
+
   it('uses live workflow progress instead of sealing a running agent as completed', async () => {
     vi.mocked(subagentsApi.getRunByAgent).mockResolvedValue(subagentRun({
       agentId: 'abc123',

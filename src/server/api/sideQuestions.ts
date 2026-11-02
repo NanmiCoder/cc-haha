@@ -9,6 +9,7 @@ const service = new SideQuestionService({
   ensure: ensureCliSessionStartedForControl,
   control: (id, request, timeout, signal) => conversationService.requestControl(id, request, timeout, signal),
 })
+export const hasSideQuestionPowerActivity = () => service.hasPendingWork()
 const MAX_BODY_BYTES = 1024 * 1024
 
 async function readBody(req: Request): Promise<unknown> {

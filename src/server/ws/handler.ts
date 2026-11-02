@@ -38,6 +38,8 @@ import {
   conversationService,
 } from '../services/conversationService.js'
 import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { powerActivityClock } from '../services/powerActivityClock.js'
+import { releasePowerActivityLease } from '../services/powerActivityLease.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
@@ -242,6 +244,7 @@ type RuntimeOverride = {
 const strictCollaborationRuntimeSessions = new Set<string>()
 
 type ActiveUserTurnState = {
+  powerCompletionRecorded?: boolean
   admissionPending?: boolean
   messageSent: boolean
   collaborationAck?: 'queued' | 'consumed'
@@ -296,6 +299,7 @@ const legacyQueuedSessionChats = new Set<string>()
 const interruptedSessionChats = new Set<string>()
 
 function beginSessionChatActivity(sessionId: string): void {
+  powerActivityClock.changed()
   mobileActivityClock.start(sessionId)
   terminalSessionChatStates.delete(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
@@ -303,6 +307,7 @@ function beginSessionChatActivity(sessionId: string): void {
 }
 
 function failSessionChatActivity(sessionId: string): void {
+  powerActivityClock.changed()
   mobileActivityClock.finish(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
@@ -310,7 +315,15 @@ function failSessionChatActivity(sessionId: string): void {
 }
 
 function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
-  if (cliMsg?.type !== 'result') return
+  if (cliMsg?.type !== 'result' || isAgentRunMessageFrame(cliMsg)) return
+  const turn = activeUserTurns.get(sessionId)
+  const unsettled = turn ? !turn.powerCompletionRecorded : legacyQueuedSessionChats.has(sessionId)
+  if (unsettled) {
+    if (turn) turn.powerCompletionRecorded = true
+    if (!turn?.cancelled && !interruptedSessionChats.has(sessionId) && cliMsg.is_error === false
+      && (!cliMsg.subtype || cliMsg.subtype === 'success')) powerActivityClock.completed()
+    else powerActivityClock.changed()
+  }
   mobileActivityClock.finish(sessionId)
 
   legacyQueuedSessionChats.delete(sessionId)
@@ -385,6 +398,7 @@ function trackCliBackgroundTaskLifecycle(
       taskIds = new Set()
       activeBackgroundTaskIds.set(sessionId, taskIds)
     }
+    if (!taskIds.has(lifecycle.taskId)) powerActivityClock.changed()
     taskIds.add(lifecycle.taskId)
     if (isAgentTaskType(lifecycle.taskType)) {
       let sessionAgentTasks = activeAgentTasks.get(sessionId)
@@ -457,12 +471,17 @@ function trackCliBackgroundTaskLifecycle(
     void emitAuthoritativeNonAgentStopped(sessionId, existingNonAgentTask)
     return { ...lifecycle, suppressForward: true }
   }
+  if (activeBackgroundTaskIds.get(sessionId)?.has(lifecycle.taskId)) {
+    if (lifecycle.status === 'completed') powerActivityClock.completed()
+    else powerActivityClock.changed()
+  }
   untrackCliBackgroundTask(sessionId, lifecycle.taskId)
   return lifecycle
 }
 
 
 function trackCliRunState(sessionId: string, cliMsg: any): 'running' | 'idle' | null {
+  if (cliMsg?.type === 'result' && legacyQueuedSessionChats.has(sessionId)) settleSessionChatActivity(sessionId, cliMsg)
   if (
     cliMsg?.type === 'result' &&
     cliMsg.is_error === true &&
@@ -479,11 +498,13 @@ function trackCliRunState(sessionId: string, cliMsg: any): 'running' | 'idle' | 
     return null
   }
   if (cliMsg.state === 'running') {
+    if (!activeCliRuns.has(sessionId)) powerActivityClock.changed()
     activeCliRuns.add(sessionId)
     resumeCliRunForeground(sessionId)
     return 'running'
   }
   if (cliMsg.state === 'idle') {
+    if (activeCliRuns.has(sessionId)) powerActivityClock.changed()
     activeCliRuns.delete(sessionId)
     cliRunsAwaitingBackgroundTasks.delete(sessionId)
     return 'idle'
@@ -576,6 +597,25 @@ export function getSessionChatActivityState(sessionId: string): SessionChatActiv
 export type LiveSessionActivity = {
   id: string
   activityState: Extract<SessionChatActivityState, 'running' | 'waiting'>
+}
+
+/** Power safety uses work ownership, never the visual Stop/failed projection. */
+export function hasSessionPowerActivity(): boolean {
+  if (conversationService.hasPendingTeamStops()) return true
+  const ids = new Set([
+    ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
+    ...activeCliRuns, ...legacyQueuedSessionChats, ...activeBackgroundTaskIds.keys(),
+    ...computerUseApprovalService.getPendingSessionIds(),
+    ...runtimeTransitionPromises.keys(), ...sessionStartupPromises.keys(), ...sessionClearInProgress,
+  ])
+  for (const id of ids) {
+    if (activeUserTurns.has(id) || activeCliRuns.has(id) || legacyQueuedSessionChats.has(id)
+      || runtimeTransitionPromises.has(id) || sessionStartupPromises.has(id) || sessionClearInProgress.has(id)
+      || hasActiveBackgroundTasks(id)
+      || conversationService.getPendingPermissionRequests(id).length > 0
+      || computerUseApprovalService.getPendingRequests(id).length > 0) return true
+  }
+  return false
 }
 
 /**
@@ -747,6 +787,8 @@ export type WebSocketData = {
   connectedAt: number
   channel: 'client' | 'sdk'
   clientKind?: 'full' | 'pet'
+  /** Only a machine-token authenticated local socket may take over an IM lease. */
+  powerActivityLeaseAuthorized?: boolean
   sdkToken: string | null
   serverPort: number
   serverHost: string
@@ -875,6 +917,7 @@ export const handleWebSocket = {
       ) as ClientMessage
 
       if (migrationMaintenance.isActive && message.type !== 'ping' && message.type !== 'sync_state') {
+        if (message.type === 'user_message') releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
         sendError(ws, 'Data migration is in progress', 'MIGRATION_IN_PROGRESS')
         return
       }
@@ -891,6 +934,7 @@ export const handleWebSocket = {
       switch (message.type) {
         case 'user_message': {
           const activeTurn: ActiveUserTurnState = { messageSent: false }
+          const powerLeaseId = message.powerActivityLeaseId
           migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
@@ -921,7 +965,7 @@ export const handleWebSocket = {
               })
               sendMessage(ws, { type: 'status', state: 'idle' })
             }
-          })
+          }).finally(() => releaseAcceptedPowerLease(ws, powerLeaseId))
           break
         }
 
@@ -1050,6 +1094,10 @@ export const handleWebSocket = {
 // Message handlers
 // ============================================================================
 
+function releaseAcceptedPowerLease(ws: SessionConnection, leaseId: unknown): void {
+  if (ws.data.powerActivityLeaseAuthorized === true) releasePowerActivityLease(leaseId)
+}
+
 async function handleUserMessage(
   ws: SessionConnection,
   message: Extract<ClientMessage, { type: 'user_message' }>,
@@ -1091,6 +1139,7 @@ async function handleUserMessage(
     sessionStopRequested.has(sessionId) || agentStopRequestedSessions.has(sessionId)
   activeTurn.admissionPending = !collaboration
   activeUserTurns.set(sessionId, activeTurn)
+  releaseAcceptedPowerLease(ws, message.powerActivityLeaseId)
   nonAgentStopRequestedSessions.delete(sessionId)
   clearBackgroundTaskDisconnectCeiling(sessionId)
 
@@ -1551,6 +1600,7 @@ function clearSessionTurnObserver(sessionId: string): void {
 
 function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState): void {
   if (activeUserTurns.get(sessionId) === activeTurn) {
+    powerActivityClock.changed()
     activeUserTurns.delete(sessionId)
     refreshBackgroundTaskDisconnectCeiling(sessionId)
   }

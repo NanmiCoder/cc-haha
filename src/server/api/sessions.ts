@@ -1,4 +1,5 @@
 import { handleSideChatsRoute } from './sideChats.js'
+import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 /**
  * Session REST API Routes
  *
@@ -36,6 +37,8 @@ import { sessionService } from '../services/sessionService.js'
 import { loadRenderedToolImage } from '../services/toolImageMedia.js'
 import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
 import { getMobileSessionActivity } from '../services/mobileSessionActivityRuntime.js'
+import { getPowerActivitySnapshot } from '../services/powerActivityRuntime.js'
+import { handlePowerActivityLease } from '../services/powerActivityLease.js'
 import { conversationService } from '../services/conversationService.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
@@ -156,6 +159,12 @@ export async function handleSessionsApi(
         )
       }
       return await batchDeleteSessions(req)
+    }
+
+    if (sessionId === 'power-activity-lease') return handlePowerActivityLease(req)
+    if (sessionId === 'power-activity') {
+      if (req.method !== 'GET') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
+      return Response.json(await getPowerActivitySnapshot(), { headers: { 'Cache-Control': 'no-store' } })
     }
 
     // Special collection route: /api/sessions/live-status
@@ -1212,6 +1221,7 @@ async function deleteSession(sessionId: string): Promise<Response> {
     throw error
   }
   closeSessionConnection(sessionId, 'session deleted')
+  emitSessionTurnEvent({ type: 'deleted', sessionId })
   cleanupAdapterSessionMappings(sessionId)
   recentProjectsCache = null
   // A deleted lead ends its reviewed team for good; Stop and lead restarts only pause it.
@@ -1237,6 +1247,7 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
 
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
+    emitSessionTurnEvent({ type: 'deleted', sessionId })
     cleanupAdapterSessionMappings(sessionId)
     void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))
   }

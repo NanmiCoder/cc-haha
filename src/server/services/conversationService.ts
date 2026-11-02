@@ -1,6 +1,7 @@
 import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
+import { powerActivityClock } from './powerActivityClock.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -1196,7 +1197,7 @@ export class ConversationService {
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
     this.clearAutoAnswerWait(pendingRequest)
     if (session) {
-      session.pendingPermissionRequests.delete(requestId)
+      if (session.pendingPermissionRequests.delete(requestId)) powerActivityClock.changed()
     }
 
     return this.sendSdkMessage(sessionId, {
@@ -1740,6 +1741,7 @@ export class ConversationService {
           }
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
           session.pendingPermissionRequests.set(msg.request_id, request)
+          powerActivityClock.changed()
           void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
         }
         if (
@@ -1747,14 +1749,14 @@ export class ConversationService {
           typeof msg.request_id === 'string'
         ) {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
-          session.pendingPermissionRequests.delete(msg.request_id)
+          if (session.pendingPermissionRequests.delete(msg.request_id)) powerActivityClock.changed()
         }
         if (
           msg?.type === 'control_response' &&
           typeof msg.response?.request_id === 'string'
         ) {
           this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.response.request_id))
-          session.pendingPermissionRequests.delete(msg.response.request_id)
+          if (session.pendingPermissionRequests.delete(msg.response.request_id)) powerActivityClock.changed()
         }
         if (session.teamWorker && msg?.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
           const parent = this.sessions.get(session.teamWorker.parentSessionId)
@@ -2052,6 +2054,8 @@ export class ConversationService {
   getActiveSessions(): string[] {
     return Array.from(this.sessions.keys())
   }
+
+  hasPendingTeamStops(): boolean { return this.teamStopOperations.size > 0 }
 
   getProcessIds(): number[] {
     return [...this.sessions.values()].map(session => session.proc.pid).filter(pid => pid > 0)
