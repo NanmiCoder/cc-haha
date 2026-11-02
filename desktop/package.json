@@ -23,7 +23,6 @@
       "node_modules/semver/**",
       "src-tauri/binaries/**"
     ],
-    "artifactName": "Claude-Code-Haha-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
     "directories": {
       "output": "build-artifacts/electron"
@@ -58,7 +57,11 @@
         "cc-haha-computer-use\\.app",
         "claude-sidecar-[^/]+$"
       ],
-      "notarize": true
+      "notarize": true,
+      "artifactName": "Claude-Code-Haha-${version}-macOS-${arch}-update.${ext}"
+    },
+    "dmg": {
+      "artifactName": "Claude-Code-Haha-${version}-macOS-${arch}.${ext}"
     },
     "win": {
       "target": "nsis",
@@ -70,7 +73,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "artifactName": "Claude-Code-Haha-${version}-Windows-${arch}-Setup.${ext}"
     },
     "linux": {
       "target": [
@@ -79,7 +83,8 @@
       ],
       "icon": "src-tauri/icons",
       "category": "Development",
-      "maintainer": "NanmiCoder <relakkes@gmail.com>"
+      "maintainer": "NanmiCoder <relakkes@gmail.com>",
+      "artifactName": "Claude-Code-Haha-${version}-Linux-${arch}.${ext}"
     },
     "publish": [
       {

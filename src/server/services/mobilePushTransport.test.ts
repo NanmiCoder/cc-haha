@@ -4,7 +4,7 @@ import { createServer, connect, type IncomingHttpHeaders } from 'node:http2'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { DirectMobilePushTransport } from './mobilePushTransport.js'
+import { DesktopPullTransport, DirectMobilePushTransport, EXPO_PUSH_URL, ExpoPushTransport, MobilePushRouter } from './mobilePushTransport.js'
 
 test('APNs HTTP/2 transport signs ES256 and uses the dedicated Live Activity topic', async () => {
   const directory = mkdtempSync(path.join(os.tmpdir(), 'apns-wire-'))
@@ -72,4 +72,83 @@ test('missing explicit provider config never searches user credentials or starts
   expect(transport.configured('android')).toBe(false)
   await expect(transport.send({ platform: 'android', kind: 'notification', token: 'fixture', payload: {} })).rejects.toThrow('not configured')
   expect(requests).toBe(0)
+})
+
+test('Expo relay posts one message per ticket and maps only DeviceNotRegistered to a dead token', async () => {
+  const calls: { url: string; init: RequestInit }[] = []
+  let reply: () => Response = () => Response.json({ data: [{ status: 'ok', id: 'ticket-1' }] })
+  const transport = new ExpoPushTransport({ fetch: async (url, init) => { calls.push({ url, init }); return reply() }, fetchOptions: async () => ({ proxy: 'http://proxy.fixture:7890' }) })
+  const delivery = { platform: 'ios' as const, kind: 'notification' as const, provider: 'expo' as const, token: 'ExponentPushToken[fixture]', payload: { title: 'fixture', body: 'ready', categoryId: 'cchahaTool', data: { hostId: 'a' }, to: 'ExponentPushToken[someone-else]' } }
+  expect(transport.configured()).toBe(true)
+  expect(await transport.send(delivery)).toBe('sent')
+  expect(calls[0]?.url).toBe(EXPO_PUSH_URL)
+  expect(calls[0]?.init.redirect).toBe('error')
+  // The app's network proxy carries the request; it never overrides the safety options.
+  expect((calls[0]?.init as Record<string, unknown>).proxy).toBe('http://proxy.fixture:7890')
+  expect(calls[0]?.init.headers).toMatchObject({ Accept: 'application/json', 'Content-Type': 'application/json' })
+  // The registration's token always wins over anything in the payload.
+  expect(JSON.parse(String(calls[0]?.init.body))).toEqual([{ ...delivery.payload, to: delivery.token }])
+  reply = () => Response.json({ data: [{ status: 'error', message: 'not registered', details: { error: 'DeviceNotRegistered' } }] })
+  expect(await transport.send(delivery)).toBe('invalidToken')
+  for (const failure of [
+    () => Response.json({ data: [{ status: 'error', details: { error: 'MessageRateExceeded' } }] }),
+    () => Response.json({ data: [{ status: 'error', details: { error: 'InvalidCredentials' } }] }),
+    () => Response.json({ errors: [{ code: 'PUSH_TOO_MANY_EXPERIENCE_IDS' }] }),
+    () => new Response('rate limited', { status: 429 }),
+    () => new Response('not json'),
+  ]) {
+    reply = failure
+    await expect(transport.send(delivery)).rejects.toThrow('Expo push rejected')
+  }
+  await expect(transport.send({ ...delivery, kind: 'liveActivity' })).rejects.toThrow('ordinary notifications')
+})
+
+test('pulled alerts wait for the phone, wake its long poll and leave once acknowledged', async () => {
+  let now = 0
+  const transport = new DesktopPullTransport(() => now)
+  const signal = new AbortController().signal
+  const send = (token: string, body: string) => transport.send({ platform: 'android', kind: 'notification', provider: 'desktop', token, payload: { title: 't', body } })
+  expect(await transport.pull('phone-a', undefined, signal, 0)).toEqual([])
+  const waiting = transport.pull('phone-a', undefined, signal, 60_000)
+  await send('phone-b', 'not yours')
+  await send('phone-a', 'first')
+  const [first] = await waiting
+  // Not toMatchObject(expect.any): Bun 1.3 writes the matcher into the received object.
+  expect(first?.body).toBe('first')
+  expect(typeof first?.id).toBe('string')
+  await send('phone-a', 'second')
+  // Unacknowledged alerts are handed out again; the phone dedupes by id.
+  expect((await transport.pull('phone-a', undefined, signal, 0)).map(item => item.body)).toEqual(['first', 'second'])
+  expect((await transport.pull('phone-a', first!.id, signal, 0)).map(item => item.body)).toEqual(['second'])
+  expect((await transport.pull('phone-a', 'unknown-ack', signal, 0)).map(item => item.body)).toEqual(['second'])
+  now += 10 * 60_000
+  expect(await transport.pull('phone-a', undefined, signal, 0)).toEqual([])
+  expect((await transport.pull('phone-b', undefined, signal, 0)).length).toBe(0)
+  for (let index = 0; index < 40; index++) await send('phone-c', String(index))
+  const kept = await transport.pull('phone-c', undefined, signal, 0)
+  expect(kept.map(item => item.body)).toEqual(Array.from({ length: 32 }, (_, index) => String(index + 8)))
+  await expect(transport.send({ platform: 'ios', kind: 'liveActivity', token: 'phone-a', payload: {} })).rejects.toThrow('ordinary notifications')
+})
+
+test('a disconnected phone releases its long poll without waiting for the hold', async () => {
+  const transport = new DesktopPullTransport()
+  const controller = new AbortController()
+  const started = Date.now()
+  const waiting = transport.pull('phone-a', undefined, controller.signal, 60_000)
+  controller.abort()
+  expect(await waiting).toEqual([])
+  expect(Date.now() - started).toBeLessThan(1000)
+})
+
+test('the router sends each registration through the provider it chose', async () => {
+  const seen: string[] = []
+  const fake = (name: string, configured: boolean) => ({ configured: () => configured, send: async () => { seen.push(name); return 'sent' as const } })
+  const desktop = new DesktopPullTransport()
+  const router = new MobilePushRouter(fake('direct', false), fake('expo', true), desktop)
+  expect([router.configured('ios'), router.configured('ios', 'expo'), router.configured('android', 'desktop'), router.configured('ios', 'desktop')]).toEqual([false, true, true, false])
+  await router.send({ platform: 'ios', kind: 'notification', token: 't', payload: {} })
+  await router.send({ platform: 'ios', kind: 'notification', provider: 'expo', token: 't', payload: {} })
+  await router.send({ platform: 'android', kind: 'notification', provider: 'desktop', token: 'phone', payload: { body: 'pulled' } })
+  expect(seen).toEqual(['direct', 'expo'])
+  expect(await desktop.pull('phone', undefined, new AbortController().signal, 0)).toMatchObject([{ body: 'pulled' }])
 })

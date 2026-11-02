@@ -2,8 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { ApiError } from '../../../middleware/errorHandler.js'
 import { VoiceServiceError } from '../errors.js'
 import { VoiceProviderRegistry } from '../registry.js'
-import { VOICE_LIMITS } from '../types.js'
+import { DEFAULT_VOICE_PREFERENCES, VOICE_LIMITS } from '../types.js'
 import { VoiceService } from '../voiceService.js'
+import { fakeProviderRecord, fakeTargets } from './fakeCorrection.js'
 import { FakeProvider, makeWav, memoryPreferencesStore } from './fakeProvider.js'
 
 const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0))
@@ -11,13 +12,17 @@ const signal = () => new AbortController().signal
 
 function createService(
   providers: FakeProvider[],
-  options: { preferences?: Parameters<typeof memoryPreferencesStore>[0] } = {},
+  options: {
+    preferences?: Parameters<typeof memoryPreferencesStore>[0]
+    targets?: ReturnType<typeof fakeTargets>
+  } = {},
 ) {
   const registry = new VoiceProviderRegistry()
   for (const provider of providers) registry.register(provider)
   const preferences = memoryPreferencesStore({ providerId: providers[0]?.info.id, ...options.preferences })
-  const service = new VoiceService({ registry, preferences })
-  return { service, preferences }
+  const targets = options.targets ?? fakeTargets()
+  const service = new VoiceService({ registry, preferences, correctionTargets: targets })
+  return { service, preferences, targets }
 }
 
 async function expectRejects<T extends Error>(promise: Promise<unknown>, type: new (...args: never[]) => T) {
@@ -41,7 +46,8 @@ describe('VoiceService catalog', () => {
 
     expect(catalog.supported).toBe(true)
     expect(catalog.limits).toEqual(VOICE_LIMITS)
-    expect(catalog.preferences).toEqual({ enabled: true, providerId: 'alpha', language: 'auto', downloadSource: 'auto' })
+    expect(catalog.preferences).toEqual({ ...DEFAULT_VOICE_PREFERENCES, providerId: 'alpha' })
+    expect(catalog.correction).toEqual({ defaultTarget: null, target: null })
     expect(catalog.providers.map(item => [item.info.id, item.preparation.phase])).toEqual([
       ['alpha', 'unprepared'],
       ['beta', 'ready'],
@@ -435,12 +441,92 @@ describe('VoiceService preferences', () => {
     })
 
     expect(await service.updatePreferences({ language: 'zh' })).toEqual({
+      ...DEFAULT_VOICE_PREFERENCES,
       enabled: true,
       providerId: 'alpha',
       language: 'zh',
-      downloadSource: 'auto',
     })
     expect(preferences.current.enabled).toBe(true)
+  })
+
+  test('stores the correction switch and a fixed or default correction model', async () => {
+    const fast = fakeProviderRecord('fast-provider')
+    const { service, preferences, targets } = createService([new FakeProvider({ id: 'alpha' })], {
+      targets: fakeTargets({ providers: [fast] }),
+    })
+
+    expect(await service.updatePreferences({ correctionEnabled: true })).toMatchObject({ correctionEnabled: true })
+    expect(await service.updatePreferences({
+      correctionProviderId: ' fast-provider ',
+      correctionModelId: 'fast-model',
+    })).toMatchObject({ correctionProviderId: 'fast-provider', correctionModelId: 'fast-model' })
+    expect(targets.fixedCalls).toEqual([['fast-provider', 'fast-model']])
+
+    expect(await service.updatePreferences({ correctionProviderId: null, correctionModelId: null }))
+      .toMatchObject({ correctionEnabled: true, correctionProviderId: null, correctionModelId: null })
+    expect(preferences.current.correctionEnabled).toBe(true)
+  })
+
+  test('rejects a mixed or unknown correction model pair and a non-boolean switch, writing nothing', async () => {
+    const { service, preferences } = createService([new FakeProvider({ id: 'alpha' })], {
+      targets: fakeTargets({ providers: [fakeProviderRecord('known')] }),
+      preferences: { correctionEnabled: true, correctionProviderId: 'known', correctionModelId: 'm' },
+    })
+    const before = { ...preferences.current }
+
+    for (const patch of [
+      { correctionEnabled: 'yes' },
+      { correctionProviderId: 'known', correctionModelId: null },
+      { correctionProviderId: null, correctionModelId: 'm' },
+      { correctionProviderId: 'known' },
+      { correctionModelId: 'm' },
+      { correctionProviderId: 'known', correctionModelId: '   ' },
+      { correctionProviderId: 1, correctionModelId: 'm' },
+      { correctionProviderId: 'known', correctionModelId: 'x'.repeat(201) },
+      { correctionProviderId: 'gone', correctionModelId: 'm' },
+    ]) {
+      await expectRejects(service.updatePreferences(patch), ApiError)
+    }
+    expect(preferences.current).toEqual(before)
+  })
+
+  test('switching provider releases the previous one and survives a failing release', async () => {
+    const alpha = new FakeProvider({ id: 'alpha' })
+    const beta = new FakeProvider({ id: 'beta' })
+    const released: string[] = []
+    Object.assign(alpha, { release: async () => { released.push('alpha') } })
+    Object.assign(beta, { release: async () => { released.push('beta'); throw new Error('worker already gone') } })
+    const { service, preferences } = createService([alpha, beta], { preferences: { providerId: 'alpha' } })
+
+    await service.updatePreferences({ providerId: 'alpha' })
+    await service.updatePreferences({ language: 'zh' })
+    expect(released).toEqual([])
+
+    await service.updatePreferences({ providerId: 'beta' })
+    expect(released).toEqual(['alpha'])
+    expect(preferences.current.providerId).toBe('beta')
+
+    expect(await service.updatePreferences({ providerId: 'alpha' })).toMatchObject({ providerId: 'alpha' })
+    expect(released).toEqual(['alpha', 'beta'])
+    expect(preferences.current.providerId).toBe('alpha')
+  })
+
+  test('a switch is saved and answered without waiting for the old model to finish its queued work', async () => {
+    // A release waits for the previous worker's queued transcriptions (minutes for
+    // a long dictation). The desktop must not see that as a failed save.
+    const alpha = new FakeProvider({ id: 'alpha' })
+    const beta = new FakeProvider({ id: 'beta' })
+    let releaseStarted = false
+    Object.assign(alpha, { release: () => { releaseStarted = true; return new Promise<void>(() => {}) } })
+    const { service, preferences } = createService([alpha, beta], { preferences: { providerId: 'alpha' } })
+
+    const outcome = await Promise.race([
+      service.updatePreferences({ providerId: 'beta' }).then(() => 'answered'),
+      new Promise(resolve => setTimeout(() => resolve('blocked'), 200)),
+    ])
+    expect(outcome).toBe('answered')
+    expect(releaseStarted).toBe(true)
+    expect(preferences.current.providerId).toBe('beta')
   })
 
   test('stores the download source and rejects unknown ones', async () => {

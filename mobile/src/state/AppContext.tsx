@@ -5,11 +5,16 @@ import React, {
   useMemo,
   useState,
 } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as SecureStore from 'expo-secure-store'
+import { getRandomBytes } from 'expo-crypto'
+import CCHahaDuty from '../../modules/cchaha-duty'
 import { Drafts, HostRepository, type Registry, type Storage } from './storage'
 import { PushRegistrationCoordinator } from './pushRegistrations'
+import { PushTokens } from './pushProvider'
+import { BackgroundDuty } from './backgroundDuty'
+import { getDevicePushToken, getExpoPushToken } from './devicePushToken'
 import { createApiClient } from './api'
 import type { Host } from '../core/types'
 import { h5CredentialValue, resolveH5Session, type H5Storage } from '../core/h5Session'
@@ -36,6 +41,15 @@ const secrets: Storage =
 const repository = new HostRepository(AsyncStorage, secrets)
 const storedCredential = async (id: string) => (await repository.credential(id)) || null
 export const pushRegistrations = new PushRegistrationCoordinator(secrets)
+export const pushTokens = new PushTokens(secrets, {
+  random: getRandomBytes,
+  device: getDevicePushToken,
+  expo: getExpoPushToken,
+})
+/** The Android foreground service that pulls alerts from computers registered via `desktop`. */
+export const backgroundDuty = new BackgroundDuty(
+  Platform.OS === 'android' ? CCHahaDuty : null
+)
 type AppContextValue = {
   registry: Registry
   ready: boolean
@@ -69,6 +83,18 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
       .catch((e) => setError(e.message))
       .finally(() => setReady(true))
   }, [])
+  useEffect(() => {
+    // The background service mutes its alerts while the app itself is on screen,
+    // and can only (re)start from the foreground.
+    backgroundDuty.setAppActive(AppState.currentState === 'active')
+    const listener = AppState.addEventListener('change', (state) =>
+      backgroundDuty.setAppActive(state === 'active')
+    )
+    return () => listener.remove()
+  }, [])
+  useEffect(() => {
+    if (ready && !error) backgroundDuty.retain(registry.hosts.map((host) => host.id))
+  }, [ready, error, registry.hosts])
   return (
     <Context.Provider
       value={{
@@ -87,6 +113,10 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
           if (!host) return
           const credential = await repository.credential(id)
           const client = credential ? createApiClient(host, credential) : null
+          // Not on unmount: Android unmounts React when the activity goes away,
+          // exactly when the background connection has to keep running.
+          backgroundDuty.set(id, undefined)
+          void pushTokens.forget(id).catch(() => {})
           setRegistry(
             await pushRegistrations.removeHost(id, client, () =>
               repository.remove(id)

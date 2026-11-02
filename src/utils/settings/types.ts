@@ -485,6 +485,13 @@ export const SettingsSchema = lazySchema(() =>
           'Enable the "ultracode" keyword trigger: including the keyword in a prompt ' +
             'opts that turn into the Workflow tool. Set to false to disable the trigger. Default: true.',
         ),
+      nextPromptSuggestionsEnabled: z
+        .boolean()
+        .optional()
+        .describe(
+          'Desktop: show a predicted next prompt in the empty composer after each reply ' +
+            '(one extra model request per turn). Default: false.',
+        ),
       workflowSizeGuideline: z
         .enum(['unrestricted', 'small', 'medium', 'large'])
         .optional()

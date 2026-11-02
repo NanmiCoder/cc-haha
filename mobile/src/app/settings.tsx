@@ -3,7 +3,7 @@ import { Linking, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import Constants from 'expo-constants'
 import { isH5 } from '../state/h5'
-import { useApp, useConnection } from '../state/AppContext'
+import { pushTokens, useApp, useConnection } from '../state/AppContext'
 import { usePushRegistration, useRetryPushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
 import {
@@ -34,11 +34,11 @@ import {
   requestNotificationStatus,
   scheduleTestNotification,
 } from '../core/systemPermissions'
-import { getDevicePushToken } from '../state/devicePushToken'
 import { DeliveryCard } from '../ui/settings/DeliveryCard'
 import { ProfileEntry } from '../ui/profile/ProfileEntry'
 import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
 import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
+import { requestBackgroundRunning, useDutyStatus } from '../ui/settings/useDutyStatus'
 import {
   aboutLinks,
   channelFootnote,
@@ -83,6 +83,12 @@ export default function Settings() {
   const [linkError, setLinkError] = useState('')
   const [quietOpen, setQuietOpen] = useState(0)
   const [quietVisible, setQuietVisible] = useState(false)
+  const { decisions, completed, errors } = preferences.notifications
+  // Only when this computer reaches the phone through the background connection.
+  const duty = useDutyStatus(
+    push?.status === 'registered' && push.provider === 'desktop' &&
+      (decisions || completed || errors)
+  )
 
   const delivery = deliveryStatus({
     platform,
@@ -92,8 +98,9 @@ export default function Settings() {
     hasHost: Boolean(host),
     decisions: preferences.notifications.decisions,
     liveActivity: preferences.liveActivity,
+    duty,
   })
-  const note = deliveryNote(push)
+  const note = deliveryNote(push, duty)
   const remind = remindFootnote(permissions.notifications)
 
   /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
@@ -114,16 +121,21 @@ export default function Settings() {
       if (kind === 'request') await requestNotifications()
       else if (kind === 'settings') await openNotificationSettings()
       else if (kind === 'retry') retryPush()
+      else if (kind === 'battery') requestBackgroundRunning()
+      else if (kind === 'appSettings') await openAppSettings()
       else {
         if (host && !client) throw new Error('电脑还没连上，稍后再试')
         const outcome = await runTestNotification({
           hostId: host?.id,
-          getToken: getDevicePushToken,
+          // The test must reach the phone the same way the computer's real alerts do.
+          getToken: () => pushTokens.token(push?.provider ?? 'direct', host?.id ?? ''),
           postTest: (body) =>
             client!.post<PushTestResult>('/api/sessions/mobile-push/test', body),
           scheduleLocal: scheduleTestNotification,
         })
         setTestNote(outcome.note)
+        // The computer just sent through its relay: read the fresh delivery state.
+        if (outcome.via === 'remote') retryPush()
       }
     } catch (e) {
       setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))

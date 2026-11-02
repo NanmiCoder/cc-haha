@@ -111,6 +111,17 @@ const checks: Check[] = [
     ],
   },
   {
+    title: 'Voice input preferences saved before AI correction and the personal vocabulary file',
+    command: [
+      'bun',
+      'test',
+      './src/server/__tests__/desktop-ui-preferences.test.ts',
+      './src/server/services/voice/vocabulary/store.test.ts',
+      '--test-name-pattern',
+      'voiceInput|voice vocabulary file',
+    ],
+  },
+  {
     title: 'Desktop localStorage migrations',
     command: ['bun', 'run', 'test', '--', '--run', 'src/lib/persistenceMigrations.test.ts'],
     cwd: 'desktop',

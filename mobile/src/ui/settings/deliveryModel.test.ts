@@ -412,3 +412,46 @@ describe('computer row title', () => {
     expect(computerSettingsTitle(undefined)).toBe('这台电脑的设置')
   })
 })
+
+describe('Android background connection (pull from the computer)', () => {
+  const android = (duty: DeliveryInput['duty']) => input({ platform: 'android', push: { status: 'registered' }, duty })
+  const healthy = { running: true, connected: true, batteryOptimizationIgnored: true }
+  test('is reported as its own row and only ready while the service runs', () => {
+    expect(values({ platform: 'android' })).toEqual(['系统通知:已允许:ok', '电脑推送:MacBook Pro 已开启:ok'])
+    expect(deliveryStatus(android(null)).state).toBe('checking')
+    expect(deliveryStatus(android(healthy))).toMatchObject({ state: 'ok', title: '通知已就绪' })
+    expect(deliveryStatus(android(healthy)).rows.at(-1)).toEqual({ key: 'background', label: '后台连接', value: '已连接', tone: 'ok' })
+    const stopped = deliveryStatus(android({ ...healthy, running: false }))
+    expect(stopped).toMatchObject({ state: 'blocked', title: '后台连接未运行' })
+    expect(stopped.rows.at(-1)?.tone).toBe('bad')
+    expect(deliveryStatus(android({ ...healthy, connected: false })).rows.at(-1)?.value).toBe('正在连接电脑')
+  })
+  test('asks for the battery exemption until granted and always offers the vendor settings', () => {
+    const limited = deliveryStatus(android({ ...healthy, batteryOptimizationIgnored: false }))
+    expect(limited.rows.at(-1)).toMatchObject({ value: '已连接，受省电限制', tone: 'warn' })
+    expect(limited.actions.map((action) => action.kind)).toEqual(['test', 'battery', 'appSettings'])
+    expect(deliveryStatus(android(healthy)).actions.map((action) => action.kind)).toEqual(['test', 'appSettings'])
+    expect(deliveryStatus(input()).actions.map((action) => action.kind)).toEqual(['test'])
+  })
+  test('explains the persistent notification and vendor autostart only for this channel', () => {
+    expect(deliveryNote({ status: 'registered' }, healthy)).toContain('正在值守')
+    expect(deliveryNote({ status: 'registered' }, healthy)).toContain('自启动')
+    expect(deliveryNote({ status: 'registered' })).toBe('')
+  })
+})
+
+describe('iPhone alerts the computer could not send through Expo', () => {
+  const failing = { status: 'registered', issue: 'relayFailing', error: '电脑连不上 Expo 推送服务（exp.host）' } as const
+  test('the card stops claiming alerts are ready and offers a fresh check', () => {
+    const card = deliveryStatus(input({ push: failing }))
+    expect(card).toMatchObject({ state: 'blocked', title: '推送发送失败' })
+    expect(card.rows.find((row) => row.key === 'push')).toMatchObject({ value: '最近一次发送失败', tone: 'bad' })
+    expect(card.actions.map((action) => action.kind)).toEqual(['test', 'retry'])
+    expect(deliveryStatus(input()).state).toBe('ok')
+  })
+  test('the note names the cause and the proxy setting that fixes it', () => {
+    const note = deliveryNote(failing)
+    expect(note).toContain('电脑连不上 Expo 推送服务（exp.host）')
+    expect(note).toContain('「设置 → 通用」里配置网络代理')
+  })
+})

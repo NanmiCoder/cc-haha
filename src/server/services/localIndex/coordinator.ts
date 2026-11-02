@@ -111,6 +111,8 @@ export type LocalIndexCoordinatorDependencies = {
   }) => Promise<LocalIndexBackupResult>
   storageLimitBytes?: number
   busyCooldownMs?: number
+  /** Lifecycle log sink. Defaults to `console.log` (the host captures stdout). */
+  log?: (line: string) => void
 }
 
 export const LOCAL_INDEX_STORAGE_LIMIT_BYTES = 512 * 1024 * 1024
@@ -472,6 +474,13 @@ export function createLocalIndexCoordinator(
     1,
     Math.trunc(dependencies.busyCooldownMs ?? 5_000),
   )
+  // Lifecycle logging is the only visibility into a startup that can run for
+  // minutes. Keep it to phase boundaries and throttled progress: per-file lines
+  // would turn the log itself into event-loop work (#1746). stdout is where the
+  // desktop host's `Recent server logs` capture reads from; tests stay quiet.
+  const log = dependencies.log ?? (process.env.NODE_ENV === 'test'
+    ? () => undefined
+    : (line: string) => console.log(`[local-index] ${line}`))
 
   let mode: LocalIndexMode = 'off'
   let status = cloneStatus(OFF_STATUS)
@@ -488,6 +497,10 @@ export function createLocalIndexCoordinator(
   let watcher: ReconciliationWatcher | undefined
   let watcherHealthy = true
   let storageLimited = false
+  // Only the first full sweep after start() narrates itself. Later sweeps run
+  // every few minutes and stay silent unless they actually re-project files,
+  // so lifecycle lines cannot crowd the host's bounded diagnostics log.
+  let startupSweepPending = false
   let failedPaths = new Map<string, string>()
   let fullSweepFailureCode: string | null = null
   // A code restored from the previous run's backfill state describes that
@@ -565,6 +578,29 @@ export function createLocalIndexCoordinator(
 
   const outstandingReconciliationFailures = (): number =>
     failedPaths.size + (fullSweepFailureCode ? 1 : 0)
+
+  /**
+   * The most common reason a first launch after an upgrade looks hung: a parser
+   * version bump invalidates every source fingerprint, so every transcript is
+   * re-projected on one event loop. Say so once, with counts (#1746).
+   */
+  const logPendingParserRebuild = (sources: readonly {
+    parserVersion: number
+    lastErrorCode: string | null
+  }[]): void => {
+    // A size-limited source keeps the parser version of its last successful
+    // projection, so counting it would repeat this line on every launch.
+    const pending = sources.filter(source =>
+      source.parserVersion !== SESSION_SUMMARY_PARSER_VERSION &&
+      source.lastErrorCode !== LOCAL_INDEX_SOURCE_LIMIT)
+    if (pending.length === 0) return
+    const previousVersions = [...new Set(pending.map(source => source.parserVersion))]
+      .sort((left, right) => left - right)
+    log(
+      `rebuilding ${pending.length} sources (parser ` +
+      `${previousVersions.map(version => `v${version}`).join('/')} → v${SESSION_SUMMARY_PARSER_VERSION})`,
+    )
+  }
 
   const refreshStorageStatus = (activeDatabase: LocalIndexDatabase): void => {
     try {
@@ -657,6 +693,7 @@ export function createLocalIndexCoordinator(
     activeIndex: SessionIndex,
     activeProjector: SessionProjector,
     isActiveGeneration: () => boolean,
+    narrate = false,
   ): Promise<void> => {
     if (
       typeof activeIndex.listActivitySources !== 'function' ||
@@ -666,6 +703,8 @@ export function createLocalIndexCoordinator(
       return
     }
     const existingSources = activeIndex.listActivitySources()
+    const activityStartedAt = now()
+    if (narrate) log(`activity backfill start (${existingSources.length} known sources)`)
     const discovery = await discoverActivitySources(activeScope, signal)
     if (!isActiveGeneration()) return
     const complete = discovery.complete && !(
@@ -739,6 +778,12 @@ export function createLocalIndexCoordinator(
         updatedAtMs: now(),
       })
     })
+    if (narrate) {
+      log(
+        `activity backfill complete: ${indexed}/${discovered} indexed, ${degraded} degraded ` +
+        `in ${Math.max(0, now() - activityStartedAt)} ms`,
+      )
+    }
   }
 
   const runDiscoveryGeneration = async (
@@ -760,7 +805,11 @@ export function createLocalIndexCoordinator(
     if (!isActiveGeneration()) return
     refreshStorageStatus(activeDatabase)
     if (storageLimited) return
+    const narrate = startupSweepPending
+    startupSweepPending = false
+    const discoveryStartedAt = now()
     const existingSources = activeIndex.listSources()
+    if (narrate) log(`discovery start (${existingSources.length} known sources)`)
     const existingPaths = new Set(existingSources.map(source => source.path))
     const seenPaths = new Set<string>()
     const knownPaths = new Set(existingPaths)
@@ -774,6 +823,23 @@ export function createLocalIndexCoordinator(
       paths: sweepFailedPaths,
     }
     activeSweepFailures = sweepFailures
+    let checked = 0
+    let reprojected = 0
+    let lastProgressAt = discoveryStartedAt
+    /**
+     * Progress over files that were actually re-read, at most one line per
+     * 5 s and only while the startup sweep narrates. A time budget keeps the
+     * line count tied to how long the rebuild runs rather than to how many
+     * transcripts exist, so the host's bounded log keeps its earlier lines.
+     */
+    const logProgress = (action: string): void => {
+      checked += 1
+      if (action === 'unchanged') return
+      reprojected += 1
+      if (!narrate || now() - lastProgressAt < 5_000) return
+      lastProgressAt = now()
+      log(`reprojected ${reprojected} sources (${checked}/${knownPaths.size} checked)`)
+    }
 
     indexScopedFailureCode = null
     status = {
@@ -863,6 +929,7 @@ export function createLocalIndexCoordinator(
                 ...status,
                 indexed: committedPaths.size,
               }
+              logProgress(result.kind === 'indexed' ? result.action : 'unchanged')
             }
           } catch (error) {
             if (!isActiveGeneration()) return
@@ -962,6 +1029,12 @@ export function createLocalIndexCoordinator(
       }
       fullSweepFailureFromPreviousRun = false
       if (activeSweepFailures === sweepFailures) activeSweepFailures = null
+      if (narrate || reprojected > 0) {
+        log(
+          `discovery complete: ${knownPaths.size} discovered, ${committedPaths.size} indexed, ` +
+          `${reprojected} reprojected, ${degraded} degraded in ${Math.max(0, now() - discoveryStartedAt)} ms`,
+        )
+      }
       try {
         await runActivityDiscoveryGeneration(
           signal,
@@ -970,6 +1043,7 @@ export function createLocalIndexCoordinator(
           activeIndex,
           activeProjector,
           isActiveGeneration,
+          narrate,
         )
       } catch (error) {
         if (isActiveGeneration()) {
@@ -1146,10 +1220,13 @@ export function createLocalIndexCoordinator(
       }
       const resolvedScope = resolveScope()
       const resolvedDatabasePath = resolveDatabasePath()
+      const openStartedAt = now()
+      log(`opening ${resolvedDatabasePath}`)
       try {
         openedDatabase = openDatabase(resolvedDatabasePath, resolvedScope)
       } catch (error) {
         if (!isConfirmedLocalIndexCorruption(error)) throw stableDatabaseError(error)
+        log('database is corrupt; backing it up and reopening')
         await backupDatabaseFamily({
           scope: resolvedScope,
           databasePath: resolvedDatabasePath,
@@ -1164,6 +1241,7 @@ export function createLocalIndexCoordinator(
       }
       const activeDatabase = openedDatabase
       const activeIndex = createIndex(activeDatabase)
+      log(`opened in ${Math.max(0, now() - openStartedAt)} ms`)
       const persisted = activeIndex.getBackfillState(resolvedScope)
       // A parser upgrade makes persisted activity aggregates semantically stale. Invalidate their
       // readiness before exposing the index so reads fall back until the rebuild finishes.
@@ -1204,7 +1282,8 @@ export function createLocalIndexCoordinator(
           scope === resolvedScope,
       })
       const activeProjector = projector
-      failedPaths = new Map(activeIndex.listSources()
+      const existingSources = activeIndex.listSources()
+      failedPaths = new Map(existingSources
         .filter(source => source.state === 'degraded')
         .map(source => [
           resolve(source.path),
@@ -1219,6 +1298,8 @@ export function createLocalIndexCoordinator(
       const hasCommittedRows = activeIndex.countSources() > 0
       servableSnapshot = hasCommittedRows
       status = initialBuildingStatus(mode, persisted, hasCommittedRows)
+      log(`ready to reconcile (${existingSources.length} indexed sources)`)
+      logPendingParserRebuild(existingSources)
       if (outstandingReconciliationFailures() > 0) {
         status = {
           ...status,
@@ -1233,6 +1314,7 @@ export function createLocalIndexCoordinator(
       watcherHealthy = true
       storageLimited = false
       scheduling = { maxBatchSize: 0, yieldCount: 0 }
+      startupSweepPending = true
       const activeWatcher = createWatcher({
         scope: resolvedScope,
         yieldToForeground,

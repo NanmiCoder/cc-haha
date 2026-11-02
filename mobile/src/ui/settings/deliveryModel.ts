@@ -27,14 +27,19 @@ export function readNotificationPermission(response: {
 }
 
 export type RowTone = 'ok' | 'warn' | 'bad' | 'off'
+export type DutyState = {
+  running: boolean
+  connected: boolean
+  batteryOptimizationIgnored: boolean
+}
 export type DeliveryRow = {
-  key: 'system' | 'push' | 'live'
+  key: 'system' | 'push' | 'live' | 'background'
   label: string
   value: string
   tone: RowTone
 }
 export type DeliveryAction = {
-  kind: 'request' | 'settings' | 'test' | 'retry'
+  kind: 'request' | 'settings' | 'test' | 'retry' | 'battery' | 'appSettings'
   label: string
   /** primary=墨色主按钮，secondary=灰底按钮，plain=无底文字按钮。 */
   look: 'primary' | 'secondary' | 'plain'
@@ -58,6 +63,11 @@ export type DeliveryInput = {
   hostName: string | undefined
   hasHost: boolean
   decisions: boolean
+  /**
+   * Android pulling from the computer (`desktop` push): the foreground service's
+   * state; `null` until first read. Absent for every other channel.
+   */
+  duty?: DutyState | null
   liveActivity: LiveActivityMode
 }
 
@@ -84,6 +94,8 @@ function pushRow(input: DeliveryInput): DeliveryRow {
     return { ...base, value: '需重新连接电脑', tone: 'warn' }
   if (input.push?.issue === 'storage')
     return { ...base, value: '登记信息无法保存', tone: 'bad' }
+  if (input.push?.issue === 'relayFailing')
+    return { ...base, value: '最近一次发送失败', tone: 'bad' }
   switch (input.push?.status) {
     case 'registered':
       return {
@@ -102,6 +114,17 @@ function pushRow(input: DeliveryInput): DeliveryRow {
     default:
       return { ...base, value: '检查中…', tone: 'off' }
   }
+}
+
+/** 安卓「后台连接」：常驻服务在跑、连上电脑、没被省电策略限制，三样都有才算稳。 */
+export function backgroundRow(duty: DutyState | null): DeliveryRow {
+  const base = { key: 'background', label: '后台连接' } as const
+  if (!duty) return { ...base, value: '检查中…', tone: 'off' }
+  if (!duty.running) return { ...base, value: '未运行', tone: 'bad' }
+  if (!duty.connected) return { ...base, value: '正在连接电脑', tone: 'warn' }
+  if (!duty.batteryOptimizationIgnored)
+    return { ...base, value: '已连接，受省电限制', tone: 'warn' }
+  return { ...base, value: '已连接', tone: 'ok' }
 }
 
 /**
@@ -125,6 +148,8 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   const push = pushRow(input)
   const rows: DeliveryRow[] = [system, push]
   if (input.platform === 'ios') rows.push(liveActivityRow(input))
+  const duty = input.duty
+  if (duty !== undefined) rows.push(backgroundRow(duty))
 
   const permission = input.permission
   const actions: DeliveryAction[] = []
@@ -144,10 +169,17 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
       label: '测试通知',
       look: 'secondary',
     })
+  const relayFailing = input.push?.status === 'registered' && input.push.issue === 'relayFailing'
   if (permission?.status === 'granted' && input.hasHost &&
-    (input.push?.status === 'notConfigured' || (input.push?.status === 'error' &&
+    (input.push?.status === 'notConfigured' || relayFailing || (input.push?.status === 'error' &&
       input.push.issue !== 'authorization' && input.push.issue !== 'storage')))
     actions.push({ kind: 'retry', label: '重新检查', look: 'plain' })
+  if (duty) {
+    if (!duty.batteryOptimizationIgnored)
+      actions.push({ kind: 'battery', label: '允许后台运行', look: 'secondary' })
+    // 厂商的自启动、后台限制开关都在应用详情页或它旁边。
+    actions.push({ kind: 'appSettings', label: '应用设置', look: 'plain' })
+  }
 
   const guide = input.hasHost && input.push?.status === 'notConfigured'
   // 系统通知没开时结论已定，不必等推送登记；已允许才要等登记结果。
@@ -155,7 +187,7 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
     !permission ||
     (permission.status === 'granted' &&
       input.hasHost &&
-      (!input.push || input.push.status === 'loading'))
+      (!input.push || input.push.status === 'loading' || duty === null))
   if (checking)
     return {
       state: 'checking',
@@ -165,11 +197,31 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
       actions,
       guide,
     }
-  if (permission?.status === 'granted' && input.push?.status === 'registered')
+  // 登记成功不等于收得到：电脑经 Expo 发送失败时，离开 App 后的提醒到不了手机。
+  if (permission?.status === 'granted' && relayFailing)
+    return {
+      state: 'blocked',
+      title: '推送发送失败',
+      subtitle: '电脑最近一次没能把提醒发出去，离开 App 后可能收不到。',
+      rows,
+      actions,
+      guide,
+    }
+  // 安卓拉取模式下，离开 App 还能不能收到，取决于后台连接是否真的在跑。
+  if (permission?.status === 'granted' && input.push?.status === 'registered' && (!duty || duty.running))
     return {
       state: 'ok',
       title: '通知已就绪',
       subtitle: '离开 App 后也可接收电脑发来的提醒。',
+      rows,
+      actions,
+      guide,
+    }
+  if (permission?.status === 'granted' && duty && !duty.running)
+    return {
+      state: 'blocked',
+      title: '后台连接未运行',
+      subtitle: '离开 App 后暂时收不到提醒。请允许后台运行，或回到 App 重新连接。',
       rows,
       actions,
       guide,
@@ -200,8 +252,13 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
 
 /** 卡片下的补充说明：只有登记失败、设备不支持这两种需要多说一句。 */
 export function deliveryNote(
-  push: DeliveryInput['push']
+  push: DeliveryInput['push'],
+  duty?: DeliveryInput['duty']
 ) {
+  if (push?.status === 'registered' && push.issue === 'relayFailing')
+    return `${push.error ?? '电脑发送推送失败'}。如果电脑要通过代理上网，请在电脑端「设置 → 通用」里配置网络代理，再点「测试通知」确认。`
+  if (duty && push?.status === 'registered')
+    return '离开 App 后，靠通知栏里那条「正在值守」保持与电脑的连接。小米、华为、OPPO、vivo 等手机还要在应用设置里允许自启动，并在最近任务里锁定 cc-haha，否则可能被系统清理。'
   if (push?.issue === 'deviceNotConfigured')
     return '此版本暂不支持后台推送，请在 App 内查看任务提醒。无需重复修改手机通知权限。'
   if (push?.issue === 'deviceUnavailable')

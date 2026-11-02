@@ -16,12 +16,15 @@ import {
   getMcpConfigByName,
   isMcpServerDisabled,
   isMcpServerDisabledForExecution,
+  parseMcpConfig,
   projectDirDeclaresMcpServers,
   registerCwdProjectIfDeclaresMcpServers,
+  resolveProjectMcpDirectorySync,
   removeMcpConfig,
   setMcpServerEnabled,
 } from '../../services/mcp/config.js'
 import { inspectMcpHostCommand } from '../services/mcpHostPreflight.js'
+import { listProjectMcpSelections, updateProjectMcpSelections, type ProjectMcpSelectionTarget } from '../../services/mcp/projectSharing.js'
 import type {
   ConfigScope,
   McpHTTPServerConfig,
@@ -75,6 +78,7 @@ type McpServerDto = {
   canToggle: boolean
   config: McpEditableConfigDto
   projectPath?: string
+  error?: string
 }
 
 type McpMutationBody = {
@@ -231,22 +235,28 @@ function describeServerConfigLocation(name: string, scope: ConfigScope): string 
   return describeMcpConfigFilePath(scope)
 }
 
-function describeServerProjectPath(name: string, scope: string): string | undefined {
+function describeServerProjectLocation(name: string, scope: string): { projectPath?: string; error?: string } {
   if (scope === 'project') {
     const configPath = findProjectMcpConfigPath(name)
-    return configPath ? normalizePathForConfigKey(dirname(configPath)) : undefined
+    if (!configPath) return {}
+    const directory = dirname(configPath)
+    try {
+      return { projectPath: resolveProjectMcpDirectorySync(directory) }
+    } catch (error) {
+      return { projectPath: directory, error: error instanceof Error ? error.message : 'Project directory is unavailable' }
+    }
   }
   if (scope === 'local') {
-    return normalizePathForConfigKey(getProjectPathForConfig(getCwd()))
+    return { projectPath: normalizePathForConfigKey(getProjectPathForConfig(getCwd())) }
   }
-  return undefined
+  return {}
 }
 
 function getServerIdentity(name: string, config: ScopedMcpServerConfig): McpServerIdentity {
   return {
     name,
     scope: config.scope,
-    projectPath: describeServerProjectPath(name, config.scope),
+    projectPath: describeServerProjectLocation(name, config.scope).projectPath,
   }
 }
 
@@ -394,6 +404,8 @@ function buildServerDto(
 ): McpServerDto {
   const enabled = !isMcpServerDisabledForExecution(name)
   if (!enabled) status = getInitialStatus(false)
+  const location = describeServerProjectLocation(name, config.scope)
+  if (location.error) status = { status: 'failed', statusLabel: getStatusLabel('failed'), statusDetail: location.error }
   const transport = config.type ?? 'stdio'
   const canEdit = EDITABLE_SCOPES.has(config.scope) && (transport === 'stdio' || transport === 'http' || transport === 'sse')
 
@@ -407,12 +419,12 @@ function buildServerDto(
     statusDetail: status.statusDetail,
     configLocation: describeServerConfigLocation(name, config.scope),
     summary: getSummary(config),
-    canEdit,
-    canRemove: EDITABLE_SCOPES.has(config.scope),
-    canReconnect: enabled,
-    canToggle: true,
+    canEdit: canEdit && !location.error,
+    canRemove: EDITABLE_SCOPES.has(config.scope) && !location.error,
+    canReconnect: enabled && !location.error,
+    canToggle: !location.error,
     config: serializeEditableConfig(config),
-    projectPath: describeServerProjectPath(name, config.scope),
+    ...location,
   }
 }
 
@@ -576,6 +588,22 @@ async function assertHostPrerequisites(config: McpServerConfig) {
   }
 }
 
+async function checkProjectHostPrerequisites(name: string, config: McpServerConfig, cwd: string): Promise<boolean> {
+  if ((config.type ?? 'stdio') !== 'stdio') return true
+  return runWithCwdOverride(cwd, async () => {
+    try {
+      // Inspect the same expanded in-memory view used by runtime loading. The
+      // service keeps the separate raw configuration for the actual file write.
+      const parsed = parseMcpConfig({ configObject: { mcpServers: { [name]: config } }, expandVars: true, scope: 'project' })
+      const expanded = parsed.config?.mcpServers[name]
+      return !!expanded && await getHostPreflightStatus(expanded, true) === null
+    } catch {
+      // Expanded commands and environment values must not reach target errors.
+      return false
+    }
+  })
+}
+
 async function createServer(body: Record<string, unknown>): Promise<Response> {
   const name = typeof body.name === 'string' ? body.name.trim() : ''
   if (!name) {
@@ -602,6 +630,48 @@ async function createServer(body: Record<string, unknown>): Promise<Response> {
   }
 
   return Response.json({ server: serializeServerSnapshot(name, created) }, { status: 201 })
+}
+
+async function listServerProjects(name: string, url: URL): Promise<Response> {
+  const result = await listProjectMcpSelections(
+    name,
+    url.searchParams.getAll('projectPath'),
+    optionalString(url.searchParams.get('sourceCwd')),
+    url.searchParams.has('configHash') ? url.searchParams.getAll('configHash') : undefined,
+  )
+  return Response.json({
+    projects: result.projects,
+    ...(result.config ? { config: serializeEditableConfig({ ...result.config, scope: 'project' }) } : {}),
+    ...(result.sourceConfig ? { sourceConfig: result.sourceConfig } : {}),
+  })
+}
+
+async function updateServerProjects(name: string, body: Record<string, unknown>): Promise<Response> {
+  if (!Array.isArray(body.targets)) throw ApiError.badRequest('Missing or invalid project targets')
+  const targets = body.targets.map((entry): ProjectMcpSelectionTarget => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw ApiError.badRequest('Invalid project target')
+    const target = entry as Record<string, unknown>
+    if (typeof target.projectPath !== 'string' || typeof target.selected !== 'boolean' ||
+      !(target.expectedRevision === null || typeof target.expectedRevision === 'string')) {
+      throw ApiError.badRequest('Project targets require projectPath, selected and expectedRevision')
+    }
+    return { projectPath: target.projectPath, selected: target.selected, expectedRevision: target.expectedRevision }
+  })
+  if (!targets.length) return Response.json({ results: [] })
+  const config = buildServerConfig(body.config)
+  try {
+    const results = await updateProjectMcpSelections(
+      name,
+      config,
+      targets,
+      optionalString(body.sourceCwd),
+      body.sourceConfig,
+      (rawConfig, projectPath) => checkProjectHostPrerequisites(name, rawConfig, projectPath),
+    )
+    return Response.json({ results })
+  } catch {
+    throw ApiError.badRequest('MCP server name or configuration is not allowed')
+  }
 }
 
 async function updateServer(name: string, body: Record<string, unknown>): Promise<Response> {
@@ -788,6 +858,11 @@ export async function handleMcpApi(
 
       if (req.method === 'GET' && !serverName) {
         return listServers()
+      }
+
+      if (serverName && action === 'projects') {
+        if (req.method === 'GET') return listServerProjects(serverName, url)
+        if (req.method === 'PUT') return updateServerProjects(serverName, body ?? {})
       }
 
       if (req.method === 'GET' && serverName && action === 'status') {

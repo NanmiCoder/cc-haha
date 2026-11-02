@@ -2,7 +2,10 @@ import type { RequestCompatibility, SavedProvider } from './types/provider.js'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS, normalizeAutoQuestionSettings } from '../shared/autoQuestionSettings.js'
 
 export type ApiRequestContext = { remoteBrowser?: boolean; remoteDeviceId?: string; remoteDeviceExpiresAt?: number }
-const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
+// `nextPromptSuggestionsEnabled` is readable so a remote desktop-class browser,
+// which asks for suggestions on its session socket, also renders them; turning
+// on the extra per-turn request stays a desktop-only decision.
+const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'nextPromptSuggestionsEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
 const WRITE_SETTINGS = new Set(['language', 'chatSendBehavior', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'outputStyle', 'autoQuestion'])
 const RESERVED_PROVIDER_PATHS = new Set(['settings', 'cc-switch', 'test', 'models', 'presets', 'auth-status', 'official', 'reorder'])
 const REMOTE_COMPATIBILITY_KEYS = new Set(['maxOutputTokens', 'outputTokenLimit', 'outputTokenField', 'sampling', 'reasoning', 'parallelTools', 'structuredOutput'])

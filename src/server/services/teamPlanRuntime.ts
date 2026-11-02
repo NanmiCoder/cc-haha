@@ -754,7 +754,7 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
     failedLaunchesNoticed.add(`${plan.planId}:${plan.revision}`)
     const error = plan.launch?.error?.trim()
     const failure = error && error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error
-    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure))
+    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure), undefined, { synthetic: true })
   }
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped) continue
@@ -786,6 +786,8 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
     await conversationService.sendMessage(
       parentSessionId,
       teamStoppedNotice(launch.plan.teamName, stoppedByUser ? 'user' : stoppedByRestart ? 'restart' : 'error', lines),
+      undefined,
+      { synthetic: true },
     )
   }
 }
@@ -955,7 +957,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     powerActivityClock.changed()
     startSupervisor(launch)
     const waitingNames = members.filter(member => waiting.has(member.id)).map(member => member.name)
-    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames))
+    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames), undefined, { synthetic: true })
     return { memberIds }
   } catch (error) {
     await stopTeamPlanRuntime(plan.planId)
@@ -1087,7 +1089,7 @@ export async function rehydrateTeamPlanRuntimesForSession(sessionId: string): Pr
 export async function notifyTeamPlanLeader(plan: TeamPlanRecord, kind: TeamPlanLeaderNotice): Promise<void> {
   // Approval wakes the leader only after launch's readiness barrier and snapshot.
   if (kind === 'approved' || !conversationService.hasSession(plan.sessionId)) return
-  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback))
+  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback), undefined, { synthetic: true })
 }
 
 export class TeamPlanExecutionInterruptedError extends Error {

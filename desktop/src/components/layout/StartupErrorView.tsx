@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { DoctorPanel } from '../doctor/DoctorPanel'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { isRetainedSidecarStartupTimeout } from '@/lib/sidecarStartupError'
 
 const LOG_MARKER = '\n\nRecent server logs:\n'
 
@@ -27,6 +28,27 @@ export function splitStartupError(error: string) {
   }
 }
 
+/**
+ * A Windows child process that dies on an NTSTATUS failure reports it as a
+ * large unsigned exit code: 3221225477 is 0xC0000005 (access violation),
+ * 3221225725 is 0xC00000FD (stack overflow). A sidecar exiting that way at
+ * startup crashed instead of rejecting its configuration, so the hint points at
+ * what the user can check: security software and the installed runtime files.
+ * Returns the code as "decimal (0xHEX)" for the hint, or null for ordinary
+ * exit codes.
+ */
+export function matchRuntimeCrashExitCode(text: string): string | null {
+  for (const match of text.matchAll(/code=(-?\d+)\b/g)) {
+    const signed = Number(match[1])
+    if (!Number.isSafeInteger(signed)) continue
+    const code = signed < 0 ? signed >>> 0 : signed
+    if (code >= 0xc0000000 && code <= 0xc0ffffff) {
+      return `${code} (0x${code.toString(16).toUpperCase()})`
+    }
+  }
+  return null
+}
+
 type StartupErrorViewProps = {
   error: string
 }
@@ -34,6 +56,10 @@ type StartupErrorViewProps = {
 export function StartupErrorView({ error }: StartupErrorViewProps) {
   const t = useTranslation()
   const { message, logs, diagnostics } = useMemo(() => splitStartupError(error), [error])
+  // After a startup timeout the host keeps the sidecar running; Retry resumes
+  // waiting on it, so asking for an issue report would be the wrong advice.
+  const stillStarting = isRetainedSidecarStartupTimeout(message)
+  const crashExitCode = useMemo(() => matchRuntimeCrashExitCode(error), [error])
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -57,10 +83,10 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
         <div className="flex flex-col gap-4">
           <div>
             <h1 className="text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
-              {t('app.serverFailed')}
+              {t(stillStarting ? 'app.serverStillStarting' : 'app.serverFailed')}
             </h1>
             <p className="mt-1.5 text-[13px] leading-6 text-[var(--color-text-tertiary)]">
-              {t('app.serverFailedHint')}
+              {t(stillStarting ? 'app.serverStillStartingHint' : 'app.serverFailedHint')}
             </p>
           </div>
 
@@ -72,6 +98,15 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
               {message}
             </pre>
           </Card>
+
+          {crashExitCode ? (
+            <p
+              data-testid="startup-crash-hint"
+              className="text-[13px] leading-6 text-[var(--color-text-secondary)]"
+            >
+              {t('app.startupCrashHint', { code: crashExitCode })}
+            </p>
+          ) : null}
 
           {logs ? (
             <Card radius="md" surface="none" padding="sm" className="bg-[var(--color-code-bg)]">

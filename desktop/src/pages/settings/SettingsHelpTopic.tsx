@@ -95,6 +95,14 @@ const SETTINGS_HELP_TOPICS = {
       ['when', 'settings.help.trace.when'],
     ],
   },
+  voiceCorrection: {
+    title: 'settings.help.voiceCorrection.title',
+    entries: [
+      ['what', 'settings.help.voiceCorrection.what'],
+      ['when', 'settings.help.voiceCorrection.when'],
+      ['cost', 'settings.help.voiceCorrection.cost'],
+    ],
+  },
 } satisfies Record<string, HelpTopicKeys>
 
 export type SettingsHelpTopicId = keyof typeof SETTINGS_HELP_TOPICS

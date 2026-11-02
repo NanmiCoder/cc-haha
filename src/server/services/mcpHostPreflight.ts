@@ -88,12 +88,13 @@ function buildNonExecutablePathMessage(command: string, resolvedPath: string) {
 async function resolveCommandFromPath(
   command: string,
   envPath?: string,
+  cwd: string = getCwd(),
 ): Promise<string | null> {
   const pathEntries = getPathSearchList(envPath)
 
   for (const entry of pathEntries) {
     for (const candidate of getWindowsExecutableCandidates(command)) {
-      const resolvedPath = path.join(entry, candidate)
+      const resolvedPath = path.resolve(cwd, entry, candidate)
       try {
         await access(
           resolvedPath,
@@ -150,8 +151,8 @@ export async function inspectMcpHostCommand(
 
   const hasExplicitPath = env ? Object.hasOwn(env, 'PATH') : false
   const resolvedCommand = hasExplicitPath
-    ? await resolveCommandFromPath(trimmedCommand, env?.PATH)
-    : await resolveCommandFromPath(trimmedCommand, process.env.PATH)
+    ? await resolveCommandFromPath(trimmedCommand, env?.PATH, cwd)
+    : await resolveCommandFromPath(trimmedCommand, process.env.PATH, cwd)
   if (resolvedCommand) {
     return {
       ok: true,
@@ -164,6 +165,7 @@ export async function inspectMcpHostCommand(
     const shellResolvedCommand = await resolveCommandFromPath(
       trimmedCommand,
       stdioEnv.PATH,
+      cwd,
     )
     if (shellResolvedCommand) {
       return {

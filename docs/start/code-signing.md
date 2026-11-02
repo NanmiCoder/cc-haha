@@ -43,7 +43,7 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 接入完成后，可以在 PowerShell 中检查 Windows 安装包：
 
 ```powershell
-Get-AuthenticodeSignature ".\Claude-Code-Haha-<version>-win-x64.exe" |
+Get-AuthenticodeSignature ".\Claude-Code-Haha-<version>-Windows-x64-Setup.exe" |
   Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 

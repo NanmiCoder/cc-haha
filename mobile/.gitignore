@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Gradle output of local native modules (the sources under modules/ are committed)
+/modules/*/android/build/
+/modules/*/android/.cxx/

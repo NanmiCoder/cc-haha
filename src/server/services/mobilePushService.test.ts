@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { MobilePushService, inQuietHours, migrateMobilePushStore, pushEvent, validatePushInput, type MobileActivity, type PushInput } from './mobilePushService.js'
-import type { PushDelivery } from './mobilePushTransport.js'
+import { DesktopPullTransport, MobilePushRouter, type PushDelivery } from './mobilePushTransport.js'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
@@ -22,8 +22,185 @@ function fixture(configured = true) {
 
 test('configuration absence is normal unavailability and never records successful registration', () => {
   const f = fixture(false)
-  expect(f.service.status()).toEqual({ status: 'notConfigured', platforms: { ios: false, android: false } })
+  expect(f.service.status()).toEqual({ status: 'notConfigured', platforms: { ios: false, android: false }, providers: { expo: false, desktop: false } })
   expect(f.service.register(input(), {})).toEqual({ registered: false, status: 'notConfigured' })
+})
+
+const expoToken = 'ExponentPushToken[fixture-device-a]'
+const pullToken = 'p'.repeat(43)
+function relayFixture() {
+  const directory = mkdtempSync(path.join(tmpdir(), 'mobile-push-relay-'))
+  let activities: MobileActivity[] = [], remoteActive = true
+  const sent: PushDelivery[] = []
+  const desktop = new DesktopPullTransport()
+  // Only the publisher's own computer has APNs / FCM keys; relays need none.
+  const transport = new MobilePushRouter({ configured: () => false, send: async () => { throw new Error('direct push is not configured') } }, { configured: () => true, send: async delivery => { sent.push(delivery); return 'sent' } }, desktop)
+  const service = new MobilePushService({ directory, transport, pull: (token, ack, signal) => desktop.pull(token, ack, signal, 0), activities: async () => activities, summary: async () => ({ title: 'fixture session' }) })
+  service.start(() => remoteActive)
+  cleanups.push(() => { service.stop(); rmSync(directory, { recursive: true, force: true }) })
+  return { service, directory, sent, state: (value: MobileActivity[]) => { activities = value }, revoke: () => { remoteActive = false } }
+}
+
+test('relay providers validate their own token shapes and never carry ActivityKit tokens', () => {
+  expect(validatePushInput(input({ provider: 'expo', token: expoToken }))).toBe(true)
+  expect(validatePushInput(input({ provider: 'expo', token: 'ExpoPushToken[x]', platform: 'android' }))).toBe(true)
+  expect(validatePushInput(input({ provider: 'desktop', platform: 'android', token: pullToken }))).toBe(true)
+  for (const value of [
+    input({ provider: 'expo' }),
+    input({ provider: 'expo', token: 'ExponentPushToken[has space]' }),
+    input({ token: expoToken }),
+    input({ provider: 'desktop', token: pullToken }),
+    input({ provider: 'desktop', platform: 'android', token: 'short' }),
+    input({ provider: 'desktop', platform: 'android', token: `${'p'.repeat(43)}/` }),
+    { ...input({ token: expoToken }), provider: 'fcm' },
+    input({ provider: 'expo', token: expoToken, kind: 'liveActivity', deviceToken: 'b'.repeat(64), sessionId: 's', activityId: 'a', name: 'CCHahaTaskActivity' }),
+  ]) expect(validatePushInput(value)).toBe(false)
+})
+
+test('a computer without APNs / FCM keys still delivers through Expo and the phone pull', async () => {
+  const f = relayFixture()
+  expect(f.service.status()).toEqual({ status: 'configured', platforms: { ios: false, android: false }, providers: { expo: true, desktop: true } })
+  expect(f.service.register(input(), {})).toEqual({ registered: false, status: 'notConfigured' })
+  expect(f.service.register(input({ provider: 'expo', token: expoToken, delivery: { timeSensitive: true } }), {}).registered).toBe(true)
+  expect(f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, delivery: { channels: 'split' } }), {}).registered).toBe(true)
+  f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+  f.state([{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash', preview: 'rm -rf build' }]); await f.service.tick()
+  expect(f.sent).toEqual([{ platform: 'ios', kind: 'notification', provider: 'expo', token: expoToken, payload: { title: 'fixture session', body: 'rm -rf build', data: { hostId: 'local-phone-host-a', sessionId: 's', requestId: 'q1', eventType: 'decision' }, categoryId: 'cchahaTool', sound: 'default', priority: 'high', ttl: 300, interruptionLevel: 'time-sensitive' } }])
+  const pulled = await f.service.pull(pullToken, undefined, {}, new AbortController().signal)
+  const pulledId = pulled?.[0]?.id
+  expect(typeof pulledId).toBe('string')
+  expect(pulled).toEqual([{ id: pulledId!, title: 'fixture session', body: 'rm -rf build', data: { hostId: 'local-phone-host-a', sessionId: 's', requestId: 'q1', eventType: 'decision' }, category: 'cchahaTool', channelId: 'cc-haha-decisions' }])
+  // An acknowledged alert is never handed out twice.
+  expect(await f.service.pull(pullToken, pulledId, {}, new AbortController().signal)).toEqual([])
+  f.state([completed()]); await f.service.tick()
+  expect(f.sent[1]?.payload).toMatchObject({ body: '任务已完成', categoryId: 'cchahaResult' })
+  expect(f.sent[1]?.payload.interruptionLevel).toBeUndefined()
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ body: '任务已完成', channelId: 'cc-haha-completed' }])
+})
+
+test('only the registered owner of a pull token may read its alerts', async () => {
+  const f = relayFixture()
+  const signal = new AbortController().signal
+  f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken }), { remoteDeviceId: 'phone-a' })
+  f.service.register(input({ provider: 'expo', token: expoToken }), {})
+  expect(await f.service.pull(pullToken, undefined, { remoteDeviceId: 'phone-a' }, signal)).toEqual([])
+  expect(await f.service.pull(pullToken, undefined, { remoteDeviceId: 'phone-b' }, signal)).toBeUndefined()
+  expect(await f.service.pull(pullToken, undefined, {}, signal)).toBeUndefined()
+  expect(await f.service.pull('q'.repeat(43), undefined, { remoteDeviceId: 'phone-a' }, signal)).toBeUndefined()
+  // An Expo registration is not a pull registration.
+  expect(await f.service.pull(expoToken, undefined, {}, signal)).toBeUndefined()
+  f.revoke()
+  expect(await f.service.pull(pullToken, undefined, { remoteDeviceId: 'phone-a' }, signal)).toBeUndefined()
+})
+
+test('the phone test reaches a pull registration and Expo reports removed devices', async () => {
+  const f = relayFixture()
+  f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, delivery: { channels: 'split' } }), {})
+  expect(await f.service.sendTest(pullToken, undefined, {})).toEqual({ status: 'sent' })
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-completed', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
+  f.service.register(input({ provider: 'expo', token: expoToken }), {})
+  expect(await f.service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
+  expect(f.sent[0]?.payload).toMatchObject({ title: '测试通知 · cc-haha', categoryId: 'cchahaResult', data: { eventType: 'test' } })
+})
+
+test('a remote listener restart pauses delivery but keeps the registration; only losing the pairing deletes it', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'mobile-push-listener-'))
+  const sent: PushDelivery[] = []
+  let activities: MobileActivity[] = [], listening = true, paired = true
+  const desktop = new DesktopPullTransport()
+  const transport = new MobilePushRouter({ configured: () => false, send: async () => 'sent' }, { configured: () => true, send: async delivery => { sent.push(delivery); return 'sent' } }, desktop)
+  const service = new MobilePushService({ directory, transport, pull: (token, ack, signal) => desktop.pull(token, ack, signal, 0), activities: async () => activities, summary: async () => null })
+  service.start(() => listening, () => paired)
+  cleanups.push(() => { service.stop(); rmSync(directory, { recursive: true, force: true }) })
+  service.register(input({ provider: 'expo', token: expoToken }), { remoteDeviceId: 'phone' })
+  service.register(input({ provider: 'desktop', platform: 'android', token: pullToken }), { remoteDeviceId: 'phone' })
+  const stored = () => JSON.parse(readFileSync(path.join(directory, 'mobile-push.json'), 'utf8')).registrations.length
+  activities = [{ id: 's', activityState: 'running' }]; await service.tick()
+  // cloudflared exits and the desktop stops the listener while it reconnects.
+  listening = false
+  activities = [{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }]; await service.tick()
+  expect(sent).toEqual([])
+  expect(stored()).toBe(2)
+  // The tunnel is back: the approval that started meanwhile still reaches the phone.
+  listening = true
+  await service.tick()
+  expect(sent.map(item => item.payload.categoryId)).toEqual(['cchahaTool'])
+  expect(await service.pull(pullToken, undefined, { remoteDeviceId: 'phone' }, new AbortController().signal)).toHaveLength(1)
+  paired = false; listening = false
+  await service.tick()
+  expect(stored()).toBe(0)
+})
+
+test('a stalled Expo send never holds back alerts for phones that pull', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'mobile-push-lanes-'))
+  const desktop = new DesktopPullTransport()
+  let release!: () => void
+  const stalled = new Promise<void>(resolve => { release = resolve })
+  const expoSends: string[] = []
+  // exp.host unreachable: each attempt hangs until its 15 s timeout.
+  const expo = { configured: () => true, send: async (delivery: PushDelivery) => { expoSends.push(String((delivery.payload.data as { requestId?: string }).requestId)); await stalled; throw new Error('timeout') } }
+  let activities: MobileActivity[] = [{ id: 'a', activityState: 'running' }, { id: 'b', activityState: 'running' }]
+  const service = new MobilePushService({ directory, transport: new MobilePushRouter({ configured: () => false, send: async () => 'sent' }, expo, desktop), pull: (token, ack, signal) => desktop.pull(token, ack, signal, 0), activities: async () => activities, summary: async () => null })
+  cleanups.push(() => { release(); void service.stop(); rmSync(directory, { recursive: true, force: true }) })
+  service.register(input({ provider: 'expo', token: expoToken }), {})
+  service.register(input({ provider: 'desktop', platform: 'android', token: pullToken }), {})
+  await service.tick()
+  activities = [{ id: 'a', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }, { id: 'b', activityState: 'running' }]
+  const first = service.tick()
+  for (let i = 0; i < 20 && !expoSends.length; i++) await Bun.sleep(1)
+  expect(expoSends).toEqual(['q1'])
+  // A second approval arrives while the Expo send is still hanging; the next interval tick runs.
+  activities = [{ id: 'a', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }, { id: 'b', activityState: 'waiting', requestId: 'q2', toolName: 'Bash' }]
+  await service.tick()
+  const pulled = await desktop.pull(pullToken, undefined, new AbortController().signal, 0)
+  expect(pulled.map(item => (item.data as { requestId: string }).requestId)).toEqual(['q1', 'q2'])
+  release()
+  await first
+})
+
+test('the latest Expo failure is reported to phones until a send succeeds again', async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'mobile-push-expo-error-'))
+  let fail: Error | undefined = new Error('fetch failed')
+  const expo = { configured: () => true, send: async () => { if (fail) throw fail; return 'sent' as const } }
+  const service = new MobilePushService({ directory, transport: new MobilePushRouter({ configured: () => false, send: async () => 'sent' }, expo, new DesktopPullTransport()), pull: async () => [], activities: async () => [], summary: async () => null })
+  cleanups.push(() => { void service.stop(); rmSync(directory, { recursive: true, force: true }) })
+  service.register(input({ provider: 'expo', token: expoToken }), {})
+  expect(service.status().relayErrors).toBeUndefined()
+  expect(await service.sendTest(expoToken, undefined, {})).toMatchObject({ status: 'failed' })
+  expect(service.status().relayErrors).toEqual({ expo: '电脑连不上 Expo 推送服务（exp.host）' })
+  // An answer from Expo itself names its reason, e.g. missing APNs credentials on EAS.
+  fail = new Error('Expo push rejected delivery (InvalidCredentials)')
+  await service.sendTest(expoToken, undefined, {})
+  expect(service.status().relayErrors).toEqual({ expo: 'Expo 推送服务拒绝了发送（InvalidCredentials）' })
+  expect(JSON.stringify(service.status())).not.toContain(expoToken)
+  fail = undefined
+  expect(await service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
+  expect(service.status().relayErrors).toBeUndefined()
+})
+
+test('a phone from before relays hears "not configured" from a computer without its own keys', async () => {
+  const f = relayFixture()
+  expect(await f.service.sendTest('a'.repeat(64), undefined, {})).toEqual({ status: 'notConfigured' })
+  const keyed = fixture()
+  expect(await keyed.service.sendTest('a'.repeat(64), undefined, {})).toEqual({ status: 'noRegistration' })
+})
+
+test('stores written before relay providers load unchanged and keep using direct push', async () => {
+  const f = fixture()
+  // A registration persisted by the previous version: no provider field.
+  f.service.register(input(), {})
+  const file = path.join(f.directory, 'mobile-push.json')
+  const legacy = JSON.parse(readFileSync(file, 'utf8'))
+  expect(legacy.registrations[0].provider).toBeUndefined()
+  const migrated = migrateMobilePushStore(legacy)
+  expect(migrated.registrations).toHaveLength(1)
+  expect(migrateMobilePushStore({ ...legacy, registrations: [{ ...legacy.registrations[0], provider: 'carrier-pigeon' }] }).registrations).toEqual([])
+  const restarted = new MobilePushService({ directory: f.directory, transport: f.transport, activities: async () => [{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }], summary: async () => null })
+  await restarted.tick()
+  restarted.stop()
+  expect(f.sent).toHaveLength(1)
+  expect(f.sent[0]?.provider).toBeUndefined()
+  expect(f.sent[0]?.payload).toMatchObject({ aps: { category: 'cchahaTool' } })
 })
 
 test('registration rejects client ownership, malformed preferences and invalid time zones', () => {

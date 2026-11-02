@@ -330,10 +330,22 @@ In-app updates are driven by `electron-updater`, with artifacts hosted on GitHub
 |---|---|---|
 | macOS arm64 / x64 | `dmg` for first install, `zip` for Squirrel.Mac updates | `latest-mac.yml` |
 | Windows x64 / ARM64 | NSIS `.exe` | `latest.yml` |
-| Linux x64 | `.AppImage` for updates, `.deb` for manual install | `latest-linux.yml` |
-| Linux arm64 | `.AppImage` for updates, `.deb` for manual install | `latest-linux-arm64.yml` |
+| Linux x64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux.yml` |
+| Linux arm64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux-arm64.yml` |
 
 The release workflow generates `latest*.yml` inside each platform matrix job, renames colliding metadata to `latest-<platform>.yml`, and finally lets `scripts/release-update-metadata.ts` merge them back into the standard filenames electron-updater expects. Do not change this so each matrix job publishes the GitHub Release directly — the metadata files would overwrite each other.
+
+### Artifact names
+
+File names are written for the people downloading them: `Claude-Code-Haha-<version>-macOS-Apple-Silicon.dmg` / `-macOS-Intel.dmg`, `-Windows-x64-Setup.exe` / `-Windows-arm64-Setup.exe`, and `-Linux-x64` / `-Linux-arm64` with `.AppImage`, `.deb` and `.rpm`. The Mac auto-update zips are `-macOS-arm64-update.zip` / `-macOS-x64-update.zip`. Default names live in the `artifactName` of `mac`, `dmg`, `nsis` and `linux` in `desktop/package.json`; the DMG chip names and the uniform Linux `x64` are overridden per row in the release matrix `builder_args`, because electron-builder spells `${arch}` per Linux format (`x86_64`, `amd64`, `aarch64`). Those overrides must stay in single quotes, or the shell expands `${version}` first.
+
+Renames have three hard constraints, each checked by `scripts/pr/release-workflow.test.ts` against electron-updater's selection logic:
+
+- `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and `latest-linux-arm64.yml` are hard-coded by installed clients and cannot change.
+- The Apple Silicon zip name must contain `arm64` and the Intel one must not; otherwise Apple Silicon machines get "updated" to the Intel build.
+- Both Windows installers share one `latest.yml`, and the updater picks by the `x64` / `arm64` in the name; without them, ARM devices install the x64 build.
+
+`.blockmap` files are still generated on the runner for package-smoke but no longer published: the app has disabled differential downloads since v0.4.7, and older clients fall back to a full download when a blockmap is missing. Releases also no longer attach `install-macos-unsigned.sh`, since release Mac builds are always signed and notarized.
 
 ### Signing secrets
 
@@ -349,14 +361,13 @@ APPLE_TEAM_ID
 
 `MACOS_CERTIFICATE` is the base64 content of a Developer ID Application `.p12`. The project does not ship a `.pkg`, so no Developer ID Installer certificate is needed.
 
-Windows signing is optional:
+Windows signing goes through SignPath and is off until approval lands: tag pushes, manual releases and manual drafts all produce unsigned Windows installers. Auto-update still works; users may just see a SmartScreen prompt. The switch is the `WINDOWS_SIGNING_ENABLED` repository variable:
 
-```text
-WINDOWS_CERTIFICATE
-WINDOWS_CERTIFICATE_PASSWORD
-```
+- Unset or anything but `true`: Windows is not signed, and the preflight only emits a notice.
+- `true`: the `SIGNPATH_*` variables and `SIGNPATH_API_TOKEN` are required, and a non-draft release with missing configuration is refused.
+- A manual `Release Desktop` run can override it with the `windows_signing` input: `auto` follows the variable, `unsigned` skips signing for that run, and `signed` forces it (failing if configuration is incomplete), so a draft can be trial-signed before the variable is turned on.
 
-Auto-update still works without Windows signing; users may just see a SmartScreen prompt.
+Before turning signing on, update the installer artifact configuration in SignPath to match `.github/signpath/windows-installer.xml` (`Claude-Code-Haha-*-Windows-*-Setup.exe`), then trial-sign a draft. As long as unsigned Windows releases remain possible, never add `publisherName` or `verifyUpdateCodeSignature` to `desktop/package.json`: clients built with either would reject every later unsigned update, with no way to recover in place.
 
 ### Pre-release checks
 
@@ -374,6 +385,7 @@ Confirm `release-notes/v<version>.md` exists before running `bun run scripts/rel
 
 1. `bun run scripts/release.ts <version>` commits the version bump and release notes on a `release/v<version>` branch, without a tag. Push the branch, open the PR as the script prints, and merge it once PR Quality is green.
 2. After the merge, run `bun run scripts/release.ts --tag <version>`. The script checks that `origin/main` carries desktop version `<version>` and its release notes, tags the merged commit, and you push only the tag: `git push origin v<version>`.
+3. The tag push triggers `Release Desktop`, and that run builds and publishes the release, with the mobile delivery chained after it. No manual workflow run is needed. Only if that run fails before publishing, re-run it with `gh workflow run release-desktop.yml --ref v<version> -f draft=false`. Once a release is published, every run is refused at the preflight, so nothing can overwrite installers users are downloading.
 
 ### Verify one real update path
 
@@ -386,7 +398,7 @@ Every release should be verified by upgrading from the previous stable build at 
 5. After restart, confirm the version in About, and that providers, sessions, skills, agents, memories, custom pets, and a custom data directory all still work.
 6. Confirm historical attachment context, subagent details, and task state restore correctly; open a pet window and check the overlay and current-session navigation.
 
-Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml`, `.exe`, and `.exe.blockmap` are all in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` ships as a manual installer only.
+Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml` and both `-Setup.exe` installers are in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` and `.rpm` ship as manual installers only.
 
 ## PR Workflow
 
