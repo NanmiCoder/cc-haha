@@ -163,6 +163,83 @@ describe('Plugins API', () => {
     expect(body.summary.enabled).toBe(1)
   })
 
+  it('GET /api/plugins lists the marketplaces recorded in known_marketplaces.json', async () => {
+    const marketplaceRoot = path.join(tmpDir, 'marketplace-root')
+    const emptyMarketplaceRoot = path.join(tmpDir, 'empty-marketplace-root')
+    const pluginRoot = path.join(marketplaceRoot, 'plugins', 'demo')
+    const pluginsDir = path.join(tmpDir, 'plugins')
+    const lastUpdated = new Date(0).toISOString()
+
+    await fs.mkdir(path.join(pluginRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.join(marketplaceRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(path.join(emptyMarketplaceRoot, '.claude-plugin'), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+
+    await fs.writeFile(
+      path.join(pluginRoot, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'demo', version: '1.0.0', description: 'Demo plugin' }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(marketplaceRoot, '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({
+        name: 'test-market',
+        owner: { name: 'Test' },
+        plugins: [{ name: 'demo', source: './plugins/demo', version: '1.0.0' }],
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(emptyMarketplaceRoot, '.claude-plugin', 'marketplace.json'),
+      JSON.stringify({ name: 'empty-market', owner: { name: 'Test' }, plugins: [] }),
+      'utf-8',
+    )
+    // The file is a flat record keyed by marketplace name, exactly as
+    // KnownMarketplacesFileSchema describes it and as the CLI writes it.
+    await fs.writeFile(
+      path.join(pluginsDir, 'known_marketplaces.json'),
+      JSON.stringify({
+        'test-market': {
+          source: { source: 'directory', path: marketplaceRoot },
+          installLocation: marketplaceRoot,
+          lastUpdated,
+        },
+        'empty-market': {
+          source: { source: 'directory', path: emptyMarketplaceRoot },
+          installLocation: emptyMarketplaceRoot,
+          lastUpdated,
+          autoUpdate: false,
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'demo@test-market': true } }),
+      'utf-8',
+    )
+
+    const { req, url, segments } = makeRequest('GET', '/api/plugins')
+    const res = await handlePluginsApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      marketplaces: Array<{
+        name: string
+        source: string
+        lastUpdated?: string
+        autoUpdate: boolean
+        installedCount: number
+      }>
+      summary: { marketplaceCount: number }
+    }
+    expect(body.marketplaces).toEqual([
+      { name: 'empty-market', source: emptyMarketplaceRoot, lastUpdated, autoUpdate: false, installedCount: 0 },
+      { name: 'test-market', source: marketplaceRoot, lastUpdated, autoUpdate: true, installedCount: 1 },
+    ])
+    expect(body.summary.marketplaceCount).toBe(2)
+  })
+
   it('POST /api/plugins/reload returns numeric counters', async () => {
     const { req, url, segments } = makeRequest('POST', '/api/plugins/reload', {})
     const res = await handlePluginsApi(req, url, segments)
