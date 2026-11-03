@@ -161,6 +161,9 @@ async function syncMcpActionToSession(
   // A lean CLI has no MCP runtime; asking it would only come back as an
   // error that the desktop reports as a failed chat sync.
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+  if (!conversationService.hasSession(sessionId)) {
+    return { applied: false, reason: 'not_running' }
+  }
   if (launchInfo?.agentProfile === 'lean') return { applied: false, reason: 'lean_profile' }
 
   try {
@@ -171,6 +174,11 @@ async function syncMcpActionToSession(
     )
     return { applied: true }
   } catch (error) {
+    // Stopping a session cancels pending controls before removing its runtime.
+    // That cancellation must not mask a successful sync in another session.
+    if (!conversationService.hasSession(sessionId)) {
+      return { applied: false, reason: 'not_running' }
+    }
     return {
       applied: false,
       reason: 'failed',
