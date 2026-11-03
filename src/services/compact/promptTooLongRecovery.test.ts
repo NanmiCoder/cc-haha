@@ -44,6 +44,10 @@ beforeAll(async () => {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: '0',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    // Under test, model calls go through recorded fixtures (src/services/vcr.ts) and
+    // in CI a missing one fails before any request is sent. These calls are meant to
+    // reach the loopback provider above; what VCR records lands in this temp root.
+    VCR_RECORD: '1',
   })
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, env)
