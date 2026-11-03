@@ -11,6 +11,7 @@ import { Profiler, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
+import { resolveAppRegion } from '../../test/appRegion'
 import type {
   DesktopUiPreferencesResponse,
   SidebarProjectPreferences,
@@ -710,6 +711,25 @@ describe('Sidebar', () => {
     expect(useTabStore.getState().activeTabId).toBeNull()
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
+  })
+
+  it('keeps every control in the title region clickable on the drag region', async () => {
+    // Only controls inside a drag region are no-drag now, so the rule has to
+    // name every kind the titlebars hold — the repository link here is an <a>,
+    // not a button, and dropping `a` from the rule would let a press on it
+    // drag the window instead.
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    render(<Sidebar />, { container: root })
+
+    const titleRegion = screen.getByTestId('sidebar-title-region')
+    expect(resolveAppRegion(titleRegion)).toBe('drag')
+    const controls = Array.from(titleRegion.querySelectorAll('a, button'))
+    expect(controls.some((control) => control.tagName === 'A')).toBe(true)
+    expect(controls.some((control) => control.tagName === 'BUTTON')).toBe(true)
+    for (const control of controls) {
+      expect(resolveAppRegion(control), control.outerHTML).toBe('no-drag')
+    }
   })
 
   it('answers the Cmd+N request like the New Session item, in the project on screen', async () => {
