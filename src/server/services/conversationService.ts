@@ -2,6 +2,7 @@ import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
 import { powerActivityClock } from './powerActivityClock.js'
+import { SDKPromptSuggestionActivityMessageSchema } from '../../entrypoints/sdk/coreSchemas.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -327,6 +328,8 @@ type SessionProcess = {
   pendingControlRequests: Map<string, (reason: Error) => void>
   /** Last value sent with `set_prompt_suggestions`; the CLI starts disabled. */
   promptSuggestionsEnabled?: boolean
+  promptSuggestionGenerations?: Set<string>
+  promptSuggestionExited?: boolean
 }
 
 export type PendingPermissionRequest = {
@@ -414,6 +417,8 @@ export class ConversationService {
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
   private promptSuggestionClientSessions = new Set<string>()
   private promptSuggestionsSettingEnabled = false
+  // Retired runtimes keep ownership until their actual process exits.
+  private promptSuggestionWorkOwners = new Set<SessionProcess>()
   private readonly processDeps: ConversationServiceProcessDeps
 
   constructor(processDeps: ConversationServiceProcessDeps = {}) {
@@ -1714,6 +1719,13 @@ export class ConversationService {
       try {
         const msg = JSON.parse(line)
         if (this.isReplayedSdkMessage(session, msg)) continue
+        if (msg?.type === 'system' && msg.subtype === 'prompt_suggestion_activity') {
+          const activity = SDKPromptSuggestionActivityMessageSchema().safeParse(msg)
+          if (activity.success) {
+            this.trackPromptSuggestionActivity(session, activity.data.generation_id, activity.data.active)
+          }
+          continue
+        }
         if (
           msg?.type === 'system' &&
           msg.subtype === 'api_retry' &&
@@ -1826,6 +1838,33 @@ export class ConversationService {
         )
       }
     }
+  }
+
+  hasPromptSuggestionPowerActivity(): boolean {
+    return this.promptSuggestionWorkOwners.size > 0
+  }
+
+  private trackPromptSuggestionActivity(session: SessionProcess, generationId: string, active: boolean): void {
+    if (session.promptSuggestionExited || session.proc.exitCode != null) return
+    if (!session.promptSuggestionGenerations) {
+      if (!active) return
+      session.promptSuggestionGenerations = new Set()
+      void session.proc.exited.then(() => {
+        session.promptSuggestionExited = true
+        session.promptSuggestionGenerations?.clear()
+        if (this.promptSuggestionWorkOwners.delete(session)) powerActivityClock.changed()
+      }, () => {})
+    }
+    const generations = session.promptSuggestionGenerations
+    if (active) {
+      if (generations.has(generationId)) return
+      generations.add(generationId)
+      this.promptSuggestionWorkOwners.add(session)
+    } else {
+      if (!generations.delete(generationId)) return
+      if (generations.size === 0) this.promptSuggestionWorkOwners.delete(session)
+    }
+    powerActivityClock.changed()
   }
 
   private notifyOutputCallbacks(
