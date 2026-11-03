@@ -31,6 +31,19 @@ describe('EmptyState', () => {
     expect(onClick).toHaveBeenCalledTimes(1)
   })
 
+  it('renders a row of choices under the description', () => {
+    render(
+      <EmptyState title="No providers" description="Pick one to start.">
+        <button type="button">DeepSeek</button>
+        <button type="button">Kimi</button>
+      </EmptyState>,
+    )
+    const description = screen.getByText('Pick one to start.')
+    const choice = screen.getByRole('button', { name: 'DeepSeek' })
+    expect(description.compareDocumentPosition(choice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Kimi' })).toBeInTheDocument()
+  })
+
   it('hides the decorative icon from assistive tech', () => {
     render(<EmptyState title="No data" icon={<span data-testid="icon" />} />)
     expect(screen.getByTestId('icon').parentElement).toHaveAttribute('aria-hidden', 'true')

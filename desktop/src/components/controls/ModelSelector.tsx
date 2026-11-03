@@ -16,9 +16,10 @@ import {
 import { useTranslation } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
+import { formatTokenLimit, isMagpieProvider, useMagpieStore } from '../../stores/magpieStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import type { ModelMapping, SavedProvider } from '../../types/provider'
+import type { MagpieModel, ModelMapping, SavedProvider } from '../../types/provider'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { ModelInfo, ReasoningEffortLevel } from '../../types/settings'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -210,6 +211,21 @@ function buildProviderModels(
     buildProviderModelRow(provider, entry.id, entry.id, entry.labels.join(' · ')))
 }
 
+/**
+ * Every model Magpie serves, in its catalog's order, then any mapped slot the
+ * catalog no longer lists (so the provider's own choice never disappears).
+ */
+function buildMagpieProviderModels(
+  provider: SavedProvider,
+  labels: Record<ModelSlot, string>,
+  catalog: readonly MagpieModel[],
+  describe: (model: MagpieModel) => string,
+): ModelInfo[] {
+  const rows = catalog.map((model) => buildProviderModelRow(provider, model.runtimeId, model.id, describe(model)))
+  const listed = new Set(rows.map((row) => row.id))
+  return [...rows, ...buildProviderModels(provider, labels).filter((row) => !listed.has(row.id))]
+}
+
 function buildProviderModelRow(
   provider: SavedProvider,
   id: string,
@@ -248,6 +264,8 @@ function buildProviderChoices(
   openAIOfficialLoggedIn: boolean,
   grokOfficialLoggedIn: boolean,
   deepSeekAccountLoggedIn: boolean,
+  magpieCatalog: readonly MagpieModel[] | null = null,
+  describeMagpieModel: (model: MagpieModel) => string = (model) => model.displayName,
 ): ModelProviderChoice[] {
   const claudeOfficialModels = activeId === null && availableModels.length > 0
     ? mergeOfficialModels(availableModels)
@@ -289,7 +307,9 @@ function buildProviderChoices(
       providerId: provider.id,
       providerName: provider.name,
       isDefault: activeId === provider.id,
-      models: buildProviderModels(provider, labels),
+      models: isMagpieProvider(provider) && magpieCatalog?.length
+        ? buildMagpieProviderModels(provider, labels, magpieCatalog, describeMagpieModel)
+        : buildProviderModels(provider, labels),
     })
   }
 
@@ -484,6 +504,15 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     [t],
   )
 
+  const magpieCatalog = useMagpieStore((store) => store.state?.models ?? null)
+  const describeMagpieModel = useCallback((model: MagpieModel) => [
+    model.displayName,
+    model.contextWindow !== undefined
+      ? t('settings.providers.magpie.contextTag', { size: formatTokenLimit(model.contextWindow) })
+      : model.isGroup ? null : t('settings.providers.magpie.unknownContext'),
+    model.reasoningEfforts.length > 0 ? t('settings.providers.magpie.reasoningTag') : null,
+  ].filter(Boolean).join(' · '), [t])
+
   const providerChoices = useMemo(
     () => [...(leadingChoices ?? []), ...(runtimeChoices ?? buildProviderChoices(
       savedProvidersOnly
@@ -501,8 +530,12 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       openAIOAuthStatus?.loggedIn === true && !savedProvidersOnly,
       grokOAuthStatus?.loggedIn === true && !savedProvidersOnly,
       deepSeekOAuthStatus?.loggedIn === true && !savedProvidersOnly,
+      magpieCatalog,
+      describeMagpieModel,
     ))],
     [
+      magpieCatalog,
+      describeMagpieModel,
       leadingChoices,
       savedProvidersOnly,
       runtimeChoices,
@@ -648,6 +681,10 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const openSelector = useCallback(() => {
     if (disabled) return
     setEffortOpen(false)
+    // Magpie's catalog changes in Magpie; read it again (the server caches it briefly).
+    if (useProviderStore.getState().providers.some(isMagpieProvider)) {
+      void useMagpieStore.getState().refresh()
+    }
 
     if (runtimeChoices !== undefined || !isRuntimeScoped || providerChoices.length > 0) {
       setOpen(true)

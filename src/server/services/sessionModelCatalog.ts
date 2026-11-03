@@ -12,6 +12,7 @@ import { DEEPSEEK_ACCOUNT_MODEL_CATALOG } from '../../services/deepseekAuth/mode
 import { getPresetDefaultEnv, getPresetReasoningProviderKind } from './providerRuntimeEnv.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import type { SavedProvider } from '../types/provider.js'
+import { getCachedMagpieModels, isMagpieProvider, type MagpieModel } from './magpieGateway.js'
 
 const providers = new ProviderService()
 const slots = ['main', 'fable', 'opus', 'sonnet', 'haiku'] as const
@@ -22,7 +23,8 @@ export async function listSessionModels(): Promise<SessionModelOption[]> {
     providers.listProviders(), hahaOAuthService.loadTokens(), hahaOpenAIOAuthService.loadTokens(),
     hahaGrokOAuthService.loadTokens(), hahaDeepSeekOAuthService.loadTokens(),
   ])
-  const catalog = buildSessionModelCatalog(index.providers, { claude: !!claude, openai: !!openai, grok: !!grok, deepseek: !!deepseek }, index.activeId)
+  // Magpie's catalog as last fetched (settings, model picker or a session start), never refetched here.
+  const catalog = buildSessionModelCatalog(index.providers, { claude: !!claude, openai: !!openai, grok: !!grok, deepseek: !!deepseek }, index.activeId, getCachedMagpieModels())
   // Official accounts also have user-configured slot mappings. Keep those
   // concrete choices and defaults without consulting a remote model catalog.
   for (const providerId of [null, 'openai-official', 'grok-official', 'deepseek-account']) {
@@ -44,7 +46,7 @@ export async function listSessionModels(): Promise<SessionModelOption[]> {
   return catalog
 }
 
-export function buildSessionModelCatalog(saved: SavedProvider[], accounts: { claude: boolean; openai: boolean; grok: boolean; deepseek: boolean }, activeProviderId?: string | null): SessionModelOption[] {
+export function buildSessionModelCatalog(saved: SavedProvider[], accounts: { claude: boolean; openai: boolean; grok: boolean; deepseek: boolean }, activeProviderId?: string | null, magpieModels: readonly MagpieModel[] = []): SessionModelOption[] {
   const result: SessionModelOption[] = []
   const add = (providerId: string | null, providerName: string, modelId: string, modelName: string, isDefault: boolean, supportedEfforts?: readonly string[], defaultEffort?: string) => {
     if (!modelId || result.some(item => item.providerId === providerId && item.modelId === modelId)) return
@@ -69,6 +71,12 @@ export function buildSessionModelCatalog(saved: SavedProvider[], accounts: { cla
       add(provider.id, provider.name, modelId, modelId, slot === 'main', profile?.supportedReasoningEfforts ?? [], profile?.defaultReasoningEffort)
       const candidate = result.find(item => item.providerId === provider.id && item.modelId === modelId)!
       candidate.aliases = [...(candidate.aliases ?? []), slot, ...(slot === 'main' ? ['default'] : [])]
+    }
+    // Every model Magpie serves can run a session, not only the mapped slots.
+    if (isMagpieProvider(provider)) for (const model of magpieModels) {
+      const profile = resolveModelReasoningProfile(model.runtimeId, provider.apiFormat,
+        getModelReasoningCapabilityOverride(model.runtimeId, provider.models, getPresetDefaultEnv(provider.presetId)), getPresetReasoningProviderKind(provider.presetId))
+      add(provider.id, provider.name, model.runtimeId, model.displayName, false, profile?.supportedReasoningEfforts ?? [], profile?.defaultReasoningEffort)
     }
   }
   const identitiesByName = new Map<string, Set<string>>()

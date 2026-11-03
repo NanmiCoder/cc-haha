@@ -241,6 +241,8 @@ export type SessionContextSnapshot = {
   maxTokens: number
   rawMaxTokens: number
   percentage: number
+  /** Where the live CLI compacts on its own (absent when auto-compact is off or for an estimate). */
+  autoCompactThreshold?: number
   gridRows: Array<Array<{
     color: string
     isFilled: boolean

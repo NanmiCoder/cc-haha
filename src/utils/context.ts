@@ -13,6 +13,7 @@ import { getModelCapability } from './model/modelCapabilities.js'
 import {
   getBuiltInModelContextWindow,
   getConfiguredModelContextWindow,
+  getConfiguredModelMaxOutputTokens,
   getConfiguredOrBuiltInModelContextWindow,
 } from './model/modelContextWindows.js'
 import { readProviderEnvForModel } from './model/providerEnvScope.js'
@@ -415,6 +416,14 @@ export function getModelMaxOutputTokens(model: string): {
   const cap = getModelCapability(model)
   if (cap?.max_tokens && cap.max_tokens >= 4_096) {
     upperLimit = cap.max_tokens
+    defaultTokens = Math.min(defaultTokens, upperLimit)
+  }
+
+  // The model's provider knows its real limit (a gateway's catalog): asking
+  // for more is refused upstream, and the compaction reserve is sized by it.
+  const configured = getConfiguredModelMaxOutputTokens(model)
+  if (configured !== undefined) {
+    upperLimit = configured
     defaultTokens = Math.min(defaultTokens, upperLimit)
   }
 
