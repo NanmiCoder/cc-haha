@@ -51,10 +51,12 @@ export const DEFAULT_DARK_THEME: DarkThemeMode = 'dark'
  */
 export const THEME_BACKGROUNDS: Record<ThemeMode, string> = {
   white: '#FFFFFF',
+  'glaze-white': '#F9F9F9',
   paper: '#FBF9F4',
   'warm-classic': '#F6F0E1',
   celadon: '#F5F8F5',
   dark: '#201D17',
+  'deep-night': '#202020',
   'ink-blue': '#1A1D24',
 }
 
