@@ -10,20 +10,24 @@
 #   CU_HELPER_ARCH       (default: current machine arch; arm64 or x86_64)
 #   CU_HELPER_TIMESTAMP_MODE
 #                        (default: auto; secure for Developer ID, none for local development)
+#   CC_HAHA_LOCAL_UNSIGNED_BUILD=1
+#                        Local desktop packaging only: permits the explicit
+#                        build-wide identity '-' (Computer Use is unavailable).
 #
 # Output: prints "built: <arch-specific abs path>/cc-haha-computer-use.app"
 #
 # Stable-identity contract: same cert + same --identifier on every build,
-# --options runtime, a secure timestamp for Developer ID distribution, no ad-hoc.
+# --options runtime, a secure timestamp for Developer ID distribution.
 #
 # WHY this matters: macOS TCC (Privacy & Security) grants Accessibility + Screen
 # Recording to a binary keyed by its code-signing identity (the "designated
 # requirement" / cdhash lineage). An ad-hoc signature (codesign -s -) or a
 # per-build throwaway cert rotates that identity on EVERY rebuild, so the user
 # would have to re-grant both permissions after every `swift build`. To keep the
-# grants alive we ALWAYS sign with a STABLE cert and a CONSTANT --identifier.
-# We NEVER fall back to ad-hoc signing — if no stable identity exists we stop and
-# tell the user exactly how to create a one-time self-signed Code Signing cert.
+# grants alive, Computer Use builds need a STABLE cert and a CONSTANT --identifier.
+# We never auto-select ad-hoc signing. Only the local desktop packaging entrypoint
+# may explicitly request it; that package cannot pass Computer Use attestation.
+# Direct helper builds without a stable identity still stop with setup guidance.
 
 set -euo pipefail
 
@@ -185,7 +189,11 @@ resolve_identity() {
   if [ -n "${CC_HAHA_SIGN_IDENTITY:-}" ]; then
     SIGN_IDENTITY="$CC_HAHA_SIGN_IDENTITY"
     if [ "$SIGN_IDENTITY" = "-" ]; then
-      die "CC_HAHA_SIGN_IDENTITY='-' (ad-hoc) is refused. Ad-hoc signing rotates the TCC identity every build. Use a stable cert."
+      if [ "${CC_HAHA_LOCAL_UNSIGNED_BUILD:-}" != "1" ] \
+        || [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        die "Ad-hoc signing requires explicit local unsigned packaging; CI must use a stable signing identity."
+      fi
+      log "warning: local ad-hoc helper build; Computer Use is unavailable without a shared signing certificate."
     fi
     log "identity: $SIGN_IDENTITY (from CC_HAHA_SIGN_IDENTITY)"
     return 0
@@ -418,7 +426,7 @@ verify() {
     die "Developer ID signature is missing a secure Timestamp; notarization would reject $BIN_PATH."
   fi
   log ""
-  log "verified: Identifier=$got_id (stable)"
+  log "verified: Identifier=$got_id"
 }
 
 # ---------------------------------------------------------------------------
@@ -477,7 +485,7 @@ wrap_app() {
   if [ "$RESOLVED_TIMESTAMP_MODE" = "secure" ] && ! printf '%s\n' "$app_dv" | grep -q '^Timestamp='; then
     die "Developer ID signature is missing a secure Timestamp; notarization would reject $APP_PATH."
   fi
-  log "verified: .app bundle Identifier=$app_id (stable)"
+  log "verified: .app bundle Identifier=$app_id"
 }
 
 # Run the production loader from an independent .app location. Checking only a
