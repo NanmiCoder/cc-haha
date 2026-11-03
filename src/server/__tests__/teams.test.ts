@@ -5032,6 +5032,30 @@ describe('Teams API', () => {
     expect(inbox.at(-1)?.text).toBe('Please continue with the failing test')
   })
 
+  it('PATCH /api/teams/:name/members/:id/runtime checks the requested model before touching the team', async () => {
+    await writeTeamConfig('runtime-team', makeTeamConfig({ name: 'runtime-team' }))
+    const patch = (body: string) => fetch(
+      `${baseUrl}/api/teams/runtime-team/members/${encodeURIComponent('agent-worker@runtime-team')}/runtime`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body },
+    )
+
+    for (const body of [
+      '{not json',
+      JSON.stringify({ providerId: null }),
+      JSON.stringify({ providerId: null, modelId: '  ' }),
+      JSON.stringify({ providerId: 7, modelId: 'claude-sonnet-4-6' }),
+      JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 3 }),
+    ]) {
+      const res = await patch(body)
+      expect(res.status, body).toBe(400)
+    }
+
+    // A team written without an approved plan has no running members to switch.
+    const res = await patch(JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 'high' }))
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as { message?: string }).message).toContain('is not a member of a running team')
+  })
+
   it('DELETE /api/teams/:name should delete team', async () => {
     const config = makeTeamConfig({ name: 'del-team' })
     config.members = config.members.filter(
