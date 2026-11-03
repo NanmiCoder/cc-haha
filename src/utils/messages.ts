@@ -2028,35 +2028,39 @@ function relocateToolReferenceSiblings(
  * media was there. Returns the same object when there is nothing to replace.
  *
  * Only user messages carry media; assistant messages hold text, tool_use and
- * thinking blocks.
+ * thinking blocks. `markers` picks the block types to replace and their text;
+ * by default both images and documents are replaced.
  */
-export function replaceMediaWithPlaceholders(message: UserMessage): UserMessage {
+export function replaceMediaWithPlaceholders(
+  message: UserMessage,
+  markers: { image?: string; document?: string } = {
+    image: '[image]',
+    document: '[document]',
+  },
+): UserMessage {
   const content = message.message.content
   if (!Array.isArray(content)) {
     return message
   }
 
+  const markerFor = (type: string) =>
+    type === 'image' || type === 'document' ? markers[type] : undefined
+
   let hasMediaBlock = false
   const newContent = content.flatMap(block => {
-    if (block.type === 'image') {
+    const marker = markerFor(block.type)
+    if (marker !== undefined) {
       hasMediaBlock = true
-      return [{ type: 'text' as const, text: '[image]' }]
-    }
-    if (block.type === 'document') {
-      hasMediaBlock = true
-      return [{ type: 'text' as const, text: '[document]' }]
+      return [{ type: 'text' as const, text: marker }]
     }
     // Also replace media nested inside tool_result content arrays
     if (block.type === 'tool_result' && Array.isArray(block.content)) {
       let toolHasMedia = false
       const newToolContent = block.content.map(item => {
-        if (item.type === 'image') {
+        const itemMarker = markerFor(item.type)
+        if (itemMarker !== undefined) {
           toolHasMedia = true
-          return { type: 'text' as const, text: '[image]' }
-        }
-        if (item.type === 'document') {
-          toolHasMedia = true
-          return { type: 'text' as const, text: '[document]' }
+          return { type: 'text' as const, text: itemMarker }
         }
         return item
       })
@@ -5417,9 +5421,13 @@ export function filterOrphanedThinkingOnlyMessages(
  * Strip signature-bearing blocks (thinking, redacted_thinking, connector_text)
  * from all assistant messages. Their signatures are bound to the API key that
  * generated them; after a credential change (e.g. /login) they're invalid and
- * the API rejects them with a 400.
+ * the API rejects them with a 400. `shouldStrip` limits the strip to some
+ * assistant messages; by default every one is stripped.
  */
-export function stripSignatureBlocks(messages: Message[]): Message[] {
+export function stripSignatureBlocks(
+  messages: Message[],
+  shouldStrip: (msg: AssistantMessage) => boolean = () => true,
+): Message[] {
   let changed = false
   const result = messages.map(msg => {
     if (msg.type !== 'assistant') return msg
@@ -5434,7 +5442,7 @@ export function stripSignatureBlocks(messages: Message[]): Message[] {
       }
       return true
     })
-    if (filtered.length === content.length) return msg
+    if (filtered.length === content.length || !shouldStrip(msg)) return msg
 
     // Strip to [] even for thinking-only messages. Streaming yields each
     // content block as a separate same-id AssistantMessage (claude.ts:2150),
@@ -5457,30 +5465,32 @@ export function stripSignatureBlocks(messages: Message[]): Message[] {
 /**
  * Protected thinking signatures are model-bound. When a resumed session moves
  * to another model, replaying those blocks can either fail signature validation
- * or send a block type the new provider does not implement. Keep the transcript
- * intact and clean only the in-memory request history.
+ * or send a block type the new provider does not implement. Decide per message:
+ * once the new model has produced thinking of its own, the older model's blocks
+ * are still in history and must keep being removed. Keep the transcript intact
+ * and clean only the in-memory request history.
  */
 export function stripSignatureBlocksAfterModelChange(
   messages: Message[],
   currentModel: string,
 ): Message[] {
-  const signatureSource = messages.findLast(msg => (
-    msg.type === 'assistant' &&
-    msg.message.model !== SYNTHETIC_MODEL &&
-    msg.message.content.some(isThinkingBlock)
-  ))
-  if (signatureSource?.type !== 'assistant' || !signatureSource.message.model) {
-    return messages
+  const normalized = new Map<string, string>()
+  const normalize = (model: string) => {
+    let value = normalized.get(model)
+    if (value === undefined) {
+      value = normalizeModelStringForAPI(parseUserSpecifiedModel(model))
+        .trim()
+        .toLowerCase()
+      normalized.set(model, value)
+    }
+    return value
   }
+  const target = normalize(currentModel)
 
-  const normalize = (model: string) => normalizeModelStringForAPI(
-    parseUserSpecifiedModel(model),
-  ).trim().toLowerCase()
-
-  if (normalize(signatureSource.message.model) === normalize(currentModel)) {
-    return messages
-  }
-  return stripSignatureBlocks(messages)
+  return stripSignatureBlocks(messages, msg => {
+    const model = msg.message.model
+    return !!model && model !== SYNTHETIC_MODEL && normalize(model) !== target
+  })
 }
 
 /**
