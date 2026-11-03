@@ -4247,6 +4247,9 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': 'Close',
+  'tabs.emptySessionDeleteFailed': 'Could not delete the empty session. You can reopen its tab.',
+  'tabs.saveFailed': 'Could not save open tabs. Your current tabs are still open; retry saving before quitting.',
+  'tabs.restoreFailed': 'Could not restore tabs. The saved tabs have been kept. Please retry.',
   'tabs.closeOthers': 'Close Others',
   'tabs.closeLeft': 'Close to the Left',
   'tabs.closeRight': 'Close to the Right',
