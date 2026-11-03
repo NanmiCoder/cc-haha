@@ -39,6 +39,7 @@ import {
 } from '../../utils/tasks.js'
 import type { TaskListLifecycleState } from '../../utils/tasks.js'
 import { cleanupTeamDirectories } from '../../utils/swarm/teamHelpers.js'
+import { parseMemberCommand, unsupportedMemberCommandReason } from '../../utils/swarm/memberCommand.js'
 import type { TaskInfo } from './taskService.js'
 import { powerActivityClock } from './powerActivityClock.js'
 
@@ -1807,6 +1808,11 @@ export class TeamService {
     const text = content.trim()
     if (!text) {
       throw ApiError.badRequest('content (string) is required in request body')
+    }
+    const command = parseMemberCommand(text)
+    const unsupported = command && unsupportedMemberCommandReason(command)
+    if (unsupported) {
+      throw new ApiError(400, unsupported, 'MEMBER_COMMAND_UNSUPPORTED')
     }
 
     // Own the accepted instruction before async lookup or a contended mailbox

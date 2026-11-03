@@ -2412,6 +2412,44 @@ describe('teamStore member recovery states', () => {
     }])
     expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('idle')
   })
+
+  it('stops waiting once a command the member ran shows up, even though it never replies', async () => {
+    const timestamp = new Date().toISOString()
+    getMemberTranscriptMock.mockResolvedValue({ messages: [] })
+    getWorkbenchMock.mockResolvedValue(workbenchWithWorker('v1', { status: 'idle', activity: 'idle' }))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    const sessionId = memberSessionId(WORKER_ID)
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+
+    await useTeamStore.getState().sendMessageToMember(sessionId, '/compact')
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('thinking')
+
+    // What the member's CLI records for /compact: a summary and the command, no reply.
+    getMemberTranscriptMock.mockResolvedValue({ messages: [
+      { id: 'boundary', type: 'system', content: 'Conversation compacted', timestamp },
+      { id: 'summary', type: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary: reviewed the routes.', timestamp },
+      { id: 'command', type: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>', timestamp },
+      { id: 'output', type: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>', timestamp },
+    ] })
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('idle')
+  })
+
+  it('keeps waiting for the reply to an ordinary message whose prompt already shows', async () => {
+    const timestamp = new Date().toISOString()
+    getMemberTranscriptMock.mockResolvedValue({ messages: [] })
+    getWorkbenchMock.mockResolvedValue(workbenchWithWorker('v1', { status: 'idle', activity: 'idle' }))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    const sessionId = memberSessionId(WORKER_ID)
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+
+    await useTeamStore.getState().sendMessageToMember(sessionId, 'compact the notes please')
+    getMemberTranscriptMock.mockResolvedValue({ messages: [
+      { id: 'echo', type: 'user', content: 'compact the notes please', timestamp },
+    ] })
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('thinking')
+  })
 })
 
 describe('teamStore execution provider snapshots', () => {

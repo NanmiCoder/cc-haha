@@ -4384,6 +4384,22 @@ describe('TeamService', () => {
     })
   })
 
+  it("refuses commands that would undo a member, and passes its other commands to its inbox as typed", async () => {
+    await writeTeamConfig('command-team', makeTeamConfig({ name: 'command-team' }))
+
+    for (const command of ['/clear', '  /Reset now', '/new', '/model opus']) {
+      await expect(service.sendMemberMessage('command-team', 'agent-worker', command))
+        .rejects.toMatchObject({ statusCode: 400, code: 'MEMBER_COMMAND_UNSUPPORTED' })
+    }
+    await service.sendMemberMessage('command-team', 'agent-worker', '/compact')
+
+    const inbox = JSON.parse(await fs.readFile(
+      path.join(tmpDir, 'teams', 'command-team', 'inboxes', 'Worker-Agent.json'),
+      'utf-8',
+    )) as Array<{ from: string, text: string }>
+    expect(inbox.map(message => message.text)).toEqual(['/compact'])
+  })
+
   it('reports a member message that could not be written instead of claiming it was sent', async () => {
     await writeTeamConfig('blocked-mailbox-team', makeTeamConfig({ name: 'blocked-mailbox-team' }))
     // An inbox that cannot be read back can never take the message.

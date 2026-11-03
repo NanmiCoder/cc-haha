@@ -43,6 +43,7 @@ export type TeamMember = {
   model?: string
   providerId?: string | null
   providerName?: string
+  effortLevel?: string
 }
 
 export type TeamDetail = {
