@@ -79,6 +79,17 @@ Check two things when connecting:
 
 Whether a local model can complete an agent workflow depends on its tool-calling ability, API compatibility, configuration, and task. If it outputs text without calling tools, inspect the requests, responses, and tool configuration rather than inferring the cause from model size alone.
 
+## Magpie
+
+[Magpie](https://usemagpie.ai) is a local gateway: the API keys, subscriptions, local models and routing groups you set up in it are served to every agent from one address. If you already use Magpie, there is nothing to enter twice here.
+
+1. Open Magpie. "Magpie is running on this computer" appears at the top of the API Key list in Model Settings; click "Connect".
+2. Pick a main model and click "Connect and make default". No key, no address.
+
+Once connected, the composer's model picker lists every Magpie model, and each conversation can switch at any time. Each model's context length and reply limit come straight from Magpie, so the compaction point and the context percentage follow the model. A model Magpie gives no context length for (common for local models) is counted as 200K; set its length in Magpie. Compaction happens when the context is nearly full by default; to save usage, choose "At 272K" under the Magpie configuration's "Edit".
+
+While Magpie is closed, the configuration shows "Not running" and sending a message tells you to open Magpie; it never switches to another configuration on its own. If you change Magpie's port, the next check follows it.
+
 ## The Add Provider dialog, field by field
 
 ![Add Provider dialog: preset, base URL, auth variable, API key, model mapping (Chinese interface)](../../images/app/en/settings-provider-add.webp)

@@ -6,7 +6,10 @@ import {
   type ModelReasoningProviderKind,
 } from '../../shared/modelReasoning.js'
 import type { ModelApiFormatRule } from '../../shared/modelApiFormats.js'
-import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  MODEL_MAX_OUTPUT_TOKENS_ENV_KEY,
+} from '../../utils/model/modelContextWindows.js'
 import { PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY } from '../../utils/managedEnvConstants.js'
 import {
   IMAGE_GENERATION_API_KEY_ENV_KEY,
@@ -79,6 +82,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
   ATTRIBUTION_HEADER_ENV_KEY,
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  MODEL_MAX_OUTPUT_TOKENS_ENV_KEY,
   PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
@@ -593,6 +597,9 @@ export function buildProviderManagedEnv(
     }),
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
+    }),
+    ...(provider.modelMaxOutputTokens && Object.keys(provider.modelMaxOutputTokens).length > 0 && {
+      [MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]: JSON.stringify(provider.modelMaxOutputTokens),
     }),
     ...(apiFormat === 'anthropic' && {
       ENABLE_TOOL_SEARCH: provider.toolSearchEnabled === true ? 'true' : 'false',

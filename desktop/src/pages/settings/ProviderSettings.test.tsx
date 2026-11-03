@@ -6,6 +6,7 @@ import { ApiError } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { MAGPIE_BANNER_DISMISSED_KEY, useMagpieStore } from '../../stores/magpieStore'
 import { BUNDLED_PROVIDER_PRESETS } from '../../config/providerPresets'
 import type { SavedProvider } from '../../types/provider'
 import { ProviderSettings } from './ProviderSettings'
@@ -388,6 +389,7 @@ describe('built-in DeepSeek Account provider', () => {
     })
 
     render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('tab', { name: /Official sign-in/ }))
 
     const card = await screen.findByTestId('deepseek-account-provider')
     expect(within(card).getByText('DeepSeek Account')).toBeInTheDocument()
@@ -815,5 +817,232 @@ describe('OpenRouter provider', () => {
 
     fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
     expect(open).toHaveBeenCalledWith('https://openrouter.ai/settings/keys')
+  })
+})
+
+describe('provider list tabs and search', () => {
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(useSettingsStore.getState(), 'setModel').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'getOfficialModels').mockResolvedValue({
+      models: { main: 'claude-fixture', haiku: 'claude-fixture', sonnet: 'claude-fixture', opus: 'claude-fixture' },
+    })
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    // A previous test's list must not decide which tab this one opens on.
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false, providerOrder: [],
+      presets: BUNDLED_PROVIDER_PRESETS,
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+  })
+
+  it('opens a fresh install on API Key with presets to start from', async () => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [], activeId: null })
+    render(<ProviderSettings />)
+
+    expect(await screen.findByRole('heading', { name: 'No API key providers yet' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /API Key/ })).toHaveAttribute('aria-selected', 'true')
+    // Claude Official is still the fallback default, so its tab carries the marker.
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveTextContent('(contains the default)')
+    expect(screen.getByRole('tab', { name: /API Key/ })).not.toHaveTextContent('(contains the default)')
+    // Four built-in cards are not worth searching.
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kimi' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: 'Kimi' })).toHaveAttribute('aria-pressed', 'true')
+    expect(dialog.getByDisplayValue('Kimi')).toBeInTheDocument()
+  })
+
+  it('opens on Official sign-in when one was made the default, and stays there when the default changes', async () => {
+    let activeId: string | null = 'openai-official'
+    vi.mocked(providersApi.list).mockImplementation(async () => ({ providers: savedProviders, activeId }))
+    const activate = vi.spyOn(providersApi, 'activateOfficial').mockImplementation(async () => {
+      activeId = null
+      return { ok: true }
+    })
+    render(<ProviderSettings />)
+
+    const officialTab = await screen.findByRole('tab', { name: /Official sign-in/ })
+    await waitFor(() => expect(officialTab).toHaveAttribute('aria-selected', 'true'))
+    expect(officialTab).toHaveTextContent('(contains the default)')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+
+    fireEvent.click(within(screen.getByTestId('claude-official-provider')).getByRole('button', { name: /Claude Official/ }))
+    await waitFor(() => expect(activate).toHaveBeenCalled())
+    await waitFor(() => expect(within(screen.getByTestId('claude-official-provider')).getByText('Default')).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('filters the open tab by model ID, highlights it, and points at matches in the other tab', async () => {
+    render(<ProviderSettings />)
+    const search = await screen.findByRole('searchbox', { name: 'Search providers' })
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Drag to reorder' })).toHaveLength(3))
+
+    fireEvent.change(search, { target: { value: 'DeepSeek' } })
+
+    const match = screen.getByTestId('provider-saved-qiniuai')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+    expect(within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })).toHaveLength(2)
+    expect(screen.getByRole('tab', { name: /API Key/ })).toHaveTextContent(/API Key\s*1/)
+    // A filtered list is not an order to drag within.
+    expect(screen.queryByRole('button', { name: 'Drag to reorder' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /1 more in Official sign-in/ }))
+    expect(screen.getByTestId('deepseek-account-provider')).toBeInTheDocument()
+    expect(screen.queryByTestId('claude-official-provider')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(search).toHaveValue('')
+    expect(screen.getByTestId('claude-official-provider')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Drag to reorder' })).toHaveLength(4)
+  })
+
+  it('offers the other tab when the open one has no match', async () => {
+    render(<ProviderSettings />)
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search providers' }), { target: { value: 'grok' } })
+
+    expect(screen.getByRole('heading', { name: 'Nothing in API Key matches "grok"' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View 1 in Official sign-in' }))
+    expect(screen.getByTestId('grok-official-provider')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('says which hidden field matched, matches every word, and never searches the API key', async () => {
+    const hidden: SavedProvider = {
+      ...savedProviders[1]!,
+      id: 'saved-hidden',
+      name: 'Fixture Gateway',
+      notes: 'team billing account',
+      models: { main: 'main-fixture', haiku: 'haiku-only-fixture', sonnet: 'main-fixture', opus: 'main-fixture' },
+    }
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [...savedProviders, hidden], activeId: null })
+    render(<ProviderSettings />)
+    const search = await screen.findByRole('searchbox', { name: 'Search providers' })
+
+    fireEvent.change(search, { target: { value: 'haiku-only' } })
+    expect(screen.getByTestId('provider-saved-hidden')).toHaveTextContent('Matched Haiku Model · haiku-only-fixture')
+
+    fireEvent.change(search, { target: { value: 'gateway billing' } })
+    expect(screen.getByTestId('provider-saved-hidden')).toHaveTextContent('Matched Notes · team billing account')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'gateway kimi' } })
+    expect(screen.queryByTestId('provider-saved-hidden')).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'fake-saved-api-key' } })
+    expect(screen.getByRole('heading', { name: 'Nothing in API Key matches "fake-saved-api-key"' })).toBeInTheDocument()
+    expect(screen.getByText('Search by name, provider, endpoint or model ID')).toBeInTheDocument()
+  })
+})
+
+describe('Magpie on the provider list', () => {
+  const running = {
+    status: { installed: true, running: true, baseUrl: 'http://127.0.0.1:3425' },
+    models: [
+      { id: 'kimi/kimi-k3', runtimeId: 'kimi/kimi-k3', displayName: 'Kimi K3', provider: 'kimi', isGroup: false, contextWindow: 262_144, reasoningEfforts: [] },
+      { id: 'ollama/qwen3.6:27b', runtimeId: 'ollama/qwen3.6:27b', displayName: 'Qwen3.6 27B', provider: 'ollama', isGroup: false, reasoningEfforts: [] },
+    ],
+  }
+  const magpieProvider: SavedProvider = {
+    id: 'magpie-1', presetId: 'magpie', name: 'Magpie', apiKey: '', baseUrl: 'http://127.0.0.1:3425', apiFormat: 'anthropic',
+    models: { main: 'kimi/kimi-k3', haiku: 'ollama/qwen3.6:27b', sonnet: 'kimi/kimi-k3', opus: 'kimi/kimi-k3' },
+  }
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false, providerOrder: [],
+      presets: BUNDLED_PROVIDER_PRESETS,
+    })
+    useMagpieStore.setState({ state: null, loading: false, bannerDismissed: false })
+    localStorage.removeItem(MAGPIE_BANNER_DISMISSED_KEY)
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+    localStorage.removeItem(MAGPIE_BANNER_DISMISSED_KEY)
+  })
+
+  it('offers Magpie at the top of API Key while it runs unconnected, and × hides it for good', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    const banner = await screen.findByTestId('magpie-connect-banner')
+    expect(banner).toHaveTextContent('Magpie is running on this computer')
+    expect(banner).toHaveTextContent('2 models, no key needed')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByRole('dialog', { name: 'Connect Magpie' })).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+
+    fireEvent.click(within(screen.getByTestId('magpie-connect-banner')).getByRole('button', { name: "Don't show again" }))
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+    expect(localStorage.getItem(MAGPIE_BANNER_DISMISSED_KEY)).toBe('1')
+  })
+
+  it('stays quiet while Magpie is not running', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    const check = vi.spyOn(providersApi, 'magpie').mockResolvedValue({ ...running, status: { ...running.status, running: false }, models: null })
+    render(<ProviderSettings />)
+
+    await waitFor(() => expect(check).toHaveBeenCalled())
+    await screen.findByTestId('provider-saved-fennoai')
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+  })
+
+  it('shows a connected Magpie as a local gateway with its state, and edits it in its own dialog', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [magpieProvider], activeId: 'magpie-1' })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('provider-magpie-1')
+    await waitFor(() => expect(card).toHaveTextContent('Running, 2 models available'))
+    expect(card).toHaveTextContent('Local gateway')
+    // The connect bar is for an unconnected Magpie only.
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+    expect(within(card).getByText('Background tasks').parentElement).toHaveTextContent('ollama/qwen3.6:27b')
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    expect(await screen.findByRole('dialog', { name: 'Edit Magpie' })).toBeInTheDocument()
+  })
+
+  it('tells a stopped Magpie apart and offers to open it', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [magpieProvider], activeId: 'magpie-1' })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue({ ...running, status: { ...running.status, running: false }, models: null })
+    const open = vi.spyOn(providersApi, 'openMagpie').mockResolvedValue({ ok: true })
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('provider-magpie-1')
+    await waitFor(() => expect(card).toHaveTextContent('Not running'))
+    fireEvent.click(within(card).getByRole('button', { name: 'Open Magpie' }))
+    await waitFor(() => expect(open).toHaveBeenCalled())
+  })
+
+  it('hands the add dialog\'s Magpie preset over to the connect dialog', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Magpie' }))
+    expect(await screen.findByRole('dialog', { name: 'Connect Magpie' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Add Model' })).not.toBeInTheDocument()
   })
 })
