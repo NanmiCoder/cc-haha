@@ -19,6 +19,8 @@ vi.mock('../api/desktopUiPreferences', async (importOriginal) => {
     ...actual,
     desktopUiPreferencesApi: {
       ...actual.desktopUiPreferencesApi,
+      getProjectDirectories: vi.fn(),
+      updateProjectDirectories: vi.fn(),
       updateProjectDisplayName: vi.fn(),
     },
   }
@@ -81,10 +83,17 @@ describe('DirectoryPicker project list', () => {
     invalidateRecentProjectsCache()
     vi.mocked(sessionsApi.getRecentProjects).mockReset()
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: PROJECTS })
+    vi.mocked(desktopUiPreferencesApi.getProjectDirectories).mockImplementation(async (workDir) => ({ projectKey: workDir, mainDirectory: workDir, additionalDirectories: [] }))
+    vi.mocked(desktopUiPreferencesApi.updateProjectDirectories).mockImplementation(async (workDir, additionalDirectories) => ({ ok: true, projectKey: workDir, mainDirectory: workDir, additionalDirectories }))
     vi.mocked(desktopUiPreferencesApi.updateProjectDisplayName).mockReset()
     vi.mocked(desktopUiPreferencesApi.updateProjectDisplayName)
       .mockImplementation(async (projectKey, displayName) => ({ ok: true, projectKey, displayName }))
     useSettingsStore.setState({ locale: 'zh' })
+  })
+
+  it('names the auxiliary folder picker from its supplied placeholder', () => {
+    render(<DirectoryPicker value="" onChange={vi.fn()} variant="workbar" placeholder="添加文件夹" />)
+    expect(screen.getByRole('button', { name: '添加文件夹' })).toHaveAttribute('title', '添加文件夹')
   })
 
   it('loads the full project list with a deep scan', async () => {
@@ -163,12 +172,14 @@ describe('DirectoryPicker project list', () => {
     await waitFor(() => expect(nameInput.value).toBe('claude-code-haha'))
     fireEvent.change(nameInput, { target: { value: '我的项目' } })
 
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '创建项目' })).not.toBeDisabled())
     fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }))
 
     await waitFor(() => {
       expect(desktopUiPreferencesApi.updateProjectDisplayName)
         .toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha', '我的项目')
     })
+    expect(desktopUiPreferencesApi.updateProjectDirectories).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha', [])
     await waitFor(() => {
       expect(onWorkDirChange).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha')
     })

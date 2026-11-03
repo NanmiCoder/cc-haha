@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Project auxiliary directories and legacy session snapshots',
+    command: ['bun', 'test', './src/server/services/sessionService.additionalDirectories.test.ts'],
+  },
+  {
     title: 'Idle power preferences migrate disabled and preserve the last action record',
     command: ['bun', 'run', 'test', '--', '--run', 'electron/services/idlePowerPersistence.test.ts'],
     cwd: 'desktop',

@@ -39,6 +39,7 @@ type Props = {
   value: string
   onChange: (path: string) => void
   variant?: 'chip' | 'workbar'
+  placeholder?: string
   isGitProject?: boolean
 }
 
@@ -465,7 +466,7 @@ export function RecentProjectsPanel({
   )
 }
 
-export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProject = false }: Props) {
+export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProject = false, placeholder }: Props) {
   const t = useTranslation()
   const [isOpen, setIsOpen] = useState(false)
   const [mode, setMode] = useState<DirectoryPanelMode>('recent')
@@ -601,10 +602,10 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
           ref={triggerRef}
           onClick={() => { setIsOpen(!isOpen); setMode('recent') }}
           className={emptyTriggerClassName}
-          title={t('dirPicker.selectProject')}
+          title={placeholder ?? t('dirPicker.selectProject')}
         >
           <FolderOpen size={isWorkbar ? 16 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
-          <span className="min-w-0 truncate">{t('dirPicker.selectProject')}</span>
+          <span className="min-w-0 truncate">{placeholder ?? t('dirPicker.selectProject')}</span>
         </button>
       )}
 
