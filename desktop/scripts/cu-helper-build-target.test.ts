@@ -32,6 +32,19 @@ describe('cu-helper release target', () => {
     }).CU_HELPER_IDENTITY).toBeUndefined()
   })
 
+  it('forwards explicit local unsigned mode to the helper with the build-wide ad-hoc identity', () => {
+    expect(createCuHelperBuildEnv('aarch64-apple-darwin', {
+      CC_HAHA_SIGN_IDENTITY: '-',
+      CC_HAHA_LOCAL_UNSIGNED_BUILD: '1',
+      CU_HELPER_IDENTITY: 'Apple Development: Stale Identity',
+    })).toMatchObject({
+      CU_HELPER_ARCH: 'arm64',
+      CU_HELPER_IDENTITY: '-',
+      CC_HAHA_SIGN_IDENTITY: '-',
+      CC_HAHA_LOCAL_UNSIGNED_BUILD: '1',
+    })
+  })
+
   it('skips non-macOS targets and rejects unknown Apple architectures', () => {
     expect(resolveCuHelperArch('x86_64-pc-windows-msvc')).toBeNull()
     expect(resolveCuHelperArch('aarch64-unknown-linux-gnu')).toBeNull()

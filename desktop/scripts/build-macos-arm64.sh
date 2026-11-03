@@ -131,20 +131,23 @@ SIGN_BUILD_EFFECTIVE="${SIGN_BUILD:-}"
 RESOLVED_SIGN_IDENTITY="${CC_HAHA_SIGN_IDENTITY:-}"
 
 if [[ -z "${RESOLVED_SIGN_IDENTITY}" && "${SIGN_BUILD_EFFECTIVE}" != "0" ]]; then
+  # An absent certificate is a normal fallback, not a grep/pipefail error.
+  # Read every row so selecting the first identity cannot cause SIGPIPE either.
   RESOLVED_SIGN_IDENTITY="$(
     security find-identity -v -p codesigning 2>/dev/null \
-      | grep -E '"Developer ID Application:' \
-      | head -1 \
-      | sed -E 's/^[^"]*"([^"]+)".*$/\1/'
+      | awk '
+          /"(Developer ID Application|Apple Development):/ {
+            sub(/^[^"]*"/, "")
+            sub(/"[^"]*$/, "")
+            if (!developer_id && /^Developer ID Application:/) developer_id = $0
+            if (!apple_development && /^Apple Development:/) apple_development = $0
+          }
+          END {
+            if (developer_id) print developer_id
+            else if (apple_development) print apple_development
+          }
+        '
   )"
-  if [[ -z "${RESOLVED_SIGN_IDENTITY}" ]]; then
-    RESOLVED_SIGN_IDENTITY="$(
-      security find-identity -v -p codesigning 2>/dev/null \
-        | grep -E '"Apple Development:' \
-        | head -1 \
-        | sed -E 's/^[^"]*"([^"]+)".*$/\1/'
-    )"
-  fi
 fi
 
 if [[ "${SIGN_BUILD_EFFECTIVE}" == "0" || -z "${RESOLVED_SIGN_IDENTITY}" ]]; then
@@ -155,8 +158,18 @@ if [[ "${SIGN_BUILD_EFFECTIVE}" == "0" || -z "${RESOLVED_SIGN_IDENTITY}" ]]; the
     echo "[build-macos-arm64] No stable signing identity in the keychain — building ad-hoc."
   fi
   echo "[build-macos-arm64] NOTE: Computer Use does not work on an ad-hoc build."
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "[build-macos-arm64] Unsigned packaging is local-only; CI requires a stable signing identity." >&2
+    exit 1
+  fi
+  # Pin the same explicit ad-hoc mode for both native runtimes. Otherwise the
+  # sidecar may auto-select a stale certificate and the helper refuses to build.
+  export CC_HAHA_SIGN_IDENTITY="-"
+  export CC_HAHA_LOCAL_UNSIGNED_BUILD=1
+  unset CSC_NAME
 else
   SIGN_BUILD_EFFECTIVE=1
+  unset CC_HAHA_LOCAL_UNSIGNED_BUILD
   # Every signing step reads one of these: build-sidecars.ts and
   # native/cu-helper/build.sh read CC_HAHA_SIGN_IDENTITY, electron-builder reads
   # CSC_NAME. Pinning CSC_NAME rather than leaving auto-discovery on is what
