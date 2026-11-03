@@ -180,16 +180,42 @@ export function isModelWindowKnownForAutoCompact(model: string): boolean {
   )
 }
 
+// Hard limits providers stated in prompt-too-long errors, per model, for this
+// process. Recorded only after a compacted retry went through, so a limit is
+// trusted once the provider accepted a request under it. Without it the
+// threshold stays above the real cap and every later turn hits the same wall
+// before proactive auto-compact can fire.
+const providerReportedContextLimits = new Map<string, number>()
+
+// The same model name can reach two providers in one process (a subagent
+// bound to its own provider); each one's limit is its own.
+function providerContextLimitKey(model: string): string {
+  return `${readProviderEnvForModel(model, 'ANTHROPIC_BASE_URL') ?? ''}\u0000${model}`
+}
+
+export function rememberProviderContextLimit(model: string, limit: number): void {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return
+  const key = providerContextLimitKey(model)
+  const known = providerReportedContextLimits.get(key)
+  providerReportedContextLimits.set(key, known === undefined ? limit : Math.min(known, limit))
+}
+
+export function resetProviderReportedContextLimitsForTesting(): void {
+  providerReportedContextLimits.clear()
+}
+
 /** The window the UI and compaction treat as the model's usable context. */
 export function getEffectiveModelContextWindow(
   model: string,
   betas?: string[],
 ): number {
-  return applyAutoCompactWindowLimit(
+  const window = applyAutoCompactWindowLimit(
     getContextWindowForModel(model, betas),
     readProviderEnvForModel(model, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
     isModelWindowKnownForAutoCompact(model),
   )
+  const reported = providerReportedContextLimits.get(providerContextLimitKey(model))
+  return reported === undefined ? window : Math.min(window, reported)
 }
 
 /**
