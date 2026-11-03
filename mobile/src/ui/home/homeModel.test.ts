@@ -12,6 +12,7 @@ import {
   hostAddress,
   hostCheckBadge,
   hostCheckLine,
+  credentialHostCheck,
   hostLink,
   hostStatusLine,
   inProject,
@@ -26,6 +27,14 @@ import {
   settledOutcome,
   stalledLabel,
 } from './homeModel'
+
+test('a local credential read failure does not offer re-pairing as authorization recovery', () => {
+  const host = { id: 'fixture', name: 'Fixture', url: 'https://fixture.invalid', auth: 'remote' as const }
+  expect(hostLink({ host, fresh: false, failure: null, credentialError: '本地读取失败', credentialIssue: 'unavailable' })).toBe('failed')
+  expect(credentialHostCheck('本地读取失败', 'unavailable')).toEqual({ state: 'failed', message: '本地读取失败' })
+  expect(hostCheckLine(host, { state: 'failed', message: '本地读取失败' }, Date.now())).toBe('本地读取失败')
+  expect(credentialHostCheck('未找到凭据', 'missing').state).toBe('unauthorized')
+})
 
 const session = (
   id: string,
