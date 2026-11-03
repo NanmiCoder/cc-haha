@@ -314,9 +314,42 @@ describe('ComputerUseSettings', () => {
       render(<ComputerUseSettings />)
 
       expect(await screen.findByText('Computer Use runtime is unavailable')).toBeInTheDocument()
+      expect(screen.getByText(/runtime is missing from this app build/)).toBeInTheDocument()
       expect(screen.getByRole('switch', { name: 'Enabled' })).toBeInTheDocument()
       expect(screen.queryByLabelText('Python Interpreter Path')).not.toBeInTheDocument()
       expect(screen.queryByText('Install Environment')).not.toBeInTheDocument()
+    })
+
+    it('explains signature rejection while disabled and clears it after a successful recheck', async () => {
+      computerUseApiMock.getAuthorizedApps.mockResolvedValue({ ...enabledConfig, enabled: false })
+      computerUseApiMock.getStatus.mockResolvedValueOnce({
+        ...nativeStatus,
+        cuHelper: { ...nativeStatus.cuHelper, available: false, reason: 'helper_signature_invalid' },
+      }).mockResolvedValue(nativeStatus)
+
+      render(<ComputerUseSettings />)
+
+      expect(await screen.findByText(/Local ad-hoc builds cannot run Computer Use/)).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: 'Enabled' })).not.toBeChecked()
+      expect(screen.queryByText(/runtime is missing or could not be prepared/)).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Recheck Status/ }))
+      expect(await screen.findByText('System Permissions')).toBeInTheDocument()
+      expect(screen.queryByText(/Local ad-hoc builds/)).not.toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: 'Enabled' })).not.toBeChecked()
+      expect(computerUseApiMock.openPermissionCard).not.toHaveBeenCalled()
+      expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+    })
+
+    it('distinguishes a preparation failure from a missing runtime', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue({
+        ...nativeStatus,
+        cuHelper: { ...nativeStatus.cuHelper, available: false, reason: 'helper_prepare_failed' },
+      })
+
+      render(<ComputerUseSettings />)
+
+      expect(await screen.findByText(/could not be prepared at its standalone location/)).toBeInTheDocument()
+      expect(screen.queryByText(/runtime is missing or could not be prepared/)).not.toBeInTheDocument()
     })
 
     it('shows the macOS floor instead of falling back to the compatibility page', async () => {
