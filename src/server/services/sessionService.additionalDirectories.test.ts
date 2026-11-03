@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleDesktopUiApi } from '../api/desktop-ui.js'
@@ -8,6 +8,7 @@ import { SessionService } from './sessionService.js'
 import { ConversationService } from './conversationService.js'
 import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
 import { sanitizePath } from '../../utils/sessionStoragePortable.js'
+import { getProjectMcpDirectoryIdentity } from '../../services/mcp/config.js'
 
 let directory: string
 let config: string | undefined
@@ -15,7 +16,9 @@ let main: string
 let extra: string
 
 beforeEach(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'project-directories-'))
+  // Use the same physical paths as the API, including handwritten legacy project keys.
+  // macOS tmpdir() can return /var/... while realpath resolves to /private/var/....
+  directory = await realpath(await mkdtemp(join(tmpdir(), 'project-directories-')))
   config = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = join(directory, 'config')
   main = join(directory, 'main')
@@ -47,7 +50,7 @@ test('project directories REST save/reload reaches new session CLI and preserves
   await symlink(extra, alias, process.platform === 'win32' ? 'junction' : 'dir')
   const saved = await preferences('PUT', { workDir: main, additionalDirectories: [extra, alias, main, extra + '/'] })
   expect(saved.status).toBe(200)
-  expect(await saved.json()).toMatchObject({ additionalDirectories: [extra] })
+  expect(await saved.json()).toMatchObject({ projectKey: getProjectMcpDirectoryIdentity(main), additionalDirectories: [extra] })
   expect(await (await preferences('GET')).json()).toMatchObject({ mainDirectory: main, additionalDirectories: [extra] })
   const current = await create()
   expect(current.workDir).toBe(main)
@@ -86,6 +89,20 @@ test('legacy project and session fixtures default to no auxiliary access and pre
   await writeFile(file, original)
   expect((await new SessionService().getSessionLaunchInfo(sessionId))?.additionalDirectories).toEqual([])
   expect(await readFile(file, 'utf8')).toBe(original)
+})
+
+test('concurrent directory updates retain both projects and unrelated preference fields', async () => {
+  const sibling = join(directory, 'sibling')
+  await mkdir(sibling)
+  const service = new DesktopUiPreferencesService()
+  await service.updateProfilePreferences({ displayName: 'Fixture owner' })
+  await Promise.all([
+    service.updateProjectDirectories({ workDir: main, additionalDirectories: [extra] }),
+    new DesktopUiPreferencesService().updateProjectDirectories({ workDir: sibling, additionalDirectories: [main] }),
+  ])
+  expect((await service.getProjectDirectories(main)).additionalDirectories).toEqual([extra])
+  expect((await service.getProjectDirectories(sibling)).additionalDirectories).toEqual([main])
+  expect((await service.readPreferences()).preferences.profile.displayName).toBe('Fixture owner')
 })
 
 test('invalid directory updates fail atomically without changing saved scope', async () => {
@@ -134,11 +151,15 @@ test('rejects CLI expansion to a different physical directory without overwritin
   // An older app/config fixture can already contain the unsupported directory.
   // Admission must reject it too, before a placeholder/session can be launched.
   const fixture = JSON.parse(before)
-  fixture.projectAdditionalDirectories[main] = [selected]
-  await writeFile(prefsPath, JSON.stringify(fixture))
+  const projectKey = getProjectMcpDirectoryIdentity(main)
+  expect(fixture.projectAdditionalDirectories).toEqual({ [projectKey]: [extra] })
+  fixture.projectAdditionalDirectories[projectKey] = [selected]
+  const legacy = JSON.stringify(fixture)
+  await writeFile(prefsPath, legacy)
   const url = new URL('http://localhost/api/sessions')
   const response = await handleSessionsApi(new Request(url, { method: 'POST', body: JSON.stringify({ workDir: main }) }), url, ['api', 'sessions'])
   expect(response.status).toBe(400)
   expect((await response.json() as { message: string }).message).toContain('different location')
+  expect(await readFile(prefsPath, 'utf8')).toBe(legacy)
   await expect(import('node:fs/promises').then(fs => fs.readdir(join(process.env.CLAUDE_CONFIG_DIR!, 'projects')))).rejects.toMatchObject({ code: 'ENOENT' })
 })

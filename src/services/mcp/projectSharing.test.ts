@@ -4,7 +4,7 @@ import { writeFileSync } from 'fs'
 import * as nativeFs from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { _setGlobalConfigCacheForTesting, getProjectPathForConfig } from '../../utils/config.js'
+import { _setGlobalConfigCacheForTesting, getGlobalConfig, getProjectPathForConfig } from '../../utils/config.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { getGlobalClaudeFile } from '../../utils/env.js'
 import { getFsImplementation, setFsImplementation } from '../../utils/fsOperations.js'
@@ -34,6 +34,47 @@ describe('project MCP file mutation boundaries', () => {
     getProjectPathForConfig.cache.clear?.()
     _setGlobalConfigCacheForTesting(null)
     await fs.rm(fixture, { recursive: true, force: true })
+  })
+
+  it('updates every target beyond the directory I/O pool capacity in input order', async () => {
+    const directories = Array.from({ length: 20 }, (_, index) => join(fixture, `project-${index}`))
+    for (const directory of directories) await fs.mkdir(directory)
+    const config = { type: 'http' as const, url: 'https://fixture.invalid' }
+    const results = await updateProjectMcpSelections('shared', config, directories.map(projectPath => ({
+      projectPath, selected: true, expectedRevision: null,
+    })))
+
+    expect(results.map(result => ({ projectPath: result.projectPath, success: result.success, error: result.error }))).toEqual(
+      directories.map(projectPath => ({ projectPath, success: true, error: undefined })),
+    )
+    for (const [index, directory] of directories.entries()) {
+      const saved = readProjectMcpJsonSnapshot(join(directory, '.mcp.json'))
+      expect(saved.servers.shared).toEqual(config)
+      expect(results[index]?.revision).toBe(saved.revision)
+      expect(findProjectMcpRegistryKey(directory, getGlobalConfig().projects ?? {})).toBe(directory)
+    }
+  })
+
+  it('detects aliases across a large batch before writing and isolates a late revision conflict', async () => {
+    const directories = Array.from({ length: 19 }, (_, index) => join(fixture, `project-${index}`))
+    for (const directory of directories) await fs.mkdir(directory)
+    const alias = join(fixture, 'first-alias')
+    await fs.symlink(directories[0]!, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const last = directories.at(-1)!
+    const original = JSON.stringify({ mcpServers: {}, futureTop: true })
+    await fs.writeFile(join(last, '.mcp.json'), original)
+    const results = await updateProjectMcpSelections('shared', { type: 'http', url: 'https://fixture.invalid' }, [
+      ...directories.map(projectPath => ({ projectPath, selected: true, expectedRevision: null })),
+      { projectPath: alias, selected: true, expectedRevision: null },
+    ])
+
+    expect(results).toHaveLength(20)
+    expect(results[0]).toMatchObject({ projectPath: directories[0], success: false, error: 'Duplicate project target' })
+    expect(results.at(-1)).toMatchObject({ projectPath: directories[0], success: false, error: 'Duplicate project target' })
+    expect(results[18]).toMatchObject({ projectPath: last, success: false, error: 'Project .mcp.json changed; reload the project list and retry' })
+    expect(results.slice(1, 18).every(result => result.success)).toBe(true)
+    await expect(fs.stat(join(directories[0]!, '.mcp.json'))).rejects.toThrow()
+    expect(await fs.readFile(join(last, '.mcp.json'), 'utf8')).toBe(original)
   })
 
   it('rejects malformed existing files in legacy additions without replacing their bytes', async () => {
@@ -201,7 +242,8 @@ describe('project MCP file mutation boundaries', () => {
     const realpath = spyOn(nativeFs, 'realpathSync').mockImplementation(path => path === requested ? substitute : originalRealpath(path))
     try {
       expect(() => resolveProjectMcpDirectorySync(requested)).toThrow('Project directory identity could not be verified')
-      await expect(resolveProjectMcpDirectory(requested)).rejects.toThrow('Project directory identity could not be verified')
+      // The async resolver's native realpath substitution is tested inside its
+      // worker in projectDirectoryIo.test.ts; a main-thread spy cannot reach it.
       expect(findProjectMcpRegistryKey(substitute, { [requested]: { futureProject: true } })).toBeUndefined()
       expect(findProjectMcpRegistryKey(requested, { [requested]: { futureProject: true } })).toBeUndefined()
       expect(getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(substitute))).toBe(getProjectMcpDirectoryIdentity(substitute))

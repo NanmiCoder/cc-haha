@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import path, { join as joinPath } from 'node:path'
 import { promisify } from 'node:util'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ADAPTER_FLAGS,
   reserveLocalPort,
@@ -465,6 +465,34 @@ describe('build-sidecars Windows x64 target mapping', () => {
     }
   })
 
+  it('does not start a request if the process-alive check exhausts the readiness deadline', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchMock
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      const readiness = expect(waitForCompiledSidecar({
+        baseUrl: 'http://127.0.0.1:1',
+        expectedSessionId: 'never-ready',
+        deadlineMs: 25,
+        exited: new Promise(() => {}),
+        logs: () => '',
+        localAccessToken: 'not-used',
+      })).rejects.toThrow(
+        'compiled sidecar did not become ready (compiled sidecar request deadline exceeded)',
+      )
+
+      // Model a busy event loop: wall time passes before the zero-delay alive check.
+      vi.setSystemTime(Date.now() + 25)
+      await vi.advanceTimersByTimeAsync(0)
+      await readiness
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('bounds a sidecar response with headers but a never-ending body and still cleans up', async () => {
     const originalFetch = globalThis.fetch
     const originalEnvironment = {
@@ -489,26 +517,32 @@ describe('build-sidecars Windows x64 target mapping', () => {
       logs: () => '',
     }
     let bodyCancelCount = 0
+    let responseBody: ReadableStream<Uint8Array> | undefined
     let rejectCancellation: ((error: Error) => void) | undefined
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"partial":'))
-      },
-      cancel() {
-        bodyCancelCount += 1
-        return new Promise<void>((_resolve, reject) => {
-          rejectCancellation = reject
-        })
-      },
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })) as typeof fetch
+    const fetchMock = vi.fn(async () => {
+      responseBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial":'))
+        },
+        cancel() {
+          bodyCancelCount += 1
+          return new Promise<void>((_resolve, reject) => {
+            rejectCancellation = reject
+          })
+        },
+      })
+      return new Response(responseBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    globalThis.fetch = fetchMock as typeof fetch
 
-    const startedAt = performance.now()
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const startedAt = Date.now()
     let guardTimer: ReturnType<typeof setTimeout> | undefined
     try {
-      await expect(Promise.race([
+      const readiness = expect(Promise.race([
         waitForCompiledSidecar({
           baseUrl: 'http://127.0.0.1:1',
           expectedSessionId: 'never-ready',
@@ -523,9 +557,26 @@ describe('build-sidecars Windows x64 target mapping', () => {
             250,
           )
         }),
-      ])).rejects.toThrow('compiled sidecar did not become ready')
+      ])).rejects.toThrow(
+        'compiled sidecar did not become ready (compiled sidecar request deadline exceeded)',
+      )
+
+      // Enter the body read before spending the request's deadline budget.
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(responseBody?.locked).toBe(true)
+      await vi.advanceTimersByTimeAsync(24)
+      expect(bodyCancelCount).toBe(0)
+      await vi.advanceTimersByTimeAsync(1)
+      await readiness
+      expect(Date.now() - startedAt).toBe(25)
+      expect(bodyCancelCount).toBe(1)
+      expect(rejectCancellation).toBeTypeOf('function')
+      rejectCancellation?.(new Error('late body cancellation rejection'))
+      await vi.advanceTimersByTimeAsync(0)
     } finally {
       if (guardTimer) clearTimeout(guardTimer)
+      vi.useRealTimers()
       globalThis.fetch = originalFetch
       try {
         await terminateCompiledSidecar(processHandle)
@@ -534,10 +585,6 @@ describe('build-sidecars Windows x64 target mapping', () => {
       }
     }
 
-    expect(performance.now() - startedAt).toBeLessThan(150)
-    expect(bodyCancelCount).toBeGreaterThan(0)
-    rejectCancellation?.(new Error('late body cancellation rejection'))
-    await new Promise(resolveWait => setTimeout(resolveWait, 0))
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
     expect(await stat(rootDir).then(() => true, () => false)).toBe(false)
     expect(process.env.HOME).toBe(originalEnvironment.HOME)

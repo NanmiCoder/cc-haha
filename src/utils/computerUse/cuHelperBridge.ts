@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { release } from 'node:os'
 import path from 'node:path'
 import { execFileNoThrow } from '../execFileNoThrow.js'
-import { ensureInstalledHelper, isNestedInHostApp } from './cuHelperInstall.js'
+import { prepareInstalledHelper, isNestedInHostApp, type CuHelperUnavailableReason } from './cuHelperInstall.js'
 import { getRuntimePaths } from './pythonBridge.js'
 
 /**
@@ -168,12 +168,25 @@ export function isCuHelperAvailable(): boolean {
 export function resolveLaunchableCuHelperBinary(
   runtimeSupported: boolean = isMacosComputerUseRuntimeSupported(),
 ): string | null {
-  if (!runtimeSupported) return null
-  const installed = ensureInstalledHelper()
-  if (installed?.binary) return installed.binary
+  return resolveCuHelperLaunchStatus(runtimeSupported).binary
+}
+
+export type CuHelperLaunchStatus =
+  | { binary: string; reason: null }
+  | { binary: null; reason: CuHelperUnavailableReason }
+
+export function resolveCuHelperLaunchStatus(
+  runtimeSupported: boolean = isMacosComputerUseRuntimeSupported(),
+): CuHelperLaunchStatus {
+  if (!runtimeSupported) return { binary: null, reason: 'helper_missing' }
+  const installed = prepareInstalledHelper()
+  if (installed.helper) return { binary: installed.helper.binary, reason: null }
   const sourceApp = resolveCuHelperAppBundle()
-  if (sourceApp && isNestedInHostApp(sourceApp)) return null
-  return resolveCuHelperBinary()
+  if (sourceApp && isNestedInHostApp(sourceApp)) {
+    return { binary: null, reason: installed.reason }
+  }
+  const binary = resolveCuHelperBinary()
+  return binary ? { binary, reason: null } : { binary: null, reason: installed.reason }
 }
 
 /**

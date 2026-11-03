@@ -19,8 +19,10 @@ import {
 import {
   callCuHelper,
   isMacosComputerUseRuntimeSupported,
+  resolveCuHelperLaunchStatus,
   resolveLaunchableCuHelperBinary,
 } from '../../utils/computerUse/cuHelperBridge.js'
+import type { CuHelperUnavailableReason } from '../../utils/computerUse/cuHelperInstall.js'
 const claudeHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
 const runtimeStateRoot = join(claudeHome, '.runtime')
 const venvRoot = join(runtimeStateRoot, 'venv')
@@ -92,7 +94,7 @@ type EnvStatus = {
       | 'unsupported_platform'
       | 'system_version_unknown'
       | 'os_too_old'
-      | 'helper_missing'
+      | CuHelperUnavailableReason
       | null
   }
   python: {
@@ -219,15 +221,6 @@ export function resolveComputerUseCapability(
 type CuHelperPermissions = {
   accessibility?: boolean
   screenRecording?: boolean
-}
-
-/**
- * True only on macOS AND when the native `cu-helper` can be launched from its
- * canonical installation. This also verifies/install-repairs the packaged
- * helper instead of reporting a nested app-bundle binary as healthy.
- */
-function isCuHelperAvailableForServer(): boolean {
-  return process.platform === 'darwin' && resolveLaunchableCuHelperBinary() !== null
 }
 
 /**
@@ -418,7 +411,7 @@ type CheckStatusDependencies = {
   arch?: string
   detectMacosProductVersion?: () => Promise<string | null>
   isMacosRuntimeSupported?: (platform: string) => boolean
-  isCuHelperAvailable?: () => boolean
+  resolveCuHelper?: typeof resolveCuHelperLaunchStatus
   checkPermissions?: typeof checkCuHelperPermissions
   getAgentDesktopStatus?: typeof getAgentDesktopStatus
 }
@@ -437,14 +430,18 @@ export async function checkStatus(
     && (systemVersion !== null
       ? isVersionAtLeast(systemVersion, MIN_MACOS_COMPUTER_USE_VERSION)
       : kernelVersionEligible)
-  const helperPresent = macosEligible
-    && (dependencies.isCuHelperAvailable ?? isCuHelperAvailableForServer)()
+  const helper = macosEligible
+    ? (dependencies.resolveCuHelper ?? resolveCuHelperLaunchStatus)()
+    : null
   const capability = resolveComputerUseCapability(
     platform,
     systemVersion,
-    helperPresent,
+    Boolean(helper?.binary),
     kernelVersionEligible,
   )
+  if (capability.cuHelper.supported && helper && !helper.binary) {
+    capability.cuHelper.reason = helper.reason
+  }
   const supported = capability.supported
 
   // macOS has a self-contained native runtime. Its status must never wait for
