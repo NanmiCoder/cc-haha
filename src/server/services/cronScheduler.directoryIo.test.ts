@@ -199,3 +199,57 @@ test('a full directory worker queue cannot make cron fall back to HOME', async (
     await Promise.all(workers.map(worker => worker.terminate()))
   }
 })
+
+test('manual cron session creation cannot swallow a later directory timeout and launch a CLI', async () => {
+  const project = join(root, 'project')
+  await mkdir(project)
+  const gate = new Int32Array(new SharedArrayBuffer(12))
+  const workers: Worker[] = []
+  await setProjectDirectoryWorkerFactoryForTests(script => {
+    const worker = new Worker(`
+      const { workerData } = require('node:worker_threads');
+      const nativeFs = require('node:fs');
+      const gate = new Int32Array(workerData.gate);
+      const original = nativeFs.statSync;
+      nativeFs.statSync = function(path, ...args) {
+        if (path === workerData.project && Atomics.load(gate, 0)) {
+          Atomics.store(gate, 1, 1);
+          Atomics.wait(gate, 2, 0);
+        }
+        return original.call(nativeFs, path, ...args);
+      };
+      ${script}
+    `, { eval: true, workerData: { gate: gate.buffer, project } })
+    workers.push(worker)
+    return worker
+  }, 200)
+  const cron = new CronService()
+  const scheduler = new CronScheduler(cron)
+  const cli = stubCli(scheduler)
+  const service = (scheduler as any).sessionService
+  const original = service.createSession.bind(service)
+  const create = spyOn(service, 'createSession').mockImplementation((...args: unknown[]) => {
+    Atomics.store(gate, 0, 1)
+    return original(...args)
+  })
+  restores.push(() => create.mockRestore())
+  const task = await cron.createTask({ cron: '* * * * *', prompt: 'fixture only', recurring: true, folderPath: project })
+  const pending = scheduler.executeTask(task, { createSession: true })
+  try {
+    const run = await pending
+    expect(Atomics.load(gate, 1)).toBe(1)
+    expect(run).toMatchObject({ status: 'failed', error: expect.stringContaining('timed out') })
+    expect(run.sessionId).toBeUndefined()
+    expect(cli.spawn).not.toHaveBeenCalled()
+    expect(cli.environment).not.toHaveBeenCalled()
+    Atomics.store(gate, 2, 1)
+    Atomics.notify(gate, 2)
+    await Promise.all(workers.map(worker => worker.terminate()))
+    expect(cli.spawn).not.toHaveBeenCalled()
+  } finally {
+    Atomics.store(gate, 2, 1)
+    Atomics.notify(gate, 2)
+    await pending
+    await Promise.all(workers.map(worker => worker.terminate()))
+  }
+})
