@@ -44,7 +44,7 @@ export default function Home() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
   const { ready, error: storageError } = useApp()
-  const { host, error: credentialError } = useConnection()
+  const { host, error: credentialError, credentialIssue } = useConnection()
   const { snapshot, loading, fresh, error, failure, refresh } = useDashboard()
   const [searching, setSearching] = useState(false)
   // 状态筛选、项目展开都只在内存里，并且跟着电脑走：换电脑后回到默认。
@@ -57,7 +57,7 @@ export default function Home() {
   const mine = view && view.hostId === host?.id ? view : null
   const expanded = useMemo(() => mine?.expanded ?? {}, [mine])
   const shown = useMemo(() => mine?.shown ?? {}, [mine])
-  const link = hostLink({ host, fresh, failure, credentialError })
+  const link = hostLink({ host, fresh, failure, credentialError, credentialIssue })
   // 电脑卡状态行的模型名 / 配对到期：只在电脑连得上时读。
   const cardInfo = useHostCardInfo(link === 'online' || link === 'slow')
 
@@ -204,7 +204,7 @@ export default function Home() {
           ) : (
             <>
               <InlineError
-                text={storageError || (link === 'failed' ? error : '')}
+                text={storageError || credentialError || (link === 'failed' ? error : '')}
                 style={{ marginBottom: 12 }}
               />
               {disconnected ? (
