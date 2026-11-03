@@ -26,6 +26,8 @@ import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useMagpieStore } from '../../stores/magpieStore'
+import { providersApi } from '../../api/providers'
 import { useSessionStore } from '@/stores/sessionStore'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import type { ModelInfo } from '../../types/settings'
@@ -56,6 +58,8 @@ afterEach(() => {
   useHahaDeepSeekOAuthStore.setState(useHahaDeepSeekOAuthStore.getInitialState(), true)
   useTabStore.setState(useTabStore.getInitialState(), true)
   useUIStore.setState(useUIStore.getInitialState(), true)
+  useMagpieStore.setState(useMagpieStore.getInitialState(), true)
+  vi.restoreAllMocks()
 })
 
 beforeEach(() => {
@@ -66,6 +70,41 @@ beforeEach(() => {
 })
 
 describe('ModelSelector', () => {
+  it('lists every model Magpie serves on the Magpie provider, not only its mapped slots', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const magpieState = {
+      status: { installed: true, running: true, baseUrl: 'http://127.0.0.1:3425' },
+      models: [
+        { id: 'kimi/kimi-k3', runtimeId: 'kimi/kimi-k3', displayName: 'Kimi K3', provider: 'kimi', isGroup: false, contextWindow: 262_144, reasoningEfforts: ['high'] },
+        { id: 'deepseek/deepseek-v4-pro', runtimeId: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'deepseek', isGroup: false, contextWindow: 1_000_000, reasoningEfforts: [] },
+        { id: 'ollama/qwen3.6:27b', runtimeId: 'ollama/qwen3.6:27b', displayName: 'Qwen3.6 27B', provider: 'ollama', isGroup: false, reasoningEfforts: [] },
+      ],
+    }
+    // Opening the picker reads the catalog again.
+    const refresh = vi.spyOn(providersApi, 'magpie').mockResolvedValue(magpieState)
+    useMagpieStore.setState({ state: magpieState })
+    useProviderStore.setState({
+      activeId: 'magpie-1', hasLoadedProviders: true, isLoading: false,
+      providers: [{
+        id: 'magpie-1', presetId: 'magpie', name: 'Magpie',
+        apiFormat: 'anthropic', apiKey: '', baseUrl: 'http://127.0.0.1:3425',
+        models: { main: 'kimi/kimi-k3', haiku: 'kimi/kimi-k3', sonnet: 'kimi/kimi-k3', opus: 'kimi/kimi-k3' },
+      }],
+    })
+    const runtimeChange = vi.fn()
+    render(<ModelSelector runtimeKey="__draft__" onRuntimeSelectionChange={runtimeChange} />)
+    await clickByRole(/, Magpie$/)
+
+    expect(refresh).toHaveBeenCalled()
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('button', { name: /deepseek\/deepseek-v4-pro/ })).toHaveTextContent('DeepSeek V4 Pro · Context 1M')
+    expect(dropdown.getByRole('button', { name: /ollama\/qwen3.6:27b/ })).toHaveTextContent('Qwen3.6 27B · Context unknown')
+    fireEvent.click(dropdown.getByRole('button', { name: /deepseek\/deepseek-v4-pro/ }))
+    expect(runtimeChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      providerId: 'magpie-1', modelId: 'deepseek/deepseek-v4-pro',
+    }))
+  })
+
   it('shows the configured default for an opened session whose saved provider was removed', () => {
     useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
     useProviderStore.setState({

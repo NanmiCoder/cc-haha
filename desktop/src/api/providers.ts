@@ -12,6 +12,8 @@ import type {
   ProviderModelsInput,
   ProviderModelsResult,
   ModelMapping,
+  MagpieState,
+  OpenMagpieResult,
 } from '../types/provider'
 
 type ProvidersResponse = { providers: SavedProvider[]; activeId: string | null }
@@ -95,6 +97,15 @@ export const providersApi = {
 
   scanCcSwitch() {
     return api.get<CcSwitchScanResult>('/api/providers/cc-switch/scan')
+  },
+
+  /** The local Magpie gateway and its catalog; `refresh` skips the server's short cache. */
+  magpie(refresh = false) {
+    return api.get<MagpieState>(`/api/providers/magpie${refresh ? '?refresh=1' : ''}`)
+  },
+
+  openMagpie() {
+    return api.post<OpenMagpieResult>('/api/providers/magpie/open')
   },
 
   importCcSwitch(sourceIds: string[]) {

@@ -2431,6 +2431,11 @@ export class ConversationService {
       }
     }
 
+    // A Magpie session runs any model in Magpie's catalog; write the catalog's
+    // current windows and reply limits back first so the env built below carries them.
+    await this.providerService.refreshMagpieProvider(
+      typeof options?.providerId === 'string' ? options.providerId : null,
+    )
     const explicitProvider =
       typeof options?.providerId === 'string'
         ? await this.providerService.getProvider(options.providerId)
