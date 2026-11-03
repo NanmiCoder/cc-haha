@@ -288,10 +288,13 @@ export function TabBar() {
     setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 1)
     // scrollWidth is at least clientWidth even with only one tab. Measure
     // layout offsets (not transformed drag previews) to preserve empty chrome.
-    const first = el.firstElementChild as HTMLElement | null
+    // The mask starts at the strip's left edge, so it has to reach the last
+    // tab's right edge from there, padding included: measured from the first
+    // tab instead, it stopped 4px short and the last tab's edge dragged the
+    // window rather than taking the click.
     const last = el.lastElementChild as HTMLElement | null
-    const contentWidth = first && last ? last.offsetLeft + last.offsetWidth - first.offsetLeft : 0
-    setTabHitWidth(Math.max(0, Math.min(el.clientWidth, contentWidth - el.scrollLeft)))
+    const tabsRight = last ? last.offsetLeft + last.offsetWidth : 0
+    setTabHitWidth(Math.max(0, Math.min(el.clientWidth, tabsRight - el.scrollLeft)))
 
     // Only the waiting tabs are measured, so a scroll costs a few rect reads
     // rather than one per tab. State is left alone when nothing changed: this

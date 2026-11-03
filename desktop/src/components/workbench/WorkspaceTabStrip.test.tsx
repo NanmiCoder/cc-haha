@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { act, createEvent, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen, within, type RenderOptions } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import type { WorkspaceTab } from '../../lib/workspace/types'
+import { resolveAppRegion } from '../../test/appRegion'
 
 const FILE_TAB: WorkspaceTab = {
   id: 'tab-file',
@@ -62,7 +63,10 @@ const TERMINAL_TAB: WorkspaceTab = {
   ordinal: 2,
 }
 
-function renderStrip(overrides: Partial<Parameters<typeof WorkspaceTabStrip>[0]> = {}) {
+function renderStrip(
+  overrides: Partial<Parameters<typeof WorkspaceTabStrip>[0]> = {},
+  options: RenderOptions = {},
+) {
   const props = {
     dock: 'side' as const,
     tabs: [FILE_TAB],
@@ -78,7 +82,7 @@ function renderStrip(overrides: Partial<Parameters<typeof WorkspaceTabStrip>[0]>
     onAdd: vi.fn(),
     ...overrides,
   }
-  const view = render(<WorkspaceTabStrip {...props} />)
+  const view = render(<WorkspaceTabStrip {...props} />, options)
   return { ...view, props }
 }
 
@@ -107,6 +111,34 @@ describe('WorkspaceTabStrip', () => {
     expect(tab).toHaveClass('tab-bar-interactive')
     expect(add).toHaveClass('tab-bar-interactive')
     expect(tab).not.toHaveAttribute('data-desktop-drag-region')
+  })
+
+  it('keeps scrolled-out resource tabs from carving the titlebar beside them', () => {
+    // Chromium does not clip app-region rectangles to the list's overflow, so
+    // a no-drag tab scrolled out of the list still lands on the titlebar to
+    // its left — the session strip's empty drag space. The list box itself is
+    // sized to its tabs and does not scroll, so it carries the no-drag
+    // rectangle and nothing inside it reports one.
+    // Mounted where the app mounts it: anything else directly under <body> is
+    // an overlay portal, which owns its box and reports nothing inside it.
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    renderStrip(
+      { placement: 'window', tabs: [FILE_TAB, BROWSER_TAB, REVIEW_TAB, TERMINAL_TAB] },
+      { container: root },
+    )
+    const strip = screen.getByTestId('workspace-tab-strip-side')
+    const list = screen.getByRole('tablist')
+
+    expect(resolveAppRegion(strip)).toBe('drag')
+    expect(resolveAppRegion(list)).toBe('no-drag')
+    const inside = Array.from(list.querySelectorAll('*'))
+    expect(inside.some((node) => node.matches('button'))).toBe(true)
+    for (const node of inside) {
+      expect(resolveAppRegion(node), node.outerHTML).toBe('none')
+    }
+    // The add button sits outside the list, on the drag strip.
+    expect(resolveAppRegion(screen.getByTestId('workspace-add-tab-side'))).toBe('no-drag')
   })
 
   it('does not turn a dock strip into window chrome', () => {
