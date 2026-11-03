@@ -1032,17 +1032,47 @@ test('a command waits until the member is idle, and what the user sends after it
 
 test('a member that cannot even answer a shutdown request is stopped, so the lead can end the team', async () => {
   const h = await startHarness(['reader'])
+  const mailbox = await import('../../utils/teammateMailbox.js')
+  const { TEAM_LEAD_NAME } = await import('../../utils/swarm/constants.js')
+  const originalWrite = mailbox.writeToMailbox
+  let releaseNotice!: () => void
+  const noticeGate = new Promise<void>(resolve => { releaseNotice = resolve })
+  let noticeHeld = false
+  let noticeWrite: ReturnType<typeof originalWrite> | undefined
+  const write = spyOn(mailbox, 'writeToMailbox').mockImplementation((...args) => {
+    const notice = mailbox.isIdleNotification(args[1].text)
+    if (args[0] === TEAM_LEAD_NAME && args[1].from === 'reader' && args[2] === h.teamName
+      && notice?.idleReason === 'failed' && notice.failureReason?.includes('could not answer the shutdown request')) {
+      noticeHeld = true
+      noticeWrite = noticeGate.then(() => originalWrite(...args))
+      return noticeWrite
+    }
+    return originalWrite(...args)
+  })
+  const failureNotice = async () => (await h.leadNotifications()).find(item => item.from === 'reader' && item.type === 'idle_notification' && item.idleReason === 'failed')
   try {
-    const { createShutdownRequestMessage } = await import('../../utils/teammateMailbox.js')
     await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
     h.replies.push('FIXTURE_ERROR:Prompt is too long')
-    await messageMember(h, 'reader', 'team-lead', JSON.stringify(createShutdownRequestMessage({ requestId: 'stop-reader', from: 'team-lead', reason: 'done' })))
+    await messageMember(h, 'reader', 'team-lead', JSON.stringify(mailbox.createShutdownRequestMessage({ requestId: 'stop-reader', from: 'team-lead', reason: 'done' })))
     await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'member to be stopped')
     expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
-    const failure = (await h.leadNotifications()).find(item => item.idleReason === 'failed')
+    // Stopping the member is recorded before its failure notice is published.
+    await h.waitFor(() => noticeHeld, 'shutdown failure notice write to begin')
+    expect(await h.teamMember('reader')).toMatchObject({ terminated: true, isActive: false })
+    expect(await failureNotice()).toBeUndefined()
+    releaseNotice()
+    await h.waitFor(async () => (await failureNotice()) !== undefined, 'shutdown failure notice to reach the lead')
+    const failure = await failureNotice()
     expect(failure?.failureReason).toContain('could not answer the shutdown request')
   } finally {
-    await h.cleanup()
+    releaseNotice()
+    try {
+      // Drain the real write before cleanup can remove the mailbox.
+      await noticeWrite
+    } finally {
+      write.mockRestore()
+      await h.cleanup()
+    }
   }
 }, 30_000)
 
