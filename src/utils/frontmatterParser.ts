@@ -82,7 +82,7 @@ const YAML_SPECIAL_CHARS = /[{}[\]*&#!|>%@`]|: /
  * Pre-processes frontmatter text to quote values that contain special YAML characters.
  * This allows glob patterns like **\/*.{ts,tsx} to be parsed correctly.
  */
-function quoteProblematicValues(frontmatterText: string): string {
+export function quoteProblematicValues(frontmatterText: string): string {
   const lines = frontmatterText.split('\n')
   const result: string[] = []
 

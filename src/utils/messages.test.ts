@@ -239,6 +239,54 @@ describe('stripSignatureBlocksAfterModelChange', () => {
       stripSignatureBlocksAfterModelChange(messages, 'deepseek-v4-flash'),
     ).toBe(messages)
   })
+
+  test('keeps removing the old model thinking after the new model has thought', () => {
+    // Streaming stores each block as its own same-id assistant message.
+    const geminiThinking = assistant('gemini-turn', [
+      { type: 'thinking', thinking: '', signature: '' },
+    ])
+    const geminiSignature = assistant('gemini-turn', [
+      {
+        type: 'redacted_thinking',
+        data: 'cc-haha:gemini-thought-signature:v1:abc',
+      },
+    ])
+    const geminiTool = assistant('gemini-turn', [toolUse('tool-gemini')])
+    const deepseekThinking = assistant('deepseek-turn', [
+      { type: 'thinking', thinking: 'plan', signature: 'deepseek-sig' },
+    ])
+    const deepseekTool = assistant('deepseek-turn', [toolUse('tool-deepseek')])
+    for (const message of [geminiThinking, geminiSignature, geminiTool]) {
+      message.message.model = 'gemini-4-argon'
+    }
+    for (const message of [deepseekThinking, deepseekTool]) {
+      message.message.model = 'deepseek-flash'
+    }
+    const messages = [
+      createUserMessage({ content: 'start' }),
+      geminiThinking,
+      geminiSignature,
+      geminiTool,
+      toolResult('tool-gemini'),
+      createUserMessage({ content: 'continue' }),
+      deepseekThinking,
+      deepseekTool,
+      toolResult('tool-deepseek'),
+      createUserMessage({ content: 'next question' }),
+    ]
+
+    const forAPI = normalizeMessagesForAPI(
+      stripSignatureBlocksAfterModelChange(messages, 'deepseek-flash'),
+    )
+
+    const assistantBlocks = forAPI
+      .filter(message => message.type === 'assistant')
+      .map(message => message.message.content.map(block => block.type))
+    expect(assistantBlocks).toEqual([
+      ['tool_use'],
+      ['thinking', 'tool_use'],
+    ])
+  })
 })
 
 describe('malformed provider tool arguments', () => {

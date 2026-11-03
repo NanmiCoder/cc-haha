@@ -420,12 +420,14 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
 
     const currentBranch = branchResult.stdout.trim() || null
     const rawWorktreeRecords = worktreeResult.code === 0 ? parseWorktreeList(worktreeResult.stdout) : []
-    const worktreeRecords = await Promise.all(
-      rawWorktreeRecords.map(async (worktree) => ({
+    const worktreeRecords: GitWorktreeRecord[] = []
+    // Consume this batch without exhausting the shared directory I/O pool.
+    for (const worktree of rawWorktreeRecords) {
+      worktreeRecords.push({
         ...worktree,
         path: await canonicalizeKnownPath(worktree.path),
-      })),
-    )
+      })
+    }
     const worktrees = worktreeRecords.map((worktree) => ({
       path: worktree.path,
       branch: worktree.branch,
