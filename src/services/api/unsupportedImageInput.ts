@@ -48,3 +48,29 @@ function isOpenAIImageUrlTextOnlySchemaError(raw: string): boolean {
     raw.includes('only text')
   )
 }
+
+// Failures about particular images (format, MIME type, size, animation, image
+// count, broken data, unreachable URL) also mention images, but the model
+// still accepts other images. Learning from them would strip every later image
+// for this model, so they surface unchanged; a missed refusal only costs one
+// visible error.
+const IMAGE_CONTENT_PROBLEM = new RegExp([
+  String.raw`\bmime\b`, String.raw`\bformats?\b`, String.raw`\bgif\b`, 'animated', 'image type',
+  'multiple images', 'too many images', 'number of images',
+  'too large', 'exceed', String.raw`\bsize\b`, 'dimension', 'resolution', 'pixel',
+  'corrupt', 'decod', 'base64', 'download', 'fetch', 'could not process', 'unable to process', 'region',
+].join('|'), 'i')
+
+/**
+ * Whether an error is the endpoint refusing image input for the model, as
+ * opposed to a problem with one particular image. Only this earns an
+ * image-free re-send or a "does not support images" message; anything else
+ * surfaces in the provider's own words. Callers check the status and that the
+ * refused request actually carried images.
+ */
+export function isImageInputRefusalMessage(message: string): boolean {
+  return (
+    isUnsupportedImageInputErrorMessage(message) &&
+    !IMAGE_CONTENT_PROBLEM.test(message)
+  )
+}
