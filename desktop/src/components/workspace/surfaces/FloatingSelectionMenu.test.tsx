@@ -3,6 +3,7 @@ import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { resolveAppRegion } from '@/test/appRegion'
 import { FloatingSelectionMenu } from './FloatingSelectionMenu'
 
 describe('FloatingSelectionMenu', () => {
@@ -29,6 +30,28 @@ describe('FloatingSelectionMenu', () => {
 
     const button = screen.getByRole('button', { name: 'Add to chat' })
     expect(button).toHaveStyle({ left: '120px', top: '48px' })
+  })
+
+  it('stays clickable when it is clamped up under the window titlebar', () => {
+    // Following a selection scrolled off the top of a PDF, the button is
+    // clamped to y=12 — inside the 52px titlebar. Rendered inside the surface
+    // it reported no app-region, so the titlebar's drag region took the click:
+    // Windows dragged the window and macOS swallowed it. As an overlay
+    // portalled under <body> its own box is the no-drag rectangle.
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    render(
+      <FloatingSelectionMenu
+        selection={{ text: 'const a = 1', x: 120, y: 12 }}
+        onAdd={vi.fn()}
+        popoverRef={createRef<HTMLButtonElement>()}
+      />,
+      { container: root },
+    )
+
+    const button = screen.getByRole('button', { name: 'Add to chat' })
+    expect(root).not.toContainElement(button)
+    expect(resolveAppRegion(button)).toBe('no-drag')
   })
 
   it('reports the click to the caller', () => {

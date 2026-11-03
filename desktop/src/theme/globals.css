@@ -1687,34 +1687,56 @@ code, kbd, pre, samp, .font-mono {
   color: var(--color-selection-fg);
 }
 
-/* Desktop drag region */
+/* Desktop drag region
+
+   Chromium reports one rectangle for every box whose app-region is drag or
+   no-drag, in document order, and Electron lets the later rectangle win.
+   Nothing clips them: not overflow, not opacity, not inert, not
+   pointer-events. A control in a scrolled transcript or settings page, or in
+   a session panel kept mounted at opacity 0 behind Settings, still sits
+   under the 52px titlebar, and ContentRouter renders after TabBar — so a
+   page-wide no-drag on every button punched holes in the empty tab strip
+   wherever the content underneath happened to have one (electron/electron
+   #52063 reports the same on 42).
+
+   No-drag therefore exists only where it has a drag region to carve: on
+   controls inside one, and on overlays portalled above the whole window. */
 [data-desktop-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
 }
-button, input, textarea, select, a, [role="button"] {
+[data-desktop-drag-region] :is(button, input, textarea, select, a, [role="button"], [draggable="true"]),
+[data-desktop-drag-region] .tab-bar-interactive,
+[data-desktop-drag-region] .tab-bar-interactive * {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
-[draggable="true"] {
+/* A portalled menu, dialog or popover can open over the titlebar; it owns the
+   pixels it covers. Tooltips are click-through, so they keep none. Its own box
+   is the rectangle: from Electron 44 (Chromium 152) app-region inherits, and a
+   list scrolled inside the overlay would otherwise report its hidden rows. */
+body > :not(#root, [role="tooltip"]) {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
-.tab-bar-interactive,
-.tab-bar-interactive * {
-  app-region: no-drag;
-  -webkit-app-region: no-drag;
-}
-
-/* Scrolled-out tabs must not subtract native drag regions from the sidebar.
-   Reset every descendant, including buttons covered by the global rules.
-   The stationary sibling below supplies the visible no-drag rectangle. */
-.tab-strip-scroll .tab-bar-interactive,
-.tab-strip-scroll .tab-bar-interactive * {
+body > :not(#root, [role="tooltip"]) * {
   app-region: initial;
   -webkit-app-region: initial;
 }
-.tab-strip-hit-region {
+/* Scrolled-out tabs must not subtract native drag regions from the sidebar or
+   the strip beside them. Reset every descendant, including the buttons the
+   drag-region rule above covers, and let one box that does not scroll carry
+   the visible no-drag rectangle: a stationary sibling for the session strip,
+   whose scroller also spans the empty drag space, and the scroller itself for
+   a content-sized tab list. */
+.tab-strip-scroll .tab-bar-interactive,
+.tab-strip-scroll .tab-bar-interactive *,
+[data-desktop-drag-region] .tab-strip-viewport * {
+  app-region: initial;
+  -webkit-app-region: initial;
+}
+.tab-strip-hit-region,
+[data-desktop-drag-region] .tab-strip-viewport {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
