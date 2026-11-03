@@ -43,7 +43,7 @@ describe('tabStore', () => {
   })
 
   beforeEach(() => {
-    useTabStore.setState({ tabs: [], activeTabId: null, closedSessionTabs: [] })
+    useTabStore.setState({ tabs: [], activeTabId: null, lastSessionTabId: null, closedSessionTabs: [] })
     useSessionStore.setState({ ...initialSessionState, sessions: [], historicalSessionIds: new Set() })
     localStorage.clear()
     useSessionRuntimeStore.setState({ selections: {} })
@@ -699,7 +699,7 @@ it('maps both legacy market entry points to one canonical tab', () => {
 })
 
 it('restores duplicate legacy markets as one tab and retains their active selection', async () => {
-  useTabStore.setState({ tabs: [], activeTabId: null })
+  useTabStore.setState({ tabs: [], activeTabId: null, lastSessionTabId: null })
   vi.mocked(sessionsApi.list).mockResolvedValue({ sessions: [] } as never)
   localStorage.setItem('cc-haha-open-tabs', JSON.stringify({ openTabs: [
     { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings' },
@@ -709,4 +709,47 @@ it('restores duplicate legacy markets as one tab and retains their active select
   await useTabStore.getState().restoreTabs()
   expect(useTabStore.getState().tabs.map(tab => tab.sessionId)).toEqual([SETTINGS_TAB_ID, MARKET_TAB_ID])
   expect(useTabStore.getState().activeTabId).toBe(MARKET_TAB_ID)
+})
+
+it('tracks the last active chat tab across settings tabs', () => {
+  useTabStore.setState({ tabs: [], activeTabId: null, lastSessionTabId: null })
+  useTabStore.getState().openTab('session-a', 'A')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-a')
+
+  useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-a')
+
+  useTabStore.getState().openTab('session-b', 'B')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-b')
+
+  useTabStore.getState().setActiveTab(SETTINGS_TAB_ID)
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-b')
+
+  useTabStore.getState().setActiveTab('session-a')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-a')
+})
+
+it('falls back to another chat tab when the last chat tab closes', () => {
+  useTabStore.setState({ tabs: [], activeTabId: null, lastSessionTabId: null })
+  useTabStore.getState().openTab('session-a', 'A')
+  useTabStore.getState().openTab('session-b', 'B')
+  useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-b')
+
+  useTabStore.getState().closeTab('session-b')
+  expect(useTabStore.getState().lastSessionTabId).toBe('session-a')
+})
+
+it('restores lastSessionTabId from the persisted active chat tab', async () => {
+  const summary = historicalSummary('restore-last-session-tab')
+  useTabStore.setState({ tabs: [], activeTabId: null, lastSessionTabId: null })
+  localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+    openTabs: [{ sessionId: summary.id, title: summary.title, type: 'session' }],
+    activeTabId: summary.id,
+  }))
+  vi.mocked(sessionsApi.list).mockResolvedValue({ sessions: [summary], total: 1 } as never)
+
+  await useTabStore.getState().restoreTabs()
+
+  expect(useTabStore.getState().lastSessionTabId).toBe(summary.id)
 })
