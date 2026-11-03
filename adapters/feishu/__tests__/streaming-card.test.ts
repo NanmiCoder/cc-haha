@@ -145,6 +145,27 @@ describe('buildErrorCard', () => {
 // ---------------------------------------------------------------------------
 
 describe('StreamingCard: ensureCreated (CardKit 主路径)', () => {
+  it('concurrent callers wait until the same message has been created', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const { client, calls } = makeMockClient({
+      'card.create': async () => {
+        await pending
+        return { code: 0, data: { card_id: 'ck_shared' } }
+      },
+    })
+    const sc = new StreamingCard({ larkClient: client, chatId: 'oc_chat_1' })
+    const creating = sc.ensureCreated()
+    const waiting = sc.ensureCreated().then(() => sc._getMessageId())
+    release()
+    const [, messageId] = await Promise.all([creating, waiting])
+    expect(messageId).toBe('om_default')
+    expect(calls.map((call) => call.api)).toEqual([
+      'cardkit.v1.card.create', 'im.message.create',
+    ])
+    await sc.finalize()
+  })
+
   it('依次调用 card.create + im.message.create，sequence=1', async () => {
     const { client, calls } = makeMockClient({
       'card.create': { code: 0, data: { card_id: 'ck_main_1' } },
@@ -354,6 +375,75 @@ describe('StreamingCard: appendText + flush', () => {
 // ---------------------------------------------------------------------------
 
 describe('StreamingCard: finalize', () => {
+  it('settles as aborted when pending creation and its fallback both fail', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const { client, calls } = makeMockClient({
+      'card.create': async () => {
+        await pending
+        throw new Error('create failed')
+      },
+      'im.message.create': () => { throw new Error('fallback failed') },
+    })
+    const sc = new StreamingCard({ larkClient: client, chatId: 'oc_chat_1' })
+    const creating = sc.ensureCreated().catch((err: Error) => err)
+    sc.appendText('answer')
+    const finalizing = sc.finalize()
+    release()
+    const [creationError] = await Promise.all([creating, finalizing])
+    expect(creationError).toBeInstanceOf(Error)
+    expect((creationError as Error).message).toBe('fallback failed')
+    expect(sc._getPhase()).toBe('aborted')
+    expect(calls.map((call) => call.api)).toEqual([
+      'cardkit.v1.card.create', 'im.message.create',
+    ])
+  })
+
+  for (const stage of ['card.create', 'im.message.create', 'fallback'] as const) {
+    it(`waits for pending ${stage} before delivering the final answer`, async () => {
+      let release!: () => void
+      let entered!: () => void
+      const pending = new Promise<void>((resolve) => { release = resolve })
+      const started = new Promise<void>((resolve) => { entered = resolve })
+      const delayed = async (response: any) => {
+        entered()
+        await pending
+        return response
+      }
+      const { client, calls } = makeMockClient({
+        'card.create': stage === 'fallback'
+          ? { code: 999, msg: 'CardKit unavailable' }
+          : stage === 'card.create'
+            ? () => delayed({ code: 0, data: { card_id: 'ck_delayed' } })
+            : undefined,
+        'im.message.create': stage !== 'card.create'
+          ? () => delayed({ data: { message_id: 'om_delayed' } })
+          : undefined,
+      })
+      const sc = new StreamingCard({ larkClient: client, chatId: 'oc_chat_1' })
+      const creating = sc.ensureCreated()
+      await started
+      sc.appendText('complete short answer')
+      const finalizing = sc.finalize()
+      release()
+      await Promise.all([creating, finalizing])
+
+      expect(sc._getPhase()).toBe('completed')
+      const writes = calls.filter((call) => call.api === (
+        stage === 'fallback' ? 'im.message.patch' : 'cardkit.v1.card.update'
+      ))
+      expect(writes).toHaveLength(1)
+      const card = JSON.parse(stage === 'fallback'
+        ? writes[0]!.args.data.content
+        : writes[0]!.args.data.card.data)
+      expect(card.body.elements[0].content).toBe('complete short answer')
+      sc.appendText('ignored after completion')
+      await sc._getFlushController().flush()
+      expect(sc._getAccumulatedText()).toBe('complete short answer')
+      expect(calls.filter((call) => call.api === 'cardkit.v1.cardElement.content')).toHaveLength(0)
+    })
+  }
+
   it('CardKit 路径: settings(false) + card.update，sequence 连续递增', async () => {
     const { client, calls } = makeMockClient({
       'card.create': { code: 0, data: { card_id: 'ck_final' } },
@@ -600,6 +690,27 @@ describe('StreamingCard: 错误处理', () => {
 // ---------------------------------------------------------------------------
 
 describe('StreamingCard: abort', () => {
+  it('waits for pending creation and renders the error without reopening streaming', async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const { client, calls } = makeMockClient({
+      'card.create': async () => {
+        await pending
+        return { code: 0, data: { card_id: 'ck_delayed' } }
+      },
+    })
+    const sc = new StreamingCard({ larkClient: client, chatId: 'oc_chat_1' })
+    const creating = sc.ensureCreated()
+    const aborting = sc.abort(new Error('session reset'))
+    release()
+    await Promise.all([creating, aborting])
+    expect(sc._getPhase()).toBe('aborted')
+    const updates = calls.filter((call) => call.api === 'cardkit.v1.card.update')
+    expect(updates).toHaveLength(1)
+    expect(JSON.parse(updates[0]!.args.data.card.data).body.elements[0].content).toBe('session reset')
+    expect(calls.filter((call) => call.api === 'cardkit.v1.cardElement.content')).toHaveLength(0)
+  })
+
   it('CardKit 路径: 渲染错误卡并关闭流式', async () => {
     const { client, calls } = makeMockClient({
       'card.create': { code: 0, data: { card_id: 'ck_err' } },
