@@ -130,15 +130,19 @@ const toggle = (set: ReadonlySet<string>, key: string) => {
 export default function Chat() {
   const { id, host, notificationAction, requestId } = useLocalSearchParams<{
     id: string
-    host: string
+    host?: string
     notificationAction?: string
     requestId?: string
   }>()
+  // 不带 host 的链接（cchaha://chat/<id>）按当前电脑打开，与其他带 host 参数的页面一致；
+  // 否则草稿、历史缓存和首页快照都按 undefined 取，冷启动时还会读到空快照闪退。
+  const { registry } = useApp()
+  const hostId = host ?? registry.selectedId ?? ''
   return (
     <ChatSession
-      key={`${host}:${id}`}
+      key={`${hostId}:${id}`}
       id={id}
-      hostId={host}
+      hostId={hostId}
       notificationAction={notificationAction}
       notificationRequestId={requestId}
     />

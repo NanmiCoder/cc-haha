@@ -8,6 +8,7 @@ import { createApiClient } from '../state/api'
 import { connectHost, pairingMessage } from '../core/connectHost'
 import { useApp } from '../state/AppContext'
 import { goBack } from '../ui/kit'
+import { goHome } from '../ui/navigation'
 import { errorText, useTheme } from '../ui/theme'
 import { Scanner } from '../ui/connect/Scanner'
 import { ManualSheet } from '../ui/connect/ManualSheet'
@@ -172,7 +173,7 @@ function Connect() {
       if (!controller.signal.aborted && attempt.current === controller) {
         setAddress('')
         setToken('')
-        router.replace('/')
+        goHome()
       }
     } catch (e) {
       if (controller.signal.aborted) return

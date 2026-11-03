@@ -17,6 +17,7 @@ import {
   Separator,
   useColors,
 } from '../ui/kit'
+import { goHome } from '../ui/navigation'
 import { errorText } from '../ui/theme'
 import { modeName, effortName } from '../ui/modes'
 import { StatusDot, useNow } from '../ui/home/parts'
@@ -100,7 +101,7 @@ function ComputerBody({ host }: { host: Host }) {
           setRemoving(true)
           setRemoveError('')
           remove(host.id)
-            .then(() => router.replace('/'))
+            .then(() => goHome())
             .catch((e) => setRemoveError(errorText(e)))
             .finally(() => setRemoving(false))
         },

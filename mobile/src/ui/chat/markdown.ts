@@ -94,6 +94,98 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks
 }
 
+/* ───────────── 超长消息的挂载上限 ───────────── */
+
+/**
+ * 一条消息是消息列表里的一行，列表虚拟化管不到行内：每个段落、列表项、表格单元格都会
+ * 挂成原生视图。安卓上原生视图占 Java 堆（上限通常 256MB），模型重复输出几万段时，
+ * 打开或长按这条消息就会 OutOfMemoryError 闪退。所以按大约要挂的原生视图数给每条消息
+ * 设上限：超出时只留开头和结尾，中间折叠成可展开的一处。
+ */
+export type MarkdownLimit = { head: number; tail: number }
+export const MARKDOWN_LIMIT: MarkdownLimit = { head: 1500, tail: 500 }
+/** 每展开一次开头多挂一份预算，最多挂到这么多；再长的部分只能在电脑上看，展开不能把上限又撑回去。 */
+export const MARKDOWN_EXPAND_LIMIT = 6000
+export type MarkdownWindow = { head: MarkdownBlock[]; hidden: number; tail: MarkdownBlock[] }
+
+// 与 Message.tsx 的渲染结构对应：列表项 = 行 + 序号 + 容器 + 正文；表格每行 = 行 + 每格（容器 + 正文），外加表框。
+const LIST_ITEM_COST = 4
+const TABLE_FRAME_COST = 3
+const tableRowCost = (block: { header: string[] }) => 1 + block.header.length * 2
+
+/** 拆成可单独取舍的片段：列表按项、表格按行，其余块（含只有表头的表格）整块算一段。 */
+type Piece = { block: number; item: number; cost: number }
+
+function markdownPieces(blocks: MarkdownBlock[]): Piece[] {
+  const pieces: Piece[] = []
+  blocks.forEach((block, index) => {
+    if (block.type === 'list')
+      block.items.forEach((_, item) => pieces.push({ block: index, item, cost: LIST_ITEM_COST }))
+    else if (block.type === 'table' && block.rows.length)
+      block.rows.forEach((_, item) => pieces.push({ block: index, item, cost: tableRowCost(block) }))
+    else {
+      // 只有表头的表格：表头和表框在 pieceCost 里按“开表”计入，这里不重复算。
+      const cost = block.type === 'table' ? 0 : block.type === 'code' || block.type === 'quote' ? 2 : 1
+      pieces.push({ block: index, item: -1, cost })
+    }
+  })
+  return pieces
+}
+
+/** 表格被切开时，每一截都带上表头和表框。 */
+function pieceCost(blocks: MarkdownBlock[], piece: Piece, opensTable: boolean) {
+  const block = blocks[piece.block]
+  return piece.cost + (opensTable && block.type === 'table' ? TABLE_FRAME_COST + tableRowCost(block) : 0)
+}
+
+function rebuild(blocks: MarkdownBlock[], pieces: Piece[]): MarkdownBlock[] {
+  const out: MarkdownBlock[] = []
+  for (let start = 0; start < pieces.length; ) {
+    let end = start
+    while (end + 1 < pieces.length && pieces[end + 1].block === pieces[start].block) end++
+    const block = blocks[pieces[start].block]
+    const from = pieces[start].item
+    const to = pieces[end].item + 1
+    if (from < 0) out.push(block)
+    else if (block.type === 'list') out.push({ ...block, items: block.items.slice(from, to) })
+    else if (block.type === 'table') out.push({ ...block, rows: block.rows.slice(from, to) })
+    else out.push(block)
+    start = end + 1
+  }
+  return out
+}
+
+/** 按原生视图预算截出开头和结尾；放得下就原样返回，hidden 是中间折叠的段数。 */
+export function windowMarkdown(blocks: MarkdownBlock[], limit: MarkdownLimit): MarkdownWindow {
+  const pieces = markdownPieces(blocks)
+  let head = 0
+  let spent = 0
+  while (head < pieces.length) {
+    const opens = head === 0 || pieces[head - 1].block !== pieces[head].block
+    const cost = pieceCost(blocks, pieces[head], opens)
+    if (spent + cost > limit.head) break
+    spent += cost
+    head++
+  }
+  if (head === pieces.length) return { head: blocks, hidden: 0, tail: [] }
+  let tail = pieces.length
+  spent = 0
+  while (tail > head) {
+    const piece = pieces[tail - 1]
+    const opens = tail === pieces.length || pieces[tail].block !== piece.block
+    const cost = pieceCost(blocks, piece, opens)
+    if (spent + cost > limit.tail) break
+    spent += cost
+    tail--
+  }
+  if (tail === head) return { head: blocks, hidden: 0, tail: [] }
+  return {
+    head: rebuild(blocks, pieces.slice(0, head)),
+    hidden: tail - head,
+    tail: rebuild(blocks, pieces.slice(tail)),
+  }
+}
+
 /* ───────────── 表格列宽 ───────────── */
 
 export const TABLE_MIN_COLUMN = 72
