@@ -319,6 +319,15 @@ export function getMemberWorkState(
   return member.status === 'running' ? 'working' : 'idle'
 }
 
+/**
+ * Whether the member's last turn failed because its conversation outgrew the
+ * model's context. A message alone resends the same oversized prompt; `/compact`
+ * in its own conversation is what lets it continue.
+ */
+export function memberHitContextLimit(member: Pick<TeamMember, 'lastError'>): boolean {
+  return /prompt is too long/i.test(member.lastError ?? '')
+}
+
 export type StalledTaskOwnerState = Extract<MemberWorkState, 'stopped' | 'error' | 'retrying'>
 
 /**

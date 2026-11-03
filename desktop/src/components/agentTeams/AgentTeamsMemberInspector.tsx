@@ -9,6 +9,7 @@ import {
   getMemberAvatarKey,
   getMemberWorkState,
   getWorkbenchTaskState,
+  memberHitContextLimit,
   parseWorkbenchMessageBody,
   resolveMemberModel,
   resolveTeamMemberIdentity,
@@ -409,15 +410,20 @@ export function AgentTeamsMemberInspector({
     workState === 'stopped' || workState === 'retrying' || workState === 'error'
   )
   const failureReason = awaitsRecovery ? member.lastError : undefined
+  // Resending into a context that no longer fits fails the same way, so the
+  // hint names the step that clears it. A scheduled retry keeps its countdown.
+  const contextLimited = workState !== 'retrying' && memberHitContextLimit(member)
   const recoveryHint = !awaitsRecovery
     ? undefined
-    : workState === 'stopped'
-      ? t('agentTeams.member.stoppedHint')
-      : workState === 'error'
-        ? t('agentTeams.member.errorHint')
-        : member.autoRetry && now !== undefined
-          ? retryCountdown(member.autoRetry, now, t)
-          : undefined
+    : contextLimited
+      ? t('agentTeams.member.contextLimitHint')
+      : workState === 'stopped'
+        ? t('agentTeams.member.stoppedHint')
+        : workState === 'error'
+          ? t('agentTeams.member.errorHint')
+          : member.autoRetry && now !== undefined
+            ? retryCountdown(member.autoRetry, now, t)
+            : undefined
 
   return (
     <section

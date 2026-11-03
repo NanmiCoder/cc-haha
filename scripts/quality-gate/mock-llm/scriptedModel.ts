@@ -53,6 +53,13 @@ export type MockRequest = {
 export const UPSTREAM_ERROR_TRIGGER = 'MOCK_UPSTREAM_ERROR'
 export const UPSTREAM_ERROR_MESSAGE = 'mock upstream rejected this request'
 export const UPSTREAM_REFUSAL_TRIGGER = 'MOCK_UPSTREAM_REFUSAL'
+/**
+ * Prompt whose history the provider rejects as too long, worded the way
+ * OpenAI-compatible gateways word it. Once compacted, the summary no longer
+ * carries the prompt and the retry goes through.
+ */
+export const PROMPT_TOO_LONG_TRIGGER = 'MOCK_PROMPT_TOO_LONG'
+export const PROMPT_TOO_LONG_MESSAGE = "This model's maximum context length is 120000 tokens. However, you requested 150000 tokens. Please reduce the length of the messages."
 
 function blocksOf(message: RequestMessage | undefined): RequestBlock[] {
   if (!message) return []
@@ -150,6 +157,10 @@ export function decideReply(request: MockRequest): MockReply {
   // the generic neutral title reply that ends before the throttle can fire.
   if (textOf(blocksOf(last)).includes('CRITICAL: Respond with TEXT ONLY')) {
     return text(`<summary>${'The user canceled an A/B question. Nothing was changed. Continue normally.\n'.repeat(24)}</summary>`, 60)
+  }
+
+  if (prompt.includes(PROMPT_TOO_LONG_TRIGGER)) {
+    return { kind: 'error', status: 400, errorType: 'invalid_request_error', message: PROMPT_TOO_LONG_MESSAGE }
   }
 
   if (prompt.includes(UPSTREAM_ERROR_TRIGGER)) {
