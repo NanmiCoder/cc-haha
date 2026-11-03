@@ -201,7 +201,8 @@ describe('project MCP file mutation boundaries', () => {
     const realpath = spyOn(nativeFs, 'realpathSync').mockImplementation(path => path === requested ? substitute : originalRealpath(path))
     try {
       expect(() => resolveProjectMcpDirectorySync(requested)).toThrow('Project directory identity could not be verified')
-      await expect(resolveProjectMcpDirectory(requested)).rejects.toThrow('Project directory identity could not be verified')
+      // The async resolver's native realpath substitution is tested inside its
+      // worker in projectDirectoryIo.test.ts; a main-thread spy cannot reach it.
       expect(findProjectMcpRegistryKey(substitute, { [requested]: { futureProject: true } })).toBeUndefined()
       expect(findProjectMcpRegistryKey(requested, { [requested]: { futureProject: true } })).toBeUndefined()
       expect(getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(substitute))).toBe(getProjectMcpDirectoryIdentity(substitute))

@@ -1,9 +1,9 @@
-import { access, constants, stat } from 'node:fs/promises'
 import * as path from 'node:path'
-import { expandPath } from '../../utils/path.js'
+import { expandPath, normalizePathForConfigKey } from '../../utils/path.js'
+import { getPlatform } from '../../utils/platform.js'
 import { ApiError } from '../middleware/errorHandler.js'
-import { findCanonicalGitRootPreservingPathIdentity } from '../../utils/git.js'
-import { getProjectMcpDirectoryIdentity, resolveProjectMcpDirectory } from '../../services/mcp/config.js'
+import { getProjectMcpDirectoryIdentity } from '../../services/mcp/config.js'
+import { ProjectDirectoryIoError, readProjectDirectory } from '../../services/mcp/projectDirectoryIo.js'
 
 export type ProjectAdditionalDirectories = Record<string, string[]>
 export type ProjectDirectories = { projectKey: string; mainDirectory: string; additionalDirectories: string[] }
@@ -22,25 +22,27 @@ export function normalizeProjectAdditionalDirectories(value: unknown): ProjectAd
     .map(([key, directories]) => [key, normalizeAdditionalDirectories(directories)]))
 }
 
-async function resolveDirectory(value: unknown): Promise<string> {
+function nativeDirectory(directory: string): string {
+  return getPlatform() === 'windows' ? normalizePathForConfigKey(directory) : directory
+}
+
+async function resolveDirectory(value: unknown, kind: 'directory' | 'project' = 'directory'): Promise<{ directory: string; root?: string }> {
   if (typeof value !== 'string' || !value.trim() || !path.isAbsolute(value) || value.includes('\0')) {
     throw ApiError.badRequest('Choose an absolute directory path on this server')
   }
   try {
     // The existing project boundary verifies native realpath + dev/ino, preserving
     // Unicode path identity and collapsing symlink aliases without changing cwd.
-    const directory = await resolveProjectMcpDirectory(value)
-    await access(directory, constants.R_OK | constants.X_OK)
-    return directory
-  } catch {
+    const result = await readProjectDirectory({ kind, path: value })
+    return { directory: nativeDirectory(result.directory), ...(result.root ? { root: nativeDirectory(result.root) } : {}) }
+  } catch (error) {
+    if (error instanceof ProjectDirectoryIoError && error.kind !== 'failed') throw ApiError.badRequest(error.message)
     throw ApiError.badRequest(`Directory is unavailable or inaccessible: ${value}`)
   }
 }
 
 export async function resolveProjectDirectories(workDir: unknown): Promise<Omit<ProjectDirectories, 'additionalDirectories'>> {
-  const mainDirectory = await resolveDirectory(workDir)
-  const gitRoot = findCanonicalGitRootPreservingPathIdentity(mainDirectory)
-  const root = gitRoot ? await resolveProjectMcpDirectory(gitRoot) : mainDirectory
+  const { directory: mainDirectory, root = mainDirectory } = await resolveDirectory(workDir, 'project')
   return { projectKey: getProjectMcpDirectoryIdentity(root), mainDirectory }
 }
 
@@ -49,19 +51,16 @@ export async function validateProjectAdditionalDirectories(mainDirectory: string
   const directories: string[] = []
   const seen = new Set([getProjectMcpDirectoryIdentity(mainDirectory)])
   for (const item of value) {
-    const directory = await resolveDirectory(item)
+    const { directory } = await resolveDirectory(item)
     const identity = getProjectMcpDirectoryIdentity(directory)
     if (seen.has(identity)) continue
     try {
       // The CLI expands --add-dir paths. Prove that trim/NFC/path expansion
       // still denotes the selected physical directory before granting scope.
       const cliPath = path.resolve(expandPath(directory))
-      const [selected, consumed] = await Promise.all([
-        stat(directory, { bigint: true }), stat(cliPath, { bigint: true }),
-      ])
-      if (!selected.isDirectory() || !consumed.isDirectory() || selected.ino === 0n ||
-        selected.dev !== consumed.dev || selected.ino !== consumed.ino) throw new Error('identity mismatch')
-    } catch {
+      await readProjectDirectory({ kind: 'cliIdentity', path: directory, cliPath })
+    } catch (error) {
+      if (error instanceof ProjectDirectoryIoError && error.kind !== 'failed') throw ApiError.badRequest(error.message)
       throw ApiError.badRequest(`This folder path resolves to a different location or cannot be verified and cannot be added: ${directory}`)
     }
     seen.add(identity)

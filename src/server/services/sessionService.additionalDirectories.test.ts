@@ -91,6 +91,20 @@ test('legacy project and session fixtures default to no auxiliary access and pre
   expect(await readFile(file, 'utf8')).toBe(original)
 })
 
+test('concurrent directory updates retain both projects and unrelated preference fields', async () => {
+  const sibling = join(directory, 'sibling')
+  await mkdir(sibling)
+  const service = new DesktopUiPreferencesService()
+  await service.updateProfilePreferences({ displayName: 'Fixture owner' })
+  await Promise.all([
+    service.updateProjectDirectories({ workDir: main, additionalDirectories: [extra] }),
+    new DesktopUiPreferencesService().updateProjectDirectories({ workDir: sibling, additionalDirectories: [main] }),
+  ])
+  expect((await service.getProjectDirectories(main)).additionalDirectories).toEqual([extra])
+  expect((await service.getProjectDirectories(sibling)).additionalDirectories).toEqual([main])
+  expect((await service.readPreferences()).preferences.profile.displayName).toBe('Fixture owner')
+})
+
 test('invalid directory updates fail atomically without changing saved scope', async () => {
   expect((await preferences('PUT', { workDir: main, additionalDirectories: [extra] })).status).toBe(200)
   const file = join(directory, 'file')

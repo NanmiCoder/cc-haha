@@ -1,5 +1,6 @@
 import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
 import { validateProjectAdditionalDirectories } from './projectDirectories.js'
+import { ProjectDirectoryIoError, readProjectDirectory } from '../../services/mcp/projectDirectoryIo.js'
 /**
  * CronScheduler — Execution engine for scheduled tasks
  *
@@ -11,7 +12,7 @@ import { validateProjectAdditionalDirectories } from './projectDirectories.js'
 
 import * as fs from 'fs/promises'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
@@ -856,14 +857,19 @@ export class CronScheduler {
     const runId = crypto.randomBytes(6).toString('hex')
     const startedAt = new Date().toISOString()
     let workDir = task.folderPath || os.homedir()
-    if (task.folderPath && (!existsSync(task.folderPath) || !statSync(task.folderPath).isDirectory())) {
-      console.warn(`[cron] task ${task.id}: folderPath "${task.folderPath}" is not a valid directory, falling back to homedir`)
-      workDir = os.homedir()
-    }
-    workDir = this.resolveCanonicalWorkDir(workDir)
     let additionalDirectories: string[] = []
     let directoryError: string | undefined
     try {
+      try {
+        workDir = (await readProjectDirectory({ kind: 'identity', path: path.resolve(workDir) })).directory
+      } catch (error) {
+        // Only a proven missing/non-directory legacy task target falls back.
+        // A stalled or inaccessible target must never silently execute in HOME.
+        if (!task.folderPath || !(error instanceof ProjectDirectoryIoError) ||
+          (error.reason !== 'missing' && error.reason !== 'not-directory')) throw error
+        console.warn(`[cron] task ${task.id}: folderPath "${task.folderPath}" is not a valid directory, falling back to homedir`)
+        workDir = (await readProjectDirectory({ kind: 'identity', path: os.homedir() })).directory
+      }
       const project = await new DesktopUiPreferencesService().getProjectDirectories(workDir)
       additionalDirectories = await validateProjectAdditionalDirectories(workDir, project.additionalDirectories)
     } catch (error) {
@@ -1105,14 +1111,6 @@ export class CronScheduler {
     }).catch(() => {
       // The task result is still valid even if session metadata refresh fails.
     })
-  }
-
-  private resolveCanonicalWorkDir(workDir: string): string {
-    try {
-      return realpathSync(workDir)
-    } catch {
-      return workDir
-    }
   }
 
   private getRuntimeArgs(task: CronTask): string[] {

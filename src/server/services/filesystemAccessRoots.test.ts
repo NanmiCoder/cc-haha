@@ -1,13 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
+import * as fs from 'node:fs'
 import {
   clearFilesystemAccessRootsForTests,
   isWithinRegisteredFilesystemRoot,
   registerChangedFileAccessRoot,
+  registerCanonicalFilesystemAccessRoot,
 } from './filesystemAccessRoots.js'
 
 describe('registerChangedFileAccessRoot', () => {
   beforeEach(() => clearFilesystemAccessRootsForTests())
   afterEach(() => clearFilesystemAccessRootsForTests())
+
+  it('registers an already verified canonical root without repeating native I/O', () => {
+    const realpath = spyOn(fs, 'realpathSync').mockImplementation(() => { throw new Error('Unexpected main-thread realpath') })
+    try {
+      registerCanonicalFilesystemAccessRoot('/verified/project')
+      expect(realpath).not.toHaveBeenCalled()
+    } finally { realpath.mockRestore() }
+    expect(isWithinRegisteredFilesystemRoot('/verified/project/file.txt')).toBe(true)
+    expect(isWithinRegisteredFilesystemRoot('/verified/other/file.txt')).toBe(false)
+  })
 
   it('registers the containing dir of a changed file outside the workdir', () => {
     registerChangedFileAccessRoot('/elsewhere/proj/todo.html', '/work/dir')
