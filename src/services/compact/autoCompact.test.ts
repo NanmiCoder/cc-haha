@@ -9,20 +9,27 @@ import {
   shouldAutoCompact,
 } from './autoCompact.js'
 import { getContextWindowForModel, getEffectiveModelContextWindow } from '../../utils/context.js'
-import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  MODEL_MAX_OUTPUT_TOKENS_ENV_KEY,
+} from '../../utils/model/modelContextWindows.js'
+import { getModelMaxOutputTokens } from '../../utils/context.js'
 
 let originalAutoCompactWindow: string | undefined
 let originalContextWindows: string | undefined
+let originalMaxOutputTokens: string | undefined
 let originalDisableCompact: string | undefined
 let originalDisableAutoCompact: string | undefined
 
 beforeEach(() => {
   originalAutoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   originalContextWindows = process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+  originalMaxOutputTokens = process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]
   originalDisableCompact = process.env.DISABLE_COMPACT
   originalDisableAutoCompact = process.env.DISABLE_AUTO_COMPACT
   delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   delete process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+  delete process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]
   delete process.env.DISABLE_COMPACT
   delete process.env.DISABLE_AUTO_COMPACT
 })
@@ -37,6 +44,11 @@ afterEach(() => {
     delete process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
   } else {
     process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY] = originalContextWindows
+  }
+  if (originalMaxOutputTokens === undefined) {
+    delete process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]
+  } else {
+    process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY] = originalMaxOutputTokens
   }
   if (originalDisableCompact === undefined) {
     delete process.env.DISABLE_COMPACT
@@ -77,6 +89,35 @@ describe('model context window resolution', () => {
 
     expect(getContextWindowForModel('deepseek-v4-pro')).toBe(500_000)
     expect(getContextWindowForModel('provider/custom-model')).toBe(300_000)
+  })
+
+  test('a gateway catalog sizes every model it serves, not only the mapped slots', () => {
+    // Magpie-style ids: provider/model. Without the maps both fall back to
+    // 200K and the default 32K reply, compacting the 1M model far too early
+    // and asking the 8K-reply model for more than it may write.
+    process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY] = JSON.stringify({
+      'deepseek/deepseek-v4-pro': 1_000_000,
+      'ollama/qwen3.6:27b': 32_768,
+    })
+    process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY] = JSON.stringify({
+      'deepseek/deepseek-v4-pro': 384_000,
+      'ollama/qwen3.6:27b': 8_192,
+    })
+
+    expect(getModelMaxOutputTokens('ollama/qwen3.6:27b')).toEqual({ default: 8_192, upperLimit: 8_192 })
+    // A larger limit only raises the ceiling; the default reply stays the usual one.
+    expect(getModelMaxOutputTokens('deepseek/deepseek-v4-pro')).toEqual({ default: 32_000, upperLimit: 384_000 })
+    expect(getEffectiveContextWindowSize('deepseek/deepseek-v4-pro')).toBe(1_000_000 - 20_000)
+    // The summary reserve follows the small model's real reply limit.
+    expect(getEffectiveContextWindowSize('ollama/qwen3.6:27b')).toBe(32_768 - 8_192)
+    expect(getModelMaxOutputTokens('other/unlisted-model')).toEqual({ default: 32_000, upperLimit: 64_000 })
+  })
+
+  test('ignores per-model reply limits outside the accepted range', () => {
+    process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY] = JSON.stringify({ 'tiny/model': 512, 'bad/model': 'many' })
+
+    expect(getModelMaxOutputTokens('tiny/model')).toEqual({ default: 32_000, upperLimit: 64_000 })
+    expect(getModelMaxOutputTokens('bad/model')).toEqual({ default: 32_000, upperLimit: 64_000 })
   })
 
   test('global auto compact window can raise unknown models above the default', () => {

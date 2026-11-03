@@ -94,6 +94,8 @@ export type ComputerUseStatus = {
       | 'system_version_unknown'
       | 'os_too_old'
       | 'helper_missing'
+      | 'helper_signature_invalid'
+      | 'helper_prepare_failed'
       | null
   }
   python: {

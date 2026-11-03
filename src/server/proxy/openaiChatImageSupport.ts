@@ -1,4 +1,4 @@
-import { isUnsupportedImageInputErrorMessage } from '../../services/api/unsupportedImageInput.js'
+import { isImageInputRefusalMessage } from '../../services/api/unsupportedImageInput.js'
 import type { OpenAIChatImageContentMode } from './transform/anthropicToOpenaiChat.js'
 import type { OpenAIChatRequest } from './transform/types.js'
 
@@ -11,18 +11,6 @@ import type { OpenAIChatRequest } from './transform/types.js'
 const TEXT_ONLY_TTL_MS = 30 * 60 * 1000
 const MAX_TEXT_ONLY_MODELS = 256
 const textOnlyModelsUntil = new Map<string, number>()
-
-// Failures about particular images (format, MIME type, size, animation, image
-// count, broken data, unreachable URL) also mention images, but the model
-// still accepts other images. Learning from them would strip every later image
-// for this model, so they surface unchanged; a missed refusal only costs one
-// visible error.
-const IMAGE_CONTENT_PROBLEM = new RegExp([
-  String.raw`\bmime\b`, String.raw`\bformats?\b`, String.raw`\bgif\b`, 'animated', 'image type',
-  'multiple images', 'too many images', 'number of images',
-  'too large', 'exceed', String.raw`\bsize\b`, 'dimension', 'resolution', 'pixel',
-  'corrupt', 'decod', 'base64', 'download', 'fetch', 'could not process', 'unable to process', 'region',
-].join('|'), 'i')
 
 function modelKey(endpointUrl: string, model: string): string {
   return `${endpointUrl.replace(/\/+$/, '').toLowerCase()}\n${model.toLowerCase()}`
@@ -65,8 +53,7 @@ export function isOpenAIChatImageRejection(
   return (
     (status === 400 || status === 422) &&
     requestCarriesImages(request) &&
-    isUnsupportedImageInputErrorMessage(errorText) &&
-    !IMAGE_CONTENT_PROBLEM.test(errorText)
+    isImageInputRefusalMessage(errorText)
   )
 }
 

@@ -35,6 +35,7 @@ import {
   triggerFastModeCooldown,
 } from '../../utils/fastMode.js'
 import { isNonCustomOpusModel } from '../../utils/model/model.js'
+import { readProviderEnv } from '../../utils/model/providerEnvScope.js'
 import { disableKeepAlive } from '../../utils/proxy.js'
 import { sleep } from '../../utils/sleep.js'
 import type { ThinkingConfig } from '../../utils/thinking.js'
@@ -51,6 +52,7 @@ import {
   REPEATED_529_ERROR_MESSAGE,
 } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
+import { isLocalProtocolProxy } from './outputBudget.js'
 import { StreamEndedEarlyError } from './streamFallback.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 import { isOpenAIPolicyError } from '../openaiAuth/policyError.js'
@@ -60,6 +62,7 @@ const abortError = () => new APIUserAbortError()
 const DEFAULT_MAX_RETRIES = 10
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
+const LOCAL_SERVICE_REFUSED_MAX_RETRIES = 2
 export const BASE_DELAY_MS = 500
 
 // Foreground query sources where the user IS blocking on the result — these
@@ -125,11 +128,36 @@ function isStaleConnectionError(error: unknown): boolean {
   return details?.code === 'ECONNRESET' || details?.code === 'EPIPE'
 }
 
+const CONNECTION_REFUSED_CODES = new Set(['ECONNREFUSED', 'ConnectionRefused'])
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/**
+ * A service on this machine (Ollama, LM Studio, a Magpie gateway) that refuses
+ * the connection is not running. Our own `/proxy` stays out: it fronts a remote
+ * upstream and keeps the normal retries.
+ */
+export function isLocalServiceRefused(
+  error: unknown,
+  baseUrl = readProviderEnv('ANTHROPIC_BASE_URL'),
+): boolean {
+  if (!(error instanceof APIConnectionError)) return false
+  const code = extractConnectionErrorDetails(error)?.code
+  if (!code || !CONNECTION_REFUSED_CODES.has(code)) return false
+  if (!baseUrl || isLocalProtocolProxy(baseUrl)) return false
+  try {
+    return LOOPBACK_HOSTS.has(new URL(baseUrl).hostname)
+  } catch {
+    return false
+  }
+}
+
 export interface RetryContext {
   maxTokensOverride?: number
   model: string
   thinkingConfig: ThinkingConfig
   fastMode?: boolean
+  /** Set once the request is re-sent with its images replaced. */
+  withoutImages?: boolean
 }
 
 /**
@@ -162,6 +190,12 @@ interface RetryOptions {
    * regardless of which request mode hit the overload.
    */
   initialConsecutive529Errors?: number
+  /**
+   * Whether a failure may be the provider refusing image input. If so, the
+   * request is re-sent once, immediately, with `withoutImages` set; the
+   * operation decides what that removes.
+   */
+  shouldRetryWithoutImages?: (error: unknown) => boolean
 }
 
 export class CannotRetryError extends Error {
@@ -566,6 +600,14 @@ export async function* withRetry<T>(
         continue
       }
 
+      if (
+        !retryContext.withoutImages &&
+        options.shouldRetryWithoutImages?.(error)
+      ) {
+        retryContext.withoutImages = true
+        continue
+      }
+
       // Non-foreground sources bail immediately on 529 — no retry amplification
       // during capacity cascades. User never sees these fail.
       if (is529Error(error) && !shouldRetry529(options.querySource)) {
@@ -623,6 +665,15 @@ export async function* withRetry<T>(
       if (
         (attempt > maxRetries && !persistent) ||
         !hasApiAttemptsLeft(options.apiAttemptBudget)
+      ) {
+        throw new CannotRetryError(error, retryContext)
+      }
+
+      // Backing off for minutes only hides that a local service is closed;
+      // a couple of quick tries are enough for a momentary blip.
+      if (
+        attempt > LOCAL_SERVICE_REFUSED_MAX_RETRIES &&
+        isLocalServiceRefused(error)
       ) {
         throw new CannotRetryError(error, retryContext)
       }

@@ -13,7 +13,7 @@ import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
+import { PROMPT_TOO_LONG_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 
 export type MockAgentScenario = { id: string; title: string }
@@ -53,6 +53,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   {
     id: 'mock-upstream-error-recovers',
     title: 'An upstream error ends the turn visibly and the next turn still works',
+  },
+  {
+    id: 'mock-prompt-too-long-compacts',
+    title: 'A history the provider rejects as too long is compacted and retried instead of ending the turn',
   },
   {
     id: 'mock-provider-refusal-recovers',
@@ -840,6 +844,29 @@ export function createMockOnlyRunners(
           throw new Error('The turn after refusal did not use the selected upstream model')
         }
         await assertRuntime()
+      } finally {
+        socket.close()
+      }
+    },
+
+    async 'mock-prompt-too-long-compacts'(ctx) {
+      const socket = await ctx.openSocket(await ctx.createSession())
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        const since = requests.length
+        socket.send({ type: 'user_message', content: `${PROMPT_TOO_LONG_TRIGGER}: the provider rejects this history as too long.` })
+        await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'the turn to finish after compaction', start)
+        const frames = socket.messages.slice(start)
+        const shown = frames.find((m) => m.type === 'error')
+        if (shown) throw new Error(`the rejection reached the user instead of being recovered: ${JSON.stringify(shown).slice(0, 300)}`)
+        if (!frames.some((m) => m.type === 'system_notification' && m.subtype === 'compact_boundary')) {
+          throw new Error('the rejected history was never compacted')
+        }
+        if (!streamedText(frames).trim()) throw new Error('no reply after the compacted retry')
+        // Upstream saw the rejected request, the summary request, and the retry.
+        const agentRequests = requests.slice(since).filter((request) => (request.body.tools ?? []).length > 0)
+        if (agentRequests.length < 2) throw new Error(`expected the rejected request and its retry upstream, saw ${agentRequests.length}`)
       } finally {
         socket.close()
       }

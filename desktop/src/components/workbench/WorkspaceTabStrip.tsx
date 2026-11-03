@@ -220,7 +220,11 @@ export function WorkspaceTabStrip({
           role="tablist"
           aria-label={t('workspace.tabStrip')}
           aria-orientation="horizontal"
-          className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-0.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          // Sized to its tabs, so the empty strip beside it stays drag space.
+          // In the titlebar this box is the no-drag rectangle and the tabs
+          // inside report none: scrolled out, they would carve the session
+          // strip to the left (globals.css, `.tab-strip-viewport`).
+          className="tab-strip-viewport flex min-w-0 items-center gap-0.5 overflow-x-auto px-0.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
           onPointerLeave={endDrag}

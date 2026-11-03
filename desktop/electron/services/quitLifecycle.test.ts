@@ -35,6 +35,8 @@ function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAcc
   const context = {
     app, isQuitting: false, quitCleanupStarted: false, quitCleanupFinished: false,
     dataMigration,
+    preventSleepService: { dispose: cleanup('preventSleep') },
+    idlePowerService: { dispose: cleanup('idlePower') },
     mainWindow: {}, saveWindowState: cleanup('window'),
     trayController: { dispose: cleanup('tray') },
     terminalService: { killAll: cleanup('terminal') },
@@ -86,7 +88,8 @@ describe('Electron quit lifecycle', () => {
     expect(fixture.requestQuit().preventDefault).toHaveBeenCalledOnce()
     expect(fixture.exit).not.toHaveBeenCalled()
     await settle()
-    expect(fixture.calls).toEqual(['window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
+    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
+    expect(fixture.context.console.error).not.toHaveBeenCalled()
 
     fixture.finishServer()
     await settle()
@@ -94,13 +97,13 @@ describe('Electron quit lifecycle', () => {
     expect(fixture.exit).toHaveBeenCalledOnce()
   })
 
-  it.each(['window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess'])(
+  it.each(['idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess'])(
     'still stops the server and quits when %s cleanup throws', async step => {
       const fixture = quitFixture(step)
       expect(() => fixture.requestQuit()).not.toThrow()
       fixture.requestQuit()
       await settle()
-      expect(fixture.calls).toEqual(['window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
+      expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
       expect(fixture.exit).not.toHaveBeenCalled()
 
       fixture.finishServer()

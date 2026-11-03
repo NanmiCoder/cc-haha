@@ -380,6 +380,8 @@ export function buildRootCoverageCommand(outputDir: string, serverFiles: string[
     '--no-env-file',
     '--feature=TRANSCRIPT_CLASSIFIER',
     'test',
+    // Preserve one LCOV universe without sharing globals/module caches across files.
+    '--isolate',
     '--preload',
     resolve(rootDir, 'preload.ts'),
     '--timeout=20000',
@@ -389,6 +391,20 @@ export function buildRootCoverageCommand(outputDir: string, serverFiles: string[
     '--coverage-dir',
     join(outputDir, 'root-server'),
     ...serverFiles.map(rootBunTestFilter),
+  ]
+}
+
+export function buildAdaptersCoverageCommand(outputDir: string) {
+  return [
+    'bun',
+    '--no-env-file',
+    'test',
+    '--isolate',
+    '--coverage',
+    '--coverage-reporter=lcov',
+    '--coverage-reporter=text',
+    '--coverage-dir',
+    join(outputDir, 'adapters'),
   ]
 }
 
@@ -961,7 +977,7 @@ export async function runCoverageGate(options: {
   const adapters = await runSuite(
     'adapters',
     'IM adapters',
-    ['bun', '--no-env-file', 'test', '--coverage', '--coverage-reporter=lcov', '--coverage-reporter=text', '--coverage-dir', join(outputDir, 'adapters')],
+    buildAdaptersCoverageCommand(outputDir),
     join(rootDir, 'adapters'),
     join(outputDir, 'adapters'),
     () => parseLcov(readFileSync(join(outputDir, 'adapters', 'lcov.info'), 'utf8')),

@@ -43,6 +43,14 @@ import {
   CLAUDE_OFFICIAL_DEFAULT_MODELS,
 } from './claudeOfficialRuntime.js'
 import { SettingsService } from './settingsService.js'
+import {
+  fetchMagpieModels,
+  isMagpieProvider,
+  magpieModelLimits,
+  probeMagpie,
+  type MagpieModel,
+  type MagpieStatus,
+} from './magpieGateway.js'
 import { hahaGrokOAuthService } from './hahaGrokOAuthService.js'
 import {
   CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
@@ -164,6 +172,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(input.model1mSupport !== undefined && { model1mSupport: input.model1mSupport }),
     ...(input.autoCompactWindow !== undefined && { autoCompactWindow: input.autoCompactWindow }),
     ...(input.modelContextWindows !== undefined && { modelContextWindows: input.modelContextWindows }),
+    ...(input.modelMaxOutputTokens !== undefined && { modelMaxOutputTokens: input.modelMaxOutputTokens }),
     toolSearchEnabled: input.toolSearchEnabled ?? false,
     ...(input.disableExperimentalBetas === true && { disableExperimentalBetas: true }),
     ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
@@ -415,6 +424,7 @@ export class ProviderService {
       ...(input.model1mSupport !== undefined && input.model1mSupport !== null && { model1mSupport: input.model1mSupport }),
       ...(typeof input.autoCompactWindow === 'number' && { autoCompactWindow: input.autoCompactWindow }),
       ...(input.modelContextWindows !== undefined && input.modelContextWindows !== null && { modelContextWindows: input.modelContextWindows }),
+      ...(input.modelMaxOutputTokens !== undefined && input.modelMaxOutputTokens !== null && { modelMaxOutputTokens: input.modelMaxOutputTokens }),
       ...(input.toolSearchEnabled !== undefined && { toolSearchEnabled: input.toolSearchEnabled }),
       ...(input.supportsNestedToolResultMedia !== undefined && { supportsNestedToolResultMedia: input.supportsNestedToolResultMedia }),
       ...(input.requestCompatibility !== undefined && input.requestCompatibility !== null && { requestCompatibility: input.requestCompatibility }),
@@ -434,6 +444,9 @@ export class ProviderService {
     }
     if (input.modelContextWindows === null) {
       delete updated.modelContextWindows
+    }
+    if (input.modelMaxOutputTokens === null) {
+      delete updated.modelMaxOutputTokens
     }
     if (input.requestCompatibility === null) {
       delete updated.requestCompatibility
@@ -537,6 +550,56 @@ export class ProviderService {
     } else {
       await this.syncToSettings(provider)
     }
+  }
+
+  // --- Magpie (local gateway) ---
+
+  /**
+   * Magpie as this computer runs it now, with its catalog. Saved Magpie
+   * providers follow it: a moved port and each model's window and reply limit
+   * are written back to them, so every session, settings sync and Agent route
+   * built from the saved provider sees the same limits.
+   */
+  async getMagpieState(options?: { force?: boolean }): Promise<{ status: MagpieStatus; models: MagpieModel[] | null }> {
+    const status = await probeMagpie()
+    const models = status.running ? await fetchMagpieModels(status.baseUrl, { force: options?.force }) : null
+    if (status.running) await this.syncMagpieProviders(status.baseUrl, models)
+    return { status, models }
+  }
+
+  /** Before a Magpie session starts, so it launches with the current catalog's limits. */
+  async refreshMagpieProvider(id: string | null | undefined): Promise<void> {
+    const index = await this.readIndex()
+    const provider = index.providers.find((candidate) => candidate.id === (id ?? index.activeId))
+    if (!isMagpieProvider(provider)) return
+    try {
+      await this.getMagpieState()
+    } catch {
+      // Not running: the session reports that itself; the last limits stay.
+    }
+  }
+
+  private async syncMagpieProviders(baseUrl: string, models: MagpieModel[] | null): Promise<void> {
+    const index = await this.readIndex()
+    const limits = models ? magpieModelLimits(models) : null
+    const changed: SavedProvider[] = []
+    index.providers = index.providers.map((provider) => {
+      if (!isMagpieProvider(provider)) return provider
+      const next: SavedProvider = { ...provider, baseUrl }
+      if (limits) {
+        delete next.modelContextWindows
+        delete next.modelMaxOutputTokens
+        if (Object.keys(limits.modelContextWindows).length) next.modelContextWindows = limits.modelContextWindows
+        if (Object.keys(limits.modelMaxOutputTokens).length) next.modelMaxOutputTokens = limits.modelMaxOutputTokens
+      }
+      if (JSON.stringify(next) === JSON.stringify(provider)) return provider
+      changed.push(next)
+      return next
+    })
+    if (!changed.length) return
+    await this.writeIndex(index)
+    const active = changed.find((provider) => provider.id === index.activeId)
+    if (active) await this.syncToSettings(active)
   }
 
   async activateOfficial(): Promise<void> {

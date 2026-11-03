@@ -30,8 +30,7 @@ export async function readTeamPlan(teamName: string): Promise<TeamPlanRecord | n
   return parsed.data
 }
 
-async function writePlan(plan: TeamPlanRecord): Promise<void> {
-  const path = planPath(plan.teamName)
+async function writePlan(plan: TeamPlanRecord, path = planPath(plan.teamName)): Promise<void> {
   await mkdir(getTeamDir(plan.teamName), { recursive: true })
   const temp = `${path}.${randomUUID()}.tmp`
   try {
@@ -153,6 +152,40 @@ export async function stageMember(teamName: string, member: TeamPlanMember): Pro
     return plan
   })
 }
+/**
+ * The user changed a running member's model after approval. A restart rebuilds
+ * the member from the approved snapshot, so the snapshot and the live record
+ * change together; nothing else the user approved does. The member may belong
+ * to an earlier plan of the team, archived when members were added later.
+ */
+export async function setRunningMemberRuntime(teamName: string, planId: string, memberId: string, runtime: TeamPlanRuntime, providerName: string): Promise<TeamPlanRecord> {
+  return locked(teamName, async () => {
+    const current = await readTeamPlan(teamName)
+    let plan = current?.planId === planId ? current : null
+    let path = planPath(teamName)
+    if (!plan) {
+      // Archive identities are generated UUIDs; never turn input into a path.
+      if (!/^[a-f0-9-]{36}$/i.test(planId)) throw new TeamPlanError('Team plan not found', 404)
+      path = join(getTeamDir(teamName), `plan-${planId}.json`)
+      try { plan = teamPlanRecordSchema.parse(JSON.parse(await readFile(path, 'utf8'))) } catch { throw new TeamPlanError('Team plan not found', 404) }
+    }
+    if (plan.state !== 'running' || !plan.approvedSnapshot) throw new TeamPlanError('Only a member of a running team can change its model')
+    if (!plan.approvedSnapshot.members.some(member => member.id === memberId)) throw new TeamPlanError('Member not found in this team', 404)
+    const apply = (member: TeamPlanMember): TeamPlanMember => member.id === memberId
+      ? { ...member, runtime: preserveRuntimeExtensions(member.runtime, runtime), providerName }
+      : member
+    const next: TeamPlanRecord = {
+      ...plan,
+      members: plan.members.map(apply),
+      approvedSnapshot: { ...plan.approvedSnapshot, members: plan.approvedSnapshot.members.map(apply) },
+      revision: plan.revision + 1,
+      updatedAt: Date.now(),
+    }
+    await writePlan(next, path)
+    return next
+  })
+}
+
 export async function findTeamPlanForSession(sessionId: string): Promise<TeamPlanRecord | null> {
   let names: string[]
   try { names = await readdir(getTeamsDir()) } catch (error) {

@@ -84,6 +84,7 @@ import {
   normalizeMessagesForAPI,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
+  stripSignatureBlocksAfterModelChange,
   stripToolReferenceBlocksFromUserMessage,
 } from "../../utils/messages.js";
 import {
@@ -274,6 +275,12 @@ import {
   getAssistantMessageFromError,
   getErrorMessageIfRefusal,
 } from "./errors.js";
+import {
+  isTextOnlyImageModel,
+  rememberTextOnlyImageModel,
+  replaceImagesForTextOnlyModel,
+} from "./imageInputRefusals.js";
+import { isImageInputRefusalMessage } from "./unsupportedImageInput.js";
 import {
   EMPTY_USAGE,
   type GlobalCacheStrategy,
@@ -1433,8 +1440,10 @@ async function* queryModel(
   });
 
   queryCheckpoint("query_message_normalization_start");
+  // Every caller replays history through here (main loop, compaction, away
+  // summary), so another model's signed thinking is dropped at this boundary.
   let messagesForAPI = normalizeMessagesForAPI(
-    messages,
+    stripSignatureBlocksAfterModelChange(messages, options.model),
     filteredTools,
     options.model,
   );
@@ -1492,6 +1501,12 @@ async function* queryModel(
   messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
     countDocuments: provider === 'bedrock' || provider === 'vertex',
   })
+
+  // A model that recently refused images and then accepted the same request
+  // without them gets placeholders up front instead of failing first.
+  if (isTextOnlyImageModel(options.model)) {
+    messagesForAPI = replaceImagesForTextOnlyModel(messagesForAPI);
+  }
 
   // Instrumentation: Track message count after normalization
   logEvent("tengu_api_after_normalize", {
@@ -1698,6 +1713,7 @@ async function* queryModel(
   let stream: Stream<BetaRawMessageStreamEvent> | undefined = undefined;
   let streamRequestId: string | null | undefined = undefined;
   let clientRequestId: string | undefined = undefined;
+  let imagesOmittedForRetry = false;
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
   let streamResponse: Response | undefined = undefined;
 
@@ -2073,6 +2089,12 @@ async function* queryModel(
         isFastModeRequest = context.fastMode ?? false;
         start = Date.now();
         attemptStartTimes.push(start);
+        if (context.withoutImages && !imagesOmittedForRetry) {
+          // Swap the shared request history, not just these params: a final
+          // failure is then classified against what was actually sent.
+          messagesForAPI = replaceImagesForTextOnlyModel(messagesForAPI);
+          imagesOmittedForRetry = true;
+        }
         // Client has been created by withRetry's getClient() call. This fires
         // once per attempt; on retries the client is usually cached (withRetry
         // only calls getClient() again after auth errors), so the delta from
@@ -2129,6 +2151,15 @@ async function* queryModel(
         signal,
         querySource: options.querySource,
         apiAttemptBudget: options.apiAttemptBudget,
+        // Only an explicit refusal of image input, on a request that carried
+        // images, earns the image-free re-send, and only its success is
+        // remembered: other 400/422s (a malformed history block, one bad
+        // image, a one-off failure) say nothing about the model's vision.
+        shouldRetryWithoutImages: (error) =>
+          error instanceof APIError &&
+          (error.status === 400 || error.status === 422) &&
+          isImageInputRefusalMessage(error.message) &&
+          replaceImagesForTextOnlyModel(messagesForAPI) !== messagesForAPI,
       },
     );
 
@@ -2142,6 +2173,12 @@ async function* queryModel(
       }
     } while (!e.done);
     stream = e.value as Stream<BetaRawMessageStreamEvent>;
+    if (imagesOmittedForRetry) {
+      rememberTextOnlyImageModel(options.model);
+      logForDebugging(
+        `${options.model} refused image input and accepted the request without images; omitting images for this model`,
+      );
+    }
 
     // reset state
     newMessages.length = 0;

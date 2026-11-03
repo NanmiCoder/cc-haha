@@ -1049,9 +1049,6 @@ async function getSessionRepositoryContext(url: URL): Promise<Response> {
   }
 
   const context = await getRepositoryContext(workDir)
-  registerFilesystemAccessRoot(workDir)
-  registerFilesystemAccessRoot(context.workDir)
-  registerFilesystemAccessRoot(context.repoRoot)
   return Response.json(context)
 }
 

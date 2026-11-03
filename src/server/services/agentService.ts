@@ -15,6 +15,8 @@ import { getCwd } from '../../utils/cwd.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { findCanonicalGitRoot, findGitRoot } from '../../utils/git.js'
 import { getAgentDefinitionsWithOverrides } from '../../tools/AgentTool/loadAgentsDir.js'
+import { quoteProblematicValues } from '../../utils/frontmatterParser.js'
+import { parseYaml } from '../../utils/yaml.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
 export type AgentScope = 'user' | 'project'
@@ -600,14 +602,14 @@ export class AgentService {
       return null
     }
 
-    const document = YAML.parseDocument(match[1] ?? '')
-    if (document.errors.length > 0 || !document.contents) {
+    const document = parseAgentFrontmatter(match[1] ?? '')
+    const value = readFrontmatterValue(document)
+    if (value === undefined) {
       if (failIfInvalid) {
         throw ApiError.badRequest('Agent file contains invalid YAML frontmatter')
       }
       return null
     }
-    const value = document.toJS()
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       if (failIfInvalid) {
         throw ApiError.badRequest('Agent frontmatter must be a YAML mapping')
@@ -827,6 +829,35 @@ async function withAgentMutationLock<T>(
     if (agentMutationTails.get(key) === current) {
       agentMutationTails.delete(key)
     }
+  }
+}
+
+// Edit the same text the CLI loader activates: it quotes values such as
+// unquoted `<example>Context: ...` descriptions only when its own parser
+// rejects the original. Deciding with another parser would rewrite values the
+// loader reads differently, e.g. turn a `[Bash, Write]` list into a string.
+function parseAgentFrontmatter(
+  frontmatterText: string,
+): ReturnType<typeof YAML.parseDocument> {
+  try {
+    parseYaml(frontmatterText)
+  } catch {
+    return YAML.parseDocument(quoteProblematicValues(frontmatterText))
+  }
+  return YAML.parseDocument(frontmatterText)
+}
+
+// `yaml` reports some documents as invalid only while resolving aliases
+// (unresolved or exponentially expanding ones). Keep them read-only instead of
+// letting the exception fail the whole agent list.
+function readFrontmatterValue(
+  document: ReturnType<typeof YAML.parseDocument>,
+): unknown {
+  if (document.errors.length > 0 || !document.contents) return undefined
+  try {
+    return document.toJS()
+  } catch {
+    return undefined
   }
 }
 

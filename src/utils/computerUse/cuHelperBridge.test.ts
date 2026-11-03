@@ -7,6 +7,7 @@ import {
   resolveCuHelperAppBundle,
   resolveCuHelperBinary,
   resolveCuHelperDevelopmentBinary,
+  resolveCuHelperLaunchStatus,
   resolveLaunchableCuHelperBinary,
 } from './cuHelperBridge.js'
 import { __resetInstalledHelperCache } from './cuHelperInstall.js'
@@ -156,7 +157,9 @@ describe('isCuHelperAvailable', () => {
     __resetCuHelperCache()
     resolveCuHelperBinary(p => p === '/x/cu-helper')
     expect(resolveLaunchableCuHelperBinary(false)).toBeNull()
+    expect(resolveCuHelperLaunchStatus(false)).toEqual({ binary: null, reason: 'helper_missing' })
     expect(resolveLaunchableCuHelperBinary(true)).toBe('/x/cu-helper')
+    expect(resolveCuHelperLaunchStatus(true)).toEqual({ binary: '/x/cu-helper', reason: null })
   })
 })
 
