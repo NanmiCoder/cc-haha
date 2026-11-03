@@ -5,8 +5,9 @@ import { parseMarkdown } from './markdown'
 /**
  * 真实的 Markdown 组件和长按浮起的 MessageMenu：一条消息挂多少块、展开到哪为止、
  * 流式追加时结尾窗口的 key 是否稳定。安卓上每块都是占 Java 堆的原生视图，挂太多会 OOM 闪退。
+ * 测试用的长文本经 stdin 交给子进程（脚本里读作 texts）：Linux 单个命令行参数上限 128KB。
  */
-function run(body: string) {
+function run(body: string, texts: Record<string, string> = {}) {
   const script = `
     import { mock } from 'bun:test'
     const React = require(${JSON.stringify(import.meta.resolve('react'))})
@@ -52,12 +53,16 @@ function run(body: string) {
       }
     }
     function fresh() { slots = []; cursor = 0 }
+    const texts = JSON.parse(await Bun.stdin.text())
     const out = {}
     ${body}
     console.log(JSON.stringify(out))
   `
   try {
-    const stdout = execFileSync(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const stdout = execFileSync(process.execPath, ['-e', script], {
+      input: JSON.stringify(texts),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
     return JSON.parse(String(stdout).trim().split('\n').at(-1) ?? '{}')
   } catch (error) {
     throw new Error(String((error as { stderr?: Buffer }).stderr || error))
@@ -75,10 +80,10 @@ const degenerate = '实跑已启动。\n\n' + '<br>\n\n'.repeat(32000) + '结论
 test('普通长回复整条渲染，没有折叠行', () => {
   const out = run(`
     fresh()
-    const view = markdown({ text: ${JSON.stringify(article)} })
+    const view = markdown({ text: texts.article })
     out.count = view.count
     out.gap = view.gap ?? null
-  `)
+  `, { article })
   expect(out.count).toBe(parseMarkdown(article).length)
   expect(out.gap).toBeNull()
 })
@@ -86,14 +91,13 @@ test('普通长回复整条渲染，没有折叠行', () => {
 test('超长回复只挂开头和结尾；展开三次后封顶，提示到电脑上看完整内容', () => {
   const out = run(`
     fresh()
-    const text = ${JSON.stringify(degenerate)}
     out.steps = []
     for (let tap = 0; tap < 5; tap++) {
-      const view = markdown({ text })
+      const view = markdown({ text: texts.degenerate })
       out.steps.push({ count: view.count, pressable: view.gap.pressable, label: view.gap.label })
       if (view.gap.pressable) view.gap.press()
     }
-  `)
+  `, { degenerate })
   expect(out.steps.map((step: { count: number }) => step.count)).toEqual([2000, 3500, 5000, 6500, 6500])
   expect(out.steps[0]).toEqual({ count: 2000, pressable: true, label: '… 中间还有 30002 段，点按展开' })
   expect(out.steps.at(-1)).toEqual({
@@ -107,13 +111,13 @@ test('流式追加一段时，结尾窗口里已有的块 key 不变、内容不
   const lines = (count: number) => Array.from({ length: count }, (_, index) => `第 ${index} 段`).join('\n\n')
   const out = run(`
     fresh()
-    const before = markdown({ text: ${JSON.stringify(lines(2600))} }).tail
+    const before = markdown({ text: texts.before }).tail
     fresh()
-    const after = markdown({ text: ${JSON.stringify(lines(2601))} }).tail
+    const after = markdown({ text: texts.after }).tail
     out.shared = Object.keys(before).filter(key => key in after)
     out.changed = out.shared.filter(key => before[key] !== after[key])
     out.added = Object.keys(after).filter(key => !(key in before)).map(key => after[key])
-  `)
+  `, { before: lines(2600), after: lines(2601) })
   expect(out.shared).toHaveLength(499)
   expect(out.changed).toEqual([])
   expect(out.added).toEqual(['第 2600 段'])
@@ -133,11 +137,11 @@ test('长按浮起的预览：普通长回复完整，超长回复受同样的�
       fresh()
       return markdown(find(page).props)
     }
-    const normal = preview(${JSON.stringify(article)})
+    const normal = preview(texts.article)
     out.normal = { count: normal.count, gap: normal.gap ?? null }
-    const huge = preview(${JSON.stringify(degenerate)})
+    const huge = preview(texts.degenerate)
     out.huge = { count: huge.count, pressable: huge.gap.pressable, label: huge.gap.label }
-  `)
+  `, { article, degenerate })
   expect(out.normal).toEqual({ count: parseMarkdown(article).length, gap: null })
   expect(out.huge).toEqual({ count: 2000, pressable: false, label: '… 中间还有 30002 段' })
 })
