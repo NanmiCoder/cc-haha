@@ -214,7 +214,22 @@ describe('provider presets API', () => {
     expect(PROVIDER_PRESETS.some((preset) => preset.id === 'custom')).toBe(true)
   })
 
+  test('Magpie connects straight to its local gateway under cc-haha\'s own key', () => {
+    const magpie = PROVIDER_PRESETS.find((preset) => preset.id === 'magpie')
+    expect(magpie).toMatchObject({
+      baseUrl: 'http://127.0.0.1:3425',
+      apiFormat: 'anthropic',
+      needsApiKey: false,
+      authStrategy: 'auth_token_empty_api_key',
+      // Not the bare `magpie` key: with it, Magpie counts our claude-cli
+      // requests as Claude Code's and redirects claude-* ids to its tiers.
+      defaultEnv: { ANTHROPIC_AUTH_TOKEN: 'magpie-cc-haha' },
+    })
+    expect(magpie?.modelApiFormats).toBeUndefined()
+  })
+
   test('local Anthropic-compatible presets appear immediately before custom', () => {
+    expect(PROVIDER_PRESETS.at(-4)?.id).toBe('magpie')
     expect(PROVIDER_PRESETS.at(-3)?.id).toBe('lmstudio')
     expect(PROVIDER_PRESETS.at(-2)?.id).toBe('ollama')
     expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
@@ -626,7 +641,8 @@ describe('provider presets API', () => {
     test('stays ordered before the local endpoints so the catalog layout is stable', () => {
       const ids = PROVIDER_PRESETS.map((preset) => preset.id)
       expect(ids.indexOf('openrouter')).toBeGreaterThan(-1)
-      expect(ids.indexOf('openrouter')).toBeLessThan(ids.indexOf('lmstudio'))
+      expect(ids.indexOf('openrouter')).toBeLessThan(ids.indexOf('magpie'))
+      expect(PROVIDER_PRESETS.at(-4)?.id).toBe('magpie')
       expect(PROVIDER_PRESETS.at(-3)?.id).toBe('lmstudio')
       expect(PROVIDER_PRESETS.at(-2)?.id).toBe('ollama')
       expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')

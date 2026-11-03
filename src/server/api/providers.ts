@@ -7,6 +7,8 @@
  *                                           (?providerId=<id>: only that provider's own auth)
  * GET    /api/providers/settings          — read cc-haha managed settings.json
  * GET    /api/providers/cc-switch/scan    — scan a local cc-switch install
+ * GET    /api/providers/magpie            — the local Magpie gateway's state and catalog
+ * POST   /api/providers/magpie/open       — open the Magpie app (macOS)
  * POST   /api/providers                  — add a provider
  * POST   /api/providers/cc-switch/import  — import scanned cc-switch providers
  * POST   /api/providers/models            — list upstream models for a config
@@ -23,6 +25,7 @@
 
 import { z } from 'zod'
 import { ProviderService } from '../services/providerService.js'
+import { openMagpieApp } from '../services/magpieGateway.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
   CreateProviderSchema,
@@ -95,6 +98,19 @@ export async function handleProvidersApi(
         return await handleCcSwitchImport(req)
       }
       throw ApiError.notFound(`Unknown cc-switch route: ${action ?? ''}`)
+    }
+
+    // /api/providers/magpie — the local gateway, ahead of the generic :id handlers
+    if (id === 'magpie') {
+      if (!action) {
+        if (req.method !== 'GET') throw methodNotAllowed(req.method)
+        return Response.json(await providerService.getMagpieState({ force: url.searchParams.get('refresh') === '1' }))
+      }
+      if (action === 'open') {
+        if (req.method !== 'POST') throw methodNotAllowed(req.method)
+        return Response.json(await openMagpieApp())
+      }
+      throw ApiError.notFound(`Unknown Magpie route: ${action}`)
     }
 
     // GET /api/providers/presets
