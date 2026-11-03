@@ -624,6 +624,7 @@ export class ConversationService {
     options?: SessionStartOptions,
     repository?: PreparedSessionWorkspace['repository'],
     agentProfile: 'standard' | 'lean' = 'standard',
+    additionalDirectories: readonly string[] = [],
   ): string[] {
     const side = getSideChat(sessionId)
     const dangerousMode = process.env.CLAUDE_DANGEROUS_MODE === '1'
@@ -672,6 +673,7 @@ export class ConversationService {
           : []),
       ] : []),
       ...worktreeArgs,
+      ...additionalDirectories.flatMap(directory => ['--add-dir', directory]),
       '--replay-user-messages',
       ...this.getRuntimeArgs(options),
       ...this.getPermissionArgs(options?.permissionMode, dangerousMode),
@@ -703,6 +705,9 @@ export class ConversationService {
       throw new ConversationStartupError('Agent teams are unavailable in lean sessions', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
+    const additionalDirectories = (options?.teamWorker
+      ? (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.additionalDirectories
+      : launchInfo?.additionalDirectories) ?? []
     if (launchInfo?.agentProfile === 'lean' && (options?.permissionMode ?? launchInfo.permissionMode) === 'plan') {
       throw new ConversationStartupError('Plan mode is unavailable in lean sessions. Choose another permission mode before continuing.', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
@@ -792,6 +797,7 @@ export class ConversationService {
       options,
       launchRepository,
       launchInfo?.agentProfile ?? 'standard',
+      additionalDirectories,
     )
 
     console.log(
@@ -1018,6 +1024,7 @@ export class ConversationService {
       const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
       await sessionService.appendSessionMetadata(sessionId, {
         workDir: metadataWorkDir,
+        additionalDirectories,
         customTitle: launchInfo?.customTitle ?? null,
         repository: launchRepository,
         permissionMode: options?.permissionMode || launchInfo?.permissionMode,

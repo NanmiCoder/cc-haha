@@ -1,0 +1,25 @@
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdActionKind {
+    Click = 0,
+    DoubleClick = 1,
+    RightClick = 2,
+    TripleClick = 3,
+    SetValue = 4,
+    SetFocus = 5,
+    Expand = 6,
+    Collapse = 7,
+    Select = 8,
+    Toggle = 9,
+    Check = 10,
+    Uncheck = 11,
+    Scroll = 12,
+    ScrollTo = 13,
+    PressKey = 14,
+    KeyDown = 15,
+    KeyUp = 16,
+    TypeText = 17,
+    Clear = 18,
+    Hover = 19,
+    Drag = 20,
+}

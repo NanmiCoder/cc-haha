@@ -82,6 +82,12 @@ jobs:
         run: bun run check:desktop
       - name: Mobile typecheck, lint, and tests
         run: bun run check:mobile
+      - name: Setup native Computer Use Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare native Computer Use dependencies
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml
+      - name: Native Computer Use deterministic checks
+        run: bun run check:agent-desktop
       - name: Electron host checks
         run: bun run check:electron
       - name: Persistence upgrade contracts

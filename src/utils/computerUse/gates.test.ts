@@ -32,8 +32,11 @@ describe('shouldExposeComputerUseMcp', () => {
     expect(shouldExposeComputerUseMcp('darwin', false)).toBe(false)
   })
 
-  test('keeps Windows compatibility independent and rejects other platforms', () => {
-    expect(shouldExposeComputerUseMcp('win32', false)).toBe(true)
-    expect(shouldExposeComputerUseMcp('linux', true)).toBe(false)
+  test('requires the packaged native runtime on Windows and Linux', () => {
+    for (const platform of ['win32', 'linux']) {
+      expect(shouldExposeComputerUseMcp(platform, false, true)).toBe(true)
+      expect(shouldExposeComputerUseMcp(platform, true, false)).toBe(false)
+    }
+    expect(shouldExposeComputerUseMcp('freebsd', true, true)).toBe(false)
   })
 })

@@ -1,0 +1,44 @@
+{
+  "skeleton_anchors": [
+    {
+      "ref_id": "@e1",
+      "pid": 42,
+      "role": "group",
+      "name": "Sidebar",
+      "root_ref": null
+    },
+    {
+      "ref_id": "@e2",
+      "pid": 42,
+      "role": "group",
+      "name": "Toolbar",
+      "root_ref": null
+    }
+  ],
+  "drilled_from_e1": [
+    {
+      "ref_id": "@e3",
+      "pid": 42,
+      "role": "treeitem",
+      "name": "Recents",
+      "root_ref": "@e1"
+    },
+    {
+      "ref_id": "@e4",
+      "pid": 42,
+      "role": "treeitem",
+      "name": "Documents",
+      "root_ref": "@e1"
+    }
+  ],
+  "drilled_from_e2": [
+    {
+      "ref_id": "@e5",
+      "pid": 42,
+      "role": "button",
+      "name": "Back",
+      "root_ref": "@e2"
+    }
+  ],
+  "expected_total": 5
+}

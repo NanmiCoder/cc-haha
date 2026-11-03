@@ -1,0 +1,109 @@
+name: Bug Report
+description: Report a reproducible defect in agent-desktop
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report.
+        Before submitting, please **search existing issues** to avoid duplicates.
+        Fill in every required field — incomplete reports will be closed without investigation.
+
+  - type: input
+    id: version
+    attributes:
+      label: agent-desktop version
+      description: Paste the output of `agent-desktop --version`
+      placeholder: "agent-desktop 0.10.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      description: "e.g. macOS 15.2 Sequoia, Windows 11 24H2, Ubuntu 24.04"
+      placeholder: macOS 15.2 Sequoia
+    validations:
+      required: true
+
+  - type: input
+    id: install_method
+    attributes:
+      label: Installation method
+      description: How did you install agent-desktop?
+      placeholder: "npm / GitHub release / built from source"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command_and_output
+    attributes:
+      label: Command run and full JSON output
+      description: Paste the exact command you ran and the complete JSON response.
+      render: shell
+      placeholder: |
+        $ agent-desktop snapshot --app Finder
+        {"version":"2.5","ok":false,"command":"snapshot","error":{"code":"APP_NOT_FOUND",...}}
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps_to_reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably trigger the bug.
+      placeholder: |
+        1. Open Finder
+        2. Run `agent-desktop snapshot --app Finder`
+        3. Observe error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: macos_permission
+    attributes:
+      label: macOS Accessibility permission (macOS only)
+      description: Skip if you are not on macOS.
+      options:
+        - label: I have granted Accessibility permission in **System Settings > Privacy & Security > Accessibility**
+          required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / additional context
+      description: |
+        Paste verbose logs if available. Re-run with `RUST_LOG=debug agent-desktop <your-command>` to capture them.
+        Include any other context that might help (target app, screenshot, etc.).
+    validations:
+      required: false

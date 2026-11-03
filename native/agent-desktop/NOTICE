@@ -1,0 +1,17 @@
+agent-desktop 1.0.2
+Source: https://github.com/vercel-labs/agent-desktop
+Upstream commit: 9eb9b296192fcb70bda25e918cd6dd66abfa3d0d
+
+This distribution includes the upstream Rust workspace and embedded agent skills,
+licensed under Apache License 2.0. LICENSE contains the upstream license text.
+UPSTREAM.json records the source revision and the original SHA-256 of every
+copied file. PATCHES.md records the local changes.
+
+The Windows and X11 cursor renderers use product arrow geometry adapted from
+native/cu-helper/Sources/cu-helper/VirtualCursorStyle.swift in claude-code-haha.
+The desktop integration supplies the product cursor colors through the existing
+style options. These presentation changes do not provide an isolated input
+desktop. The upstream interaction policy and Wayland limitations remain in force.
+
+THIRD-PARTY-NOTICES contains the license texts distributed with the locked Rust
+dependencies for all workspace platforms. Cargo.lock records their versions.

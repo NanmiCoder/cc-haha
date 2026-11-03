@@ -41,15 +41,16 @@ export function getChicagoEnabled(): boolean {
 }
 
 /**
- * Computer Use is native-only on macOS and compatibility-only on Windows.
+ * Computer Use uses the macOS helper or the Windows/Linux native CLI.
  * The macOS MCP must not be exposed until the exact helper that status/API
  * calls use is launchable; otherwise the model sees tools that can only fail.
  */
 export function shouldExposeComputerUseMcp(
   platform: NodeJS.Platform,
   macosNativeLaunchable: boolean,
+  agentDesktopLaunchable = false,
 ): boolean {
-  return platform === 'win32'
+  return ((platform === 'win32' || platform === 'linux') && agentDesktopLaunchable)
     || (platform === 'darwin' && macosNativeLaunchable)
 }
 

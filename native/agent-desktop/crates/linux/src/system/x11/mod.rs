@@ -1,0 +1,35 @@
+mod bounded;
+pub(crate) mod capture;
+mod client;
+pub(crate) mod control;
+pub(crate) mod control_display;
+mod evidence;
+#[cfg(test)]
+pub(crate) mod live_display;
+pub(crate) mod map;
+pub(crate) mod menu_export;
+mod monitor;
+pub(crate) mod native_population;
+mod reader;
+mod resource_owner;
+mod snapshot;
+mod source;
+pub(crate) mod stacking;
+mod state;
+pub(crate) mod twin_tie;
+pub(crate) mod window;
+
+pub(crate) use bounded::{PendingRead, start};
+pub(crate) use client::X11Client;
+pub(crate) use evidence::X11Evidence;
+pub(crate) use map::evidence;
+pub(crate) use monitor::X11Monitor;
+pub(crate) use monitor::monitor_fault::{MonitorFault, fault_of_connect};
+pub(crate) use monitor::monitor_reader::MonitorReader;
+pub(crate) use monitor::monitor_source::MonitorSource;
+pub(crate) use reader::DisplayReader;
+pub(crate) use source::X11Source;
+pub(crate) use state::X11State;
+pub(crate) use window::frame_extents::FrameExtents;
+pub(crate) use window::frame_facts::FrameFacts;
+pub(crate) use window::popup_window::PopupWindow;

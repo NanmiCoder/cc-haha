@@ -45,7 +45,7 @@ const findGitRootImpl = memoizeWithLRU(
             stat_count: statCount,
             found: true,
           })
-          return current.normalize('NFC')
+          return current
         }
       } catch {
         // .git doesn't exist at this level, continue up
@@ -68,7 +68,7 @@ const findGitRootImpl = memoizeWithLRU(
           stat_count: statCount,
           found: true,
         })
-        return root.normalize('NFC')
+        return root
       }
     } catch {
       // .git doesn't exist at root
@@ -104,7 +104,7 @@ function createFindGitRoot(): {
 } {
   function wrapper(startPath: string): string | null {
     const result = findGitRootImpl(startPath)
-    return result === GIT_ROOT_NOT_FOUND ? null : result
+    return result === GIT_ROOT_NOT_FOUND ? null : result.normalize('NFC')
   }
   wrapper.cache = findGitRootImpl.cache
   return wrapper
@@ -173,9 +173,9 @@ const resolveCanonicalRoot = memoizeWithLRU(
       // Bare-repo worktrees: the common dir isn't inside a working directory.
       // Use the common dir itself as the stable identity (anthropics/claude-code#27994).
       if (basename(commonDir) !== '.git') {
-        return commonDir.normalize('NFC')
+        return commonDir
       }
-      return dirname(commonDir).normalize('NFC')
+      return dirname(commonDir)
     } catch {
       return gitRoot
     }
@@ -196,6 +196,16 @@ const resolveCanonicalRoot = memoizeWithLRU(
  */
 export const findCanonicalGitRoot = createFindCanonicalGitRoot()
 
+/**
+ * Native directory identity for access scopes. Display/grouping callers retain
+ * their NFC API above; folding two physical POSIX paths must never share grants.
+ * Reuses the same root walk and authenticated worktree/backlink validation.
+ */
+export function findCanonicalGitRootPreservingPathIdentity(startPath: string): string | null {
+  const root = findGitRootImpl(startPath)
+  return root === GIT_ROOT_NOT_FOUND ? null : resolveCanonicalRoot(root)
+}
+
 function createFindCanonicalGitRoot(): {
   (startPath: string): string | null
   cache: typeof resolveCanonicalRoot.cache
@@ -205,7 +215,7 @@ function createFindCanonicalGitRoot(): {
     if (!root) {
       return null
     }
-    return resolveCanonicalRoot(root)
+    return resolveCanonicalRoot(root).normalize('NFC')
   }
   wrapper.cache = resolveCanonicalRoot.cache
   return wrapper

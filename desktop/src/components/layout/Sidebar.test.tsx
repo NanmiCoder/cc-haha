@@ -17,6 +17,8 @@ import type {
 } from '../../api/desktopUiPreferences'
 
 const desktopUiPreferencesApiMock = vi.hoisted(() => ({
+  getProjectDirectories: vi.fn(),
+  updateProjectDirectories: vi.fn(),
   updateSidebarPreferences: vi.fn(),
   updateProjectDisplayName: vi.fn(),
 }))
@@ -437,6 +439,10 @@ describe('Sidebar', () => {
     setSessionsArchived.mockResolvedValue({ successes: [], failures: [] })
     addToast.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
+    desktopUiPreferencesApiMock.getProjectDirectories.mockReset()
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockReset()
+    desktopUiPreferencesApiMock.getProjectDirectories.mockImplementation(async (workDir: string) => ({ projectKey: workDir, mainDirectory: workDir, additionalDirectories: [] }))
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockImplementation(async (workDir: string, additionalDirectories: string[]) => ({ ok: true, projectKey: workDir, mainDirectory: workDir, additionalDirectories }))
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockReset()
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockImplementation((projectKey: string, displayName: string | null) => Promise.resolve({
       ok: true,

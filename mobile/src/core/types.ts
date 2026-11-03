@@ -19,8 +19,8 @@ export type Host = Readonly<{
   auth: 'lan' | 'remote'
   /**
    * The H5 page's own computer (never stored). The browser already loaded the
-   * page from this origin, so the native rule that public hosts need HTTPS
-   * does not apply: a LAN H5 over Tailscale or a bare host name keeps working.
+   * page from this origin, so its cookie or loopback authentication can be used
+   * without going through the native access-token or device-pairing form.
    */
   page?: true
 }>

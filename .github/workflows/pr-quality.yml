@@ -53,37 +53,39 @@ jobs:
 
       - name: Collect changed files
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
+          : > changed-files.nul
           : > author.txt
           : > codeowners.txt
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed-files.txt
+            # The PR files API stops at 3000 paths. Checkout includes both commits.
+            git cat-file -e "${PR_BASE_SHA}^{commit}"
+            git cat-file -e "${PR_HEAD_SHA}^{commit}"
+            git diff --name-only -z "${PR_BASE_SHA}...${PR_HEAD_SHA}" > changed-files.nul
             jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" > labels.txt
             # A CODEOWNER's own PR needs no maintainer-approval label. Owners come
             # from the base branch, so a PR cannot add its author to the list.
             jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt
-            git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt 2>/dev/null || : > codeowners.txt
+            git show "${PR_BASE_SHA}:.github/CODEOWNERS" > codeowners.txt 2>/dev/null || : > codeowners.txt
           else
             # A push to main: scope the run to what the push brought in. A new branch
             # or a force push has no usable "before", so fall back to the last commit.
             if git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
-              git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER" > changed-files.txt
+              git diff --name-only -z "$PUSH_BEFORE" "$PUSH_AFTER" > changed-files.nul
             else
-              git diff --name-only "${PUSH_AFTER}~1" "$PUSH_AFTER" > changed-files.txt
+              git diff --name-only -z "${PUSH_AFTER}~1" "$PUSH_AFTER" > changed-files.nul
             fi
             : > labels.txt
           fi
 
       - name: Build deterministic scope plan
         id: policy
-        run: bun run scripts/pr/change-policy.ts --files changed-files.txt --labels-file labels.txt --author-file author.txt --codeowners-file codeowners.txt --plan-only
+        run: bun run scripts/pr/change-policy.ts --files0 changed-files.nul --labels-file labels.txt --author-file author.txt --codeowners-file codeowners.txt --plan-only
 
   policy-enforcement:
     name: policy-enforcement
@@ -355,6 +357,10 @@ jobs:
       - name: Prepare bundled Cloudflare connector build dependency
         working-directory: desktop
         run: bun run prepare:cloudflared
+      - name: Setup native Computer Use Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare native Computer Use dependencies
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml
       - name: Run desktop native checks
         run: bun run check:native
 
