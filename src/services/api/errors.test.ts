@@ -48,17 +48,7 @@ describe('image unsupported API errors', () => {
     })
   })
 
-  test('falls back to image_unsupported when a 400 with unrecognized wording hit a request carrying images', () => {
-    const message = 'unsupported content block type: only text is allowed for this model'
-    const error = new APIError(
-      400,
-      {
-        type: 'error',
-        error: { type: 'invalid_request_error', message },
-      },
-      message,
-      undefined,
-    )
+  test('surfaces a 400/422 that only happened to carry images in the provider\'s own words', () => {
     const messagesForAPI = [
       {
         type: 'user' as const,
@@ -74,76 +64,30 @@ describe('image unsupported API errors', () => {
         },
       },
     ]
+    const notAboutImageInput = [
+      // DeepSeek refusing a Gemini signature block left in history (#52072b78).
+      [422, 'Failed to deserialize the JSON body into the target type: messages[2].content: unknown variant `redacted_thinking`, expected one of `text`, `image`, `document`, `thinking`, `tool_use`, `tool_result` at line 1 column 9210'],
+      [400, 'unsupported content block type: only text is allowed for this model'],
+      [400, 'Could not process image'],
+      [400, 'unsupported image format: image/heic'],
+      [400, 'Invalid request: Your request exceeded model token limit: 262144 (requested: 270000)'],
+    ] as const
 
-    // The wording alone must not match the text classifier, otherwise this
-    // test stops exercising the request-context fallback.
-    expect(isUnsupportedImageInputErrorMessage(message)).toBe(false)
+    for (const [status, message] of notAboutImageInput) {
+      const error = new APIError(
+        status,
+        { type: 'error', error: { type: 'invalid_request_error', message } },
+        message,
+        undefined,
+      )
+      const msg = getAssistantMessageFromError(error, 'deepseek-flash', {
+        messagesForAPI: messagesForAPI as never,
+      })
 
-    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
-      messagesForAPI: messagesForAPI as never,
-    })
-
-    expect(msg.isApiErrorMessage).toBe(true)
-    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED)
-    expect(msg.sourceModel).toBe('deepseek-v4-pro')
-  })
-
-  test('does not fall back to image_unsupported when the failed request carried no images', () => {
-    const message = 'unsupported content block type: only text is allowed for this model'
-    const error = new APIError(
-      400,
-      {
-        type: 'error',
-        error: { type: 'invalid_request_error', message },
-      },
-      message,
-      undefined,
-    )
-    const messagesForAPI = [
-      {
-        type: 'user' as const,
-        message: { role: 'user' as const, content: 'plain text only' },
-      },
-    ]
-
-    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
-      messagesForAPI: messagesForAPI as never,
-    })
-
-    expect(msg.isApiErrorMessage).toBe(true)
-    expect(msg.businessErrorCode).toBeUndefined()
-  })
-
-  test('does not fall back for non-400/422 API errors even when images were sent', () => {
-    const error = new APIError(
-      500,
-      {
-        type: 'error',
-        error: { type: 'api_error', message: 'internal error' },
-      },
-      'internal error',
-      undefined,
-    )
-    const messagesForAPI = [
-      {
-        type: 'user' as const,
-        message: {
-          role: 'user' as const,
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/png', data: 'AAA' },
-            },
-          ],
-        },
-      },
-    ]
-
-    const msg = getAssistantMessageFromError(error, 'deepseek-v4-pro', {
-      messagesForAPI: messagesForAPI as never,
-    })
-
-    expect(msg.businessErrorCode).toBeUndefined()
+      expect(msg.isApiErrorMessage).toBe(true)
+      expect(msg.businessErrorCode).toBeUndefined()
+      expect(JSON.stringify(msg.message.content)).toContain(message.slice(0, 40))
+    }
   })
 })
 

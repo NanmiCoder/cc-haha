@@ -156,6 +156,8 @@ export interface RetryContext {
   model: string
   thinkingConfig: ThinkingConfig
   fastMode?: boolean
+  /** Set once the request is re-sent with its images replaced. */
+  withoutImages?: boolean
 }
 
 /**
@@ -188,6 +190,12 @@ interface RetryOptions {
    * regardless of which request mode hit the overload.
    */
   initialConsecutive529Errors?: number
+  /**
+   * Whether a failure may be the provider refusing image input. If so, the
+   * request is re-sent once, immediately, with `withoutImages` set; the
+   * operation decides what that removes.
+   */
+  shouldRetryWithoutImages?: (error: unknown) => boolean
 }
 
 export class CannotRetryError extends Error {
@@ -589,6 +597,14 @@ export async function* withRetry<T>(
       if (wasFastModeActive && isFastModeNotEnabledError(error)) {
         handleFastModeRejectedByAPI()
         retryContext.fastMode = false
+        continue
+      }
+
+      if (
+        !retryContext.withoutImages &&
+        options.shouldRetryWithoutImages?.(error)
+      ) {
+        retryContext.withoutImages = true
         continue
       }
 
