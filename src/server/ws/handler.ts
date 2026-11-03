@@ -601,7 +601,7 @@ export type LiveSessionActivity = {
 
 /** Power safety uses work ownership, never the visual Stop/failed projection. */
 export function hasSessionPowerActivity(): boolean {
-  if (conversationService.hasPendingTeamStops()) return true
+  if (conversationService.hasPendingTeamStops() || conversationService.hasPromptSuggestionPowerActivity()) return true
   const ids = new Set([
     ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
     ...activeCliRuns, ...legacyQueuedSessionChats, ...activeBackgroundTaskIds.keys(),

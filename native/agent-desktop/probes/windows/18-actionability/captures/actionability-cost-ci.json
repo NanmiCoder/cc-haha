@@ -1,0 +1,42 @@
+{
+    "element_from_point_chromium":  {
+                                        "skipped":  "no chromium hwnd"
+                                    },
+    "element_from_point_desktop":  {
+                                       "max_ms":  3.69,
+                                       "median_ms":  2.4023,
+                                       "min_ms":  2.2245,
+                                       "n":  7,
+                                       "warmup_discarded":  true
+                                   },
+    "element_from_point_own":  {
+                                   "max_ms":  2.269,
+                                   "median_ms":  1.8906,
+                                   "min_ms":  1.5276,
+                                   "n":  7,
+                                   "warmup_discarded":  true
+                               },
+    "element_from_point_wpf":  {
+                                   "max_ms":  1.8856000000000002,
+                                   "median_ms":  1.7130999999999998,
+                                   "min_ms":  1.4996,
+                                   "n":  7,
+                                   "warmup_discarded":  true
+                               },
+    "five_point_worst_case":  {
+                                  "max_ms":  9.0907,
+                                  "median_ms":  8.5463,
+                                  "min_ms":  7.819299999999999,
+                                  "n":  7,
+                                  "warmup_discarded":  true
+                              },
+    "methodology":  "min-of-seven discard warm-up (A15-13)",
+    "stack":  "uia3-com-product-CUIAutomation8",
+    "target_pre_read":  {
+                            "max_ms":  0.1459,
+                            "median_ms":  0.1144,
+                            "min_ms":  0.11220000000000001,
+                            "n":  7,
+                            "warmup_discarded":  true
+                        }
+}

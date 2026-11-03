@@ -1132,6 +1132,7 @@ export async function runHeadless(
           message.subtype === 'task_notification' ||
           message.subtype === 'task_started' ||
           message.subtype === 'task_progress' ||
+          message.subtype === 'prompt_suggestion_activity' ||
           message.subtype === 'post_turn_summary')
       ) &&
       message.type !== 'stream_event' &&
@@ -1205,6 +1206,17 @@ export async function runHeadless(
   gracefulShutdownSync(
     lastMessage?.type === 'result' && lastMessage?.is_error ? 1 : 0,
   )
+}
+
+export function createPromptSuggestionActivityEmitter(structuredIO: StructuredIO) {
+  return (generationId: string, active: boolean) => structuredIO.outbound.enqueue({
+    type: 'system',
+    subtype: 'prompt_suggestion_activity',
+    generation_id: generationId,
+    active,
+    uuid: randomUUID(),
+    session_id: getSessionId(),
+  })
 }
 
 export function bindAgentRunMessageSink(structuredIO: StructuredIO): () => void {
@@ -2268,6 +2280,7 @@ function runHeadlessStreaming(
           getAppState,
           isResultHeld: () => heldBackResult !== null,
           emit: message => output.enqueue(message),
+          onActivity: createPromptSuggestionActivityEmitter(structuredIO),
         })
 
       // Extract command processing into a named function for the do-while pattern.

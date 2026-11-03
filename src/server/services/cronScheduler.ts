@@ -1,3 +1,5 @@
+import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
+import { validateProjectAdditionalDirectories } from './projectDirectories.js'
 /**
  * CronScheduler — Execution engine for scheduled tasks
  *
@@ -859,11 +861,19 @@ export class CronScheduler {
       workDir = os.homedir()
     }
     workDir = this.resolveCanonicalWorkDir(workDir)
+    let additionalDirectories: string[] = []
+    let directoryError: string | undefined
+    try {
+      const project = await new DesktopUiPreferencesService().getProjectDirectories(workDir)
+      additionalDirectories = await validateProjectAdditionalDirectories(workDir, project.additionalDirectories)
+    } catch (error) {
+      directoryError = error instanceof Error ? error.message : String(error)
+    }
 
     // Only create a session when explicitly requested (manual "Run Now"),
     // not for automatic cron runs — avoids flooding the sidebar.
     let sessionId: string | undefined
-    if (options?.createSession) {
+    if (options?.createSession && !directoryError) {
       try {
         const result = await this.sessionService.createSession(
           workDir,
@@ -896,6 +906,24 @@ export class CronScheduler {
 
     // Persist the "running" state
     await appendRun(run, runLogTarget)
+    if (directoryError) {
+      const failedRun: TaskRun = {
+        ...run, status: 'failed', error: directoryError,
+        completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt),
+      }
+      await updateRun(failedRun, runLogTarget)
+      if (task.notification?.enabled && task.notification.channels.length > 0 && shouldNotifyScheduledRun(task, failedRun)) {
+        migrationMaintenance.track(sendTaskNotification(failedRun, task.notification)).catch((err) => {
+          console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
+        })
+      }
+      if (!task.recurring) {
+        await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
+          // Task may have been deleted.
+        })
+      }
+      return failedRun
+    }
 
     const inputPayload = JSON.stringify({
       type: 'user',
@@ -915,6 +943,7 @@ export class CronScheduler {
       '--output-format',
       'stream-json',
       ...(sessionId ? ['--session-id', sessionId] : []),
+      ...additionalDirectories.flatMap(directory => ['--add-dir', directory]),
       ...this.getRuntimeArgs(task),
     ])
 
@@ -1022,7 +1051,7 @@ export class CronScheduler {
         }
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, additionalDirectories)
       await updateRun(completedRun, runLogTarget)
 
       // Send IM notification if configured
@@ -1056,7 +1085,7 @@ export class CronScheduler {
           new Date(completedAt).getTime() - new Date(startedAt).getTime(),
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, additionalDirectories)
       await updateRun(failedRun, runLogTarget)
 
       return failedRun
@@ -1066,11 +1095,13 @@ export class CronScheduler {
   private async persistScheduledSessionPermission(
     sessionId: string | undefined,
     workDir: string,
+    additionalDirectories: string[],
   ): Promise<void> {
     if (!sessionId) return
     await this.sessionService.appendSessionMetadata(sessionId, {
       workDir,
       permissionMode: 'bypassPermissions',
+      additionalDirectories,
     }).catch(() => {
       // The task result is still valid even if session metadata refresh fails.
     })

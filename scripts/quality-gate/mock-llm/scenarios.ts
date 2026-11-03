@@ -6,8 +6,8 @@
  * the failure paths a real provider cannot be made to produce on demand.
  */
 
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
@@ -19,6 +19,7 @@ import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
   { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
   { id: 'mock-team-task-owner', title: 'Real task tools reject an unknown teammate and recover with a valid assignment' },
   { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
@@ -99,6 +100,55 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-project-additional-directories'(ctx) {
+      const directory = join(dirname(ctx.workRoot), 'auxiliary 数据 files')
+      mkdirSync(directory, { recursive: true })
+      const endpoint = `${ctx.baseUrl}/api/desktop-ui/preferences/project-directories`
+      const update = async (additionalDirectories: string[]) => {
+        const response = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workDir: ctx.workRoot, additionalDirectories }) })
+        if (!response.ok) throw new Error(`Project directory save failed: ${response.status} ${await response.text()}`)
+      }
+      const original = await ctx.createSession()
+      await update([directory])
+      const created = await ctx.createSession()
+      await update([])
+      const allowedPath = join(directory, 'allowed.txt')
+      const sockets = []
+      try {
+        const current = await ctx.openSocket(created)
+        sockets.push(current)
+        ctx.pinRuntime(current)
+        current.send({ type: 'set_permission_mode', mode: 'acceptEdits' })
+        for (const [tool, input] of [
+          ['Write', { file_path: allowedPath, content: 'AUXILIARY_DIRECTORY_REACHED_REAL_CLI' }],
+          ['Read', { file_path: allowedPath }],
+        ] as const) {
+          const start = current.messages.length
+          const since = requests.length
+          current.send({ type: 'user_message', content: `MOCK_TEAM_OWNER ${JSON.stringify({ tool, input })}` })
+          const settled = await current.waitFor(message => ['permission_request', 'message_complete', 'error'].includes(message.type), ctx.stepTimeoutMs, `auxiliary ${tool}`, start)
+          if (settled.type !== 'message_complete' || !toolResultsSentUpstream(requests, since).some(result => !result.is_error && (tool !== 'Read' || contentText(result.content).includes('AUXILIARY_DIRECTORY_REACHED_REAL_CLI')))) {
+            throw new Error(`Configured directory ${tool} did not execute inside acceptEdits scope: ${JSON.stringify(settled)}`)
+          }
+        }
+        if (readFileSync(allowedPath, 'utf8') !== 'AUXILIARY_DIRECTORY_REACHED_REAL_CLI') throw new Error('Auxiliary write did not reach the real disk')
+        const deniedPath = join(directory, 'old-task-must-not-write.txt')
+        const old = await ctx.openSocket(original)
+        sockets.push(old)
+        ctx.pinRuntime(old)
+        old.send({ type: 'set_permission_mode', mode: 'acceptEdits' })
+        old.send({ type: 'user_message', content: `MOCK_TEAM_OWNER ${JSON.stringify({ tool: 'Write', input: { file_path: deniedPath, content: 'UNEXPECTED' } })}` })
+        const permission = await old.waitFor(message => ['permission_request', 'message_complete', 'error'].includes(message.type), ctx.stepTimeoutMs, 'old session scope')
+        if (permission.type !== 'permission_request') throw new Error(`An older task acquired new project directory access: ${JSON.stringify(permission)}`)
+        old.send({ type: 'permission_response', requestId: permission.requestId, allowed: false })
+        await old.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'old task denied tool')
+        if (existsSync(deniedPath)) throw new Error('Old task wrote outside its saved scope')
+        writeFileSync(join(ctx.artifactDir, 'project-directories.json'), JSON.stringify({ original, created, directory, allowedPath, deniedPath, primaryDirectory: ctx.workRoot, permissionMode: 'acceptEdits', newTaskReadWrite: true, oldTaskRequestedPermission: true }, null, 2))
+      } finally {
+        for (const socket of sockets) socket.close()
+        await update([])
+      }
+    },
     async 'mock-cold-permission-switch'(ctx) {
       const sessionId = await ctx.createSession()
       const socket = await ctx.openSocket(sessionId)

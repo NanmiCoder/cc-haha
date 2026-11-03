@@ -145,6 +145,8 @@ export function startSdkPushSuggestion(
     /** The turn's result is still held back for background agents. */
     isResultHeld: () => boolean
     emit: (message: SdkPromptSuggestionMessage) => void
+    /** A generation owns work until its promise settles, even after abort. */
+    onActivity?: (generationId: string, active: boolean) => void
     generate?: typeof tryGenerateSuggestion
   },
 ): void {
@@ -152,6 +154,8 @@ export function startSdkPushSuggestion(
   const localAbort = new AbortController()
   state.abortController = localAbort
   const generate = deps.generate ?? tryGenerateSuggestion
+  const generationId = randomUUID()
+  deps.onActivity?.(generationId, true)
   // Use a ref object so the IIFE's finally can compare against its own
   // promise without a self-reference (which upsets TypeScript's flow analysis).
   const ref: { promise: Promise<void> | null } = { promise: null }
@@ -205,6 +209,7 @@ export function startSdkPushSuggestion(
       if (state.inflightPromise === ref.promise) {
         state.inflightPromise = null
       }
+      deps.onActivity?.(generationId, false)
     }
   })()
   state.inflightPromise = ref.promise

@@ -1,0 +1,40 @@
+[package]
+name    = "agent-desktop-macos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+smallvec.workspace = true
+agent-desktop-core.workspace = true
+thiserror.workspace          = true
+serde.workspace              = true
+serde_json.workspace         = true
+tracing.workspace            = true
+base64.workspace             = true
+rustc-hash.workspace         = true
+libc.workspace               = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys  = "0.2.0"
+core-foundation    = "0.10.1"
+core-foundation-sys = "0.8.7"
+core-graphics      = { version = "0.25.0", features = ["elcapitan", "highsierra"] }
+
+[features]
+dev-tools = []
+interactive-tests = []
+
+[[bin]]
+name = "agent-desktop-macos-helper"
+path = "src/bin/agent-desktop-macos-helper.rs"
+
+[[example]]
+name = "ax_probe"
+required-features = ["dev-tools"]
+
+[build-dependencies]
+
+[lints]
+workspace = true

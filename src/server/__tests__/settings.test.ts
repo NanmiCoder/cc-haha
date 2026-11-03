@@ -16,6 +16,8 @@ import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAu
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import * as claudeModelCatalog from '../services/claudeModelCatalog.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
+import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
 import {
   clearOpenAICodexModelCatalogCache,
 } from '../../services/openaiAuth/modelCatalog.js'
@@ -1498,6 +1500,7 @@ describe('Models API', () => {
       'gpt-6-sol',
       'gpt-6-luna',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
@@ -1537,7 +1540,10 @@ describe('Models API', () => {
     const originalFetch = globalThis.fetch
     const requests: Headers[] = []
     clearOpenAICodexModelCatalogCache()
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (input, init) => {
+      if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
       requests.push(new Headers(init?.headers))
       return Response.json({ models: [{
         slug: 'gpt-desktop-account-only',

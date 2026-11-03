@@ -222,6 +222,23 @@ function addBundledRipgrepLicenseChecks(
   }
 }
 
+function addNativeDesktopRuntimeChecks(
+  report: PackageSmokeReport,
+  rootDir: string,
+  sidecarDir: string,
+  platform: 'Windows' | 'Linux',
+) {
+  const binary = platform === 'Windows' ? 'agent-desktop.exe' : 'agent-desktop'
+  addPresenceCheck(report, rootDir, `${platform} native Computer Use binary`, join(sidecarDir, binary))
+  addPresenceCheck(report, rootDir, `${platform} native Computer Use manifest`, join(sidecarDir, 'agent-desktop-manifest.json'))
+  if (platform === 'Linux') {
+    addPresenceCheck(report, rootDir, 'Linux native Computer Use clipboard owner', join(sidecarDir, 'agent-desktop-linux-clipboard-owner'))
+  }
+  for (const file of ['LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES', 'UPSTREAM.json', 'PATCHES.md']) {
+    addPresenceCheck(report, rootDir, `${platform} native Computer Use license (${file})`, join(sidecarDir, 'agent-desktop-licenses', file))
+  }
+}
+
 function walkPaths(rootDir: string, options?: { directoriesOnly?: boolean }) {
   if (!existsSync(rootDir)) {
     return [] as string[]
@@ -1240,6 +1257,7 @@ function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport, op
       sidecarDir,
     )
     addBundledRipgrepLicenseChecks(report, rootDir, sidecarDir, 'Windows')
+    addNativeDesktopRuntimeChecks(report, rootDir, sidecarDir, 'Windows')
     addMatchCheck(
       report,
       rootDir,
@@ -1417,6 +1435,7 @@ function inspectLinuxArtifacts(rootDir: string, report: PackageSmokeReport, opti
       sidecarDir,
     )
     addBundledRipgrepLicenseChecks(report, rootDir, sidecarDir, 'Linux')
+    addNativeDesktopRuntimeChecks(report, rootDir, sidecarDir, 'Linux')
     addMatchCheck(
       report,
       rootDir,

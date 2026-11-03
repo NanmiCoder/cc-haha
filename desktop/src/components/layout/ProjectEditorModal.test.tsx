@@ -16,14 +16,21 @@ vi.mock('@/lib/desktopHost', () => ({
   }),
 }))
 
+const projectDirectoriesApi = vi.hoisted(() => ({
+  getProjectDirectories: vi.fn(),
+}))
+vi.mock('@/api/desktopUiPreferences', () => ({ desktopUiPreferencesApi: projectDirectoriesApi }))
+
 beforeEach(() => {
   nativeDialog.isDesktop = false
   nativeDialog.open.mockReset()
+  projectDirectoriesApi.getProjectDirectories.mockImplementation(async (workDir: string) => ({ projectKey: workDir, mainDirectory: workDir, additionalDirectories: [] }))
 })
 
 vi.mock('../../i18n', () => ({
   useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
+      'sidebar.projectEditor.removeDirectory': 'sidebar.projectEditor.removeDirectory {path}',
       'dirPicker.chooseProjectFolder': 'Choose project folder',
       'common.cancel': 'Cancel',
       'common.save': 'Save',
@@ -143,6 +150,7 @@ describe('ProjectEditorModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose source folder' }))
     expect(onSourceFolderChange).toHaveBeenCalledWith('/workspace/selected  ')
 
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).not.toBeDisabled())
     fireEvent.change(name, { target: { value: 'x'.repeat(81) } })
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
     expect(onSubmit).not.toHaveBeenCalled()
@@ -156,6 +164,7 @@ describe('ProjectEditorModal', () => {
         name: 'Client workspace',
         sourceFolder: '/workspace/selected  ',
         logicalRoot: '/workspace/logical-root  ',
+        additionalDirectories: [],
       })
     })
   })
@@ -256,6 +265,7 @@ describe('ProjectEditorModal', () => {
         name: 'Renamed client',
         sourceFolder: '/workspace/client',
         logicalRoot: '/workspace/client',
+        additionalDirectories: [],
       })
     })
   })
@@ -278,6 +288,7 @@ describe('ProjectEditorModal', () => {
     )
 
     const save = screen.getByRole('button', { name: 'Save' })
+    await waitFor(() => expect(save).not.toBeDisabled())
     fireEvent.click(save)
     fireEvent.click(save)
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
@@ -295,4 +306,28 @@ describe('ProjectEditorModal', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+})
+
+it('edits auxiliary directories without changing the primary folder and submits its loaded snapshot', async () => {
+  nativeDialog.isDesktop = true
+  projectDirectoriesApi.getProjectDirectories.mockResolvedValue({ projectKey: '/workspace/project', mainDirectory: '/workspace/project', additionalDirectories: ['/workspace/data'] })
+  nativeDialog.open.mockResolvedValue(['/workspace/后端 files', '/workspace/data'])
+  const onSubmit = vi.fn()
+  render(<ProjectEditorModal open mode="edit" logicalRoot="/workspace/project" initialName="Project" onClose={vi.fn()} onSubmit={onSubmit} />)
+  await screen.findByText('/workspace/data')
+  fireEvent.click(screen.getByRole('button', { name: 'sidebar.projectEditor.addDirectory' }))
+  await screen.findByText('/workspace/后端 files')
+  expect(screen.getAllByText('/workspace/data')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'sidebar.projectEditor.removeDirectory /workspace/data' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ name: 'Project', logicalRoot: '/workspace/project', sourceFolder: '/workspace/project', additionalDirectories: ['/workspace/后端 files'] }))
+})
+
+it('reports auxiliary directory load failures and does not submit an empty replacement', async () => {
+  projectDirectoriesApi.getProjectDirectories.mockRejectedValue(new Error('Directory access failed'))
+  const onSubmit = vi.fn()
+  render(<ProjectEditorModal open mode="edit" logicalRoot="/workspace/project" initialName="Project" onClose={vi.fn()} onSubmit={onSubmit} />)
+  expect(await screen.findByRole('alert')).toHaveTextContent('Directory access failed')
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  expect(onSubmit).not.toHaveBeenCalled()
 })

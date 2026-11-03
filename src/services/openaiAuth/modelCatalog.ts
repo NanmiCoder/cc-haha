@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
   OPENAI_CODEX_API_ENDPOINT,
-  OPENAI_CODEX_CLIENT_VERSION,
   OPENAI_CODEX_ORIGINATOR,
-  OPENAI_CODEX_TOKEN_USER_AGENT,
 } from './client.js'
+import {
+  clearOpenAICodexClientVersionCache,
+  resolveOpenAICodexClientVersion,
+} from './clientVersion.js'
 import { createModelCatalogCache } from '../modelCatalogCache.js'
 import { ensureFreshOpenAITokens } from './index.js'
 import { getOpenAIOAuthTokens } from './storage.js'
@@ -106,6 +108,7 @@ export async function fetchOpenAICodexModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
   suppliedTokens?: OpenAIModelCatalogTokens | null,
   proxyUrl?: string | null,
+  options?: { refreshClientVersion?: boolean },
 ): Promise<OpenAIModelCatalogEntry[]> {
   const tokens = suppliedTokens === undefined
     ? await ensureFreshOpenAITokens()
@@ -114,13 +117,18 @@ export async function fetchOpenAICodexModelCatalog(
     throw new Error('OpenAI OAuth token is unavailable')
   }
 
+  const clientVersion = await resolveOpenAICodexClientVersion({
+    fetchOverride,
+    proxyUrl,
+    forceRefresh: options?.refreshClientVersion,
+  })
   const url = new URL(OPENAI_CODEX_MODELS_ENDPOINT)
-  url.searchParams.set('client_version', OPENAI_CODEX_CLIENT_VERSION)
+  url.searchParams.set('client_version', clientVersion)
   const headers = new Headers({
     Accept: 'application/json',
     Authorization: `Bearer ${tokens.accessToken}`,
     originator: OPENAI_CODEX_ORIGINATOR,
-    'User-Agent': OPENAI_CODEX_TOKEN_USER_AGENT,
+    'User-Agent': `codex-cli/${clientVersion}`,
   })
   if (tokens.accountId) {
     headers.set('ChatGPT-Account-Id', tokens.accountId)
@@ -164,6 +172,7 @@ export async function getOpenAICodexModelCatalog(options?: {
     fetchCatalog: async () => {
       const models = await fetchOpenAICodexModelCatalog(
         options?.fetchOverride, options?.tokens, await options?.resolveProxyUrl?.(),
+        { refreshClientVersion: options?.forceRefresh },
       )
       if (models.length === 0) {
         throw new Error('OpenAI models endpoint returned no visible models')
@@ -178,4 +187,5 @@ export async function getOpenAICodexModelCatalog(options?: {
 
 export function clearOpenAICodexModelCatalogCache(): void {
   catalogCache.clear()
+  clearOpenAICodexClientVersionCache()
 }
