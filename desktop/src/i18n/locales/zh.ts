@@ -3414,6 +3414,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.editMessageCheckingCheckpoints': '正在确认这条消息能否回滚…',
   'chat.editMessageCheckpointsUnavailable': '无法读取本会话的检查点，暂时不能编辑。',
   'chat.editAttachmentUnavailable': '{count} 个附件已无法读取，重新发送时会被省略。',
+  'chat.messageTooLarge': '这条消息有 {size}，超过 {limit} 的上限，没有发送。大图请改为从磁盘添加文件，不要直接粘贴。',
   'chat.editResendConfirmTitle': '编辑并重新发送？',
   'chat.editResendDropsTurns': '这条消息之后的 {count} 轮对话会被删除，然后发送修改后的消息。',
   'chat.editResendLatestBody': '这一轮的回复会被删除，然后发送修改后的消息。',

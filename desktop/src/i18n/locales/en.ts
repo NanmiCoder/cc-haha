@@ -3416,6 +3416,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.editMessageCheckingCheckpoints': 'Checking whether this prompt can be rewound…',
   'chat.editMessageCheckpointsUnavailable': "Editing is unavailable: this session's checkpoints could not be loaded.",
   'chat.editAttachmentUnavailable': '{count} attachment(s) can no longer be read and will be left out when resending.',
+  'chat.messageTooLarge': 'This message is {size}, over the {limit} limit, so it was not sent. Attach large images as files from disk instead of pasting them.',
   'chat.editResendConfirmTitle': 'Edit and resend?',
   'chat.editResendDropsTurns': 'The {count} later turn(s) after this message will be deleted, then the edited message is sent.',
   'chat.editResendLatestBody': 'The reply to this turn will be deleted, then the edited message is sent.',

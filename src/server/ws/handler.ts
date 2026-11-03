@@ -909,6 +909,14 @@ export const handleWebSocket = {
     // Raising the SDK receive budget must not raise the renderer input budget.
     // The public-access gateway applies its own smaller limit before this handler.
     if (Buffer.byteLength(rawMessage) > 16 * 1024 * 1024) {
+      // A bare 1009 only makes the renderer reconnect, so the turn it tried to
+      // send (pasted screenshots travel inline as data URLs) vanished without a
+      // trace. Say why first; the close still enforces the budget.
+      sendError(
+        ws,
+        'Message exceeds the 16 MiB limit. Attach large images as files instead of pasting them.',
+        'CLIENT_MESSAGE_TOO_LARGE',
+      )
       ws.close(1009, 'Client message exceeds 16 MiB')
       return
     }

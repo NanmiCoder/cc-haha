@@ -3417,6 +3417,7 @@ export const jp: Record<TranslationKey, string> = {
   'chat.editMessageCheckingCheckpoints': 'このメッセージまで巻き戻せるか確認しています…',
   'chat.editMessageCheckpointsUnavailable': 'このセッションのチェックポイントを読み込めないため、現在は編集できません。',
   'chat.editAttachmentUnavailable': '{count} 件の添付ファイルを読み込めなくなったため、再送信では省略されます。',
+  'chat.messageTooLarge': 'このメッセージは {size} で、上限の {limit} を超えているため送信されませんでした。大きな画像は貼り付けではなく、ディスクからファイルとして添付してください。',
   'chat.editResendConfirmTitle': '編集して再送信しますか？',
   'chat.editResendDropsTurns': 'このメッセージ以降の {count} ターンの会話が削除され、編集したメッセージが送信されます。',
   'chat.editResendLatestBody': 'このターンの返信が削除され、編集したメッセージが送信されます。',

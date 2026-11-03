@@ -92,6 +92,8 @@ import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEn
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
+import { formatBytes } from '@/lib/formatBytes'
+import { checkUserMessageBudget } from '@/lib/userMessageBudget'
 import type { AttachmentRef, UIAttachment } from '../types/chat'
 import type { SavedProvider } from '../types/provider'
 import type { PermissionMode } from '../types/settings'
@@ -724,6 +726,31 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
 
     const submittedTabId = useTabStore.getState().activeTabId
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
+    const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
+      type: attachment.type,
+      name: attachment.name,
+      path: attachment.path,
+      data: attachment.data,
+      mimeType: attachment.mimeType,
+    }))
+    // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
+    // serialized from the live document; the bubble keeps the pill text.
+    // Agent Team armed in the + menu: the model gets the team instruction,
+    // the bubble keeps what the user typed.
+    const sendAsTeam = capabilityMenu.agentTeamArmed
+    const contentForModel = sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText
+    // The local server drops a frame over its input budget by closing the
+    // socket, and the client would only reconnect: the first turn, with its
+    // pasted screenshots inlined as data URLs, would vanish without a trace.
+    // Checked before the draft becomes a session, so the draft stays as it is.
+    const budget = checkUserMessageBudget({ type: 'user_message', content: contentForModel, attachments: attachmentPayload })
+    if (!budget.ok) {
+      addToast({
+        type: 'error',
+        message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+      })
+      return
+    }
     setIsSubmitting(true)
     runSubmittingRef.current = true
     setMaterializationAttempt((attempt) => attempt + 1)
@@ -741,20 +768,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
       }
       connectToSession(sessionId)
-      const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
-        type: attachment.type,
-        name: attachment.name,
-        path: attachment.path,
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      }))
-      // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
-      // serialized from the live document; the bubble keeps the pill text.
-      // Agent Team armed in the + menu: the model gets the team instruction,
-      // the bubble keeps what the user typed.
-      const sendAsTeam = capabilityMenu.agentTeamArmed
       if (serializedText || attachmentPayload.length > 0) {
-        sendMessage(sessionId, sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText, attachmentPayload, { displayContent: text })
+        sendMessage(sessionId, contentForModel, attachmentPayload, { displayContent: text })
       }
       recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
       if (sendAsTeam) capabilityMenu.disarmAgentTeam()

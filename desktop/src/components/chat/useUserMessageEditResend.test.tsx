@@ -65,7 +65,7 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
     useChatStore.setState({ ...useChatStore.getInitialState(), sessions: { 'session-a': makeSession(), 'session-b': makeSession() } }, true)
     useUIStore.setState({ toasts: [] })
     vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
-    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => true)
   })
 
   afterEach(() => { vi.restoreAllMocks() })
@@ -279,7 +279,7 @@ describe('useUserMessageEditResend unconfirmed prompt', () => {
     }, true)
     useUIStore.setState({ toasts: [] })
     vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
-    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => true)
     return renderHook(() => useUserMessageEditResend({
       sessionId: 'session-a',
       messages: unconfirmedMessages,
