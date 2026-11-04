@@ -16,6 +16,11 @@ import {
   getConfiguredModelMaxOutputTokens,
   getConfiguredOrBuiltInModelContextWindow,
 } from './model/modelContextWindows.js'
+import {
+  persistProviderContextLimit,
+  readPersistedProviderContextLimit,
+  resetProviderContextLimitCacheForTesting,
+} from './model/providerContextLimitCache.js'
 import { readProviderEnvForModel } from './model/providerEnvScope.js'
 
 // Default fallback when the model-specific capability is unknown.
@@ -185,7 +190,8 @@ export function isModelWindowKnownForAutoCompact(model: string): boolean {
 // process. Recorded only after a compacted retry went through, so a limit is
 // trusted once the provider accepted a request under it. Without it the
 // threshold stays above the real cap and every later turn hits the same wall
-// before proactive auto-compact can fire.
+// before proactive auto-compact can fire. Also persisted, so later processes
+// (each desktop session is one) start below the wall instead of relearning it.
 const providerReportedContextLimits = new Map<string, number>()
 
 // The same model name can reach two providers in one process (a subagent
@@ -199,10 +205,24 @@ export function rememberProviderContextLimit(model: string, limit: number): void
   const key = providerContextLimitKey(model)
   const known = providerReportedContextLimits.get(key)
   providerReportedContextLimits.set(key, known === undefined ? limit : Math.min(known, limit))
+  persistProviderContextLimit(key, limit)
 }
 
-export function resetProviderReportedContextLimitsForTesting(): void {
+/** The hard limit a provider stated for this model, in this process or an earlier one. */
+export function getProviderReportedContextLimit(model: string): number | undefined {
+  const key = providerContextLimitKey(model)
+  const inProcess = providerReportedContextLimits.get(key)
+  const persisted = readPersistedProviderContextLimit(key)
+  if (inProcess === undefined) return persisted
+  return persisted === undefined ? inProcess : Math.min(inProcess, persisted)
+}
+
+/** `keepPersisted` leaves the cache file in place to stand in for a new process. */
+export function resetProviderReportedContextLimitsForTesting(
+  options: { keepPersisted?: boolean } = {},
+): void {
   providerReportedContextLimits.clear()
+  resetProviderContextLimitCacheForTesting(options)
 }
 
 /** The window the UI and compaction treat as the model's usable context. */
@@ -215,7 +235,7 @@ export function getEffectiveModelContextWindow(
     readProviderEnvForModel(model, 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'),
     isModelWindowKnownForAutoCompact(model),
   )
-  const reported = providerReportedContextLimits.get(providerContextLimitKey(model))
+  const reported = getProviderReportedContextLimit(model)
   return reported === undefined ? window : Math.min(window, reported)
 }
 

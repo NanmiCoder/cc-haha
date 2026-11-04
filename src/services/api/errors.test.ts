@@ -70,7 +70,6 @@ describe('image unsupported API errors', () => {
       [400, 'unsupported content block type: only text is allowed for this model'],
       [400, 'Could not process image'],
       [400, 'unsupported image format: image/heic'],
-      [400, 'Invalid request: Your request exceeded model token limit: 262144 (requested: 270000)'],
     ] as const
 
     for (const [status, message] of notAboutImageInput) {
@@ -88,6 +87,16 @@ describe('image unsupported API errors', () => {
       expect(msg.businessErrorCode).toBeUndefined()
       expect(JSON.stringify(msg.message.content)).toContain(message.slice(0, 40))
     }
+
+    // An overflow that happened to carry images is an overflow, not a refusal
+    // of image input: compaction is what frees room for it.
+    const overflow = 'Invalid request: Your request exceeded model token limit: 262144 (requested: 270000)'
+    const msg = getAssistantMessageFromError(
+      new APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: overflow } }, overflow, undefined),
+      'deepseek-flash',
+      { messagesForAPI: messagesForAPI as never },
+    )
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.PROMPT_TOO_LONG)
   })
 })
 
@@ -186,6 +195,109 @@ describe('context overflow errors', () => {
       type: 'text',
       text: PROMPT_TOO_LONG_ERROR_MESSAGE,
     })
+  })
+
+  test('matches the overflow wordings of relays and OpenAI-compatible providers', () => {
+    const overflowMessages = [
+      // Qwen / DashScope
+      'InternalError.Algo.InvalidParameter: Range of input length should be [1, 129024]',
+      // Zhipu GLM (code 1261), raw and as the escaped JSON a relay forwards
+      '{"error":{"code":"1261","message":"Prompt 超长"}}',
+      '{"error":{"code":"1261","message":"Prompt \\u8d85\\u957f"}}',
+      // Moonshot Kimi
+      'Your request exceeded model token limit: 262144 (requested: 558009)',
+      // MiniMax
+      'invalid params, context window exceeds limit (2013)',
+      // Volcengine Ark
+      'OutofContextError: Total tokens of image and text exceed max message tokens.',
+      // Gemini
+      'The input token count (135538) exceeds the maximum number of tokens allowed (131072).',
+      'Unable to submit request because the input token count is 40000 but model only supports up to 32768',
+      // vLLM, xAI, llama.cpp, Ollama, TGI
+      'The decoder prompt (length 140000) is longer than the maximum model length of 131072.',
+      "This model's maximum prompt length is 131072 but the request contains 140000 tokens.",
+      'the request exceeds the available context size, try increasing it',
+      'prompt too long; exceeded max context length by 1234 tokens',
+      'Input validation error: `inputs` tokens + `max_new_tokens` must be <= 4096. Given: 4000 `inputs` tokens and 1000 `max_new_tokens`',
+      'model_context_window_exceeded',
+    ]
+
+    for (const message of overflowMessages) {
+      expect({ message, overflow: isContextOverflowErrorText(message) })
+        .toEqual({ message, overflow: true })
+    }
+  })
+
+  test('keeps max_tokens and rate-limit rejections out of the overflow path', () => {
+    // Compaction cannot fix these: the input fits, or nothing is too long.
+    const negatives = [
+      "'max_tokens' or 'max_completion_tokens' is too large: 200000. This model's maximum context length is 131072 tokens and your request has 2100 input tokens (200000 > 131072 - 2100).",
+      'max_tokens must be less than or equal to 8192',
+      'Rate limit reached: too many tokens per minute, the context window is shared',
+      'Too many requests: context window exceeded the per-minute token budget',
+    ]
+
+    for (const message of negatives) {
+      expect({ message, overflow: isContextOverflowErrorText(message) })
+        .toEqual({ message, overflow: false })
+    }
+  })
+
+  test('parses the limit from more provider formats', () => {
+    const cases: Array<[string, { actualTokens?: number, limitTokens?: number }]> = [
+      ["This model's maximum context length is 128000 tokens. However, your messages resulted in 130500 tokens. Please reduce the length of the messages.", { actualTokens: 130500, limitTokens: 128000 }],
+      ["This endpoint's maximum context length is 131072 tokens. However, you requested about 140000 tokens (130000 of text input, 10000 in the output).", { actualTokens: 140000, limitTokens: 131072 }],
+      ["This model's maximum context length is 131072 tokens. However, your prompt contains 140000 input tokens, which exceeds this limit even without any output tokens.", { actualTokens: 140000, limitTokens: 131072 }],
+      ['Your request exceeded model token limit: 262144 (requested: 558009)', { actualTokens: 558009, limitTokens: 262144 }],
+      ['The input token count (135538) exceeds the maximum number of tokens allowed (131072).', { actualTokens: 135538, limitTokens: 131072 }],
+      ['Unable to submit request because the input token count is 40000 but model only supports up to 32768', { actualTokens: 40000, limitTokens: 32768 }],
+      ['The decoder prompt (length 140000) is longer than the maximum model length of 131072.', { actualTokens: 140000, limitTokens: 131072 }],
+      ["This model's maximum prompt length is 131072 but the request contains 140000 tokens.", { actualTokens: 140000, limitTokens: 131072 }],
+      ['Prompt contains 140000 tokens and 0 draft tokens, too large for model with 131072 maximum context length', { actualTokens: 140000, limitTokens: 131072 }],
+      // Only the limit is stated: still enough to stop compacting above it.
+      ['Range of input length should be [1, 129024]', { actualTokens: undefined, limitTokens: 129024 }],
+    ]
+
+    for (const [message, expected] of cases) {
+      expect({ message, counts: parsePromptTooLongTokenCounts(message) })
+        .toEqual({ message, counts: { actualTokens: undefined, limitTokens: undefined, ...expected } })
+    }
+  })
+
+  test('maps a 5xx-wrapped overflow to Prompt is too long', () => {
+    const message = 'Upstream returned HTTP 500: {"error":{"message":"Range of input length should be [1, 60000]"}}'
+    const error = new APIError(500, { error: { type: 'api_error', message } }, message, undefined)
+
+    const msg = getAssistantMessageFromError(error, 'qwen-plus')
+
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.PROMPT_TOO_LONG)
+    expect(parsePromptTooLongTokenCounts(msg.errorDetails ?? '').limitTokens).toBe(60000)
+  })
+
+  test('recognizes an escaped overflow nested in the local proxy envelope, as the SDK reports it', () => {
+    // The relay's ensure_ascii body, wrapped by the proxy, then stringified
+    // again by the SDK: the escape reaches us with its backslash doubled.
+    const relayBody = '{"error":{"code":"1261","message":"Prompt \\u8d85\\u957f"}}'
+    const error = new APIError(
+      500,
+      { type: 'error', error: { type: 'api_error', message: `Upstream returned HTTP 500: ${relayBody}` } },
+      undefined,
+      undefined,
+    )
+    expect(error.message).toContain('\\\\u8d85')
+
+    const msg = getAssistantMessageFromError(error, 'glm-5.2')
+
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.PROMPT_TOO_LONG)
+  })
+
+  test('does not read a 429 as a context overflow', () => {
+    const message = 'Request was throttled: context window exceeded the per-minute budget'
+    const error = new APIError(429, { error: { type: 'rate_limit_error', message } }, message, undefined)
+
+    const msg = getAssistantMessageFromError(error, 'custom-model')
+
+    expect(msg.businessErrorCode).not.toBe(BUSINESS_ERROR_CODES.PROMPT_TOO_LONG)
   })
 })
 

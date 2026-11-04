@@ -1,3 +1,4 @@
+import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
@@ -5,12 +6,21 @@ import { logForDebugging } from '../../utils/debug.js'
 import { hasExactErrorMessage } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { logError } from '../../utils/log.js'
+import { MODEL_CONTEXT_WINDOW_MIN } from '../../utils/model/modelContextWindows.js'
+import {
+  hasUsableContextUsage,
+  tokenCountWithEstimation,
+} from '../../utils/tokens.js'
 import {
   isPromptTooLongMessage,
   parsePromptTooLongTokenCounts,
 } from '../api/errors.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
-import { getAutoCompactThreshold, isAutoCompactEnabled } from './autoCompact.js'
+import {
+  estimateFallbackFixedContextTokens,
+  getAutoCompactThreshold,
+  isAutoCompactEnabled,
+} from './autoCompact.js'
 import {
   type CompactionResult,
   compactConversation,
@@ -53,11 +63,70 @@ export function isPromptTooLongApiError(
   )
 }
 
-/** The provider's hard limit, when its error states one. */
+function hasMediaBlocks(content: unknown): boolean {
+  return Array.isArray(content) && content.some(block =>
+    block?.type === 'image' ||
+    block?.type === 'document' ||
+    (block?.type === 'tool_result' && hasMediaBlocks(block.content)),
+  )
+}
+
+/**
+ * A rejection that compacting the conversation can fix: a context overflow,
+ * or a relay's byte limit (413) on a request with no media in it. A 413 on a
+ * request carrying images or PDFs is left to the media stripping that history
+ * normalization applies on the next turn, which keeps the text intact.
+ */
+export function isRecoverableContextRejection(
+  message: unknown,
+  messages: readonly Message[],
+): message is AssistantMessage {
+  if (isPromptTooLongApiError(message)) return true
+  return (
+    (message as Message | undefined)?.type === 'assistant' &&
+    (message as AssistantMessage).isApiErrorMessage === true &&
+    (message as AssistantMessage).businessErrorCode ===
+      BUSINESS_ERROR_CODES.REQUEST_TOO_LARGE &&
+    !messages.some(
+      candidate =>
+        candidate.type === 'user' && hasMediaBlocks(candidate.message.content),
+    )
+  )
+}
+
+/**
+ * The provider's hard limit: the one its error states, or else the size of
+ * the request it just rejected, which the limit is below. A rejected request
+ * smaller than any real context window says nothing about the window (it was
+ * refused for something else that merely reads like an overflow), so it
+ * teaches nothing.
+ */
 export function getProviderContextLimit(
   message: AssistantMessage,
+  rejectedRequestTokens: number,
 ): number | undefined {
-  return parsePromptTooLongTokenCounts(message.errorDetails ?? '').limitTokens
+  const stated = parsePromptTooLongTokenCounts(message.errorDetails ?? '').limitTokens
+  if (stated !== undefined) return stated
+  return rejectedRequestTokens >= MODEL_CONTEXT_WINDOW_MIN
+    ? rejectedRequestTokens
+    : undefined
+}
+
+/**
+ * How large the rejected request was: the provider's last reported usage plus
+ * everything added since, and the fixed prefix (system prompt, tools) when the
+ * provider never reported usage — the same count proactive auto-compact uses.
+ */
+export function estimateRejectedRequestTokens(
+  messages: readonly Message[],
+  cacheSafeParams: CacheSafeParams,
+): number {
+  return (
+    tokenCountWithEstimation(messages) +
+    (hasUsableContextUsage(messages)
+      ? 0
+      : estimateFallbackFixedContextTokens(cacheSafeParams))
+  )
 }
 
 export async function compactAfterPromptTooLong({

@@ -11,6 +11,7 @@ let query: typeof import('../query.js')['query']
 let getDefaultAppState: typeof import('../state/AppStateStore.js')['getDefaultAppState']
 let messagesModule: typeof import('../utils/messages.js')
 let contextModule: typeof import('../utils/context.js')
+let tokensModule: typeof import('../utils/tokens.js')
 let asSystemPrompt: typeof import('../utils/systemPromptType.js')['asSystemPrompt']
 let root: string
 let originalCwd: string
@@ -54,6 +55,7 @@ beforeAll(async () => {
   getDefaultAppState = (await import('../state/AppStateStore.js')).getDefaultAppState
   messagesModule = await import('../utils/messages.js')
   contextModule = await import('../utils/context.js')
+  tokensModule = await import('../utils/tokens.js')
   asSystemPrompt = (await import('../utils/systemPromptType.js')).asSystemPrompt
 })
 
@@ -105,6 +107,26 @@ function tooLong() {
   })
 }
 
+// MiniMax and Zhipu reject an overflow without stating any token count.
+function tooLongWithoutCounts() {
+  return messagesModule.createAssistantAPIErrorMessage({
+    content: 'Prompt is too long',
+    error: 'invalid_request',
+    errorDetails: 'invalid params, context window exceeds limit (2013)',
+    businessErrorCode: 'prompt_too_long',
+  })
+}
+
+// A relay's byte limit (nginx client_max_body_size) rather than a token count.
+function tooLarge() {
+  return messagesModule.createAssistantAPIErrorMessage({
+    content: 'Request too large for the provider or relay',
+    error: 'invalid_request',
+    errorDetails: 'request_too_large: 413 <html><head><title>413 Request Entity Too Large</title></head></html>',
+    businessErrorCode: 'request_too_large',
+  })
+}
+
 function reply(text: string) {
   const message = messagesModule.createAssistantMessage({
     content: text,
@@ -114,12 +136,36 @@ function reply(text: string) {
   return message
 }
 
-type Outcome = 'too_long' | 'reply'
+type Outcome = 'too_long' | 'too_long_without_counts' | 'too_large' | 'reply'
+
+const OUTCOMES: Record<Outcome, () => ReturnType<typeof tooLong>> = {
+  too_long: tooLong,
+  too_long_without_counts: tooLongWithoutCounts,
+  too_large: tooLarge,
+  reply: () => reply('done'),
+}
+
+// Six user turns; with `answered`, an earlier answer reports the 30K-token
+// request the provider accepted, the way a real conversation does.
+function historyMessages(options: { answered?: boolean, image?: boolean }) {
+  const history: import('../types/message.js').Message[] = Array.from({ length: 6 }, (_, i) => messagesModule.createUserMessage({ content: `step ${i}` }))
+  if (options.answered) history.splice(1, 0, reply('earlier answer'))
+  if (options.image) {
+    history.push(messagesModule.createUserMessage({
+      content: [
+        { type: 'text', text: 'and this screenshot' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+      ],
+    }))
+  }
+  return history
+}
 
 async function run(options: {
   responses: Outcome[]
   compaction?: 'succeeds' | 'fails' | 'stopped'
   querySource?: QueryParams['querySource']
+  history?: import('../types/message.js').Message[]
 }) {
   const responses = [...options.responses]
   const sentToModel: number[] = []
@@ -128,7 +174,7 @@ async function run(options: {
     sentToModel.push(request.messages.length)
     const next = responses.shift()
     if (!next) throw new Error('unexpected model call')
-    yield next === 'too_long' ? tooLong() : reply('done')
+    yield OUTCOMES[next]()
   }
   const compactAfterPromptTooLong: NonNullable<QueryParams['deps']>['compactAfterPromptTooLong'] = async ({ messages, toolUseContext }) => {
     compactedInputs.push(messages.length)
@@ -145,7 +191,7 @@ async function run(options: {
       hookResults: [],
     }
   }
-  const history = Array.from({ length: 6 }, (_, i) => messagesModule.createUserMessage({ content: `step ${i}` }))
+  const history = options.history ?? historyMessages({})
   const output: Array<Record<string, unknown>> = []
   const loop = query({
     messages: history,
@@ -166,7 +212,7 @@ async function run(options: {
     if (next.done) { terminal = next.value; break }
     output.push(next.value as Record<string, unknown>)
   }
-  const tooLongErrors = output.filter(message => message.type === 'assistant' && (message as { businessErrorCode?: string }).businessErrorCode === 'prompt_too_long')
+  const tooLongErrors = output.filter(message => message.type === 'assistant' && ['prompt_too_long', 'request_too_large'].includes((message as { businessErrorCode?: string }).businessErrorCode ?? ''))
   const boundaries = output.filter(message => message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary')
   const interruptions = output.filter(message => message.type === 'user' && JSON.stringify((message as { message?: unknown }).message).includes('interrupted'))
   return { terminal, sentToModel, compactedInputs, tooLongErrors, boundaries, interruptions }
@@ -227,6 +273,47 @@ describe('query recovery from a provider prompt-too-long rejection', () => {
       process.env.ANTHROPIC_BASE_URL = baseUrl
     }
     expect(contextModule.getEffectiveModelContextWindow('custom-200k')).toBe(80_000)
+  })
+
+  test('when the rejection states no limit, follows the size of the request that was rejected', async () => {
+    const history = historyMessages({ answered: true })
+    const rejectedTokens = tokensModule.tokenCountWithEstimation(history)
+    expect(rejectedTokens).toBeGreaterThan(30_000)
+
+    const result = await run({ responses: ['too_long_without_counts', 'reply'], history })
+
+    expect(result.terminal).toEqual({ reason: 'completed' })
+    expect(result.compactedInputs).toEqual([7])
+    expect(result.tooLongErrors).toHaveLength(0)
+    // The provider refused this many tokens, so the window is at most that.
+    expect(contextModule.getEffectiveModelContextWindow('custom-200k')).toBe(rejectedTokens)
+  })
+
+  test('learns no limit from a rejection of a request too small to be a real context window', async () => {
+    const result = await run({ responses: ['too_long_without_counts', 'reply'] })
+
+    expect(result.terminal).toEqual({ reason: 'completed' })
+    expect(contextModule.getEffectiveModelContextWindow('custom-200k')).toBe(200_000)
+  })
+
+  test('compacts and retries once when a relay rejects a text-only request by size (413)', async () => {
+    const history = historyMessages({ answered: true })
+    const rejectedTokens = tokensModule.tokenCountWithEstimation(history)
+
+    const result = await run({ responses: ['too_large', 'reply'], history })
+
+    expect(result.terminal).toEqual({ reason: 'completed' })
+    expect(result.compactedInputs).toEqual([7])
+    expect(result.sentToModel).toEqual([7, 2])
+    expect(result.tooLongErrors).toHaveLength(0)
+    expect(contextModule.getEffectiveModelContextWindow('custom-200k')).toBe(rejectedTokens)
+  })
+
+  test('leaves a 413 on a request carrying media to the media stripping of the next turn', async () => {
+    const result = await run({ responses: ['too_large'], history: historyMessages({ image: true }) })
+
+    expect(result.compactedInputs).toEqual([])
+    expect(result.tooLongErrors).toHaveLength(1)
   })
 
   test('leaves forked side queries alone', async () => {
