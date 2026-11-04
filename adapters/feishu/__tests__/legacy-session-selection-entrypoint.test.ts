@@ -9,8 +9,10 @@ import { StreamingCard } from '../streaming-card.js'
 import { FeishuMediaService } from '../media.js'
 import { WechatMediaService } from '../../wechat/media.js'
 import { DingTalkMediaService } from '../../dingtalk/media.js'
+import { DingTalkAiCardService } from '../../dingtalk/ai-card.js'
 import { WhatsAppMediaService } from '../../whatsapp/media.js'
 import { currentInboundPowerLease } from '../../common/inbound-power-activity.js'
+import { MessageBuffer } from '../../common/message-buffer.js'
 
 type Platform = 'feishu' | 'dingtalk' | 'wechat' | 'whatsapp'
 const platforms: Platform[] = ['feishu', 'dingtalk', 'wechat', 'whatsapp']
@@ -27,6 +29,11 @@ let sequence = 0
 let newSessionCount = 0
 let preflightGate: Promise<void> | undefined
 let preflightStarted: (() => void) | undefined
+let permissionDeliveryGate: Promise<void> | undefined
+let permissionDeliveryStarted: (() => void) | undefined
+let permissionDeliveryAttempts = 0
+let failPermissionDelivery = false
+let dingtalkTextFailures = 0
 const notices: string[] = []
 const sentPrompts: Array<{ sessionId: string; content: string }> = []
 const activeLeases = new Set<string>()
@@ -41,6 +48,15 @@ const environmentKeys = [
   'CC_HAHA_LOCAL_ACCESS_TOKEN',
 ]
 const savedEnvironment = new Map(environmentKeys.map((key) => [key, process.env[key]]))
+
+async function waitForPermissionDelivery() {
+  if (permissionDeliveryGate) {
+    permissionDeliveryAttempts++
+    permissionDeliveryStarted?.()
+    await permissionDeliveryGate
+  }
+  if (failPermissionDelivery) throw new Error('Fixture permission delivery failed')
+}
 
 function entries() {
   return [{
@@ -88,8 +104,15 @@ beforeAll(async () => {
         return Response.json({ workDir: temporaryRoot, permissionMode: 'default' })
       }
       if (url.pathname === '/dingtalk' || url.pathname === '/ilink/bot/sendmessage') {
+        if (url.pathname === '/dingtalk' && dingtalkTextFailures > 0) {
+          dingtalkTextFailures--
+          return Response.json({ errcode: 503 }, { status: 503 })
+        }
+        try { await waitForPermissionDelivery() } catch {
+          return Response.json({ errcode: 503, ret: 503 }, { status: 503 })
+        }
         notices.push(await request.text())
-        return Response.json({ ret: 0 })
+        return Response.json(url.pathname === '/dingtalk' ? { errcode: 0 } : { ret: 0 })
       }
       if (url.pathname === '/ilink/bot/getconfig') return Response.json({ ret: 0 })
       if (url.pathname === '/ilink/bot/sendtyping') return Response.json({ ret: 0 })
@@ -174,6 +197,7 @@ beforeAll(async () => {
   wechat = await import('../../wechat/index.js')
   whatsapp = await import('../../whatsapp/index.js')
   spies.push(spyOn(feishu.larkClient.im.message, 'create').mockImplementation(async (request: any) => {
+    await waitForPermissionDelivery()
     notices.push(String(request.data.content))
     return { code: 0, data: { message_id: `fixture-${++sequence}` } }
   }))
@@ -215,6 +239,142 @@ afterAll(async () => {
 function adapterFor(platform: Platform) {
   return { feishu, dingtalk, wechat, whatsapp }[platform]
 }
+
+for (const platform of ['feishu', 'wechat', 'dingtalk'] as const) {
+  it(`${platform} retries failed permission delivery after a snapshot, then suppresses replay`, async () => {
+    const adapter = adapterFor(platform)
+    const chatId = chatFor(platform)
+    await send(platform, '/status')
+    adapter.bridge.resetSession(chatId)
+    adapter.clearTransientChatState(chatId)
+    const request = { type: 'permission_request', requestId: `failed-${platform}`, toolName: 'Bash', input: {} }
+    failPermissionDelivery = true
+    try {
+      await expect(adapter.handleServerMessage(chatId, request)).rejects.toThrow()
+    } finally { failPermissionDelivery = false }
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    await adapter.handleServerMessage(chatId, { type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+    const before = notices.length
+    await adapter.handleServerMessage(chatId, request)
+    await adapter.handleServerMessage(chatId, request)
+    expect(notices).toHaveLength(before + 1)
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    adapter.clearTransientChatState(chatId)
+  })
+
+  it(`${platform} claims each permission before asynchronous delivery and ignores replay`, async () => {
+    const adapter = adapterFor(platform)
+    const chatId = chatFor(platform)
+    await send(platform, '/status')
+    adapter.bridge.resetSession(chatId)
+    adapter.clearTransientChatState(chatId)
+    const request = { type: 'permission_request', requestId: `dedup-${platform}`, toolName: 'Bash', input: { command: 'echo fixture' } }
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { started = resolve })
+    permissionDeliveryGate = gate
+    permissionDeliveryStarted = started
+    permissionDeliveryAttempts = 0
+    const before = notices.length
+    const first = adapter.handleServerMessage(chatId, request)
+    const duplicate = adapter.handleServerMessage(chatId, request)
+    try {
+      await entered
+      expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+      await adapter.handleServerMessage(chatId, { type: 'permission_resolved', permissionType: 'tool', requestId: request.requestId })
+      expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(0)
+    } finally {
+      release()
+      await Promise.all([first, duplicate])
+      permissionDeliveryGate = undefined
+      permissionDeliveryStarted = undefined
+    }
+    expect(permissionDeliveryAttempts).toBe(1)
+    expect(notices).toHaveLength(before + 1)
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(0)
+    expect(adapter.getRuntimeState(chatId).state).toBe('thinking')
+
+    const next = { ...request, requestId: `${request.requestId}-next` }
+    await adapter.handleServerMessage(chatId, next)
+    const sent = notices.length
+    await adapter.handleServerMessage(chatId, next)
+    expect(notices).toHaveLength(sent)
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    adapter.clearTransientChatState(chatId)
+  })
+}
+
+it('DingTalk registers permission before waiting for stream completion and preserves resolution', async () => {
+  const chatId = chatFor('dingtalk')
+  await send('dingtalk', '/status')
+  dingtalk.bridge.resetSession(chatId)
+  dingtalk.clearTransientChatState(chatId)
+  await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'before approval' })
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const complete = spyOn(MessageBuffer.prototype, 'complete').mockImplementation(() => gate)
+  const request = { type: 'permission_request', requestId: 'during-dingtalk-finalize', toolName: 'Bash', input: {} }
+  const first = dingtalk.handleServerMessage(chatId, request)
+  const duplicate = dingtalk.handleServerMessage(chatId, request)
+  try {
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(dingtalk.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    await dingtalk.handleServerMessage(chatId, { type: 'permission_resolved', permissionType: 'tool', requestId: request.requestId })
+  } finally {
+    release()
+    await Promise.all([first, duplicate])
+    complete.mockRestore()
+  }
+  expect(dingtalk.getRuntimeState(chatId).pendingPermissionCount).toBe(0)
+  expect(dingtalk.getRuntimeState(chatId).state).toBe('thinking')
+  // If completion resurrected the pending set, an older snapshot would expose it.
+  await dingtalk.handleServerMessage(chatId, { type: 'permission_requests_snapshot', turnActive: true })
+  expect(dingtalk.getRuntimeState(chatId).pendingPermissionCount).toBe(0)
+  dingtalk.clearTransientChatState(chatId)
+})
+
+it('DingTalk retries terminal text automatically and keeps exhausted replies separate from the next turn', async () => {
+  const chatId = chatFor('dingtalk')
+  await send('dingtalk', '/help')
+  dingtalk.clearTransientChatState(chatId)
+  const card = spyOn(DingTalkAiCardService.prototype, 'createForTarget').mockResolvedValue(null)
+  const before = notices.length
+  try {
+    dingtalkTextFailures = 1
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'transient answer' })
+    await dingtalk.handleServerMessage(chatId, { type: 'message_complete' })
+    expect(notices.slice(before).filter(text => text.includes('transient answer'))).toHaveLength(1)
+
+    dingtalkTextFailures = 100
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'previous turn answer' })
+    await expect(dingtalk.handleServerMessage(chatId, { type: 'message_complete' })).rejects.toThrow('DingTalk text delivery failed')
+    dingtalk.sessionStore.set(chatId, 'history-active', temporaryRoot)
+    // Failed delivery of the old reply cannot consume a new inbound message.
+    await dingtalk.routeUserMessage(chatId, 'next prompt must survive')
+    const deadline = Date.now() + 2000
+    while (!sentPrompts.some(prompt => prompt.content === 'next prompt must survive') && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(sentPrompts.some(prompt => prompt.content === 'next prompt must survive')).toBe(true)
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'next turn answer' })
+    await expect(dingtalk.handleServerMessage(chatId, { type: 'message_complete' })).rejects.toThrow('DingTalk text delivery failed')
+    // A reset must not silently discard the failed terminal reply.
+    dingtalk.clearTransientChatState(chatId)
+    dingtalkTextFailures = 0
+    await dingtalk.routeUserMessage(chatId, '/help')
+    const finalTexts = notices.slice(before).flatMap(text => {
+      try { return [JSON.parse(text).markdown?.text].filter(Boolean) } catch { return [] }
+    })
+    expect(finalTexts.filter(text => text === 'previous turn answer')).toHaveLength(1)
+    expect(finalTexts.filter(text => text === 'next turn answer')).toHaveLength(1)
+    expect(finalTexts.some(text => text.includes('previous turn answer') && text.includes('next turn answer'))).toBe(false)
+  } finally {
+    dingtalkTextFailures = 0
+    card.mockRestore()
+    dingtalk.clearTransientChatState(chatId)
+  }
+})
 
 it('uses the CONNECT-capable HTTP transport for both clients created by Feishu startup', async () => {
   const restHttp = (feishu.larkClient as unknown as { httpInstance: Lark.HttpInstance }).httpInstance

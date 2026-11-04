@@ -16,7 +16,7 @@ import {
   parsePermissionCommand,
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
-import { syncImPermissionState } from '../common/permission-sync.js'
+import { deliverImPermissionPrompt, syncImPermissionState } from '../common/permission-sync.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
@@ -417,19 +417,13 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       typingController.start(chatId)
       break
     case 'permission_request': {
-      runtime.pendingPermissionCount += 1
-      runtime.state = 'permission_pending'
-      let pending = pendingPermissions.get(chatId)
-      if (!pending) {
-        pending = new Set()
-        pendingPermissions.set(chatId, pending)
-      }
-      pending.add(msg.requestId)
-      typingController.stop(chatId)
-      await sendText(
-        chatId,
-        `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
-      )
+      await deliverImPermissionPrompt(chatId, msg.requestId, runtime, pendingPermissions, async () => {
+        typingController.stop(chatId)
+        await sendText(
+          chatId,
+          `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
+        )
+      })
       break
     }
     case 'message_complete': {

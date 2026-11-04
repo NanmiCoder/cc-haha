@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import { SessionStore } from '../../common/session-store.js'
-import { WsBridge } from '../../common/ws-bridge.js'
+import { WsBridge, type ServerMessage } from '../../common/ws-bridge.js'
 import { AttachmentStore } from '../../common/attachment/attachment-store.js'
 import { adapterMigrationLifecycle } from '../../common/migration-lifecycle.js'
 
@@ -28,6 +28,7 @@ describe('Telegram entrypoint session routing', () => {
   const activeLeases = new Set<string>()
   const acceptedLeases: string[] = []
   const protectedDownloads: boolean[] = []
+  let permissionDelivery: { requestId: string; gate: Promise<void>; fail: boolean } | undefined
 
   async function eventually(assertion: () => void): Promise<void> {
     const deadline = Date.now() + 2500
@@ -146,6 +147,11 @@ describe('Telegram entrypoint session routing', () => {
     entry.bot.botInfo = { id: 12345, is_bot: true, first_name: 'Fixture', username: 'fixture_bot', can_join_groups: false, can_read_all_group_messages: false, supports_inline_queries: false, can_manage_bots: false, can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: false, allows_users_to_create_topics: false }
     entry.bot.api.config.use(async (_previous, method, payload) => {
       apiCalls.push({ method, payload })
+      if (method === 'sendMessage' && permissionDelivery &&
+        String((payload as any).text).includes(permissionDelivery.requestId) && (payload as any).reply_markup) {
+        await permissionDelivery.gate
+        if (permissionDelivery.fail) throw new Error('Fixture permission send failed')
+      }
       if (method === 'getFile') {
         // All media is deferred until the authorized inbound lease is held.
         protectedDownloads.push(activeLeases.size > 0)
@@ -163,6 +169,53 @@ describe('Telegram entrypoint session routing', () => {
       else process.env[key] = value
     }
     if (directory) rmSync(directory, { recursive: true, force: true })
+  })
+
+  it.each([false, true])('deduplicates pending permission delivery and preserves resolution (send fails=%s)', async (fail) => {
+    const chatId = fail ? 722 : 721
+    const sessionId = `permission-${chatId}`
+    sessionPaths.set(sessionId, project)
+    store.set(String(chatId), sessionId, project)
+    const registrations = spyOn(WsBridge.prototype, 'onServerMessage')
+    let handle!: (message: ServerMessage) => Promise<void>
+    try {
+      await text(chatId, 'Permission fixture')
+      handle = registrations.mock.calls.find(([id]) => id === String(chatId))![1] as typeof handle
+    } finally {
+      registrations.mockRestore()
+    }
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const request = { type: 'permission_request', requestId: `duplicate-${chatId}`, toolName: 'Bash', input: {} }
+    permissionDelivery = { requestId: request.requestId, gate, fail }
+    const first = handle(request).catch(error => error)
+    const duplicate = handle(request).catch(error => error)
+    const status = async () => {
+      const before = texts(chatId).length
+      await text(chatId, '/status')
+      await eventually(() => expect(texts(chatId).length).toBeGreaterThan(before))
+      return texts(chatId).at(-1)!
+    }
+    try {
+      expect(await status()).toContain('审批: 1 个待确认')
+      const calls = apiCalls.filter(call => call.payload.chat_id === chatId && call.payload.reply_markup && String(call.payload.text).includes(request.requestId))
+      expect(calls).toHaveLength(1)
+    } finally {
+      release()
+      await Promise.all([first, duplicate])
+      permissionDelivery = undefined
+    }
+    // A failed send still leaves the approval available for a manual response.
+    expect(await status()).toContain('审批: 1 个待确认')
+    await handle({ type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+    await handle(request)
+    await handle(request)
+    expect(apiCalls.filter(call => call.payload.chat_id === chatId && call.payload.reply_markup && String(call.payload.text).includes(request.requestId)))
+      .toHaveLength(fail ? 2 : 1)
+    expect(await status()).toContain('审批: 1 个待确认')
+    await handle({ type: 'permission_resolved', permissionType: 'tool', requestId: request.requestId })
+    expect(await status()).not.toContain('待确认')
+    await handle({ type: 'message_complete' })
   })
 
   it('retains the original session and project through reconnect timeout and retries that conversation', async () => {
