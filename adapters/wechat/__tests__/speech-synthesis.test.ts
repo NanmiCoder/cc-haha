@@ -140,11 +140,23 @@ describe('WeChat local speech synthesis', () => {
     await expect(synthesizeWechatSpeech('Hello', { signal: controller.signal, platform: 'win32' })).rejects.toMatchObject({ name: 'AbortError' })
   })
 
-  it('uses the shared PowerShell resolver for System.Speech on non-Chinese text', async () => {
+  it('uses an injected PowerShell resolver for System.Speech on non-Chinese text', async () => {
     const result = await synthesizeWechatSpeech('English reply', {
       ...windowsOptions, outputDir: await tempDir(),
       runner: async request => {
         expect(request.command).toBe('fixture-powershell.exe')
+        expect(Buffer.from(request.args.at(-1)!, 'base64').toString('utf16le')).toContain('System.Speech.Synthesis.SpeechSynthesizer')
+        await fs.writeFile(request.outputPath, wav())
+      },
+    })
+    await result.cleanup()
+  })
+
+  it('defaults to the Windows .NET Framework host without a CLI shell resolver', async () => {
+    const result = await synthesizeWechatSpeech('English reply', {
+      platform: 'win32', outputDir: await tempDir(),
+      runner: async request => {
+        expect(request.command).toBe(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
         expect(Buffer.from(request.args.at(-1)!, 'base64').toString('utf16le')).toContain('System.Speech.Synthesis.SpeechSynthesizer')
         await fs.writeFile(request.outputPath, wav())
       },

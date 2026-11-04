@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { getCachedPowerShellPath } from '../../src/utils/shell/powershellDetection.js'
 
 export const WECHAT_SPEECH_MAX_CHARACTERS = 2000
 export const WECHAT_SPEECH_MAX_BYTES = 10 * 1024 * 1024
@@ -231,7 +230,9 @@ export async function synthesizeWechatSpeech(text: string, options: WechatSpeech
   }
   const windowsPowerShell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const useWinRt = Boolean(options.voiceId) || /[\u3400-\u9fff]/u.test(cleaned)
-  const command = useWinRt ? windowsPowerShell : await (options.resolvePowerShell ?? getCachedPowerShellPath)() ?? windowsPowerShell
+  // The speech APIs use Windows' .NET Framework host. Keep the standalone
+  // adapter independent of the CLI shell resolver and its root dependencies.
+  const command = useWinRt ? windowsPowerShell : await options.resolvePowerShell?.() ?? windowsPowerShell
   if (options.signal?.aborted) throw aborted()
   const parentDir = path.resolve(options.outputDir ?? os.tmpdir())
   await fs.mkdir(parentDir, { recursive: true })

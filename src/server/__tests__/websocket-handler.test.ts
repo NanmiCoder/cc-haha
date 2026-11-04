@@ -173,6 +173,40 @@ describe('WebSocket ordered attachment admission', () => {
     expect(send.mock.calls[0]?.[1]).toBe('Fresh request after Stop')
   })
 
+  it('cancels queued admissions on session cleanup without blocking a replacement connection', async () => {
+    const sessionId = `wechat-video-cleanup-${crypto.randomUUID()}`
+    const previous = makeClientSocket(sessionId)
+    const replacement = makeClientSocket(sessionId)
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    const committed: string[] = []
+    const send = spyOn(conversationService, 'sendMessage').mockImplementation(async (_id, content, _attachments, options) => {
+      if (content === 'Old video') await pending
+      if (options?.canSend && !options.canSend()) return false
+      committed.push(content)
+      options?.onCommitted?.()
+      return true
+    })
+    handleWebSocket.open(previous)
+    handleWebSocket.message(previous, JSON.stringify({ type: 'user_message', content: 'Old video' }))
+    await flushMicrotasks(40)
+    handleWebSocket.message(previous, JSON.stringify({ type: 'user_message', content: 'Old follow-up' }))
+    expect(closeSessionConnection(sessionId)).toBe(true)
+    handleWebSocket.open(replacement)
+    handleWebSocket.message(replacement, JSON.stringify({ type: 'user_message', content: 'New request' }))
+    await flushMicrotasks(100)
+    expect(committed).toEqual(['New request'])
+    release()
+    await flushMicrotasks(100)
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(committed).toEqual(['New request'])
+  })
+
   it('does not block a different session behind video admission', async () => {
     const waitingId = `wechat-video-waiting-${crypto.randomUUID()}`
     const otherId = `wechat-video-independent-${crypto.randomUUID()}`
