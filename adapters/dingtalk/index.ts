@@ -150,8 +150,7 @@ async function getAccessToken(): Promise<string> {
 async function sendText(chatId: string, text: string): Promise<void> {
   const sessionWebhook = sessionWebhooks.get(chatId)
   if (!sessionWebhook) {
-    console.warn(`[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`)
-    return
+    throw new Error(`[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`)
   }
 
   const token = await getAccessToken()
@@ -172,7 +171,7 @@ async function sendText(chatId: string, text: string): Promise<void> {
     })
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      console.warn(`[DingTalk] sendText failed: ${res.status} ${body}`)
+      throw new Error(`[DingTalk] sendText failed: ${res.status} ${body}`)
     }
   }
 }
@@ -450,7 +449,9 @@ function handlePermissionCommand(chatId: string, text: string): boolean {
   const sent = applyPermissionDecision(chatId, decision)
   if (!sent) return true
 
-  void sendText(chatId, formatPermissionDecisionStatus(decision))
+  void sendText(chatId, formatPermissionDecisionStatus(decision)).catch((err) => {
+    console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
+  })
   return true
 }
 
@@ -458,13 +459,17 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+    void sendText(chatId, `未找到待确认的权限请求：${requestId}`).catch((err) => {
+      console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
+    })
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。')
+    void sendText(chatId, '权限响应发送失败，请检查会话状态。').catch((err) => {
+      console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
+    })
     return false
   }
 
