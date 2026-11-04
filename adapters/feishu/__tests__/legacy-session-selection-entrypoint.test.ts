@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -42,6 +42,13 @@ let dingtalkTextFailures = 0
 const notices: string[] = []
 const sentPrompts: Array<{ sessionId: string; content: string; attachments?: AttachmentRef[] }> = []
 const transcribedAudio: Buffer[] = []
+let dingtalkDelivery: {
+  cardFailure: 'create' | 'finish' | null
+  failFirstMarkdown: boolean
+  markdownAttempts: number
+  delivered: string[]
+  finishedCards: string[]
+} | undefined
 const activeLeases = new Set<string>()
 const acceptedLeases: string[] = []
 const attachmentLeases: Array<{ platform: Platform; protected: boolean }> = []
@@ -114,6 +121,15 @@ beforeAll(async () => {
         }
         return Response.json({ workDir: temporaryRoot, permissionMode: 'default' })
       }
+      if (url.pathname === '/dingtalk' && dingtalkDelivery) {
+        dingtalkDelivery.markdownAttempts++
+        if (dingtalkDelivery.failFirstMarkdown && dingtalkDelivery.markdownAttempts === 1) {
+          return new Response('webhook unavailable', { status: 503 })
+        }
+        const body = await request.json() as { markdown: { text: string } }
+        dingtalkDelivery.delivered.push(body.markdown.text)
+        return Response.json({ errcode: 0 })
+      }
       if (url.pathname === '/dingtalk' || url.pathname === '/ilink/bot/sendmessage') {
         if (url.pathname === '/dingtalk' && dingtalkTextFailures > 0) {
           dingtalkTextFailures--
@@ -173,6 +189,17 @@ beforeAll(async () => {
     if (url.origin === httpOrigin) return originalFetch(input, init)
     if (url.href === 'https://api.dingtalk.com/v1.0/oauth2/accessToken') {
       return Response.json({ accessToken: 'fixture-access-token', expireIn: 7200 })
+    }
+    if (dingtalkDelivery && url.origin === 'https://api.dingtalk.com' && url.pathname.startsWith('/v1.0/card/')) {
+      if (url.pathname === '/v1.0/card/instances' && init?.method === 'POST' && dingtalkDelivery.cardFailure === 'create') {
+        return new Response('card unavailable', { status: 503 })
+      }
+      if (url.pathname === '/v1.0/card/streaming') {
+        if (dingtalkDelivery.cardFailure === 'finish') return new Response('stream unavailable', { status: 503 })
+        const body = JSON.parse(String(init?.body))
+        if (body.isFinalize) dingtalkDelivery.finishedCards.push(body.content)
+      }
+      return Response.json({})
     }
     throw new Error(`External network is forbidden in this fixture: ${url.origin}${url.pathname}`)
   }) as typeof fetch
@@ -1087,4 +1114,94 @@ describe('WeChat actual module multimedia integration', () => {
       await waitUntilMedia(() => activeLeases.size === 0)
     }
   })
+})
+
+describe('DingTalk reply delivery through the adapter entrypoint', () => {
+  const chatId = chatFor('dingtalk')
+
+  beforeEach(async () => {
+    dingtalk.clearTransientChatState(chatId)
+    dingtalk.sessionSelectionController.clear(chatId)
+    dingtalkDelivery = { cardFailure: null, failFirstMarkdown: false, markdownAttempts: 0, delivered: [], finishedCards: [] }
+    await send('dingtalk', '/help')
+    dingtalkDelivery.markdownAttempts = 0
+    dingtalkDelivery.delivered.length = 0
+  })
+
+  afterEach(() => {
+    dingtalk.clearTransientChatState(chatId)
+    dingtalk.clearTransientChatState('dingtalk:dm:without-webhook')
+    dingtalkDelivery = undefined
+  })
+
+  for (const failure of ['create', 'finish'] as const) {
+    for (const firstSendFails of [false, true]) {
+      it(`${failure} fallback ${firstSendFails ? 'retries a rejected webhook' : 'sends markdown once'}`, async () => {
+        dingtalkDelivery!.cardFailure = failure
+        dingtalkDelivery!.failFirstMarkdown = firstSendFails
+        await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'complete short answer' })
+        await dingtalk.handleServerMessage(chatId, { type: 'message_complete' })
+        await dingtalk.handleServerMessage(chatId, { type: 'message_complete' })
+
+        expect(dingtalkDelivery!.delivered).toEqual(['complete short answer'])
+        expect(dingtalkDelivery!.markdownAttempts).toBe(firstSendFails ? 2 : 1)
+      })
+    }
+  }
+
+  it('finishes a working card without also sending markdown', async () => {
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'card answer' })
+    await dingtalk.handleServerMessage(chatId, { type: 'message_complete' })
+
+    expect(dingtalkDelivery!.finishedCards).toEqual(['card answer'])
+    expect(dingtalkDelivery!.delivered).toEqual([])
+    expect(dingtalkDelivery!.markdownAttempts).toBe(0)
+  })
+
+  it('reports a missing webhook as a delivery failure', async () => {
+    const missingChat = 'dingtalk:dm:without-webhook'
+    await dingtalk.handleServerMessage(missingChat, { type: 'content_delta', text: 'undelivered answer' })
+    await expect(dingtalk.handleServerMessage(missingChat, { type: 'message_complete' }))
+      .rejects.toThrow('Missing sessionWebhook')
+    expect(dingtalkDelivery!.delivered).toEqual([])
+  })
+
+  it('keeps an unpaired notice without a webhook best effort', async () => {
+    const warning = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await dingtalk.handleRobotMessage({
+        conversationType: '1', senderStaffId: 'unpaired-without-webhook', msgtype: 'text', text: { content: 'hello' },
+      })
+      expect(dingtalkDelivery!.markdownAttempts).toBe(0)
+      expect(warning.mock.calls.some(([message]) => String(message).includes('Missing sessionWebhook'))).toBe(true)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  for (const permissionState of ['unknown', 'disconnected', 'accepted', 'unpaired'] as const) {
+    it(`contains a failed ${permissionState} notice`, async () => {
+      if (permissionState !== 'unknown' && permissionState !== 'unpaired') {
+        await dingtalk.handleServerMessage(chatId, {
+          type: 'permission_request', requestId: 'permission-1', toolName: 'Bash', input: { command: 'pwd' },
+        })
+      }
+      dingtalkDelivery!.markdownAttempts = 0
+      dingtalkDelivery!.delivered.length = 0
+      dingtalkDelivery!.failFirstMarkdown = true
+      const response = spyOn(dingtalk.bridge, 'sendPermissionResponse').mockReturnValue(permissionState === 'accepted')
+      const warning = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await send('dingtalk', '/allow permission-1', { unauthorized: permissionState === 'unpaired' })
+        await Bun.sleep(0)
+
+        expect(dingtalkDelivery!.markdownAttempts).toBe(1)
+        expect(dingtalkDelivery!.delivered).toEqual([])
+        expect(warning.mock.calls.some(args => args.join(' ').includes('sendText failed'))).toBe(true)
+      } finally {
+        warning.mockRestore()
+        response.mockRestore()
+      }
+    })
+  }
 })

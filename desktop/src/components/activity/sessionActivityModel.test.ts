@@ -1181,6 +1181,55 @@ describe('buildSessionActivityModel', () => {
     expect(model.badgeCount).toBe(1)
   })
 
+  it('does not add rows for TaskCreate calls that were cancelled or blocked', () => {
+    const cancelled = "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed."
+    const model = buildSessionActivityModel({
+      sessionId: 'session-1',
+      messages: [
+        ...['脚手架', '数据层', '3D 场景'].map((subject, index) => ({
+          id: `task-create-${index}`,
+          type: 'tool_use' as const,
+          toolName: 'TaskCreate',
+          toolUseId: `task-create-call-${index}`,
+          input: { subject, description: `完成${subject}` },
+          timestamp: 1000 + index,
+        })),
+        {
+          id: 'task-create-result-0',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-0',
+          content: 'Task #1 created successfully: 脚手架',
+          isError: false,
+          timestamp: 1010,
+        },
+        {
+          id: 'task-create-result-1',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-1',
+          content: cancelled,
+          isError: true,
+          timestamp: 1011,
+        },
+        {
+          id: 'task-create-result-2',
+          type: 'tool_result',
+          toolUseId: 'task-create-call-2',
+          content: 'TaskCreated hook blocked: subject must reference a ticket',
+          isError: true,
+          timestamp: 1012,
+        },
+      ],
+      tasks: [],
+      completedAndDismissed: false,
+      backgroundTasks: [],
+      agentNotifications: [],
+    })
+
+    expect(model.sections.tasks.rows).toEqual([
+      expect.objectContaining({ id: '1', label: '脚手架', status: 'pending' }),
+    ])
+  })
+
   it('does not let a stale live task list regress a successful TaskUpdate', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
