@@ -207,6 +207,12 @@ describe('Telegram entrypoint session routing', () => {
     }
     // A failed send still leaves the approval available for a manual response.
     expect(await status()).toContain('审批: 1 个待确认')
+    await handle({ type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+    await handle(request)
+    await handle(request)
+    expect(apiCalls.filter(call => call.payload.chat_id === chatId && call.payload.reply_markup && String(call.payload.text).includes(request.requestId)))
+      .toHaveLength(fail ? 2 : 1)
+    expect(await status()).toContain('审批: 1 个待确认')
     await handle({ type: 'permission_resolved', permissionType: 'tool', requestId: request.requestId })
     expect(await status()).not.toContain('待确认')
     await handle({ type: 'message_complete' })

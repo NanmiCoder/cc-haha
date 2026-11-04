@@ -1494,6 +1494,40 @@ export async function stopCollaborationRuntime(sessionId: string): Promise<void>
   })
 }
 
+/** Keep HTTP history rewrites in the same queue as startup and runtime changes. */
+export async function runSessionRewind<T>(
+  sessionId: string,
+  rewind: (stopRuntime: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  // A later message waiting behind an existing transition is not the turn the
+  // rewind interrupted. In particular, a second queued rewind must not cancel it.
+  const activeTurn = activeUserTurns.get(sessionId)
+  const turnToCancel = !runtimeTransitionPromises.has(sessionId) || activeTurn?.messageSent || activeTurn?.sendStarted
+    ? activeTurn
+    : undefined
+  let result!: T
+  await enqueueRuntimeTransition(sessionId, async () => {
+    result = await rewind(async () => {
+      // The service calls this only after validating the selected target. An
+      // invalid rewind must not stop the user's current work.
+      if (turnToCancel) {
+        turnToCancel.cancelled = true
+        releaseUserTurnWithoutResult(sessionId, turnToCancel)
+      }
+      const pendingStartup = sessionStartupPromises.get(sessionId)
+      await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+      if (pendingStartup) {
+        // Startup may have been waiting on metadata before a process existed.
+        // Drain it and stop again before the transcript can be replaced.
+        await pendingStartup.catch(() => undefined)
+        await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+      }
+      endReplacedCliRun(sessionId)
+    })
+  })
+  return result
+}
+
 /** Apply an idle worker's complete runtime without a renderer or a speculative CLI launch. */
 export async function applyCollaborationRuntime(sessionId: string, selection: SessionRuntimeSelection): Promise<void> {
   strictCollaborationRuntimeSessions.add(sessionId)

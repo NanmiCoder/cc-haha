@@ -645,6 +645,26 @@ describe('ImChatRuntime server stream', () => {
     expect(notices.filter(notice => notice.includes('ask-1'))).toHaveLength(1)
   })
 
+  it('retries an undelivered approval after a reconnect snapshot without inflating pending count', async () => {
+    const { runtime, port, notices, dedup } = createRuntime()
+    const request = { type: 'permission_request', requestId: 'retry-prompt', toolName: 'Bash', input: {} }
+    const send = port.sendNotice
+    let failing = true
+    port.sendNotice = async (chatId, text) => {
+      if (failing) throw new Error('platform offline')
+      await send(chatId, text)
+    }
+    try {
+      await expect(runtime.handleServerMessage(CHAT_ID, request)).rejects.toThrow('platform offline')
+      await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+      failing = false
+      await runtime.handleServerMessage(CHAT_ID, request)
+      await runtime.handleServerMessage(CHAT_ID, request)
+      expect(notices.filter(text => text.includes(request.requestId))).toHaveLength(1)
+      expect(runtime.getRuntimeState(CHAT_ID).pendingPermissionCount).toBe(1)
+    } finally { dedup.destroy() }
+  })
+
   it('routes a numeric reply to the single pending permission request', async () => {
     const { runtime, bridge } = createRuntime()
 
@@ -739,8 +759,12 @@ describe('ImChatRuntime server stream', () => {
       text: `![inside](${insidePath}) ![outside](/etc/hosts)`,
     })
     await runtime.handleServerMessage(CHAT_ID, { type: 'message_complete' })
-    // The upload is dispatched without blocking the stream.
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The upload is dispatched without blocking the stream. Wait for its
+    // observable result rather than depending on a 20 ms filesystem deadline.
+    const uploadDeadline = Date.now() + 2000
+    while (images.length === 0 && Date.now() < uploadDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
 
     expect(images).toEqual([{ mime: 'image/png', alt: 'inside' }])
   })

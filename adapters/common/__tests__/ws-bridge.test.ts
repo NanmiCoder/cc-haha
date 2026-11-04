@@ -146,6 +146,99 @@ describe('WsBridge: handler serialization', () => {
     return connections[0]!
   }
 
+  it('drains accepted answer frames across a reconnect before delivering its snapshot', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, { reconnectBaseMs: 5 })
+    const events: string[] = []
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    bridge.onServerMessage('queued-answer', async (msg) => {
+      events.push(msg.type === 'content_delta' ? msg.text : msg.type)
+      if (msg.type === 'content_start') await pending
+    })
+    try {
+      bridge.connectSession('queued-answer', 'same-session')
+      expect(await bridge.waitForOpen('queued-answer')).toBe(true)
+      const socket = await waitForServerConnection()
+      socket.send(JSON.stringify({ type: 'content_start', blockType: 'text' }))
+      expect(await waitFor(() => events.length === 1)).toBe(true)
+      const oldSession = (bridge as any).sessions.get('queued-answer')
+      const accepted: string[] = []
+      oldSession.ws.on('message', (raw: Buffer) => { accepted.push(JSON.parse(raw.toString()).type) })
+      socket.send(JSON.stringify({ type: 'content_delta', text: 'complete answer' }))
+      socket.send(JSON.stringify({ type: 'message_complete' }))
+      expect(await waitFor(() => accepted.length === 2)).toBe(true)
+      expect(accepted).toEqual(['content_delta', 'message_complete'])
+
+      socket.close(1011, 'transient disconnect while rendering')
+      expect(await waitFor(() => connections.length === 2)).toBe(true)
+      expect(await bridge.waitForOpen('queued-answer')).toBe(true)
+      const reconnected = (bridge as any).sessions.get('queued-answer')
+      let snapshotAccepted = false
+      reconnected.ws.once('message', () => { snapshotAccepted = true })
+      connections[1]!.send(JSON.stringify({ type: 'permission_requests_snapshot', toolRequestIds: [], turnActive: false }))
+      expect(await waitFor(() => snapshotAccepted)).toBe(true)
+      expect(events).toEqual(['content_start'])
+
+      release()
+      await (bridge as any).handlerChains.get('queued-answer')
+      expect(events).toEqual(['content_start', 'complete answer', 'message_complete', 'permission_requests_snapshot'])
+      expect(bridge.getSessionId('queued-answer')).toBe('same-session')
+    } finally {
+      release()
+      bridge.destroy()
+    }
+  })
+
+  it.each(['reset', 'switch', 'terminal'] as const)('discards old queued frames after a logical replacement (%s)', async (replacement) => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, {
+      reconnectBaseMs: 10_000, maxReconnectAttempts: replacement === 'terminal' ? 0 : 10,
+    })
+    const events: string[] = []
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    bridge.onServerMessage('replaced', async (msg) => {
+      events.push(msg.type)
+      if (msg.type === 'content_start') await pending
+    })
+    try {
+      bridge.connectSession('replaced', 'original-session')
+      expect(await bridge.waitForOpen('replaced')).toBe(true)
+      const socket = await waitForServerConnection()
+      socket.send(JSON.stringify({ type: 'content_start' }))
+      expect(await waitFor(() => events.length === 1)).toBe(true)
+      const oldSession = (bridge as any).sessions.get('replaced')
+      let oldFrameAccepted = false
+      oldSession.ws.once('message', () => { oldFrameAccepted = true })
+      socket.send(JSON.stringify({ type: 'content_delta', text: 'old answer' }))
+      expect(await waitFor(() => oldFrameAccepted)).toBe(true)
+      const oldChain = (bridge as any).handlerChains.get('replaced')
+
+      if (replacement === 'reset') {
+        bridge.resetSession('replaced')
+      } else {
+        socket.close(1011, 'fixture replacement')
+        expect(await waitFor(() => replacement === 'terminal'
+          ? oldSession.terminal
+          : oldSession.reconnectTimer !== null)).toBe(true)
+      }
+      const sessionId = replacement === 'switch' ? 'different-session' : 'original-session'
+      bridge.onServerMessage('replaced', (msg) => { events.push(`new:${msg.type}`) })
+      bridge.connectSession('replaced', sessionId)
+      expect(await bridge.waitForOpen('replaced')).toBe(true)
+      expect(await waitFor(() => connections.length === 2)).toBe(true)
+      connections[1]!.send(JSON.stringify({ type: 'status', state: 'idle' }))
+      release()
+      await oldChain
+      expect(await waitFor(() => events.includes('new:status'))).toBe(true)
+      expect(events).toEqual(['content_start', 'new:status'])
+      expect(bridge.getSessionId('replaced')).toBe(sessionId)
+      expect(bridge.isSessionOpen('replaced')).toBe(true)
+    } finally {
+      release()
+      bridge.destroy()
+    }
+  })
+
   it('exhausts flapping reconnects and delivers a terminal error before cleanup', async () => {
     const bridge = new WsBridge(serverUrl, 'test', undefined, {
       reconnectBaseMs: 5, maxReconnectAttempts: 3,

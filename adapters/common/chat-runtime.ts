@@ -37,7 +37,7 @@ import {
 } from './permission.js'
 import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from './session-recovery.js'
 import { SessionSelectionController } from './session-selection.js'
-import { syncImPermissionState } from './permission-sync.js'
+import { deliverImPermissionPrompt, syncImPermissionState } from './permission-sync.js'
 import type { SessionStore } from './session-store.js'
 import type { AttachmentRef, ServerMessage, WsBridge } from './ws-bridge.js'
 import { ImageBlockWatcher } from './attachment/image-block-watcher.js'
@@ -441,25 +441,16 @@ export class ImChatRuntime {
         break
 
       case 'permission_request': {
-        let pending = this.pendingPermissions.get(chatId)
-        if (!pending) {
-          pending = new Set()
-          this.pendingPermissions.set(chatId, pending)
-        }
-        // The server re-announces a request when its auto-answer deadline changes;
-        // the prompt has already been sent, so a repeat must not notify again.
-        if (pending.has(msg.requestId)) break
-        runtime.pendingPermissionCount += 1
-        runtime.state = 'permission_pending'
-        pending.add(msg.requestId)
-        this.port.setBusy?.(chatId, false)
-        // Close the in-flight reply first: the approval prompt is a separate
-        // message and must not be swallowed by an editing stream.
-        await this.finishResponse(chatId)
-        await this.port.sendNotice(
-          chatId,
-          `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
-        )
+        await deliverImPermissionPrompt(chatId, msg.requestId, runtime, this.pendingPermissions, async (isCurrent) => {
+          this.port.setBusy?.(chatId, false)
+          // Close the reply before sending the separate approval prompt.
+          await this.finishResponse(chatId)
+          if (!isCurrent()) return
+          await this.port.sendNotice(
+            chatId,
+            `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
+          )
+        })
         break
       }
 

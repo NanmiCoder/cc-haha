@@ -30,7 +30,7 @@ import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
 import { SessionSelectionController } from '../common/session-selection.js'
-import { syncImPermissionState } from '../common/permission-sync.js'
+import { deliverImPermissionPrompt, syncImPermissionState } from '../common/permission-sync.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { TelegramMediaService } from './media.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -378,19 +378,15 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
 
     case 'permission_request': {
-      const pending = pendingPermissions.get(chatId) ?? new Set<string>()
-      if (pending.has(msg.requestId)) break
-      pending.add(msg.requestId)
-      pendingPermissions.set(chatId, pending)
-      runtime.pendingPermissionCount = pending.size
-      runtime.state = 'permission_pending'
-      const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
-      const keyboard = new InlineKeyboard()
-        .text('✅ 允许', `permit:${msg.requestId}:yes`)
-        .text('♾️ 永久允许', `permit:${msg.requestId}:always`)
-        .row()
-        .text('❌ 拒绝', `permit:${msg.requestId}:no`)
-      await bot.api.sendMessage(numericChatId, text, { reply_markup: keyboard })
+      await deliverImPermissionPrompt(chatId, msg.requestId, runtime, pendingPermissions, async () => {
+        const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
+        const keyboard = new InlineKeyboard()
+          .text('✅ 允许', `permit:${msg.requestId}:yes`)
+          .text('♾️ 永久允许', `permit:${msg.requestId}:always`)
+          .row()
+          .text('❌ 拒绝', `permit:${msg.requestId}:no`)
+        await bot.api.sendMessage(numericChatId, text, { reply_markup: keyboard })
+      })
       break
     }
 

@@ -32,6 +32,8 @@ export type MessageHandler = (msg: ServerMessage) => void
 
 type Session = {
   sessionId: string
+  /** Stable across transport reconnects, renewed by a logical reset/replacement. */
+  deliveryGeneration: symbol
   ws: WebSocket
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -235,9 +237,10 @@ export class WsBridge {
 
     // A reconnect to the same session is not new activity; its snapshot on
     // open refreshes the turn and approval state.
-    const carried = prev?.sessionId === sessionId ? prev : undefined
+    const carried = prev?.sessionId === sessionId && !prev.terminal ? prev : undefined
     const session: Session = {
       sessionId,
+      deliveryGeneration: carried?.deliveryGeneration ?? Symbol(),
       ws,
       reconnectAttempts: carried?.reconnectAttempts ?? 0,
       reconnectTimer: null,
@@ -301,13 +304,14 @@ export class WsBridge {
 
   private deliverMessage(chatId: string, session: Session, msg: ServerMessage): Promise<void> {
     if (!this.handlers.has(chatId)) return Promise.resolve()
-    // Keep terminal notifications behind in-flight card updates too. Recheck
-    // ownership at delivery so a reset/replacement cannot receive old frames.
+    // Already received frames belong to the logical session, not its socket.
+    // A reconnect must drain them before its snapshot; only a reset/replacement
+    // invalidates them. Terminal notifications use the same FIFO boundary.
     const prev = this.handlerChains.get(chatId) ?? Promise.resolve()
     const next = adapterMigrationLifecycle.track(prev
       .catch(() => {})
       .then(() => {
-        if (this.sessions.get(chatId) !== session) return
+        if (this.sessions.get(chatId)?.deliveryGeneration !== session.deliveryGeneration) return
         return this.handlers.get(chatId)?.(msg)
       })
       .catch((err) => {

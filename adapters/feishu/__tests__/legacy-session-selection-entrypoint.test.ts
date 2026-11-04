@@ -9,6 +9,7 @@ import { StreamingCard } from '../streaming-card.js'
 import { FeishuMediaService } from '../media.js'
 import { WechatMediaService } from '../../wechat/media.js'
 import { DingTalkMediaService } from '../../dingtalk/media.js'
+import { DingTalkAiCardService } from '../../dingtalk/ai-card.js'
 import { WhatsAppMediaService } from '../../whatsapp/media.js'
 import { currentInboundPowerLease } from '../../common/inbound-power-activity.js'
 import { MessageBuffer } from '../../common/message-buffer.js'
@@ -31,6 +32,8 @@ let preflightStarted: (() => void) | undefined
 let permissionDeliveryGate: Promise<void> | undefined
 let permissionDeliveryStarted: (() => void) | undefined
 let permissionDeliveryAttempts = 0
+let failPermissionDelivery = false
+let dingtalkTextFailures = 0
 const notices: string[] = []
 const sentPrompts: Array<{ sessionId: string; content: string }> = []
 const activeLeases = new Set<string>()
@@ -47,10 +50,12 @@ const environmentKeys = [
 const savedEnvironment = new Map(environmentKeys.map((key) => [key, process.env[key]]))
 
 async function waitForPermissionDelivery() {
-  if (!permissionDeliveryGate) return
-  permissionDeliveryAttempts++
-  permissionDeliveryStarted?.()
-  await permissionDeliveryGate
+  if (permissionDeliveryGate) {
+    permissionDeliveryAttempts++
+    permissionDeliveryStarted?.()
+    await permissionDeliveryGate
+  }
+  if (failPermissionDelivery) throw new Error('Fixture permission delivery failed')
 }
 
 function entries() {
@@ -99,9 +104,15 @@ beforeAll(async () => {
         return Response.json({ workDir: temporaryRoot, permissionMode: 'default' })
       }
       if (url.pathname === '/dingtalk' || url.pathname === '/ilink/bot/sendmessage') {
-        await waitForPermissionDelivery()
+        if (url.pathname === '/dingtalk' && dingtalkTextFailures > 0) {
+          dingtalkTextFailures--
+          return Response.json({ errcode: 503 }, { status: 503 })
+        }
+        try { await waitForPermissionDelivery() } catch {
+          return Response.json({ errcode: 503, ret: 503 }, { status: 503 })
+        }
         notices.push(await request.text())
-        return Response.json({ ret: 0 })
+        return Response.json(url.pathname === '/dingtalk' ? { errcode: 0 } : { ret: 0 })
       }
       if (url.pathname === '/ilink/bot/getconfig') return Response.json({ ret: 0 })
       if (url.pathname === '/ilink/bot/sendtyping') return Response.json({ ret: 0 })
@@ -230,6 +241,27 @@ function adapterFor(platform: Platform) {
 }
 
 for (const platform of ['feishu', 'wechat', 'dingtalk'] as const) {
+  it(`${platform} retries failed permission delivery after a snapshot, then suppresses replay`, async () => {
+    const adapter = adapterFor(platform)
+    const chatId = chatFor(platform)
+    await send(platform, '/status')
+    adapter.bridge.resetSession(chatId)
+    adapter.clearTransientChatState(chatId)
+    const request = { type: 'permission_request', requestId: `failed-${platform}`, toolName: 'Bash', input: {} }
+    failPermissionDelivery = true
+    try {
+      await expect(adapter.handleServerMessage(chatId, request)).rejects.toThrow()
+    } finally { failPermissionDelivery = false }
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    await adapter.handleServerMessage(chatId, { type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+    const before = notices.length
+    await adapter.handleServerMessage(chatId, request)
+    await adapter.handleServerMessage(chatId, request)
+    expect(notices).toHaveLength(before + 1)
+    expect(adapter.getRuntimeState(chatId).pendingPermissionCount).toBe(1)
+    adapter.clearTransientChatState(chatId)
+  })
+
   it(`${platform} claims each permission before asynchronous delivery and ignores replay`, async () => {
     const adapter = adapterFor(platform)
     const chatId = chatFor(platform)
@@ -300,6 +332,48 @@ it('DingTalk registers permission before waiting for stream completion and prese
   await dingtalk.handleServerMessage(chatId, { type: 'permission_requests_snapshot', turnActive: true })
   expect(dingtalk.getRuntimeState(chatId).pendingPermissionCount).toBe(0)
   dingtalk.clearTransientChatState(chatId)
+})
+
+it('DingTalk retries terminal text automatically and keeps exhausted replies separate from the next turn', async () => {
+  const chatId = chatFor('dingtalk')
+  await send('dingtalk', '/help')
+  dingtalk.clearTransientChatState(chatId)
+  const card = spyOn(DingTalkAiCardService.prototype, 'createForTarget').mockResolvedValue(null)
+  const before = notices.length
+  try {
+    dingtalkTextFailures = 1
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'transient answer' })
+    await dingtalk.handleServerMessage(chatId, { type: 'message_complete' })
+    expect(notices.slice(before).filter(text => text.includes('transient answer'))).toHaveLength(1)
+
+    dingtalkTextFailures = 100
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'previous turn answer' })
+    await expect(dingtalk.handleServerMessage(chatId, { type: 'message_complete' })).rejects.toThrow('DingTalk text delivery failed')
+    dingtalk.sessionStore.set(chatId, 'history-active', temporaryRoot)
+    // Failed delivery of the old reply cannot consume a new inbound message.
+    await dingtalk.routeUserMessage(chatId, 'next prompt must survive')
+    const deadline = Date.now() + 2000
+    while (!sentPrompts.some(prompt => prompt.content === 'next prompt must survive') && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    expect(sentPrompts.some(prompt => prompt.content === 'next prompt must survive')).toBe(true)
+    await dingtalk.handleServerMessage(chatId, { type: 'content_delta', text: 'next turn answer' })
+    await expect(dingtalk.handleServerMessage(chatId, { type: 'message_complete' })).rejects.toThrow('DingTalk text delivery failed')
+    // A reset must not silently discard the failed terminal reply.
+    dingtalk.clearTransientChatState(chatId)
+    dingtalkTextFailures = 0
+    await dingtalk.routeUserMessage(chatId, '/help')
+    const finalTexts = notices.slice(before).flatMap(text => {
+      try { return [JSON.parse(text).markdown?.text].filter(Boolean) } catch { return [] }
+    })
+    expect(finalTexts.filter(text => text === 'previous turn answer')).toHaveLength(1)
+    expect(finalTexts.filter(text => text === 'next turn answer')).toHaveLength(1)
+    expect(finalTexts.some(text => text.includes('previous turn answer') && text.includes('next turn answer'))).toBe(false)
+  } finally {
+    dingtalkTextFailures = 0
+    card.mockRestore()
+    dingtalk.clearTransientChatState(chatId)
+  }
 })
 
 it('uses the CONNECT-capable HTTP transport for both clients created by Feishu startup', async () => {
