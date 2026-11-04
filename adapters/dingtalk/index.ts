@@ -147,10 +147,12 @@ async function getAccessToken(): Promise<string> {
   return data.accessToken
 }
 
-async function sendText(chatId: string, text: string): Promise<void> {
+async function sendText(chatId: string, text: string, options: { requireDelivery?: boolean } = {}): Promise<void> {
   const sessionWebhook = sessionWebhooks.get(chatId)
   if (!sessionWebhook) {
-    console.warn(`[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`)
+    const message = `[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`
+    if (options.requireDelivery) throw new Error(message)
+    console.warn(message)
     return
   }
 
@@ -172,7 +174,9 @@ async function sendText(chatId: string, text: string): Promise<void> {
     })
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      console.warn(`[DingTalk] sendText failed: ${res.status} ${body}`)
+      const message = `[DingTalk] sendText failed: ${res.status} ${body}`
+      if (options.requireDelivery) throw new Error(message)
+      console.warn(message)
     }
   }
 }
@@ -210,7 +214,7 @@ async function flushToAiCard(chatId: string, newText: string, isComplete: boolea
     isComplete,
     {
       getOrCreateCard: () => getOrCreateAiCard(chatId),
-      sendText: (text) => sendText(chatId, text),
+      sendText: (text) => sendText(chatId, text, { requireDelivery: true }),
       aiCards,
     },
   )
