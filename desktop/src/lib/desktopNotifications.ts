@@ -2,6 +2,9 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { getDesktopHost } from './desktopHost'
 
 const DEFAULT_COOLDOWN_MS = 750
+// Keep recent deduplication and ID-only plugin click fallbacks without retaining
+// every turn for the lifetime of the desktop. Payloads also embed their target.
+const NOTIFICATION_HISTORY_LIMIT = 1024
 
 export type DesktopNotificationOptions = {
   title: string
@@ -37,6 +40,14 @@ const pendingCooldownScopes = new Set<string>()
 const notificationTargetById = new Map<number, DesktopNotificationTarget>()
 let overrideNativeNotificationSender: NativeNotificationSender | null = null
 let nextNotificationId = 1
+
+function trimNotificationHistory<T>(history: Set<T> | Map<T, unknown>): void {
+  while (history.size > NOTIFICATION_HISTORY_LIMIT) {
+    const oldest = history.keys().next()
+    if (oldest.done) break
+    history.delete(oldest.value)
+  }
+}
 
 function readBrowserNotificationPermission(): DesktopNotificationPermission {
   if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -166,6 +177,9 @@ function notificationTargetFromPayload(payload: unknown): DesktopNotificationTar
 
   if (!payload || typeof payload !== 'object') return null
   const record = payload as Record<string, unknown>
+  const id = typeof record.id === 'number' ? record.id : null
+  const cachedTarget = id !== null ? notificationTargetById.get(id) : null
+  if (id !== null) notificationTargetById.delete(id)
 
   const directTarget = notificationTargetFromPayload(record.target)
   if (directTarget) return directTarget
@@ -185,8 +199,7 @@ function notificationTargetFromPayload(payload: unknown): DesktopNotificationTar
   const dataTarget = data ? notificationTargetFromPayload(data[TARGET_EXTRA_KEY]) : null
   if (dataTarget) return dataTarget
 
-  const id = typeof record.id === 'number' ? record.id : null
-  return id !== null ? notificationTargetById.get(id) ?? null : null
+  return cachedTarget ?? null
 }
 
 function buildNativeNotificationPayload(options: {
@@ -202,6 +215,7 @@ function buildNativeNotificationPayload(options: {
   if (options.target) {
     const id = nextNotificationId++
     notificationTargetById.set(id, options.target)
+    trimNotificationHistory(notificationTargetById)
     payload.id = id
     payload.extra = { [TARGET_EXTRA_KEY]: JSON.stringify(options.target) }
     payload.target = options.target
@@ -308,7 +322,12 @@ async function sendNativeNotification(options: { title: string; body?: string; t
   }
 
   const payload = buildNativeNotificationPayload(options)
-  await getDesktopHost().notifications.send(payload)
+  try {
+    await getDesktopHost().notifications.send(payload)
+  } catch (err) {
+    if (payload.id !== undefined) notificationTargetById.delete(payload.id)
+    throw err
+  }
   return true
 }
 
@@ -396,10 +415,14 @@ export async function notifyDesktop(options: DesktopNotificationOptions): Promis
     }))
     if (options.dedupeKey) {
       pendingKeys.delete(options.dedupeKey)
-      if (sent) notifiedKeys.add(options.dedupeKey)
+      if (sent) {
+        notifiedKeys.add(options.dedupeKey)
+        trimNotificationHistory(notifiedKeys)
+      }
     }
     if (sent && cooldownScope) {
       lastNotificationAtByScope.set(cooldownScope, Date.now())
+      trimNotificationHistory(lastNotificationAtByScope)
     }
     if (cooldownScope) pendingCooldownScopes.delete(cooldownScope)
     if (!sent && typeof console !== 'undefined') {

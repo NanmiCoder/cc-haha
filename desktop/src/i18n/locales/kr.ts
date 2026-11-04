@@ -4250,6 +4250,9 @@ export const kr: Record<TranslationKey, string> = {
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': '닫기',
+  'tabs.emptySessionDeleteFailed': '빈 세션을 삭제하지 못했습니다. 닫은 탭을 다시 열 수 있습니다.',
+  'tabs.saveFailed': '탭을 저장하지 못했습니다. 현재 탭은 열려 있습니다. 종료하기 전에 저장을 다시 시도하세요.',
+  'tabs.restoreFailed': '탭을 복원하지 못했습니다. 저장된 탭은 유지됩니다. 다시 시도하세요.',
   'tabs.closeOthers': '다른 탭 닫기',
   'tabs.closeLeft': '왼쪽 탭 닫기',
   'tabs.closeRight': '오른쪽 탭 닫기',

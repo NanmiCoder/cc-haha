@@ -47,9 +47,19 @@ const phase = () => useVoiceInputStore.getState().catalog?.providers[0]!.prepara
 /** Lets pending promise continuations run without advancing the fake clock. */
 const flush = () => vi.advanceTimersByTimeAsync(0)
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   useVoiceInputStore.setState({ catalog: null, loading: false, error: null })
 })
 
@@ -81,15 +91,64 @@ describe('voiceInputStore.loadCatalog', () => {
   })
 
   it('joins an in-flight load instead of issuing a second request', async () => {
-    let resolve!: (value: VoiceCatalog) => void
-    api.catalog.mockImplementation(() => new Promise(r => { resolve = r }))
+    const pending = deferred<VoiceCatalog>()
+    api.catalog.mockReturnValueOnce(pending.promise)
+    let joined = false
 
     const first = useVoiceInputStore.getState().loadCatalog()
-    const second = useVoiceInputStore.getState().loadCatalog({ force: true })
-    resolve(catalog({ phase: 'ready' }))
+    const second = useVoiceInputStore.getState().loadCatalog().then(() => { joined = true })
+    await flush()
+    expect.soft(joined).toBe(false)
+    pending.resolve(catalog({ phase: 'ready' }))
     await Promise.all([first, second])
 
     expect(api.catalog).toHaveBeenCalledTimes(1)
+    expect(joined).toBe(true)
+    expect(phase()).toBe('ready')
+  })
+
+  it('queues and coalesces forced refreshes without publishing the older catalog', async () => {
+    const oldLoad = deferred<VoiceCatalog>()
+    const freshLoad = deferred<VoiceCatalog>()
+    api.catalog.mockReturnValueOnce(oldLoad.promise).mockReturnValueOnce(freshLoad.promise)
+    let refreshed = false
+
+    const first = useVoiceInputStore.getState().loadCatalog()
+    const forced = useVoiceInputStore.getState().loadCatalog({ force: true }).then(() => { refreshed = true })
+    const alsoForced = useVoiceInputStore.getState().loadCatalog({ force: true })
+    await flush()
+    expect.soft(refreshed).toBe(false)
+    expect.soft(api.catalog).toHaveBeenCalledTimes(1)
+
+    oldLoad.resolve(catalog({ phase: 'downloading' }))
+    await flush()
+    expect.soft(api.catalog).toHaveBeenCalledTimes(2)
+    expect.soft(useVoiceInputStore.getState().catalog).toBeNull()
+    expect.soft(useVoiceInputStore.getState().loading).toBe(true)
+    expect.soft(refreshed).toBe(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect.soft(api.providerStatus).not.toHaveBeenCalled()
+
+    freshLoad.resolve(catalog({ phase: 'ready' }))
+    await Promise.all([first, forced, alsoForced])
+    expect(refreshed).toBe(true)
+    expect(phase()).toBe('ready')
+    expect(useVoiceInputStore.getState().loading).toBe(false)
+  })
+
+  it('runs a queued forced refresh even when the preceding load fails', async () => {
+    const oldLoad = deferred<VoiceCatalog>()
+    api.catalog.mockReturnValueOnce(oldLoad.promise).mockResolvedValueOnce(catalog({ phase: 'ready' }))
+    const first = useVoiceInputStore.getState().loadCatalog()
+    const forced = useVoiceInputStore.getState().loadCatalog({ force: true })
+
+    oldLoad.reject(new Error('old request failed'))
+    await Promise.all([first, forced])
+
+    expect(api.catalog).toHaveBeenCalledTimes(2)
+    expect(phase()).toBe('ready')
+    expect(useVoiceInputStore.getState().error).toBeNull()
+    expect(useVoiceInputStore.getState().loading).toBe(false)
   })
 
   it('records a failed load, clears the loading flag, and retries on the next call', async () => {

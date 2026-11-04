@@ -205,44 +205,80 @@ export function useConnection(id?: string) {
   const host = registry.hosts.find(
     (item) => item.id === (id ?? registry.selectedId)
   )
-  const [auth, setAuth] = useState<{ id: string; credential: string } | null>(
-    null
-  )
-  const [failure, setFailure] = useState<{
-    id: string
+  const [restored, setRestored] = useState<{
+    host: Host
+    credential: string | null
+    issue: 'missing' | 'unavailable' | null
     message: string
   } | null>(null)
+  // Forget the previous selection before rendering any new host-bound client.
+  if (restored && restored.host !== host) setRestored(null)
   useEffect(() => {
+    if (!host) return
     let alive = true
-    if (host)
-      credentialOf(host.id)
-        .then((credential) => {
-          if (!alive) return
-          if (credential === null)
-            setFailure({
-              id: host.id,
-              message: '连接凭据已失效，请在主机页面移除后重新连接',
-            })
-          else setAuth({ id: host.id, credential })
+    let active = AppState.currentState === 'active'
+    let resolved = false
+    let generation = 0
+    let retries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const restore = async () => {
+      if (!alive || !active || resolved) return
+      const attempt = ++generation
+      const current = () => alive && active && attempt === generation
+      try {
+        const credential = await credentialOf(host.id)
+        if (!current()) return
+        resolved = credential !== null
+        setRestored({
+          host,
+          credential,
+          issue: credential === null ? 'missing' : null,
+          message: credential === null ? '未找到这台电脑的连接凭据，请检查手机上的连接设置' : '',
         })
-        .catch((e) => {
-          if (alive) setFailure({ id: host.id, message: e.message })
+      } catch {
+        if (!current()) return
+        // A locked/unavailable secret store says nothing about server authorization.
+        setRestored({
+          host,
+          credential: null,
+          issue: 'unavailable',
+          message: '暂时无法读取连接凭据，请解锁手机后重试',
         })
+        const delay = [1000, 3000, 10000][retries++]
+        if (delay !== undefined) timer = setTimeout(() => void restore(), delay)
+      }
+    }
+    const listener = AppState.addEventListener('change', (state) => {
+      const next = state === 'active'
+      if (active === next) return
+      active = next
+      generation++
+      clearTimeout(timer)
+      if (active) {
+        retries = 0
+        void restore()
+      }
+    })
+    void restore()
     return () => {
       alive = false
+      clearTimeout(timer)
+      listener.remove()
     }
   }, [host, credentialOf])
+  const current = restored?.host === host ? restored : null
   const client = useMemo(
     () =>
-      host && auth?.id === host.id
-        ? createApiClient(host, auth.credential)
+      host && current?.credential !== null && current?.credential !== undefined
+        ? createApiClient(host, current.credential)
         : null,
-    [host, auth]
+    [host, current]
   )
   return {
     host,
     client,
-    credential: auth?.id === host?.id ? auth?.credential : undefined,
-    error: failure?.id === host?.id ? (failure?.message ?? '') : '',
+    credential: current?.credential ?? undefined,
+    error: current?.message ?? '',
+    credentialIssue: current?.issue ?? null,
   }
 }

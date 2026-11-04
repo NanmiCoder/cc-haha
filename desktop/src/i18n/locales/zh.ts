@@ -4245,6 +4245,9 @@ export const zh: Record<TranslationKey, string> = {
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': '关闭',
+  'tabs.emptySessionDeleteFailed': '删除空会话失败，你仍可重新打开已关闭的标签。',
+  'tabs.saveFailed': '保存标签失败。当前标签仍然打开，请在退出前重试保存。',
+  'tabs.restoreFailed': '恢复标签失败，已保留上次保存的标签，请重试。',
   'tabs.closeOthers': '关闭其他',
   'tabs.closeLeft': '关闭左侧',
   'tabs.closeRight': '关闭右侧',
