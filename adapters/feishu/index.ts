@@ -834,11 +834,12 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
 
     case 'permission_request': {
-      runtime.pendingPermissionCount += 1
-      runtime.state = 'permission_pending'
       const pending = pendingPermissions.get(chatId) ?? new Set<string>()
+      if (pending.has(msg.requestId)) break
       pending.add(msg.requestId)
       pendingPermissions.set(chatId, pending)
+      runtime.pendingPermissionCount = pending.size
+      runtime.state = 'permission_pending'
       const stored = sessionStore.get(chatId)
       const card = buildPermissionCard(
         msg.toolName,

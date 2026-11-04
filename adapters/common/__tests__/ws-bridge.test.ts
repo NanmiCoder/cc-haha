@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { WsBridge } from '../ws-bridge.js'
 import { restoreSelectedSession } from '../session-selection.js'
 import { restoreStoredSessionBinding } from '../session-recovery.js'
@@ -145,6 +145,138 @@ describe('WsBridge: handler serialization', () => {
     })
     return connections[0]!
   }
+
+  it('exhausts flapping reconnects and delivers a terminal error before cleanup', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, {
+      reconnectBaseMs: 5, maxReconnectAttempts: 3,
+    })
+    const received: any[] = []
+    bridge.onServerMessage('flapping', async (msg) => { received.push(msg) })
+    server.on('connection', (socket) => socket.close(1011, 'fixture disconnect'))
+    try {
+      bridge.connectSession('flapping', 'original-session')
+      expect(await waitFor(() => received.some((msg) => msg.code === 'ADAPTER_CONNECTION_LOST'))).toBe(true)
+      expect(connections).toHaveLength(4)
+      expect(received.map((msg) => msg.type)).toEqual(['permission_requests_snapshot', 'error'])
+      expect(received[0]).toMatchObject({ turnActive: false, toolRequestIds: [], computerUseRequestIds: [] })
+      expect(bridge.hasSession('flapping')).toBe(false)
+      expect((bridge as any).handlerChains.has('flapping')).toBe(false)
+      expect(bridge.sendUserMessage('flapping', 'must retry')).toBe(false)
+    } finally {
+      bridge.destroy()
+    }
+  })
+
+  it('rejects sends on an expired pong deadline and reconnects the same session', async () => {
+    let now = 0
+    const bridge = new WsBridge(serverUrl, 'test', undefined, {
+      heartbeatIntervalMs: 20, reconnectBaseMs: 5, now: () => now,
+    })
+    const received: any[] = []
+    server.on('connection', (socket) => socket.on('message', (raw) => received.push(JSON.parse(raw.toString()))))
+    try {
+      bridge.connectSession('silent', 'same-session')
+      expect(await bridge.waitForOpen('silent')).toBe(true)
+      expect(await waitFor(() => received.some((msg) => msg.type === 'ping'))).toBe(true)
+      now = 21
+      expect(bridge.sendUserMessage('silent', 'not delivered')).toBe(false)
+      expect(bridge.isSessionOpen('silent')).toBe(false)
+      expect(await waitFor(() => connections.length === 2)).toBe(true)
+      expect(bridge.getSessionId('silent')).toBe('same-session')
+      expect(received.some((msg) => msg.type === 'user_message')).toBe(false)
+    } finally {
+      bridge.destroy()
+    }
+  })
+
+  it('detects a missing pong without another user message', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, { heartbeatIntervalMs: 15, reconnectBaseMs: 5 })
+    try {
+      bridge.connectSession('silent-heartbeat', 'original-session')
+      expect(await bridge.waitForOpen('silent-heartbeat')).toBe(true)
+      expect(await waitFor(() => connections.length >= 2)).toBe(true)
+    } finally {
+      bridge.destroy()
+    }
+  })
+
+  it('keeps a responsive connection open and resets retries only after a healthy heartbeat', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, { heartbeatIntervalMs: 15, reconnectBaseMs: 5 })
+    const frames: string[] = []
+    server.on('connection', (socket) => {
+      if (connections.length === 1) socket.close(1011, 'retry once')
+      else socket.on('message', (raw) => {
+        if (JSON.parse(raw.toString()).type === 'ping') socket.send(JSON.stringify({ type: 'pong' }))
+      })
+    })
+    bridge.onServerMessage('healthy', (msg) => { frames.push(msg.type) })
+    try {
+      bridge.connectSession('healthy', 'original-session')
+      expect(await waitFor(() => connections.length === 2)).toBe(true)
+      expect(await waitFor(() => (bridge as any).sessions.get('healthy')?.reconnectAttempts === 0)).toBe(true)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(connections).toHaveLength(2)
+      expect(bridge.isSessionOpen('healthy')).toBe(true)
+      expect(bridge.sendUserMessage('healthy', 'accepted')).toBe(true)
+      expect(frames).toEqual([])
+    } finally {
+      bridge.destroy()
+    }
+  })
+
+  it.each([false, true])('serializes exhausted-connection notices and respects replacement (replace=%s)', async (replace) => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, { maxReconnectAttempts: 0 })
+    const events: string[] = []
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    bridge.onServerMessage('queued', async (msg) => {
+      events.push(msg.type)
+      if (msg.type === 'status') await pending
+    })
+    try {
+      bridge.connectSession('queued', 'old-session')
+      expect(await bridge.waitForOpen('queued')).toBe(true)
+      const socket = await waitForServerConnection()
+      socket.send(JSON.stringify({ type: 'status', state: 'thinking' }))
+      expect(await waitFor(() => events.length === 1)).toBe(true)
+      socket.close(1011, 'disconnect while rendering')
+      expect(await waitFor(() => (bridge as any).sessions.get('queued')?.terminal === true)).toBe(true)
+      expect(events).toEqual(['status'])
+      if (replace) {
+        bridge.resetSession('queued')
+        bridge.onServerMessage('queued', (msg) => { events.push(`new:${msg.type}`) })
+        bridge.connectSession('queued', 'new-session')
+        expect(await bridge.waitForOpen('queued')).toBe(true)
+      }
+      release()
+      expect(await waitFor(() => replace || !bridge.hasSession('queued'))).toBe(true)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(events).toEqual(replace ? ['status'] : ['status', 'permission_requests_snapshot', 'error'])
+      expect(bridge.getSessionId('queued')).toBe(replace ? 'new-session' : null)
+    } finally {
+      release()
+      bridge.destroy()
+    }
+  })
+
+  it('returns false on a synchronous socket send error and starts recovery', async () => {
+    const bridge = new WsBridge(serverUrl, 'test', undefined, { reconnectBaseMs: 5 })
+    try {
+      bridge.connectSession('send-error', 'original-session')
+      expect(await bridge.waitForOpen('send-error')).toBe(true)
+      const session = (bridge as any).sessions.get('send-error')
+      const send = spyOn(session.ws, 'send').mockImplementation(() => { throw new Error('socket failed') })
+      try {
+        expect(bridge.sendUserMessage('send-error', 'not accepted')).toBe(false)
+      } finally {
+        send.mockRestore()
+      }
+      expect(session.turnActive).toBe(false)
+      expect(await waitFor(() => connections.length === 2)).toBe(true)
+    } finally {
+      bridge.destroy()
+    }
+  })
 
   it('transfers only an acquired inbound power lease with the exact user message', async () => {
     const bridge = new WsBridge(serverUrl, 'test', 'fixture-token')
@@ -443,6 +575,9 @@ describe('WsBridge: idle release', () => {
     server.on('connection', (ws) => {
       connections.push(ws)
       ws.on('close', (code) => closeCodes.push(code))
+      ws.on('message', (raw) => {
+        if (JSON.parse(raw.toString()).type === 'ping') ws.send(JSON.stringify({ type: 'pong' }))
+      })
     })
     await new Promise<void>((resolve) => server.on('listening', () => resolve()))
     serverUrl = `ws://127.0.0.1:${(server.address() as { port: number }).port}`

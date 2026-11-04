@@ -413,14 +413,16 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
 
 async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promise<void> {
   const runtime = getRuntimeState(chatId)
-  runtime.pendingPermissionCount += 1
-  runtime.state = 'permission_pending'
-  await finishAndResetDingTalkStreamingState({ aiCardBuffers, streamingCards, streamingCardText, finalize: () => flushToAiCard(chatId, '', true) }, chatId)
-
   const set = pendingPermissions.get(chatId) ?? new Set<string>()
+  if (set.has(msg.requestId)) return
+  // Claim before the first await: reconnect replay can arrive while finishing
+  // the stream, and a concurrent resolution must not be undone afterwards.
   set.add(msg.requestId)
   pendingPermissions.set(chatId, set)
   pendingPermissionChats.set(msg.requestId, chatId)
+  runtime.pendingPermissionCount = set.size
+  runtime.state = 'permission_pending'
+  await finishAndResetDingTalkStreamingState({ aiCardBuffers, streamingCards, streamingCardText, finalize: () => flushToAiCard(chatId, '', true) }, chatId)
 
   const requestText = formatPermissionRequest(msg.toolName, msg.input, msg.requestId)
   const instructions = formatPermissionInstructions(msg.requestId)

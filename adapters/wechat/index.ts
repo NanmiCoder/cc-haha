@@ -417,14 +417,15 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       typingController.start(chatId)
       break
     case 'permission_request': {
-      runtime.pendingPermissionCount += 1
-      runtime.state = 'permission_pending'
       let pending = pendingPermissions.get(chatId)
+      if (pending?.has(msg.requestId)) break
       if (!pending) {
         pending = new Set()
         pendingPermissions.set(chatId, pending)
       }
       pending.add(msg.requestId)
+      runtime.pendingPermissionCount = pending.size
+      runtime.state = 'permission_pending'
       typingController.stop(chatId)
       await sendText(
         chatId,

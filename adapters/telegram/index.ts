@@ -378,11 +378,12 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
 
     case 'permission_request': {
-      runtime.pendingPermissionCount += 1
-      runtime.state = 'permission_pending'
       const pending = pendingPermissions.get(chatId) ?? new Set<string>()
+      if (pending.has(msg.requestId)) break
       pending.add(msg.requestId)
       pendingPermissions.set(chatId, pending)
+      runtime.pendingPermissionCount = pending.size
+      runtime.state = 'permission_pending'
       const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
       const keyboard = new InlineKeyboard()
         .text('✅ 允许', `permit:${msg.requestId}:yes`)
