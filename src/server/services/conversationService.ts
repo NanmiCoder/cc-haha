@@ -1034,6 +1034,14 @@ export class ConversationService {
         ...(options?.model ? { runtimeModelId: options.model } : {}),
         ...(options?.effort ? { effortLevel: options.effort } : {}),
       })
+      // Startup resumes once the SDK socket attaches, usually before init, so
+      // init can move the session while this write is in flight. If it lands
+      // after init's own write, restore init's cwd and drop the placeholder.
+      const initWorkDir = this.getSessionWorkDir(sessionId)
+      if (initWorkDir && initWorkDir !== metadataWorkDir) {
+        await sessionService.appendSessionMetadata(sessionId, { workDir: initWorkDir })
+        await sessionService.deletePlaceholderSessionFiles(sessionId, initWorkDir)
+      }
     }
 
     console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
