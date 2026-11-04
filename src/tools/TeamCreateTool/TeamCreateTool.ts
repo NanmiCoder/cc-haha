@@ -129,7 +129,7 @@ export const TeamCreateTool: Tool<InputSchema, Output> = buildTool({
 
     if (existingTeam) {
       throw new Error(
-        `Already leading team "${existingTeam}". A leader can only manage one team at a time. Use TeamDelete to end the current team before creating a new one.`,
+        `Already leading team "${existingTeam}". A leader can only manage one team at a time, and this team can take the new work: message its members with SendMessage, or add members with the Agent tool (team_name: "${existingTeam}"). Use TeamDelete only when the user wants this team replaced by a new one.`,
       )
     }
 
