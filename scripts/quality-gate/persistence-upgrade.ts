@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'WeChat delivery journal and media preference schema upgrades preserve old fixtures',
+    command: ['bun', 'test', './adapters/wechat/__tests__/delivery-store.test.ts', './adapters/wechat/__tests__/media-preferences.test.ts'],
+  },
+  {
     title: 'Project auxiliary directories and legacy session snapshots',
     command: ['bun', 'test', './src/server/services/sessionService.additionalDirectories.test.ts'],
   },
