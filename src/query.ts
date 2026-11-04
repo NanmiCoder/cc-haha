@@ -18,8 +18,9 @@ import { buildPostCompactMessages } from './services/compact/compact.js'
 import {
   canRecoverFromPromptTooLong,
   compactAfterPromptTooLong,
+  estimateRejectedRequestTokens,
   getProviderContextLimit,
-  isPromptTooLongApiError,
+  isRecoverableContextRejection,
 } from './services/compact/promptTooLongRecovery.js'
 import { rememberProviderContextLimit } from './utils/context.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -873,7 +874,7 @@ async function* queryLoop(
             }
             if (
               promptTooLongRecoveryEnabled &&
-              isPromptTooLongApiError(message)
+              isRecoverableContextRejection(message, messagesForQuery)
             ) {
               withheld = true
             }
@@ -1267,20 +1268,25 @@ async function* queryLoop(
       if (
         promptTooLongRecoveryEnabled &&
         lastMessage &&
-        isPromptTooLongApiError(lastMessage)
+        isRecoverableContextRejection(lastMessage, messagesForQuery)
       ) {
+        const rejectedCacheSafeParams = {
+          systemPrompt,
+          userContext,
+          systemContext,
+          toolUseContext,
+          forkContextMessages: messagesForQuery,
+        }
+        const rejectedRequestTokens = estimateRejectedRequestTokens(
+          messagesForQuery,
+          rejectedCacheSafeParams,
+        )
         const compacted = await (
           deps.compactAfterPromptTooLong ?? compactAfterPromptTooLong
         )({
           messages: messagesForQuery,
           toolUseContext,
-          cacheSafeParams: {
-            systemPrompt,
-            userContext,
-            systemContext,
-            toolUseContext,
-            forkContextMessages: messagesForQuery,
-          },
+          cacheSafeParams: rejectedCacheSafeParams,
           querySource,
         })
         if (compacted) {
@@ -1293,7 +1299,10 @@ async function* queryLoop(
                 preCompactContext,
             )
           }
-          const limit = getProviderContextLimit(lastMessage)
+          const limit = getProviderContextLimit(
+            lastMessage,
+            rejectedRequestTokens,
+          )
           pendingProviderContextLimit =
             limit === undefined ? undefined : { model: currentModel, limit }
           const postCompactMessages = buildPostCompactMessages(compacted)

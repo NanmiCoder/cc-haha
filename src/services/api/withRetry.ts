@@ -285,6 +285,11 @@ export function isRetryableStreamError(error: unknown): boolean {
   if (!message) {
     return false
   }
+  // An overflow reported inside the stream is still an overflow: re-sending
+  // the same request cannot succeed, compaction can.
+  if (isContextOverflowErrorText(message)) {
+    return false
+  }
   return (
     message.includes('"type":"api_error"') ||
     message.includes('"type":"overloaded_error"')
@@ -351,10 +356,16 @@ export function isProxyStreamTransportError(error: unknown): boolean {
 
 /**
  * The upstream rejected the request inside the stream. Unlike a broken stream,
- * re-sending it without streaming only gets the same answer.
+ * re-sending it without streaming only gets the same answer. A context
+ * overflow is such a rejection whatever event type carries it: the local proxy
+ * relays an OpenAI `data: {"error":...}` chunk as an api_error.
  */
 export function isStreamRequestRejection(error: unknown): boolean {
-  return streamErrorEventType(error) === 'invalid_request_error'
+  const type = streamErrorEventType(error)
+  return (
+    type === 'invalid_request_error' ||
+    (type !== undefined && isContextOverflowErrorText(errorMessage(error)))
+  )
 }
 
 /**
@@ -1034,6 +1045,13 @@ function shouldRetry(error: APIError): boolean {
     return true
   }
 
+  // A context overflow replays the same oversized prompt on every attempt,
+  // whatever status a gateway wraps it in (a 401 in #1162, a 500 from relays).
+  // Fail fast so the overflow surfaces and compaction can react instead.
+  if (error.status !== 429 && isContextOverflowErrorText(error.message)) {
+    return false
+  }
+
   // Note this is not a standard header.
   const shouldRetryHeader = error.headers?.get('x-should-retry')
 
@@ -1077,12 +1095,6 @@ function shouldRetry(error: APIError): boolean {
   // Clear API key cache on 401 and allow retry.
   // OAuth token handling is done in the main retry loop via handleOAuth401Error.
   if (error.status === 401) {
-    // Some gateways wrap context-overflow rejections in a 401 (#1162).
-    // Retrying just replays the same oversized prompt — fail fast so the
-    // overflow surfaces and compaction can react instead.
-    if (isContextOverflowErrorText(error.message)) {
-      return false
-    }
     clearApiKeyHelperCache()
     return true
   }

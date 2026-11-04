@@ -13,7 +13,7 @@ import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { PROMPT_TOO_LONG_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
+import { PROMPT_TOO_LONG_TRIGGER, RELAY_OVERFLOW_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 
 export type MockAgentScenario = { id: string; title: string }
@@ -57,6 +57,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   {
     id: 'mock-prompt-too-long-compacts',
     title: 'A history the provider rejects as too long is compacted and retried instead of ending the turn',
+  },
+  {
+    id: 'mock-relay-overflow-compacts',
+    title: 'A relay-wrapped overflow in a provider\'s own wording, with no token counts, is compacted and retried without burning retries',
   },
   {
     id: 'mock-provider-refusal-recovers',
@@ -867,6 +871,33 @@ export function createMockOnlyRunners(
         // Upstream saw the rejected request, the summary request, and the retry.
         const agentRequests = requests.slice(since).filter((request) => (request.body.tools ?? []).length > 0)
         if (agentRequests.length < 2) throw new Error(`expected the rejected request and its retry upstream, saw ${agentRequests.length}`)
+      } finally {
+        socket.close()
+      }
+    },
+
+    async 'mock-relay-overflow-compacts'(ctx) {
+      const socket = await ctx.openSocket(await ctx.createSession())
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        const since = requests.length
+        socket.send({ type: 'user_message', content: `${RELAY_OVERFLOW_TRIGGER}: the relay rejects this history as too long.` })
+        await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'the turn to finish after compaction', start)
+        const frames = socket.messages.slice(start)
+        const shown = frames.find((m) => m.type === 'error')
+        if (shown) throw new Error(`the relay's rejection reached the user instead of being recovered: ${JSON.stringify(shown).slice(0, 300)}`)
+        if (!frames.some((m) => m.type === 'system_notification' && m.subtype === 'compact_boundary')) {
+          throw new Error('the rejected history was never compacted')
+        }
+        if (!streamedText(frames).trim()) throw new Error('no reply after the compacted retry')
+        // The 500 is an overflow, not an outage: the relay refuses the agent
+        // request once and the compacted retry goes through, with no
+        // transient-error retries in between.
+        const agentRequests = requests.slice(since).filter((request) => (request.body.tools ?? []).length > 0)
+        const rejected = agentRequests.filter((request) => request.outcome === 'error')
+        if (rejected.length !== 1) throw new Error(`expected the relay to refuse the agent request once, it refused ${rejected.length}`)
+        if (!agentRequests.some((request) => request.outcome === 'completed')) throw new Error('the compacted retry never reached the relay')
       } finally {
         socket.close()
       }

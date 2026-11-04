@@ -60,6 +60,13 @@ export const UPSTREAM_REFUSAL_TRIGGER = 'MOCK_UPSTREAM_REFUSAL'
  */
 export const PROMPT_TOO_LONG_TRIGGER = 'MOCK_PROMPT_TOO_LONG'
 export const PROMPT_TOO_LONG_MESSAGE = "This model's maximum context length is 120000 tokens. However, you requested 150000 tokens. Please reduce the length of the messages."
+/**
+ * The same rejection the way a relay forwards a Chinese provider's: Zhipu's
+ * 1261 wording, JSON-escaped by a Python relay, no token counts, wrapped in a
+ * 500. Retrying would replay it; only compaction lets the turn through.
+ */
+export const RELAY_OVERFLOW_TRIGGER = 'MOCK_RELAY_OVERFLOW'
+export const RELAY_OVERFLOW_MESSAGE = '{"error":{"code":"1261","message":"Prompt \\u8d85\\u957f"}}'
 
 function blocksOf(message: RequestMessage | undefined): RequestBlock[] {
   if (!message) return []
@@ -161,6 +168,10 @@ export function decideReply(request: MockRequest): MockReply {
 
   if (prompt.includes(PROMPT_TOO_LONG_TRIGGER)) {
     return { kind: 'error', status: 400, errorType: 'invalid_request_error', message: PROMPT_TOO_LONG_MESSAGE }
+  }
+
+  if (prompt.includes(RELAY_OVERFLOW_TRIGGER)) {
+    return { kind: 'error', status: 500, errorType: 'api_error', message: RELAY_OVERFLOW_MESSAGE }
   }
 
   if (prompt.includes(UPSTREAM_ERROR_TRIGGER)) {
