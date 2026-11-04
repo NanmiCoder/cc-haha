@@ -4248,6 +4248,9 @@ export const jp: Record<TranslationKey, string> = {
 
   // ─── Tabs ──────────────────────────────────────
   'tabs.close': '閉じる',
+  'tabs.emptySessionDeleteFailed': '空のセッションを削除できませんでした。閉じたタブは再度開けます。',
+  'tabs.saveFailed': 'タブを保存できませんでした。現在のタブは開いたままです。終了前に保存を再試行してください。',
+  'tabs.restoreFailed': 'タブを復元できませんでした。保存済みのタブは保持されています。再試行してください。',
   'tabs.closeOthers': '他を閉じる',
   'tabs.closeLeft': '左側を閉じる',
   'tabs.closeRight': '右側を閉じる',
