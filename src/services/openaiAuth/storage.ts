@@ -1,3 +1,4 @@
+import { oauthFileAuthority } from '../oauth/refresh-coordinator.js'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -27,6 +28,12 @@ function getCcHahaDir(): string {
   const configDir =
     process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
   return path.join(configDir, 'cc-haha')
+}
+
+/** Scope in-process refresh coordination to the actual credential store. */
+export function getOpenAIOAuthAuthority(): string {
+  const filePath = getDesktopTokenFilePath()
+  return filePath ? oauthFileAuthority(filePath) : `secure:${path.resolve(getCcHahaDir())}`
 }
 
 function getFileBackedStorageMarkerPath(): string {

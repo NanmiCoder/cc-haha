@@ -5,7 +5,7 @@
  * 此处的 REST API 用于非流式操作与状态查询。
  *
  * Routes:
- *   POST /api/sessions/:id/chat        — 发送消息（入队）
+ *   POST /api/sessions/:id/chat        — 未实现；返回 501，发送请使用 WebSocket
  *   GET  /api/sessions/:id/chat/status  — 查询对话状态
  *   POST /api/sessions/:id/chat/stop    — 停止生成
  */
@@ -105,26 +105,24 @@ async function sendMessage(req: Request, sessionId: string): Promise<Response> {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
-  let body: { content?: string }
+  let body: unknown
   try {
-    body = (await req.json()) as { content?: string }
+    body = await req.json()
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
 
-  if (!body.content || typeof body.content !== 'string') {
+  if (!body || typeof body !== 'object' || !('content' in body)
+    || typeof body.content !== 'string' || !body.content) {
     throw ApiError.badRequest('content (string) is required in request body')
   }
 
-  const messageId = crypto.randomUUID()
-
-  // This legacy REST endpoint only queues a response; real turn state is
-  // tracked by the WebSocket handler once a client starts the turn.
-  setSessionChatState(sessionId, 'thinking')
-
-  return Response.json(
-    { messageId, status: 'queued' as const },
-    { status: 202 }
+  // No REST delivery queue exists. Do not acknowledge an unsubmitted message
+  // or manufacture running activity; WebSocket owns actual turn admission.
+  throw new ApiError(
+    501,
+    'REST chat message delivery is not implemented. Use the session WebSocket user_message command.',
+    'REST_CHAT_NOT_IMPLEMENTED',
   )
 }
 

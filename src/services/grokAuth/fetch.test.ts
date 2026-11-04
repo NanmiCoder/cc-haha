@@ -275,6 +275,43 @@ describe('Grok Responses fetch adapter', () => {
     })
   })
 
+  test('a late 401 from a concurrent request reuses the already rotated access token', async () => {
+    let oldRequests = 0
+    let refreshCalls = 0
+    let bothStarted!: () => void
+    let releaseLate!: () => void
+    const started = new Promise<void>(resolve => { bothStarted = resolve })
+    const late = new Promise<void>(resolve => { releaseLate = resolve })
+    const fetchOverride: typeof fetch = async (input, init) => {
+      if (String(input) === GROK_OAUTH_TOKEN_ENDPOINT) {
+        refreshCalls++
+        return Response.json({ access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600 })
+      }
+      if (new Headers(init?.headers).get('Authorization') === 'Bearer access') {
+        if (++oldRequests === 1) await started
+        else { bothStarted(); await late }
+        return new Response('expired', { status: 401 })
+      }
+      return new Response('event: response.completed\ndata: {"response":{"id":"resp_retry","object":"response","created_at":1,"model":"grok-4.5","status":"completed","output":[]}}\n\n', {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    }
+    const wrapped = buildGrokFetch(fetchOverride, 'test')
+    const request = () => wrapped('https://api.anthropic.com/v1/messages', {
+      method: 'POST', body: JSON.stringify({ model: 'grok-4.5', max_tokens: 64, messages: [{ role: 'user', content: 'hello' }] }),
+    })
+    const first = request()
+    const second = request()
+    // The request that reaches the old-token endpoint first can vary with file I/O.
+    try {
+      expect((await Promise.race([first, second])).status).toBe(200)
+    } finally {
+      releaseLate()
+    }
+    expect((await Promise.all([first, second])).every(response => response.status === 200)).toBe(true)
+    expect(refreshCalls).toBe(1)
+  })
+
   // Every turn of one conversation must land on the same cache entry, or the
   // whole prefix is re-billed each time. xAI reads the identity from the body,
   // the CLI proxy from a header — both must carry it, and both must survive the
