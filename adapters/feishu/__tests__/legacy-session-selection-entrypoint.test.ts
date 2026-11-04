@@ -616,9 +616,22 @@ describe('DingTalk reply delivery through the adapter entrypoint', () => {
     expect(dingtalkDelivery!.delivered).toEqual([])
   })
 
-  for (const permissionState of ['unknown', 'disconnected', 'accepted'] as const) {
-    it(`contains a failed permission notice for a ${permissionState} request`, async () => {
-      if (permissionState !== 'unknown') {
+  it('keeps an unpaired notice without a webhook best effort', async () => {
+    const warning = spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await dingtalk.handleRobotMessage({
+        conversationType: '1', senderStaffId: 'unpaired-without-webhook', msgtype: 'text', text: { content: 'hello' },
+      })
+      expect(dingtalkDelivery!.markdownAttempts).toBe(0)
+      expect(warning.mock.calls.some(([message]) => String(message).includes('Missing sessionWebhook'))).toBe(true)
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
+  for (const permissionState of ['unknown', 'disconnected', 'accepted', 'unpaired'] as const) {
+    it(`contains a failed ${permissionState} notice`, async () => {
+      if (permissionState !== 'unknown' && permissionState !== 'unpaired') {
         await dingtalk.handleServerMessage(chatId, {
           type: 'permission_request', requestId: 'permission-1', toolName: 'Bash', input: { command: 'pwd' },
         })
@@ -629,12 +642,12 @@ describe('DingTalk reply delivery through the adapter entrypoint', () => {
       const response = spyOn(dingtalk.bridge, 'sendPermissionResponse').mockReturnValue(permissionState === 'accepted')
       const warning = spyOn(console, 'warn').mockImplementation(() => {})
       try {
-        await send('dingtalk', '/allow permission-1')
+        await send('dingtalk', '/allow permission-1', { unauthorized: permissionState === 'unpaired' })
         await Bun.sleep(0)
 
         expect(dingtalkDelivery!.markdownAttempts).toBe(1)
         expect(dingtalkDelivery!.delivered).toEqual([])
-        expect(warning.mock.calls.some(([message]) => String(message).includes('Permission notice failed'))).toBe(true)
+        expect(warning.mock.calls.some(args => args.join(' ').includes('sendText failed'))).toBe(true)
       } finally {
         warning.mockRestore()
         response.mockRestore()

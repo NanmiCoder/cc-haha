@@ -147,10 +147,13 @@ async function getAccessToken(): Promise<string> {
   return data.accessToken
 }
 
-async function sendText(chatId: string, text: string): Promise<void> {
+async function sendText(chatId: string, text: string, options: { requireDelivery?: boolean } = {}): Promise<void> {
   const sessionWebhook = sessionWebhooks.get(chatId)
   if (!sessionWebhook) {
-    throw new Error(`[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`)
+    const message = `[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`
+    if (options.requireDelivery) throw new Error(message)
+    console.warn(message)
+    return
   }
 
   const token = await getAccessToken()
@@ -171,7 +174,9 @@ async function sendText(chatId: string, text: string): Promise<void> {
     })
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      throw new Error(`[DingTalk] sendText failed: ${res.status} ${body}`)
+      const message = `[DingTalk] sendText failed: ${res.status} ${body}`
+      if (options.requireDelivery) throw new Error(message)
+      console.warn(message)
     }
   }
 }
@@ -209,7 +214,7 @@ async function flushToAiCard(chatId: string, newText: string, isComplete: boolea
     isComplete,
     {
       getOrCreateCard: () => getOrCreateAiCard(chatId),
-      sendText: (text) => sendText(chatId, text),
+      sendText: (text) => sendText(chatId, text, { requireDelivery: true }),
       aiCards,
     },
   )
@@ -449,9 +454,7 @@ function handlePermissionCommand(chatId: string, text: string): boolean {
   const sent = applyPermissionDecision(chatId, decision)
   if (!sent) return true
 
-  void sendText(chatId, formatPermissionDecisionStatus(decision)).catch((err) => {
-    console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
-  })
+  void sendText(chatId, formatPermissionDecisionStatus(decision))
   return true
 }
 
@@ -459,17 +462,13 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`).catch((err) => {
-      console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
-    })
+    void sendText(chatId, `未找到待确认的权限请求：${requestId}`)
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。').catch((err) => {
-      console.warn('[DingTalk] Permission notice failed:', err instanceof Error ? err.message : err)
-    })
+    void sendText(chatId, '权限响应发送失败，请检查会话状态。')
     return false
   }
 
