@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { getSessionId } from '../../bootstrap/state.js'
 import { cleanupComputerUseAfterTurn } from './cleanup.js'
 import { checkComputerUseLock, releaseComputerUseLock, tryAcquireComputerUseLock } from './computerUseLock.js'
 
@@ -67,6 +69,38 @@ test('a stale finalizer leaves the replacement turn’s overlay and lock alone',
     expect(await checkComputerUseLock()).toEqual({ kind: 'free' })
   } finally {
     await releaseComputerUseLock()
+    if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a resumed session recovers a lock after its previous process exits', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-haha-computer-use-resume-'))
+  const previousConfig = process.env.CLAUDE_CONFIG_DIR
+  const predecessor = Bun.spawn([process.execPath, '--no-env-file', '-e', 'setInterval(() => {}, 1000)'], {
+    cwd: root,
+    env: createSandboxedTestEnvironment(root),
+    stdin: 'ignore', stdout: 'ignore', stderr: 'ignore',
+  })
+  const path = join(root, 'computer-use.lock')
+  const sessionId = getSessionId()
+  const turn = Symbol()
+  process.env.CLAUDE_CONFIG_DIR = root
+  try {
+    await writeFile(path, JSON.stringify({ sessionId, pid: predecessor.pid, acquiredAt: Date.now() }))
+    expect(await checkComputerUseLock()).toEqual({ kind: 'blocked', by: sessionId })
+    expect(await tryAcquireComputerUseLock(turn)).toEqual({ kind: 'blocked', by: sessionId })
+
+    predecessor.kill()
+    await predecessor.exited
+    expect(await tryAcquireComputerUseLock(turn)).toEqual({ kind: 'acquired', fresh: true })
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ sessionId, pid: process.pid })
+    expect(await releaseComputerUseLock(turn)).toBe(true)
+  } finally {
+    if (predecessor.exitCode === null) predecessor.kill()
+    await predecessor.exited
+    await releaseComputerUseLock(turn)
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfig
     await rm(root, { recursive: true, force: true })

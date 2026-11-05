@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileRange, tailFile } from '../fsOperations.js'
 import { readFileInRange } from '../readFileInRange.js'
-import { decodeShellOutput } from './outputEncoding.js'
+import { decodeShellOutput, hasClippedUtf8Start } from './outputEncoding.js'
 
 const gbk = (bytes: Buffer) => new TextDecoder('gb18030').decode(bytes)
 const chinese = Buffer.from([0xd6, 0xd0, 0xce, 0xc4])
@@ -36,6 +36,41 @@ test('retains incomplete characters for the next bounded read', () => {
   const legacyPrefix = decodeShellOutput(chinese.subarray(0, 3), false, true, gbk)
   expect(legacyPrefix).toEqual({ content: '中', bytesRead: 2 })
   expect(decodeShellOutput(chinese.subarray(legacyPrefix.bytesRead), false, false, gbk).content).toBe('文')
+})
+
+test('keeps consecutive legacy lines and resumes a clipped UTF-8 character after them', () => {
+  const legacy = Buffer.concat([chinese, Buffer.from('\r\n'), chinese, Buffer.from('\n')])
+  const output = Buffer.concat([legacy, Buffer.from('next🙂')])
+  const first = decodeShellOutput(output.subarray(0, -2), false, true, gbk)
+  expect(first).toEqual({
+    content: '中文\r\n中文\nnext',
+    bytesRead: legacy.length + Buffer.byteLength('next'),
+  })
+  expect(decodeShellOutput(output.subarray(first.bytesRead), false, false, gbk).content).toBe('🙂')
+})
+
+test('recognizes a tail clipped inside UTF-8 without discarding an OEM line start', () => {
+  const output = Buffer.from('first🙂\nlast')
+  expect(hasClippedUtf8Start(output, 5)).toBe(false)
+  for (const offset of [6, 7, 8]) {
+    expect(hasClippedUtf8Start(output, offset)).toBe(true)
+    expect(decodeShellOutput(output.subarray(offset), true, false, gbk)).toEqual({
+      content: '\nlast',
+      bytesRead: output.length - offset,
+    })
+  }
+  const oemLine = Buffer.from([0xb0, 0xa1, 0x0a])
+  const prefix = Buffer.from('start\n')
+  expect(hasClippedUtf8Start(Buffer.concat([prefix, oemLine]), prefix.length)).toBe(false)
+})
+
+test('returns replacement text and complete offsets if the native decoder declines a line', () => {
+  const utf8 = Buffer.from('\nnext 🙂\n')
+  const output = Buffer.concat([chinese, utf8, chinese])
+  expect(decodeShellOutput(output, false, false, () => undefined)).toEqual({
+    content: output.toString('utf8'),
+    bytesRead: output.length,
+  })
 })
 
 test.skipIf(process.platform !== 'win32')('file range cursors and tails preserve bounded UTF-8 output', async () => {
