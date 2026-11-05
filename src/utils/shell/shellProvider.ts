@@ -17,6 +17,7 @@ export type ShellProvider = {
       id: number | string
       sandboxTmpDir?: string
       useSandbox: boolean
+      failOnPowerShellError?: boolean
     },
   ): Promise<{ commandString: string; cwdFilePath: string }>
 

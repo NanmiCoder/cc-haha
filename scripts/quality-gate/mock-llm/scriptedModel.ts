@@ -182,7 +182,7 @@ export function decideReply(request: MockRequest): MockReply {
     return { kind: 'message', content: [], stopReason: 'refusal' }
   }
 
-  const isAgentTurn = hasTool(request, 'Write') || hasTool(request, 'Bash')
+  const isAgentTurn = hasTool(request, 'Write') || hasTool(request, 'Bash') || hasTool(request, 'PowerShell')
   if (!isAgentTurn) return text('Mock title')
 
   // A tool just ran: report what came back, the way a model summarises a result.
@@ -276,8 +276,14 @@ export function decideReply(request: MockRequest): MockReply {
   }
 
   const shell = /Run the shell command `([^`]+)`/i.exec(prompt)
-  if (shell && hasTool(request, 'Bash')) {
-    return toolUse('Bash', { command: shell[1], description: 'Run the requested command' })
+  if (shell) {
+    const tool = hasTool(request, 'Bash') ? 'Bash' : 'PowerShell'
+    if (hasTool(request, tool)) return toolUse(tool, { command: shell[1], description: 'Run the requested command' })
+  }
+  if (prompt.startsWith('MOCK_NATIVE_POWERSHELL ')) {
+    const command = JSON.parse(prompt.slice('MOCK_NATIVE_POWERSHELL '.length))
+    if (hasTool(request, 'PowerShell')) return toolUse('PowerShell', { command, description: 'Run a native PowerShell fixture' })
+    return text('PowerShell was unavailable')
   }
 
   const count = /Count from 1 to (\d+)/i.exec(prompt)

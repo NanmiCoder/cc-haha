@@ -51,10 +51,11 @@ function getSleepGuidance(): string | null {
 function getEditionSection(edition: PowerShellEdition | null): string {
   if (edition === 'desktop') {
     return `PowerShell edition: Windows PowerShell 5.1 (powershell.exe)
+   - Windows PowerShell 5.1 reads scripts without a BOM as ANSI. To run an existing UTF-8 script with non-ASCII characters and no BOM, use PowerShell 7 or explicitly save the script as UTF-8 with BOM.
    - Pipeline chain operators \`&&\` and \`||\` are NOT available — they cause a parser error. To run B only if A succeeds: \`A; if ($?) { B }\`. To chain unconditionally: \`A; B\`.
    - Ternary (\`?:\`), null-coalescing (\`??\`), and null-conditional (\`?.\`) operators are NOT available. Use \`if/else\` and explicit \`$null -eq\` checks instead.
    - Avoid \`2>&1\` on native executables. In 5.1, redirecting a native command's stderr inside PowerShell wraps each line in an ErrorRecord (NativeCommandError) and sets \`$?\` to \`$false\` even when the exe returned exit code 0. stderr is already captured for you — don't redirect it.
-   - Default file encoding is UTF-16 LE (with BOM). When writing files other tools will read, pass \`-Encoding utf8\` to \`Out-File\`/\`Set-Content\`.
+   - To explicitly write UTF-8 from Windows PowerShell 5.1, pass \`-Encoding UTF8\` to \`Out-File\` or \`Set-Content\`. This edition includes a BOM with that encoding.
    - \`ConvertFrom-Json\` returns a PSCustomObject, not a hashtable. \`-AsHashtable\` is not available.`
   }
   if (edition === 'core') {
@@ -79,6 +80,8 @@ export async function getPrompt(): Promise<string> {
 
 IMPORTANT: This tool is for terminal operations via PowerShell: git, npm, docker, and PS cmdlets. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.
 
+Use this tool directly for native Windows PowerShell commands and scripts. Pass the PowerShell command itself.
+
 ${getEditionSection(edition)}
 
 Before executing the command, please follow these steps:
@@ -92,6 +95,8 @@ Before executing the command, please follow these steps:
 
 PowerShell Syntax Notes:
    - Variables use $ prefix: $myVar = "value"
+   - Use a distinct variable such as $targetProcessId for process IDs. $PID is a read-only automatic variable and variable names are case-insensitive.
+   - On Windows, PowerShell cmdlet errors stop model-issued commands by default. Use a command-specific -ErrorAction when intentionally handling an expected error. Check $LASTEXITCODE for native executables.
    - Escape character is backtick (\`), not backslash
    - Use Verb-Noun cmdlet naming: Get-ChildItem, Set-Location, New-Item, Remove-Item
    - Common aliases: ls (Get-ChildItem), cd (Set-Location), cat (Get-Content), rm (Remove-Item)

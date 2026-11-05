@@ -31,8 +31,8 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, HWND_TOPMOST, MSG, PM_REMOVE,
-    PeekMessageW, RegisterClassExW, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow,
+    PeekMessageW, RegisterClassExW, SW_HIDE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP,
 };
@@ -100,21 +100,8 @@ impl OverlayWindow {
         Ok(Self { handle })
     }
 
-    /// Re-raises within the topmost band on every present, because the
-    /// shell's own chrome is topmost too and the most recently raised
-    /// window wins inside that band.
-    pub(crate) fn raise(&self) {
-        unsafe {
-            SetWindowPos(
-                self.handle,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
-            );
-        }
+    pub(crate) fn hide(&self) {
+        unsafe { ShowWindow(self.handle, SW_HIDE) };
     }
 
     /// Places and paints the surface in one call. Position, size and
@@ -129,8 +116,10 @@ impl OverlayWindow {
         pixels: &[u32],
     ) -> Result<(), AdapterError> {
         if width <= 0 || height <= 0 || pixels.len() < (width as usize) * (height as usize) {
-            unsafe { ShowWindow(self.handle, SW_HIDE) };
-            return Ok(());
+            self.hide();
+            return Err(AdapterError::internal(
+                "The cursor overlay frame could not be composed",
+            ));
         }
         let Some(mut dib) = Dib::create(width, height) else {
             return Err(win32_error(
@@ -166,11 +155,25 @@ impl OverlayWindow {
             )
         };
         if updated == 0 {
-            Err(win32_error("The overlay could not be painted"))
-        } else {
-            unsafe { ShowWindow(self.handle, SW_SHOWNOACTIVATE) };
-            Ok(())
+            return Err(win32_error("The overlay could not be painted"));
         }
+        // Raise within the topmost band after painting so showing the
+        // window never exposes its previous frame.
+        let shown = unsafe {
+            SetWindowPos(
+                self.handle,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+        };
+        if shown == 0 {
+            return Err(win32_error("The overlay could not be shown"));
+        }
+        Ok(())
     }
 
     /// Drains whatever the queue holds without waiting for more, so a
@@ -205,13 +208,12 @@ mod tests {
     #[test]
     fn empty_frame_hides_previous_overlay_and_next_frame_restores_it() {
         let window = OverlayWindow::create().unwrap();
-        unsafe { ShowWindow(window.handle, SW_SHOWNOACTIVATE) };
         window.present(0, 0, 1, 1, &[0xffffffff]).unwrap();
         assert_ne!(
             unsafe { GetWindowLongPtrW(window.handle, GWL_STYLE) } as u32 & WS_VISIBLE,
             0
         );
-        window.present(0, 0, 0, 0, &[]).unwrap();
+        assert!(window.present(0, 0, 0, 0, &[]).is_err());
         assert_eq!(
             unsafe { GetWindowLongPtrW(window.handle, GWL_STYLE) } as u32 & WS_VISIBLE,
             0
@@ -221,5 +223,14 @@ mod tests {
             unsafe { GetWindowLongPtrW(window.handle, GWL_STYLE) } as u32 & WS_VISIBLE,
             0
         );
+    }
+
+    #[test]
+    fn an_invalid_window_cannot_report_a_painted_frame() {
+        let window = OverlayWindow {
+            handle: std::ptr::null_mut(),
+        };
+        let error = window.present(0, 0, 1, 1, &[0xffffffff]).unwrap_err();
+        assert_eq!(error.message, "The overlay could not be painted");
     }
 }

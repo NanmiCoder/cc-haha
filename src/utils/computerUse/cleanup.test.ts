@@ -1,15 +1,18 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ToolUseContext } from '../../Tool.js'
 import { cleanupComputerUseAfterTurn } from './cleanup.js'
+import { checkComputerUseLock, releaseComputerUseLock, tryAcquireComputerUseLock } from './computerUseLock.js'
 
 /**
  * Unit coverage for the turn-end overlay-hide wiring in
  * `cleanupComputerUseAfterTurn`. Driven entirely through the injected
  * `deps.overlayHide` seam — no real cu-helper daemon, no real lock file.
  *
- * Hermetic by construction: in a fresh test process the file-based CU lock was
- * never acquired, so `isLockHeldLocally()` (a zero-syscall module-state check)
- * returns false and the disk lock-release path is skipped. With an empty
+ * The injected-overlay cases leave the file-based lock unacquired, so
+ * `isLockHeldLocally()` returns false and the disk release is skipped. With an empty
  * `computerUseMcpState` the hidden-apps/unhide branch is also skipped. So the
  * ONLY observable side effect here is the injected overlayHide — which is
  * exactly what we want to assert on.
@@ -35,6 +38,40 @@ function makeCtx(): CleanupCtx {
 }
 
 const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+test('a stale finalizer leaves the replacement turn’s overlay and lock alone', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-haha-computer-use-turn-'))
+  const previousConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = root
+  const first = Symbol()
+  const replacement = Symbol()
+  try {
+    expect(await tryAcquireComputerUseLock(first)).toEqual({ kind: 'acquired', fresh: true })
+    // Same-session work can still share the lock without changing its owner.
+    expect(await tryAcquireComputerUseLock(replacement)).toEqual({ kind: 'acquired', fresh: false })
+    expect(await Promise.all([
+      releaseComputerUseLock(first),
+      releaseComputerUseLock(first),
+    ])).toEqual([true, false])
+    expect(await tryAcquireComputerUseLock(replacement)).toEqual({ kind: 'acquired', fresh: true })
+
+    let hides = 0
+    const overlayHide = async () => { hides++ }
+    const hideCursorBadge = () => {}
+    await cleanupComputerUseAfterTurn(makeCtx(), { overlayHide, hideCursorBadge, ownedTurn: first })
+    expect(await releaseComputerUseLock(first)).toBe(false)
+    expect(hides).toBe(0)
+    expect(await checkComputerUseLock()).toEqual({ kind: 'held_by_self' })
+    await cleanupComputerUseAfterTurn(makeCtx(), { overlayHide, hideCursorBadge, ownedTurn: replacement })
+    expect(hides).toBe(1)
+    expect(await checkComputerUseLock()).toEqual({ kind: 'free' })
+  } finally {
+    await releaseComputerUseLock()
+    if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    await rm(root, { recursive: true, force: true })
+  }
+})
 
 describe('cleanupComputerUseAfterTurn — turn-end overlay hide', () => {
   test('calls the injected overlayHide exactly once on a no-hidden-apps, lock-not-held turn', async () => {

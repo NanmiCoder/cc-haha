@@ -19,6 +19,7 @@ use agent_desktop_core::{AdapterError, CursorOverlayControl, ErrorCode};
 pub(crate) const MAX_CONTROL_BYTES: usize = 4096;
 
 pub(crate) const ACKNOWLEDGEMENT: u8 = 1;
+pub(crate) const PAINT_FAILED: u8 = 2;
 
 pub(crate) fn encode(control: &CursorOverlayControl) -> Result<Vec<u8>, AdapterError> {
     let bytes = serde_json::to_vec(control).map_err(|error| {
