@@ -310,7 +310,7 @@ async function parallelWithLimit<T, R>(
 /**
  * Downloads all file attachments for a session in parallel
  *
- * @param attachments - List of file attachments to download
+ * @param files - List of file attachments to download
  * @param config - Files API configuration
  * @param concurrency - Maximum concurrent downloads (default: 5)
  * @returns Array of download results in the same order as input

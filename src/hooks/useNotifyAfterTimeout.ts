@@ -33,7 +33,7 @@ function shouldNotify(threshold: number): boolean {
  * 2. After the specified timeout if the user doesn't interact within that time
  *
  * @param message - The notification message to display
- * @param timeout - The timeout in milliseconds (defaults to 6000ms)
+ * @param notificationType - The notification type to display
  */
 export function useNotifyAfterTimeout(
   message: string,

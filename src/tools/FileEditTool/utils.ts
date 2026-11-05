@@ -304,9 +304,12 @@ function applyCurlySingleQuotes(str: string): string {
 }
 
 /**
- * Transform edits to ensure replace_all always has a boolean value
- * @param edits Array of edits with optional replace_all
- * @returns Array of edits with replace_all guaranteed to be boolean
+ * Apply a string replacement to file content
+ * @param originalContent The file content to edit
+ * @param oldString The text to replace
+ * @param newString The replacement text
+ * @param replaceAll Replace every occurrence instead of only the first
+ * @returns The edited file content
  */
 export function applyEditToFile(
   originalContent: string,
@@ -514,7 +517,6 @@ const CONTEXT_LINES = 4
 
 /**
  * Gets a snippet from a file showing the context around a patch with line numbers.
- * @param originalFile The original file content before applying the patch
  * @param patch The diff hunks to use for determining snippet location
  * @param newFile The file content after applying the patch
  * @returns The snippet text with line numbers and the starting line number

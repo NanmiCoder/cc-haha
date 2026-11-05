@@ -184,9 +184,8 @@ export function parseToolPreset(preset: string): ToolPreset | null {
 }
 
 /**
- * Get the list of tool names for a given preset
+ * Get the list of tool names for the default preset
  * Filters out tools that are disabled via isEnabled() check
- * @param preset The preset name
  * @returns Array of tool names
  */
 export function getToolsForDefaultPreset(): string[] {

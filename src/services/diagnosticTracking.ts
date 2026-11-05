@@ -325,7 +325,6 @@ export class DiagnosticTrackingService {
    * - Automatically finds the IDE client from the provided clients list
    *
    * @param clients Array of MCP clients that may include an IDE client
-   * @param shouldQuery Whether a query is actually being made (not just a command)
    */
   async handleQueryStart(clients: MCPServerConnection[]): Promise<void> {
     // Only proceed if we should query and have clients
