@@ -60,6 +60,7 @@ export function VoiceHistoryVocabularyDialog({ open, onClose, initialModel, defa
   const addVocabulary = useVoiceVocabularyStore(state => state.add)
 
   const [sources, setSources] = useState<VoiceHistorySource[] | null>(null)
+  const [days, setDays] = useState(0)
   const [sourcesFailed, setSourcesFailed] = useState(false)
   const [chosenSources, setChosenSources] = useState<Set<VoiceHistorySourceId>>(new Set())
   const [model, setModel] = useState<VoiceCorrectionModelChoice>(initialModel)
@@ -79,9 +80,10 @@ export function VoiceHistoryVocabularyDialog({ open, onClose, initialModel, defa
     setSourcesFailed(false)
     setSaveFailed(false)
     voiceApi.historySources().then(
-      ({ sources: found }) => {
+      ({ sources: found, days: window }) => {
         if (cancelled) return
         setSources(found)
+        setDays(window)
         setChosenSources(new Set(found.filter(source => source.available).map(source => source.id)))
       },
       () => { if (!cancelled) setSourcesFailed(true) },
@@ -243,10 +245,10 @@ export function VoiceHistoryVocabularyDialog({ open, onClose, initialModel, defa
                 key={source.id}
                 label={SOURCE_NAMES[source.id]}
                 description={!source.available
-                  ? t('voice.settings.vocabulary.history.sourceMissing')
+                  ? t('voice.settings.vocabulary.history.sourceMissing', { days })
                   : source.id === 'claude-code'
-                    ? t('voice.settings.vocabulary.history.sessionsWithHaha', { count: source.sessions.toLocaleString() })
-                    : t('voice.settings.vocabulary.history.sessions', { count: source.sessions.toLocaleString() })}
+                    ? t('voice.settings.vocabulary.history.sessionsWithHaha', { days, count: source.sessions.toLocaleString() })
+                    : t('voice.settings.vocabulary.history.sessions', { days, count: source.sessions.toLocaleString() })}
                 disabled={!source.available}
                 checked={source.available && chosenSources.has(source.id)}
                 onChange={(event) => {

@@ -6,6 +6,10 @@
  * Ported from the benchmark probe `history_terms.py`, validated on a real
  * machine (1,231 sessions in ~9 s with useful top terms).
  *
+ * Only recent history is read (`HISTORY_WINDOW_DAYS`): a heavy user's whole
+ * history is gigabytes, which made the scan take tens of seconds, and the
+ * words someone says now are the ones dictation needs.
+ *
  * Sources:
  * - Claude Code: `<Claude config home>/projects/<project>/<session>.jsonl`, one
  *   session per file. Subagent folders and `agent-*.jsonl` sidechain files are
@@ -47,6 +51,9 @@ export interface HistoryScanResult {
 }
 
 export const HISTORY_CANDIDATE_LIMIT = 400
+/** How far back the scan reads. */
+export const HISTORY_WINDOW_DAYS = 14
+const DAY_MS = 86_400_000
 /** A term must recur across sessions to be more than a one-off. */
 const MIN_SESSIONS = 3
 /** Light users get a lower bar so the dialog is not empty. */
@@ -64,6 +71,11 @@ export function defaultHistoryPaths(): HistoryPaths {
     claudeConfigDir: getClaudeConfigHomeDir(),
     codexHome: process.env.CODEX_HOME || path.join(os.homedir(), '.codex'),
   }
+}
+
+/** The earliest moment (epoch ms) a message may have been written to count. */
+export function historyWindowStart(now: number = Date.now()): number {
+  return now - HISTORY_WINDOW_DAYS * DAY_MS
 }
 
 export function isVoiceHistorySourceId(value: unknown): value is VoiceHistorySourceId {
@@ -132,8 +144,24 @@ async function isFile(file: string): Promise<boolean> {
   }
 }
 
-/** One file per main session; subagent folders are not descended into. */
-export async function listClaudeTranscripts(claudeConfigDir: string): Promise<string[]> {
+async function modifiedSince(file: string, since: number): Promise<boolean> {
+  try {
+    return (await fs.stat(file)).mtimeMs >= since
+  } catch {
+    return false
+  }
+}
+
+/** Whether a row's write time is before `since`; rows without a readable time count as recent. */
+function writtenBefore(at: number, since: number | undefined): boolean {
+  return since !== undefined && Number.isFinite(at) && at < since
+}
+
+/**
+ * One file per main session; subagent folders are not descended into. With
+ * `since`, a transcript last written before it is skipped without being read.
+ */
+export async function listClaudeTranscripts(claudeConfigDir: string, since?: number): Promise<string[]> {
   const projectsDir = path.join(claudeConfigDir, 'projects')
   let projects: import('node:fs').Dirent[]
   try {
@@ -151,9 +179,9 @@ export async function listClaudeTranscripts(claudeConfigDir: string): Promise<st
       continue
     }
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.jsonl') && !entry.name.startsWith('agent-')) {
-        files.push(path.join(projectsDir, project.name, entry.name))
-      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl') || entry.name.startsWith('agent-')) continue
+      const file = path.join(projectsDir, project.name, entry.name)
+      if (since === undefined || await modifiedSince(file, since)) files.push(file)
     }
   }
   return files.sort()
@@ -168,8 +196,11 @@ interface UserMessage {
   text: string
 }
 
-/** The user's own typed text from one transcript row, or null for anything else. */
-export function claudeUserText(line: string): string | null {
+/**
+ * The user's own typed text from one transcript row, or null for anything
+ * else, including a message written before `since`.
+ */
+export function claudeUserText(line: string, since?: number): string | null {
   if (!line.includes('"type":"user"')) return null
   let row: unknown
   try {
@@ -180,6 +211,7 @@ export function claudeUserText(line: string): string | null {
   if (!row || typeof row !== 'object') return null
   const record = row as Record<string, unknown>
   if (record.type !== 'user' || record.isMeta === true || record.isSidechain === true) return null
+  if (typeof record.timestamp === 'string' && writtenBefore(Date.parse(record.timestamp), since)) return null
   const message = record.message
   let content = message && typeof message === 'object' ? (message as Record<string, unknown>).content : undefined
   if (Array.isArray(content)) {
@@ -196,13 +228,17 @@ export function claudeUserText(line: string): string | null {
   return text
 }
 
-async function* claudeMessages(claudeConfigDir: string, signal?: AbortSignal): AsyncGenerator<UserMessage> {
-  for (const file of await listClaudeTranscripts(claudeConfigDir)) {
+async function* claudeMessages(
+  claudeConfigDir: string,
+  since: number | undefined,
+  signal?: AbortSignal,
+): AsyncGenerator<UserMessage> {
+  for (const file of await listClaudeTranscripts(claudeConfigDir, since)) {
     if (signal?.aborted) throw abortError()
     const session = `claude-code:${path.basename(file, '.jsonl')}`
     try {
       for await (const line of readLines(file, signal)) {
-        const text = claudeUserText(line)
+        const text = claudeUserText(line, since)
         if (text) yield { session, text }
       }
     } catch (error) {
@@ -213,7 +249,8 @@ async function* claudeMessages(claudeConfigDir: string, signal?: AbortSignal): A
   }
 }
 
-function codexRow(line: string): { session: string; text: string } | null {
+/** One prompt from Codex's history, or null when it is empty or older than `since`. */
+function codexRow(line: string, since?: number): { session: string; text: string } | null {
   let row: unknown
   try {
     row = JSON.parse(line)
@@ -222,28 +259,35 @@ function codexRow(line: string): { session: string; text: string } | null {
   }
   if (!row || typeof row !== 'object') return null
   const record = row as Record<string, unknown>
+  // `ts` is in seconds.
+  if (typeof record.ts === 'number' && writtenBefore(record.ts * 1000, since)) return null
   const text = typeof record.text === 'string' ? record.text.trim() : ''
   if (!text) return null
   const session = typeof record.session_id === 'string' && record.session_id ? record.session_id : 'codex'
   return { session, text }
 }
 
-async function* codexMessages(codexHome: string, signal?: AbortSignal): AsyncGenerator<UserMessage> {
+async function* codexMessages(
+  codexHome: string,
+  since: number | undefined,
+  signal?: AbortSignal,
+): AsyncGenerator<UserMessage> {
   const file = codexHistoryFile(codexHome)
   if (!(await isFile(file))) return
   for await (const line of readLines(file, signal)) {
-    const row = codexRow(line)
+    const row = codexRow(line, since)
     if (row) yield { session: `codex:${row.session}`, text: row.text }
   }
 }
 
-export async function listHistorySources(paths: HistoryPaths): Promise<VoiceHistorySource[]> {
-  const claudeSessions = (await listClaudeTranscripts(paths.claudeConfigDir)).length
+/** Sessions per source; with `since`, only those written to since then. */
+export async function listHistorySources(paths: HistoryPaths, since?: number): Promise<VoiceHistorySource[]> {
+  const claudeSessions = (await listClaudeTranscripts(paths.claudeConfigDir, since)).length
   const codexSessions = new Set<string>()
   const codexFile = codexHistoryFile(paths.codexHome)
   if (await isFile(codexFile)) {
     for await (const line of readLines(codexFile)) {
-      const row = codexRow(line)
+      const row = codexRow(line, since)
       if (row) codexSessions.add(row.session)
     }
   }
@@ -291,6 +335,8 @@ export async function scanHistoryTerms(
     /** Lowercased terms not to offer again (already in the vocabulary, or dismissed). */
     exclude?: ReadonlySet<string>
     limit?: number
+    /** Epoch ms; messages written before it are not read. Omitted reads everything. */
+    since?: number
   },
 ): Promise<HistoryScanResult> {
   const counts = new Map<string, number>()
@@ -300,8 +346,10 @@ export async function scanHistoryTerms(
   let messages = 0
 
   const streams: AsyncGenerator<UserMessage>[] = []
-  if (sources.includes('claude-code')) streams.push(claudeMessages(options.paths.claudeConfigDir, options.signal))
-  if (sources.includes('codex')) streams.push(codexMessages(options.paths.codexHome, options.signal))
+  if (sources.includes('claude-code')) {
+    streams.push(claudeMessages(options.paths.claudeConfigDir, options.since, options.signal))
+  }
+  if (sources.includes('codex')) streams.push(codexMessages(options.paths.codexHome, options.since, options.signal))
 
   for (const stream of streams) {
     for await (const message of stream) {

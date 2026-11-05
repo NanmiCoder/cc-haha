@@ -5,6 +5,8 @@ import * as path from 'node:path'
 import {
   claudeUserText,
   defaultHistoryPaths,
+  HISTORY_WINDOW_DAYS,
+  historyWindowStart,
   keepProseLines,
   listHistorySources,
   messageTerms,
@@ -29,13 +31,15 @@ const user = (content: unknown, extra: Record<string, unknown> = {}) =>
 const assistant = (text: string) =>
   JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
 
-async function writeTranscript(project: string, session: string, lines: string[]) {
+async function writeTranscript(project: string, session: string, lines: string[], modifiedAt?: Date) {
   const dir = path.join(paths.claudeConfigDir, 'projects', project)
   await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(path.join(dir, `${session}.jsonl`), lines.join('\n') + '\n', 'utf-8')
+  const file = path.join(dir, `${session}.jsonl`)
+  await fs.writeFile(file, lines.join('\n') + '\n', 'utf-8')
+  if (modifiedAt) await fs.utimes(file, modifiedAt, modifiedAt)
 }
 
-async function writeCodexHistory(rows: Array<{ session_id?: string; text?: string }>) {
+async function writeCodexHistory(rows: Array<{ session_id?: string; text?: string; ts?: number }>) {
   await fs.mkdir(paths.codexHome, { recursive: true })
   await fs.writeFile(
     path.join(paths.codexHome, 'history.jsonl'),
@@ -166,6 +170,71 @@ describe('scanHistoryTerms', () => {
     controller.abort()
     await expect(scanHistoryTerms(['claude-code'], { paths, signal: controller.signal }))
       .rejects.toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('only recent history', () => {
+  const NOW = Date.parse('2026-11-05T12:00:00.000Z')
+  const since = historyWindowStart(NOW)
+  const daysAgo = (days: number) => new Date(NOW - days * 86_400_000)
+
+  test('the window is two weeks', () => {
+    expect(HISTORY_WINDOW_DAYS).toBe(14)
+    expect(since).toBe(Date.parse('2026-10-22T12:00:00.000Z'))
+  })
+
+  test('a message written before the window does not count; one without a time does', () => {
+    expect(claudeUserText(user('Codex', { timestamp: daysAgo(15).toISOString() }), since)).toBeNull()
+    expect(claudeUserText(user('Codex', { timestamp: daysAgo(13).toISOString() }), since)).toBe('Codex')
+    expect(claudeUserText(user('Codex'), since)).toBe('Codex')
+    expect(claudeUserText(user('Codex', { timestamp: daysAgo(15).toISOString() }))).toBe('Codex')
+  })
+
+  test('skips transcripts last written before the window, old messages in recent ones, and old Codex prompts', async () => {
+    // Not even read: its rows carry no time of their own.
+    await writeTranscript('-work', 'old', [user('Stale Stale'), user('Stale')], daysAgo(20))
+    await writeTranscript('-work', 'resumed', [
+      user('Stale 和 Codex', { timestamp: daysAgo(30).toISOString() }),
+      user('Codex 和 DeepSeek', { timestamp: daysAgo(2).toISOString() }),
+    ], daysAgo(1))
+    await writeTranscript('-work', 'fresh', [user('Codex DeepSeek', { timestamp: daysAgo(1).toISOString() })], daysAgo(1))
+    await writeTranscript('-other', 'older', [user('Stale', { timestamp: daysAgo(40).toISOString() })], daysAgo(40))
+    await writeCodexHistory([
+      { session_id: 'c-old', text: 'Stale', ts: daysAgo(15).getTime() / 1000 },
+      { session_id: 'c-new', text: 'Codex', ts: daysAgo(3).getTime() / 1000 },
+    ])
+
+    const result = await scanHistoryTerms(['claude-code', 'codex'], { paths, since })
+
+    expect(result).toEqual({
+      sessions: 3,
+      messages: 3,
+      candidates: [
+        { term: 'Codex', sessions: 3, count: 3 },
+        { term: 'DeepSeek', sessions: 2, count: 2 },
+      ],
+    })
+    // Without a window everything is read.
+    expect((await scanHistoryTerms(['claude-code', 'codex'], { paths })).candidates[0])
+      .toEqual({ term: 'Stale', sessions: 4, count: 5 })
+  })
+
+  test('sources count only sessions inside the window, so a source with only old history is unavailable', async () => {
+    await writeTranscript('-work', 'old', [user('a')], daysAgo(20))
+    await writeTranscript('-work', 'new', [user('b')], daysAgo(1))
+    await writeCodexHistory([
+      { session_id: 'c1', text: 'a', ts: daysAgo(30).getTime() / 1000 },
+      { session_id: 'c2', text: 'b', ts: daysAgo(15).getTime() / 1000 },
+    ])
+
+    expect(await listHistorySources(paths, since)).toEqual([
+      { id: 'claude-code', available: true, sessions: 1 },
+      { id: 'codex', available: false, sessions: 0 },
+    ])
+    expect(await listHistorySources(paths)).toEqual([
+      { id: 'claude-code', available: true, sessions: 2 },
+      { id: 'codex', available: true, sessions: 2 },
+    ])
   })
 })
 
