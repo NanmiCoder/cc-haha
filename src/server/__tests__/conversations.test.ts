@@ -29,6 +29,7 @@ import {
   REJECT_MESSAGE_WITH_REASON_PREFIX,
 } from '../../constants/messages.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
+import { HISTORY_SEMANTIC_RECORD_BYTES } from '../services/boundedSessionHistory.js'
 import { createRepositoryBranch } from '../services/repositoryLaunchService.js'
 import { ProviderService } from '../services/providerService.js'
 import { SettingsService } from '../services/settingsService.js'
@@ -3012,6 +3013,104 @@ describe('WebSocket Chat Integration', () => {
     const basicBody = await basicRes.json() as any
     expect(basicBody.usage.source).toBe('current_process')
     expect(basicBody.context).toBeUndefined()
+  })
+
+  it('keeps inspection status available after an oversized screenshot is recorded', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'inspection-'))
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, permissionMode: 'acceptEdits' }),
+    })
+    expect(created.status).toBe(201)
+    const { sessionId } = await created.json() as { sessionId: string }
+    await runTurn(sessionId, 'hello before inspection')
+
+    const transcript = await sessionService.findSessionFile(sessionId)
+    expect(transcript).not.toBeNull()
+    const image = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(HISTORY_SEMANTIC_RECORD_BYTES / 2) },
+    }
+    const screenshot = {
+      type: 'user',
+      uuid: crypto.randomUUID(),
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'screenshot',
+          content: [image],
+        }],
+      },
+      toolUseResult: [image],
+      version: '9.9.9',
+    }
+    const reply = {
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      message: { role: 'assistant', model: 'mock-opus', usage: { input_tokens: 50_000, output_tokens: 10 } },
+    }
+    await fs.appendFile(transcript!.filePath, `${JSON.stringify(screenshot)}\n${JSON.stringify(reply)}\n`)
+
+    const inspectionUrl = `${baseUrl}/api/sessions/${sessionId}/inspection`
+    const readStatus = async () => {
+      const snapshot = spyOn(sessionService, 'getInspectionTranscriptSnapshot')
+      try {
+        const response = await fetch(`${inspectionUrl}?statusOnly=1`)
+        expect(response.status).toBe(200)
+        expect(snapshot).not.toHaveBeenCalled()
+        const body = await response.json()
+        expect(body).not.toHaveProperty('usage')
+        expect(body).not.toHaveProperty('contextEstimate')
+        return body
+      } finally {
+        snapshot.mockRestore()
+      }
+    }
+    const control = spyOn(conversationService, 'requestControl')
+    try {
+      expect(await readStatus()).toMatchObject({
+        active: true,
+        status: { sessionId, workDir, model: 'mock-opus', contextWindow: expect.any(Number), mcpServers: [{ name: 'mock', status: 'connected' }] },
+      })
+      expect(control.mock.calls.map(([, request]) => request.subtype)).toEqual(['mcp_status'])
+    } finally {
+      control.mockRestore()
+    }
+
+    const live = await fetch(`${inspectionUrl}?includeContext=0`)
+    expect(live.status).toBe(200)
+    const liveBody = await live.json()
+    expect(liveBody).toMatchObject({
+      active: true,
+      status: { sessionId, workDir, model: 'mock-opus', mcpServers: [{ name: 'mock', status: 'connected' }] },
+      usage: { source: 'current_process', totalInputTokens: 27_000 },
+    })
+    expect(liveBody.errors).toEqual({})
+
+    const context = await fetch(`${inspectionUrl}?contextOnly=1`)
+    expect(context.status).toBe(200)
+    expect(await context.json()).toMatchObject({ context: { model: 'mock-opus', estimateOnly: true } })
+
+    await conversationService.stopSessionAndWait(sessionId)
+    expect(await readStatus()).toMatchObject({
+      active: false,
+      status: { sessionId, workDir, permissionMode: 'acceptEdits', model: 'mock-opus', version: '9.9.9' },
+    })
+    const stopped = await fetch(inspectionUrl)
+    expect(stopped.status).toBe(200)
+    const stoppedBody = await stopped.json()
+    expect(stoppedBody).toMatchObject({
+      active: false,
+      status: { sessionId, workDir, permissionMode: 'acceptEdits' },
+      errors: {
+        usage: expect.stringContaining('semantic read limit'),
+        context: expect.stringContaining('semantic read limit'),
+      },
+    })
+    expect(stoppedBody).not.toHaveProperty('usage')
+    expect(stoppedBody).not.toHaveProperty('contextEstimate')
   })
 
   it('should expose context-only inspection without waiting on mcp status', async () => {

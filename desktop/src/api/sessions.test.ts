@@ -88,6 +88,17 @@ describe('sessionsApi', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/historical-session/summary')
   })
 
+  it('requests only status from the session inspector', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', {
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await sessionsApi.getInspection('session-1', { statusOnly: true })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:3456/api/sessions/session-1/inspection?statusOnly=1')
+  })
+
   it.each([
     [{ projectRoot: '/workspace/repo with spaces', limit: 50, cursor: 'opaque+/=' }, 'projectRoot=%2Fworkspace%2Frepo+with+spaces&limit=50&cursor=opaque%2B%2F%3D'],
     [{ projectRoot: '/workspace/repo', limit: 50, beforeModifiedAt: '2026-08-01T00:00:00.000Z', beforeId: 'boundary-id' }, 'projectRoot=%2Fworkspace%2Frepo&limit=50&beforeModifiedAt=2026-08-01T00%3A00%3A00.000Z&beforeId=boundary-id'],
