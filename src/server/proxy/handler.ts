@@ -82,6 +82,21 @@ const TRACE_RECORDED_ERROR_MARKER = Symbol('cc-haha-trace-recorded-error')
 // `controller.error('...')`). The marker above still covers Error objects for
 // paths that only see object throws.
 const recordedTraceErrorContexts = new WeakSet<ProxyTraceContext>()
+const pendingProxyTraces = new Set<Promise<void>>()
+
+/** Finish whole proxy trace producers, including the gap between call and event writes. */
+export async function drainProxyTraces(): Promise<void> {
+  while (pendingProxyTraces.size > 0) await Promise.allSettled([...pendingProxyTraces])
+}
+
+function trackProxyTrace(operation: Promise<void>): Promise<void> {
+  pendingProxyTraces.add(operation)
+  void operation.then(
+    () => pendingProxyTraces.delete(operation),
+    () => pendingProxyTraces.delete(operation),
+  )
+  return operation
+}
 
 function markTraceErrorRecorded(error: unknown): void {
   if (error && typeof error === 'object') {
@@ -1457,7 +1472,11 @@ function recordProxyTraceInBackground(input: RecordProxyTraceInput): void {
   void recordProxyTrace(input).catch(() => {})
 }
 
-async function recordProxyTrace({
+function recordProxyTrace(input: RecordProxyTraceInput): Promise<void> {
+  return trackProxyTrace(recordProxyTraceOnce(input))
+}
+
+async function recordProxyTraceOnce({
   callId,
   context,
   model,
@@ -1683,6 +1702,15 @@ function captureTraceStream(
     await decompressEnded
   }
 
+  const finishTraceInBackground = (error?: unknown, end: Exclude<ProtocolTraceTransport, 'open'> = 'eof') => {
+    // Register before closing the response: decompression may finish later,
+    // and shutdown must not close the index before that producer starts writing.
+    void trackProxyTrace((async () => {
+      await finishDecompressor()
+      await finalize(error, end)
+    })())
+  }
+
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       reader = stream.getReader()
@@ -1710,14 +1738,12 @@ function captureTraceStream(
             captureDecoded(value)
           }
         }
+        finishTraceInBackground()
         controller.close()
-        await finishDecompressor()
-        void finalize()
       } catch (err) {
-        controller.error(err)
         activelyEnded = true
-        await finishDecompressor()
-        void finalize(err, 'error')
+        finishTraceInBackground(err, 'error')
+        controller.error(err)
       } finally {
         reader?.releaseLock()
         reader = null
@@ -1728,8 +1754,7 @@ function captureTraceStream(
         ? reason
         : new Error(reason ? `Stream cancelled: ${String(reason)}` : 'Stream cancelled')
       activelyEnded = true
-      await finishDecompressor()
-      void finalize(error, 'cancelled')
+      finishTraceInBackground(error, 'cancelled')
       await reader?.cancel(reason).catch(() => undefined)
     },
   })

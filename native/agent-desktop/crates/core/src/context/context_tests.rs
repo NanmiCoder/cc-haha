@@ -251,6 +251,7 @@ fn bare_session_without_manifest_does_not_trace() {
 
 #[test]
 fn trace_on_session_writes_segment_without_explicit_trace_flag() {
+    let _clock = crate::wait::deadline::VirtualClock::freeze();
     let _guard = crate::refs::refs_test_support::HomeGuard::new();
     let manifest = start_session(StartSessionOptions {
         name: None,

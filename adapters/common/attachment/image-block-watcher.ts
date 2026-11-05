@@ -10,6 +10,7 @@
  */
 
 import type { PendingUpload } from './attachment-types.js'
+import { fileURLToPath } from 'node:url'
 
 // Matches a complete markdown image: ![alt](target)
 // `alt` may be empty; `target` stops at the first closing paren.
@@ -30,7 +31,16 @@ function classify(target: string): PendingUpload['source'] | null {
     return { kind: 'base64', mime: m[1]!, data: m[2]! }
   }
   if (target.startsWith('file://')) {
-    return { kind: 'path', path: target.slice('file://'.length) }
+    try {
+      const url = new URL(target)
+      // Bun's fileURLToPath can preserve malformed escapes on some platforms.
+      // Validate the encoding before native path conversion, without decoding twice.
+      const pathname = decodeURIComponent(url.pathname)
+      if (pathname.includes('\0') || /%2f|%5c/i.test(url.pathname)) return null
+      return { kind: 'path', path: fileURLToPath(url) }
+    } catch {
+      return null
+    }
   }
   if (target.startsWith('http://') || target.startsWith('https://')) {
     return { kind: 'url', url: target }

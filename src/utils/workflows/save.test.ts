@@ -83,7 +83,7 @@ describe('saveWorkflowScript', () => {
     const outside = join(root, 'outside.js')
     await writeFile(outside, '// untouched\n', 'utf8')
     mkdirSync(join(configDir, 'workflows'), { recursive: true })
-    symlinkSync(outside, join(configDir, 'workflows', 'my-review.js'))
+    symlinkSync(process.platform === 'win32' ? root : outside, join(configDir, 'workflows', 'my-review.js'), process.platform === 'win32' ? 'junction' : 'file')
 
     const result = await saveWorkflowScript({ script: SCRIPT, scope: 'user' })
     expect('error' in result && result.error).toContain('symlink')
@@ -93,7 +93,7 @@ describe('saveWorkflowScript', () => {
   test('refuses when the project .claude directory is itself a symlink', async () => {
     const elsewhere = join(root, 'elsewhere')
     mkdirSync(elsewhere, { recursive: true })
-    symlinkSync(elsewhere, join(repo, '.claude'))
+    symlinkSync(elsewhere, join(repo, '.claude'), process.platform === 'win32' ? 'junction' : 'dir')
 
     const result = await saveWorkflowScript({
       script: SCRIPT,

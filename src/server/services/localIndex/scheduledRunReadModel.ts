@@ -421,10 +421,14 @@ export function markScheduledRunIndexDegraded(
   try { active.index.markDegraded(errorCode) } catch {}
 }
 
-export async function resetScheduledRunReadModelForTests(): Promise<void> {
+export async function stopScheduledRunReadModel(): Promise<void> {
   await projectionQueue
   active?.index.close()
   active = null
+}
+
+export async function resetScheduledRunReadModelForTests(): Promise<void> {
+  await stopScheduledRunReadModel()
   projectionQueue = Promise.resolve()
   canonicalReadCount = 0
   rebuildCount = 0

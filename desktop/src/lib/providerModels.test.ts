@@ -33,7 +33,10 @@ describe('groupProviderModels', () => {
       '其他',
     )
 
-    expect(groups.map((group) => group.group)).toEqual(['xai', '其他'])
+    // Group membership is independent of the host's Chinese/English collation.
+    expect(new Set(groups.map((group) => group.group))).toEqual(new Set(['xai', '其他']))
+    expect(groups).toHaveLength(2)
+    expect(groups.find((group) => group.group === 'xai')?.models.map((m) => m.id)).toEqual(['owned'])
     expect(groups.find((group) => group.group === '其他')?.models.map((m) => m.id))
       .toEqual(['no-owner', 'blank-owner'])
   })

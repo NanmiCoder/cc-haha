@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createComputerUseReplWorker } from './replWorker'
 import { REPL_BOOTSTRAP_SOURCE } from '../../vendor/computer-use-mcp/replApi'
 
@@ -612,7 +613,7 @@ describe('computer use persistent REPL worker', () => {
 
   test('runs the same persistent protocol in a separate process with a disposable home', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'cu-repl-worker-'))
-    const child = Bun.spawn([process.execPath, '--no-env-file', new URL('./replWorker.ts', import.meta.url).pathname], {
+    const child = Bun.spawn([process.execPath, '--no-env-file', fileURLToPath(new URL('./replWorker.ts', import.meta.url))], {
       cwd: directory,
       env: { HOME: directory, TMPDIR: directory, CLAUDE_CONFIG_DIR: directory },
       stdin: 'pipe',

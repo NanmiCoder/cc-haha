@@ -26,6 +26,16 @@ function makeTempDir(): string {
   return dir
 }
 
+function linkFixture(source: string, target: string, directory = false): void {
+  // File symlinks require an OS privilege on Windows. A junction at the same
+  // asset path exercises the real reparse-point rejection before file decoding.
+  fs.symlinkSync(
+    process.platform === 'win32' && !directory ? path.dirname(source) : source,
+    target,
+    process.platform === 'win32' ? 'junction' : directory ? 'dir' : 'file',
+  )
+}
+
 function pngHeader(width = 1536, height = 2288): Buffer {
   const data = Buffer.alloc(24)
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(data)
@@ -337,7 +347,7 @@ describe('createCustomPetFromAtlas', () => {
     expect(fs.readFileSync(path.join(root, 'safe-pet', 'spritesheet.png'))).toEqual(pngHeader())
 
     const symlinkPath = path.join(root, 'linked.png')
-    fs.symlinkSync(atlasPath, symlinkPath)
+    linkFixture(atlasPath, symlinkPath)
     await expect(createCustomPetFromAtlas({
       ...input,
       slug: 'linked-pet',
@@ -419,7 +429,7 @@ describe('createCustomPetFromImage', () => {
     expect(fs.readFileSync(path.join(root, 'safe-image', 'pet.png'))).toEqual(pngHeader(512, 640))
 
     const symlinkPath = path.join(root, 'linked.png')
-    fs.symlinkSync(imagePath, symlinkPath)
+    linkFixture(imagePath, symlinkPath)
     await expect(createCustomPetFromImage({
       ...input,
       slug: 'linked-image',
@@ -530,7 +540,7 @@ describe('loadCustomPets', () => {
     fs.mkdirSync(linkedDir)
     fs.writeFileSync(path.join(linkedDir, 'pet.json'), JSON.stringify(validSingleImageManifest()))
     fs.writeFileSync(path.join(outside, 'pet.webp'), webpHeader(512, 640))
-    fs.symlinkSync(path.join(outside, 'pet.webp'), path.join(linkedDir, 'pet.webp'))
+    linkFixture(path.join(outside, 'pet.webp'), path.join(linkedDir, 'pet.webp'))
     writeSingleImagePet(
       root,
       'animated-image',
@@ -683,7 +693,7 @@ describe('loadCustomPets', () => {
     const root = makeTempDir()
     const outside = makeTempDir()
     writePet(outside, 'target')
-    fs.symlinkSync(path.join(outside, 'target'), path.join(root, 'linked-pet'), 'dir')
+    linkFixture(path.join(outside, 'target'), path.join(root, 'linked-pet'), true)
 
     const result = await loadCustomPets({ root, inspectImageSize: validSizeInspector })
 
@@ -701,19 +711,19 @@ describe('loadCustomPets', () => {
 
     if (target === 'manifest') {
       fs.writeFileSync(path.join(outside, 'pet.json'), JSON.stringify(validManifest()))
-      fs.symlinkSync(path.join(outside, 'pet.json'), path.join(petDir, 'pet.json'))
+      linkFixture(path.join(outside, 'pet.json'), path.join(petDir, 'pet.json'))
       fs.writeFileSync(path.join(petDir, 'spritesheet.webp'), webpHeader())
     } else if (target === 'image') {
       fs.writeFileSync(path.join(petDir, 'pet.json'), JSON.stringify(validManifest()))
       fs.writeFileSync(path.join(outside, 'spritesheet.webp'), webpHeader())
-      fs.symlinkSync(path.join(outside, 'spritesheet.webp'), path.join(petDir, 'spritesheet.webp'))
+      linkFixture(path.join(outside, 'spritesheet.webp'), path.join(petDir, 'spritesheet.webp'))
     } else {
       fs.writeFileSync(path.join(petDir, 'pet.json'), JSON.stringify(validManifest({
         spritesheetPath: 'assets/spritesheet.webp',
       })))
       fs.mkdirSync(path.join(outside, 'assets'))
       fs.writeFileSync(path.join(outside, 'assets', 'spritesheet.webp'), webpHeader())
-      fs.symlinkSync(path.join(outside, 'assets'), path.join(petDir, 'assets'), 'dir')
+      linkFixture(path.join(outside, 'assets'), path.join(petDir, 'assets'), true)
     }
 
     const result = await loadCustomPets({ root, inspectImageSize: validSizeInspector })

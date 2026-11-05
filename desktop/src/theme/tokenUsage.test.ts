@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -59,7 +59,7 @@ describe('css custom property usage', () => {
       // preview-agent 是注入到第三方页面的独立脚本：它的样式活在 Shadow DOM 里，
       // 页面上不存在 globals.css，token 由那段样式自己定义自己消费。自洽性由
       // preview-agent/editBubble.test.ts 用同等强度的检查守住。
-      if (file.includes('/preview-agent/')) continue
+      if (file.split(sep).join('/').includes('/preview-agent/')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {
@@ -86,7 +86,7 @@ describe('css custom property usage', () => {
     for (const file of sourceFiles) {
       // The pet window is an OS-level always-on-top surface with its own
       // stacking context; it is not part of the in-app overlay scale.
-      if (file.includes('/features/pets/')) continue
+      if (file.split(sep).join('/').includes('/features/pets/')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {
@@ -123,7 +123,7 @@ describe('css custom property usage', () => {
     const offenders: string[] = []
 
     for (const file of sourceFiles) {
-      if (file.includes('/features/pets/')) continue
+      if (file.split(sep).join('/').includes('/features/pets/')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')
       lines.forEach((line, index) => {

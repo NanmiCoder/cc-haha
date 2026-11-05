@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite'
 import { getEventListeners } from 'node:events'
 import { appendFile, chmod, mkdir, mkdtemp, open, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { openLocalIndexDatabase, type LocalIndexDatabase } from './database.js'
 import {
   createLocalIndexCoordinator,
@@ -424,7 +424,7 @@ describe('local index coordinator', () => {
     const outside = join(configDir, 'outside.jsonl')
     const linked = join(configDir, 'projects', '-repo', 'linked.jsonl')
     await writeFile(outside, await Bun.file(second.path).text())
-    await symlink(outside, linked)
+    await symlink(process.platform === 'win32' ? configDir : outside, linked, process.platform === 'win32' ? 'junction' : 'file')
     await watcherOptions.onBatch({ paths: [linked], fullSweep: false })
     expect(coordinator.listSessions({ limit: 10 }).total).toBe(2)
 
@@ -2533,7 +2533,7 @@ describe('discoverActivityTranscriptSources', () => {
 
     const result = await discoverActivityTranscriptSources(root, new AbortController().signal)
 
-    const names = result.candidates.map(candidate => candidate.path.split('/').pop()).sort()
+    const names = result.candidates.map(candidate => basename(candidate.path)).sort()
     // agent-wf.jsonl lives at subagents/workflows/<wf_id>/ — the level that used to be skipped
     // entirely, leaving every workflow agent's tokens and tool calls out of the stats.
     expect(names).toEqual([

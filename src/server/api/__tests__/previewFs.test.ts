@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import {
   mkdirSync,
+  lstatSync,
   mkdtempSync,
   rmSync,
   symlinkSync,
@@ -154,7 +155,14 @@ describe('handlePreviewFs', () => {
     mkdirSync(root)
     mkdirSync(outside)
     writeFileSync(path.join(outside, 'secret.txt'), 'outside')
-    symlinkSync(path.join(outside, 'secret.txt'), path.join(root, 'final-link.txt'))
+    // A final directory junction exercises the same realpath escape guard on
+    // Windows without requiring permission to create file symlinks.
+    symlinkSync(
+      process.platform === 'win32' ? outside : path.join(outside, 'secret.txt'),
+      path.join(root, 'final-link.txt'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
+    expect(lstatSync(path.join(root, 'final-link.txt')).isSymbolicLink()).toBe(true)
     symlinkSync(
       outside,
       path.join(root, 'linked-directory'),

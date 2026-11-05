@@ -19,6 +19,19 @@ import type {
 
 type LaneExecutor = (lane: LaneDefinition, options: QualityGateOptions) => Promise<LaneResult>
 
+export function commandLaneEnvironment(source: NodeJS.ProcessEnv, platform = process.platform): NodeJS.ProcessEnv {
+  if (platform !== 'win32') return source
+  const environment = { ...source }
+  for (const name of Object.keys(environment)) {
+    if (name.toUpperCase() !== 'PATH' || environment[name] === undefined) continue
+    // Nested bun/npm scripts repeatedly prepend ancestor .bin directories.
+    // cmd.exe drops oversized variables, so collapse exact repetitions while
+    // retaining every unique entry and its original command lookup priority.
+    environment[name] = [...new Set(environment[name].split(';'))].join(';')
+  }
+  return environment
+}
+
 function nowId() {
   return new Date().toISOString().replace(/[:.]/g, '-')
 }
@@ -154,6 +167,7 @@ async function runCommandLane(lane: LaneDefinition, options: QualityGateOptions)
   const writeStderr = streamLogs ? (chunk: Buffer) => process.stderr.write(chunk) : () => {}
   const proc = Bun.spawn(command, {
     cwd: options.rootDir,
+    env: commandLaneEnvironment(process.env),
     stdout: 'pipe',
     stderr: 'pipe',
   })

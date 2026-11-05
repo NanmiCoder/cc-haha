@@ -12,7 +12,7 @@ import {
   saveAiTitle,
 } from '../services/titleService.js'
 import { sessionService } from '../services/sessionService.js'
-import { drainTraceCaptureForTests } from '../services/traceCaptureService.js'
+import { clearTraceCaptureStateForTests, drainTraceCaptureForTests } from '../services/traceCaptureService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { hahaDeepSeekOAuthService } from '../services/hahaDeepSeekOAuthService.js'
 import { SYSTEM_PROXY_URL_ENV } from '../services/networkSettings.js'
@@ -677,6 +677,7 @@ describe('titleService protocol routing', () => {
     // Let the background trace writer finish before the directory it targets goes
     // away, otherwise it fails the run with an unhandled ENOENT.
     await drainTraceCaptureForTests()
+    clearTraceCaptureStateForTests()
     restoreEnv('CLAUDE_CONFIG_DIR', originalConfigDir)
     await fs.rm(tmpDir, { recursive: true, force: true })
   })

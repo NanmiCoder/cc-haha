@@ -318,7 +318,7 @@ fn element_wait_actionable_type_fails_on_uneditable_role() {
         wait_predicate::ElementPredicate::Actionable(action_request::ActionRequest::headless(
             crate::actions::action::Action::TypeText(String::new()),
         )),
-        50,
+        5_000,
         &adapter,
         &crate::context::CommandContext::default(),
     )

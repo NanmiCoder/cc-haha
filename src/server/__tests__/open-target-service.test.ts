@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
 import {
   createOpenTargetService,
@@ -152,7 +152,7 @@ describe('openTargetService', () => {
       .toBe('/api/open-targets/icons/vscode')
   })
 
-  it.each(['/Applications/Zed.app', join(homedir(), 'Applications', 'Zed.app')])(
+  it.each(['/Applications/Zed.app', posix.join(homedir(), 'Applications', 'Zed.app')])(
     'detects Zed installed at %s and opens projects and files through the app bundle',
     async (appPath) => {
       const dir = await makeDir('cc-haha zed-')

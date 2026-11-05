@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { test } from 'bun:test'
 
 test('failed same-provider catalog retries independently and aborted responses cannot overwrite a new provider', () => {
@@ -12,13 +11,12 @@ test('failed same-provider catalog retries independently and aborted responses c
   const script = `
 import { mock } from 'bun:test'
 import assert from 'node:assert/strict'
-const root = ${JSON.stringify(fileURLToPath(new URL('../../..', import.meta.url)).replace(/\/$/, ''))}
 let cursor = 0
 const slots: any[] = []
 let effects: (() => void)[] = []
 let dirty = false
 const equal = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((value, i) => Object.is(value, b[i]))
-mock.module(\`\${root}/mobile/node_modules/react\`, () => ({
+mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
   default: {},
   useState(initial: any) {
     const id = cursor++
@@ -39,15 +37,15 @@ mock.module(\`\${root}/mobile/node_modules/react\`, () => ({
     }
   },
 }))
-mock.module(\`\${root}/mobile/node_modules/react-native\`, () => ({ FlatList: 'FlatList', View: 'View', useWindowDimensions: () => ({height:844}) }))
-mock.module(\`\${root}/mobile/src/ui/Text\`, () => ({ Text: 'Text' }))
-mock.module(\`\${root}/mobile/src/ui/kit\`, () => ({ Button:'Button',Callout:'Callout',InlineError:'InlineError',Loading:'Loading',Sheet:'Sheet',SearchField:'SearchField',TextButton:'TextButton',useColors:()=>({}) }))
-mock.module(\`\${root}/mobile/src/ui/theme\`, () => ({ errorText:String }))
-mock.module(\`\${root}/mobile/src/ui/newtask/ChoiceRow\`, () => ({ ChoiceRow:'ChoiceRow' }))
+mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({ FlatList: 'FlatList', View: 'View', useWindowDimensions: () => ({height:844}) }))
+mock.module(${JSON.stringify(import.meta.resolve('./Text'))}, () => ({ Text: 'Text' }))
+mock.module(${JSON.stringify(import.meta.resolve('./kit'))}, () => ({ Button:'Button',Callout:'Callout',InlineError:'InlineError',Loading:'Loading',Sheet:'Sheet',SearchField:'SearchField',TextButton:'TextButton',useColors:()=>({}) }))
+mock.module(${JSON.stringify(import.meta.resolve('./theme'))}, () => ({ errorText:String }))
+mock.module(${JSON.stringify(import.meta.resolve('./newtask/ChoiceRow'))}, () => ({ ChoiceRow:'ChoiceRow' }))
 let modelCalls = 0, directoryCalls = 0
 let slowResolve, slowSignal
 const directory = { activeId: null, sources:[{id:null,auth:'ready',name:'Claude'},{id:'slow',auth:'ready',name:'Slow'},{id:'next',auth:'ready',name:'Next'}] }
-mock.module(\`\${root}/mobile/src/core/runtimeCatalog\`, () => ({
+mock.module(${JSON.stringify(import.meta.resolve('../core/runtimeCatalog'))}, () => ({
   canSetRuntimeEffort:()=>true, runtimeProviderIdentity:(id:any)=>id, modelDetail:()=>'', runtimeModelSelection:(providerId,model)=>({providerId,modelId:model.id}),
   loadRuntimeDirectory:async()=>{ directoryCalls++; return directory },
   loadRuntimeModels:async(_client,_directory,id,signal)=>{
@@ -57,7 +55,7 @@ mock.module(\`\${root}/mobile/src/core/runtimeCatalog\`, () => ({
     return [{id:id==='next'?'next-model':'recovered',name:'Recovered'}]
   },
 }))
-const { useRuntimeChoice } = await import(\`\${root}/mobile/src/ui/RuntimePicker\`)
+const { useRuntimeChoice } = await import(${JSON.stringify(import.meta.resolve('./RuntimePicker'))})
 const client = {}
 let choice: ReturnType<typeof useRuntimeChoice>
 async function settle() {

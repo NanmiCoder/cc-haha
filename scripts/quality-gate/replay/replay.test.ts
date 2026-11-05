@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 
 import { listCassetteIds, loadCassette, queueKey, serializeCassette, sha, type Cassette, type Interaction } from './cassette'
-import { expandEvents, expandString, learnVolatileValues, normalizeEvents, normalizeFragments, pathVariants, type PlaceholderTable } from './normalize'
+import { expandEvents, expandString, learnVolatileValues, normalizeEvents, normalizeFragments, normalizedFingerprint, pathVariants, type PlaceholderTable } from './normalize'
 import { buildCassette, scanForSecrets, startRecorder } from './recorder'
 import { compareRequest, startReplayServer, type ReplayServer } from './replayServer'
 import { fingerprintRequest, parseSse, responseFeatures, serializeSseEvent, type SseEvent } from './wire'
@@ -88,6 +88,31 @@ async function post(server: ReplayServer, body: unknown, path = '/v1/messages') 
 }
 
 describe('normalisation', () => {
+  test.each(['anthropic', 'openai_chat'] as const)('matches generated Windows transcript and upload paths in %s fingerprints', format => {
+    const roots: PlaceholderTable = [{ name: 'CONFIG_DIR', values: ['C:\\fixture\\config'] }]
+    const text = 'Transcript: C:\\fixture\\config\\projects\\project\\session.jsonl\n[Image: source: C:\\fixture\\config\\uploads\\session\\swatch.png]\nKeep \\n as literal text.'
+    const expected = 'Transcript: {{CONFIG_DIR}}/projects/project/session.jsonl\n[Image: source: {{CONFIG_DIR}}/uploads/session/swatch.png]\nKeep \\n as literal text.'
+    const body = (content: string) => ({ model: 'fixture', stream: true, messages: [{ role: 'user', content }] })
+    const actual = normalizedFingerprint(format, body(text), roots)
+    expect(actual.firstUserText).toBe(expected)
+    expect(actual.lastUserText).toBe(expected)
+    expect(normalizedFingerprint(format, body(text.replace('swatch.png', 'different.png')), roots).firstUserText).not.toBe(expected)
+    const posix = normalizedFingerprint(format, body('Read /tmp/work/file\\literal.txt'), [{ name: 'WORK_ROOT', values: ['/tmp/work'] }])
+    expect(posix.firstUserText).toBe('Read {{WORK_ROOT}}/file\\literal.txt')
+
+    const spaced = [
+      'Read the full transcript at: C:\\fixture\\config\\folder with spaces\\session.jsonl',
+      '[Image: source: C:\\fixture\\config\\folder with spaces\\swatch.png, original 6000x120, displayed at 3000x60.]',
+      'Read "C:\\fixture\\config\\folder with spaces\\out.txt" and keep \\n as literal text.',
+      'Read `C:\\fixture\\config\\folder with spaces\\out.txt` and keep \\n as literal text.',
+    ].join('\n')
+    const canonical = spaced.replaceAll('C:\\fixture\\config\\folder with spaces\\', '{{CONFIG_DIR}}/folder with spaces/')
+    expect(normalizedFingerprint(format, body(spaced), roots).firstUserText).toBe(canonical)
+    expect(normalizedFingerprint(format, body(spaced.replace('out.txt', 'other.txt')), roots).firstUserText).not.toBe(canonical)
+    expect(normalizedFingerprint(format, body('Read "/tmp/work/folder with spaces/file\\literal.txt"'), [{ name: 'WORK_ROOT', values: ['/tmp/work'] }]).firstUserText)
+      .toBe('Read "{{WORK_ROOT}}/folder with spaces/file\\literal.txt"')
+  })
+
   test('a path split across fragments becomes one whole placeholder and expands back for another run', () => {
     const fragments = ['{"command":"ls /var/folders/ab/T/cc-haha-agent', '-replay-rec/replay-multi', '-tool/src"}']
     const normalized = normalizeFragments(fragments, table(RECORDED_ROOT), true)

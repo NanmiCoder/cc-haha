@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 const SAFE_INHERITED_ENV_NAMES = new Set([
@@ -51,6 +51,10 @@ export function createSandboxedTestEnvironment(
   overrides: Record<string, string> = {},
   source: NodeJS.ProcessEnv = process.env,
 ) {
+  // Windows TEMP may use an 8.3 alias while filesystem authorization resolves
+  // long paths. Give the complete child process tree one canonical identity.
+  mkdirSync(sandboxHome, { recursive: true })
+  sandboxHome = realpathSync.native(sandboxHome)
   const configHome = join(sandboxHome, '.config')
   const dataHome = join(sandboxHome, '.local', 'share')
   const cacheHome = join(sandboxHome, '.cache')
@@ -91,6 +95,21 @@ function openDirectoryTree(directory: string) {
   }
 }
 
+/** Bun on Windows does not honor rmSync's maxRetries; retry transient locks explicitly. */
+export function removeTestDirectory(directory: string) {
+  const retryable = new Set(['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM'])
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rmSync(directory, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (attempt === 5 || !code || !retryable.has(code)) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, (attempt + 1) * 100)
+    }
+  }
+}
+
 /**
  * Remove a lane's sandbox HOME without letting a test's leftovers turn a finished,
  * passing run red. A read-only directory left under the sandboxed TMPDIR blocks a
@@ -100,14 +119,14 @@ function openDirectoryTree(directory: string) {
  */
 export function removeTestSandbox(directory: string, label: string, warn: (message: string) => void = console.warn) {
   try {
-    rmSync(directory, { recursive: true, force: true })
+    removeTestDirectory(directory)
     return
   } catch {
     // Retry below with the tree made writable.
   }
   try {
     openDirectoryTree(directory)
-    rmSync(directory, { recursive: true, force: true })
+    removeTestDirectory(directory)
   } catch (error) {
     const prefix = process.env.GITHUB_ACTIONS === 'true' ? '::warning::' : ''
     warn(`${prefix}${label}: could not remove test sandbox ${directory}: ${error instanceof Error ? error.message : String(error)}`)

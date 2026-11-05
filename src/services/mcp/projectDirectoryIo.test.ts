@@ -34,7 +34,7 @@ test('async MCP resolution rejects native realpath substitution to a different i
     ${script}
   `, { eval: true, workerData: { requested, substitute } }))
   await expect(resolveProjectMcpDirectory(requested)).rejects.toThrow('Project directory identity could not be verified')
-  expect(await resolveProjectMcpDirectory(substitute)).toBe(substitute)
+  expect(await resolveProjectMcpDirectory(substitute)).toBe(substitute.replaceAll('\\', '/'))
 })
 
 class StuckWorker extends EventEmitter {

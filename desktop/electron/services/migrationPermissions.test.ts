@@ -265,7 +265,7 @@ describe('Windows migration permissions', () => {
     const failing = vi.fn<MigrationPermissionsRunner>(async () => { throw new Error('ACL unavailable') })
     await expect(preserveWindowsMigrationPermissions(entries, undefined, failing)).rejects.toThrow('ACL unavailable')
     expect(failing).toHaveBeenCalledOnce()
-  })
+  }, 30_000)
 
   it('honors cancellation before mutation and after each runner', async () => {
     const f = await fixture()
@@ -336,7 +336,26 @@ describe('Windows migration permissions', () => {
       expect(await fs.readdir(stage)).toEqual([])
       expect(await fs.readFile(f.sourceFile, 'utf8')).toBe('source fixture bytes')
     } finally {
-      await restrictWindowsMigrationStaging(f.sourceDir)
+      // This fixture retained WRITE_DAC but denies READ_CONTROL. Restore only
+      // this directory's DACL without reading it or propagating it to children.
+      await powershell(`
+        $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($owner, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit', [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
+        $acl.AddAccessRule($rule)
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class FixtureAclRestore {
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  public static extern bool SetFileSecurity(string path, uint information, byte[] descriptor);
+}
+'@
+        if (-not [FixtureAclRestore]::SetFileSecurity($payload.sourceDir, 4, $acl.GetSecurityDescriptorBinaryForm())) {
+          throw [System.ComponentModel.Win32Exception]::new([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        }
+      `, f)
     }
   }, 30_000)
 

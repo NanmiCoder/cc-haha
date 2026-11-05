@@ -10,6 +10,7 @@ import {
   resetScheduledRunReadModelForTests,
   setScheduledRunFingerprintAfterInitialStatHookForTests,
   setScheduledRunProjectionBeforeCommitHookForTests,
+  stopScheduledRunReadModel,
 } from './scheduledRunReadModel.js'
 import { getScheduledRunIndexDatabasePath } from './scheduledRunIndex.js'
 import { CronScheduler } from '../cronScheduler.js'
@@ -30,6 +31,23 @@ afterEach(async () => {
 })
 
 describe('scheduled run read model', () => {
+  test('closes its database at shutdown and can rebuild it after restart', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'scheduled-run-shutdown-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    process.env.CC_HAHA_LOCAL_INDEX = 'on'
+    const sourcePath = path.join(tmpDir, 'scheduled_tasks_log.json')
+    await fs.writeFile(sourcePath, JSON.stringify({ runs: [{
+      id: 'shutdown-run', taskId: 'task-1', taskName: 'Task',
+      startedAt: '2026-07-15T00:00:00.000Z', status: 'completed', prompt: 'prompt',
+    }] }))
+    const before = await readScheduledRunPage(sourcePath, { summaryOnly: true })
+    expect(before?.runs[0]?.id).toBe('shutdown-run')
+    await stopScheduledRunReadModel()
+    await stopScheduledRunReadModel()
+    await fs.rm(path.dirname(getScheduledRunIndexDatabasePath()), { recursive: true })
+    expect(await readScheduledRunPage(sourcePath, { summaryOnly: true })).toEqual(before)
+  })
+
   test('parses a changed canonical file once and keeps warm summary polls off the JSON hot path', async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'scheduled-run-read-model-'))
     process.env.CLAUDE_CONFIG_DIR = tmpDir

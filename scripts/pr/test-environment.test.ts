@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createOfflineTestEnvironment,
   createSandboxedTestEnvironment,
+  removeTestDirectory,
 } from './test-environment'
 
 describe('offline test environment', () => {
@@ -45,7 +46,7 @@ describe('offline test environment', () => {
   })
 
   test('routes cross-platform user and temporary directories into one sandbox', () => {
-    const sandboxHome = mkdtempSync(join(tmpdir(), 'cc-haha-test-env-'))
+    const sandboxHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'cc-haha-test-env-')))
     try {
       const environment = createSandboxedTestEnvironment(sandboxHome, {}, {
         PATH: '/usr/bin',
@@ -63,6 +64,23 @@ describe('offline test environment', () => {
       expect(existsSync(environment.TMPDIR)).toBe(true)
     } finally {
       rmSync(sandboxHome, { recursive: true, force: true })
+    }
+  })
+
+  test('uses one canonical home and temp identity when the supplied root is an alias', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'cc-haha-test-alias-'))
+    const actual = join(parent, 'actual')
+    const alias = join(parent, 'alias')
+    mkdirSync(actual)
+    symlinkSync(actual, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    try {
+      const environment = createSandboxedTestEnvironment(alias)
+      expect(environment.HOME).toBe(realpathSync.native(actual))
+      expect(environment.USERPROFILE).toBe(environment.HOME)
+      expect(environment.TMPDIR).toBe(join(realpathSync.native(actual), 'tmp'))
+      expect(environment.CLAUDE_CONFIG_DIR).toBe(join(realpathSync.native(actual), '.claude'))
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
     }
   })
 
@@ -101,6 +119,45 @@ describe('offline test environment', () => {
       expect(stdout).toBe('clean')
     } finally {
       rmSync(sandboxHome, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('test directory cleanup', () => {
+  test.skipIf(process.platform !== 'win32')('waits for a short-lived child to release its working directory', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cc-haha-cleanup-lock-'))
+    const child = Bun.spawn([process.execPath, '--no-env-file', '-e',
+      'console.log("ready"); setTimeout(() => process.exit(0), 250)',
+    ], { cwd: directory, stdout: 'pipe', stderr: 'ignore' })
+    try {
+      const reader = child.stdout.getReader()
+      await reader.read()
+      reader.releaseLock()
+      removeTestDirectory(directory)
+      expect(existsSync(directory)).toBe(false)
+      expect(await child.exited).toBe(0)
+    } finally {
+      child.kill()
+      await child.exited
+      removeTestDirectory(directory)
+    }
+  })
+
+  test.skipIf(process.platform !== 'win32')('reports a persistent lock instead of silently passing cleanup', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cc-haha-cleanup-persistent-'))
+    const child = Bun.spawn([process.execPath, '--no-env-file', '-e',
+      'console.log("ready"); setInterval(() => {}, 60000)',
+    ], { cwd: directory, stdout: 'pipe', stderr: 'ignore' })
+    try {
+      const reader = child.stdout.getReader()
+      await reader.read()
+      reader.releaseLock()
+      expect(() => removeTestDirectory(directory)).toThrow('EBUSY')
+      expect(existsSync(directory)).toBe(true)
+    } finally {
+      child.kill()
+      await child.exited
+      removeTestDirectory(directory)
     }
   })
 })

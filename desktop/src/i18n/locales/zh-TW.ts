@@ -1,6 +1,22 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  'settings.adapters.wechatHealthStopped': "訊息通道已停止",
+  'settings.adapters.wechatHealthStarting': "正在連接訊息通道",
+  'settings.adapters.wechatHealthOnline': "訊息通道在線",
+  'settings.adapters.wechatHealthReconnecting': "訊息通道正在重連",
+  'settings.adapters.wechatHealthAuthExpired': "登入已失效，請重新掃碼",
+  'settings.adapters.wechatHealthError': "訊息通道異常",
+  'settings.adapters.wechatHealthStale': "連線狀態已過期",
+  'settings.adapters.wechatHealthServerOffline': "無法連接本機服務",
+  'settings.adapters.wechatHealthChecking': "正在檢查連線",
+  'settings.adapters.wechatHealthReconnect': "重新連接",
+  'settings.adapters.wechatHealthPaired': "已有使用者獲准使用",
+  'settings.adapters.wechatHealthUnpaired': "等待使用者配對",
+  'settings.adapters.wechatHealthLastReceive': "最近接收",
+  'settings.adapters.wechatHealthLastSend': "最近傳送",
+  'settings.adapters.wechatHealthNever': "尚無",
+  'settings.adapters.wechatHealthRestartFailed': "重新連接失敗，請確認桌面服務正在執行後重試。",
   "sidebar.archiveSession": "封存",
   "sidebar.restoreSession": "還原",
   "sidebar.archivedSessions": "已封存對話",

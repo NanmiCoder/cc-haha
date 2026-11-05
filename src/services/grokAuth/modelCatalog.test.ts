@@ -167,11 +167,13 @@ describe('Grok model catalog', () => {
       return new Response('nope', { status: 503 })
     }
 
-    await getGrokModelCatalog({ accountKey: 'flaky', fetchOverride })
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    await getGrokModelCatalog({ accountKey: 'flaky', fetchOverride })
-    await getGrokModelCatalog({ accountKey: 'flaky', fetchOverride })
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    const options = { accessToken: 'fixture-token', fetchOverride }
+    // Observe the failed refresh completing before checking its backoff, rather
+    // than racing token-file I/O or accidentally testing only in-flight dedup.
+    expect(await getGrokModelCatalog({ ...options, forceRefresh: true })).toEqual(GROK_MODEL_CATALOG)
+    await getGrokModelCatalog(options)
+    await getGrokModelCatalog(options)
+    await new Promise<void>(resolve => setImmediate(resolve))
 
     expect(calls).toBe(1)
   })

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createSandboxedTestEnvironment, removeTestSandbox } from '../../../scripts/pr/test-environment'
 
 test('mobile WAV uploads agree with the production voice handler and a deterministic provider', () => {
@@ -61,7 +62,7 @@ test('mobile WAV uploads agree with the production voice handler and a determini
     `
     const result = spawnSync(process.execPath, [
       '--no-env-file', '--preload',
-      new URL('../../../preload.ts', import.meta.url).pathname,
+      fileURLToPath(new URL('../../../preload.ts', import.meta.url)),
       '-e', script,
     ], { cwd: sandboxHome, env: { ...env, NODE_ENV: 'test' }, encoding: 'utf8', timeout: 15000 })
     const report = existsSync(resultPath) ? readFileSync(resultPath, 'utf8') : 'No child report'

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { ImageBlockWatcher } from '../image-block-watcher.js'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 
 describe('ImageBlockWatcher', () => {
   it('extracts a markdown image with an http URL for policy-checked loading', () => {
@@ -34,10 +36,31 @@ describe('ImageBlockWatcher', () => {
 
   it('extracts a markdown image with file:// URL as path', () => {
     const w = new ImageBlockWatcher()
-    const out = w.feed('![x](file:///var/img/x.png)')
+    const imagePath = resolve('fixture images', '图.png')
+    const out = w.feed(`![x](${pathToFileURL(imagePath).href})`)
     const source = out[0]!.source
     expect(source.kind).toBe('path')
-    if (source.kind === 'path') expect(source.path).toBe('/var/img/x.png')
+    if (source.kind === 'path') expect(source.path).toBe(imagePath)
+    expect(w.feed('![bad](file:///bad%ZZimage.png)')).toEqual([])
+    expect(w.feed('![bad](file:///bad%2fimage.png)')).toEqual([])
+  })
+
+  it.each(['%', '%2', '%ZZ', '%C3%28', '%E9', '%00', '%2f', '%2F', '%5c', '%5C'])(
+    'rejects malformed or structural file URL encoding %s on a native absolute path',
+    (encoding) => {
+      const url = pathToFileURL(resolve('fixture images', 'badPLACEHOLDERimage.png')).href
+        .replace('PLACEHOLDER', encoding)
+      const watcher = new ImageBlockWatcher()
+      expect(watcher.feed(`![bad](${url})`)).toEqual([])
+      expect(watcher.drain()).toEqual([])
+    },
+  )
+
+  it('decodes valid file URL escapes exactly once', () => {
+    const imagePath = resolve('fixture images', '图%2F%ZZ.png')
+    const url = pathToFileURL(imagePath).href
+    expect(new ImageBlockWatcher().feed(`![ok](${url})`)[0]?.source)
+      .toEqual({ kind: 'path', path: imagePath })
   })
 
   it('extracts a data URI as base64', () => {

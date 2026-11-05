@@ -51,7 +51,7 @@ function ensureRealManagedDirectory(path: string, trustRoot: string): void {
   if (!snapshot.isDirectory() || snapshot.isSymbolicLink()) {
     throw new UnsafeLocalIndexPathError()
   }
-  if (!isContained(trustRoot, realpathSync(path))) {
+  if (!isContained(trustRoot, realpathSync.native(path))) {
     throw new UnsafeLocalIndexPathError()
   }
 }
@@ -99,12 +99,14 @@ export function prepareManagedDatabasePath(options: {
   // Recursive creation is restricted to the caller-owned trust root. Every
   // managed descendant is created one component at a time and lstat-verified.
   mkdirSync(lexicalScope, { recursive: true })
-  const trustRoot = realpathSync(lexicalScope)
+  const trustRoot = realpathSync.native(lexicalScope)
   const scopeSnapshot = lstatSync(lexicalScope)
   if (!scopeSnapshot.isDirectory() && !scopeSnapshot.isSymbolicLink()) {
     throw new UnsafeLocalIndexPathError()
   }
-  const ccHahaDir = join(lexicalScope, 'cc-haha')
+  // Resolve the caller-owned root before creating managed children. In
+  // particular, mkdir through a Windows junction must not retain an alias.
+  const ccHahaDir = join(trustRoot, 'cc-haha')
   const databaseDir = join(ccHahaDir, 'db')
   ensureRealManagedDirectory(ccHahaDir, trustRoot)
   ensureRealManagedDirectory(databaseDir, trustRoot)

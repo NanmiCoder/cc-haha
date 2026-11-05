@@ -2539,13 +2539,14 @@ export async function executeSessionRewind(
   sessionId: string,
   selector: RewindTargetSelector,
   mode: SessionRewindMode = 'both',
+  stopRuntime: () => Promise<void> = () => conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true }),
 ): Promise<SessionRewindExecuteResult> {
   const restoreFiles = mode !== 'conversation'
   const selectedTarget = await resolveRewindTarget(sessionId, selector)
 
   // Stop and drain the runtime before the final completeness check. Otherwise
   // a late tool result or snapshot can land between validation and restore.
-  await conversationService.stopSessionAndWait(sessionId)
+  await stopRuntime()
 
   const target = await resolveRewindTarget(sessionId, {
     targetUserMessageId: selectedTarget.targetUserMessageId,

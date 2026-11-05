@@ -14,7 +14,7 @@ import {
   writeFile,
 } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import {
   getIsInteractive,
   getOriginalCwd,
@@ -79,6 +79,7 @@ describe('file history rewind link safety', () => {
     await symlink(
       outsideBackupDirectory,
       join(backupRoot, getSessionId()),
+      process.platform === 'win32' ? 'junction' : 'dir',
     )
     const { getState, updateState } = createHistoryState(targetMessageId)
 
@@ -147,7 +148,7 @@ describe('file history rewind link safety', () => {
       await fileHistoryTrackEdit(updateState, trackedPath, targetMessageId)
       await unlink(trackedPath)
       if (linkType === 'symlink') {
-        await symlink(victimPath, trackedPath)
+        await symlink(process.platform === 'win32' ? dirname(victimPath) : victimPath, trackedPath, process.platform === 'win32' ? 'junction' : 'file')
       } else {
         await link(victimPath, trackedPath)
       }
@@ -204,7 +205,7 @@ describe('file history rewind link safety', () => {
         getState().snapshots.at(-1)!.trackedFileBackups[trackingPath]!
       await unlink(trackedPath)
       if (linkType === 'symlink') {
-        await symlink(victimPath, trackedPath)
+        await symlink(process.platform === 'win32' ? dirname(victimPath) : victimPath, trackedPath, process.platform === 'win32' ? 'junction' : 'file')
       } else {
         await link(victimPath, trackedPath)
       }
@@ -244,7 +245,7 @@ describe('file history rewind link safety', () => {
 
     await fileHistoryTrackEdit(updateState, trackedPath, targetMessageId)
     await rm(nestedDir, { recursive: true, force: true })
-    await symlink(outsideDir, nestedDir)
+    await symlink(outsideDir, nestedDir, process.platform === 'win32' ? 'junction' : 'dir')
     await fileHistoryRewind(updateState, targetMessageId)
 
     expect(await readFile(victimPath, 'utf8')).toBe('outside content')
@@ -261,7 +262,7 @@ describe('file history rewind link safety', () => {
     await fileHistoryTrackEdit(updateState, trackedPath, targetMessageId)
     await mkdir(outsideDir)
     await writeFile(victimPath, 'outside content')
-    await symlink(outsideDir, nestedDir)
+    await symlink(outsideDir, nestedDir, process.platform === 'win32' ? 'junction' : 'dir')
     await fileHistoryRewind(updateState, targetMessageId)
 
     expect(await readFile(victimPath, 'utf8')).toBe('outside content')
@@ -334,7 +335,7 @@ describe('file history rewind link safety', () => {
       if (backupState === 'symlink') {
         const outsideBackup = join(testRoot!, 'outside-backup.txt')
         await writeFile(outsideBackup, 'outside backup content')
-        await symlink(outsideBackup, backupPath)
+        await symlink(process.platform === 'win32' ? dirname(outsideBackup) : outsideBackup, backupPath, process.platform === 'win32' ? 'junction' : 'file')
       }
       await writeFile(trackedPath, 'modified content')
 
@@ -452,7 +453,7 @@ describe('migrated backup hard links', () => {
     const outsideBackup = join(testRoot!, 'outside-backup.txt')
     await writeFile(outsideBackup, 'outside backup content')
     await unlink(backupPath)
-    await symlink(outsideBackup, backupPath)
+    await symlink(process.platform === 'win32' ? dirname(outsideBackup) : outsideBackup, backupPath, process.platform === 'win32' ? 'junction' : 'file')
 
     await expect(readBackupFileSafely(backupName)).rejects.toThrow(/unsafe linked/)
   })
@@ -506,14 +507,14 @@ describe('completed turn checkpoint persistence', () => {
     await fileHistoryTrackEdit(updateState, second, target)
     await writeFile(first, 'frozen first')
     await unlink(second)
-    await symlink(first, second)
+    await symlink(process.platform === 'win32' ? dirname(first) : first, second, process.platform === 'win32' ? 'junction' : 'file')
     await fileHistoryCompleteSnapshot(updateState, target)
     const completed = getState().snapshots[0]!
     expect(Object.keys(completed.trackedFileBackups)).toHaveLength(2)
     expect(Object.keys(completed.completedFileBackups!)).toEqual(['first.txt'])
     const backup = completed.completedFileBackups!['first.txt']!
     expect((await readBackupFileSafely(backup.backupFileName!)).content.toString()).toBe('frozen first')
-    await unlink(second)
+    await rm(second, { recursive: true })
     await writeFile(second, 'later live second')
     await writeFile(first, 'later live first')
     await fileHistoryCompleteSnapshot(updateState, target)

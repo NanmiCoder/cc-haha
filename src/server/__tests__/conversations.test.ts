@@ -7379,7 +7379,7 @@ describe('WebSocket Chat Integration', () => {
       expect(serializedSecondRequest).toContain('FIRST_REPLY_1033')
     } finally {
       conversationService.startSession = originalStartSession
-      if (sessionId) conversationService.stopSession(sessionId)
+      if (sessionId) await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
       if (originalCliPathForTest === undefined) delete process.env.CLAUDE_CLI_PATH
       else process.env.CLAUDE_CLI_PATH = originalCliPathForTest
       if (originalResumeTranscriptPath === undefined) delete process.env.MOCK_SDK_RESUME_TRANSCRIPT_PATH

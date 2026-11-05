@@ -11,7 +11,7 @@ import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
-import { updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
+import { clearTraceCaptureStateForTests, drainTraceCaptureForTests, updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 
@@ -92,6 +92,8 @@ describe('ConversationService', () => {
   })
 
   afterEach(async () => {
+    await drainTraceCaptureForTests()
+    clearTraceCaptureStateForTests()
     hahaOAuthService.setFetchAccountUuidFn()
     if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = originalConfigDir

@@ -329,7 +329,18 @@ async function writeRunsFile(
   const serialized = JSON.stringify(data, null, 2) + '\n'
   try {
     await fs.writeFile(tmpFile, serialized, 'utf-8')
-    await fs.rename(tmpFile, filePath)
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rename(tmpFile, filePath)
+        break
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (attempt === 5 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
+        // A Windows reader can briefly prevent atomic replacement. Keep the
+        // original log intact until replacement succeeds; never unlink it.
+        await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)))
+      }
+    }
   } catch (err) {
     await fs.unlink(tmpFile).catch(() => {})
     throw err

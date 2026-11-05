@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import * as fsPromises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
@@ -66,7 +67,7 @@ async function startHarness(memberNames: string[], options: {
   const { conversationService: service } = await import('./conversationService.js')
   const { ProviderService } = await import('./providerService.js')
   const { launchTeamPlanRuntime } = await import('./teamPlanRuntime.js')
-  const { writeTeamFileAsync, getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
+  const { writeTeamFileAsync, getTeamDir, readTeamFile } = await import('../../utils/swarm/teamHelpers.js')
   const { beginTaskListLifecycle, withTaskListLifecycleLock, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
   // Only members' model calls are recorded and answered from `replies`. The lead
   // fixture calls the same upstream (launch tells it the team is running) at a
@@ -119,12 +120,35 @@ async function startHarness(memberNames: string[], options: {
   const waitFor = async (condition: () => boolean | Promise<boolean>, label: string, timeoutMs = 8000) => {
     const end = Date.now() + timeoutMs
     while (!(await condition()) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20))
-    if (!(await condition())) throw new Error(`Timed out waiting for ${label}`)
+    if (!(await condition())) {
+      const state = {
+        requests: requests.map(request => ({ agent: request.agent, automatic: request.prompt.includes('[Team runtime notice]'), prompt: request.prompt.slice(-200) })),
+        remainingReplies: replies,
+        members: readTeamFile(teamName)?.members,
+      }
+      throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(state)}`)
+    }
   }
   const instructed = options.instructedAtLaunch ?? memberNames
   await waitFor(() => instructed.every(name => requests.some(request => request.prompt.includes(`Work as ${name}`))), 'initial member turns')
+  const leadNotifications = async () => {
+    // Delivery can archive a notice before the test reads it. Inspect the
+    // durable feed so assertions do not race the lead consuming its inbox.
+    const { readMailboxHistory } = await import('../../utils/teammateMailbox.js')
+    return (await readMailboxHistory('team-lead', teamName)).map(message => {
+      try { return { from: message.from, ...JSON.parse(message.text) } } catch { return { from: message.from, text: message.text } }
+    })
+  }
+  if (!options.initialMemberReply) {
+    // Request arrival is not turn completion: a slow initial result must not
+    // consume a later scripted reply or clear the next turn's retry state.
+    await waitFor(async () => {
+      const notices = await leadNotifications()
+      return instructed.every(name => notices.some(notice => notice.from === name && notice.result === 'fixture result'))
+    }, 'initial member results')
+  }
   return {
-    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor, providerId: provider.id, upstreamUrl: upstream.url.toString(),
+    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor, leadNotifications, providerId: provider.id, upstreamUrl: upstream.url.toString(),
     memberRequests(name: string) {
       return requests.filter(request => request.agent === name)
     },
@@ -138,15 +162,12 @@ async function startHarness(memberNames: string[], options: {
       const { readTeamFile } = await import('../../utils/swarm/teamHelpers.js')
       return readTeamFile(teamName)?.members.find(member => member.name === name)
     },
-    async leadNotifications() {
-      const { readMailbox } = await import('../../utils/teammateMailbox.js')
-      return (await readMailbox('team-lead', teamName)).map(message => {
-        try { return { from: message.from, ...JSON.parse(message.text) } } catch { return { from: message.from, text: message.text } }
-      })
-    },
     async cleanup() {
       const runtime = await import('./teamPlanRuntime.js')
       await runtime.stopTeamPlanRuntime(planId)
+      // Windows may still be running taskkill after a best-effort wait returns.
+      // The lead owns this fixture directory, so require its exit before rm.
+      await service.stopSessionAndWait(parentId, undefined, { requireExit: true })
       await service.stopAllSessionsAndWait(1000)
       ProviderService.setServerPort(oldPort)
       bridge.stop(true)
@@ -245,6 +266,167 @@ test('a successful turn reports its result to the lead and resets the retry budg
     expect(entry.lastError).toBeUndefined()
     expect(entry.autoRetry).toBeUndefined()
   } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test.each(['continue', 'new instruction'] as const)('retry publication cannot lose or revive a continuation (%s)', async (nextAction) => {
+  const { setTeamRuntimeTimingForTests } = await import('./teamPlanRuntime.js')
+  const teamHelpers = await import('../../utils/swarm/teamHelpers.js')
+  const { getTeamDir, readTeamFile } = teamHelpers
+  setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [40] })
+  const h = await startHarness(['reader'])
+  let releaseWrite!: () => void
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
+  let writeHeld = false
+  let pendingWrite: Promise<void> | undefined
+  const originalRename = fsPromises.rename
+  const scheduledWhileActive: Array<boolean | undefined> = []
+  const originalSetTimeout = globalThis.setTimeout
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    // Observe only this runtime's timers; lock backoff and the polling helper
+    // also use setTimeout. Every callback still runs on the real timer.
+    if (new Error().stack?.includes('teamPlanRuntime.ts:')) {
+      scheduledWhileActive.push(readTeamFile(h.teamName)?.members.find(member => member.name === 'reader')?.isActive)
+    }
+    return originalSetTimeout(...args)
+  }) as typeof setTimeout)
+  let replacementWaiting = false
+  const originalMutate = teamHelpers.mutateTeamFileAsync
+  const mutate = spyOn(teamHelpers, 'mutateTeamFileAsync').mockImplementation((...args) => {
+    // With one busy member and its failure write held, the next roster update
+    // is the new instruction's delivery. It has already cancelled the retry,
+    // but cannot publish its own state until the first atomic rename completes.
+    if (args[0] === h.teamName && writeHeld) replacementWaiting = true
+    return originalMutate(...args)
+  })
+  const rename = spyOn(fsPromises, 'rename').mockImplementation(async (...args) => {
+    if (!writeHeld && String(args[1]) === join(getTeamDir(h.teamName), 'config.json')) {
+      const next = JSON.parse(await readFile(args[0], 'utf8'))
+      if (next.members.some((member: { name?: string; autoRetry?: unknown }) => member.name === 'reader' && member.autoRetry)) {
+        writeHeld = true
+        pendingWrite = writeGate.then(() => originalRename(...args))
+        return pendingWrite
+      }
+    }
+    return originalRename(...args)
+  })
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    h.replies.push('FIXTURE_ERROR:API Error: 502 Bad Gateway', 'Recovered after the roster write')
+    await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+    await h.waitFor(() => writeHeld, 'retry state publication')
+    // A slow atomic rename leaves the old busy state visible. Starting the
+    // timer here lets autoContinueWorker read it and permanently abandon retry.
+    expect(await h.teamMember('reader')).toMatchObject({ isActive: true })
+    expect(scheduledWhileActive).toEqual([])
+    if (nextAction === 'new instruction') {
+      await messageMember(h, 'reader', 'user', 'Use the new instructions')
+      await h.waitFor(() => replacementWaiting, 'replacement instruction waiting for the roster lock')
+    }
+    releaseWrite()
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.result === 'Recovered after the roster write'), 'recovered result')
+    expect(h.memberRequests('reader')).toHaveLength(3)
+    expect(scheduledWhileActive).toEqual(nextAction === 'continue' ? [false] : [])
+    expect(h.memberRequests('reader').at(-1)?.prompt).toContain(nextAction === 'continue' ? '[Team runtime notice]' : 'Use the new instructions')
+    if (nextAction === 'new instruction') {
+      expect(h.memberRequests('reader').some(request => request.prompt.includes('[Team runtime notice]'))).toBe(false)
+    }
+    expect(await h.teamMember('reader')).toMatchObject({ isActive: false })
+    expect((await h.teamMember('reader') as any).autoRetry).toBeUndefined()
+  } finally {
+    releaseWrite()
+    await pendingWrite
+    rename.mockRestore()
+    mutate.mockRestore()
+    timer.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test.each(['continue', 'new instruction'] as const)('automatic retry waits for delivery acknowledgement (%s)', async (nextAction) => {
+  const { setTeamRuntimeTimingForTests } = await import('./teamPlanRuntime.js')
+  const mailbox = await import('../../utils/teammateMailbox.js')
+  setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [40] })
+  const h = await startHarness(['reader'])
+  let releaseAck!: () => void
+  const ackGate = new Promise<void>(resolve => { releaseAck = resolve })
+  let ackHeld = false
+  let retryFired = false
+  let pendingAck: ReturnType<typeof mailbox.markMessagesAsReadByPredicate> | undefined
+  const originalAck = mailbox.markMessagesAsReadByPredicate
+  const ack = spyOn(mailbox, 'markMessagesAsReadByPredicate').mockImplementation((...args) => {
+    if (!ackHeld && args[0] === 'reader' && args[2] === h.teamName) {
+      ackHeld = true
+      pendingAck = ackGate.then(() => originalAck(...args))
+      return pendingAck
+    }
+    return originalAck(...args)
+  })
+  const originalSetTimeout = globalThis.setTimeout
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    const [callback, delay, ...callbackArgs] = args
+    if (typeof callback === 'function' && delay !== undefined && delay <= 40 && new Error().stack?.includes('teamPlanRuntime.ts:')) {
+      return originalSetTimeout(() => {
+        retryFired = true
+        callback(...callbackArgs)
+      }, delay)
+    }
+    return originalSetTimeout(...args)
+  }) as typeof setTimeout)
+  try {
+    h.replies.push('FIXTURE_ERROR:API Error: 502 Bad Gateway', 'Recovered after acknowledgement')
+    await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+    await h.waitFor(() => ackHeld && retryFired, 'retry clock while delivery acknowledgement is held')
+    expect(h.memberRequests('reader')).toHaveLength(2)
+    expect((await mailbox.readUnreadMessages('reader', h.teamName)).length).toBeGreaterThan(0)
+    if (nextAction === 'new instruction') await messageMember(h, 'reader', 'user', 'Use the new instructions')
+    releaseAck()
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.result === 'Recovered after acknowledgement'), 'result after acknowledgement')
+    expect(h.memberRequests('reader')).toHaveLength(3)
+    expect(h.memberRequests('reader').at(-1)?.prompt).toContain(nextAction === 'continue' ? '[Team runtime notice]' : 'Use the new instructions')
+    expect(h.memberRequests('reader').filter(request => request.prompt.includes('[Team runtime notice]'))).toHaveLength(nextAction === 'continue' ? 1 : 0)
+  } finally {
+    releaseAck()
+    await pendingAck
+    ack.mockRestore()
+    timer.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a new instruction revokes an automatic retry already waiting to send', async () => {
+  const { setTeamRuntimeTimingForTests } = await import('./teamPlanRuntime.js')
+  setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [40] })
+  const h = await startHarness(['reader'])
+  const send = h.service.sendMessage.bind(h.service)
+  let releaseSend!: () => void
+  const sendGate = new Promise<void>(resolve => { releaseSend = resolve })
+  let pendingRetry: Promise<boolean> | undefined
+  const sendSpy = spyOn(h.service, 'sendMessage').mockImplementation((...args: Parameters<typeof send>) => {
+    if (args[0] === h.memberIds.reader && String(args[1]).includes('[Team runtime notice]')) {
+      pendingRetry = sendGate.then(() => send(...args))
+      return pendingRetry
+    }
+    return send(...args)
+  })
+  try {
+    h.replies.push('FIXTURE_ERROR:API Error: 502 Bad Gateway', 'Completed the new instruction')
+    await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+    await h.waitFor(() => pendingRetry !== undefined, 'automatic send preparation')
+    await messageMember(h, 'reader', 'user', 'Use the new instructions')
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.result === 'Completed the new instruction'), 'new instruction result')
+    releaseSend()
+    expect(await pendingRetry).toBe(false)
+    expect(h.memberRequests('reader')).toHaveLength(3)
+    expect(h.memberRequests('reader').at(-1)?.prompt).toContain('Use the new instructions')
+    expect(h.memberRequests('reader').some(request => request.prompt.includes('[Team runtime notice]'))).toBe(false)
+    expect((await h.leadNotifications()).some(item => item.idleReason === 'failed')).toBe(false)
+    expect((await h.teamMember('reader') as any).lastError).toBeUndefined()
+  } finally {
+    releaseSend()
+    await pendingRetry
+    sendSpy.mockRestore()
     await h.cleanup()
   }
 }, 30_000)

@@ -15,6 +15,8 @@ let config: string | undefined
 let main: string
 let extra: string
 
+const storedPath = (value: string) => value.replaceAll('\\', '/')
+
 beforeEach(async () => {
   // Use the same physical paths as the API, including handwritten legacy project keys.
   // macOS tmpdir() can return /var/... while realpath resolves to /private/var/....
@@ -50,24 +52,24 @@ test('project directories REST save/reload reaches new session CLI and preserves
   await symlink(extra, alias, process.platform === 'win32' ? 'junction' : 'dir')
   const saved = await preferences('PUT', { workDir: main, additionalDirectories: [extra, alias, main, extra + '/'] })
   expect(saved.status).toBe(200)
-  expect(await saved.json()).toMatchObject({ projectKey: getProjectMcpDirectoryIdentity(main), additionalDirectories: [extra] })
-  expect(await (await preferences('GET')).json()).toMatchObject({ mainDirectory: main, additionalDirectories: [extra] })
+  expect(await saved.json()).toMatchObject({ projectKey: getProjectMcpDirectoryIdentity(main), additionalDirectories: [storedPath(extra)] })
+  expect(await (await preferences('GET')).json()).toMatchObject({ mainDirectory: storedPath(main), additionalDirectories: [storedPath(extra)] })
   const current = await create()
   expect(current.workDir).toBe(main)
   const service = new SessionService()
   expect((await service.getSessionLaunchInfo(old.sessionId))?.additionalDirectories).toEqual([])
   const launch = await service.getSessionLaunchInfo(current.sessionId)
-  expect(launch?.additionalDirectories).toEqual([extra])
+  expect(launch?.additionalDirectories).toEqual([storedPath(extra)])
   expect((await preferences('PUT', { workDir: main, additionalDirectories: [] })).status).toBe(200)
   await service.appendSessionMetadata(current.sessionId, { workDir: main, runtimeModelId: 'fake-model' })
   await service.clearSessionTranscript(current.sessionId, main)
   const resumed = await new SessionService().getSessionLaunchInfo(current.sessionId)
-  expect(resumed?.additionalDirectories).toEqual([extra])
+  expect(resumed?.additionalDirectories).toEqual([storedPath(extra)])
   const conversations = new ConversationService() as any
   conversations.resolveCliArgs = (args: string[]) => args
   for (const resume of [false, true]) {
     const args: string[] = conversations.buildSessionCliArgs(current.sessionId, 'ws://127.0.0.1/fake', resume, undefined, undefined, 'standard', resumed!.additionalDirectories)
-    expect(args[args.indexOf('--add-dir') + 1]).toBe(extra)
+    expect(args[args.indexOf('--add-dir') + 1]).toBe(storedPath(extra))
     expect(args).not.toContain('--dangerously-skip-permissions')
   }
   expect((await new SessionService().getSessionLaunchInfo((await create()).sessionId))?.additionalDirectories).toEqual([])
@@ -100,8 +102,8 @@ test('concurrent directory updates retain both projects and unrelated preference
     service.updateProjectDirectories({ workDir: main, additionalDirectories: [extra] }),
     new DesktopUiPreferencesService().updateProjectDirectories({ workDir: sibling, additionalDirectories: [main] }),
   ])
-  expect((await service.getProjectDirectories(main)).additionalDirectories).toEqual([extra])
-  expect((await service.getProjectDirectories(sibling)).additionalDirectories).toEqual([main])
+  expect((await service.getProjectDirectories(main)).additionalDirectories).toEqual([storedPath(extra)])
+  expect((await service.getProjectDirectories(sibling)).additionalDirectories).toEqual([storedPath(main)])
   expect((await service.readPreferences()).preferences.profile.displayName).toBe('Fixture owner')
 })
 
@@ -112,7 +114,7 @@ test('invalid directory updates fail atomically without changing saved scope', a
   for (const value of [null, 'not-array', [''], ['  '], ['../relative'], [join(directory, 'missing')], [file], [42], ['C:\\Users\\foreign'], ['ssh://other-host/data']]) {
     const response = await preferences('PUT', { workDir: main, additionalDirectories: value })
     expect(response.status).toBe(400)
-    expect(await (await preferences('GET')).json()).toMatchObject({ additionalDirectories: [extra] })
+    expect(await (await preferences('GET')).json()).toMatchObject({ additionalDirectories: [storedPath(extra)] })
   }
 })
 
@@ -132,7 +134,7 @@ test('new tasks report removed auxiliary folders while existing tasks retain the
   const created = await create()
   await rm(extra, { recursive: true })
   await expect(new SessionService().createSession(main)).rejects.toThrow('unavailable')
-  expect((await new SessionService().getSessionLaunchInfo(created.sessionId))?.additionalDirectories).toEqual([extra])
+  expect((await new SessionService().getSessionLaunchInfo(created.sessionId))?.additionalDirectories).toEqual([storedPath(extra)])
   expect((await preferences('PUT', { workDir: main, additionalDirectories: [] })).status).toBe(200)
   await create()
 })
@@ -152,7 +154,7 @@ test('rejects CLI expansion to a different physical directory without overwritin
   // Admission must reject it too, before a placeholder/session can be launched.
   const fixture = JSON.parse(before)
   const projectKey = getProjectMcpDirectoryIdentity(main)
-  expect(fixture.projectAdditionalDirectories).toEqual({ [projectKey]: [extra] })
+  expect(fixture.projectAdditionalDirectories).toEqual({ [projectKey]: [storedPath(extra)] })
   fixture.projectAdditionalDirectories[projectKey] = [selected]
   const legacy = JSON.stringify(fixture)
   await writeFile(prefsPath, legacy)

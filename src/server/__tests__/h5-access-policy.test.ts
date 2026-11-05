@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyH5Request,
+  isH5AccessControlPath,
   resolveTrustedRendererOrigin,
   isLocalCredentialOnlyPath,
   isLoopbackHost,
@@ -237,7 +238,12 @@ describe('h5AccessPolicy', () => {
       localAccessAuthorized: true,
     }
 
-    for (const pathname of ['/api/h5-access', '/api/h5-access/enable']) {
+    for (const pathname of [
+      '/api/h5-access', '/api/h5-access/enable',
+      '/api//h5-access', '/api///h5-access//enable/',
+      '//api//h5-access//regenerate//', '/api//h5-access/disable',
+    ]) {
+      expect(isH5AccessControlPath(pathname)).toBe(true)
       expect(requiresLocalAccessCredential(pathname, unauthorizedContext)).toBe(true)
       expect(requiresLocalAccessCredential(pathname, authorizedContext)).toBe(false)
     }
@@ -245,6 +251,8 @@ describe('h5AccessPolicy', () => {
     // Verifying a token the phone already holds is not a control-plane change,
     // and an unmanaged (tokenless) server must not lock itself out either.
     expect(requiresLocalAccessCredential('/api/h5-access/verify', unauthorizedContext)).toBe(false)
+    expect(requiresLocalAccessCredential('/api//h5-access//verify/', unauthorizedContext)).toBe(false)
+    expect(isH5AccessControlPath('/api/h5-access-other')).toBe(false)
     expect(requiresLocalAccessCredential('/api/h5-access', { clientAddress: '127.0.0.1' })).toBe(false)
   })
 

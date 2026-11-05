@@ -115,15 +115,15 @@ describe('native desktop binary resolution', () => {
     expect(resolveAgentDesktopBinary({
       platform: 'win32', appRoot: '/app/resources/app.asar', projectRoot: '/dev/source',
       exists: candidate => { candidates.push(candidate); return candidate.includes('app.asar.unpacked') },
-    })).toBe('/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe')
-    expect(candidates).toEqual(['/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe'])
+    })).toBe(path.normalize('/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe'))
+    expect(candidates).toEqual([path.normalize('/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe')])
     expect(resolveAgentDesktopBinary({ platform: 'linux', appRoot: '/app/app.asar', exists: () => false })).toBeNull()
   })
 
   test('finds explicit-target and host development builds with native names', () => {
-    const expected = '/source/native/agent-desktop/target/aarch64-unknown-linux-gnu/release/agent-desktop'
+    const expected = path.normalize('/source/native/agent-desktop/target/aarch64-unknown-linux-gnu/release/agent-desktop')
     expect(resolveAgentDesktopBinary({ platform: 'linux', arch: 'arm64', projectRoot: '/source', appRoot: '', exists: value => value === expected })).toBe(expected)
-    const host = '/source/native/agent-desktop/target/debug/agent-desktop.exe'
+    const host = path.normalize('/source/native/agent-desktop/target/debug/agent-desktop.exe')
     expect(resolveAgentDesktopBinary({ platform: 'win32', projectRoot: '/source', appRoot: '', exists: value => value === host })).toBe(host)
   })
 })

@@ -16,12 +16,15 @@ import { migrationMaintenance, migrationUnavailableResponse } from './migrationM
 import { countExternalMigrationProcesses } from './migrationInventory.js'
 import { handleMigrationRuntimeRequest, isMigrationRuntimePath } from './migrationRuntimeApi.js'
 import { quiesceTeamPlanRuntimesForMigration } from './services/teamPlanRuntime.js'
+import { stopTraceCapture } from './services/traceCaptureService.js'
+import { stopScheduledRunReadModel } from './services/localIndex/scheduledRunReadModel.js'
+import { stopHistoryContexts } from './services/sessionHistoryContext.js'
 import { ManagedSettingsService } from './services/managedSettingsService.js'
 import { resolveCors, withCors, type CorsResolution } from './middleware/cors.js'
 import { requireAuth, requireH5Token } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
-import { handleProxyRequest } from './proxy/handler.js'
+import { drainProxyTraces, handleProxyRequest } from './proxy/handler.js'
 import { ProviderService } from './services/providerService.js'
 import { handleHahaOAuthCallback } from './api/haha-oauth.js'
 import { handleHahaOpenAIOAuthCallback } from './api/haha-openai-oauth.js'
@@ -802,6 +805,8 @@ export async function stopServerRuntimeForShutdown(
       await conversationService.stopAllSessionsAndWait()
     }
   }
+  await drainProxyTraces()
+  await Promise.all([stopTraceCapture(), stopScheduledRunReadModel(), stopHistoryContexts()])
 }
 
 function cleanupAllSessions() {

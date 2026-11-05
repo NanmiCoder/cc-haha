@@ -659,8 +659,13 @@ class WorkflowService {
 
     let handle: Awaited<ReturnType<typeof fs.open>> | undefined
     try {
-      const realPath = await fs.realpath(candidate)
-      if (!isExpectedTaskOutputPath(realPath, root, sessionId, notification.taskId)) {
+      // Resolve both sides with the same API: Windows temp roots may use an
+      // 8.3 alias while the output file resolves to its long path spelling.
+      const [realPath, realRoot] = await Promise.all([
+        fs.realpath(candidate),
+        fs.realpath(root),
+      ])
+      if (!isExpectedTaskOutputPath(realPath, realRoot, sessionId, notification.taskId)) {
         return []
       }
       const stats = await fs.lstat(candidate)

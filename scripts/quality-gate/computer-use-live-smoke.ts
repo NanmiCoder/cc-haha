@@ -308,11 +308,13 @@ export async function acquireLiveSmokeLock(
 }
 
 export function assertSafeRunDirectory(runDirectory: string): void {
-  const resolved = path.resolve(runDirectory)
-  const basename = path.basename(resolved)
+  // This fixture belongs exclusively to macOS TextEdit, even when its policy
+  // is unit-tested on Windows. Interpret its paths using the target OS.
+  const resolved = path.posix.resolve(runDirectory)
+  const basename = path.posix.basename(resolved)
   const exactGeneratedName = /^cc-haha-cu-live-smoke-[A-Za-z0-9]{6}$/
   if (
-    path.dirname(resolved) !== '/tmp'
+    path.posix.dirname(resolved) !== '/tmp'
     || !exactGeneratedName.test(basename)
     || resolved !== runDirectory
   ) {
@@ -326,20 +328,20 @@ export function deriveLiveSmokePaths(
   ownerPid: number,
 ): LiveSmokePaths {
   assertSafeRunDirectory(runDirectory)
-  if (!path.isAbsolute(runtimeStateRoot)) {
+  if (!path.posix.isAbsolute(runtimeStateRoot)) {
     throw new Error(`Runtime state root must be absolute: ${runtimeStateRoot}`)
   }
   if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) {
     throw new Error(`Invalid daemon owner PID: ${ownerPid}`)
   }
-  const daemonSocket = path.join(
+  const daemonSocket = path.posix.join(
     runtimeStateRoot,
     `cu-helper.daemon.${ownerPid}.${LIVE_SMOKE_DAEMON_GENERATION}.sock`,
   )
   return {
     runDirectory,
-    fixturePath: path.join(runDirectory, FIXTURE_BASENAME),
-    targetIdentityPath: path.join(runDirectory, '.textedit-identity.json'),
+    fixturePath: path.posix.join(runDirectory, FIXTURE_BASENAME),
+    targetIdentityPath: path.posix.join(runDirectory, '.textedit-identity.json'),
     daemonSocket,
     daemonPidfile: `${daemonSocket}.pid`,
   }

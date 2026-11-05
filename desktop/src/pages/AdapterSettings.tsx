@@ -19,6 +19,7 @@ import {
   SettingsSwitchRow,
 } from '@/components/settings/SettingsSection'
 import QRCode from 'qrcode'
+import { WechatConnectionStatus } from './settings/WechatConnectionStatus'
 
 type ImTab = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp' | 'wecom' | 'qq' | 'slack'
 type ImPlatform = ImTab
@@ -925,7 +926,7 @@ export function AdapterSettings() {
     )
   }
 
-  const wechatTone: Tone = config.wechat?.accountId ? 'success' : isWechatBinding ? 'info' : 'neutral'
+  const wechatTone: Tone = isWechatBinding ? 'info' : 'neutral'
   const whatsappTone: Tone = config.whatsapp?.accountJid ? 'success' : isWhatsAppBinding ? 'info' : 'neutral'
   const dingtalkTone: Tone = dtAuthStatus === 'error'
     ? 'danger'
@@ -1252,6 +1253,7 @@ export function AdapterSettings() {
                 )}
               </div>
 
+              {config.wechat?.accountId && <WechatConnectionStatus paired={Boolean(config.wechat.pairedUsers?.length || config.wechat.allowedUsers?.length)} />}
               <div className="p-4">
                 <Input
                   label={t('settings.adapters.allowedUsers')}

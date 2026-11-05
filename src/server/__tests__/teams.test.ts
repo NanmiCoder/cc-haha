@@ -2198,6 +2198,16 @@ describe('TeamService', () => {
     registerTeamForSessionCleanup(barrierName, barrierLifecycle)
 
     const cleanupResource = new AsyncResource('fulfilled-session-cleanup')
+    let firstCleanupFinished!: () => void
+    const firstCleanup = new Promise<void>(resolve => { firstCleanupFinished = resolve })
+    const actualLock = lockfile.lock
+    const observeRelease = spyOn(lockfile, 'lock').mockImplementation(async (file, options) => {
+      const release = await actualLock(file, options)
+      return async () => {
+        await release()
+        if (path.basename(file) === `${firstName}.lock`) firstCleanupFinished()
+      }
+    })
     let cleanupPromise!: Promise<void>
     let replacement: Awaited<ReturnType<typeof beginTaskListLifecycle>> | undefined
     try {
@@ -2206,13 +2216,10 @@ describe('TeamService', () => {
           cleanupSessionTeams()
         ))
 
-        let firstDeleted = false
-        for (let attempt = 0; attempt < 100; attempt++) {
-          firstDeleted = (await readTaskListLifecycleState(firstName)).deleted
-          if (firstDeleted) break
-          await new Promise<void>(resolve => setTimeout(resolve, 5))
-        }
-        expect(firstDeleted).toBe(true)
+        // Wait for real cleanup to release its lifecycle lock. A fixed 500 ms
+        // polling budget races the filesystem under the full Windows suite.
+        await firstCleanup
+        expect((await readTaskListLifecycleState(firstName)).deleted).toBe(true)
 
         const replacementIdentity = {
           ...firstIdentity,
@@ -2237,6 +2244,9 @@ describe('TeamService', () => {
       expect(await fs.stat(path.join(tmpDir, 'teams', firstName))).toBeDefined()
       expect(await fs.stat(path.join(tmpDir, 'tasks', firstName))).toBeDefined()
     } finally {
+      await cleanupPromise
+      observeRelease.mockRestore()
+      cleanupResource.emitDestroy()
       getSessionCreatedTeams().delete(firstName)
       getSessionCreatedTeams().delete(barrierName)
     }

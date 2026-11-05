@@ -836,10 +836,10 @@ describe('paired phone voice input', () => {
     const provider = new FakeProvider({ id: 'sensevoice-local' })
     const f = voiceFixture(provider)
     const { claim } = await f.pairNative()
-    // Early size rejections leave upload bytes unread; isolate each socket so
-    // it cannot affect the next error-response assertion.
+    // Use the browser's normal keep-alive transport. Forcing Connection: close
+    // can reset a still-uploading socket before an early size response arrives.
     const upload = (body: Uint8Array, query = '') => f.native(`/api/voice/transcribe${query}`, claim.token, {
-      method: 'POST', headers: { 'Content-Type': 'audio/wav', Connection: 'close' }, body: body as BodyInit,
+      method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: body as BodyInit,
     })
     const notReady = await upload(makeWav(0.25))
     expect(notReady.status).toBe(409)

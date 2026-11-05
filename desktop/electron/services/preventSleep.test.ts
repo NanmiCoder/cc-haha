@@ -103,7 +103,7 @@ describe('prevent sleep main-process lifecycle', () => {
     const { service, blocker, readActivity } = create(vi.fn(async () => true))
     const openExternal = vi.fn()
     const preventDefault = vi.fn()
-    installMainWindowNavigationGuards(contents, { openExternal })
+    installMainWindowNavigationGuards(contents, { openExternal, rendererUrl: 'file:///app/index.html' })
     installPreventSleepLifecycle(contents as unknown as WebContents, service)
     service.setEnabled(true)
     await until(() => readActivity.mock.calls.length >= 2)

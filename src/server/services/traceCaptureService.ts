@@ -2,6 +2,7 @@ export {
   captureResponseTraceSnapshot,
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
+  stopTraceCapture,
   createTraceCallId,
   createTraceBodySnapshot,
   getTraceCaptureDiagnosticsForTests,

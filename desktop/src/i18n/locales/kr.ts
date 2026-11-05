@@ -1,6 +1,22 @@
 import type { TranslationKey } from './en'
 
 export const kr: Record<TranslationKey, string> = {
+  'settings.adapters.wechatHealthStopped': "메시지 연결 중지됨",
+  'settings.adapters.wechatHealthStarting': "메시지 연결 중",
+  'settings.adapters.wechatHealthOnline': "메시지 연결 온라인",
+  'settings.adapters.wechatHealthReconnecting': "메시지 다시 연결 중",
+  'settings.adapters.wechatHealthAuthExpired': "로그인 만료 — 다시 스캔하세요",
+  'settings.adapters.wechatHealthError': "메시지 연결 오류",
+  'settings.adapters.wechatHealthStale': "연결 상태 만료됨",
+  'settings.adapters.wechatHealthServerOffline': "로컬 서비스에 연결할 수 없음",
+  'settings.adapters.wechatHealthChecking': "연결 확인 중",
+  'settings.adapters.wechatHealthReconnect': "다시 연결",
+  'settings.adapters.wechatHealthPaired': "승인된 사용자가 있습니다",
+  'settings.adapters.wechatHealthUnpaired': "사용자 페어링 대기 중",
+  'settings.adapters.wechatHealthLastReceive': "최근 수신",
+  'settings.adapters.wechatHealthLastSend': "최근 발신",
+  'settings.adapters.wechatHealthNever': "아직 없음",
+  'settings.adapters.wechatHealthRestartFailed': "다시 연결하지 못했습니다. 데스크톱 서비스가 실행 중인지 확인하고 다시 시도하세요.",
   "sidebar.archiveSession": "보관",
   "sidebar.restoreSession": "복원",
   "sidebar.archivedSessions": "보관된 세션",

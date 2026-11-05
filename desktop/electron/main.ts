@@ -3,6 +3,7 @@ import type { DesktopPublicAccessConfiguration } from '../src/lib/desktopHost/ty
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
   isElectronIpcChannel,
@@ -199,6 +200,11 @@ function rendererEntry() {
     appRoot: appRoot(),
     env: process.env,
   })
+}
+
+function rendererEntryUrl() {
+  const entry = rendererEntry()
+  return /^https?:\/\//.test(entry) ? entry : pathToFileURL(entry).href
 }
 
 /**
@@ -416,7 +422,7 @@ function getPetWindowController() {
         window.webContents.session.webRequest,
         resolvePetServerAccess,
       )
-      installMainWindowNavigationGuards(window.webContents, { openExternal: openExternalUrl })
+      installMainWindowNavigationGuards(window.webContents, { openExternal: openExternalUrl, rendererUrl: rendererEntryUrl() })
     },
     load: window => loadRendererEntry(window, { petWindow: '1' }),
     onPanelPlacementChanged: (window, placement) => {
@@ -939,7 +945,7 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
     window.webContents.setZoomFactor(normalizeZoomFactor(payload))
@@ -1011,7 +1017,7 @@ async function createMainWindow() {
     isAppUrl: createRendererUrlMatcher(rendererEntry()),
     systemPreferences,
   })
-  installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
+  installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl, rendererUrl: rendererEntryUrl() })
   installPreventSleepLifecycle(mainWindow.webContents, preventSleepService)
   installIdlePowerLifecycle(mainWindow.webContents, () => idlePowerService, () => { idlePowerRendererGeneration += 1 })
   await installRendererContextMenu(

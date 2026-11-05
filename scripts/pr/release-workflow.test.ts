@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { parse, stringify } from 'yaml'
 import { mergeUpdateMetadataArtifacts } from '../release-update-metadata'
+import { testBashPath } from './test-shell'
 
 describe('release desktop workflow', () => {
   function readReleaseWorkflow() {
-    return readFileSync('.github/workflows/release-desktop.yml', 'utf8')
+    return readFileSync('.github/workflows/release-desktop.yml', 'utf8').replace(/\r\n/g, '\n')
   }
 
   function extractJob(workflow: string, jobName: string) {
@@ -484,7 +485,7 @@ describe('release desktop workflow', () => {
         const output = join(directory, `output-${index}`)
         const logPath = join(directory, `log-${index}`)
         // Capture inside the shell so Bun's test-output pipes cannot affect echo/printf exit codes.
-        const result = Bun.spawn(['bash', '-e', '-c', 'exec > "$PREFLIGHT_LOG" 2>&1\n' + preflight.run], {
+        const result = Bun.spawn([testBashPath(), '-e', '-c', 'exec > "$PREFLIGHT_LOG" 2>&1\n' + preflight.run], {
           env: {
             ...configured,
             RELEASE_DRAFT: 'false',
@@ -680,9 +681,9 @@ describe('release desktop workflow', () => {
     try {
       for (const scenario of cases) {
         const log = join(directory, `gh-${scenario.mode}.log`)
-        const result = Bun.spawnSync(['bash', 'scripts/assert-release-unpublished.sh', '0.7.7'], {
+        const result = Bun.spawnSync([testBashPath(), 'scripts/assert-release-unpublished.sh', '0.7.7'], {
           env: {
-            PATH: `${fakeBin}:${process.env.PATH}`,
+            PATH: `${fakeBin}${delimiter}${process.env.PATH}`,
             HOME: directory,
             GITHUB_REPOSITORY: 'NanmiCoder/cc-haha',
             FAKE_GH_MODE: scenario.mode,

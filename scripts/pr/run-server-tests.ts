@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { loadQuarantineManifest, quarantinedPathSet } from '../quality-gate/quarantine'
 import { rootBunTestFilter } from './bun-test-filter'
 import { classifyFailedFiles, formatFlakeReport } from './server-test-flakes'
-import { createSandboxedTestEnvironment } from './test-environment'
+import { createSandboxedTestEnvironment, removeTestDirectory } from './test-environment'
+import { readServerTestSummary } from './server-test-summary'
 
 const root = process.cwd()
 // The root runtime is wider than src/server: CLI commands, query handling,
@@ -59,12 +60,8 @@ type TestFileResult = {
   exitCode: number
   passedTests: number
   failedTests: number
+  skippedTests: number
   evidenceComplete: boolean
-}
-
-function summaryCount(output: string, label: 'pass' | 'fail') {
-  const match = output.match(new RegExp(`^\\s*(\\d+) ${label}$`, 'm'))
-  return match ? Number(match[1]) : 0
 }
 
 async function runTestFile(file: string): Promise<TestFileResult> {
@@ -92,30 +89,23 @@ async function runTestFile(file: string): Promise<TestFileResult> {
       proc.exited,
     ])
     const output = `${stdout}${stderr}`
-    const passedTests = summaryCount(output, 'pass')
-    const failedTests = summaryCount(output, 'fail')
-    const reportedFiles = Number(
-      output.match(/Ran\s+\d+\s+tests?\s+across\s+(\d+)\s+files?\./)?.[1] ?? 0,
-    )
-    const evidenceComplete =
-      exitCode === 0 &&
-      reportedFiles === 1 &&
-      passedTests + failedTests > 0
+    const { passedTests, failedTests, skippedTests, evidenceComplete } = readServerTestSummary(output, exitCode)
     if (!evidenceComplete) {
       process.stderr.write(output)
     }
     console.log(
-      `[server-tests] ${file}: ${evidenceComplete ? 'passed' : `failed or incomplete (${exitCode})`}`,
+      `[server-tests] ${file}: ${evidenceComplete ? (passedTests > 0 ? 'passed' : `skipped (${skippedTests})`) : `failed or incomplete (${exitCode})`}`,
     )
     return {
       file,
       exitCode,
       passedTests,
       failedTests,
+      skippedTests,
       evidenceComplete,
     }
   } finally {
-    rmSync(sandboxHome, { recursive: true, force: true })
+    removeTestDirectory(sandboxHome)
   }
 }
 
@@ -138,7 +128,7 @@ await Promise.all(
 
 const failedFiles = results.filter((result) => !result.evidenceComplete)
 console.log(
-  `[server-tests] summary: files=${results.length} passed-tests=${results.reduce((total, result) => total + result.passedTests, 0)} failed-tests=${results.reduce((total, result) => total + result.failedTests, 0)} failed-files=${failedFiles.length}`,
+  `[server-tests] summary: files=${results.length} passed-tests=${results.reduce((total, result) => total + result.passedTests, 0)} skipped-tests=${results.reduce((total, result) => total + result.skippedTests, 0)} failed-tests=${results.reduce((total, result) => total + result.failedTests, 0)} failed-files=${failedFiles.length}`,
 )
 // Re-run each failed file once, alone, to tell a race from a regression. The
 // exit code does not depend on the re-run.

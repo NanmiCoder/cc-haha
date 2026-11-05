@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
+import { testBashPath } from './test-shell'
 
 type WorkflowJob = {
   if?: string
@@ -33,7 +34,7 @@ describe('PR quality workflow', () => {
     const setupBunStepCount = workflow.match(/uses: oven-sh\/setup-bun@v2/g)?.length ?? 0
     const versionFileCount = workflow.match(/bun-version-file: package\.json/g)?.length ?? 0
 
-    expect(packageJson.packageManager).toBe('bun@1.4.3')
+    expect(packageJson.packageManager).toBe('bun@1.4.4')
     expect(setupBunStepCount).toBeGreaterThan(0)
     expect(versionFileCount).toBe(setupBunStepCount)
     expect(workflow).not.toContain('bun-version:')
@@ -131,7 +132,7 @@ describe('PR quality workflow', () => {
       writeFileSync(join(bin, 'gh'), '#!/bin/sh\necho "unexpected API lookup" >&2\nexit 99\n')
       chmodSync(join(bin, 'gh'), 0o755)
       const env = createSandboxedTestEnvironment(join(root, 'home'), {
-        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        PATH: `${bin}${delimiter}${process.env.PATH ?? ''}`,
         GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
         GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
         GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
@@ -144,6 +145,9 @@ describe('PR quality workflow', () => {
         return result.stdout.trim()
       }
       git(['init', '-b', 'main'])
+      // These names live only in the Git index, never in the Windows worktree.
+      // Otherwise Git for Windows silently ignores them while returning zero.
+      git(['config', 'core.protectNTFS', 'false'])
       mkdirSync(join(root, '.github'))
       writeFileSync(join(root, '.github/CODEOWNERS'), '* @base-owner\n')
       git(['add', '.github/CODEOWNERS'])
@@ -163,21 +167,21 @@ describe('PR quality workflow', () => {
       writeFileSync(join(root, 'event.json'), JSON.stringify({ pull_request: { labels: [{ name: 'fixture-label' }], user: { login: 'contributor' } } }))
       const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
       const script = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Collect changed files')!.run!
-      const result = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: head }, encoding: 'utf8' })
+      const result = spawnSync(testBashPath(), ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: head }, encoding: 'utf8' })
       expect(result.status, result.stderr).toBe(0)
       const changed = readFileSync(join(root, 'changed-files.nul'), 'utf8').split('\0').filter(Boolean)
       expect(new Set(changed)).toEqual(new Set(['.github/CODEOWNERS', ...paths]))
       const plan = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Build deterministic scope plan')!.run!
       expect(plan).toContain('--files0 changed-files.nul')
       expect(readFileSync(join(root, 'codeowners.txt'), 'utf8')).toBe('* @base-owner\n')
-      expect(readFileSync(join(root, 'author.txt'), 'utf8')).toBe('contributor\n')
-      const missing = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: '0'.repeat(40) }, encoding: 'utf8' })
+      expect(readFileSync(join(root, 'author.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('contributor\n')
+      const missing = spawnSync(testBashPath(), ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: '0'.repeat(40) }, encoding: 'utf8' })
       expect(missing.status).not.toBe(0)
       expect(missing.stderr).not.toContain('unexpected API lookup')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 
   test('installs adapter dependencies before desktop checks compile the sidecar bundle', () => {
     const steps = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))['desktop-checks'].steps ?? []
@@ -256,7 +260,7 @@ describe('PR quality workflow', () => {
       if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
       return 'skipped'
     })
-    const result = Bun.spawnSync(['bash', '-c', script], {
+    const result = Bun.spawnSync([testBashPath(), '-c', script], {
       env: { PATH: process.env.PATH ?? '' },
       stdout: 'pipe', stderr: 'pipe',
     })
@@ -295,7 +299,7 @@ describe('PR quality workflow', () => {
         if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
         return 'skipped'
       })
-    const result = Bun.spawnSync(['bash', '-c', script], {
+    const result = Bun.spawnSync([testBashPath(), '-c', script], {
       env: { PATH: process.env.PATH ?? '' }, stdout: 'pipe', stderr: 'pipe',
     })
     expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
@@ -372,7 +376,7 @@ describe('PR quality workflow', () => {
       if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
       return 'skipped'
     })
-    const result = Bun.spawnSync(['bash', '-c', script], {
+    const result = Bun.spawnSync([testBashPath(), '-c', script], {
       env: { PATH: process.env.PATH ?? '' },
       stdout: 'pipe', stderr: 'pipe',
     })
@@ -400,6 +404,10 @@ describe('PR quality workflow', () => {
 
     expect(workflow).toContain('agent_e2e_checks: ${{ steps.policy.outputs.agent_e2e_checks }}')
     expect(steps.some((step) => step.run === 'bun run check:agent-e2e')).toBe(true)
+    const check = steps.findIndex(step => step.run === 'bun run check:agent-e2e')
+    const verifyRipgrep = steps.findIndex(step => /\brg --version\b/.test(step.run ?? ''))
+    expect(verifyRipgrep, 'agent E2E must verify its search executable').toBeGreaterThanOrEqual(0)
+    expect(verifyRipgrep).toBeLessThan(check)
     expect(workflow).toContain('path: artifacts/agent-e2e/')
     expect(steps.some((step) => String(step.run ?? '').includes('secrets'))).toBe(false)
   })
@@ -485,7 +493,7 @@ describe('full quality workflow', () => {
     for (const file of ['.github/workflows/pr-quality.yml', '.github/workflows/nightly-quality.yml']) {
       for (const [name, job] of Object.entries(workflowJobs(readFileSync(file, 'utf8')))) {
         const steps = job.steps ?? []
-        const check = steps.findIndex(step => /\bcheck:(server|coverage|native)\b/.test(step.run ?? ''))
+        const check = steps.findIndex(step => /\bcheck:(server|coverage|native|agent-e2e)\b/.test(step.run ?? ''))
         if (check < 0) continue
         const ripgrep = steps.findIndex(step => step.run?.includes('apt-get install') && /\bripgrep\b/.test(step.run))
         expect(ripgrep, `${file} ${name} must install ripgrep`).toBeGreaterThanOrEqual(0)

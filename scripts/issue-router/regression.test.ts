@@ -2,6 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { fixture, provenance, head, base, now, session, discovery, mergeSha } from './test-helpers'
 
+// These integration scenarios launch many real Git processes; Windows process
+// startup can exceed Bun's five-second unit-test default. Keep a bounded budget.
 const fixtures: ReturnType<typeof fixture>[] = []
 afterEach(() => { for (const f of fixtures.splice(0)) f.cleanup() })
 function owned() {
@@ -42,7 +44,7 @@ test('external merge receipt completes without a merge outbox or fabricated send
   expect(() => f.call({ ...complete, main_ci_reference: '' })).toThrow()
   expect(() => f.call({ ...complete, scenario_reference: '' })).toThrow()
   expect(f.call(complete)).toEqual({ completed: true })
-})
+}, 60_000)
 
 test('external merge receipt rejects wrong identity, stale generation and conflicting merge SHA', () => {
   const { f, receipt, complete } = externalMerge()
@@ -57,7 +59,7 @@ test('external merge receipt rejects wrong identity, stale generation and confli
   f.call(receipt)
   expect(() => f.call({ ...receipt, merge_sha: 'd'.repeat(40), observed_at: new Date(now + 500).toISOString() })).toThrow('Confirmed external merge SHA')
   expect(() => f.call({ ...complete, merge_sha: 'd'.repeat(40) })).toThrow('receipt no longer matches')
-})
+}, 60_000)
 
 test('external merge receipt cannot cover an unknown merge', () => {
   const { f, claimed } = owned()
@@ -73,7 +75,7 @@ test('external merge receipt cannot cover an unknown merge', () => {
   const db = new Database(f.layout().database)
   expect(db.query('SELECT status FROM outbox WHERE action_key = ?').get(action.action_key)).toEqual({ status: 'unknown' })
   db.close()
-})
+}, 60_000)
 
 test('external merge receipt cannot bypass an unresolved resume', () => {
   const sample = externalMerge()
@@ -84,7 +86,7 @@ test('external merge receipt cannot bypass an unresolved resume', () => {
   sample.f.call({ command: 'dispatch-start', ...sample.claimed.token, action_key: resume.action_key, sender: 'sender' })
   sample.f.call({ command: 'dispatch-unknown', ...sample.claimed.token, action_key: resume.action_key, sender: 'sender', reference: 'fixture://unknown-resume' })
   expect(() => sample.f.call(sample.complete)).toThrow('Resolve all external actions')
-})
+}, 60_000)
 
 test('external merge receipt is invalid after main or PR observations change', () => {
   const { f, claimed, receipt, complete } = externalMerge()
@@ -100,7 +102,7 @@ test('external merge receipt is invalid after main or PR observations change', (
   expect(() => f.call({ command: 'retire', ...claimed.token, executor_stopped: true, outcome: 'closed',
     reference: 'fixture://closed', pr_terminal_reference: receipt.reference })).toThrow('Use complete')
   expect(() => f.call({ ...receipt, base: nextMain, main_sha: nextMain })).toThrow('newer or conflicting')
-})
+}, 60_000)
 
 for (const reopen of [false, true]) {
   test(`external merge receipt is not inherited by ${reopen ? 'reopened generations' : 'handoff'}`, () => {
@@ -124,7 +126,7 @@ for (const reopen of [false, true]) {
     if (reopen) expect(() => f.call({ ...receipt, ...token, observed_at: new Date(now + 1100).toISOString() })).toThrow('predates the reopened')
     else expect(() => f.call({ command: 'retire', ...token, executor_stopped: true, outcome: 'closed',
       reference: 'fixture://closed', pr_terminal_reference: receipt.reference })).toThrow('Use complete')
-  })
+  }, 60_000)
 }
 
 test('repeated content transitions A→B→A→B each reach the original session exactly once', () => {
@@ -146,7 +148,7 @@ test('repeated content transitions A→B→A→B each reach the original session
     before = cursor
   }
   expect(f.call({ command: 'status' }).runs).toHaveLength(1)
-})
+}, 60_000)
 
 test('late older CI cannot replace the newer failed advisory snapshot on the same version', () => {
   const { f, claimed } = owned()
@@ -158,7 +160,7 @@ test('late older CI cannot replace the newer failed advisory snapshot on the sam
     { ...ci.checks[0], name: 'advisory', external_id: '2', conclusion: 'failure' }] }, now + 5000)
   expect(() => f.call(ci, now + 6000)).toThrow('older')
   expect(() => f.acquire(claimed.token)).toThrow('All selected CI')
-})
+}, 60_000)
 
 test('a cancelled, never-sent merge can be reacquired when the original head returns', () => {
   const { f, claimed } = owned()
@@ -170,7 +172,7 @@ test('a cancelled, never-sent merge can be reacquired when the original head ret
   expect(again.action_key).toBe(original.action_key)
   expect(again.status).toBe('pending')
   f.call({ command: 'dispatch-start', ...claimed.token, action_key: again.action_key, sender: 'sender' })
-})
+}, 60_000)
 
 test('new material blocks merge both before acquisition and just before sending', () => {
   const { f, claimed } = owned()
@@ -181,7 +183,7 @@ test('new material blocks merge both before acquisition and just before sending'
   f.call({ command: 'consume', ...claimed.token })
   expect(() => f.acquire(claimed.token)).toThrow('material')
   expect(() => f.call({ command: 'dispatch-start', ...claimed.token, action_key: acquired.action_key, sender: 'sender' })).toThrow('material')
-})
+}, 60_000)
 
 test('completed issue reopening reuses its history in analysis mode and cannot reuse a terminal PR as a new merge', () => {
   const { f, claimed } = owned()
@@ -216,7 +218,7 @@ test('completed issue reopening reuses its history in analysis mode and cannot r
     reference: 'fixture://analysis-complete', pr_terminal_reference: 'fixture://merged-pr' })
   expect(f.call({ command: 'status' }).runs).toHaveLength(0)
   expect(f.call({ command: 'status' }).resources).toHaveLength(0)
-})
+}, 60_000)
 
 test('metadata ignores caller Git overrides and global configuration', () => {
   const { f } = owned()
@@ -232,7 +234,7 @@ test('metadata ignores caller Git overrides and global configuration', () => {
       else process.env[name] = value
     }
   }
-})
+}, 60_000)
 
 test('equivalent timestamp encodings cannot replace a failed CI snapshot at the same instant', () => {
   const { f, claimed } = owned()
@@ -243,7 +245,7 @@ test('equivalent timestamp encodings cannot replace a failed CI snapshot at the 
   f.call({ ...ci, observed_at: '2026-10-28T03:00:05Z' }, now + 5000)
   expect(() => f.call({ ...ci, observed_at: '2026-10-28T03:00:05+00:00', checks: [{ ...ci.checks[0], conclusion: 'success' }] }, now + 6000)).toThrow('ambiguous')
   expect(() => f.acquire(claimed.token)).toThrow('All selected CI')
-})
+}, 60_000)
 
 test('reopened analysis mode survives consumption and later owner handoff', () => {
   const { f, claimed } = owned()
@@ -260,7 +262,7 @@ test('reopened analysis mode survives consumption and later owner handoff', () =
   const handed = f.call({ command: 'handoff', ...token, new_owner: 'handoff-owner', old_executor_stopped: true,
     stopped_reference: 'fixture://stopped', session, worktree: '/fixture' })
   expect(JSON.parse(handed.action.payload).mode).toBe('analysis')
-})
+}, 60_000)
 
 test('confirmed merge evidence transfers during handoff while reopened generations cannot reuse it', () => {
   const { f, claimed } = owned()
@@ -275,4 +277,4 @@ test('confirmed merge evidence transfers during handoff while reopened generatio
   f.call({ command: 'ack', ...token, action_key: handed.action.action_key, sender: 'sender', reference: 'fixture://handoff-delivered' })
   expect(f.call({ command: 'complete', ...token, merge_sha: mergeSha, main_ci_reference: 'fixture://main-ci', scenario_reference: 'fixture://scenario' }).completed).toBe(true)
   expect(f.call({ command: 'status' }).resources).toHaveLength(0)
-})
+}, 60_000)

@@ -7,6 +7,7 @@ import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment'
+import { testBashPath, testShellPath } from '../../scripts/pr/test-shell'
 
 async function exists(pathname: string): Promise<boolean> {
   return stat(pathname).then(() => true, () => false)
@@ -83,11 +84,11 @@ exit 0
       await writeExecutable(path.join(fakeBinDir, command), '#!/bin/bash\nexit 0\n')
     }
 
-    // Read shell fakes through Bash so fresh temporary executables are not
-    // launched directly, while preserving their child-process exit behavior.
+    // A subshell preserves each fake's exit behavior without launching another
+    // Bash process for every mocked command (especially costly on Windows).
     const shellEnvironment = path.join(fixtureRoot, 'fake-command-env.sh')
     await writeFile(shellEnvironment, ['uname', 'bun', 'node', 'codesign', 'hdiutil', 'security']
-      .map(command => `${command}() { /bin/bash "\${TEST_FAKE_BIN_DIR}/${command}" "$@"; }`)
+      .map(command => `${command}() ( source "\${TEST_FAKE_BIN_DIR}/${command}" "$@" )`)
       .join('\n'), 'utf8')
 
     const installedBefore = await Promise.all([
@@ -97,24 +98,24 @@ exit 0
       exists(path.join(mobileDir, 'node_modules')),
     ])
 
-    const result = spawnSync('/bin/bash', [buildScript], {
+    const result = spawnSync(testBashPath(), [testShellPath(buildScript)], {
       cwd: desktopDir,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 10_000,
       env: createSandboxedTestEnvironment(fixtureRoot, {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
-        BASH_ENV: shellEnvironment,
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ''}`,
+        BASH_ENV: testShellPath(shellEnvironment),
         CI: options.ci ?? '',
         GITHUB_ACTIONS: options.githubActions ?? '',
-        TEST_FAKE_BIN_DIR: fakeBinDir,
+        TEST_FAKE_BIN_DIR: testShellPath(fakeBinDir),
         MAC_TARGETS: 'zip',
         SIGN_BUILD: options.signBuild ?? '',
         CC_HAHA_SIGN_IDENTITY: options.signIdentity ?? '',
         CC_HAHA_LOCAL_UNSIGNED_BUILD: options.localUnsignedBuild ?? '',
         CSC_NAME: '',
-        TEST_REPO_ROOT: fixtureRoot,
-        TEST_NATIVE_BUILD_SCRIPT: path.resolve(import.meta.dirname, '../../native/cu-helper/build.sh'),
+        TEST_REPO_ROOT: testShellPath(fixtureRoot),
+        TEST_NATIVE_BUILD_SCRIPT: testShellPath(path.resolve(import.meta.dirname, '../../native/cu-helper/build.sh')),
       }),
     })
 

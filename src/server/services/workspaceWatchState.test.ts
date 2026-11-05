@@ -60,7 +60,7 @@ it('caps each incremental chunk and parallel metadata operations, retaining a bo
 it('does not descend into a directory or follow an entry symlink', async () => {
   await fs.mkdir(path.join(root, 'nested'))
   await fs.writeFile(path.join(root, 'nested/content.txt'), 'nested')
-  await fs.symlink(path.join(root, 'nested'), path.join(root, 'alias'))
+  await fs.symlink(path.join(root, 'nested'), path.join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir')
   await fs.mkdir(path.join(root, '.git'))
   const result = await readWorkspaceWatchState(root, new AbortController().signal, name => name === '.git')
   expect([...result.entries.keys()].sort()).toEqual(['alias', 'nested'])

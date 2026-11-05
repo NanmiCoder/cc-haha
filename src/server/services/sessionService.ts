@@ -768,6 +768,18 @@ type SharedSessionMutationState = {
   } | null
 }
 
+type SessionMetadataUpdate = {
+  workDir: string
+  customTitle?: string | null
+  additionalDirectories?: string[]
+  repository?: PreparedSessionWorkspace['repository']
+  permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
+  openAIFastMode?: boolean
+}
+
 const sharedSessionMutationStates = new WeakMap<LocalIndexGateway, SharedSessionMutationState>()
 
 function getSharedSessionMutationState(
@@ -789,6 +801,7 @@ export function hasMalformedFileHistoryBefore(snapshot: FileHistorySnapshot): bo
 }
 
 export class SessionService {
+  private static readonly metadataMutationTails = new Map<string, Promise<void>>()
   private readonly uiFileHistoryReads = new Map<string, Promise<RawEntry[]>>()
   private readonly inspectionSnapshots = new Map<string, Promise<SessionInspectionTranscriptSnapshot | null>>()
 
@@ -808,6 +821,24 @@ export class SessionService {
 
   private memorySessionKey(sessionId: string): string {
     return `${this.getConfigDir()}:${sessionId}`
+  }
+
+  private async withMetadataMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    // SDK init can retire a launch placeholder while startup still reads its
+    // metadata. Share the queue across service instances, scoped to this store.
+    const key = this.memorySessionKey(sessionId)
+    const tails = SessionService.metadataMutationTails
+    const previous = tails.get(key)
+    let release!: () => void
+    const current = new Promise<void>(resolve => { release = resolve })
+    tails.set(key, current)
+    if (previous) await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (tails.get(key) === current) tails.delete(key)
+    }
   }
 
   private rememberPrivateTitle(sessionId: string, title: string): void {
@@ -5362,17 +5393,14 @@ export class SessionService {
 
   async appendSessionMetadata(
     sessionId: string,
-    metadata: {
-      workDir: string
-      customTitle?: string | null
-      additionalDirectories?: string[]
-      repository?: PreparedSessionWorkspace['repository']
-      permissionMode?: string
-      runtimeProviderId?: string | null
-      runtimeModelId?: string
-      effortLevel?: string
-      openAIFastMode?: boolean
-    }
+    metadata: SessionMetadataUpdate,
+  ): Promise<void> {
+    return this.withMetadataMutation(sessionId, () => this.appendSessionMetadataUnlocked(sessionId, metadata))
+  }
+
+  private async appendSessionMetadataUnlocked(
+    sessionId: string,
+    metadata: SessionMetadataUpdate,
   ): Promise<void> {
     if (isSideChatId(sessionId)) {
       const side = getSideChat(sessionId)
@@ -5538,6 +5566,13 @@ export class SessionService {
   }
 
   async deletePlaceholderSessionFiles(
+    sessionId: string,
+    keepWorkDir: string,
+  ): Promise<number> {
+    return this.withMetadataMutation(sessionId, () => this.deletePlaceholderSessionFilesUnlocked(sessionId, keepWorkDir))
+  }
+
+  private async deletePlaceholderSessionFilesUnlocked(
     sessionId: string,
     keepWorkDir: string,
   ): Promise<number> {

@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { join, dirname } from 'path'
 import { _setGlobalConfigCacheForTesting, getProjectPathForConfig } from '../../utils/config.js'
 import { getGlobalClaudeFile } from '../../utils/env.js'
+import { normalizePathForConfigKey } from '../../utils/path.js'
 import { handleMcpApi } from '../api/mcp.js'
 import * as hostPreflight from '../services/mcpHostPreflight.js'
 
@@ -160,7 +161,7 @@ describe('project-sharing STDIO preflight', () => {
     expect(saved.body.results[1].error).toContain('executable')
     await expect(fs.stat(join(other, '.mcp.json'))).rejects.toThrow()
     await executable(other)
-    const retry = await request('PUT', '/api/mcp/shared/projects', { config: initial.config, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: [target(initial.projects.find((state: ProjectState) => state.projectPath === other))] })
+    const retry = await request('PUT', '/api/mcp/shared/projects', { config: initial.config, sourceCwd: source, sourceConfig: initial.sourceConfig, targets: [target(initial.projects.find((state: ProjectState) => state.projectPath === normalizePathForConfigKey(other)))] })
     expect(retry.body.results[0].success).toBe(true)
     expect((await read(other)).mcpServers.shared).toMatchObject(raw)
   })

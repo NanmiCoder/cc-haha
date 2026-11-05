@@ -66,9 +66,39 @@ test('shared canonical resolver rejects a symlinked .git backlink and a forged c
   await writeFile(paths.join(worktree, '.git'), `gitdir: ${entry}\n`)
   await writeFile(paths.join(entry, 'commondir'), '../..\n')
   await writeFile(paths.join(entry, 'gitdir'), paths.join(worktree, '.git') + '\n')
-  await symlink(paths.join(worktree, '.git'), paths.join(attacker, '.git'), process.platform === 'win32' ? 'file' : undefined)
+  // Windows junctions exercise the native reparse-point rejection without
+  // requiring Developer Mode or a process-wide symbolic-link privilege.
+  await symlink(process.platform === 'win32' ? entry : paths.join(worktree, '.git'), paths.join(attacker, '.git'), process.platform === 'win32' ? 'junction' : undefined)
   expect(await resolveInWorker([attacker])).toEqual([attacker])
   await writeFile(paths.join(malformed, '.git'), `gitdir: ${entry}\n`)
   await writeFile(paths.join(entry, 'commondir'), '../../wrong\n')
   expect(await resolveInWorker([malformed])).toEqual([malformed])
+})
+
+test('canonical resolver rejects a .git file alias even when its resolved target matches the trusted backlink', () => {
+  const repository = paths.join(root, 'main')
+  const worktree = paths.join(root, 'worktree')
+  const attacker = paths.join(root, 'attacker')
+  const entry = paths.join(repository, '.git', 'worktrees', 'fixture')
+  const backlink = paths.join(worktree, '.git')
+  const contents = new Map([
+    [paths.join(worktree, '.git'), `gitdir: ${entry}\n`],
+    [paths.join(attacker, '.git'), `gitdir: ${entry}\n`],
+    [paths.join(entry, 'commondir'), '../..\n'],
+    [paths.join(entry, 'gitdir'), `${backlink}\n`],
+  ])
+  // Keep the file-symlink attack covered on Windows too, where creating a
+  // native file symlink needs privileges. The worker test above separately
+  // exercises real filesystem links; this fixture fixes the alias identities.
+  const fixtureFs = {
+    readFileSync(file: string) {
+      const content = contents.get(file)
+      if (content === undefined) throw new Error(`Unexpected fixture read: ${file}`)
+      return content
+    },
+    realpathSync(file: string) { return file === paths.join(attacker, '.git') ? backlink : file },
+  } as Pick<typeof fs, 'readFileSync' | 'realpathSync' | 'statSync'>
+  expect(fixtureFs.realpathSync(paths.join(attacker, '.git'))).toBe(backlink)
+  expect(resolveCanonicalNativeGitRoot(worktree, fixtureFs, paths)).toBe(repository)
+  expect(resolveCanonicalNativeGitRoot(attacker, fixtureFs, paths)).toBe(attacker)
 })

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -141,16 +142,27 @@ describe('cu-helper daemon system commands', () => {
 
   test('creates a private runtime directory before the native daemon binds', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-cu-runtime-test-'))
+    const nativeStat = fs.lstatSync
+    // NTFS has no POSIX permission bits. Model the macOS stat result while
+    // retaining the real directory operation and checking the chmod request.
+    const metadata = process.platform === 'win32'
+      ? spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof nativeStat>) =>
+          Object.assign(nativeStat(...args), { mode: 0o40700 })) as typeof nativeStat)
+      : undefined
+    const permissions = spyOn(fs, 'chmodSync')
     try {
       const runtimeDir = path.join(root, '.runtime')
       __prepareDaemonSocketDirectoryForTests(
         path.join(runtimeDir, 'cu-helper.sock'),
       )
 
-      const stat = lstatSync(runtimeDir)
+      const stat = fs.lstatSync(runtimeDir)
       expect(stat.isDirectory()).toBe(true)
       expect(stat.mode & 0o777).toBe(0o700)
+      expect(permissions).toHaveBeenCalledWith(runtimeDir, 0o700)
     } finally {
+      permissions.mockRestore()
+      metadata?.mockRestore()
       rmSync(root, { recursive: true, force: true })
     }
   })
@@ -161,7 +173,7 @@ describe('cu-helper daemon system commands', () => {
       const actual = path.join(root, 'actual')
       const runtimeDir = path.join(root, '.runtime')
       mkdirSync(actual)
-      symlinkSync(actual, runtimeDir)
+      symlinkSync(actual, runtimeDir, process.platform === 'win32' ? 'junction' : 'dir')
 
       expect(() => __prepareDaemonSocketDirectoryForTests(
         path.join(runtimeDir, 'cu-helper.sock'),
@@ -607,7 +619,7 @@ describe('cu-helper overlay reconciliation', () => {
 })
 
 describe('cu-helper stale daemon reaping', () => {
-  const current = '/runtime/cu-helper.daemon.100.sock'
+  const current = path.normalize('/runtime/cu-helper.daemon.100.sock')
 
   function harness(options: {
     entries?: string[]
@@ -653,8 +665,8 @@ describe('cu-helper stale daemon reaping', () => {
     h.run()
     expect(h.killed).toEqual([900])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.7.sock',
-      '/runtime/cu-helper.daemon.200.7.sock.pid',
+      path.normalize('/runtime/cu-helper.daemon.200.7.sock'),
+      path.normalize('/runtime/cu-helper.daemon.200.7.sock.pid'),
     ])
   })
 
@@ -670,8 +682,8 @@ describe('cu-helper stale daemon reaping', () => {
     h.run()
     expect(h.killed).toEqual([])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.sock',
-      '/runtime/cu-helper.daemon.200.sock.pid',
+      path.normalize('/runtime/cu-helper.daemon.200.sock'),
+      path.normalize('/runtime/cu-helper.daemon.200.sock.pid'),
     ])
   })
 
@@ -681,13 +693,13 @@ describe('cu-helper stale daemon reaping', () => {
         'cu-helper.daemon.not-a-pid.sock.pid',
         'cu-helper.daemon.200.sock.pid',
       ],
-      pidfiles: { '/runtime/cu-helper.daemon.200.sock.pid': '900junk' },
+      pidfiles: { [path.normalize('/runtime/cu-helper.daemon.200.sock.pid')]: '900junk' },
     })
     h.run()
     expect(h.killed).toEqual([])
     expect(h.removed).toEqual([
-      '/runtime/cu-helper.daemon.200.sock',
-      '/runtime/cu-helper.daemon.200.sock.pid',
+      path.normalize('/runtime/cu-helper.daemon.200.sock'),
+      path.normalize('/runtime/cu-helper.daemon.200.sock.pid'),
     ])
   })
 })

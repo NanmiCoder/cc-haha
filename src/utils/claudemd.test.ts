@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, isAbsolute, sep } from 'node:path'
 
 let root: string
 let cwd: string
@@ -62,13 +62,17 @@ beforeEach(() => {
   )
   // Real fixture reads, but never inspect instructions from host ancestors.
   const fs = fsOperations.getFsImplementation()
+  const insideFixture = (target: string) => {
+    const child = relative(root, target)
+    return !isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`)
+  }
   spies.push(spyOn(fsOperations, 'getFsImplementation').mockReturnValue({
     ...fs,
     readFile: async (path, options) => {
-      if (!path.startsWith(root + '/')) throw Object.assign(new Error('Outside fixture'), { code: 'ENOENT' })
+      if (!insideFixture(path)) throw Object.assign(new Error('Outside fixture'), { code: 'ENOENT' })
       return fs.readFile(path, options)
     },
-    readdir: async path => path.startsWith(root + '/') ? fs.readdir(path) : [],
+    readdir: async path => insideFixture(path) ? fs.readdir(path) : [],
   }))
   memory.clearMemoryFileCaches()
 })
@@ -203,7 +207,7 @@ test('excluded CLAUDE instructions do not suppress fallback', async () => {
 test('AGENTS external includes require the existing approval gate', async () => {
   const external = join(root, 'policy', 'external.md')
   put(external, 'external')
-  const text = `@${external}\nproject`
+  const text = `@${external.replaceAll('\\', '/')}\nproject`
   put(join(cwd, 'AGENTS.md'), text)
   expect(await contents()).toEqual([text])
   expect((await memory.getMemoryFiles(true)).map(file => file.content)).toEqual([text, 'external'])

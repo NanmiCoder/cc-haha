@@ -337,8 +337,11 @@ function isH5ProtectedCapabilityPath(pathname: string): boolean {
 }
 
 export function isH5AccessControlPath(pathname: string): boolean {
-  return pathname.startsWith('/api/h5-access') &&
-    pathname !== '/api/h5-access/verify'
+  // Match the router's path segments before applying the credential boundary.
+  // Repeated/trailing slashes must not turn control-plane routes into ordinary API traffic.
+  const normalized = normalizeApiPath(pathname)
+  return (normalized === '/api/h5-access' || normalized.startsWith('/api/h5-access/')) &&
+    normalized !== '/api/h5-access/verify'
 }
 
 /**

@@ -885,7 +885,7 @@ for await (const line of input) {
       expect(automatic.status).toBe('completed')
       expect(automatic.sessionId).toBeUndefined()
       const automaticCapture = (await readCaptures())[0]!
-      expect(folders(automaticCapture)).toEqual([initialDirectory])
+      expect(folders(automaticCapture).map(directory => path.normalize(directory))).toEqual([initialDirectory])
       expect(automaticCapture.cwd).toBe(workDir)
 
       await preferences.updateProjectDirectories({ workDir, additionalDirectories: manualDirectories })
@@ -898,7 +898,7 @@ for await (const line of input) {
       }
       const manualCapture = (await readCaptures())[1]!
       expect(manualCapture.placeholderExists).toBe(false)
-      expect(folders(manualCapture)).toEqual(manualDirectories)
+      expect(folders(manualCapture).map(directory => path.normalize(directory))).toEqual(manualDirectories)
       await preferences.updateProjectDirectories({ workDir, additionalDirectories: [futureDirectory] })
       await fs.writeFile(releasePath, 'manual run may finish')
       const manual = await pendingManual
@@ -907,7 +907,7 @@ for await (const line of input) {
       const recovered = await new SessionService().getSessionLaunchInfo(manual.sessionId!)
       expect(recovered?.workDir).toBe(workDir)
       expect(recovered?.additionalDirectories).toEqual(folders(manualCapture))
-      expect((await preferences.getProjectDirectories(workDir)).additionalDirectories).toEqual([futureDirectory])
+      expect((await preferences.getProjectDirectories(workDir)).additionalDirectories.map(directory => path.normalize(directory))).toEqual([futureDirectory])
     } finally {
       await fs.writeFile(releasePath, 'release on failure')
       if (pendingManual) await Promise.allSettled([pendingManual])

@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
-import { drainTraceCaptureForTests } from './traceCaptureService.js'
+import { clearTraceCaptureStateForTests, drainTraceCaptureForTests } from './traceCaptureService.js'
 import { hahaOAuthService } from './hahaOAuthService.js'
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { hahaGrokOAuthService } from './hahaGrokOAuthService.js'
@@ -45,6 +45,7 @@ describe('autoQuestionDecisionService', () => {
     globalThis.fetch = originalFetch
     hahaOpenAIOAuthService.dispose()
     await drainTraceCaptureForTests()
+    clearTraceCaptureStateForTests()
     if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     await fs.rm(configDir, { recursive: true, force: true })

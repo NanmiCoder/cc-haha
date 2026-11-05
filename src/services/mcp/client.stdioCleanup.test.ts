@@ -25,6 +25,9 @@ let restorePid: (() => void) | undefined
 const connected: Array<{ name: string; config: McpServerConfig }> = []
 
 beforeEach(async () => {
+  // Signal assertions below exercise the POSIX branch on every host. Windows
+  // process-tree behavior is covered separately with an injected taskkill.
+  __setStdioProcessTreeKillForTests({ platform: 'linux' })
   root = await mkdtemp(join(tmpdir(), 'mcp-stdio-cleanup-'))
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = root

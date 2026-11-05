@@ -172,7 +172,19 @@ const TIMESTAMP = /(?:\{\{DATE\}\}|\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)
  */
 export function normalizedFingerprint(format: ApiFormat, body: Record<string, unknown>, table: PlaceholderTable): RequestFingerprint {
   const fingerprint = fingerprintRequest(format, body)
-  const normalize = (text: string) => normalizeString(text, table).replace(UUID, '{{UUID}}').replace(TIMESTAMP, '{{TIMESTAMP}}')
+  const windowsRoots = new Set(table.filter(({ values }) => values.some(value => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(value))).map(({ name }) => name))
+  const normalizePath = (path: string) => windowsRoots.has(/^\{\{([A-Z][A-Z0-9_]*)\}\}/.exec(path)?.[1] ?? '') ? path.replace(/\\/g, '/') : path
+  // Generated transcript/upload paths keep their native separators after the
+  // root is replaced. Canonicalize only paths rooted in a Windows placeholder;
+  // unrelated prose and literal backslashes in POSIX filenames stay strict.
+  // Spaces are allowed only inside paired quotes or the product's delimited
+  // transcript/image fields, rather than swallowing prose after a bare path.
+  const normalize = (text: string) => normalizeString(text, table)
+    .replace(/(["'`])(\{\{[A-Z][A-Z0-9_]*\}\}[\\/][^\r\n]*?)\1/g, (_match, quote: string, path: string) => quote + normalizePath(path) + quote)
+    .replace(/(full transcript at: )(\{\{[A-Z][A-Z0-9_]*\}\}[\\/][^\r\n]*)/g, (_match, prefix: string, path: string) => prefix + normalizePath(path))
+    .replace(/(\[Image: source: )(\{\{[A-Z][A-Z0-9_]*\}\}[\\/][^\r\n]*?)(?=, original \d|\])/g, (_match, prefix: string, path: string) => prefix + normalizePath(path))
+    .replace(/\{\{[A-Z][A-Z0-9_]*\}\}(?:[\\/][^\s"'`<>\[\]]*)?/g, normalizePath)
+    .replace(UUID, '{{UUID}}').replace(TIMESTAMP, '{{TIMESTAMP}}')
   return {
     ...fingerprint,
     lastUserText: normalize(fingerprint.lastUserText),

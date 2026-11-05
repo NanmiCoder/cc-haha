@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -25,6 +25,7 @@ import {
 } from '../../tasks/LocalWorkflowTask/LocalWorkflowTask.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { getClaudeTempDir } from '../../utils/permissions/filesystem.js'
+import * as filesystemPermissions from '../../utils/permissions/filesystem.js'
 import { createWorkflowHarness } from '../../utils/workflows/harness.js'
 import { WorkflowJournal } from '../../utils/workflows/journal.js'
 import type { WorkflowProgressEvent } from '../../utils/workflows/types.js'
@@ -35,6 +36,7 @@ let tmpHome: string
 let projectDir: string
 let originalConfigDir: string | undefined
 let taskOutputRoot: string | undefined
+let tempRootSpy: ReturnType<typeof spyOn> | undefined
 
 function request(
   urlStr: string,
@@ -136,6 +138,8 @@ describe('Workflows API', () => {
   })
 
   afterEach(async () => {
+    tempRootSpy?.mockRestore()
+    tempRootSpy = undefined
     if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
     resetSettingsCache()
@@ -813,7 +817,26 @@ describe('Workflows API', () => {
     ])
   })
 
-  it('reconstructs the latest resume snapshot with one cached prefix', async () => {
+  it.each(['direct', 'aliased', 'escaping'])('reconstructs resumed progress only within the permitted root (%s)', async rootKind => {
+    let physicalOutputRoot = taskOutputRoot!
+    let aliasedTempRoot: string | undefined
+    if (rootKind === 'aliased') {
+      const actualRoot = getClaudeTempDir()
+      await fs.mkdir(actualRoot, { recursive: true })
+      const rootAlias = path.join(tmpHome, 'output-root-alias')
+      await fs.symlink(path.resolve(actualRoot), rootAlias, process.platform === 'win32' ? 'junction' : 'dir')
+      expect((await fs.stat(rootAlias)).isDirectory()).toBe(true)
+      // Reproduce the lexical/canonical mismatch of Windows 8.3 temp roots
+      // with a real filesystem alias on every supported host.
+      aliasedTempRoot = rootAlias
+      taskOutputRoot = path.join(rootAlias, `wf-api-${path.basename(tmpHome)}`)
+    } else if (rootKind === 'escaping') {
+      await fs.mkdir(getClaudeTempDir(), { recursive: true })
+      const outsideRoot = path.join(tmpHome, 'outside-output')
+      await fs.mkdir(outsideRoot)
+      await fs.symlink(outsideRoot, taskOutputRoot!, process.platform === 'win32' ? 'junction' : 'dir')
+      physicalOutputRoot = outsideRoot
+    }
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const runId = 'wf_resume12-abc'
     const projectRoot = path.join(tmpHome, 'claude', 'projects', '-tmp-project')
@@ -831,7 +854,9 @@ describe('Workflows API', () => {
     const oldTaskId = 'wold12345'
     const resumedTaskId = 'wnew12345'
     const outputDir = path.join(taskOutputRoot!, sessionId, 'tasks')
-    await fs.mkdir(outputDir, { recursive: true })
+    // Bun on Windows cannot recursively mkdir through a junction; prepare the
+    // real directory, then exercise all API reads through the alias below.
+    await fs.mkdir(path.join(physicalOutputRoot, sessionId, 'tasks'), { recursive: true })
     const oldOutput = path.join(outputDir, `${oldTaskId}.output`)
     const resumedOutput = path.join(outputDir, `${resumedTaskId}.output`)
     const journal = new WorkflowJournal(
@@ -880,6 +905,9 @@ describe('Workflows API', () => {
       timestamp: '2026-08-10T01:01:00.000Z',
     })
 
+    if (aliasedTempRoot) {
+      tempRootSpy = spyOn(filesystemPermissions, 'getClaudeTempDir').mockReturnValue(aliasedTempRoot)
+    }
     const response = await call(`/api/workflows/session-runs/${sessionId}`)
     expect(response.status).toBe(200)
     const body = (await response.json()) as {
@@ -890,6 +918,10 @@ describe('Workflows API', () => {
     }
     expect(body.runs).toHaveLength(1)
     expect(body.runs[0]?.runId).toBe(runId)
+    if (rootKind === 'escaping') {
+      expect(body.runs[0]?.progress).toBeUndefined()
+      return
+    }
     const agents = body.runs[0]!.progress.filter(
       event => event.type === 'workflow_agent',
     )
@@ -951,15 +983,25 @@ describe('Workflows API', () => {
   it('refuses to write through a symlinked target', async () => {
     const workflowsDir = path.join(tmpHome, 'claude', 'workflows')
     await fs.mkdir(workflowsDir, { recursive: true })
-    const outside = path.join(tmpHome, 'outside.js')
+    const outsideDir = path.join(tmpHome, 'outside')
+    await fs.mkdir(outsideDir)
+    const outside = path.join(outsideDir, 'outside.js')
     await fs.writeFile(outside, '// pre-existing\n', 'utf8')
-    await fs.symlink(outside, path.join(workflowsDir, 'my-audit.js'))
+    // Junctions are real symbolic links according to lstat on Windows; the
+    // final-entry guard must reject them before trying to write the script.
+    await fs.symlink(
+      process.platform === 'win32' ? outsideDir : outside,
+      path.join(workflowsDir, 'my-audit.js'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
+    expect((await fs.lstat(path.join(workflowsDir, 'my-audit.js'))).isSymbolicLink()).toBe(true)
 
     const response = await call('/api/workflows/save', {
       method: 'POST',
       body: { script: VALID_SCRIPT, scope: 'user' },
     })
     expect(response.status).toBe(400)
+    expect((await response.json()).message).toContain('Refusing to write through a symlink')
     expect(await fs.readFile(outside, 'utf8')).toBe('// pre-existing\n')
   })
 

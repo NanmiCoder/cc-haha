@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +12,7 @@ import {
   type RemoteImageHopResponse,
 } from '../safe-remote-image.js'
 import { IMAGE_MAX_BYTES } from '../attachment-limits.js'
+import { ImageBlockWatcher } from '../image-block-watcher.js'
 
 const servers: Server[] = []
 
@@ -293,10 +295,49 @@ describe('loadSafeRemoteImage', () => {
 })
 
 describe('materializePendingUploadImage', () => {
+  it('blocks local file exfiltration from streamed markdown while allowing project images', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'adapter-path-policy-'))
+    const workDir = join(root, 'project')
+    const outside = join(root, 'project-other')
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aUioAAAAASUVORK5CYII=', 'base64')
+    try {
+      await mkdir(workDir)
+      await mkdir(outside)
+      await writeFile(join(workDir, 'inside.png'), png)
+      await writeFile(join(workDir, 'secret.png'), 'fixture secret, not an image')
+      await writeFile(join(outside, 'secret.png'), png)
+      await symlink(outside, join(workDir, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+      const materializeMarkdown = async (target: string, directory: string | undefined = workDir) => {
+        const pending = new ImageBlockWatcher().feed(`![fixture](${target})`)[0]!
+        return materializePendingUploadImage(pending.source, directory)
+      }
+      const inside = join(workDir, 'inside.png')
+      expect((await materializeMarkdown(inside)).buffer).toEqual(png)
+      for (const target of [
+        join(outside, 'secret.png'),
+        pathToFileURL(join(outside, 'secret.png')).href,
+        join(workDir, '..', 'project-other', 'secret.png'),
+        join(workDir, 'escape', 'secret.png'),
+      ]) {
+        await expect(materializeMarkdown(target)).rejects.toThrow('outside the active session work directory')
+      }
+      await expect(materializePendingUploadImage({ kind: 'path', path: inside })).rejects.toThrow('missing session work directory')
+      expect((await materializeMarkdown(pathToFileURL(inside).href)).mime).toBe('image/png')
+      await expect(materializeMarkdown(join(workDir, 'secret.png'))).rejects.toThrow('not a supported image')
+      await expect(materializeMarkdown(join(workDir, 'missing.png'))).rejects.toThrow('does not exist')
+      await expect(materializeMarkdown(workDir)).rejects.toThrow('not a regular file')
+      await writeFile(join(workDir, 'large.png'), Buffer.alloc(IMAGE_MAX_BYTES + 1))
+      await expect(materializeMarkdown(join(workDir, 'large.png'))).rejects.toThrow('图片过大')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('materializes base64 and path sources without changing their MIME', async () => {
     const root = await mkdtemp(join(tmpdir(), 'adapter-outbound-image-'))
     const imagePath = join(root, 'image.webp')
-    await writeFile(imagePath, 'path-image')
+    const webp = Buffer.from('RIFF0000WEBPfixture')
+    await writeFile(imagePath, webp)
 
     try {
       const base64 = await materializePendingUploadImage({
@@ -308,11 +349,11 @@ describe('materializePendingUploadImage', () => {
         kind: 'path',
         path: imagePath,
         mime: 'image/webp',
-      })
+      }, root)
 
       expect(base64.buffer.toString()).toBe('base64-image')
       expect(base64.mime).toBe('image/jpeg')
-      expect(path.buffer.toString()).toBe('path-image')
+      expect(path.buffer).toEqual(webp)
       expect(path.mime).toBe('image/webp')
     } finally {
       await rm(root, { recursive: true, force: true })

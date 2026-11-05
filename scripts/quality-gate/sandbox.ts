@@ -1,7 +1,7 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSandboxedTestEnvironment } from '../pr/test-environment'
+import { createSandboxedTestEnvironment, removeTestDirectory } from '../pr/test-environment'
 
 /**
  * Quality-gate sandboxing for lanes that boot the real product server.
@@ -254,7 +254,7 @@ export function createQualityGateSandbox(options: {
 }): QualityGateSandbox {
   const source = options.source ?? process.env
   const sourceConfigDir = options.sourceConfigDir ?? realUserConfigDir(source)
-  const home = mkdtempSync(join(tmpdir(), `cc-haha-qa-${options.label}-`))
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), `cc-haha-qa-${options.label}-`)))
   const env = buildSandboxLaneEnv(home, options.envOverrides ?? {}, source)
   const configDir = env.CLAUDE_CONFIG_DIR
   mkdirSync(configDir, { recursive: true })
@@ -274,7 +274,10 @@ export function createQualityGateSandbox(options: {
       return describeUserStateMutations(guardedBefore, fingerprintUserState(sourceConfigDir))
     },
     cleanup() {
-      rmSync(home, { recursive: true, force: true })
+      // Windows may release handles shortly after a stopped child exits. Retry
+      // transient filesystem errors for a bounded period; persistent failures
+      // still throw rather than disguising leaked processes as passing cleanup.
+      removeTestDirectory(home)
     },
   }
 }

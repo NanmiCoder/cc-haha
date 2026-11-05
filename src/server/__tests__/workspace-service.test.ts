@@ -518,7 +518,12 @@ describe('WorkspaceService', () => {
     const outsideDir = await makeTempDir('workspace-service-symlink-outside-')
     const outsideFile = path.join(outsideDir, 'secret.txt')
     await fs.writeFile(outsideFile, 'top secret\n')
-    await fs.symlink(outsideFile, path.join(workDir, 'escape.txt'))
+    await fs.symlink(
+      process.platform === 'win32' ? outsideDir : outsideFile,
+      path.join(workDir, 'escape.txt'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
+    expect((await fs.lstat(path.join(workDir, 'escape.txt'))).isSymbolicLink()).toBe(true)
 
     const service = new WorkspaceService(async () => workDir)
 
@@ -538,7 +543,12 @@ describe('WorkspaceService', () => {
     git(repoDir, 'commit', '-m', 'initial')
 
     await fs.writeFile(outsideFile, 'top secret\n')
-    await fs.symlink(outsideFile, path.join(repoDir, 'escape.txt'))
+    await fs.symlink(
+      process.platform === 'win32' ? outsideDir : outsideFile,
+      path.join(repoDir, 'escape.txt'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
+    expect((await fs.lstat(path.join(repoDir, 'escape.txt'))).isSymbolicLink()).toBe(true)
 
     const service = new WorkspaceService(async () => repoDir)
 

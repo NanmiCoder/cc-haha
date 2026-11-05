@@ -534,6 +534,59 @@ describe('remote H5 auth and CORS integration', () => {
     await expect(desktopEnable.json()).resolves.toHaveProperty('token')
   })
 
+  test('normalizes H5 control paths before rejecting tokenless reads and mutations', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-path-fixture'
+    await restartRemoteServer()
+    const service = new H5AccessService()
+    const before = await service.getSettings()
+    for (const [pathname, method] of [
+      ['/api//h5-access', 'GET'],
+      ['/api///h5-access//', 'GET'],
+      ['/api//h5-access/', 'PUT'],
+      ['/api//h5-access/enable', 'POST'],
+      ['/api///h5-access//regenerate/', 'POST'],
+      ['/api//h5-access//disable/', 'POST'],
+    ]) {
+      const response = await fetch(`${baseUrl}${pathname}`, {
+        method,
+        ...(method === 'PUT' ? {
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allowedOrigins: ['https://path-fixture.example'] }),
+        } : {}),
+      })
+      expect(response.status).toBe(403)
+      expect(await response.json()).not.toHaveProperty('settings')
+      expect(await service.getSettings()).toEqual(before)
+    }
+  })
+
+  test('normalized H5 control paths accept only the desktop credential while token verification stays usable', async () => {
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-path-fixture'
+    await restartRemoteServer()
+    const headers = { Authorization: 'Bearer desktop-path-fixture' }
+    const enabled = await fetch(`${baseUrl}/api//h5-access//enable/`, { method: 'POST', headers })
+    expect(enabled.status).toBe(200)
+    const { token } = await enabled.json() as { token: string }
+    expect(typeof token).toBe('string')
+    const read = await fetch(`${baseUrl}/api//h5-access/`, { headers })
+    expect(read.status).toBe(200)
+    expect((await read.json() as { settings: { token: string } }).settings.token).toBe(token)
+
+    for (const authorization of [undefined, 'Bearer incorrect-fixture', `Bearer ${token}`]) {
+      const response = await fetch(`${baseUrl}/api//h5-access/`, {
+        headers: authorization ? { Authorization: authorization } : {},
+      })
+      expect(response.status).toBe(403)
+      expect(await response.json()).not.toHaveProperty('settings')
+    }
+    for (const [authorization, status] of [[`Bearer ${token}`, 200], ['Bearer incorrect-fixture', 401]] as const) {
+      const response = await fetch(`${baseUrl}/api//h5-access//verify/`, {
+        method: 'POST', headers: { Authorization: authorization },
+      })
+      expect(response.status).toBe(status)
+    }
+  })
+
   test('does not extend tokenless loopback trust to cross-site subresource loads', async () => {
     process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'desktop-local-secret'
     await restartRemoteServer()
@@ -666,10 +719,13 @@ describe('remote H5 auth and CORS integration', () => {
       sessions: Array<Record<string, unknown>>
     }
     const realPrivateWorkDir = await fs.realpath(privateWorkDir)
-    expect(desktopSessionsBody.sessions.find((session) => session.id === sessionId)).toMatchObject({
-      workDir: realPrivateWorkDir,
+    const desktopSession = desktopSessionsBody.sessions.find((session) => session.id === sessionId)
+    expect(desktopSession).toMatchObject({
       projectRoot: realPrivateWorkDir,
     })
+    // workDir may retain the caller's spelling (including Windows 8.3 paths).
+    // The desktop credential must reveal the actual directory, unlike the pet projection.
+    expect(await fs.realpath(desktopSession!.workDir as string)).toBe(realPrivateWorkDir)
 
     const updateResponse = await fetch(`${baseUrl}/api/desktop-ui/preferences/pet`, {
       method: 'PUT',

@@ -10,7 +10,7 @@ if (!process.env.BTW_LOOPBACK_FIXTURE) {
   test('side question real fork shares prefix, sees current context and never executes tools', async () => {
     const root = await mkdtemp(join(tmpdir(), 'btw-loopback-'))
     try {
-      const child = Bun.spawn([process.execPath, '--no-env-file', 'test', fileURLToPath(import.meta.url)], {
+      const child = Bun.spawn([process.execPath, '--no-env-file', 'test', '--timeout=20000', fileURLToPath(import.meta.url)], {
         cwd: root, env: createSandboxedTestEnvironment(root, {
           BTW_LOOPBACK_FIXTURE: '1', NODE_ENV: 'production', ANTHROPIC_API_KEY: 'fixture',
           CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -19,13 +19,15 @@ if (!process.env.BTW_LOOPBACK_FIXTURE) {
           CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
         }), stdout: 'pipe', stderr: 'pipe',
       })
-      const timeout = setTimeout(() => child.kill(), 12_000)
+      // Include module startup in the outer process budget; the nested test
+      // uses the same 20s bound as the server lane that invokes this fixture.
+      const timeout = setTimeout(() => child.kill(), 30_000)
       try {
         const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
         expect(code, stdout + stderr).toBe(0)
       } finally { clearTimeout(timeout) }
     } finally { await rm(root, { recursive: true, force: true }) }
-  }, 15_000)
+  }, 35_000)
 } else {
   test('real fork tools/cache/current context', async () => {
     ;(globalThis as any).MACRO = { BUILD_TIME: '' }

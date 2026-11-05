@@ -52,6 +52,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  await drainTraceCaptureForTests()
   clearTraceCaptureStateForTests()
   if (originalConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR

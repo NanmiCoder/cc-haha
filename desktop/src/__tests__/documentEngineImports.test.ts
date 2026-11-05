@@ -44,7 +44,7 @@ function staticImports(file: string): StaticImport[] {
     const isReExport = ts.isExportDeclaration(node)
     if (!(isImport || isReExport) || !node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier)) continue
     const typeOnly = isImport ? node.importClause?.isTypeOnly === true : node.isTypeOnly
-    found.push({ file: path.relative(srcRoot, file), specifier: node.moduleSpecifier.text, typeOnly })
+    found.push({ file: path.relative(srcRoot, file).split(path.sep).join('/'), specifier: node.moduleSpecifier.text, typeOnly })
   }
   return found
 }

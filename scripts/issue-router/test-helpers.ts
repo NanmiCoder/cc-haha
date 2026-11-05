@@ -19,7 +19,9 @@ export const cli = resolve(import.meta.dir, 'cli.ts')
 
 export function fixture(separate = false) {
   const root = mkdtempSync(join(tmpdir(), 'issue-router-'))
-  const primary = join(root, 'primary 空间\ncheckout')
+  // Windows forbids control characters in filenames; retain whitespace and
+  // Unicode coverage there, and also exercise embedded newlines on POSIX.
+  const primary = join(root, process.platform === 'win32' ? 'primary 空间 checkout' : 'primary 空间\ncheckout')
   const home = join(root, 'isolated-home')
   mkdirSync(home)
   const env = {

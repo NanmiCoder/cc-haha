@@ -16,6 +16,18 @@ const cache = new Map<string, Cache>()
 const flights = new Map<string, Flight>()
 process.once('exit', () => { for (const entry of cache.values()) { entry.database.close(); rmSync(entry.directory, { recursive: true, force: true }) } })
 
+export async function stopHistoryContexts(): Promise<void> {
+  const active = [...flights.values()]
+  for (const flight of active) flight.controller.abort()
+  await Promise.allSettled(active.map(flight => flight.promise))
+  const entries = [...cache.values()]
+  cache.clear()
+  for (const entry of entries) {
+    entry.database.close()
+    await rm(entry.directory, { recursive: true, force: true })
+  }
+}
+
 async function sourceAnchors(filePath: string, size: number, signal: AbortSignal): Promise<string> {
   const handle = await open(filePath, 'r')
   try {

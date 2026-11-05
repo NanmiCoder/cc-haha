@@ -210,7 +210,7 @@ describe('writeCronTasks symlink safety', () => {
     try {
       await mkdir(projectDir, { recursive: true })
       await mkdir(outsideDir, { recursive: true })
-      await symlink(outsideDir, join(projectDir, '.claude'), 'dir')
+      await symlink(outsideDir, join(projectDir, '.claude'), process.platform === 'win32' ? 'junction' : 'dir')
 
       const task = {
         id: 'abcd1234',

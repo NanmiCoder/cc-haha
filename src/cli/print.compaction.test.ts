@@ -146,7 +146,7 @@ function startUpstream(compactionReply: (index: number) => Response) {
 
 async function runCli(port: number, args: string[], env: Record<string, string> = {}) {
   // Not --bare: bare mode does not persist the session we resume.
-  const child = Bun.spawn([CLI, ...args], {
+  const child = Bun.spawn([process.execPath, '--no-env-file', CLI, ...args], {
     cwd: join(sandbox!, 'project'),
     env: {
       ...createSandboxedTestEnvironment(sandbox!),

@@ -52,7 +52,7 @@ export function normalizeIconSize(raw: unknown): number {
 export function normalizeIconFileName(iconFile: string): string {
   const trimmed = iconFile.trim()
   if (!trimmed) return ''
-  return path.extname(trimmed) ? trimmed : `${trimmed}.icns`
+  return path.posix.extname(trimmed) ? trimmed : `${trimmed}.icns`
 }
 
 async function defaultPathExists(candidate: string): Promise<boolean> {
@@ -65,7 +65,7 @@ async function defaultPathExists(candidate: string): Promise<boolean> {
 }
 
 async function defaultReadIconFileName(appPath: string): Promise<string | null> {
-  const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+  const plistPath = path.posix.join(appPath, 'Contents', 'Info.plist')
   try {
     const proc = Bun.spawn(
       ['/usr/bin/plutil', '-extract', 'CFBundleIconFile', 'raw', '-o', '-', plistPath],
@@ -123,11 +123,11 @@ export async function resolveAppIconPath(
   const listResourceFiles = deps.listResourceFiles ?? defaultListResourceFiles
   const pathExists = deps.pathExists ?? defaultPathExists
 
-  const resourcesPath = path.join(appPath, 'Contents', 'Resources')
+  const resourcesPath = path.posix.join(appPath, 'Contents', 'Resources')
 
   const declared = await readIconFileName(appPath)
   if (declared) {
-    const candidate = path.join(resourcesPath, normalizeIconFileName(declared))
+    const candidate = path.posix.join(resourcesPath, normalizeIconFileName(declared))
     if (await pathExists(candidate)) return candidate
   }
 
@@ -140,7 +140,7 @@ export async function resolveAppIconPath(
     .find(name => !/document/i.test(name))
   if (!fallback) return null
 
-  const fallbackPath = path.join(resourcesPath, fallback)
+  const fallbackPath = path.posix.join(resourcesPath, fallback)
   return await pathExists(fallbackPath) ? fallbackPath : null
 }
 

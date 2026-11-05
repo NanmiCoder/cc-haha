@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   createReconciliationWatcher,
   type ReconciliationBatch,
@@ -84,7 +84,7 @@ describe('local index reconciliation watcher', () => {
   test('yields to the event loop while it opens watchers for many project directories', async () => {
     // Opening one fs.watch per project directory is synchronous; with hundreds
     // of projects a single uninterrupted loop kept /health silent (#1746).
-    const directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
+    const directories = Array.from({ length: 60 }, (_, index) => resolve('/scope/projects', `-repo-${index}`))
     const watched: string[] = []
     const watchedAtYield: number[] = []
     const watcher = createReconciliationWatcher({
@@ -110,7 +110,7 @@ describe('local index reconciliation watcher', () => {
   })
 
   test('stops opening watchers when stopped while yielding between groups', async () => {
-    const directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
+    const directories = Array.from({ length: 60 }, (_, index) => resolve('/scope/projects', `-repo-${index}`))
     const watched: string[] = []
     const closed: string[] = []
     const paused = deferred()
@@ -141,8 +141,8 @@ describe('local index reconciliation watcher', () => {
   })
 
   test('lets a newer refresh own the directory set while an older one is parked', async () => {
-    let directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
-    const removed = '/scope/projects/-repo-55'
+    let directories = Array.from({ length: 60 }, (_, index) => resolve('/scope/projects', `-repo-${index}`))
+    const removed = resolve('/scope/projects/-repo-55')
     const opened: string[] = []
     const closed: string[] = []
     const paused = deferred()

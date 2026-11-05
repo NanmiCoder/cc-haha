@@ -60,7 +60,8 @@ async function run(cmd: string[], cwd: string) {
 }
 
 function releaseNotesPath(version: string) {
-  return path.join('release-notes', `v${version}.md`)
+  // This path is also a Git tree reference, which always uses forward slashes.
+  return path.posix.join('release-notes', `v${version}.md`)
 }
 
 /** Step 1: bump the version and commit it with its notes on release/v<version>. */

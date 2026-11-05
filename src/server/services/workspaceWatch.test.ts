@@ -258,7 +258,7 @@ describe('bounded workspace watches', () => {
   it('rejects out-of-root and symlink escapes before registering any watch', async () => {
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-watch-outside-'))
     try {
-      await fs.symlink(outside, path.join(root, 'escape'))
+      await fs.symlink(outside, path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
       for (const requested of ['../outside', 'escape']) {
         await expect(service.watchDirectories('task', ['', requested], () => {}, controller().signal))
           .rejects.toThrow(/outside workspace/i)

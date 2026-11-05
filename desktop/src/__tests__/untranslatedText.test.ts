@@ -159,7 +159,7 @@ function findUntranslatedText(file: string, code: string): Finding[] {
 }
 
 const files = sourceFiles(srcRoot)
-const findings = files.flatMap((file) => findUntranslatedText(path.relative(srcRoot, file), readFileSync(file, 'utf8')))
+const findings = files.flatMap((file) => findUntranslatedText(path.relative(srcRoot, file).split(path.sep).join('/'), readFileSync(file, 'utf8')))
 
 function isExempt(finding: Finding): boolean {
   return [LANGUAGE_NEUTRAL, KNOWN_GAPS].some((exemptions) => exemptions[finding.file]?.includes(finding.text))
