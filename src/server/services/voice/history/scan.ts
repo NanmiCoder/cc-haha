@@ -14,8 +14,11 @@
  * - Claude Code: `<Claude config home>/projects/<project>/<session>.jsonl`, one
  *   session per file. Subagent folders and `agent-*.jsonl` sidechain files are
  *   not the user's own messages and are skipped.
- * - Codex: `$CODEX_HOME/history.jsonl` (default `~/.codex`), one prompt per
- *   line with its `session_id`.
+ * - Codex: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` and
+ *   `$CODEX_HOME/archived_sessions/` (default `~/.codex`), one thread per file,
+ *   written by both the CLI and the app. Only threads the user typed into count:
+ *   `codex exec` runs, subagents and agent-created threads are skipped.
+ *   `history.jsonl` is only the CLI's prompt recall; the app never writes it.
  */
 
 import { createReadStream } from 'node:fs'
@@ -136,14 +139,6 @@ async function* readLines(filePath: string, signal?: AbortSignal): AsyncGenerato
   }
 }
 
-async function isFile(file: string): Promise<boolean> {
-  try {
-    return (await fs.stat(file)).isFile()
-  } catch {
-    return false
-  }
-}
-
 async function modifiedSince(file: string, since: number): Promise<boolean> {
   try {
     return (await fs.stat(file)).mtimeMs >= since
@@ -187,8 +182,153 @@ export async function listClaudeTranscripts(claudeConfigDir: string, since?: num
   return files.sort()
 }
 
-function codexHistoryFile(codexHome: string): string {
-  return path.join(codexHome, 'history.jsonl')
+const CODEX_ROLLOUT_DIRS = ['sessions', 'archived_sessions']
+/** Codex's `INTERACTIVE_SESSION_SOURCES`: where a person types the prompts. */
+const CODEX_INTERACTIVE_SOURCES = ['cli', 'vscode']
+const CODEX_INTERACTIVE_CUSTOM_SOURCES = ['atlas', 'chatgpt']
+
+async function collectCodexRollouts(dir: string, since: number | undefined, files: string[]): Promise<void> {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      await collectCodexRollouts(entryPath, since, files)
+    } else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
+      if (since === undefined || await modifiedSince(entryPath, since)) files.push(entryPath)
+    }
+  }
+}
+
+/** Every Codex thread file; with `since`, one last written before it is skipped without being read. */
+async function listCodexRollouts(codexHome: string, since?: number): Promise<string[]> {
+  const files: string[] = []
+  for (const dir of CODEX_ROLLOUT_DIRS) await collectCodexRollouts(path.join(codexHome, dir), since, files)
+  return files.sort()
+}
+
+/**
+ * The thread id from a rollout's first line, or null when the user did not type
+ * into it (`codex exec`, a subagent, a thread an agent created) or it is not a
+ * rollout. Only the first `session_meta` is the file's own; later ones are
+ * copied in from a forked parent.
+ */
+export function codexUserThreadId(firstLine: string): string | null {
+  let row: unknown
+  try {
+    row = JSON.parse(firstLine)
+  } catch {
+    return null
+  }
+  if (!row || typeof row !== 'object') return null
+  const record = row as Record<string, unknown>
+  const meta = record.payload
+  if (record.type !== 'session_meta' || !meta || typeof meta !== 'object') return null
+  const { id, source, thread_source: threadSource } = meta as Record<string, unknown>
+  const custom = source && typeof source === 'object' ? (source as Record<string, unknown>).custom : undefined
+  // Rollouts from before `source` existed were all typed in the app or CLI.
+  const interactive = source === undefined
+    || (typeof source === 'string' && CODEX_INTERACTIVE_SOURCES.includes(source))
+    || (typeof custom === 'string' && CODEX_INTERACTIVE_CUSTOM_SOURCES.includes(custom))
+  if (!interactive || (threadSource !== undefined && threadSource !== 'user')) return null
+  return typeof id === 'string' && id ? id : null
+}
+
+/**
+ * Where the context the app or IDE puts ahead of a prompt ends: Codex's
+ * `USER_MESSAGE_BEGIN`, and the app's shorter form.
+ */
+const CODEX_REQUEST_MARKERS = ['## My request for Codex:', '## My request:']
+
+/** The typed request without the attachment or IDE context put ahead of it. */
+function codexRequestText(text: string): string {
+  for (const marker of CODEX_REQUEST_MARKERS) {
+    const at = text.lastIndexOf(marker)
+    if (at >= 0) return text.slice(at + marker.length).trim()
+  }
+  return text.trim()
+}
+
+function textParts(content: unknown[], keep: (part: Record<string, unknown>, index: number) => boolean): string {
+  const texts: string[] = []
+  content.forEach((part, index) => {
+    if (!part || typeof part !== 'object') return
+    const record = part as Record<string, unknown>
+    if (typeof record.text === 'string' && keep(record, index)) texts.push(record.text)
+  })
+  return texts.join('\n')
+}
+
+export interface CodexUserRow {
+  /** The typed text; empty when the row holds none (a heartbeat, injected context). */
+  text: string
+  /** Read from origin-tagged model input rather than an untagged event. */
+  tagged: boolean
+}
+
+/**
+ * The user's own text from one rollout row, or null for any other row,
+ * including one written before `since`.
+ *
+ * Current Codex tags every part of a user-role model input with its origin
+ * (`content_item_kinds`), so typed text (`user.text`) is told apart from
+ * scheduled heartbeats and AGENTS.md, environment or skill context. Rollouts
+ * written before those tags carry each prompt as a `user_message` event
+ * (legacy) or a completed `UserMessage` item (paginated); the same prompt also
+ * appears in those events when tags exist, so a thread with tags reads only those.
+ */
+export function codexUserRow(line: string, since?: number): CodexUserRow | null {
+  if (!line.includes('"role":"user"') && !line.includes('"user_message"') && !line.includes('"UserMessage"')) {
+    return null
+  }
+  let row: unknown
+  try {
+    row = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!row || typeof row !== 'object') return null
+  const record = row as Record<string, unknown>
+  const payload = record.payload
+  if (!payload || typeof payload !== 'object') return null
+  if (typeof record.timestamp === 'string' && writtenBefore(Date.parse(record.timestamp), since)) return null
+  const item = payload as Record<string, unknown>
+
+  if (record.type === 'response_item') {
+    if (item.type !== 'message' || item.role !== 'user' || !Array.isArray(item.content)) return null
+    const metadata = item.internal_chat_message_metadata_passthrough
+    const kinds = metadata && typeof metadata === 'object'
+      ? (metadata as Record<string, unknown>).content_item_kinds
+      : undefined
+    if (!Array.isArray(kinds) || kinds.length !== item.content.length) return null
+    return { text: codexRequestText(textParts(item.content, (_, index) => kinds[index] === 'user.text')), tagged: true }
+  }
+
+  if (record.type !== 'event_msg') return null
+  let text: string | undefined
+  if (item.type === 'user_message' && typeof item.message === 'string') {
+    text = item.message
+  } else if (item.type === 'item_completed') {
+    const completed = item.item
+    const content = completed && typeof completed === 'object' && (completed as Record<string, unknown>).type === 'UserMessage'
+      ? (completed as Record<string, unknown>).content
+      : undefined
+    if (Array.isArray(content)) text = textParts(content, part => part.type === 'text')
+  }
+  return text === undefined ? null : { text: codexRequestText(text), tagged: false }
+}
+
+async function firstLine(file: string): Promise<string | null> {
+  try {
+    for await (const line of readLines(file)) return line
+  } catch {
+    // Deleted or unreadable: it has no thread to offer.
+  }
+  return null
 }
 
 interface UserMessage {
@@ -249,51 +389,55 @@ async function* claudeMessages(
   }
 }
 
-/** One prompt from Codex's history, or null when it is empty or older than `since`. */
-function codexRow(line: string, since?: number): { session: string; text: string } | null {
-  let row: unknown
-  try {
-    row = JSON.parse(line)
-  } catch {
-    return null
-  }
-  if (!row || typeof row !== 'object') return null
-  const record = row as Record<string, unknown>
-  // `ts` is in seconds.
-  if (typeof record.ts === 'number' && writtenBefore(record.ts * 1000, since)) return null
-  const text = typeof record.text === 'string' ? record.text.trim() : ''
-  if (!text) return null
-  const session = typeof record.session_id === 'string' && record.session_id ? record.session_id : 'codex'
-  return { session, text }
-}
-
 async function* codexMessages(
   codexHome: string,
   since: number | undefined,
   signal?: AbortSignal,
 ): AsyncGenerator<UserMessage> {
-  const file = codexHistoryFile(codexHome)
-  if (!(await isFile(file))) return
-  for await (const line of readLines(file, signal)) {
-    const row = codexRow(line, since)
-    if (row) yield { session: `codex:${row.session}`, text: row.text }
+  for (const file of await listCodexRollouts(codexHome, since)) {
+    if (signal?.aborted) throw abortError()
+    let thread: string | null | undefined
+    let sawTags = false
+    const tagged: string[] = []
+    const untagged: string[] = []
+    try {
+      for await (const line of readLines(file, signal)) {
+        if (thread === undefined) {
+          thread = codexUserThreadId(line)
+          if (!thread) break
+          continue
+        }
+        const row = codexUserRow(line, since)
+        if (!row) continue
+        sawTags ||= row.tagged
+        if (row.text) (row.tagged ? tagged : untagged).push(row.text)
+      }
+    } catch (error) {
+      if (signal?.aborted) throw abortError()
+      // A rollout deleted or unreadable mid-scan only loses its own terms.
+      if (!(error instanceof Error && 'code' in error)) throw error
+      continue
+    }
+    for (const text of sawTags ? tagged : untagged) yield { session: `codex:${thread}`, text }
   }
+}
+
+async function countCodexThreads(codexHome: string, since: number | undefined): Promise<number> {
+  let threads = 0
+  for (const file of await listCodexRollouts(codexHome, since)) {
+    const line = await firstLine(file)
+    if (line !== null && codexUserThreadId(line)) threads += 1
+  }
+  return threads
 }
 
 /** Sessions per source; with `since`, only those written to since then. */
 export async function listHistorySources(paths: HistoryPaths, since?: number): Promise<VoiceHistorySource[]> {
   const claudeSessions = (await listClaudeTranscripts(paths.claudeConfigDir, since)).length
-  const codexSessions = new Set<string>()
-  const codexFile = codexHistoryFile(paths.codexHome)
-  if (await isFile(codexFile)) {
-    for await (const line of readLines(codexFile)) {
-      const row = codexRow(line, since)
-      if (row) codexSessions.add(row.session)
-    }
-  }
+  const codexSessions = await countCodexThreads(paths.codexHome, since)
   return [
     { id: 'claude-code', available: claudeSessions > 0, sessions: claudeSessions },
-    { id: 'codex', available: codexSessions.size > 0, sessions: codexSessions.size },
+    { id: 'codex', available: codexSessions > 0, sessions: codexSessions },
   ]
 }
 
