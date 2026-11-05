@@ -14,6 +14,7 @@ import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId, type SessionId } from '../../types/ids.js'
 import { getAgentProfile, setAgentProfile } from '../../utils/agentProfile.js'
 import type { Message } from '../../types/message.js'
+import type { EffortValue } from '../../utils/effort.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import {
   createAssistantMessage,
@@ -95,7 +96,7 @@ afterEach(async () => {
   }
 })
 
-function parentContext(): ToolUseContext {
+function parentContext(sessionEffort?: EffortValue): ToolUseContext {
   const agentDefinition = {
     agentType: 'worker',
     whenToUse: 'Teammate',
@@ -103,7 +104,7 @@ function parentContext(): ToolUseContext {
     getSystemPrompt: () => 'Work.',
     source: 'projectSettings',
   } as const
-  const state = getDefaultAppState()
+  const state = { ...getDefaultAppState(), effortValue: sessionEffort }
   return {
     options: {
       commands: [],
@@ -134,6 +135,8 @@ async function runTurn(params: {
   context?: Message[]
   answer: Message
   recordedUuids: Set<UUID>
+  agentEffort?: EffortValue
+  sessionEffort?: EffortValue
 }): Promise<Message[]> {
   spyOn(queryModule, 'query').mockImplementation(async function* () {
     yield params.answer
@@ -145,9 +148,10 @@ async function runTurn(params: {
       whenToUse: 'Teammate',
       getSystemPrompt: () => 'Work.',
       source: 'projectSettings',
+      ...(params.agentEffort !== undefined ? { effort: params.agentEffort } : {}),
     } as never,
     promptMessages: [params.prompt],
-    toolUseContext: parentContext(),
+    toolUseContext: parentContext(params.sessionEffort),
     canUseTool: (async () => ({ behavior: 'allow' })) as never,
     isAsync: true,
     forkContextMessages: params.context,
@@ -243,6 +247,7 @@ describe('a teammate transcript kept across runs', () => {
 
     expect(await readAgentMetadata(AGENT_ID)).toEqual({
       agentType: 'worker',
+      effort: null,
       taskKind: 'in_process_teammate',
       teamName: 'team',
       name: 'worker',
@@ -250,5 +255,26 @@ describe('a teammate transcript kept across runs', () => {
       planModeRequired: false,
       permissionMode: 'default',
     })
+  })
+
+  test('records the effort the run launched with', async () => {
+    const launch = async (efforts: { agentEffort?: EffortValue; sessionEffort?: EffortValue }) => {
+      await runTurn({
+        prompt: createUserMessage({ content: 'Start' }),
+        answer: createAssistantMessage({ content: 'Started.' }),
+        recordedUuids: new Set(),
+        ...efforts,
+      })
+      await Promise.all(metadataWrites)
+      return (await readAgentMetadata(AGENT_ID))?.effort
+    }
+
+    // An Agent's pinned effort wins over the session's.
+    expect(await launch({ agentEffort: 'max', sessionEffort: 'low' })).toBe('max')
+    // Without one, the run inherits the session's.
+    expect(await launch({ sessionEffort: 'low' })).toBe('low')
+    // Neither: the model's own default, recorded as an explicit null so it is
+    // distinguishable from metadata written before effort was recorded.
+    expect(await launch({})).toBeNull()
   })
 })
