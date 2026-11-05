@@ -113,4 +113,33 @@ describe('MCP connection ownership', () => {
     await clearServerCache(name, config)
     expect(closed).not.toHaveBeenCalled()
   })
+
+  // `scope` records where a definition came from, not what the connection is, so
+  // it must not be part of the connection's identity. When it was, a reconnect
+  // that resolved the config through `getMcpConfigByName` (file-scoped) could not
+  // clear the entry cached under `scope:'dynamic'`, and the old connection — with
+  // its child process — stayed alive.
+  test('a clear with a differing scope still closes the same connection', async () => {
+    spyOn(Client.prototype, 'connect').mockResolvedValue(undefined)
+    const dynamic = { ...config, scope: 'dynamic' as const }
+    const fileScoped = { ...config, scope: 'user' as const }
+    expect(getServerCacheKey(name, dynamic)).toBe(getServerCacheKey(name, fileScoped))
+
+    const active = await connect()
+    let closed = 0
+    active.client.close = async () => { closed += 1; active.client.onclose?.() }
+
+    await clearServerCache(name, fileScoped)
+    expect(closed).toBe(1)
+    expect(connectToServer.cache.has(getServerCacheKey(name, dynamic))).toBe(false)
+  })
+
+  test('same-name definitions in different scopes share one connection', async () => {
+    spyOn(Client.prototype, 'connect').mockResolvedValue(undefined)
+    const dynamic = { ...config, scope: 'dynamic' as const }
+    const fileScoped = { ...config, scope: 'project' as const }
+    const first = await connectToServer(name, dynamic)
+    const second = await connectToServer(name, fileScoped)
+    expect(second === first).toBe(true)
+  })
 })
