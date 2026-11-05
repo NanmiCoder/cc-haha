@@ -8,7 +8,7 @@ import {
   suggestPathUnderCwd,
 } from '../../utils/file.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
-import { glob } from '../../utils/glob.js'
+import { glob, resolveGlobSearch } from '../../utils/glob.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { expandPath, toRelativePath } from '../../utils/path.js'
 import { checkReadPermissionForTool } from '../../utils/permissions/filesystem.js'
@@ -85,8 +85,8 @@ export const GlobTool = buildTool({
   isSearchOrReadCommand() {
     return { isSearch: true, isRead: false }
   },
-  getPath({ path }): string {
-    return path ? expandPath(path) : getCwd()
+  getPath({ pattern, path }): string {
+    return resolveGlobSearch(pattern, path ? expandPath(path) : getCwd()).searchDir
   },
   async preparePermissionMatcher({ pattern }) {
     return rulePattern => matchWildcardPattern(rulePattern, pattern)

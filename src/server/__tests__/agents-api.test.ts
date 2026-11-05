@@ -1224,7 +1224,7 @@ describe('Agents API Markdown CRUD', () => {
       '---\nname: escaped-user\ndescription: Outside user agent\n---\nOutside user prompt.\n'
     await fs.mkdir(outsideUserAgents, { recursive: true })
     await fs.writeFile(outsideUserFile, outsideUserContent, 'utf-8')
-    await fs.symlink(outsideUserAgents, path.join(configDir, 'agents'))
+    await fs.symlink(outsideUserAgents, path.join(configDir, 'agents'), process.platform === 'win32' ? 'junction' : 'dir')
 
     const userCreate = await api('POST', '/api/agents', {
       scope: 'user',
@@ -1284,6 +1284,7 @@ describe('Agents API Markdown CRUD', () => {
     await fs.symlink(
       outsideProjectAgents,
       path.join(projectRoot, '.claude', 'agents'),
+      process.platform === 'win32' ? 'junction' : 'dir',
     )
 
     const projectCreate = await api('POST', '/api/agents', {
@@ -1347,7 +1348,7 @@ describe('Agents API Markdown CRUD', () => {
     await fs.mkdir(path.join(ancestorProjectRoot, '.git'), { recursive: true })
     await fs.mkdir(ancestorProjectCwd, { recursive: true })
     await fs.mkdir(path.join(outsideClaudeDir, 'agents'), { recursive: true })
-    await fs.symlink(outsideClaudeDir, path.join(ancestorProjectRoot, '.claude'))
+    await fs.symlink(outsideClaudeDir, path.join(ancestorProjectRoot, '.claude'), process.platform === 'win32' ? 'junction' : 'dir')
     const ancestorCreate = await api('POST', '/api/agents', {
       scope: 'project',
       cwd: ancestorProjectCwd,
@@ -1690,7 +1691,13 @@ describe('Agents API Markdown CRUD', () => {
       '---\nname: linked-agent\ndescription: Outside\n---\nPrompt',
       'utf-8',
     )
-    await fs.symlink(outsideFile, path.join(agentsDir, 'linked-agent.md'))
+    // Junctions exercise the same final reparse-point guard on Windows without
+    // requiring the OS privilege needed to create file symlinks.
+    await fs.symlink(
+      process.platform === 'win32' ? tempRoot : outsideFile,
+      path.join(agentsDir, 'linked-agent.md'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
     const linkedUpdate = await api('PUT', '/api/agents/linked-agent', {
       scope: 'user',
       cwd: projectCwd,

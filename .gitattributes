@@ -1,0 +1,5 @@
+# The generated catalog is verified byte-for-byte against its LF serializer.
+src/server/services/market/catalog/skills.json text eol=lf
+
+# Preserve the vendored source bytes checked against UPSTREAM.json on Windows.
+native/agent-desktop/** text=auto eol=lf

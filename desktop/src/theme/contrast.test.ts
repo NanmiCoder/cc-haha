@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import css from './globals.css?raw'
+import rawCss from './globals.css?raw'
+
+const css = rawCss.replace(/\r\n/g, '\n')
 
 /**
  * Contrast guard for the status palette.

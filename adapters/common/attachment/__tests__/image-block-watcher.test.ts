@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import { ImageBlockWatcher } from '../image-block-watcher.js'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
 
 describe('ImageBlockWatcher', () => {
   it('extracts a markdown image with an http URL for policy-checked loading', () => {
@@ -34,10 +36,13 @@ describe('ImageBlockWatcher', () => {
 
   it('extracts a markdown image with file:// URL as path', () => {
     const w = new ImageBlockWatcher()
-    const out = w.feed('![x](file:///var/img/x.png)')
+    const imagePath = resolve('fixture images', '图.png')
+    const out = w.feed(`![x](${pathToFileURL(imagePath).href})`)
     const source = out[0]!.source
     expect(source.kind).toBe('path')
-    if (source.kind === 'path') expect(source.path).toBe('/var/img/x.png')
+    if (source.kind === 'path') expect(source.path).toBe(imagePath)
+    expect(w.feed('![bad](file:///bad%ZZimage.png)')).toEqual([])
+    expect(w.feed('![bad](file:///bad%2fimage.png)')).toEqual([])
   })
 
   it('extracts a data URI as base64', () => {

@@ -272,7 +272,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
 
 async function dispatchOutboundMedia(chatId: string, pending: PendingUpload): Promise<void> {
   try {
-    const { buffer, mime } = await materializePendingUploadImage(pending.source)
+    const { buffer, mime } = await materializePendingUploadImage(pending.source, sessionStore.get(chatId)?.workDir)
     const check = checkAttachmentLimit('image', buffer.length, mime)
     if (!check.ok) {
       console.warn('[WhatsApp] Outbound image rejected:', check.hint)

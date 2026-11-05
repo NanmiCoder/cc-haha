@@ -491,7 +491,13 @@ describe('agent file paths and persistence', () => {
     )
     await fs.mkdir(agentsDir, { recursive: true })
     await fs.writeFile(outsideFile, originalContent, 'utf-8')
-    await fs.symlink(outsideFile, symlinkFile)
+    if (process.platform === 'win32') {
+      // Junctions exercise the same final-reparse-point rejection without
+      // requiring the machine-wide privilege for creating file symlinks.
+      await fs.symlink(temporaryRoot, symlinkFile, 'junction')
+    } else {
+      await fs.symlink(outsideFile, symlinkFile)
+    }
     const agent: CustomAgentDefinition = {
       agentType: 'linked-agent',
       whenToUse: 'Original outside description',
@@ -530,7 +536,7 @@ describe('agent file paths and persistence', () => {
     await fs.mkdir(agentsDir, { recursive: true })
     await fs.mkdir(outsideDir, { recursive: true })
     await fs.writeFile(outsideFile, originalContent, 'utf-8')
-    await fs.symlink(outsideDir, linkedDirectory)
+    await fs.symlink(outsideDir, linkedDirectory, process.platform === 'win32' ? 'junction' : 'dir')
     const agent: CustomAgentDefinition = {
       agentType: 'nested-agent',
       whenToUse: 'Original outside description',

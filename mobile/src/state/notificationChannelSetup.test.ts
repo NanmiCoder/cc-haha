@@ -13,7 +13,7 @@ test('importance numbers match the installed expo-notifications AndroidImportanc
     new URL(
       '../../node_modules/expo-notifications/build/NotificationChannelManager.types.d.ts',
       import.meta.url
-    ).pathname
+    )
   ).text()
   const value = (name: string) =>
     Number(new RegExp(`\\b${name} = (\\d+)`).exec(text)?.[1])

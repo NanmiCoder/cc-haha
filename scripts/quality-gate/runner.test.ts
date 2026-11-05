@@ -2,10 +2,27 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testBashPath } from '../pr/test-shell'
 import { currentPackageSmokeArch, currentPackageSmokePlatform, currentReleaseArtifactsDir, lanesForMode } from './modes'
 import { renderJUnitReport, renderMarkdownReport } from './reporter'
-import { runQualityGate, runQualityGateLanes } from './runner'
+import { commandLaneEnvironment, runQualityGate, runQualityGateLanes } from './runner'
 import type { LaneDefinition, QualityGateReport } from './types'
+
+describe('command lane environment', () => {
+  test('keeps every unique Windows search directory in its first position without changing other variables', () => {
+    const source = { Path: 'C:\\first;C:\\with spaces;;C:\\last;C:\\first;;C:\\last', PATHEXT: '.EXE;.CMD', HOME: 'C:\\fixture-home' }
+    const environment = commandLaneEnvironment(source, 'win32')
+    expect(environment).toEqual({ ...source, Path: 'C:\\first;C:\\with spaces;;C:\\last' })
+    expect(source.Path).toBe('C:\\first;C:\\with spaces;;C:\\last;C:\\first;;C:\\last')
+    expect(commandLaneEnvironment({ HOME: 'C:\\fixture-home' }, 'win32')).toEqual({ HOME: 'C:\\fixture-home' })
+  })
+
+  test('leaves non-Windows search paths and case-sensitive variables unchanged', () => {
+    const source = { PATH: '/first:/second:/first', Path: 'literal;value;literal', HOME: '/fixture-home' }
+    expect(commandLaneEnvironment(source, 'linux')).toEqual(source)
+    expect(commandLaneEnvironment(source, 'darwin')).toEqual(source)
+  })
+})
 
 describe('quality gate modes', () => {
   test('pr mode includes existing path-aware PR checks', () => {
@@ -250,6 +267,49 @@ describe('runQualityGate', () => {
     }
   })
 
+  test.skipIf(process.platform !== 'win32')('command lanes find tools after nested package scripts repeat PATH entries', async () => {
+    const artifactsDir = mkdtempSync(join(tmpdir(), 'quality-gate-path-'))
+    const firstTools = join(artifactsDir, 'first tools')
+    const secondTools = join(artifactsDir, 'second tools')
+    mkdirSync(firstTools)
+    mkdirSync(secondTools)
+    writeFileSync(join(firstTools, 'quality-path-tool.cmd'), '@echo selected-first\r\n')
+    writeFileSync(join(secondTools, 'quality-path-tool.cmd'), '@echo selected-second\r\n')
+    const originalPath = process.env.PATH
+    try {
+      // bun run and npm run each prepend ancestor .bin directories. Reach the
+      // cmd.exe limit even when the host has a short TEMP directory and PATH.
+      const basePath = [firstTools, secondTools, originalPath].join(';')
+      const repeats = Math.max(0, Math.ceil((9000 - basePath.length) / (firstTools.length + 1)))
+      process.env.PATH = [firstTools, secondTools, ...Array(repeats).fill(firstTools), originalPath].join(';')
+      expect(process.env.PATH.length).toBeGreaterThan(8191)
+      const { report } = await runQualityGateLanes({
+        mode: 'pr',
+        dryRun: false,
+        allowLive: false,
+        baselineTargets: [],
+        rootDir: artifactsDir,
+        artifactsDir,
+        runId: 'repeated-command-path',
+      }, [{
+        id: 'path-tool',
+        title: 'Path tool',
+        description: 'Finds the first installed command',
+        kind: 'command',
+        command: [process.env.COMSPEC!, '/d', '/s', '/c', 'quality-path-tool'],
+        requiredForModes: ['pr'],
+      }])
+      expect(report.results[0].status).toBe('passed')
+      const log = readFileSync(report.results[0].logPath!, 'utf8')
+      expect(log).toContain('selected-first')
+      expect(log).not.toContain('selected-second')
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH
+      else process.env.PATH = originalPath
+      rmSync(artifactsDir, { recursive: true, force: true })
+    }
+  })
+
   test('skips PR local check lanes when the impact report does not require them', async () => {
     const artifactsDir = mkdtempSync(join(tmpdir(), 'quality-gate-test-'))
     const lanes: LaneDefinition[] = [
@@ -258,7 +318,7 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes selected local checks',
         kind: 'command',
-        command: ['bash', '-lc', [
+        command: [testBashPath(), '-lc', [
           'printf "%s\\n"',
           '"# PR impact report"',
           '""',
@@ -277,7 +337,7 @@ describe('runQualityGate', () => {
         title: 'Desktop checks',
         description: 'Should be skipped',
         kind: 'command',
-        command: ['bash', '-lc', 'exit 7'],
+        command: [testBashPath(), '-lc', 'exit 7'],
         impactRequiredCheck: 'bun run check:desktop',
         requiredForModes: ['pr'],
       },
@@ -309,7 +369,7 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes selected local checks',
         kind: 'command',
-        command: ['bash', '-lc', [
+        command: [testBashPath(), '-lc', [
           'printf "%s\\n"',
           '"# PR impact report"',
           '""',
@@ -328,7 +388,7 @@ describe('runQualityGate', () => {
         title: 'Desktop checks',
         description: 'Should run',
         kind: 'command',
-        command: ['bash', '-lc', 'exit 0'],
+        command: [testBashPath(), '-lc', 'exit 0'],
         impactRequiredCheck: 'bun run check:desktop',
         requiredForModes: ['pr'],
       },
@@ -455,7 +515,7 @@ describe('runQualityGate', () => {
         title: 'Impact report',
         description: 'Writes a blocked policy decision',
         kind: 'command',
-        command: ['bash', '-lc', [
+        command: [testBashPath(), '-lc', [
           'printf "%s\\n"',
           '"# PR impact report"',
           '""',

@@ -664,12 +664,19 @@ function isTraceRecord(value: unknown): value is TraceJsonRecord {
  * re-open the index database and hold a file handle past the temp dir
  * removal on Windows.
  */
-export async function drainTraceCaptureForTests(): Promise<void> {
+async function drainTraceCapture(): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
     const pending = [...traceWriteQueues.values(), ...[...projectionJobs.values()].map(job => job.promise)]
     if (pending.length === 0 && traceBackfillScheduled.size === 0) return
     await Promise.allSettled([...pending, traceBackfillQueue])
   }
+}
+export const drainTraceCaptureForTests = drainTraceCapture
+
+/** Finish queued writes before releasing SQLite handles during server shutdown. */
+export async function stopTraceCapture(): Promise<void> {
+  await drainTraceCapture()
+  closeTraceIndexes()
 }
 export function clearTraceCaptureStateForTests(): void {
   traceWriteQueues.clear()

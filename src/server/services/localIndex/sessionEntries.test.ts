@@ -506,7 +506,7 @@ describe('targeted session entry reads', () => {
       })).toBeNull()
 
       const link = join(root, 'projects', '-tmp-project', 'linked.jsonl')
-      await symlink(outside, link)
+      await symlink(process.platform === 'win32' ? root : outside, link, process.platform === 'win32' ? 'junction' : 'file')
       expect(await readSessionEntriesByLocator({
         transcriptPath: link,
         projectsRoot: join(root, 'projects'),

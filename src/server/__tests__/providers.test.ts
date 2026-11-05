@@ -6,10 +6,11 @@ import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
+import { removeTestDirectory } from '../../../scripts/pr/test-environment.js'
 import { ProviderService } from '../services/providerService.js'
 import { readActiveProviderManagedEnv } from '../services/providerRuntimeEnv.js'
 import { handleProvidersApi } from '../api/providers.js'
-import { handleProxyRequest } from '../proxy/handler.js'
+import { drainProxyTraces, handleProxyRequest } from '../proxy/handler.js'
 import { resetOpenAIChatImageSupportForTests } from '../proxy/openaiChatImageSupport.js'
 import { resetOpenAIChatReasoningFieldSupportForTests } from '../proxy/openaiChatReasoningFieldSupport.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
@@ -41,6 +42,7 @@ async function setup() {
 }
 
 async function teardown() {
+  await drainProxyTraces()
   await drainTraceCaptureForTests()
   clearTraceCaptureStateForTests()
   // Diagnostics resolve their path when the queued write runs; flush them
@@ -56,18 +58,7 @@ async function teardown() {
   } else {
     delete process.env.HOME
   }
-  // The background trace projection may still hold a handle briefly (first
-  // index builds are slower); retry the removal instead of failing the test
-  // on Windows.
-  for (let attempt = 0; attempt < 60; attempt++) {
-    try {
-      await fs.rm(tmpDir, { recursive: true, force: true })
-      return
-    } catch {
-      await new Promise(resolve => setTimeout(resolve, 25))
-    }
-  }
-  await fs.rm(tmpDir, { recursive: true, force: true })
+  removeTestDirectory(tmpDir)
 }
 
 /** Create a mock Request */

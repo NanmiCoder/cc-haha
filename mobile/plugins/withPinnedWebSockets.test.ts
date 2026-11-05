@@ -6,7 +6,7 @@ const { pinWebSockets } = require('./withPinnedWebSockets')
 const template = readFileSync(
   new URL('./__fixtures__/MainApplication.kt', import.meta.url),
   'utf8'
-)
+).replace(/\r\n/g, '\n')
 const moduleImport =
   'import com.facebook.react.modules.websocket.WebSocketModule'
 

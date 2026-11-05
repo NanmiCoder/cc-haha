@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment'
+import { testBashPath, testShellPath } from '../../scripts/pr/test-shell'
 
 const fixtures: string[] = []
 
@@ -34,11 +36,20 @@ async function pickDmg(machine: string, dmgNames: string[]): Promise<string | un
   await writeExecutable(path.join(fakeBin, 'uname'), `#!/bin/sh\necho ${machine}\n`)
   await writeExecutable(path.join(fakeBin, 'xattr'), '#!/bin/sh\nexit 0\n')
   await writeExecutable(path.join(fakeBin, 'hdiutil'), '#!/bin/sh\nexit 1\n')
+  const shellEnvironment = path.join(root, 'fake-command-env.sh')
+  await writeFile(shellEnvironment, ['uname', 'xattr', 'hdiutil']
+    .map(command => `${command}() ( source "\${TEST_FAKE_BIN_DIR}/${command}" "$@" )`)
+    .join('\n'), 'utf8')
 
-  const result = spawnSync('bash', [script], {
-    env: { PATH: `${fakeBin}:/usr/bin:/bin`, HOME: root },
+  const result = spawnSync(testBashPath(), [testShellPath(script)], {
+    env: createSandboxedTestEnvironment(root, {
+      PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+      BASH_ENV: testShellPath(shellEnvironment),
+      TEST_FAKE_BIN_DIR: testShellPath(fakeBin),
+    }),
     encoding: 'utf8',
   })
+  expect(result.error).toBeUndefined()
   expect(result.status).not.toBe(0)
   const chosen = result.stdout.match(/^Using DMG: (.+)$/m)?.[1]
   return chosen ? path.basename(chosen) : undefined

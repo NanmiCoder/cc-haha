@@ -371,6 +371,7 @@ describe('evaluateChangePolicy', () => {
     expect(result.blocked).toBe(false)
   })
 
+  // The real CLI scans the repository's dependency graph, including on Windows.
   test('plan-only mode publishes a blocked scope without preventing product jobs', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'change-policy-plan-'))
     try {
@@ -404,7 +405,7 @@ describe('evaluateChangePolicy', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })
 
 describe('change-policy NUL-delimited Git paths', () => {
@@ -494,7 +495,7 @@ describe('change-policy CLI owner exemption', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })
 
 describe('evaluateChangePolicy dependent-file widening', () => {

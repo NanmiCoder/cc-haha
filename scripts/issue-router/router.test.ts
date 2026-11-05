@@ -7,6 +7,8 @@ import { fixture, now, timestamp, createdSince, discovery, cli, session, head, b
 import { execute } from './router'
 import { resolveLayout } from './git'
 
+// These integration scenarios launch many real Git processes; Windows process
+// startup can exceed Bun's five-second unit-test default. Keep a bounded budget.
 const fixtures: ReturnType<typeof fixture>[] = []
 function setup(numbers = [1, 2, 3], separate = false) {
   const f = fixture(separate)
@@ -21,7 +23,7 @@ const failure = (fn: () => unknown, message: string) => expect(fn).toThrow(messa
 describe('shared repository identity', () => {
   for (const separate of [false, true]) test(`linked worktrees share the primary database (separate=${separate})`, () => {
     const f = setup([1], separate)
-    const linked = join(f.root, 'linked 空间\nworktree')
+    const linked = join(f.root, process.platform === 'win32' ? 'linked 空间 worktree' : 'linked 空间\nworktree')
     f.git('worktree', 'add', '--detach', linked, 'HEAD')
     expect(resolveLayout(linked)).toEqual(f.layout())
     f.enqueue(1)
@@ -30,7 +32,7 @@ describe('shared repository identity', () => {
     mkdirSync(join(f.layout().stateRoot, 'reports'))
     writeFileSync(join(f.layout().stateRoot, 'reports', 'result.json'), '{}')
     expect(f.git('status', '--short')).toBe('')
-  })
+  }, 60_000)
 
   test('unavailable primary never falls back to the linked worktree', () => {
     const f = setup([1])
@@ -39,7 +41,7 @@ describe('shared repository identity', () => {
     rmSync(f.primary, { recursive: true })
     failure(() => resolveLayout(linked), 'Cannot read Git metadata')
     expect(existsSync(join(linked, '.issue-router'))).toBe(false)
-  })
+  }, 60_000)
 
   test('explicit shared exclude preserves bytes and does not edit primary sources', () => {
     const f = fixture(true)
@@ -56,7 +58,7 @@ describe('shared repository identity', () => {
     expect(installed).toBe('# keep existing\nexisting-pattern\n/.issue-router/\n')
     f.init()
     expect(f.git('status', '--short')).toBe(before)
-  })
+  }, 60_000)
 })
 
 describe('queue, owner and external dispatch', () => {
@@ -95,7 +97,7 @@ describe('queue, owner and external dispatch', () => {
     f.call({ command: 'observe', scan_id: 'backfill', cursor_before: 'c3', cursor_after: 'c4', complete: true,
       candidates: [{ ...candidates[3], created_at: createdSince }] })
     expect(f.claim(13).run.issue_number).toBe(13)
-  })
+  }, 60_000)
 
   test('reopen admits a fifth issue in the same module while respecting its creation boundary', () => {
     const f = setup([1, 2, 3, 4, 5])
@@ -115,7 +117,7 @@ describe('queue, owner and external dispatch', () => {
     db.close()
     expect(f.call(reopen).generation).toBe(2)
     expect(f.call({ command: 'status' }).runs).toHaveLength(5)
-  })
+  }, 60_000)
 
   test('parallel issues still cannot share an active session, worktree or PR', () => {
     const f = setup([1, 2])
@@ -130,7 +132,7 @@ describe('queue, owner and external dispatch', () => {
     failure(() => claim(2, other, '/fixture/shared', 102), 'UNIQUE constraint failed: runs.worktree')
     failure(() => claim(2, other, '/fixture/other', 101), 'UNIQUE constraint failed: runs.pr_number')
     expect(f.call({ command: 'status' }).runs).toHaveLength(1)
-  })
+  }, 60_000)
 
   test('baseline is mandatory and never queues historical issues', () => {
     const f = fixture()
@@ -145,7 +147,7 @@ describe('queue, owner and external dispatch', () => {
     expect(claimed.action.kind).toBe('create')
     expect(claimed.action.payload.marker).toContain(claimed.run.run_id)
     failure(() => f.claim(1), 'Issue is not queued')
-  })
+  }, 60_000)
 
   test('different issues in the same module all receive owners without development slots', () => {
     const f = setup()
@@ -159,7 +161,7 @@ describe('queue, owner and external dispatch', () => {
     expect(state.runs).toHaveLength(3)
     expect(state.issues.find((issue: any) => issue.number === 2)).toMatchObject({ queue_state: 'active', modules: '["desktop","server"]' })
     expect(state.resources).toHaveLength(0)
-  })
+  }, 60_000)
 
   test('sending CAS, unknown creation and expired leases never reopen ownership', () => {
     const f = setup()
@@ -180,7 +182,7 @@ describe('queue, owner and external dispatch', () => {
     f.call({ command: 'reconcile', ...claimed.token, action_key: claimed.action.action_key, outcome: 'found', reference: 'fixture://found', session, worktree: '/fixture' })
     expect(f.call({ command: 'status' }).runs[0].session).toEqual(session)
     expect(f.call({ command: 'status' }).actions).toHaveLength(0)
-  })
+  }, 60_000)
 
   test('incremental candidates and cursor recover atomically, idempotent resume stays on original session', () => {
     const f = setup([1])
@@ -208,7 +210,7 @@ describe('queue, owner and external dispatch', () => {
     f.call({ command: 'dispatch-start', ...claimed.token, action_key: resume.action_key, sender: 'sender' })
     f.call({ command: 'ack', ...claimed.token, action_key: resume.action_key, sender: 'sender', reference: 'fixture://delivered' })
     expect(f.call({ command: 'status' }).issues[0].delivered).toBe('fp-new')
-  })
+  }, 60_000)
 
   test('handoff invalidates late owners, retains shared resources and rejects unresolved external writes', () => {
     const f = setup([1])
@@ -228,7 +230,7 @@ describe('queue, owner and external dispatch', () => {
     f.call({ command: 'progress', ...token, phase: 'ci', next_step: 'wait CI', reference: 'fixture://ci' })
     expect(f.call({ command: 'status' }).resources).toEqual([{ name: 'desktop-smoke', run_id, generation: 2 }])
     failure(() => f.call({ command: 'dispatch-start', ...token, action_key: claimed.action.action_key, sender: 'new-sender' }), 'another run/generation')
-  })
+  }, 60_000)
 
   test('existing execution is adopted and its PR/branch remain stable', () => {
     const f = setup([1])
@@ -240,7 +242,7 @@ describe('queue, owner and external dispatch', () => {
     expect(result.run.pr_number).toBe(50)
     const token = { run_id: result.run.run_id, owner: 'owner', generation: 1 }
     failure(() => f.call({ command: 'record-pr', ...token, ...provenance, head, base, number: 51, state: 'open', url: 'https://example.invalid/pr/51', branch: 'fix/issue-1-fixture' }), 'stable branch and original PR')
-  })
+  }, 60_000)
 
   test('PR objects, duplicate coverage, closed issues and stale scans cannot create work', () => {
     const f = setup()
@@ -254,7 +256,7 @@ describe('queue, owner and external dispatch', () => {
     failure(() => f.enqueue(4), 'Unknown issue')
     failure(() => f.observe([5], false, 'c3', 'c1'), 'Another scan advanced')
     failure(() => f.call({ command: 'observe', scan_id: 'incomplete', cursor_before: 'c2', cursor_after: 'c3', complete: false, candidates: [] }), 'Invalid input')
-  })
+  }, 60_000)
 })
 
 describe('version-bound merge gate', () => {
@@ -289,7 +291,7 @@ describe('version-bound merge gate', () => {
     f.call({ command: 'record-pr', ...claimed.token, ...provenance, observed_at: new Date(now + 2000).toISOString(), head: 'd'.repeat(40), base, number: 101, state: 'open', url: 'https://example.invalid/pr/101', branch: claimed.run.branch })
     failure(() => f.call({ command: 'dispatch-start', ...claimed.token, action_key: acquired.action.action_key, sender: 'sender' }), 'Only pending actions')
     failure(() => f.acquire(claimed.token, { head: 'd'.repeat(40), base }), 'Missing validation')
-  })
+  }, 60_000)
 
   test('desktop smoke resources serialize between running issues', () => {
     const f = setup([1, 2])
@@ -302,7 +304,7 @@ describe('version-bound merge gate', () => {
     failure(() => f.call({ command: 'smoke-acquire', ...second.token }), 'Resource desktop-smoke')
     f.call({ command: 'smoke-release', ...first.token })
     f.call({ command: 'smoke-acquire', ...second.token })
-  })
+  }, 60_000)
 
   test('merge resources serialize and completion requires verified outcome', () => {
     const f = setup([1, 2])
@@ -320,7 +322,7 @@ describe('version-bound merge gate', () => {
     f.call(complete)
     expect(f.call({ command: 'status' }).runs).toHaveLength(1)
     expect(f.call({ command: 'status' }).main_head).toBe(mergeSha)
-  })
+  }, 60_000)
 
   test('an advanced main requires fresh evidence before the next merge', () => {
     const f = setup([2])
@@ -332,7 +334,7 @@ describe('version-bound merge gate', () => {
     failure(() => f.acquire(claimed.token), 'Main advanced')
     f.evidence(claimed.token, 102, { head, base: mergeSha })
     expect(f.acquire(claimed.token, { head, base: mergeSha }).resource).toBe('main-merge')
-  })
+  }, 60_000)
 })
 
 describe('real CLI and independent processes', () => {
@@ -352,7 +354,7 @@ describe('real CLI and independent processes', () => {
     expect(corrupt.output.ok).toBe(false)
     expect(readFileSync(f.layout().database, 'utf8')).toBe('not sqlite')
     expect(run('nonsense').output.error.code).toBe('input')
-  })
+  }, 60_000)
 
   test('same issue stays unique while five different issues in one module all claim through parallel CLI connections', async () => {
     const f = setup([1, 2, 3, 4, 5, 6])

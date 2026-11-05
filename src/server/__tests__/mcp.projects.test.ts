@@ -9,6 +9,7 @@ import { _setGlobalConfigCacheForTesting, getProjectPathForConfig } from '../../
 import * as configUtils from '../../utils/config.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { getGlobalClaudeFile } from '../../utils/env.js'
+import { normalizePathForConfigKey } from '../../utils/path.js'
 import { handleMcpApi } from '../api/mcp.js'
 import * as mcpHostPreflight from '../services/mcpHostPreflight.js'
 
@@ -40,7 +41,8 @@ async function project(name: string, contents?: unknown) {
   const dir = path.join(fixture, name)
   await fs.mkdir(dir, { recursive: true })
   if (contents !== undefined) await fs.writeFile(path.join(dir, '.mcp.json'), JSON.stringify(contents, null, 2))
-  return dir
+  // Project API identities use the same portable spelling as config keys.
+  return normalizePathForConfigKey(dir)
 }
 
 async function read(dir: string) {
@@ -112,6 +114,8 @@ describe('MCP project sharing API', () => {
     const source = await project('source', { mcpServers: { shared: { ...config, futureField: { keep: true }, oauth: { xaa: true, futureOAuth: 'kept' } } } })
     const destination = await project('destination', { inputs: [{ id: 'kept' }], mcpServers: { sibling: { command: 'node', env: { TOKEN: '${OTHER_TOKEN}' }, futureSibling: true } } })
     await fs.chmod(path.join(destination, '.mcp.json'), 0o600)
+    const originalMode = (await fs.stat(path.join(destination, '.mcp.json'))).mode & 0o777
+    expect(originalMode).toBe(process.platform === 'win32' ? 0o666 : 0o600)
     const snapshot = await preview([source, destination], source)
     const states = snapshot.body.projects as ProjectState[]
     const save = await request('PUT', '/api/mcp/shared/projects', { sourceCwd: source, config, targets: states.map(state => target(state, true)) })
@@ -122,7 +126,8 @@ describe('MCP project sharing API', () => {
     expect(persisted.inputs).toEqual([{ id: 'kept' }])
     expect(persisted.mcpServers.shared).toMatchObject({ ...config, futureField: { keep: true }, oauth: { xaa: true, futureOAuth: 'kept' } })
     expect(persisted.mcpServers.sibling).toEqual({ command: 'node', env: { TOKEN: '${OTHER_TOKEN}' }, futureSibling: true })
-    expect((await fs.stat(path.join(destination, '.mcp.json'))).mode & 0o777).toBe(0o600)
+    // NTFS does not expose Unix permission bits; preserve the mode the host set.
+    expect((await fs.stat(path.join(destination, '.mcp.json'))).mode & 0o777).toBe(originalMode)
     const global = JSON.parse(await fs.readFile(getGlobalClaudeFile(), 'utf8'))
     expect(Object.keys(global.projects ?? {})).toEqual(expect.arrayContaining([source, destination]))
   })
@@ -176,7 +181,7 @@ describe('MCP project sharing API', () => {
   it('rejects directory aliases in one mutation without applying conflicting duplicate targets', async () => {
     const destination = await project('destination')
     const alias = path.join(fixture, 'alias')
-    await fs.symlink(destination, alias, 'dir')
+    await fs.symlink(destination, alias, process.platform === 'win32' ? 'junction' : 'dir')
     const states = (await preview([destination, alias])).body.projects as ProjectState[]
     expect(states).toHaveLength(1)
     const aliasPreview = (await preview([alias])).body.projects as ProjectState[]
@@ -405,7 +410,7 @@ describe('MCP project sharing API', () => {
   it('reuses a physical registry alias and exposes one project identity through API list contexts', async () => {
     const destination = await project('physical', { mcpServers: { shared: config } })
     const alias = path.join(fixture, 'alias')
-    await fs.symlink(destination, alias, 'dir')
+    await fs.symlink(destination, alias, process.platform === 'win32' ? 'junction' : 'dir')
     await fs.writeFile(getGlobalClaudeFile(), JSON.stringify({ futureGlobal: true, projects: { [alias]: { futureProject: true } } }))
     const initial = (await preview([destination], destination)).body
     const save = await request('PUT', '/api/mcp/shared/projects', { config, sourceCwd: destination, sourceConfig: initial.sourceConfig, targets: [target(initial.projects[0], true)] })

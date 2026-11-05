@@ -25,6 +25,19 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
 }
 
+/** Git trees can contain POSIX names that Windows cannot materialize. */
+function writeIndexFile(repoDir: string, name: string, content: string): void {
+  // Only this disposable index accepts such paths; never check them out.
+  git(repoDir, 'config', 'core.protectNTFS', 'false')
+  const oid = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    cwd: repoDir, input: content, encoding: 'utf8',
+  }).trim()
+  execFileSync('git', ['update-index', '-z', '--index-info'], {
+    cwd: repoDir, input: `100644 ${oid}\t${name}\0`,
+  })
+  expect(execFileSync('git', ['show', `:${name}`], { cwd: repoDir })).toEqual(Buffer.from(content))
+}
+
 function tryGit(cwd: string, ...args: string[]): void {
   try {
     git(cwd, ...args)
@@ -40,6 +53,8 @@ async function initRepo(prefix = 'review-service-'): Promise<string> {
   git(repoDir, 'config', 'user.email', 'review-service@example.com')
   git(repoDir, 'config', 'user.name', 'Review Service')
   git(repoDir, 'config', 'commit.gpgsign', 'false')
+  // Fixtures assert exact bytes, independent of the host's Git installation.
+  git(repoDir, 'config', 'core.autocrlf', 'false')
   git(repoDir, 'checkout', '-q', '-b', 'main')
   return repoDir
 }
@@ -889,6 +904,24 @@ describe('ReviewService pathspec literalness', () => {
 
   it('reaches a file whose name starts with the pathspec magic prefix', async () => {
     const repoDir = await initRepo('review-colon-')
+    if (process.platform === 'win32') {
+      // A literal colon cannot name a Windows file. Exercise the same literal
+      // pathspec boundary against real index entries instead of a fake file.
+      writeIndexFile(repoDir, ':colon.txt', 'base\n')
+      writeIndexFile(repoDir, 'colon.txt', 'base\n')
+      git(repoDir, 'commit', '-m', 'initial')
+      writeIndexFile(repoDir, ':colon.txt', 'edited\n')
+      writeIndexFile(repoDir, 'colon.txt', 'keep edited\n')
+      const service = makeService(repoDir)
+      const status = await service.getStatus(SESSION, STAGED)
+      const result = await service.unstage(SESSION, {
+        paths: [':colon.txt'], snapshot: status.snapshot, source: STAGED,
+      })
+      expect(result.results[0]).toMatchObject({ path: ':colon.txt', ok: true })
+      expect(git(repoDir, 'show', '::colon.txt')).toBe('base\n')
+      expect(git(repoDir, 'show', ':colon.txt')).toBe('keep edited\n')
+      return
+    }
     await write(repoDir, 'colon.txt', 'base\n')
     git(repoDir, 'add', '-A')
     git(repoDir, 'commit', '-m', 'initial')
@@ -1033,8 +1066,12 @@ describe('ReviewService symlink containment', () => {
       path.join(repoDir, '.git', 'config'),
       '\n[credential]\n\thelper = store\n[remote "origin"]\n\turl = https://token:s3cr3t@example.com/x.git\n',
     )
-    await fs.symlink('.git', path.join(repoDir, 'meta'))
-    await fs.symlink('tracked.txt', path.join(repoDir, 'link.txt'))
+    await fs.symlink(path.join(repoDir, '.git'), path.join(repoDir, 'meta'), process.platform === 'win32' ? 'junction' : 'dir')
+    await fs.symlink(
+      process.platform === 'win32' ? repoDir : path.join(repoDir, 'tracked.txt'),
+      path.join(repoDir, 'link.txt'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
 
     return { repoDir, backupRoot: await makeTempDir('review-symlink-backup-') }
   }
@@ -1412,8 +1449,25 @@ describe('ReviewService wildcard filenames', () => {
    * the other two wildmatch characters, and they are the ones that make a
    * single pathspec match an unbounded number of siblings.
    */
-  it('reverts only the star- and question-named files it was given', async () => {
+  it('keeps star- and question-mark pathspec operations limited to the named files', async () => {
     const repoDir = await initRepo('review-wildcard-')
+    if (process.platform === 'win32') {
+      // Windows cannot create * or ? files, but the Git index can retain them.
+      // Unstage uses the same literal pathspec helper as working-tree revert.
+      const originals = { 'report.txt': 'committed-report\n', 'report*.txt': 'committed-star\n', 'report?.txt': 'committed-question\n', 'reportX.txt': 'committed-x\n' }
+      for (const [name, content] of Object.entries(originals)) writeIndexFile(repoDir, name, content)
+      git(repoDir, 'commit', '-m', 'initial')
+      for (const name of Object.keys(originals)) writeIndexFile(repoDir, name, 'EDITED\n')
+      const service = makeService(repoDir)
+      const status = await service.getStatus(SESSION, STAGED)
+      const result = await service.unstage(SESSION, { paths: ['report*.txt', 'report?.txt'], snapshot: status.snapshot, source: STAGED })
+      expect(result.state).toBe('ok')
+      expect(git(repoDir, 'show', ':report*.txt')).toBe(originals['report*.txt'])
+      expect(git(repoDir, 'show', ':report?.txt')).toBe(originals['report?.txt'])
+      expect(git(repoDir, 'show', ':report.txt')).toBe('EDITED\n')
+      expect(git(repoDir, 'show', ':reportX.txt')).toBe('EDITED\n')
+      return
+    }
     await write(repoDir, 'report.txt', 'committed-report\n')
     await write(repoDir, 'report*.txt', 'committed-star\n')
     await write(repoDir, 'report?.txt', 'committed-question\n')
@@ -1450,13 +1504,15 @@ describe('ReviewService review safety regressions', () => {
     const repoDir = await initRepo()
     await write(repoDir, 'new.txt', content)
     await fs.chmod(path.join(repoDir, 'new.txt'), mode)
+    const executable = Boolean((await fs.stat(path.join(repoDir, 'new.txt'))).mode & 0o111)
+    expect(executable).toBe(process.platform === 'win32' ? false : mode === 0o755)
     const service = makeService(repoDir)
     const diff = await service.getFileDiff(SESSION, { source: UNSTAGED, path: 'new.txt' })
     expect(diff.state).toBe('ok')
     const result = await service.stageHunk(SESSION, { patch: diff.diff!, snapshot: diff.snapshot, source: UNSTAGED })
     expect(result.state).toBe('ok')
     expect(execFileSync('git', ['show', ':new.txt'], { cwd: repoDir })).toEqual(Buffer.from(content))
-    expect(git(repoDir, 'ls-files', '--stage', 'new.txt').split(' ')[0]).toBe(mode === 0o755 ? '100755' : '100644')
+    expect(git(repoDir, 'ls-files', '--stage', 'new.txt').split(' ')[0]).toBe(executable ? '100755' : '100644')
   })
 
   it('rejects working-tree writes from the staged comparison without changing either side', async () => {
@@ -1526,7 +1582,7 @@ describe('ReviewService rename and historical isolation regressions', () => {
     git(repoDir, 'commit', '-m', 'delete')
     if (currentType === 'untracked') await write(repoDir, 'file.txt', 'unrelated live file\n')
     if (currentType === 'directory') await write(repoDir, 'file.txt/child.txt', 'unrelated live directory\n')
-    if (currentType === 'symlink') await fs.symlink('does-not-exist', path.join(repoDir, 'file.txt'))
+    if (currentType === 'symlink') await fs.symlink(path.join(repoDir, 'does-not-exist'), path.join(repoDir, 'file.txt'), process.platform === 'win32' ? 'junction' : 'file')
     const service = makeService(repoDir)
     const source: ReviewSource = { kind: 'commit', commit }
     expect((await service.getStatus(SESSION, source)).files.map(file => file.path)).toEqual(['file.txt'])
@@ -1541,9 +1597,16 @@ describe('ReviewService rename and historical isolation regressions', () => {
 describe('ReviewService exact new-file path headers', () => {
   it.each(['space name.txt', 'line\nbreak.txt', 'back\\slash.txt', 'trailing .txt '])('stages an empty file whose name needs Git quoting: %j', async (name) => {
     const repoDir = await initRepo()
-    await write(repoDir, name, '')
     const service = makeService(repoDir)
-    const diff = await service.getFileDiff(SESSION, { source: UNSTAGED, path: name })
+    const indexOnly = process.platform === 'win32' && /[\n\\]| $/.test(name)
+    if (indexOnly) git(repoDir, 'config', 'core.protectNTFS', 'false')
+    else await write(repoDir, name, '')
+    const status = await service.getStatus(SESSION, UNSTAGED)
+    // Keep unrepresentable names exact through the parser and actual Git
+    // apply --cached, without pretending Windows created those filenames.
+    const diff = indexOnly
+      ? { diff: `diff --git ${JSON.stringify(`a/${name}`)} ${JSON.stringify(`b/${name}`)}\nnew file mode 100644\n`, snapshot: status.snapshot }
+      : await service.getFileDiff(SESSION, { source: UNSTAGED, path: name })
     expect(collectPatchPaths(diff.diff!)).toEqual([name])
     const staged = await service.stageHunk(SESSION, { source: UNSTAGED, snapshot: diff.snapshot, patch: diff.diff! })
     expect(staged.state).toBe('ok')

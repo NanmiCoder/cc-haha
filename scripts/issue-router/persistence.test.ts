@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import { fixture, now, timestamp, createdSince, session } from './test-helpers'
 
+// These integration scenarios launch many real Git processes; Windows process
+// startup can exceed Bun's five-second unit-test default. Keep a bounded budget.
 const fixtures: ReturnType<typeof fixture>[] = []
 afterEach(() => { for (const f of fixtures.splice(0)) f.cleanup() })
 function legacy(version = 1) {
@@ -39,7 +41,7 @@ describe('issue router persistence upgrade', () => {
     expect(state.resources).toHaveLength(0)
     expect(f.call({ command: 'migrate' })).toEqual({ schema_version: 4, migrated: false })
     expect(() => f.call({ command: 'dispatch-start', run_id: 'legacy-run', owner: 'legacy-owner', generation: 3, action_key: 'legacy-action', sender: 'new-sender' })).toThrow('Only pending actions')
-  })
+  }, 60_000)
 
   test('frozen v2 upgrades content delivery conservatively without resending an unknown action', () => {
     const f = legacy(2)
@@ -57,7 +59,7 @@ describe('issue router persistence upgrade', () => {
     const action = f.call({ command: 'consume', ...token }).action
     expect(JSON.parse(action.payload).revision).toBe(1)
     expect(action.kind).toBe('resume')
-  })
+  }, 60_000)
 
   test('v3 migration preserves all 101 issues and the active 1704 owner, then explicit policy waits for creation metadata', () => {
     const f = legacy(3)
@@ -95,7 +97,7 @@ describe('issue router persistence upgrade', () => {
     expect(state.issues).toHaveLength(101)
     expect(state.runs.find((run: any) => run.run_id === runId)).toMatchObject(token)
     expect(state.dispatch_policy.created_since).toBe(createdSince)
-  })
+  }, 60_000)
 
   test('consistent WAL backup restores queue, outbox and cursor with an explicit recovery barrier', () => {
     const f = fixture()
@@ -131,7 +133,7 @@ describe('issue router persistence upgrade', () => {
     expect(state.cursor).toBe('c1')
     f.call({ command: 'reconcile', ...claimed.token, action_key: claimed.action.action_key, outcome: 'found', reference: 'fixture://found', session, worktree: '/fixture' })
     expect(f.call({ command: 'status' }).runs[0].session).toEqual(session)
-  })
+  }, 60_000)
 
   test('foreign, unsupported, damaged and missing databases stop instead of starting a second queue', () => {
     const f = legacy()
@@ -147,5 +149,5 @@ describe('issue router persistence upgrade', () => {
     expect(() => f.call({ command: 'restore', backup: badBackup, clients_stopped: true })).toThrow()
     expect(existsSync(f.layout().database)).toBe(false)
     expect(() => f.call({ command: 'status' }, now)).toThrow('State is missing')
-  })
+  }, 60_000)
 })

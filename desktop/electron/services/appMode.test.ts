@@ -251,7 +251,7 @@ describe('Electron app mode service', () => {
     const fakeApp = app()
     const installDir = path.dirname(fakeApp.getPath('exe'))
     const aliasedInstallDir = path.join(fakeApp.root, 'install-alias')
-    fs.symlinkSync(installDir, aliasedInstallDir, 'dir')
+    fs.symlinkSync(installDir, aliasedInstallDir, process.platform === 'win32' ? 'junction' : 'dir')
 
     expect(() => setAppMode(fakeApp, {
       mode: 'portable',

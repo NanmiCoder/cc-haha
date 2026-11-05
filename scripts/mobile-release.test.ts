@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { parse } from 'yaml'
+import { createSandboxedTestEnvironment } from './pr/test-environment'
 import { buildMessage, carryForwardApk, deliverBuild, EAS_CLI_VERSION, findReusableBuild, fingerprintInputs, isBuildInput, parseDelivery, planDelivery, selectReusableBuild, submissionAlreadyFinished, type Delivery } from './mobile-release'
 
 const commit = 'a'.repeat(40)
@@ -215,7 +216,19 @@ function fixtureRepo(tag: string, gh: string) {
   writeFileSync(join(root, 'mobile/eas.json'), '{}')
   writeFileSync(join(root, 'bin/gh'), gh, { mode: 0o755 })
   writeFileSync(join(root, 'bin/bunx'), '#!/usr/bin/env bun\nthrow new Error("EAS must not run here")\n', { mode: 0o755 })
-  const env = { PATH: `${join(root, 'bin')}:${process.env.PATH}`, HOME: join(root, 'home'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', EXPO_PROJECT_ID: buildId, EXPO_OWNER: 'fixture', ASC_APP_ID: '123456789', GITHUB_REPOSITORY: 'fixture/repo', MOBILE_RELEASE_TAG: tag, MOBILE_RELEASE_PLATFORM: 'ios' }
+  if (process.platform === 'win32') {
+    // Native Windows process lookup requires a cmd shim; an extensionless
+    // shebang would fall through to the developer's installed gh/bunx.
+    for (const name of ['gh', 'bunx']) {
+      writeFileSync(join(root, 'bin', `${name}.cmd`), `@echo off\r\n"${process.execPath}" "%~dp0${name}" %*\r\n`)
+    }
+  }
+  const env = createSandboxedTestEnvironment(join(root, 'home'), {
+    PATH: `${join(root, 'bin')}${delimiter}${process.env.PATH}`,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    EXPO_PROJECT_ID: buildId, EXPO_OWNER: 'fixture', ASC_APP_ID: '123456789',
+    GITHUB_ACTIONS: 'false', GITHUB_REPOSITORY: 'fixture/repo', MOBILE_RELEASE_TAG: tag, MOBILE_RELEASE_PLATFORM: 'ios',
+  })
   for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'], ['-c', 'tag.gpgsign=false', 'tag', tag]]) {
     const result = Bun.spawnSync(['git', ...args], { cwd: root, env })
     expect(result.exitCode, result.stderr.toString()).toBe(0)
@@ -235,7 +248,7 @@ test('real runner dry-run never builds or mutates EAS config; draft releases fai
   const unsafe = Bun.spawnSync([process.execPath, '--no-env-file', 'scripts/mobile-release.ts'], { cwd: root, env })
   expect(unsafe.exitCode).toBe(1)
   expect(unsafe.stderr.toString()).toContain('only in GitHub Actions')
-})
+}, 30_000)
 
 test('a desktop release without mobile changes re-attaches the verified APK and its manifest without touching EAS', () => {
   const apkName = `cc-haha-mobile-0.1.0-${buildId}.apk`
@@ -280,4 +293,4 @@ else throw new Error('unexpected gh ' + args.join(' '))
   expect(readFileSync(join(fixtureDir, `uploaded-${apkName}`))).toEqual(apk)
   const manifest = parseDelivery(JSON.parse(readFileSync(join(fixtureDir, 'uploaded-mobile-release-android.json'), 'utf8')))
   expect(manifest).toMatchObject({ tag: 'v1.1.0', commit: head, fingerprint: releaseFingerprint, version: '0.1.0', buildId, asset: apkName, sha256 })
-})
+}, 30_000)

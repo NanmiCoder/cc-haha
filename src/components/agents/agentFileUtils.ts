@@ -515,11 +515,27 @@ async function writeFileAndFlush(
   flag: 'w' | 'wx' = 'w',
   rejectFinalSymlink = false,
 ): Promise<void> {
+  const before = rejectFinalSymlink ? await lstat(filePath) : null
+  if (before && (before.isSymbolicLink() || !before.isFile())) {
+    throw new Error(`Cannot update project agent through a symbolic link or non-regular file: ${filePath}`)
+  }
   const openFlag = rejectFinalSymlink
-    ? fsConstants.O_WRONLY | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW
+    ? fsConstants.O_WRONLY | (process.platform === 'win32' ? 0 : fsConstants.O_NOFOLLOW)
     : flag
   const handle = await open(filePath, openFlag)
   try {
+    if (before) {
+      // Windows does not support O_NOFOLLOW. Never truncate before checking
+      // that the opened handle still names the validated regular file.
+      const opened = await handle.stat()
+      const current = await lstat(filePath)
+      if (!opened.isFile() || current.isSymbolicLink() ||
+        opened.dev !== before.dev || opened.ino !== before.ino ||
+        current.dev !== before.dev || current.ino !== before.ino) {
+        throw new Error(`Project agent changed while opening: ${filePath}`)
+      }
+      await handle.truncate(0)
+    }
     await handle.writeFile(content, { encoding: 'utf-8' })
     await handle.datasync()
   } finally {

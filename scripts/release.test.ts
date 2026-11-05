@@ -38,6 +38,7 @@ function fixtureRepo() {
   return dir
 }
 
+// Real Git init/commit/merge/tag scenarios need a bounded integration budget on Windows.
 describe('release script', () => {
   test('bumps versions', () => {
     expect(bumpVersion('1.2.3', 'patch')).toBe('1.2.4')
@@ -58,7 +59,7 @@ describe('release script', () => {
     expect(git(dir, 'tag', '--list')).toBe('')
     expect(JSON.parse(readFileSync(join(dir, 'desktop/package.json'), 'utf8')).version).toBe('1.2.4')
     expect(JSON.parse(readFileSync(join(dir, 'mobile/package.json'), 'utf8')).version).toBe('0.1.0')
-  })
+  }, 30_000)
 
   test('mobile version bump is explicit, independent, and preserves app configuration', async () => {
     const dir = fixtureRepo()
@@ -66,7 +67,7 @@ describe('release script', () => {
     expect(JSON.parse(readFileSync(join(dir, 'desktop/package.json'), 'utf8')).version).toBe('1.2.4')
     expect(JSON.parse(readFileSync(join(dir, 'mobile/package.json'), 'utf8')).version).toBe('0.2.0')
     expect(JSON.parse(readFileSync(join(dir, 'mobile/app.json'), 'utf8'))).toEqual({ expo: { version: '0.2.0', extra: { keep: true } } })
-  })
+  }, 30_000)
 
   test('mobile dry-run and invalid bump do not mutate or switch the repository', async () => {
     const dir = fixtureRepo()
@@ -74,14 +75,14 @@ describe('release script', () => {
     await expect(prepareRelease(dir, 'patch', { mobileBump: '0.0.1', log: () => {} })).rejects.toThrow('must increase')
     expect(git(dir, 'status', '--porcelain')).toBe('')
     expect(git(dir, 'branch', '--show-current')).toBe('main')
-  })
+  }, 30_000)
 
   test('refuses a release without notes and leaves the repository untouched', async () => {
     const dir = fixtureRepo()
     await expect(prepareRelease(dir, 'minor', { log: () => {} })).rejects.toThrow('Missing release notes file: release-notes/v1.3.0.md')
     expect(git(dir, 'branch', '--show-current')).toBe('main')
     expect(git(dir, 'status', '--porcelain')).toBe('')
-  })
+  }, 30_000)
 
   test('tags the merged release commit only once main carries that version', async () => {
     const dir = fixtureRepo()
@@ -96,5 +97,5 @@ describe('release script', () => {
 
     expect(result).toEqual({ tag: 'v1.2.4', commit: merged })
     expect(git(dir, 'rev-parse', 'v1.2.4^{commit}')).toBe(merged)
-  })
+  }, 30_000)
 })

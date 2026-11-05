@@ -21,7 +21,9 @@ export function canonicalizeFilesystemAccessPath(filePath: string): string {
   let candidate = resolved
   while (true) {
     try {
-      const canonicalAncestor = realpathSync(candidate)
+      // Bun's JS realpathSync can retain Windows 8.3 aliases while async reads
+      // expand them. Use the OS spelling on both sides of the access boundary.
+      const canonicalAncestor = realpathSync.native(candidate)
       return path.resolve(
         normalizeDriveRootPathForPlatform(canonicalAncestor),
         ...suffix,

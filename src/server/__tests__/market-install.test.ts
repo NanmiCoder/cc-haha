@@ -325,7 +325,7 @@ describe('uninstallMarketSkill', () => {
     await fs.mkdir(victim, { recursive: true })
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(path.join(victim, 'SKILL.md'), SKILL_MD)
-    await fs.symlink(victim, target)
+    await fs.symlink(victim, target, process.platform === 'win32' ? 'junction' : 'dir')
 
     const error = await uninstallMarketSkill('clawhub', 'demo').catch((caught) => caught)
 

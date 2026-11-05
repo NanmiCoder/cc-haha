@@ -179,7 +179,7 @@ describe('workspace watch reconciliation without native callbacks', () => {
     try {
       await service.watchDirectories('task', ['src'], event => events.push(event), abort.signal, error => errors.push(error))
       await fs.rm(path.join(root, 'src'), { recursive: true })
-      await fs.symlink(outside, path.join(root, 'src'))
+      await fs.symlink(outside, path.join(root, 'src'), process.platform === 'win32' ? 'junction' : 'dir')
       await fs.writeFile(path.join(outside, 'secret.txt'), 'outside')
       await timers.flush(WORKSPACE_WATCH_RECONCILIATION.intervalMs)
       expect(errors.length).toBe(1)
@@ -208,7 +208,7 @@ describe('workspace watch reconciliation without native callbacks', () => {
       const close = spyOn(handle, 'close')
       openSpy = spyOn(fs, 'opendir').mockImplementation((async () => {
         await fs.rm(path.join(root, 'src'), { recursive: true })
-        await fs.symlink(outside, path.join(root, 'src'))
+        await fs.symlink(outside, path.join(root, 'src'), process.platform === 'win32' ? 'junction' : 'dir')
         return handle
       }) as typeof fs.opendir)
       await timers.flush(WORKSPACE_WATCH_RECONCILIATION.intervalMs)

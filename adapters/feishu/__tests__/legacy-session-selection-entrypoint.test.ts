@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as Lark from '@larksuiteoapi/node-sdk'
 import { ProxyAgent } from 'proxy-agent'
 import { enqueue } from '../../common/chat-queue.js'
@@ -276,6 +277,52 @@ afterAll(async () => {
 
 function adapterFor(platform: Platform) {
   return { feishu, dingtalk, wechat, whatsapp }[platform]
+}
+
+for (const platform of ['feishu', 'whatsapp'] as const) {
+  it(`${platform} only uploads real local images inside its bound session directory`, async () => {
+    const adapter = adapterFor(platform)
+    const chatId = `${platform}-outbound-policy`
+    const workDir = path.join(temporaryRoot, `${platform}-images`)
+    const outside = path.join(temporaryRoot, `${platform}-images-other`)
+    fs.mkdirSync(workDir)
+    fs.mkdirSync(outside)
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aUioAAAAASUVORK5CYII=', 'base64')
+    const insidePath = path.join(workDir, 'inside.png')
+    fs.writeFileSync(insidePath, png)
+    fs.writeFileSync(path.join(outside, 'outside.png'), png)
+    fs.writeFileSync(path.join(workDir, 'secret.png'), 'fixture private key, not image data')
+    fs.symlinkSync(outside, path.join(workDir, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    adapter.sessionStore.set(chatId, 'outbound-policy-session', workDir)
+    const uploads: Buffer[] = []
+    const upload = platform === 'feishu'
+      ? spyOn(FeishuMediaService.prototype, 'uploadImage').mockImplementation(async buffer => { uploads.push(buffer); return 'fixture-image-key' })
+      : spyOn(WhatsAppMediaService.prototype, 'sendMedia').mockImplementation(async (_chat, buffer) => { uploads.push(buffer) })
+    const sendImage = spyOn(FeishuMediaService.prototype, 'sendImageMessage').mockResolvedValue(undefined)
+    const errors = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const targets = [insidePath, pathToFileURL(insidePath).href,
+        path.join(outside, 'outside.png'), path.join(workDir, 'escape', 'outside.png'), path.join(workDir, 'secret.png')]
+      await adapter.handleServerMessage(chatId, { type: 'content_delta', text: targets.map(target => `![fixture](${target})`).join(' ') })
+      const deadline = Date.now() + 2000
+      while (uploads.length + errors.mock.calls.length < targets.length && Date.now() < deadline) await Bun.sleep(5)
+      expect(uploads).toEqual([png, png])
+      expect(errors).toHaveBeenCalledTimes(3)
+      adapter.clearTransientChatState(chatId)
+      adapter.sessionStore.delete(chatId)
+      await adapter.handleServerMessage(chatId, { type: 'content_delta', text: `![missing](${insidePath})` })
+      const missingDeadline = Date.now() + 2000
+      while (errors.mock.calls.length < 4 && Date.now() < missingDeadline) await Bun.sleep(5)
+      expect(uploads).toHaveLength(2)
+      expect(errors.mock.calls.at(-1)?.join(' ')).toContain('missing session work directory')
+    } finally {
+      upload.mockRestore()
+      sendImage.mockRestore()
+      errors.mockRestore()
+      adapter.clearTransientChatState(chatId)
+      adapter.sessionStore.delete(chatId)
+    }
+  })
 }
 
 for (const platform of ['feishu', 'wechat', 'dingtalk'] as const) {
@@ -578,9 +625,22 @@ for (const platform of platforms) {
       const creationsBefore = newSessionCount
       const sendSpy = spyOn(adapter.bridge, 'sendUserMessage')
       spies.push(sendSpy)
+      let snapshotProcessed!: () => void
+      const initialSnapshot = new Promise<void>(resolve => { snapshotProcessed = resolve })
+      const register = adapter.bridge.onServerMessage.bind(adapter.bridge)
+      const registration = spyOn(adapter.bridge, 'onServerMessage').mockImplementation((id, handler) => {
+        register(id, async message => {
+          await handler(message)
+          if (id === chatId && message.type === 'permission_requests_snapshot' && message.turnActive) snapshotProcessed()
+        })
+      })
+      spies.push(registration)
       await send(platform, '/sessions')
       expect(adapter.sessionStore.get(chatId)?.sessionId).toBe('current')
       await send(platform, '/resume 1')
+      // Socket open and an empty queue do not prove the initial frame arrived.
+      await initialSnapshot
+      registration.mockRestore()
       await enqueue(chatId, async () => {})
       expect(adapter.sessionStore.get(chatId)?.sessionId).toBe('history-active')
       expect(adapter.getRuntimeState(chatId).state).toBe('thinking')

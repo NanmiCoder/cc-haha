@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsPromises from 'fs/promises'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
@@ -21,6 +21,31 @@ import {
 
 const TRANSCRIPT_BODY =
   '{"type":"assistant","message":{"content":[{"type":"text","text":"agent result"}]}}\n'
+
+/** Exercise the successful syscall branch even on unprivileged Windows hosts. */
+function availableSymlinkFixture() {
+  if (process.platform !== 'win32') return undefined
+  // A hard link supplies real shared file bytes for this syscall substitute.
+  // It is not used to claim Windows symlink/containment behavior is tested.
+  return spyOn(fsPromises, 'symlink').mockImplementation(async (target, destination, type) => {
+    expect(type).toBe('file')
+    await fsPromises.link(target, destination)
+  })
+}
+
+async function assertTranscriptLink(
+  fixture: ReturnType<typeof availableSymlinkFixture>,
+  target: string,
+  outputPath: string,
+) {
+  if (fixture) {
+    expect(fixture).toHaveBeenLastCalledWith(target, outputPath, 'file')
+    const [targetStat, outputStat] = await Promise.all([fsPromises.stat(target), fsPromises.stat(outputPath)])
+    expect([outputStat.dev, outputStat.ino]).toEqual([targetStat.dev, targetStat.ino])
+  } else {
+    expect((await fsPromises.lstat(outputPath)).isSymbolicLink()).toBe(true)
+  }
+}
 
 /** Mirrors the real layout: transcripts live outside the tasks directory. */
 function writeTranscript(taskId: string): string {
@@ -55,6 +80,7 @@ describe('writeTaskOutput', () => {
 
 describe('initTaskOutputAsSymlink', () => {
   test('symlinks .output at the transcript when the platform allows it', async () => {
+    const fixture = availableSymlinkFixture()
     _setSymlinkCapableForTest(true)
     const taskId = 'symlink-ok'
     const target = writeTranscript(taskId)
@@ -62,9 +88,11 @@ describe('initTaskOutputAsSymlink', () => {
     const outputPath = await initTaskOutputAsSymlink(taskId, target)
 
     expect(outputPath).toBe(join(getTaskOutputDir(), `${taskId}.output`))
-    expect((await fsPromises.lstat(outputPath)).isSymbolicLink()).toBe(true)
+    await assertTranscriptLink(fixture, target, outputPath)
     expect(getTaskOutputPath(taskId)).toBe(outputPath)
     expect(await getTaskOutput(taskId)).toBe(TRANSCRIPT_BODY)
+    await fsPromises.appendFile(target, 'later result\n')
+    expect(await getTaskOutput(taskId)).toBe(`${TRANSCRIPT_BODY}later result\n`)
   })
 
   test('links before the target exists — the agent transcript is written later', async () => {
@@ -86,6 +114,7 @@ describe('initTaskOutputAsSymlink', () => {
   })
 
   test('replaces a file already sitting at the output path', async () => {
+    const fixture = availableSymlinkFixture()
     _setSymlinkCapableForTest(true)
     const taskId = 'symlink-occupied'
     const target = writeTranscript(taskId)
@@ -93,8 +122,11 @@ describe('initTaskOutputAsSymlink', () => {
 
     const outputPath = await initTaskOutputAsSymlink(taskId, target)
 
-    expect((await fsPromises.lstat(outputPath)).isSymbolicLink()).toBe(true)
+    await assertTranscriptLink(fixture, target, outputPath)
+    expect(getTaskOutputPath(taskId)).toBe(outputPath)
     expect(await getTaskOutput(taskId)).toBe(TRANSCRIPT_BODY)
+    await fsPromises.appendFile(target, 'replacement result\n')
+    expect(await getTaskOutput(taskId)).toBe(`${TRANSCRIPT_BODY}replacement result\n`)
   })
 
   // #1141: Windows only grants symlink privileges to administrators / Developer

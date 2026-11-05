@@ -1,18 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import {
+  canonicalizeFilesystemAccessPath,
   clearFilesystemAccessRootsForTests,
   isWithinRegisteredFilesystemRoot,
   registerChangedFileAccessRoot,
   registerCanonicalFilesystemAccessRoot,
+  registerFilesystemAccessRoot,
 } from './filesystemAccessRoots.js'
 
 describe('registerChangedFileAccessRoot', () => {
   beforeEach(() => clearFilesystemAccessRootsForTests())
   afterEach(() => clearFilesystemAccessRootsForTests())
 
+  it('uses the same canonical spelling as async filesystem reads, including Windows short paths', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'filesystem-access-alias-'))
+    try {
+      const file = path.join(root, 'preview.html')
+      fs.writeFileSync(file, 'fixture')
+      const canonicalRoot = await fs.promises.realpath(root)
+      expect(canonicalizeFilesystemAccessPath(root)).toBe(canonicalRoot)
+      registerFilesystemAccessRoot(root)
+      expect(isWithinRegisteredFilesystemRoot(await fs.promises.realpath(file))).toBe(true)
+      expect(canonicalizeFilesystemAccessPath(path.join(root, 'missing', 'child.html'))).toBe(path.join(canonicalRoot, 'missing', 'child.html'))
+      expect(isWithinRegisteredFilesystemRoot(path.join(`${canonicalRoot}-other`, 'private.html'))).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('registers an already verified canonical root without repeating native I/O', () => {
-    const realpath = spyOn(fs, 'realpathSync').mockImplementation(() => { throw new Error('Unexpected main-thread realpath') })
+    const realpath = spyOn(fs.realpathSync, 'native').mockImplementation(() => { throw new Error('Unexpected main-thread realpath') })
     try {
       registerCanonicalFilesystemAccessRoot('/verified/project')
       expect(realpath).not.toHaveBeenCalled()

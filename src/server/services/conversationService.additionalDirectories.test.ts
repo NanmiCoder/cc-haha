@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +12,8 @@ import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminal
 import { __resetWebSocketHandlerStateForTests, translateCliMessage } from '../ws/handler.js'
 
 type LaunchCapture = { args: string[]; sessionId: string; launchCwd: string; cwd: string; transcriptPath: string }
+
+const storedPaths = (values: string[]) => values.map(value => value.replaceAll('\\', '/'))
 
 let root: string
 let mainDirectory: string
@@ -162,11 +164,11 @@ test('actual first launches and resumed CLIs retain the creation snapshot when p
   expect(firstLaunch!.args).not.toContain('--resume')
   expect(resumedLaunch!.args[resumedLaunch!.args.indexOf('--resume') + 1]).toBe(current.sessionId)
   for (const launch of [firstLaunch!, resumedLaunch!]) {
-    expect(additionalDirectories(launch)).toEqual(configured)
+    expect(additionalDirectories(launch)).toEqual(storedPaths(configured))
     expect(launch.cwd).toBe(mainDirectory)
     expect(launch.args).not.toContain('--dangerously-skip-permissions')
   }
-  expect((await new SessionService().getSessionLaunchInfo(current.sessionId))?.additionalDirectories).toEqual(configured)
+  expect((await new SessionService().getSessionLaunchInfo(current.sessionId))?.additionalDirectories).toEqual(storedPaths(configured))
 }, 20_000)
 
 test('actual team worker first start and restart inherit the parent snapshot rather than current project folders', async () => {
@@ -189,8 +191,55 @@ test('actual team worker first start and restart inherit the parent snapshot rat
   expect(firstLaunch!.args[firstLaunch!.args.indexOf('--agent-id') + 1]).toBe('reader@directory-fixture')
   expect(firstLaunch!.args).toContain('--session-id')
   expect(resumedLaunch!.args[resumedLaunch!.args.indexOf('--resume') + 1]).toBe(workerId)
-  expect(additionalDirectories(firstLaunch!)).toEqual(configured)
-  expect(additionalDirectories(resumedLaunch!)).toEqual(configured)
+  expect(additionalDirectories(firstLaunch!)).toEqual(storedPaths(configured))
+  expect(additionalDirectories(resumedLaunch!)).toEqual(storedPaths(configured))
+}, 20_000)
+
+test('placeholder cleanup waits for an in-flight metadata transfer across service instances', async () => {
+  const configured = await directories('metadata race auxiliary')
+  await saveDirectories(configured)
+  const writer = new SessionService()
+  const created = await writer.createSession(mainDirectory)
+  const placeholder = (await writer.getSessionLaunchInfo(created.sessionId))!.filePath
+  const project = join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(worktreeDirectory))
+  await mkdir(project, { recursive: true })
+  await writeFile(join(project, `${created.sessionId}.jsonl`), JSON.stringify({
+    type: 'assistant', uuid: crypto.randomUUID(), sessionId: created.sessionId, cwd: worktreeDirectory,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'persisted turn' }] },
+  }) + '\n')
+  let releaseRead!: () => void
+  let readStarted!: () => void
+  const paused = new Promise<void>(resolve => { releaseRead = resolve })
+  const entered = new Promise<void>(resolve => { readStarted = resolve })
+  const originalRead = (writer as any).getMetadataProjection.bind(writer)
+  let held = false
+  const read = spyOn(writer as any, 'getMetadataProjection').mockImplementation(async (file: string, directory: string) => {
+    if (file === placeholder && !held) {
+      held = true
+      readStarted()
+      await paused
+    }
+    return originalRead(file, directory)
+  })
+  const writing = writer.appendSessionMetadata(created.sessionId, { workDir: worktreeDirectory })
+  void writing.catch(() => {})
+  let cleanup: Promise<number> | undefined
+  try {
+    await entered
+    cleanup = new SessionService().deletePlaceholderSessionFiles(created.sessionId, worktreeDirectory)
+    // The writer deliberately holds the source read open. Deleting it during
+    // this interval caused startup to reject with ENOENT and lose its snapshot.
+    expect(await Promise.race([cleanup.then(() => true), Bun.sleep(250).then(() => false)])).toBe(false)
+    releaseRead()
+    await writing
+    expect(await cleanup).toBe(1)
+    await expect(stat(placeholder)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await new SessionService().getSessionLaunchInfo(created.sessionId))?.additionalDirectories).toEqual(storedPaths(configured))
+  } finally {
+    releaseRead()
+    read.mockRestore()
+    await Promise.allSettled([writing, ...(cleanup ? [cleanup] : [])])
+  }
 }, 20_000)
 
 test('worktree SDK init transfers the snapshot before deleting the launch placeholder and resumes the surviving transcript', async () => {
@@ -215,7 +264,7 @@ test('worktree SDK init transfers the snapshot before deleting the launch placeh
   const saved = await new SessionService().getSessionLaunchInfo(created.sessionId)
   expect(saved?.filePath).toBe(join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(worktreeDirectory), `${created.sessionId}.jsonl`))
   expect(saved?.workDir).toBe(worktreeDirectory)
-  expect(saved?.additionalDirectories).toEqual(configured)
+  expect(saved?.additionalDirectories).toEqual(storedPaths(configured))
   await service.stopSessionAndWait(created.sessionId)
   await service.startSession(created.sessionId, worktreeDirectory, sdkUrl(created.sessionId))
   const [firstLaunch, resumedLaunch] = await captures()
@@ -223,10 +272,10 @@ test('worktree SDK init transfers the snapshot before deleting the launch placeh
   expect(firstLaunch!.launchCwd).toBe(mainDirectory)
   expect(resumedLaunch!.args).not.toContain('--worktree')
   expect(resumedLaunch!.args).toContain('--resume')
-  expect(additionalDirectories(firstLaunch!)).toEqual(configured)
-  expect(additionalDirectories(resumedLaunch!)).toEqual(configured)
+  expect(additionalDirectories(firstLaunch!)).toEqual(storedPaths(configured))
+  expect(additionalDirectories(resumedLaunch!)).toEqual(storedPaths(configured))
   expect((await readFile(saved!.filePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line)))
-    .toContainEqual(expect.objectContaining({ type: 'session-meta', additionalDirectories: configured }))
+    .toContainEqual(expect.objectContaining({ type: 'session-meta', additionalDirectories: storedPaths(configured) }))
 }, 20_000)
 
 test('a startup snapshot that lands after worktree init keeps the init cwd', async () => {
@@ -264,6 +313,6 @@ test('a startup snapshot that lands after worktree init keeps the init cwd', asy
   const saved = await new SessionService().getSessionLaunchInfo(created.sessionId)
   expect(saved?.workDir).toBe(worktreeDirectory)
   expect(saved?.filePath).toBe(join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(worktreeDirectory), `${created.sessionId}.jsonl`))
-  expect(saved?.additionalDirectories).toEqual(configured)
+  expect(saved?.additionalDirectories).toEqual(storedPaths(configured))
   expect(await stat(placeholder).then(() => true, () => false)).toBe(false)
 }, 20_000)

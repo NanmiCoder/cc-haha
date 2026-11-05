@@ -1,5 +1,4 @@
 import { lookup } from 'node:dns/promises'
-import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 // Bun maps the bare `undici` specifier to a compatibility shim whose explicit
 // Client is incomplete. The package subpath loads the repository dependency.
@@ -9,6 +8,7 @@ import {
   IMAGE_MIME_WHITELIST,
 } from './attachment-limits.js'
 import type { PendingUpload } from './attachment-types.js'
+import { loadSafeOutboundImage } from './outbound-image.js'
 
 const REMOTE_IMAGE_TIMEOUT_MS = 10_000
 const MAX_REDIRECTS = 5
@@ -387,6 +387,7 @@ export async function loadSafeRemoteImage(
 
 export async function materializePendingUploadImage(
   source: PendingUpload['source'],
+  sessionWorkDir?: string | null,
 ): Promise<{ buffer: Buffer; mime: string }> {
   if (source.kind === 'base64') {
     return {
@@ -395,10 +396,9 @@ export async function materializePendingUploadImage(
     }
   }
   if (source.kind === 'path') {
-    return {
-      buffer: await readFile(source.path),
-      mime: source.mime ?? 'image/png',
-    }
+    const loaded = await loadSafeOutboundImage({ id: 'local-image', source }, sessionWorkDir)
+    if (!loaded.ok) throw new Error(loaded.reason)
+    return loaded
   }
 
   const loaded = await loadSafeRemoteImage(source.url)

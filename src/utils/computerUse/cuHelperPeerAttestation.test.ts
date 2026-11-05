@@ -6,6 +6,9 @@ import {
   realpathSync,
   rmSync,
   writeFileSync,
+  openSync,
+  closeSync,
+  readSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +28,7 @@ describe('reverse cu-helper daemon attestation', () => {
 
   test('passes the connected socket to a packaged signed helper verifier', async () => {
     const calls: { file: string; args: string[]; peerFd: number }[] = []
-    const pathRoot = mkdtempSync('/tmp/cc-haha-peer-path-')
+    const pathRoot = mkdtempSync(join(tmpdir(), 'cc-haha-peer-path-'))
     const expectedPath = join(pathRoot, 'cc-haha-computer-use')
     writeFileSync(expectedPath, '')
     try {
@@ -101,7 +104,7 @@ describe('reverse cu-helper daemon attestation', () => {
     })).resolves.toBeNull()
   })
 
-  test('hard timeout reaps the direct verifier without consuming the parent socket', async () => {
+  test('hard timeout reaps the direct verifier without consuming the parent descriptor', async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'cc-haha-peer-timeout-'))
     const socketPath = join(fixtureRoot, 'peer.sock')
 
@@ -109,20 +112,32 @@ describe('reverse cu-helper daemon attestation', () => {
     let client: Socket | undefined
     let serverSocket: Socket | undefined
     let verifierPid: number | undefined
+    let inheritedFile: number | undefined
     try {
-      server.listen(socketPath)
+      if (process.platform === 'win32') server.listen(0, '127.0.0.1')
+      else server.listen(socketPath)
       await once(server, 'listening')
       const accepted = once(server, 'connection')
-      client = createConnection(socketPath)
+      const address = server.address()
+      client = typeof address === 'object' && address
+        ? createConnection({ host: '127.0.0.1', port: address.port })
+        : createConnection(socketPath)
       await once(client, 'connect')
       const acceptedSockets = await accepted
       serverSocket = acceptedSockets[0] as Socket
-      const peerFd = (client as unknown as { _handle: { fd: number } })._handle.fd
+      // Windows cannot inherit a socket as POSIX fd 3. Exercise the same
+      // subprocess timeout and ownership contract with a real file descriptor.
+      if (process.platform === 'win32') {
+        const descriptorFixture = join(fixtureRoot, 'descriptor.txt')
+        writeFileSync(descriptorFixture, 'parent-owned')
+        inheritedFile = openSync(descriptorFixture, 'r')
+      }
+      const peerFd = inheritedFile ?? (client as unknown as { _handle: { fd: number } })._handle.fd
 
       const startedAt = performance.now()
       const result = await runVerifierWithSocket(
-        '/bin/sleep',
-        ['60'],
+        process.execPath,
+        ['--no-env-file', '-e', 'setInterval(() => {}, 60000)'],
         peerFd,
         50,
       )
@@ -141,6 +156,11 @@ describe('reverse cu-helper daemon attestation', () => {
         await new Promise(resolve => setTimeout(resolve, 10))
       }
       expect(verifierExited).toBe(true)
+      if (inheritedFile !== undefined) {
+        const buffer = Buffer.alloc(12)
+        expect(readSync(inheritedFile, buffer, 0, 12, 0)).toBe(12)
+        expect(buffer.toString()).toBe('parent-owned')
+      }
 
       const received = once(serverSocket, 'data')
       client.write('still-open')
@@ -160,7 +180,8 @@ describe('reverse cu-helper daemon attestation', () => {
           // Already reaped is the expected path.
         }
       }
-      if (server.listening) server.close()
+      if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      if (inheritedFile !== undefined) closeSync(inheritedFile)
       rmSync(fixtureRoot, { recursive: true, force: true })
     }
   })

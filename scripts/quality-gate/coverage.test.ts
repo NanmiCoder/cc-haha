@@ -36,7 +36,7 @@ describe('coverage gate helpers', () => {
       '--coverage-reporter=lcov',
       '--coverage-reporter=text',
       '--coverage-dir',
-      '/tmp/coverage/root-server',
+      join('/tmp/coverage', 'root-server'),
       './src/example.test.ts',
     ])
   })
@@ -51,7 +51,7 @@ describe('coverage gate helpers', () => {
       '--coverage-reporter=lcov',
       '--coverage-reporter=text',
       '--coverage-dir',
-      '/tmp/coverage/adapters',
+      join('/tmp/coverage', 'adapters'),
     ])
   })
 
@@ -533,6 +533,30 @@ describe('coverage gate helpers', () => {
 })
 
 describe('coverage subprocess output', () => {
+  test('runs a Windows-length test set in one LCOV process without including excluded tests', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'coverage-long-'))
+    try {
+      mkdirSync(join(root, 'src'))
+      writeFileSync(join(root, 'preload.ts'), '')
+      writeFileSync(join(root, 'src', 'shared.ts'), 'export function value() { return 1 }\n')
+      const files = Array.from({ length: 240 }, (_, index) => `src/${String(index).padStart(3, '0')}-${'x'.repeat(100)}.test.ts`)
+      for (const file of files) writeFileSync(join(root, file), "import {test,expect} from 'bun:test'; import {value} from './shared'; test('covered',()=>expect(value()).toBe(1))")
+      writeFileSync(join(root, 'src', 'excluded.test.ts'), "throw new Error('excluded test executed')")
+      const outputDir = join(root, 'coverage')
+      const command = buildRootCoverageCommand(outputDir, files, root)
+      command[0] = process.execPath
+      expect(command.join(' ').length).toBeLessThan(24_000)
+      const result = await runCommand(command, root, join(root, 'coverage.log'))
+      expect({ code: result.exitCode, output: result.output }).toMatchObject({ code: 0 })
+      expect(parseBunTestFileCount(result.output)).toBe(files.length)
+      const lcov = readFileSync(join(outputDir, 'root-server', 'lcov.info'), 'utf8')
+      expect(hasUsableLcov(lcov, { rootDir: root })).toBe(true)
+      expect(lcov).toContain('shared.ts')
+    } finally {
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+    }
+  }, 30000)
+
   test.each(['root', 'adapters'])('isolates %s globals and module caches while retaining coverage from every test file', async suite => {
     const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-isolation-'))
     const outputDir = join(root, 'coverage')
@@ -586,12 +610,15 @@ describe('coverage subprocess output', () => {
           // Two isolated files hit different functions in one source. Its
           // denominator stays three, and the uncalled function stays uncovered.
           expect(summary.functions).toEqual({ total: 3, covered: 2, pct: 66.67 })
-          expect(summary.lines).toEqual({ total: 6, covered: 5, pct: 83.33 })
+          // Bun 1.4.4 also instruments the unused function's return line.
+          // Both its declaration and body must remain in the denominator.
+          expect(summary.lines).toEqual({ total: 7, covered: 5, pct: 71.43 })
           const sharedRecord = lcov.split('end_of_record')
-            .find(record => /^SF:.*src\/shared\.ts$/m.test(record))
+            .find(record => /^SF:.*src[\\/]shared\.ts\r?$/m.test(record))
           expect(sharedRecord).toMatch(/^DA:3,[1-9]\d*$/m)
           expect(sharedRecord).toMatch(/^DA:6,[1-9]\d*$/m)
           expect(sharedRecord).toMatch(/^DA:8,0$/m)
+          expect(sharedRecord).toMatch(/^DA:9,0$/m)
         } else {
           expect(summary.lines.pct).toBe(100)
           expect(summary.functions).toEqual({ total: 1, covered: 1, pct: 100 })

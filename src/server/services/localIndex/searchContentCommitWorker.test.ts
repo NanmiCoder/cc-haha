@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import {
   commitSearchContentSpool,
   getSearchCommitWorkerForTests,
@@ -134,10 +135,10 @@ test('inline SQLite commit worker survives bun --compile without external worker
   const directory = await mkdtemp(join(tmpdir(), 'search-worker-compiled-'))
   directories.push(directory)
   const script = join(directory, 'entry.ts')
-  const binary = join(directory, 'compiled-search')
-  const databaseModule = new URL('./searchContentDatabase.ts', import.meta.url).pathname
-  const indexModule = new URL('./searchContentIndex.ts', import.meta.url).pathname
-  const projectorModule = new URL('./searchContentProjector.ts', import.meta.url).pathname
+  const binary = join(directory, process.platform === 'win32' ? 'compiled-search.exe' : 'compiled-search')
+  const databaseModule = fileURLToPath(new URL('./searchContentDatabase.ts', import.meta.url))
+  const indexModule = fileURLToPath(new URL('./searchContentIndex.ts', import.meta.url))
+  const projectorModule = fileURLToPath(new URL('./searchContentProjector.ts', import.meta.url))
   await writeFile(script, `
     import { writeFile } from 'node:fs/promises'
     import { join } from 'node:path'

@@ -67,7 +67,7 @@ async function runSideChat(options: { rows: Row[]; resumeAt?: string; resumeHook
     }))
     await writeFile(transcript, lines.join('\n') + '\n')
     // The same arguments the desktop server passes for a side chat.
-    const child = Bun.spawn(['./bin/claude-haha', ...(options.resumeHook ? [] : ['--bare']), '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    const child = Bun.spawn([process.execPath, '--no-env-file', './bin/claude-haha', ...(options.resumeHook ? [] : ['--bare']), '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--resume', transcript, ...(options.resumeAt ? ['--resume-session-at', options.resumeAt] : []), '--fork-session',
       '--session-id', crypto.randomUUID(), '--no-session-persistence'],
       { env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' })

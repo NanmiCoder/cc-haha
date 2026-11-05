@@ -10,6 +10,9 @@ export default defineConfig({
     },
   },
   test: {
+    // The suite includes filesystem and real renderer integrations. Avoid
+    // CPU-count fan-out exhausting I/O and timing out otherwise isolated tests.
+    maxWorkers: 4,
     // Packaged source snapshots are generated output, not the active test suite.
     exclude: [...configDefaults.exclude, '**/build-artifacts/**', '**/artifacts/**'],
     environment: 'jsdom',

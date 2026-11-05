@@ -15,6 +15,7 @@ import { updateProjectMcpSelections } from './projectSharing.js'
 
 let fixture: string
 let configDir: string | undefined
+const storedPath = (directory: string) => directory.replaceAll('\\', '/')
 
 describe('project MCP file mutation boundaries', () => {
   beforeEach(async () => {
@@ -45,13 +46,13 @@ describe('project MCP file mutation boundaries', () => {
     })))
 
     expect(results.map(result => ({ projectPath: result.projectPath, success: result.success, error: result.error }))).toEqual(
-      directories.map(projectPath => ({ projectPath, success: true, error: undefined })),
+      directories.map(projectPath => ({ projectPath: storedPath(projectPath), success: true, error: undefined })),
     )
     for (const [index, directory] of directories.entries()) {
       const saved = readProjectMcpJsonSnapshot(join(directory, '.mcp.json'))
       expect(saved.servers.shared).toEqual(config)
       expect(results[index]?.revision).toBe(saved.revision)
-      expect(findProjectMcpRegistryKey(directory, getGlobalConfig().projects ?? {})).toBe(directory)
+      expect(findProjectMcpRegistryKey(directory, getGlobalConfig().projects ?? {})).toBe(storedPath(directory))
     }
   })
 
@@ -69,9 +70,9 @@ describe('project MCP file mutation boundaries', () => {
     ])
 
     expect(results).toHaveLength(20)
-    expect(results[0]).toMatchObject({ projectPath: directories[0], success: false, error: 'Duplicate project target' })
-    expect(results.at(-1)).toMatchObject({ projectPath: directories[0], success: false, error: 'Duplicate project target' })
-    expect(results[18]).toMatchObject({ projectPath: last, success: false, error: 'Project .mcp.json changed; reload the project list and retry' })
+    expect(results[0]).toMatchObject({ projectPath: storedPath(directories[0]!), success: false, error: 'Duplicate project target' })
+    expect(results.at(-1)).toMatchObject({ projectPath: storedPath(directories[0]!), success: false, error: 'Duplicate project target' })
+    expect(results[18]).toMatchObject({ projectPath: storedPath(last), success: false, error: 'Project .mcp.json changed; reload the project list and retry' })
     expect(results.slice(1, 18).every(result => result.success)).toBe(true)
     await expect(fs.stat(join(directories[0]!, '.mcp.json'))).rejects.toThrow()
     expect(await fs.readFile(join(last, '.mcp.json'), 'utf8')).toBe(original)
@@ -162,7 +163,7 @@ describe('project MCP file mutation boundaries', () => {
     await fs.mkdir(composed, { recursive: true })
     const decomposedReal = await fs.realpath(decomposed)
     const composedReal = await fs.realpath(composed)
-    expect(await resolveProjectMcpDirectory(decomposed)).toBe(decomposedReal)
+    expect(await resolveProjectMcpDirectory(decomposed)).toBe(storedPath(decomposedReal))
     const currentPlatform = spyOn(platform, 'getPlatform').mockReturnValue('linux')
     try {
       expect(getProjectMcpDirectoryIdentity(decomposed)).not.toBe(getProjectMcpDirectoryIdentity(composed))

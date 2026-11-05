@@ -32,7 +32,7 @@ function checkEntryPoint(entry: 'composer' | 'message') {
     mock.module(${JSON.stringify(import.meta.resolve('../chatMaterials'))}, () => ({ pickChatMaterial: async () => [] }))
     mock.module(${JSON.stringify(import.meta.resolve('../compose/BringSheet'))}, () => ({ BringSheet: 'BringSheet' }))
     mock.module(${JSON.stringify(import.meta.resolve('../compose/glyphs'))}, () => ({ Glyph: 'Glyph' }))
-    mock.module(${JSON.stringify(new URL('./ImagePreview.tsx', import.meta.url).pathname)}, () => ({ ImagePreview: 'ImagePreview' }))
+    mock.module(${JSON.stringify(import.meta.resolve('./ImagePreview'))}, () => ({ ImagePreview: 'ImagePreview' }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/useVoiceDictation'))}, () => ({ useVoiceDictation: () => ({ phase: 'idle', live: false, issue: null, pendingText: null }) }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('../ChatComposer'))})
     const { Message } = require(${JSON.stringify(import.meta.resolve('../Message'))})

@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   createSandboxedTestEnvironment,
   removeTestSandbox,
@@ -72,7 +73,7 @@ test('LAN verify agrees with the production H5 handler in an isolated process', 
         process.exitCode = 1
       }
     `
-    const preloadPath = new URL('../../../preload.ts', import.meta.url).pathname
+    const preloadPath = fileURLToPath(new URL('../../../preload.ts', import.meta.url))
     const result = spawnSync(
       process.execPath,
       ['--no-env-file', '--preload', preloadPath, '-e', script],
@@ -122,10 +123,10 @@ test('native LAN WebSocket empty Origin retains real-server authentication and b
       '../../../src/server/services/sessionService.ts',
       import.meta.url
     ).href
-    const mockCli = new URL(
+    const mockCli = fileURLToPath(new URL(
       '../../../src/server/__tests__/fixtures/mock-sdk-cli.ts',
       import.meta.url
-    ).pathname
+    ))
     const script = `
       import assert from 'node:assert/strict'
       import { writeFileSync, writeSync } from 'node:fs'
@@ -194,7 +195,7 @@ test('native LAN WebSocket empty Origin retains real-server authentication and b
       [
         '--no-env-file',
         '--preload',
-        new URL('../../../preload.ts', import.meta.url).pathname,
+        fileURLToPath(new URL('../../../preload.ts', import.meta.url)),
         '-e',
         script,
       ],

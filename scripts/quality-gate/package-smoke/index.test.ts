@@ -279,11 +279,17 @@ describe('final macOS helper cursor resource verification', () => {
     let executed = false
     if (mode !== 'external-frame-symlink') rmSync(source.sequence, { recursive: true })
     if (mode === 'file') writeFileSync(source.sequence, 'not a directory')
-    if (mode === 'external-symlink') symlinkSync(source.rootDir, source.sequence, 'dir')
+    if (mode === 'external-symlink') symlinkSync(source.rootDir, source.sequence, process.platform === 'win32' ? 'junction' : 'dir')
     if (mode === 'external-frame-symlink') {
       const external = join(source.rootDir, 'build-tree-frame.png')
       writeFileSync(external, 'outside the packaged helper')
-      symlinkSync(external, join(source.sequence, 'frame_0.png'))
+      if (process.platform === 'win32') {
+        // A junction is available without developer mode and exercises the same
+        // recursive realpath escape as a symlink to an individual frame.
+        symlinkSync(source.rootDir, join(source.sequence, 'external-frames'), 'junction')
+      } else {
+        symlinkSync(external, join(source.sequence, 'frame_0.png'))
+      }
     }
     const report = await inspectPackage(source.rootDir, {
       platform: 'macos', arch: 'arm64', packageKind: 'dir', hostPlatform: 'macos', hostArch: 'arm64',
@@ -1117,7 +1123,7 @@ describe('packaged artifact inspection', () => {
     expect(report.passed).toBe(false)
     expect(report.missingChecks.some((check) => check.label === 'Linux arm64 node-pty native module')).toBe(true)
     expect(report.notes.join('\n')).toContain('expected ELF arm64')
-    expect(report.notes.join('\n')).toContain('build/Release/pty.node (ELF x64)')
+    expect(report.notes.join('\n').replaceAll('\\', '/')).toContain('build/Release/pty.node (ELF x64)')
   })
 
   test('accepts the node-pty module compiled during a Linux install', async () => {
@@ -1163,7 +1169,7 @@ describe('packaged artifact inspection', () => {
 
     expect(report.passed).toBe(false)
     expect(report.missingChecks.some((check) => check.label === glibcLabel)).toBe(true)
-    expect(report.notes.join('\n')).toContain('build/Release/pty.node requires GLIBC_2.34.')
+    expect(report.notes.join('\n').replaceAll('\\', '/')).toContain('build/Release/pty.node requires GLIBC_2.34.')
   })
 
   test('accepts a Linux node-pty module built against the release glibc floor', async () => {

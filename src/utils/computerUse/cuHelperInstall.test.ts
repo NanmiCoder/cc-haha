@@ -33,9 +33,9 @@ describe('isNestedInHostApp', () => {
 
 describe('installedHelperAppBundle / installedHelperRoot', () => {
   test('derive <configHome>/cu-helper[/cc-haha-computer-use.app]', () => {
-    expect(installedHelperRoot('/home/.claude')).toBe('/home/.claude/cu-helper')
+    expect(installedHelperRoot('/home/.claude')).toBe(path.join('/home/.claude', 'cu-helper'))
     expect(installedHelperAppBundle('/home/.claude')).toBe(
-      '/home/.claude/cu-helper/cc-haha-computer-use.app',
+      path.join('/home/.claude', 'cu-helper', 'cc-haha-computer-use.app'),
     )
   })
 })
@@ -193,7 +193,7 @@ describe('ensureInstalledHelper', () => {
       writeFileSync(destInfo, 'tampered destination')
       expect(ensureInstalledHelper(deps)?.appBundle).toBe(destApp)
       expect(copyCount).toBe(2)
-      expect(readFileSync(destInfo, 'utf8')).toBe('signed fixture: Contents/Info.plist')
+      expect(readFileSync(destInfo, 'utf8')).toBe(`signed fixture: ${path.join('Contents', 'Info.plist')}`)
       expect(existsSync(path.join(configHome, 'cu-helper', '.install.lock'))).toBe(false)
     } finally {
       rmSync(tempRoot, { recursive: true, force: true })

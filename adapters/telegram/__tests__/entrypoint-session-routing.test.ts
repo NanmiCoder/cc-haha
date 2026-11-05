@@ -176,11 +176,21 @@ describe('Telegram entrypoint session routing', () => {
     const sessionId = `permission-${chatId}`
     sessionPaths.set(sessionId, project)
     store.set(String(chatId), sessionId, project)
-    const registrations = spyOn(WsBridge.prototype, 'onServerMessage')
+    let snapshotProcessed!: () => void
+    const initialSnapshot = new Promise<void>(resolve => { snapshotProcessed = resolve })
+    const register = WsBridge.prototype.onServerMessage
+    const registrations = spyOn(WsBridge.prototype, 'onServerMessage').mockImplementation(function (this: WsBridge, id, handler) {
+      register.call(this, id, async message => {
+        await handler(message)
+        if (id === String(chatId) && message.type === 'permission_requests_snapshot') snapshotProcessed()
+      })
+    })
     let handle!: (message: ServerMessage) => Promise<void>
     try {
       await text(chatId, 'Permission fixture')
       handle = registrations.mock.calls.find(([id]) => id === String(chatId))![1] as typeof handle
+      // Inject later permissions only after the real opening snapshot finishes.
+      await initialSnapshot
     } finally {
       registrations.mockRestore()
     }

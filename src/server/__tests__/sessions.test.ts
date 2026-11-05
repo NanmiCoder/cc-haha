@@ -7,7 +7,9 @@ import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as path from 'node:path'
 import * as os from 'node:os'
+import { removeTestDirectory } from '../../../scripts/pr/test-environment.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
+import { stopHistoryContexts } from '../services/sessionHistoryContext.js'
 import {
   createRepositoryBranch,
   getRepositoryContext,
@@ -54,8 +56,9 @@ async function setupTmpConfigDir(): Promise<string> {
 }
 
 async function cleanupTmpDir(): Promise<void> {
+  await stopHistoryContexts()
   if (tmpDir) {
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    removeTestDirectory(tmpDir)
   }
   delete process.env.CLAUDE_CONFIG_DIR
 }
@@ -172,6 +175,9 @@ async function createWorkspaceApiGitRepo(baseDir: string): Promise<string> {
   await fs.mkdir(path.join(workDir, 'src'), { recursive: true })
   await fs.mkdir(javaControllerDir, { recursive: true })
   git(workDir, 'init')
+  // Nested QA sandboxes put this intentional Java package path beyond MAX_PATH.
+  // Keep the deep-path API coverage and configure only this disposable repo.
+  if (process.platform === 'win32') git(workDir, 'config', 'core.longpaths', 'true')
   git(workDir, 'config', 'user.email', 'sessions-api@example.com')
   git(workDir, 'config', 'user.name', 'Sessions API')
 
@@ -3377,6 +3383,9 @@ describe('SessionService', () => {
 
   it('should reject a branch name past the length cap', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
+    // Test the branch-name cap independently of Windows' total-path limit in
+    // Git; the isolated temp root plus a valid 200-character ref exceeds 260.
+    git(workDir, 'config', 'core.longpaths', 'true')
 
     await expect(createRepositoryBranch(workDir, { name: 'a'.repeat(201) }))
       .rejects.toMatchObject({ code: 'REPOSITORY_BRANCH_NAME_INVALID' })
@@ -6757,8 +6766,10 @@ describe('Sessions API', () => {
     await fs.writeFile(outsideDeleteFile, 'delete outside after\n', 'utf-8')
     await fs.writeFile(outsideHardLinkFile, 'hard link outside after\n', 'utf-8')
     await fs.writeFile(outsideHardLinkDeleteFile, 'hard link delete outside after\n', 'utf-8')
-    await fs.symlink(outsideSymlinkFile, symlinkFile)
-    await fs.symlink(outsideDir, linkedDir)
+    // Windows junctions are real reparse links available without developer
+    // mode. Both platforms must reject links before restoring any file.
+    await fs.symlink(process.platform === 'win32' ? outsideDir : outsideSymlinkFile, symlinkFile, process.platform === 'win32' ? 'junction' : 'file')
+    await fs.symlink(outsideDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir')
     await fs.link(outsideHardLinkFile, hardLinkFile)
     await fs.link(outsideHardLinkDeleteFile, hardLinkDeleteFile)
     await writeFileHistoryBackup(sessionId, safeBackup, 'safe before\n')
@@ -8511,7 +8522,7 @@ describe('Sessions API', () => {
 
     await fs.mkdir(path.dirname(targetFile), { recursive: true })
     await fs.writeFile(targetFile, after, 'utf-8')
-    await fs.symlink(workDir, aliasDir, 'dir')
+    await fs.symlink(workDir, aliasDir, process.platform === 'win32' ? 'junction' : 'dir')
     await writeFileHistoryBackup(sessionId, backupName, before)
     await writeSessionFile('-tmp-snapshot-transcript-alias-session', sessionId, [
       makeSessionMetaEntry(workDir),
@@ -10038,7 +10049,6 @@ describe('Sessions API', () => {
   })
 
   it('should reject a symlinked file-history session directory', async () => {
-    if (process.platform === 'win32') return
     const sessionId = '99999999-bbbb-cccc-dddd-000000000030'
     const workDir = path.join(tmpDir, 'symlinked-backup-directory')
     const targetFile = path.join(workDir, 'target.txt')
@@ -10052,7 +10062,7 @@ describe('Sessions API', () => {
     await writeFileHistoryBackup(sessionId, backupName, 'before\n')
     const backupDir = path.join(tmpDir, 'file-history', sessionId)
     await fs.rm(backupDir, { recursive: true })
-    await fs.symlink(outsideBackupDir, backupDir, 'dir')
+    await fs.symlink(outsideBackupDir, backupDir, process.platform === 'win32' ? 'junction' : 'dir')
     await writeSessionFile('-tmp-symlinked-backup-directory', sessionId, [
       makeSessionMetaEntry(workDir),
       makeFileHistorySnapshotEntry(userId, {
@@ -10070,7 +10080,6 @@ describe('Sessions API', () => {
   })
 
   it('should reject a symlinked backup file', async () => {
-    if (process.platform === 'win32') return
     const sessionId = '99999999-bbbb-cccc-dddd-000000000031'
     const workDir = path.join(tmpDir, 'symlinked-backup-file')
     const targetFile = path.join(workDir, 'target.txt')
@@ -10083,7 +10092,7 @@ describe('Sessions API', () => {
     await writeFileHistoryBackup(sessionId, backupName, 'before\n')
     const backupPath = path.join(tmpDir, 'file-history', sessionId, backupName)
     await fs.unlink(backupPath)
-    await fs.symlink(outsideBackup, backupPath)
+    await fs.symlink(process.platform === 'win32' ? path.dirname(outsideBackup) : outsideBackup, backupPath, process.platform === 'win32' ? 'junction' : 'file')
     await writeSessionFile('-tmp-symlinked-backup-file', sessionId, [
       makeSessionMetaEntry(workDir),
       makeFileHistorySnapshotEntry(userId, {
@@ -10240,7 +10249,7 @@ describe('Sessions API', () => {
     expect(body.activityState).toBe('idle')
   })
 
-  it('POST /api/sessions/:id/chat should queue a message', async () => {
+  it('POST /api/sessions/:id/chat rejects unimplemented delivery without leaving running activity', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-api-test', sessionId, [
       makeSnapshotEntry(),
@@ -10252,18 +10261,17 @@ describe('Sessions API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: 'New question' }),
     })
-    expect(res.status).toBe(202)
+    expect(res.status).toBe(501)
 
-    const body = (await res.json()) as { messageId: string; status: string }
-    expect(body.status).toBe('queued')
-    expect(body.messageId).toBeTruthy()
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('REST_CHAT_NOT_IMPLEMENTED')
+    expect(body.message).toContain('WebSocket')
+    expect(body).not.toHaveProperty('messageId')
 
     const statusRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
     const status = (await statusRes.json()) as { state: string; activityState: string }
-    expect(status.state).toBe('thinking')
-    expect(status.activityState).toBe('running')
-
-    await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/stop`, { method: 'POST' })
+    expect(status.state).toBe('idle')
+    expect(status.activityState).toBe('idle')
   })
 
   it('POST /api/sessions/:id/chat/stop should reset state to idle', async () => {
@@ -10392,7 +10400,7 @@ describe('Sessions API', () => {
       await historyApi.fileHistoryTrackEdit(updateHistory, fixture.createdFile, history.snapshots[0]!.messageId)
       await fs.writeFile(fixture.stepFile, 'captured successful after\n')
       await fs.unlink(fixture.createdFile)
-      await fs.symlink(fixture.stepFile, fixture.createdFile)
+      await fs.symlink(process.platform === 'win32' ? path.dirname(fixture.stepFile) : fixture.stepFile, fixture.createdFile, process.platform === 'win32' ? 'junction' : 'file')
       await historyApi.fileHistoryCompleteSnapshot(updateHistory, history.snapshots[0]!.messageId)
       await flushSessionStorage()
       const completed = history.snapshots[0]!

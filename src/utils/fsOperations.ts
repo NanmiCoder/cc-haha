@@ -540,7 +540,9 @@ export const NodeFsOperations: FsOperations = {
 
   realpathSync(path: string) {
     using _ = slowLogging`fs.realpathSync(${path})`
-    return fs.realpathSync(path).normalize('NFC')
+    // Bun's JS resolver can retain Windows 8.3 aliases. Permissions must use
+    // the same physical spelling as native/async directory resolution.
+    return fs.realpathSync.native(path).normalize('NFC')
   },
 
   mkdirSync(dirPath, options) {

@@ -510,6 +510,7 @@ export async function executeAgentFlowAgainstProvider(
         if (!runner) throw new Error(`no runner registered for scenario ${scenario.id}`)
         await runner(ctx)
         results.push({ id: scenario.id, title: scenario.title, status: 'passed', durationMs: Date.now() - started })
+        console.log(`[${options.label}] PASS ${scenario.id} (${Date.now() - started} ms)`)
       } catch (error) {
         results.push({
           id: scenario.id,
@@ -518,6 +519,7 @@ export async function executeAgentFlowAgainstProvider(
           detail: error instanceof Error ? error.message : String(error),
           durationMs: Date.now() - started,
         })
+        console.error(`[${options.label}] FAIL ${scenario.id}: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
   } finally {

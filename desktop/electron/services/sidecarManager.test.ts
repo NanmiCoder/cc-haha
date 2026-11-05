@@ -339,7 +339,11 @@ describe('Electron sidecar manager', () => {
     const logPath = path.join(dir, 'electron-host.log')
     const homeDir = path.join(dir, 'private-home')
     try {
-      for (let index = 0; index < HOST_DIAGNOSTICS_LINE_LIMIT + 5; index++) {
+      appendHostDiagnostic(logPath, 'line 0', { homeDir })
+      // Seed a full existing log, then cross the real rotation boundary.
+      // Repeatedly rewriting the prefix only adds filesystem work on Windows.
+      writeFileSync(logPath, Array.from({ length: HOST_DIAGNOSTICS_LINE_LIMIT }, (_, index) => `line ${index}\n`).join(''))
+      for (let index = HOST_DIAGNOSTICS_LINE_LIMIT; index < HOST_DIAGNOSTICS_LINE_LIMIT + 5; index++) {
         appendHostDiagnostic(logPath, `line ${index}`, { homeDir })
       }
       appendHostDiagnostic(

@@ -10,6 +10,7 @@
  */
 
 import type { PendingUpload } from './attachment-types.js'
+import { fileURLToPath } from 'node:url'
 
 // Matches a complete markdown image: ![alt](target)
 // `alt` may be empty; `target` stops at the first closing paren.
@@ -30,7 +31,11 @@ function classify(target: string): PendingUpload['source'] | null {
     return { kind: 'base64', mime: m[1]!, data: m[2]! }
   }
   if (target.startsWith('file://')) {
-    return { kind: 'path', path: target.slice('file://'.length) }
+    try {
+      return { kind: 'path', path: fileURLToPath(target) }
+    } catch {
+      return null
+    }
   }
   if (target.startsWith('http://') || target.startsWith('https://')) {
     return { kind: 'url', url: target }

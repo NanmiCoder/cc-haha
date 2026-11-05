@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs'
 import { readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import path from 'node:path'
+import { posix as path } from 'node:path'
 
 export type InstalledMacApp = {
   bundleId: string

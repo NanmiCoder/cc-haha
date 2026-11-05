@@ -222,7 +222,8 @@ test('tokens are encrypted at rest and ownership requires the verified remote de
   const raw = readFileSync(path.join(f.directory, 'mobile-push.json'), 'utf8')
   expect(raw).not.toContain(input().token)
   expect(JSON.parse(raw).future).toEqual({ keep: true })
-  expect(statSync(path.join(f.directory, 'mobile-push.json')).mode & 0o777).toBe(0o600)
+  // Windows exposes writable files as 0666; Unix must keep owner-only access.
+  expect(statSync(path.join(f.directory, 'mobile-push.json')).mode & 0o777).toBe(process.platform === 'win32' ? 0o666 : 0o600)
   expect(f.service.unregister(registered.id!, input().token, { remoteDeviceId: 'device-b' })).toBe(false)
   expect(f.service.unregister(registered.id!, 'b'.repeat(64), { remoteDeviceId: 'device-a' })).toBe(false)
   expect(f.service.unregister(registered.id!, input().token, { remoteDeviceId: 'device-a' })).toBe(true)

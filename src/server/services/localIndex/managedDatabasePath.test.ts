@@ -34,7 +34,7 @@ describe('managed SQLite database paths', () => {
       const outside = path.join(root, 'outside')
       await fs.mkdir(path.join(scope, 'cc-haha'), { recursive: true })
       await fs.mkdir(outside)
-      await fs.symlink(outside, path.join(scope, 'cc-haha', 'db'))
+      await fs.symlink(outside, path.join(scope, 'cc-haha', 'db'), process.platform === 'win32' ? 'junction' : 'dir')
       const databasePath = path.join(scope, 'cc-haha', 'db', filename)
 
       expect(() => openDatabase({ path: databasePath, scope })).toThrow(
@@ -51,7 +51,7 @@ describe('managed SQLite database paths', () => {
     const realScope = path.join(root, 'real-config')
     const scope = path.join(root, 'config-link')
     await fs.mkdir(realScope)
-    await fs.symlink(realScope, scope)
+    await fs.symlink(realScope, scope, process.platform === 'win32' ? 'junction' : 'dir')
     const databasePath = path.join(scope, 'cc-haha', 'db', 'index-v1.sqlite')
 
     const database = openLocalIndexDatabase({ path: databasePath, scope })
@@ -67,7 +67,11 @@ describe('managed SQLite database paths', () => {
     const outside = path.join(root, 'outside.sqlite')
     await fs.mkdir(databaseDir, { recursive: true })
     await fs.writeFile(outside, '')
-    await fs.symlink(outside, path.join(databaseDir, 'index-v1.sqlite'))
+    await fs.symlink(
+      process.platform === 'win32' ? root : outside,
+      path.join(databaseDir, 'index-v1.sqlite'),
+      process.platform === 'win32' ? 'junction' : 'file',
+    )
 
     expect(() => openLocalIndexDatabase({
       path: path.join(databaseDir, 'index-v1.sqlite'),

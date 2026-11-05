@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
+import mermaid from 'mermaid'
 
 import { MermaidRenderer } from './MermaidRenderer'
 import { useUIStore } from '../../stores/uiStore'
@@ -11,11 +12,11 @@ type SvgMeasurementPrototype = SVGElement & {
 }
 
 describe('MermaidRenderer Mermaid integration', () => {
-  beforeEach(() => {
-    useUIStore.setState({ theme: 'white' })
+  const svgPrototype = SVGElement.prototype as SvgMeasurementPrototype
+  const originalBBox = Object.getOwnPropertyDescriptor(svgPrototype, 'getBBox')
+  const originalTextLength = Object.getOwnPropertyDescriptor(svgPrototype, 'getComputedTextLength')
 
-    const svgPrototype = SVGElement.prototype as SvgMeasurementPrototype
-
+  beforeAll(async () => {
     if (!svgPrototype.getBBox) {
       Object.defineProperty(svgPrototype, 'getBBox', {
         configurable: true,
@@ -34,6 +35,24 @@ describe('MermaidRenderer Mermaid integration', () => {
         value: () => 96,
       })
     }
+
+    // Mermaid lazily imports both the flowchart renderer and Dagre layout on
+    // its first render. Await that real engine setup separately from the
+    // component's ordinary DOM waits; cold Vite transforms can exceed 5 s.
+    mermaid.initialize({ startOnLoad: false, htmlLabels: false, flowchart: { htmlLabels: false } })
+    const { svg } = await mermaid.render('mermaid-integration-warmup', 'flowchart LR\nwarmupA[Initialize] --> warmupB[Ready]')
+    expect(svg).toContain('<svg')
+  }, 30_000)
+
+  afterAll(() => {
+    if (originalBBox) Object.defineProperty(svgPrototype, 'getBBox', originalBBox)
+    else delete svgPrototype.getBBox
+    if (originalTextLength) Object.defineProperty(svgPrototype, 'getComputedTextLength', originalTextLength)
+    else delete svgPrototype.getComputedTextLength
+  })
+
+  beforeEach(() => {
+    useUIStore.setState({ theme: 'white' })
   })
 
   it('keeps labels from real Mermaid flowchart SVG output', async () => {

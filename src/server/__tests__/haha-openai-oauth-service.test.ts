@@ -526,7 +526,7 @@ describe('HahaOpenAIOAuthService — ensureFreshAccessToken', () => {
     expect(loaded?.clientId).toBe('app_EMoamEEZ73f0CkXaXp7hrann')
   })
 
-  test('returns null when refresh fails', async () => {
+  test('propagates the cause when refresh fails', async () => {
     await service.saveTokens({
       accessToken: 'expired',
       refreshToken: 'bad-refresh',
@@ -538,6 +538,6 @@ describe('HahaOpenAIOAuthService — ensureFreshAccessToken', () => {
       throw new Error('401 Unauthorized')
     })
 
-    expect(await service.ensureFreshAccessToken()).toBeNull()
+    await expect(service.ensureFreshAccessToken()).rejects.toThrow('401 Unauthorized')
   })
 })

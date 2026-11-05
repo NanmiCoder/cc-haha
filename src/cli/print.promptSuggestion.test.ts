@@ -66,7 +66,7 @@ async function runPrint(lines: string[]) {
   })
   try {
     const child = spawnWithInput(
-      ['./bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'],
+      [process.execPath, '--no-env-file', './bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'],
       env,
       lines.join('\n') + '\n',
     )
@@ -167,7 +167,7 @@ async function startLiveCli(
     ANTHROPIC_MODEL: 'claude-sonnet-4-5',
   })
   const child = Bun.spawn(
-    ['./bin/claude-haha', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', ...extraArgs],
+    [process.execPath, '--no-env-file', './bin/claude-haha', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', ...extraArgs],
     { env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' },
   )
   const events: any[] = []

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, realpath, rm, symlink, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -20,10 +20,13 @@ afterEach(async () => {
 describe('userProvidedImages', () => {
   test('stores the real path so a symlinked attachment still matches', async () => {
     scratchDir = await mkdtemp(join(tmpdir(), 'user-images-'))
-    const realPath = join(scratchDir, 'portrait.png')
-    const linkPath = join(scratchDir, 'link.png')
+    const realDirectory = join(scratchDir, 'original')
+    const aliasDirectory = join(scratchDir, 'alias')
+    await mkdir(realDirectory)
+    const realPath = join(realDirectory, 'portrait.png')
+    const linkPath = join(aliasDirectory, 'portrait.png')
     await writeFile(realPath, 'png')
-    await symlink(realPath, linkPath)
+    await symlink(realDirectory, aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir')
 
     await registerUserProvidedImage(linkPath)
 

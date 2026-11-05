@@ -46,7 +46,7 @@ test.each(['collaboration', 'scheduled'] as const)('headless %s inbox acknowledg
     : { subtype: 'enqueue_session_message', start_if_idle: true, message_id: 'stable', sender_session_id: 'peer', text: '/clear @missing-fixture-file.txt' }
   const input = ['first', 'retry'].map(request_id => JSON.stringify({ type: 'control_request', request_id, request: payload })).join('\n') + '\n'
   try {
-    const child = spawnWithInput(['./bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages'], env, input)
+    const child = spawnWithInput([process.execPath, '--no-env-file', './bin/claude-haha', '--bare', '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages'], env, input)
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
     expect({ code, stderr }).toMatchObject({ code: 0 })
     const events = stdout.trim().split('\n').map(line => JSON.parse(line))
@@ -58,7 +58,7 @@ test.each(['collaboration', 'scheduled'] as const)('headless %s inbox acknowledg
     expect(requests).toBe(1)
     if (kind === 'scheduled') expect(events.find(event => event.type === 'user' && event.isReplay)?.scheduledTask).toEqual(scheduledTask)
     const sessionId = events.find(event => event.subtype === 'session_message_receipt').session_id
-    const resumed = spawnWithInput(['./bin/claude-haha', '--bare', '-p', '--resume', sessionId, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages'], env, input)
+    const resumed = spawnWithInput([process.execPath, '--no-env-file', './bin/claude-haha', '--bare', '-p', '--resume', sessionId, '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages'], env, input)
     const [resumedText, resumedError, resumedCode] = await Promise.all([new Response(resumed.stdout).text(), new Response(resumed.stderr).text(), resumed.exited])
     expect({ code: resumedCode, stderr: resumedError, stdout: resumedText }).toMatchObject({ code: 0 })
     const resumedEvents = resumedText.trim().split('\n').map(line => JSON.parse(line))

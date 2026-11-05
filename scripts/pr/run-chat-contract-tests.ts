@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { rootBunTestFilter } from './bun-test-filter'
-import { createSandboxedTestEnvironment } from './test-environment'
+import { createSandboxedTestEnvironment, removeTestDirectory } from './test-environment'
 
 interface ContractSuite {
   name: string
@@ -21,6 +21,8 @@ const suites: ContractSuite[] = [
       'bun',
       '--no-env-file',
       'test',
+      '--max-concurrency=1',
+      '--timeout=20000',
       rootBunTestFilter('src/server/__tests__/websocket-handler.test.ts'),
     ],
   },
@@ -31,6 +33,8 @@ const suites: ContractSuite[] = [
       'bun',
       '--no-env-file',
       'test',
+      '--max-concurrency=1',
+      '--timeout=20000',
       rootBunTestFilter('src/server/__tests__/conversations.test.ts'),
     ],
   },
@@ -74,7 +78,7 @@ for (const [index, suite] of suites.entries()) {
     })
     exitCode = await proc.exited
   } finally {
-    rmSync(sandboxHome, { recursive: true, force: true })
+    removeTestDirectory(sandboxHome)
   }
 
   if (exitCode !== 0) {

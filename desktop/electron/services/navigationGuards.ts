@@ -3,27 +3,13 @@ export type WindowOpenHandlerResult = { action: 'deny' } | { action: 'allow' }
 export type NavigationGuardWebContents = {
   setWindowOpenHandler(handler: (details: { url: string }) => WindowOpenHandlerResult): void
   on(
-    event: 'will-navigate',
-    handler: (event: { preventDefault: () => void }, url: string) => void,
+    event: 'will-navigate' | 'will-redirect',
+    handler: (event: { preventDefault: () => void; isMainFrame?: boolean }, url: string) => void,
   ): unknown
 }
 
 export type NavigationGuardOptions = {
   openExternal: (url: string) => void
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname
-    .trim()
-    .replace(/^\[/, '')
-    .replace(/\]$/, '')
-    .toLowerCase()
-
-  if (normalized === 'localhost' || normalized === '::1') return true
-  const parts = normalized.split('.')
-  return parts.length === 4 &&
-    parts[0] === '127' &&
-    parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255)
 }
 
 export function isHttpUrl(url: string): boolean {
@@ -35,14 +21,21 @@ export function isHttpUrl(url: string): boolean {
   }
 }
 
-export function isAllowedMainWindowNavigationUrl(url: string): boolean {
+export function isAllowedMainWindowNavigationUrl(url: string, rendererUrl: string): boolean {
   try {
     const parsed = new URL(url)
-    if (parsed.protocol === 'file:') return true
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return isLoopbackHostname(parsed.hostname)
-    }
-    return false
+    const entry = new URL(rendererUrl)
+    if (!['file:', 'http:', 'https:'].includes(entry.protocol)) return false
+    if (parsed.protocol !== entry.protocol || parsed.host !== entry.host) return false
+    if (parsed.username || parsed.password) return false
+    // Only the configured document can inherit preload. In particular, file:
+    // has a null origin, so comparing origins alone would trust every file.
+    // Query/hash changes are used by the SPA and the pet window.
+    const pathname = decodeURIComponent(parsed.pathname)
+    const entryPathname = decodeURIComponent(entry.pathname)
+    return entry.protocol === 'file:' && process.platform === 'win32'
+      ? pathname.toLowerCase() === entryPathname.toLowerCase()
+      : pathname === entryPathname
   } catch {
     return false
   }
@@ -57,17 +50,20 @@ export function isAllowedMainWindowNavigationUrl(url: string): boolean {
  */
 export function installMainWindowNavigationGuards(
   webContents: NavigationGuardWebContents,
-  { openExternal }: NavigationGuardOptions,
+  { openExternal, rendererUrl }: NavigationGuardOptions & { rendererUrl: string },
 ): void {
   webContents.setWindowOpenHandler(({ url }) => {
     if (isHttpUrl(url)) openExternal(url)
     return { action: 'deny' }
   })
-  webContents.on('will-navigate', (event, url) => {
-    if (isAllowedMainWindowNavigationUrl(url)) return
+  const guard = (event: { preventDefault: () => void; isMainFrame?: boolean }, url: string) => {
+    if (event.isMainFrame === false) return
+    if (isAllowedMainWindowNavigationUrl(url, rendererUrl)) return
     event.preventDefault()
     if (isHttpUrl(url)) openExternal(url)
-  })
+  }
+  webContents.on('will-navigate', guard)
+  webContents.on('will-redirect', guard)
 }
 
 /**

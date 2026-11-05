@@ -56,7 +56,7 @@ describe('WeChat bounded video processing', () => {
     const audio = fake.calls.at(-1)!.args
     expect(audio).toContain('16000')
     expect(audio).toContain('pcm_s16le')
-    expect(audio).toContain(source)
+    expect(audio[audio.indexOf('-i') + 1]).toBe(await fs.realpath(source))
     await result.cleanup()
     expect(await fs.readdir(root)).toEqual([path.basename(source)])
   })

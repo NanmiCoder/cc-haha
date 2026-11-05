@@ -482,11 +482,15 @@ export type LeadMailboxPollStep =
  */
 export async function takeLeadMailboxBatch(
   state: LeadMailboxPollState,
-  options: { teamName: string | undefined; hasActiveTeammates: boolean },
+  options: { teamName: string | undefined; hasActiveTeammates: boolean; canPoll?: () => boolean },
 ): Promise<LeadMailboxPollStep> {
   const { teamName, hasActiveTeammates } = options
+  if (options.canPoll?.() === false) return { kind: 'stop' }
   if (state.held) return { kind: 'held' }
   const unread = await readUnreadMessages(TEAM_LEAD_NAME, teamName)
+  // Do not start a new claim after closing. An already-started claim retains
+  // its existing atomic acknowledgement/history semantics.
+  if (options.canPoll?.() === false) return { kind: 'stop' }
 
   if (!hasActiveTeammates) {
     if (
@@ -1316,6 +1320,7 @@ function runHeadlessStreaming(
     | 'finally_post_flush'
     | undefined
   let inputClosed = false
+  let outputClosed = false
   let shutdownPromptInjected = false
   const leadMailboxPoll = createLeadMailboxPollState()
   const teamFinishedReminder: TeamFinishedReminderState = {}
@@ -2209,7 +2214,7 @@ function runHeadlessStreaming(
   })
 
   const run = async () => {
-    if (running) {
+    if (running || outputClosed) {
       return
     }
 
@@ -2715,7 +2720,7 @@ function runHeadlessStreaming(
       // Flush pending internal events before going idle
       await structuredIO.flushInternalEvents()
       runPhase = 'finally_post_flush'
-      if (!isShuttingDown()) {
+      if (!isShuttingDown() && !outputClosed) {
         notifySessionStateChanged('idle')
         // Drain so the idle session_state_changed SDK event (plus any
         // terminal task_notification bookends emitted during bg-agent
@@ -2729,8 +2734,10 @@ function runHeadlessStreaming(
       }
       running = false
       // Start idle timer when we finish processing and are waiting for input
-      idleTimeout.start()
+      if (!outputClosed) idleTimeout.start()
     }
+
+    if (outputClosed) return
 
     // Proactive tick: if proactive is active and queue is empty, inject a tick
     if (
@@ -2768,6 +2775,7 @@ function runHeadlessStreaming(
         const POLL_INTERVAL_MS = 500
 
         while (true) {
+          if (outputClosed) return
           // Check if teammates are still active
           const refreshedState = getAppState()
           const teamName = refreshedState.teamContext?.teamName
@@ -2776,7 +2784,11 @@ function runHeadlessStreaming(
           const step = await takeLeadMailboxBatch(leadMailboxPoll, {
             teamName,
             hasActiveTeammates: hasTeammatesRequiringShutdown(refreshedState),
+            canPoll: () => !outputClosed,
           })
+          // Closing input can finish the output while this idle poll awaits
+          // disk I/O. Its old teammate snapshot no longer owns another turn.
+          if (outputClosed) return
 
           if (step.kind === 'stop') {
             logForDebugging(
@@ -2885,6 +2897,7 @@ function runHeadlessStreaming(
 
             // Format remaining teammate chat the same way as useInboxPoller.
             // Permission requests stay out of the model context.
+            if (outputClosed) return
             const formatted = formatTeammateMessages(partitioned.remaining)
 
             // Enqueue and process
@@ -2916,6 +2929,7 @@ function runHeadlessStreaming(
             teamFinishedReminder,
             teamName,
           )
+          if (outputClosed) return
           if (teamFinishedPrompt) {
             logForDebugging(
               '[print.ts] Approved team finished, reminding the lead to shut it down',
@@ -2945,11 +2959,17 @@ function runHeadlessStreaming(
         return hasTeammatesRequiringShutdown(refreshedAppState)
       })()
 
+      // Another turn or a closing input may have taken ownership while the
+      // teammate shutdown check was waiting.
+      if (outputClosed || running) return
+
       if (hasActiveSwarm) {
         // Team members are idle or pane-based - inject prompt to shut down team
         enqueue(createShutdownTeamPrompt())
         void run()
       } else {
+        outputClosed = true
+        idleTimeout.stop()
         // Wait for any in-flight push suggestion before closing the output stream.
         if (suggestionState.inflightPromise) {
           await Promise.race([suggestionState.inflightPromise, sleep(5000)])
@@ -4643,6 +4663,8 @@ function runHeadlessStreaming(
     inputClosed = true
     cronScheduler?.stop()
     if (!running) {
+      outputClosed = true
+      idleTimeout.stop()
       // If a push-suggestion is in-flight, wait for it to emit before closing
       // the output stream (5 s safety timeout to prevent hanging).
       if (suggestionState.inflightPromise) {

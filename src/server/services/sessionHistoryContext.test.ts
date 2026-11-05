@@ -2,12 +2,12 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { appendFile, mkdtemp, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readHistoryContexts } from './sessionHistoryContext.js'
+import { readHistoryContexts, stopHistoryContexts } from './sessionHistoryContext.js'
 
 let directory: string
 let file: string
 beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'history-context-test-')); file = join(directory, 'session.jsonl') })
-afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
+afterEach(async () => { await stopHistoryContexts(); await rm(directory, { recursive: true, force: true }) })
 const row = (id: string, fields: object = {}) => JSON.stringify({ uuid: id, ...fields })
 const version = async (filePath = file) => { const info = await stat(filePath, { bigint: true }); return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}` }
 const agentToolId = (entry: Record<string, unknown>) => typeof entry.agent === 'string' ? entry.agent : undefined
@@ -16,6 +16,19 @@ const messageAgentToolId = (entry: Record<string, unknown>) => {
   const blocks = Array.isArray(content) ? content : []
   return blocks.find(block => block.type === 'tool_use' && ['Agent', 'Task'].includes(block.name))?.id as string | undefined
 }
+
+test('releases cached context databases at shutdown and rebuilds on restart', async () => {
+  await writeFile(file, row('side', { isSidechain: true }) + '\n')
+  const options = { filePath: file, sourceVersion: await version(), offsets: [0], agentToolId }
+  const initial = await readHistoryContexts(options)
+  expect((await readHistoryContexts(options)).scannedBytes).toBe(0)
+  await stopHistoryContexts()
+  await stopHistoryContexts()
+  const restarted = await readHistoryContexts(options)
+  expect(restarted.contexts).toEqual(initial.contexts)
+  expect(restarted.scannedBytes).toBe(initial.scannedBytes)
+  expect(restarted.scannedBytes).toBeGreaterThan(0)
+})
 
 test('root reads hide unowned sidechains while a child transcript keeps them, from one shared scan', async () => {
   const entries = [

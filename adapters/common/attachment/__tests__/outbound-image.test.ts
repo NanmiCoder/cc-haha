@@ -6,6 +6,7 @@ import { IMAGE_MAX_BYTES } from '../attachment-limits.js'
 import { loadSafeOutboundImage, sendSafeOutboundImage } from '../outbound-image.js'
 
 const temporaryRoots: string[] = []
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aUioAAAAASUVORK5CYII=', 'base64')
 
 function makeTempRoot(prefix: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -20,6 +21,21 @@ afterEach(() => {
 })
 
 describe('loadSafeOutboundImage', () => {
+  it('derives local image MIME from its signature instead of an Agent label or extension', async () => {
+    const root = makeTempRoot('outbound-formats-')
+    for (const [expected, buffer] of [
+      ['image/png', png],
+      ['image/jpeg', Buffer.from([0xff, 0xd8, 0xff, 0xe0])],
+      ['image/gif', Buffer.from('GIF89afixture')],
+      ['image/webp', Buffer.from('RIFF0000WEBPfixture')],
+    ] as const) {
+      const imagePath = path.join(root, '..image.dat')
+      fs.writeFileSync(imagePath, buffer)
+      const result = await loadSafeOutboundImage({ id: expected, source: { kind: 'path', path: imagePath } }, root)
+      expect(result).toEqual({ ok: true, buffer, mime: expected })
+    }
+  })
+
   it('requires an active session work directory', async () => {
     const result = await loadSafeOutboundImage({
       id: 'missing-session',
@@ -35,7 +51,7 @@ describe('loadSafeOutboundImage', () => {
   it('loads a bounded image inside the active session work directory', async () => {
     const root = makeTempRoot('outbound-root-')
     const imagePath = path.join(root, 'result.png')
-    fs.writeFileSync(imagePath, Buffer.from('png'))
+    fs.writeFileSync(imagePath, png)
 
     const result = await loadSafeOutboundImage({
       id: 'inside',
@@ -43,16 +59,17 @@ describe('loadSafeOutboundImage', () => {
     }, root)
 
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.buffer.toString()).toBe('png')
+    if (result.ok) expect(result.buffer).toEqual(png)
   })
 
   it('rejects paths outside the session root, including symlink escapes', async () => {
     const root = makeTempRoot('outbound-root-')
     const outside = makeTempRoot('outbound-outside-')
     const secretPath = path.join(outside, 'secret.png')
-    const symlinkPath = path.join(root, 'escape.png')
+    const symlinkRoot = path.join(root, 'escape')
+    const symlinkPath = path.join(symlinkRoot, 'secret.png')
     fs.writeFileSync(secretPath, Buffer.from('secret'))
-    fs.symlinkSync(secretPath, symlinkPath)
+    fs.symlinkSync(outside, symlinkRoot, process.platform === 'win32' ? 'junction' : 'dir')
 
     const direct = await loadSafeOutboundImage({
       id: 'outside',
@@ -143,14 +160,15 @@ describe('loadSafeOutboundImage', () => {
   it('only calls the platform sender after the image passes validation', async () => {
     const root = makeTempRoot('outbound-root-')
     const imagePath = path.join(root, 'result.png')
-    fs.writeFileSync(imagePath, Buffer.from('png'))
+    fs.writeFileSync(imagePath, png)
     const sent: string[] = []
 
     const allowed = await sendSafeOutboundImage({
       id: 'inside',
       source: { kind: 'path', path: imagePath, mime: 'image/png' },
     }, root, async (buffer, mime) => {
-      sent.push(`${buffer.toString()}:${mime}`)
+      expect(buffer).toEqual(png)
+      sent.push(mime)
     })
     const blocked = await sendSafeOutboundImage({
       id: 'url',
@@ -161,6 +179,6 @@ describe('loadSafeOutboundImage', () => {
 
     expect(allowed.ok).toBe(true)
     expect(blocked.ok).toBe(false)
-    expect(sent).toEqual(['png:image/png'])
+    expect(sent).toEqual(['image/png'])
   })
 })

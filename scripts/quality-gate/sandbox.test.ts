@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -15,7 +15,7 @@ import {
 const scratchDirs: string[] = []
 
 function scratch(prefix: string) {
-  const dir = mkdtempSync(join(tmpdir(), `cc-haha-sandbox-test-${prefix}-`))
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), `cc-haha-sandbox-test-${prefix}-`)))
   scratchDirs.push(dir)
   return dir
 }

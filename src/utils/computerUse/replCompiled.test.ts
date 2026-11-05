@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createComputerUseReplWorker } from './replWorker'
 import type { ReplOutput } from '../../vendor/computer-use-mcp/replProtocol'
 
@@ -10,7 +10,7 @@ test('minified bootstrap source remains self-contained in an isolated realm', as
   const directory = await mkdtemp(join(tmpdir(), 'cu-repl-minified-'))
   try {
     const entrypoint = join(directory, 'bootstrap.ts')
-    const apiPath = new URL('../../vendor/computer-use-mcp/replApi.ts', import.meta.url).pathname
+    const apiPath = fileURLToPath(new URL('../../vendor/computer-use-mcp/replApi.ts', import.meta.url))
     await writeFile(entrypoint, `export {REPL_BOOTSTRAP_SOURCE} from ${JSON.stringify(apiPath)}`)
     const build = await Bun.build({
       entrypoints: [entrypoint],

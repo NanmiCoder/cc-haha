@@ -11,6 +11,7 @@ Source: [vercel-labs/agent-desktop](https://github.com/vercel-labs/agent-desktop
 - `crates/linux/src/system/overlay/cursor_overlay_draw.rs` uses the same arrow dimensions and outline width. Its window remains click-through and keeps the hotspot at the requested screen coordinate.
 - `src/cli/product_bridge_tests.rs`, registered in `src/cli/mod.rs`, checks the product bridge's actual cursor configuration, screenshot, clipboard image, and batch argument contracts without opening a desktop.
 - `crates/core/tests/product_cursor_visuals.rs` runs the Windows geometry and raster tests without linking an OS adapter or opening a window.
+- `crates/core/src/context/context_tests.rs` freezes the virtual clock while checking trace persistence, so host scheduling does not consume the trace lock budget. `crates/core/src/commands/wait_predicate_tests.rs` gives the non-editable action fixture the existing semantic-test timeout, while preserving its unsupported-action assertions. Both changes affect tests only.
 - `.gitignore` excludes the local Cargo target and test state directories.
 - `tests/e2e-windows/scenarios/Interaction.ps1`, `tests/fixture-app-windows/FixtureCardsClicks.cs`, and the collected dependency notices have trailing whitespace normalized. Source statements and license wording are unchanged.
 - `NOTICE`, `THIRD-PARTY-NOTICES`, this file, and `UPSTREAM.json` provide distribution and source attribution.

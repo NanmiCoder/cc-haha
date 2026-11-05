@@ -1,10 +1,11 @@
 import { expect, spyOn, test } from 'bun:test'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
+  stopTraceCapture,
   getTraceCaptureDiagnosticsForTests,
   setTraceProjectionAfterIndexHookForTests,
   traceCaptureService,
@@ -27,6 +28,7 @@ async function fixture(run: (filePath: string) => Promise<void>) {
     await fs.mkdir(dir, { recursive: true })
     await run(join(dir, 'fixture.jsonl'))
   } finally {
+    await drainTraceCaptureForTests()
     clearTraceCaptureStateForTests()
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfig
@@ -44,6 +46,20 @@ function callLine(id: string, preview = '') {
     } },
   } }) + '\n'
 }
+
+test('shutdown releases the trace database and a later read rebuilds from canonical records', () => fixture(async filePath => {
+  await fs.writeFile(filePath, callLine('before-shutdown'))
+  const initial = await traceCaptureService.getSessionTraceOverview('fixture')
+  expect(initial.calls.map(call => call.id)).toEqual(['before-shutdown'])
+  await stopTraceCapture()
+  await stopTraceCapture()
+  const databaseDirectory = join(process.env.CLAUDE_CONFIG_DIR!, 'cc-haha', 'db')
+  await fs.rm(databaseDirectory, { recursive: true })
+  await fs.appendFile(filePath, callLine('after-restart'))
+  const restarted = await traceCaptureService.getSessionTraceOverview('fixture')
+  expect(restarted.calls.map(call => call.id)).toEqual(['before-shutdown', 'after-restart'])
+  expect((await fs.stat(databaseDirectory)).isDirectory()).toBe(true)
+}))
 
 test('skips oversized JSONL records before parse and keeps raw bytes available', () => fixture(async filePath => {
   await fs.writeFile(filePath, callLine('huge', 'x'.repeat(TRACE_RECORD_BYTES_LIMIT * 3)) + callLine('small'))
@@ -173,7 +189,7 @@ test('bounds queued cold jobs and cancels queued work before opening source file
   let reads = 0
   const openSpy = spyOn(fs, 'open').mockImplementation(async (...args) => {
     const handle = await originalOpen(...args)
-    if (!String(args[0]).includes('/queued-')) return handle
+    if (!basename(String(args[0])).startsWith('queued-')) return handle
     return new Proxy(handle, {
       get(target, property) {
         if (property === 'read') return async (buffer: Uint8Array, offset: number, length: number, position: number) => {

@@ -6,6 +6,7 @@ import { z } from 'zod/v4'
 import { getEmptyToolPermissionContext, type ToolUseContext } from '../../Tool.js'
 import { FileReadTool } from '../FileReadTool/FileReadTool.js'
 import { FileWriteTool } from './FileWriteTool.js'
+import { windowsPathToPosixPath } from '../../utils/windowsPaths.js'
 
 const directories: string[] = []
 const originalSimple = process.env.CLAUDE_CODE_SIMPLE
@@ -29,7 +30,7 @@ afterEach(async () => {
 
 function context(deniedPath?: string): ToolUseContext {
   const permissions = getEmptyToolPermissionContext()
-  if (deniedPath) permissions.alwaysDenyRules.session = [`Edit(/${deniedPath})`]
+  if (deniedPath) permissions.alwaysDenyRules.session = [`Edit(/${windowsPathToPosixPath(deniedPath)})`]
   return {
     readFileState: new Map(), abortController: new AbortController(),
     updateFileHistoryState: () => {},

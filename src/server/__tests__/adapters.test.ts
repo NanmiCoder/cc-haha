@@ -355,7 +355,7 @@ describe('Adapters API', () => {
     await fs.writeFile(path.join(staleDir, 'creds.json'), '{}')
     await fs.writeFile(path.join(freshDir, 'creds.json'), '{}')
     await fs.writeFile(path.join(victim, 'keep.txt'), 'keep')
-    await fs.symlink(victim, symlinksDir)
+    await fs.symlink(victim, symlinksDir, process.platform === 'win32' ? 'junction' : 'dir')
 
     const staleDate = new Date(Date.now() - (3 * 60 * 1000) - 60_000)
     await fs.utimes(staleDir, staleDate, staleDate)

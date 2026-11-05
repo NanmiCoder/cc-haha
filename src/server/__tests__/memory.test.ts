@@ -280,7 +280,7 @@ describe('memory API', () => {
     const outsideDir = path.join(tmpDir, 'outside')
     await fs.mkdir(memoryDir, { recursive: true })
     await fs.mkdir(outsideDir, { recursive: true })
-    await fs.symlink(outsideDir, path.join(memoryDir, 'linked'), 'dir')
+    await fs.symlink(outsideDir, path.join(memoryDir, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
 
     const traversalRes = await request('PUT', '/api/memory/file', {
       projectId,

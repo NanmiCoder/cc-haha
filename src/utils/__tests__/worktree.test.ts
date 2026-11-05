@@ -174,10 +174,13 @@ describe('createAgentWorktree', () => {
       'add',
       '-b',
       branch,
-      linkedWorktreePath,
+      // Git for Windows cannot create this nested worktree through a junction.
+      // Provision its physical target, then exercise removal via the unsafe alias.
+      externalWorktreePath,
       'HEAD',
     ])
     writeFileSync(join(externalWorktreePath, 'keep.txt'), 'must remain\n')
+    expect(readFileSync(join(linkedWorktreePath, 'keep.txt'), 'utf8')).toBe('must remain\n')
 
     expect(
       await removeAgentWorktree(linkedWorktreePath, branch, repoDir),

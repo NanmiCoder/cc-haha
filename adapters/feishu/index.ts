@@ -177,7 +177,7 @@ async function dispatchOutboundImage(chatId: string, pending: PendingUpload): Pr
   if (cache.has(pending.id)) return // already uploaded within this chat
 
   try {
-    const { buffer, mime } = await materializePendingUploadImage(pending.source)
+    const { buffer, mime } = await materializePendingUploadImage(pending.source, sessionStore.get(chatId)?.workDir)
 
     const check = checkAttachmentLimit('image', buffer.length, mime)
     if (!check.ok) {

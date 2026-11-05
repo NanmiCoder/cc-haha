@@ -375,7 +375,7 @@ export function parseBunTestFileCount(output: string) {
 }
 
 export function buildRootCoverageCommand(outputDir: string, serverFiles: string[], rootDir = ROOT_DIR) {
-  return [
+  const command = [
     'bun',
     '--no-env-file',
     '--feature=TRANSCRIPT_CLASSIFIER',
@@ -392,6 +392,18 @@ export function buildRootCoverageCommand(outputDir: string, serverFiles: string[
     join(outputDir, 'root-server'),
     ...serverFiles.map(rootBunTestFilter),
   ]
+  // CreateProcess has a 32,767-character limit. Keep one isolated LCOV process
+  // (merging per-process function totals is lossy), but let Bun discover src
+  // when enumerating every test would exceed that limit. Explicitly exclude
+  // unselected files; the gate still checks the exact discovered file count.
+  if (command.join(' ').length < 24_000) return command
+  const selected = new Set(serverFiles)
+  const excluded = collectServerTestFiles(rootDir, { quarantined: [] })
+    .filter(file => !selected.has(file))
+  const compact = command.slice(0, command.length - serverFiles.length)
+  compact.push('./src')
+  for (const file of excluded) compact.push('--path-ignore-patterns', file)
+  return compact
 }
 
 export function buildAdaptersCoverageCommand(outputDir: string) {

@@ -54,6 +54,8 @@ type WorkerRuntime = {
   starting?: Promise<boolean>
   autoContinueAttempts: number
   autoContinueTimer?: ReturnType<typeof setTimeout>
+  autoContinueGeneration?: number
+  delivery?: Promise<void>
   powerOperations?: number
   powerTurnPending?: boolean
   restartHistory: number[]
@@ -427,24 +429,32 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
 function cancelAutoContinue(worker: WorkerRuntime): void {
   if (worker.autoContinueTimer) clearTimeout(worker.autoContinueTimer)
   worker.autoContinueTimer = undefined
+  worker.autoContinueGeneration = (worker.autoContinueGeneration ?? 0) + 1
 }
 
 function autoContinuePrompt(reason: string, attempt: number): string {
   return formatTeammateAutoContinuePrompt(reason, attempt, timing.autoContinueDelaysMs.length)
 }
 
-async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: string, attempt: number): Promise<void> {
+async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: string, attempt: number, generation: number | undefined): Promise<void> {
   if (migrationMaintenance.isActive) return
+  const canContinue = () => worker.autoContinueGeneration === generation
+    && !launch.stopped && !launch.pausedAt && conversationService.hasSession(worker.sessionId)
+  if (!canContinue()) return
   worker.autoContinueTimer = undefined
-  if (launch.stopped || launch.pausedAt || !conversationService.hasSession(worker.sessionId)) return
+  // A short turn can finish before its triggering mail is marked read. Wait
+  // for that delivery so the old instruction is not mistaken for newer mail.
+  await worker.delivery
+  if (!canContinue()) return
   // Queued mail resumes the member anyway, with the newer context.
-  if ((await readUnreadMessages(worker.member.name, launch.plan.teamName)).length > 0) return
+  if ((await readUnreadMessages(worker.member.name, launch.plan.teamName)).length > 0 || !canContinue()) return
   const entry = readTeamFile(launch.plan.teamName)?.members.find(member => member.sessionId === worker.sessionId)
   if (entry?.isActive) return
   await updateWorkerEntry(launch, worker, current => ({ ...current, isActive: true }))
+  if (!canContinue()) return
   worker.powerTurnPending = true
-  const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt))
-  if (sent) return
+  const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt), undefined, { canSend: canContinue })
+  if (sent || !canContinue()) return
   // No retry is scheduled any more: report the failure instead of leaving a
   // stale countdown that also keeps a /goal lead waiting on this member.
   await updateWorkerEntry(launch, worker, current => {
@@ -522,11 +532,17 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     const attempt = ++worker.autoContinueAttempts
     const delay = timing.autoContinueDelaysMs[attempt - 1]!
     cancelAutoContinue(worker)
+    const generation = worker.autoContinueGeneration
+    const nextAt = Date.now() + delay
+    // Publish the idle state before a short backoff can fire. Otherwise a slow
+    // roster write makes autoContinueWorker see the previous busy turn and quit.
+    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt } }))
+    // Stop, a command, or a newer instruction can cancel while the write waits.
+    if (worker.autoContinueGeneration !== generation || launch.stopped || launch.pausedAt) return
     worker.autoContinueTimer = setTimeout(() => {
-      void migrationMaintenance.track(trackWorkerPowerOperation(worker, () => autoContinueWorker(launch, worker, reason, attempt))).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
-    }, delay)
+      void migrationMaintenance.track(trackWorkerPowerOperation(worker, () => autoContinueWorker(launch, worker, reason, attempt, generation))).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
+    }, Math.max(0, nextAt - Date.now()))
     worker.autoContinueTimer.unref?.()
-    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
     return
   }
   const exhausted = alive && isTransientWorkerFailure(text)
@@ -586,7 +602,13 @@ function clearFailure(worker: WorkerRuntime): void {
 // ── Supervisor ──────────────────────────────────────────────────────────────
 
 async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
-  return trackWorkerPowerOperation(worker, () => deliverToWorkerOnce(launch, worker, messages))
+  const delivery = trackWorkerPowerOperation(worker, () => deliverToWorkerOnce(launch, worker, messages))
+  worker.delivery = delivery
+  try {
+    await delivery
+  } finally {
+    if (worker.delivery === delivery) worker.delivery = undefined
+  }
 }
 
 async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {

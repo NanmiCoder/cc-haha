@@ -53,6 +53,6 @@ test('rejects traversal, duplicate targets, unpinned sources and symlinked insta
   const external = join(path, 'external.md')
   await writeFile(external, bytes)
   await rm(file)
-  await symlink(external, file)
+  await symlink(process.platform === 'win32' ? path : external, file, process.platform === 'win32' ? 'junction' : 'file')
   await expect(adapter.check(installation, new AbortController().signal)).rejects.toThrow('Invalid skill bundle member')
 })

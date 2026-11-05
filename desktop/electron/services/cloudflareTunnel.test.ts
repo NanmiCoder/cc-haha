@@ -75,10 +75,10 @@ function fixture(dependencies: Partial<CloudflareTunnelDependencies> = {}) {
 
 describe('bundled Cloudflare connector', () => {
   it('resolves the same target-specific packaged binary on every supported platform', () => {
-    expect(resolveBundledCloudflared('/desktop', 'darwin', 'arm64')).toBe('/desktop/src-tauri/binaries/cloudflared-aarch64-apple-darwin')
-    expect(resolveBundledCloudflared('/desktop', 'linux', 'x64')).toBe('/desktop/src-tauri/binaries/cloudflared-x86_64-unknown-linux-gnu')
-    expect(resolveBundledCloudflared('/desktop', 'win32', 'x64')).toBe('/desktop/src-tauri/binaries/cloudflared-x86_64-pc-windows-msvc.exe')
-    expect(resolveBundledCloudflared('/Resources/app.asar', 'darwin', 'x64')).toBe('/Resources/app.asar.unpacked/src-tauri/binaries/cloudflared-x86_64-apple-darwin')
+    expect(resolveBundledCloudflared('/desktop', 'darwin', 'arm64')).toBe(path.join('/desktop', 'src-tauri/binaries/cloudflared-aarch64-apple-darwin'))
+    expect(resolveBundledCloudflared('/desktop', 'linux', 'x64')).toBe(path.join('/desktop', 'src-tauri/binaries/cloudflared-x86_64-unknown-linux-gnu'))
+    expect(resolveBundledCloudflared('/desktop', 'win32', 'x64')).toBe(path.join('/desktop', 'src-tauri/binaries/cloudflared-x86_64-pc-windows-msvc.exe'))
+    expect(resolveBundledCloudflared('/Resources/app.asar', 'darwin', 'x64')).toBe(path.join('/Resources/app.asar.unpacked', 'src-tauri/binaries/cloudflared-x86_64-apple-darwin'))
   })
 
   it('does not inherit another tunnel, token, proxy, or user home', () => {
