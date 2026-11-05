@@ -255,7 +255,11 @@ export const useWorkspaceReviewStore = create<WorkspaceReviewStore>((set, get) =
               // at all, and the panel drew a green check over a deleted
               // worktree.
               error: status.error ?? null,
-              diffsByPath: snapshotChanged ? {} : entry.diffsByPath,
+              // Failed reads are retryable when the user refreshes, even if
+              // Git has not changed. Keep them between renders to avoid loops.
+              diffsByPath: snapshotChanged ? {} : options?.force
+                ? Object.fromEntries(Object.entries(entry.diffsByPath).filter(([, diff]) => diff?.state !== 'error'))
+                : entry.diffsByPath,
               diffLoadingByPath: {},
             },
           },

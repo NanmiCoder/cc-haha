@@ -16,6 +16,28 @@ afterEach(async () => {
 })
 
 describe('AttachmentStore', () => {
+  it('stores colon-bearing WeChat message IDs as ordinary files, not Windows alternate streams', async () => {
+    const store = new AttachmentStore({ root: tmpRoot })
+    const target = store.resolvePath('wechat', 'session', 'wechat-image-v1:fixture:photo.jpg')
+    expect(path.basename(target)).not.toContain(':')
+    await store.write(target, Buffer.from('downloaded image bytes'))
+    const entries = await fs.readdir(path.dirname(target))
+    expect(entries).toEqual([path.basename(target)])
+    expect((await fs.stat(target)).size).toBe(22)
+    expect(await fs.readFile(target, 'utf8')).toBe('downloaded image bytes')
+  })
+
+  it('normalizes Windows-invalid characters, trailing dots and reserved device names', async () => {
+    const store = new AttachmentStore({ root: tmpRoot })
+    for (const name of ['a<b>c:d"e|f?g*.txt', 'report.txt. ', 'CON', 'nul.txt', 'LPT1.pdf']) {
+      const target = store.resolvePath('wechat', 'session:fixture', name)
+      expect(path.relative(tmpRoot, target)).not.toMatch(/[<>:"|?*]/)
+      expect(path.basename(target)).not.toMatch(/[. ]$/)
+      await store.write(target, Buffer.from(name))
+      expect(await fs.readFile(target, 'utf8')).toBe(name)
+    }
+  })
+
   it('keeps default IM downloads inside the active storage directory', async () => {
     const previous = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = tmpRoot

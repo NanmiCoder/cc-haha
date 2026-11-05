@@ -1,6 +1,22 @@
 import type { TranslationKey } from './en'
 
 export const jp: Record<TranslationKey, string> = {
+  'settings.adapters.wechatHealthStopped': "メッセージ接続は停止中",
+  'settings.adapters.wechatHealthStarting': "メッセージ接続中",
+  'settings.adapters.wechatHealthOnline': "メッセージ接続はオンライン",
+  'settings.adapters.wechatHealthReconnecting': "メッセージ接続を再接続中",
+  'settings.adapters.wechatHealthAuthExpired': "ログイン期限切れ — 再スキャンしてください",
+  'settings.adapters.wechatHealthError': "メッセージ接続エラー",
+  'settings.adapters.wechatHealthStale': "接続状態の有効期限切れ",
+  'settings.adapters.wechatHealthServerOffline': "ローカルサービスに接続できません",
+  'settings.adapters.wechatHealthChecking': "接続を確認中",
+  'settings.adapters.wechatHealthReconnect': "再接続",
+  'settings.adapters.wechatHealthPaired': "承認済みユーザーがいます",
+  'settings.adapters.wechatHealthUnpaired': "ユーザーのペアリング待ち",
+  'settings.adapters.wechatHealthLastReceive': "最終受信",
+  'settings.adapters.wechatHealthLastSend': "最終送信",
+  'settings.adapters.wechatHealthNever': "まだありません",
+  'settings.adapters.wechatHealthRestartFailed': "再接続に失敗しました。デスクトップサービスの動作を確認して再試行してください。",
   "sidebar.archiveSession": "アーカイブ",
   "sidebar.restoreSession": "復元",
   "sidebar.archivedSessions": "アーカイブ済みセッション",

@@ -23,11 +23,19 @@ describe('MessageDedup', () => {
     expect(dedup.tryRecord('msg-1')).toBe(false)
   })
 
+  it('does not record a message when only checking accepted ids', () => {
+    expect(dedup.has('retryable')).toBe(false)
+    expect(dedup.has('retryable')).toBe(false)
+    expect(dedup.tryRecord('retryable')).toBe(true)
+    expect(dedup.has('retryable')).toBe(true)
+  })
+
   it('allows same ID after TTL expires', async () => {
     const shortDedup = new MessageDedup(50, 100) // 50ms TTL
     expect(shortDedup.tryRecord('msg-1')).toBe(true)
     expect(shortDedup.tryRecord('msg-1')).toBe(false)
     await new Promise((r) => setTimeout(r, 60))
+    expect(shortDedup.has('msg-1')).toBe(false)
     expect(shortDedup.tryRecord('msg-1')).toBe(true)
     shortDedup.destroy()
   })
