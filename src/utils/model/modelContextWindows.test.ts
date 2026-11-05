@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  findModelMaxOutputTokens,
   getConfiguredOrBuiltInModelContextWindow,
   getModelContextWindowFromEnvValue,
 } from './modelContextWindows.js'
@@ -35,5 +36,16 @@ describe('model context windows', () => {
       'glm-5.2[1m]',
       JSON.stringify({ 'glm-5.2': 1_000_000 }),
     )).toBe(1_000_000)
+  })
+
+  test('finds the reply limit saved on a provider the way configured windows are matched', () => {
+    const limits = { 'MiniMax-M3': 8_192, 'glm-5.3-flash': 16_384, tiny: 100 }
+
+    expect(findModelMaxOutputTokens('MiniMax-M3[1m]', limits)).toBe(8_192)
+    expect(findModelMaxOutputTokens('zai-org/glm-5.3-flash', limits)).toBe(16_384)
+    // Below the accepted minimum, or not listed at all: no limit.
+    expect(findModelMaxOutputTokens('tiny', limits)).toBeUndefined()
+    expect(findModelMaxOutputTokens('deepseek-flash', limits)).toBeUndefined()
+    expect(findModelMaxOutputTokens('deepseek-flash', undefined)).toBeUndefined()
   })
 })
