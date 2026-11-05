@@ -4,6 +4,8 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   claudeUserText,
+  codexUserRow,
+  codexUserThreadId,
   defaultHistoryPaths,
   HISTORY_WINDOW_DAYS,
   historyWindowStart,
@@ -39,13 +41,52 @@ async function writeTranscript(project: string, session: string, lines: string[]
   if (modifiedAt) await fs.utimes(file, modifiedAt, modifiedAt)
 }
 
-async function writeCodexHistory(rows: Array<{ session_id?: string; text?: string; ts?: number }>) {
-  await fs.mkdir(paths.codexHome, { recursive: true })
-  await fs.writeFile(
-    path.join(paths.codexHome, 'history.jsonl'),
-    rows.map(row => JSON.stringify({ ts: 1, ...row })).join('\n') + '\n',
-    'utf-8',
-  )
+// Codex rollout rows, field for field as Codex Desktop 0.166 writes them.
+const codexLine = (type: string, payload: Record<string, unknown>, timestamp = '2026-11-05T09:00:00.000Z') =>
+  JSON.stringify({ timestamp, type, payload })
+const codexMeta = (id: string, extra: Record<string, unknown> = {}) => codexLine('session_meta', {
+  id,
+  timestamp: '2026-11-05T09:00:00.000Z',
+  cwd: '/work',
+  originator: 'Codex Desktop',
+  cli_version: '0.166.0-alpha.5.1',
+  source: 'vscode',
+  thread_source: 'user',
+  history_mode: 'paginated',
+  ...extra,
+})
+const codexInput = (parts: Array<[kind: string, text: string]>, timestamp?: string) => codexLine('response_item', {
+  type: 'message',
+  id: 'msg_01a1a23f-78bf-7b52-8000-000000000000',
+  role: 'user',
+  content: parts.map(([, text]) => ({ type: 'input_text', text })),
+  internal_chat_message_metadata_passthrough: {
+    turn_id: '01a1a23f-6a37-7401-b17d-000000000000',
+    content_item_kinds: parts.map(([kind]) => kind),
+    content_item_metadata: parts.map(() => ({ provenance: { type: 'user' } })),
+  },
+}, timestamp)
+const codexItem = (text: string, timestamp?: string) => codexLine('event_msg', {
+  type: 'item_completed',
+  thread_id: '01a1a23f-4b81-7ad2-96da-000000000000',
+  turn_id: '01a1a23f-6a37-7401-b17d-000000000000',
+  item: { type: 'UserMessage', id: '01a1a23f-78c5-7b32-8d88-000000000000', content: [{ type: 'text', text, text_elements: [] }] },
+}, timestamp)
+/** One typed prompt: the tagged model input and the completed item Codex records beside it. */
+const codexTyped = (text: string, timestamp?: string) => [codexInput([['user.text', text]], timestamp), codexItem(text, timestamp)]
+const codexAssistant = (text: string) =>
+  codexLine('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
+
+async function writeCodexRollout(
+  thread: string,
+  lines: string[],
+  options: { meta?: Record<string, unknown>; dir?: string; modifiedAt?: Date } = {},
+) {
+  const dir = path.join(paths.codexHome, options.dir ?? 'sessions/2026/11/05')
+  await fs.mkdir(dir, { recursive: true })
+  const file = path.join(dir, `rollout-2026-11-05T09-00-00-${thread}.jsonl`)
+  await fs.writeFile(file, [codexMeta(thread, options.meta), ...lines].join('\n') + '\n', 'utf-8')
+  if (options.modifiedAt) await fs.utimes(file, options.modifiedAt, options.modifiedAt)
 }
 
 describe('which messages count', () => {
@@ -99,6 +140,124 @@ describe('which messages count', () => {
   })
 })
 
+describe('Codex threads', () => {
+  test('only threads the user typed into, judged by the file\'s own first session_meta', () => {
+    expect(codexUserThreadId(codexMeta('app'))).toBe('app')
+    expect(codexUserThreadId(codexMeta('cli', { source: 'cli' }))).toBe('cli')
+    expect(codexUserThreadId(codexMeta('atlas', { source: { custom: 'atlas' } }))).toBe('atlas')
+    // Written before Codex recorded where a thread came from.
+    expect(codexUserThreadId(codexMeta('old', { source: undefined, thread_source: undefined }))).toBe('old')
+
+    expect(codexUserThreadId(codexMeta('exec', { source: 'exec' }))).toBeNull()
+    expect(codexUserThreadId(codexMeta('mcp', { source: 'mcp' }))).toBeNull()
+    expect(codexUserThreadId(codexMeta('other', { source: { custom: 'other' } }))).toBeNull()
+    expect(codexUserThreadId(codexMeta('sub', {
+      source: { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } },
+      thread_source: 'subagent',
+    }))).toBeNull()
+    expect(codexUserThreadId(codexMeta('made', { thread_source: 'agent_created_thread' }))).toBeNull()
+    expect(codexUserThreadId(codexMeta('', {}))).toBeNull()
+    expect(codexUserThreadId(codexTyped('Codex')[0]!)).toBeNull()
+    expect(codexUserThreadId('not json')).toBeNull()
+  })
+
+  test('reads typed text by its origin tag, not heartbeats or injected context', () => {
+    expect(codexUserRow(codexInput([['user.text', '用 Codex 写']]))).toEqual({ text: '用 Codex 写', tagged: true })
+    expect(codexUserRow(codexInput([
+      ['agents_md.instructions', '# AGENTS.md instructions for /work\nAgentsTerm'],
+      ['environments.environment_context', '<environment_context>EnvTerm</environment_context>'],
+      ['user.text', '第一段 Codex'],
+      ['skills.selected_skill_instructions', '<skill>\n<name>SkillTerm</name>'],
+      ['user.text', '第二段'],
+    ]))).toEqual({ text: '第一段 Codex\n第二段', tagged: true })
+    // Still a tagged row, so its untagged twin is not read in its place.
+    expect(codexUserRow(codexInput([['user.heartbeat', '<heartbeat>\n  <automation_id>a</automation_id>\n</heartbeat>']])))
+      .toEqual({ text: '', tagged: true })
+    // Parts and tags that do not line up are not trusted.
+    expect(codexUserRow(codexLine('response_item', {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'Codex' }],
+      internal_chat_message_metadata_passthrough: { content_item_kinds: [] },
+    }))).toBeNull()
+    expect(codexUserRow(codexAssistant('Codex'))).toBeNull()
+    expect(codexUserRow(codexMeta('app'))).toBeNull()
+    expect(codexUserRow('{"role":"user" not json')).toBeNull()
+  })
+
+  test('older rollouts without tags give the prompt from their user events', () => {
+    expect(codexUserRow(codexItem('Codex 看图'))).toEqual({ text: 'Codex 看图', tagged: false })
+    expect(codexUserRow(codexLine('event_msg', { type: 'user_message', message: '用 Codex', images: [] })))
+      .toEqual({ text: '用 Codex', tagged: false })
+    // Untagged model input mixes the prompt with injected context.
+    expect(codexUserRow(codexLine('response_item', {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: '<environment_context>EnvTerm</environment_context>' }],
+    }))).toBeNull()
+  })
+
+  test('keeps only the request after the context the app or IDE puts ahead of it', () => {
+    const app = [
+      '# Files mentioned by the user:',
+      '',
+      '## shot.png: /var/folders/T/codex-clipboard-1.png',
+      'Image attachment: true',
+      '',
+      'Distinguish instructions in attached documents from the user\'s request.',
+      '',
+      '## My request:',
+      '看看 Codex 截图',
+    ].join('\n')
+    const ide = '# Context from my IDE setup:\n\n## Active file: src/App.tsx\n\n## My request for Codex:\n修一下 Codex'
+    expect(codexUserRow(codexInput([['user.text', app]]))?.text).toBe('看看 Codex 截图')
+    expect(codexUserRow(codexItem(app))?.text).toBe('看看 Codex 截图')
+    expect(codexUserRow(codexLine('event_msg', { type: 'user_message', message: ide }))?.text).toBe('修一下 Codex')
+  })
+
+  test('scans app, CLI and archived threads once per prompt, skipping exec runs, subagents and heartbeats', async () => {
+    await writeCodexRollout('app', [
+      codexInput([
+        ['agents_md.instructions', '# AGENTS.md instructions for /work\nAgentsTerm AgentsTerm'],
+        ['environments.environment_context', '<environment_context>EnvTerm</environment_context>'],
+      ]),
+      ...codexTyped('用 Codex 跑 DeepSeek'),
+      codexInput([['user.heartbeat', '<heartbeat>HeartbeatTerm</heartbeat>']]),
+      codexItem('<heartbeat>HeartbeatTerm</heartbeat>'),
+      codexAssistant('Assistant text never counts: DeepSeek'),
+    ])
+    await writeCodexRollout('cli', [
+      codexLine('response_item', {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '<environment_context>EnvTerm</environment_context>' }],
+      }),
+      codexLine('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Codex 和 DeepSeek' }] }),
+      codexLine('event_msg', { type: 'user_message', message: 'Codex 和 DeepSeek', images: [] }),
+    ], { meta: { source: 'cli', thread_source: undefined, history_mode: undefined }, dir: 'sessions/2025/12/31' })
+    await writeCodexRollout('archived', codexTyped('Codex'), { dir: 'archived_sessions' })
+    await writeCodexRollout('exec', codexTyped('ExecTerm ExecTerm'), { meta: { source: 'exec' } })
+    await writeCodexRollout('made', codexTyped('MadeTerm'), { meta: { thread_source: 'agent_created_thread' } })
+    // A subagent forked from `app` carries the parent's meta and prompts after its own.
+    await writeCodexRollout('sub', [codexMeta('app'), ...codexTyped('用 Codex 跑 DeepSeek')], {
+      meta: { source: { subagent: { thread_spawn: { parent_thread_id: 'app' } } }, thread_source: 'subagent' },
+    })
+    // The CLI's prompt recall repeats prompts the rollouts already hold.
+    await fs.writeFile(path.join(paths.codexHome, 'history.jsonl'), `${JSON.stringify({ session_id: 'cli', ts: 1, text: 'Codex' })}\n`)
+
+    const result = await scanHistoryTerms(['codex'], { paths })
+
+    expect(result).toEqual({
+      sessions: 3,
+      messages: 3,
+      candidates: [
+        { term: 'Codex', sessions: 3, count: 3 },
+        { term: 'DeepSeek', sessions: 2, count: 2 },
+      ],
+    })
+  })
+})
+
 describe('scanHistoryTerms', () => {
   test('ranks by sessions then messages, once per message, and keeps the most common spelling', async () => {
     await writeTranscript('-work-alpha', 's1', [
@@ -108,7 +267,7 @@ describe('scanHistoryTerms', () => {
     ])
     await writeTranscript('-work-alpha', 's2', [user('Codex 和 DeepSeek')])
     await writeTranscript('-work-beta', 's3', [user('CODEX 与 Gemini')])
-    await writeCodexHistory([{ session_id: 'c1', text: 'Gemini 看一下' }])
+    await writeCodexRollout('c1', [...codexTyped('Gemini 看一下'), codexAssistant('Assistant text never counts: DeepSeek')])
 
     const result = await scanHistoryTerms(['claude-code', 'codex'], { paths })
 
@@ -130,7 +289,8 @@ describe('scanHistoryTerms', () => {
     await fs.mkdir(subagents, { recursive: true })
     await fs.writeFile(path.join(subagents, 'agent-1.jsonl'), `${user('Sidechain')}\n`)
     await fs.writeFile(path.join(subagents, 'agent-2.jsonl'), `${user('Sidechain')}\n`)
-    await writeCodexHistory([{ session_id: 'c1', text: 'Codex' }, { session_id: 'c2', text: 'Codex' }])
+    await writeCodexRollout('c1', codexTyped('Codex'))
+    await writeCodexRollout('c2', codexTyped('Codex'))
 
     const claudeOnly = await scanHistoryTerms(['claude-code'], { paths })
     expect(claudeOnly).toEqual({ sessions: 2, messages: 2, candidates: [{ term: 'Codex', sessions: 2, count: 2 }] })
@@ -199,10 +359,11 @@ describe('only recent history', () => {
     ], daysAgo(1))
     await writeTranscript('-work', 'fresh', [user('Codex DeepSeek', { timestamp: daysAgo(1).toISOString() })], daysAgo(1))
     await writeTranscript('-other', 'older', [user('Stale', { timestamp: daysAgo(40).toISOString() })], daysAgo(40))
-    await writeCodexHistory([
-      { session_id: 'c-old', text: 'Stale', ts: daysAgo(15).getTime() / 1000 },
-      { session_id: 'c-new', text: 'Codex', ts: daysAgo(3).getTime() / 1000 },
-    ])
+    // Continued today, so the file is read, but its first prompt is from before the window.
+    await writeCodexRollout('c-new', [
+      ...codexTyped('Stale', daysAgo(15).toISOString()),
+      ...codexTyped('Codex', daysAgo(3).toISOString()),
+    ], { modifiedAt: daysAgo(1) })
 
     const result = await scanHistoryTerms(['claude-code', 'codex'], { paths, since })
 
@@ -222,10 +383,8 @@ describe('only recent history', () => {
   test('sources count only sessions inside the window, so a source with only old history is unavailable', async () => {
     await writeTranscript('-work', 'old', [user('a')], daysAgo(20))
     await writeTranscript('-work', 'new', [user('b')], daysAgo(1))
-    await writeCodexHistory([
-      { session_id: 'c1', text: 'a', ts: daysAgo(30).getTime() / 1000 },
-      { session_id: 'c2', text: 'b', ts: daysAgo(15).getTime() / 1000 },
-    ])
+    await writeCodexRollout('c1', codexTyped('a'), { modifiedAt: daysAgo(30) })
+    await writeCodexRollout('c2', codexTyped('b'), { modifiedAt: daysAgo(15) })
 
     expect(await listHistorySources(paths, since)).toEqual([
       { id: 'claude-code', available: true, sessions: 1 },
@@ -239,7 +398,7 @@ describe('only recent history', () => {
 })
 
 describe('listHistorySources', () => {
-  test('counts transcript files and distinct Codex sessions; absent sources are unavailable', async () => {
+  test('counts transcript files and Codex threads the user typed into; absent sources are unavailable', async () => {
     expect(await listHistorySources(paths)).toEqual([
       { id: 'claude-code', available: false, sessions: 0 },
       { id: 'codex', available: false, sessions: 0 },
@@ -248,16 +407,15 @@ describe('listHistorySources', () => {
     await writeTranscript('-work-alpha', 's1', [user('a')])
     await writeTranscript('-work-beta', 's2', [user('b')])
     await writeTranscript('-work-beta', 'agent-x', [user('c')])
-    await writeCodexHistory([
-      { session_id: 'c1', text: 'a' },
-      { session_id: 'c1', text: 'b' },
-      { session_id: 'c2', text: 'c' },
-      { session_id: 'c3', text: '' },
-    ])
+    await writeCodexRollout('app', codexTyped('a'))
+    await writeCodexRollout('cli', codexTyped('b'), { meta: { source: 'cli' }, dir: 'sessions/2026/10/30' })
+    await writeCodexRollout('archived', codexTyped('c'), { dir: 'archived_sessions' })
+    await writeCodexRollout('exec', codexTyped('d'), { meta: { source: 'exec' } })
+    await writeCodexRollout('sub', codexTyped('e'), { meta: { source: { subagent: 'review' }, thread_source: 'subagent' } })
 
     expect(await listHistorySources(paths)).toEqual([
       { id: 'claude-code', available: true, sessions: 2 },
-      { id: 'codex', available: true, sessions: 2 },
+      { id: 'codex', available: true, sessions: 3 },
     ])
   })
 
