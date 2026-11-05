@@ -146,7 +146,7 @@ function normalizeJsonResponse(body: JsonRecord): ParsedResponse {
   if (firstChoice) {
     const message = isRecord(firstChoice.message) ? firstChoice.message : {}
     const blocks: NormalizedBlock[] = []
-    if (typeof message.reasoning_content === 'string' && message.reasoning_content) {
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content.trim()) {
       blocks.push({ type: 'thinking', thinking: message.reasoning_content })
     }
     if (typeof message.content === 'string' && message.content) {

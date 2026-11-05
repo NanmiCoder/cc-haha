@@ -57,6 +57,13 @@ pub fn execute_with_report_with_context(
     Ok(body)
 }
 
+pub fn check_session_storage() -> Value {
+    match crate::session::tree::check_storage() {
+        Ok(()) => json!({ "ready": true }),
+        Err(error) => json!({ "ready": false, "message": error.to_string() }),
+    }
+}
+
 #[cfg(test)]
 #[path = "status_tests.rs"]
 mod tests;

@@ -38,9 +38,24 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     result?: { is_error?: boolean, content?: unknown }
     messages?: string
   } | undefined
+  let shellProbe: { issued: boolean, rejected?: boolean } | undefined
   const upstream = startMockLlmServer(request => {
-    if (!request.tools?.some(tool => tool.name === 'Read')) return textReply('Mock auxiliary reply')
+    if (!request.tools?.some(tool => tool.name === 'Read' || tool.name?.startsWith(COMPUTER_PREFIX))) {
+      return textReply('Mock auxiliary reply')
+    }
     agentRequests.push(request)
+    if (shellProbe) {
+      if (!shellProbe.issued) {
+        shellProbe.issued = true
+        return {
+          kind: 'message',
+          content: [{ type: 'tool_use', id: 'computer_use_shell_probe', name: 'Bash', input: { command: 'echo fallback' } }],
+          stopReason: 'tool_use',
+        }
+      }
+      shellProbe.rejected = request.messages?.flatMap(message => Array.isArray(message.content) ? message.content : [])
+        .some(block => block.type === 'tool_result' && block.tool_use_id === 'computer_use_shell_probe' && block.is_error)
+    }
     if (skillProbe) {
       if (!skillProbe.issued) {
         skillProbe.issued = true
@@ -146,7 +161,7 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     })
     let stdout = ''
     let stderr = ''
-    let results = 0
+    const results: { is_error?: boolean, errors?: string[] }[] = []
     const drainOut = (async () => {
       const decoder = new TextDecoder()
       let pending = ''
@@ -160,7 +175,8 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
           const line = pending.slice(0, at)
           pending = pending.slice(at + 1)
           try {
-            if (JSON.parse(line).type === 'result') results++
+            const message = JSON.parse(line)
+            if (message.type === 'result') results.push(message)
           } catch {}
         }
       }
@@ -168,13 +184,8 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     const drainErr = (async () => {
       stderr = await new Response(child.stderr).text()
     })()
-    async function turn(phase: string, enabled: boolean | null) {
-      if (enabled !== null) setEnabled(enabled)
-      const verifySkill = phase === 'enabled-next-turn' && profile === 'standard' && boundary === 'allowed'
-      skillProbe = verifySkill ? { issued: false } : undefined
-      const before = agentRequests.length
-      const beforeResults = results
-      const content = `${verifySkill ? 'Use the Skill tool with skill: "computer-use" for this request.\n\n' : ''}Report inventory for ${phase}.`
+    async function submit(phase: string, content: string) {
+      const beforeResults = results.length
       child.stdin.write(JSON.stringify({
         type: 'user',
         message: { role: 'user', content },
@@ -183,10 +194,19 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
       }) + '\n')
       await child.stdin.flush()
       const deadline = Date.now() + 60_000
-      while (results === beforeResults && child.exitCode === null && Date.now() < deadline) {
+      while (results.length === beforeResults && child.exitCode === null && Date.now() < deadline) {
         await Bun.sleep(20)
       }
-      assert.ok(results > beforeResults, `CLI did not complete ${phase}: ${stderr}\n${stdout}`)
+      assert.ok(results.length > beforeResults, `CLI did not complete ${phase}: ${stderr}\n${stdout}`)
+      return results[beforeResults]!
+    }
+    async function turn(phase: string, enabled: boolean | null) {
+      if (enabled !== null) setEnabled(enabled)
+      const verifySkill = phase === 'enabled-next-turn' && profile === 'standard' && boundary === 'allowed'
+      skillProbe = verifySkill ? { issued: false } : undefined
+      const before = agentRequests.length
+      const content = `${verifySkill ? 'Inspect the bundled computer-use skill and describe its tools.\n\n' : ''}Report inventory for ${phase}.`
+      assert.equal((await submit(phase, content)).is_error, false)
       const request = agentRequests.slice(before).at(-1)
       assert.ok(request, `${phase} never reached the model`)
       const tools = request.tools!.map(tool => tool.name!).sort()
@@ -237,7 +257,27 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     try {
       // The first-use case has no config file for the skill watcher to watch.
       await turn('disabled-start-without-config', null)
+      const checkExplicitMethod = profile === 'standard' && boundary === 'allowed'
+      const explicitRequest = '打开计算器 使用computer use'
+      if (checkExplicitMethod) {
+        const before = agentRequests.length
+        const blocked = await submit('explicit-method-disabled', explicitRequest)
+        assert.equal(blocked.is_error, true)
+        assert.match(blocked.errors?.join('\n') ?? '', /Enable Computer Use in Settings/)
+        assert.equal(agentRequests.length, before, 'disabled explicit request reached the model')
+      }
       await turn('enabled-next-turn', true)
+      if (checkExplicitMethod) {
+        skillProbe = undefined
+        shellProbe = { issued: false }
+        const before = agentRequests.length
+        assert.equal((await submit('explicit-method-enabled', explicitRequest)).is_error, false)
+        const request = agentRequests[before]
+        assert.ok(request?.tools?.some(tool => tool.name?.startsWith(COMPUTER_PREFIX)))
+        assert.ok(request.tools.every(tool => tool.name?.startsWith(COMPUTER_PREFIX) || tool.name === 'AskUserQuestion'))
+        assert.ok(shellProbe.rejected, 'CLI executed a Bash fallback on an explicit Computer Use turn')
+        shellProbe = undefined
+      }
       const count = connections().filter(row => row.pid === child.pid).length
       await turn('enabled-stable', true)
       assert.equal(
@@ -284,7 +324,16 @@ export async function runComputerUseRefreshScenario(rootDir: string, artifactDir
     }, null, 2) + '\n')
     await upstream.stop()
     const mutations = sandbox.detectUserStateMutations()
-    sandbox.cleanup()
+    // Bun on Windows can return EBUSY immediately while a child releases its cwd.
+    for (let retry = 0; ; retry++) {
+      try {
+        sandbox.cleanup()
+        break
+      } catch (error) {
+        if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EBUSY' || retry === 5) throw error
+        await Bun.sleep(100 * (retry + 1))
+      }
+    }
     assert.deepEqual(mutations, [], 'lane mutated real user state')
   }
   return 'passed'

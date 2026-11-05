@@ -1,4 +1,4 @@
-import { dirname, sep } from 'path'
+import { dirname, extname, sep } from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
 import { z } from 'zod/v4'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
@@ -324,13 +324,21 @@ export const FileWriteTool = buildTool({
 
     const enc = meta?.encoding ?? 'utf8'
     const oldContent = meta?.content ?? null
+    // Windows PowerShell 5.1 reads new UTF-8 scripts as ANSI without a BOM.
+    // Keep the encoding of existing scripts and honor an explicit BOM.
+    const needsPowerShellBom = extname(fullFilePath).toLowerCase() === '.ps1' &&
+      (oldContent?.startsWith('\uFEFF') ||
+        (meta === null && process.platform === 'win32' && /[^\x00-\x7F]/.test(content)))
+    const storedContent = needsPowerShellBom && !content.startsWith('\uFEFF')
+      ? `\uFEFF${content}`
+      : content
 
     // Write is a full content replacement — the model sent explicit line endings
     // in `content` and meant them. Do not rewrite them. Previously we preserved
     // the old file's line endings (or sampled the repo via ripgrep for new
     // files), which silently corrupted e.g. bash scripts with \r on Linux when
     // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
-    writeTextContent(fullFilePath, content, enc, 'LF')
+    writeTextContent(fullFilePath, storedContent, enc, 'LF')
 
     // Notify LSP servers about file modification (didChange) and save (didSave)
     const lspManager = getLspServerManager()
@@ -358,7 +366,7 @@ export const FileWriteTool = buildTool({
 
     // Update read timestamp, to invalidate stale writes
     readFileState.set(fullFilePath, {
-      content,
+      content: storedContent,
       timestamp: getFileModificationTime(fullFilePath),
       offset: undefined,
       limit: undefined,

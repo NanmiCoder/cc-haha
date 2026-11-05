@@ -213,6 +213,11 @@ describe('parseTraceRequestBody (Responses format)', () => {
 })
 
 describe('parseTraceResponseBody', () => {
+  it('drops whitespace-only OpenAI reasoning without changing the response text', () => {
+    const body = { choices: [{ message: { reasoning_content: ' \n ', content: 'done' }, finish_reason: 'stop' }] }
+    expect(parseTraceResponseBody(JSON.stringify(body), 'proxy')?.message?.content).toEqual([{ type: 'text', text: 'done' }])
+  })
+
   it('parses an anthropic json message response', () => {
     const parsed = parseTraceResponseBody(JSON.stringify(anthropicResponse), 'anthropic')
 

@@ -11,6 +11,15 @@ fn default_wait_timeout() -> u64 {
     30000
 }
 
+#[derive(Parser, Debug, Default)]
+pub(crate) struct StatusArgs {
+    #[arg(
+        long,
+        help = "Check private session storage without starting a session"
+    )]
+    pub check_session_storage: bool,
+}
+
 #[derive(Parser, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LaunchArgs {

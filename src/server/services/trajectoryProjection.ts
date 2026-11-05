@@ -658,7 +658,8 @@ export function projectTrajectoryRows(entries: ProjectionEntry[], options: Proje
       const messageId = str(message.id) ?? uuid
       const content = Array.isArray(message.content) ? message.content.filter(isRecord) : []
       const text = content.find(block => block.type === 'text' && typeof block.text === 'string' && block.text.trim())
-      const thinking = content.some(block => block.type === 'thinking' || block.type === 'redacted_thinking')
+      const thinking = content.some(block => block.type === 'redacted_thinking'
+        || (block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim().length > 0))
       const stopReason = str(message.stop_reason)
       const isError = entry.isApiErrorMessage === true || entry.error !== undefined
       const usage = isForkInherited(entry) ? undefined : mapUsage(message.usage)

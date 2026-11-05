@@ -59,6 +59,11 @@ pub(crate) fn update(control: &CursorOverlayControl) -> Result<(), AdapterError>
     if !framing::may_spawn(control) {
         return Ok(());
     }
+    // A multi-agent session can start its renderer on the first travel
+    // without ever sending a renderer Enable control.
+    if !sweeps_retired_generations(control) {
+        retire::sweep(&root, control.session_id());
+    }
 
     start_renderer(&name, control, budget)
 }
@@ -81,7 +86,9 @@ fn broadcast(
     budget: Duration,
 ) -> Result<(), AdapterError> {
     let mut first_error = None;
-    for name in discover::session_endpoints(root, control.session_id()) {
+    for name in
+        discover::session_endpoints(root, control.session_id(), pipe_name::PROTOCOL_GENERATION)
+    {
         match transport::reach(&name, control, budget) {
             ReachOutcome::Delivered | ReachOutcome::NoRenderer => {}
             ReachOutcome::Unreachable(error) => {

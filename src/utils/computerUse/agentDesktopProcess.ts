@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 
 // Linux X11 reserves two seconds to release held input after SIGTERM.
 const TERMINATION_GRACE_MS = 2_250
+const MAX_STDERR_BYTES = 64 * 1024
 
 export type AgentDesktopProcessRequest = {
   binaryPath: string
@@ -16,6 +17,7 @@ export type AgentDesktopProcessRequest = {
 export type AgentDesktopProcessResult = {
   stdout: string
   stderr: string
+  stderrTruncated?: boolean
   exitCode: number | null
 }
 
@@ -44,6 +46,7 @@ export const runAgentDesktopProcess: AgentDesktopRunner = request => new Promise
   const stderr: Buffer[] = []
   let stdoutBytes = 0
   let stderrBytes = 0
+  let stderrTruncated = false
   let started = false
   let settled = false
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -64,7 +67,12 @@ export const runAgentDesktopProcess: AgentDesktopRunner = request => new Promise
     clearTimeout(forceKillTimer)
     request.signal?.removeEventListener('abort', abort)
     if (error) reject(error)
-    else resolve({ stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8'), exitCode })
+    else resolve({
+      stdout: Buffer.concat(stdout).toString('utf8'),
+      stderr: Buffer.concat(stderr).toString('utf8'),
+      ...(stderrTruncated ? { stderrTruncated } : {}),
+      exitCode,
+    })
   }
   const stop = (reason: 'aborted' | 'timeout' | 'output_limit') => {
     if (settled || terminationError) return
@@ -93,9 +101,11 @@ export const runAgentDesktopProcess: AgentDesktopRunner = request => new Promise
   })
   child.stderr.on('data', (chunk: Buffer) => {
     if (settled || terminationError) return
-    stderrBytes += chunk.length
-    if (stderrBytes > 64 * 1024) stop('output_limit')
-    else stderr.push(chunk)
+    const retained = chunk.subarray(0, MAX_STDERR_BYTES - stderrBytes)
+    stderrTruncated ||= retained.length < chunk.length
+    if (retained.length === 0) return
+    stderrBytes += retained.length
+    stderr.push(retained)
   })
   child.once('close', code => {
     finish(terminationError, code)

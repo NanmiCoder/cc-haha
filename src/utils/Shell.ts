@@ -172,6 +172,7 @@ export type ExecOptions = {
   preventCwdChanges?: boolean
   shouldUseSandbox?: boolean
   shouldAutoBackground?: boolean
+  failOnPowerShellError?: boolean
   /** When provided, stdout is piped (not sent to file) and this callback fires on each data chunk. */
   onStdout?: (data: string) => void
 }
@@ -192,6 +193,7 @@ export async function exec(
     preventCwdChanges,
     shouldUseSandbox,
     shouldAutoBackground,
+    failOnPowerShellError,
     onStdout,
   } = options ?? {}
   const commandTimeout = timeout || DEFAULT_TIMEOUT
@@ -213,6 +215,7 @@ export async function exec(
       id,
       sandboxTmpDir: shouldUseSandbox ? sandboxTmpDir : undefined,
       useSandbox: shouldUseSandbox ?? false,
+      failOnPowerShellError,
     })
 
   let commandString = builtCommand

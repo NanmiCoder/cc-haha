@@ -24,6 +24,8 @@ Computer Use 通过内置 MCP 把界面观察与桌面操作交给 Coding Agent�
 
 `setupComputerUseMCP()` 只在受支持的平台且对应二进制可解析时注册工具。设置 API 另行执行真实的原生状态探测：Windows/Linux 返回 `engine: "agent-desktop"`、`runtime: "agent-desktop"` 与 `agentDesktop` 状态。缺二进制、辅助功能服务拒绝或 Linux 总线无响应都不能显示为就绪。就绪表示运行组件可用，不保证每个命令或每个应用都受支持。
 
+桌面会话逐轮刷新 Computer Use 工具。显式指定 Computer Use 时，CLI 在发起模型请求前检查最终工具清单。不可用时返回具体原因。可用时，本轮的桌面动作通过原生工具执行。
+
 ## 一个全局应用授权入口
 
 用户在设置中开启 Computer Use 并确认一次 consent，即授权所有受支持应用。运行时不再按应用弹窗，不建立应用 allowlist、denylist 或 `read/click/full` 权限分层。全局禁用、操作系统权限、目标进程与窗口有效性仍需检查。
@@ -69,7 +71,7 @@ macOS 的持久 JS 工具运行在隔离子进程中，暴露 `cua.getApp()`、A
 
 | 路径 | 实际行为 |
 |---|---|
-| Windows 语义 ref | UIA Invoke、Value、Selection、Toggle 等模式；`set-value` 是支持控件的后台文字替换路径 |
+| Windows 语义 ref | 使用 UIA Invoke、Value、Selection、Toggle 等模式。标准 WinForms 按钮和编辑框的后台点击、设值与清空使用 LegacyIAccessible，避开 Windows 代理的焦点切换 |
 | Windows `type`、右键、多击、focus | 需要 `headed: true`；`type` 使用 `SendInput`，不能声称是后台定向键盘 |
 | Linux headless ref | AT-SPI 语义动作，X11 与 Wayland 都可用；是否可执行由控件能力与 live identity 决定 |
 | Linux headed ref | `click`、`right-click`、`type` 优先尝试物理输入；只有明确未投递的受支持拒绝才可能回退语义路径 |
@@ -82,13 +84,13 @@ JSON envelope 中的 `delivery`、`retry` 与验证范围必须保留。已投�
 
 ## 会话、trace 与多 Agent 光标
 
-bridge 把 `AGENT_DESKTOP_HOME` 定向到产品配置目录下的 `.runtime/agent-desktop/`，不使用用户独立 CLI 的 `~/.agent-desktop`。需要操作的首次调用创建宿主管理的 native session，启用默认 trace 和 multi-agent cursor；status、skills、help 等元信息查询不为此启动光标会话。
+bridge 把 `AGENT_DESKTOP_HOME` 定向到产品配置目录。Windows 使用由原生引擎设定私有 DACL 的 `.runtime/agent-desktop-private/`，Linux 使用 `.runtime/agent-desktop/`。Windows 的就绪探针在会话目录内验证写入、读回和清理，失败原因会显示在设置页。需要操作的首次调用创建宿主管理的原生会话并启用多 Agent 光标配置，渲染器按动作启动。
 
 业务命令保留当前 Agent 的 `getCwd()` 异步上下文，相对图像与文件路径按该工作目录解析；状态目录由 `AGENT_DESKTOP_HOME` 单独控制。每次派发原生进程前都会重新检查已保存的全局授权，包括会话初始化和光标配置之后的实际动作；撤销授权仍允许必要的资源清理。
 
 每个产品会话关联 native session，主 Agent 与子 Agent 通过宿主传入各自 `agent-id`；名字不合法时使用稳定散列。快照与 trace 受 native session 命名空间约束。trace 可能保留界面与动作信息，应作为用户数据处理；图像通过宿主受限的 artifact 目录读取并作为 MCP image 返回。trace 导出仍是原生命令能力。
 
-光标沿用产品箭头外形与颜色：Windows 保留上游动画，Linux X11 在动作位置显示静态箭头，Wayland 的 `data.rendered: false` 明确表示没有可视光标。光标是提示层，不提供独立鼠标、独立窗口或独立剪贴板。
+Windows 光标使用动作的物理像素坐标，按所在显示器的 DPI 缩放箭头和标签。宿主把回合内的空闲淡出延迟设为 45 秒。渲染器在目标帧提交到 Windows 合成窗口后才确认到达，绘制失败时返回警告。Linux X11 在动作位置显示静态箭头。动作结果的 `cursor_overlay` 分别报告光标配置、渲染确认和警告。输入设备和剪贴板由系统共享。
 
 产品原有的 `computer-use.lock` 仍以产品 session 为 owner，一次只允许一条产品会话持有，turn 结束或取消时释放。同一进程的主 Agent/子 Agent 共享 binder，保留各自异步上下文并按队列执行；上游的交互 lease 另行约束原生动作。多 Agent 身份与光标不等于多 Agent 同时写独立桌面。
 

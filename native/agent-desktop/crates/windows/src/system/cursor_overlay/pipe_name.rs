@@ -21,11 +21,8 @@ use std::path::Path;
 /// the generation without also handing the previous one to the retirement
 /// sweep, so a renderer still drawing under it cannot be forgotten.
 ///
-/// With only the live generation in the ledger, the retired set is empty and the sweep is a no-op.
-/// That is the correct state for a protocol that has never changed, and it is
-/// said out loud rather than left to be discovered: the sweep costs nothing
-/// until the first append and does its work from the moment there is one.
-pub(crate) const PROTOCOL_GENERATIONS: [&str; 1] = ["w1"];
+/// w2 reports failed frame presentation separately from a successful paint.
+pub(crate) const PROTOCOL_GENERATIONS: [&str; 2] = ["w1", "w2"];
 
 /// The generation this build speaks. A child whose marker names a different
 /// one refuses to serve, and its pipe name differs, so a stale renderer is
@@ -88,10 +85,10 @@ pub(crate) fn pipe_name_for_generation(
 /// ids belong to whoever started the renderers and nothing here is told them.
 /// A `Disable` names no agent by design, so stopping a session means stopping
 /// whatever answers under its prefix.
-pub(crate) fn session_prefix(root: &Path, session_id: &str) -> String {
+pub(crate) fn session_prefix(root: &Path, session_id: &str, generation: &str) -> String {
     format!(
         "agent-desktop-cursor-{:016x}-",
-        endpoint_hash(root, session_id, PROTOCOL_GENERATION)
+        endpoint_hash(root, session_id, generation)
     )
 }
 

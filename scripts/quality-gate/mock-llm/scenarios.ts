@@ -688,34 +688,42 @@ export function createMockOnlyRunners(
     },
     async 'mock-tool-result-roundtrip'(ctx) {
       const nonce = `nonce-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const unicode = `中文 🙂 ${nonce}`
+      const failure = `PowerShell fixture error ${nonce}`
+      const cases = [
+        { prompt: `Run the shell command \`echo ${nonce}\` and tell me what it printed.`, expected: nonce, isError: false },
+        ...(process.platform === 'win32' ? [
+          { prompt: `MOCK_NATIVE_POWERSHELL ${JSON.stringify(`Write-Output '${unicode}'`)}`, expected: unicode, isError: false },
+          { prompt: `MOCK_NATIVE_POWERSHELL ${JSON.stringify(`Write-Error '${failure}'; Write-Output 'continued'`)}`, expected: failure, isError: true },
+        ] : []),
+      ]
       const socket = await ctx.openSocket(await ctx.createSession())
       try {
         ctx.pinRuntime(socket)
-        const start = socket.messages.length
-        const upstreamStart = requests.length
-        socket.send({ type: 'user_message', content: `Run the shell command \`echo ${nonce}\` and tell me what it printed.` })
+        for (const { prompt, expected, isError } of cases) {
+          const start = socket.messages.length
+          const upstreamStart = requests.length
+          socket.send({ type: 'user_message', content: prompt })
 
-        // Whether `echo` needs approval is the permission engine's call, not this
-        // scenario's; approve if asked so the run does not depend on that policy.
-        const settled = await socket.waitFor(
-          (message) => message.type === 'permission_request' || message.type === 'message_complete',
-          ctx.stepTimeoutMs,
-          'permission_request or message_complete',
-          start,
-        )
-        if (settled.type === 'permission_request') {
-          socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
-          await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete', start)
-        }
+          const settled = await socket.waitFor(
+            (message) => message.type === 'permission_request' || message.type === 'message_complete',
+            ctx.stepTimeoutMs,
+            'shell permission or completion',
+            start,
+          )
+          if (settled.type === 'permission_request') {
+            socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+            await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'shell completion', start)
+          }
 
-        const results = toolResultsSentUpstream(requests, upstreamStart)
-        const echoed = results.find((block) => contentText(block.content).includes(nonce))
-        if (!echoed) {
-          throw new Error(`the model never received the command output; tool_results sent upstream: ${JSON.stringify(results)}`)
-        }
-        if (echoed.is_error) throw new Error('the command output came back flagged as an error')
-        if (!streamedText(socket.messages.slice(start)).includes(nonce)) {
-          throw new Error('the model\'s reply quoting the output never streamed to the client')
+          const results = toolResultsSentUpstream(requests, upstreamStart)
+          const echoed = results.find((block) => contentText(block.content).includes(expected))
+          if (!echoed || Boolean(echoed.is_error) !== isError) {
+            throw new Error(`unexpected shell result sent to the model: ${JSON.stringify(results)}`)
+          }
+          if (!streamedText(socket.messages.slice(start)).includes(expected)) {
+            throw new Error('the model\'s reply quoting the output never streamed to the client')
+          }
         }
       } finally {
         socket.close()

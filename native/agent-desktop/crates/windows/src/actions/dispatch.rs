@@ -18,6 +18,7 @@ use agent_desktop_core::{
 pub(crate) struct ClickAvailability {
     pub(crate) invoke_available: bool,
     pub(crate) legacy_available: bool,
+    pub(crate) invoke_requires_headed: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -44,6 +45,7 @@ mod imp {
     use crate::actions::select::select_steps;
     use crate::actions::toggle_state::{check_steps, toggle_steps, uncheck_steps};
     use crate::actions::value_write::{clear_steps, set_value_steps};
+    use crate::actions::winforms::headless_winforms_control;
     use crate::tree::element::{UIAElement, uia_element};
     use crate::tree::live_read::corroborate_verified_process;
     use crate::tree::properties::property_ids::TreeProperty;
@@ -200,6 +202,7 @@ mod imp {
             ClickAvailability {
                 invoke_available: invoke_available(element),
                 legacy_available: click_legacy_available(element),
+                invoke_requires_headed: headless_winforms_control(element, policy, "BUTTON"),
             },
             || {
                 Ok(DeliveryOutcome::from_delivery(
@@ -227,6 +230,17 @@ mod imp {
         mut invoke: impl FnMut() -> Result<DeliveryOutcome, AdapterError>,
         mut legacy: impl FnMut() -> Result<DeliveryOutcome, AdapterError>,
     ) -> Result<Vec<ActionStep>, AdapterError> {
+        if availability.invoke_requires_headed
+            && !policy.is_headed()
+            && !availability.legacy_available
+        {
+            return Err(AdapterError::new(
+                ErrorCode::PolicyDenied,
+                "This Windows Forms button requires a legacy accessibility default action for headless clicks. InvokePattern can move foreground focus.",
+            )
+            .with_suggestion("Use --headed if foreground activation is acceptable.")
+            .with_disposition(agent_desktop_core::DeliverySemantics::not_delivered()));
+        }
         let mut invoke_run = gated(availability.invoke_available, &mut invoke);
         let mut legacy_run = gated(availability.legacy_available, &mut legacy);
         execute_chain(
@@ -236,7 +250,7 @@ mod imp {
             &mut [
                 ChainRung {
                     label: INVOKE_LABEL,
-                    requires_headed: false,
+                    requires_headed: availability.invoke_requires_headed,
                     run: &mut invoke_run,
                 },
                 ChainRung {

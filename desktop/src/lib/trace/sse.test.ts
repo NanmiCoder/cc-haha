@@ -103,6 +103,23 @@ describe('reassembleSseText', () => {
     expect(result?.message?.content).toEqual([{ type: 'thinking', thinking: 'Let me reason.' }])
   })
 
+  it('skips signature-only thinking and keeps redacted thinking and the following tool', () => {
+    const stream = sse([
+      { event: 'message_start', data: JSON.stringify({ message: { role: 'assistant', content: [] } }) },
+      { event: 'content_block_start', data: JSON.stringify({ index: 0, content_block: { type: 'thinking', thinking: '' } }) },
+      { event: 'content_block_delta', data: JSON.stringify({ index: 0, delta: { type: 'signature_delta', signature: 'signed' } }) },
+      { event: 'content_block_stop', data: JSON.stringify({ index: 0 }) },
+      { event: 'content_block_start', data: JSON.stringify({ index: 1, content_block: { type: 'redacted_thinking', data: 'hidden' } }) },
+      { event: 'content_block_stop', data: JSON.stringify({ index: 1 }) },
+      { event: 'content_block_start', data: JSON.stringify({ index: 2, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} } }) },
+    ])
+
+    expect(reassembleSseText(stream)?.message?.content).toEqual([
+      { type: 'thinking', thinking: '[redacted thinking]' },
+      { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} },
+    ])
+  })
+
   it('tolerates a truncated trailing frame without throwing', () => {
     const truncated = anthropicTextStream.slice(0, anthropicTextStream.indexOf(' world') + 2)
     const result = reassembleSseText(truncated)

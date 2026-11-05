@@ -9,9 +9,8 @@ import { getErrnoCode } from '../errors.js'
 
 const LOCK_FILENAME = 'computer-use.lock'
 
-// Holds the unregister function for the shutdown cleanup handler.
-// Set when the lock is acquired, cleared when released.
-let unregisterCleanup: (() => void) | undefined
+type LocalLock = { turn?: symbol; unregister: () => void; release?: Promise<boolean> }
+let localLock: LocalLock | undefined
 
 type ComputerUseLock = {
   readonly sessionId: string
@@ -91,11 +90,13 @@ async function tryCreateExclusive(lock: ComputerUseLock): Promise<boolean> {
  * turn-end cleanup is never reached (e.g. the user runs /exit while
  * a tool call is in progress).
  */
-function registerLockCleanup(): void {
-  unregisterCleanup?.()
-  unregisterCleanup = registerCleanup(async () => {
-    await releaseComputerUseLock()
-  })
+function registerLockCleanup(turn?: symbol): void {
+  localLock?.unregister()
+  localLock = { turn, unregister: registerCleanup(async () => { await releaseComputerUseLock(turn) }) }
+}
+
+function ownedByThisProcess(lock: ComputerUseLock, sessionId: string): boolean {
+  return lock.sessionId === sessionId && lock.pid === process.pid
 }
 
 /**
@@ -110,7 +111,7 @@ function registerLockCleanup(): void {
 export async function checkComputerUseLock(): Promise<CheckResult> {
   const existing = await readLock()
   if (!existing) return { kind: 'free' }
-  if (existing.sessionId === getSessionId()) return { kind: 'held_by_self' }
+  if (ownedByThisProcess(existing, getSessionId())) return { kind: 'held_by_self' }
   if (isProcessRunning(existing.pid)) {
     return { kind: 'blocked', by: existing.sessionId }
   }
@@ -127,8 +128,8 @@ export async function checkComputerUseLock(): Promise<CheckResult> {
  * hasn't run yet. Used to gate the per-turn release in `cleanup.ts` so
  * non-CU turns don't touch disk.
  */
-export function isLockHeldLocally(): boolean {
-  return unregisterCleanup !== undefined
+export function isLockHeldLocally(turn?: symbol): boolean {
+  return localLock !== undefined && (turn === undefined || localLock.turn === turn)
 }
 
 /**
@@ -145,7 +146,7 @@ export function isLockHeldLocally(): boolean {
  * retry the exclusive create once. If two sessions race to recover the
  * same stale lock, only one create succeeds (the other reads the winner).
  */
-export async function tryAcquireComputerUseLock(): Promise<AcquireResult> {
+export async function tryAcquireComputerUseLock(turn?: symbol): Promise<AcquireResult> {
   const sessionId = getSessionId()
   const lock: ComputerUseLock = {
     sessionId,
@@ -157,7 +158,7 @@ export async function tryAcquireComputerUseLock(): Promise<AcquireResult> {
 
   // Fresh acquisition.
   if (await tryCreateExclusive(lock)) {
-    registerLockCleanup()
+    registerLockCleanup(turn)
     return FRESH
   }
 
@@ -167,14 +168,14 @@ export async function tryAcquireComputerUseLock(): Promise<AcquireResult> {
   if (!existing) {
     await unlink(getLockPath()).catch(() => {})
     if (await tryCreateExclusive(lock)) {
-      registerLockCleanup()
+      registerLockCleanup(turn)
       return FRESH
     }
     return { kind: 'blocked', by: (await readLock())?.sessionId ?? 'unknown' }
   }
 
-  // Already held by this session.
-  if (existing.sessionId === sessionId) return REENTRANT
+  // Main and child actions in the same session share this lock.
+  if (ownedByThisProcess(existing, sessionId)) return REENTRANT
 
   // Another live session holds it — blocked.
   if (isProcessRunning(existing.pid)) {
@@ -188,7 +189,7 @@ export async function tryAcquireComputerUseLock(): Promise<AcquireResult> {
   )
   await unlink(getLockPath()).catch(() => {})
   if (await tryCreateExclusive(lock)) {
-    registerLockCleanup()
+    registerLockCleanup(turn)
     return FRESH
   }
   return { kind: 'blocked', by: (await readLock())?.sessionId ?? 'unknown' }
@@ -199,17 +200,23 @@ export async function tryAcquireComputerUseLock(): Promise<AcquireResult> {
  * `true` if we actually unlinked the file (i.e., we held it) — callers fire
  * exit notifications on this. Idempotent: subsequent calls return `false`.
  */
-export async function releaseComputerUseLock(): Promise<boolean> {
-  unregisterCleanup?.()
-  unregisterCleanup = undefined
-
-  const existing = await readLock()
-  if (!existing || existing.sessionId !== getSessionId()) return false
-  try {
-    await unlink(getLockPath())
-    logForDebugging('Released computer-use lock')
-    return true
-  } catch {
-    return false
-  }
+export function releaseComputerUseLock(turn?: symbol): Promise<boolean> {
+  const lock = localLock
+  if (!lock || (turn !== undefined && lock.turn !== turn)) return Promise.resolve(false)
+  if (lock.release) return lock.release.then(() => false)
+  lock.release = (async () => {
+    try {
+      const existing = await readLock()
+      if (!existing || !ownedByThisProcess(existing, getSessionId())) return false
+      await unlink(getLockPath())
+      logForDebugging('Released computer-use lock')
+      return true
+    } catch {
+      return false
+    } finally {
+      lock.unregister()
+      if (localLock === lock) localLock = undefined
+    }
+  })()
+  return lock.release
 }

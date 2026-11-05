@@ -53,6 +53,10 @@ fn dispatch_command(
         } else {
             None
         };
+    let overlay_agent = context
+        .agent_id()
+        .filter(|_| context.multi_agent())
+        .map(str::to_owned);
     let scope = if matches!(&cmd, Commands::Session(args)
         if matches!(&args.action, crate::cli_args::session::SessionAction::End(_)))
     {
@@ -63,7 +67,9 @@ fn dispatch_command(
         context.command_scope(cmd.name())?
     };
     if let Some(session_id) = overlay_session.as_ref() {
-        let _ = adapter.update_cursor_overlay(&CursorOverlayControl::hide(session_id.clone()));
+        let _ = adapter.update_cursor_overlay(
+            &CursorOverlayControl::hide(session_id.clone()).with_agent_id(overlay_agent.clone()),
+        );
     }
     let result = match cmd {
         Commands::Snapshot(args) => observation::snapshot(args, adapter, context),
@@ -122,8 +128,14 @@ fn dispatch_command(
         Commands::ClipboardSet(args) => clipboard::set(args, adapter),
         Commands::ClipboardClear => commands::clipboard_clear::execute(adapter),
         Commands::Wait(args) => system::wait(args, adapter, context),
-        Commands::Status => {
+        Commands::Status(args) => {
             commands::status::execute_with_report_with_context(adapter, permission_report, context)
+                .map(|mut data| {
+                    if args.check_session_storage {
+                        data["session_storage"] = commands::status::check_session_storage();
+                    }
+                    data
+                })
         }
         Commands::Permissions(args) => system::permissions(args, adapter, permission_report),
         Commands::Version => commands::version::execute(),
@@ -134,7 +146,9 @@ fn dispatch_command(
         Commands::Trace(args) => trace::dispatch(args, context),
     };
     if let Some(session_id) = overlay_session {
-        let _ = adapter.update_cursor_overlay(&CursorOverlayControl::show(session_id));
+        let _ = adapter.update_cursor_overlay(
+            &CursorOverlayControl::show(session_id).with_agent_id(overlay_agent),
+        );
     }
     scope.complete(&result)?;
     result

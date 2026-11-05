@@ -1,5 +1,7 @@
-use super::session_endpoints;
-use crate::system::cursor_overlay::pipe_name::{pipe_name, session_prefix};
+use super::{endpoints_in_listing, session_endpoints};
+use crate::system::cursor_overlay::pipe_name::{
+    PROTOCOL_GENERATION, pipe_name, pipe_name_for_generation, session_prefix,
+};
 use std::path::Path;
 
 /// Deliberately not shaped like a home directory: the privacy scan reads
@@ -16,7 +18,7 @@ const SESSION: &str = "s0000001";
 /// single-cursor overlay drawing, which is the common case.
 #[test]
 fn the_agentless_endpoint_is_always_a_target() {
-    let found = session_endpoints(root(), SESSION);
+    let found = session_endpoints(root(), SESSION, PROTOCOL_GENERATION);
 
     assert!(
         found.contains(&pipe_name(root(), SESSION, None)),
@@ -30,7 +32,7 @@ fn the_agentless_endpoint_is_always_a_target() {
 /// while every agent kept drawing.
 #[test]
 fn every_agent_endpoint_begins_with_the_prefix_discovery_looks_for() {
-    let prefix = session_prefix(root(), SESSION);
+    let prefix = session_prefix(root(), SESSION, PROTOCOL_GENERATION);
 
     for agent in ["a", "agent-b", "subagent-00000003"] {
         let name = pipe_name(root(), SESSION, Some(agent));
@@ -48,7 +50,7 @@ fn every_agent_endpoint_begins_with_the_prefix_discovery_looks_for() {
 /// prefix carries the state root and the session, so it cannot match.
 #[test]
 fn another_sessions_agents_do_not_carry_this_sessions_prefix() {
-    let prefix = session_prefix(root(), SESSION);
+    let prefix = session_prefix(root(), SESSION, PROTOCOL_GENERATION);
     let foreign = pipe_name(root(), "s0000002", Some("a"));
     let bare = foreign
         .strip_prefix(r"\\.\pipe\")
@@ -57,5 +59,23 @@ fn another_sessions_agents_do_not_carry_this_sessions_prefix() {
     assert!(
         !bare.starts_with(&prefix),
         "a disable for one session would have reached another session's agent"
+    );
+}
+
+#[test]
+fn retired_discovery_selects_only_same_generation_and_session_agent_pipes() {
+    let previous = pipe_name_for_generation(root(), SESSION, Some("a"), "w1");
+    let current = pipe_name(root(), SESSION, Some("a"));
+    let other_session = pipe_name_for_generation(root(), "s0000002", Some("a"), "w1");
+    let listing = [&previous, &current, &other_session]
+        .into_iter()
+        .map(|name| name.strip_prefix(r"\\.\pipe\").unwrap().to_owned());
+
+    assert_eq!(
+        endpoints_in_listing(root(), SESSION, "w1", listing),
+        [
+            pipe_name_for_generation(root(), SESSION, None, "w1"),
+            previous
+        ]
     );
 }

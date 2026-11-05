@@ -22,6 +22,7 @@ async function fixture() {
   const nativeSessions = new Map<string, { cursor: boolean; ended: boolean }>()
   let intercept: ((command: string, args: string[]) => void | Promise<void>) | undefined
   const options = {
+    platform: 'linux' as const,
     binaryPath: process.execPath,
     configRoot: path.join(root, 'config'),
     isDisabled: () => !state.enabled,
@@ -173,4 +174,35 @@ test('shutdown waits for the cancelled action before its final cursor teardown',
   expect((await action).isError).toBe(true)
   expect(events).toEqual(['last-present', 'session-end'])
   expect([...f.nativeSessions.values()]).toEqual([{ cursor: false, ended: true }])
+})
+
+test('turn cleanup waits for pending cursor configuration before disabling the renderer', async () => {
+  const f = await fixture()
+  let configuring!: () => void
+  let finishConfiguration!: () => void
+  const configurationStarted = new Promise<void>(resolve => { configuring = resolve })
+  const configurationPaused = new Promise<void>(resolve => { finishConfiguration = resolve })
+  const events: string[] = []
+  f.intercept(async (command, args) => {
+    if (command !== 'cursor-overlay') return
+    if (args[0] === 'enable') {
+      configuring()
+      await configurationPaused
+      events.push('configuration finished')
+    } else if (args[0] === 'disable') {
+      events.push('cursor disabled')
+    }
+  })
+  const controller = new AbortController()
+  const action = f.backend.execute({ command: 'click', args: ['@s:e1'] }, controller.signal)
+  await configurationStarted
+  controller.abort()
+  const cleanup = f.backend.cleanup()
+  await new Promise<void>(resolve => setImmediate(resolve))
+  finishConfiguration()
+  await cleanup
+  expect((await action).isError).toBe(true)
+  expect(f.calls.some(call => call.command === 'click')).toBe(false)
+  expect(events).toEqual(['configuration finished', 'cursor disabled'])
+  expect([...f.nativeSessions.values()]).toEqual([{ cursor: false, ended: false }])
 })
