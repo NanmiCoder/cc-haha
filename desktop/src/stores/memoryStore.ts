@@ -32,7 +32,12 @@ type MemoryStore = {
 
   fetchProjects: (cwd?: string) => Promise<void>
   selectProject: (projectId: string) => void
-  fetchFiles: (projectId: string) => Promise<void>
+  /**
+   * Reload the file list. With `reloadSelectedFile`, a file that is still listed is
+   * read again too, so a body changed on disk (by a session, the CLI or an editor)
+   * replaces the copy loaded earlier instead of staying on screen.
+   */
+  fetchFiles: (projectId: string, options?: { reloadSelectedFile?: boolean }) => Promise<void>
   openFile: (projectId: string, path: string) => Promise<boolean>
   updateDraft: (content: string) => void
   saveFile: () => Promise<boolean>
@@ -106,7 +111,7 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
     })
   },
 
-  fetchFiles: async (projectId) => {
+  fetchFiles: async (projectId, options) => {
     const request = ++filesRequest
     set({ isLoadingFiles: true, error: null })
     try {
@@ -121,6 +126,10 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
           isLoadingFiles: false,
         }
       })
+      const selectedPath = get().selectedFile?.path
+      if (options?.reloadSelectedFile && selectedPath) {
+        await get().openFile(projectId, selectedPath)
+      }
     } catch (err) {
       if (request !== filesRequest || get().selectedProjectId !== projectId) return
       set({ error: (err as Error).message, isLoadingFiles: false })

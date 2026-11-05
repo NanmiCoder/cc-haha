@@ -51,6 +51,8 @@ vi.mock('../components/markdown/MarkdownRenderer', async () => {
   }
 })
 
+const SESSION_WRITTEN_MEMORY = ['# Project Memory', '', '- Written by a session.', ''].join('\n')
+
 describe('MemorySettings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -615,5 +617,69 @@ describe('MemorySettings', () => {
     expect(memoryApiMock.readFile).toHaveBeenCalledWith('-workspace-other', 'preferences.md')
     expect(useMemoryStore.getState().selectedProjectId).toBe('-workspace-other')
     expect(useUIStore.getState().pendingMemoryPath).toBeNull()
+  })
+
+  it('shows a memory file rewritten on disk after Refresh', async () => {
+    render(<MemorySettings />)
+
+    expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Project Memory')
+
+    // A session edits MEMORY.md while the page is open.
+    memoryApiMock.listFiles.mockResolvedValue({
+      files: [
+        {
+          path: 'MEMORY.md',
+          name: 'MEMORY.md',
+          title: 'MEMORY.md',
+          bytes: 42,
+          updatedAt: '2026-05-01T00:05:00.000Z',
+          type: 'project',
+          description: 'Project conventions.',
+          isIndex: true,
+        },
+      ],
+    })
+    memoryApiMock.readFile.mockResolvedValue({
+      file: {
+        path: 'MEMORY.md',
+        content: SESSION_WRITTEN_MEMORY,
+        updatedAt: '2026-05-01T00:05:00.000Z',
+        bytes: 42,
+      },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Written by a session')
+    })
+  })
+
+  it('reloads the file from disk when Refresh discards an unsaved draft', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<MemorySettings />)
+
+    expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Project Memory')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    fireEvent.change(await screen.findByLabelText('Editor'), {
+      target: { value: '# Local draft' },
+    })
+
+    memoryApiMock.readFile.mockResolvedValue({
+      file: {
+        path: 'MEMORY.md',
+        content: SESSION_WRITTEN_MEMORY,
+        updatedAt: '2026-05-01T00:05:00.000Z',
+        bytes: 42,
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+
+    expect(confirmSpy).toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.getByLabelText('Editor')).toHaveValue(SESSION_WRITTEN_MEMORY)
+    })
+    expect(screen.queryByText('Unsaved')).not.toBeInTheDocument()
+    confirmSpy.mockRestore()
   })
 })
