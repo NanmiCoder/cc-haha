@@ -9,6 +9,16 @@ import {
 } from './modelReasoning.js'
 
 describe('model reasoning capability pass-through', () => {
+  for (const model of ['MiniMax-M3.1-Flash[1m]', 'minimax/minimax-m3.1-flash:free', 'opencode/minimax-m3.1-flash-free']) {
+    test(`recognizes required adaptive Flash reasoning: ${model}`, () => {
+      expect(resolveModelReasoningProfile(model, 'anthropic')).toMatchObject({
+        family: 'minimax', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+        defaultReasoningEffort: 'max',
+        claudeCodeCapabilities: 'thinking,required_thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+      })
+    })
+  }
+
   test('passes every Claude Code effort through without vendor-specific model rules', () => {
     const modelIds = [
       'deepseek-v4-pro',
