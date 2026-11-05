@@ -1775,6 +1775,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.providers.testConnection': '接続をテスト',
   'settings.providers.settingsJson': '設定 JSON',
   'settings.providers.settingsJsonDesc': '~/.claude/cc-haha/settings.json — 直接編集できます。保存時に書き込まれます。',
+  'settings.providers.settingsJsonInactiveDesc': 'このプロバイダーをデフォルトにしたときの ~/.claude/cc-haha/settings.json です。保存しても現在のデフォルトは変わりません。',
   'settings.providers.jsonError': 'JSON 構文エラー: {error}',
   'settings.providers.proxyMode': "ネットワークプロキシー",
   'settings.providers.proxyModeHelp': "ネットワークプロキシーモードの設定ヘルプ",
