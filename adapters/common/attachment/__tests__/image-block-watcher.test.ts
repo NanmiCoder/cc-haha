@@ -45,6 +45,24 @@ describe('ImageBlockWatcher', () => {
     expect(w.feed('![bad](file:///bad%2fimage.png)')).toEqual([])
   })
 
+  it.each(['%', '%2', '%ZZ', '%C3%28', '%E9', '%00', '%2f', '%2F', '%5c', '%5C'])(
+    'rejects malformed or structural file URL encoding %s on a native absolute path',
+    (encoding) => {
+      const url = pathToFileURL(resolve('fixture images', 'badPLACEHOLDERimage.png')).href
+        .replace('PLACEHOLDER', encoding)
+      const watcher = new ImageBlockWatcher()
+      expect(watcher.feed(`![bad](${url})`)).toEqual([])
+      expect(watcher.drain()).toEqual([])
+    },
+  )
+
+  it('decodes valid file URL escapes exactly once', () => {
+    const imagePath = resolve('fixture images', '图%2F%ZZ.png')
+    const url = pathToFileURL(imagePath).href
+    expect(new ImageBlockWatcher().feed(`![ok](${url})`)[0]?.source)
+      .toEqual({ kind: 'path', path: imagePath })
+  })
+
   it('extracts a data URI as base64', () => {
     const w = new ImageBlockWatcher()
     const out = w.feed('![inline](data:image/png;base64,AAAA)')

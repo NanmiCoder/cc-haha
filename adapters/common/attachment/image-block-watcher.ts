@@ -32,7 +32,12 @@ function classify(target: string): PendingUpload['source'] | null {
   }
   if (target.startsWith('file://')) {
     try {
-      return { kind: 'path', path: fileURLToPath(target) }
+      const url = new URL(target)
+      // Bun's fileURLToPath can preserve malformed escapes on some platforms.
+      // Validate the encoding before native path conversion, without decoding twice.
+      const pathname = decodeURIComponent(url.pathname)
+      if (pathname.includes('\0') || /%2f|%5c/i.test(url.pathname)) return null
+      return { kind: 'path', path: fileURLToPath(url) }
     } catch {
       return null
     }
