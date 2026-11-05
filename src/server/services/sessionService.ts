@@ -229,6 +229,13 @@ export type SessionInspectionTranscriptSnapshot = {
   contextEstimate: TranscriptContextEstimate | null
 }
 
+type SessionMetadataProjection = {
+  summary: SessionListSummary
+  launchInfo: SessionLaunchInfo
+  customTitle: string | null
+  transcriptMetadata: TranscriptMetadataSnapshot
+}
+
 export type TrimSessionResult = {
   removedCount: number
   removedMessageIds: string[]
@@ -824,8 +831,8 @@ export class SessionService {
 
   private readonly subagentLookupCache = new Map<string, { version: string; transcript: SubagentTranscript }>()
   private readonly historyRecoveryCache = new Map<string, SessionHistoryRecovery>()
-  private readonly metadataProjectionCache = new Map<string, { signature: string; summary: SessionListSummary; launchInfo: SessionLaunchInfo; customTitle: string | null }>()
-  private readonly metadataProjectionRequests = new Map<string, Promise<{ summary: SessionListSummary; launchInfo: SessionLaunchInfo; customTitle: string | null }>>()
+  private readonly metadataProjectionCache = new Map<string, SessionMetadataProjection & { signature: string }>()
+  private readonly metadataProjectionRequests = new Map<string, Promise<SessionMetadataProjection>>()
 
   private readonly sessionHistoryRequests = new Map<string, Promise<{
     messages: MessageEntry[]
@@ -1481,11 +1488,7 @@ export class SessionService {
     return (await this.getMetadataProjection(filePath, projectDir)).summary
   }
 
-  private async getMetadataProjection(filePath: string, projectDir: string): Promise<{
-    summary: SessionListSummary
-    launchInfo: SessionLaunchInfo
-    customTitle: string | null
-  }> {
+  private async getMetadataProjection(filePath: string, projectDir: string): Promise<SessionMetadataProjection> {
     const stat = await fs.stat(filePath, { bigint: true })
     const signature = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`
     const key = `${this.getConfigDir()}\0${filePath}`
@@ -1516,6 +1519,7 @@ export class SessionService {
       })
       const launch = makeState()
       const summary = makeState()
+      const transcriptMetadata: TranscriptMetadataSnapshot = {}
       const apply = (state: ReturnType<typeof makeState>, entry: RawEntry) => {
         if (!state.createdAt && entry.timestamp) state.createdAt = entry.timestamp
         if ((entry.type === 'user' || entry.type === 'assistant') && entry.message?.role) {
@@ -1551,8 +1555,12 @@ export class SessionService {
         if (Buffer.byteLength(JSON.stringify(state)) > 128 * 1024) throw new ApiError(413, 'Session metadata exceeds its resource budget', 'SESSION_METADATA_TOO_LARGE')
       }
       const scan = await streamSessionMetadata(filePath, (entry, completeLine) => {
-        apply(launch, entry as RawEntry)
-        if (completeLine) apply(summary, entry as RawEntry)
+        const record = entry as RawEntry
+        apply(launch, record)
+        if (completeLine) apply(summary, record)
+        const model = record.message?.model
+        if (typeof model === 'string' && model.length <= 512) transcriptMetadata.model = model
+        if (typeof record.version === 'string' && record.version.length <= 512) transcriptMetadata.version = record.version
       })
       const shared = (state: typeof summary) => ({
         ...(state.additionalDirectories !== undefined ? { additionalDirectories: state.additionalDirectories } : {}),
@@ -1583,6 +1591,7 @@ export class SessionService {
           ...shared(launch),
         },
         customTitle: launch.nonemptyCustomTitle,
+        transcriptMetadata: { ...transcriptMetadata, cwd: launch.cwd },
       }
       this.metadataProjectionCache.delete(key)
       this.metadataProjectionCache.set(key, { signature: scan.sourceVersion, ...result })
@@ -3292,7 +3301,7 @@ export class SessionService {
     return contextWindow
   }
 
-  private async getTranscriptContextWindow(
+  async getSessionModelContextWindow(
     sessionId: string,
     model: string,
     launchInfo?: ProviderContextWindowHint | null,
@@ -3343,7 +3352,7 @@ export class SessionService {
     transcriptHasMediaInput: boolean,
     launchInfo?: ProviderContextWindowHint | null,
   ): Promise<TranscriptContextEstimate> {
-    const rawMaxTokens = await this.getTranscriptContextWindow(sessionId, latest.model, launchInfo)
+    const rawMaxTokens = await this.getSessionModelContextWindow(sessionId, latest.model, launchInfo)
     const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
     const providerTokens = promptTokens + latest.outputTokens
     const hasProviderUsage = providerTokens > 0
@@ -3689,7 +3698,7 @@ export class SessionService {
     }
 
     for (const modelUsage of models.values()) {
-      modelUsage.contextWindow = await this.getTranscriptContextWindow(
+      modelUsage.contextWindow = await this.getSessionModelContextWindow(
         sessionId,
         modelUsage.model,
         modelRuntimeHints.get(modelUsage.model),
@@ -5190,6 +5199,13 @@ export class SessionService {
     })
     const entry = entries.find((candidate) => candidate.uuid === messageId)
     return typeof entry?.cwd === 'string' && entry.cwd.trim() ? entry.cwd : null
+  }
+
+  async getSessionStatusMetadata(sessionId: string): Promise<Pick<SessionMetadataProjection, 'launchInfo' | 'transcriptMetadata'> | null> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return null
+    const { launchInfo, transcriptMetadata } = await this.getMetadataProjection(found.filePath, found.projectDir)
+    return { launchInfo, transcriptMetadata }
   }
 
   /**

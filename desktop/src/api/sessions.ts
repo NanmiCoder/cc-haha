@@ -295,6 +295,7 @@ export type SessionInspectionResponse = {
     version?: string
     cwd?: string
     model?: string
+    contextWindow?: number
     apiKeySource?: string
     outputStyle?: string
     tools?: string[]
@@ -612,7 +613,13 @@ export const sessionsApi = {
     return api.get<{ commands: SlashCommandOption[] }>(`/api/sessions/${sessionId}/slash-commands`)
   },
 
-  getInspection(sessionId: string, options?: { includeContext?: boolean; timeout?: number; contextOnly?: boolean }) {
+  getInspection(sessionId: string, options?: {
+    includeContext?: boolean
+    timeout?: number
+    contextOnly?: boolean
+    statusOnly?: boolean
+    signal?: AbortSignal
+  }) {
     const query = new URLSearchParams()
     if (options?.includeContext !== undefined) {
       query.set('includeContext', options.includeContext ? '1' : '0')
@@ -620,9 +627,13 @@ export const sessionsApi = {
     if (options?.contextOnly) {
       query.set('contextOnly', '1')
     }
+    if (options?.statusOnly) {
+      query.set('statusOnly', '1')
+    }
     const suffix = query.size > 0 ? `?${query.toString()}` : ''
     return api.get<SessionInspectionResponse>(`/api/sessions/${sessionId}/inspection${suffix}`, {
       timeout: options?.timeout ?? (options?.includeContext ? 45_000 : 25_000),
+      signal: options?.signal,
     })
   },
 
