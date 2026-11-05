@@ -5,6 +5,19 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { createPowerShellProvider } from './powershellProvider.js'
 
+test('preserves a caller-supplied command when automatic error handling is disabled', async () => {
+  const provider = createPowerShellProvider('pwsh')
+  const command = "using namespace System.Collections.Generic\nparam($marker = '中文')\nWrite-Output $marker"
+  const { commandString } = await provider.buildExecCommand(command, {
+    id: 'caller-supplied',
+    useSandbox: false,
+    failOnPowerShellError: false,
+  })
+
+  expect(commandString.startsWith(`${command}\n; $_ec = `)).toBe(true)
+  expect(provider.getSpawnArgs(commandString)).toEqual(['-NoProfile', '-NonInteractive', '-Command', commandString])
+})
+
 test.skipIf(process.platform !== 'win32')('native model commands preserve Unicode and stop on PowerShell errors', async () => {
   const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const provider = createPowerShellProvider(executable)
