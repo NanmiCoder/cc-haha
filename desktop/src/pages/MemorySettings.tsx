@@ -134,7 +134,9 @@ export function MemorySettings() {
     if (!canLeaveDirtyEdit()) return
     void fetchProjects(activeCwd)
     if (selectedProjectId) {
-      void fetchFiles(selectedProjectId)
+      // Re-read the open file as well: a session may have rewritten it on disk,
+      // and an unsaved draft was just discarded by the confirmation above.
+      void fetchFiles(selectedProjectId, { reloadSelectedFile: true })
     }
   }
 
