@@ -41,6 +41,15 @@ cd adapters
 bun install
 ```
 
+Running the whole desktop app locally (`bun run electron:dev`) needs one more step: `bun install` does not run Electron's postinstall, so `desktop/node_modules/electron/dist` stays empty and the command fails with `Electron executable not found`.
+
+```bash
+cd desktop
+node node_modules/electron/install.js
+```
+
+It is separate because `trustedDependencies` in `desktop/package.json` lists only `node-pty` — Electron would drop a hundred-megabyte binary into `node_modules`, which is not worth paying on every `bun install`. Lint, tests, and every `check:*` gate run without it.
+
 Do not commit local artifacts such as `artifacts/quality-runs/`, `node_modules/`, or `desktop/node_modules/`.
 
 ## Gate Tiers

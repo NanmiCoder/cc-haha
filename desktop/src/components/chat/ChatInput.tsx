@@ -28,6 +28,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { isTouchH5Document } from '../../lib/touchH5'
 import {
   formatWorkspaceReferencePrompt,
+  getAnnotationNumbers,
   useWorkspaceChatContextStore,
   type WorkspaceChatReference,
 } from '../../stores/workspaceChatContextStore'
@@ -42,6 +43,7 @@ import type { SlashCommandOption } from '../../types/slashCommand'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
 import { memberHitContextLimit } from '@/components/agentTeams/agentTeamsModel'
 import { AttachmentGallery } from './AttachmentGallery'
+import { ChatAnnotationEditor } from './annotations/ChatAnnotationEditor'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
 import { ProjectContextChip } from '@/components/chat/ProjectContextChip'
 import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from '@/components/chat/RepositoryLaunchControls'
@@ -314,6 +316,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     (s) => activeTabId ? s.referencesBySession[activeTabId] ?? EMPTY_WORKSPACE_REFERENCES : EMPTY_WORKSPACE_REFERENCES,
   )
   const addWorkspaceReference = useWorkspaceChatContextStore((s) => s.addReference)
+  const updateWorkspaceReference = useWorkspaceChatContextStore((s) => s.updateReference)
   const removeWorkspaceReference = useWorkspaceChatContextStore((s) => s.removeReference)
   const clearWorkspaceReferences = useWorkspaceChatContextStore((s) => s.clearReferences)
   const updateRepositoryLaunchDraft = useCallback((
@@ -462,6 +465,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     !isPreparingTurn &&
     (!showLaunchControls || launchReady || !!pendingSlashUiAction) &&
     (input.trim().length > 0 || (!isMemberSession && (attachments.length > 0 || hasWorkspaceReferences)))
+  const annotationNumbers = useMemo(() => getAnnotationNumbers(workspaceReferences), [workspaceReferences])
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null)
+  const [annotationAnchorRect, setAnnotationAnchorRect] = useState<DOMRect | null>(null)
+  const activeAnnotation = activeAnnotationId
+    ? workspaceReferences.find((reference) => reference.id === activeAnnotationId) ?? null
+    : null
+  const closeAnnotationEditor = useCallback(() => {
+    setActiveAnnotationId(null)
+    setAnnotationAnchorRect(null)
+  }, [])
   const composerAttachments = useMemo(
     () => [
       ...attachments,
@@ -1793,8 +1806,35 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
           {composerAttachments.length > 0 && (
             <div className="px-2 pt-2">
-              <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} />
+              <AttachmentGallery
+                attachments={composerAttachments}
+                variant="composer"
+                onRemove={removeAttachment}
+                annotationNumbers={annotationNumbers}
+                onActivate={(id, anchorRect) => {
+                  setAnnotationAnchorRect(anchorRect)
+                  setActiveAnnotationId(id)
+                }}
+              />
             </div>
+          )}
+
+          {activeAnnotation && annotationAnchorRect && activeTabId && (
+            <ChatAnnotationEditor
+              key={activeAnnotation.id}
+              anchorRect={annotationAnchorRect}
+              quote={activeAnnotation.quote ?? ''}
+              initialNote={activeAnnotation.note ?? ''}
+              onSave={(note) => {
+                updateWorkspaceReference(activeTabId, activeAnnotation.id, { note })
+                closeAnnotationEditor()
+              }}
+              onDelete={() => {
+                removeWorkspaceReference(activeTabId, activeAnnotation.id)
+                closeAnnotationEditor()
+              }}
+              onClose={closeAnnotationEditor}
+            />
           )}
 
           {isHeroComposer ? (
