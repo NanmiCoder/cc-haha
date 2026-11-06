@@ -2,8 +2,9 @@
  * One Chat Completions call through the LLMTR preset and the app's OpenAI
  * Chat request path.
  *
- * Run from the repository root after `bun install`:
- *   LLMTR_API_KEY=... bun run scripts/llmtr/chat-smoke.ts
+ * Source entry, from the repository root:
+ *   LLMTR_API_KEY=... bun --no-env-file run scripts/llmtr/chat-smoke.ts
+ * The parent artifact is `bun build` of this file, so it does not need the checkout.
  *   LLMTR_MODEL=minimax/minimax-m3.1-flash   optional full model id
  *
  * This is not a standalone client. It loads the bundled LLMTR preset and
@@ -17,7 +18,10 @@
  * reasoning object, or reasoning_effort.
  *
  * The in-app proxy may resend once if an upstream rejects image input or a
- * reasoning field. This entrypoint does not.
+ * reasoning field. This entrypoint does not, and it does not follow redirects.
+ *
+ * Success requires HTTP success, no error object, and nonempty assistant
+ * message text. Empty text and reasoning-only choices are failures.
  *
  * GET /v1/models is public and is not called here. A successful model list
  * does not mean LLMTR_API_KEY is valid.
@@ -33,6 +37,7 @@ export const LLMTR_API_KEY_ENV = 'LLMTR_API_KEY'
 export const LLMTR_MODEL_ENV = 'LLMTR_MODEL'
 export const LLMTR_SMOKE_MAX_TOKENS = 64
 export const LLMTR_SMOKE_TIMEOUT_MS = 120_000
+export const LLMTR_SMOKE_REDIRECT = 'error' as const
 const SMOKE_PROMPT = 'Say "ok" and nothing else.'
 
 export type LlmtrChatSmokeRequest = {
@@ -96,6 +101,52 @@ function redactSecret(text: string, secret: string): string {
   return text.split(secret).join('***')
 }
 
+function assistantMessageText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  let text = ''
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue
+    const record = part as Record<string, unknown>
+    if (record.type === 'text' && typeof record.text === 'string') text += record.text
+  }
+  return text
+}
+
+/**
+ * Assistant text only. Reasoning fields and empty choices do not count.
+ * Returns '' when the payload has an error object or no usable text.
+ */
+export function llmtrSmokeAssistantText(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return ''
+  const record = payload as Record<string, unknown>
+  if (record.error != null && record.error !== false) return ''
+  const choices = record.choices
+  if (!Array.isArray(choices) || choices.length === 0) return ''
+  const choice = choices[0]
+  if (!choice || typeof choice !== 'object') return ''
+  const message = (choice as Record<string, unknown>).message
+  if (!message || typeof message !== 'object') return ''
+  return assistantMessageText((message as Record<string, unknown>).content).trim()
+}
+
+export function classifyLlmtrSmokePayload(payload: unknown): { ok: true; text: string } | { ok: false; reason: string } {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { ok: false, reason: 'Response is not a Chat Completions object' }
+  }
+  const record = payload as Record<string, unknown>
+  if (record.error != null && record.error !== false) {
+    return { ok: false, reason: 'Chat Completions response contains an error' }
+  }
+  const choices = record.choices
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return { ok: false, reason: 'Response is not a Chat Completions choices payload' }
+  }
+  const text = llmtrSmokeAssistantText(payload)
+  if (!text) return { ok: false, reason: 'Assistant message text is empty' }
+  return { ok: true, text }
+}
+
 async function main(): Promise<number> {
   const apiKey = process.env[LLMTR_API_KEY_ENV]?.trim() ?? ''
   if (!apiKey) {
@@ -122,6 +173,7 @@ async function main(): Promise<number> {
       method: 'POST',
       headers: request.headers,
       body: JSON.stringify(request.body),
+      redirect: LLMTR_SMOKE_REDIRECT,
       signal: AbortSignal.timeout(LLMTR_SMOKE_TIMEOUT_MS),
     })
   } catch (err) {
@@ -139,14 +191,16 @@ async function main(): Promise<number> {
     return 1
   }
 
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(raw) as { choices?: unknown; error?: unknown }
-    if (!Array.isArray(parsed.choices) || parsed.choices.length === 0 || parsed.error) {
-      console.error('Response is not a Chat Completions choices payload')
-      return 1
-    }
+    parsed = JSON.parse(raw)
   } catch {
     console.error('Response was not JSON')
+    return 1
+  }
+  const verdict = classifyLlmtrSmokePayload(parsed)
+  if (!verdict.ok) {
+    console.error(verdict.reason)
     return 1
   }
 

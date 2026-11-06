@@ -58,7 +58,7 @@ AZURE_OPENAI_CODEX_DEPLOYMENT=your_codex_deployment
 
 The desktop preset is named LLMTR. Its base URL is `https://llmtr.com/v1` and its protocol is OpenAI Chat Completions. The key is stored on the provider form and the local proxy sends it as `Authorization: Bearer` to `/v1/chat/completions`. The app does not read `LLMTR_API_KEY`.
 
-`LLMTR_API_KEY` is only for the one-shot script `scripts/llmtr/chat-smoke.ts`. Optional `LLMTR_MODEL` overrides the model ID; the default is `minimax/minimax-m3.1-flash`. The script sends one request with no tools, `max_tokens` 64, no retry, and no `reasoning` parameter. The public catalog's context 1000000 and completion ceiling 524288 are preset metadata only; they do not raise that request's `max_tokens`. `GET /v1/models` is a public catalog and does not validate the key.
+`LLMTR_API_KEY` is only for the one-shot script `scripts/llmtr/chat-smoke.ts`. Optional `LLMTR_MODEL` overrides the model ID; the default is `minimax/minimax-m3.1-flash`. The script sends one request with no tools, `max_tokens` 64, no retry, no redirects, and no `reasoning` parameter. Success requires an HTTP success, no error object, and nonempty assistant text. Empty or reasoning-only choices are failures. The public catalog's context 1000000 and completion ceiling 524288 are preset metadata only; they do not raise that request's `max_tokens`. `GET /v1/models` is a public catalog and does not validate the key.
 
 ### Local runtime and privacy
 

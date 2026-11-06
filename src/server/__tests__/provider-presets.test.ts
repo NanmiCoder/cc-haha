@@ -11,7 +11,7 @@ import { buildProviderManagedEnv, providerNeedsProxy } from '../services/provide
 import { ProviderService } from '../services/providerService.js'
 import { resolveModelApiFormat } from '../../shared/modelApiFormats.js'
 import { resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
-import { buildLlmtrChatSmokeRequest } from '../../../scripts/llmtr/chat-smoke.js'
+import { buildLlmtrChatSmokeRequest, classifyLlmtrSmokePayload, LLMTR_SMOKE_REDIRECT } from '../../../scripts/llmtr/chat-smoke.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -766,6 +766,7 @@ describe('provider presets API', () => {
       expect(catalogDefault.body.max_tokens).toBe(64)
       expect(catalogDefault.body.max_completion_tokens).toBeUndefined()
       expect('reasoning' in catalogDefault.body).toBe(false)
+      expect(LLMTR_SMOKE_REDIRECT).toBe('error')
 
       const withThinking = anthropicToOpenaiChat({
         model: 'minimax/minimax-m3.1-flash',
@@ -775,6 +776,35 @@ describe('provider presets API', () => {
       })
       expect(withThinking).not.toHaveProperty('reasoning')
       expect(withThinking.thinking).toBeUndefined()
+    })
+
+    test('counts only nonempty assistant text as a successful chat body', () => {
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: 'ok' } }],
+      })).toEqual({ ok: true, text: 'ok' })
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }],
+      })).toEqual({ ok: true, text: 'ok' })
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: '' } }],
+      }).ok).toBe(false)
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: '   ' } }],
+      }).ok).toBe(false)
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: null, reasoning_content: 'only reasoning' } }],
+      })).toMatchObject({ ok: false, reason: 'Assistant message text is empty' })
+      expect(classifyLlmtrSmokePayload({
+        choices: [{ message: { role: 'assistant', content: [{ type: 'reasoning', text: 'only reasoning' }] } }],
+      })).toMatchObject({ ok: false, reason: 'Assistant message text is empty' })
+      expect(classifyLlmtrSmokePayload({
+        error: { message: 'nope' },
+        choices: [{ message: { role: 'assistant', content: 'ok' } }],
+      })).toMatchObject({ ok: false, reason: 'Chat Completions response contains an error' })
+      expect(classifyLlmtrSmokePayload({ choices: [] })).toMatchObject({
+        ok: false,
+        reason: 'Response is not a Chat Completions choices payload',
+      })
     })
 
     test('checks the key with Chat Completions and never with the public model list', async () => {
