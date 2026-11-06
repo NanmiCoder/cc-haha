@@ -1,13 +1,17 @@
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
 
 import { handleProvidersApi } from '../api/providers.js'
 import { PROVIDER_PRESETS, ProviderPresetSchema } from '../config/providerPresets.js'
+import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
+import { buildOpenaiEndpoint } from '../proxy/openaiEndpoint.js'
 import { buildProviderManagedEnv, providerNeedsProxy } from '../services/providerRuntimeEnv.js'
+import { ProviderService } from '../services/providerService.js'
 import { resolveModelApiFormat } from '../../shared/modelApiFormats.js'
 import { resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
+import { buildLlmtrChatSmokeRequest } from '../../../scripts/llmtr/chat-smoke.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -641,11 +645,164 @@ describe('provider presets API', () => {
     test('stays ordered before the local endpoints so the catalog layout is stable', () => {
       const ids = PROVIDER_PRESETS.map((preset) => preset.id)
       expect(ids.indexOf('openrouter')).toBeGreaterThan(-1)
-      expect(ids.indexOf('openrouter')).toBeLessThan(ids.indexOf('magpie'))
+      expect(ids.indexOf('openrouter')).toBeLessThan(ids.indexOf('llmtr'))
+      expect(ids.indexOf('llmtr')).toBeLessThan(ids.indexOf('magpie'))
       expect(PROVIDER_PRESETS.at(-4)?.id).toBe('magpie')
       expect(PROVIDER_PRESETS.at(-3)?.id).toBe('lmstudio')
       expect(PROVIDER_PRESETS.at(-2)?.id).toBe('ollama')
       expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
+    })
+  })
+
+  /**
+   * LLMTR is a named OpenAI Chat Completions gateway. The preset must stay on
+   * /v1/chat/completions, keep full model ids, and must not invent context,
+   * price, or capability metadata. GET /v1/models is public, so it is not a
+   * key check; the provider test posts a chat completion instead.
+   */
+  describe('LLMTR preset', () => {
+    const llmtr = PROVIDER_PRESETS.find((preset) => preset.id === 'llmtr')!
+
+    test('publishes a Chat Completions preset and leaves Magpie alone', () => {
+      expect(llmtr).toBeDefined()
+      expect(llmtr.name).toBe('LLMTR')
+      expect(llmtr.baseUrl).toBe('https://llmtr.com/v1')
+      expect(llmtr.apiFormat).toBe('openai_chat')
+      expect(llmtr.authStrategy).toBe('api_key')
+      expect(llmtr.needsApiKey).toBe(true)
+      expect(llmtr.websiteUrl).toBe('https://llmtr.com')
+      expect(llmtr.isNew).toBe(true)
+      expect(llmtr.deprecated).toBeUndefined()
+      expect(llmtr.featured).toBeUndefined()
+      expect(llmtr.apiKeyUrl).toBeUndefined()
+      expect(llmtr.promoText).toBeUndefined()
+      expect(llmtr.defaultEnv).toEqual({})
+      expect(llmtr.modelContextWindows).toBeUndefined()
+      expect(llmtr.modelApiFormats).toBeUndefined()
+      expect(llmtr.upstreamHeaders).toBeUndefined()
+      expect(llmtr.reasoningProviderKind).toBeUndefined()
+      expect(llmtr.defaultModels).toEqual({
+        main: 'minimax/minimax-m3.1-flash',
+        haiku: 'minimax/minimax-m3.1-flash',
+        sonnet: 'minimax/minimax-m3.1-flash',
+        opus: 'minimax/minimax-m3.1-flash',
+      })
+      expect(providerNeedsProxy(llmtr.apiFormat, undefined)).toBe(true)
+      expect(buildOpenaiEndpoint(llmtr.baseUrl, 'chat/completions'))
+        .toBe('https://llmtr.com/v1/chat/completions')
+      const magpie = PROVIDER_PRESETS.find((preset) => preset.id === 'magpie')
+      expect(magpie).toMatchObject({
+        baseUrl: 'http://127.0.0.1:3425',
+        apiFormat: 'anthropic',
+        defaultEnv: { ANTHROPIC_AUTH_TOKEN: 'magpie-cc-haha' },
+      })
+    })
+
+    test('routes the desktop key through the loopback proxy without a context table', () => {
+      const env = buildProviderManagedEnv({
+        id: 'llmtr-test', presetId: llmtr.id, name: llmtr.name,
+        baseUrl: llmtr.baseUrl, apiFormat: llmtr.apiFormat,
+        authStrategy: llmtr.authStrategy, apiKey: 'llmtr-offline-fixture-key',
+        models: llmtr.defaultModels,
+      })
+      expect(env.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/proxy$/)
+      expect(env.ANTHROPIC_API_KEY).toBe('proxy-managed')
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+      expect(env.LLMTR_API_KEY).toBeUndefined()
+      expect(env.ANTHROPIC_MODEL).toBe('minimax/minimax-m3.1-flash')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('minimax/minimax-m3.1-flash')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('minimax/minimax-m3.1-flash')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('minimax/minimax-m3.1-flash')
+      expect(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBeUndefined()
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    })
+
+    test('keeps a one-shot chat on Chat Completions with no tools or reasoning object', () => {
+      const request = buildLlmtrChatSmokeRequest({
+        apiKey: 'llmtr-offline-fixture-key',
+        model: 'llmtr/example-model',
+      })
+      expect(request.url).toBe('https://llmtr.com/v1/chat/completions')
+      expect(request.url).not.toContain('/responses')
+      expect(request.headers.Authorization).toBe('Bearer llmtr-offline-fixture-key')
+      expect(request.body).toMatchObject({
+        model: 'llmtr/example-model',
+        max_tokens: 64,
+        stream: false,
+        messages: [{ role: 'user', content: 'Say "ok" and nothing else.' }],
+      })
+      expect(request.body.tools).toBeUndefined()
+      expect('reasoning' in request.body).toBe(false)
+      expect(request.body.reasoning_effort).toBeUndefined()
+      expect(request.body.thinking).toBeUndefined()
+
+      const withThinking = anthropicToOpenaiChat({
+        model: 'minimax/minimax-m3.1-flash',
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'hi' }],
+        thinking: { type: 'enabled', budget_tokens: 2048 },
+      })
+      expect(withThinking).not.toHaveProperty('reasoning')
+      expect(withThinking.thinking).toBeUndefined()
+    })
+
+    test('checks the key with Chat Completions and never with the public model list', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ url: string; method: string; authorization: string | null; body: Record<string, unknown> }> = []
+      globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+        const target = String(url)
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        const headers = init?.headers as Record<string, string>
+        calls.push({
+          url: target,
+          method: init?.method ?? 'GET',
+          authorization: headers?.Authorization ?? null,
+          body,
+        })
+        if (target.includes('/models') || target.includes('/responses')) {
+          return new Response(JSON.stringify({ data: [{ id: 'public-catalog-model' }] }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
+          id: 'chatcmpl-llmtr',
+          object: 'chat.completion',
+          created: 0,
+          model: body.model,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const result = await new ProviderService().testProviderConfig({
+          baseUrl: llmtr.baseUrl,
+          apiKey: 'llmtr-offline-fixture-key',
+          modelId: 'llmtr/example-model',
+          authStrategy: llmtr.authStrategy,
+          apiFormat: llmtr.apiFormat,
+          presetId: llmtr.id,
+        })
+        expect(result.connectivity.success).toBe(true)
+        expect(result.proxy?.success).toBe(true)
+        expect(calls.map((call) => call.url)).toEqual([
+          'https://llmtr.com/v1/chat/completions',
+          'https://llmtr.com/v1/chat/completions',
+        ])
+        expect(calls.every((call) => call.method === 'POST')).toBe(true)
+        expect(calls.every((call) => call.authorization === 'Bearer llmtr-offline-fixture-key')).toBe(true)
+        expect(calls.map((call) => call.body.model)).toEqual(['llmtr/example-model', 'llmtr/example-model'])
+        expect(calls.map((call) => call.body.max_tokens)).toEqual([16, 64])
+        for (const call of calls) {
+          expect(call.body.reasoning).toBeUndefined()
+          expect(call.body.tools).toBeUndefined()
+          expect(call.url).not.toContain('/models')
+          expect(call.url).not.toContain('/responses')
+        }
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
   })
 

@@ -47,6 +47,7 @@ The built-in presets, as they appear in the dialog:
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — major Chinese model vendors; the base URLs point at each one's Anthropic-compatible endpoint.
 - **XuanShu API** · **FennoAI** — routing services that give you access to official Claude models through their own gateways.
 - **Qiniu Cloud AI** · **OpenRouter** — aggregators: one key for DeepSeek, GLM, Kimi, Qwen, Claude, and more.
+- **LLMTR** — an OpenAI Chat Completions gateway; see the LLMTR section below.
 - **LM Studio** · **Ollama** — local models; see the next section.
 - **Custom** — anything not listed above.
 
@@ -63,6 +64,16 @@ Three things to know:
 - **Model IDs carry an `author/slug` namespace**, e.g. `anthropic/claude-sonnet-5.5` or `deepseek/deepseek-v4-pro`. All four prefilled slots are Claude 5.5; for anything else, click "Fetch models" and pick from the live list instead of copying a name from elsewhere — with a catalogue this size, a hand-typed ID is easy to get wrong.
 - **Claude Code only guarantees full compatibility with Anthropic first-party providers.** Reaching another vendor's model through OpenRouter can hit differences in tool calling, thinking, or parameter shape. On a 400, check "Disable experimental beta headers" first, then try another model.
 - **To use `/fast`**, pin the slot to a specific Opus ID (`~…-latest` aliases don't carry the fast parameter) and add `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1` to `env` in "Settings JSON". To let Claude Code run its own model discovery, add `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` there too.
+
+### LLMTR
+
+[LLMTR](https://llmtr.com) speaks OpenAI Chat Completions. The preset is named LLMTR and its base URL is `https://llmtr.com/v1`. The app sends chat through the local loopback proxy to `https://llmtr.com/v1/chat/completions`, with the key in `Authorization: Bearer`. Chat is not rerouted to `/v1/responses`, and the request does not include a Responses API `reasoning` object.
+
+All four slots hint `minimax/minimax-m3.1-flash`. Keep model IDs from "Fetch models" intact, including IDs that already start with `llmtr/`. The preset does not fill in context length, price, or extra capabilities.
+
+`GET https://llmtr.com/v1/models` is a public catalog and does not check the API key. Use Test on the provider row to check the key; that call is Chat Completions, not the model list.
+
+The desktop app stores the key on the provider record and does not read `LLMTR_API_KEY`. That variable is only for the one-shot script `scripts/llmtr/chat-smoke.ts`: one Chat Completions request, no tools, `max_tokens` 64, optional `LLMTR_MODEL` override, and no automatic retry.
 
 ## Local models
 
@@ -126,7 +137,7 @@ Presets pick the right one. If you're guessing, start with Bearer Token and swit
 
 Each slot has a `1M` checkbox. Tick it only if that model genuinely supports a one-million-token context window.
 
-**API Format** — this field only appears when you pick the `Custom` preset or edit an existing provider. Three options: Anthropic Messages (native), OpenAI Chat Completions (proxied), and OpenAI Responses API (proxied). The proxied formats are translated by a loopback proxy the app starts locally — you don't deploy anything. Every built-in preset uses Anthropic native, which is why the field is hidden for them.
+**API Format** — this field only appears when you pick the `Custom` preset or edit an existing provider. Three options: Anthropic Messages (native), OpenAI Chat Completions (proxied), and OpenAI Responses API (proxied). The proxied formats are translated by a loopback proxy the app starts locally — you don't deploy anything. The LLMTR preset is fixed to Chat Completions: requests go to `/v1/chat/completions` and are not rerouted to `/v1/responses`. Most other built-in presets are Anthropic-native, so the field stays hidden when you add them.
 
 Click "Add" when you're done.
 

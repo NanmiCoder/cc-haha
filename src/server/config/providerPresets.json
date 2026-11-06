@@ -471,6 +471,23 @@
     }
   },
   {
+    "id": "llmtr",
+    "name": "LLMTR",
+    "baseUrl": "https://llmtr.com/v1",
+    "apiFormat": "openai_chat",
+    "defaultModels": {
+      "main": "minimax/minimax-m3.1-flash",
+      "haiku": "minimax/minimax-m3.1-flash",
+      "sonnet": "minimax/minimax-m3.1-flash",
+      "opus": "minimax/minimax-m3.1-flash"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://llmtr.com",
+    "isNew": true,
+    "authStrategy": "api_key",
+    "defaultEnv": {}
+  },
+  {
     "id": "magpie",
     "name": "Magpie",
     "baseUrl": "http://127.0.0.1:3425",

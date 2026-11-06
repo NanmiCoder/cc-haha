@@ -54,6 +54,12 @@ AZURE_OPENAI_API_KEY=your_azure_openai_key
 AZURE_OPENAI_CODEX_DEPLOYMENT=your_codex_deployment
 ```
 
+### LLMTR
+
+The desktop preset is named LLMTR. Its base URL is `https://llmtr.com/v1` and its protocol is OpenAI Chat Completions. The key is stored on the provider form and the local proxy sends it as `Authorization: Bearer` to `/v1/chat/completions`. The app does not read `LLMTR_API_KEY`.
+
+`LLMTR_API_KEY` is only for the one-shot script `scripts/llmtr/chat-smoke.ts`. Optional `LLMTR_MODEL` overrides the model ID; the default is `minimax/minimax-m3.1-flash`. The script sends one request with no tools, `max_tokens` 64, and no retry. `GET /v1/models` is a public catalog and does not validate the key.
+
 ### Local runtime and privacy
 
 | Variable | Description |
