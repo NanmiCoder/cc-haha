@@ -37,6 +37,7 @@ import {
 import type { ActivityStep } from './activityGroupModel'
 import { ToolResultBlock } from './ToolResultBlock'
 import { PermissionDialog } from './PermissionDialog'
+import { MagpieConnectionHint, isCliApiErrorText } from './MagpieConnectionHint'
 import { AskUserQuestion } from './AskUserQuestion'
 import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
@@ -4618,6 +4619,9 @@ export const MessageBlock = memo(function MessageBlock({
             isTurnOutputOwner={isTurnOutputOwner}
             turnCompletion={turnCompletion}
           />
+          {isCliApiErrorText(message.content) && (
+            <MagpieConnectionHint sessionId={sessionId} errorText={message.content} />
+          )}
         </SelectableChatMessage>
       )
     case 'thinking':
@@ -4711,6 +4715,7 @@ export const MessageBlock = memo(function MessageBlock({
               {message.message}
             </div>
           )}
+          <MagpieConnectionHint sessionId={sessionId} errorText={message.message} />
         </div>
       )
     }

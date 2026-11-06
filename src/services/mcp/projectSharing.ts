@@ -194,13 +194,16 @@ export async function updateProjectMcpSelections(
       // Legacy callers can still retry without an ephemeral source snapshot.
     }
   }
-  const resolved = await Promise.all(targets.map(async target => {
+  const resolved: Array<{ target: ProjectMcpSelectionTarget; projectPath?: string; error?: string }> = []
+  // Resolve the whole batch before duplicate checks and writes, without
+  // exhausting the shared directory I/O pool with one request's targets.
+  for (const target of targets) {
     try {
-      return { target, projectPath: await resolveProjectMcpDirectory(target.projectPath) }
+      resolved.push({ target, projectPath: await resolveProjectMcpDirectory(target.projectPath) })
     } catch (error) {
-      return { target, error: describeError(error) }
+      resolved.push({ target, error: describeError(error) })
     }
-  }))
+  }
   const counts = new Map<string, number>()
   for (const entry of resolved) {
     if (!entry.projectPath) continue

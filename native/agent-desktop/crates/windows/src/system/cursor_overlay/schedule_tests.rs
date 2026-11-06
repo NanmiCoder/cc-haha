@@ -123,3 +123,18 @@ fn the_rest_fade_runs_from_full_to_nothing() {
 fn a_fade_with_no_steps_is_already_gone() {
     assert_eq!(rest_fade(0, 0), 0.0);
 }
+#[test]
+fn product_idle_delay_extends_the_cursor_within_the_supported_range() {
+    for (configured, expected) in [
+        (None, 6_000),
+        (Some("not-a-duration"), 6_000),
+        (Some("1"), 6_000),
+        (Some("45000"), 45_000),
+        (Some("999999"), 60_000),
+    ] {
+        assert_eq!(
+            super::idle_rest_delay(configured),
+            Duration::from_millis(expected),
+        );
+    }
+}

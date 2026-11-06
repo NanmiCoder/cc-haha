@@ -9,6 +9,7 @@ import {
   installedHelperAppBundle,
   installedHelperRoot,
   isNestedInHostApp,
+  prepareInstalledHelper,
 } from './cuHelperInstall.js'
 
 afterEach(() => __resetInstalledHelperCache())
@@ -225,14 +226,14 @@ describe('ensureInstalledHelper', () => {
         writeFileSync(destination, `last working fixture: ${relative}`)
       }
 
-      const installed = ensureInstalledHelper({
+      const installed = prepareInstalledHelper({
         sourceApp,
         configHome,
         copyApp: (src, dest) => cpSync(src, dest, { recursive: true }),
         verifyPackagedSignatures: (_source, candidate) => candidate.includes('.staging-'),
       })
 
-      expect(installed).toBeNull()
+      expect(installed).toEqual({ helper: null, reason: 'helper_signature_invalid' })
       expect(readFileSync(path.join(destApp, INNER), 'utf8'))
         .toBe(`last working fixture: ${INNER}`)
     } finally {
@@ -320,5 +321,40 @@ describe('ensureInstalledHelper', () => {
     })
     expect(ensureInstalledHelper(deps)).toBeNull()
     expect(state.marker).toBeNull()
+  })
+
+  test('reports signature rejection without a launchable path, then recovers on retry', () => {
+    const rejected = fakeFs({ copiedSignatureValid: false })
+    expect(prepareInstalledHelper(rejected.deps)).toEqual({
+      helper: null,
+      reason: 'helper_signature_invalid',
+    })
+    expect(rejected.state.ops).not.toContain('replace')
+    expect(rejected.state.marker).toBeNull()
+
+    const valid = fakeFs()
+    expect(prepareInstalledHelper(valid.deps)).toEqual({
+      helper: { appBundle: DEST_APP, binary: DEST_INNER },
+      reason: null,
+    })
+  })
+
+  test('distinguishes a missing source from a failed standalone preparation', () => {
+    expect(prepareInstalledHelper({ sourceApp: null })).toEqual({
+      helper: null, reason: 'helper_missing',
+    })
+    const { deps } = fakeFs({ failCopy: true })
+    expect(prepareInstalledHelper(deps)).toEqual({
+      helper: null, reason: 'helper_prepare_failed',
+    })
+  })
+
+  test('preserves signature rejection during post-replacement verification', () => {
+    const { deps } = fakeFs()
+    let verifications = 0
+    expect(prepareInstalledHelper({
+      ...deps,
+      verifyPackagedSignatures: () => ++verifications === 1,
+    })).toEqual({ helper: null, reason: 'helper_signature_invalid' })
   })
 })

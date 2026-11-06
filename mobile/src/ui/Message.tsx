@@ -5,7 +5,17 @@ import type { ChatItem } from '../core/types'
 import { visibleMessageText } from '../core/chatComposer'
 import { userMessageDisplay, type UserMessageCapability } from '../core/userMessageDisplay'
 import { Callout, CodeBlock, Icon, InlineCode, useColors } from './kit'
-import { fitColumnWidths, naturalColumnWidths, parseInline, parseMarkdown } from './chat/markdown'
+import {
+  fitColumnWidths,
+  MARKDOWN_EXPAND_LIMIT,
+  MARKDOWN_LIMIT,
+  naturalColumnWidths,
+  parseInline,
+  parseMarkdown,
+  windowMarkdown,
+  type MarkdownBlock,
+  type MarkdownLimit,
+} from './chat/markdown'
 import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { Glyph } from './compose/glyphs'
@@ -107,65 +117,100 @@ function MarkdownTable({
   )
 }
 
-/** 助手正文与计划内容共用的 Markdown 渲染（16/25，代码块用 CodeBlock）。 */
+/**
+ * 助手正文与计划内容共用的 Markdown 渲染（16/25，代码块用 CodeBlock）。
+ * 超长内容只挂开头和结尾（见 windowMarkdown），中间点按后分批展开，最多展开到
+ * MARKDOWN_EXPAND_LIMIT；expandable 为假时只提示省略。
+ */
 export function Markdown({
   text,
   selectable = true,
+  limit = MARKDOWN_LIMIT,
+  expandable = true,
 }: {
   text: string
   selectable?: boolean
+  limit?: MarkdownLimit
+  expandable?: boolean
 }) {
   const colors = useColors()
+  const [extra, setExtra] = useState(0)
+  const blocks = useMemo(() => parseMarkdown(text), [text])
+  const ceiling = Math.max(limit.head, MARKDOWN_EXPAND_LIMIT)
+  const head = Math.min(limit.head + extra, ceiling)
+  const shown = useMemo(
+    () => windowMarkdown(blocks, { head, tail: limit.tail }),
+    [blocks, head, limit.tail]
+  )
   const body: TextStyle = { fontSize: 16, lineHeight: 25, color: colors.ink }
+  const render = (block: MarkdownBlock, key: string) => {
+    switch (block.type) {
+      case 'code':
+        return <CodeBlock key={key}>{block.text || ' '}</CodeBlock>
+      case 'heading':
+        return (
+          <Inline
+            key={key}
+            text={block.text}
+            selectable={selectable}
+            style={{
+              ...body,
+              fontWeight: '600',
+              ...(block.level <= 2 ? { fontSize: 18, lineHeight: 26 } : {}),
+            }}
+          />
+        )
+      case 'list':
+        return (
+          <View key={key} style={{ gap: 4, paddingLeft: 4 }}>
+            {block.items.map((item, itemIndex) => (
+              <View key={itemIndex} style={{ flexDirection: 'row', gap: 10 }}>
+                <Text style={[body, { color: colors.ink3 }]}>{item.marker}</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Inline text={item.text} selectable={selectable} style={body} />
+                </View>
+              </View>
+            ))}
+          </View>
+        )
+      case 'quote':
+        return (
+          <View
+            key={key}
+            style={{ borderLeftWidth: 3, borderLeftColor: colors.hair, paddingLeft: 12 }}
+          >
+            <Inline text={block.text} selectable={selectable} style={{ ...body, color: colors.ink2 }} />
+          </View>
+        )
+      case 'table':
+        return <MarkdownTable key={key} header={block.header} rows={block.rows} selectable={selectable} />
+      case 'rule':
+        return <View key={key} style={{ height: 1, backgroundColor: colors.hair }} />
+      default:
+        return <Inline key={key} text={block.text} selectable={selectable} style={body} />
+    }
+  }
+  const omitted = `${shown.tail.length ? '中间' : '后面'}还有 ${shown.hidden} 段`
+  // 结尾窗口始终以最后一块收尾；按块在原文里的位置给 key，流式追加时窗口平移只换两头，不让整段重挂。
+  const tailStart = blocks.length - shown.tail.length
   return (
     <View style={{ gap: 10 }}>
-      {parseMarkdown(text).map((block, index) => {
-        switch (block.type) {
-          case 'code':
-            return <CodeBlock key={index}>{block.text || ' '}</CodeBlock>
-          case 'heading':
-            return (
-              <Inline
-                key={index}
-                text={block.text}
-                selectable={selectable}
-                style={{
-                  ...body,
-                  fontWeight: '600',
-                  ...(block.level <= 2 ? { fontSize: 18, lineHeight: 26 } : {}),
-                }}
-              />
-            )
-          case 'list':
-            return (
-              <View key={index} style={{ gap: 4, paddingLeft: 4 }}>
-                {block.items.map((item, itemIndex) => (
-                  <View key={itemIndex} style={{ flexDirection: 'row', gap: 10 }}>
-                    <Text style={[body, { color: colors.ink3 }]}>{item.marker}</Text>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Inline text={item.text} selectable={selectable} style={body} />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )
-          case 'quote':
-            return (
-              <View
-                key={index}
-                style={{ borderLeftWidth: 3, borderLeftColor: colors.hair, paddingLeft: 12 }}
-              >
-                <Inline text={block.text} selectable={selectable} style={{ ...body, color: colors.ink2 }} />
-              </View>
-            )
-          case 'table':
-            return <MarkdownTable key={index} header={block.header} rows={block.rows} selectable={selectable} />
-          case 'rule':
-            return <View key={index} style={{ height: 1, backgroundColor: colors.hair }} />
-          default:
-            return <Inline key={index} text={block.text} selectable={selectable} style={body} />
-        }
-      })}
+      {shown.head.map((block, index) => render(block, `h${index}`))}
+      {!shown.hidden ? null : expandable && head < ceiling ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${omitted}，点按展开`}
+          onPress={() => setExtra((value) => value + limit.head)}
+          style={{ alignSelf: 'flex-start', paddingVertical: 4 }}
+        >
+          <Text style={{ fontSize: 14, lineHeight: 20, color: colors.run }}>{`… ${omitted}，点按展开`}</Text>
+        </Pressable>
+      ) : (
+        <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink3 }}>
+          {expandable ? `… ${omitted}，太长了，完整内容请在电脑上查看` : `… ${omitted}`}
+        </Text>
+      )}
+      {shown.tail.map((block, index) => render(block, `t${tailStart + index}`))}
     </View>
   )
 }

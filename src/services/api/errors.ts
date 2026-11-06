@@ -59,7 +59,10 @@ import {
   StreamEndedEarlyError,
 } from './streamFallback.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
-import { isUnsupportedImageInputErrorMessage } from './unsupportedImageInput.js'
+import {
+  isImageInputRefusalMessage,
+  isUnsupportedImageInputErrorMessage,
+} from './unsupportedImageInput.js'
 
 export { isUnsupportedImageInputErrorMessage }
 
@@ -127,16 +130,62 @@ export const PROMPT_TOO_LONG_ERROR_MESSAGE = 'Prompt is too long'
  */
 const CONTEXT_OVERFLOW_PATTERNS: RegExp[] = [
   /prompt is too long/i,
-  /input is too long for requested model/i,
+  /input is too long for (?:the )?(?:requested|selected) model/i,
   /context_length_exceeded/i,
+  /model_context_window_exceeded/i,
   /maximum context length/i,
   /exceeds? the context window/i,
-  /context window exceeded/i,
+  /context window exceed(?:ed|s)/i,
   /supports only \d+\s*k?\s*(?:tokens?\s+of\s+)?context/i,
+  // Relays mostly forward the provider's own wording, and no code is shared
+  // across providers, so each one is listed by what it actually says.
+  /exceeded model token limit/i, // Moonshot Kimi
+  /range of input length should be/i, // Qwen / DashScope
+  /prompt (?:too long|exceeds max length|超长)/i, // Zhipu GLM 1261, Ollama
+  /OutofContextError|exceed max message tokens/i, // Volcengine Ark
+  /input token count.*exceeds the maximum/i, // Gemini
+  /input token count is \d+ but model only supports up to/i, // Gemini
+  /longer than the maximum model length/i, // vLLM
+  /maximum prompt length is \d+/i, // xAI
+  /exceeds the available context size/i, // llama.cpp
+  /`inputs` tokens \+ `max_new_tokens` must be <= \d+/i, // TGI
+  /requested input length \d+ exceeds maximum input length/i,
+  /exceeds (?:the )?maximum allowed input length/i,
+  /number of input tokens exceeds maximum length/i,
+  /tokens in request more than max tokens allowed/i,
+  /too large for the model'?s configured input limit/i,
+  /is longer than the model'?s context length/i,
+  /greater than the context length/i,
+  /context length is only \d+ tokens/i,
+  /prompt has [\d,]+ tokens?, but the configured context size is/i,
 ]
 
+// Wordings that share a phrase with an overflow but that compaction cannot
+// fix: the input already fits (an oversized max_tokens) or nothing is too long
+// (a token-rate limit).
+const NOT_CONTEXT_OVERFLOW_PATTERNS: RegExp[] = [
+  /'?max_tokens'? or '?max_completion_tokens'? is too large/i,
+  /max[_ ]tokens must be (?:less than|at most)/i,
+  /rate[ _-]?limit/i,
+  /too many requests/i,
+]
+
+// Python relays serialize JSON with ensure_ascii, so a Chinese error message
+// reaches us as `\u8d85\u957f` rather than the characters themselves — and
+// with its backslash escaped again for every JSON layer it was nested in (the
+// local proxy's envelope, the SDK's stringified body).
+function decodeJsonUnicodeEscapes(text: string): string {
+  return text.replace(/\\+u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  )
+}
+
 export function isContextOverflowErrorText(text: string): boolean {
-  return CONTEXT_OVERFLOW_PATTERNS.some(pattern => pattern.test(text))
+  const decoded = decodeJsonUnicodeEscapes(text)
+  return (
+    CONTEXT_OVERFLOW_PATTERNS.some(pattern => pattern.test(decoded)) &&
+    !NOT_CONTEXT_OVERFLOW_PATTERNS.some(pattern => pattern.test(decoded))
+  )
 }
 
 export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
@@ -154,31 +203,68 @@ export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
   )
 }
 
+// Where each provider's wording states the request size and the limit, as
+// capture-group indexes. `actual` is absent when only the limit is stated.
+const TOKEN_COUNT_FORMATS: Array<{
+  pattern: RegExp
+  actual?: number
+  limit: number
+}> = [
+  // Anthropic: "prompt is too long: 210000 tokens > 200000 maximum"
+  { pattern: /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i, actual: 1, limit: 2 },
+  // OpenAI, DeepSeek, OpenRouter, vLLM
+  {
+    pattern: /maximum context length is\s+(\d+)\s+tokens?\.\s*(?:however,\s*)?(?:you requested(?: about)?|your messages resulted in|your prompt contains)\s+(\d+)\s+(?:input\s+)?tokens?\b/i,
+    actual: 2,
+    limit: 1,
+  },
+  // Moonshot Kimi
+  { pattern: /exceeded model token limit:\s*(\d+)\s*\(requested:\s*(\d+)\)/i, actual: 2, limit: 1 },
+  // Gemini
+  { pattern: /input token count \((\d+)\) exceeds the maximum number of tokens allowed \((\d+)\)/i, actual: 1, limit: 2 },
+  { pattern: /input token count is (\d+) but model only supports up to (\d+)/i, actual: 1, limit: 2 },
+  // vLLM
+  { pattern: /prompt \(length (\d+)\) is longer than the maximum model length of (\d+)/i, actual: 1, limit: 2 },
+  // xAI
+  { pattern: /maximum prompt length is (\d+) but the request contains (\d+) tokens/i, actual: 2, limit: 1 },
+  // Mistral
+  { pattern: /prompt contains (\d+) tokens.*?too large for model with (\d+) maximum context length/i, actual: 1, limit: 2 },
+  // Qwen / DashScope states only the limit.
+  { pattern: /range of input length should be \[\s*\d+\s*,\s*(\d+)\s*\]/i, limit: 1 },
+]
+
+function parseTokenCount(value: string | undefined): number | undefined {
+  const count = Number(value)
+  return Number.isSafeInteger(count) && count > 0 ? count : undefined
+}
+
 /**
  * Parse actual/limit token counts from a raw prompt-too-long API error
- * message in Anthropic or OpenAI-compatible format. Requested tokens include
- * the completion allowance so compaction also leaves room for the response.
- * The raw string may be wrapped in SDK prefixes or JSON envelopes, or
- * have different casing (Vertex), so this is intentionally lenient.
+ * message. Requested tokens include the completion allowance where the
+ * provider counts it, so compaction also leaves room for the response. The
+ * raw string may be wrapped in SDK prefixes or JSON envelopes, or have
+ * different casing (Vertex), so this is intentionally lenient. A wording that
+ * states only the limit yields the limit alone.
  */
 export function parsePromptTooLongTokenCounts(rawMessage: string): {
   actualTokens: number | undefined
   limitTokens: number | undefined
 } {
-  const anthropic = rawMessage.match(
-    /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i,
-  )
-  const openAI = anthropic ? null : rawMessage.match(
-    /maximum context length is\s+(\d+)\s+tokens?\.\s*(?:however,\s*)you requested\s+(\d+)\s+tokens?\b/i,
-  )
-  const actualTokens = Number(anthropic?.[1] ?? openAI?.[2])
-  const limitTokens = Number(anthropic?.[2] ?? openAI?.[1])
-  const valid = Number.isSafeInteger(actualTokens) && actualTokens > 0 &&
-    Number.isSafeInteger(limitTokens) && limitTokens > 0
-  return {
-    actualTokens: valid ? actualTokens : undefined,
-    limitTokens: valid ? limitTokens : undefined,
+  for (const format of TOKEN_COUNT_FORMATS) {
+    const match = rawMessage.match(format.pattern)
+    if (!match) continue
+    const limitTokens = parseTokenCount(match[format.limit])
+    const actualTokens = format.actual === undefined
+      ? undefined
+      : parseTokenCount(match[format.actual])
+    const valid = limitTokens !== undefined &&
+      (format.actual === undefined || actualTokens !== undefined)
+    return {
+      actualTokens: valid ? actualTokens : undefined,
+      limitTokens: valid ? limitTokens : undefined,
+    }
   }
+  return { actualTokens: undefined, limitTokens: undefined }
 }
 
 /**
@@ -602,25 +688,6 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
   return undefined
 }
 
-// Deep-walk a request payload looking for image blocks. Images can sit at the
-// top level of a user message or nested inside a tool_result's content, and
-// the payloads here are { type, message: { content } } wrappers, so walk all
-// object values rather than only `content`.
-function messagesContainImageBlock(messages: readonly unknown[]): boolean {
-  const walk = (value: unknown): boolean => {
-    if (Array.isArray(value)) {
-      return value.some(walk)
-    }
-    if (value && typeof value === 'object') {
-      const record = value as Record<string, unknown>
-      if (record.type === 'image') return true
-      return Object.values(record).some(walk)
-    }
-    return false
-  }
-  return walk(messages)
-}
-
 export function getAssistantMessageFromError(
   error: unknown,
   model: string,
@@ -656,10 +723,14 @@ export function getAssistantMessageFromError(
   // Custom/Anthropic-compatible providers often reject image blocks with
   // provider-specific wording when the selected model is text-only. Convert it
   // to a known synthetic error so normalizeMessagesForAPI can strip the image
-  // from later turns instead of poisoning the whole session.
+  // from later turns instead of poisoning the whole session. Only an explicit
+  // refusal qualifies: a 400/422 that merely landed on a request carrying
+  // images (a malformed history block, a bad image, a schema error) surfaces
+  // in the provider's own words, so a vision model never gets told it cannot
+  // see images.
   if (
     error instanceof Error &&
-    isUnsupportedImageInputErrorMessage(error.message) &&
+    isImageInputRefusalMessage(error.message) &&
     (!(error instanceof APIError) || error.status === 400 || error.status === 422)
   ) {
     return createAssistantAPIErrorMessage({
@@ -774,10 +845,15 @@ export function getAssistantMessageFromError(
   }
 
   // Handle context-overflow errors (Vertex returns 413, direct API returns
-  // 400, some third-party gateways wrap them in a 401 with their own wording).
-  // This must stay ahead of the generic 401 handler below so a wrapped
-  // overflow isn't misreported as an authentication failure.
-  if (error instanceof Error && isContextOverflowErrorText(error.message)) {
+  // 400, some third-party gateways wrap them in a 401 or a 5xx with their own
+  // wording). This must stay ahead of the generic 401 handler below so a
+  // wrapped overflow isn't misreported as an authentication failure. A 429 is
+  // a rate limit whatever it says, and compacting would not lift it.
+  if (
+    error instanceof Error &&
+    !(error instanceof APIError && error.status === 429) &&
+    isContextOverflowErrorText(error.message)
+  ) {
     // Content stays generic (UI matches on exact string). The raw error with
     // token counts goes into errorDetails — reactive compact's retry loop
     // parses the gap from there via getPromptTooLongTokenGap.
@@ -1164,30 +1240,6 @@ export function getAssistantMessageFromError(
         ...error.evidence,
       }),
       businessErrorCode: BUSINESS_ERROR_CODES.UPSTREAM_STREAM_INTERRUPTED,
-    })
-  }
-
-  // Fallback for image rejections with unrecognized wording. The wording
-  // classifier above can't enumerate every provider/gateway phrasing, and a
-  // miss used to poison the session: the rejected image stayed in history and
-  // every later turn re-failed with the same 400. When a 400/422 lands on a
-  // request that actually carried image blocks and no more specific classifier
-  // matched (context overflow, PDF, image size, auth, 404 all handled above),
-  // treat it as an image rejection so the image is stripped from later turns.
-  // The strip is gated to sourceModel, so a false positive only affects the
-  // exact model that failed — switching models replays the image.
-  if (
-    error instanceof APIError &&
-    (error.status === 400 || error.status === 422) &&
-    options?.messagesForAPI &&
-    messagesContainImageBlock(options.messagesForAPI)
-  ) {
-    return createAssistantAPIErrorMessage({
-      content: getImageUnsupportedErrorMessage(),
-      error: 'invalid_request',
-      errorDetails: error.message,
-      businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED,
-      sourceModel: model,
     })
   }
 

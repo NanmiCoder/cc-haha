@@ -89,6 +89,7 @@ async function writeSubagentLaunchMetadata(
     toolUseId?: string
     ownerAgentId?: string
     description?: string
+    effort?: string | null
   },
 ): Promise<void> {
   if (!tmpDir) throw new Error('tmpDir not initialized')
@@ -800,6 +801,73 @@ describe('getSubagentRunByTool', () => {
     expect(result?.messages[1]).toMatchObject({
       type: 'tool_use',
       content: [{ type: 'tool_use', id: 'subagent-tool-1', name: 'Bash' }],
+    })
+  })
+
+  describe('the model and effort a run used', () => {
+    const sessionId = 'dddddddd-bbbb-cccc-dddd-eeeeeeeeeeef'
+    const projectDir = '-tmp-subagent-runtime'
+    const toolUseId = 'call_00_runtime'
+    const agentId = 'a46d5bd4ae656c8d6'
+
+    function assistantEntry(uuid: string, model: string, timestamp: string): Record<string, unknown> {
+      return {
+        type: 'assistant',
+        message: { role: 'assistant', model, content: [{ type: 'text', text: `from ${model}` }] },
+        uuid,
+        timestamp,
+      }
+    }
+
+    async function writeRun(effort: { effort?: string | null }): Promise<void> {
+      await setupTmpConfigDir()
+      await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry(toolUseId)])
+      await writeSubagentLaunchMetadata(projectDir, sessionId, agentId, {
+        agentType: 'codebase-analyzer',
+        toolUseId,
+        ...effort,
+      })
+      await writeSubagentTranscriptFile(projectDir, sessionId, agentId, [
+        {
+          type: 'user',
+          message: { role: 'user', content: 'Explain the repository' },
+          uuid: 'runtime-user',
+          timestamp: '2026-01-01T00:00:02.000Z',
+        },
+        assistantEntry('runtime-first', 'deepseek-v4-pro', '2026-01-01T00:00:03.000Z'),
+        assistantEntry('runtime-latest', 'deepseek-v4-flash', '2026-01-01T00:00:04.000Z'),
+        // An interrupt the CLI recorded itself names no provider model.
+        assistantEntry('runtime-synthetic', '<synthetic>', '2026-01-01T00:00:05.000Z'),
+      ])
+    }
+
+    it('reports the newest served model and the recorded effort while the run is live', async () => {
+      await writeRun({ effort: 'high' })
+
+      const result = await getSubagentRunByTool(sessionId, toolUseId)
+
+      expect(result).toMatchObject({ status: 'running', model: 'deepseek-v4-flash', effort: 'high' })
+      expect(await getSubagentRunByAgentId(sessionId, agentId)).toMatchObject({
+        model: 'deepseek-v4-flash',
+        effort: 'high',
+      })
+    })
+
+    it('keeps a recorded model default distinct from an unknown effort', async () => {
+      await writeRun({ effort: null })
+
+      const result = await getSubagentRunByTool(sessionId, toolUseId)
+
+      expect(result?.effort).toBeNull()
+    })
+
+    it('reports no effort for metadata written before effort was recorded', async () => {
+      await writeRun({})
+
+      const result = await getSubagentRunByTool(sessionId, toolUseId)
+
+      expect(result?.model).toBe('deepseek-v4-flash')
+      expect(result).not.toHaveProperty('effort')
     })
   })
 

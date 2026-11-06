@@ -13,6 +13,7 @@ import {
 import { homedir } from 'os'
 import * as nodePath from 'path'
 import { getErrnoCode } from './errors.js'
+import { decodeShellOutput, hasClippedUtf8Start } from './shell/outputEncoding.js'
 import { slowLogging } from './slowOperations.js'
 
 /**
@@ -687,8 +688,7 @@ export async function readFileRange(
   }
 
   return {
-    content: buffer.toString('utf8', 0, totalRead),
-    bytesRead: totalRead,
+    ...decodeShellOutput(buffer.subarray(0, totalRead), false, offset + totalRead < size),
     bytesTotal: size,
   }
 }
@@ -707,7 +707,8 @@ export async function tailFile(
     return { content: '', bytesRead: 0, bytesTotal: 0 }
   }
   const offset = Math.max(0, size - maxBytes)
-  const bytesToRead = size - offset
+  const prefixBytes = process.platform === 'win32' ? Math.min(offset, 3) : 0
+  const bytesToRead = size - offset + prefixBytes
   const buffer = Buffer.allocUnsafe(bytesToRead)
 
   let totalRead = 0
@@ -716,7 +717,7 @@ export async function tailFile(
       buffer,
       totalRead,
       bytesToRead - totalRead,
-      offset + totalRead,
+      offset - prefixBytes + totalRead,
     )
     if (bytesRead === 0) {
       break
@@ -724,9 +725,11 @@ export async function tailFile(
     totalRead += bytesRead
   }
 
+  const raw = buffer.subarray(0, totalRead)
+  const startsMidCharacter = hasClippedUtf8Start(raw, prefixBytes)
   return {
-    content: buffer.toString('utf8', 0, totalRead),
-    bytesRead: totalRead,
+    content: decodeShellOutput(raw.subarray(prefixBytes), startsMidCharacter).content,
+    bytesRead: Math.max(0, totalRead - prefixBytes),
     bytesTotal: size,
   }
 }

@@ -6,13 +6,15 @@
  * GET    /api/teams/:name                          — 获取团队详情
  * GET    /api/teams/:name/workbench                — 获取协作工作台只读快照
  * GET    /api/teams/:name/members/:id/transcript   — 获取成员 transcript
- * POST   /api/teams/:name/members/:id/messages     — 给成员发送消息
+ * POST   /api/teams/:name/members/:id/messages     — 给成员发送消息（以 / 开头的是在成员自己的 CLI 里执行的命令）
+ * PATCH  /api/teams/:name/members/:id/runtime      — 切换运行中成员的模型
  * DELETE /api/teams/:name                          — 删除团队
  */
 
 import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } from '../services/teamPlanService.js'
 import { TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
 import { teamService } from '../services/teamService.js'
+import { changeTeamMemberRuntime } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { ensureCliSessionStartedForControl } from '../ws/handler.js'
 
@@ -142,6 +144,32 @@ export async function handleTeamsApi(
 
       await teamService.sendMemberMessage(teamName, agentId, body.content ?? '')
       return Response.json({ ok: true })
+    }
+
+    // ── PATCH /api/teams/:name/members/:id/runtime ────────────────────────
+    if (
+      method === 'PATCH' &&
+      teamName &&
+      segments[3] === 'members' &&
+      segments[4] &&
+      segments[5] === 'runtime'
+    ) {
+      const agentId = decodeURIComponent(segments[4])
+      let body: { providerId?: unknown; modelId?: unknown; effortLevel?: unknown }
+      try {
+        body = (await req.json()) as typeof body
+      } catch {
+        throw ApiError.badRequest('Invalid JSON body')
+      }
+      if (typeof body.modelId !== 'string' || !body.modelId.trim()) throw ApiError.badRequest('modelId (string) is required')
+      if (body.providerId !== null && typeof body.providerId !== 'string') throw ApiError.badRequest('providerId must be a string or null')
+      if (body.effortLevel !== undefined && typeof body.effortLevel !== 'string') throw ApiError.badRequest('effortLevel must be a string')
+      const member = await changeTeamMemberRuntime(teamName, agentId, {
+        providerId: body.providerId,
+        modelId: body.modelId,
+        ...(body.effortLevel !== undefined ? { effortLevel: body.effortLevel } : {}),
+      })
+      return Response.json({ ok: true, member })
     }
 
     // ── GET /api/teams/:name ──────────────────────────────────────────────

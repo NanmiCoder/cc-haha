@@ -50,6 +50,24 @@ export type TeamTaskAnchor = {
 
 export type { TranscriptMessage }
 
+/** `providerId: null` is Claude Official. */
+export type MemberRuntimeUpdate = {
+  providerId: string | null
+  modelId: string
+  effortLevel?: string
+}
+
+export type MemberRuntimeUpdateResponse = {
+  ok: true
+  member: {
+    agentId: string
+    name?: string
+    model?: string
+    providerId?: string | null
+    providerName?: string
+  }
+}
+
 export const teamsApi = {
   list() {
     return api.get<TeamsResponse>('/api/teams')
@@ -105,6 +123,17 @@ export const teamsApi = {
     return api.post<{ ok: true }>(
       `/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(agentId)}/messages`,
       { content },
+    )
+  },
+
+  /**
+   * Switches a member's model through the team runtime, which restarts its CLI
+   * as the same member. Never route this through the session runtime path.
+   */
+  updateMemberRuntime(teamName: string, agentId: string, runtime: MemberRuntimeUpdate) {
+    return api.patch<MemberRuntimeUpdateResponse>(
+      `/api/teams/${encodeURIComponent(teamName)}/members/${encodeURIComponent(agentId)}/runtime`,
+      runtime,
     )
   },
 

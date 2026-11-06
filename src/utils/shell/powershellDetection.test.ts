@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test'
+import { win32 } from 'node:path'
 import {
+  findPowerShell,
   isPowerShellExecutablePath,
   resolvePowerShellPathOverride,
 } from './powershellDetection.js'
+
+const windowsPowerShellPath = win32.join(
+  process.env.SystemRoot ?? 'C:\\Windows',
+  'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+)
 
 describe('PowerShell detection override', () => {
   test('accepts pwsh and powershell executable paths', () => {
@@ -52,16 +59,19 @@ describe('PowerShell detection override', () => {
     const resolved = await resolvePowerShellPathOverride('powershell.exe', {
       getPlatform: () => 'windows',
       probePath: async path =>
-        path ===
-        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-          ? path
-          : null,
+        path === windowsPowerShellPath ? path : null,
       which: async () => null,
     })
 
-    expect(resolved).toBe(
-      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
-    )
+    expect(resolved).toBe(windowsPowerShellPath)
+  })
+
+  test('discovers Windows PowerShell when it is absent from PATH', async () => {
+    await expect(findPowerShell({
+      getPlatform: () => 'windows',
+      probePath: async path => path === windowsPowerShellPath ? path : null,
+      which: async () => null,
+    })).resolves.toBe(windowsPowerShellPath)
   })
 
   test('ignores missing or non-PowerShell overrides', async () => {

@@ -16,9 +16,9 @@ export function isSessionMetadataTextTruncated(entry: object): boolean {
 
 const rootFields = new Set([
   'type', 'subtype', 'uuid', 'parentUuid', 'parent_tool_use_id', 'isSidechain', 'isMeta',
-  'cwd', 'timestamp', 'workDir', 'repository', 'worktreeSession', 'permissionMode', 'agentProfile',
+  'additionalDirectories', 'cwd', 'timestamp', 'workDir', 'repository', 'worktreeSession', 'permissionMode', 'agentProfile',
   'runtimeProviderId', 'runtimeModelId', 'effortLevel', 'customTitle', 'aiTitle',
-  'entrypoint', 'message', 'content',
+  'entrypoint', 'message', 'content', 'version',
 ])
 const blockFields = new Set(['type', 'name', 'id', 'tool_use_id', 'text'])
 
@@ -34,7 +34,7 @@ function createProjection() {
       if (!rootFields.has(path[0]!)) return false
       if (path[0] !== 'message') return true
       if (path.length === 1) return true
-      if (path[1] === 'role') return path.length === 2
+      if (path[1] === 'role' || path[1] === 'model') return path.length === 2
       if (path[1] !== 'content') return false
       return path.length <= 3 || path.length === 4 && blockFields.has(path[3]!)
     },

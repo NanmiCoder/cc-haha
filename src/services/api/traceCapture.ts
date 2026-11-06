@@ -411,12 +411,38 @@ export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptur
 export const TRACE_CAPTURE_NODE_LIMIT = 4096
 export const TRACE_CAPTURE_DEPTH_LIMIT = 32
 export const TRACE_CAPTURE_CHAR_LIMIT = 1024 * 1024
+const TRACE_REQUEST_PARSE_CHAR_LIMIT = 64 * TRACE_CAPTURE_CHAR_LIMIT
+const TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT = 64 * 1024
+const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"/i
 
 type BoundedTraceValue = { value: unknown; omitted?: string }
-function boundedTraceValue(input: unknown): BoundedTraceValue {
+type RequestImageMode = 'preview' | 'semantic'
+type RequestImageSource = 'anthropic' | 'gemini' | 'url'
+
+function ownTraceValue(value: object, key: string): unknown {
+  const property = Object.getOwnPropertyDescriptor(value, key)
+  return property?.enumerable ? property.value : undefined
+}
+
+function requestImageSource(key: string, type: unknown, parent?: RequestImageSource): RequestImageSource | undefined {
+  if (key === 'source' && type === 'image') return 'anthropic'
+  if (key === 'inlineData') return 'gemini'
+  if (key === 'image_url' && (type === 'image_url' || type === 'input_image')) return 'url'
+  if (key === 'url' && parent === 'url') return 'url'
+  return undefined
+}
+
+function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): BoundedTraceValue {
   let nodes = 0
   let chars = 0
   let bytes = 0
+  let imageChars = 0
+  const imageCharLimit = requestImages === 'semantic' ? TRACE_CAPTURE_CHAR_LIMIT : TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT
+  const reserveImageChars = (length: number) => {
+    if (length > imageCharLimit - imageChars) return false
+    imageChars += length
+    return true
+  }
   const countText = (text: string) => {
     chars += text.length
     if (chars > TRACE_CAPTURE_CHAR_LIMIT) throw new Error('string-budget')
@@ -427,11 +453,18 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
     }
   }
   const seen = new WeakSet<object>()
-  const visit = (value: unknown, depth: number): unknown => {
+  const visit = (value: unknown, depth: number, imageSource?: RequestImageSource): unknown => {
     if (++nodes > TRACE_CAPTURE_NODE_LIMIT) throw new Error('node-budget')
     bytes += 16
     if (depth > TRACE_CAPTURE_DEPTH_LIMIT) throw new Error('depth-budget')
     if (typeof value === 'string') {
+      if (imageSource === 'url') {
+        // The prefix is bounded even when the encoded data is very large.
+        const header = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(value.slice(0, 80))
+        if (header && (requestImages === 'semantic' || !reserveImageChars(value.length))) {
+          value = `[${header[1]} data omitted (${value.length - header[0].length} encoded characters)]`
+        }
+      }
       countText(value)
       return value
     }
@@ -450,6 +483,13 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
       seen.delete(value)
       return result
     }
+    const type = requestImages ? ownTraceValue(value, 'type') : undefined
+    const mime = imageSource === 'gemini' ? ownTraceValue(value, 'mimeType') : undefined
+    const base64Image = imageSource === 'anthropic' && type === 'base64'
+    const inlineImage = typeof mime === 'string' && mime.startsWith('image/')
+    const imageData = base64Image || inlineImage ? ownTraceValue(value, 'data') : undefined
+    const smallImage = typeof imageData === 'string' && reserveImageChars(imageData.length)
+    const compactImage = typeof imageData === 'string' && (requestImages === 'semantic' || !smallImage)
     const result: Record<string, unknown> = {}
     for (const key in value) {
       if (!Object.prototype.hasOwnProperty.call(value, key)) continue
@@ -457,7 +497,23 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
       countText(key)
       const property = Object.getOwnPropertyDescriptor(value, key)
       if (property?.get || property?.set) throw new Error('accessor')
-      Object.defineProperty(result, key, { value: visit(property?.value, depth + 1), enumerable: true, configurable: true, writable: true })
+      if (compactImage && key === 'data') continue
+      const nestedSource = requestImages ? requestImageSource(key, type, imageSource) : undefined
+      Object.defineProperty(result, key, { value: visit(property?.value, depth + 1, nestedSource), enumerable: true, configurable: true, writable: true })
+    }
+    if (compactImage) {
+      // A digest is available for the same small images as before. Large
+      // payloads need only their encoded length, with no scan or decode.
+      if (smallImage) {
+        const decoded = Buffer.from(imageData, 'base64')
+        countText('bytes')
+        result.bytes = visit(decoded.byteLength, depth + 1)
+        countText('sha256')
+        result.sha256 = visit(createHash('sha256').update(decoded).digest('hex'), depth + 1)
+      } else {
+        countText('encodedChars')
+        result.encodedChars = visit(imageData.length, depth + 1)
+      }
     }
     seen.delete(value)
     return result
@@ -508,10 +564,16 @@ function boundedBodySnapshot(snapshot: TraceBodySnapshot): TraceBodySnapshot {
 
 export function createTraceBodySnapshot(
   body: unknown,
-  options?: { maxPreviewChars?: number; alreadyTruncated?: boolean },
+  options?: { maxPreviewChars?: number; alreadyTruncated?: boolean; compactRequestImages?: boolean },
 ): TraceBodySnapshot {
   const maxPreviewChars = options?.maxPreviewChars ?? TRACE_PREVIEW_CHARS
-  const bounded = boundedTraceValue(body)
+  const initial = boundedTraceValue(body)
+  // Keep the ordinary raw preview contract. When binary media would make
+  // the capture lose the whole request, retry with a smaller media allowance.
+  const bounded = options?.compactRequestImages && isTraceRecord(body)
+    && (initial.omitted === 'string-budget' || initial.omitted === 'byte-budget')
+    ? boundedTraceValue(body, 'preview')
+    : initial
   const { serialized, contentType } = serializeTraceBody(bounded.value)
   const bytes = Buffer.byteLength(serialized)
   const preview = serialized.length > maxPreviewChars
@@ -523,7 +585,7 @@ export function createTraceBodySnapshot(
     bytes,
     sha256: createHash('sha256').update(serialized).digest('hex'),
     preview,
-    truncated: Boolean(bounded.omitted) || Boolean(options?.alreadyTruncated) || serialized.length > maxPreviewChars,
+    truncated: Boolean(initial.omitted) || Boolean(options?.alreadyTruncated) || serialized.length > maxPreviewChars,
     ...(bounded.omitted ? { captureOmitted: bounded.omitted } : {}),
   }
 }
@@ -570,7 +632,7 @@ function createRequestSemanticField(
   body: unknown,
   source: TraceCallRecord['source'],
 ): { semantic: TraceRequestSemantic } | Record<string, never> {
-  const semantic = createTraceRequestSemantic(body, source)
+  const semantic = traceRequestSemanticFromValue(body, source)
   return semantic ? { semantic } : {}
 }
 
@@ -584,10 +646,17 @@ export function createTraceRequestSemantic(
   body: unknown,
   source: TraceCallRecord['source'],
 ): TraceRequestSemantic | null {
-  const bounded = boundedTraceValue(body)
+  return traceRequestSemanticFromValue(parseTraceRequestBody(body), source)
+}
+
+function traceRequestSemanticFromValue(
+  body: unknown,
+  source: TraceCallRecord['source'],
+): TraceRequestSemantic | null {
+  const bounded = boundedTraceValue(body, 'semantic')
   if (bounded.omitted) return { version: 1, request: bounded.value as TraceJsonRecord }
-  const parsed = parseTraceRequestValue(bounded.value)
-  if (!parsed) return null
+  const parsed = bounded.value
+  if (!isTraceRecord(parsed)) return null
   const request = source === 'proxy' && isTraceRecord(parsed.anthropic)
     ? parsed.anthropic
     : parsed
@@ -601,56 +670,16 @@ export function createTraceRequestSemantic(
   }
   return {
     version: 1,
-    request: compactTraceSemanticValue(boundedTraceValue(request).value) as TraceJsonRecord,
+    request: redactBoundedValue(request) as TraceJsonRecord,
   }
 }
 
-function parseTraceRequestValue(body: unknown): TraceJsonRecord | null {
-  if (isTraceRecord(body)) return body
-  if (typeof body !== 'string') return null
-  const trimmed = body.trim()
-  if (!trimmed.startsWith('{')) return null
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    return isTraceRecord(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function compactTraceSemanticValue(value: unknown, key = ''): unknown {
-  if (SENSITIVE_KEY_RE.test(key)) return '[redacted]'
-  if (Array.isArray(value)) return value.map(entry => compactTraceSemanticValue(entry))
-  if (!isTraceRecord(value)) {
-    return typeof value === 'string' ? redactSecretsInText(value) : value
-  }
-
-  if (value.type === 'image' && isTraceRecord(value.source)) {
-    const source = value.source
-    if (source.type === 'base64' && typeof source.data === 'string') {
-      const decoded = Buffer.from(source.data, 'base64')
-      return {
-        ...Object.fromEntries(
-          Object.entries(value)
-            .filter(([entryKey]) => entryKey !== 'source')
-            .map(([entryKey, entryValue]) => [entryKey, compactTraceSemanticValue(entryValue, entryKey)]),
-        ),
-        source: {
-          type: 'base64',
-          ...(typeof source.media_type === 'string' ? { media_type: source.media_type } : {}),
-          bytes: decoded.byteLength,
-          sha256: createHash('sha256').update(decoded).digest('hex'),
-        },
-      }
-    }
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([entryKey, entryValue]) => [
-      entryKey,
-      compactTraceSemanticValue(entryValue, entryKey),
-    ]),
-  )
+function parseTraceRequestBody(body: unknown): unknown {
+  // SDK requests arrive serialized. Bound the input parse separately from the
+  // smaller capture budget, which applies once image payloads can be elided.
+  if (typeof body !== 'string' || body.length > TRACE_REQUEST_PARSE_CHAR_LIMIT) return body
+  if (body.length > TRACE_CAPTURE_CHAR_LIMIT && !TRACE_INLINE_IMAGE_MARKER_RE.test(body)) return body
+  return parseJsonOrText(body)
 }
 
 function isTraceRecord(value: unknown): value is TraceJsonRecord {
@@ -728,6 +757,7 @@ class TraceCaptureService {
 
     const startedAt = input.startedAt ?? new Date().toISOString()
     const completedAt = input.completedAt
+    const requestBody = parseTraceRequestBody(input.request.body)
     const record: TraceCallRecord = {
       id: input.id ?? createTraceCallId(),
       sessionId: input.sessionId,
@@ -744,8 +774,10 @@ class TraceCaptureService {
         method: input.request.method ?? 'POST',
         url: sanitizeUrl(input.request.url ?? ''),
         headers: sanitizeHeaders(input.request.headers),
-        body: input.request.bodySnapshot ? boundedBodySnapshot(input.request.bodySnapshot) : createTraceBodySnapshot(input.request.body ?? null),
-        ...createRequestSemanticField(input.request.body, input.source),
+        body: input.request.bodySnapshot
+          ? boundedBodySnapshot(input.request.bodySnapshot)
+          : createTraceBodySnapshot(requestBody, { compactRequestImages: true }),
+        ...createRequestSemanticField(requestBody, input.source),
       },
       ...(input.response
         ? {

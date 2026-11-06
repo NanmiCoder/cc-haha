@@ -56,6 +56,16 @@ const SIGNED_FINGERPRINT_FILES = [
 ] as const
 
 export type InstalledHelper = { appBundle: string; binary: string }
+export type CuHelperUnavailableReason =
+  | 'helper_missing'
+  | 'helper_signature_invalid'
+  | 'helper_prepare_failed'
+
+type HelperInstallResult =
+  | { helper: InstalledHelper; reason: null }
+  | { helper: null; reason: CuHelperUnavailableReason }
+
+class HelperSignatureError extends Error {}
 
 /** Stable, host-independent install root (honors CLAUDE_CONFIG_DIR via envUtils). */
 export function installedHelperRoot(configHome: string = getClaudeConfigHomeDir()): string {
@@ -316,19 +326,20 @@ function verifyPackagedHelperSignatures(sourceApp: string, destApp: string): boo
  * signer against the packaged source and current sidecar.
  */
 export function ensureInstalledHelper(deps: InstallDeps = {}): InstalledHelper | null {
-  return ensureInstalledHelperUncached(deps)
+  return prepareInstalledHelper(deps).helper
 }
 
-function ensureInstalledHelperUncached(deps: InstallDeps): InstalledHelper | null {
+/** Preserve a safe failure category for status without exposing paths or raw errors. */
+export function prepareInstalledHelper(deps: InstallDeps = {}): HelperInstallResult {
   const exists = deps.exists ?? existsSync
   const sourceApp = deps.sourceApp !== undefined ? deps.sourceApp : resolveCuHelperAppBundle()
-  if (!sourceApp) return null
+  if (!sourceApp) return { helper: null, reason: 'helper_missing' }
   const sourceInner = path.join(sourceApp, INNER_REL)
 
   // Dev / already-standalone: not nested in a host `.app` → its SR subject is
   // already the helper itself, so use it in place (no copy, no dev friction).
   if (!isNestedInHostApp(sourceApp)) {
-    return { appBundle: sourceApp, binary: sourceInner }
+    return { helper: { appBundle: sourceApp, binary: sourceInner }, reason: null }
   }
 
   // Packaged: relocate OUT of the host bundle to a stable standalone path.
@@ -391,20 +402,23 @@ function ensureInstalledHelperUncached(deps: InstallDeps): InstalledHelper | nul
             throw new Error('copied cu-helper bundle fingerprint does not match source')
           }
           if (!verifySignatures(sourceApp, stagingApp)) {
-            throw new Error('copied cu-helper signature does not match the packaged sidecar')
+            throw new HelperSignatureError('copied cu-helper signature does not match the packaged sidecar')
           }
           const verifyInstalled = () => {
             try {
-              return signedBundleFingerprint(destApp, readBytes) === srcHash
-                && verifySignatures(sourceApp, destApp)
+              if (signedBundleFingerprint(destApp, readBytes) !== srcHash) return false
             } catch {
               return false
             }
+            if (!verifySignatures(sourceApp, destApp)) {
+              throw new HelperSignatureError('installed cu-helper signature does not match the packaged sidecar')
+            }
+            return true
           }
           replaceApp(stagingApp, destApp, verifyInstalled)
           destinationVerified = verifyInstalled()
           if (!destinationVerified) {
-            throw new Error('installed cu-helper signature does not match the packaged sidecar')
+            throw new Error('installed cu-helper bundle fingerprint does not match source')
           }
           writeMarker(markerPath, srcHash)
           logForDebugging(`installed cu-helper to standalone path: ${destApp}`, { level: 'debug' })
@@ -414,16 +428,19 @@ function ensureInstalledHelperUncached(deps: InstallDeps): InstalledHelper | nul
       })
     }
     if (exists(destInner) && destinationVerified) {
-      return { appBundle: destApp, binary: destInner }
+      return { helper: { appBundle: destApp, binary: destInner }, reason: null }
     }
-    throw new Error('installed cu-helper signature does not match the packaged sidecar')
+    throw new Error('installed cu-helper is missing or failed verification')
   } catch (err) {
     logForDebugging(
       `cu-helper standalone install failed; refusing nested helper because Screen Recording would target the host: ${String(err)}`,
       { level: 'error' },
     )
+    return {
+      helper: null,
+      reason: err instanceof HelperSignatureError ? 'helper_signature_invalid' : 'helper_prepare_failed',
+    }
   }
-  return null
 }
 
 /** Test hook: clear the cached install resolution. */

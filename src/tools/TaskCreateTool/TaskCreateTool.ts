@@ -70,8 +70,11 @@ export const TaskCreateTool = buildTool({
   isEnabled() {
     return isTodoV2Enabled()
   },
+  // IDs come from the order callers win the task-list lock. Models address
+  // follow-up TaskUpdate calls by the order they issued TaskCreate, so a
+  // parallel batch must run serially in tool_use order (matches upstream).
   isConcurrencySafe() {
-    return true
+    return false
   },
   toAutoClassifierInput(input) {
     return input.subject

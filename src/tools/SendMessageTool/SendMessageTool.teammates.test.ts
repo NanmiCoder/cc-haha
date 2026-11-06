@@ -340,6 +340,41 @@ describe('SendMessage to other recipients', () => {
     expect(lead.teammates()).toEqual([])
   })
 
+  test('a shutdown request to a desktop member the user stopped is answered at once, without restarting it', async () => {
+    await writeTeam([
+      member('builder', { backendType: 'process', terminated: true }),
+      member('reader', { backendType: 'process' }),
+    ])
+    const lead = leadContext()
+    const shutdown = async (to: string) =>
+      (
+        await SendMessageTool.call(
+          { to, message: { type: 'shutdown_request' } } as never,
+          lead.context,
+          undefined as never,
+          undefined as never,
+        )
+      ).data as { success: boolean; message: string; request_id: string }
+
+    expect(await shutdown('builder')).toMatchObject({
+      success: true,
+      message:
+        'builder is already stopped, so nothing was sent and no approval will come. It does not block TeamDelete.',
+      request_id: '',
+    })
+    // Mail is what makes the server restart a stopped member.
+    expect(await readMailbox('builder', TEAM)).toEqual([])
+
+    // A member whose process still runs is asked as before.
+    const asked = await shutdown('reader')
+    expect(asked.message).toStartWith('Shutdown request sent to reader.')
+    const [request] = await readMailbox('reader', TEAM)
+    expect(JSON.parse(request!.text)).toMatchObject({
+      type: 'shutdown_request',
+      requestId: asked.request_id,
+    })
+  })
+
   test('writes to a running desktop member and a pane teammate as before', async () => {
     await writeTeam([
       member('builder', { backendType: 'process' }),

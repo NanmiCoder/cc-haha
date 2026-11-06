@@ -46,6 +46,13 @@ export type SubagentRunResponse = {
   activityComplete?: boolean
   updatedAt?: string
   source: SubagentRunSource
+  /** The model that served the run's newest answer. Absent until it answers. */
+  model?: string
+  /**
+   * Effort level the run launched with, from its metadata sidecar. `null`
+   * means the model's own default; absent when the sidecar predates it.
+   */
+  effort?: string | null
   /**
    * Whether a follow-up message can still reach this agent. A one-shot
    * subagent is dispatched, answers once, and is done — resuming it would
@@ -431,6 +438,43 @@ function latestTimestamp(...values: Array<string | undefined>): string | undefin
   return latest
 }
 
+// The CLI's placeholder for messages it made up itself (interrupts, errors).
+const SYNTHETIC_MODEL = '<synthetic>'
+
+/**
+ * The model behind the newest answer. Assistant messages carry whatever the
+ * provider actually served, which is the only record of the model a run that
+ * inherited its parent's resolved to.
+ */
+function latestServedModel(messages: MessageEntry[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const model = messages[index]?.model
+    if (typeof model === 'string' && model && model !== SYNTHETIC_MODEL) return model
+  }
+  return undefined
+}
+
+async function recordedRunEffort(
+  sessionId: string,
+  agentId: string | null,
+): Promise<{ effort?: string | null }> {
+  if (!agentId) return {}
+  const metadata = await sessionService.getSubagentMetadata(sessionId, agentId)
+  if (!isRecord(metadata)) return {}
+  if (metadata.effort === null) return { effort: null }
+  return typeof metadata.effort === 'string' && /^[a-z]{1,16}$/.test(metadata.effort)
+    ? { effort: metadata.effort }
+    : {}
+}
+
+function runRuntimeFields(
+  messages: MessageEntry[],
+  recorded: { effort?: string | null },
+): Pick<SubagentRunResponse, 'model' | 'effort'> {
+  const model = latestServedModel(messages)
+  return { ...(model ? { model } : {}), ...recorded }
+}
+
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
@@ -712,6 +756,7 @@ export async function getSubagentRunByAgentId(
     activityComplete: transcript.historyComplete !== false,
     ...(updatedAt ? { updatedAt } : {}),
     source: 'subagent-jsonl',
+    ...runRuntimeFields(messages, await recordedRunEffort(sessionId, transcript.agentId)),
     // A workflow agent answers once into its script and is gone; there is no
     // inbox a follow-up could reach.
     canSendMessage: false,
@@ -837,6 +882,7 @@ export async function getSubagentRunByTool(
       : safeLiveTaskId
         ? 'live-task'
         : 'session-history',
+    ...runRuntimeFields(transcriptMessages, await recordedRunEffort(sessionId, resolvedAgentId)),
     canSendMessage,
   }
 }

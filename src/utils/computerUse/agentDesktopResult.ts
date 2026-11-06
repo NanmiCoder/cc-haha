@@ -11,6 +11,32 @@ export type AgentDesktopEnvelope = {
   [key: string]: unknown
 }
 
+export type AgentDesktopCursorConfiguration = {
+  configured: boolean | null
+  warning?: { code: string; message: string }
+}
+
+const cursorFeedbackPrefix = 'CC_HAHA_CURSOR_FEEDBACK '
+
+export function cursorFeedback(stderr: string, configuration: AgentDesktopCursorConfiguration) {
+  let attempted = false
+  let rendered: boolean | null = null
+  let warning = configuration.warning
+  for (const line of stderr.split(/\r?\n/)) {
+    if (!line.startsWith(cursorFeedbackPrefix)) continue
+    let event: unknown
+    try { event = JSON.parse(line.slice(cursorFeedbackPrefix.length)) } catch { continue }
+    if (!record(event) || typeof event.acknowledged !== 'boolean') continue
+    attempted = true
+    if (event.acknowledged) rendered = true
+    if (record(event.warning) && typeof event.warning.code === 'string' && typeof event.warning.message === 'string') {
+      if (rendered !== true) rendered = false
+      warning ??= { code: event.warning.code, message: event.warning.message }
+    }
+  }
+  return { configured: configuration.configured, attempted, rendered, ...(warning ? { warning } : {}) }
+}
+
 export function parseAgentDesktopEnvelope(stdout: string): AgentDesktopEnvelope {
   const value: unknown = JSON.parse(stdout)
   if (!record(value) || typeof value.ok !== 'boolean' || typeof value.command !== 'string') {
@@ -47,9 +73,16 @@ export async function agentDesktopToolResult(
   artifactRoot: string,
   help: boolean,
   command?: string,
+  cursor?: AgentDesktopCursorConfiguration,
 ): Promise<CuCallToolResult> {
   if (help && result.exitCode === 0) return { content: [{ type: 'text', text: result.stdout }] }
   const envelope = parseAgentDesktopProcessEnvelope(result, command)
+  if (cursor) {
+    envelope.cursor_overlay = {
+      ...cursorFeedback(result.stderr, cursor),
+      ...(result.stderrTruncated ? { diagnostics_truncated: true } : {}),
+    }
+  }
   const images: Array<{ type: 'image'; data: string; mimeType: string }> = []
   let imageBytes = 0
   const extract = async (entry: AgentDesktopEnvelope) => {

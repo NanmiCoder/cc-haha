@@ -460,6 +460,7 @@ export const PowerShellTool = buildTool({
         setAppState: toolUseContext.setAppStateForTasks ?? setAppState,
         setToolJSX,
         preventCwdChanges: !isMainThread,
+        failOnPowerShellError: _parentMessage !== undefined && !toolUseContext.userModified,
         isMainThread,
         toolUseId: toolUseContext.toolUseId,
         agentId: toolUseContext.agentId
@@ -666,6 +667,7 @@ async function* runPowerShellCommand({
   setAppState,
   setToolJSX,
   preventCwdChanges,
+  failOnPowerShellError,
   isMainThread,
   toolUseId,
   agentId
@@ -675,6 +677,7 @@ async function* runPowerShellCommand({
   setAppState: (f: (prev: AppState) => AppState) => void;
   setToolJSX?: SetToolJSXFn;
   preventCwdChanges?: boolean;
+  failOnPowerShellError: boolean;
   isMainThread?: boolean;
   toolUseId?: string;
   agentId?: AgentId;
@@ -716,13 +719,11 @@ async function* runPowerShellCommand({
   const shouldAutoBackground = !isBackgroundTasksDisabled && isAutobackgroundingAllowed(command);
   const powershellPath = await getCachedPowerShellPath();
   if (!powershellPath) {
-    // Pre-flight failure: pwsh not installed. Return code 0 so call() surfaces
-    // this as a graceful stderr message rather than throwing ShellError — the
-    // command never ran, so there is no meaningful non-zero exit to report.
     return {
       stdout: '',
-      stderr: 'PowerShell is not available on this system.',
-      code: 0,
+      stderr: '',
+      code: 1,
+      preSpawnError: 'PowerShell is not available on this system.',
       interrupted: false
     };
   }
@@ -737,6 +738,7 @@ async function* runPowerShellCommand({
         lastTotalBytes = isIncomplete ? totalBytes : 0;
       },
       preventCwdChanges,
+      failOnPowerShellError,
       // Sandbox works on Linux/macOS/WSL2 — pwsh there is a native binary and
       // SandboxManager.wrapWithSandbox wraps it same as bash (Shell.ts uses
       // /bin/sh for the outer spawn to parse the POSIX-quoted bwrap/sandbox-exec
@@ -751,12 +753,11 @@ async function* runPowerShellCommand({
     });
   } catch (e) {
     logError(e);
-    // Pre-flight failure: spawn/exec rejected before the command ran. Use
-    // code 0 so call() returns stderr gracefully instead of throwing ShellError.
     return {
       stdout: '',
-      stderr: `Failed to execute PowerShell command: ${getErrorMessage(e)}`,
-      code: 0,
+      stderr: '',
+      code: 1,
+      preSpawnError: `Failed to execute PowerShell command: ${getErrorMessage(e)}`,
       interrupted: false
     };
   }

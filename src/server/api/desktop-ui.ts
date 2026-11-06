@@ -48,6 +48,12 @@ export async function handleDesktopUiApi(
       })
     }
 
+    if (detail === 'project-directories') {
+      if (req.method === 'GET') return Response.json(await desktopUiPreferencesService.getProjectDirectories(url.searchParams.get('workDir')))
+      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+      return Response.json({ ok: true, ...await desktopUiPreferencesService.updateProjectDirectories(await parseJsonBody(req)) })
+    }
+
     if (detail === 'project-display-name') {
       if (req.method !== 'PUT') throw methodNotAllowed(req.method)
       const body = await parseJsonBody(req)

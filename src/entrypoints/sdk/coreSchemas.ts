@@ -1870,6 +1870,18 @@ export const SDKElicitationCompleteMessageSchema = lazySchema(() =>
 )
 
 /** @internal */
+export const SDKPromptSuggestionActivityMessageSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('system'),
+    subtype: z.literal('prompt_suggestion_activity'),
+    generation_id: z.string().min(1).max(128),
+    active: z.boolean(),
+    uuid: UUIDPlaceholder(),
+    session_id: z.string(),
+  }),
+)
+
+/** @internal */
 export const SDKPromptSuggestionMessageSchema = lazySchema(() =>
   z
     .object({
@@ -1956,6 +1968,7 @@ export const SDKMessageSchema = lazySchema(() =>
     SDKRateLimitEventSchema(),
     SDKElicitationCompleteMessageSchema(),
     SDKPromptSuggestionMessageSchema(),
+    SDKPromptSuggestionActivityMessageSchema(),
   ]),
 )
 

@@ -6509,6 +6509,58 @@ describe('Sessions API', () => {
     expect(launchInfo!.transcriptMessageCount).toBe(0)
   })
 
+  it('POST /api/sessions/:id/rewind keeps hidden entries the remaining conversation is chained through', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-111111111111'
+    const ids = Array.from({ length: 9 }, () => crypto.randomUUID())
+    const [firstUser, skillPrompt, firstReply, interrupted, sentinel, resumed, resumedReply, target, targetReply] = ids
+    const chained = (entry: Record<string, unknown>, uuid: string, parentUuid: string | null) => ({
+      ...entry,
+      uuid,
+      parentUuid,
+      sessionId,
+    })
+    const filePath = await writeSessionFile('-tmp-api-rewind-hidden-chain', sessionId, [
+      makeSnapshotEntry(),
+      chained(makeUserEntry('first prompt'), firstUser, null),
+      // Hidden from history: a skill body and the sentinel a resumed CLI writes
+      // after an interrupted turn. Later messages are chained through both.
+      chained({ ...makeUserEntry('Base directory for this skill: /skills/demo'), isMeta: true }, skillPrompt, firstUser),
+      chained(makeAssistantEntry('first reply'), firstReply, skillPrompt),
+      chained(makeUserEntry('second prompt'), interrupted, firstReply),
+      chained({
+        ...makeAssistantEntry('No response requested.'),
+        message: { model: '<synthetic>', id: 'msg_synthetic', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] },
+      }, sentinel, interrupted),
+      chained(makeUserEntry('continue'), resumed, sentinel),
+      chained(makeAssistantEntry('continued reply'), resumedReply, resumed),
+      chained(makeUserEntry('prompt to edit and resend'), target, resumedReply),
+      chained(makeAssistantEntry('reply being rewound'), targetReply, target),
+    ])
+
+    const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userMessageIndex: 3,
+        targetUserMessageId: target,
+        expectedContent: 'prompt to edit and resend',
+      }),
+    })
+    expect(executeRes.status).toBe(200)
+    const executeBody = await executeRes.json() as {
+      conversation: { removedMessageIds: string[] }
+    }
+    expect(executeBody.conversation.removedMessageIds).toEqual([target, targetReply])
+
+    // What --resume rebuilds from the rewritten file must still reach the start.
+    const { loadTranscriptFile, buildConversationChain } = await import('../../utils/sessionStorage.js')
+    const loaded = await loadTranscriptFile(filePath)
+    const chain = buildConversationChain(loaded.messages, loaded.messages.get(resumedReply as never)!)
+    expect(chain.map((message) => message.uuid)).toEqual(ids.slice(0, 7))
+    expect(loaded.messages.has(target as never)).toBe(false)
+    expect(loaded.messages.has(targetReply as never)).toBe(false)
+  })
+
   it('POST /api/sessions/:id/rewind should target the selected message id instead of a shifted visible index', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-ffffffffffff'
     const firstUserId = crypto.randomUUID()

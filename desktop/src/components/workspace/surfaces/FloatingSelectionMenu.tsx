@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { MessageCircle } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import type { FloatingSelectionMenuState } from './textSelection'
@@ -14,7 +15,12 @@ export function FloatingSelectionMenu({
   const t = useTranslation()
   if (!selection) return null
 
-  return (
+  // Portalled like the chat's selection toolbar: following a selection
+  // scrolled off the top of a preview, the button is clamped up under the
+  // 52px titlebar. Left inside the surface it reports no app-region there, so
+  // the titlebar's drag region swallowed the click; as an overlay under
+  // <body> it owns its box (globals.css, the desktop drag region).
+  return createPortal(
     <button
       ref={popoverRef}
       type="button"
@@ -27,6 +33,7 @@ export function FloatingSelectionMenu({
     >
       <MessageCircle size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-secondary)]" aria-hidden="true" />
       <span>{t('workspace.addSelectionToChat')}</span>
-    </button>
+    </button>,
+    document.body,
   )
 }

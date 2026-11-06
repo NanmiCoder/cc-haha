@@ -434,7 +434,7 @@ function NativeComputerUse({
               title={t('settings.computerUse.nativeUnavailableTitle')}
               detail={missing
                 ? t('settings.computerUse.agentDesktopMissing')
-                : t('settings.computerUse.agentDesktopProbeFailed', {
+                : runtime?.message ?? t('settings.computerUse.agentDesktopProbeFailed', {
                     reason: runtime?.reason ?? t('settings.computerUse.agentDesktopNoStatus'),
                   })}
               tone="strong"
@@ -456,6 +456,13 @@ function NativeComputerUse({
   }
 
   if (!status.cuHelper.available) {
+    const detailKey = status.cuHelper.reason === 'helper_signature_invalid'
+      ? 'settings.computerUse.nativeSignatureInvalidDetail'
+      : status.cuHelper.reason === 'helper_prepare_failed'
+        ? 'settings.computerUse.nativePrepareFailedDetail'
+        : status.cuHelper.reason === 'helper_missing'
+          ? 'settings.computerUse.nativeMissingDetail'
+          : 'settings.computerUse.nativeUnavailableDetail'
     return (
       <div className={PAGE_CLASS}>
         {header}
@@ -464,7 +471,7 @@ function NativeComputerUse({
           className="mt-6"
           size="lg"
           title={t('settings.computerUse.nativeUnavailableTitle')}
-          detail={t('settings.computerUse.nativeUnavailableDetail')}
+          detail={t(detailKey)}
           retryLabel={t('settings.computerUse.recheckBtn')}
           onRetry={onRecheck}
           tone="strong"

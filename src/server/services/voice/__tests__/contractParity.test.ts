@@ -79,6 +79,7 @@ describe('voice contract parity (server types.ts vs desktop api/voice.ts)', () =
     'VoiceVocabularyInput',
     'VoiceVocabularyAddResult',
     'VoiceHistorySource',
+    'VoiceHistorySourceList',
     'VoiceHistoryTerm',
     'VoiceHistoryGroup',
     'VoiceHistorySuggestions',

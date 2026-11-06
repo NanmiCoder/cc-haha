@@ -88,7 +88,11 @@ describe('RawRequestTab', () => {
         response: {
           status: 200,
           headers: {},
-          body: { contentType: 'json', bytes: 50, sha256: 'y', preview: JSON.stringify({ role: 'assistant', content: [{ type: 'text', text: 'Response from the model' }], stop_reason: 'end_turn' }), truncated: false },
+          body: { contentType: 'json', bytes: 50, sha256: 'y', preview: JSON.stringify({
+            role: 'assistant',
+            content: [{ type: 'thinking', thinking: '', signature: 'signed' }, { type: 'text', text: 'Response from the model' }],
+            stop_reason: 'end_turn',
+          }), truncated: false },
         },
       }),
     })
@@ -97,6 +101,7 @@ describe('RawRequestTab', () => {
     expect(await screen.findByText(/Closest captured call by time/)).toBeInTheDocument()
     // The detail fetches the call in its own effect, so only its rendered body proves the request was made.
     expect(await screen.findByText('Response from the model')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Thinking.*0 chars/i })).not.toBeInTheDocument()
     // The record locator reaches calls beyond the capture's indexed window.
     expect(getTraceCall).toHaveBeenCalledWith('s1', 'match', '9000-12000')
     // Where the call went and with which model sit at the top.

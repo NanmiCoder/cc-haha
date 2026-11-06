@@ -44,6 +44,9 @@ function replaceProvider(catalog: VoiceCatalog | null, status: VoiceProviderStat
 }
 
 export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
+  let catalogLoad: Promise<void> | null = null
+  let catalogRefreshRequested = false
+
   const applyStatus = (status: VoiceProviderStatus) => {
     set(state => ({ catalog: replaceProvider(state.catalog, status) }))
   }
@@ -89,23 +92,39 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
     error: null,
 
     loadCatalog: async (options) => {
-      if (get().loading) return
+      if (catalogLoad) {
+        // A forced read must start after the active request, which may have
+        // captured the server state before the caller's change.
+        if (options?.force) catalogRefreshRequested = true
+        return catalogLoad
+      }
       if (get().catalog && !options?.force) return
       set({ loading: true })
-      try {
-        const catalog = await voiceApi.catalog()
-        set({ catalog, error: null })
-        // Resume progress display if the server is already downloading.
-        for (const provider of catalog.providers) {
-          if (provider.preparation.phase === 'downloading' || provider.preparation.phase === 'verifying') {
-            poll(provider.info.id)
-          }
+      catalogLoad = (async () => {
+        try {
+          do {
+            catalogRefreshRequested = false
+            try {
+              const catalog = await voiceApi.catalog()
+              // Do not publish a superseded snapshot or restart its poll loops.
+              if (catalogRefreshRequested) continue
+              set({ catalog, error: null })
+              // Resume progress display if the server is already downloading.
+              for (const provider of catalog.providers) {
+                if (provider.preparation.phase === 'downloading' || provider.preparation.phase === 'verifying') {
+                  poll(provider.info.id)
+                }
+              }
+            } catch (error) {
+              if (!catalogRefreshRequested) set({ error: String(error) })
+            }
+          } while (catalogRefreshRequested)
+        } finally {
+          catalogLoad = null
+          set({ loading: false })
         }
-      } catch (error) {
-        set({ error: String(error) })
-      } finally {
-        set({ loading: false })
-      }
+      })()
+      return catalogLoad
     },
 
     updatePreferences: async (patch) => {

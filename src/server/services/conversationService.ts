@@ -2,6 +2,7 @@ import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
 import { powerActivityClock } from './powerActivityClock.js'
+import { SDKPromptSuggestionActivityMessageSchema } from '../../entrypoints/sdk/coreSchemas.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -327,6 +328,8 @@ type SessionProcess = {
   pendingControlRequests: Map<string, (reason: Error) => void>
   /** Last value sent with `set_prompt_suggestions`; the CLI starts disabled. */
   promptSuggestionsEnabled?: boolean
+  promptSuggestionGenerations?: Set<string>
+  promptSuggestionExited?: boolean
 }
 
 export type PendingPermissionRequest = {
@@ -414,6 +417,8 @@ export class ConversationService {
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
   private promptSuggestionClientSessions = new Set<string>()
   private promptSuggestionsSettingEnabled = false
+  // Retired runtimes keep ownership until their actual process exits.
+  private promptSuggestionWorkOwners = new Set<SessionProcess>()
   private readonly processDeps: ConversationServiceProcessDeps
 
   constructor(processDeps: ConversationServiceProcessDeps = {}) {
@@ -619,6 +624,7 @@ export class ConversationService {
     options?: SessionStartOptions,
     repository?: PreparedSessionWorkspace['repository'],
     agentProfile: 'standard' | 'lean' = 'standard',
+    additionalDirectories: readonly string[] = [],
   ): string[] {
     const side = getSideChat(sessionId)
     const dangerousMode = process.env.CLAUDE_DANGEROUS_MODE === '1'
@@ -667,6 +673,7 @@ export class ConversationService {
           : []),
       ] : []),
       ...worktreeArgs,
+      ...additionalDirectories.flatMap(directory => ['--add-dir', directory]),
       '--replay-user-messages',
       ...this.getRuntimeArgs(options),
       ...this.getPermissionArgs(options?.permissionMode, dangerousMode),
@@ -698,6 +705,9 @@ export class ConversationService {
       throw new ConversationStartupError('Agent teams are unavailable in lean sessions', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
+    const additionalDirectories = (options?.teamWorker
+      ? (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.additionalDirectories
+      : launchInfo?.additionalDirectories) ?? []
     if (launchInfo?.agentProfile === 'lean' && (options?.permissionMode ?? launchInfo.permissionMode) === 'plan') {
       throw new ConversationStartupError('Plan mode is unavailable in lean sessions. Choose another permission mode before continuing.', 'LEAN_CAPABILITY_UNAVAILABLE')
     }
@@ -787,6 +797,7 @@ export class ConversationService {
       options,
       launchRepository,
       launchInfo?.agentProfile ?? 'standard',
+      additionalDirectories,
     )
 
     console.log(
@@ -1013,6 +1024,7 @@ export class ConversationService {
       const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
       await sessionService.appendSessionMetadata(sessionId, {
         workDir: metadataWorkDir,
+        additionalDirectories,
         customTitle: launchInfo?.customTitle ?? null,
         repository: launchRepository,
         permissionMode: options?.permissionMode || launchInfo?.permissionMode,
@@ -1022,6 +1034,14 @@ export class ConversationService {
         ...(options?.model ? { runtimeModelId: options.model } : {}),
         ...(options?.effort ? { effortLevel: options.effort } : {}),
       })
+      // Startup resumes once the SDK socket attaches, usually before init, so
+      // init can move the session while this write is in flight. If it lands
+      // after init's own write, restore init's cwd and drop the placeholder.
+      const initWorkDir = this.getSessionWorkDir(sessionId)
+      if (initWorkDir && initWorkDir !== metadataWorkDir) {
+        await sessionService.appendSessionMetadata(sessionId, { workDir: initWorkDir })
+        await sessionService.deletePlaceholderSessionFiles(sessionId, initWorkDir)
+      }
     }
 
     console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
@@ -1707,6 +1727,13 @@ export class ConversationService {
       try {
         const msg = JSON.parse(line)
         if (this.isReplayedSdkMessage(session, msg)) continue
+        if (msg?.type === 'system' && msg.subtype === 'prompt_suggestion_activity') {
+          const activity = SDKPromptSuggestionActivityMessageSchema().safeParse(msg)
+          if (activity.success) {
+            this.trackPromptSuggestionActivity(session, activity.data.generation_id, activity.data.active)
+          }
+          continue
+        }
         if (
           msg?.type === 'system' &&
           msg.subtype === 'api_retry' &&
@@ -1819,6 +1846,33 @@ export class ConversationService {
         )
       }
     }
+  }
+
+  hasPromptSuggestionPowerActivity(): boolean {
+    return this.promptSuggestionWorkOwners.size > 0
+  }
+
+  private trackPromptSuggestionActivity(session: SessionProcess, generationId: string, active: boolean): void {
+    if (session.promptSuggestionExited || session.proc.exitCode != null) return
+    if (!session.promptSuggestionGenerations) {
+      if (!active) return
+      session.promptSuggestionGenerations = new Set()
+      void session.proc.exited.then(() => {
+        session.promptSuggestionExited = true
+        session.promptSuggestionGenerations?.clear()
+        if (this.promptSuggestionWorkOwners.delete(session)) powerActivityClock.changed()
+      }, () => {})
+    }
+    const generations = session.promptSuggestionGenerations
+    if (active) {
+      if (generations.has(generationId)) return
+      generations.add(generationId)
+      this.promptSuggestionWorkOwners.add(session)
+    } else {
+      if (!generations.delete(generationId)) return
+      if (generations.size === 0) this.promptSuggestionWorkOwners.delete(session)
+    }
+    powerActivityClock.changed()
   }
 
   private notifyOutputCallbacks(
@@ -2385,6 +2439,11 @@ export class ConversationService {
       }
     }
 
+    // A Magpie session runs any model in Magpie's catalog; write the catalog's
+    // current windows and reply limits back first so the env built below carries them.
+    await this.providerService.refreshMagpieProvider(
+      typeof options?.providerId === 'string' ? options.providerId : null,
+    )
     const explicitProvider =
       typeof options?.providerId === 'string'
         ? await this.providerService.getProvider(options.providerId)

@@ -251,6 +251,26 @@ describe('Computer Use API authorized app config', () => {
 })
 
 describe('Computer Use platform capability', () => {
+  for (const reason of ['helper_missing', 'helper_signature_invalid', 'helper_prepare_failed'] as const) {
+    it(`preserves ${reason} without probing permissions, including when globally disabled`, async () => {
+      const { checkStatus } = await importComputerUseApi()
+      expect(await (await callAuthorizedApps('GET')).json()).toMatchObject({ enabled: false })
+      const status = await checkStatus({
+        platform: 'darwin',
+        detectMacosProductVersion: async () => '14.4',
+        isMacosRuntimeSupported: () => true,
+        resolveCuHelper: () => ({ binary: null, reason }),
+        checkPermissions: async () => { throw new Error('must not launch a rejected helper') },
+      })
+      expect(status).toMatchObject({
+        supported: true,
+        engine: 'macos-native',
+        cuHelper: { available: false, supported: true, reason },
+        permissions: { accessibility: null, screenRecording: null, error: null },
+      })
+    })
+  }
+
   it('builds native macOS status through the real capability transition', async () => {
     const { checkStatus } = await importComputerUseApi()
     const calls: string[] = []
@@ -266,9 +286,9 @@ describe('Computer Use platform capability', () => {
         calls.push(`runtime:${platform}`)
         return true
       },
-      isCuHelperAvailable: () => {
+      resolveCuHelper: () => {
         calls.push('helper')
-        return true
+        return { binary: '/fixture/cu-helper', reason: null }
       },
       checkPermissions: async () => {
         calls.push('permissions')
@@ -306,9 +326,9 @@ describe('Computer Use platform capability', () => {
       arch: 'arm64',
       detectMacosProductVersion: async () => '14.3.9',
       isMacosRuntimeSupported: () => true,
-      isCuHelperAvailable: () => {
+      resolveCuHelper: () => {
         helperCalls += 1
-        return true
+        return { binary: '/fixture/cu-helper', reason: null }
       },
       checkPermissions: async () => {
         permissionCalls += 1
@@ -405,7 +425,7 @@ describe('agent-desktop native status', () => {
           return native
         },
         checkPermissions: async () => { throw new Error('must not probe macOS TCC') },
-        isCuHelperAvailable: () => { throw new Error('must not launch cu-helper') },
+        resolveCuHelper: () => { throw new Error('must not launch cu-helper') },
       })
 
       expect(calls).toEqual([platform])

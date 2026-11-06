@@ -10,21 +10,19 @@ describe('resolveShellToolAvailability', () => {
       resolveShellToolAvailability({
         platform: 'windows',
         gitBashPath: null,
-        userType: undefined,
         powerShellSetting: undefined,
       }),
     ).toEqual({ bash: false, powershell: true })
   })
 
-  test('keeps the existing external default when Git Bash is available', () => {
+  test('offers native PowerShell alongside an available Git Bash on Windows', () => {
     expect(
       resolveShellToolAvailability({
         platform: 'windows',
         gitBashPath: 'C:\\Program Files\\Git\\bin\\bash.exe',
-        userType: undefined,
         powerShellSetting: undefined,
       }),
-    ).toEqual({ bash: true, powershell: false })
+    ).toEqual({ bash: true, powershell: true })
   })
 
   test('honors an explicit PowerShell opt-out', () => {
@@ -32,7 +30,6 @@ describe('resolveShellToolAvailability', () => {
       resolveShellToolAvailability({
         platform: 'windows',
         gitBashPath: null,
-        userType: undefined,
         powerShellSetting: '0',
       }),
     ).toEqual({ bash: false, powershell: false })
@@ -43,7 +40,6 @@ describe('resolveShellToolAvailability', () => {
       resolveShellToolAvailability({
         platform: 'macos',
         gitBashPath: null,
-        userType: undefined,
         powerShellSetting: undefined,
       }),
     ).toEqual({ bash: true, powershell: false })

@@ -9,7 +9,7 @@ const VALID_REF_ID: &str = "@s8f3k2p9:e1";
 
 #[test]
 fn permission_report_is_collected_only_for_permission_consumers() {
-    let status = Commands::Status;
+    let status = Commands::Status(Default::default());
     let list_displays = Commands::ListDisplays;
     let batch = Commands::Batch(crate::cli_args::batch::BatchArgs {
         commands_json: "[]".into(),
@@ -216,5 +216,9 @@ fn a_multi_agent_desktop_action_needs_an_agent_id_on_every_platform() {
     assert!(agent_id_missing(&click, true, None));
     assert!(!agent_id_missing(&click, true, Some("agent-a")));
     assert!(!agent_id_missing(&click, false, None));
-    assert!(!agent_id_missing(&Commands::Status, true, None));
+    assert!(!agent_id_missing(
+        &Commands::Status(Default::default()),
+        true,
+        None
+    ));
 }

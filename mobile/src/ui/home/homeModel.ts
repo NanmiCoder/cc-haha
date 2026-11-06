@@ -201,9 +201,11 @@ export function hostLink(input: {
   fresh: boolean
   failure: DashboardFailure | null
   credentialError?: string
+  credentialIssue?: 'missing' | 'unavailable' | null
 }): HostLink {
   if (!input.host) return 'none'
-  if (input.credentialError) return 'unauthorized'
+  if (input.credentialError)
+    return input.credentialIssue === 'unavailable' ? 'failed' : 'unauthorized'
   if (input.fresh) return 'online'
   return input.failure ?? 'connecting'
 }
@@ -309,7 +311,7 @@ export function canStartTask(link: HostLink) {
 /* ───────────── 其他电脑的连通检查 ───────────── */
 
 export type HostCheck = {
-  state: 'checking' | 'online' | 'offline' | 'unauthorized'
+  state: 'checking' | 'online' | 'offline' | 'unauthorized' | 'failed'
   message?: string
   expiresAt?: number
   checkedAt?: number
@@ -318,12 +320,18 @@ export type HostCheck = {
   lastOnlineAt?: number
 }
 
+export function credentialHostCheck(message: string, issue: 'missing' | 'unavailable' | null): HostCheck {
+  return { state: issue === 'unavailable' ? 'failed' : 'unauthorized', message }
+}
+
 export function hostCheckLine(host: Pick<Host, 'auth'>, check: HostCheck, now: number) {
   switch (check.state) {
     case 'checking':
       return '正在检查连接…'
     case 'unauthorized':
       return '授权已失效 · 请重新连接'
+    case 'failed':
+      return check.message || '暂时无法读取连接凭据'
     case 'offline':
       return check.lastOnlineAt
         ? `离线 · ${clockLabel(check.lastOnlineAt, now)} 最后在线`

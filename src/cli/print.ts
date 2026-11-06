@@ -268,11 +268,12 @@ import {
 import { disableStaleMcpReconnect } from './mcpReconnectState.js'
 import {
   computerUsePermissionContext,
+  computerUseUnavailableMessage,
   createComputerUseMcpRefresh,
-  isComputerUseRuntimeTool,
   readComputerUseRefreshConfiguration,
 } from './computerUseMcpRefresh.js'
-import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer } from '../utils/computerUse/common.js'
+import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer, isComputerUseRuntimeTool } from '../utils/computerUse/common.js'
+import { requiresComputerUse } from '../utils/computerUse/turnIntent.js'
 import { getMcpPrefix } from 'src/services/mcp/mcpStringUtils.js'
 import {
   commandBelongsToServer,
@@ -673,7 +674,9 @@ export function canBatchWith(
     !isPendingSessionMessage(head.uuid) &&
     !isPendingSessionMessage(next.uuid) &&
     next.workload === head.workload &&
-    next.isMeta === head.isMeta
+    next.isMeta === head.isMeta &&
+    !requiresComputerUse(head) &&
+    !requiresComputerUse(next)
   )
 }
 
@@ -1132,6 +1135,7 @@ export async function runHeadless(
           message.subtype === 'task_notification' ||
           message.subtype === 'task_started' ||
           message.subtype === 'task_progress' ||
+          message.subtype === 'prompt_suggestion_activity' ||
           message.subtype === 'post_turn_summary')
       ) &&
       message.type !== 'stream_event' &&
@@ -1205,6 +1209,17 @@ export async function runHeadless(
   gracefulShutdownSync(
     lastMessage?.type === 'result' && lastMessage?.is_error ? 1 : 0,
   )
+}
+
+export function createPromptSuggestionActivityEmitter(structuredIO: StructuredIO) {
+  return (generationId: string, active: boolean) => structuredIO.outbound.enqueue({
+    type: 'system',
+    subtype: 'prompt_suggestion_activity',
+    generation_id: generationId,
+    active,
+    uuid: randomUUID(),
+    session_id: getSessionId(),
+  })
 }
 
 export function bindAgentRunMessageSink(structuredIO: StructuredIO): () => void {
@@ -2268,6 +2283,7 @@ function runHeadlessStreaming(
           getAppState,
           isResultHeld: () => heldBackResult !== null,
           emit: message => output.enqueue(message),
+          onActivity: createPromptSuggestionActivityEmitter(structuredIO),
         })
 
       // Extract command processing into a named function for the do-while pattern.
@@ -2445,6 +2461,9 @@ function runHeadlessStreaming(
           // const-capture: TS loses `while ((command = dequeue()))` narrowing
           // inside the closure.
           const cmd = command
+          const requiredComputerUse = requiresComputerUse(cmd) && !isPendingSessionMessage(cmd.uuid)
+            ? { unavailableMessage: computerUseUnavailableMessage(computerUseMcp.unavailableReason()) }
+            : undefined
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               commands: uniqBy(
@@ -2503,6 +2522,7 @@ function runHeadlessStreaming(
                 ),
               agents: currentAgents,
               orphanedPermission: cmd.orphanedPermission,
+              requiredComputerUse,
               setSDKStatus: (status, detail) => {
                 output.enqueue({
                   type: 'system',

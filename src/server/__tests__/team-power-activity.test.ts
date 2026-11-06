@@ -259,18 +259,22 @@ test('power owns a paused member message from admission through queued resume an
   const initial = await getPowerSnapshot()
   const { teamService } = await import('../services/teamService.js')
   const mailbox = await import('../../utils/teammateMailbox.js')
+  const { TEAM_LEAD_NAME } = await import('../../utils/swarm/constants.js')
   const originalRead = mailbox.readUnreadMessages
   const originalWrite = mailbox.writeToMailbox
   const originalAcknowledge = mailbox.markMessagesAsReadByPredicate
   let releaseSupervisor!: () => void
   let releaseWrite!: () => void
   let releaseAcknowledgement!: () => void
+  let releaseResultNotification!: () => void
   const supervisorGate = new Promise<void>(resolve => { releaseSupervisor = resolve })
   const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
   const acknowledgementGate = new Promise<void>(resolve => { releaseAcknowledgement = resolve })
+  const resultNotificationGate = new Promise<void>(resolve => { releaseResultNotification = resolve })
   let supervisorHeld = false
   let writeHeld = false
   let acknowledgementHeld = false
+  let resultNotificationHeld = false
   // Hold one supervisor read. Activity snapshots still read the actual inbox.
   const read = spyOn(mailbox, 'readUnreadMessages').mockImplementation(async (...args) => {
     if (args[0] === 'reader' && args[1] === h.teamName && !supervisorHeld) {
@@ -283,6 +287,13 @@ test('power owns a paused member message from admission through queued resume an
     if (args[0] === 'reader' && args[1].from === 'user' && args[2] === h.teamName) {
       writeHeld = true
       await writeGate
+    }
+    // Roster and SDK idle precede this awaited lead notification. Hold the real
+    // write so those earlier signals cannot accidentally observe completion.
+    if (args[0] === TEAM_LEAD_NAME && args[1].from === 'reader' && args[2] === h.teamName
+      && mailbox.isIdleNotification(args[1].text)?.result === 'Resumed task complete') {
+      resultNotificationHeld = true
+      await resultNotificationGate
     }
     return originalWrite(...args)
   })
@@ -320,7 +331,13 @@ test('power owns a paused member message from admission through queued resume an
     expect(await originalRead('reader', h.teamName)).toEqual([])
     expect((await getPowerSnapshot()).busy).toBe(true)
     h.requests[1]!.reply('Resumed task complete')
-    await waitFor(() => h.member()?.isActive === false && h.states.get(h.workerId) === 'idle', 'resumed result bookkeeping')
+    await waitFor(() => resultNotificationHeld && h.member()?.isActive === false
+      && h.states.get(h.workerId) === 'idle', 'resumed result notification')
+    const notifying = await getPowerSnapshot()
+    expect(notifying.busy).toBe(true)
+    expect(notifying.completionSequence).toBe(initial.completionSequence)
+    releaseResultNotification()
+    await waitFor(async () => (await getPowerSnapshot()).completionSequence > initial.completionSequence, 'resumed completion publication')
     const delivering = await getPowerSnapshot()
     expect(delivering.busy).toBe(true)
     expect(delivering.completionSequence).toBeGreaterThan(initial.completionSequence)
@@ -331,6 +348,7 @@ test('power owns a paused member message from admission through queued resume an
     releaseWrite()
     releaseSupervisor()
     releaseAcknowledgement()
+    releaseResultNotification()
     await sending?.catch(() => {})
     read.mockRestore()
     write.mockRestore()

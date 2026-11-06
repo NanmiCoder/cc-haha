@@ -768,6 +768,63 @@ describe('SubagentRunPage', () => {
     expect(within(header).getByText('Completed')).toBeInTheDocument()
   })
 
+  it('shows the model and effort of a running SubAgent while its answer streams live', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ status: 'running', messages: [] }))
+      .mockResolvedValue(subagentRun({
+        status: 'running',
+        messages: [
+          { id: 'msg-user', type: 'user', content: 'Read files', timestamp: TRANSCRIPT_TIMESTAMP },
+          {
+            id: 'msg-assistant',
+            type: 'assistant',
+            content: [{ type: 'text', text: 'Reading the layout' }],
+            model: 'deepseek-v4-flash',
+            timestamp: TRANSCRIPT_TIMESTAMP,
+          },
+        ],
+        model: 'deepseek-v4-flash',
+        effort: 'high',
+      }))
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+    const conversation = await screen.findByTestId('subagent-conversation')
+    // The answer arrives over the live stream, whose text names no model.
+    act(() => {
+      sendRunEvent('live-answer', { type: 'content_start', blockType: 'text' })
+      sendRunEvent('live-answer', { type: 'content_delta', text: 'Reading the layout' })
+    })
+    await waitFor(() => expect(conversation).toHaveTextContent('Reading the layout'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2))
+
+    const header = screen.getByTestId('session-header')
+    expect(await within(header).findByTitle('Model')).toHaveTextContent('deepseek-v4-flash')
+    expect(within(header).getByTitle('Effort')).toHaveTextContent('High')
+    // The poll only fed the header; the streaming turn stays on screen.
+    expect(useChatStore.getState().sessions[`${SUBAGENT_TAB_PREFIX}session-1__tool-1`]?.chatState)
+      .not.toBe('idle')
+  })
+
+  it.each([
+    { name: 'a recorded model default as Default', recorded: { effort: null }, shown: 'Default' },
+    { name: 'no effort for metadata from before it was recorded', recorded: {}, shown: null },
+  ] as const)('shows $name', async ({ recorded, shown }) => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({
+      model: 'deepseek-v4-flash',
+      ...recorded,
+    }))
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    if (shown) expect(within(header).getByTitle('Effort')).toHaveTextContent(shown)
+    // Metadata from before effort was recorded says nothing about the run's.
+    else expect(within(header).queryByTitle('Effort')).not.toBeInTheDocument()
+  })
+
   it('uses compact main-session chrome and mobile transcript behavior on narrow screens', async () => {
     viewportMocks.isMobile = true
     vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({

@@ -471,6 +471,25 @@
     }
   },
   {
+    "id": "magpie",
+    "name": "Magpie",
+    "baseUrl": "http://127.0.0.1:3425",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "",
+      "haiku": "",
+      "sonnet": "",
+      "opus": ""
+    },
+    "needsApiKey": false,
+    "websiteUrl": "https://usemagpie.ai",
+    "promoText": "Magpie 是一个本机网关，把它里面配好的服务商、订阅和路由组转给 cc-haha 用，不用填密钥。",
+    "authStrategy": "auth_token_empty_api_key",
+    "defaultEnv": {
+      "ANTHROPIC_AUTH_TOKEN": "magpie-cc-haha"
+    }
+  },
+  {
     "id": "lmstudio",
     "name": "LM Studio",
     "baseUrl": "http://localhost:1234",

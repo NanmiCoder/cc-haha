@@ -80,6 +80,7 @@ export type ComputerUseStatus = {
     available: boolean
     binaryPath: string | null
     reason: string | null
+    message?: string
     detail?: unknown
   }
   systemVersion: string | null
@@ -94,6 +95,8 @@ export type ComputerUseStatus = {
       | 'system_version_unknown'
       | 'os_too_old'
       | 'helper_missing'
+      | 'helper_signature_invalid'
+      | 'helper_prepare_failed'
       | null
   }
   python: {

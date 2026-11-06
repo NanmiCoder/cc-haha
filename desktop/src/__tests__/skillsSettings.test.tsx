@@ -21,7 +21,7 @@ vi.mock('../stores/providerStore', () => ({
     activeId: null,
     presets: [],
     isLoading: false,
-    fetchProviders: vi.fn(),
+    fetchProviders: vi.fn().mockResolvedValue(undefined),
     deleteProvider: vi.fn(),
     activateProvider: vi.fn(),
     activateOfficial: vi.fn(),

@@ -142,7 +142,12 @@ async function getIdlePowerService(): Promise<IdlePowerService> {
       return readIdlePowerActivity(resolveMainRendererServerAccess(), signal)
     },
     onChange: state => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ELECTRON_EVENT_CHANNELS.powerIdleActionState, state)
+      const window = mainWindow
+      if (isQuitting || !window || window.isDestroyed()) return
+      const contents = window.webContents
+      // WebContents is destroyed before its owning window during shutdown.
+      // stop() still emits so live renderers can clear a cancelled countdown.
+      if (!contents.isDestroyed()) contents.send(ELECTRON_EVENT_CHANNELS.powerIdleActionState, state)
     },
   }).then(service => { idlePowerService = service; return service }).catch(error => { idlePowerInitialization = null; throw error })
   const service = await idlePowerInitialization

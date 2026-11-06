@@ -80,6 +80,7 @@ import { gracefulShutdownSync, isShuttingDown } from './gracefulShutdown.js'
 import { parseJSONL } from './json.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
+import type { EffortLevel } from './effort.js'
 import type { ModelAlias } from './model/aliases.js'
 import { sanitizePath } from './path.js'
 import type { PermissionMode } from './permissions/PermissionMode.js'
@@ -281,6 +282,13 @@ export type AgentMetadata = {
   ownerAgentId?: string
   /** Per-invocation Agent tool model override. Retained across follow-ups. */
   model?: ModelAlias
+  /**
+   * Effort level the run launched with: the Agent's pinned effort, otherwise
+   * the parent session's. `null` means neither set one, so the model's own
+   * default applies. Absent in metadata written before this was recorded,
+   * which says nothing about the effort that run used.
+   */
+  effort?: EffortLevel | null
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a

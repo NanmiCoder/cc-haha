@@ -1005,6 +1005,26 @@ describe('ContextUsageIndicator presentation', () => {
     expect(fill).not.toHaveAttribute('style', expect.stringContaining('purple_FOR_SUBAGENTS_ONLY'))
   })
 
+  it('says where the session compacts on its own, and says nothing when it does not report it', async () => {
+    sessionsApiMock.getInspection.mockResolvedValue({
+      ...baseInspection,
+      context: { ...baseInspection.context, rawMaxTokens: 1_000_000, autoCompactThreshold: 967_000 },
+    })
+    const { unmount } = render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+    await waitFor(() => expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%'))
+    fireEvent.click(screen.getByTestId('context-usage-indicator'))
+    expect(await screen.findByTestId('context-auto-compact')).toHaveTextContent('Compacts automatically at about 967,000')
+    unmount()
+
+    useContextUsageStore.setState({ bySession: {} })
+    sessionsApiMock.getInspection.mockResolvedValue(baseInspection)
+    render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+    await waitFor(() => expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%'))
+    fireEvent.click(screen.getByTestId('context-usage-indicator'))
+    await screen.findByTestId('context-usage-popover')
+    expect(screen.queryByTestId('context-auto-compact')).not.toBeInTheDocument()
+  })
+
   it('uses the bottom sheet when the composer is compact (Workbench / narrow column)', async () => {
     render(
       <ContextUsageIndicator
