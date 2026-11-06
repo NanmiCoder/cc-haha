@@ -485,7 +485,13 @@
     "websiteUrl": "https://llmtr.com",
     "isNew": true,
     "authStrategy": "api_key",
-    "defaultEnv": {}
+    "defaultEnv": {},
+    "modelContextWindows": {
+      "minimax/minimax-m3.1-flash": 1000000
+    },
+    "modelMaxOutputTokens": {
+      "minimax/minimax-m3.1-flash": 524288
+    }
   },
   {
     "id": "magpie",

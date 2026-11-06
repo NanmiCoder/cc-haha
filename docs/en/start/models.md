@@ -69,7 +69,7 @@ Three things to know:
 
 [LLMTR](https://llmtr.com) speaks OpenAI Chat Completions. The preset is named LLMTR and its base URL is `https://llmtr.com/v1`. The app sends chat through the local loopback proxy to `https://llmtr.com/v1/chat/completions`, with the key in `Authorization: Bearer`. Chat is not rerouted to `/v1/responses`, and the request does not include a Responses API `reasoning` object.
 
-All four slots hint `minimax/minimax-m3.1-flash`. Keep model IDs from "Fetch models" intact, including IDs that already start with `llmtr/`. The preset does not fill in context length, price, or extra capabilities.
+All four slots hint `minimax/minimax-m3.1-flash`. Keep model IDs from "Fetch models" intact, including IDs that already start with `llmtr/`. The public catalog lists that id with context length 1000000 and a completion ceiling of 524288; the preset records those two numbers. The catalog's raw prices are prompt `0.00000015`, completion `0.0000006`, and input_cache_read `0.000000015`. The app does not price requests from them. Reasoning is on by default at the server. Omit the `reasoning` parameter: do not set it false, and do not attach a reasoning object. The one-shot script still uses `max_tokens` 64, not the catalog ceiling.
 
 `GET https://llmtr.com/v1/models` is a public catalog and does not check the API key. Use Test on the provider row to check the key; that call is Chat Completions, not the model list.
 

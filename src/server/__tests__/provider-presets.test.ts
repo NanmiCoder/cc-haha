@@ -655,10 +655,11 @@ describe('provider presets API', () => {
   })
 
   /**
-   * LLMTR is a named OpenAI Chat Completions gateway. The preset must stay on
-   * /v1/chat/completions, keep full model ids, and must not invent context,
-   * price, or capability metadata. GET /v1/models is public, so it is not a
-   * key check; the provider test posts a chat completion instead.
+   * LLMTR is a named OpenAI Chat Completions gateway. Context and reply
+   * ceiling come from the public catalog record for minimax/minimax-m3.1-flash.
+   * Prices are not applied. Reasoning stays server-side: omit the parameter,
+   * do not force it false, and do not send a reasoning object.
+   * GET /v1/models is public, so it is not a key check.
    */
   describe('LLMTR preset', () => {
     const llmtr = PROVIDER_PRESETS.find((preset) => preset.id === 'llmtr')!
@@ -677,7 +678,13 @@ describe('provider presets API', () => {
       expect(llmtr.apiKeyUrl).toBeUndefined()
       expect(llmtr.promoText).toBeUndefined()
       expect(llmtr.defaultEnv).toEqual({})
-      expect(llmtr.modelContextWindows).toBeUndefined()
+      expect(llmtr.modelContextWindows).toEqual({
+        'minimax/minimax-m3.1-flash': 1_000_000,
+      })
+      expect(llmtr.modelMaxOutputTokens).toEqual({
+        'minimax/minimax-m3.1-flash': 524_288,
+      })
+      expect(llmtr).not.toHaveProperty('pricing')
       expect(llmtr.modelApiFormats).toBeUndefined()
       expect(llmtr.upstreamHeaders).toBeUndefined()
       expect(llmtr.reasoningProviderKind).toBeUndefined()
@@ -698,7 +705,7 @@ describe('provider presets API', () => {
       })
     })
 
-    test('routes the desktop key through the loopback proxy without a context table', () => {
+    test('publishes the catalog context and reply ceiling without pricing the request', () => {
       const env = buildProviderManagedEnv({
         id: 'llmtr-test', presetId: llmtr.id, name: llmtr.name,
         baseUrl: llmtr.baseUrl, apiFormat: llmtr.apiFormat,
@@ -713,8 +720,24 @@ describe('provider presets API', () => {
       expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('minimax/minimax-m3.1-flash')
       expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('minimax/minimax-m3.1-flash')
       expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('minimax/minimax-m3.1-flash')
-      expect(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBeUndefined()
+      expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toEqual({
+        'minimax/minimax-m3.1-flash': 1_000_000,
+      })
+      expect(JSON.parse(env.CLAUDE_CODE_MODEL_MAX_OUTPUT_TOKENS!)).toEqual({
+        'minimax/minimax-m3.1-flash': 524_288,
+      })
       expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+
+      const overridden = buildProviderManagedEnv({
+        id: 'llmtr-test', presetId: llmtr.id, name: llmtr.name,
+        baseUrl: llmtr.baseUrl, apiFormat: llmtr.apiFormat,
+        authStrategy: llmtr.authStrategy, apiKey: 'llmtr-offline-fixture-key',
+        models: llmtr.defaultModels,
+        modelMaxOutputTokens: { 'minimax/minimax-m3.1-flash': 4096 },
+      })
+      expect(JSON.parse(overridden.CLAUDE_CODE_MODEL_MAX_OUTPUT_TOKENS!)).toEqual({
+        'minimax/minimax-m3.1-flash': 4096,
+      })
     })
 
     test('keeps a one-shot chat on Chat Completions with no tools or reasoning object', () => {
@@ -735,6 +758,14 @@ describe('provider presets API', () => {
       expect('reasoning' in request.body).toBe(false)
       expect(request.body.reasoning_effort).toBeUndefined()
       expect(request.body.thinking).toBeUndefined()
+
+      const catalogDefault = buildLlmtrChatSmokeRequest({
+        apiKey: 'llmtr-offline-fixture-key',
+      })
+      expect(catalogDefault.body.model).toBe('minimax/minimax-m3.1-flash')
+      expect(catalogDefault.body.max_tokens).toBe(64)
+      expect(catalogDefault.body.max_completion_tokens).toBeUndefined()
+      expect('reasoning' in catalogDefault.body).toBe(false)
 
       const withThinking = anthropicToOpenaiChat({
         model: 'minimax/minimax-m3.1-flash',

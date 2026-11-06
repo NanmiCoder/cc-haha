@@ -9,11 +9,15 @@
  * This is not a standalone client. It loads the bundled LLMTR preset and
  * builds the body with anthropicToOpenaiChat plus buildOpenaiEndpoint, the
  * same helpers the proxy and provider test use. It sends one request:
- * no tools, max_tokens 64, no retry.
+ * no tools, max_tokens 64, no retry. The catalog reply ceiling is not the
+ * request budget.
+ *
+ * Reasoning is mandatory and already enabled on the server. This request
+ * omits the reasoning parameter. It does not send reasoning:false, a
+ * reasoning object, or reasoning_effort.
  *
  * The in-app proxy may resend once if an upstream rejects image input or a
- * reasoning field. This entrypoint does not. A desktop turn that enables
- * thinking can still add reasoning_effort; this request does not.
+ * reasoning field. This entrypoint does not.
  *
  * GET /v1/models is public and is not called here. A successful model list
  * does not mean LLMTR_API_KEY is valid.

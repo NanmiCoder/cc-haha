@@ -249,8 +249,13 @@ describe('bundled provider presets', () => {
         opus: 'minimax/minimax-m3.1-flash',
       },
       defaultEnv: {},
+      modelContextWindows: {
+        'minimax/minimax-m3.1-flash': 1000000,
+      },
+      modelMaxOutputTokens: {
+        'minimax/minimax-m3.1-flash': 524288,
+      },
     })
-    expect(preset?.modelContextWindows).toBeUndefined()
     expect(preset?.modelApiFormats).toBeUndefined()
     expect(preset?.featured).toBeUndefined()
     expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://LLMTR.COM/V1/ ')).toBe(true)

@@ -69,7 +69,7 @@ OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kim
 
 [LLMTR](https://llmtr.com) 使用 OpenAI Chat Completions。预设名称为 LLMTR，接口地址是 `https://llmtr.com/v1`。应用经本机回环代理把对话转到 `https://llmtr.com/v1/chat/completions`，密钥以 `Authorization: Bearer` 发出。对话不会改走 `/v1/responses`，请求里也不附带 Responses API 的 `reasoning` 对象。
 
-四个槽位的默认模型提示都是 `minimax/minimax-m3.1-flash`。从「拉取模型」得到的 ID 要原样保留，已经带 `llmtr/` 前缀的 ID 也不要截短。预设不填写上下文长度、价格或额外能力。
+四个槽位的默认模型提示都是 `minimax/minimax-m3.1-flash`。从「拉取模型」得到的 ID 要原样保留，已经带 `llmtr/` 前缀的 ID 也不要截短。公开目录里这条 ID 的上下文长度是 1000000，补全上限是 524288；预设只记录这两个数。目录里的原始价格是 prompt `0.00000015`、completion `0.0000006`、input_cache_read `0.000000015`，应用不拿它们计价。推理在服务端默认开启。请求省略 `reasoning` 参数，不要写成 false，也不要附带 reasoning 对象。一次性脚本的 `max_tokens` 仍是 64，不用目录里的补全上限。
 
 `GET https://llmtr.com/v1/models` 是公开目录，不校验 API Key。密钥是否有效，以服务商列表里的「测试」为准；测试打的是 Chat Completions，不是模型列表。
 
