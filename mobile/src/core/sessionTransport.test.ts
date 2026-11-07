@@ -48,12 +48,13 @@ class FakeTimers implements TransportTimers {
   }
 }
 class FakeSocket implements SocketLike {
+  url = ''
   readyState = 0
   onopen: SocketLike['onopen'] = null
   onmessage: SocketLike['onmessage'] = null
   onclose: SocketLike['onclose'] = null
   onerror: SocketLike['onerror'] = null
-  sent: ClientMessage[] = []
+  sent: (ClientMessage | Record<string, unknown>)[] = []
   closed = false
   send(data: string) {
     if (this.readyState !== 1) throw new Error('Socket closed')
@@ -73,6 +74,28 @@ class FakeSocket implements SocketLike {
   drop(code = 1006) {
     this.readyState = 3
     this.onclose?.({ code })
+  }
+  /** The server's answer to a stream request (see resumableStreams.ts). */
+  attach(frame: { resumed: boolean; next: number; last: number; cack?: number; epoch?: string }) {
+    this.onmessage?.({
+      data: JSON.stringify({ type: 'stream_attached', v: 1, stream: 'fixture', epoch: 'epoch-1', cack: 0, ...frame }),
+    })
+  }
+  /** A numbered stream frame. */
+  frame(seq: number, event: ServerEvent | Record<string, unknown>) {
+    this.onmessage?.({ data: JSON.stringify({ seq, ...event }) })
+  }
+  /** The open-time snapshots as numbered frames, from `seq` on; returns the next number. */
+  streamSnapshots(seq = 1) {
+    this.frame(seq, { type: 'connected', sessionId: 'session' })
+    this.frame(seq + 1, {
+      type: 'permission_requests_snapshot',
+      toolRequestIds: [],
+      computerUseRequestIds: [],
+      turnActive: false,
+    })
+    this.frame(seq + 2, { type: 'session_state', turnState: 'idle', activeBackgroundTaskIds: [] })
+    return seq + 3
   }
   snapshots() {
     this.receive({ type: 'connected', sessionId: 'session' })
@@ -125,13 +148,22 @@ const history = (
 function harness(
   load: ApiClient['history'] = async () => history(),
   baseline = history(),
-  store?: HistoryStore
+  store?: HistoryStore,
+  extra: {
+    verify?: ApiClient['verify']
+    gate?: { hold(): () => void }
+    streams?: boolean
+  } = {}
 ) {
+  let streamCount = 0
   const timers = new FakeTimers()
   const sockets: FakeSocket[] = []
   const connections: ConnectionState[] = []
   const errors: Error[] = []
+  const verifies: number[] = []
+  let skew = 0
   let firstRead = true
+  let historyCalls = 0
   const client = {
     host: {
       id: 'a',
@@ -140,12 +172,17 @@ function harness(
       auth: 'lan' as const,
     },
     history: ((...args) => {
+      historyCalls++
       if (firstRead) {
         firstRead = false
         return Promise.resolve(baseline)
       }
       return load(...args)
     }) as ApiClient['history'],
+    verify: ((...args) => {
+      verifies.push(timers.now)
+      return extra.verify ? extra.verify(...args) : Promise.resolve({ ok: true as const })
+    }) as ApiClient['verify'],
   }
   const transport = new SessionTransport({
     client,
@@ -153,9 +190,15 @@ function harness(
     sessionId: 'session',
     platform: 'native',
     timers,
+    clock: () => timers.now + skew,
+    gate: extra.gate,
+    ...(extra.streams
+      ? { newStreamId: () => `stream${String(++streamCount).padStart(16, '0')}` }
+      : {}),
     socketFactory: (options) => {
       expect(options.headers?.Authorization).toBe('Bearer fake-token')
       const socket = new FakeSocket()
+      socket.url = options.url
       sockets.push(socket)
       return socket
     },
@@ -171,6 +214,13 @@ function harness(
     timers,
     connections,
     errors,
+    verifies,
+    historyCalls: () => historyCalls,
+    /** 模拟进程被挂起：墙钟往前走，计时器却没有按时触发。 */
+    suspend: (ms: number) => {
+      skew += ms
+    },
+    now: () => timers.now + skew,
     ready: async () => {
       await flush()
       const socket = sockets.at(-1)!
@@ -877,10 +927,20 @@ describe('transport lifecycle and outbound commands', () => {
     unauthorized.timers.advance(60000)
     expect(unauthorized.sockets).toHaveLength(1)
     let rejectCredential = false
-    const revoked = harness(async () => {
-      if (rejectCredential) throw new ApiError('Unauthorized', 401)
-      return history()
-    })
+    const revoked = harness(
+      async () => {
+        if (rejectCredential) throw new ApiError('Unauthorized', 401)
+        return history()
+      },
+      undefined,
+      undefined,
+      {
+        verify: async () => {
+          if (rejectCredential) throw new ApiError('Unauthorized', 401)
+          return { ok: true }
+        },
+      }
+    )
     const socket = await revoked.ready()
     rejectCredential = true
     socket.drop(1008)
@@ -910,10 +970,20 @@ describe('transport lifecycle and outbound commands', () => {
 
   test.each([0, 403, 429, 503])('a 1008 close followed by HTTP %i keeps retrying instead of discarding authorization', async status => {
     let unavailable = false
-    const h = harness(async () => {
-      if (unavailable) throw new ApiError('Temporarily unavailable', status)
-      return history()
-    })
+    const h = harness(
+      async () => {
+        if (unavailable) throw new ApiError('Temporarily unavailable', status)
+        return history()
+      },
+      undefined,
+      undefined,
+      {
+        verify: async () => {
+          if (unavailable) throw new ApiError('Temporarily unavailable', status)
+          return { ok: true }
+        },
+      }
+    )
     const socket = await h.ready()
     unavailable = true
     socket.drop(1008)
@@ -932,14 +1002,16 @@ describe('transport lifecycle and outbound commands', () => {
   })
 
   test('a late rejected authorization probe cannot invalidate a newer healthy connection', async () => {
-    const pending = deferred<HistoryPage>()
+    const pending = deferred<{ ok: true }>()
     let probePending = false
-    const h = harness(async () => {
-      if (probePending) {
-        probePending = false
-        return pending.promise
-      }
-      return history()
+    const h = harness(undefined, undefined, undefined, {
+      verify: async () => {
+        if (probePending) {
+          probePending = false
+          return pending.promise
+        }
+        return { ok: true }
+      },
     })
     const socket = await h.ready()
     probePending = true
@@ -955,13 +1027,18 @@ describe('transport lifecycle and outbound commands', () => {
     h.transport.dispose()
   })
 
-  test('1006 handshake failure probes HTTP to expose otherwise hidden 401', async () => {
-    const h = harness(async () => {
-      throw new ApiError('Unauthorized', 401)
+  test('1006 handshake failure asks verify() to expose an otherwise hidden 401, without a history read', async () => {
+    const h = harness(undefined, undefined, undefined, {
+      verify: async () => {
+        throw new ApiError('Unauthorized', 401)
+      },
     })
     await flush()
+    const reads = h.historyCalls()
     h.sockets[0].drop(1006)
     await flush()
+    expect(h.verifies).toHaveLength(1)
+    expect(h.historyCalls()).toBe(reads)
     expect(h.transport.connection).toBe('pairing_required')
     h.timers.advance(30000)
     expect(h.sockets).toHaveLength(1)
@@ -1013,6 +1090,765 @@ describe('transport lifecycle and outbound commands', () => {
     await flush()
     expect(h.transport.state.items).toHaveLength(0)
     expect(h.sockets[0].closed).toBe(true)
+  })
+})
+
+describe('incremental sync from the tail', () => {
+  const tailed = (
+    messages: HistoryEntry[],
+    tail: string,
+    complete = true,
+    sourceVersion = 'v1',
+    nextCursor: string | null = null
+  ): HistoryPage => {
+    const page = history(messages, sourceVersion, nextCursor)
+    return { ...page, page: { ...page.page!, tailCursor: tail, tailComplete: complete } }
+  }
+
+  test('a reconnect with a tail cursor reads only what was appended, never a full page', async () => {
+    const cursors: (string | undefined)[] = []
+    let n = 0
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        n++
+        return n === 2
+          ? tailed([entry('u1', 'user', 'Later'), entry('a1', 'assistant', 'Reply')], `tail-${n}`, true, `v${n}`)
+          : tailed([], `tail-${n}`, true, `v${n}`)
+      },
+      tailed([entry('u0', 'user', 'Start'), entry('a0', 'assistant', 'Ok')], 'tail-0', true, 'v0', 'older-0')
+    )
+    const socket = await h.ready()
+    socket.drop(1001)
+    h.timers.advance(500)
+    await h.ready()
+    expect(cursors).toEqual(['tail-0', 'tail-1', 'tail-2'])
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Start', 'Ok', 'Later', 'Reply'])
+    // The cursor chain still belongs to the first page, so older pages keep merging.
+    expect(h.transport.historyPage?.page?.sourceVersion).toBe('v0')
+    expect(h.transport.historyPage?.page?.nextCursor).toBe('older-0')
+    h.transport.dispose()
+  })
+
+  test('a completed identical turn saved before subscription is not collapsed into a new one', async () => {
+    const cached = tailed([entry('u0', 'user', 'Start'), entry('a0', 'assistant', 'Ok')], 'tail-0')
+    const hydration = deferred<HistoryPage>()
+    const h = harness(
+      async () => hydration.promise,
+      // Saved elsewhere between the cached read and this reconnect.
+      tailed([entry('u1', 'user', 'Continue'), entry('a1', 'assistant', 'Done')], 'tail-1'),
+      { read: () => cached, write: () => {} }
+    )
+    await flush()
+    const socket = h.sockets[0]
+    socket.open()
+    socket.snapshots()
+    socket.receive({ type: 'user_message_replay', content: 'Continue' })
+    socket.receive({ type: 'content_delta', text: 'Done' })
+    socket.receive({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    hydration.resolve(tailed([], 'tail-1'))
+    await flush()
+    expect(h.transport.state.items.map((item) => item.text)).toEqual([
+      'Start',
+      'Ok',
+      'Continue',
+      'Done',
+      'Continue',
+      'Done',
+    ])
+    h.transport.dispose()
+  })
+
+  test('a rewritten transcript (409 on follow) falls back to the newest page exactly once', async () => {
+    const cursors: (string | undefined)[] = []
+    const fresh = tailed([entry('r1', 'user', 'Rewritten')], 'tail-new', true, 'v9')
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        if (cursor === 'tail-0') throw new ApiError('Session history was rewritten', 409, 'HISTORY_CHANGED')
+        return cursor ? tailed([], cursor, true, 'v9') : fresh
+      },
+      tailed([entry('u0', 'user', 'Start')], 'tail-0')
+    )
+    await h.ready()
+    expect(cursors).toEqual(['tail-0', undefined])
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Rewritten'])
+    expect(h.errors).toEqual([])
+    h.transport.dispose()
+  })
+
+  test('a follow chain that cannot reach the tail within its pages falls back to the newest page', async () => {
+    const cursors: (string | undefined)[] = []
+    let n = 0
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        if (!cursor) return tailed([entry('latest', 'assistant', 'Newest')], 'tail-latest')
+        n++
+        return cursor === 'tail-latest'
+          ? tailed([], 'tail-latest')
+          : tailed([entry(`n${n}`, 'assistant', `More ${n}`)], `tail-${n}`, false)
+      },
+      tailed([entry('u0', 'user', 'Start')], 'tail-0')
+    )
+    await h.ready()
+    expect(cursors).toEqual(['tail-0', 'tail-1', 'tail-2', undefined])
+    expect(h.transport.state.items.at(-1)?.text).toBe('Newest')
+    h.transport.dispose()
+  })
+
+  test('a computer downgraded to a version without follow cursors falls back to the newest page', async () => {
+    const cursors: (string | undefined)[] = []
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        // An older computer reads the follow cursor as a plain "newer" cursor: an empty page without tailCursor.
+        return cursor
+          ? history([])
+          : history([entry('u0', 'user', 'Start'), entry('u1', 'user', 'Later')])
+      },
+      tailed([entry('u0', 'user', 'Start')], 'tail-0')
+    )
+    await h.ready()
+    expect(cursors).toEqual(['tail-0', undefined])
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Start', 'Later'])
+    h.transport.dispose()
+  })
+
+  test('reconciling after a finished turn downloads only the records it appended', async () => {
+    const cursors: (string | undefined)[] = []
+    let persisted = false
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        return persisted && cursor === 'tail-0'
+          ? tailed([entry('u1', 'user', 'Question'), entry('a1', 'assistant', 'Answer')], 'tail-1')
+          : tailed([], cursor ?? 'tail-0')
+      },
+      tailed([], 'tail-0')
+    )
+    const socket = await h.ready()
+    h.transport.send({ type: 'user_message', content: 'Question' })
+    socket.receive({ type: 'user_message_replay', content: 'Question' })
+    socket.receive({ type: 'content_delta', text: 'Answer' })
+    socket.receive({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    persisted = true
+    cursors.length = 0
+    h.timers.advance(100)
+    await flush()
+    expect(cursors).toEqual(['tail-0'])
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Question', 'Answer'])
+    expect(h.transport.state.items.every((item) => !item.id.startsWith('live:'))).toBe(true)
+    expect(h.transport.historyPage?.page?.tailCursor).toBe('tail-1')
+    h.transport.dispose()
+  })
+})
+
+describe('returning to the foreground', () => {
+  test('a socket that answers the probe is kept, with no new socket and no history read', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    const reads = h.historyCalls()
+    h.suspend(10 * 60_000)
+    h.transport.resume(h.now() - 10 * 60_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    expect(h.transport.connection).toBe('ready')
+    h.timers.advance(1000)
+    socket.receive({ type: 'pong' })
+    h.timers.advance(5000)
+    expect(h.sockets).toHaveLength(1)
+    expect(socket.closed).toBe(false)
+    expect(h.historyCalls()).toBe(reads)
+    expect(h.connections.at(-1)).toBe('ready')
+    expect(h.connections).not.toContain('reconnecting')
+    h.transport.dispose()
+  })
+
+  test('a probe with no answer reconnects at once instead of after a backoff', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.transport.resume(h.now())
+    h.timers.advance(2499)
+    expect(h.transport.connection).toBe('ready')
+    h.timers.advance(1)
+    expect(socket.closed).toBe(true)
+    expect(h.transport.connection).toBe('reconnecting')
+    h.timers.advance(0)
+    await h.ready()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('resuming does not abort an attempt that is still in flight', async () => {
+    const preflight = deferred<HistoryPage>()
+    let hold = false
+    const h = harness(async () => (hold ? preflight.promise : history()))
+    const socket = await h.ready()
+    hold = true
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const reads = h.historyCalls()
+    h.transport.resume(h.now())
+    h.transport.resume(h.now())
+    await flush()
+    expect(h.historyCalls()).toBe(reads)
+    hold = false
+    preflight.resolve(history())
+    await h.ready()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('an attempt that spanned a long background stay restarts on return', async () => {
+    const stuck = deferred<HistoryPage>()
+    let hold = false
+    const h = harness(async () => (hold ? stuck.promise : history()))
+    const socket = await h.ready()
+    hold = true
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const hiddenAt = h.now()
+    h.suspend(60_000)
+    const reads = h.historyCalls()
+    hold = false
+    h.transport.resume(hiddenAt)
+    await flush()
+    expect(h.historyCalls()).toBe(reads + 1)
+    await h.ready()
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('returning while a backoff is pending retries immediately', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    for (let i = 0; i < 4; i++) {
+      h.sockets.at(-1)!.drop(1001)
+      h.timers.advance(30_000)
+      await flush()
+    }
+    h.sockets.at(-1)!.drop(1001)
+    const count = h.sockets.length
+    h.transport.resume(h.now())
+    await flush()
+    expect(h.sockets).toHaveLength(count + 1)
+    expect(socket.closed).toBe(true)
+    h.transport.dispose()
+  })
+
+  test('a heartbeat that fires late after a suspension probes instead of dropping the socket', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.timers.advance(15_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    // The pong never got processed before iOS froze the process.
+    h.suspend(5 * 60_000)
+    h.timers.advance(15_000)
+    expect(socket.closed).toBe(false)
+    expect(h.transport.connection).toBe('ready')
+    // The pong held back by the suspension arrives first, then the probe's own.
+    socket.receive({ type: 'pong' })
+    socket.receive({ type: 'pong' })
+    h.timers.advance(15_000)
+    expect(h.sockets).toHaveLength(1)
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('only the probe\'s own pong keeps the socket: frames and a pong held back by the suspension do not', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.timers.advance(15_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    h.suspend(60_000)
+    h.transport.resume(h.now() - 60_000)
+    expect(socket.sent.filter((message) => message.type === 'ping')).toHaveLength(2)
+    // Delivered only now: output and the pong for the ping sent before the suspension.
+    socket.receive({ type: 'content_delta', text: 'From before' })
+    socket.receive({ type: 'pong' })
+    h.timers.advance(2500)
+    expect(socket.closed).toBe(true)
+    expect(h.transport.connection).toBe('reconnecting')
+    h.transport.dispose()
+  })
+
+  test('a probe answered by its pong keeps the socket even when other frames arrive first', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    h.transport.resume(h.now())
+    socket.receive({ type: 'content_delta', text: 'Buffered' })
+    h.timers.advance(1000)
+    socket.receive({ type: 'pong' })
+    h.timers.advance(5000)
+    expect(socket.closed).toBe(false)
+    expect(h.sockets).toHaveLength(1)
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('the credential check after a failed handshake runs at most once every 30 seconds', async () => {
+    const h = harness()
+    await flush()
+    h.sockets[0].drop(1006)
+    await flush()
+    expect(h.verifies).toHaveLength(1)
+    h.timers.advance(500)
+    await flush()
+    h.sockets.at(-1)!.drop(1006)
+    await flush()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.verifies).toHaveLength(1)
+    h.timers.advance(30_000)
+    await flush()
+    h.sockets.at(-1)!.drop(1006)
+    await flush()
+    expect(h.sockets).toHaveLength(3)
+    expect(h.verifies).toHaveLength(2)
+    h.transport.dispose()
+  })
+
+  test('failed attempts in a row are counted until the session is ready again', async () => {
+    let down = false
+    const h = harness(async () => {
+      if (down) throw new ApiError('Network unavailable', 0, 'NETWORK_ERROR')
+      return history()
+    })
+    const socket = await h.ready()
+    expect(h.transport.failures).toBe(0)
+    down = true
+    socket.drop(1001)
+    // Losing a working connection is not a failed attempt yet.
+    expect(h.transport.failures).toBe(0)
+    h.timers.advance(500)
+    await flush()
+    expect(h.transport.failures).toBe(1)
+    h.timers.advance(1000)
+    await flush()
+    expect(h.transport.failures).toBe(2)
+    down = false
+    h.timers.advance(2000)
+    await h.ready()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.failures).toBe(0)
+    h.transport.dispose()
+  })
+
+  test('holds the foreground gate only while it is not ready', async () => {
+    let holds = 0
+    const released: number[] = []
+    const gate = {
+      hold: () => {
+        const id = ++holds
+        return () => released.push(id)
+      },
+    }
+    const h = harness(undefined, undefined, undefined, { gate })
+    await flush()
+    expect(holds).toBe(1)
+    expect(released).toEqual([])
+    const socket = await h.ready()
+    expect(released).toEqual([1])
+    socket.drop(1001)
+    expect(holds).toBe(2)
+    h.timers.advance(500)
+    await h.ready()
+    expect(released).toEqual([1, 2])
+    h.sockets.at(-1)!.drop(1001)
+    h.transport.dispose()
+    expect(released).toEqual([1, 2, 3])
+  })
+})
+
+describe('resumable streams', () => {
+  const streamParams = (socket: FakeSocket) => new URL(socket.url).searchParams
+  /** Open a fresh stream and finish its first sync; returns the next frame number. */
+  async function readyStream(h: ReturnType<typeof harness>) {
+    await flush()
+    const socket = h.sockets.at(-1)!
+    socket.open()
+    socket.attach({ resumed: false, next: 1, last: 0 })
+    const next = socket.streamSnapshots(1)
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    return { socket, next }
+  }
+
+  test('a stream that was in sync resumes on a new socket without reading history or reopening', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    expect(streamParams(socket).get('stream')).toBe('stream0000000000000001')
+    expect(streamParams(socket).get('ack')).toBeNull()
+    const reads = h.historyCalls()
+    const before = h.connections.length
+    socket.drop(1001)
+    expect(h.transport.connection).toBe('reconnecting')
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    expect(h.transport.connection).toBe('resuming')
+    expect(streamParams(second).get('stream')).toBe('stream0000000000000001')
+    expect(streamParams(second).get('ack')).toBe(String(next - 1))
+    expect(streamParams(second).get('epoch')).toBe('epoch-1')
+    second.open()
+    second.attach({ resumed: true, next, last: next + 1 })
+    // Until the replay is in, nothing new may overtake what was sent before the drop.
+    expect(h.transport.connection).toBe('resuming')
+    expect(h.transport.send({ type: 'stop_generation' })).toBe(false)
+    second.frame(next, { type: 'content_delta', text: 'While you were away' })
+    expect(h.transport.connection).toBe('resuming')
+    second.frame(next + 1, { type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.state.items.at(-1)?.text).toBe('While you were away')
+    expect(h.historyCalls()).toBe(reads)
+    expect(second.sent).toEqual([])
+    expect(h.connections.slice(before)).toEqual(['reconnecting', 'resuming', 'ready'])
+    h.transport.dispose()
+  })
+
+  test('a command sent on a dying socket is resent once with its number, unless the computer already ran it', async () => {
+    for (const cack of [0, 1]) {
+      const h = harness(undefined, undefined, undefined, { streams: true })
+      const { socket, next } = await readyStream(h)
+      expect(h.transport.send({ type: 'set_permission_mode', mode: 'plan' })).toBe(true)
+      expect(socket.sent.at(-1)).toEqual({ cseq: 1, type: 'set_permission_mode', mode: 'plan' })
+      socket.drop(1001)
+      h.timers.advance(500)
+      await flush()
+      const second = h.sockets.at(-1)!
+      second.open()
+      second.attach({ resumed: true, next, last: next - 1, cack })
+      expect(second.sent).toEqual(cack ? [] : [{ cseq: 1, type: 'set_permission_mode', mode: 'plan' }])
+      h.transport.dispose()
+    }
+  })
+
+  test('a decision resolved elsewhere during the gap is not resent', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'permission_request', requestId: 'r1', toolName: 'Bash', input: {} })
+    expect(h.transport.send({ type: 'permission_response', requestId: 'r1', allowed: true })).toBe(true)
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    second.open()
+    second.attach({ resumed: true, next: next + 1, last: next + 1 })
+    expect(second.sent).toEqual([])
+    second.frame(next + 1, { type: 'permission_resolved', requestId: 'r1', permissionType: 'tool' })
+    expect(second.sent).toEqual([])
+    expect(h.transport.state.permissions).toEqual([])
+    h.transport.dispose()
+  })
+
+  test('the replay is applied before an unexecuted decision is resent', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'permission_request', requestId: 'r1', toolName: 'Bash', input: {} })
+    h.transport.send({ type: 'permission_response', requestId: 'r1', allowed: true })
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    second.open()
+    second.attach({ resumed: true, next: next + 1, last: next + 1 })
+    expect(second.sent).toEqual([])
+    second.frame(next + 1, { type: 'status', state: 'permission_pending' })
+    expect(second.sent).toEqual([{ cseq: 1, type: 'permission_response', requestId: 'r1', allowed: true }])
+    h.transport.dispose()
+  })
+
+  test('frames that arrive twice are applied once', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'content_delta', text: 'once' })
+    socket.frame(next, { type: 'content_delta', text: 'once' })
+    expect(h.transport.state.items.at(-1)?.text).toBe('once')
+    h.transport.dispose()
+  })
+
+  test('pings carry the acknowledgement so the computer can release its buffer', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'content_delta', text: 'x' })
+    h.timers.advance(15_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping', ack: next })
+    h.transport.dispose()
+  })
+
+  test('a stream the computer no longer has starts over with a new stream and a fresh sync', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket } = await readyStream(h)
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    const reads = h.historyCalls()
+    const verifies = h.verifies.length
+    second.open()
+    second.attach({ resumed: false, reason: 'expired', next: 1, last: 0 } as never)
+    // The computer opened nothing for this socket and closes it with 4001: there is no stream to end.
+    expect(second.sent).toEqual([])
+    second.drop(4001)
+    await flush()
+    expect(h.historyCalls()).toBe(reads + 1)
+    expect(h.verifies).toHaveLength(verifies)
+    const third = h.sockets.at(-1)!
+    expect(third).not.toBe(second)
+    expect(streamParams(third).get('stream')).toBe('stream0000000000000002')
+    expect(streamParams(third).get('epoch')).toBeNull()
+    third.open()
+    third.attach({ resumed: false, next: 1, last: 0 })
+    third.streamSnapshots(1)
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    h.transport.dispose()
+  })
+
+  test('a drop before the first sync finished cannot resume and starts a new stream', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    await flush()
+    const socket = h.sockets[0]
+    socket.open()
+    socket.attach({ resumed: false, next: 1, last: 0 })
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    expect(streamParams(second).get('stream')).toBe('stream0000000000000002')
+    expect(streamParams(second).get('ack')).toBeNull()
+    h.transport.dispose()
+  })
+
+  test('an older computer without stream support keeps working the old way', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    await flush()
+    const socket = h.sockets[0]
+    socket.open()
+    socket.snapshots()
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.send({ type: 'set_permission_mode', mode: 'plan' })).toBe(true)
+    expect(socket.sent.at(-1)).toEqual({ type: 'set_permission_mode', mode: 'plan' })
+    h.timers.advance(15_000)
+    expect(socket.sent.at(-1)).toEqual({ type: 'ping' })
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    expect(streamParams(h.sockets.at(-1)!).get('stream')).toBeNull()
+    h.transport.dispose()
+  })
+
+  test('moving to a better path resumes the same stream there without reading history', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    const reads = h.historyCalls()
+    const before = h.connections.length
+    h.transport.migrate()
+    // Make before break: the old socket stays in use until the new path is attached.
+    expect(socket.closed).toBe(false)
+    const moved = h.sockets.at(-1)!
+    expect(moved).not.toBe(socket)
+    expect(streamParams(moved).get('ack')).toBe(String(next - 1))
+    moved.open()
+    moved.attach({ resumed: true, next, last: next - 1 })
+    expect(socket.closed).toBe(true)
+    expect(h.transport.connection).toBe('ready')
+    expect(h.connections.slice(before)).toEqual([])
+    expect(h.historyCalls()).toBe(reads)
+    expect(h.transport.send({ type: 'stop_generation' })).toBe(true)
+    expect(moved.sent.at(-1)).toEqual({ cseq: 1, type: 'stop_generation' })
+    h.transport.dispose()
+  })
+
+  test('after moving paths, new commands wait until the replay on the new path is in, without leaving ready', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'permission_request', requestId: 'r1', toolName: 'Bash', input: {} })
+    // Written on the old path just before the move; the computer has not run it yet.
+    expect(h.transport.send({ type: 'permission_response', requestId: 'r1', allowed: true })).toBe(true)
+    const before = h.connections.length
+    h.transport.migrate()
+    const moved = h.sockets.at(-1)!
+    moved.open()
+    moved.attach({ resumed: true, next: next, last: next + 1 })
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.send({ type: 'stop_generation' })).toBe(false)
+    moved.frame(next, { type: 'permission_request', requestId: 'r1', toolName: 'Bash', input: {} })
+    moved.frame(next + 1, { type: 'status', state: 'permission_pending' })
+    expect(moved.sent).toEqual([{ cseq: 1, type: 'permission_response', requestId: 'r1', allowed: true }])
+    expect(h.transport.send({ type: 'stop_generation' })).toBe(true)
+    expect(moved.sent.at(-1)).toEqual({ cseq: 2, type: 'stop_generation' })
+    expect(h.connections.slice(before)).toEqual([])
+    // A replay that never finishes does not block commands forever.
+    h.transport.migrate()
+    const stalled = h.sockets.at(-1)!
+    stalled.open()
+    stalled.attach({ resumed: true, next: next + 2, last: next + 5 })
+    expect(h.transport.send({ type: 'stop_generation' })).toBe(false)
+    h.timers.advance(15_000)
+    expect(h.transport.connection).toBe('reconnecting')
+    h.transport.dispose()
+  })
+
+  test('a better path found while reconnecting is simply used by the next socket, without another move', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    socket.drop(1001)
+    h.transport.migrate()
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    second.open()
+    second.attach({ resumed: true, next, last: next - 1 })
+    expect(h.transport.connection).toBe('ready')
+    h.timers.advance(1000)
+    await flush()
+    expect(h.sockets).toHaveLength(2)
+    h.transport.dispose()
+  })
+
+  test('resyncing on request ends the stream, starts a new one and re-reads the newest page', async () => {
+    const cursors: (string | undefined)[] = []
+    const tailed = (messages: HistoryEntry[], tail: string): HistoryPage => {
+      const page = history(messages)
+      return { ...page, page: { ...page.page!, tailCursor: tail, tailComplete: true } }
+    }
+    const h = harness(
+      async (_id, cursor) => {
+        cursors.push(cursor)
+        return tailed([entry('u0', 'user', 'Start')], `tail-${cursors.length}`)
+      },
+      tailed([entry('u0', 'user', 'Start')], 'tail-0'),
+      undefined,
+      { streams: true }
+    )
+    const { socket } = await readyStream(h)
+    cursors.length = 0
+    const reads = h.historyCalls()
+    h.transport.reconnect()
+    expect(socket.sent.at(-1)).toEqual({ type: 'stream_end' })
+    expect(socket.closed).toBe(true)
+    await flush()
+    expect(h.historyCalls()).toBe(reads + 1)
+    expect(cursors).toEqual([undefined])
+    const fresh = h.sockets.at(-1)!
+    expect(fresh).not.toBe(socket)
+    expect(streamParams(fresh).get('stream')).toBe('stream0000000000000002')
+    expect(streamParams(fresh).get('epoch')).toBeNull()
+    expect(streamParams(fresh).get('ack')).toBeNull()
+    fresh.open()
+    fresh.attach({ resumed: false, next: 1, last: 0 })
+    fresh.streamSnapshots(1)
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['Start'])
+    h.transport.dispose()
+  })
+
+  test('a reconcile cancelled by a drop is redone once the stream resumes', async () => {
+    let saved = false
+    const h = harness(
+      async () => (saved ? history([entry('a1', 'assistant', 'Answer')]) : history()),
+      undefined,
+      undefined,
+      { streams: true }
+    )
+    const { socket, next } = await readyStream(h)
+    socket.frame(next, { type: 'content_delta', text: 'Answer' })
+    socket.frame(next + 1, { type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    // The app goes to the background before the scheduled reconcile runs.
+    socket.drop(1001)
+    saved = true
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    second.open()
+    second.attach({ resumed: true, next: next + 2, last: next + 1 })
+    expect(h.transport.connection).toBe('ready')
+    const persisted = () => h.transport.state.items.map((item) => [!item.id.startsWith('live:'), item.text])
+    expect(persisted()).toEqual([[false, 'Answer']])
+    h.timers.advance(100)
+    await flush()
+    expect(persisted()).toEqual([[true, 'Answer']])
+    h.transport.dispose()
+  })
+
+  test('the sync epoch counts real alignments only, not resumes or path moves', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    expect(h.transport.syncEpoch).toBe(0)
+    const { socket, next } = await readyStream(h)
+    expect(h.transport.syncEpoch).toBe(1)
+    socket.drop(1001)
+    h.timers.advance(500)
+    await flush()
+    const second = h.sockets.at(-1)!
+    second.open()
+    second.attach({ resumed: true, next, last: next - 1 })
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.syncEpoch).toBe(1)
+    h.transport.migrate()
+    const moved = h.sockets.at(-1)!
+    moved.open()
+    moved.attach({ resumed: true, next, last: next - 1 })
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.syncEpoch).toBe(1)
+    h.transport.reconnect()
+    await readyStream(h)
+    expect(h.transport.syncEpoch).toBe(2)
+    h.transport.dispose()
+  })
+
+  test('a command the computer keeps refusing is resent at most twice, then reported as unconfirmed', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket, next } = await readyStream(h)
+    expect(h.transport.send({ type: 'user_message', content: 'Too large' })).toBe(true)
+    let current = socket
+    const resent: number[] = []
+    for (let round = 0; round < 3; round++) {
+      // The computer closes the socket on this command every time (e.g. 1009 too big).
+      current.drop(1009)
+      h.timers.advance(30_000)
+      await flush()
+      current = h.sockets.at(-1)!
+      current.open()
+      current.attach({ resumed: true, next, last: next - 1 })
+      resent.push(current.sent.filter((message) => message.type === 'user_message').length)
+    }
+    expect(resent).toEqual([1, 1, 0])
+    expect(h.transport.connection).toBe('ready')
+    expect(h.transport.state.items.find((item) => item.type === 'user')).toMatchObject({
+      pending: false,
+      delivery: 'uncertain',
+    })
+    expect(h.transport.state.error?.code).toBe('DELIVERY_UNCONFIRMED')
+    // Ask the computer whether a turn is really running instead of trusting the optimistic state.
+    expect(current.sent.at(-1)).toEqual({ type: 'sync_state' })
+    h.transport.dispose()
+  })
+
+  test('an older computer without streams keeps its connection when a better path appears', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    await flush()
+    const socket = h.sockets[0]
+    socket.open()
+    socket.snapshots()
+    await flush()
+    h.transport.migrate()
+    expect(socket.closed).toBe(false)
+    expect(h.sockets).toHaveLength(1)
+    h.transport.dispose()
+  })
+
+  test('leaving the conversation ends the stream on the computer', async () => {
+    const h = harness(undefined, undefined, undefined, { streams: true })
+    const { socket } = await readyStream(h)
+    h.transport.dispose()
+    expect(socket.sent.at(-1)).toEqual({ type: 'stream_end' })
+    expect(socket.closed).toBe(true)
   })
 })
 

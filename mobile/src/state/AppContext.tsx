@@ -16,6 +16,7 @@ import { PushTokens } from './pushProvider'
 import { BackgroundDuty } from './backgroundDuty'
 import { getDevicePushToken, getExpoPushToken } from './devicePushToken'
 import { createApiClient } from './api'
+import { hostLinks } from '../core/hostLink'
 import type { Host } from '../core/types'
 import { h5CredentialValue, resolveH5Session, type H5Storage } from '../core/h5Session'
 import { h5Location, isH5 } from './h5'
@@ -93,7 +94,11 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
     return () => listener.remove()
   }, [])
   useEffect(() => {
-    if (ready && !error) backgroundDuty.retain(registry.hosts.map((host) => host.id))
+    if (!ready || error) return
+    backgroundDuty.retain(registry.hosts.map((host) => host.id))
+    // A removed computer's direct-connection link must stop signaling on every
+    // foreground and network change.
+    hostLinks.retain(registry.hosts.map((host) => host.id))
   }, [ready, error, registry.hosts])
   return (
     <Context.Provider
@@ -122,6 +127,8 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
               repository.remove(id)
             )
           )
+          // The unregister request above may have created this computer's link.
+          hostLinks.forget(id)
           drafts.removeHost(id)
         },
       }}

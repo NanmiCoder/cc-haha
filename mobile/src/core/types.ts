@@ -75,6 +75,10 @@ export type HistoryPage = {
     scannedBytes: number
     omittedOversizedEntries: number
     contentTruncated?: boolean
+    /** 新电脑才给：从这一页末尾往后只读新增记录的游标。 */
+    tailCursor?: string
+    /** false：这次往后读到了页上限，后面还有新增记录。 */
+    tailComplete?: boolean
   }
 }
 export type PairRequest = { id: string; claimSecret: string }

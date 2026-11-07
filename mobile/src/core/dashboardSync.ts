@@ -90,6 +90,33 @@ export async function loadDashboardSnapshot(
   }
 }
 
+/**
+ * 只刷新各会话的运行状态，会话列表沿用上一份。聊天页只需要这部分；
+ * 上百条会话的列表每 3 秒经公网隧道整份拉一遍，会和聊天的连接抢带宽。
+ */
+export async function loadDashboardActivity(
+  client: DashboardClient,
+  signal: AbortSignal,
+  now: () => number,
+  previous: DashboardSnapshot
+): Promise<DashboardSnapshot> {
+  const checkedAt = now()
+  const status = await client.get<{ sessions: MobileActivity[] }>(
+    '/api/sessions/mobile-status',
+    { signal }
+  )
+  if (!Array.isArray(status.sessions))
+    throw new ApiError('电脑返回的任务状态无效', 0, 'INVALID_RESPONSE')
+  return { ...previous, activity: status.sessions, checkedAt }
+}
+
+/** full：会话列表和运行状态；activity：只刷新运行状态（聊天页）。 */
+export type DashboardScope = 'full' | 'activity'
+const POLL_MS: Record<DashboardScope, number> = { full: 3000, activity: 5000 }
+/** 回到前台后最多等聊天连接这么久，再发首页的同步请求。 */
+export const RESUME_YIELD_MS = 1500
+export type DashboardGate = { readonly busy: boolean; whenIdle(maxMs: number): Promise<void> }
+
 type Callbacks = {
   snapshot(value: DashboardSnapshot): void
   fresh(value: boolean): void
@@ -116,6 +143,8 @@ export class DashboardPoller {
   private inFlight = false
   private pending = false
   private hasSnapshot = false
+  private last?: DashboardSnapshot
+  private scope: DashboardScope = 'full'
   /** 连续连不上的次数；已有快照时第一次失败只算“正在重试”，不立刻判离线。 */
   private offlineStreak = 0
   private epoch = 0
@@ -126,7 +155,9 @@ export class DashboardPoller {
     private client: DashboardClient,
     private callbacks: Callbacks,
     private clock: Timers = timers,
-    private load = loadDashboardSnapshot
+    private load = loadDashboardSnapshot,
+    private gate?: DashboardGate,
+    private loadActivity = loadDashboardActivity
   ) {}
 
   start(active = true) {
@@ -141,12 +172,26 @@ export class DashboardPoller {
     this.callbacks.fresh(false)
     this.clock.clear(this.pollTimer)
     this.clock.clear(this.freshnessTimer)
-    if (active) this.refresh()
-    else {
+    if (active) {
+      // 聊天正在和电脑重新对齐时先让它用链路，等它好了（或等够了）再同步首页。
+      if (!this.gate?.busy) this.refresh()
+      else {
+        const epoch = this.epoch
+        void this.gate.whenIdle(RESUME_YIELD_MS).then(() => {
+          if (this.alive && this.active && this.epoch === epoch) this.refresh()
+        })
+      }
+    } else {
       this.pending = false
       this.request?.abort()
       this.callbacks.loading(false)
     }
+  }
+  setScope(scope: DashboardScope) {
+    if (this.scope === scope) return
+    this.scope = scope
+    // 回到需要完整列表的页面时立即补一份，不等下一轮。
+    if (scope === 'full') this.refresh()
   }
   refresh() {
     if (!this.alive || !this.active) return
@@ -177,13 +222,13 @@ export class DashboardPoller {
       this.epoch === epoch &&
       !request.signal.aborted
     try {
-      const snapshot = await this.load(
-        this.client,
-        request.signal,
-        this.clock.now
-      )
+      const snapshot =
+        this.scope === 'activity' && this.last?.hostId === this.client.host.id
+          ? await this.loadActivity(this.client, request.signal, this.clock.now, this.last)
+          : await this.load(this.client, request.signal, this.clock.now)
       if (current()) {
         this.hasSnapshot = true
+        this.last = snapshot
         this.offlineStreak = 0
         this.callbacks.snapshot(snapshot)
         const remaining = snapshot.checkedAt + 12000 - this.clock.now()
@@ -218,7 +263,7 @@ export class DashboardPoller {
         if (this.pending) {
           this.pending = false
           this.refresh()
-        } else this.pollTimer = this.clock.set(() => this.refresh(), 3000)
+        } else this.pollTimer = this.clock.set(() => this.refresh(), POLL_MS[this.scope])
       }
     }
   }
