@@ -6014,6 +6014,11 @@ export class SessionService {
     }
 
     for (const entry of entries) {
+      // Overlapping transcript writes can leave repeated UUIDs on disk. The
+      // latest record already owns parent resolution above; project it once
+      // too, so history cannot create duplicate desktop message/row identities.
+      if (typeof entry.uuid === 'string' && entry.uuid && entriesByUuid.get(entry.uuid) !== entry) continue
+
       const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
       if (goalLocalCommandMessage) {
         messages.push(goalLocalCommandMessage)
