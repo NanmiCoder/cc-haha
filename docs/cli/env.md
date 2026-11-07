@@ -54,6 +54,12 @@ AZURE_OPENAI_API_KEY=your_azure_openai_key
 AZURE_OPENAI_CODEX_DEPLOYMENT=your_codex_deployment
 ```
 
+### LLMTR
+
+桌面预设名称是 LLMTR，接口地址为 `https://llmtr.com/v1`，协议是 OpenAI Chat Completions。密钥写在服务商表单里，由本机代理以 `Authorization: Bearer` 发到 `/v1/chat/completions`。应用不读取 `LLMTR_API_KEY`。
+
+`LLMTR_API_KEY` 只给一次性脚本 `scripts/llmtr/chat-smoke.ts` 使用。可选的 `LLMTR_MODEL` 覆盖模型 ID，缺省为 `minimax/minimax-m3.1-flash`。脚本发一条不带工具的请求，`max_tokens` 为 64，不重试，不跟随重定向，也不附带 `reasoning` 参数。只有 HTTP 成功、响应体没有 error、并且助手正文非空才算成功；只有推理、没有正文算失败。公开目录给出的上下文 1000000 和补全上限 524288 只作预设元数据，不提高这次请求的 `max_tokens`。`GET /v1/models` 是公开目录，不能用来判断密钥是否有效。
+
 ### 本地运行与隐私
 
 | 变量 | 说明 |

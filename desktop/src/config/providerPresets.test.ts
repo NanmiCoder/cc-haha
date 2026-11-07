@@ -231,6 +231,38 @@ describe('bundled provider presets', () => {
     }
   })
 
+  it('bundles LLMTR as an OpenAI Chat Completions preset with full model ids', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'llmtr')
+
+    expect(preset).toMatchObject({
+      name: 'LLMTR',
+      baseUrl: 'https://llmtr.com/v1',
+      apiFormat: 'openai_chat',
+      authStrategy: 'api_key',
+      needsApiKey: true,
+      websiteUrl: 'https://llmtr.com',
+      isNew: true,
+      defaultModels: {
+        main: 'minimax/minimax-m3.1-flash',
+        haiku: 'minimax/minimax-m3.1-flash',
+        sonnet: 'minimax/minimax-m3.1-flash',
+        opus: 'minimax/minimax-m3.1-flash',
+      },
+      defaultEnv: {},
+      modelContextWindows: {
+        'minimax/minimax-m3.1-flash': 1000000,
+      },
+      modelMaxOutputTokens: {
+        'minimax/minimax-m3.1-flash': 524288,
+      },
+    })
+    expect(preset?.modelApiFormats).toBeUndefined()
+    expect(preset?.featured).toBeUndefined()
+    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://LLMTR.COM/V1/ ')).toBe(true)
+    expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
+      .toContain('llmtr')
+  })
+
   it('does not bundle the removed TeamoRouter preset', () => {
     expect(BUNDLED_PROVIDER_PRESETS.some((preset) => preset.id === 'teamorouter')).toBe(false)
   })

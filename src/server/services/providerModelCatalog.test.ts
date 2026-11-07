@@ -662,6 +662,35 @@ describe('fetchProviderModels', () => {
     expect(calls.length).toBe(1)
   })
 
+  test('keeps full LLMTR ids and does not treat the public catalog as an API-key check', async () => {
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'llmtr')!
+    stubFetchSequence([() => jsonResponse({
+      object: 'list',
+      data: [
+        { id: 'llmtr/example-model', owned_by: 'llmtr' },
+        { id: 'minimax/minimax-m3.1-flash', owned_by: 'minimax' },
+      ],
+    })])
+
+    // The catalog endpoint answers without authenticating the bearer token.
+    // A 200 here must not be read as proof that the key can call chat.
+    const result = await fetchProviderModels({
+      baseUrl: preset.baseUrl,
+      apiKey: 'not-a-validated-llmtr-key',
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      models: [
+        { id: 'llmtr/example-model', ownedBy: 'llmtr' },
+        { id: 'minimax/minimax-m3.1-flash', ownedBy: 'minimax' },
+      ],
+      endpoint: 'https://llmtr.com/v1/models',
+    })
+    expect(calls.map((call) => call.url)).toEqual(['https://llmtr.com/v1/models'])
+    expect(calls[0].init?.method ?? 'GET').not.toBe('POST')
+  })
+
   test('probes the modelsUrl override verbatim', async () => {
     stubFetchSequence([() => jsonResponse({ data: [{ id: 'custom-model' }] })])
 

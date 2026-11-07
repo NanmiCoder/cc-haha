@@ -464,6 +464,10 @@ function getPresetModelContextWindows(presetId: string): Record<string, number> 
   return PROVIDER_PRESETS.find((preset) => preset.id === presetId)?.modelContextWindows ?? {}
 }
 
+function getPresetModelMaxOutputTokens(presetId: string): Record<string, number> {
+  return PROVIDER_PRESETS.find((preset) => preset.id === presetId)?.modelMaxOutputTokens ?? {}
+}
+
 function getProviderCapabilityEnv(
   provider: SavedProvider,
   models: SavedProvider['models'],
@@ -581,6 +585,10 @@ export function buildProviderManagedEnv(
     ...getPresetModelContextWindows(provider.presetId),
     ...(provider.modelContextWindows ?? {}),
   }
+  const modelMaxOutputTokens = {
+    ...getPresetModelMaxOutputTokens(provider.presetId),
+    ...(provider.modelMaxOutputTokens ?? {}),
+  }
 
   const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
   const providerCapabilityEnv = getProviderCapabilityEnv(provider, models)
@@ -598,8 +606,8 @@ export function buildProviderManagedEnv(
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     }),
-    ...(provider.modelMaxOutputTokens && Object.keys(provider.modelMaxOutputTokens).length > 0 && {
-      [MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]: JSON.stringify(provider.modelMaxOutputTokens),
+    ...(Object.keys(modelMaxOutputTokens).length > 0 && {
+      [MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]: JSON.stringify(modelMaxOutputTokens),
     }),
     ...(apiFormat === 'anthropic' && {
       ENABLE_TOOL_SEARCH: provider.toolSearchEnabled === true ? 'true' : 'false',
