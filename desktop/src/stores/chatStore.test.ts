@@ -397,6 +397,55 @@ describe('chatStore tool settlement', () => {
   })
 })
 
+describe('chatStore user message budget', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    useSettingsStore.setState({ locale: 'en' })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }) },
+    })
+  })
+
+  const pastedScreenshot = (name: string) => ({
+    type: 'image' as const,
+    name,
+    mimeType: 'image/png',
+    data: `data:image/png;base64,${'A'.repeat(9 * 1024 * 1024)}`,
+  })
+
+  it('refuses a frame over the server budget with a visible error instead of losing the turn', () => {
+    // Two 4K screenshots pasted as bitmaps are ~13 MB of base64 each. The
+    // server closes the socket (1009) for a frame over 16 MiB and the client
+    // only reconnected, so the message disappeared without a trace.
+    const sent = useChatStore.getState().sendMessage(
+      TEST_SESSION_ID,
+      'what is wrong here',
+      [pastedScreenshot('one.png'), pastedScreenshot('two.png')],
+    )
+
+    expect(sent).toBe(false)
+    expect(sendMock).not.toHaveBeenCalled()
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(session.chatState).toBe('idle')
+    expect(session.messages).toEqual([
+      expect.objectContaining({ type: 'error', code: 'MESSAGE_TOO_LARGE' }),
+    ])
+    expect((session.messages[0] as { message: string }).message).toContain('over the 16 MB limit')
+  })
+
+  it('sends a frame under the budget unchanged', () => {
+    const attachments = [{ type: 'image' as const, name: 'small.png', mimeType: 'image/png', data: 'data:image/png;base64,QUJD' }]
+    const sent = useChatStore.getState().sendMessage(TEST_SESSION_ID, 'what is this', attachments)
+
+    expect(sent).toBe(true)
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'user_message', content: 'what is this', attachments })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([
+      expect.objectContaining({ type: 'user_text', content: 'what is this', awaitingReplay: true }),
+    ])
+  })
+})
+
 describe('chatStore prompt suggestions', () => {
   beforeEach(() => {
     sendMock.mockReset()

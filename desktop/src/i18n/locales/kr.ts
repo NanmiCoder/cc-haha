@@ -3425,6 +3425,7 @@ export const kr: Record<TranslationKey, string> = {
   'chat.editMessageCheckingCheckpoints': '이 메시지로 되감을 수 있는지 확인하는 중…',
   'chat.editMessageCheckpointsUnavailable': '이 세션의 체크포인트를 불러올 수 없어 지금은 편집할 수 없습니다.',
   'chat.editAttachmentUnavailable': '첨부 파일 {count}개를 더 이상 읽을 수 없어 다시 보낼 때 제외됩니다.',
+  'chat.messageTooLarge': '이 메시지는 {size}로 상한 {limit}을 초과해 보내지 않았습니다. 큰 이미지는 붙여넣기 대신 디스크에서 파일로 첨부하세요.',
   'chat.editResendConfirmTitle': '편집 후 다시 보낼까요?',
   'chat.editResendDropsTurns': '이 메시지 이후의 대화 {count}턴이 삭제된 뒤 편집한 메시지가 전송됩니다.',
   'chat.editResendLatestBody': '이 턴의 답변이 삭제된 뒤 편집한 메시지가 전송됩니다.',

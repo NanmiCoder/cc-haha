@@ -40,12 +40,21 @@ test('large image replay reaches the SDK consumer intact before the terminal res
   }
 }, 10_000)
 
-test('renderer messages retain the smaller input budget', () => {
-  const closed: Array<[number | undefined, string | undefined]> = []
+test('renderer messages retain the smaller input budget and learn why the socket closed', () => {
+  // Two pasted 4K screenshots used to produce a bare 1009: the renderer only
+  // reconnected and the turn vanished without any visible error.
+  const events: string[] = []
   handleWebSocket.message({
     data: { sessionId: 'fixture', channel: 'client', sdkToken: null, clientKind: 'full', connectedAt: 0, serverPort: 1, serverHost: '127.0.0.1' },
-    send: () => 0,
-    close: (code, reason) => { closed.push([code, reason]) },
+    send: (payload: string) => { events.push(`send:${payload}`); return 0 },
+    close: (code, reason) => { events.push(`close:${code}:${reason}`) },
   }, Buffer.alloc(16 * 1024 * 1024 + 1, 32))
-  expect(closed).toEqual([[1009, 'Client message exceeds 16 MiB']])
+  expect(events).toEqual([
+    `send:${JSON.stringify({
+      type: 'error',
+      message: 'Message exceeds the 16 MiB limit. Attach large images as files instead of pasting them.',
+      code: 'CLIENT_MESSAGE_TOO_LARGE',
+    })}`,
+    'close:1009:Client message exceeds 16 MiB',
+  ])
 })

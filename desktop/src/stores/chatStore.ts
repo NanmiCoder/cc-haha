@@ -27,6 +27,8 @@ import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
 import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
+import { formatBytes } from '../lib/formatBytes'
+import { checkUserMessageBudget } from '../lib/userMessageBudget'
 import { t } from '../i18n'
 import {
   VISUAL_SELECTION_BATCH_PROMPT_HEADER,
@@ -48,6 +50,7 @@ import type {
   BackgroundAgentTask,
   BackgroundAgentTaskUsage,
   ChatState,
+  ClientMessage,
   CompactProgress,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
@@ -458,12 +461,16 @@ type ChatStore = {
    * off screen, so coming back to it redraws at once and only backfills.
    */
   disconnectSession: (sessionId: string, options?: { keepTranscript?: boolean }) => void
+  /**
+   * Returns `false` when the frame is over the server's input budget: nothing
+   * was sent and an error row explains why, so the caller keeps its draft.
+   */
   sendMessage: (
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
     options?: { sessionReferences?: Array<{ sessionId: string }>; displayContent?: string; displayAttachments?: AttachmentRef[]; hideDisplayContent?: boolean },
-  ) => void
+  ) => boolean
   respondToPermission: (
     sessionId: string,
     requestId: string,
@@ -3521,6 +3528,36 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       subagentTab?.sourceSessionId && subagentTab.subagentToolUseId,
     )
     const isDirectAgentSession = isMemberSession || isSubagentSession
+    const outgoing: ClientMessage = {
+      type: 'user_message',
+      content,
+      attachments,
+      ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}),
+    }
+    if (!isDirectAgentSession) {
+      // The server closes the socket (1009) for a frame over its input budget
+      // and the client only reconnects, so the turn vanished without a trace:
+      // no bubble, no error. Refuse it before the optimistic row and the title
+      // update, and say why where the reply would have appeared.
+      const budget = checkUserMessageBudget(outgoing)
+      if (!budget.ok) {
+        set((s) => ({
+          sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
+            messages: [
+              ...session.messages,
+              {
+                id: nextId(),
+                type: 'error',
+                message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+                code: 'MESSAGE_TOO_LARGE',
+                timestamp: Date.now(),
+              },
+            ],
+          })),
+        }))
+        return false
+      }
+    }
     const hideDisplayContent = !isDirectAgentSession && options?.hideDisplayContent === true
     const userFacingContent =
       hideDisplayContent
@@ -3648,7 +3685,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             })),
           }))
         })
-      return
+      return true
     }
 
     if (
@@ -3687,7 +3724,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }),
         }))
       })
-      return
+      return true
     }
 
     const selection = useSessionRuntimeStore.getState().selections[sessionId]
@@ -3708,7 +3745,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         get().setSessionRuntime(sessionId, defaultSelection)
       }
     }
-    wsManager.send(sessionId, { type: 'user_message', content, attachments, ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}) })
+    wsManager.send(sessionId, outgoing)
+    return true
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {

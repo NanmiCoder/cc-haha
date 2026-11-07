@@ -846,6 +846,30 @@ describe('ChatInput file mentions', () => {
     expect(within(shells[0] as HTMLElement).queryByRole('img')).not.toBeInTheDocument()
   })
 
+  it('keeps the draft and says why when pasted screenshots push the frame over the server budget', async () => {
+    // Two 4K screenshots pasted as bitmaps are ~13 MB of base64 each. The
+    // server closes the socket (1009) for a frame over 16 MiB and the composer
+    // only reconnected, so the turn vanished with nothing on screen.
+    const pastedScreenshot = (index: number) => {
+      const data = `data:image/png;base64,${'A'.repeat(9 * 1024 * 1024)}`
+      return { id: `paste-${index}`, name: `shot-${index}.png`, type: 'image' as const, mimeType: 'image/png', previewUrl: data, data }
+    }
+    useChatStore.getState().setComposerDraft(sessionId, { input: '', attachments: [pastedScreenshot(1), pastedScreenshot(2)] })
+    render(<ChatInput compact />)
+    expect(await screen.findByRole('img', { name: 'shot-1.png' })).toBeInTheDocument()
+    setComposerText('what is wrong here', 18)
+    act(() => fireEvent.keyDown(getComposerElement(), { key: 'Enter' }))
+
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining('over the 16 MB limit'),
+    })
+    expect(getComposerText()).toBe('what is wrong here')
+    expect(screen.getByRole('img', { name: 'shot-2.png' })).toBeInTheDocument()
+    expect(useChatStore.getState().sessions[sessionId]?.messages.map((message) => message.type)).toEqual(['assistant_text'])
+  })
+
   it('requires a permission change before sending a restored lean plan session', () => {
     useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const, permissionMode: 'plan' })) }))
     render(<ChatInput compact />)
