@@ -84,7 +84,7 @@ src/server/
 
 | 方法 | 路径 | 描述 |
 |------|------|------|
-| POST | `/api/sessions/:id/chat` | 发送消息（返回任务 ID） |
+| POST | `/api/sessions/:id/chat` | 未实现，返回 501；发送消息请使用会话 WebSocket 的 `user_message` |
 | GET | `/api/sessions/:id/chat/status` | 获取对话状态 |
 | POST | `/api/sessions/:id/chat/stop` | 停止生成 |
 
