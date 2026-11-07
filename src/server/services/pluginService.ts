@@ -331,7 +331,10 @@ export class PluginService {
       this.toSummary(detail),
     )
 
-    const marketplaces = Object.entries(marketplaceConfig.marketplaces ?? {})
+    // known_marketplaces.json is the flat record validated by
+    // KnownMarketplacesFileSchema (marketplace name → entry); it has no
+    // nested `marketplaces` key, so reading one always produced an empty list.
+    const marketplaces = Object.entries(marketplaceConfig)
       .map(([name, entry]) => ({
         name,
         source: getMarketplaceSourceDisplay(entry.source),
