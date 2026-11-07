@@ -78,10 +78,11 @@ export class SessionSocket {
   readonly messages: ProtocolMessage[] = []
   private ws: WebSocket | null = null
 
-  constructor(private readonly baseUrl: string, private readonly sessionId: string) {}
+  /** `query`: extra URL parameters, e.g. a resumable stream (`stream=…&ack=…&epoch=…`). */
+  constructor(private readonly baseUrl: string, private readonly sessionId: string, private readonly query = '') {}
 
   async open() {
-    const wsUrl = `${this.baseUrl.replace(/^http/, 'ws')}/ws/${this.sessionId}`
+    const wsUrl = `${this.baseUrl.replace(/^http/, 'ws')}/ws/${this.sessionId}${this.query ? `?${this.query}` : ''}`
     const ws = new WebSocket(wsUrl)
     this.ws = ws
     ws.onmessage = (event) => {
@@ -92,13 +93,18 @@ export class SessionSocket {
       ws.onopen = () => { clearTimeout(timer); resolveOpen() }
       ws.onerror = () => { clearTimeout(timer); reject(new Error('WebSocket failed to open')) }
     })
-    await this.waitFor((message) => message.type === 'connected')
+    // A resumed stream continues the old connection, so the session sends no new `connected`.
+    await this.waitFor((message) => message.type === 'connected' || (message.type === 'stream_attached' && message.resumed === true))
     return this
   }
 
   send(message: Record<string, unknown>) {
+    this.sendRaw(JSON.stringify(message))
+  }
+
+  sendRaw(text: string) {
     if (!this.ws) throw new Error('socket is not open')
-    this.ws.send(JSON.stringify(message))
+    this.ws.send(text)
   }
 
   /**
@@ -348,6 +354,51 @@ const runners: Record<string, (ctx: ScenarioContext) => Promise<void>> = {
         second.close()
       }
     } finally {
+      first.close()
+    }
+  },
+
+  async 'stream-resume-mid-turn'(ctx) {
+    const sessionId = await ctx.createSession()
+    const stream = 'agentFlowResumeStream0'
+    const target = join(ctx.workRoot, 'resumed.txt')
+    const first = await new SessionSocket(ctx.baseUrl, sessionId, `stream=${stream}`).open()
+    let second: SessionSocket | undefined
+    try {
+      const attached = first.messages[0]
+      if (attached?.type !== 'stream_attached' || attached.resumed !== false) {
+        throw new Error(`a new stream must announce itself first; saw ${JSON.stringify(attached)}`)
+      }
+      first.sendRaw(JSON.stringify({ cseq: 1, type: 'user_message', content: buildMockToolPrompt({
+        tool: 'Write',
+        input: { file_path: target, content: 'resume' },
+        write: { path: target, content: 'written-after-resume' },
+      }) }))
+      const pending = await first.waitFor((message) => message.type === 'permission_request', DEFAULT_STEP_TIMEOUT_MS, 'permission_request')
+      const lastSeq = Math.max(...first.messages.map((message) => typeof message.seq === 'number' ? message.seq : 0))
+      first.close()
+      await Bun.sleep(100)
+
+      // The phone comes back on a new socket: the server continues the same session
+      // connection and replays only what this client has not acknowledged.
+      second = await new SessionSocket(ctx.baseUrl, sessionId, `stream=${stream}&ack=${lastSeq}&epoch=${String(attached.epoch)}`).open()
+      if (second.messages.some((message) => message.type === 'connected' || message.type === 'permission_requests_snapshot')) {
+        throw new Error('a resumed stream must not reopen the session')
+      }
+      const approval = JSON.stringify({ cseq: 2, type: 'permission_response', requestId: pending.requestId, allowed: true, rule: 'agent-flow' })
+      second.sendRaw(approval)
+      // A resend after an uncertain drop must not reach the session twice.
+      second.sendRaw(approval)
+      await second.waitFor((message) => message.type === 'message_complete', DEFAULT_STEP_TIMEOUT_MS, 'message_complete')
+      if (!existsSync(target)) throw new Error('approving over the resumed stream did not complete the tool')
+      const acks = second.messages.filter((message) => message.type === 'command_ack' && message.cseq === 2)
+      if (acks.length !== 2) throw new Error(`each copy of a command must be acknowledged; saw ${acks.length}`)
+      // Each approval the session handles is answered to the CLI and announced with
+      // `permission_resolved`, so a second announcement means the resend got through.
+      const resolved = second.messages.filter((message) => message.type === 'permission_resolved' && message.requestId === pending.requestId)
+      if (resolved.length !== 1) throw new Error(`the approval must reach the session exactly once; saw ${resolved.length} permission_resolved`)
+    } finally {
+      second?.close()
       first.close()
     }
   },

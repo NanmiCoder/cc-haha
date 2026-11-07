@@ -332,6 +332,21 @@ describe('ElectronServerRuntime', () => {
     }
   })
 
+  it('gives only the server a separate per-launch token for the direct-connection endpoint', async () => {
+    const runtime = createRuntime()
+
+    await runtime.startServer()
+
+    const endpointToken = runtime.getP2PEndpointToken()
+    expect(endpointToken.length).toBeGreaterThanOrEqual(32)
+    expect(endpointToken).not.toBe(runtime.getLocalAccessToken())
+    expect(endpointToken).not.toBe(runtime.getPetAccessToken())
+    expect(sidecarMocks.serverPlans[0]!.env.CC_HAHA_P2P_ENDPOINT_TOKEN).toBe(endpointToken)
+    const adapters = sidecarMocks.spawnSidecar.mock.calls.map(([plan]) => plan).filter(plan => plan.args[0] === 'adapters')
+    for (const adapter of adapters) expect(adapter.env.CC_HAHA_P2P_ENDPOINT_TOKEN).toBeUndefined()
+    expect(createRuntime().getP2PEndpointToken()).not.toBe(endpointToken)
+  })
+
   it('gives the server only the dynamic bridge URL while adapters explicitly inherit it', async () => {
     const bridge = {
       start: vi.fn(async () => 'http://127.0.0.1:49123'),

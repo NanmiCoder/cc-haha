@@ -785,7 +785,8 @@ function translateCliUsage(usage: unknown): TokenUsage {
 export type WebSocketData = {
   sessionId: string
   connectedAt: number
-  channel: 'client' | 'sdk'
+  /** `p2p` is the desktop WebRTC endpoint's relay link; index.ts routes it to the P2P broker. */
+  channel: 'client' | 'sdk' | 'p2p'
   clientKind?: 'full' | 'pet'
   /** Only a machine-token authenticated local socket may take over an IM lease. */
   powerActivityLeaseAuthorized?: boolean
@@ -796,6 +797,10 @@ export type WebSocketData = {
   mediaRefs?: boolean
   /** The client shows next-prompt suggestions in its composer (`?suggestions=1`). */
   promptSuggestions?: boolean
+  /** The client opted into a resumable stream (see resumableStreams.ts). */
+  resume?: import('./resumableStreams.js').ResumeRequest
+  /** This socket's close must end its resumable stream (revoke, origin change, user disable). */
+  terminal?: boolean
 }
 
 // Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can

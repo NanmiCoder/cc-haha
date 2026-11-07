@@ -57,10 +57,12 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "extraProguardRules": "-keep class org.webrtc.** { *; }\n-dontwarn org.webrtc.**"
           }
         }
       ],
+      "./plugins/withWebRtcDataChannels",
       "expo-font",
       "./plugins/withPinnedWebSockets",
       "expo-sharing",
