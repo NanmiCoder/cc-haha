@@ -41,7 +41,6 @@ vi.mock('../../i18n', () => ({
     'permMode.permShell': 'Run shell commands',
     'permMode.permPackages': 'Install packages',
     'permMode.enableBypassBtn': 'Enable bypass',
-    'permMode.disabledDuringTurn': 'Cannot switch permissions while session is active',
     'permMode.enableAutoTitle': 'Enable Auto mode?',
     'permMode.enableAutoBody': 'Auto mode reduces prompts but does not guarantee safety.',
     'permMode.enableAutoDetail': 'Claude reviews tool calls and blocks actions it considers risky.',
@@ -198,7 +197,7 @@ describe('PermissionModeSelector', () => {
     expect(screen.getByRole('button', { name: 'Bypass permissions' })).toHaveClass('h-11', 'w-11')
   })
 
-  it('opens from its handle with no trigger on screen, and not mid-turn', () => {
+  it('opens from its handle with no trigger on screen, mid-turn included', () => {
     viewportMocks.isMobile = true
     useTabStore.setState({ activeTabId: 'tab', tabs: [] })
     useChatStore.setState({ sessions: { tab: makeChatSession('idle') } })
@@ -211,7 +210,7 @@ describe('PermissionModeSelector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     act(() => useChatStore.setState({ sessions: { tab: makeChatSession('streaming') } }))
     act(() => handle.current?.open())
-    expect(screen.queryByRole('dialog', { name: 'Execution Permissions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Execution Permissions' })).toBeInTheDocument()
   })
 
   it('uses the active tab workspace when showing the bypass confirmation path', () => {
@@ -257,12 +256,12 @@ describe('PermissionModeSelector', () => {
     expect(screen.queryByText('C:\\Users\\LinTan')).not.toBeInTheDocument()
   })
 
-  it('disables the trigger button when the session turn is active', () => {
+  it('switches the session mode while its turn is running', () => {
     const setSessionPermissionMode = vi.fn()
     useChatStore.setState({
       setSessionPermissionMode,
       sessions: {
-        'current-tab': makeChatSession('thinking'),
+        'current-tab': makeChatSession('tool_executing'),
       },
     })
     useSessionStore.setState({
@@ -284,23 +283,23 @@ describe('PermissionModeSelector', () => {
     })
     useTabStore.setState({
       activeTabId: 'current-tab',
-      tabs: [{ sessionId: 'current-tab', title: 'Current', type: 'session', status: 'idle' }],
+      tabs: [{ sessionId: 'current-tab', title: 'Current', type: 'session', status: 'running' }],
     })
 
     render(<PermissionModeSelector />)
 
     const trigger = screen.getByRole('button', { name: 'Ask permissions' })
-    expect(trigger).toBeDisabled()
-    expect(trigger).toHaveAttribute('title', 'Cannot switch permissions while session is active')
-
+    expect(trigger).toBeEnabled()
     fireEvent.click(trigger)
-    // Menu should not open when disabled
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(setSessionPermissionMode).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Auto accept edits/ }))
+
+    expect(setSessionPermissionMode).toHaveBeenCalledWith('current-tab', 'acceptEdits')
   })
 
-  it('closes an open permission menu when the session turn starts', () => {
+  it('keeps an open permission menu usable when the session turn starts', () => {
+    const setSessionPermissionMode = vi.fn()
     useChatStore.setState({
+      setSessionPermissionMode,
       sessions: {
         'current-tab': makeChatSession('idle'),
       },
@@ -312,10 +311,7 @@ describe('PermissionModeSelector', () => {
 
     render(<PermissionModeSelector />)
 
-    const trigger = screen.getByRole('button', { name: 'Ask permissions' })
-    fireEvent.click(trigger)
-    expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
-
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     act(() => {
       useChatStore.setState({
         sessions: {
@@ -323,13 +319,15 @@ describe('PermissionModeSelector', () => {
         },
       })
     })
+    fireEvent.click(screen.getByRole('menuitem', { name: /Auto accept edits/ }))
 
-    expect(trigger).toBeDisabled()
-    expect(screen.queryByRole('menuitem', { name: /Auto accept edits/ })).not.toBeInTheDocument()
+    expect(setSessionPermissionMode).toHaveBeenCalledWith('current-tab', 'acceptEdits')
   })
 
-  it('closes an open bypass confirmation when the session turn starts', () => {
+  it('confirms bypass for a session whose turn started behind the dialog', () => {
+    const setSessionPermissionMode = vi.fn()
     useChatStore.setState({
+      setSessionPermissionMode,
       sessions: {
         'current-tab': makeChatSession('idle'),
       },
@@ -343,76 +341,17 @@ describe('PermissionModeSelector', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
     fireEvent.click(screen.getByRole('menuitem', { name: /Bypass permissions/ }))
-    expect(screen.getByRole('dialog', { name: 'Enable bypass mode' })).toBeInTheDocument()
-
     act(() => {
       useChatStore.setState({
         sessions: {
-          'current-tab': makeChatSession('tool_executing'),
+          'current-tab': makeChatSession('permission_pending'),
         },
       })
     })
+    fireEvent.click(screen.getByRole('button', { name: 'Enable bypass' }))
 
+    expect(setSessionPermissionMode).toHaveBeenCalledWith('current-tab', 'bypassPermissions')
     expect(screen.queryByRole('dialog', { name: 'Enable bypass mode' })).not.toBeInTheDocument()
-  })
-
-  it('rejects a stale menu action when the turn starts before click dispatch', () => {
-    const setSessionPermissionMode = vi.fn()
-    useChatStore.setState({
-      setSessionPermissionMode,
-      sessions: {
-        'current-tab': makeChatSession('idle'),
-      },
-    })
-    useTabStore.setState({
-      activeTabId: 'current-tab',
-      tabs: [{ sessionId: 'current-tab', title: 'Current', type: 'session', status: 'idle' }],
-    })
-
-    render(<PermissionModeSelector />)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
-    const menuItem = screen.getByRole('menuitem', { name: /Auto accept edits/ })
-
-    act(() => {
-      useChatStore.setState({
-        sessions: {
-          'current-tab': makeChatSession('thinking'),
-        },
-      })
-      menuItem.click()
-    })
-
-    expect(setSessionPermissionMode).not.toHaveBeenCalled()
-  })
-
-  it('rejects a stale bypass confirmation when the turn starts before click dispatch', () => {
-    const setSessionPermissionMode = vi.fn()
-    useChatStore.setState({
-      setSessionPermissionMode,
-      sessions: {
-        'current-tab': makeChatSession('idle'),
-      },
-    })
-    useTabStore.setState({
-      activeTabId: 'current-tab',
-      tabs: [{ sessionId: 'current-tab', title: 'Current', type: 'session', status: 'idle' }],
-    })
-
-    render(<PermissionModeSelector />)
-    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: /Bypass permissions/ }))
-    const confirmButton = screen.getByRole('button', { name: 'Enable bypass' })
-
-    act(() => {
-      useChatStore.setState({
-        sessions: {
-          'current-tab': makeChatSession('tool_executing'),
-        },
-      })
-      confirmButton.click()
-    })
-
-    expect(setSessionPermissionMode).not.toHaveBeenCalled()
   })
 
   it('rejects a stale menu action after the active tab changes', () => {
@@ -741,7 +680,7 @@ describe('PermissionModeSelector', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('keeps Auto behind the active-turn guard', () => {
+  it('applies Auto to a running session through its opt-in confirmation', async () => {
     const setSessionPermissionMode = vi.fn()
     useSettingsStore.setState({ autoModeOptInAccepted: true } as never)
     useChatStore.setState({
@@ -757,11 +696,14 @@ describe('PermissionModeSelector', () => {
 
     render(<PermissionModeSelector />)
 
-    const trigger = screen.getByRole('button', { name: 'Ask permissions' })
-    expect(trigger).toBeDisabled()
-    fireEvent.click(trigger)
-    expect(screen.queryByRole('menuitem', { name: /Auto mode/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Auto mode/ }))
     expect(setSessionPermissionMode).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Auto mode' }))
+
+    await waitFor(() => {
+      expect(setSessionPermissionMode).toHaveBeenCalledWith('current-tab', 'auto')
+    })
   })
 
   it('closes the permission menu when its trigger is clicked again', () => {

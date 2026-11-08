@@ -196,6 +196,14 @@ export function decideReply(request: MockRequest): MockReply {
       if (hasTool(request, 'ToolSearch')) return toolUse('ToolSearch', { query: `select:${tool}` })
     }
   }
+  // Several writes in one turn, one per request, so a scenario can act between them.
+  if (prompt.startsWith('MOCK_WRITE_SEQUENCE ') && hasTool(request, 'Write')) {
+    const writes = JSON.parse(prompt.slice('MOCK_WRITE_SEQUENCE '.length)) as Array<Record<string, unknown>>
+    const promptIndex = messages.findLastIndex(message => message.role === 'user' && textOf(blocksOf(message)).includes(prompt))
+    const issued = messages.slice(promptIndex + 1)
+      .filter(message => message.role === 'assistant' && blocksOf(message).some(block => block.type === 'tool_use')).length
+    if (issued < writes.length) return toolUse('Write', writes[issued]!)
+  }
   if (prompt === 'MOCK_LATE_MCP' && !results.some(block => toolResultText(block).includes('LATE_MCP_AVAILABLE'))) {
     const toolName = 'mcp__late_start__echo'
     if (hasTool(request, toolName)) return toolUse(toolName, {})

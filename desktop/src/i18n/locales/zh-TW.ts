@@ -3756,7 +3756,6 @@ export const zh: Record<TranslationKey, string> = {
   'permMode.permShell': '執行任意 Shell 命令',
   'permMode.permPackages': '安裝或移除軟體包',
   'permMode.enableBypassBtn': '啟用跳過',
-  'permMode.disabledDuringTurn': '工作階段進行中，無法切換權限',
   'permMode.enableAutoTitle': '啟用自動模式？',
   'permMode.enableAutoBody': '自動模式會減少權限詢問，但不能保證絕對安全。',
   'permMode.enableAutoDetail': 'Claude 會檢查工具呼叫中的風險操作和提示詞注入，執行其認為安全的操作，並阻止其認為有風險的操作。請僅在隔離環境中使用。',
