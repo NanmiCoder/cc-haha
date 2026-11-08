@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useRef, useId, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useState, useEffect, useMemo, useRef, useId, type CSSProperties, type ReactNode } from 'react'
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
   ArrowLeftRight,
+  ArrowRight,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
@@ -25,6 +26,8 @@ import {
   Network,
   Plus,
   Route,
+  Search,
+  SearchX,
   Shrink,
   Star,
   Wrench,
@@ -42,6 +45,8 @@ import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { IconButton } from '@/components/ui/IconButton'
 import { Badge } from '@/components/ui/Badge'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SearchField } from '@/components/ui/SearchField'
 import { Spinner } from '@/components/ui/Spinner'
 import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
@@ -54,12 +59,26 @@ import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCom
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
 import { isValidHttpProxyUrl } from './shared'
+import {
+  highlightSegments,
+  initialProviderTab,
+  matchProviderFields,
+  PROVIDER_SEARCH_MIN_ITEMS,
+  providerTabOf,
+  searchTerms,
+  type ProviderListTab,
+  type ProviderSearchField,
+  type ProviderSearchMatch,
+} from './providerListSearch'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
 import { DeepSeekAccountLogin } from '../../components/settings/DeepSeekAccountLogin'
 import { OfficialProviderModelSettings } from '../../components/settings/OfficialProviderModelSettings'
 import { CcSwitchImportModal } from '../../components/settings/CcSwitchImportModal'
+import { MagpieProviderDialog } from '../../components/settings/MagpieProviderDialog'
+import { MagpieConnectBanner, MagpieModelChips, MagpieStatusLine } from '../../components/settings/MagpieProviderParts'
+import { MAGPIE_PRESET_ID, isMagpieProvider, useMagpieStore } from '../../stores/magpieStore'
 import { ModelIdCombobox } from '../../components/settings/ModelIdCombobox'
 import { ProviderRequestCompatibilityFields } from '@/components/settings/ProviderRequestCompatibilityFields'
 import { compatibilityForm, invalidCompatibilityNumber, parseCompatibilityForm, parseAnthropicBudgetForm, pickOutputBudget, readCompatibilityEditorJson, writeCompatibilityJson, type RequestCompatibilityForm } from '../../lib/providerRequestCompatibility'
@@ -183,6 +202,76 @@ function providerItemTestId(item: ProviderListItem): string {
   }
 }
 
+type OfficialProviderKind = Exclude<ProviderListItem['kind'], 'saved'>
+
+/** The built-in sign-in providers: their card copy and the login shown once one is the default. */
+const OFFICIAL_PROVIDERS: Record<OfficialProviderKind, { title: TranslationKey; subtitle: TranslationKey; Login: () => ReactNode }> = {
+  'claude-official': { title: 'settings.providers.officialName', subtitle: 'settings.providers.officialDesc', Login: ClaudeOfficialLogin },
+  'openai-official': { title: 'settings.providers.openaiOfficialName', subtitle: 'settings.providers.openaiOfficialDesc', Login: ChatGPTOfficialLogin },
+  'grok-official': { title: 'settings.providers.grokOfficialName', subtitle: 'settings.providers.grokOfficialDesc', Login: GrokOfficialLogin },
+  'deepseek-account': { title: 'settings.providers.deepseekAccountName', subtitle: 'settings.providers.deepseekAccountDesc', Login: DeepSeekAccountLogin },
+}
+
+type Translate = ReturnType<typeof useTranslation>
+
+function providerSubtitle(provider: SavedProvider): string {
+  return `${provider.baseUrl} · ${provider.models.main}`
+}
+
+/** The protocol badge: a path-bound gateway routes per model, so it gets "multi-protocol" rather than one format. */
+function providerFormatBadge(provider: SavedProvider, preset: ProviderPreset | undefined, t: Translate): string | null {
+  if (preset?.modelApiFormats?.length) return t('settings.providers.multiProtocolBadge')
+  if (!provider.apiFormat || provider.apiFormat === 'anthropic') return null
+  return provider.apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses'
+}
+
+/** What a saved provider is searched by. The API key never is. */
+function savedProviderSearchFields(
+  provider: SavedProvider,
+  preset: ProviderPreset | undefined,
+  isActive: boolean,
+  slotLabels: Record<ModelSlot, string>,
+  t: Translate,
+): ProviderSearchField[] {
+  return [
+    { value: provider.name, visible: true },
+    { value: preset && preset.id !== 'custom' ? preset.name : '', visible: true },
+    { value: providerFormatBadge(provider, preset, t) ?? '', visible: true },
+    { value: providerSubtitle(provider), visible: true },
+    // The default card lists its role mappings as chips; the others show only the main model.
+    ...MODEL_SLOTS.filter((slot) => slot !== 'main').map((slot) => ({
+      value: provider.models[slot] ?? '',
+      visible: isActive,
+      label: slotLabels[slot],
+    })),
+    { value: provider.notes ?? '', visible: false, label: t('settings.providers.notes') },
+  ]
+}
+
+function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
+  if (terms.length === 0) return <>{text}</>
+  return (
+    <>
+      {highlightSegments(text, terms).map((segment, index) => segment.match ? (
+        <mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-warning-container)] text-inherit">{segment.text}</mark>
+      ) : (
+        <Fragment key={index}>{segment.text}</Fragment>
+      ))}
+    </>
+  )
+}
+
+function ProviderTabLabel({ label, count, holdsDefault, defaultLabel }: { label: string; count: number; holdsDefault: boolean; defaultLabel: string }) {
+  return (
+    <>
+      {holdsDefault && <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-[var(--color-success)]" />}
+      <span>{label}</span>
+      <span className="text-xs font-normal tabular-nums text-[var(--color-text-tertiary)]">{count}</span>
+      {holdsDefault && <span className="sr-only">{defaultLabel}</span>}
+    </>
+  )
+}
+
 export function ProviderSettings({ browserMode = false }: { browserMode?: boolean }) {
   const {
     providers,
@@ -203,7 +292,16 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
   const t = useTranslation()
   const [editingProvider, setEditingProvider] = useState<SavedProvider | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [createPresetId, setCreatePresetId] = useState<string | undefined>(undefined)
+  /** Connecting Magpie (no provider) or editing the saved one. */
+  const [magpieDialog, setMagpieDialog] = useState<{ provider?: SavedProvider } | null>(null)
+  const magpieState = useMagpieStore((store) => store.state)
+  const magpieBannerDismissed = useMagpieStore((store) => store.bannerDismissed)
+  const refreshMagpie = useMagpieStore((store) => store.refresh)
   const [showCcSwitchImport, setShowCcSwitchImport] = useState(false)
+  /** Null until this visit's provider list arrives or the user picks a tab. */
+  const [selectedTab, setSelectedTab] = useState<ProviderListTab | null>(null)
+  const [query, setQuery] = useState('')
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<SavedProvider | null>(null)
   const [isDeletingProvider, setIsDeletingProvider] = useState(false)
   const [actionFailed, setActionFailed] = useState(false)
@@ -217,9 +315,32 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
     }),
   )
 
+  /** This visit's provider list has arrived (the store may still have held an older one). */
+  const [listArrived, setListArrived] = useState(false)
   useEffect(() => {
-    void fetchProviders()
+    let cancelled = false
+    void fetchProviders().then(() => {
+      if (!cancelled) setListArrived(true)
+    })
+    return () => {
+      cancelled = true
+    }
   }, [fetchProviders])
+
+  // Pin the opening tab once, from the list that just arrived. Deriving it on
+  // every render would flip the view away from a card someone just made default.
+  useEffect(() => {
+    if (listArrived && selectedTab === null) setSelectedTab(initialProviderTab(activeId))
+  }, [activeId, listArrived, selectedTab])
+
+  useEffect(() => {
+    if (browserMode) return
+    // While Magpie answers, the server moves saved Magpie providers to its
+    // current port and catalog limits; reload the list to show them.
+    void refreshMagpie().then((state) => {
+      if (state?.status.running) void fetchProviders()
+    })
+  }, [browserMode, fetchProviders, refreshMagpie])
 
   const presetMap = useMemo(
     () => new Map(presets.map((preset) => [preset.id, preset])),
@@ -284,10 +405,156 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
     void reorderProviders(arrayMove(ids, oldIndex, newIndex))
   }
 
-  const isClaudeOfficialActive = hasLoadedProviders && activeId === null
-  const isOpenAIOfficialActive = hasLoadedProviders && activeId === OPENAI_OFFICIAL_PROVIDER_ID
-  const isGrokOfficialActive = hasLoadedProviders && activeId === GROK_OFFICIAL_PROVIDER_ID
-  const isDeepSeekAccountActive = hasLoadedProviders && activeId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+  const terms = useMemo(() => searchTerms(query), [query])
+  const searching = terms.length > 0
+  const modelSlotLabels = useMemo(
+    () => MODEL_SLOTS.reduce((labels, slot) => {
+      labels[slot] = t(MODEL_SLOT_LABEL_KEYS[slot])
+      return labels
+    }, {} as Record<ModelSlot, string>),
+    [t],
+  )
+  const providerEntries = useMemo(() => providerItems.map((item) => {
+    const tab: ProviderListTab = item.kind === 'saved' ? 'api' : 'official'
+    const fields: ProviderSearchField[] = item.kind === 'saved'
+      ? savedProviderSearchFields(item.provider, presetMap.get(item.provider.presetId), activeId === item.provider.id, modelSlotLabels, t)
+      : [
+        { value: t(OFFICIAL_PROVIDERS[item.kind].title), visible: true },
+        { value: t(OFFICIAL_PROVIDERS[item.kind].subtitle), visible: true },
+      ]
+    return { item, tab, match: matchProviderFields(fields, terms) }
+  }), [activeId, modelSlotLabels, presetMap, providerItems, t, terms])
+  const starterPresets = useMemo(
+    () => selectableProviderPresets(presets.filter((preset) => preset.id !== 'official')).filter((preset) => !preset.featured),
+    [presets],
+  )
+
+  const tab = selectedTab ?? (hasLoadedProviders ? initialProviderTab(activeId) : 'api')
+  const otherTab: ProviderListTab = tab === 'api' ? 'official' : 'api'
+  const defaultTab = hasLoadedProviders ? providerTabOf(activeId) : null
+  // With no query every entry matches, so the counts are the tab sizes.
+  const matchedEntries = providerEntries.filter((entry) => entry.match !== null)
+  const countIn = (target: ProviderListTab) => matchedEntries.filter((entry) => entry.tab === target).length
+  const visibleEntries = matchedEntries.filter((entry) => entry.tab === tab)
+  const otherMatchCount = searching ? countIn(otherTab) : 0
+  const tabLabels: Record<ProviderListTab, string> = {
+    api: t('settings.providers.tabs.apiKey'),
+    official: t('settings.providers.tabs.official'),
+  }
+  const showSearch = providerItems.length >= PROVIDER_SEARCH_MIN_ITEMS || query !== ''
+
+  const openCreateModal = (presetId?: string) => {
+    if (presetId === MAGPIE_PRESET_ID) {
+      setMagpieDialog({})
+      return
+    }
+    setCreatePresetId(presetId)
+    setShowCreateModal(true)
+  }
+  const showMagpieBanner = !browserMode && !searching && tab === 'api'
+    && magpieState?.status.running === true && !magpieBannerDismissed
+    && !providers.some(isMagpieProvider)
+
+  const renderProviderEntry = (item: ProviderListItem, match: ProviderSearchMatch | null) => {
+    if (item.kind !== 'saved') {
+      const official = OFFICIAL_PROVIDERS[item.kind]
+      const isActive = hasLoadedProviders && (item.kind === 'claude-official' ? activeId === null : activeId === item.id)
+      const activate = item.kind === 'claude-official' ? handleActivateOfficial : () => handleActivate(item.id)
+      return (
+        <SortableProviderCard
+          browserMode={browserMode}
+          key={item.id}
+          item={item}
+          isActive={isActive}
+          dragLabel={t('settings.providers.dragToReorder')}
+          dragDisabled={searching}
+          onActivate={!isActive ? activate : undefined}
+          title={<HighlightedText text={t(official.title)} terms={terms} />}
+          subtitle={<HighlightedText text={t(official.subtitle)} terms={terms} />}
+          badges={isActive ? (
+            <Badge tone="brand">{t('settings.providers.default')}</Badge>
+          ) : null}
+          details={!browserMode && isActive ? (
+            <div className="flex flex-col">
+              <official.Login />
+              <OfficialProviderModelSettings providerId={item.id} />
+            </div>
+          ) : null}
+        />
+      )
+    }
+
+    const provider = item.provider
+    const isActive = activeId === provider.id
+    const test = testResults[provider.id]
+    const preset = presetMap.get(provider.presetId)
+    const formatBadge = providerFormatBadge(provider, preset, t)
+    const isMagpie = isMagpieProvider(provider)
+
+    return (
+      <SortableProviderCard
+        browserMode={browserMode}
+        key={item.id}
+        item={item}
+        isActive={isActive}
+        dragLabel={t('settings.providers.dragToReorder')}
+        dragDisabled={searching}
+        onActivate={!isActive ? () => handleActivate(provider.id) : undefined}
+        title={<HighlightedText text={provider.name} terms={terms} />}
+        subtitle={<span className="font-mono text-[11px]"><HighlightedText text={providerSubtitle(provider)} terms={terms} /></span>}
+        matchNote={match?.hiddenField ? (
+          <p className="truncate text-xs text-[var(--color-text-tertiary)]">
+            {t('settings.providers.search.matchedField', { field: match.hiddenField.label })}
+            {' · '}
+            <span className="font-mono text-[11px] text-[var(--color-text-secondary)]">
+              <HighlightedText text={match.hiddenField.value} terms={terms} />
+            </span>
+          </p>
+        ) : null}
+        statusLine={isMagpie && !browserMode ? <MagpieStatusLine /> : null}
+        modelChips={isActive ? (
+          isMagpie
+            ? <MagpieModelChips provider={provider} />
+            : <ProviderModelChips models={provider.models} labels={modelSlotLabels} />
+        ) : null}
+        badges={(
+          <>
+            {isMagpie ? (
+              // The preset is named like the provider; what tells it apart is where it runs.
+              <Badge tone="neutral">{t('settings.providers.magpie.localGateway')}</Badge>
+            ) : preset && preset.id !== 'custom' && (
+              <Badge tone="neutral">{preset.name}</Badge>
+            )}
+            {formatBadge && <Badge tone="warning">{formatBadge}</Badge>}
+            {isActive && (
+              <Badge tone="brand">{t('settings.providers.default')}</Badge>
+            )}
+          </>
+        )}
+        result={test && !test.loading && test.result ? (
+          <ProviderTestResultLines result={test.result} />
+        ) : null}
+        secondaryActions={!isActive ? (
+          <>
+            <Button variant="ghost" size="sm" onClick={() => handleActivate(provider.id)}>{t('settings.providers.setDefault')}</Button>
+            <Button variant="danger-ghost" size="sm" onClick={() => handleDelete(provider)}>{t('common.delete')}</Button>
+          </>
+        ) : null}
+        actions={(
+          <>
+            {!browserMode && <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>{t('settings.providers.test')}</Button>}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => (isMagpie ? setMagpieDialog({ provider }) : setEditingProvider(provider))}
+            >
+              {t('settings.providers.edit')}
+            </Button>
+          </>
+        )}
+      />
+    )
+  }
 
   return (
     <div className="min-w-0">
@@ -306,7 +573,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
             </Button>}
             <Button
               size="base"
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => openCreateModal()}
               icon={<Plus size={14} strokeWidth={1.75} aria-hidden="true" />}
             >
               {t('settings.providers.addProvider')}
@@ -316,177 +583,107 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
       />
 
       {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mt-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleProviderDragEnd}
-      >
-        <SortableContext
-          items={providerItems.map((item) => item.id)}
-          strategy={verticalListSortingStrategy}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+        <SegmentedControl
+          as="tablist"
+          label={t('settings.providers.tabs.label')}
+          value={tab}
+          onChange={setSelectedTab}
+          items={(['api', 'official'] as const).map((value) => ({
+            value,
+            label: (
+              <ProviderTabLabel
+                label={tabLabels[value]}
+                count={countIn(value)}
+                holdsDefault={defaultTab === value}
+                defaultLabel={t('settings.providers.tabs.containsDefault')}
+              />
+            ),
+          }))}
+        />
+        {showSearch && (
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            label={t('settings.providers.search.label')}
+            clearLabel={t('settings.providers.search.clear')}
+            placeholder={t('settings.providers.search.placeholder')}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || !query) return
+              event.preventDefault()
+              setQuery('')
+            }}
+            containerClassName={browserMode ? 'w-full' : 'w-[280px] max-w-full'}
+          />
+        )}
+      </div>
+      {showMagpieBanner && (
+        <MagpieConnectBanner
+          modelCount={magpieState?.models?.length ?? 0}
+          onConnect={() => setMagpieDialog({})}
+        />
+      )}
+
+      {visibleEntries.length > 0 && (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleProviderDragEnd}
         >
-          <div className="mt-5 flex flex-col gap-2">
-            {providerItems.map((item) => {
-              if (item.kind === 'claude-official') {
-                return (
-                  <SortableProviderCard
-                    browserMode={browserMode}
-                    key={item.id}
-                    item={item}
-                    isActive={isClaudeOfficialActive}
-                    dragLabel={t('settings.providers.dragToReorder')}
-                    onActivate={!isClaudeOfficialActive ? handleActivateOfficial : undefined}
-                    title={t('settings.providers.officialName')}
-                    subtitle={t('settings.providers.officialDesc')}
-                    badges={isClaudeOfficialActive ? (
-                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
-                    ) : null}
-                    details={!browserMode && isClaudeOfficialActive ? (
-                      <div className="flex flex-col">
-                        <ClaudeOfficialLogin />
-                        <OfficialProviderModelSettings providerId={CLAUDE_OFFICIAL_PROVIDER_ID} />
-                      </div>
-                    ) : null}
-                  />
-                )
-              }
+          {/* Only this tab's cards are sortable; the drop is applied to the full stored order. */}
+          <SortableContext
+            items={visibleEntries.map((entry) => entry.item.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div role="tabpanel" aria-label={tabLabels[tab]} className="mt-4 flex flex-col gap-2">
+              {visibleEntries.map((entry) => renderProviderEntry(entry.item, entry.match))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
 
-              if (item.kind === 'openai-official') {
-                return (
-                  <SortableProviderCard
-                    browserMode={browserMode}
-                    key={item.id}
-                    item={item}
-                    isActive={isOpenAIOfficialActive}
-                    dragLabel={t('settings.providers.dragToReorder')}
-                    onActivate={!isOpenAIOfficialActive ? () => handleActivate(OPENAI_OFFICIAL_PROVIDER_ID) : undefined}
-                    title={t('settings.providers.openaiOfficialName')}
-                    subtitle={t('settings.providers.openaiOfficialDesc')}
-                    badges={isOpenAIOfficialActive ? (
-                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
-                    ) : null}
-                    details={!browserMode && isOpenAIOfficialActive ? (
-                      <div className="flex flex-col">
-                        <ChatGPTOfficialLogin />
-                        <OfficialProviderModelSettings providerId={OPENAI_OFFICIAL_PROVIDER_ID} />
-                      </div>
-                    ) : null}
-                  />
-                )
-              }
+      {searching && visibleEntries.length > 0 && otherMatchCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setSelectedTab(otherTab)}
+          className="mt-2 flex h-10 w-full items-center gap-2 rounded-[var(--radius-lg)] border border-dashed border-[var(--color-outline)] px-3.5 text-left text-[13px] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        >
+          <Search size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <span className="min-w-0 flex-1 truncate">
+            {t('settings.providers.search.otherTabMatches', { tab: tabLabels[otherTab], count: otherMatchCount })}
+          </span>
+          <span className="shrink-0 font-medium text-[var(--color-text-primary)]">{t('settings.providers.search.switchTab')}</span>
+          <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+        </button>
+      )}
 
-              if (item.kind === 'grok-official') {
-                return (
-                  <SortableProviderCard
-                    browserMode={browserMode}
-                    key={item.id}
-                    item={item}
-                    isActive={isGrokOfficialActive}
-                    dragLabel={t('settings.providers.dragToReorder')}
-                    onActivate={!isGrokOfficialActive ? () => handleActivate(GROK_OFFICIAL_PROVIDER_ID) : undefined}
-                    title={t('settings.providers.grokOfficialName')}
-                    subtitle={t('settings.providers.grokOfficialDesc')}
-                    badges={isGrokOfficialActive ? (
-                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
-                    ) : null}
-                    details={!browserMode && isGrokOfficialActive ? (
-                      <div className="flex flex-col">
-                        <GrokOfficialLogin />
-                        <OfficialProviderModelSettings providerId={GROK_OFFICIAL_PROVIDER_ID} />
-                      </div>
-                    ) : null}
-                  />
-                )
-              }
+      {searching && visibleEntries.length === 0 && (
+        <EmptyState
+          className="mt-4"
+          icon={<SearchX size={18} strokeWidth={1.75} />}
+          title={t('settings.providers.search.noResults', { tab: tabLabels[tab], query: query.trim() })}
+          description={otherMatchCount === 0 ? t('settings.providers.search.noResultsHint') : undefined}
+          action={otherMatchCount > 0 ? {
+            label: t('settings.providers.search.viewOtherTab', { tab: tabLabels[otherTab], count: otherMatchCount }),
+            onClick: () => setSelectedTab(otherTab),
+          } : undefined}
+        />
+      )}
 
-              if (item.kind === 'deepseek-account') {
-                return (
-                  <SortableProviderCard
-                    browserMode={browserMode}
-                    key={item.id}
-                    item={item}
-                    isActive={isDeepSeekAccountActive}
-                    dragLabel={t('settings.providers.dragToReorder')}
-                    onActivate={!isDeepSeekAccountActive ? () => handleActivate(DEEPSEEK_ACCOUNT_PROVIDER_ID) : undefined}
-                    title={t('settings.providers.deepseekAccountName')}
-                    subtitle={t('settings.providers.deepseekAccountDesc')}
-                    badges={isDeepSeekAccountActive ? (
-                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
-                    ) : null}
-                    details={!browserMode && isDeepSeekAccountActive ? (
-                      <div className="flex flex-col">
-                        <DeepSeekAccountLogin />
-                        <OfficialProviderModelSettings providerId={DEEPSEEK_ACCOUNT_PROVIDER_ID} />
-                      </div>
-                    ) : null}
-                  />
-                )
-              }
-
-              const provider = item.provider
-              const isActive = activeId === provider.id
-              const test = testResults[provider.id]
-              const preset = presetMap.get(provider.presetId)
-
-              return (
-                <SortableProviderCard
-                  browserMode={browserMode}
-                  key={item.id}
-                  item={item}
-                  isActive={isActive}
-                  dragLabel={t('settings.providers.dragToReorder')}
-                  onActivate={!isActive ? () => handleActivate(provider.id) : undefined}
-                  title={provider.name}
-                  subtitle={<span className="font-mono text-[11px]">{`${provider.baseUrl} · ${provider.models.main}`}</span>}
-                  modelChips={isActive ? (
-                    <ProviderModelChips
-                      models={provider.models}
-                      labels={MODEL_SLOTS.reduce((labels, slot) => {
-                        labels[slot] = t(MODEL_SLOT_LABEL_KEYS[slot])
-                        return labels
-                      }, {} as Record<ModelSlot, string>)}
-                    />
-                  ) : null}
-                  badges={(
-                    <>
-                      {preset && preset.id !== 'custom' && (
-                        <Badge tone="neutral">{preset.name}</Badge>
-                      )}
-                      {preset?.modelApiFormats?.length ? (
-                        // A path-bound gateway declares one format on the record but
-                        // routes per model, so the single-format badge would mislead.
-                        <Badge tone="warning">{t('settings.providers.multiProtocolBadge')}</Badge>
-                      ) : provider.apiFormat && provider.apiFormat !== 'anthropic' && (
-                        <Badge tone="warning">
-                          {provider.apiFormat === 'openai_chat' ? 'OpenAI Chat' : 'OpenAI Responses'}
-                        </Badge>
-                      )}
-                      {isActive && (
-                        <Badge tone="brand">{t('settings.providers.default')}</Badge>
-                      )}
-                    </>
-                  )}
-                  result={test && !test.loading && test.result ? (
-                    <ProviderTestResultLines result={test.result} />
-                  ) : null}
-                  secondaryActions={!isActive ? (
-                    <>
-                      <Button variant="ghost" size="sm" onClick={() => handleActivate(provider.id)}>{t('settings.providers.setDefault')}</Button>
-                      <Button variant="danger-ghost" size="sm" onClick={() => handleDelete(provider)}>{t('common.delete')}</Button>
-                    </>
-                  ) : null}
-                  actions={(
-                    <>
-                      {!browserMode && <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>{t('settings.providers.test')}</Button>}
-                      <Button variant="ghost" size="sm" onClick={() => setEditingProvider(provider)}>{t('settings.providers.edit')}</Button>
-                    </>
-                  )}
-                />
-              )
-            })}
-          </div>
-        </SortableContext>
-      </DndContext>
+      {hasLoadedProviders && !searching && tab === 'api' && providers.length === 0 && (
+        <EmptyState
+          className="mt-4"
+          icon={<KeyRound size={18} strokeWidth={1.75} />}
+          title={t('settings.providers.apiKeyEmpty.title')}
+          description={t('settings.providers.apiKeyEmpty.description')}
+        >
+          {starterPresets.map((preset) => (
+            <Button key={preset.id} variant="secondary" size="sm" onClick={() => openCreateModal(preset.id)}>
+              {preset.id === 'custom' ? t('settings.providers.customPreset') : preset.name}
+            </Button>
+          ))}
+        </EmptyState>
+      )}
 
       {isLoading && providers.length === 0 ? (
         <div className="flex justify-center py-8">
@@ -496,7 +693,22 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
 
       {/* Create Modal — conditionally rendered so state resets on close */}
       {showCreateModal && (
-        <ProviderFormModal browserMode={browserMode} open={true} onClose={() => setShowCreateModal(false)} mode="create" presets={presets} />
+        <ProviderFormModal
+          browserMode={browserMode}
+          open={true}
+          onClose={() => setShowCreateModal(false)}
+          mode="create"
+          presets={presets}
+          initialPresetId={createPresetId}
+          onPickMagpie={browserMode ? undefined : () => {
+            setShowCreateModal(false)
+            setMagpieDialog({})
+          }}
+        />
+      )}
+
+      {magpieDialog && (
+        <MagpieProviderDialog open={true} onClose={() => setMagpieDialog(null)} provider={magpieDialog.provider} />
       )}
 
       {/* Edit Modal */}
@@ -532,6 +744,8 @@ type SortableProviderCardProps = {
   item: ProviderListItem
   isActive: boolean
   dragLabel: string
+  /** While searching the list is a filtered view, so it is not reorderable. */
+  dragDisabled?: boolean
   title: ReactNode
   subtitle: ReactNode
   badges?: ReactNode
@@ -542,6 +756,10 @@ type SortableProviderCardProps = {
   secondaryActions?: ReactNode
   /** The default provider's model mapping, as a full-width chip row. */
   modelChips?: ReactNode
+  /** Why a search matched, when the match is in a field the card does not show. */
+  matchNote?: ReactNode
+  /** A live state of the provider's endpoint (Magpie: running or not). */
+  statusLine?: ReactNode
   details?: ReactNode
   onActivate?: () => void
 }
@@ -558,6 +776,7 @@ function SortableProviderCard({
   item,
   isActive,
   dragLabel,
+  dragDisabled = false,
   title,
   subtitle,
   badges,
@@ -565,6 +784,8 @@ function SortableProviderCard({
   actions,
   secondaryActions,
   modelChips,
+  matchNote,
+  statusLine,
   details,
   onActivate,
 }: SortableProviderCardProps) {
@@ -575,7 +796,7 @@ function SortableProviderCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id })
+  } = useSortable({ id: item.id, disabled: dragDisabled })
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -598,7 +819,10 @@ function SortableProviderCard({
         isDragging && 'opacity-90 shadow-[var(--shadow-dropdown)]',
       )}
     >
-      <button
+      {dragDisabled ? (
+        // Keeps the dot and name in the same column as when the handle is there.
+        <span aria-hidden="true" className="h-5 w-5 shrink-0" />
+      ) : <button
         type="button"
         {...attributes}
         {...listeners}
@@ -613,7 +837,7 @@ function SortableProviderCard({
         style={{ touchAction: 'none' }}
       >
         <GripVertical size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
+      </button>}
       <button
         type="button"
         onClick={onActivate}
@@ -660,6 +884,8 @@ function SortableProviderCard({
           {actions}
         </div>
       )}
+      {matchNote && <div className={cx('min-w-0 basis-full', CARD_TEXT_INDENT)}>{matchNote}</div>}
+      {statusLine && <div className={cx('min-w-0 basis-full', CARD_TEXT_INDENT)}>{statusLine}</div>}
       {result && <div className={cx('basis-full', CARD_TEXT_INDENT)}>{result}</div>}
       {modelChips && <div className={cx('basis-full', CARD_TEXT_INDENT)}>{modelChips}</div>}
       {details && <div className={cx('basis-full pt-1', CARD_TEXT_INDENT)}>{details}</div>}
@@ -741,6 +967,10 @@ type ProviderFormProps = {
   mode: 'create' | 'edit'
   provider?: SavedProvider
   presets: ProviderPreset[]
+  /** Preset picked before the dialog opened, e.g. from the empty API key list. */
+  initialPresetId?: string
+  /** Magpie is connected through its own dialog (catalog, no key). */
+  onPickMagpie?: () => void
 }
 
 function requirePreset(preset: ProviderPreset | undefined): ProviderPreset {
@@ -1189,7 +1419,7 @@ function openExternalUrl(url: string) {
     .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
 }
 
-function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode = false }: ProviderFormProps) {
+function ProviderFormModal({ open, onClose, mode, provider, presets, initialPresetId, onPickMagpie, browserMode = false }: ProviderFormProps) {
   const { createProvider, updateProvider, testConfig, fetchModels } = useProviderStore()
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const addToast = useUIStore((s) => s.addToast)
@@ -1212,7 +1442,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   )
   const initialPreset = provider
     ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
-    : selectablePresets[0] ?? fallbackPreset
+    : selectablePresets.find((p) => p.id === initialPresetId) ?? selectablePresets[0] ?? fallbackPreset
   // The custom preset's catalog name is a bare English "Custom"; show a localized
   // label that says what it is for.
   const presetLabel = (preset: ProviderPreset) =>
@@ -1397,6 +1627,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   }, [baseUrl, apiKey])
 
   const handlePresetChange = (preset: ProviderPreset) => {
+    if (preset.id === MAGPIE_PRESET_ID && onPickMagpie) {
+      onPickMagpie()
+      return
+    }
     settingsJsonUserEditedRef.current = false
     setSelectedPreset(preset)
     setCompatibility(compatibilityForm())

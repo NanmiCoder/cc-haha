@@ -13,8 +13,12 @@ import {
 import { setAgentProfile } from '../../utils/agentProfile.js'
 import * as attachments from '../../utils/attachments.js'
 import * as forkedAgent from '../../utils/forkedAgent.js'
-import { COMPACT_MAX_OUTPUT_TOKENS } from '../../utils/context.js'
-import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
+import {
+  COMPACT_MAX_OUTPUT_TOKENS,
+  rememberProviderContextLimit,
+  resetProviderReportedContextLimitsForTesting,
+} from '../../utils/context.js'
+import { createAssistantAPIErrorMessage, createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import { getCurrentUsage } from '../../utils/tokens.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 
@@ -192,6 +196,44 @@ describe('oversized compaction recovery (#1373)', () => {
     expect(result[0]?.type).toBe('user')
   })
 
+  function toolUseCount(messages: Message[]) {
+    return messages.flatMap(message => message.type === 'assistant'
+      ? message.message.content.filter(block => block.type === 'tool_use') : []).length
+  }
+
+  test('without counts in the error, sizes the cut from the counts the conversation knows', () => {
+    // MiniMax-style rejection, three times over the provider's real limit
+    // (e.g. after switching to a smaller model mid-session).
+    const messages = toolHistory(20)
+    const error = overflow('invalid params, context window exceeds limit (2013)')
+    const result = truncateHeadForPTLRetry(messages, error, { actualTokens: 300_000, limitTokens: 100_000 })!
+
+    // A fixed 20% cut keeps 16 of 20 rounds and is refused again three times
+    // over; following the known sizes keeps under a third.
+    expect(toolUseCount(result)).toBeLessThanOrEqual(6)
+    expect(toolUseCount(result)).toBeGreaterThan(0)
+    expect(result.at(-1)).toBe(messages.at(-1))
+    expect(result[0]?.type).toBe('user')
+  })
+
+  test('inferred counts never cut less than the plain fallback', () => {
+    const messages = toolHistory(20)
+    const error = overflow('invalid params, context window exceeds limit (2013)')
+    const plain = truncateHeadForPTLRetry(messages, error)!
+    const inferred = truncateHeadForPTLRetry(messages, error, { actualTokens: 101_000, limitTokens: 100_000 })!
+
+    expect(toolUseCount(inferred)).toBeLessThanOrEqual(toolUseCount(plain))
+  })
+
+  test('a limit the error states is combined with the known request size', () => {
+    // Qwen states only the limit.
+    const messages = toolHistory(20)
+    const error = overflow('Range of input length should be [1, 100000]')
+    const result = truncateHeadForPTLRetry(messages, error, { actualTokens: 300_000, limitTokens: 250_000 })!
+
+    expect(toolUseCount(result)).toBeLessThanOrEqual(6)
+  })
+
   test('unparseable overflow still makes progress across retries and keeps the newest round', () => {
     const messages = toolHistory(8)
     const error = overflow('Provider rejected the prompt without token counts')
@@ -342,6 +384,42 @@ describe('compaction fork output allowance near the context window', () => {
       await summarize(967_000)
       expect(captured?.maxOutputTokens).toBe(COMPACT_MAX_OUTPUT_TOKENS)
     })
+
+    test('hands a size rejection straight back instead of re-sending the same conversation uncached', async () => {
+      // A relay's 413: the uncached fallback carries the same history and is
+      // refused the same way; the caller trims the oldest rounds instead.
+      let calls = 0
+      forkSpy.mockImplementation(async () => {
+        calls++
+        return {
+          messages: [createAssistantAPIErrorMessage({
+            content: 'Request too large: your provider or relay rejected it (HTTP 413).',
+            error: 'invalid_request',
+            errorDetails: 'request_too_large: 413 Request Entity Too Large',
+            businessErrorCode: 'request_too_large',
+          })],
+          totalUsage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        } as never
+      })
+
+      const response = await summarize(600_000)
+
+      expect(calls).toBe(1)
+      expect(response.businessErrorCode).toBe('request_too_large')
+    })
+  })
+})
+
+describe('compaction against the window the provider actually allows', () => {
+  afterEach(() => {
+    resetProviderReportedContextLimitsForTesting()
+  })
+
+  test('caps the fork allowance below a limit the provider stated', () => {
+    // claude-opus-4-8 is registered at 1M; the provider behind it accepts 131K.
+    expect(getCompactForkMaxOutputTokens(100_000, 'claude-opus-4-8')).toBeUndefined()
+    rememberProviderContextLimit('claude-opus-4-8', 131_072)
+    expect(getCompactForkMaxOutputTokens(100_000, 'claude-opus-4-8')).toBe(COMPACT_MAX_OUTPUT_TOKENS)
   })
 })
 

@@ -15,6 +15,14 @@ import {
   type AutoCompactTrackingState,
 } from './services/compact/autoCompact.js'
 import { buildPostCompactMessages } from './services/compact/compact.js'
+import {
+  canRecoverFromPromptTooLong,
+  compactAfterPromptTooLong,
+  estimateRejectedRequestTokens,
+  getProviderContextLimit,
+  isRecoverableContextRejection,
+} from './services/compact/promptTooLongRecovery.js'
+import { rememberProviderContextLimit } from './utils/context.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
 const reactiveCompact = feature('REACTIVE_COMPACT')
   ? (require('./services/compact/reactiveCompact.js') as typeof import('./services/compact/reactiveCompact.js'))
@@ -58,7 +66,6 @@ import {
   createToolUseSummaryMessage,
   createMicrocompactBoundaryMessage,
   stripSignatureBlocks,
-  stripSignatureBlocksAfterModelChange,
 } from './utils/messages.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { prependUserContext, appendSystemContext } from './utils/api.js'
@@ -112,6 +119,8 @@ import { productionDeps, type QueryDeps } from './query/deps.js'
 import type { Terminal, Continue } from './query/transitions.js'
 import { consumeTeamPlanTurnPause } from './utils/swarm/teamPlanTurnBoundary.js'
 import { feature } from 'bun:bundle'
+import { requiresComputerUse } from './utils/computerUse/turnIntent.js'
+import { isLockHeldLocally } from './utils/computerUse/computerUseLock.js'
 import {
   getCurrentTurnTokenBudget,
   getTurnOutputTokens,
@@ -236,15 +245,26 @@ export async function* query(
   Terminal
 > {
   const consumedCommandUuids: string[] = []
-  const terminal = yield* queryLoop(params, consumedCommandUuids)
-  // Only reached if queryLoop returned normally. Skipped on throw (error
-  // propagates through yield*) and on .return() (Return completion closes
-  // both generators). This gives the same asymmetric started-without-completed
-  // signal as print.ts's drainCommandQueue when the turn fails.
-  for (const uuid of consumedCommandUuids) {
-    notifyCommandLifecycle(uuid, 'completed')
+  const turn = params.toolUseContext.agentId ? undefined : Symbol()
+  const toolUseContext = turn ? { ...params.toolUseContext, computerUseTurn: turn } : params.toolUseContext
+  try {
+    const terminal = yield* queryLoop({ ...params, toolUseContext }, consumedCommandUuids)
+    // A throw or .return() skips this notification, as in print.ts.
+    for (const uuid of consumedCommandUuids) {
+      notifyCommandLifecycle(uuid, 'completed')
+    }
+    return terminal
+  } finally {
+    // API failures, turn limits and iterator closure can bypass Stop hooks.
+    if (turn && isLockHeldLocally(turn)) {
+      try {
+        const { cleanupComputerUseAfterTurn } = await import('./utils/computerUse/cleanup.js')
+        await cleanupComputerUseAfterTurn(toolUseContext, { ownedTurn: turn })
+      } catch (error) {
+        logForDebugging(`Could not finish Computer Use cleanup: ${String(error)}`)
+      }
+    }
   }
-  return terminal
 }
 
 async function* queryLoop(
@@ -301,6 +321,10 @@ async function* queryLoop(
   // trigger point. Loop-local (not on State) to avoid touching the 7 continue
   // sites.
   let taskBudgetRemaining: number | undefined = undefined
+
+  // A provider limit read from a prompt-too-long error, remembered once the
+  // compacted retry it led to is accepted (see promptTooLongRecovery.ts).
+  let pendingProviderContextLimit: { model: string, limit: number } | undefined
 
   // Snapshot immutable env/statsig/session state once at entry. See QueryConfig
   // for what's included and why feature() gates are intentionally excluded.
@@ -605,7 +629,6 @@ async function* queryLoop(
         permissionMode === 'plan' &&
         doesMostRecentAssistantMessageExceed200k(messagesForQuery),
     })
-    messagesForQuery = stripSignatureBlocksAfterModelChange(messagesForQuery, currentModel)
 
     queryCheckpoint('query_setup_end')
 
@@ -658,6 +681,9 @@ async function* queryLoop(
     // it predates the experiment and is already the control-arm baseline.
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
+    // One compaction per overflow: a retry that is still too long surfaces.
+    const promptTooLongRecoveryEnabled =
+      !hasAttemptedReactiveCompact && canRecoverFromPromptTooLong(querySource)
     if (
       !compactionResult &&
       querySource !== 'compact' &&
@@ -856,6 +882,12 @@ async function* queryLoop(
             if (
               mediaRecoveryEnabled &&
               reactiveCompact?.isWithheldMediaSizeError(message)
+            ) {
+              withheld = true
+            }
+            if (
+              promptTooLongRecoveryEnabled &&
+              isRecoverableContextRejection(message, messagesForQuery)
             ) {
               withheld = true
             }
@@ -1102,6 +1134,23 @@ async function* queryLoop(
       }
     }
 
+    // The compacted retry was accepted, so the limit the provider stated is
+    // real: proactive auto-compact now fires below it instead of every later
+    // turn running into the same rejection.
+    if (
+      pendingProviderContextLimit &&
+      assistantMessages.some(message => !message.isApiErrorMessage)
+    ) {
+      rememberProviderContextLimit(
+        pendingProviderContextLimit.model,
+        pendingProviderContextLimit.limit,
+      )
+      logForDebugging(
+        `prompt-too-long: ${pendingProviderContextLimit.model} accepts at most ${pendingProviderContextLimit.limit} tokens; auto-compact follows that limit from now on`,
+      )
+      pendingProviderContextLimit = undefined
+    }
+
     if (!needsFollowUp) {
       const lastMessage = assistantMessages.at(-1)
 
@@ -1220,6 +1269,80 @@ async function* queryLoop(
         // reactiveCompact compiled out but contextCollapse withheld and
         // couldn't recover (staged queue empty/stale). Surface. Same
         // early-return rationale — don't fall through to stop hooks.
+        yield lastMessage
+        void executeStopFailureHooks(lastMessage, toolUseContext)
+        return { reason: 'prompt_too_long' }
+      }
+
+      // The provider rejected the request as too long before auto-compact's
+      // threshold was reached. Compact what was sent and retry once; a retry
+      // that is still too long surfaces the error (the guard only resets when
+      // the turn moves on to its next tool round).
+      if (
+        promptTooLongRecoveryEnabled &&
+        lastMessage &&
+        isRecoverableContextRejection(lastMessage, messagesForQuery)
+      ) {
+        const rejectedCacheSafeParams = {
+          systemPrompt,
+          userContext,
+          systemContext,
+          toolUseContext,
+          forkContextMessages: messagesForQuery,
+        }
+        const rejectedRequestTokens = estimateRejectedRequestTokens(
+          messagesForQuery,
+          rejectedCacheSafeParams,
+        )
+        const compacted = await (
+          deps.compactAfterPromptTooLong ?? compactAfterPromptTooLong
+        )({
+          messages: messagesForQuery,
+          toolUseContext,
+          cacheSafeParams: rejectedCacheSafeParams,
+          querySource,
+        })
+        if (compacted) {
+          if (params.taskBudget) {
+            const preCompactContext =
+              finalContextTokensFromLastResponse(messagesForQuery)
+            taskBudgetRemaining = Math.max(
+              0,
+              (taskBudgetRemaining ?? params.taskBudget.total) -
+                preCompactContext,
+            )
+          }
+          const limit = getProviderContextLimit(
+            lastMessage,
+            rejectedRequestTokens,
+          )
+          pendingProviderContextLimit =
+            limit === undefined ? undefined : { model: currentModel, limit }
+          const postCompactMessages = buildPostCompactMessages(compacted)
+          for (const msg of postCompactMessages) {
+            yield msg
+          }
+          state = {
+            messages: postCompactMessages,
+            toolUseContext,
+            autoCompactTracking: undefined,
+            maxOutputTokensRecoveryCount,
+            hasAttemptedReactiveCompact: true,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount,
+            transition: { reason: 'reactive_compact_retry' },
+          }
+          continue
+        }
+        // Stopped while compacting: the turn ends the way any stop ends it.
+        if (toolUseContext.abortController.signal.aborted) {
+          if (toolUseContext.abortController.signal.reason !== 'interrupt') {
+            yield createUserInterruptionMessage({ toolUse: false })
+          }
+          return { reason: 'aborted_streaming' }
+        }
         yield lastMessage
         void executeStopFailureHooks(lastMessage, toolUseContext)
         return { reason: 'prompt_too_long' }
@@ -1620,6 +1743,9 @@ async function* queryLoop(
       sleepRan ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
+      // Explicit desktop requests need their own SDK turn and its refreshed
+      // Computer Use inventory. Do not merge them into a general-tool turn.
+      if (querySource === 'sdk' && requiresComputerUse(cmd)) return false
       if (isMainThread) return cmd.agentId === undefined
       // Subagents only drain task-notifications addressed to them — never
       // user prompts, even if someone stamps an agentId on one.

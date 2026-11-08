@@ -47,6 +47,14 @@ export const OPENAI_OFFICIAL_MODELS: ModelInfo[] = [
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
+    id: 'gpt-6.1-terra',
+    name: 'GPT-6.1 Terra',
+    description: 'GPT-6.1 Terra Codex model',
+    context: '475000',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'gpt-5.6-sol',
     name: 'GPT-5.6-Sol',
     description: 'Frontier agentic coding model',

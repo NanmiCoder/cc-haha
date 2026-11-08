@@ -73,6 +73,7 @@ export type SavedProvider = {
   model1mSupport?: Model1mSupport
   autoCompactWindow?: number
   modelContextWindows?: ModelContextWindows
+  modelMaxOutputTokens?: Record<string, number>
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
@@ -94,6 +95,7 @@ export type CreateProviderInput = {
   model1mSupport?: Model1mSupport
   autoCompactWindow?: number
   modelContextWindows?: ModelContextWindows
+  modelMaxOutputTokens?: Record<string, number>
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
@@ -114,6 +116,7 @@ export type UpdateProviderInput = {
   model1mSupport?: Model1mSupport | null
   autoCompactWindow?: number | null
   modelContextWindows?: ModelContextWindows | null
+  modelMaxOutputTokens?: Record<string, number> | null
   toolSearchEnabled?: boolean
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
@@ -247,3 +250,33 @@ export type ProviderModelsResult =
     httpStatus?: number
     endpointsTried: string[]
   }
+
+/** The local Magpie gateway as the server found it (GET /api/providers/magpie). */
+export type MagpieStatus = {
+  installed: boolean
+  running: boolean
+  baseUrl: string
+  version?: string
+}
+
+export type MagpieModel = {
+  id: string
+  /** The id a session runs: a 1M Claude model carries `[1m]`. */
+  runtimeId: string
+  displayName: string
+  provider: string
+  providerName?: string
+  isGroup: boolean
+  contextWindow?: number
+  maxOutputTokens?: number
+  reasoningEfforts: string[]
+  images?: boolean
+}
+
+export type MagpieState = {
+  status: MagpieStatus
+  /** Null while Magpie is not running or did not answer. */
+  models: MagpieModel[] | null
+}
+
+export type OpenMagpieResult = { ok: boolean; unsupported?: boolean }

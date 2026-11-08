@@ -571,6 +571,23 @@ describe('AgentTeamsMemberInspector', () => {
       expect(lastError.textContent).toBe(reason)
       expect(lastError.getAttribute('title')).toBe(reason)
       expect(lastError.className).toContain('truncate')
+      // Resending into a full context fails the same way, so the hint names /compact.
+      expect(screen.getByTestId('agent-teams-member-recovery-hint').textContent)
+        .toBe('Its context is full. Type /compact in its conversation, then send a message to let it continue')
+    })
+
+    it('points a stopped member whose context is full at /compact too', () => {
+      renderMember({ ...builder, status: 'idle', activity: 'stopped', lastError: 'Prompt is too long' })
+
+      expect(screen.getByTestId('agent-teams-member-recovery').getAttribute('data-member-state'))
+        .toBe('stopped')
+      expect(screen.getByTestId('agent-teams-member-recovery-hint').textContent)
+        .toBe('Its context is full. Type /compact in its conversation, then send a message to let it continue')
+    })
+
+    it('keeps the plain recovery hint for any other failure', () => {
+      renderMember({ ...builder, status: 'error', activity: 'idle', lastError: 'Credit balance is too low' })
+
       expect(screen.getByTestId('agent-teams-member-recovery-hint').textContent)
         .toBe('Once the problem is fixed, send a message to let it continue')
     })

@@ -93,7 +93,8 @@ export function MessageMenu({
               <UserBubble item={item} text={text} team={text !== item.text} />
             ) : (
               <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
-                <Markdown text={text || '附件消息'} selectable={false} />
+                {/* 浮起的副本和列表里用同一个挂载上限，超长消息不会整条再挂一遍。 */}
+                <Markdown text={text || '附件消息'} selectable={false} expandable={false} />
               </View>
             )}
           </ScrollView>

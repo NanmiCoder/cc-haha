@@ -821,8 +821,11 @@ function buildTaskRowsFromTaskTools(
     if (message.type !== 'tool_use') continue
 
     if (message.toolName === 'TaskCreate') {
+      const toolResult = resultsByToolUseId.get(message.toolUseId)
+      // 被中断取消或被 TaskCreated hook 拦下的 TaskCreate 没有建出任务，不能按调用序号补一行
+      if (toolResult?.isError) continue
       const input = isRecordValue(message.input) ? message.input : {}
-      const result = parseCreatedTaskResult(resultsByToolUseId.get(message.toolUseId)?.content)
+      const result = parseCreatedTaskResult(toolResult?.content)
       const taskId = result?.id || stringField(input, 'taskId') || stringField(input, 'id') || `${createIndex + 1}`
       const row = buildTaskToolRow(taskId, input, createIndex, result)
       rowsByTaskId.set(taskId, row)

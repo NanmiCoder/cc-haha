@@ -1,0 +1,799 @@
+{
+  "capture": "uia-tree-census",
+  "client_stack": "uia3-com",
+  "control_types": [
+    {
+      "class_names": [
+        "\"\"",
+        "\"Button\""
+      ],
+      "control_type": "50000",
+      "nodes": 20,
+      "with_automation_id": 20,
+      "with_name": 20
+    },
+    {
+      "class_names": [
+        "\"SearchEditBox\"",
+        "\"UIProperty\""
+      ],
+      "control_type": "50004",
+      "nodes": 9,
+      "with_automation_id": 9,
+      "with_name": 9
+    },
+    {
+      "class_names": [
+        "\"UIImage\""
+      ],
+      "control_type": "50006",
+      "nodes": 2,
+      "with_automation_id": 2,
+      "with_name": 2
+    },
+    {
+      "class_names": [
+        "\"UIItem\""
+      ],
+      "control_type": "50007",
+      "nodes": 2,
+      "with_automation_id": 2,
+      "with_name": 2
+    },
+    {
+      "class_names": [
+        "\"UIItemsView\""
+      ],
+      "control_type": "50008",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50010",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50011",
+      "nodes": 2,
+      "with_automation_id": 2,
+      "with_name": 2
+    },
+    {
+      "class_names": [
+        "\"msctls_progress32\""
+      ],
+      "control_type": "50012",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"SelectorButton\""
+      ],
+      "control_type": "50013",
+      "nodes": 2,
+      "with_automation_id": 2,
+      "with_name": 2
+    },
+    {
+      "class_names": [
+        "\"StatusBarModuleInner\""
+      ],
+      "control_type": "50017",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50018",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50019",
+      "nodes": 3,
+      "with_automation_id": 3,
+      "with_name": 3
+    },
+    {
+      "class_names": [
+        "\"MetadataLabel\""
+      ],
+      "control_type": "50020",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\"",
+        "\"ToolbarWindow32\""
+      ],
+      "control_type": "50021",
+      "nodes": 5,
+      "with_automation_id": 5,
+      "with_name": 5
+    },
+    {
+      "class_names": [
+        "\"SysTreeView32\""
+      ],
+      "control_type": "50023",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50024",
+      "nodes": 10,
+      "with_automation_id": 10,
+      "with_name": 10
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50025",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"Element\"",
+        "\"SelectorNoDefault\""
+      ],
+      "control_type": "50026",
+      "nodes": 2,
+      "with_automation_id": 2,
+      "with_name": 2
+    },
+    {
+      "class_names": [
+        "\"\"",
+        "\"UIColumnHeader\""
+      ],
+      "control_type": "50031",
+      "nodes": 7,
+      "with_automation_id": 7,
+      "with_name": 7
+    },
+    {
+      "class_names": [
+        "\"CabinetWClass\""
+      ],
+      "control_type": "50032",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"Address Band Root\"",
+        "\"Breadcrumb Parent\"",
+        "\"CtrlNotifySink\"",
+        "\"DUIListView\"",
+        "\"DUIViewWndClassName\"",
+        "\"Element\"",
+        "\"HWNDView\"",
+        "\"NUIPane\"",
+        "\"NetUIHWND\"",
+        "\"ProperTreeHost\"",
+        "\"ReBarWindow32\"",
+        "\"Search Box\"",
+        "\"SearchBox\"",
+        "\"SearchEditBoxWrapperClass\"",
+        "\"SeparatorBand\"",
+        "\"ShellTabWindowClass\"",
+        "\"TravelBand\"",
+        "\"UIRibbonCommandBar\"",
+        "\"UIRibbonCommandBarDock\"",
+        "\"UIRibbonWorkPane\"",
+        "\"UniversalSearchBand\"",
+        "\"UpBand\"",
+        "\"WorkerW\""
+      ],
+      "control_type": "50033",
+      "nodes": 25,
+      "with_automation_id": 25,
+      "with_name": 25
+    },
+    {
+      "class_names": [
+        "\"UIViewHeader\""
+      ],
+      "control_type": "50034",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    },
+    {
+      "class_names": [
+        "\"\""
+      ],
+      "control_type": "50037",
+      "nodes": 1,
+      "with_automation_id": 1,
+      "with_name": 1
+    }
+  ],
+  "crate": "uiautomation 0.25.0",
+  "max_depth": 24,
+  "node_count": 100,
+  "os_build": "Microsoft Windows [Version 10.0.17763.7434]",
+  "providers": [
+    {
+      "nodes": 10,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Annotation:Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]\""
+    },
+    {
+      "nodes": 10,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Annotation:Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main(parent link):Microsoft: TreeView Item Proxy (unmanaged:UIAutomationCore.DLL)]\""
+    },
+    {
+      "nodes": 12,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]\""
+    },
+    {
+      "nodes": 6,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIRibbon.dll)]\""
+    },
+    {
+      "nodes": 15,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]\""
+    },
+    {
+      "nodes": 15,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:explorerframe.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Microsoft: Non-Control Proxy (unmanaged:uiautomationcore.dll); Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 22,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: TreeView PRoxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: Ribbon Non-Client Provider (unmanaged:UIRibbon.dll)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 2,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:explorerframe.dll)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Override(parent link):Nested [pid:<pid>,providerId:<providerid> Override(parent link):Unidentified Provider (unmanaged:DUI70.dll)]; Main:Microsoft: Non-Control Proxy (unmanaged:uiautomationcore.dll); Hwnd:Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 1,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Override(parent link):Nested [pid:<pid>,providerId:<providerid> Override(parent link):Unidentified Provider (unmanaged:DUI70.dll)]; Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]; Hwnd:Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    },
+    {
+      "nodes": 2,
+      "provider": "\"[pid:<pid>,providerId:<providerid> Override:Nested [pid:<pid>,providerId:<providerid> Override(parent link):Unidentified Provider (unmanaged:DUI70.dll)]; Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]\""
+    }
+  ],
+  "sample": [
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 640.0,
+        "width": 1000.0,
+        "x": 40.0,
+        "y": 40.0
+      },
+      "child_index": 0,
+      "class_name": "CabinetWClass",
+      "control_type": 50032,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 3,
+        "present": true
+      },
+      "parent_index": null,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: Ribbon Non-Client Provider (unmanaged:UIRibbon.dll)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 24.0,
+        "width": 984.0,
+        "x": 48.0,
+        "y": 71.0
+      },
+      "child_index": 0,
+      "class_name": "UIRibbonCommandBarDock",
+      "control_type": 50033,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 15,
+        "present": true
+      },
+      "parent_index": 0,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 22.0,
+        "width": 44.0,
+        "x": 86.0,
+        "y": 45.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50021,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 20,
+        "present": true
+      },
+      "parent_index": 5,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 24.0,
+        "width": 22.0,
+        "x": 86.0,
+        "y": 43.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50000,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 10,
+        "present": true
+      },
+      "parent_index": 6,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 23.0,
+        "width": 884.0,
+        "x": 104.0,
+        "y": 71.0
+      },
+      "child_index": 3,
+      "class_name": "",
+      "control_type": 50018,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 11,
+        "present": true
+      },
+      "parent_index": 5,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 23.0,
+        "width": 884.0,
+        "x": 104.0,
+        "y": 71.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50025,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 0,
+        "present": true
+      },
+      "parent_index": 11,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 23.0,
+        "width": 58.0,
+        "x": 104.0,
+        "y": 71.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50019,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 4,
+        "present": true
+      },
+      "parent_index": 12,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 22.0,
+        "width": 650.0,
+        "x": 155.0,
+        "y": 101.0
+      },
+      "child_index": 0,
+      "class_name": "msctls_progress32",
+      "control_type": 50012,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 0,
+        "present": true
+      },
+      "parent_index": 28,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 21.0,
+        "width": 35.0,
+        "x": 155.0,
+        "y": 101.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50031,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 13,
+        "present": true
+      },
+      "parent_index": 31,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Annotation:Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 21.0,
+        "width": 27.0,
+        "x": 351.0,
+        "y": 101.0
+      },
+      "child_index": 3,
+      "class_name": "",
+      "control_type": 50011,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 4,
+        "present": true
+      },
+      "parent_index": 31,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Annotation:Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "SearchEditBox",
+      "bounds": {
+        "height": 15.0,
+        "width": 170.0,
+        "x": 824.0,
+        "y": 104.0
+      },
+      "child_index": 0,
+      "class_name": "SearchEditBox",
+      "control_type": 50004,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 10,
+        "present": true
+      },
+      "parent_index": 43,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:explorerframe.dll)]"
+    },
+    {
+      "automation_id": "StatusBarModuleInner",
+      "bounds": {
+        "height": 23.0,
+        "width": 984.0,
+        "x": 48.0,
+        "y": 649.0
+      },
+      "child_index": 0,
+      "class_name": "StatusBarModuleInner",
+      "control_type": 50017,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 10,
+        "present": true
+      },
+      "parent_index": 52,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "System.StatusBarViewItemCount",
+      "bounds": {
+        "height": 23.0,
+        "width": 52.0,
+        "x": 55.0,
+        "y": 649.0
+      },
+      "child_index": 0,
+      "class_name": "Element",
+      "control_type": 50026,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 14,
+        "present": true
+      },
+      "parent_index": 53,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "PropertyValue",
+      "bounds": {
+        "height": 23.0,
+        "width": 42.0,
+        "x": 60.0,
+        "y": 649.0
+      },
+      "child_index": 0,
+      "class_name": "MetadataLabel",
+      "control_type": 50020,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 7,
+        "present": true
+      },
+      "parent_index": 54,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "ViewMode_Details",
+      "bounds": {
+        "height": 23.0,
+        "width": 22.0,
+        "x": 984.0,
+        "y": 649.0
+      },
+      "child_index": 0,
+      "class_name": "SelectorButton",
+      "control_type": 50013,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 7,
+        "present": true
+      },
+      "parent_index": 56,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "100",
+      "bounds": {
+        "height": 519.0,
+        "width": 156.0,
+        "x": 48.0,
+        "y": 130.0
+      },
+      "child_index": 0,
+      "class_name": "SysTreeView32",
+      "control_type": 50023,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 9,
+        "present": true
+      },
+      "parent_index": 59,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Annotation(parent link):Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main:Microsoft: TreeView PRoxy (unmanaged:UIAutomationCore.DLL)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 24.0,
+        "width": 72.0,
+        "x": 91.0,
+        "y": 146.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50024,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 12,
+        "present": true
+      },
+      "parent_index": 60,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Annotation:Microsoft: Annotation Proxy (unmanaged:UIAutomationCore.DLL); Main(parent link):Microsoft: TreeView Item Proxy (unmanaged:UIAutomationCore.DLL)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 519.0,
+        "width": 824.0,
+        "x": 208.0,
+        "y": 130.0
+      },
+      "child_index": 0,
+      "class_name": "UIItemsView",
+      "control_type": 50008,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 10,
+        "present": true
+      },
+      "parent_index": 71,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main:Nested [pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:explorerframe.dll)]; Hwnd(parent link):Microsoft: HWND Proxy (unmanaged:uiautomationcore.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 25.0,
+        "width": 824.0,
+        "x": 208.0,
+        "y": 130.0
+      },
+      "child_index": 0,
+      "class_name": "UIViewHeader",
+      "control_type": 50034,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 6,
+        "present": true
+      },
+      "parent_index": 72,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "0",
+      "bounds": {
+        "height": 22.0,
+        "width": 574.0,
+        "x": 222.0,
+        "y": 161.0
+      },
+      "child_index": 1,
+      "class_name": "UIItem",
+      "control_type": 50007,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 5,
+        "present": true
+      },
+      "parent_index": 72,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:explorerframe.dll)]"
+    },
+    {
+      "automation_id": "",
+      "bounds": {
+        "height": 22.0,
+        "width": 18.0,
+        "x": 226.0,
+        "y": 161.0
+      },
+      "child_index": 0,
+      "class_name": "UIImage",
+      "control_type": 50006,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 0,
+        "present": true
+      },
+      "parent_index": 82,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Unidentified Provider (unmanaged:DUI70.dll)]"
+    },
+    {
+      "automation_id": "TitleBar",
+      "bounds": {
+        "height": 31.0,
+        "width": 968.0,
+        "x": 64.0,
+        "y": 43.0
+      },
+      "child_index": 3,
+      "class_name": "",
+      "control_type": 50037,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 0,
+        "present": true
+      },
+      "parent_index": 0,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIRibbon.dll)]"
+    },
+    {
+      "automation_id": "SystemMenuBar",
+      "bounds": {
+        "height": 22.0,
+        "width": 22.0,
+        "x": 48.0,
+        "y": 48.0
+      },
+      "child_index": 0,
+      "class_name": "",
+      "control_type": 50010,
+      "failed_reads": 0,
+      "is_offscreen": false,
+      "is_password": false,
+      "name": {
+        "chars": 6,
+        "present": true
+      },
+      "parent_index": 94,
+      "provider_description": "[pid:<pid>,providerId:<providerid> Main(parent link):Microsoft: MSAA Proxy (unmanaged:UIRibbon.dll)]"
+    }
+  ],
+  "target_class": "CabinetWClass",
+  "target_variant": "Windows 10 1809 ribbon Explorer folder window",
+  "walk": {
+    "cycles_skipped": 0,
+    "enumeration_failures": 0,
+    "nodes_observed": 100,
+    "structurally_complete": true
+  }
+}

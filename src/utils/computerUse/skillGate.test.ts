@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   invalidateComputerUseSkillGate,
   isComputerUseSkillEnabled,
+  isComputerUseEnabledForDispatch,
 } from './skillGate.js'
 import { resolveStoredComputerUseConfig } from './preauthorizedConfig.js'
 
@@ -18,9 +19,19 @@ afterEach(() => invalidateComputerUseSkillGate())
 
 const configWith = (enabled: boolean) => () => JSON.stringify({ enabled })
 
+test('execution consent ignores the skill-menu TTL and rejects malformed or unreadable saved state', () => {
+  isComputerUseSkillEnabled(1_000, configWith(true))
+  expect(isComputerUseEnabledForDispatch(configWith(true))).toBe(true)
+  expect(isComputerUseEnabledForDispatch(configWith(false))).toBe(false)
+  for (const content of ['{"enabled":"true"}', 'null', '{}', 'not-json']) {
+    expect(isComputerUseEnabledForDispatch(() => content)).toBe(false)
+  }
+  expect(isComputerUseEnabledForDispatch(() => { throw new Error('unreadable') })).toBe(false)
+})
+
 describe('computer use skill gate', () => {
   test('follows the user setting', () => {
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(true)
     invalidateComputerUseSkillGate()
     expect(isComputerUseSkillEnabled(1, configWith(false))).toBe(false)
@@ -31,7 +42,7 @@ describe('computer use skill gate', () => {
     // are registered on that same default. Hiding the skill here would produce
     // the one combination that cannot work — tools present, the workflow they
     // assume absent — for every user who has never opened the Settings page.
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     const appDefault = resolveStoredComputerUseConfig().enabled
 
     invalidateComputerUseSkillGate()
@@ -47,18 +58,18 @@ describe('computer use skill gate', () => {
 
   test('an explicit off in the config still wins over the default', () => {
     // The whole point of the gate: a user who switched it off must not see it.
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     invalidateComputerUseSkillGate()
     expect(isComputerUseSkillEnabled(1, configWith(false))).toBe(false)
   })
 
   test('stays off on platforms without either engine', () => {
-    if (process.platform === 'darwin' || process.platform === 'win32') return
+    if (['darwin', 'win32', 'linux'].includes(process.platform)) return
     expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(false)
   })
 
   test('caches briefly so an open slash menu does not stat on every keystroke', () => {
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     invalidateComputerUseSkillGate()
     let reads = 0
     const counting = () => {
@@ -71,7 +82,7 @@ describe('computer use skill gate', () => {
   })
 
   test('re-reads after the cache window, so a settings change lands without a restart', () => {
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     invalidateComputerUseSkillGate()
     expect(isComputerUseSkillEnabled(1_000, configWith(true))).toBe(true)
     // Far enough past the TTL that the next call must go back to disk.
@@ -79,7 +90,7 @@ describe('computer use skill gate', () => {
   })
 
   test('explicit invalidation takes effect immediately', () => {
-    if (process.platform !== 'darwin' && process.platform !== 'win32') return
+    if (!['darwin', 'win32', 'linux'].includes(process.platform)) return
     invalidateComputerUseSkillGate()
     expect(isComputerUseSkillEnabled(1, configWith(true))).toBe(true)
     invalidateComputerUseSkillGate()

@@ -37,6 +37,7 @@ import {
 import type { ActivityStep } from './activityGroupModel'
 import { ToolResultBlock } from './ToolResultBlock'
 import { PermissionDialog } from './PermissionDialog'
+import { MagpieConnectionHint, isCliApiErrorText } from './MagpieConnectionHint'
 import { AskUserQuestion } from './AskUserQuestion'
 import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
@@ -4204,6 +4205,12 @@ export function MessageList({
         className={`${CHAT_SCROLL_AREA_CLASS} h-full overflow-y-auto ${chatScrollPaddingClass}`}
       >
         <div
+          // A malformed/replayed history can contain duplicate row identities.
+          // React can leave those rows outside its tracked child list; replace
+          // the transcript as a unit on session changes so none can follow the
+          // user into another session. Keep the scroller outside this boundary
+          // so its outgoing scroll snapshot is still captured before the swap.
+          key={resolvedSessionId}
           ref={scrollContentRef}
           // The reading measure holds whether or not a right-hand panel is
           // open — `compact` only tightens padding. Dropping to `max-w-full`
@@ -4467,6 +4474,9 @@ export const MessageBlock = memo(function MessageBlock({
             isTurnOutputOwner={isTurnOutputOwner}
             turnCompletion={turnCompletion}
           />
+          {isCliApiErrorText(message.content) && (
+            <MagpieConnectionHint sessionId={sessionId} errorText={message.content} />
+          )}
         </SelectableChatMessage>
       )
     case 'thinking':
@@ -4560,6 +4570,7 @@ export const MessageBlock = memo(function MessageBlock({
               {message.message}
             </div>
           )}
+          <MagpieConnectionHint sessionId={sessionId} errorText={message.message} />
         </div>
       )
     }

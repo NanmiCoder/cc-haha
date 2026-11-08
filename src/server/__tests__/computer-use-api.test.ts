@@ -251,6 +251,26 @@ describe('Computer Use API authorized app config', () => {
 })
 
 describe('Computer Use platform capability', () => {
+  for (const reason of ['helper_missing', 'helper_signature_invalid', 'helper_prepare_failed'] as const) {
+    it(`preserves ${reason} without probing permissions, including when globally disabled`, async () => {
+      const { checkStatus } = await importComputerUseApi()
+      expect(await (await callAuthorizedApps('GET')).json()).toMatchObject({ enabled: false })
+      const status = await checkStatus({
+        platform: 'darwin',
+        detectMacosProductVersion: async () => '14.4',
+        isMacosRuntimeSupported: () => true,
+        resolveCuHelper: () => ({ binary: null, reason }),
+        checkPermissions: async () => { throw new Error('must not launch a rejected helper') },
+      })
+      expect(status).toMatchObject({
+        supported: true,
+        engine: 'macos-native',
+        cuHelper: { available: false, supported: true, reason },
+        permissions: { accessibility: null, screenRecording: null, error: null },
+      })
+    })
+  }
+
   it('builds native macOS status through the real capability transition', async () => {
     const { checkStatus } = await importComputerUseApi()
     const calls: string[] = []
@@ -266,9 +286,9 @@ describe('Computer Use platform capability', () => {
         calls.push(`runtime:${platform}`)
         return true
       },
-      isCuHelperAvailable: () => {
+      resolveCuHelper: () => {
         calls.push('helper')
-        return true
+        return { binary: '/fixture/cu-helper', reason: null }
       },
       checkPermissions: async () => {
         calls.push('permissions')
@@ -306,9 +326,9 @@ describe('Computer Use platform capability', () => {
       arch: 'arm64',
       detectMacosProductVersion: async () => '14.3.9',
       isMacosRuntimeSupported: () => true,
-      isCuHelperAvailable: () => {
+      resolveCuHelper: () => {
         helperCalls += 1
-        return true
+        return { binary: '/fixture/cu-helper', reason: null }
       },
       checkPermissions: async () => {
         permissionCalls += 1
@@ -367,15 +387,99 @@ describe('Computer Use platform capability', () => {
     })
   })
 
-  it('routes Windows to compatibility and rejects unsupported platforms', async () => {
+  it('routes Windows and Linux to the native runtime and rejects other platforms', async () => {
     const { resolveComputerUseCapability } = await importComputerUseApi()
 
-    expect(resolveComputerUseCapability('win32', null, false).engine)
-      .toBe('windows-compat')
-    expect(resolveComputerUseCapability('linux', null, false)).toMatchObject({
+    for (const platform of ['win32', 'linux']) {
+      expect(resolveComputerUseCapability(platform, null, false)).toMatchObject({
+        supported: true,
+        engine: 'agent-desktop',
+        cuHelper: { available: false, supported: false },
+      })
+    }
+    expect(resolveComputerUseCapability('freebsd', null, false)).toMatchObject({
       supported: false,
       engine: 'unsupported',
     })
+  })
+})
+
+describe('agent-desktop native status', () => {
+  for (const platform of ['win32', 'linux'] as const) {
+    it(`reports the real native probe on ${platform} without using saved Python settings`, async () => {
+      const { checkStatus } = await importComputerUseApi()
+      await callAuthorizedApps('PUT', { pythonPath: '/missing/legacy/python', enabled: true })
+      const configPath = join(configDir!, 'cc-haha', 'computer-use-config.json')
+      const original = await readFile(configPath, 'utf8')
+      const calls: string[] = []
+      const native = {
+        available: true,
+        binaryPath: '/fixture/agent-desktop',
+        reason: null,
+        detail: { supported_surfaces: ['native'] },
+      }
+      const status = await checkStatus({
+        platform,
+        getAgentDesktopStatus: async options => {
+          calls.push(String(options?.platform))
+          return native
+        },
+        checkPermissions: async () => { throw new Error('must not probe macOS TCC') },
+        resolveCuHelper: () => { throw new Error('must not launch cu-helper') },
+      })
+
+      expect(calls).toEqual([platform])
+      expect(status).toMatchObject({
+        platform,
+        supported: true,
+        engine: 'agent-desktop',
+        runtime: 'agent-desktop',
+        agentDesktop: native,
+        python: { installed: false, source: null, path: null },
+        venv: { created: false },
+        dependencies: { installed: false, requirementsFound: false },
+        permissions: { accessibility: null, screenRecording: null, error: null },
+      })
+      expect(await readFile(configPath, 'utf8')).toBe(original)
+      await expect(readFile(join(configDir!, '.runtime', 'requirements.txt'))).rejects.toThrow()
+    })
+  }
+
+  it('preserves missing binaries and Linux accessibility failures without reporting ready', async () => {
+    const { checkStatus } = await importComputerUseApi()
+    for (const native of [
+      { available: false, binaryPath: null, reason: 'binary_missing' },
+      {
+        available: false,
+        binaryPath: '/fixture/agent-desktop',
+        reason: 'accessibility_bus_unavailable',
+        detail: { supported_surfaces: [] },
+      },
+    ]) {
+      const status = await checkStatus({ platform: 'linux', getAgentDesktopStatus: async () => native })
+      expect(status).toMatchObject({ supported: true, runtime: 'agent-desktop', agentDesktop: native })
+    }
+  })
+
+  it('does not launch a native probe for unsupported platforms', async () => {
+    const { checkStatus } = await importComputerUseApi()
+    const status = await checkStatus({
+      platform: 'freebsd',
+      getAgentDesktopStatus: async () => { throw new Error('must not run') },
+    })
+    expect(status).toMatchObject({ supported: false, engine: 'unsupported' })
+    expect(status.agentDesktop).toBeUndefined()
+  })
+
+  it('retires Python setup on every supported platform without writing runtime files', async () => {
+    const { runSetup } = await importComputerUseApi()
+    for (const platform of ['darwin', 'win32', 'linux']) {
+      expect(await runSetup(platform)).toMatchObject({
+        success: false,
+        steps: [{ name: 'native_runtime', ok: false, message: expect.stringContaining('Python setup is no longer required') }],
+      })
+    }
+    await expect(readFile(join(configDir!, '.runtime', 'requirements.txt'))).rejects.toThrow()
   })
 })
 
@@ -383,11 +487,12 @@ describe('runPipInstallWithFallback', () => {
   it('rejects setup on unsupported platforms before writing runtime files', async () => {
     const { getUnsupportedComputerUsePlatformStep } = await importComputerUseApi()
 
-    expect(getUnsupportedComputerUsePlatformStep('linux')).toEqual({
+    expect(getUnsupportedComputerUsePlatformStep('freebsd')).toEqual({
       name: 'platform',
       ok: false,
-      message: 'Computer Use does not support platform: linux',
+      message: 'Computer Use does not support platform: freebsd',
     })
+    expect(getUnsupportedComputerUsePlatformStep('linux')).toBeNull()
     expect(getUnsupportedComputerUsePlatformStep('darwin')).toBeNull()
     expect(getUnsupportedComputerUsePlatformStep('win32')).toBeNull()
   })

@@ -256,6 +256,9 @@ class DutyService : Service() {
     val requested = item.optString("channelId")
     val channel = if (requested.isNotEmpty() && (Build.VERSION.SDK_INT < 26 || getSystemService(NotificationManager::class.java).getNotificationChannel(requested) != null)) requested else FALLBACK_CHANNEL
     val body = item.optString("body")
+    // The settings test is tapped inside the app and exists to show a banner, so the
+    // in-app quiet below does not apply to it.
+    val test = data.optString("eventType") == "test"
     val builder = NotificationCompat.Builder(this, channel)
       .setSmallIcon(R.drawable.cchaha_duty_icon)
       .setContentTitle(item.optString("title").ifEmpty { host.hostName })
@@ -266,7 +269,7 @@ class DutyService : Service() {
       .setCategory(if (item.optString("category") == "cchahaResult") NotificationCompat.CATEGORY_STATUS else NotificationCompat.CATEGORY_REMINDER)
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .setContentIntent(launchIntent(base))
-      .setSilent(appActive)
+      .setSilent(appActive && !test)
     // Like the iOS category: the app opens, re-checks the exact pending request, then answers it.
     if (item.optString("category") == "cchahaTool" && base != null && requestId != null) {
       builder.addAction(0, "拒绝", launchIntent("$base&notificationAction=deny"))

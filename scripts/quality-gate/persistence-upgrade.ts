@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Project auxiliary directories and legacy session snapshots',
+    command: ['bun', 'test', './src/server/services/sessionService.additionalDirectories.test.ts'],
+  },
+  {
     title: 'Idle power preferences migrate disabled and preserve the last action record',
     command: ['bun', 'run', 'test', '--', '--run', 'electron/services/idlePowerPersistence.test.ts'],
     cwd: 'desktop',
@@ -63,6 +67,10 @@ const checks: Check[] = [
   {
     title: 'Agent Teams teammate resume from agent metadata written before the teammate fields',
     command: ['bun', 'test', './src/utils/swarm/inProcessRunner.resume.test.ts', '--test-name-pattern', 'metadata written before'],
+  },
+  {
+    title: 'SubAgent runs from agent metadata written before launch effort was recorded report no effort',
+    command: ['bun', 'test', './src/server/services/subagentRunService.test.ts', '--test-name-pattern', 'metadata written before effort was recorded'],
   },
   {
     title: 'Session collaboration state migration and recovery',

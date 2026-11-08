@@ -9,7 +9,7 @@ import { create } from 'zustand'
 import { boundActivityText, CHAT_TERMINAL_ACTIVITY_MAX_PER_SESSION, CHAT_TERMINAL_ACTIVITY_MAX_TOTAL } from '../lib/chatHistoryBudget'
 import { wsManager } from '../api/websocket'
 import { sessionsApi, type SessionHistoryPage } from '../api/sessions'
-import { ApiResponseParseError } from '../api/client'
+import { ApiError, ApiResponseParseError } from '../api/client'
 import { subagentsApi } from '../api/subagents'
 import { useTeamPlanStore } from './teamPlanStore'
 import { useTeamStore } from './teamStore'
@@ -77,6 +77,20 @@ function reconcileProviderRuntimeSelection(sessionId: string, selection: Runtime
     currentModelId: settings.currentModel?.id,
     defaultEffortLevel: settings.effortLevel,
   })
+}
+
+/**
+ * A member message the server turned down. A slash command the member's CLI
+ * may not run (`/clear`, `/model`) gets the desktop's own localized words,
+ * which point at `/compact` and the model picker; anything else keeps the
+ * server's message.
+ */
+function teamMemberMessageFailure(err: unknown): string {
+  const body = err instanceof ApiError ? err.body : undefined
+  if (body && typeof body === 'object' && (body as { error?: unknown }).error === 'MEMBER_COMMAND_UNSUPPORTED') {
+    return t('teams.memberCommandUnsupported')
+  }
+  return err instanceof Error ? err.message : String(err)
 }
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type CompactSummaryMessage = Extract<UIMessage, { type: 'compact_summary' }>
@@ -3626,7 +3640,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 {
                   id: nextId(),
                   type: 'error',
-                  message: err instanceof Error ? err.message : String(err),
+                  message: teamMemberMessageFailure(err),
                   code: 'TEAM_MEMBER_MESSAGE_FAILED',
                   timestamp: Date.now(),
                 },
@@ -3769,8 +3783,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   setSessionPermissionMode: (sessionId, mode) => {
-    const session = get().sessions[sessionId]
-    if (!session || session.chatState !== 'idle') return
+    // Allowed mid-turn: the server applies it to the running CLI, so tool calls
+    // after the switch use the new mode without interrupting the turn.
+    if (!get().sessions[sessionId]) return
     wsManager.send(sessionId, { type: 'set_permission_mode', mode })
   },
 

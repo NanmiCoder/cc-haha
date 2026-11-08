@@ -1,8 +1,40 @@
 import { describe, expect, test } from 'bun:test'
+import YAML from 'yaml'
 import {
   parseFrontmatter,
+  quoteProblematicValues,
   splitPathInFrontmatter,
 } from './frontmatterParser.js'
+
+describe('quoteProblematicValues', () => {
+  test('yields strict YAML carrying exactly what parseFrontmatter reads', () => {
+    const description =
+      'Use this agent for analysis. Examples: <example>Context: User asks. user: \'Scan "src" under C:\\repo?\' assistant: \'Sure.\'</example>'
+    const frontmatterText = [
+      'name: codebase-analyzer',
+      `description: ${description}`,
+      'tools: Read, Grep',
+      'note: "already: quoted"',
+      'model: opus',
+    ].join('\n')
+    expect(YAML.parseDocument(frontmatterText).errors).not.toEqual([])
+
+    // The agent editor saves this Document, so it must round-trip the values
+    // the CLI loader activated rather than a reinterpretation of them.
+    const document = YAML.parseDocument(quoteProblematicValues(frontmatterText))
+    expect(document.errors).toEqual([])
+    expect(document.toJS()).toEqual({
+      name: 'codebase-analyzer',
+      description,
+      tools: 'Read, Grep',
+      note: 'already: quoted',
+      model: 'opus',
+    })
+    expect(document.toJS()).toEqual(
+      parseFrontmatter(`---\n${frontmatterText}\n---\nPrompt`).frontmatter,
+    )
+  })
+})
 
 describe('parseFrontmatter delimiters', () => {
   test('keeps indented delimiter text inside YAML block scalars', () => {

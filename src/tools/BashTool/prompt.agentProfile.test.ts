@@ -17,6 +17,7 @@ afterEach(() => {
   setAgentProfile('standard')
   delete process.env.USER_TYPE
   delete process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS
+  delete process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL
 })
 afterAll(() => {
   for (const key of Object.keys(process.env)) delete process.env[key]
@@ -48,9 +49,14 @@ test('lean Bash instructions do not recommend unavailable slash skills', () => {
 // to the standard description; lean work must never move it.
 test('standard Bash description is byte-identical to the pinned baseline', () => {
   setAgentProfile('standard')
+  process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL = '0'
   const standard = getSimplePrompt()
   expect(standard).toContain('# Creating pull requests')
   expect(sha256(standard)).toBe('41cafd5561a4f9fd2cefcb06d04ab707c2e158e10fd8013f00b588e969be9b7c')
+})
+
+test.skipIf(process.platform !== 'win32')('Windows Bash directs native commands to PowerShell when available', () => {
+  expect(getSimplePrompt()).toContain('use it directly for native Windows PowerShell commands and .ps1 scripts')
 })
 
 test('lean Bash keeps short git safety rules instead of the commit and PR manual', () => {

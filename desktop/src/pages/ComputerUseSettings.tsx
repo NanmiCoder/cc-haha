@@ -2,18 +2,11 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import {
   CircleAlert,
   CircleCheck,
-  CircleHelp,
-  CircleX,
-  Download,
-  ExternalLink,
-  FolderOpen,
   RefreshCw,
-  RotateCcw,
-  Save,
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react'
-import { computerUseApi, type ComputerUseStatus, type SetupResult } from '../api/computerUse'
+import { computerUseApi, type ComputerUseStatus } from '../api/computerUse'
 import { useTranslation } from '../i18n'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { COMPUTER_USE_ENABLE_REQUEST, needsComputerUsePermissionCard } from '@/lib/computerUseEnable'
@@ -27,23 +20,15 @@ import {
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Switch } from '@/components/ui/Switch'
-import { getDesktopHost } from '../lib/desktopHost'
 
 type CheckState = 'loading' | 'ready' | 'error'
-const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
-  darwin: 'https://www.python.org/downloads/macos/',
-  win32: 'https://www.python.org/downloads/windows/',
-}
-
 // Settings.tsx owns the page frame (width, gutters); a pane is just a column.
 const PAGE_CLASS = 'min-w-0'
 // The status rows carry a leading icon/dot, which `SettingsRow` has no slot
 // for, so they reuse its title/description type directly.
 const ROW_TITLE_CLASS = 'text-[13px] font-medium leading-5 text-[var(--color-text-primary)]'
-const ROW_DESC_CLASS = 'mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]'
 
 type NoticeTone = 'error' | 'warning' | 'success'
 
@@ -70,58 +55,16 @@ function Notice({ tone, children }: { tone: NoticeTone; children: ReactNode }) {
   )
 }
 
-function StatusIcon({ ok }: { ok: boolean | null }) {
-  if (ok === null) {
-    return <CircleHelp size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-  }
-  return ok ? (
-    <CircleCheck size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-success)]" />
-  ) : (
-    <CircleX size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
-  )
-}
-
-function StatusRow({ label, ok, detail }: { label: string; ok: boolean | null; detail: string }) {
-  return (
-    <div className="flex min-h-[52px] items-center gap-3 px-4 py-3">
-      <StatusIcon ok={ok} />
-      <div className="min-w-0 flex-1">
-        <div className={ROW_TITLE_CLASS}>{label}</div>
-        <div className={`${ROW_DESC_CLASS} break-all`}>{detail}</div>
-      </div>
-    </div>
-  )
-}
-
-async function openSystemSettings(pane: 'Privacy_ScreenCapture' | 'Privacy_Accessibility') {
-  await computerUseApi.openSettings(pane)
-}
-
-async function openExternalUrl(url: string) {
-  const host = getDesktopHost()
-  try {
-    await host.shell.open(url)
-  } catch {
-    window.open(url, '_blank', 'noopener,noreferrer')
-  }
-}
-
 export function ComputerUseSettings() {
   const t = useTranslation()
   const [status, setStatus] = useState<ComputerUseStatus | null>(null)
   const [checkState, setCheckState] = useState<CheckState>('loading')
   const [configState, setConfigState] = useState<CheckState>('loading')
   const [configError, setConfigError] = useState<string | null>(null)
-  const [setupRunning, setSetupRunning] = useState(false)
-  const [setupResult, setSetupResult] = useState<SetupResult | null>(null)
 
   const [computerUseEnabled, setComputerUseEnabled] = useState(false)
   const [enableConfirmOpen, setEnableConfirmOpen] = useState(false)
   const [enableSaving, setEnableSaving] = useState(false)
-  const [pythonPathDraft, setPythonPathDraft] = useState('')
-  const [pythonPathSaved, setPythonPathSaved] = useState('')
-  const [pythonPathSaving, setPythonPathSaving] = useState(false)
-  const [pythonPathMessage, setPythonPathMessage] = useState<string | null>(null)
   // Native (cu-helper) Codex-style UI state
   const [cardOpening, setCardOpening] = useState(false)
   const [cardError, setCardError] = useState<string | null>(null)
@@ -148,8 +91,6 @@ export function ComputerUseSettings() {
   ) => {
     if (requestSeq !== configMutationSeqRef.current) return
     setComputerUseEnabled(configResult.enabled)
-    setPythonPathDraft(configResult.pythonPath ?? '')
-    setPythonPathSaved(configResult.pythonPath ?? '')
   }, [])
 
   const fetchConfig = useCallback(async () => {
@@ -170,22 +111,6 @@ export function ComputerUseSettings() {
     fetchStatus()
     fetchConfig()
   }, [fetchStatus, fetchConfig])
-
-  const envReady = status?.venv.created && status?.dependencies.installed
-
-  const handleSetup = async () => {
-    setSetupRunning(true)
-    setSetupResult(null)
-    try {
-      const result = await computerUseApi.runSetup()
-      setSetupResult(result)
-      await fetchStatus()
-    } catch {
-      setSetupResult({ success: false, steps: [{ name: 'error', ok: false, message: 'Request failed' }] })
-    } finally {
-      setSetupRunning(false)
-    }
-  }
 
   const toggleComputerUseEnabled = async (value: boolean): Promise<boolean> => {
     const requestSeq = ++configMutationSeqRef.current
@@ -244,83 +169,17 @@ export function ComputerUseSettings() {
     }
   }
 
-  const savePythonPath = async (value = pythonPathDraft) => {
-    configMutationSeqRef.current += 1
-    const normalized = value.trim()
-    setPythonPathSaving(true)
-    setPythonPathMessage(null)
-    try {
-      await computerUseApi.setAuthorizedApps({ pythonPath: normalized || null })
-      setPythonPathDraft(normalized)
-      setPythonPathSaved(normalized)
-      setPythonPathMessage(t('settings.computerUse.pythonPathSaved'))
-      await fetchStatus()
-    } catch {
-      setPythonPathMessage(t('settings.computerUse.pythonPathSaveFailed'))
-    } finally {
-      setPythonPathSaving(false)
-    }
-  }
-
-  const choosePythonPath = async () => {
-    const host = getDesktopHost()
-    if (!host.capabilities.dialogs) {
-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
-      return
-    }
-    try {
-      const selected = await host.dialogs.open({
-        multiple: false,
-        directory: false,
-        title: t('settings.computerUse.pythonPathDialogTitle'),
-      })
-      const selectedPath = Array.isArray(selected) ? selected[0] : selected
-      if (typeof selectedPath === 'string' && selectedPath.trim()) {
-        setPythonPathDraft(selectedPath)
-        await savePythonPath(selectedPath)
-      }
-    } catch {
-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
-    }
-  }
-
-  const allReady =
-    status?.supported &&
-    status.python.installed &&
-    status.venv.created &&
-    status.dependencies.installed
-
-  const accessibilityNeedsAttention = status?.permissions.accessibility === false
-  const screenRecordingNeedsAttention = status?.permissions.screenRecording === false
-  const screenRecordingReady = status ? status.permissions.screenRecording !== false : null
-  const pythonDownloadUrl = status
-    ? PYTHON_DOWNLOAD_URLS[status.platform] ?? 'https://www.python.org/downloads/'
-    : 'https://www.python.org/downloads/'
-  const pythonPathDirty = pythonPathDraft.trim() !== pythonPathSaved
-  const pythonDetail = status?.python.installed
-    ? `${t('settings.computerUse.pythonFound')} — ${status.python.version} (${status.python.path})`
-    : status?.python.source === 'custom'
-      ? `${t('settings.computerUse.pythonCustomInvalid')} — ${status.python.path}${status.python.error ? `: ${status.python.error}` : ''}`
-      : t('settings.computerUse.pythonNotFound')
-
-  // Native (cu-helper) path: drop the entire Python setup flow in favor of the
-  // Codex-style page. Branch ONLY when on macOS AND the Swift helper resolves.
-  const native = status?.engine === 'macos-native'
-
   const enableDialog = (
     <ComputerUseEnableDialog
       open={enableConfirmOpen}
       loading={enableSaving}
-      platform={status?.platform === 'darwin' ? 'darwin' : 'win32'}
+      platform={status?.platform === 'darwin' ? 'darwin' : status?.platform === 'linux' ? 'linux' : 'win32'}
       onClose={() => setEnableConfirmOpen(false)}
       onConfirm={confirmComputerUseEnabled}
     />
   )
 
-  // The renderer cannot choose between the native macOS page and the
-  // compatibility page until the capability probe finishes. Rendering the
-  // compatibility page here used to flash its header toggle before the native
-  // page replaced the entire tree.
+  // Wait for the platform probe before rendering runtime controls.
   if (status === null) {
     return (
       <div className={PAGE_CLASS}>
@@ -392,7 +251,7 @@ export function ComputerUseSettings() {
     )
   }
 
-  if (native && status) {
+  if (status.engine === 'macos-native' || (status.engine === 'agent-desktop' && status.runtime === 'agent-desktop')) {
     return (
       <>
         <NativeComputerUse
@@ -412,249 +271,22 @@ export function ComputerUseSettings() {
     )
   }
 
-  // The Python compatibility page is Windows-only. Missing or future engine
-  // values (for example during a rolling sidecar/UI upgrade) fail closed on
-  // the native page instead of resurrecting the retired macOS setup screen.
-  if (status.engine !== 'windows-compat') {
-    return (
-      <div className={PAGE_CLASS}>
-        <ErrorState
-          size="lg"
-          title={t('settings.computerUse.nativeUnavailableTitle')}
-          detail={t('settings.computerUse.nativeUnavailableDetail')}
-          retryLabel={t('settings.computerUse.recheckBtn')}
-          onRetry={fetchStatus}
-          tone="strong"
-        />
-      </div>
-    )
-  }
-
   return (
-    <>
-      <div className={PAGE_CLASS}>
-        <SettingsPageHeader
-          title={t('settings.computerUse.title')}
-          description={t('settings.computerUse.description')}
-          action={(
-            <Switch
-              checked={computerUseEnabled}
-              onChange={requestComputerUseEnabled}
-              label={t('settings.computerUse.enabledToggle')}
-            />
-          )}
-        />
-
-        <div className="mt-6 space-y-4">
-          {configError && <Notice tone="error">{configError}</Notice>}
-
-          {!computerUseEnabled && (
-            <Notice tone="warning">{t('settings.computerUse.disabledHint')}</Notice>
-          )}
-
-          {checkState === 'loading' ? (
-            <LoadingState size="md" label={t('common.loading')} />
-          ) : checkState === 'error' ? (
-            <ErrorState
-              size="lg"
-              title={t('settings.computerUse.statusCheckFailed')}
-              retryLabel={t('common.retry')}
-              onRetry={fetchStatus}
-            />
-          ) : status ? (
-            <>
-              {!status.supported && (
-                <Notice tone="warning">{t('settings.computerUse.notSupported')}</Notice>
-              )}
-
-              {/* Status checks */}
-              <SettingsGroup>
-                <StatusRow
-                  label={t('settings.computerUse.python')}
-                  ok={status.python.installed}
-                  detail={pythonDetail}
-                />
-                <StatusRow
-                  label={t('settings.computerUse.venv')}
-                  ok={status.venv.created}
-                  detail={status.venv.created ? `${t('settings.computerUse.venvReady')} — ${status.venv.path}` : t('settings.computerUse.venvNotReady')}
-                />
-                <StatusRow
-                  label={t('settings.computerUse.deps')}
-                  ok={status.dependencies.installed}
-                  detail={status.dependencies.installed ? t('settings.computerUse.depsReady') : t('settings.computerUse.depsNotReady')}
-                />
-              </SettingsGroup>
-
-              <SettingsGroup>
-                <SettingsRow
-                  title={t('settings.computerUse.pythonPathLabel')}
-                  description={pythonPathMessage ?? t('settings.computerUse.pythonPathHint')}
-                  htmlFor="computer-use-python-path"
-                  layout="stack"
-                >
-                  <Input
-                    id="computer-use-python-path"
-                    type="text"
-                    size="md"
-                    containerClassName="min-w-[220px] flex-1"
-                    className="font-mono"
-                    value={pythonPathDraft}
-                    onChange={e => {
-                      setPythonPathDraft(e.target.value)
-                      setPythonPathMessage(null)
-                    }}
-                    placeholder={t('settings.computerUse.pythonPathPlaceholder')}
-                  />
-                  <Button
-                    variant="secondary"
-                    size="base"
-                    onClick={choosePythonPath}
-                    disabled={pythonPathSaving}
-                    icon={<FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" />}
-                  >
-                    {t('settings.computerUse.pythonPathBrowse')}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="base"
-                    onClick={() => savePythonPath()}
-                    disabled={!pythonPathDirty}
-                    loading={pythonPathSaving}
-                    icon={<Save size={14} strokeWidth={1.75} aria-hidden="true" />}
-                  >
-                    {t('settings.computerUse.pythonPathSave')}
-                  </Button>
-                  {pythonPathSaved && (
-                    <Button
-                      variant="secondary"
-                      size="base"
-                      onClick={() => savePythonPath('')}
-                      disabled={pythonPathSaving}
-                      icon={<RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />}
-                    >
-                      {t('settings.computerUse.pythonPathAuto')}
-                    </Button>
-                  )}
-                </SettingsRow>
-              </SettingsGroup>
-
-              {/* macOS Permissions — only shown on macOS (darwin) */}
-              {envReady && status.platform === 'darwin' && (
-                <>
-                  <SettingsGroup>
-                    <StatusRow
-                      label={t('settings.computerUse.accessibility')}
-                      ok={status.permissions.accessibility}
-                      detail={
-                        status.permissions.accessibility === null ? t('settings.computerUse.permUnknown')
-                          : status.permissions.accessibility ? t('settings.computerUse.permGranted')
-                            : t('settings.computerUse.permDenied')
-                      }
-                    />
-                    <StatusRow
-                      label={t('settings.computerUse.screenRecording')}
-                      ok={screenRecordingReady}
-                      detail={
-                        status.permissions.screenRecording === true ? t('settings.computerUse.permGranted')
-                          : status.permissions.screenRecording === false ? t('settings.computerUse.permDenied')
-                            : t('settings.computerUse.permScreenRecordingUnknownSoft')
-                      }
-                    />
-                  </SettingsGroup>
-                  {(accessibilityNeedsAttention || screenRecordingNeedsAttention) && (
-                    <Notice tone="warning">
-                      <p>{t('settings.computerUse.permRestartHint')}</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {accessibilityNeedsAttention && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => openSystemSettings('Privacy_Accessibility')}
-                            icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
-                          >
-                            {t('settings.computerUse.openAccessibility')}
-                          </Button>
-                        )}
-                        {screenRecordingNeedsAttention && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => openSystemSettings('Privacy_ScreenCapture')}
-                            icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
-                          >
-                            {t('settings.computerUse.openScreenRecording')}
-                          </Button>
-                        )}
-                      </div>
-                    </Notice>
-                  )}
-                </>
-              )}
-
-              {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility && screenRecordingReady)) && (
-                <Notice tone="success">{t('settings.computerUse.allReady')}</Notice>
-              )}
-
-              {setupResult && (
-                <Notice tone={setupResult.success ? 'success' : 'error'}>
-                  <div className="font-medium">
-                    {setupResult.success ? t('settings.computerUse.setupSuccess') : t('settings.computerUse.setupFail')}
-                  </div>
-                  <div className="mt-1.5 space-y-1">
-                    {setupResult.steps.map((step, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <StatusIcon ok={step.ok} />
-                        <span className="min-w-0 break-words">{step.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Notice>
-              )}
-
-              {/* Action buttons */}
-              <div className="flex flex-wrap gap-2">
-                {!status.python.installed && (
-                  <Button
-                    variant="primary"
-                    size="base"
-                    onClick={() => openExternalUrl(pythonDownloadUrl)}
-                    icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
-                  >
-                    {t('settings.computerUse.downloadPython')}
-                  </Button>
-                )}
-                {!envReady && status.python.installed && (
-                  <Button
-                    variant="primary"
-                    size="base"
-                    onClick={handleSetup}
-                    loading={setupRunning}
-                    icon={<Download size={14} strokeWidth={1.75} aria-hidden="true" />}
-                  >
-                    {setupRunning ? t('settings.computerUse.setupRunning') : t('settings.computerUse.setupBtn')}
-                  </Button>
-                )}
-                <Button
-                  variant="secondary"
-                  size="base"
-                  onClick={fetchStatus}
-                  icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
-                >
-                  {t('settings.computerUse.recheckBtn')}
-                </Button>
-              </div>
-            </>
-          ) : null}
-        </div>
-      </div>
-      {enableDialog}
-    </>
+    <div className={PAGE_CLASS}>
+      <ErrorState
+        size="lg"
+        title={t('settings.computerUse.nativeUnavailableTitle')}
+        detail={t('settings.computerUse.nativeUnavailableDetail')}
+        retryLabel={t('settings.computerUse.recheckBtn')}
+        onRetry={fetchStatus}
+        tone="strong"
+      />
+    </div>
   )
 }
 
 // ============================================================================
-// Native (cu-helper) Codex-style page — macOS only, no Python.
+// Native runtime settings. macOS keeps its separate OS-permission controls.
 // ============================================================================
 
 type Translate = ReturnType<typeof useTranslation>
@@ -725,13 +357,16 @@ function NativeComputerUse({
   onOpenCard: () => void
   onRecheck: () => void
 }) {
+  const agentDesktop = status.engine === 'agent-desktop'
   const accessibility = status.permissions.accessibility
   const screenRecording = status.permissions.screenRecording
   const permissionProbeFailed = Boolean(status.permissions.error)
   const header = (
     <SettingsPageHeader
       title={t('settings.computerUse.controlTitle')}
-      description={t('settings.computerUse.controlSubtitle')}
+      description={agentDesktop
+        ? t('settings.computerUse.agentDesktopSubtitle')
+        : t('settings.computerUse.controlSubtitle')}
       action={(
         <Switch
           checked={enabled}
@@ -764,7 +399,70 @@ function NativeComputerUse({
     )
   }
 
+  if (agentDesktop) {
+    const runtime = status.agentDesktop
+    const available = runtime?.available === true
+    const missing = runtime?.reason === 'binary_missing'
+    return (
+      <div className={PAGE_CLASS}>
+        {header}
+        {configErrorNotice}
+        {!enabled && (
+          <div className="mt-6">
+            <Notice tone="warning">{t('settings.computerUse.disabledHint')}</Notice>
+          </div>
+        )}
+        <SettingsSection title={t('settings.computerUse.sectionControl')}>
+          {available ? (
+            <SettingsGroup>
+              <SettingsRow
+                title={t('settings.computerUse.agentDesktopRuntime')}
+                description={t('settings.computerUse.agentDesktopReady')}
+              >
+                <Badge tone="success" size="xs">{t('settings.computerUse.agentDesktopReadyLabel')}</Badge>
+              </SettingsRow>
+              <SettingsRow
+                title={t('settings.computerUse.agentDesktopInputTitle')}
+                description={status.platform === 'linux'
+                  ? t('settings.computerUse.agentDesktopLinuxInput')
+                  : t('settings.computerUse.agentDesktopWindowsInput')}
+              />
+            </SettingsGroup>
+          ) : (
+            <ErrorState
+              size="lg"
+              title={t('settings.computerUse.nativeUnavailableTitle')}
+              detail={missing
+                ? t('settings.computerUse.agentDesktopMissing')
+                : runtime?.message ?? t('settings.computerUse.agentDesktopProbeFailed', {
+                    reason: runtime?.reason ?? t('settings.computerUse.agentDesktopNoStatus'),
+                  })}
+              tone="strong"
+            />
+          )}
+          <SettingsBlock>
+            <Button
+              variant="secondary"
+              size="base"
+              onClick={onRecheck}
+              icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              {t('settings.computerUse.recheckBtn')}
+            </Button>
+          </SettingsBlock>
+        </SettingsSection>
+      </div>
+    )
+  }
+
   if (!status.cuHelper.available) {
+    const detailKey = status.cuHelper.reason === 'helper_signature_invalid'
+      ? 'settings.computerUse.nativeSignatureInvalidDetail'
+      : status.cuHelper.reason === 'helper_prepare_failed'
+        ? 'settings.computerUse.nativePrepareFailedDetail'
+        : status.cuHelper.reason === 'helper_missing'
+          ? 'settings.computerUse.nativeMissingDetail'
+          : 'settings.computerUse.nativeUnavailableDetail'
     return (
       <div className={PAGE_CLASS}>
         {header}
@@ -773,7 +471,7 @@ function NativeComputerUse({
           className="mt-6"
           size="lg"
           title={t('settings.computerUse.nativeUnavailableTitle')}
-          detail={t('settings.computerUse.nativeUnavailableDetail')}
+          detail={t(detailKey)}
           retryLabel={t('settings.computerUse.recheckBtn')}
           onRetry={onRecheck}
           tone="strong"

@@ -18,6 +18,7 @@ import {
   Spinner,
   useColors,
 } from '../ui/kit'
+import { goHome } from '../ui/navigation'
 import { errorText } from '../ui/theme'
 import { hostCheckBadge, hostCheckLine } from '../ui/home/homeModel'
 import { StatusDot, useNow, useToneColor } from '../ui/home/parts'
@@ -190,7 +191,7 @@ function Hosts() {
     setError('')
     try {
       await select(host.id)
-      router.replace('/')
+      goHome()
     } catch (e) {
       setError(errorText(e))
     } finally {

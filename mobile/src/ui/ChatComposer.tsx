@@ -351,7 +351,8 @@ export function ChatComposer({
   disabled: boolean
   run: ChatComposerRun
   onOpenRun(): void
-  onSend(): void
+  /** Returns true when the page took the draft and is clearing it. */
+  onSend(): boolean | void
   /** 运行中且输入框是空的，发送位变成停止键。 */
   onStop?(): void
   onError(message: string): void
@@ -376,6 +377,18 @@ export function ChatComposer({
     setSelection(next)
     setCaret(next)
   }
+  // React Native applies the page's clear after a send only when JS has seen every change
+  // the field made (it compares event counts), and Android drops it otherwise. Two ways a
+  // keyboard commit beats it, both seen on an emulator with a fast last key and send tap:
+  // - the commit lands while the finger is on the button: React renders it only after the
+  //   tap, so the tap would send without it and clear against a stale count. `unrendered`
+  //   holds the field's change until a render shows it; such a send waits for that render.
+  // - the commit lands after the clear left JS: the field keeps the sent text plus the key
+  //   and reports both. `sent` holds the text a send took from the focused field until the
+  //   field shows it cleared (caret back at 0) or reports text no longer starting with it.
+  const unrendered = useRef<string | null>(null)
+  const sendWhenRendered = useRef(false)
+  const sent = useRef<string | null>(null)
   const [candidates, setCandidates] = useState<ComposerCandidate[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -465,14 +478,45 @@ export function ChatComposer({
     }
   }
   function press() {
+    // Once only: a page that does not take the change must not hold the send forever.
+    if (!sendWhenRendered.current && unrendered.current !== null && unrendered.current !== draft) {
+      sendWhenRendered.current = true
+      return
+    }
+    sendWhenRendered.current = false
     if (slot.kind === 'stop') return onStop?.()
     if (runShortcut(draft, references.length > 0 || attachments.length > 0)) {
       onDraft('')
       onOpenRun()
       return
     }
-    onSend()
+    const taken = onSend() === true
+    // Only a focused field can have a key in flight, and only a caret away from 0 shows
+    // the clear landing (selection events need focus and a change).
+    sent.current =
+      taken &&
+      Platform.OS === 'android' &&
+      draft &&
+      input.current?.isFocused() &&
+      (selection.start > 0 || selection.end > 0)
+        ? draft
+        : null
   }
+  /** A change reported by the field; keys typed on top of the sent text keep only themselves. */
+  function fieldText(value: string) {
+    const taken = sent.current
+    if (taken === null) return value
+    if (value.startsWith(taken)) return value.slice(taken.length)
+    sent.current = null
+    return value
+  }
+  useEffect(() => {
+    // Effects of an older render can run after newer changes were reported.
+    if (unrendered.current !== draft) return
+    unrendered.current = null
+    if (sendWhenRendered.current) press()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per rendered draft
+  }, [draft])
   function openBring() {
     input.current?.blur()
     setBringOpen(true)
@@ -566,9 +610,14 @@ export function ChatComposer({
           value={draft}
           multiline
           editable={!disabled && !voice.live}
-          onChangeText={(value) => {
+          onChangeText={(reported) => {
             voice.edited()
-            const cursor = Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
+            const value = fieldText(reported)
+            const cursor =
+              value === reported
+                ? Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
+                : value.length
+            unrendered.current = value
             onDraft(value)
             setSelection({ start: cursor, end: cursor })
             setCaret(null)
@@ -582,6 +631,8 @@ export function ChatComposer({
                 }
           }
           onSelectionChange={({ nativeEvent }) => {
+            // The caret back at 0 after a send: the clear landed.
+            if (nativeEvent.selection.start === 0 && nativeEvent.selection.end === 0) sent.current = null
             setSelection(nativeEvent.selection)
             setCaret(null)
           }}

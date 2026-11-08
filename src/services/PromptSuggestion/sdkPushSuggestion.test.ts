@@ -105,6 +105,45 @@ describe('setSdkPromptSuggestions', () => {
 })
 
 describe('startSdkPushSuggestion', () => {
+  test('owns each generation before starting and until its real settlement, including superseded work', async () => {
+    const state = createSdkSuggestionState()
+    const activity: Array<{ generation: string; active: boolean }> = []
+    const releases: Array<() => void> = []
+    const start = () => {
+      const deps = {
+        cacheSafeParams: params('turn'), messages: [], getAppState: () => ({}) as AppState,
+        isResultHeld: () => false, emit: () => {},
+        onActivity: (generation: string, active: boolean) => activity.push({ generation, active }),
+        generate: async () => {
+          expect(activity.at(-1)?.active).toBe(true)
+          await new Promise<void>(resolve => releases.push(resolve))
+          return null
+        },
+      }
+      startSdkPushSuggestion(state, deps)
+      return state.inflightPromise!
+    }
+    const first = start()
+    const second = start()
+    try {
+      expect(activity).toHaveLength(2)
+      expect(activity[0]!.generation).not.toBe(activity[1]!.generation)
+      setSdkPromptSuggestions(state, false, () => {})
+      expect(activity.every(event => event.active)).toBe(true)
+      releases[0]!()
+      await first
+      expect(activity[2]).toEqual({ ...activity[0]!, active: false })
+      expect(state.inflightPromise).toBe(second)
+      releases[1]!()
+      await second
+      expect(activity[3]).toEqual({ ...activity[1]!, active: false })
+      expect(state.inflightPromise).toBeNull()
+    } finally {
+      for (const release of releases) release()
+      await Promise.all([first, second])
+    }
+  })
+
   const generated = (suggestion: string) => async () => ({
     suggestion,
     promptId: 'user_intent' as const,

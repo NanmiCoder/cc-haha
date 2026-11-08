@@ -674,7 +674,7 @@ export function Sidebar({
       })
   }, [])
 
-  const submitProjectCreation = useCallback(async ({ name, sourceFolder, logicalRoot }: ProjectEditorSubmission) => {
+  const submitProjectCreation = useCallback(async ({ name, sourceFolder, logicalRoot, additionalDirectories }: ProjectEditorSubmission) => {
     setProjectEditorLoading(true)
     setProjectEditorError(null)
     try {
@@ -683,6 +683,7 @@ export function Sidebar({
         ? cachedLookup.request
         : sessionsApi.getRepositoryContext(sourceFolder))
         .catch(() => null)
+      await desktopUiPreferencesApi.updateProjectDirectories(sourceFolder, additionalDirectories)
       const sessionId = await useSessionStore.getState().createSession(sourceFolder)
       restoreHiddenProjectForWorkDir(sourceFolder)
 
@@ -717,10 +718,11 @@ export function Sidebar({
     setProjectEditor({ mode: 'edit', logicalRoot: project.key })
   }, [])
 
-  const submitProjectEdit = useCallback(async ({ name, logicalRoot }: ProjectEditorSubmission) => {
+  const submitProjectEdit = useCallback(async ({ name, logicalRoot, additionalDirectories }: ProjectEditorSubmission) => {
     setProjectEditorLoading(true)
     setProjectEditorError(null)
     try {
+      await desktopUiPreferencesApi.updateProjectDirectories(logicalRoot, additionalDirectories)
       await saveProjectDisplayName(logicalRoot, name)
       closeProjectEditor()
     } catch (error) {

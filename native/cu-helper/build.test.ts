@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment'
 
 const buildScript = path.resolve(import.meta.dirname, 'build.sh')
 const productIcon = path.resolve(import.meta.dirname, '../../desktop/src-tauri/icons/icon.icns')
@@ -205,6 +206,72 @@ function resolveIdentityWithOnlyDeveloperId() {
   }
 }
 
+function localSigningFixture(environment: Record<string, string> = {}, fullBuild = false) {
+  const directory = mkdtempSync(path.join(tmpdir(), 'cu-helper-local-signing-'))
+  fixtureDirectories.push(directory)
+  const binDir = path.join(directory, 'build', 'arm64', 'release')
+  mkdirSync(path.join(binDir, resourceBundleName, 'LensSequence'), { recursive: true })
+  writeFileSync(path.join(binDir, resourceBundleName, 'LensSequence', 'README.md'), 'optional frames fixture')
+  const binary = path.join(binDir, 'cc-haha-computer-use')
+  writeFileSync(binary, `#!/bin/bash
+[ "$1" = "--probe-cursor-resources" ] || exit 40
+resources="$(cd "$(dirname "$0")/../Resources/${resourceBundleName}/LensSequence" && pwd -P)"
+printf '{"resourceDirectory":"%s","frameCount":0,"proceduralFallback":true}\\n' "$resources"
+`)
+  chmodSync(binary, 0o755)
+  const signingLog = path.join(directory, 'codesign-args')
+  const result = runFixtureCommand([
+    'bash', '-c', `
+source "$1"
+BUILD_DIR="$2/build"
+SIGN_STAMP="$BUILD_DIR/.signid"
+ARCH=arm64
+SWIFT_SCRATCH_PATH="$BUILD_DIR/$ARCH"
+security() { printf '     0 valid identities found\\n'; }
+uname() { if [ "$1" = '-s' ]; then printf 'Darwin\\n'; else printf 'arm64\\n'; fi; }
+swift() {
+  case "$*" in
+    --version) printf 'Swift fixture compiler\\n' ;;
+    *--show-bin-path*) printf '%s\\n' "$TEST_BIN_DIR" ;;
+  esac
+}
+lipo() { return 0; }
+otool() { printf '(__TEXT,__info_plist) section\\n'; }
+codesign() {
+  printf '%s\\n' "$*" >> "$TEST_SIGNING_LOG"
+  if [ "$1" = '-dv' ]; then
+    printf 'Identifier=dev.cchaha.cu-helper\\n' >&2
+    case "\${CC_HAHA_SIGN_IDENTITY:-}" in
+      'Developer ID Application:'*) printf 'Timestamp=fixture secure timestamp\\n' >&2 ;;
+    esac
+  fi
+}
+if [ "$3" = 'full' ]; then
+  main
+else
+  resolve_identity
+  printf '%s' "$SIGN_IDENTITY"
+fi
+`, 'cu-helper-local-signing-test', buildScript, directory, fullBuild ? 'full' : 'identity',
+  ], {
+    cwd: directory,
+    env: createSandboxedTestEnvironment(directory, {
+      CI: '',
+      GITHUB_ACTIONS: '',
+      TEST_BIN_DIR: binDir,
+      TEST_SIGNING_LOG: signingLog,
+      ...environment,
+    }),
+  })
+  return {
+    ...result,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    signingCalls: existsSync(signingLog) ? readFileSync(signingLog, 'utf8').trim().split('\n') : [],
+    appPath: path.join(binDir, 'cc-haha-computer-use.app'),
+  }
+}
+
 describe('cu-helper build signing timestamp', () => {
   test('uses a secure timestamp for Developer ID distribution signatures', () => {
     expect(
@@ -229,6 +296,67 @@ describe('cu-helper build signing identity', () => {
 
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toBe('Developer ID Application: Example Corp (TEAM123456)')
+  })
+
+  test.each([
+    {},
+    { CC_HAHA_SIGN_IDENTITY: '-' },
+    { CU_HELPER_IDENTITY: '-' },
+    { CC_HAHA_LOCAL_UNSIGNED_BUILD: '1' },
+    { CC_HAHA_SIGN_IDENTITY: '-', CC_HAHA_LOCAL_UNSIGNED_BUILD: '1', GITHUB_ACTIONS: 'true' },
+    { CC_HAHA_SIGN_IDENTITY: '-', CC_HAHA_LOCAL_UNSIGNED_BUILD: '1', CI: 'true' },
+  ])('refuses ad-hoc signing outside explicitly selected local packaging: %j', environment => {
+    const result = localSigningFixture(environment)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.signingCalls).toEqual([])
+  })
+
+  test('accepts the explicit local unsigned packaging identity', () => {
+    const result = localSigningFixture({
+      CC_HAHA_SIGN_IDENTITY: '-', CC_HAHA_LOCAL_UNSIGNED_BUILD: '1',
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('-')
+    expect(result.stderr).toContain('Computer Use is unavailable')
+  })
+
+  test('keeps a real build-wide signing identity even with a stale local unsigned flag', () => {
+    const identity = 'Developer ID Application: Example Corp (TEAM123456)'
+    const result = localSigningFixture({
+      CC_HAHA_SIGN_IDENTITY: identity, CC_HAHA_LOCAL_UNSIGNED_BUILD: '1', GITHUB_ACTIONS: 'true',
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe(identity)
+  })
+})
+
+describe.skipIf(process.platform !== 'darwin')('cu-helper local unsigned packaging', () => {
+  test('signs, verifies, wraps and probes the helper with ad-hoc signatures', () => {
+    const result = localSigningFixture({
+      CC_HAHA_SIGN_IDENTITY: '-', CC_HAHA_LOCAL_UNSIGNED_BUILD: '1',
+    }, true)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(`built: ${result.appPath}`)
+    expect(result.signingCalls.filter(line => line.startsWith('--force'))).toEqual([
+      expect.stringContaining('--timestamp=none --identifier dev.cchaha.cu-helper --sign - '),
+      expect.stringContaining('--timestamp=none --identifier dev.cchaha.cu-helper --sign - '),
+    ])
+    expect(result.signingCalls.filter(line => line.startsWith('--verify'))).toHaveLength(2)
+    expect(result.stderr).toContain('verified: relocated cursor resources')
+    expect(existsSync(path.join(result.appPath, 'Contents', 'Resources', resourceBundleName, 'LensSequence'))).toBe(true)
+  })
+
+  test.each([
+    ['Developer ID Application: Example Corp (TEAM123456)', '--timestamp'],
+    ['Apple Development: Developer (TEAM123456)', '--timestamp=none'],
+  ])('preserves signed helper packaging for %s', (identity, timestamp) => {
+    const result = localSigningFixture({ CC_HAHA_SIGN_IDENTITY: identity }, true)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(`built: ${result.appPath}`)
+    expect(result.signingCalls.filter(line => line.startsWith('--force'))).toEqual([
+      expect.stringContaining(`${timestamp} --identifier dev.cchaha.cu-helper --sign ${identity} `),
+      expect.stringContaining(`${timestamp} --identifier dev.cchaha.cu-helper --sign ${identity} `),
+    ])
   })
 })
 

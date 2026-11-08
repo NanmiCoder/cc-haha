@@ -1,6 +1,6 @@
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
-import { isEnvDefinedFalsy, isEnvTruthy } from '../envUtils.js'
+import { isEnvDefinedFalsy } from '../envUtils.js'
 import { getPlatform } from '../platform.js'
 import { tryFindGitBashPath } from '../windowsPaths.js'
 
@@ -12,24 +12,20 @@ export type ShellToolAvailability = { bash: boolean; powershell: boolean }
 export function resolveShellToolAvailability({
   platform,
   gitBashPath,
-  userType,
   powerShellSetting,
 }: {
   platform: ReturnType<typeof getPlatform>
   gitBashPath: string | null
-  userType: string | undefined
   powerShellSetting: string | undefined
 }): ShellToolAvailability {
   if (platform !== 'windows') {
     return { bash: true, powershell: false }
   }
 
-  const bash = gitBashPath !== null
-  const powershell = isEnvDefinedFalsy(powerShellSetting)
-    ? false
-    : userType === 'ant' || !bash || isEnvTruthy(powerShellSetting)
-
-  return { bash, powershell }
+  return {
+    bash: gitBashPath !== null,
+    powershell: !isEnvDefinedFalsy(powerShellSetting),
+  }
 }
 
 export function resolveAvailableShellTool({
@@ -58,7 +54,6 @@ export function getShellToolAvailability(): ShellToolAvailability {
   return resolveShellToolAvailability({
     platform,
     gitBashPath: platform === 'windows' ? tryFindGitBashPath() : null,
-    userType: process.env.USER_TYPE,
     powerShellSetting: process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL,
   })
 }
@@ -68,11 +63,7 @@ export function isBashToolEnabled(): boolean {
   return getShellToolAvailability().bash
 }
 
-/**
- * Runtime gate for PowerShellTool. On Windows it remains opt-in for external
- * users with Git Bash, but becomes the default fallback when Git Bash is
- * unavailable. An explicit env=0 always opts out.
- */
+/** Native Windows commands can use PowerShell directly, alongside Git Bash. */
 export function isPowerShellToolEnabled(): boolean {
   return getShellToolAvailability().powershell
 }

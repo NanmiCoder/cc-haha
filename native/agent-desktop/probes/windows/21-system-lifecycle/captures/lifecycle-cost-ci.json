@@ -1,0 +1,60 @@
+{
+    "probe":  "21-system-lifecycle",
+    "question":  "hot-path launch-to-window, close-to-exit, window-op round-trip (min-of-seven, warm-up discarded per A15-13)",
+    "methodology_cites":  [
+                              "A15-13",
+                              "A20-6"
+                          ],
+    "launch_to_window":  {
+                             "samples_ms":  [
+                                                90.9963,
+                                                67.8077,
+                                                75.4962,
+                                                79.1832,
+                                                77.2547,
+                                                61.0614,
+                                                63.134,
+                                                64.2869
+                                            ],
+                             "min_ms":  63.134,
+                             "median_ms":  75.4962,
+                             "max_ms":  90.9963,
+                             "n":  7,
+                             "warmup_discarded":  true
+                         },
+    "close_to_exit":  {
+                          "samples_ms":  [
+                                             12.9472,
+                                             11.6726,
+                                             11.1651,
+                                             11.7329,
+                                             11.2958,
+                                             10.9231,
+                                             10.9256,
+                                             11.8368
+                                         ],
+                          "min_ms":  10.9256,
+                          "median_ms":  11.6726,
+                          "max_ms":  12.9472,
+                          "n":  7,
+                          "warmup_discarded":  true
+                      },
+    "window_op_round_trip":  {
+                                 "samples_ms":  [
+                                                    104.8803,
+                                                    94.4532,
+                                                    93.8019,
+                                                    93.0228,
+                                                    92.951,
+                                                    93.2353,
+                                                    95.7126,
+                                                    93.9176
+                                                ],
+                                 "min_ms":  93.0228,
+                                 "median_ms":  93.9176,
+                                 "max_ms":  104.8803,
+                                 "n":  7,
+                                 "warmup_discarded":  true
+                             },
+    "note":  "absolute ms are environment-sensitive; CI asserts min\u003c=median\u003c=max, n=7, warmup_discarded only"
+}

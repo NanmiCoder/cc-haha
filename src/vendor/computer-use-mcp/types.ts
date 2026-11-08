@@ -221,6 +221,7 @@ export interface ComputerUseHostAdapter {
   serverName: string;
   logger: Logger;
   executor: ComputerExecutor;
+  agentDesktop?: import('./agentDesktopProtocol.js').AgentDesktopBackend;
 
   /** A fresh persistent kernel per bound session. The host owns isolation. */
   createReplRuntime?(): import('./replProtocol.js').ComputerUseReplRuntime;
@@ -286,6 +287,7 @@ export interface ComputerUseHostAdapter {
  * O_EXCL file) call the real async primitive directly.
  */
 export interface ComputerUseSessionContext {
+  getAgentId?(): string;
   // ── Read state fresh per call ──────────────────────────────────────
 
   getAllowedApps(): readonly AppGrant[];

@@ -4,6 +4,8 @@ import { chmod, open, stat, unlink } from 'fs/promises'
 import mapValues from 'lodash-es/mapValues.js'
 import memoize from 'lodash-es/memoize.js'
 import { dirname, isAbsolute, join, parse } from 'path'
+import { readNativeProjectDirectoryIdentity } from './projectDirectoryIdentity.js'
+import { readProjectDirectory } from './projectDirectoryIo.js'
 import { getPlatform } from 'src/utils/platform.js'
 import type { PluginError } from '../../types/plugin.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
@@ -187,25 +189,8 @@ export function readProjectMcpJsonSnapshot(mcpJsonPath: string): ProjectMcpJsonS
 }
 
 function readProjectMcpDirectoryIdentity(projectPath: string): { directory: string; dev: number; ino: number } {
-  if (!projectPath || !isAbsolute(projectPath) || projectPath.includes('\0')) {
-    throw new Error('Project path must be an absolute directory path')
-  }
-  try {
-    const fs = getFsImplementation()
-    const requested = fs.statSync(projectPath)
-    if (!requested.isDirectory()) throw new Error('not a directory')
-    // Use the unnormalized native result: the shared FS wrapper folds Unicode
-    // to NFC, which can denote a different physical directory on POSIX.
-    const canonical = realpathSync(projectPath)
-    const physical = fs.statSync(canonical)
-    if (!physical.isDirectory() || requested.dev !== physical.dev || requested.ino !== physical.ino) {
-      throw new Error('Project directory identity could not be verified')
-    }
-    return { directory: getPlatform() === 'windows' ? normalizePathForConfigKey(canonical) : canonical, dev: requested.dev, ino: requested.ino }
-  } catch (error) {
-    if (error instanceof Error && error.message === 'Project directory identity could not be verified') throw error
-    throw new Error('Project directory is unavailable')
-  }
+  const identity = readNativeProjectDirectoryIdentity(projectPath, { statSync: getFsImplementation().statSync, realpathSync }, { isAbsolute })
+  return { ...identity, directory: getPlatform() === 'windows' ? normalizePathForConfigKey(identity.directory) : identity.directory }
 }
 
 /** File targets must prove physical identity before realpath may redirect them. */
@@ -214,7 +199,9 @@ export function resolveProjectMcpDirectorySync(projectPath: string): string {
 }
 
 export async function resolveProjectMcpDirectory(projectPath: string): Promise<string> {
-  return resolveProjectMcpDirectorySync(projectPath)
+  if (!projectPath || !isAbsolute(projectPath) || projectPath.includes('\0')) throw new Error('Project path must be an absolute directory path')
+  const { directory } = await readProjectDirectory({ kind: 'identity', path: projectPath })
+  return getPlatform() === 'windows' ? normalizePathForConfigKey(directory) : directory
 }
 
 export function getProjectMcpDirectoryIdentity(projectPath: string): string {

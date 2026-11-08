@@ -13,7 +13,14 @@ import {
   unregisterTeamForSessionCleanup,
 } from '../../utils/swarm/teamHelpers.js'
 import { clearTeammateColors } from '../../utils/swarm/teammateLayoutManager.js'
-import { clearLeaderTeamName, type Task } from '../../utils/tasks.js'
+import {
+  clearLeaderTeamName,
+  getCanonicalTeamTaskListId,
+  readTaskListLifecycleState,
+  type Task,
+  type TaskListLifecycleToken,
+} from '../../utils/tasks.js'
+import { getSessionId } from '../../bootstrap/state.js'
 import { TEAM_DELETE_TOOL_NAME } from './constants.js'
 import { getPrompt } from './prompt.js'
 import { renderToolResultMessage, renderToolUseMessage } from './UI.js'
@@ -31,6 +38,30 @@ export type Output = {
 }
 
 export type Input = z.infer<InputSchema>
+
+/**
+ * The incarnation of the team this lead may clean up. The process that ran
+ * TeamCreate registered it; a desktop lead process restarts often (a model or
+ * permission change, a crash, a reopen) and finds it in the durable record,
+ * which names the session leading it. Once the team's config is gone (removed
+ * by hand) nothing else proves the leftovers are this lead's: 'foreign' is a
+ * record of an incarnation this lead cannot claim, undefined no record at all.
+ */
+async function ownedLifecycle(
+  teamName: string,
+): Promise<TaskListLifecycleToken | 'foreign' | undefined> {
+  const registered = getRegisteredTeamLifecycle(teamName)
+  if (registered) return registered
+  const state = await readTaskListLifecycleState(
+    getCanonicalTeamTaskListId(teamName),
+  ).catch(() => undefined)
+  const identity = state?.activeIdentity
+  if (!state || !identity) return undefined
+  if (identity.teamName !== teamName || identity.leadSessionId !== getSessionId()) {
+    return 'foreign'
+  }
+  return { generation: state.generation, identity }
+}
 
 export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
   name: TEAM_DELETE_TOOL_NAME,
@@ -79,6 +110,7 @@ export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
     let finalTasks: Task[] | undefined
     let taskListSnapshotAt: string | undefined
     let taskListSnapshotRevision: number | undefined
+    let alreadyRemoved = false
 
     if (teamName) {
       // Read team config to check for active members
@@ -98,25 +130,33 @@ export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
           return {
             data: {
               success: false,
-              message: `Cannot cleanup team with ${nonLeadMembers.length} registered teammate(s): ${memberNames}. Use requestShutdown and wait for shutdown approval first.`,
+              message: `Cannot cleanup team with ${nonLeadMembers.length} registered teammate(s): ${memberNames}. Send each a shutdown_request with SendMessage, then end your turn: approvals arrive as messages, and TeamDelete succeeds once those teammates have exited. Never delete the team or task directories yourself.`,
               team_name: teamName,
             },
           }
         }
       }
 
-      const finalTaskSnapshot = await cleanupTeamDirectories(
-        teamName,
-        getRegisteredTeamLifecycle(teamName),
-      )
-      finalTasks = finalTaskSnapshot.tasks.filter(task => !task.metadata?._internal)
-      taskListSnapshotAt = finalTaskSnapshot.capturedAt
-      taskListSnapshotRevision = finalTaskSnapshot.revision
-      // Already cleaned — don't try again on gracefulShutdown.
-      unregisterTeamForSessionCleanup(teamName, {
-        generation: finalTaskSnapshot.generation,
-        identity: finalTaskSnapshot.identity,
-      })
+      const lifecycle = await ownedLifecycle(teamName)
+      // Without its config, a team whose record names another lead is gone
+      // and what is left may be another session's; only let go of it, or this
+      // lead could never form another team.
+      if (teamFile || lifecycle !== 'foreign') {
+        const finalTaskSnapshot = await cleanupTeamDirectories(
+          teamName,
+          lifecycle === 'foreign' ? undefined : lifecycle,
+        )
+        finalTasks = finalTaskSnapshot.tasks.filter(task => !task.metadata?._internal)
+        taskListSnapshotAt = finalTaskSnapshot.capturedAt
+        taskListSnapshotRevision = finalTaskSnapshot.revision
+        // Already cleaned — don't try again on gracefulShutdown.
+        unregisterTeamForSessionCleanup(teamName, {
+          generation: finalTaskSnapshot.generation,
+          identity: finalTaskSnapshot.identity,
+        })
+      } else {
+        alreadyRemoved = true
+      }
 
       // Clear color assignments so new teams start fresh
       clearTeammateColors()
@@ -142,9 +182,11 @@ export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
     return {
       data: {
         success: true,
-        message: teamName
-          ? `Cleaned up directories and worktrees for team "${teamName}"`
-          : 'No team name found, nothing to clean up',
+        message: !teamName
+          ? 'No team name found, nothing to clean up'
+          : alreadyRemoved
+            ? `Team "${teamName}" was already removed; this session no longer leads it`
+            : `Cleaned up directories and worktrees for team "${teamName}"`,
         team_name: teamName,
         finalTasks,
         taskListSnapshotAt,

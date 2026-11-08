@@ -1,12 +1,17 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
+import { createSandboxedTestEnvironment } from './test-environment'
 
 type WorkflowJob = {
   if?: string
   'runs-on'?: string
   'continue-on-error'?: boolean
   needs?: string | string[]
+  strategy?: { 'fail-fast'?: boolean; matrix?: { shard?: number[] } }
   steps?: Array<{
     name?: string
     run?: string
@@ -18,6 +23,11 @@ type WorkflowJob = {
 
 function workflowJobs(workflow: string) {
   return (parse(workflow) as { jobs: Record<string, WorkflowJob> }).jobs
+}
+
+/** A step runs `command`, possibly with arguments such as a CI shard. */
+function runsCommand(step: { run?: string }, command: string) {
+  return step.run === command || Boolean(step.run?.startsWith(`${command} `))
 }
 
 describe('PR quality workflow', () => {
@@ -91,7 +101,7 @@ describe('PR quality workflow', () => {
       ['desktop-native-checks', 'bun run check:native'],
     ]) {
       const steps = jobs[job].steps ?? []
-      const check = steps.findIndex(step => step.run === command)
+      const check = steps.findIndex(step => runsCommand(step, command))
       expect(check).toBeGreaterThanOrEqual(0)
       for (const workspace of ['desktop', 'adapters']) {
         const install = steps.findIndex(step =>
@@ -111,14 +121,73 @@ describe('PR quality workflow', () => {
     const runs = (jobs['scope-plan'].steps ?? []).map(step => step.run ?? '').join('\n')
 
     expect(runs).toContain(`jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt`)
-    expect(runs).toContain('git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt')
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    expect(workflow).toContain('PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}')
+    expect(workflow).toContain('PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}')
+    expect(runs).toContain('git show "${PR_BASE_SHA}:.github/CODEOWNERS" > codeowners.txt')
     expect(runs).toContain('--author-file author.txt --codeowners-file codeowners.txt')
     expect(runs).not.toMatch(/cat \.github\/CODEOWNERS|--codeowners-file \.github\/CODEOWNERS/)
   })
 
+  test('collects every PR path beyond 3000 files from immutable commits without an API lookup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pr-complete-files-'))
+    try {
+      const bin = join(root, 'bin')
+      mkdirSync(bin)
+      writeFileSync(join(bin, 'gh'), '#!/bin/sh\necho "unexpected API lookup" >&2\nexit 99\n')
+      chmodSync(join(bin, 'gh'), 0o755)
+      const env = createSandboxedTestEnvironment(join(root, 'home'), {
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+        EVENT_NAME: 'pull_request', REPOSITORY: 'fixture/repo', PR_NUMBER: '1',
+        GITHUB_EVENT_PATH: join(root, 'event.json'),
+      })
+      const git = (args: string[], input?: string) => {
+        const result = spawnSync('git', args, { cwd: root, env, input, encoding: 'utf8' })
+        expect(result.status, result.stderr).toBe(0)
+        return result.stdout.trim()
+      }
+      git(['init', '-b', 'main'])
+      mkdirSync(join(root, '.github'))
+      writeFileSync(join(root, '.github/CODEOWNERS'), '* @base-owner\n')
+      git(['add', '.github/CODEOWNERS'])
+      git(['commit', '-m', 'fixture base'])
+      const base = git(['rev-parse', 'HEAD'])
+      const blob = git(['hash-object', '-w', '--stdin'], '')
+      const paths = [
+        ...Array.from({ length: 3005 }, (_, index) => `native/vendor/fixture-${index}.rs`),
+        'src/late.ts', 'docs/中文.md', 'src/utils/quote"scope.ts',
+        'src/utils/tab\tscope.ts', 'src/utils/line\nscope.ts',
+      ]
+      git(['update-index', '--add', '-z', '--index-info'], paths.map(name => `100644 ${blob}\t${name}\0`).join(''))
+      writeFileSync(join(root, '.github/CODEOWNERS'), '* @head-owner\n')
+      git(['add', '.github/CODEOWNERS'])
+      const tree = git(['write-tree'])
+      const head = git(['commit-tree', tree, '-p', base], 'fixture head\n')
+      writeFileSync(join(root, 'event.json'), JSON.stringify({ pull_request: { labels: [{ name: 'fixture-label' }], user: { login: 'contributor' } } }))
+      const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+      const script = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Collect changed files')!.run!
+      const result = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: head }, encoding: 'utf8' })
+      expect(result.status, result.stderr).toBe(0)
+      const changed = readFileSync(join(root, 'changed-files.nul'), 'utf8').split('\0').filter(Boolean)
+      expect(new Set(changed)).toEqual(new Set(['.github/CODEOWNERS', ...paths]))
+      const plan = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Build deterministic scope plan')!.run!
+      expect(plan).toContain('--files0 changed-files.nul')
+      expect(readFileSync(join(root, 'codeowners.txt'), 'utf8')).toBe('* @base-owner\n')
+      expect(readFileSync(join(root, 'author.txt'), 'utf8')).toBe('contributor\n')
+      const missing = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: '0'.repeat(40) }, encoding: 'utf8' })
+      expect(missing.status).not.toBe(0)
+      expect(missing.stderr).not.toContain('unexpected API lookup')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('installs adapter dependencies before desktop checks compile the sidecar bundle', () => {
     const steps = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))['desktop-checks'].steps ?? []
-    const check = steps.findIndex(step => step.run === 'bun run check:desktop')
+    const check = steps.findIndex(step => runsCommand(step, 'bun run check:desktop'))
     const install = steps.findIndex(step =>
       step['working-directory'] === 'adapters' && step.run === 'bun install --frozen-lockfile',
     )
@@ -135,7 +204,7 @@ describe('PR quality workflow', () => {
       ['desktop-native-checks', 'bun run check:native'],
     ]) {
       const steps = jobs[job].steps ?? []
-      const check = steps.findIndex(step => step.run === command)
+      const check = steps.findIndex(step => runsCommand(step, command))
       const install = steps.findIndex(step =>
         step['working-directory'] === 'mobile' && step.run === 'bun install --frozen-lockfile',
       )
@@ -286,25 +355,53 @@ describe('PR quality workflow', () => {
     expect(workflow).toContain('require_selected "chat-contract-checks"')
     expect(workflow).toContain('require_selected "agent-flow-checks"')
     expect(workflow).toContain('require_selected "agent-e2e-checks"')
-    // Coverage is reported, never blocking.
-    expect(workflow).toContain('advise_selected "coverage-checks"')
-    expect(workflow).not.toContain('require_selected "coverage-checks"')
+  })
+
+  test('keeps advisory coverage off the required gate so the gate never waits for it', () => {
+    // The coverage lane takes ~25 minutes and never decides a merge. While the gate
+    // listed it in `needs`, every PR waited for it before turning green.
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const gate = jobs['pr-quality-gate']!
+    const gateScript = gate.steps!.map(step => step.run ?? '').join('\n')
+
+    expect(gate.needs).not.toContain('coverage-checks')
+    expect(gateScript).not.toContain('coverage')
+    // Still selected and still reported on the PR as its own check.
+    expect(jobs['coverage-checks']!.needs).toBe('scope-plan')
+    expect(jobs['coverage-checks']!.steps?.some(step => step.run === 'bun run check:coverage')).toBe(true)
+  })
+
+  test('splits the long required lanes into shards that together run the whole check', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const gate = jobs['pr-quality-gate']!
+    for (const [job, command] of [
+      ['server-checks', 'bun run check:server'],
+      ['desktop-checks', 'bun run check:desktop'],
+    ] as const) {
+      const shards = jobs[job]!.strategy?.matrix?.shard ?? []
+      const total = shards.length
+      expect(total, job).toBeGreaterThan(1)
+      // Exactly 1..N: a missing shard number would silently skip that slice of tests.
+      expect(shards, job).toEqual(Array.from({ length: total }, (_, index) => index + 1))
+      // Every shard reports, so one failure does not hide another.
+      expect(jobs[job]!.strategy?.['fail-fast'], job).toBe(false)
+      const runs = (jobs[job]!.steps ?? []).filter(step => runsCommand(step, command))
+      expect(runs.map(step => step.run), job).toEqual([`${command} --shard=\${{ matrix.shard }}/${total}`])
+      // A matrix job's result is failure when any shard fails, so the gate stays strict.
+      expect(gate.needs, job).toContain(job)
+    }
   })
 
   test.each([
-    { coverage: 'failure', agentE2e: 'success', exit: 0 },
-    { coverage: 'success', agentE2e: 'success', exit: 0 },
-    { coverage: 'skipped', agentE2e: 'success', exit: 0 },
-    { coverage: 'success', agentE2e: 'failure', exit: 1 },
-    { coverage: 'success', agentE2e: 'skipped', exit: 1 },
-  ])('treats coverage as advisory and the mock-LLM agent lane as required: %j', scenario => {
+    { agentE2e: 'success', exit: 0 },
+    { agentE2e: 'failure', exit: 1 },
+    { agentE2e: 'skipped', exit: 1 },
+  ])('requires the selected mock-LLM agent lane: %j', scenario => {
     const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
     const gateScript = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
     const script = gateScript.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
-      if (expression === 'needs.scope-plan.outputs.coverage_checks') return 'true'
       if (expression === 'needs.scope-plan.outputs.agent_e2e_checks') return 'true'
       if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
-      if (expression === 'needs.coverage-checks.result') return scenario.coverage
       if (expression === 'needs.agent-e2e-checks.result') return scenario.agentE2e
       if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
       return 'skipped'
@@ -324,7 +421,7 @@ describe('PR quality workflow', () => {
     const enforce = (jobs['policy-enforcement'].steps ?? []).find((step) => step.name === 'Enforce change policy')!.run!
 
     expect(parsed.on.push?.branches).toEqual(['main'])
-    expect(collect).toContain('git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER"')
+    expect(collect).toContain('git diff --name-only -z "$PUSH_BEFORE" "$PUSH_AFTER"')
     // Pushes to main must not cancel one another: each merge gets its own verdict.
     expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}")
     // Label exceptions live on the pull request; main must not re-block on them.

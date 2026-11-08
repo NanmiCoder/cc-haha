@@ -124,9 +124,9 @@ test('main.tsx starts every MCP source behind the profile, each from one place',
   expect(calls('fetchClaudeAIMcpConfigsIfEligible')).toBe(1)
   expect(main).toMatch(/const claudeaiConfigPromise[^=]*=\s*agentProfileMcp &&/)
 
-  // Computer Use's MCP server (macOS and Windows).
+  // Computer Use's MCP server (all supported native platforms).
   expect(calls('setupComputerUseMCP')).toBe(1)
-  expect(main).toMatch(/if \(agentProfileMcp && \(process\.platform === 'darwin' \|\| process\.platform === 'win32'\)\) \{\s*try \{\s*const \{\s*getChicagoEnabled/)
+  expect(main).toMatch(/if \(agentProfileMcp && isComputerUseSupportedPlatform\(\)\) \{\s*try \{\s*const \{\s*getChicagoEnabled/)
 
   // User, project and plugin configuration (the real-CLI tests above show it end to end).
   expect(calls('getClaudeCodeMcpConfigs')).toBe(1)

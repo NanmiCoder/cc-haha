@@ -4,6 +4,7 @@ import { router, useRootNavigationState } from 'expo-router'
 import * as Notifications from 'expo-notifications'
 import { channelTriggerFor } from './channelIds'
 import { ensureNotificationChannel } from './notificationChannel'
+import { notificationPresentation } from './notificationPresentation'
 import { usePushRegistration } from './PushRegistrationContext'
 import { useApp } from './AppContext'
 import { usePreferences } from './PreferencesContext'
@@ -27,12 +28,11 @@ export function NotificationBridge() {
   useEffect(() => {
     if (Platform.OS === 'web') return
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: AppState.currentState !== 'active',
-        shouldShowList: true,
-        shouldPlaySound: AppState.currentState !== 'active',
-        shouldSetBadge: false,
-      }),
+      handleNotification: async (notification) =>
+        notificationPresentation(
+          AppState.currentState === 'active',
+          notification.request.content.data
+        ),
     })
     void Promise.all([
       Notifications.setNotificationCategoryAsync('cchahaTool', [

@@ -1,8 +1,9 @@
 import { createHash } from 'crypto'
-import { readFileSync, realpathSync, statSync } from 'fs'
+import * as nativeFs from 'fs'
 import { open, readFile, realpath, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
-import { basename, dirname, join, resolve, sep } from 'path'
+import * as nativePath from 'path'
+import { join } from 'path'
 import { hasBinaryExtension, isBinaryContent } from '../constants/files.js'
 import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
@@ -18,6 +19,7 @@ import {
   isShallowClone as isShallowCloneFs,
   resolveGitDir,
 } from './git/gitFilesystem.js'
+import { findNativeGitRoot, resolveCanonicalNativeGitRoot } from './git/projectRoot.js'
 import { logError } from './log.js'
 import { memoizeWithLRU } from './memoize.js'
 import { whichSync } from './which.js'
@@ -29,57 +31,13 @@ const findGitRootImpl = memoizeWithLRU(
     const startTime = Date.now()
     logForDiagnosticsNoPII('info', 'find_git_root_started')
 
-    let current = resolve(startPath)
-    const root = current.substring(0, current.indexOf(sep) + 1) || sep
-    let statCount = 0
-
-    while (current !== root) {
-      try {
-        const gitPath = join(current, '.git')
-        statCount++
-        const stat = statSync(gitPath)
-        // .git can be a directory (regular repo) or file (worktree/submodule)
-        if (stat.isDirectory() || stat.isFile()) {
-          logForDiagnosticsNoPII('info', 'find_git_root_completed', {
-            duration_ms: Date.now() - startTime,
-            stat_count: statCount,
-            found: true,
-          })
-          return current.normalize('NFC')
-        }
-      } catch {
-        // .git doesn't exist at this level, continue up
-      }
-      const parent = dirname(current)
-      if (parent === current) {
-        break
-      }
-      current = parent
-    }
-
-    // Check root directory as well
-    try {
-      const gitPath = join(root, '.git')
-      statCount++
-      const stat = statSync(gitPath)
-      if (stat.isDirectory() || stat.isFile()) {
-        logForDiagnosticsNoPII('info', 'find_git_root_completed', {
-          duration_ms: Date.now() - startTime,
-          stat_count: statCount,
-          found: true,
-        })
-        return root.normalize('NFC')
-      }
-    } catch {
-      // .git doesn't exist at root
-    }
-
+    const { root, statCount } = findNativeGitRoot(startPath, nativeFs, nativePath)
     logForDiagnosticsNoPII('info', 'find_git_root_completed', {
       duration_ms: Date.now() - startTime,
       stat_count: statCount,
-      found: false,
+      found: root !== null,
     })
-    return GIT_ROOT_NOT_FOUND
+    return root ?? GIT_ROOT_NOT_FOUND
   },
   path => path,
   512,
@@ -104,7 +62,7 @@ function createFindGitRoot(): {
 } {
   function wrapper(startPath: string): string | null {
     const result = findGitRootImpl(startPath)
-    return result === GIT_ROOT_NOT_FOUND ? null : result
+    return result === GIT_ROOT_NOT_FOUND ? null : result.normalize('NFC')
   }
   wrapper.cache = findGitRootImpl.cache
   return wrapper
@@ -123,63 +81,7 @@ function createFindGitRoot(): {
  * path (permission checks, prompt building).
  */
 const resolveCanonicalRoot = memoizeWithLRU(
-  (gitRoot: string): string => {
-    try {
-      // In a worktree, .git is a file containing: gitdir: <path>
-      // In a regular repo, .git is a directory (readFileSync throws EISDIR).
-      const gitContent = readFileSync(join(gitRoot, '.git'), 'utf-8').trim()
-      if (!gitContent.startsWith('gitdir:')) {
-        return gitRoot
-      }
-      const worktreeGitDir = resolve(
-        gitRoot,
-        gitContent.slice('gitdir:'.length).trim(),
-      )
-      // commondir points to the shared .git directory (relative to worktree gitdir).
-      // Submodules have no commondir (readFileSync throws ENOENT) → fall through.
-      const commonDir = resolve(
-        worktreeGitDir,
-        readFileSync(join(worktreeGitDir, 'commondir'), 'utf-8').trim(),
-      )
-      // SECURITY: The .git file and commondir are attacker-controlled in a
-      // cloned/downloaded repo. Without validation, a malicious repo can point
-      // commondir at any path the victim has trusted, bypassing the trust
-      // dialog and executing hooks from .claude/settings.json on startup.
-      //
-      // Validate the structure matches what `git worktree add` creates:
-      //   1. worktreeGitDir is a direct child of <commonDir>/worktrees/
-      //      → ensures the commondir file we read lives inside the resolved
-      //        common dir, not inside the attacker's repo
-      //   2. <worktreeGitDir>/gitdir points back to <gitRoot>/.git
-      //      → ensures an attacker can't borrow a victim's existing worktree
-      //        entry by guessing its path
-      // Both are required: (1) alone fails if victim has a worktree of the
-      // trusted repo; (2) alone fails because attacker controls worktreeGitDir.
-      if (resolve(dirname(worktreeGitDir)) !== join(commonDir, 'worktrees')) {
-        return gitRoot
-      }
-      // Git writes gitdir with strbuf_realpath() (symlinks resolved), but
-      // gitRoot from findGitRoot() is only lexically resolved. Realpath gitRoot
-      // so legitimate worktrees accessed via a symlinked path (e.g. macOS
-      // /tmp → /private/tmp) aren't rejected. Realpath the directory then join
-      // '.git' — realpathing the .git file itself would follow a symlinked .git
-      // and let an attacker borrow a victim's back-link.
-      const backlink = realpathSync(
-        readFileSync(join(worktreeGitDir, 'gitdir'), 'utf-8').trim(),
-      )
-      if (backlink !== join(realpathSync(gitRoot), '.git')) {
-        return gitRoot
-      }
-      // Bare-repo worktrees: the common dir isn't inside a working directory.
-      // Use the common dir itself as the stable identity (anthropics/claude-code#27994).
-      if (basename(commonDir) !== '.git') {
-        return commonDir.normalize('NFC')
-      }
-      return dirname(commonDir).normalize('NFC')
-    } catch {
-      return gitRoot
-    }
-  },
+  (gitRoot: string): string => resolveCanonicalNativeGitRoot(gitRoot, nativeFs, nativePath),
   root => root,
   50,
 )
@@ -196,6 +98,16 @@ const resolveCanonicalRoot = memoizeWithLRU(
  */
 export const findCanonicalGitRoot = createFindCanonicalGitRoot()
 
+/**
+ * Native directory identity for access scopes. Display/grouping callers retain
+ * their NFC API above; folding two physical POSIX paths must never share grants.
+ * Reuses the same root walk and authenticated worktree/backlink validation.
+ */
+export function findCanonicalGitRootPreservingPathIdentity(startPath: string): string | null {
+  const root = findGitRootImpl(startPath)
+  return root === GIT_ROOT_NOT_FOUND ? null : resolveCanonicalRoot(root)
+}
+
 function createFindCanonicalGitRoot(): {
   (startPath: string): string | null
   cache: typeof resolveCanonicalRoot.cache
@@ -205,7 +117,7 @@ function createFindCanonicalGitRoot(): {
     if (!root) {
       return null
     }
-    return resolveCanonicalRoot(root)
+    return resolveCanonicalRoot(root).normalize('NFC')
   }
   wrapper.cache = resolveCanonicalRoot.cache
   return wrapper

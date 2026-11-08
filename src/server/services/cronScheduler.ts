@@ -1,3 +1,6 @@
+import { DesktopUiPreferencesService } from './desktopUiPreferencesService.js'
+import { validateProjectAdditionalDirectories } from './projectDirectories.js'
+import { ProjectDirectoryIoError, readProjectDirectory } from '../../services/mcp/projectDirectoryIo.js'
 /**
  * CronScheduler — Execution engine for scheduled tasks
  *
@@ -9,7 +12,8 @@
 
 import * as fs from 'fs/promises'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { ApiError } from '../middleware/errorHandler.js'
+import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
@@ -554,11 +558,24 @@ export function buildCronCliArgs(
 // instances in the same host must not claim competing tasks for one conversation.
 const sessionTaskTargets = new Set<string>()
 
+// Only startup preparation enters the bounded directory pool. Release before
+// waiting for CLI/model output, including across scheduler instances in one host.
+let taskPreparationQueue = Promise.resolve()
+
+async function acquireTaskPreparation(): Promise<() => void> {
+  const previous = taskPreparationQueue
+  let release!: () => void
+  taskPreparationQueue = new Promise<void>(resolve => { release = resolve })
+  await previous
+  return release
+}
+
 export class CronScheduler {
   private intervalId: Timer | null = null
   private sessionTasks = new Map<string, AbortController>()
   private sessionTaskPromises = new Set<Promise<TaskRun | undefined>>()
-  private standaloneTaskPromises = new Set<Promise<TaskRun>>()
+  private standaloneTaskPromises = new Map<string, Promise<TaskRun>>()
+  private stopGeneration = 0
   private runningTasks = new Map<
     string,
     { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string; resultReceived?: boolean; resultSucceeded?: boolean; migrationInterrupted?: boolean }
@@ -596,7 +613,8 @@ export class CronScheduler {
 
   /** Stop the scheduler and kill any running task processes. */
   stop(): void {
-    const wasRunning = this.intervalId !== null || this.runningTasks.size > 0 || this.sessionTasks.size > 0
+    this.stopGeneration++
+    const wasRunning = this.intervalId !== null || this.hasActiveWork()
     if (!wasRunning) return
 
     if (this.intervalId) {
@@ -618,12 +636,13 @@ export class CronScheduler {
   /** One tick of the scheduler — evaluate all tasks against the current time. */
   async tick(now = new Date()): Promise<void> {
     if (migrationMaintenance.isActive) return
+    const generation = this.stopGeneration
     try {
       const tasks = await this.cronService.listTasks()
       const currentKey = CronScheduler.minuteKey(now)
 
       for (const task of tasks) {
-        if (migrationMaintenance.isActive) return
+        if (migrationMaintenance.isActive || generation !== this.stopGeneration) return
         // Skip disabled tasks
         if (task.enabled === false) continue
 
@@ -639,7 +658,7 @@ export class CronScheduler {
         }
 
         // Skip if already running (in-memory guard — same process)
-        if (this.runningTasks.has(task.id)) continue
+        if (this.runningTasks.has(task.id) || this.standaloneTaskPromises.has(task.id)) continue
 
         // Skip if this process already fired the task in the current minute
         if (this.lastFiredMinuteKey.get(task.id) === currentKey) continue
@@ -680,11 +699,13 @@ export class CronScheduler {
       if (!run) throw new Error('Scheduled task target is busy or this occurrence was already claimed')
       return run
     }))
+    const existing = this.standaloneTaskPromises.get(task.id)
+    if (existing) return existing
     powerActivityClock.changed()
-    const promise = migrationMaintenance.track(this.executeTaskOnce(task, options))
-    this.standaloneTaskPromises.add(promise)
+    const promise = migrationMaintenance.track(this.executeTaskOnce(task, this.stopGeneration, options))
+    this.standaloneTaskPromises.set(task.id, promise)
     void promise.finally(() => {
-      this.standaloneTaskPromises.delete(promise)
+      this.standaloneTaskPromises.delete(task.id)
       powerActivityClock.changed()
     }).catch(() => {})
     return promise
@@ -701,6 +722,7 @@ export class CronScheduler {
   }
 
   async stopAndWait(): Promise<void> {
+    this.stopGeneration++
     for (const controller of this.sessionTasks.values()) controller.abort(new Error('Data migration is in progress'))
     await Promise.allSettled([...this.sessionTaskPromises])
     const entries = [...this.runningTasks.values()]
@@ -722,6 +744,7 @@ export class CronScheduler {
       const exited = await waitForMigrationExit(proc.exited)
       if (!exited) throw new Error('Scheduled task process did not exit')
     }
+    await Promise.allSettled([...this.standaloneTaskPromises.values()])
   }
 
   private launchSessionTask(task: CronTask, scheduledFor: string, manual = false): Promise<TaskRun | undefined> {
@@ -748,7 +771,12 @@ export class CronScheduler {
     const controller = new AbortController()
     this.sessionTasks.set(task.id, controller)
     const logTarget = captureRunsFileMutationTarget()
+    let releasePreparation: (() => void) | undefined
     try {
+      if (task.execution?.kind === 'new-session') {
+        releasePreparation = await acquireTaskPreparation()
+        if (controller.signal.aborted || migrationMaintenance.isActive) return
+      }
       let preflightError: string | undefined
       try { if (!await executor.canStart(task)) return } catch (error) { preflightError = String(error) }
       const current = await this.cronService.getTask(task.id)
@@ -769,14 +797,17 @@ export class CronScheduler {
       let completed: TaskRun
       try {
         if (preflightError) throw new Error(preflightError)
+        controller.signal.throwIfAborted()
+        migrationMaintenance.assertAvailable()
         const latest = await this.cronService.getTask(task.id)
         if (!latest || (!manual && latest.enabled === false) || (latest.revision ?? 1) !== (task.revision ?? 1)) throw new Error('Task changed before delivery')
         const result = await executor.execute({ task, runId, occurrenceId, scheduledFor, signal: controller.signal, onSessionResolved: async sessionId => {
+          releasePreparation?.()
           run.sessionId = sessionId
           await updateRun(run, logTarget)
         }, canSend: async () => {
           const fresh = await this.cronService.getTask(task.id)
-          return !controller.signal.aborted && !!fresh && (manual || fresh.enabled !== false) && (fresh.revision ?? 1) === (task.revision ?? 1)
+          return !controller.signal.aborted && !migrationMaintenance.isActive && !!fresh && (manual || fresh.enabled !== false) && (fresh.revision ?? 1) === (task.revision ?? 1)
         } })
         completed = { ...run, ...result, completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt) }
       } catch (error) {
@@ -797,6 +828,7 @@ export class CronScheduler {
       await pruneScheduledTaskReceipts(task.id, directory).catch(error => console.error('[CronScheduler] Receipt retention failed:', error))
       return completed
     } finally {
+      releasePreparation?.()
       this.sessionTasks.delete(task.id)
       if (targetKey) sessionTaskTargets.delete(targetKey)
     }
@@ -832,7 +864,12 @@ export class CronScheduler {
     }
   }
 
-  private async executeTaskOnce(task: CronTask, options?: { createSession?: boolean }): Promise<TaskRun> {
+  private assertTaskPreparationAvailable(generation: number): void {
+    migrationMaintenance.assertAvailable()
+    if (generation !== this.stopGeneration) throw new Error('Scheduler stopped')
+  }
+
+  private async executeTaskOnce(task: CronTask, generation: number, options?: { createSession?: boolean }): Promise<TaskRun> {
     const runLogTarget = captureRunsFileMutationTarget()
 
     // Prevent concurrent executions of the same task
@@ -854,30 +891,56 @@ export class CronScheduler {
     const runId = crypto.randomBytes(6).toString('hex')
     const startedAt = new Date().toISOString()
     let workDir = task.folderPath || os.homedir()
-    if (task.folderPath && (!existsSync(task.folderPath) || !statSync(task.folderPath).isDirectory())) {
-      console.warn(`[cron] task ${task.id}: folderPath "${task.folderPath}" is not a valid directory, falling back to homedir`)
-      workDir = os.homedir()
-    }
-    workDir = this.resolveCanonicalWorkDir(workDir)
-
-    // Only create a session when explicitly requested (manual "Run Now"),
-    // not for automatic cron runs — avoids flooding the sidebar.
+    let additionalDirectories: string[] = []
+    let directoryError: string | undefined
     let sessionId: string | undefined
-    if (options?.createSession) {
+    const releasePreparation = await acquireTaskPreparation()
+    try {
+      this.assertTaskPreparationAvailable(generation)
       try {
-        const result = await this.sessionService.createSession(
-          workDir,
-          undefined,
-          'bypassPermissions',
-        )
-        sessionId = result.sessionId
-        // Delete the placeholder JSONL file so the CLI can create it fresh
-        // with actual content. Same pattern as conversationService.ts.
-        await this.sessionService.deleteSessionFile(sessionId)
-      } catch {
-        // Fall back to no session if creation fails
+        try {
+          workDir = (await readProjectDirectory({ kind: 'identity', path: path.resolve(workDir) })).directory
+        } catch (error) {
+          // Only a proven missing/non-directory legacy task target falls back.
+          // A stalled or inaccessible target must never silently execute in HOME.
+          if (!task.folderPath || !(error instanceof ProjectDirectoryIoError) ||
+            (error.reason !== 'missing' && error.reason !== 'not-directory')) throw error
+          console.warn(`[cron] task ${task.id}: folderPath "${task.folderPath}" is not a valid directory, falling back to homedir`)
+          workDir = (await readProjectDirectory({ kind: 'identity', path: os.homedir() })).directory
+        }
+        const project = await new DesktopUiPreferencesService().getProjectDirectories(workDir)
+        additionalDirectories = await validateProjectAdditionalDirectories(workDir, project.additionalDirectories)
+      } catch (error) {
+        directoryError = error instanceof Error ? error.message : String(error)
       }
+
+      this.assertTaskPreparationAvailable(generation)
+      // Only create a session when explicitly requested (manual "Run Now"),
+      // not for automatic cron runs — avoids flooding the sidebar.
+      if (options?.createSession && !directoryError) {
+        try {
+          const result = await this.sessionService.createSession(
+            workDir,
+            undefined,
+            'bypassPermissions',
+          )
+          sessionId = result.sessionId
+          // Delete the placeholder JSONL file so the CLI can create it fresh
+          // with actual content. Same pattern as conversationService.ts.
+          await this.sessionService.deleteSessionFile(sessionId)
+        } catch (error) {
+          // Session creation repeats directory admission. Its scope validation
+          // failures must not grant a CLI launch without a session instead.
+          if (error instanceof ProjectDirectoryIoError || error instanceof ApiError) {
+            directoryError = error.message
+          }
+          // Other optional history failures retain the legacy no-session path.
+        }
+      }
+    } finally {
+      releasePreparation()
     }
+    this.assertTaskPreparationAvailable(generation)
 
     const run: TaskRun = {
       id: runId,
@@ -896,6 +959,39 @@ export class CronScheduler {
 
     // Persist the "running" state
     await appendRun(run, runLogTarget)
+    let childEnv: Record<string, string | undefined> = {}
+    try {
+      this.assertTaskPreparationAvailable(generation)
+      if (!directoryError) childEnv = await this.buildTaskChildEnv(workDir, task)
+      this.assertTaskPreparationAvailable(generation)
+    } catch (error) {
+      // Preparation may have been stopped while durable bookkeeping or child
+      // environment resolution awaited I/O. Never leave an unlaunched run running.
+      const failedRun: TaskRun = {
+        ...run, status: 'failed', error: error instanceof Error ? error.message : String(error),
+        completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt),
+      }
+      await updateRun(failedRun, runLogTarget)
+      return failedRun
+    }
+    if (directoryError) {
+      const failedRun: TaskRun = {
+        ...run, status: 'failed', error: directoryError,
+        completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt),
+      }
+      await updateRun(failedRun, runLogTarget)
+      if (task.notification?.enabled && task.notification.channels.length > 0 && shouldNotifyScheduledRun(task, failedRun)) {
+        migrationMaintenance.track(sendTaskNotification(failedRun, task.notification)).catch((err) => {
+          console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
+        })
+      }
+      if (!task.recurring) {
+        await this.cronService.updateTask(task.id, { enabled: false }).catch(() => {
+          // Task may have been deleted.
+        })
+      }
+      return failedRun
+    }
 
     const inputPayload = JSON.stringify({
       type: 'user',
@@ -915,12 +1011,11 @@ export class CronScheduler {
       '--output-format',
       'stream-json',
       ...(sessionId ? ['--session-id', sessionId] : []),
+      ...additionalDirectories.flatMap(directory => ['--add-dir', directory]),
       ...this.getRuntimeArgs(task),
     ])
 
-    const childEnv = await this.buildTaskChildEnv(workDir, task)
     const taskTimeoutMs = resolveCronTaskTimeoutMs()
-    migrationMaintenance.assertAvailable()
     const proc = Bun.spawn(
       cliArgs,
       buildCronTaskSpawnOptions(workDir, childEnv),
@@ -1022,7 +1117,7 @@ export class CronScheduler {
         }
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, additionalDirectories)
       await updateRun(completedRun, runLogTarget)
 
       // Send IM notification if configured
@@ -1056,7 +1151,7 @@ export class CronScheduler {
           new Date(completedAt).getTime() - new Date(startedAt).getTime(),
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, additionalDirectories)
       await updateRun(failedRun, runLogTarget)
 
       return failedRun
@@ -1066,22 +1161,16 @@ export class CronScheduler {
   private async persistScheduledSessionPermission(
     sessionId: string | undefined,
     workDir: string,
+    additionalDirectories: string[],
   ): Promise<void> {
     if (!sessionId) return
     await this.sessionService.appendSessionMetadata(sessionId, {
       workDir,
       permissionMode: 'bypassPermissions',
+      additionalDirectories,
     }).catch(() => {
       // The task result is still valid even if session metadata refresh fails.
     })
-  }
-
-  private resolveCanonicalWorkDir(workDir: string): string {
-    try {
-      return realpathSync(workDir)
-    } catch {
-      return workDir
-    }
   }
 
   private getRuntimeArgs(task: CronTask): string[] {

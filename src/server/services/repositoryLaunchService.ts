@@ -3,8 +3,8 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { promisify } from 'node:util'
 import { ApiError } from '../middleware/errorHandler.js'
-import { findCanonicalGitRoot, findGitRoot } from '../../utils/git.js'
-import { registerFilesystemAccessRoot } from './filesystemAccessRoots.js'
+import { ProjectDirectoryIoError, readProjectDirectory } from '../../services/mcp/projectDirectoryIo.js'
+import { registerCanonicalFilesystemAccessRoot } from './filesystemAccessRoots.js'
 import { normalizeDriveRootPathForPlatform } from './windowsDrivePath.js'
 import {
   ensureWorktreesDirExcluded,
@@ -198,31 +198,25 @@ async function runGit(
 
 async function resolveDirectory(workDir: string): Promise<string> {
   const resolved = path.resolve(normalizeDriveRootPathForPlatform(workDir))
-  let realPath: string
   try {
-    realPath = normalizeDriveRootPathForPlatform(await fs.realpath(resolved))
-  } catch {
+    return normalizeDriveRootPathForPlatform((await readProjectDirectory({ kind: 'identity', path: resolved })).directory)
+  } catch (error) {
+    if (error instanceof ProjectDirectoryIoError && error.kind !== 'failed') throw ApiError.badRequest(error.message)
+    if (error instanceof ProjectDirectoryIoError && error.reason === 'not-directory') {
+      throw repositoryBadRequest(REPOSITORY_ERROR.workdirNotDirectory, `Working directory is not a directory: ${resolved}`)
+    }
     throw repositoryBadRequest(
       REPOSITORY_ERROR.workdirMissing,
       `Working directory does not exist: ${resolved}`,
     )
   }
-
-  const stat = await fs.stat(realPath)
-  if (!stat.isDirectory()) {
-    throw repositoryBadRequest(
-      REPOSITORY_ERROR.workdirNotDirectory,
-      `Working directory is not a directory: ${realPath}`,
-    )
-  }
-
-  return realPath
 }
 
 async function canonicalizeKnownPath(candidate: string): Promise<string> {
   try {
-    return (await fs.realpath(candidate)).normalize('NFC')
-  } catch {
+    return (await readProjectDirectory({ kind: 'identity', path: candidate })).directory.normalize('NFC')
+  } catch (error) {
+    if (error instanceof ProjectDirectoryIoError && error.kind !== 'failed') throw error
     return path.resolve(candidate).normalize('NFC')
   }
 }
@@ -374,10 +368,14 @@ async function getDefaultBranch(repoRoot: string): Promise<string | null> {
 
 export async function getRepositoryContext(workDir: string): Promise<RepositoryContextResult> {
   let absWorkDir: string
+  let gitRoot: string | null | undefined
+  let canonicalRoot: string | undefined
   try {
     absWorkDir = await resolveDirectory(workDir)
-    registerFilesystemAccessRoot(workDir)
-    registerFilesystemAccessRoot(absWorkDir)
+    const project = await readProjectDirectory({ kind: 'project', path: absWorkDir })
+    gitRoot = project.gitRoot
+    canonicalRoot = project.root
+    registerCanonicalFilesystemAccessRoot(absWorkDir)
   } catch (error) {
     return {
       state: 'missing_workdir',
@@ -394,7 +392,6 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
     }
   }
 
-  const gitRoot = findGitRoot(absWorkDir)
   if (!gitRoot) {
     return {
       state: 'not_git_repo',
@@ -411,8 +408,8 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
   }
 
   try {
-    const repoRoot = findCanonicalGitRoot(gitRoot) ?? gitRoot
-    registerFilesystemAccessRoot(repoRoot)
+    const repoRoot = canonicalRoot ?? gitRoot
+    registerCanonicalFilesystemAccessRoot(repoRoot)
     const [branchResult, defaultBranch, statusResult, worktreeResult, headResult] = await Promise.all([
       runGit(gitRoot, ['branch', '--show-current']),
       getDefaultBranch(gitRoot),
@@ -423,12 +420,14 @@ export async function getRepositoryContext(workDir: string): Promise<RepositoryC
 
     const currentBranch = branchResult.stdout.trim() || null
     const rawWorktreeRecords = worktreeResult.code === 0 ? parseWorktreeList(worktreeResult.stdout) : []
-    const worktreeRecords = await Promise.all(
-      rawWorktreeRecords.map(async (worktree) => ({
+    const worktreeRecords: GitWorktreeRecord[] = []
+    // Consume this batch without exhausting the shared directory I/O pool.
+    for (const worktree of rawWorktreeRecords) {
+      worktreeRecords.push({
         ...worktree,
         path: await canonicalizeKnownPath(worktree.path),
-      })),
-    )
+      })
+    }
     const worktrees = worktreeRecords.map((worktree) => ({
       path: worktree.path,
       branch: worktree.branch,

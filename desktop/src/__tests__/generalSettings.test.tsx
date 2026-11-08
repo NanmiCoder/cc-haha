@@ -12,9 +12,17 @@ import type { AppMode, ChatSendBehavior, PermissionMode, ThemeMode, UpdateProxyS
 import { browserHost } from '../lib/desktopHost/browserHost'
 import { settingsApi } from '../api/settings'
 
-const MOCK_DELETE_PROVIDER = vi.fn()
-const MOCK_GET_SETTINGS = vi.fn()
-const MOCK_UPDATE_SETTINGS = vi.fn()
+// Hoisted like the other mocks: a store that imports the providers API at load
+// time runs the module factory below before plain top-level consts exist.
+const { MOCK_DELETE_PROVIDER, MOCK_GET_SETTINGS, MOCK_UPDATE_SETTINGS, MOCK_MAGPIE } = vi.hoisted(() => ({
+  MOCK_DELETE_PROVIDER: vi.fn(),
+  MOCK_GET_SETTINGS: vi.fn(),
+  MOCK_UPDATE_SETTINGS: vi.fn(),
+  MOCK_MAGPIE: vi.fn().mockResolvedValue({
+    status: { installed: false, running: false, baseUrl: 'http://127.0.0.1:3425' },
+    models: null,
+  }),
+}))
 const desktopNotificationsMock = vi.hoisted(() => ({
   getDesktopNotificationPermission: vi.fn(),
   getDesktopNotificationPlatform: vi.fn(),
@@ -41,7 +49,7 @@ const providerStoreState = {
   hasLoadedProviders: true,
   presets: [] as ProviderPreset[],
   isLoading: false,
-  fetchProviders: vi.fn(),
+  fetchProviders: vi.fn().mockResolvedValue(undefined),
   deleteProvider: MOCK_DELETE_PROVIDER,
   activateProvider: vi.fn(),
   activateOfficial: vi.fn(),
@@ -82,13 +90,14 @@ vi.mock('../api/agents', () => ({
 }))
 
 vi.mock('../stores/providerStore', () => ({
-  useProviderStore: () => providerStoreState,
+  useProviderStore: Object.assign(() => providerStoreState, { getState: () => providerStoreState }),
 }))
 
 vi.mock('../api/providers', () => ({
   providersApi: {
     getSettings: MOCK_GET_SETTINGS,
     updateSettings: MOCK_UPDATE_SETTINGS,
+    magpie: MOCK_MAGPIE,
   },
 }))
 
@@ -224,7 +233,7 @@ describe('Settings > General tab', () => {
     providerStoreState.hasLoadedProviders = true
     providerStoreState.presets = []
     providerStoreState.isLoading = false
-    providerStoreState.fetchProviders = vi.fn()
+    providerStoreState.fetchProviders = vi.fn().mockResolvedValue(undefined)
     providerStoreState.activateProvider = vi.fn()
     providerStoreState.activateOfficial = vi.fn()
     providerStoreState.testProvider = vi.fn()
@@ -2424,6 +2433,7 @@ describe('Settings > Providers tab', () => {
     expect(card.className).toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
     expect(card.className).not.toContain('border-[var(--color-border-focus)]')
     // Only the default card carries the accent.
+    fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
     const other = screen.getByTestId('claude-official-provider')
     expect(other.className).not.toContain('border-[var(--color-primary-fixed-dim)]')
   })
@@ -2454,6 +2464,9 @@ describe('Settings > Providers tab', () => {
     providerStoreState.hasLoadedProviders = true
 
     render(<Settings />)
+    // A fresh install opens on API Key; Claude Official is only the fallback default.
+    expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
 
     expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
   })
@@ -2484,15 +2497,17 @@ describe('Settings > Providers tab', () => {
     expect(screen.getByTestId('grok-official-login')).toBeInTheDocument()
   })
 
-  it('renders saved and official providers in the stored sortable order', () => {
+  const sortableRows = () => screen.getAllByRole('button', { name: 'Drag to reorder' })
+    .map((handle) => handle.closest('[data-testid]')?.getAttribute('data-testid'))
+
+  it('renders each tab in the stored sortable order', () => {
     providerStoreState.providerOrder = ['provider-1', 'openai-official', 'claude-official']
 
     render(<Settings />)
 
-    const rows = screen.getAllByRole('button', { name: 'Drag to reorder' })
-      .map((handle) => handle.closest('[data-testid]')?.getAttribute('data-testid'))
-    expect(rows).toEqual([
-      'provider-provider-1',
+    expect(sortableRows()).toEqual(['provider-provider-1'])
+    fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
+    expect(sortableRows()).toEqual([
       'openai-official-provider',
       'claude-official-provider',
       'grok-official-provider',
@@ -2505,10 +2520,9 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    const rows = screen.getAllByRole('button', { name: 'Drag to reorder' })
-      .map((handle) => handle.closest('[data-testid]')?.getAttribute('data-testid'))
-    expect(rows).toEqual([
-      'provider-provider-1',
+    expect(sortableRows()).toEqual(['provider-provider-1'])
+    fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
+    expect(sortableRows()).toEqual([
       'claude-official-provider',
       'openai-official-provider',
       'grok-official-provider',

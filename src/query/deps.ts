@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import { queryModelWithStreaming } from '../services/api/claude.js'
 import { autoCompactIfNeeded } from '../services/compact/autoCompact.js'
 import { microcompactMessages } from '../services/compact/microCompact.js'
+import { compactAfterPromptTooLong } from '../services/compact/promptTooLongRecovery.js'
 
 // -- deps
 
@@ -25,6 +26,8 @@ export type QueryDeps = {
   // -- compaction
   microcompact: typeof microcompactMessages
   autocompact: typeof autoCompactIfNeeded
+  /** Optional so existing fakes keep compiling; production uses the real one. */
+  compactAfterPromptTooLong?: typeof compactAfterPromptTooLong
 
   // -- platform
   uuid: () => string
@@ -35,6 +38,7 @@ export function productionDeps(): QueryDeps {
     callModel: queryModelWithStreaming,
     microcompact: microcompactMessages,
     autocompact: autoCompactIfNeeded,
+    compactAfterPromptTooLong,
     uuid: randomUUID,
   }
 }

@@ -74,16 +74,18 @@ export function __resetAppIconCacheForTests(): void {
 export type ComputerUseStatus = {
   platform: string
   supported: boolean
-  engine: 'macos-native' | 'windows-compat' | 'unsupported'
+  engine: 'macos-native' | 'agent-desktop' | 'windows-compat' | 'unsupported'
+  runtime?: 'agent-desktop'
+  agentDesktop?: {
+    available: boolean
+    binaryPath: string | null
+    reason: string | null
+    message?: string
+    detail?: unknown
+  }
   systemVersion: string | null
   arch: string
-  /**
-   * Native cu-helper engine availability. `available` is true only on macOS AND
-   * when the Swift `cu-helper` binary resolves on the server. The settings page
-   * branches on this to render the Codex-style native UI (no Python) instead of
-   * the Python setup flow. Populated by the backend `checkStatus` (server
-   * `EnvStatus.cuHelper`).
-   */
+  /** macOS helper eligibility and installation, separate from OS permissions. */
   cuHelper: {
     available: boolean
     supported: boolean
@@ -93,6 +95,8 @@ export type ComputerUseStatus = {
       | 'system_version_unknown'
       | 'os_too_old'
       | 'helper_missing'
+      | 'helper_signature_invalid'
+      | 'helper_prepare_failed'
       | null
   }
   python: {

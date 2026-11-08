@@ -16,6 +16,7 @@
 import type { SavedProvider, ProviderAuthStrategy } from '../types/provider.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import { findModelMaxOutputTokens } from '../../utils/model/modelContextWindows.js'
 import {
   getPresetAuthStrategy,
   providerNeedsProxy,
@@ -54,6 +55,7 @@ export type ProviderTextCompletionRequest = {
   modelId: string
   system: string
   user: string
+  /** Lowered to the output limits the provider configured, as chat requests are. */
   maxTokens: number
   /**
    * Sent with the first (thinking-disabled) attempt only; the 400/422 retry drops
@@ -81,8 +83,23 @@ export type ProviderTextCompletionRequest = {
   networkSettings?: NetworkSettings
 }
 
+/** The provider's answer to the thinking-disabled first attempt that made it resend. */
+export type ProviderTextCompletionRejection = {
+  status: number
+  /** Start of the response body, on one line. */
+  detail: string
+}
+
 export type ProviderTextCompletionResult =
-  | { ok: true; text: string }
+  | {
+    ok: true
+    text: string
+    /**
+     * Set when the text came from the resend, which runs at the model's default
+     * thinking. Callers put it in their failure messages when the answer is unusable.
+     */
+    firstAttemptRejected?: ProviderTextCompletionRejection
+  }
   | { ok: false; reason: ProviderTextCompletionFailureReason; status?: number; message: string }
 
 type Failure = Extract<ProviderTextCompletionResult, { ok: false }>
@@ -114,6 +131,43 @@ export function classifyProviderStatus(status: number): ProviderTextCompletionFa
  */
 function rejectedRequestShape(response: Response): boolean {
   return response.status === 400 || response.status === 422
+}
+
+const REJECTION_DETAIL_MAX_CHARS = 200
+
+async function describeRejection(response: Response): Promise<ProviderTextCompletionRejection> {
+  const body = await response.text().catch(() => '')
+  return { status: response.status, detail: body.replace(/\s+/g, ' ').trim().slice(0, REJECTION_DETAIL_MAX_CHARS) }
+}
+
+type SentRequest = { response: Response; firstAttemptRejected?: ProviderTextCompletionRejection }
+
+/** Sends `firstAttempt` on top of the body, and the bare body once more if the provider rejects that shape. */
+async function sendWithThinkingRetry(
+  send: (body: Record<string, unknown>) => Promise<Response>,
+  requestBody: Record<string, unknown>,
+  firstAttempt: Record<string, unknown>,
+  overall: AbortSignal | undefined,
+): Promise<SentRequest> {
+  const first = await send({ ...requestBody, ...firstAttempt })
+  if (!rejectedRequestShape(first)) return { response: first }
+  const firstAttemptRejected = await raceAbort(describeRejection(first), overall)
+  return { response: await send(requestBody), firstAttemptRejected }
+}
+
+/**
+ * The caller's budget, lowered to the output limits saved on the provider: the
+ * model's own (a gateway's catalog) and the endpoint's. Chat requests respect the
+ * same limits, and asking for more is refused upstream.
+ */
+export function outputBudget(request: Pick<ProviderTextCompletionRequest, 'provider' | 'modelId' | 'maxTokens'>): number {
+  const { provider, modelId, maxTokens } = request
+  const limits = [
+    findModelMaxOutputTokens(modelId, provider.modelMaxOutputTokens),
+    provider.requestCompatibility?.maxOutputTokens,
+    provider.requestCompatibility?.outputTokenLimit,
+  ]
+  return Math.min(maxTokens, ...limits.filter((limit): limit is number => limit !== undefined))
 }
 
 /** Removes reasoning a model inlined into its text (`<think>…</think>`, or an unclosed tail). */
@@ -225,7 +279,7 @@ export async function providerTextCompletion(
 
     const requestBody = {
       model: normalizeModelStringForAPI(request.modelId),
-      max_tokens: request.maxTokens,
+      max_tokens: outputBudget(request),
       system: request.system,
       messages: [{ role: 'user', content: request.user }],
     }
@@ -243,7 +297,7 @@ export async function providerTextCompletion(
       // Only the proxy transforms read this; a direct Anthropic endpoint never sees it.
       ...(usesLocalProxy && request.reasoningEffort ? { output_config: { effort: request.reasoningEffort } } : {}),
     }
-    const response = usesLocalProxy
+    const { response, firstAttemptRejected } = usesLocalProxy
       ? await sendThroughProxy(provider.id, request.sessionId, requestBody, firstAttempt, overall)
       : await sendAnthropicDirect(
         `${normalizeAnthropicBaseUrl(provider.baseUrl.replace(/\/+$/, ''))}/v1/messages`,
@@ -266,7 +320,7 @@ export async function providerTextCompletion(
       )
     }
     const text = await raceAbort(readAnthropicText(response), overall)
-    return { ok: true, text: stripThinkBlocks(text) }
+    return { ok: true, text: stripThinkBlocks(text), ...(firstAttemptRejected ? { firstAttemptRejected } : {}) }
   } catch (error) {
     return classifyThrown(error)
   }
@@ -284,7 +338,7 @@ async function completeWithOpenAIOfficial(
   const mappedModel = resolveOpenAICodexModel(request.modelId)
   const requestBody = anthropicToOpenaiResponses({
     model: mappedModel,
-    max_tokens: request.maxTokens,
+    max_tokens: outputBudget(request),
     system: request.system,
     messages: [{ role: 'user', content: request.user }],
     stream: true,
@@ -292,7 +346,7 @@ async function completeWithOpenAIOfficial(
     ...(request.reasoningEffort ? { output_config: { effort: request.reasoningEffort } } : {}),
   })
   requestBody.stream = true
-  requestBody.max_output_tokens = request.maxTokens
+  requestBody.max_output_tokens = outputBudget(request)
 
   const headers = new Headers()
   headers.set('Content-Type', 'application/json')
@@ -331,7 +385,7 @@ async function sendThroughProxy(
   requestBody: Record<string, unknown>,
   firstAttempt: Record<string, unknown>,
   overall: AbortSignal | undefined,
-): Promise<Response> {
+): Promise<SentRequest> {
   const url = `http://127.0.0.1/proxy/providers/${encodeURIComponent(providerId)}/v1/messages`
   const send = (body: Record<string, unknown>) => raceAbort(handleProxyRequest(
     new Request(url, {
@@ -345,8 +399,7 @@ async function sendThroughProxy(
     new URL(url),
   ), overall)
 
-  const response = await send({ ...requestBody, ...firstAttempt })
-  return rejectedRequestShape(response) ? send(requestBody) : response
+  return sendWithThinkingRetry(send, requestBody, firstAttempt, overall)
 }
 
 async function sendAnthropicDirect(
@@ -357,7 +410,7 @@ async function sendAnthropicDirect(
   networkSettings: NetworkSettings,
   overall: AbortSignal | undefined,
   attemptTimeoutMs: number,
-): Promise<Response> {
+): Promise<SentRequest> {
   const send = (body: Record<string, unknown>) => fetch(url, {
     method: 'POST',
     headers: requestHeaders,
@@ -367,6 +420,5 @@ async function sendAnthropicDirect(
     ...deepSeekAccountFetchInit(requestHeaders),
   })
 
-  const response = await send({ ...requestBody, ...firstAttempt })
-  return rejectedRequestShape(response) ? send(requestBody) : response
+  return sendWithThinkingRetry(send, requestBody, firstAttempt, overall)
 }

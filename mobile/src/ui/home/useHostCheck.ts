@@ -5,7 +5,7 @@ import { useConnection } from '../../state/AppContext'
 import { ApiError } from '../../core/client'
 import type { Host } from '../../core/types'
 import { errorText } from '../theme'
-import type { HostCheck } from './homeModel'
+import { credentialHostCheck, type HostCheck } from './homeModel'
 
 /** 本次打开 App 期间每台电脑最后一次连通的时间，只在内存里。 */
 const lastOnline = new Map<string, number>()
@@ -15,7 +15,7 @@ const lastOnline = new Map<string, number>()
  * 公网连接额外读取授权到期时间；在线时读取正在跑和等你的任务数。
  */
 export function useHostCheck(host: Host, refresh = 0): HostCheck {
-  const { client, error } = useConnection(host.id)
+  const { client, error, credentialIssue } = useConnection(host.id)
   const [status, setStatus] = useState<HostCheck>({ state: 'checking' })
   useFocusEffect(
     useCallback(() => {
@@ -94,5 +94,5 @@ export function useHostCheck(host: Host, refresh = 0): HostCheck {
       }
     }, [client, refresh])
   )
-  return error ? { state: 'unauthorized', message: error } : status
+  return error ? credentialHostCheck(error, credentialIssue) : status
 }

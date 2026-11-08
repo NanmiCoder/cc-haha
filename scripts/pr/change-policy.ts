@@ -531,6 +531,26 @@ function readListFile(path: string) {
     .filter(Boolean)
 }
 
+function readNullDelimitedGitPaths(path: string) {
+  let content: string
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path))
+  } catch {
+    throw new Error('Invalid NUL-delimited Git paths: expected a readable UTF-8 file.')
+  }
+  if (content === '') return []
+  if (!content.endsWith('\0')) {
+    throw new Error('Invalid NUL-delimited Git paths: missing final NUL.')
+  }
+  const files = content.slice(0, -1).split('\0')
+  // Git uses repo-relative POSIX paths. Fail closed if legacy path normalization
+  // would rewrite a legal filename (for example a literal backslash or end space).
+  if (files.some(file => !file || normalizePath(file) !== file)) {
+    throw new Error('Invalid NUL-delimited Git paths: normalization would lose a filename.')
+  }
+  return files
+}
+
 function formatSummary(result: ChangePolicyResult) {
   const lines = [
     'PR change policy',
@@ -612,17 +632,18 @@ function writeGithubOutputs(result: ChangePolicyResult) {
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2))
   const filesPath = args.get('--files')
+  const files0Path = args.get('--files0')
   const labelsPath = args.get('--labels-file')
   const labelsArg = args.get('--labels')
   const authorPath = args.get('--author-file')
   const codeOwnersPath = args.get('--codeowners-file')
 
-  if (!filesPath) {
-    console.error('Usage: bun run scripts/pr/change-policy.ts --files <changed-files.txt> [--labels-file <labels.txt>] [--author-file <author.txt> --codeowners-file <base CODEOWNERS>]')
+  if ((!filesPath && !files0Path) || (filesPath && files0Path)) {
+    console.error('Usage: bun run scripts/pr/change-policy.ts (--files <changed-files.txt> | --files0 <changed-files.nul>) [--labels-file <labels.txt>] [--author-file <author.txt> --codeowners-file <base CODEOWNERS>]')
     process.exit(2)
   }
 
-  const files = readListFile(filesPath)
+  const files = files0Path ? readNullDelimitedGitPaths(files0Path) : readListFile(filesPath!)
   const labels = labelsPath
     ? readListFile(labelsPath)
     : labelsArg?.split(',').map((label) => label.trim()).filter(Boolean) ?? []

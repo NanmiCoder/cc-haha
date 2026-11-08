@@ -50,21 +50,27 @@ describe('install-macos-unsigned.sh DMG selection', () => {
     'Claude-Code-Haha-0.7.7-macOS-Intel.dmg',
   ]
 
-  it('picks the chip-named release DMG for each Mac', async () => {
-    expect(await pickDmg('arm64', releaseDmgs)).toBe('Claude-Code-Haha-0.7.7-macOS-Apple-Silicon.dmg')
-    expect(await pickDmg('x86_64', releaseDmgs)).toBe('Claude-Code-Haha-0.7.7-macOS-Intel.dmg')
+  it.each([
+    ['arm64', 'Claude-Code-Haha-0.7.7-macOS-Apple-Silicon.dmg'],
+    ['x86_64', 'Claude-Code-Haha-0.7.7-macOS-Intel.dmg'],
+  ])('picks the chip-named release DMG on %s', async (machine, expected) => {
+    expect(await pickDmg(machine, releaseDmgs)).toBe(expected)
   })
 
-  it('picks arch-named development DMGs', async () => {
+  it.each([
+    ['arm64', 'Claude-Code-Haha-0.7.7-macOS-arm64.dmg'],
+    ['x86_64', 'Claude-Code-Haha-0.7.7-macOS-x64.dmg'],
+  ])('picks the arch-named development DMG on %s', async (machine, expected) => {
     const devDmgs = ['Claude-Code-Haha-0.7.7-macOS-arm64.dmg', 'Claude-Code-Haha-0.7.7-macOS-x64.dmg']
-    expect(await pickDmg('arm64', devDmgs)).toBe('Claude-Code-Haha-0.7.7-macOS-arm64.dmg')
-    expect(await pickDmg('x86_64', devDmgs)).toBe('Claude-Code-Haha-0.7.7-macOS-x64.dmg')
+    expect(await pickDmg(machine, devDmgs)).toBe(expected)
   })
 
-  it('still recognizes DMGs from releases before the rename', async () => {
+  it.each([
+    ['arm64', 'Claude-Code-Haha-0.7.6-mac-arm64.dmg'],
+    ['x86_64', 'Claude-Code-Haha-0.7.6-mac-x64.dmg'],
+  ])('recognizes a release before the rename on %s', async (machine, expected) => {
     const legacyDmgs = ['Claude-Code-Haha-0.7.6-mac-arm64.dmg', 'Claude-Code-Haha-0.7.6-mac-x64.dmg']
-    expect(await pickDmg('arm64', legacyDmgs)).toBe('Claude-Code-Haha-0.7.6-mac-arm64.dmg')
-    expect(await pickDmg('x86_64', legacyDmgs)).toBe('Claude-Code-Haha-0.7.6-mac-x64.dmg')
+    expect(await pickDmg(machine, legacyDmgs)).toBe(expected)
   })
 
   it('does not mistake the auto-update zip for an installer', async () => {

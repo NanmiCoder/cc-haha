@@ -14,6 +14,7 @@ vi.mock('../../api/trajectory', () => ({
 import { TrajectoryDetailPanel } from './TrajectoryDetailPanel'
 import { clearTrajectoryDetailCache } from './useTrajectoryDetail'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { trajectoryApi } from '@/api/trajectory'
 
 const ROW: TrajectoryRow = { id: 'a:1', kind: 'assistant', turn: 2, ts: '2026-10-04T10:00:01.000Z', preview: 'Hello', loc: [[0, 10]] }
 
@@ -72,6 +73,20 @@ describe('TrajectoryDetailPanel', () => {
   it('offers the raw request tab on main-session responses, and only there', () => {
     renderPanel()
     expect(screen.getByRole('tab', { name: 'Raw request' })).toBeInTheDocument()
+  })
+
+  it('omits a whitespace-only thinking section from the transcript detail', async () => {
+    vi.mocked(trajectoryApi.getRow).mockResolvedValueOnce({
+      rowId: ROW.id,
+      truncated: false,
+      entries: [{ type: 'assistant', message: { content: [
+        { type: 'thinking', thinking: ' \n ' },
+        { type: 'text', text: 'Visible response' },
+      ] } }],
+    })
+    renderPanel()
+    expect(await screen.findByText('Visible response')).toBeInTheDocument()
+    expect(screen.queryByText('Thinking')).not.toBeInTheDocument()
   })
 
   it('lets the raw JSON fill the panel instead of a capped inner box', async () => {

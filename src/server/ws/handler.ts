@@ -601,7 +601,7 @@ export type LiveSessionActivity = {
 
 /** Power safety uses work ownership, never the visual Stop/failed projection. */
 export function hasSessionPowerActivity(): boolean {
-  if (conversationService.hasPendingTeamStops()) return true
+  if (conversationService.hasPendingTeamStops() || conversationService.hasPromptSuggestionPowerActivity()) return true
   const ids = new Set([
     ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
     ...activeCliRuns, ...legacyQueuedSessionChats, ...activeBackgroundTaskIds.keys(),
@@ -785,7 +785,8 @@ function translateCliUsage(usage: unknown): TokenUsage {
 export type WebSocketData = {
   sessionId: string
   connectedAt: number
-  channel: 'client' | 'sdk'
+  /** `p2p` is the desktop WebRTC endpoint's relay link; index.ts routes it to the P2P broker. */
+  channel: 'client' | 'sdk' | 'p2p'
   clientKind?: 'full' | 'pet'
   /** Only a machine-token authenticated local socket may take over an IM lease. */
   powerActivityLeaseAuthorized?: boolean
@@ -796,6 +797,10 @@ export type WebSocketData = {
   mediaRefs?: boolean
   /** The client shows next-prompt suggestions in its composer (`?suggestions=1`). */
   promptSuggestions?: boolean
+  /** The client opted into a resumable stream (see resumableStreams.ts). */
+  resume?: import('./resumableStreams.js').ResumeRequest
+  /** This socket's close must end its resumable stream (revoke, origin change, user disable). */
+  terminal?: boolean
 }
 
 // Active WebSocket clients, grouped by session. Desktop, H5, and IM adapters can
@@ -2293,16 +2298,16 @@ async function applyPermissionModeToActiveSession(
   sessionId: string,
   mode: PermissionMode,
 ): Promise<void> {
+  // The latest choice wins over a restart still waiting for the turn to end.
+  deferredPermissionModes.delete(sessionId)
   const currentMode = conversationService.getSessionPermissionMode(sessionId)
-  if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
-    deferredPermissionModes.set(sessionId, mode)
-    return
-  }
-
   if (currentMode === mode) {
     sendToSession(sessionId, { type: 'permission_mode_changed', mode })
     return
   }
+  // The CLI applies set_permission_mode in-process, mid-turn included: tool
+  // calls after the switch are checked under the new mode, while a request the
+  // user is already looking at stays pending until they answer it.
   try {
     const ok = await conversationService.setPermissionMode(sessionId, mode)
     if (!ok) {
@@ -2312,6 +2317,11 @@ async function applyPermissionModeToActiveSession(
     await commitConfirmedPermissionMode(sessionId, mode)
   } catch (err) {
     if (!isSideChatId(sessionId) && shouldFallbackToPermissionRestart(mode, err)) {
+      // Only the legacy restart would end the running turn; let it finish first.
+      if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
+        deferredPermissionModes.set(sessionId, mode)
+        return
+      }
       await restartSessionWithPermissionMode(ws, sessionId, mode)
       return
     }

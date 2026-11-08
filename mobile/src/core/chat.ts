@@ -506,6 +506,38 @@ export function mergeHistoryPages(
 }
 
 /**
+ * 把从末尾往后读到的新增记录接在已加载的历史后面。游标链（nextCursor、sourceVersion）
+ * 沿用已加载的那份：再往前翻拿到的页带着原来的版本，合并时要对得上。
+ * 上次读到时还没写完的最后一条会被重新读到，以新读到的为准。
+ */
+export function appendFollowPage(loaded: HistoryPage, delta: HistoryPage): HistoryPage {
+  const fresh = new Set(delta.messages.map((entry) => entry.id))
+  const page = loaded.page
+  return {
+    messages: [
+      ...loaded.messages.filter((entry) => !fresh.has(entry.id)),
+      ...delta.messages,
+    ],
+    taskNotifications: [
+      ...(loaded.taskNotifications ?? []),
+      ...(delta.taskNotifications ?? []),
+    ],
+    ...(page
+      ? {
+          page: {
+            ...page,
+            tailCursor: delta.page?.tailCursor ?? page.tailCursor,
+            tailComplete: delta.page?.tailComplete,
+            omittedOversizedEntries:
+              page.omittedOversizedEntries + (delta.page?.omittedOversizedEntries ?? 0),
+            contentTruncated: !!page.contentTruncated || !!delta.page?.contentTruncated,
+          },
+        }
+      : {}),
+  }
+}
+
+/**
  * 用重新读到的最新一页刷新已经往前翻过的历史，不把翻过的部分丢掉。
  * 会话只追加时，最新一页的第一条一定落在已加载的范围里：把更早的部分接回去，
  * 继续沿用原来那条游标链（服务端校验首尾指纹，只追加时它仍然有效）。

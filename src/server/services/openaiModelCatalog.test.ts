@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { OPENAI_CODEX_CLIENT_VERSION } from '../../services/openaiAuth/client.js'
+import { OPENAI_CODEX_RELEASE_SOURCES } from '../../services/openaiAuth/clientVersion.js'
 import { clearOpenAICodexModelCatalogCache } from '../../services/openaiAuth/modelCatalog.js'
 import { OPENAI_CODEX_MODEL_CATALOG } from '../../services/openaiAuth/models.js'
 import { clearOpenAIOAuthTokenCache } from '../../services/openaiAuth/storage.js'
@@ -50,7 +52,10 @@ describe('desktop OpenAI model catalog credentials', () => {
 
   test('uses desktop credentials and isolates account switches and logout from CLI credentials', async () => {
     const requests: Headers[] = []
-    const fetchOverride: typeof fetch = (async (_input, init) => {
+    const fetchOverride: typeof fetch = (async (input, init) => {
+      if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
       const headers = new Headers(init?.headers)
       requests.push(headers)
       return Response.json({ models: [{

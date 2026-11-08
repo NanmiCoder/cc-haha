@@ -13,6 +13,7 @@ import { createDefaultSessionState, useChatStore } from './chatStore'
 import { useSessionStore } from './sessionStore'
 import { closeTabsWithPolicy, reopenClosedSessionTab } from './tabClose'
 import { useTabStore } from './tabStore'
+import { useUIStore } from './uiStore'
 
 const initialSessionState = useSessionStore.getState()
 const connectToSession = vi.fn()
@@ -31,6 +32,8 @@ function summary(id: string, title = id) {
 }
 
 beforeEach(() => {
+  sessionsApiMock.delete.mockReset().mockResolvedValue(undefined)
+  useUIStore.setState({ toasts: [] })
   sessionsApiMock.getSummary.mockReset()
   connectToSession.mockReset()
   useTabStore.setState({ tabs: [], activeTabId: null, closedSessionTabs: [] })
@@ -94,6 +97,38 @@ describe('reopening a closed chat tab', () => {
 describe('deleted sessions are not offered back', () => {
   const closedIds = () => useTabStore.getState().closedSessionTabs.map((tab) => tab.sessionId)
 
+  it('keeps a failed empty-session deletion reopenable and reports the failure', async () => {
+    const id = 'failed-placeholder'
+    useSessionStore.setState({ sessions: [{ ...summary(id, 'New Session'), messageCount: 0 }] as never })
+    useTabStore.getState().openTab(id, 'New Session')
+    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), historyStatus: 'ready' } } } as never)
+    sessionsApiMock.delete.mockRejectedValueOnce(new Error('offline'))
+
+    closeTabsWithPolicy(useTabStore.getState().tabs, [], false)
+
+    await vi.waitFor(() => expect(useUIStore.getState().toasts).toHaveLength(1))
+    expect(closedIds()).toEqual([id])
+    await expect(reopenClosedSessionTab()).resolves.toBe(true)
+    expect(useTabStore.getState().activeTabId).toBe(id)
+  })
+
+  it.each([true, false])('waits for pending placeholder deletion before reopening (success=%s)', async (success) => {
+    const id = `pending-placeholder-${success}`
+    useSessionStore.setState({ sessions: [{ ...summary(id, 'New Session'), messageCount: 0 }] as never })
+    useTabStore.getState().openTab(id, 'New Session')
+    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), historyStatus: 'ready' } } } as never)
+    let finish!: () => void
+    sessionsApiMock.delete.mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finish = () => success ? resolve() : reject(new Error('offline'))
+    }))
+    closeTabsWithPolicy(useTabStore.getState().tabs, [], false)
+    const reopening = reopenClosedSessionTab()
+    expect(connectToSession).not.toHaveBeenCalled()
+    finish()
+    await expect(reopening).resolves.toBe(!success)
+    expect(useTabStore.getState().activeTabId).toBe(success ? null : id)
+  })
+
   it('drops a closed tab once its session is deleted from the sidebar', async () => {
     useSessionStore.setState({ sessions: [summary('del-closed-first'), summary('del-kept')] as never })
     useTabStore.getState().openTab('del-closed-first', 'A')
@@ -120,7 +155,7 @@ describe('deleted sessions are not offered back', () => {
     expect(useTabStore.getState().tabs).toEqual([])
   })
 
-  it('does not offer back an unused "New session" deleted when its tab closes', () => {
+  it('does not offer back an unused "New session" deleted when its tab closes', async () => {
     useSessionStore.setState({ sessions: [{ ...summary('del-placeholder', 'New Session'), messageCount: 0 }] as never })
     useTabStore.getState().openTab('del-placeholder', 'New Session')
     useChatStore.setState({
@@ -130,6 +165,6 @@ describe('deleted sessions are not offered back', () => {
     closeTabsWithPolicy(useTabStore.getState().tabs, [], false)
 
     expect(sessionsApiMock.delete).toHaveBeenCalledWith('del-placeholder')
-    expect(closedIds()).toEqual([])
+    await vi.waitFor(() => expect(closedIds()).toEqual([]))
   })
 })

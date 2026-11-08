@@ -713,6 +713,7 @@ describe('ProviderService', () => {
         expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toEqual({
           'gpt-6-sol': 258_400,
           'gpt-6.1-sol': 258_400,
+          'gpt-6.1-terra': 475_000,
           'gpt-6-luna': 258_400,
           'gpt-5.6-sol': 353_400,
           'gpt-5.6-terra': 353_400,
@@ -3453,6 +3454,85 @@ describe('ProviderService', () => {
           server.stop(true)
         }
       })
+    }
+
+    // #1816: a gateway that versions its own root (Volcengine Ark /api/v3, Zhipu
+    // /api/paas/v4) serves OpenAI routes directly under it; a second /v1 is a 404.
+    for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+      const endpoint = apiFormat === 'openai_chat' ? 'chat/completions' : 'responses'
+      for (const [basePath, upstreamPath] of [
+        ['/api/v3', `/api/v3/${endpoint}`],
+        ['/api/coding/v3/', `/api/coding/v3/${endpoint}`],
+        ['/api/paas/v4', `/api/paas/v4/${endpoint}`],
+        ['/v1', `/v1/${endpoint}`],
+        ['', `/v1/${endpoint}`],
+      ]) {
+        test(`${apiFormat} base URL ${basePath || '(root)'} reaches ${upstreamPath} in connectivity and proxy requests (#1816)`, async () => {
+          const requests: Array<{ path: string; authorization: string | null }> = []
+          const server = Bun.serve({
+            hostname: '127.0.0.1',
+            port: 0,
+            fetch(req) {
+              const requestPath = new URL(req.url).pathname
+              requests.push({ path: requestPath, authorization: req.headers.get('authorization') })
+              if (requestPath !== upstreamPath) {
+                return Response.json({ error: { message: 'Unknown endpoint' } }, { status: 404 })
+              }
+              return Response.json(apiFormat === 'openai_chat'
+                ? {
+                    id: 'chatcmpl-1',
+                    object: 'chat.completion',
+                    created: 0,
+                    model: 'model-main',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+                  }
+                : {
+                    id: 'resp_1',
+                    object: 'response',
+                    created_at: 0,
+                    model: 'model-main',
+                    status: 'completed',
+                    output: [{
+                      type: 'message',
+                      id: 'msg_1',
+                      role: 'assistant',
+                      status: 'completed',
+                      content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                    }],
+                    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+                  })
+            },
+          })
+
+          try {
+            const svc = new ProviderService()
+            const provider = await svc.addProvider(sampleInput({
+              baseUrl: `http://127.0.0.1:${server.port}${basePath}`,
+              apiFormat,
+            }))
+            const result = await svc.testProvider(provider.id)
+            expect(result.connectivity.success).toBe(true)
+            expect(result.proxy?.success).toBe(true)
+
+            const req = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model: 'model-main', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }),
+            })
+            const response = await handleProxyRequest(req, new URL(req.url))
+            expect(response.status).toBe(200)
+            expect((await response.json() as { type?: string }).type).toBe('message')
+            // Connectivity, proxy-pipeline probe, and the forwarded request.
+            expect(requests).toEqual(Array.from({ length: 3 }, () => ({
+              path: upstreamPath,
+              authorization: 'Bearer sk-test-key-123',
+            })))
+          } finally {
+            server.stop(true)
+          }
+        })
+      }
     }
 
     test('should use auth strategy headers for Anthropic-compatible tests', async () => {

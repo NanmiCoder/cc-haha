@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 
@@ -62,24 +62,26 @@ const baseContext: SessionContextSnapshot = {
   },
 }
 
-function inspectionWithContext(context: SessionContextSnapshot): SessionInspectionResponse {
-  return {
-    active: true,
-    status: {
-      sessionId: 'session-1',
-      workDir: '/workspace/demo',
-      permissionMode: 'default',
-      model: 'Claude Test',
-      tools: [],
-      mcpServers: [],
-    },
-    context,
-  }
+const baseInspection: SessionInspectionResponse = {
+  active: true,
+  status: {
+    sessionId: 'session-1',
+    workDir: '/workspace/demo',
+    permissionMode: 'default',
+    model: 'Claude Test',
+    tools: [],
+    mcpServers: [],
+  },
 }
 
-describe('LocalSlashCommandPanel memory context', () => {
+function inspectionWithContext(context: SessionContextSnapshot): SessionInspectionResponse {
+  return { ...baseInspection, context }
+}
+
+describe('LocalSlashCommandPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionsApiMock.getInspection.mockReset()
     useSettingsStore.setState({ locale: 'en' })
     useTabStore.setState(useTabStore.getInitialState(), true)
     useUIStore.setState({
@@ -97,6 +99,88 @@ describe('LocalSlashCommandPanel memory context', () => {
       fetchSkillDetail: vi.fn().mockResolvedValue(undefined),
       clearSelection: vi.fn(),
     })
+  })
+
+  it('loads status independently of historical usage and context', async () => {
+    const usageError = 'Transcript inspection contains records above the semantic read limit'
+    sessionsApiMock.getInspection
+      .mockResolvedValueOnce({
+        ...baseInspection,
+        status: { ...baseInspection.status, contextWindow: 1_000_000 },
+      })
+      .mockResolvedValueOnce({ ...baseInspection, active: false, errors: { usage: usageError } })
+      .mockResolvedValueOnce({ ...baseInspection, active: false, contextEstimate: baseContext })
+
+    render(<LocalSlashCommandPanel command="status" sessionId="session-1" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('Claude Test')).toBeInTheDocument()
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledExactlyOnceWith('session-1', {
+      statusOnly: true,
+      signal: expect.any(AbortSignal),
+    })
+    expect(screen.getByText('Context window: 1,000,000')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(usageError)
+    expect(sessionsApiMock.getInspection).toHaveBeenNthCalledWith(2, 'session-1', {
+      includeContext: false,
+      signal: expect.any(AbortSignal),
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Context' }))
+    expect(await screen.findByText('Memory files')).toBeInTheDocument()
+    expect(sessionsApiMock.getInspection).toHaveBeenNthCalledWith(3, 'session-1', {
+      includeContext: true,
+      contextOnly: true,
+      timeout: 45_000,
+      signal: expect.any(AbortSignal),
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Status' }))
+    expect(screen.getByText('Context window: 1,000,000')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(3)
+  })
+
+  it('discards in-flight inspection results when switching tabs or sessions', async () => {
+    let resolveOldUsage!: (value: SessionInspectionResponse) => void
+    let resolveOldContext!: (value: SessionInspectionResponse) => void
+    sessionsApiMock.getInspection
+      .mockReturnValueOnce(new Promise<SessionInspectionResponse>(resolve => { resolveOldUsage = resolve }))
+      .mockReturnValueOnce(new Promise<SessionInspectionResponse>(resolve => { resolveOldContext = resolve }))
+      .mockResolvedValueOnce({
+        ...baseInspection,
+        status: { ...baseInspection.status, sessionId: 'session-2' },
+        errors: { usage: 'Current usage message' },
+      })
+
+    const onClose = vi.fn()
+    const { rerender } = render(<LocalSlashCommandPanel command="cost" sessionId="session-1" onClose={onClose} />)
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledExactlyOnceWith('session-1', {
+      includeContext: false,
+      signal: expect.any(AbortSignal),
+    })
+    const usageSignal = sessionsApiMock.getInspection.mock.calls[0]?.[1].signal
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Context' }))
+    expect(usageSignal.aborted).toBe(true)
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+    const contextSignal = sessionsApiMock.getInspection.mock.calls[1]?.[1].signal
+
+    rerender(<LocalSlashCommandPanel command="cost" sessionId="session-2" onClose={onClose} />)
+    expect(contextSignal.aborted).toBe(true)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Current usage message')
+    expect(sessionsApiMock.getInspection).toHaveBeenNthCalledWith(3, 'session-2', {
+      includeContext: false,
+      signal: expect.any(AbortSignal),
+    })
+
+    await act(async () => {
+      resolveOldUsage({ ...baseInspection, errors: { usage: 'Stale usage message' } })
+      resolveOldContext(inspectionWithContext(baseContext))
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Current usage message')
+    expect(screen.queryByText('Memory files')).not.toBeInTheDocument()
   })
 
   it('shows loaded memory files and opens the selected project memory in settings', async () => {
@@ -125,6 +209,12 @@ describe('LocalSlashCommandPanel memory context', () => {
     )
 
     expect(await screen.findByText('Memory files')).toBeInTheDocument()
+    expect(sessionsApiMock.getInspection).toHaveBeenCalledExactlyOnceWith('session-1', {
+      includeContext: true,
+      contextOnly: true,
+      timeout: 45_000,
+      signal: expect.any(AbortSignal),
+    })
     expect(screen.getByText('MEMORY.md')).toBeInTheDocument()
     expect(screen.getByText('/Users/test/.claude/projects/demo/memory/MEMORY.md')).toBeInTheDocument()
     expect(screen.getByText('feedback')).toBeInTheDocument()

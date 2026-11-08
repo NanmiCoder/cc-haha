@@ -1,0 +1,64 @@
+[package]
+name    = "agent-desktop-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+agent-desktop-core.workspace = true
+png                          = { version = "=0.18.1", default-features = false }
+serde_json.workspace         = true
+thiserror.workspace          = true
+tracing.workspace            = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+uiautomation = { version = "0.25", default-features = false, features = [
+  "control",
+  "input",
+] }
+windows = { version = "0.62.2", features = [
+  "Foundation",
+  "Graphics_Capture",
+  "Graphics_DirectX_Direct3D11",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_WinRT_Direct3D11",
+  "Win32_System_WinRT_Graphics_Capture",
+  "Win32_UI_Accessibility",
+] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_UI_HiDpi",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_ApplicationInstallationAndServicing",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_DataExchange",
+  # Gates the declarations of ReadFile, WriteFile and ConnectNamedPipe, whose
+  # signatures take an OVERLAPPED pointer whether or not a caller passes one.
+  # Win32_Storage_FileSystem does not imply it, and no overlapped I/O ships
+  # here - removing this feature fails the build.
+  "Win32_System_IO",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

@@ -1,8 +1,10 @@
 import { readFileSync } from 'fs'
 
 import { getChicagoEnabled } from './gates.js'
+import { isComputerUseSupportedPlatform } from './common.js'
 import {
   getComputerUseConfigPath,
+  parseStoredComputerUseConfig,
   resolveStoredComputerUseConfig,
   type StoredComputerUseConfig,
 } from './preauthorizedConfig.js'
@@ -27,6 +29,19 @@ import {
  */
 const CACHE_TTL_MS = 3_000
 
+/** Execution consent is read afresh; the skill-menu cache is presentation only. */
+export function isComputerUseEnabledForDispatch(
+  readConfigFile: (path: string) => string = path => readFileSync(path, 'utf8'),
+): boolean {
+  if (!isComputerUseSupportedPlatform() || !getChicagoEnabled()) return false
+  try {
+    const config = parseStoredComputerUseConfig(JSON.parse(readConfigFile(getComputerUseConfigPath())))
+    return config !== null && resolveStoredComputerUseConfig(config).enabled === true
+  } catch {
+    return false
+  }
+}
+
 let cachedValue: boolean | undefined
 let cachedAt = 0
 
@@ -50,9 +65,7 @@ export function invalidateComputerUseSkillGate(): void {
 }
 
 function computeEnabled(readConfigFile: (path: string) => string): boolean {
-  // The native semantic engine runs on macOS; Windows uses the pixel-tool
-  // face backed by the packaged Python helper. Other platforms have neither.
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return false
+  if (!isComputerUseSupportedPlatform()) return false
 
   // Respect the kill switch before reading anything the user set: when the
   // feature is force-disabled its tools are not registered either, so guidance

@@ -423,6 +423,63 @@ describe('desktopNotifications', () => {
     })
   })
 
+  it('bounds dedupe history while keeping recent notifications deduplicated', async () => {
+    const sender = vi.fn(async () => true)
+    setNativeNotificationSenderForTests(sender)
+    for (let index = 0; index <= 1024; index += 1) {
+      await notifyDesktop({ title: 'Complete', dedupeKey: `turn:${index}` })
+    }
+    await expect(notifyDesktop({ title: 'Complete', dedupeKey: 'turn:1024' })).resolves.toBe(false)
+    await expect(notifyDesktop({ title: 'Complete', dedupeKey: 'turn:0' })).resolves.toBe(true)
+  })
+
+  it('bounds ID fallbacks, consumes clicked IDs, and keeps embedded targets routable', async () => {
+    notificationPluginMock.isPermissionGranted.mockResolvedValue(true)
+    eventApiMock.listen.mockResolvedValue(() => {})
+    const onTarget = vi.fn()
+    let click: (payload: unknown) => void = () => {}
+    notificationPluginMock.onAction.mockImplementation(async (handler) => {
+      click = handler
+      return () => {}
+    })
+    const cleanup = await installDesktopNotificationClickListener(onTarget)
+    const target = { type: 'session' as const, sessionId: 'session-1' }
+    for (let index = 0; index <= 1024; index += 1) {
+      await notifyDesktop({ title: 'Complete', target })
+    }
+    const first = notificationPluginMock.sendNotification.mock.calls[0]![0]
+    const latest = notificationPluginMock.sendNotification.mock.calls[1024]![0]
+    click({ id: first.id })
+    expect(onTarget).not.toHaveBeenCalled()
+    click({ id: latest.id })
+    expect(onTarget).toHaveBeenCalledExactlyOnceWith(target)
+    click({ id: latest.id })
+    expect(onTarget).toHaveBeenCalledTimes(1)
+    click(first)
+    expect(onTarget).toHaveBeenCalledTimes(2)
+    cleanup()
+  })
+
+  it('does not retain the ID of a failed native send', async () => {
+    notificationPluginMock.isPermissionGranted.mockResolvedValue(true)
+    eventApiMock.listen.mockResolvedValue(() => {})
+    notificationPluginMock.sendNotification.mockRejectedValueOnce(new Error('send failed'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onTarget = vi.fn()
+    let click: (payload: unknown) => void = () => {}
+    notificationPluginMock.onAction.mockImplementation(async (handler) => {
+      click = handler
+      return () => {}
+    })
+    const cleanup = await installDesktopNotificationClickListener(onTarget)
+    await expect(notifyDesktop({ title: 'Complete', target: { type: 'scheduled' } })).resolves.toBe(false)
+    const payload = notificationPluginMock.sendNotification.mock.calls[0]![0]
+    click({ id: payload.id })
+    expect(onTarget).not.toHaveBeenCalled()
+    cleanup()
+    warn.mockRestore()
+  })
+
   it('forwards notification click targets from native and plugin listeners', async () => {
     const unlistenNative = vi.fn()
     const pluginListener = {
