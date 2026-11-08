@@ -281,7 +281,7 @@ function ComputerBody({ host }: { host: Host }) {
               </Pressable>
             </Group>
             <InlineError text={removeError} style={{ marginTop: 8 }} />
-            <Footnote>只删掉手机上的连接和推送登记，电脑上的会话都还在。</Footnote>
+            <Footnote>只删掉手机上的连接，电脑上的会话都还在。</Footnote>
           </>
         )}
       </ScrollView>
