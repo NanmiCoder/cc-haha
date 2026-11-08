@@ -200,10 +200,9 @@ describe('ConversationService attachment materialization', () => {
 
 function createOversizedPngHeader(): Buffer {
   const buffer = Buffer.alloc(24)
-  buffer[0] = 0x89
-  buffer[1] = 0x50
-  buffer[2] = 0x4e
-  buffer[3] = 0x47
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer)
+  buffer.writeUInt32BE(13, 8)
+  buffer.write('IHDR', 12, 'ascii')
   buffer.writeUInt32BE(9000, 16)
   buffer.writeUInt32BE(9000, 20)
   return buffer
