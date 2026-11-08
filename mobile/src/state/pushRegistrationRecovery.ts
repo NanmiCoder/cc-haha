@@ -30,6 +30,14 @@ export function pushRegistrationFailure(error: unknown, stage: PushStage): Attem
 }
 
 const retryDelays = [2000, 5000, 15000]
+/** 回到前台时，这么久之内登记成功过就不复查；token 轮换另有监听，会立即重新登记。 */
+export const FOREGROUND_RECHECK_AFTER_MS = 30 * 60_000
+/** 回到前台后最多等聊天连接这么久再复查，别和它抢慢的公网隧道。 */
+export const FOREGROUND_YIELD_MS = 5000
+export type RecoveryOptions = {
+  gate?: { readonly busy: boolean; whenIdle(maxMs: number): Promise<void> }
+  now?: () => number
+}
 
 /** Serialize registration; only fresh native tokens may start work in background. */
 export class PushRegistrationRecovery {
@@ -42,10 +50,12 @@ export class PushRegistrationRecovery {
   private generation = 0
   private timer: ReturnType<typeof setTimeout> | undefined
   private request: AbortController | undefined
+  private registeredAt: number | undefined
 
   constructor(
     private attempt: (signal: AbortSignal, token?: string) => Promise<AttemptResult>,
-    private update: (info: PushInfo) => void
+    private update: (info: PushInfo) => void,
+    private options: RecoveryOptions = {}
   ) {}
 
   setActive(active: boolean) {
@@ -56,7 +66,19 @@ export class PushRegistrationRecovery {
     if (active) {
       // A foreground check reads the current native token again.
       this.pendingToken = undefined
-      this.refresh()
+      if (
+        this.registeredAt !== undefined &&
+        this.now() - this.registeredAt < FOREGROUND_RECHECK_AFTER_MS
+      )
+        return
+      const gate = this.options.gate
+      if (!gate?.busy) this.refresh()
+      else {
+        const generation = this.generation
+        void gate.whenIdle(FOREGROUND_YIELD_MS).then(() => {
+          if (this.alive && this.active && this.generation === generation) this.refresh()
+        })
+      }
     } else {
       // Keep the latest rotation queued behind the in-flight request. Ordinary
       // refreshes still stop here, while a rotated token gets one background try.
@@ -88,6 +110,10 @@ export class PushRegistrationRecovery {
     this.request?.abort()
   }
 
+  private now() {
+    return (this.options.now ?? Date.now)()
+  }
+
   private clearTimer() {
     clearTimeout(this.timer)
     this.timer = undefined
@@ -104,6 +130,11 @@ export class PushRegistrationRecovery {
     if (this.active) this.update({ status: 'loading' })
     try {
       const result = await this.attempt(request.signal, token)
+      // 只有确认送得到（没有任何问题）才算登记好了，回到前台时可以跳过复查。
+      this.registeredAt =
+        result.info.status === 'registered' && !result.info.issue
+          ? this.now()
+          : undefined
       if (current()) {
         this.update(result.info)
         retry = Boolean(result.retry)

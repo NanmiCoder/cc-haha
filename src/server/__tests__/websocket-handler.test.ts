@@ -38,6 +38,7 @@ import * as teleportApi from '../../utils/teleport/api.js'
 import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
 import { clearGrokModelCatalogCache, getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
 import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
+import { createResumableSocketHandler } from '../ws/resumableStreams.js'
 
 function makeClientSocket(sessionId: string, clientKind: 'full' | 'pet' = 'full') {
   const sent: string[] = []
@@ -5948,5 +5949,86 @@ describe('prewarm idle timer active-turn guard (issue #865 follow-up)', () => {
     fire()
 
     expect(stopSession).toHaveBeenCalledWith(sessionId)
+  })
+})
+
+describe('resumable streams over the real session handler', () => {
+  const STREAM = 'RRRRRRRRRRRRRRRRRRRRRR'
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    __resetDisconnectGraceMsForTests()
+    mock.restore()
+  })
+
+  function withOutput() {
+    const callbacks = new Set<(cliMsg: any) => void>()
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_id, callback) => { callbacks.add(callback) })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_id, callback) => { callbacks.delete(callback) })
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
+    return callbacks
+  }
+  const frames = (ws: { sent: string[] }) => ws.sent.map(text => JSON.parse(text) as Record<string, unknown>)
+
+  it('a turn that finishes while the phone is away is replayed once on return, without reopening the session', async () => {
+    const sessionId = `resume-${crypto.randomUUID()}`
+    const callbacks = withOutput()
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    __setDisconnectGraceMsForTests(1)
+    const sockets = createResumableSocketHandler(handleWebSocket, { epoch: 'test-epoch' })
+    const first = makeClientSocket(sessionId)
+    Object.assign(first.data, { resume: { streamId: STREAM, ack: 0 } })
+    sockets.open(first)
+    await flushMicrotasks()
+    const seen = frames(first).filter(frame => typeof frame.seq === 'number').length
+    sockets.close(first, 1006, '')
+    expect(getActiveSessionIds()).toContain(sessionId)
+    for (const callback of [...callbacks]) {
+      callback({ type: 'result', subtype: 'success', result: 'done', usage: { input_tokens: 1, output_tokens: 1 } })
+    }
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(stopSession).not.toHaveBeenCalled()
+
+    const second = makeClientSocket(sessionId)
+    Object.assign(second.data, { resume: { streamId: STREAM, ack: seen, epoch: 'test-epoch' } })
+    sockets.open(second)
+    const replayed = frames(second)
+    expect(replayed[0]).toMatchObject({ type: 'stream_attached', resumed: true, next: seen + 1 })
+    expect(replayed.filter(frame => frame.type === 'message_complete')).toHaveLength(1)
+    // The handler was not reopened: no second `connected` or permission snapshot.
+    expect(replayed.some(frame => frame.type === 'connected')).toBe(false)
+    expect(replayed.slice(1).every(frame => typeof frame.seq === 'number' && frame.seq > seen)).toBe(true)
+  })
+
+  it('a resume the server cannot honor is refused without opening a session connection', async () => {
+    const sessionId = `refused-${crypto.randomUUID()}`
+    withOutput()
+    const sockets = createResumableSocketHandler(handleWebSocket, { epoch: 'test-epoch' })
+    const ws = makeClientSocket(sessionId)
+    Object.assign(ws.data, { resume: { streamId: STREAM, ack: 3, epoch: 'test-epoch' } })
+    sockets.open(ws)
+    await flushMicrotasks()
+    expect(frames(ws)).toEqual([{ type: 'stream_attached', v: 1, stream: STREAM, epoch: 'test-epoch', resumed: false, reason: 'expired', cack: 0, next: 1, last: 0 }])
+    expect(ws.close).toHaveBeenCalledWith(4001, 'Stream not resumable')
+    expect(getActiveSessionIds()).not.toContain(sessionId)
+    sockets.close(ws, 4001, 'Stream not resumable')
+    expect(getActiveSessionIds()).not.toContain(sessionId)
+  })
+
+  it('a socket that does not ask for a stream behaves exactly as before', async () => {
+    const sessionId = `legacy-${crypto.randomUUID()}`
+    withOutput()
+    const sockets = createResumableSocketHandler(handleWebSocket, { epoch: 'test-epoch' })
+    const plain = makeClientSocket(sessionId)
+    const direct = makeClientSocket(`${sessionId}-direct`)
+    sockets.open(plain)
+    handleWebSocket.open(direct)
+    await flushMicrotasks()
+    const strip = (ws: { sent: string[] }) => ws.sent.map(text => text.replaceAll(`${sessionId}-direct`, sessionId))
+    expect(plain.sent).toEqual(strip(direct))
+    expect(plain.sent.some(text => text.includes('"seq"'))).toBe(false)
+    sockets.close(plain, 1006, '')
+    expect(getActiveSessionIds()).not.toContain(sessionId)
   })
 })

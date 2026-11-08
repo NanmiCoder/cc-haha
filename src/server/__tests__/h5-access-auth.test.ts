@@ -955,6 +955,30 @@ describe('remote H5 auth and CORS integration', () => {
     expect(controlResponse.status).toBe(403)
   })
 
+  test('opens the P2P endpoint link only with its own launch token, never the local access token', async () => {
+    const original = process.env.CC_HAHA_P2P_ENDPOINT_TOKEN
+    process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'p2p-local-fixture'
+    const status = async (base: string, query: string) =>
+      (await fetch(`${base}/api/public-access/p2p/endpoint${query}`, { headers: makeUpgradeHeaders() })).status
+    try {
+      delete process.env.CC_HAHA_P2P_ENDPOINT_TOKEN
+      expect(await status(baseUrl, '?endpointToken=anything')).toBe(403)
+      process.env.CC_HAHA_P2P_ENDPOINT_TOKEN = 'p2p-endpoint-fixture'
+      expect(await status(baseUrl, '')).toBe(403)
+      expect(await status(baseUrl, '?endpointToken=wrong')).toBe(403)
+      expect(await status(baseUrl, '?localToken=p2p-local-fixture')).toBe(403)
+      expect(await status(baseUrl, '?endpointToken=p2p-local-fixture')).toBe(403)
+      await expectWebSocketOpen(`${wsBaseUrl}/api/public-access/p2p/endpoint?endpointToken=p2p-endpoint-fixture`)
+      if (lanBaseUrl && (await fetch(`${lanBaseUrl}/api/status`)).status === 403) {
+        // A distinct LAN peer (see the spoofing test above): the right token is still not enough.
+        expect(await status(lanBaseUrl, '?endpointToken=p2p-endpoint-fixture')).toBe(403)
+      }
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_P2P_ENDPOINT_TOKEN
+      else process.env.CC_HAHA_P2P_ENDPOINT_TOKEN = original
+    }
+  })
+
   test('keeps local loopback SDK requests tokenless while H5 access is disabled', async () => {
     await expectWebSocketUpgradeThenClose(`${wsBaseUrl}/sdk/h5-auth-test`)
   })
