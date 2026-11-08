@@ -21,8 +21,16 @@ test('native checks isolate user state, strip provider credentials, stay offline
     },
   })
   expect(code).toBe(0)
-  expect(commands).toHaveLength(3)
+  expect(commands).toHaveLength(process.platform === 'win32' ? 6 : 4)
   expect(commands[2]).toContain('cli::')
+  expect(commands[3]).toContain('dispatch::cursor_overlay_lifecycle_tests::')
+  if (process.platform === 'win32') {
+    expect(commands[4]).toContain('agent-desktop-windows')
+    expect(commands[4]).toContain('system::cursor_overlay::')
+    expect(commands[4]).toContain('winforms')
+    expect(commands[4]).toContain('system::cursor_overlay::window::tests::')
+    expect(commands[5]).toContain('windows_private_file_install')
+  }
   expect(existsSync(home)).toBe(false)
 })
 

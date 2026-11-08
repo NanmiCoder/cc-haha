@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import sharp from 'sharp'
 
 type ProcessorMode = 'metadata' | 'throw'
 
@@ -74,6 +75,7 @@ const {
   ImageResizeError,
   downsampleImageBufferToVisionTokenBudget,
   maybeResizeAndDownsampleImageBuffer,
+  readImageHeaderDimensions,
 } = await import('../imageResizer.js')
 const { readImageWithTokenBudget } = await import(
   '../../tools/FileReadTool/FileReadTool.js'
@@ -81,10 +83,9 @@ const { readImageWithTokenBudget } = await import(
 
 function makePngHeader(width: number, height: number): Buffer {
   const buffer = Buffer.alloc(32)
-  buffer[0] = 0x89
-  buffer[1] = 0x50
-  buffer[2] = 0x4e
-  buffer[3] = 0x47
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buffer)
+  buffer.writeUInt32BE(13, 8)
+  buffer.write('IHDR', 12, 'ascii')
   buffer.writeUInt32BE(width, 16)
   buffer.writeUInt32BE(height, 20)
   return buffer
@@ -98,6 +99,19 @@ beforeEach(() => {
   webpCalls = []
   originalPngDimensions = { width: 1394, height: 4404, format: 'png' }
   outputForOperations = () => Buffer.from('resized-image')
+})
+
+describe('readImageHeaderDimensions', () => {
+  test('reads dimensions from PNG, JPEG, GIF and WebP headers', async () => {
+    const base = sharp({ create: { width: 37, height: 21, channels: 3, background: { r: 10, g: 20, b: 30 } } })
+    for (const format of ['png', 'jpeg', 'gif', 'webp'] as const) {
+      const bytes = await base.clone().toFormat(format).toBuffer()
+      expect(readImageHeaderDimensions(bytes)).toEqual({ width: 37, height: 21 })
+    }
+    const lossless = await base.clone().webp({ lossless: true }).toBuffer()
+    expect(readImageHeaderDimensions(lossless)).toEqual({ width: 37, height: 21 })
+    expect(readImageHeaderDimensions(Buffer.from('not an image'))).toBeUndefined()
+  })
 })
 
 describe('maybeResizeAndDownsampleImageBuffer', () => {
@@ -118,6 +132,22 @@ describe('maybeResizeAndDownsampleImageBuffer', () => {
       const buffer = Buffer.alloc(1024, 1)
       await expect(maybeResizeAndDownsampleImageBuffer(buffer, buffer.length, format, 2000))
         .rejects.toThrow('2000x2000px')
+    })
+  }
+
+  for (const format of ['jpeg', 'gif', 'webp'] as const) {
+    test(`checks a ${format} header against the request cap if the processor is unavailable`, async () => {
+      processorMode = 'throw'
+      const encode = (height: number) => sharp({
+        create: { width: 40, height, channels: 3, background: '#336699' },
+      }).toFormat(format).toBuffer()
+      const allowed = await encode(2000)
+      const result = await maybeResizeAndDownsampleImageBuffer(allowed, allowed.length, format, 2000)
+      expect(result.buffer).toBe(allowed)
+      expect(result.mediaType).toBe(format)
+      const oversized = await encode(2001)
+      await expect(maybeResizeAndDownsampleImageBuffer(oversized, oversized.length, format, 2000))
+        .rejects.toThrow('dimensions exceed the 2000x2000px limit')
     })
   }
 

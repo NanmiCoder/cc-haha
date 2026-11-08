@@ -14,7 +14,7 @@ Computer Use lets Claude read interface elements, take screenshots, click, and t
 | Platform | Requirements | Background action limits |
 |---|---|---|
 | macOS | macOS 14.4 or later, Accessibility and Screen Recording permissions | The native engine directs input to the target process without moving the physical pointer; you can keep working in another app |
-| Windows | Windows 10 1809 / Windows Server 2019 or later, in the signed-in user's interactive desktop | Controls supporting UI Automation can be read, clicked, or assigned values in the background; physical input uses the real mouse or keyboard |
+| Windows | Windows 10 1809 / Windows Server 2019 or later, in the signed-in user's interactive desktop | Controls that support background semantic actions can be read, clicked, and assigned values. Controls can change focus themselves. Physical input uses the real mouse or keyboard |
 | Linux | The signed-in user's graphical session and AT-SPI accessibility service; Ubuntu 24.04 or later is recommended | Supported AT-SPI actions work in the background on X11 and Wayland; physical input, capture, and window control depend on the desktop |
 
 **Background actions have limits.** They do not create an isolated virtual desktop for the agent. Target apps still change; window switching, shell UI, shortcuts, and clipboard operations can affect your work. Avoid editing the same app at the same time as the agent.
@@ -58,9 +58,13 @@ Create an empty note titled "test" in the notes app.
 Find the display settings page, but do not change any options.
 ```
 
+In desktop chat, start a request with `/computer-use` or explicitly ask to use Computer Use to select the native desktop tools for that turn. If those tools are unavailable, the chat explains why.
+
 The agent observes the interface, acts, and reads the result. After a UI change, observe again: old coordinates or element references may no longer apply. Interfaces that expose no accessibility controls may not support background semantic actions; another entry point or explicitly allowed foreground input may be needed.
 
-Only one product session can hold the Computer Use control lock at a time. A main agent and subagents can collaborate and display their own cursors, but operations remain queued and share app state and the clipboard. A virtual cursor shows what the agent is doing; it is not another input device. Wayland does not render it.
+Only one product session can hold the Computer Use control lock at a time. A main agent and subagents can collaborate and display their own cursors. Operations run in a queue and share app state and the clipboard. The virtual cursor shows where the agent is acting.
+
+On Windows, the cursor appears with an `Agent` label when an action can display it, at the scale of the monitor it is on. It stays visible for up to about 45 seconds between actions during a turn, then clears when the turn finishes or you stop it. On Wayland, tool results report the outcome of semantic actions.
 
 ## Stop and troubleshoot
 

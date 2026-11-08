@@ -11,11 +11,15 @@ Source: [vercel-labs/agent-desktop](https://github.com/vercel-labs/agent-desktop
 - `crates/linux/src/system/overlay/cursor_overlay_draw.rs` uses the same arrow dimensions and outline width. Its window remains click-through and keeps the hotspot at the requested screen coordinate.
 - `src/cli/product_bridge_tests.rs`, registered in `src/cli/mod.rs`, checks the product bridge's actual cursor configuration, screenshot, clipboard image, and batch argument contracts without opening a desktop.
 - `crates/core/tests/product_cursor_visuals.rs` runs the Windows geometry and raster tests without linking an OS adapter or opening a window.
+- `status --check-session-storage` probes private session storage with a temporary file and no native session or overlay. It uses a private Unix directory and the existing Windows DACL checks, and pins the Windows directory chain during the write, readback, and cleanup.
+- Headed cursor lifecycle controls target the active agent renderer. With the product cursor feedback environment enabled, optional presentation acknowledgements and warnings travel on stderr independently of the input receipt.
+- The Windows renderer scales the cursor and badge to the active monitor while keeping the hotspot in physical pixels. Its updated pipe protocol distinguishes a failed frame from a successful paint and retires older same-session renderers. The product may extend the idle display time through `AGENT_DESKTOP_CURSOR_IDLE_MS`, capped at 60 seconds.
+- Headless clicks and writable value edits on native Windows Forms BUTTON and EDIT controls use their direct legacy accessibility patterns. The UI Automation proxy paths for these controls can activate their window. Headed calls and controls on other frameworks keep the upstream dispatch order.
 - `.gitignore` excludes the local Cargo target and test state directories.
 - `tests/e2e-windows/scenarios/Interaction.ps1`, `tests/fixture-app-windows/FixtureCardsClicks.cs`, and the collected dependency notices have trailing whitespace normalized. Source statements and license wording are unchanged.
 - `NOTICE`, `THIRD-PARTY-NOTICES`, this file, and `UPSTREAM.json` provide distribution and source attribution.
 
-The local changes affect presentation. Headless versus headed policy, OS input delivery, interaction leases, and the explicit unsupported Wayland cursor response are inherited from upstream. Windows retains its existing cursor animation and effects; the X11 overlay remains a static arrow at each action position. The product's macOS path continues to use its Swift helper.
+Other headless and headed policies, OS input delivery, interaction leases, and private-file protection are inherited from upstream. Windows retains its existing cursor animation and effects. The X11 overlay remains a static arrow at each action position. The product's macOS path continues to use its Swift helper.
 
 ## Build
 

@@ -91,17 +91,6 @@ describe('tool image references', () => {
     const text = [{ type: 'text', text: 'only text' }]
     expect(media.projectToolResultContent(text, 's', 't')).toBe(text)
   })
-
-  it('reads dimensions from PNG, JPEG, GIF and WebP headers', async () => {
-    const base = sharp({ create: { width: 37, height: 21, channels: 3, background: { r: 10, g: 20, b: 30 } } })
-    for (const format of ['png', 'jpeg', 'gif', 'webp'] as const) {
-      const bytes = await base.clone().toFormat(format).toBuffer()
-      expect(media.imageDimensions(bytes)).toEqual({ width: 37, height: 21 })
-    }
-    const lossless = await base.clone().webp({ lossless: true }).toBuffer()
-    expect(media.imageDimensions(lossless)).toEqual({ width: 37, height: 21 })
-    expect(media.imageDimensions(Buffer.from('not an image'))).toBeUndefined()
-  })
 })
 
 describe('history with media=ref', () => {

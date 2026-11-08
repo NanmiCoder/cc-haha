@@ -129,8 +129,9 @@ export class TaskActivityController {
       if (token) await this.registerToken(token)
     })
   }
-  /** Called only after the host's collection revoke succeeded. Do not enqueue a
-   * second HTTP revoke from inside the host-removal transaction. */
+  /** Called by the host removal after it asked the computer to drop this phone's
+   * registrations. The computer may not have answered, so this only ends what is on the
+   * lock screen. Do not enqueue a second HTTP revoke from inside the removal. */
   retireHost(hostId: string) {
     return this.serial(async () => {
       if (!this.initialized) {

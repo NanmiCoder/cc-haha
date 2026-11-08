@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { skillsApi } from '../../api/skills'
 import { mcpApi } from '../../api/mcp'
 import {
@@ -46,7 +46,14 @@ type Props = {
 }
 
 type SessionInspectorTab = 'status' | 'usage' | 'context'
+type SessionInspectorTabResult = { data: SessionInspectionResponse; error?: never } | { data?: never; error: string }
 type Translate = ReturnType<typeof useTranslation>
+
+const inspectionOptionsByTab = {
+  status: { statusOnly: true },
+  usage: { includeContext: false },
+  context: { includeContext: true, contextOnly: true, timeout: 45_000 },
+}
 
 function scopeLabel(scope: string, t: ReturnType<typeof useTranslation>) {
   switch (scope) {
@@ -543,7 +550,8 @@ function StatusTab({
   const tools = Array.isArray(data.status.tools) ? data.status.tools : []
   const context = data.context ?? data.contextEstimate
   const model = data.status.model ?? context?.model ?? data.usage?.models?.[0]?.displayName ?? data.usage?.models?.[0]?.model ?? t('slash.inspector.status.unknown')
-  const contextWindow = context?.rawMaxTokens ?? data.usage?.models?.find((entry) => entry.contextWindow > 0)?.contextWindow
+  const contextWindow = data.status.contextWindow ?? context?.rawMaxTokens
+    ?? data.usage?.models?.find((entry) => entry.contextWindow > 0)?.contextWindow
   const slashCommandCount = (data.status.slashCommandCount ?? 0) > 0
     ? data.status.slashCommandCount
     : commands?.length ?? 0
@@ -693,73 +701,27 @@ function SessionInspectorPanel({
 }) {
   const t = useTranslation()
   const [selectedTab, setSelectedTab] = useState<SessionInspectorTab>(() => sessionInspectorInitialTab(command))
-  const [data, setData] = useState<SessionInspectionResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [contextLoading, setContextLoading] = useState(false)
-  const [contextError, setContextError] = useState<string | null>(null)
-  const contextRequestSessionRef = useRef<string | null>(null)
+  const [tabResults, setTabResults] = useState<Partial<Record<SessionInspectorTab, SessionInspectorTabResult>>>({})
+  const result = tabResults[selectedTab]
 
   useEffect(() => {
-    if (command !== 'status' && command !== 'cost' && command !== 'context') return
-    setSelectedTab(sessionInspectorInitialTab(command))
-  }, [command])
+    if (!sessionId || result) return
+    const controller = new AbortController()
+    const finish = (result: SessionInspectorTabResult) => {
+      if (controller.signal.aborted) return
+      setTabResults((current) => ({ ...current, [selectedTab]: result }))
+    }
+    sessionsApi.getInspection(sessionId, { ...inspectionOptionsByTab[selectedTab], signal: controller.signal })
+      .then((response) => finish({ data: assertSessionInspectionResponse(response, t) }))
+      .catch((err) => finish({ error: err instanceof Error ? err.message : String(err) }))
+    return () => controller.abort()
+  }, [result, selectedTab, sessionId, t])
 
-  useEffect(() => {
-    if (!sessionId) {
-      setError(t('slash.inspector.error.noActiveSession'))
-      return
-    }
-    let cancelled = false
-    setData(null)
-    setError(null)
-    setContextLoading(false)
-    setContextError(null)
-    contextRequestSessionRef.current = null
-    sessionsApi.getInspection(sessionId, { includeContext: false })
-      .then((response) => {
-        if (!cancelled) setData(assertSessionInspectionResponse(response, t))
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sessionId, t])
-
-  useEffect(() => {
-    if (!sessionId || selectedTab !== 'context' || data === null || data.context) return
-    if (contextRequestSessionRef.current === sessionId) return
-    contextRequestSessionRef.current = sessionId
-    let cancelled = false
-    setContextLoading(true)
-    setContextError(null)
-    sessionsApi.getInspection(sessionId, { includeContext: true, contextOnly: true, timeout: 45_000 })
-      .then((response) => {
-        if (cancelled) return
-        const inspected = assertSessionInspectionResponse(response, t)
-        setData((current) => current
-          ? {
-              ...current,
-              context: inspected.context,
-              errors: {
-                ...(current.errors ?? {}),
-                ...(inspected.errors ?? {}),
-              },
-            }
-          : inspected)
-        setContextError(inspected.errors?.context ?? null)
-      })
-      .catch((err) => {
-        if (!cancelled) setContextError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
-        if (!cancelled) setContextLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [data, selectedTab, sessionId, t])
+  const data = result?.data
+  const error = !sessionId ? t('slash.inspector.error.noActiveSession') : result?.error
+  const contextData = tabResults.context?.data
+  const usageData = tabResults.usage?.data
+  const context = contextData?.context ?? usageData?.context ?? contextData?.contextEstimate ?? usageData?.contextEstimate
 
   const tabs: Array<{ id: SessionInspectorTab; label: string }> = [
     { id: 'status', label: t('slash.inspector.tab.status') },
@@ -769,19 +731,19 @@ function SessionInspectorPanel({
 
   return (
     <SessionInspectorShell selectedTab={selectedTab} tabs={tabs} onSelectTab={setSelectedTab} onClose={onClose} t={t}>
-      {error ? (
-        <ErrorState title={error} />
-      ) : data === null ? (
-        <LoadingState label={t('slash.inspector.loading')} />
-      ) : selectedTab === 'usage' ? (
-        <UsageTab usage={data.usage} context={data.context ?? data.contextEstimate} error={data.errors?.usage} t={t} />
-      ) : selectedTab === 'context' ? (
+      {sessionId && selectedTab === 'context' ? (
         <ContextTab
-          context={data.context ?? data.contextEstimate}
-          error={contextError ?? data.errors?.context}
-          loading={contextLoading && !data.contextEstimate}
+          context={context}
+          error={error ?? data?.errors?.context}
+          loading={!result}
           t={t}
         />
+      ) : error ? (
+        <ErrorState title={error} />
+      ) : !data ? (
+        <LoadingState label={t('slash.inspector.loading')} />
+      ) : selectedTab === 'usage' ? (
+        <UsageTab usage={data.usage} context={context} error={data.errors?.usage} t={t} />
       ) : (
         <StatusTab data={data} commands={commands} t={t} />
       )}
@@ -1067,7 +1029,15 @@ export function LocalSlashCommandPanel({ command, sessionId, cwd, commands, onCl
     )
   }
   if (command === 'status' || command === 'cost' || command === 'context') {
-    return <SessionInspectorPanel command={command} sessionId={sessionId} commands={commands} onClose={onClose} />
+    return (
+      <SessionInspectorPanel
+        key={`${command}:${sessionId ?? ''}`}
+        command={command}
+        sessionId={sessionId}
+        commands={commands}
+        onClose={onClose}
+      />
+    )
   }
   return <HelpPanel commands={commands} onClose={onClose} />
 }

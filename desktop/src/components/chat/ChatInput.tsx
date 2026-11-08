@@ -1444,7 +1444,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         icon: <ShieldCheck size={16} strokeWidth={1.75} aria-hidden="true" />,
         label: t('permMode.executionPermissions'),
         value: t(PERMISSION_MODE_LABEL_KEYS[resolvedPermissionMode]),
-        disabled: isActive,
         onSelect: () => openFromComposerSheet(() => permissionSelectorRef.current?.open()),
       },
       ...(activeTabId ? [

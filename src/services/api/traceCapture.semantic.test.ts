@@ -48,6 +48,37 @@ describe('createTraceRequestSemantic', () => {
     expect(JSON.stringify(semantic)).not.toContain(imageData)
     expect(JSON.stringify(semantic)).not.toContain('upstream')
   })
+
+  test('keeps the proxy envelope when its upstream request repeats a screenshot', () => {
+    const data = 'AQID'.repeat(TRACE_CAPTURE_CHAR_LIMIT / 4 + 1)
+    const dataUrl = `data:image/png;base64,${data}`
+    const anthropic = { messages: [{ role: 'user', content: 'Read the screenshot.' }], tools: [{ name: 'Read' }] }
+    const body = {
+      anthropic,
+      upstream: {
+        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: dataUrl, detail: 'high' } }] }],
+        input: [{ role: 'user', content: [{ type: 'input_image', image_url: dataUrl }] }],
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data } }] }],
+        token: 'fixture-token',
+      },
+    }
+    const snapshot = createTraceBodySnapshot(body, { compactRequestImages: true })
+    const omittedUrl = `[image/png data omitted (${data.length} encoded characters)]`
+
+    expect(snapshot.truncated).toBe(true)
+    expect(snapshot.captureOmitted).toBeUndefined()
+    expect(JSON.parse(snapshot.preview)).toEqual({
+      anthropic,
+      upstream: {
+        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: omittedUrl, detail: 'high' } }] }],
+        input: [{ role: 'user', content: [{ type: 'input_image', image_url: omittedUrl }] }],
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', encodedChars: data.length } }] }],
+        token: '[redacted]',
+      },
+    })
+    expect(createTraceRequestSemantic(body, 'proxy')?.request).toEqual(anthropic)
+    expect(body.upstream.messages[0]!.content[0]!.image_url.url).toBe(dataUrl)
+  })
 })
 
 
@@ -79,4 +110,19 @@ test('capture budgets omit oversized trees without evaluating getters or array e
   let nested: unknown = { value: 'end' }
   for (let i = 0; i < TRACE_CAPTURE_DEPTH_LIMIT + 2; i++) nested = { nested }
   expect(createTraceBodySnapshot(nested).captureOmitted).toBe('depth-budget')
+})
+
+test('the request image path does not run getters or exempt other oversized data', () => {
+  let getterCalls = 0
+  const image = { type: 'image', source: {
+    type: 'base64',
+    get data() { getterCalls += 1; return 'unreachable' },
+  } }
+  expect(createTraceBodySnapshot({ messages: [{ content: [image] }] }, { compactRequestImages: true }).captureOmitted).toBe('accessor')
+  expect(getterCalls).toBe(0)
+
+  const data = 'x'.repeat(TRACE_CAPTURE_CHAR_LIMIT + 1)
+  const toolInput = { type: 'tool_use', name: 'Write', input: { data } }
+  expect(createTraceRequestSemantic({ messages: [{ content: [toolInput] }] }, 'anthropic')?.request)
+    .toMatchObject({ traceCaptureOmitted: { reason: 'string-budget' } })
 })

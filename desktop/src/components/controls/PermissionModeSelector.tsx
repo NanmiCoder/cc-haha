@@ -57,7 +57,7 @@ function ItemIcon({ mode }: { mode: PermissionMode }) {
 }
 
 export type PermissionModeSelectorHandle = {
-  /** Opens the mode menu, as a tap on the trigger would. Ignored mid-turn. */
+  /** Opens the mode menu, as a tap on the trigger would. */
   open: () => void
 }
 
@@ -103,14 +103,6 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const activeTabId = sessionId ?? selectedTabId
   const sideChat = useSideChatStore(s => activeTabId ? s.entries[activeTabId] : undefined)
   const sessions = useSessionStore((s) => s.sessions)
-  const chatState = useChatStore((s) =>
-    activeTabId ? s.sessions[activeTabId]?.chatState ?? 'idle' : 'idle',
-  )
-  const isTurnActive = chatState !== 'idle'
-  const isTurnActiveNow = (tabId: string | null) => {
-    if (!tabId) return false
-    return (useChatStore.getState().sessions[tabId]?.chatState ?? 'idle') !== 'idle'
-  }
   const [open, setOpen] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState(false)
   const [autoDialog, setAutoDialog] = useState(false)
@@ -194,15 +186,6 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const menuId = useId()
 
   useEffect(() => {
-    if (isTurnActive) {
-      setOpen(false)
-      setConfirmDialog(false)
-      setAutoDialog(false)
-      interactionTabIdRef.current = null
-    }
-  }, [isTurnActive])
-
-  useEffect(() => {
     if (
       (open || confirmDialog || autoDialog) &&
       activeTabId !== interactionTabIdRef.current
@@ -217,9 +200,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const closeMenu = useCallback(() => setOpen(false), [])
 
   const openMenu = useCallback(() => {
-    const actionTabId = sessionId ?? useTabStore.getState().activeTabId
-    if ((useChatStore.getState().sessions[actionTabId ?? '']?.chatState ?? 'idle') !== 'idle') return
-    interactionTabIdRef.current = actionTabId
+    interactionTabIdRef.current = sessionId ?? useTabStore.getState().activeTabId
     setOpen(true)
   }, [sessionId])
 
@@ -243,10 +224,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
           role="menuitem"
           onClick={() => {
             const actionTabId = sessionId ?? useTabStore.getState().activeTabId
-            if (
-              actionTabId !== interactionTabIdRef.current ||
-              isTurnActiveNow(actionTabId)
-            ) {
+            if (actionTabId !== interactionTabIdRef.current) {
               setOpen(false)
               setConfirmDialog(false)
               setAutoDialog(false)
@@ -310,7 +288,6 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
       <button
         onClick={() => {
           const actionTabId = sessionId ?? useTabStore.getState().activeTabId
-          if (isTurnActiveNow(actionTabId)) return
           if (open) {
             setOpen(false)
             interactionTabIdRef.current = null
@@ -319,19 +296,16 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
           interactionTabIdRef.current = actionTabId
           setOpen(true)
         }}
-        disabled={isTurnActive}
         aria-label={MODE_LABELS[currentMode]}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        title={isTurnActive ? t('permMode.disabledDuringTurn') : (glyphOnly ? MODE_LABELS[currentMode] : undefined)}
+        title={glyphOnly ? MODE_LABELS[currentMode] : undefined}
         // `shrink-0` / `whitespace-nowrap`: it shares the composer toolbar with
         // the run-location pill, whose branch name can be arbitrarily long.
         // Without these the label wrapped to two lines and grew the whole row.
-        className={`flex shrink-0 items-center whitespace-nowrap text-[var(--color-text-secondary)] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
-          isTurnActive
-            ? 'opacity-50 cursor-not-allowed'
-            : `hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] ${open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`
+        className={`flex shrink-0 items-center whitespace-nowrap text-[var(--color-text-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
         } ${compactButtonClass}`}
       >
         {glyphOnly ? (
@@ -422,10 +396,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             label: t('permMode.enableBypassBtn'),
             onClick: () => {
               const actionTabId = sessionId ?? useTabStore.getState().activeTabId
-              if (
-                actionTabId !== interactionTabIdRef.current ||
-                isTurnActiveNow(actionTabId)
-              ) {
+              if (actionTabId !== interactionTabIdRef.current) {
                 setConfirmDialog(false)
                 interactionTabIdRef.current = null
                 return
@@ -453,10 +424,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
         }}
         onConfirm={async () => {
           const actionTabId = sessionId ?? useTabStore.getState().activeTabId
-          if (
-            actionTabId !== interactionTabIdRef.current ||
-            isTurnActiveNow(actionTabId)
-          ) {
+          if (actionTabId !== interactionTabIdRef.current) {
             setAutoDialog(false)
             interactionTabIdRef.current = null
             return
@@ -468,12 +436,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
               await acceptAutoModeOptIn()
             }
             const confirmedTabId = sessionId ?? useTabStore.getState().activeTabId
-            if (
-              confirmedTabId !== interactionTabIdRef.current ||
-              isTurnActiveNow(confirmedTabId)
-            ) {
-              return
-            }
+            if (confirmedTabId !== interactionTabIdRef.current) return
             if (isControlled) {
               onChange?.('auto')
             } else if (confirmedTabId) {

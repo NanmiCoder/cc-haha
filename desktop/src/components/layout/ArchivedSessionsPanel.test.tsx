@@ -135,6 +135,59 @@ describe('ArchivedSessionsPanel', () => {
     expect(mocks.openHistoricalSession).not.toHaveBeenCalled()
   })
 
+  it('opens the row menu at the pointer even inside the transformed, clipped sidebar section', async () => {
+    // The sidebar section hosting this panel carries `transform: translateX(0)`
+    // and `overflow: hidden`. A fixed menu rendered inside it is positioned from
+    // that section's corner instead of the window's and clipped by it, so it
+    // landed as far below the pointer as the section sits below the window top,
+    // or vanished past the section's bottom edge (#1845).
+    mocks.history.mockResolvedValue({ sessions: [session('a')], nextCursor: null })
+    render(
+      <div data-testid="sidebar-section" style={{ transform: 'translateX(0)', overflow: 'hidden' }}>
+        <ArchivedSessionsPanel projectRoot="/work/project" onBack={vi.fn()} />
+      </div>,
+    )
+
+    fireEvent.contextMenu(await screen.findByText('Session a'), { clientX: 120, clientY: 300 })
+
+    const menu = screen.getByRole('menu')
+    expect(screen.getByTestId('sidebar-section')).not.toContainElement(menu)
+    expect(menu.parentElement).toBe(document.body)
+    expect(menu.style.position).toBe('fixed')
+    expect(menu.style.left).toBe('120px')
+    expect(menu.style.top).toBe('300px')
+  })
+
+  it('keeps the row menu inside the window when opened near the bottom-right corner', async () => {
+    const width = 180
+    const height = 42
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute('role') === 'menu'
+        ? { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) }
+        : { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) }
+    })
+    try {
+      mocks.history.mockResolvedValue({ sessions: [session('a')], nextCursor: null })
+      render(<ArchivedSessionsPanel projectRoot="/work/project" onBack={vi.fn()} />)
+
+      const clientX = window.innerWidth - 10
+      const clientY = window.innerHeight - 20
+      fireEvent.contextMenu(await screen.findByText('Session a'), { clientX, clientY })
+
+      const menu = screen.getByRole('menu')
+      const left = Number.parseFloat(menu.style.left)
+      const top = Number.parseFloat(menu.style.top)
+      expect(left).toBeGreaterThanOrEqual(8)
+      expect(left + width).toBeLessThanOrEqual(window.innerWidth - 8)
+      // No room below the pointer, so the menu opens upward from it.
+      expect(top).toBe(clientY - height)
+      expect(top + height).toBeLessThanOrEqual(window.innerHeight - 8)
+      expect(menu.style.visibility).toBe('visible')
+    } finally {
+      measure.mockRestore()
+    }
+  })
+
   it('restarts offset pagination after restoring a row, so the next archived session is not skipped', async () => {
     mocks.list
       .mockResolvedValueOnce({ sessions: [session('a'), session('b')], total: 3 })

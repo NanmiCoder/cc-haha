@@ -49,7 +49,9 @@ if (command === 'session' && args[0] === 'start') {
   const count = fs.readFileSync(process.env.CCH_DESKTOP_TEST_LOG, 'utf8').trim().split('\\n').map(line => JSON.parse(line)).filter(call => call.command === 'session' && call.args[0] === 'start').length
   output({ session_id: name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50) + '-' + count, name })
 } else if (command === 'status') {
-  output({ platform: 'linux', session_id: session, supported_surfaces: JSON.parse(process.env.CCH_DESKTOP_TEST_SURFACES ?? '["window"]'), permissions: { accessibility: { state: 'granted' } } })
+  const storageError = process.env.CCH_DESKTOP_TEST_STORAGE_ERROR
+  const storage = args.includes('--check-session-storage') ? { session_storage: storageError ? { ready: false, message: storageError } : { ready: true } } : {}
+  output({ platform: 'linux', session_id: session, supported_surfaces: JSON.parse(process.env.CCH_DESKTOP_TEST_SURFACES ?? '["window"]'), permissions: { accessibility: { state: 'granted' } }, ...storage })
 } else if (command === 'cursor-overlay') {
   output({ cursor_overlay: { enabled: args[0] === 'enable' } })
 } else if (command === 'screenshot') {
@@ -112,25 +114,26 @@ function text(result: Awaited<ReturnType<ReturnType<typeof createAgentDesktopBac
 describe('native desktop binary resolution', () => {
   test('packaged installs only use unpacked packaged executables', () => {
     const candidates: string[] = []
+    const expected = path.join('/app/resources/app.asar.unpacked', 'src-tauri', 'binaries', 'agent-desktop.exe')
     expect(resolveAgentDesktopBinary({
       platform: 'win32', appRoot: '/app/resources/app.asar', projectRoot: '/dev/source',
       exists: candidate => { candidates.push(candidate); return candidate.includes('app.asar.unpacked') },
-    })).toBe('/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe')
-    expect(candidates).toEqual(['/app/resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe'])
+    })).toBe(expected)
+    expect(candidates).toEqual([expected])
     expect(resolveAgentDesktopBinary({ platform: 'linux', appRoot: '/app/app.asar', exists: () => false })).toBeNull()
   })
 
   test('finds explicit-target and host development builds with native names', () => {
-    const expected = '/source/native/agent-desktop/target/aarch64-unknown-linux-gnu/release/agent-desktop'
+    const expected = path.join('/source', 'native', 'agent-desktop', 'target', 'aarch64-unknown-linux-gnu', 'release', 'agent-desktop')
     expect(resolveAgentDesktopBinary({ platform: 'linux', arch: 'arm64', projectRoot: '/source', appRoot: '', exists: value => value === expected })).toBe(expected)
-    const host = '/source/native/agent-desktop/target/debug/agent-desktop.exe'
+    const host = path.join('/source', 'native', 'agent-desktop', 'target', 'debug', 'agent-desktop.exe')
     expect(resolveAgentDesktopBinary({ platform: 'win32', projectRoot: '/source', appRoot: '', exists: value => value === host })).toBe(host)
   })
 })
 
 describe('native desktop CLI bridge', () => {
   test('owns state, shares native session, forwards literal argv and identifies concurrent agents', async () => {
-    const f = await fixture()
+    const f = await fixture({ AGENT_DESKTOP_CURSOR_IDLE_MS: '1' })
     const backend = createAgentDesktopBackend(f.options)
     const literal = 'literal $(touch NO_SHELL) `touch NO_SHELL` ; & | < >'
     const results = await Promise.all([
@@ -153,6 +156,7 @@ describe('native desktop CLI bridge', () => {
     }
     expect(await access(path.join(f.userHome, '.agent-desktop')).then(() => true, () => false)).toBe(false)
     expect(await access(path.join(f.root, 'NO_SHELL')).then(() => true, () => false)).toBe(false)
+    expect(f.requests.every(request => request.env.AGENT_DESKTOP_CURSOR_IDLE_MS === undefined)).toBe(true)
     const style = calls.find(call => call.command === 'cursor-overlay')
     expect(style.args).toEqual(['enable', '--multi-agent', '--fill', '#0075F2', '--rim', '#FFFFFF', '--accent', '#4D9EFF', '--size', '1'])
   })
@@ -254,15 +258,82 @@ describe('native desktop CLI bridge', () => {
     expect(await getAgentDesktopStatus({ ...f.options, binaryPath: path.join(f.root, 'missing') })).toEqual({ available: false, binaryPath: null, reason: 'binary_missing' })
   })
 
-  test('turn cleanup hides the cursor and the next action reenables the same style and session', async () => {
+  test('Windows status checks native-created private storage and leaves the legacy runtime untouched', async () => {
+    const f = await fixture({ CCH_DESKTOP_TEST_STORAGE_ERROR: 'private file DACL grants an untrusted principal' })
+    const legacy = path.join(f.configRoot, '.runtime', 'agent-desktop')
+    const privateRoot = path.join(f.configRoot, '.runtime', 'agent-desktop-private')
+    await mkdir(legacy, { recursive: true })
+    await writeFile(path.join(legacy, 'old-trace'), 'fixture')
+    const options = { ...f.options, platform: 'win32' as const }
+
+    expect(await getAgentDesktopStatus(options)).toMatchObject({
+      available: false,
+      reason: 'session_storage_unavailable',
+      message: 'private file DACL grants an untrusted principal',
+    })
+    expect(await getAgentDesktopStatus({
+      ...options, environment: { ...options.environment, CCH_DESKTOP_TEST_STORAGE_ERROR: '' },
+    })).toMatchObject({ available: true, reason: null })
+    expect((await f.calls()).map(call => [call.command, call.args, call.home])).toEqual([
+      ['status', ['--check-session-storage'], privateRoot],
+      ['status', ['--check-session-storage'], privateRoot],
+    ])
+    await expect(access(privateRoot)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(path.join(legacy, 'old-trace'), 'utf8')).toBe('fixture')
+  })
+
+  test('cursor configuration failure is reported separately from the successful action', async () => {
+    const f = await fixture()
+    const backend = createAgentDesktopBackend({
+      ...f.options,
+      runner: request => request.args.includes('cursor-overlay')
+        ? Promise.resolve({
+          stdout: JSON.stringify({ ok: false, command: 'cursor-overlay', error: { code: 'ACTION_FAILED', message: 'fixture cursor config failed' } }),
+          stderr: '',
+          exitCode: 1,
+        })
+        : f.options.runner(request),
+    })
+
+    const outcome = await backend.execute({ command: 'click', args: ['@s:e1'] })
+    expect(outcome.isError).toBeUndefined()
+    expect(text(outcome).cursor_overlay).toEqual({
+      configured: null, attempted: false, rendered: null,
+      warning: { code: 'ACTION_FAILED', message: 'fixture cursor config failed' },
+    })
+    expect((await f.calls()).filter(call => call.command === 'click')).toHaveLength(1)
+  })
+
+  test('explicit cursor commands use session scope and disable stays in effect until enable', async () => {
     const f = await fixture()
     const backend = createAgentDesktopBackend(f.options)
+
+    const disabled = await backend.execute({ command: 'cursor-overlay', args: ['disable'] }, undefined, 'reviewer')
+    expect(text(disabled).cursor_overlay).toMatchObject({ configured: false, attempted: false })
+    await backend.cleanup()
+    expect(text(await backend.execute({ command: 'click', args: ['@ref'] })).cursor_overlay.configured).toBe(false)
+    const enabled = await backend.execute({ command: 'cursor-overlay', args: ['enable', '--multi-agent'] }, undefined, 'reviewer')
+    expect(text(enabled).cursor_overlay).toMatchObject({ configured: true, attempted: false, rendered: null })
+    const cursorCalls = (await f.calls()).filter(call => call.command === 'cursor-overlay')
+    expect(cursorCalls.map(call => [call.args, call.agent])).toEqual([
+      [['disable'], null], [['enable', '--multi-agent'], null],
+    ])
+  })
+
+  test('turn cleanup hides the cursor and the next action reenables the same style and session', async () => {
+    const f = await fixture({ AGENT_DESKTOP_CURSOR_IDLE_MS: '1' })
+    await mkdir(path.join(f.configRoot, '.runtime', 'agent-desktop-private'), { recursive: true })
+    const backend = createAgentDesktopBackend({ ...f.options, platform: 'win32' })
     await backend.execute({ command: 'click', args: ['@ref'] })
     await backend.cleanup()
     await backend.cleanup()
     await backend.execute({ command: 'click', args: ['@ref'] })
     const calls = await f.calls()
-    expect(calls.filter(call => call.command === 'cursor-overlay').map(call => call.args[0])).toEqual(['enable', 'disable', 'enable'])
+    const cursorCalls = calls.filter(call => call.command === 'cursor-overlay')
+    expect(cursorCalls.map(call => call.args[0])).toEqual(['enable', 'disable', 'enable'])
+    expect(cursorCalls[0].args.slice(-2)).toEqual(['--label', 'Agent'])
+    expect(cursorCalls[2].args).toEqual(cursorCalls[0].args)
+    expect(f.requests.every(request => request.env.AGENT_DESKTOP_CURSOR_IDLE_MS === '45000')).toBe(true)
     expect(calls.filter(call => call.command === 'session')).toHaveLength(1)
     expect(new Set(calls.filter(call => call.command === 'click').map(call => call.session)).size).toBe(1)
   })

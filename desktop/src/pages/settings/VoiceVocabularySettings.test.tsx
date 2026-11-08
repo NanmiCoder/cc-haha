@@ -206,7 +206,7 @@ describe('VoiceVocabularySettings', () => {
   })
 
   it('says when words were last added from history and offers to analyze again', async () => {
-    api.historySources.mockResolvedValue({ sources: [] })
+    api.historySources.mockResolvedValue({ sources: [], days: 14 })
     await renderSection(vocabulary({ terms: [entry('cc-haha')], history: { lastRunAt: '2026-11-01T08:00:00.000Z', addedCount: 91 } }))
 
     expect(screen.getByTestId('voice-vocabulary-history')).toHaveTextContent(/Added 91 words from chat history on November 1\./)
@@ -215,7 +215,7 @@ describe('VoiceVocabularySettings', () => {
   })
 
   it('does not claim "added 0 words" after an analysis the user closed without adding anything', async () => {
-    api.historySources.mockResolvedValue({ sources: [] })
+    api.historySources.mockResolvedValue({ sources: [], days: 14 })
     await renderSection(vocabulary({ terms: [entry('cc-haha')], history: { lastRunAt: '2026-11-01T08:00:00.000Z', addedCount: 0 } }))
 
     const footer = screen.getByTestId('voice-vocabulary-history')

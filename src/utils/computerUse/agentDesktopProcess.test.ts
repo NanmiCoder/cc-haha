@@ -26,6 +26,13 @@ test('native process output limits terminate the child and preserve uncertain ex
   }
 })
 
+test('large optional diagnostics are bounded without terminating the input command', async () => {
+  const args = await request("process.stderr.write('x'.repeat(128 * 1024)); console.log('input receipt')")
+  const result = await runAgentDesktopProcess(args)
+  expect(result).toMatchObject({ stdout: 'input receipt\n', stderrTruncated: true, exitCode: 0 })
+  expect(Buffer.byteLength(result.stderr)).toBe(64 * 1024)
+})
+
 test('spawn errors identify a command that never started', async () => {
   const args = await request('')
   await expect(runAgentDesktopProcess({ ...args, binaryPath: path.join(args.cwd, 'missing-native-executable') })).rejects.toMatchObject({ reason: 'spawn_failed', dispatched: false })

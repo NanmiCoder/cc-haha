@@ -1,4 +1,6 @@
 import { ApiError } from '../api/client'
+import { t } from '../i18n'
+import { useUIStore } from './uiStore'
 import { sessionsApi } from '../api/sessions'
 import { hasRunningBackgroundTasks, listRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
@@ -21,6 +23,10 @@ import {
   useTabStore,
   type Tab,
 } from './tabStore'
+
+// A reopen must wait for deletion to settle, so it cannot reconnect to a
+// placeholder that is about to disappear. Failed deletions remain reopenable.
+const pendingEmptySessionDeletions = new Map<string, Promise<boolean>>()
 
 export function isSessionTabId(tabId: string | null) {
   if (!tabId) return false
@@ -98,9 +104,17 @@ export function closeTabsWithPolicy(targetTabs: Tab[], runningSessionIds: string
           chatEntry?.historyStatus === 'ready' &&
           chatEntry.messages.length === 0
         ) {
-          // Marked before the request so the tab closing below is not offered back.
-          useTabStore.getState().markSessionsDeleted([tab.sessionId])
-          void useSessionStore.getState().deleteSession(tab.sessionId)
+          if (!pendingEmptySessionDeletions.has(tab.sessionId)) {
+            const deletion = useSessionStore.getState().deleteSession(tab.sessionId)
+              .then(() => true)
+              .catch((error: unknown) => {
+                console.error('[tabs] Empty session deletion failed:', error)
+                useUIStore.getState().addToast({ type: 'error', message: t('tabs.emptySessionDeleteFailed') })
+                return false
+              })
+              .finally(() => { pendingEmptySessionDeletions.delete(tab.sessionId) })
+            pendingEmptySessionDeletions.set(tab.sessionId, deletion)
+          }
         }
         useChatStore.getState().disconnectSession(tab.sessionId)
       }
@@ -118,6 +132,8 @@ export async function reopenClosedSessionTab(): Promise<boolean> {
   for (;;) {
     const closed = useTabStore.getState().takeClosedSessionTab()
     if (!closed) return false
+    const deletion = pendingEmptySessionDeletions.get(closed.sessionId)
+    if (deletion && await deletion) continue
     if (useTabStore.getState().tabs.some((tab) => tab.sessionId === closed.sessionId)) continue
 
     let session = useSessionStore.getState().sessions.find((s) => s.id === closed.sessionId)

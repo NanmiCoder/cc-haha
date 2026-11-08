@@ -49,7 +49,7 @@ pub fn temporary_file_name(name: &OsStr) -> OsString {
     temporary
 }
 
-/// Platform seam for the five private-file primitives.
+/// Platform seam for private-file operations.
 ///
 /// Every method defaults to the portable behavior used when no platform
 /// implementation is installed, so an implementation overrides only the
@@ -79,6 +79,12 @@ pub trait PrivateFileOps: Send + Sync {
     /// Creates the directory chain at `path` and enforces that it is private.
     fn ensure_private(&self, path: &Path) -> std::io::Result<()> {
         crate::storage::private_file_parent::ensure_private_portable(path)
+    }
+
+    /// Keeps platform directory pins alive for a group of private operations.
+    fn pin_private_directory(&self, path: &Path) -> std::io::Result<Box<dyn Send>> {
+        self.ensure_private(path)?;
+        Ok(Box::new(()))
     }
 }
 

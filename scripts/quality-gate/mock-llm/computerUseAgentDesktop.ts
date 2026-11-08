@@ -61,7 +61,7 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
   const evidence: Record<string, unknown> = { platform, nativeBoundary: 'compiled fixture; no desktop API' }
   const seenTools = new Set<string>()
   const errors: string[] = []
-  let phase: 'operate' | 'cancel' | 'recover' | 'shutdown' = 'operate'
+  let phase: 'operate' | 'cancel' | 'recover' | 'provider-error' | 'shutdown' = 'operate'
   let expectedExitCode = 0
   const use = (id: string, command: string, args: string[]): MockReply => ({
     kind: 'message', content: [{ type: 'tool_use', id, name: TOOL, input: { command, args } }], stopReason: 'tool_use',
@@ -73,6 +73,10 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
       assert.ok(request.tools.some(tool => tool.name === TOOL), 'native desktop tool missing from real MCP inventory')
       if (phase === 'cancel') return use('native_wait_cancel', 'wait', ['100000'])
       if (phase === 'shutdown') return use('native_wait_shutdown', 'wait', ['100001'])
+      if (phase === 'provider-error') {
+        if (!toolResult(request, 'native_observe_before_error')) return use('native_observe_before_error', 'snapshot', ['--app', 'Fixture'])
+        return { kind: 'error', status: 400, errorType: 'invalid_request_error', message: 'fixture provider failure after Computer Use' }
+      }
       if (phase === 'recover') {
         const observed = toolResult(request, 'native_recovered_snapshot')
         if (!observed) return use('native_recovered_snapshot', 'snapshot', ['--app', 'Fixture'])
@@ -84,7 +88,10 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
       if (!before) return use('native_observe_before', 'snapshot', ['--app', 'Fixture', '-i'])
       const ref = resultData(before).data.tree.children[0].ref_id
       assert.equal(ref, '@sbefore:e1')
-      if (!toolResult(request, 'native_click')) return use('native_click', 'click', [ref])
+      const click = toolResult(request, 'native_click')
+      if (!click) return use('native_click', 'click', [ref])
+      assert.deepEqual(resultData(click).cursor_overlay, { configured: true, attempted: true, rendered: true })
+      evidence.cursorAcknowledgedIndependently = true
       const after = toolResult(request, 'native_observe_after')
       if (!after) return use('native_observe_after', 'snapshot', ['--app', 'Fixture', '-i'])
       assert.equal(resultData(after).data.tree.children[0].name, 'Saved')
@@ -117,6 +124,7 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
   let stdout = ''
   let stderr = ''
   let results = 0
+  let lastResultWasError = false
   const drains = Promise.all([
     (async () => {
       const decoder = new TextDecoder()
@@ -130,7 +138,13 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
           if (at < 0) break
           const line = pending.slice(0, at)
           pending = pending.slice(at + 1)
-          try { if (JSON.parse(line).type === 'result') results++ } catch {}
+          try {
+            const message = JSON.parse(line)
+            if (message.type === 'result') {
+              results++
+              lastResultWasError = message.is_error === true
+            }
+          } catch {}
         }
       }
     })(),
@@ -150,6 +164,7 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
     assert.deepEqual(errors, [])
     assert.equal(evidence.observedButtonChange, true)
     assert.equal(evidence.nativeErrorPreserved, true)
+    assert.equal(evidence.cursorAcknowledgedIndependently, true)
     phase = 'cancel'
     const beforeCancel = results
     await turn('Start the native desktop wait; I will interrupt it.')
@@ -187,6 +202,17 @@ export async function runComputerUseAgentDesktopScenario(rootDir: string, artifa
     assert.ok(seenTools.has(TOOL))
     assert.ok(!seenTools.has('mcp__computer-use__screenshot'))
     assert.ok(!seenTools.has('mcp__computer-use__js'))
+    phase = 'provider-error'
+    expectedExitCode = 1
+    const beforeProviderError = results
+    const cursorDisables = () => calls().filter(call => call.event === 'dispatch' && call.command === 'cursor-overlay' && call.args[0] === 'disable').length
+    const beforeProviderErrorDisables = cursorDisables()
+    await turn('Observe the native fixture before the scripted provider failure.')
+    await waitFor(() => results > beforeProviderError, 'provider error turn did not finish')
+    assert.equal(lastResultWasError, true, 'CLI should still report the provider error')
+    assert.equal(cursorDisables(), beforeProviderErrorDisables + 1, 'provider error skipped cursor teardown')
+    assert.ok(!existsSync(join(sandbox.configDir, 'computer-use.lock')), 'provider error retained the desktop lock')
+    evidence.providerErrorReleasedDesktop = true
     if (process.platform !== 'win32') {
       phase = 'shutdown'
       await turn('Start another native wait so I can close the CLI while it is running.')

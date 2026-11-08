@@ -23,7 +23,7 @@ Object.defineProperty(process, 'platform', { ...previousPlatform, value: 'darwin
 const mcpClient = await import('../services/mcp/client.js')
 const helperBridge = await import('../utils/computerUse/cuHelperBridge.js')
 const queryModule = await import('../query.js')
-const { __runHeadlessStreamingForTests } = await import('./print.js')
+const { __runHeadlessStreamingForTests, canBatchWith } = await import('./print.js')
 const { StructuredIO } = await import('./structuredIO.js')
 const { Stream } = await import('../utils/stream.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
@@ -79,7 +79,15 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
-test('a running headless query refreshes tools, permission rules, and skills together without losing another MCP', async () => {
+test('explicit desktop requests do not batch with general prompts', () => {
+  const normal = { mode: 'prompt', value: 'Read a file' } as const
+  const explicit = { mode: 'prompt', value: 'Use Computer Use to open Calculator' } as const
+  expect(canBatchWith(normal, normal)).toBe(true)
+  expect(canBatchWith(normal, explicit)).toBe(false)
+  expect(canBatchWith(explicit, normal)).toBe(false)
+})
+
+test('headless refresh honors explicit Computer Use and keeps ordinary turns independent', async () => {
   const names = ['mcp__computer-use__js', 'mcp__computer-use__js_reset']
   const nativeTools = names.map(name => ({ name, isReadOnly: () => true })) as Tools
   const unrelated = { name: 'mcp__business__lookup', isReadOnly: () => true } as Tool
@@ -142,22 +150,33 @@ test('a running headless query refreshes tools, permission rules, and skills tog
     { outputFormat: 'stream-json', computerUse: true, systemPrompt: 'fixture', userSpecifiedModel: 'claude-sonnet-4-5' } as never,
   )
   const iterator = output[Symbol.asyncIterator]()
-  async function turn(text: string) {
+  async function submit(text: string) {
     input.enqueue(JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n')
     while (true) {
       const next = await iterator.next()
       if (next.done) throw new Error('Headless session ended before a result')
       if (next.value.type === 'result') {
-        expect(next.value.is_error).toBe(false)
-        return snapshots.at(-1)!
+        return next.value
       }
     }
+  }
+  async function turn(text: string) {
+    expect((await submit(text)).is_error).toBe(false)
+    return snapshots.at(-1)!
   }
   try {
     const off = await turn('before enablement')
     expect(off.tools.filter(name => name.startsWith('mcp__computer-use__'))).toEqual([])
     expect(off.permissions.alwaysAllowRules.cliArg).toEqual(['Read'])
     expect(initialConnect).not.toHaveBeenCalled()
+
+    const explicit = '打开网易云音乐并显示歌词 使用computer use'
+    const blocked = await submit(explicit)
+    expect(blocked).toMatchObject({
+      is_error: true,
+      errors: [expect.stringContaining('Enable Computer Use in Settings')],
+    })
+    expect(snapshots).toHaveLength(1)
 
     writeFileSync(getComputerUseConfigPath(), '{"enabled":true}')
     const on = await turn('after enabling Computer Use')
@@ -168,6 +187,22 @@ test('a running headless query refreshes tools, permission rules, and skills tog
     expect(on.commands).toContain('computer-use')
     expect(initialConnect).toHaveBeenCalledTimes(1)
     expect(fetchTools).toHaveBeenCalledTimes(1)
+
+    const native = await turn(explicit)
+    expect(native.tools).toContain(names[0]!)
+    expect(native.tools.every(name => name.startsWith('mcp__computer-use__') || name === 'AskUserQuestion')).toBe(true)
+
+    const slash = await turn('/computer-use Open Calculator')
+    expect(slash.tools).toEqual(native.tools)
+
+    const permissions = state.toolPermissionContext
+    state = { ...state, toolPermissionContext: { ...permissions, alwaysDenyRules: { session: names } } }
+    expect(await submit('/computer-use Open Calculator')).toMatchObject({
+      is_error: true,
+      errors: [expect.stringContaining('tool permissions exclude desktop actions')],
+    })
+    expect(snapshots.at(-1)).toBe(slash)
+    state = { ...state, toolPermissionContext: permissions }
 
     await turn('use the same healthy connection')
     expect(initialConnect).toHaveBeenCalledTimes(1)
@@ -186,7 +221,7 @@ test('a running headless query refreshes tools, permission rules, and skills tog
     expect(disabled.commands).not.toContain('computer-use')
     expect(disabled.permissions.alwaysAllowRules.cliArg).toEqual(['Read'])
     expect(retire).toHaveBeenCalledTimes(1)
-    for (const snapshot of snapshots) expect(snapshot.tools).toContain(unrelated.name)
+    for (const snapshot of snapshots.filter(snapshot => snapshot !== native && snapshot !== slash)) expect(snapshot.tools).toContain(unrelated.name)
     expect(state.mcp.clients.map(client => client.name)).toEqual(['business'])
   } finally {
     input.done()

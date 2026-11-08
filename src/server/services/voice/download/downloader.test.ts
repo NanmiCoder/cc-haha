@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -305,14 +305,68 @@ describe('downloadAsset', () => {
   })
 
   it('classifies a stalled transfer as a timeout and keeps what arrived', async () => {
-    const server = await serve({ stallAfter: 40_000, chunkDelayMs: 2 })
     const destination = join(dir, 'file.bin')
-    const error = await downloadAsset(assetFor(content, [`${server.origin}/file`]), destination, {
-      idleTimeoutMs: 150,
-      maxRetries: 0,
-    }).catch(e => e)
-    expect(error.failure.reason).toBe('timeout')
-    expect((await stat(partPathFor(destination))).size).toBeGreaterThan(0)
+    const idleTimeoutMs = 150
+    const prefixBytes = 40_000
+    const progress: number[] = []
+    const nativeSetTimeout = globalThis.setTimeout
+    const nativeClearTimeout = globalThis.clearTimeout
+    const idleTimers = new Map<ReturnType<typeof setTimeout>, () => void>()
+    const controlledTimers = new Set<ReturnType<typeof setTimeout>>()
+    let sequence = 0
+    const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      if (delay !== idleTimeoutMs) return nativeSetTimeout(callback, delay, ...args)
+      const timer = ++sequence as unknown as ReturnType<typeof setTimeout>
+      controlledTimers.add(timer)
+      idleTimers.set(timer, () => callback(...args))
+      return timer
+    })
+    const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(timer => {
+      if (controlledTimers.has(timer as ReturnType<typeof setTimeout>)) idleTimers.delete(timer as ReturnType<typeof setTimeout>)
+      else nativeClearTimeout(timer)
+    })
+
+    try {
+      const error = await downloadAsset(assetFor(content, ['http://stalled.test/file']), destination, {
+        idleTimeoutMs,
+        maxRetries: 0,
+        progressIntervalMs: 0,
+        fetch: async (_input, init) => {
+          const signal = init!.signal!
+          // HTTP may coalesce the old fixture's writes into one reader chunk.
+          // Since interruptions deliberately discard the last chunk, require
+          // two distinct chunks before testing that the earlier prefix survives.
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(content.subarray(0, prefixBytes))
+              controller.enqueue(content.subarray(prefixBytes, prefixBytes * 2))
+              signal.addEventListener('abort', () => controller.error(signal.reason), { once: true })
+            },
+          })
+          return new Response(body, { status: 200, headers: { 'content-length': String(content.length) } })
+        },
+        onProgress: event => {
+          progress.push(event.completedBytes)
+          if (event.completedBytes !== prefixBytes * 2) return
+          // Progress follows writeFully: expire the real idle callback only
+          // once both writes finished, without racing CI scheduling or disk I/O.
+          expect(idleTimers.size).toBe(1)
+          const [timer, expire] = idleTimers.entries().next().value!
+          idleTimers.delete(timer)
+          expire()
+        },
+      }).catch(e => e)
+
+      expect(error).toBeInstanceOf(VoiceDownloadError)
+      expect(error.failure.reason).toBe('timeout')
+      expect(progress).toEqual([0, prefixBytes, prefixBytes * 2])
+      expect((await stat(partPathFor(destination))).size).toBeGreaterThan(0)
+      expect(Buffer.compare(await readFile(partPathFor(destination)), content.subarray(0, prefixBytes))).toBe(0)
+      expect(await exists(destination)).toBe(false)
+    } finally {
+      timerSpy.mockRestore()
+      clearSpy.mockRestore()
+    }
   })
 
   it('classifies certificate and DNS failures and never leaks URL credentials', async () => {

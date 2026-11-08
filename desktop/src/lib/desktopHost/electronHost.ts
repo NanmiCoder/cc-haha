@@ -66,6 +66,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       start: consentVersion => invoke(ELECTRON_IPC_CHANNELS.publicAccessStart, consentVersion),
       stop: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessStop),
       setAutoStart: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, enabled),
+      setP2PEnabled: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, enabled),
     },
     kind: 'electron',
     isDesktop: true,

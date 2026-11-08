@@ -20,7 +20,7 @@ pub(crate) fn policy_for(cmd: &Commands) -> PermissionNeed {
         | Commands::Session(_)
         | Commands::CursorOverlay(_)
         | Commands::Trace(_) => None,
-        Commands::Status | Commands::Permissions(_) => None,
+        Commands::Status(_) | Commands::Permissions(_) => None,
         Commands::ListWindows(_) | Commands::ListDisplays | Commands::ListApps(_) => None,
         Commands::ClipboardGet(_) | Commands::ClipboardSet(_) | Commands::ClipboardClear => None,
         Commands::Batch(_) => None,
@@ -135,7 +135,7 @@ pub(crate) fn requires_permission_report(cmd: &Commands) -> bool {
     policy_for(cmd) != PermissionNeed::None
         || matches!(
             cmd,
-            Commands::Status | Commands::Permissions(_) | Commands::Batch(_)
+            Commands::Status(_) | Commands::Permissions(_) | Commands::Batch(_)
         )
 }
 
@@ -241,7 +241,7 @@ fn validate_args(cmd: &Commands) -> Result<(), AppError> {
         | Commands::ClipboardGet(_)
         | Commands::ClipboardSet(_)
         | Commands::ClipboardClear
-        | Commands::Status
+        | Commands::Status(_)
         | Commands::Permissions(_)
         | Commands::Version
         | Commands::Batch(_)

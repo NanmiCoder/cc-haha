@@ -39,10 +39,21 @@ const PIPE_DIRECTORY: &str = r"\\.\pipe\*";
 /// listing costs a broadcast its extra recipients rather than reporting a
 /// session already stopped.
 #[cfg(target_os = "windows")]
-pub(crate) fn session_endpoints(root: &Path, session_id: &str) -> Vec<String> {
-    let prefix = pipe_name::session_prefix(root, session_id);
-    let mut found = vec![pipe_name::pipe_name(root, session_id, None)];
-    for name in list_pipes() {
+pub(crate) fn session_endpoints(root: &Path, session_id: &str, generation: &str) -> Vec<String> {
+    endpoints_in_listing(root, session_id, generation, list_pipes())
+}
+
+fn endpoints_in_listing(
+    root: &Path,
+    session_id: &str,
+    generation: &str,
+    names: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let prefix = pipe_name::session_prefix(root, session_id, generation);
+    let mut found = vec![pipe_name::pipe_name_for_generation(
+        root, session_id, None, generation,
+    )];
+    for name in names {
         if name.starts_with(&prefix) {
             found.push(format!(r"\\.\pipe\{name}"));
         }

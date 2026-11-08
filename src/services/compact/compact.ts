@@ -10,6 +10,7 @@ const sessionTranscriptModule = feature('KAIROS')
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import { markPostCompaction } from 'src/bootstrap/state.js'
 import { getInvokedSkillsForAgent, getSdkBetas } from '../../bootstrap/state.js'
+import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
@@ -44,6 +45,8 @@ import { getMemoryPath } from '../../utils/config.js'
 import {
   COMPACT_MAX_OUTPUT_TOKENS,
   getContextWindowForModel,
+  getEffectiveModelContextWindow,
+  getProviderReportedContextLimit,
 } from '../../utils/context.js'
 import {
   analyzeContext,
@@ -88,7 +91,9 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import {
+  getTokenCountFromUsage,
   getTokenUsage,
+  isUsableContextUsage,
   tokenCountFromLastAPIResponse,
   tokenCountWithEstimation,
 } from '../../utils/tokens.js'
@@ -178,7 +183,12 @@ export function getCompactForkMaxOutputTokens(
   if (defaultMaxTokens <= COMPACT_MAX_OUTPUT_TOKENS) {
     return undefined
   }
-  const contextWindow = getContextWindowForModel(model, getSdkBetas())
+  // A limit the provider stated is the real cap when it is below the
+  // registered window (a relay serving the model with less context).
+  const contextWindow = Math.min(
+    getContextWindowForModel(model, getSdkBetas()),
+    getProviderReportedContextLimit(model) ?? Number.POSITIVE_INFINITY,
+  )
   const fits =
     preCompactTokenCount +
       COMPACT_REQUEST_OVERHEAD_TOKENS +
@@ -236,13 +246,63 @@ export const ERROR_MESSAGE_NOT_ENOUGH_MESSAGES =
 const MAX_PTL_RETRIES = 3
 const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
+export type CompactRequestCounts = {
+  actualTokens: number
+  limitTokens: number
+}
+
+/**
+ * The provider refused the summary request for its size: a context overflow,
+ * or a relay's 413 (the summary request carries no media, so its text is what
+ * is too large). Both are fixed by trimming the oldest rounds.
+ */
+function isCompactRequestTooLarge(message: AssistantMessage): boolean {
+  return (
+    isPromptTooLongMessage(message) ||
+    (message.isApiErrorMessage === true &&
+      message.businessErrorCode === BUSINESS_ERROR_CODES.REQUEST_TOO_LARGE)
+  )
+}
+
+/**
+ * When the provider's rejection states no counts, the conversation still
+ * holds two: how large the request being summarized is, and the largest size
+ * the provider is known to accept — the request it last answered (its usage)
+ * or a limit it stated before. Undefined when neither is below the request.
+ */
+export function inferCompactRequestCounts(
+  messages: readonly Message[],
+  preCompactTokenCount: number,
+  model: string,
+): CompactRequestCounts | undefined {
+  let acceptedTokens: number | undefined
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const usage = getTokenUsage(messages[i]!)
+    if (usage && isUsableContextUsage(usage)) {
+      acceptedTokens = getTokenCountFromUsage({ ...usage, output_tokens: 0 })
+      break
+    }
+  }
+  const knownLimits = [acceptedTokens, getEffectiveModelContextWindow(model)]
+    .filter((tokens): tokens is number =>
+      tokens !== undefined && tokens > 0 && tokens < preCompactTokenCount,
+    )
+  if (knownLimits.length === 0) return undefined
+  return {
+    actualTokens: preCompactTokenCount,
+    limitTokens: Math.max(...knownLimits),
+  }
+}
+
 /**
  * Drops the oldest API-round groups to fit the provider's reported budget.
  * Local token estimates only weight the groups: their absolute scale can be
  * very different from the provider's tokenizer, especially for large logs.
- * Falls back to dropping 20% of groups when the gap is unparseable (some
- * Vertex/Bedrock error formats). Returns null when nothing can be dropped
- * without leaving an empty summarize set.
+ * When the error states no counts (MiniMax, Zhipu, a relay's 413), the counts
+ * the conversation knows stand in (see inferCompactRequestCounts), never
+ * cutting less than the plain fallback of 20% of groups, which applies when
+ * nothing is known. Returns null when nothing can be dropped without leaving
+ * an empty summarize set.
  *
  * This is the last-resort escape hatch for CC-1180 — when the compact request
  * itself hits prompt-too-long, the user is otherwise stuck. Dropping the
@@ -254,6 +314,7 @@ const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 export function truncateHeadForPTLRetry(
   messages: Message[],
   ptlResponse: AssistantMessage,
+  inferredCounts?: CompactRequestCounts,
 ): Message[] | null {
   // Strip our own synthetic marker from a previous retry before grouping.
   // Otherwise it becomes its own group 0 and the 20% fallback stalls
@@ -268,10 +329,16 @@ export function truncateHeadForPTLRetry(
   const groups = groupMessagesByApiRound(input)
   if (groups.length < 2) return null
 
-  const { actualTokens, limitTokens } = parsePromptTooLongTokenCounts(ptlResponse.errorDetails ?? '')
+  const stated = isPromptTooLongMessage(ptlResponse)
+    ? parsePromptTooLongTokenCounts(ptlResponse.errorDetails ?? '')
+    : { actualTokens: undefined, limitTokens: undefined }
+  const statesBoth =
+    stated.actualTokens !== undefined && stated.limitTokens !== undefined
+  const actualTokens = stated.actualTokens ?? inferredCounts?.actualTokens
+  const limitTokens = stated.limitTokens ?? inferredCounts?.limitTokens
+  const fallbackDropCount = Math.max(1, Math.floor(groups.length * 0.2))
   let dropCount: number
   if (
-    isPromptTooLongMessage(ptlResponse) &&
     actualTokens !== undefined &&
     limitTokens !== undefined &&
     actualTokens > limitTokens
@@ -289,8 +356,9 @@ export function truncateHeadForPTLRetry(
       dropCount++
       if (acc >= tokensToDrop) break
     }
+    if (!statesBoth) dropCount = Math.max(dropCount, fallbackDropCount)
   } else {
-    dropCount = Math.max(1, Math.floor(groups.length * 0.2))
+    dropCount = fallbackDropCount
   }
 
   // Keep at least one group so there's something to summarize.
@@ -513,14 +581,27 @@ export async function compactConversation(
         apiAttemptBudget,
       })
       summary = getAssistantMessageText(summaryResponse)
-      if (!summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)) break
+      if (
+        !summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE) &&
+        !isCompactRequestTooLarge(summaryResponse)
+      ) {
+        break
+      }
 
       // CC-1180: compact request itself hit prompt-too-long. Truncate the
       // oldest API-round groups and retry rather than leaving the user stuck.
       ptlAttempts++
       const truncated =
         ptlAttempts <= MAX_PTL_RETRIES && hasApiAttemptsLeft(apiAttemptBudget)
-          ? truncateHeadForPTLRetry(messagesToSummarize, summaryResponse)
+          ? truncateHeadForPTLRetry(
+              messagesToSummarize,
+              summaryResponse,
+              inferCompactRequestCounts(
+                messages,
+                preCompactTokenCount,
+                context.options.mainLoopModel,
+              ),
+            )
           : null
       if (!truncated) {
         logEvent('tengu_compact_failed', {
@@ -560,7 +641,10 @@ export async function compactConversation(
       throw new Error(
         `Failed to generate conversation summary - response did not contain valid text content`,
       )
-    } else if (startsWithApiErrorPrefix(summary)) {
+    } else if (
+      startsWithApiErrorPrefix(summary) ||
+      summaryResponse.isApiErrorMessage
+    ) {
       logEvent('tengu_compact_failed', {
         reason:
           'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -911,12 +995,25 @@ export async function partialCompactConversation(
         apiAttemptBudget,
       })
       summary = getAssistantMessageText(summaryResponse)
-      if (!summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)) break
+      if (
+        !summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE) &&
+        !isCompactRequestTooLarge(summaryResponse)
+      ) {
+        break
+      }
 
       ptlAttempts++
       const truncated =
         ptlAttempts <= MAX_PTL_RETRIES && hasApiAttemptsLeft(apiAttemptBudget)
-          ? truncateHeadForPTLRetry(apiMessages, summaryResponse)
+          ? truncateHeadForPTLRetry(
+              apiMessages,
+              summaryResponse,
+              inferCompactRequestCounts(
+                allMessages,
+                preCompactTokenCount,
+                context.options.mainLoopModel,
+              ),
+            )
           : null
       if (!truncated) {
         logEvent('tengu_partial_compact_failed', {
@@ -948,7 +1045,10 @@ export async function partialCompactConversation(
       throw new Error(
         'Failed to generate conversation summary - response did not contain valid text content',
       )
-    } else if (startsWithApiErrorPrefix(summary)) {
+    } else if (
+      startsWithApiErrorPrefix(summary) ||
+      summaryResponse.isApiErrorMessage
+    ) {
       logEvent('tengu_partial_compact_failed', {
         reason:
           'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1321,6 +1421,12 @@ export async function streamCompactSummary({
                   : 0,
             })
           }
+          return assistantMsg
+        }
+        // Refused for its size: the uncached fallback carries the same
+        // conversation and would be refused the same way. Hand the rejection
+        // back so the caller trims the oldest rounds instead.
+        if (assistantMsg && isCompactRequestTooLarge(assistantMsg)) {
           return assistantMsg
         }
         // The fork's retries already spent the shared budget: a fallback would

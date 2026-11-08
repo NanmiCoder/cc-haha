@@ -224,6 +224,40 @@ describe('session messages HTTP surface', () => {
     expect(body.page.nextCursor).toBeNull()
   })
 
+  it('adds only a tail cursor to the paged response, and nothing to mode=full', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const paged = await (await api('GET', `/api/sessions/${sessionId}/messages`)).json() as { page: Record<string, unknown> }
+    expect(Object.keys(paged).sort()).toEqual(['messages', 'page', 'taskNotifications'])
+    expect(Object.keys(paged.page).sort()).toEqual([
+      'contextScanBytes', 'hasMore', 'historyComplete', 'nextCursor', 'omittedOversizedEntries',
+      'previousCursor', 'scannedBytes', 'sourceVersion', 'tailComplete', 'tailCursor',
+    ])
+    const full = await (await api('GET', `/api/sessions/${sessionId}/messages?mode=full`)).json() as { page: Record<string, unknown> }
+    expect(full.page.tailCursor).toBeUndefined()
+    expect(full.page.tailComplete).toBeUndefined()
+  })
+
+  it('a reconnecting client downloads only what was appended since its tail cursor', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
+    const first = await (await api('GET', `/api/sessions/${sessionId}/messages?media=ref`)).json() as {
+      messages: Array<{ id: string }>
+      page: { tailCursor: string }
+    }
+    expect(first.messages.length).toBeGreaterThan(0)
+    await fs.appendFile(filePath, [
+      { type: 'user', uuid: 'follow-user', timestamp: '2026-01-03T00:00:00Z', message: { role: 'user', content: 'next question' } },
+      { type: 'assistant', uuid: 'follow-answer', timestamp: '2026-01-03T00:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'next answer' }] } },
+    ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+    const response = await api('GET', `/api/sessions/${sessionId}/messages?media=ref&cursor=${encodeURIComponent(first.page.tailCursor)}`)
+    expect(response.status).toBe(200)
+    const delta = await response.json() as { messages: Array<{ id: string }>; page: { tailCursor: string; tailComplete: boolean } }
+    expect(delta.messages.map(message => message.id)).toEqual(['follow-user', 'follow-answer'])
+    expect(delta.page.tailComplete).toBe(true)
+    const idle = await (await api('GET', `/api/sessions/${sessionId}/messages?media=ref&cursor=${encodeURIComponent(delta.page.tailCursor)}`)).json() as { messages: unknown[] }
+    expect(idle.messages).toEqual([])
+  })
+
   it('rejects an unknown history mode', async () => {
     const sessionId = await seedSessionWithSubagent()
     const response = await api('GET', `/api/sessions/${sessionId}/messages?mode=sideways`)

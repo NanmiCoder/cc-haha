@@ -17,6 +17,7 @@ import {
 } from '../../utils/plugins/marketplaceHelpers.js'
 import { loadInstalledPluginsV2 } from '../../utils/plugins/installedPluginsManager.js'
 import {
+  getDeclaredMarketplaces,
   loadKnownMarketplacesConfig,
 } from '../../utils/plugins/marketplaceManager.js'
 import { loadPluginLspServers } from '../../utils/plugins/lspPluginIntegration.js'
@@ -29,9 +30,10 @@ import { clearPluginCacheExclusions } from '../../utils/plugins/orphanedPluginFi
 import { parseFrontmatter } from '../../utils/frontmatterParser.js'
 import { extractDescriptionFromMarkdown } from '../../utils/markdownConfigLoader.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
-import type {
-  PluginInstallationEntry,
-  PluginScope,
+import {
+  isMarketplaceAutoUpdate,
+  type PluginInstallationEntry,
+  type PluginScope,
 } from '../../utils/plugins/schemas.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { walkPluginMarkdown } from '../../utils/plugins/walkPluginMarkdown.js'
@@ -331,12 +333,16 @@ export class PluginService {
       this.toSummary(detail),
     )
 
-    const marketplaces = Object.entries(marketplaceConfig.marketplaces ?? {})
+    // known_marketplaces.json is the flat record validated by
+    // KnownMarketplacesFileSchema (marketplace name → entry); it has no
+    // nested `marketplaces` key, so reading one always produced an empty list.
+    const declaredMarketplaces = getDeclaredMarketplaces()
+    const marketplaces = Object.entries(marketplaceConfig)
       .map(([name, entry]) => ({
         name,
         source: getMarketplaceSourceDisplay(entry.source),
         lastUpdated: entry.lastUpdated,
-        autoUpdate: entry.autoUpdate !== false,
+        autoUpdate: declaredMarketplaces[name]?.autoUpdate ?? isMarketplaceAutoUpdate(name, entry),
         installedCount: plugins.filter((plugin) => plugin.marketplace === name).length,
       }))
       .sort((a, b) => a.name.localeCompare(b.name))

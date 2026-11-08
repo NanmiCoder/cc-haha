@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 // Execute the production registration without booting Electron or user sidecars.
 // Dependencies are fixtures; the before-quit handler and its state are real.
-function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAccess = false, dataMigration: { running: boolean; cancelActive(): void; wait(): Promise<void> } | null = null) {
+function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAccess = false, dataMigration: { running: boolean; cancelActive(): void; wait(): Promise<void> } | null = null, p2pClosed?: Promise<void>) {
   const desktopDir = path.basename(process.cwd()) === 'desktop'
     ? process.cwd()
     : path.join(process.cwd(), 'desktop')
@@ -42,6 +42,7 @@ function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAcc
     terminalService: { killAll: cleanup('terminal') },
     previewService: { close: cleanup('preview') },
     petWindowController: { dispose: cleanup('pet') },
+    p2pTerminator: { dispose: () => { cleanup('p2p')(); return p2pClosed } },
     workspaceBrowserService: null,
     publicAccessManager: {
       dispose: () => {
@@ -88,7 +89,7 @@ describe('Electron quit lifecycle', () => {
     expect(fixture.requestQuit().preventDefault).toHaveBeenCalledOnce()
     expect(fixture.exit).not.toHaveBeenCalled()
     await settle()
-    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
+    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess', 'server'])
     expect(fixture.context.console.error).not.toHaveBeenCalled()
 
     fixture.finishServer()
@@ -97,13 +98,13 @@ describe('Electron quit lifecycle', () => {
     expect(fixture.exit).toHaveBeenCalledOnce()
   })
 
-  it.each(['idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess'])(
+  it.each(['idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess'])(
     'still stops the server and quits when %s cleanup throws', async step => {
       const fixture = quitFixture(step)
       expect(() => fixture.requestQuit()).not.toThrow()
       fixture.requestQuit()
       await settle()
-      expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'publicAccess', 'server'])
+      expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess', 'server'])
       expect(fixture.exit).not.toHaveBeenCalled()
 
       fixture.finishServer()
@@ -113,6 +114,21 @@ describe('Electron quit lifecycle', () => {
       expect(fixture.exit).toHaveBeenCalledOnce()
     },
   )
+
+  it('lets phones see their direct connections close before the server stops, without holding up the tunnel', async () => {
+    let closeDirect!: () => void
+    const directClosed = new Promise<void>(resolve => { closeDirect = resolve })
+    const fixture = quitFixture(undefined, false, false, null, directClosed)
+    fixture.requestQuit()
+    await settle()
+    expect(fixture.calls).toEqual(['preventSleep', 'idlePower', 'window', 'tray', 'terminal', 'preview', 'pet', 'p2p', 'publicAccess'])
+    closeDirect()
+    await settle()
+    expect(fixture.calls.at(-1)).toBe('server')
+    fixture.finishServer()
+    await settle()
+    expect(fixture.exit).toHaveBeenCalledOnce()
+  })
 
   it('still waits for the server if public access cleanup rejects asynchronously', async () => {
     const fixture = quitFixture(undefined, false, true)

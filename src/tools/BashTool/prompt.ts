@@ -7,6 +7,7 @@ import { shouldIncludeGitInstructions } from '../../utils/gitSettings.js'
 import { getClaudeTempDir } from '../../utils/permissions/filesystem.js'
 import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { isPowerShellToolEnabled } from '../../utils/shell/shellToolUtils.js'
 import {
   getDefaultBashTimeoutMs,
   getMaxBashTimeoutMs,
@@ -373,6 +374,9 @@ export function getSimplePrompt(): string {
 
   return [
     'Executes a given bash command and returns its output.',
+    ...(isPowerShellToolEnabled()
+      ? ['When the PowerShell tool is available, use it directly for native Windows PowerShell commands and .ps1 scripts. Bash expands PowerShell variables and unquoted Windows paths before invoking a child shell.']
+      : []),
     '',
     "The working directory persists between commands, but shell state does not. The shell environment is initialized from the user's profile (bash or zsh).",
     '',

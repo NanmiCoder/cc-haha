@@ -61,8 +61,7 @@ mod imp {
                 | (channel(accent[1]) << 8)
                 | channel(accent[2]);
             let pixels = vec![pixel; (width as usize) * (height as usize)];
-            self.window.raise();
-            let _ = self.window.present(
+            let painted = self.window.present(
                 at.x.round() as i32,
                 at.y.round() as i32,
                 width,
@@ -70,11 +69,11 @@ mod imp {
                 &pixels,
             );
             self.window.pump();
-            self.shown.set(true);
+            self.shown.set(painted.is_ok());
         }
 
         pub(crate) fn hide(&self) {
-            let _ = self.window.present(0, 0, 0, 0, &[]);
+            self.window.hide();
             self.window.pump();
             self.shown.set(false);
         }

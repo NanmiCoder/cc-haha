@@ -10531,19 +10531,29 @@ describe('chatStore history mapping', () => {
     expect(updateSessionPermissionModeMock).toHaveBeenCalledWith('session-1', 'acceptEdits')
   })
 
-  it('does not send permission mode updates while the session turn is active', () => {
+  it('sends permission mode updates while the session turn is running', () => {
     useChatStore.setState({
       sessions: {
-        'session-1': makeSession({ chatState: 'thinking' }),
+        'session-1': makeSession({ chatState: 'tool_executing', permissionMode: 'default' }),
       },
     })
 
-    useChatStore.getState().setSessionPermissionMode('session-1', 'acceptEdits')
+    useChatStore.getState().setSessionPermissionMode('session-1', 'bypassPermissions')
 
-    expect(sendMock).not.toHaveBeenCalledWith('session-1', {
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
       type: 'set_permission_mode',
-      mode: 'acceptEdits',
+      mode: 'bypassPermissions',
     })
+    // The selector follows the server's confirmation, not the request.
+    expect(useChatStore.getState().sessions['session-1']?.permissionMode).toBe('default')
+
+    useChatStore.getState().handleServerMessage('session-1', {
+      type: 'permission_mode_changed',
+      mode: 'bypassPermissions',
+    })
+
+    expect(useChatStore.getState().sessions['session-1']?.permissionMode).toBe('bypassPermissions')
+    expect(useChatStore.getState().sessions['session-1']?.chatState).toBe('tool_executing')
   })
 
   it('mirrors CLI permission-mode broadcasts locally without echoing back to the server', () => {

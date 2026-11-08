@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +24,7 @@ if (!inFixtureProcess) {
         child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
       ])
       expect(exitCode, stdout + stderr).toBe(0)
-      expect(stderr).toContain('14 pass')
+      expect(stderr).toContain('16 pass')
       expect(stderr).toContain('0 fail')
     } finally {
       clearTimeout(timer)
@@ -256,6 +256,42 @@ fixtureTest('replayed history plus a new tool result crosses 20 images without c
   expect(output).toHaveLength(21)
   for (let index = 0; index < output.length; index++) await verifyPixels(output[index]!, index, 2000, 40)
   expect(await readFile(path, 'utf8')).toBe(fixture)
+})
+
+function toolResultHistory(id: string, content: ImageBlockParam[]): Message[] {
+  return [
+    createUserMessage({ content: 'Read the fixture screenshots.' }),
+    createAssistantMessage({ content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: '/fixture.png' } }] }),
+    createUserMessage({ content: [{ type: 'tool_result', tool_use_id: id, content }] }),
+  ]
+}
+
+fixtureTest('a tool result image no request can verify is sent as a note, not a failed request', async () => {
+  const valid = await image(0, 3000, 60, 'jpeg')
+  const undecodable: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/png',
+    data: Buffer.concat([Buffer.from('BM'), Buffer.alloc(64)]).toString('base64') } }
+  const output = await send(toolResultHistory('read_bmp', [undecodable, valid]))
+  expect(output).toHaveLength(1)
+  await verifyPixels(output[0]!, 0, 3000, 60)
+  const blocks = requests[0]!.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+  const note = blocks.find(block => block.type === 'tool_result')!.content![0]!
+  expect(note.type).toBe('text')
+  expect(note.text).toContain('Unable to verify image dimensions')
+})
+
+fixtureTest('without an image processor, JPEG, GIF and WebP headers still verify request dimensions', async () => {
+  const processor = await import('../../tools/FileReadTool/imageProcessor.js')
+  const unavailable = spyOn(processor, 'getImageProcessor')
+    .mockRejectedValue(new Error('fixture: image processor unavailable'))
+  try {
+    const inputs = await Promise.all((['jpeg', 'gif', 'webp'] as const)
+      .map((format, index) => image(index, 3000, 60, format)))
+    const output = await send(toolResultHistory('read_without_processor', inputs))
+    expect(output.map(block => block.source!.data))
+      .toEqual(inputs.map(input => (input.source as { data: string }).data))
+  } finally {
+    unavailable.mockRestore()
+  }
 })
 
 fixtureTest('real CLI resumes a persisted 20-image session and sends 21 compliant images', async () => {

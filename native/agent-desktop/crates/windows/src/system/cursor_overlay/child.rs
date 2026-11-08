@@ -96,17 +96,27 @@ mod imp {
                     let control = *control;
                     let ours = control.session_id() == session_id
                         && serves_agent(agent_id, control.agent_id(), control.is_disable());
-                    if ours {
-                        host.apply(&control);
-                        if framing::is_acknowledged(&control) {
-                            listener.acknowledge();
+                    let applied = if ours {
+                        let result = host.apply(&control);
+                        if let Err(error) = &result {
+                            tracing::warn!(
+                                code = %error.code.as_str(),
+                                message = %error.message,
+                                "cursor overlay could not present the requested frame"
+                            );
                         }
-                    }
+                        if framing::is_acknowledged(&control) {
+                            listener.acknowledge(result.is_ok());
+                        }
+                        result.is_ok()
+                    } else {
+                        false
+                    };
                     listener.finish();
                     if ours && control.is_disable() {
                         return Ok(());
                     }
-                    if ours {
+                    if applied {
                         host.settle(&control, &|| listener.control_waiting());
                     }
                 }

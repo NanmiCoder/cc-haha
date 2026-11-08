@@ -3821,8 +3821,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   setSessionPermissionMode: (sessionId, mode) => {
-    const session = get().sessions[sessionId]
-    if (!session || session.chatState !== 'idle') return
+    // Allowed mid-turn: the server applies it to the running CLI, so tool calls
+    // after the switch use the new mode without interrupting the turn.
+    if (!get().sessions[sessionId]) return
     wsManager.send(sessionId, { type: 'set_permission_mode', mode })
   },
 

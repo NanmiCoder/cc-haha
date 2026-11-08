@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  appendFollowPage,
   appendPendingUserMessage,
   chatReducer,
   createChatState,
@@ -646,5 +647,65 @@ describe('Agent 团队成员之间的消息', () => {
     const text = '解释一下 <teammate-message 这个标签是做什么的'
     expect(normalizeHistory([entry('u', 'user', text)])[0]?.text).toBe(text)
     expect(chatReducer(createChatState('session'), { type: 'user_message_replay', content: text }).items).toHaveLength(1)
+  })
+})
+
+describe('appending a follow read', () => {
+  const at = (id: string, text: string): HistoryEntry => ({
+    id,
+    type: 'assistant',
+    content: [{ type: 'text', text }],
+    timestamp: '2026-01-01T00:00:00Z',
+  })
+  const page = (
+    messages: HistoryEntry[],
+    extra: Partial<NonNullable<HistoryPage['page']>> = {}
+  ): HistoryPage => ({
+    messages,
+    taskNotifications: [],
+    page: {
+      nextCursor: null,
+      hasMore: false,
+      historyComplete: true,
+      sourceVersion: 'v1',
+      scannedBytes: 10,
+      omittedOversizedEntries: 0,
+      ...extra,
+    },
+  })
+
+  test('appends new records and lets a re-read unfinished record replace its partial copy', () => {
+    const loaded = page([at('a', 'one'), at('b', 'two (partial)')], {
+      nextCursor: 'older',
+      hasMore: true,
+      historyComplete: false,
+      tailCursor: 't1',
+    })
+    const delta = page([at('b', 'two'), at('c', 'three')], {
+      sourceVersion: 'v2',
+      nextCursor: 'other-chain',
+      tailCursor: 't2',
+      tailComplete: true,
+    })
+    const merged = appendFollowPage(loaded, delta)
+    expect(merged.messages.map((entry) => entry.id)).toEqual(['a', 'b', 'c'])
+    expect(merged.messages[1]!.content).toEqual([{ type: 'text', text: 'two' }])
+    expect(merged.page).toMatchObject({
+      sourceVersion: 'v1',
+      nextCursor: 'older',
+      hasMore: true,
+      tailCursor: 't2',
+      tailComplete: true,
+    })
+  })
+
+  test('older pages still merge after a follow read', () => {
+    const loaded = appendFollowPage(
+      page([at('b', 'two')], { nextCursor: 'older', hasMore: true, historyComplete: false, tailCursor: 't1' }),
+      page([at('c', 'three')], { sourceVersion: 'v2', tailCursor: 't2' })
+    )
+    const merged = mergeHistoryPages(loaded, page([at('a', 'one')]))
+    expect(merged.messages.map((entry) => entry.id)).toEqual(['a', 'b', 'c'])
+    expect(merged.page?.tailCursor).toBe('t2')
   })
 })

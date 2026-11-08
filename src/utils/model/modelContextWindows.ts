@@ -191,17 +191,18 @@ export function getConfiguredModelMaxOutputTokens(model: string): number | undef
   }
 
   try {
-    return findConfiguredModelLimit(
-      model,
-      normalizeConfiguredModelLimits(
-        JSON.parse(raw) as unknown,
-        MODEL_MAX_OUTPUT_TOKENS_MIN,
-        MODEL_MAX_OUTPUT_TOKENS_MAX,
-      ),
-    )
+    return findModelMaxOutputTokens(model, JSON.parse(raw) as unknown)
   } catch {
     return undefined
   }
+}
+
+/** The reply limit listed for `model` in a provider's `modelMaxOutputTokens`, matched like the windows. */
+export function findModelMaxOutputTokens(model: string, limits: unknown): number | undefined {
+  return findConfiguredModelLimit(
+    model,
+    normalizeConfiguredModelLimits(limits, MODEL_MAX_OUTPUT_TOKENS_MIN, MODEL_MAX_OUTPUT_TOKENS_MAX),
+  )
 }
 
 export function getBuiltInModelContextWindow(model: string): number | undefined {
