@@ -26,6 +26,9 @@ function renderHostlessChat(selectedId: string | undefined) {
     mock.module(${JSON.stringify(import.meta.resolve('react-native-safe-area-context'))}, () => ({ useSafeAreaInsets: () => ({ top: 24, bottom: 16 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('expo-router'))}, () => ({ router: {}, useFocusEffect: () => {}, useLocalSearchParams: () => ({ id: 'cold-start' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('expo-clipboard'))}, () => ({}))
+    mock.module(${JSON.stringify(import.meta.resolve('expo-crypto'))}, () => ({ getRandomValues: array => array }))
+    mock.module(${JSON.stringify(import.meta.resolve('expo-network'))}, () => ({ addNetworkStateListener: () => ({ remove() {} }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../state/api'))}, () => ({ hostLinkFor: () => undefined, nativeSocketFactory: () => ({}), watchDeviceNetwork: () => () => {} }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/AppContext'))}, () => ({
       useApp: () => ({ drafts: new Map(), registry: { hosts: [], selectedId: ${JSON.stringify(selectedId ?? null)} ?? undefined } }),
       useConnection: (id) => { connections.push(id); return { client: null, host: undefined } },

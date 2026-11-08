@@ -97,7 +97,9 @@ test('the phone test reaches a pull registration and Expo reports removed device
   const f = relayFixture()
   f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, delivery: { channels: 'split' } }), {})
   expect(await f.service.sendTest(pullToken, undefined, {})).toEqual({ status: 'sent' })
-  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-completed', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
+  // The test must be able to show a banner: the phone creates "completed" at default
+  // importance (no heads-up), so the test rides the high-importance decisions channel.
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-decisions', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
   f.service.register(input({ provider: 'expo', token: expoToken }), {})
   expect(await f.service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
   expect(f.sent[0]?.payload).toMatchObject({ title: '测试通知 · cc-haha', categoryId: 'cchahaResult', data: { eventType: 'test' } })
@@ -668,7 +670,7 @@ test('explicit push test bypasses preferences and quiet hours, honours ownership
   expect(await f.service.sendTest(input().token, 'local-phone-host-a', { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
   expect(f.sent[0]!.payload).toEqual({ aps: { alert: { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。' }, sound: 'default', category: 'cchahaResult' }, hostId: 'local-phone-host-a', eventType: 'test' })
   expect(await f.service.sendTest(androidToken, undefined, { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
-  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-completed' } } })
+  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-decisions' } } })
   const lan = fixture()
   lan.service.register(input(), {})
   expect(await lan.service.sendTest(input().token, undefined, {})).toEqual({ status: 'sent' })

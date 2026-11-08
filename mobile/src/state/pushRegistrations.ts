@@ -76,6 +76,8 @@ export function migratePushProofs(raw: string | null): PushRegistrationProofs {
 }
 
 const cancelled = () => new ApiError('通知登记已取消', 0, 'ABORTED')
+/** 移除一台电脑时，最多花这么久请它注销本机的通知登记。 */
+const REMOVE_REVOKE_BUDGET_MS = 3000
 
 /** One queue per host drains accepted writes before removal. A durable token is saved
  * before PUT, so a restart, timeout or lost response cannot lose the revoke proof. */
@@ -84,7 +86,10 @@ export class PushRegistrationCoordinator {
   private blocked = new Set<string>()
   private removals = new Map<string, Promise<unknown>>()
   private localCleanup = new Map<string, Set<() => Promise<void>>>()
-  constructor(private secrets: Storage) {}
+  constructor(
+    private secrets: Storage,
+    private options: { revokeBudgetMs?: number } = {}
+  ) {}
 
   register(
     client: PushClient,
@@ -173,6 +178,13 @@ export class PushRegistrationCoordinator {
     }
   }
 
+  /**
+   * Forgets a computer on this phone. Nothing on the computer can veto it: people remove a
+   * computer when it is asleep, gone or on another network, so asking it to drop this phone's
+   * registrations is tried once, within a short budget, and never required. A registration it
+   * keeps expires on its own, or when the pairing is revoked there. Only a local failure
+   * rejects, and then the computer and its credential stay.
+   */
   removeHost<T>(
     hostId: string,
     client: PushClient | null,
@@ -188,14 +200,12 @@ export class PushRegistrationCoordinator {
         const proof = migratePushProofs(
           await this.secrets.getItem(pushProofKey(hostId))
         )
-        if (proof.tokens.length && !client)
-          throw new Error(
-            '无法读取这台电脑的连接凭据，通知尚未注销；连接已保留'
-          )
-        if (client) await this.revokeAll(client)
+        if (client && proof.tokens.length)
+          await this.revokeWithinBudget(client, proof.tokens)
       })
-      // These callbacks only end the native UI. The collection DELETE already
-      // retired every associated Live Activity, including process-recovered ones.
+      // These callbacks only end the native UI. When the computer answered, the
+      // collection DELETE already retired every associated Live Activity,
+      // including process-recovered ones.
       for (const cleanup of this.localCleanup.get(hostId) ?? []) await cleanup()
       return this.serial(hostId, async () => {
         await this.secrets.removeItem(pushProofKey(hostId))
@@ -205,7 +215,7 @@ export class PushRegistrationCoordinator {
       .catch((error) => {
         this.blocked.delete(hostId)
         throw new Error(
-          `移除未完成，电脑和凭据已保留。${error instanceof Error ? error.message : '请连接电脑后重试'}`
+          `移除未完成，电脑和凭据已保留。${error instanceof Error ? error.message : '请稍后重试'}`
         )
       })
       .finally(() => {
@@ -215,20 +225,43 @@ export class PushRegistrationCoordinator {
     return result
   }
 
+  private async revokeWithinBudget(client: PushClient, tokens: string[]) {
+    const budget = new AbortController()
+    const timer = setTimeout(
+      () => budget.abort(),
+      this.options.revokeBudgetMs ?? REMOVE_REVOKE_BUDGET_MS
+    )
+    try {
+      await this.revokeTokens(client, tokens, budget.signal)
+    } catch {
+      // Whatever the computer answered, or didn't, is not the user's problem here.
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   private async revokeAll(client: PushClient) {
     const proof = migratePushProofs(
       await this.secrets.getItem(pushProofKey(client.host.id))
     )
-    for (const token of proof.tokens) {
+    await this.revokeTokens(client, proof.tokens)
+  }
+  private async revokeTokens(
+    client: PushClient,
+    tokens: string[],
+    signal?: AbortSignal
+  ) {
+    for (const token of tokens) {
       try {
         await client.request<{ removed: number }>('/api/sessions/mobile-push', {
           method: 'DELETE',
           body: { token, hostId: client.host.id },
           timeoutMs: 6000,
+          signal,
         })
       } catch (error) {
         // 电脑已经不认这份凭据（重新配对后旧条目、电脑清了授权）：远程撤销不可能成功，
-        // 若因此拒绝移除，这台失效的电脑会永远删不掉。登记留在那台电脑上，它也再不会收到手机的请求。
+        // 当作已撤销，登记凭证才不会因为反复重试而永远留着。
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return
         throw error
       }

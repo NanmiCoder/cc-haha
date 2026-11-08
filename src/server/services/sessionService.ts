@@ -220,6 +220,18 @@ export type SessionLaunchInfo = {
   openAIFastMode?: boolean
 }
 
+type SessionMetadataPatch = {
+  workDir: string
+  customTitle?: string | null
+  additionalDirectories?: string[]
+  repository?: PreparedSessionWorkspace['repository']
+  permissionMode?: string
+  runtimeProviderId?: string | null
+  runtimeModelId?: string
+  effortLevel?: string
+  openAIFastMode?: boolean
+}
+
 type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
 
 export type SessionInspectionTranscriptSnapshot = {
@@ -776,6 +788,9 @@ type SharedSessionMutationState = {
 }
 
 const sharedSessionMutationStates = new WeakMap<LocalIndexGateway, SharedSessionMutationState>()
+// SDK init and startup can update the same session through different service
+// instances. Cleanup must not remove a launch snapshot during a metadata read.
+const sessionMetadataMutationQueues = new Map<string, Promise<void>>()
 
 function getSharedSessionMutationState(
   gateway: LocalIndexGateway,
@@ -815,6 +830,19 @@ export class SessionService {
 
   private memorySessionKey(sessionId: string): string {
     return `${this.getConfigDir()}:${sessionId}`
+  }
+
+  private async withSessionMetadataMutation<T>(sessionId: string, action: () => Promise<T>): Promise<T> {
+    const key = this.memorySessionKey(sessionId)
+    const previous = sessionMetadataMutationQueues.get(key) ?? Promise.resolve()
+    const operation = previous.then(action)
+    const queued = operation.then(() => {}, () => {})
+    sessionMetadataMutationQueues.set(key, queued)
+    try {
+      return await operation
+    } finally {
+      if (sessionMetadataMutationQueues.get(key) === queued) sessionMetadataMutationQueues.delete(key)
+    }
   }
 
   private rememberPrivateTitle(sessionId: string, title: string): void {
@@ -5185,6 +5213,43 @@ export class SessionService {
     return projection.launchInfo.workDir
   }
 
+  /**
+   * Directory a resumed CLI has to start in. `--resume <id>` only looks in the
+   * project folder of the CLI's startup directory, but a CLI that entered a
+   * worktree mid-session (EnterWorktree) keeps writing to the folder it started
+   * in while system/init, and so workDir, reports the worktree. Starting from a
+   * directory the transcript recorded that maps to its folder lets the CLI find
+   * the conversation and re-enter the worktree from its worktree-state record.
+   */
+  async resolveResumeLaunchDir(sessionId: string, workDir: string): Promise<string> {
+    const found = await this.findSessionFile(sessionId)
+    const transcript = found ? await statFileIdentity(found.filePath) : null
+    if (!found || !transcript) return workDir
+    // Compare file identity rather than folder names: case-insensitive volumes
+    // can spell the same folder differently.
+    const holdsTranscript = async (directory: string) => {
+      const resolved = await fs.realpath(directory).catch(() => null)
+      if (!resolved) return false
+      const folder = this.sanitizePath(normalizeDriveRootPathForPlatform(resolved.normalize('NFC')))
+      return isSameFileIdentity(transcript, await statFileIdentity(path.join(this.getProjectsDir(), folder, `${sessionId}.jsonl`)))
+    }
+    if (await holdsTranscript(workDir)) return workDir
+
+    const recorded = new Set<string>()
+    await this.streamJsonlFile(found.filePath, (entry) => {
+      const record = entry as Record<string, unknown>
+      if (typeof record.cwd === 'string') recorded.add(record.cwd)
+      if (entry.type === 'session-meta' && typeof record.workDir === 'string') recorded.add(record.workDir)
+    }).catch((error) => {
+      // Oversized records are still read past; keep the directories seen.
+      console.warn(`[SessionService] resolveResumeLaunchDir: transcript scan for ${sessionId} incomplete:`, error)
+    })
+    for (const directory of recorded) {
+      if (directory !== workDir && await holdsTranscript(directory)) return directory
+    }
+    return workDir
+  }
+
   async getSessionMessageCwd(
     sessionId: string,
     messageId: string,
@@ -5394,17 +5459,14 @@ export class SessionService {
 
   async appendSessionMetadata(
     sessionId: string,
-    metadata: {
-      workDir: string
-      customTitle?: string | null
-      additionalDirectories?: string[]
-      repository?: PreparedSessionWorkspace['repository']
-      permissionMode?: string
-      runtimeProviderId?: string | null
-      runtimeModelId?: string
-      effortLevel?: string
-      openAIFastMode?: boolean
-    }
+    metadata: SessionMetadataPatch,
+  ): Promise<void> {
+    return this.withSessionMetadataMutation(sessionId, () => this.appendSessionMetadataUnlocked(sessionId, metadata))
+  }
+
+  private async appendSessionMetadataUnlocked(
+    sessionId: string,
+    metadata: SessionMetadataPatch,
   ): Promise<void> {
     if (isSideChatId(sessionId)) {
       const side = getSideChat(sessionId)
@@ -5570,6 +5632,13 @@ export class SessionService {
   }
 
   async deletePlaceholderSessionFiles(
+    sessionId: string,
+    keepWorkDir: string,
+  ): Promise<number> {
+    return this.withSessionMetadataMutation(sessionId, () => this.deletePlaceholderSessionFilesUnlocked(sessionId, keepWorkDir))
+  }
+
+  private async deletePlaceholderSessionFilesUnlocked(
     sessionId: string,
     keepWorkDir: string,
   ): Promise<number> {
@@ -6014,6 +6083,11 @@ export class SessionService {
     }
 
     for (const entry of entries) {
+      // Overlapping transcript writes can leave repeated UUIDs on disk. The
+      // latest record already owns parent resolution above; project it once
+      // too, so history cannot create duplicate desktop message/row identities.
+      if (typeof entry.uuid === 'string' && entry.uuid && entriesByUuid.get(entry.uuid) !== entry) continue
+
       const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
       if (goalLocalCommandMessage) {
         messages.push(goalLocalCommandMessage)
