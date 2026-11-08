@@ -830,6 +830,41 @@ describe('ChatInput file mentions', () => {
     })
   })
 
+  it('restores a refused side question through the real composer without replacing its existing draft', async () => {
+    useSideChatStore.setState({ entries: { [sessionId]: {
+      sessionId, parentSessionId: 'side-parent', workDir: '/repo', title: 'Side chat', ephemeral: true,
+    } } })
+    render(<ChatInput compact />)
+    setComposerText('existing draft', 14)
+    const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(false)
+    try {
+      await act(async () => useSideChatStore.getState().open('side-parent', { question: 'recovered question', submit: true }))
+      await waitFor(() => expect(getComposerText()).toBe('existing draft\n\nrecovered question'))
+      expect(useChatStore.getState().sessions[sessionId]?.composerPrefill).toBeNull()
+    } finally {
+      send.mockRestore()
+    }
+  })
+
+  it('appends recovered browser text and screenshot while preserving existing mention pills', async () => {
+    useChatStore.getState().setComposerDraft(sessionId, {
+      input: 'review @README.md', attachments: [],
+      mentions: [{ label: 'README.md', path: '/repo/README.md', isDirectory: false, tokenOrdinal: 0 }],
+    })
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'recovered selection', mode: 'append',
+      attachments: [{ type: 'image', name: 'recovered.png', mimeType: 'image/png', data: 'data:image/png;base64,AAAA' }],
+    }))
+    await waitFor(() => expect(getComposerText()).toBe('review @README.md\n\nrecovered selection'))
+    expect(screen.getByAltText('recovered.png')).toBeInTheDocument()
+    expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message', content: 'review @"/repo/README.md"\n\nrecovered selection',
+    }))
+  })
+
   it('two composers isolate child send, references, controls and focus from the parent', async () => {
     const child = 'side-scoped'
     useSideChatStore.setState({ entries: { [child]: { sessionId: child, parentSessionId: sessionId, workDir: '/child', title: 'Side chat', ephemeral: true } } })
@@ -867,6 +902,30 @@ describe('ChatInput file mentions', () => {
     fireEvent.paste(editor, { clipboardData: { files: [], getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] } })
     await waitFor(() => expect(within(shells[1] as HTMLElement).getByRole('img')).toBeInTheDocument())
     expect(within(shells[0] as HTMLElement).queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('keeps the draft and says why when pasted screenshots push the frame over the server budget', async () => {
+    // Two 4K screenshots pasted as bitmaps are ~13 MB of base64 each. The
+    // server closes the socket (1009) for a frame over 16 MiB and the composer
+    // only reconnected, so the turn vanished with nothing on screen.
+    const pastedScreenshot = (index: number) => {
+      const data = `data:image/png;base64,${'A'.repeat(9 * 1024 * 1024)}`
+      return { id: `paste-${index}`, name: `shot-${index}.png`, type: 'image' as const, mimeType: 'image/png', previewUrl: data, data }
+    }
+    useChatStore.getState().setComposerDraft(sessionId, { input: '', attachments: [pastedScreenshot(1), pastedScreenshot(2)] })
+    render(<ChatInput compact />)
+    expect(await screen.findByRole('img', { name: 'shot-1.png' })).toBeInTheDocument()
+    setComposerText('what is wrong here', 18)
+    act(() => fireEvent.keyDown(getComposerElement(), { key: 'Enter' }))
+
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining('over the 16 MB limit'),
+    })
+    expect(getComposerText()).toBe('what is wrong here')
+    expect(screen.getByRole('img', { name: 'shot-2.png' })).toBeInTheDocument()
+    expect(useChatStore.getState().sessions[sessionId]?.messages.map((message) => message.type)).toEqual(['assistant_text'])
   })
 
   it('requires a permission change before sending a restored lean plan session', () => {

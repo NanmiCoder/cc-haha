@@ -870,6 +870,23 @@ describe('AskUserQuestion', () => {
     const submitButton = () => screen.getByRole('button', { name: /submit|send as new message/i })
     const chatButton = () => screen.getByRole('button', { name: /chat about this/i })
 
+    it.each(['answer', 'clarify'] as const)('retains an expired question when the %s message is refused', (action) => {
+      dropPendingRequest()
+      const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(false)
+      try {
+        render(<AskUserQuestion toolUseId="tool-1" input={SCOPE_INPUT} />)
+        fireEvent.click(screen.getByRole('button', { name: /^Tabs$/ }))
+        fireEvent.click(action === 'answer' ? submitButton() : chatButton())
+
+        expect(send).toHaveBeenCalledTimes(1)
+        expect(screen.queryByText(/Sent as a new message|Handed off/)).toBeNull()
+        expect(submitButton()).not.toHaveProperty('disabled', true)
+        expect(screen.getByRole('button', { name: /^Tabs$/ }).getAttribute('aria-pressed')).toBe('true')
+      } finally {
+        send.mockRestore()
+      }
+    })
+
     // The accident's reverse guard: as long as the request is live, both actions
     // must stay usable. If this ever goes red, the fix has swallowed the prompt
     // it was supposed to protect.

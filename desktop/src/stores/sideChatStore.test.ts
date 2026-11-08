@@ -15,6 +15,7 @@ vi.mock('@/stores/settingsStore', () => ({ useSettingsStore: { getState: () => (
 vi.mock('@/stores/providerStore', () => ({ useProviderStore: { getState: () => ({ activeId: null, providers: [] }) } }))
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.chat.sendMessage.mockReset().mockReturnValue(true)
   useSideChatStore.setState({ entries: {} })
   useWorkspaceChatContextStore.setState({ referencesBySession: {} })
   mocks.chat.sessions = {}
@@ -41,6 +42,12 @@ it('reuses the child for /btw and sends or queues exclusively to that child', as
   await store.open('parent', { question: 'Follow up', submit: true })
   expect(mocks.chat.queueUserMessage).toHaveBeenCalledWith('side-child', { content: 'Follow up', displayContent: 'Follow up' })
   expect(sideChatsApi.create).toHaveBeenCalledTimes(1)
+})
+
+it('retains a refused side question in its child composer', async () => {
+  mocks.chat.sendMessage.mockReturnValue(false)
+  await useSideChatStore.getState().open('parent', { question: 'Keep this question', submit: true })
+  expect(mocks.chat.queueComposerPrefill).toHaveBeenCalledWith('side-child', { text: 'Keep this question', mode: 'append' })
 })
 it('deduplicates simultaneous opens and keeps both selected snippets', async () => {
   const reference = { kind: 'chat-selection' as const, path: '', name: 'Selection', quote: 'one' }

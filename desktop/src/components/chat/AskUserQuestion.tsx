@@ -290,14 +290,14 @@ export function AskUserQuestion({
    */
   const sendAsMessage = (content: string, displayContent: string) => {
     const sessionId = targetSessionId
-    if (!sessionId) return
+    if (!sessionId) return false
     const store = useChatStore.getState()
     const liveChatState = store.sessions[sessionId]?.chatState ?? 'idle'
     if (liveChatState !== 'idle') {
       store.queueUserMessage(sessionId, { content, displayContent })
-      return
+      return true
     }
-    store.sendMessage(sessionId, content, undefined, { displayContent })
+    return store.sendMessage(sessionId, content, undefined, { displayContent })
   }
 
   const markUserActivity = () => {
@@ -384,11 +384,11 @@ export function AskUserQuestion({
     if (!response) return
 
     if (expired) {
-      setHasSentAsMessage(true)
-      sendAsMessage(
+      const sent = sendAsMessage(
         `${ASK_USER_QUESTION_EXPIRED_ANSWER_PREFIX}\n\n${describeAnswers()}`,
         response,
       )
+      if (sent) setHasSentAsMessage(true)
       return
     }
 
@@ -436,13 +436,13 @@ export function AskUserQuestion({
 
     if (expired) {
       const questionsWithAnswers = describeAnswers()
-      setHasRequestedChat(true)
       // No request left to deny, so this goes out as an ordinary message and
       // carries the same wording the server would have written for the denial.
-      sendAsMessage(
+      const sent = sendAsMessage(
         `${ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX}${questionsWithAnswers}`,
         questionsWithAnswers,
       )
+      if (sent) setHasRequestedChat(true)
       return
     }
 

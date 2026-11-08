@@ -397,6 +397,71 @@ describe('chatStore tool settlement', () => {
   })
 })
 
+describe('chatStore user message budget', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    useSettingsStore.setState({ locale: 'en' })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'idle' }) },
+    })
+  })
+
+  const pastedScreenshot = (name: string) => ({
+    type: 'image' as const,
+    name,
+    mimeType: 'image/png',
+    data: `data:image/png;base64,${'A'.repeat(9 * 1024 * 1024)}`,
+  })
+
+  it.each(['idle', 'thinking'] as const)('retains a queued image after editing makes its frame oversized while %s', (chatState) => {
+    const attachments = [{ type: 'image' as const, name: 'shot.png', data: `data:image/png;base64,${'A'.repeat(16 * 1024 * 1024 - 512)}` }]
+    const id = useChatStore.getState().queueUserMessage(TEST_SESSION_ID, { content: 'a', displayContent: 'a', attachments })
+    useChatStore.getState().updateQueuedUserMessage(TEST_SESSION_ID, id, 'new prompt '.repeat(256))
+    useChatStore.setState((state) => ({ sessions: { ...state.sessions, [TEST_SESSION_ID]: { ...state.sessions[TEST_SESSION_ID]!, chatState } } }))
+
+    useChatStore.getState().sendQueuedUserMessage(TEST_SESSION_ID, id)
+
+    expect(sendMock.mock.calls.length).toBe(0)
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(session.queuedUserMessages).toHaveLength(1)
+    expect(session.queuedUserMessages![0]!.attachments?.[0]?.data?.length).toBe(attachments[0]!.data.length)
+    expect(session.chatState).toBe(chatState)
+    expect(session.messages).toEqual([expect.objectContaining({ code: 'MESSAGE_TOO_LARGE' })])
+  })
+
+  it('refuses a frame over the server budget with a visible error instead of losing the turn', () => {
+    // Two 4K screenshots pasted as bitmaps are ~13 MB of base64 each. The
+    // server closes the socket (1009) for a frame over 16 MiB and the client
+    // only reconnected, so the message disappeared without a trace.
+    const sent = useChatStore.getState().sendMessage(
+      TEST_SESSION_ID,
+      'what is wrong here',
+      [pastedScreenshot('one.png'), pastedScreenshot('two.png')],
+    )
+
+    expect(sent).toBe(false)
+    expect(sendMock).not.toHaveBeenCalled()
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]!
+    expect(session.chatState).toBe('idle')
+    expect(session.messages).toEqual([
+      expect.objectContaining({ type: 'error', code: 'MESSAGE_TOO_LARGE' }),
+    ])
+    expect((session.messages[0] as { message: string }).message).toContain('over the 16 MB limit')
+  })
+
+  it('sends a frame under the budget unchanged', () => {
+    const attachments = [{ type: 'image' as const, name: 'small.png', mimeType: 'image/png', data: 'data:image/png;base64,QUJD' }]
+    const sent = useChatStore.getState().sendMessage(TEST_SESSION_ID, 'what is this', attachments)
+
+    expect(sent).toBe(true)
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'user_message', content: 'what is this', attachments })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([
+      expect.objectContaining({ type: 'user_text', content: 'what is this', awaitingReplay: true }),
+    ])
+  })
+})
+
 describe('chatStore prompt suggestions', () => {
   beforeEach(() => {
     sendMock.mockReset()
