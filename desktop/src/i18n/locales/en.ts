@@ -3756,7 +3756,6 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'permMode.permShell': 'Execute arbitrary shell commands',
   'permMode.permPackages': 'Install or remove packages',
   'permMode.enableBypassBtn': 'Enable bypass',
-  'permMode.disabledDuringTurn': 'Cannot switch permissions while session is active',
   'permMode.enableAutoTitle': 'Enable Auto mode?',
   'permMode.enableAutoBody': 'Auto mode reduces permission prompts, but it does not guarantee safety.',
   'permMode.enableAutoDetail': 'Claude checks tool calls for risky actions and prompt injection. It runs actions it considers safe and blocks actions it considers risky. Use it only in isolated environments.',
