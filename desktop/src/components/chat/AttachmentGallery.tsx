@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronDown, Folder, MessageSquare, MousePointerClick, X } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -98,6 +98,34 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
       return next
     })
   }
+
+  // Past its height cap the composer tray scrolls, so a card added out of view
+  // would look as if the add did nothing. Scroll just far enough to show the
+  // newest one. Not always the last card: uploads are listed ahead of
+  // references. Every composer attachment carries an id.
+  const composerTrayRef = useRef<HTMLDivElement>(null)
+  const shownAttachmentIdsRef = useRef<ReadonlyArray<string | undefined> | null>(null)
+  useLayoutEffect(() => {
+    const ids = attachments.map((attachment) => attachment.id)
+    const shown = shownAttachmentIdsRef.current
+    shownAttachmentIdsRef.current = ids
+    const tray = composerTrayRef.current
+    if (!tray || !shown) return
+    let addedIndex = -1
+    for (let index = ids.length - 1; index >= 0 && addedIndex < 0; index -= 1) {
+      if (ids[index] && !shown.includes(ids[index])) addedIndex = index
+    }
+    // Adding a reference that is already attached moves its card to the end.
+    if (addedIndex < 0 && ids.length === shown.length && ids[ids.length - 1] !== shown[shown.length - 1]) {
+      addedIndex = ids.length - 1
+    }
+    const card = tray.children[addedIndex]
+    if (!card) return
+    const trayBox = tray.getBoundingClientRect()
+    const cardBox = card.getBoundingClientRect()
+    if (cardBox.bottom > trayBox.bottom) tray.scrollTop += cardBox.bottom - trayBox.bottom
+    else if (cardBox.top < trayBox.top) tray.scrollTop -= trayBox.top - cardBox.top
+  }, [attachments])
 
   if (attachments.length === 0) return null
 
@@ -215,7 +243,18 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
           })}
         </div>
       ) : (
-      <div className={isComposer ? 'flex flex-wrap items-center gap-2' : 'flex max-w-full flex-wrap justify-end gap-2'}>
+      // The composer's cards wrap, so without a cap every few references add a
+      // row and the composer grows until the transcript above it is gone
+      // (#1838). Two rows and part of a third stay in view; the rest scroll.
+      // `p-1` gives the image remove badges, which sit 4px outside their
+      // thumbnail, room inside the scroll box; `-m-1` keeps the cards in place.
+      <div
+        ref={isComposer ? composerTrayRef : undefined}
+        data-testid={isComposer ? 'composer-attachment-tray' : undefined}
+        className={isComposer
+          ? '-m-1 flex max-h-[min(188px,24dvh)] flex-wrap items-center gap-2 overflow-y-auto overscroll-contain p-1'
+          : 'flex max-w-full flex-wrap justify-end gap-2'}
+      >
         {attachments.map((attachment, index) => {
           const imageSrc = attachment.type === 'image' ? attachmentImageSource(attachment) : undefined
 
