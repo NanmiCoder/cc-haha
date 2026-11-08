@@ -51,8 +51,11 @@ export const providersApi = {
     return api.get<Record<string, unknown>>('/api/providers/settings')
   },
 
-  updateSettings(settings: Record<string, unknown>) {
-    return api.put<{ ok: true }>('/api/providers/settings', settings)
+  updateSettings(settings: Record<string, unknown>, expectedActiveProviderId?: string) {
+    const query = expectedActiveProviderId === undefined
+      ? ''
+      : `?expectedActiveProviderId=${encodeURIComponent(expectedActiveProviderId)}`
+    return api.put<{ ok: true }>(`/api/providers/settings${query}`, settings)
   },
 
   create(input: CreateProviderInput) {

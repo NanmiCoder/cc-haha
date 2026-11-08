@@ -133,7 +133,11 @@ export async function handleProvidersApi(
       }
       if (req.method === 'PUT') {
         const body = await parseJsonBody(req)
-        await providerService.updateManagedSettings(body)
+        const expectedActiveProviderId = url.searchParams.get('expectedActiveProviderId')
+        if (expectedActiveProviderId !== null && !expectedActiveProviderId.trim()) {
+          throw ApiError.badRequest('expectedActiveProviderId must not be empty')
+        }
+        await providerService.updateManagedSettings(body, expectedActiveProviderId ?? undefined)
         return Response.json({ ok: true })
       }
       throw methodNotAllowed(req.method)

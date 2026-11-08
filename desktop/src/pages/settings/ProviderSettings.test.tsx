@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { providersApi } from '../../api/providers'
+import { modelsApi } from '../../api/models'
 import { ApiError } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { useProviderStore } from '../../stores/providerStore'
@@ -614,6 +615,7 @@ describe('provider request compatibility', () => {
  */
 describe('default provider settings ownership', () => {
   const originalState = useProviderStore.getState()
+  const originalSettingsState = useSettingsStore.getState()
 
   beforeEach(() => {
     useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
@@ -625,6 +627,7 @@ describe('default provider settings ownership', () => {
     cleanup()
     vi.restoreAllMocks()
     useProviderStore.setState(originalState)
+    useSettingsStore.setState(originalSettingsState)
   })
 
   const settingsJsonOf = (dialog: ReturnType<typeof within>) =>
@@ -703,11 +706,74 @@ describe('default provider settings ownership', () => {
     await waitFor(() => expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
       futureSetting: true,
       env: expect.objectContaining({ CUSTOM_ENV: 'keep', ANTHROPIC_BASE_URL: 'https://api.fenno.ai' }),
-    })))
+    }), 'saved-fennoai'))
     // The editor never owns the session default model chosen in the model picker.
     const saved = vi.mocked(providersApi.updateSettings).mock.calls.at(-1)?.[0]
     expect(saved).not.toHaveProperty('model')
     expect(saved).not.toHaveProperty('modelContext')
+  })
+
+  it.each([null, 'saved-xuanshuapi'])('keeps the draft and refreshes the default after a settings ownership conflict (default=%s)', async (destination) => {
+    let serverActive: string | null = 'saved-fennoai'
+    vi.spyOn(providersApi, 'list').mockImplementation(async () => ({ providers: savedProviders, activeId: serverActive }))
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({ futureSetting: true, env: { CUSTOM_ENV: 'keep' } })
+    const update = vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+    vi.mocked(providersApi.updateSettings).mockRejectedValue(new ApiError(409, {
+      error: 'PROVIDER_SETTINGS_OWNER_CHANGED', message: 'The default provider changed. Save again after reviewing it.',
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('CUSTOM_ENV'))
+    fireEvent.change(dialog.getByDisplayValue('FennoAI'), { target: { value: 'Unsaved draft name' } })
+    const draft = settingsJsonOf(dialog)
+    // A different client switches the server default without updating this store.
+    serverActive = destination
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(dialog.getByRole('alert')).toBeInTheDocument())
+    expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.any(Object), 'saved-fennoai')
+    expect(update).not.toHaveBeenCalled()
+    expect(useProviderStore.getState().activeId).toBe(destination)
+    expect(dialog.getByDisplayValue('Unsaved draft name')).toBeInTheDocument()
+    expect(settingsJsonOf(dialog)).toBe(draft)
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('preserves the picker model and 1M context when the default provider is saved with an unchanged main model', async () => {
+    const provider = { ...savedProviders[1]!, models: { ...savedProviders[1]!.models, haiku: 'chosen-small' } }
+    let selection: { model: string; modelContext?: string } = { model: provider.models.main }
+    const setCurrent = vi.spyOn(modelsApi, 'setCurrent').mockImplementation(async (modelId) => {
+      selection = modelId === 'chosen-small:1m'
+        ? { model: 'chosen-small', modelContext: '1m' }
+        : { model: modelId }
+      return { ok: true, model: selection.model }
+    })
+    vi.spyOn(modelsApi, 'getCurrent').mockImplementation(async () => ({
+      model: { id: selection.model, name: selection.model, description: '', context: selection.modelContext ?? 'default' },
+    }))
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: provider.id })
+    vi.spyOn(providersApi, 'getSettings').mockImplementation(async () => ({ ...selection, futureSetting: true }))
+    vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({ provider: { ...provider, ...input } as SavedProvider }))
+    // This is the real settings-store action used by the picker, before editing.
+    await useSettingsStore.getState().setModel('chosen-small:1m')
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('futureSetting'))
+    fireEvent.change(dialog.getByDisplayValue('FennoAI'), { target: { value: 'Renamed provider' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(setCurrent).toHaveBeenCalledTimes(1)
+    expect(selection).toEqual({ model: 'chosen-small', modelContext: '1m' })
+    expect(useSettingsStore.getState().currentModel).toMatchObject({ id: 'chosen-small', context: '1m' })
   })
 })
 

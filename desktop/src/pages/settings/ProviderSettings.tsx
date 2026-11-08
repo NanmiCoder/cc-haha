@@ -1420,7 +1420,7 @@ function openExternalUrl(url: string) {
 }
 
 function ProviderFormModal({ open, onClose, mode, provider, presets, initialPresetId, onPickMagpie, browserMode = false }: ProviderFormProps) {
-  const { createProvider, updateProvider, testConfig, fetchModels, activeId } = useProviderStore()
+  const { createProvider, updateProvider, testConfig, fetchModels, fetchProviders, activeId } = useProviderStore()
   // cc-haha/settings.json carries the default provider's runtime env, which every
   // session started on the default reads (Claude Official too). Only an edit of
   // that provider may write it; saving any other provider must leave it alone,
@@ -2030,21 +2030,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     try {
       // Write the edited cc-haha settings.json first so provider-specific model
       // settings never conflict with the user's global ~/.claude/settings.json.
-      if (!browserMode && writesManagedSettings && settingsJson.trim()) {
-        try {
-          const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
-          const { providersApi } = await import('../../api/providers')
-          const settings = writeCompatibilityJson(parsed, storedCompatibility)
-          delete settings.requestCompatibility
-          // The editor never owns the session default model. updateSettings merges
-          // by replacing the whole object, so omitting these keys keeps the
-          // model picker's selection instead of clearing it.
-          delete settings.model
-          delete settings.modelContext
-          await providersApi.updateSettings(settings)
-        } catch {
-          // JSON validation already prevents this
-        }
+      if (!browserMode && writesManagedSettings && provider && settingsJson.trim()) {
+        const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
+        const { providersApi } = await import('../../api/providers')
+        const settings = writeCompatibilityJson(parsed, storedCompatibility)
+        delete settings.requestCompatibility
+        // The editor never owns the session default model. updateSettings merges
+        // by replacing the whole object, so omitting these keys keeps the
+        // model picker's selection instead of clearing it.
+        delete settings.model
+        delete settings.modelContext
+        await providersApi.updateSettings(settings, provider.id)
       }
 
       if (mode === 'create') {
@@ -2093,6 +2089,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       await fetchSettings()
       onClose()
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409 &&
+        error.body && typeof error.body === 'object' && 'error' in error.body &&
+        error.body.error === 'PROVIDER_SETTINGS_OWNER_CHANGED') {
+        await fetchProviders()
+      }
       setCredentialRequired(browserMode && error instanceof ApiError &&
         !!error.body && typeof error.body === 'object' && 'code' in error.body &&
         error.body.code === 'REMOTE_PROVIDER_CREDENTIAL_REQUIRED')
