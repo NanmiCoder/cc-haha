@@ -830,6 +830,41 @@ describe('ChatInput file mentions', () => {
     })
   })
 
+  it('restores a refused side question through the real composer without replacing its existing draft', async () => {
+    useSideChatStore.setState({ entries: { [sessionId]: {
+      sessionId, parentSessionId: 'side-parent', workDir: '/repo', title: 'Side chat', ephemeral: true,
+    } } })
+    render(<ChatInput compact />)
+    setComposerText('existing draft', 14)
+    const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(false)
+    try {
+      await act(async () => useSideChatStore.getState().open('side-parent', { question: 'recovered question', submit: true }))
+      await waitFor(() => expect(getComposerText()).toBe('existing draft\n\nrecovered question'))
+      expect(useChatStore.getState().sessions[sessionId]?.composerPrefill).toBeNull()
+    } finally {
+      send.mockRestore()
+    }
+  })
+
+  it('appends recovered browser text and screenshot while preserving existing mention pills', async () => {
+    useChatStore.getState().setComposerDraft(sessionId, {
+      input: 'review @README.md', attachments: [],
+      mentions: [{ label: 'README.md', path: '/repo/README.md', isDirectory: false, tokenOrdinal: 0 }],
+    })
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'recovered selection', mode: 'append',
+      attachments: [{ type: 'image', name: 'recovered.png', mimeType: 'image/png', data: 'data:image/png;base64,AAAA' }],
+    }))
+    await waitFor(() => expect(getComposerText()).toBe('review @README.md\n\nrecovered selection'))
+    expect(screen.getByAltText('recovered.png')).toBeInTheDocument()
+    expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      type: 'user_message', content: 'review @"/repo/README.md"\n\nrecovered selection',
+    }))
+  })
+
   it('two composers isolate child send, references, controls and focus from the parent', async () => {
     const child = 'side-scoped'
     useSideChatStore.setState({ entries: { [child]: { sessionId: child, parentSessionId: sessionId, workDir: '/child', title: 'Side chat', ephemeral: true } } })

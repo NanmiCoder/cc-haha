@@ -3206,6 +3206,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       return sessions === patch.sessions ? patch : { ...patch, sessions }
     })
   }
+  const rejectOversizedMessage = (sessionId: string, message: ClientMessage): boolean => {
+    const budget = checkUserMessageBudget(message)
+    if (budget.ok) return false
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (session) => ({
+        messages: [...session.messages, {
+          id: nextId(), type: 'error',
+          message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+          code: 'MESSAGE_TOO_LARGE', timestamp: Date.now(),
+        }],
+      })),
+    }))
+    return true
+  }
   return ({
   applyBoundedUpdate: set,
   markHistoryRowsDurable,
@@ -3539,24 +3553,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       // and the client only reconnects, so the turn vanished without a trace:
       // no bubble, no error. Refuse it before the optimistic row and the title
       // update, and say why where the reply would have appeared.
-      const budget = checkUserMessageBudget(outgoing)
-      if (!budget.ok) {
-        set((s) => ({
-          sessions: updateSessionIn(s.sessions, sessionId, (session) => ({
-            messages: [
-              ...session.messages,
-              {
-                id: nextId(),
-                type: 'error',
-                message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
-                code: 'MESSAGE_TOO_LARGE',
-                timestamp: Date.now(),
-              },
-            ],
-          })),
-        }))
-        return false
-      }
+      if (rejectOversizedMessage(sessionId, outgoing)) return false
     }
     const hideDisplayContent = !isDirectAgentSession && options?.hideDisplayContent === true
     const userFacingContent =
@@ -4834,8 +4831,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     if (!session || !queuedMessage) return
 
     if (session.chatState === 'idle') {
-      get().removeQueuedUserMessage(sessionId, messageId)
-      get().sendMessage(
+      const sent = get().sendMessage(
         sessionId,
         queuedMessage.content,
         queuedMessage.attachments,
@@ -4845,8 +4841,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           displayAttachments: queuedMessage.displayAttachments,
         },
       )
+      if (sent) get().removeQueuedUserMessage(sessionId, messageId)
       return
     }
+
+    const outgoing: ClientMessage = {
+      type: 'user_message', content: queuedMessage.content, attachments: queuedMessage.attachments,
+      ...(queuedMessage.sessionReferences?.length ? { sessionReferences: queuedMessage.sessionReferences } : {}),
+    }
+    if (rejectOversizedMessage(sessionId, outgoing)) return
 
     const now = Date.now()
     set((state) => ({
@@ -4865,12 +4868,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }),
     }))
 
-    wsManager.send(sessionId, {
-      type: 'user_message',
-      content: queuedMessage.content,
-      attachments: queuedMessage.attachments,
-      ...(queuedMessage.sessionReferences?.length ? { sessionReferences: queuedMessage.sessionReferences } : {}),
-    })
+    wsManager.send(sessionId, outgoing)
   },
 
   clearMessages: (sessionId) => {

@@ -555,6 +555,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
     if (composerPrefill.mode === 'append') {
       setComposerAttachments((previous) => [...previous, ...uploads])
+      if (composerPrefill.text) {
+        // A refused send can recover both text and screenshots. Append at the
+        // end so the existing draft and its mention ordinals stay intact.
+        setComposerInput([inputRef.current, composerPrefill.text].filter(Boolean).join('\n\n'))
+      }
     } else {
       // The draft's structured pills travel with its projected text; restoring
       // both keeps @-file references as pills instead of demoting them to
