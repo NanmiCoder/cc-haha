@@ -363,18 +363,10 @@ export async function maybeResizeAndDownsampleImageBuffer(
     const base64Size = Math.ceil((originalSize * 4) / 3)
 
     // If encoding failed, metadata still describes the original image (all
-    // formats). If the processor could not load, PNG has a fixed-size header.
-    if (!knownDimensions &&
-      imageBuffer.length >= 24 &&
-      imageBuffer[0] === 0x89 &&
-      imageBuffer[1] === 0x50 &&
-      imageBuffer[2] === 0x4e &&
-      imageBuffer[3] === 0x47
-    ) {
-      const width = imageBuffer.readUInt32BE(16)
-      const height = imageBuffer.readUInt32BE(20)
-      if (width > 0 && height > 0) knownDimensions = { width, height }
-    }
+    // formats). If the processor could not load or decode it, every format the
+    // API accepts still states its pixel size in the header. Both limits are
+    // equal, so EXIF orientation cannot change this check.
+    knownDimensions ??= readImageHeaderDimensions(imageBuffer)
     const overDim = knownDimensions &&
       (knownDimensions.width > maxWidth || knownDimensions.height > maxHeight)
     // At the request boundary, an unknown size must not silently bypass the
@@ -1064,6 +1056,45 @@ export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
 
   // Default to PNG if unknown
   return 'image/png'
+}
+
+/**
+ * Pixel size from the header alone (PNG, GIF, WebP, JPEG), without decoding.
+ * Returns undefined for any other or truncated input.
+ */
+export function readImageHeaderDimensions(bytes: Buffer): { width: number; height: number } | undefined {
+  const valid = (width: number, height: number) => width > 0 && height > 0 ? { width, height } : undefined
+  if (bytes.length >= 24 && bytes.readUInt32BE(0) === 0x89504e47 && bytes.toString('ascii', 12, 16) === 'IHDR') {
+    return valid(bytes.readUInt32BE(16), bytes.readUInt32BE(20))
+  }
+  if (bytes.length >= 10 && bytes.toString('ascii', 0, 3) === 'GIF') {
+    return valid(bytes.readUInt16LE(6), bytes.readUInt16LE(8))
+  }
+  if (bytes.length >= 30 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') {
+    const chunk = bytes.toString('ascii', 12, 16)
+    if (chunk === 'VP8X') return valid(1 + bytes.readUIntLE(24, 3), 1 + bytes.readUIntLE(27, 3))
+    if (chunk === 'VP8L') {
+      const bits = bytes.readUInt32LE(21)
+      return valid(1 + (bits & 0x3fff), 1 + ((bits >> 14) & 0x3fff))
+    }
+    if (chunk === 'VP8 ') return valid(bytes.readUInt16LE(26) & 0x3fff, bytes.readUInt16LE(28) & 0x3fff)
+    return undefined
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset++; continue }
+      const marker = bytes[offset + 1]!
+      if (marker === 0xff) { offset++; continue }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue }
+      const length = bytes.readUInt16BE(offset + 2)
+      const isFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc
+      if (isFrame) return valid(bytes.readUInt16BE(offset + 7), bytes.readUInt16BE(offset + 5))
+      if (length < 2) return undefined
+      offset += 2 + length
+    }
+  }
+  return undefined
 }
 
 /**
