@@ -1,8 +1,10 @@
 import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
-import type { DesktopPublicAccessConfiguration } from '../src/lib/desktopHost/types'
+import { configureP2PSessionPermissions, P2P_PARTITION, p2pEndpointUrl, p2pHostWanted, P2PTerminator } from './services/p2pTerminator'
+import type { DesktopPublicAccessConfiguration, DesktopPublicAccessStatus } from '../src/lib/desktopHost/types'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
   isElectronIpcChannel,
@@ -119,6 +121,9 @@ let serverRuntime: ElectronServerRuntime | null = null
 let dataMigration: DataMigration | null = null
 const hostOperations = new Set<Promise<unknown>>()
 let publicAccessManager: PublicAccessManager | null = null
+/** The WebRTC endpoint phones upgrade to; runs only while remote access is wanted (see p2pHostWanted). */
+let p2pTerminator: P2PTerminator | null = null
+let p2pSessionConfigured = false
 let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
 let previewService: ElectronPreviewService | null = null
@@ -187,6 +192,10 @@ function previewPreloadPath() {
 
 function petPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
+}
+
+function p2pHostScriptPath() {
+  return path.join(appRoot(), 'electron-dist', 'p2p-host.js')
 }
 
 function previewAgentPath() {
@@ -258,7 +267,10 @@ async function loadRendererEntry(
 function getServerRuntime() {
   serverRuntime ??= new ElectronServerRuntime({
     onServerUnavailable: () => { void publicAccessManager?.serverUnavailable() },
-    onServerReady: () => { void publicAccessManager?.serverChanged() },
+    onServerReady: () => {
+      void publicAccessManager?.serverChanged()
+      void p2pTerminator?.refresh()
+    },
     desktopRoot: unpackedRoot(),
     appRoot: appRoot(),
     h5DistDir: path.join(unpackedRoot(), 'dist'),
@@ -276,6 +288,7 @@ function getDataMigration() {
       if (mainWindow && !mainWindow.isDestroyed()) saveWindowState(app, mainWindow)
       petWindowController?.dispose()
       petWindowController = null
+      await p2pTerminator?.dispose()
       await publicAccessManager?.dispose()
       publicAccessManager = null
       setStorageWritesFrozen(true)
@@ -300,11 +313,37 @@ function getDataMigration() {
   return dataMigration
 }
 
+function getP2PTerminator() {
+  p2pTerminator ??= new P2PTerminator({
+    createWindow: options => {
+      if (!p2pSessionConfigured) {
+        configureP2PSessionPermissions(session.fromPartition(P2P_PARTITION))
+        p2pSessionConfigured = true
+      }
+      return new BrowserWindow(options)
+    },
+    hostScript: () => readFileSync(p2pHostScriptPath(), 'utf8'),
+    endpoint: () => {
+      const runtime = getServerRuntime()
+      const serverUrl = runtime.getActiveServerUrl()
+      // The hidden window gets only its own endpoint capability, never the local API token.
+      return serverUrl ? p2pEndpointUrl(serverUrl, runtime.getP2PEndpointToken()) : null
+    },
+  })
+  return p2pTerminator
+}
+
+/** What the settings page reads: the connection, plus the direct-connection host's own state. */
+function publicAccessStatus(status: DesktopPublicAccessStatus): DesktopPublicAccessStatus {
+  return { ...status, p2pState: p2pTerminator?.state ?? 'off' }
+}
+
 function getPublicAccessManager() {
   if (publicAccessManager) return publicAccessManager
   let queue: Promise<unknown> = Promise.resolve()
   publicAccessManager = new PublicAccessManager({
     desktopRoot: unpackedRoot(),
+    onState: status => { void getP2PTerminator().update(p2pHostWanted(status)) },
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -591,11 +630,12 @@ function registerIpcHandlers() {
     if (getWorkspaceBrowserService().handleMessageFromView(event.sender, raw)) return
     void getPreviewService().sendMessageToRenderer(event.sender, raw, mainWindow?.webContents)
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => getPublicAccessManager().getStatus())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessConfigure, (_event, payload) => getPublicAccessManager().configure(payload as DesktopPublicAccessConfiguration))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, (_event, payload) => getPublicAccessManager().start(payload as number))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, () => getPublicAccessManager().stop())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => getPublicAccessManager().setAutoStart(payload as boolean))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => publicAccessStatus(getPublicAccessManager().getStatus()))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessConfigure, async (_event, payload) => publicAccessStatus(await getPublicAccessManager().configure(payload as DesktopPublicAccessConfiguration)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, async (_event, payload) => publicAccessStatus(await getPublicAccessManager().start(payload as number)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, async () => publicAccessStatus(await getPublicAccessManager().stop()))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => publicAccessStatus(getPublicAccessManager().setAutoStart(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, (_event, payload) => publicAccessStatus(getPublicAccessManager().setP2PEnabled(payload as boolean)))
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
   registerHandler(ELECTRON_IPC_CHANNELS.powerGetIdleActionState, async () => (await getIdlePowerService()).getState())
   registerHandler(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, async (_event, payload) => (await getIdlePowerService()).configure(payload as IdlePowerSettings))
@@ -1212,6 +1252,15 @@ app.on('before-quit', event => {
   // can strand its active turn across an immediate app restart.
   void (async () => {
     try {
+      // Phones get a closed direct connection instead of a dead one. The host
+      // bounds its own goodbye, and the tunnel shuts down meanwhile.
+      const directConnectionsClosed = (async () => {
+        try {
+          await p2pTerminator?.dispose()
+        } catch {
+          console.error('[desktop] direct connection cleanup failed during quit')
+        }
+      })()
       try {
         await publicAccessManager?.dispose()
       } catch {
@@ -1219,6 +1268,7 @@ app.on('before-quit', event => {
         // must never bypass the sidecar's graceful shutdown.
         console.error('[desktop] public access cleanup failed during quit')
       }
+      await directConnectionsClosed
       await getServerRuntime().stopAllAndWait()
     } catch (error) {
       console.error('[desktop] graceful server shutdown failed', error)

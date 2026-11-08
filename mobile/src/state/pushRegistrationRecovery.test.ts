@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test'
 import { PushRegistrationCoordinator, type PushRegistrationInput } from './pushRegistrations'
-import { PushRegistrationRecovery, type PushInfo } from './pushRegistrationRecovery'
+import {
+  FOREGROUND_RECHECK_AFTER_MS,
+  PushRegistrationRecovery,
+  type PushInfo,
+} from './pushRegistrationRecovery'
+import { ForegroundGate } from '../core/foregroundGate'
 import type { ApiClient } from '../core/client'
 
 test('backgrounding during an accepted PUT preserves the existing push registration', async () => {
@@ -57,5 +62,75 @@ test('backgrounding during an accepted PUT preserves the existing push registrat
   } finally {
     recovery.stop()
     releasePut()
+  }
+})
+
+const settle = async () => {
+  for (let i = 0; i < 30; i++) await Promise.resolve()
+}
+
+test('returning soon after a clean registration skips the re-check; a stale or failing one re-checks', async () => {
+  let now = 0
+  let attempts = 0
+  let next: PushInfo = { status: 'registered' }
+  const recovery = new PushRegistrationRecovery(
+    async () => {
+      attempts++
+      return { info: next }
+    },
+    () => {},
+    { now: () => now }
+  )
+  try {
+    recovery.setActive(true)
+    await settle()
+    expect(attempts).toBe(1)
+    recovery.setActive(false)
+    now += FOREGROUND_RECHECK_AFTER_MS - 1
+    recovery.setActive(true)
+    await settle()
+    expect(attempts).toBe(1)
+    recovery.setActive(false)
+    now += 1
+    next = { status: 'registered', issue: 'relayFailing' }
+    recovery.setActive(true)
+    await settle()
+    expect(attempts).toBe(2)
+    // A registration with a known problem keeps being re-checked on every return.
+    recovery.setActive(false)
+    recovery.setActive(true)
+    await settle()
+    expect(attempts).toBe(3)
+    // A rotated native token always registers, even inside the quiet window.
+    next = { status: 'registered' }
+    recovery.refresh('rotated-token')
+    await settle()
+    expect(attempts).toBe(4)
+  } finally {
+    recovery.stop()
+  }
+})
+
+test('the foreground re-check waits for a reconnecting chat', async () => {
+  const gate = new ForegroundGate()
+  let attempts = 0
+  const recovery = new PushRegistrationRecovery(
+    async () => {
+      attempts++
+      return { info: { status: 'error', issue: 'network' } }
+    },
+    () => {},
+    { gate }
+  )
+  try {
+    const release = gate.hold()
+    recovery.setActive(true)
+    await settle()
+    expect(attempts).toBe(0)
+    release()
+    await settle()
+    expect(attempts).toBe(1)
+  } finally {
+    recovery.stop()
   }
 })

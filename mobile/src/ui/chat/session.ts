@@ -8,9 +8,17 @@ export const connectionLabels: Record<ConnectionState, string> = {
   connecting: '正在连接电脑…',
   syncing: '正在同步…',
   ready: '已连接',
+  resuming: '正在恢复连接…',
   reconnecting: '正在重连…',
   offline: '连接已断开',
   pairing_required: '需要重新配对',
+}
+
+/** 到远程电脑走的是哪条路，只在菜单里轻轻提一句。 */
+export const linkPathLabels: Record<'cf' | 'lan' | 'direct', string> = {
+  cf: '经 Cloudflare',
+  lan: '局域网直连',
+  direct: '直连',
 }
 
 const basename = (path: string) =>

@@ -12,9 +12,20 @@ type Settings = Record<string, unknown> & Omit<DesktopPublicAccessConfiguration,
   autoStart: boolean
   consentVersion: number
   migrationRequired: boolean
+  /** Phones may upgrade to a direct (P2P) path; on unless the user turned it off. */
+  p2pEnabled: boolean
 }
 type Backend = { request<T>(route: string, method: string, body?: unknown): Promise<T> }
-type Options = { directory: string, backend: Backend, desktopRoot?: string, startTunnel?: typeof startCloudflareTunnel }
+type Options = {
+  directory: string
+  backend: Backend
+  desktopRoot?: string
+  startTunnel?: typeof startCloudflareTunnel
+  /** Called whenever the connection state or the P2P preference changes. */
+  onState?: (status: PublicAccessStatus) => void
+}
+/** Settings files at this version or newer carry `p2pEnabled`. */
+const SETTINGS_VERSION = 6
 const CONTROLLED_ERRORS = ['runtime', 'network', 'configuration', 'proxy', 'token', 'route'] as const
 type ControlledError = typeof CONTROLLED_ERRORS[number]
 // Cloudflare normally pushes a dashboard tunnel's routes right after registration.
@@ -29,9 +40,10 @@ export function migratePublicAccessSettings(raw: unknown): Settings {
     if (!isPublicAccessConfiguration(config)) throw new Error('Invalid public access configuration')
     return {
       ...value, ...config, customUrl: config.customUrl ? normalizePublicAccessOrigin(config.customUrl)! : '',
-      tunnelToken: config.tunnelToken ?? '', version: Math.max(5, typeof value.version === 'number' ? value.version : 0),
+      tunnelToken: config.tunnelToken ?? '', version: Math.max(SETTINGS_VERSION, typeof value.version === 'number' ? value.version : 0),
       autoStart: value.autoStart === true, consentVersion: typeof value.consentVersion === 'number' ? value.consentVersion : 0,
       migrationRequired: value.migrationRequired === true,
+      p2pEnabled: value.p2pEnabled !== false,
     }
   }
   if (value.mode !== undefined && !['tailscale', 'ngrok', 'custom'].includes(String(value.mode))) throw new Error('Invalid legacy public access configuration')
@@ -42,9 +54,10 @@ export function migratePublicAccessSettings(raw: unknown): Settings {
   return {
     ...value,
     ...(legacy ? { legacyRemoteConfiguration: value.legacyRemoteConfiguration ?? { ...value } } : {}),
-    version: Math.max(5, typeof value.version === 'number' ? value.version : 0),
+    version: Math.max(SETTINGS_VERSION, typeof value.version === 'number' ? value.version : 0),
     mode: 'quick', customUrl: '', localPort: localPort as number, tunnelToken: '',
     autoStart: false, consentVersion: 0, migrationRequired: legacy,
+    p2pEnabled: value.p2pEnabled !== false,
   }
 }
 
@@ -101,12 +114,31 @@ export class PublicAccessManager {
   }
 
   getStatus(): PublicAccessStatus {
-    const { mode, customUrl, localPort, migrationRequired } = this.settings
-    return { ...this.status, mode, customUrl, localPort, migrationRequired, tokenSet: !!this.settings.tunnelToken,
+    const { mode, customUrl, localPort, migrationRequired, p2pEnabled } = this.settings
+    return { ...this.status, mode, customUrl, localPort, migrationRequired, p2pEnabled, tokenSet: !!this.settings.tunnelToken,
       tunnelId: readCloudflareTunnelToken(this.settings.tunnelToken)?.tunnelId ?? null }
   }
 
   private isConfigured() { return this.settings.mode === 'quick' || !!this.settings.tunnelToken }
+  /** Every status change goes through here so the P2P endpoint follows the connection. */
+  private update(patch: Partial<typeof this.status>) {
+    const before = this.status.state
+    Object.assign(this.status, patch)
+    if (this.status.state !== before) this.options.onState?.(this.getStatus())
+  }
+
+  /** Saved settings that failed to load stay untouched on disk until the user configures again. */
+  private savedSettingsInvalid() { return this.status.state === 'unconfigured' && this.status.error === 'configuration' }
+
+  setP2PEnabled(enabled: boolean) {
+    if (this.savedSettingsInvalid()) throw new Error('Invalid public access configuration')
+    if (this.settings.p2pEnabled !== enabled) {
+      this.settings.p2pEnabled = enabled
+      this.persist()
+      this.options.onState?.(this.getStatus())
+    }
+    return this.getStatus()
+  }
   private current(generation: number) { return generation === this.generation && !this.disposed }
 
   async configure(configuration: DesktopPublicAccessConfiguration) {
@@ -122,7 +154,7 @@ export class PublicAccessManager {
     if (this.stopUnconfirmed) throw new Error('Remote gateway stop was not confirmed')
     Object.assign(this.settings, { ...configuration, customUrl, tunnelToken, consentVersion: 0, migrationRequired: false })
     this.persist()
-    Object.assign(this.status, { consentVersion: 0, error: null, state: this.isConfigured() ? 'disabled' : 'unconfigured' })
+    this.update({ consentVersion: 0, error: null, state: this.isConfigured() ? 'disabled' : 'unconfigured' })
     return this.getStatus()
   }
 
@@ -136,6 +168,7 @@ export class PublicAccessManager {
   }
 
   setAutoStart(enabled: boolean) {
+    if (this.savedSettingsInvalid()) throw new Error('Invalid public access configuration')
     this.settings.autoStart = enabled
     this.persist()
     this.status.autoStart = enabled
@@ -150,7 +183,7 @@ export class PublicAccessManager {
   start(consentVersion: number): Promise<PublicAccessStatus> {
     if (this.disposed) return Promise.resolve(this.getStatus())
     if (this.stopping || this.stopUnconfirmed) return Promise.reject(new Error('Remote gateway stop must be confirmed before enabling access'))
-    if (consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION || !this.isConfigured() || this.status.state === 'unconfigured' && this.status.error === 'configuration') return Promise.reject(new Error('Configuration and current consent required'))
+    if (consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION || !this.isConfigured() || this.savedSettingsInvalid()) return Promise.reject(new Error('Configuration and current consent required'))
     if (this.pending) {
       if (this.pendingGeneration === this.generation) return this.pendingResult!
       const generation = this.generation
@@ -184,8 +217,8 @@ export class PublicAccessManager {
     let routes = await tunnel.publishedRoutes(null, { timeoutMs: ROUTE_WAIT_MS, signal })
     while (this.current(generation)) {
       const origin = routes && publishedGatewayOrigin(routes, port, this.settings.customUrl || undefined)
-      if (origin) { this.status.error = null; return origin }
-      Object.assign(this.status, { phase: 'routing', error: routes?.some(route => route.hostname) ? 'route' : null })
+      if (origin) { this.update({ error: null }); return origin }
+      this.update({ phase: 'routing', error: routes?.some(route => route.hostname) ? 'route' : null })
       onWait()
       const next = await tunnel.publishedRoutes(routes, { signal })
       if (next === routes && this.current(generation)) throw new CloudflareTunnelError('network', 'Cloudflare disconnected while waiting for a route')
@@ -197,7 +230,7 @@ export class PublicAccessManager {
   private async connect(generation: number, onRouteWait: () => void) {
     const controller = new AbortController()
     this.controller = controller
-    Object.assign(this.status, { state: this.retryCount ? 'reconnecting' : 'connecting', error: null, phase: 'preparing', publicUrl: null })
+    this.update({ state: this.retryCount ? 'reconnecting' : 'connecting', error: null, phase: 'preparing', publicUrl: null })
     try {
       const { port } = await this.options.backend.request<{ port: number }>('/enable', 'POST', { port: this.settings.localPort })
       if (!this.current(generation)) return this.getStatus()
@@ -208,12 +241,12 @@ export class PublicAccessManager {
         mode: this.settings.mode, localPort: port,
         token: this.settings.mode === 'named' ? this.settings.tunnelToken : undefined,
         proxyUrl: proxyUrl || undefined, signal: controller.signal,
-        onPhase: () => { if (this.current(generation)) this.status.phase = 'connecting' },
+        onPhase: () => { if (this.current(generation)) this.update({ phase: 'connecting' }) },
       }, { desktopRoot: this.options.desktopRoot })
       if (!this.current(generation)) {
         this.stoppingTunnels.add(tunnel)
         try { await tunnel.stop(); this.stoppingTunnels.delete(tunnel) }
-        catch { this.stopUnconfirmed = true; Object.assign(this.status, { state: 'failed', error: 'stop', publicUrl: null, phase: null }) }
+        catch { this.stopUnconfirmed = true; this.update({ state: 'failed', error: 'stop', publicUrl: null, phase: null }) }
         return this.getStatus()
       }
       this.tunnel = tunnel
@@ -222,7 +255,7 @@ export class PublicAccessManager {
       if (!publicUrl || !this.current(generation)) return this.getStatus()
       await this.options.backend.request('/origin', 'PUT', { publicUrl })
       if (!this.current(generation)) return this.getStatus()
-      this.status.phase = 'checking'
+      this.update({ phase: 'checking' })
       let verified = false
       for (let attempt = 0; attempt < 3 && this.current(generation); attempt++) {
         const result = await this.options.backend.request<{ ok: boolean }>('/verify', 'POST')
@@ -230,13 +263,13 @@ export class PublicAccessManager {
         if (result.ok === true) { verified = true; break }
       }
       if (!verified) throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
-      Object.assign(this.status, { publicUrl, state: 'online', phase: null })
+      this.update({ publicUrl, state: 'online', phase: null })
       this.retryCount = 0
     } catch (error) {
       if (error instanceof CloudflareTunnelError && error.retryStop) {
         this.pendingStops.add(error.retryStop)
         this.stopUnconfirmed = true
-        Object.assign(this.status, { state: 'failed', error: 'stop', phase: null, publicUrl: null })
+        this.update({ state: 'failed', error: 'stop', phase: null, publicUrl: null })
       }
       if (!this.current(generation)) return this.getStatus()
       this.unsubscribe?.()
@@ -249,37 +282,49 @@ export class PublicAccessManager {
       for (const closing of this.stoppingTunnels) {
         try { await closing.stop(); this.stoppingTunnels.delete(closing) } catch { closed = false }
       }
-      try { await this.options.backend.request('/disable', 'POST') } catch { closed = false }
+      const category = classifyPublicAccessError(error)
+      // A network or proxy failure is retried with the same gateway, so phones
+      // keep their resumable streams; anything final ends them.
+      const retrying = closed && (category === 'network' || category === 'proxy') && this.canRetry()
+      try {
+        if (retrying) await this.options.backend.request('/disable', 'POST', { reason: 'restart' })
+        else await this.options.backend.request('/disable', 'POST')
+      } catch { closed = false }
       if (!this.current(generation)) return this.getStatus()
       if (!closed) {
         this.stopUnconfirmed = true
-        Object.assign(this.status, { state: 'failed', error: 'stop', phase: null, publicUrl: null })
+        this.update({ state: 'failed', error: 'stop', phase: null, publicUrl: null })
       } else {
-        const category = classifyPublicAccessError(error)
-        Object.assign(this.status, { state: 'failed', error: category, phase: null, publicUrl: null })
-        if (category === 'network' || category === 'proxy') this.scheduleRetry()
+        this.update({ state: retrying ? 'reconnecting' : 'failed', error: category, phase: null, publicUrl: null })
+        if (retrying) this.scheduleRetry()
       }
     }
     return this.getStatus()
   }
 
+  private canRetry() { return this.wanted && !this.disposed && !this.stopUnconfirmed }
+
   private scheduleRetry() {
-    if (!this.wanted || this.disposed || this.stopUnconfirmed) return
-    this.status.state = 'reconnecting'
+    if (!this.canRetry()) return
+    this.update({ state: 'reconnecting' })
     this.retry = setTimeout(() => { this.retry = null; void this.start(PUBLIC_ACCESS_CONSENT_VERSION) }, Math.min(30_000, 1000 * 2 ** this.retryCount++))
     this.retry.unref?.()
   }
 
   private async recoverAfterExit() {
     const resume = this.wanted
-    const stopped = this.stop()
+    const stopped = this.stop({ restart: resume })
     const generation = this.generation
     this.wanted = resume
     await stopped
     if (this.current(generation) && resume && !this.stopUnconfirmed) this.scheduleRetry()
   }
 
-  async stop() {
+  /**
+   * `restart`: the gateway comes back right after (tunnel or sidecar recovery),
+   * so phones keep their resumable session streams instead of starting over.
+   */
+  async stop(options: { restart?: boolean } = {}) {
     this.wanted = false
     const generation = ++this.generation
     this.controller?.abort()
@@ -303,11 +348,15 @@ export class PublicAccessManager {
       for (const retryStop of this.pendingStops) {
         try { await retryStop(); this.pendingStops.delete(retryStop) } catch { closed = false }
       }
-      try { await this.options.backend.request('/disable', 'POST') } catch { closed = false }
+      try {
+        if (options.restart) await this.options.backend.request('/disable', 'POST', { reason: 'restart' })
+        else await this.options.backend.request('/disable', 'POST')
+      } catch { closed = false }
       if (generation === this.generation) {
         this.stopUnconfirmed = !closed
-        Object.assign(this.status, { publicUrl: null, phase: null, error: closed ? null : 'stop',
-          state: closed ? this.isConfigured() ? 'disabled' : 'unconfigured' : 'failed' })
+        // A restart resumes right after, so it never reads (or acts) as switched off.
+        this.update({ publicUrl: null, phase: null, error: closed ? null : 'stop',
+          state: !closed ? 'failed' : options.restart ? 'reconnecting' : this.isConfigured() ? 'disabled' : 'unconfigured' })
       }
     } finally { this.stopping-- }
     return this.getStatus()
@@ -315,16 +364,16 @@ export class PublicAccessManager {
 
   async serverUnavailable() {
     const resume = this.wanted
-    const stopped = this.stop()
+    const stopped = this.stop({ restart: resume })
     const generation = this.generation
     this.wanted = resume
     await stopped
-    if (generation === this.generation && resume && !this.stopUnconfirmed) this.status.state = 'reconnecting'
+    if (generation === this.generation && resume && !this.stopUnconfirmed) this.update({ state: 'reconnecting' })
   }
 
   async serverChanged() {
     const resume = this.wanted
-    const stopped = this.stop()
+    const stopped = this.stop({ restart: resume })
     const generation = this.generation
     this.wanted = resume
     await stopped
