@@ -5185,6 +5185,43 @@ export class SessionService {
     return projection.launchInfo.workDir
   }
 
+  /**
+   * Directory a resumed CLI has to start in. `--resume <id>` only looks in the
+   * project folder of the CLI's startup directory, but a CLI that entered a
+   * worktree mid-session (EnterWorktree) keeps writing to the folder it started
+   * in while system/init, and so workDir, reports the worktree. Starting from a
+   * directory the transcript recorded that maps to its folder lets the CLI find
+   * the conversation and re-enter the worktree from its worktree-state record.
+   */
+  async resolveResumeLaunchDir(sessionId: string, workDir: string): Promise<string> {
+    const found = await this.findSessionFile(sessionId)
+    const transcript = found ? await statFileIdentity(found.filePath) : null
+    if (!found || !transcript) return workDir
+    // Compare file identity rather than folder names: case-insensitive volumes
+    // can spell the same folder differently.
+    const holdsTranscript = async (directory: string) => {
+      const resolved = await fs.realpath(directory).catch(() => null)
+      if (!resolved) return false
+      const folder = this.sanitizePath(normalizeDriveRootPathForPlatform(resolved.normalize('NFC')))
+      return isSameFileIdentity(transcript, await statFileIdentity(path.join(this.getProjectsDir(), folder, `${sessionId}.jsonl`)))
+    }
+    if (await holdsTranscript(workDir)) return workDir
+
+    const recorded = new Set<string>()
+    await this.streamJsonlFile(found.filePath, (entry) => {
+      const record = entry as Record<string, unknown>
+      if (typeof record.cwd === 'string') recorded.add(record.cwd)
+      if (entry.type === 'session-meta' && typeof record.workDir === 'string') recorded.add(record.workDir)
+    }).catch((error) => {
+      // Oversized records are still read past; keep the directories seen.
+      console.warn(`[SessionService] resolveResumeLaunchDir: transcript scan for ${sessionId} incomplete:`, error)
+    })
+    for (const directory of recorded) {
+      if (directory !== workDir && await holdsTranscript(directory)) return directory
+    }
+    return workDir
+  }
+
   async getSessionMessageCwd(
     sessionId: string,
     messageId: string,
