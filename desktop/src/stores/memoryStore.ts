@@ -113,6 +113,9 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
 
   fetchFiles: async (projectId, options) => {
     const request = ++filesRequest
+    const initial = get()
+    const initialFileRequest = fileRequest
+    const initialSaveRequest = saveRequest
     set({ isLoadingFiles: true, error: null })
     try {
       const { files } = await memoryApi.listFiles(projectId)
@@ -126,9 +129,14 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
           isLoadingFiles: false,
         }
       })
-      const selectedPath = get().selectedFile?.path
-      if (options?.reloadSelectedFile && selectedPath) {
-        await get().openFile(projectId, selectedPath)
+      const current = get()
+      if (
+        options?.reloadSelectedFile && initial.selectedFile &&
+        !initial.isLoadingFile && !initial.isSaving && !current.isSaving &&
+        fileRequest === initialFileRequest && saveRequest === initialSaveRequest &&
+        current.selectedFile === initial.selectedFile && current.draftContent === initial.draftContent
+      ) {
+        await current.openFile(projectId, initial.selectedFile.path)
       }
     } catch (err) {
       if (request !== filesRequest || get().selectedProjectId !== projectId) return
@@ -138,6 +146,8 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
 
   openFile: async (projectId, path) => {
     const request = ++fileRequest
+    const initial = get()
+    const initialSaveRequest = saveRequest
     set({ isLoadingFile: true, error: null })
     try {
       const { file } = await memoryApi.readFile(projectId, path)
@@ -145,6 +155,19 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
         request !== fileRequest ||
         get().selectedProjectId !== projectId
       ) {
+        return false
+      }
+      // A reload may finish after the user has edited or saved the open file.
+      // Keep that newer state; the discard confirmation only covered the draft
+      // that existed when the refresh began.
+      const current = get()
+      if (
+        initial.selectedFile?.path === path && (
+          current.selectedFile !== initial.selectedFile || current.draftContent !== initial.draftContent ||
+          current.isSaving || saveRequest !== initialSaveRequest
+        )
+      ) {
+        set({ isLoadingFile: false })
         return false
       }
       set({

@@ -682,4 +682,240 @@ describe('MemorySettings', () => {
     expect(screen.queryByText('Unsaved')).not.toBeInTheDocument()
     confirmSpy.mockRestore()
   })
+
+  it('preserves edits typed after Refresh started', async () => {
+    render(<MemorySettings />)
+    expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Project Memory')
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+
+    let finishList!: (value: unknown) => void
+    memoryApiMock.listFiles.mockReturnValueOnce(new Promise((resolve) => { finishList = resolve }))
+    memoryApiMock.readFile.mockResolvedValue({ file: {
+      path: 'MEMORY.md', content: '# Disk content',
+      updatedAt: '2026-05-01T00:02:00.000Z', bytes: 14,
+    } })
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    expect(useMemoryStore.getState().isLoadingFiles).toBe(true)
+    fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Typed after Refresh' } })
+
+    await act(async () => finishList({ files: [{
+      path: 'MEMORY.md', name: 'MEMORY.md', title: 'MEMORY.md', isIndex: true,
+      updatedAt: '2026-05-01T00:02:00.000Z', bytes: 14,
+    }] }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFiles).toBe(false))
+    expect(screen.getByLabelText('Editor')).toHaveValue('# Typed after Refresh')
+  })
+
+  it('preserves an explicit file open requested after Refresh started', async () => {
+    const list = [
+      { path: 'MEMORY.md', name: 'MEMORY.md', title: 'MEMORY.md', isIndex: true, updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 },
+      { path: 'notes/manual.md', name: 'manual.md', title: 'manual.md', isIndex: false, updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 },
+    ]
+    memoryApiMock.listFiles.mockResolvedValue({ files: list })
+    let finishManual!: (value: unknown) => void
+    const manualRead = new Promise((resolve) => { finishManual = resolve })
+    memoryApiMock.readFile.mockImplementation((_project: string, path: string) => path === 'notes/manual.md'
+      ? manualRead
+      : Promise.resolve({ file: { path, content: '# Index\n[Manual](notes/manual.md)', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 } }))
+    render(<MemorySettings />)
+    await screen.findByRole('link', { name: 'Manual' })
+    let finishList!: (value: unknown) => void
+    memoryApiMock.listFiles.mockReturnValueOnce(new Promise((resolve) => { finishList = resolve }))
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    expect(useMemoryStore.getState().isLoadingFiles).toBe(true)
+    fireEvent.click(screen.getByRole('link', { name: 'Manual' }))
+    expect(memoryApiMock.readFile).toHaveBeenLastCalledWith('-workspace-demo', 'notes/manual.md')
+    expect(useMemoryStore.getState().isLoadingFile).toBe(true)
+
+    await act(async () => finishList({ files: list }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFiles).toBe(false))
+    await act(async () => finishManual({ file: {
+      path: 'notes/manual.md', content: '# Manual content',
+      updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18,
+    } }))
+    expect(useMemoryStore.getState().selectedFile?.path).toBe('notes/manual.md')
+    expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Manual content')
+  })
+
+  it('keeps a draft when Refresh discard confirmation is rejected', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    try {
+      render(<MemorySettings />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Keep local draft' } })
+      memoryApiMock.listProjects.mockClear()
+      memoryApiMock.listFiles.mockClear()
+      memoryApiMock.readFile.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+      expect(confirm).toHaveBeenCalledOnce()
+      expect(memoryApiMock.listProjects).not.toHaveBeenCalled()
+      expect(memoryApiMock.listFiles).not.toHaveBeenCalled()
+      expect(memoryApiMock.readFile).not.toHaveBeenCalled()
+      expect(screen.getByLabelText('Editor')).toHaveValue('# Keep local draft')
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('reports a reload read failure and retains the unsaved draft', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<MemorySettings />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Retained on read failure' } })
+      memoryApiMock.readFile.mockRejectedValueOnce(new Error('memory read unavailable'))
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+      expect(await screen.findByText('memory read unavailable')).toBeInTheDocument()
+      expect(screen.getByLabelText('Editor')).toHaveValue('# Retained on read failure')
+      expect(useMemoryStore.getState().isLoadingFile).toBe(false)
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('preserves a draft submitted to a pending save while Refresh reads the old disk revision', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<MemorySettings />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Submitted draft' } })
+      let finishSave!: (value: unknown) => void
+      memoryApiMock.saveFile.mockReturnValueOnce(new Promise((resolve) => { finishSave = resolve }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      expect(useMemoryStore.getState().isSaving).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+      await waitFor(() => expect(useMemoryStore.getState().isLoadingFiles).toBe(false))
+      expect(useMemoryStore.getState().isSaving).toBe(true)
+      await act(async () => finishSave({ ok: true, file: {
+        path: 'MEMORY.md', updatedAt: '2026-05-01T00:01:00.000Z', bytes: 17,
+      } }))
+      expect(useMemoryStore.getState().selectedFile?.content).toBe('# Submitted draft')
+      expect(useMemoryStore.getState().draftContent).toBe('# Submitted draft')
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('preserves edits made while the refreshed body is still being read', async () => {
+    render(<MemorySettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    let finishRead!: (value: unknown) => void
+    memoryApiMock.readFile.mockReturnValueOnce(new Promise((resolve) => { finishRead = resolve }))
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(true))
+    fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Typed during read' } })
+
+    await act(async () => finishRead({ file: {
+      path: 'MEMORY.md', content: '# Disk content',
+      updatedAt: '2026-05-01T00:02:00.000Z', bytes: 14,
+    } }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(false))
+    expect(screen.getByLabelText('Editor')).toHaveValue('# Typed during read')
+  })
+
+  it('keeps a submitted draft when Save begins during the refreshed body read', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<MemorySettings />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Submitted after Refresh' } })
+      let finishRead!: (value: unknown) => void
+      memoryApiMock.readFile.mockReturnValueOnce(new Promise((resolve) => { finishRead = resolve }))
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+      await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(true))
+      let finishSave!: (value: unknown) => void
+      memoryApiMock.saveFile.mockReturnValueOnce(new Promise((resolve) => { finishSave = resolve }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      expect(useMemoryStore.getState().isSaving).toBe(true)
+      await act(async () => finishRead({ file: {
+        path: 'MEMORY.md', content: '# Disk before Save',
+        updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18,
+      } }))
+      expect(screen.getByLabelText('Editor')).toHaveValue('# Submitted after Refresh')
+      await act(async () => finishSave({ ok: true, file: {
+        path: 'MEMORY.md', updatedAt: '2026-05-01T00:03:00.000Z', bytes: 25,
+      } }))
+      expect(useMemoryStore.getState().selectedFile?.content).toBe('# Submitted after Refresh')
+      expect(useMemoryStore.getState().draftContent).toBe('# Submitted after Refresh')
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
+  it('keeps a later file selection after the refresh body read has started', async () => {
+    const listed = [
+      { path: 'MEMORY.md', name: 'MEMORY.md', title: 'MEMORY.md', isIndex: true, updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 },
+      { path: 'notes/manual.md', name: 'manual.md', title: 'manual.md', isIndex: false, updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 },
+    ]
+    memoryApiMock.listFiles.mockResolvedValue({ files: listed })
+    memoryApiMock.readFile.mockResolvedValue({ file: { path: 'MEMORY.md', content: '# Index\n[Manual](notes/manual.md)', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 } })
+    render(<MemorySettings />)
+    await screen.findByRole('link', { name: 'Manual' })
+    let finishRead!: (value: unknown) => void
+    const pending = new Promise((resolve) => { finishRead = resolve })
+    memoryApiMock.readFile.mockImplementation((_project: string, path: string) => path === 'MEMORY.md'
+      ? pending
+      : Promise.resolve({ file: { path, content: '# Manual after refresh', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 22 } }))
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(true))
+    fireEvent.click(screen.getByRole('link', { name: 'Manual' }))
+    await waitFor(() => expect(useMemoryStore.getState().selectedFile?.path).toBe('notes/manual.md'))
+    await act(async () => finishRead({ file: { path: 'MEMORY.md', content: '# Old refresh', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 14 } }))
+    expect(useMemoryStore.getState().selectedFile?.path).toBe('notes/manual.md')
+    expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Manual after refresh')
+    expect(useMemoryStore.getState().isLoadingFile).toBe(false)
+  })
+
+  it('keeps a later project selection after the refresh body read has started', async () => {
+    memoryApiMock.listProjects.mockResolvedValue({ projects: [
+      { id: '-workspace-demo', label: '/workspace/demo', memoryDir: '/tmp/memory-fixture/demo/memory', exists: true, fileCount: 1, isCurrent: true },
+      { id: '-workspace-other', label: '/workspace/other', memoryDir: '/tmp/memory-fixture/other/memory', exists: true, fileCount: 1, isCurrent: false },
+    ] })
+    memoryApiMock.listFiles.mockImplementation((project: string) => Promise.resolve({ files: [{
+      path: project === '-workspace-demo' ? 'MEMORY.md' : 'preferences.md', name: 'memory', title: 'memory',
+      isIndex: true, updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18,
+    }] }))
+    render(<MemorySettings />)
+    expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Project Memory')
+    let finishRead!: (value: unknown) => void
+    const pending = new Promise((resolve) => { finishRead = resolve })
+    memoryApiMock.readFile.mockImplementation((project: string, path: string) => project === '-workspace-demo'
+      ? pending
+      : Promise.resolve({ file: { path, content: '# Other project', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 16 } }))
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(true))
+    const other = screen.getAllByTestId('memory-project-row').find((row) => row.textContent?.includes('other'))!
+    fireEvent.click(other)
+    await waitFor(() => expect(useMemoryStore.getState().selectedFile?.path).toBe('preferences.md'))
+    await act(async () => finishRead({ file: { path: 'MEMORY.md', content: '# Old project read', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 } }))
+    expect(useMemoryStore.getState().selectedProjectId).toBe('-workspace-other')
+    expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Other project')
+    expect(useMemoryStore.getState().isLoadingFile).toBe(false)
+  })
+
+  it('keeps completed save state when the older refresh body read returns afterward', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      render(<MemorySettings />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+      fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# Saved while reading' } })
+      let finishRead!: (value: unknown) => void
+      memoryApiMock.readFile.mockReturnValueOnce(new Promise((resolve) => { finishRead = resolve }))
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+      await waitFor(() => expect(useMemoryStore.getState().isLoadingFile).toBe(true))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(useMemoryStore.getState().selectedFile?.content).toBe('# Saved while reading'))
+      await waitFor(() => expect(useMemoryStore.getState().isSaving).toBe(false))
+      expect(memoryApiMock.readFile).toHaveBeenCalledTimes(2)
+      await act(async () => finishRead({ file: { path: 'MEMORY.md', content: '# Disk before save', updatedAt: '2026-05-01T00:00:00.000Z', bytes: 18 } }))
+      expect(useMemoryStore.getState().draftContent).toBe('# Saved while reading')
+      expect(useMemoryStore.getState().selectedFile?.content).toBe('# Saved while reading')
+      expect(useMemoryStore.getState().lastSavedAt).toBe('2026-05-01T00:01:00.000Z')
+      expect(useMemoryStore.getState().isLoadingFile).toBe(false)
+      expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Saved while reading')
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
 })
