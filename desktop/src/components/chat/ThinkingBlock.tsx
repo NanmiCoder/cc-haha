@@ -3,6 +3,11 @@ import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { Brain, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+import {
+  EMPTY_STREAMING_MARKDOWN_SEGMENTS,
+  splitStreamingMarkdown,
+  type StreamingMarkdownSegments,
+} from '../../lib/streamingMarkdownSegments'
 
 /**
  * One line: the label, a preview of the reasoning, and the full text on demand.
@@ -96,16 +101,60 @@ export function ThinkingBlock({
           data-thinking-content="expanded"
           className="relative mb-1.5 ml-[7px] mt-1 max-h-[300px] overflow-y-auto border-l border-[var(--color-outline)] py-0.5 pl-[15px] text-[var(--color-text-secondary)]"
         >
-          <MarkdownRenderer
-            content={displayContent}
-            variant="compact"
-            cache={!isActive}
-            streaming={isActive}
-            className="thinking-markdown chat-reading-markdown text-[var(--color-text-secondary)]"
-          />
+          {isActive ? (
+            <StreamingThinkingMarkdown content={displayContent} />
+          ) : (
+            <MarkdownRenderer
+              content={displayContent}
+              variant="compact"
+              className="thinking-markdown chat-reading-markdown text-[var(--color-text-secondary)]"
+            />
+          )}
           {isActive && <span className="thinking-cursor" />}
         </div>
       )}
+    </div>
+  )
+}
+
+const STREAMING_SEGMENT_CLASS = 'thinking-markdown thinking-markdown-segment chat-reading-markdown text-[var(--color-text-secondary)]'
+
+/**
+ * The body while it streams: the settled segments are rendered once and left
+ * alone, only the tail is parsed again on each delta. One renderer over the
+ * whole text re-parsed all of it on every delta, and a long deliberation left
+ * the renderer thread with nothing for the paste or keystroke that arrived
+ * during it (#1508). Once the block settles it is rendered whole again, so the
+ * finished row is the same as it always was.
+ */
+function StreamingThinkingMarkdown({ content }: { content: string }) {
+  const previous = useRef<StreamingMarkdownSegments>(EMPTY_STREAMING_MARKDOWN_SEGMENTS)
+  const segments = useMemo(() => {
+    const next = splitStreamingMarkdown(content, previous.current)
+    previous.current = next
+    return next
+  }, [content])
+
+  return (
+    <div className="thinking-markdown-live" data-thinking-segments={segments.settled.length}>
+      {segments.settled.map((segment, index) => (
+        <MarkdownRenderer
+          key={index}
+          content={segment}
+          variant="compact"
+          cache={false}
+          streaming
+          className={STREAMING_SEGMENT_CLASS}
+        />
+      ))}
+      <MarkdownRenderer
+        key="live"
+        content={segments.live}
+        variant="compact"
+        cache={false}
+        streaming
+        className={STREAMING_SEGMENT_CLASS}
+      />
     </div>
   )
 }
@@ -185,12 +234,20 @@ const thinkingStyles = `
   content: '';
   animation: thinking-dots 1.4s steps(1, end) infinite;
 }
-.thinking-markdown > :first-child,
-.thinking-markdown > :first-child > :first-child {
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child > :first-child {
   margin-top: 0;
 }
-.thinking-markdown > :last-child,
-.thinking-markdown > :last-child > :last-child {
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child > :last-child {
+  margin-bottom: 0;
+}
+.thinking-markdown-live > :first-child > :first-child,
+.thinking-markdown-live > :first-child > :first-child > :first-child {
+  margin-top: 0;
+}
+.thinking-markdown-live > :last-child > :last-child,
+.thinking-markdown-live > :last-child > :last-child > :last-child {
   margin-bottom: 0;
 }
 `
