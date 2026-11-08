@@ -77,6 +77,9 @@ test('removing a computer quotes its name in the confirmation', () => {
   const text = removeConfirmText('MacBook Pro')
   expect(text.title).toBe('移除「MacBook Pro」？')
   expect(text.message).toContain('电脑上的会话会保留')
+  // 移除不取决于电脑连不连得上：别再说「需要连接电脑完成注销」。
+  expect(text.message).toContain('连不上也能移除')
+  expect(text.message).not.toContain('需要连接电脑')
 })
 
 test('provider row names the active source and counts the others', () => {
