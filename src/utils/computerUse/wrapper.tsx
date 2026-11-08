@@ -202,11 +202,12 @@ export function buildSessionContext(): ComputerUseSessionContext {
     // but is possible under parallel tool-use interleaving — don't spam the
     // notification in that case.
     acquireCuLock: async () => {
-      const signal = tuc().abortController.signal;
+      const { abortController, computerUseTurn } = tuc();
+      const signal = abortController.signal;
       if (signal.aborted) throw new Error("Computer Use cancelled before lock acquisition");
-      const r = await tryAcquireComputerUseLock();
+      const r = await tryAcquireComputerUseLock(computerUseTurn);
       if (signal.aborted) {
-        if (r.kind === 'acquired' && r.fresh) await releaseComputerUseLock();
+        if (r.kind === 'acquired' && r.fresh) await releaseComputerUseLock(computerUseTurn);
         throw new Error("Computer Use cancelled during lock acquisition");
       }
       if (r.kind === 'blocked') {

@@ -147,6 +147,8 @@ const STREAM_FAIL_DISABLE_THRESHOLD = 3
 export class StreamingCard {
   // ---- lifecycle state ----
   private phase: StreamingCardPhase = 'idle'
+  /** Shared by pre-creation, content_start and terminal operations. */
+  private creationPromise: Promise<void> | null = null
 
   // ---- CardKit state ----
   /** CardKit card_id。null = CardKit 创建失败，已退到 patch fallback 模式。 */
@@ -184,12 +186,17 @@ export class StreamingCard {
 
   /**
    * 首次创建卡片（CardKit 主路径；失败则降级到直发 Schema 2.0 卡 + patch）。
-   * 幂等：已创建/正在创建时直接返回。
+   * 幂等：正在创建时等待同一次创建，已创建时直接返回。
    */
   async ensureCreated(): Promise<void> {
+    if (this.creationPromise) return this.creationPromise
     if (this.phase !== 'idle') return
     this.phase = 'creating'
+    this.creationPromise = this.createCard()
+    return this.creationPromise
+  }
 
+  private async createCard(): Promise<void> {
     try {
       // CardKit 主路径
       const cardId = await createCardEntity(
@@ -207,7 +214,7 @@ export class StreamingCard {
       this.messageId = messageId
       this.cardKitStreamActive = true
       this.sequence = 1
-      this.phase = 'streaming'
+      if (this.phase === 'creating') this.phase = 'streaming'
       this.flushController.setCardMessageReady(true)
     } catch (cardKitErr) {
       // CardKit 不可用（权限、网络、API 兼容性等）→ 降级到直发卡片 + patch
@@ -234,7 +241,7 @@ export class StreamingCard {
         this.cardId = null
         this.messageId = mid
         this.cardKitStreamActive = false
-        this.phase = 'streaming'
+        if (this.phase === 'creating') this.phase = 'streaming'
         this.flushController.setCardMessageReady(true)
       } catch (fallbackErr) {
         // 兜底都失败了 —— 无法显示任何东西
@@ -243,6 +250,7 @@ export class StreamingCard {
           fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
         )
         this.phase = 'aborted'
+        this.flushController.complete()
         throw fallbackErr
       }
     }
@@ -250,7 +258,7 @@ export class StreamingCard {
     // 卡片可写之后若已有 buffered 内容（text / reasoning / tools），
     // 立刻触发一次 flush —— 否则 content_start{tool_use} 或 thinking 在
     // ensureCreated 期间到达的状态会一直卡在节流 gate 上，用户看不到。
-    if (this.hasAnyContent()) {
+    if (this.phase === 'streaming' && this.hasAnyContent()) {
       void this.flushController.throttledUpdate(this.currentThrottle())
     }
   }
@@ -314,7 +322,7 @@ export class StreamingCard {
 
   /**
    * 流式结束，切到最终态。
-   * - 先 waitForFlush 确保中间帧写入完成
+   * - 先等待正在进行的创建，再 waitForFlush 确保中间帧写入完成
    * - 然后 close streaming_mode（仅 CardKit 路径）
    * - 最后用完整 rendered 卡片 update
    * - complete FlushController 锁死，后续 appendText 被忽略
@@ -329,6 +337,10 @@ export class StreamingCard {
     }
     this.phase = 'finalizing'
     this.flushController.cancelPendingFlush()
+    // Pre-creation is fire-and-forget; IDs are only available after it settles.
+    // Creation must not move a terminal operation back to streaming.
+    await this.creationPromise?.catch(() => {})
+    if (this.phase !== 'finalizing') return
     await this.flushController.waitForFlush()
 
     const finalText = this.terminalText()
@@ -392,6 +404,7 @@ export class StreamingCard {
     const wasIdle = this.phase === 'idle'
     this.phase = 'aborted'
     this.flushController.cancelPendingFlush()
+    await this.creationPromise?.catch(() => {})
     await this.flushController.waitForFlush().catch(() => {})
 
     if (wasIdle || !this.messageId) {

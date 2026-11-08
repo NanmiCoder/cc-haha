@@ -204,10 +204,7 @@ mod imp {
                         "The cursor overlay acknowledgement could not be read",
                     ));
                 }
-                if read != 1 || byte[0] != framing::ACKNOWLEDGEMENT {
-                    return Err(unexpected_answer(read, byte[0]));
-                }
-                return Ok(());
+                return interpret_answer(read, byte[0]);
             }
             if Instant::now() >= deadline {
                 return Err(AdapterError::new(
@@ -216,6 +213,17 @@ mod imp {
                 ));
             }
             std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    pub(super) fn interpret_answer(read: u32, byte: u8) -> Result<(), AdapterError> {
+        match (read, byte) {
+            (1, framing::ACKNOWLEDGEMENT) => Ok(()),
+            (1, framing::PAINT_FAILED) => Err(AdapterError::new(
+                ErrorCode::ActionFailed,
+                "Windows could not paint the cursor overlay",
+            )),
+            _ => Err(unexpected_answer(read, byte)),
         }
     }
 

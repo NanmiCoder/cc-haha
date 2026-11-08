@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import type { PromptCommand } from '../commands.js'
 import type { ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
-import { prepareForkedCommandContext } from './forkedAgent.js'
+import { createFileStateCacheWithSizeLimit } from './fileStateCache.js'
+import { createSubagentContext, prepareForkedCommandContext } from './forkedAgent.js'
 
 const makeAgent = (agentType: string): AgentDefinition => ({
   agentType,
@@ -24,6 +25,18 @@ function makeContext(activeAgents: AgentDefinition[]): ToolUseContext {
     },
   } as unknown as ToolUseContext
 }
+
+test('subagent actions keep the parent’s Computer Use turn identity', () => {
+  const parent = {
+    ...makeContext([]),
+    abortController: new AbortController(),
+    computerUseTurn: Symbol(),
+    readFileState: createFileStateCacheWithSizeLimit(1),
+  }
+  const child = createSubagentContext(parent)
+  expect(child.computerUseTurn).toBe(parent.computerUseTurn)
+  expect(child.abortController).not.toBe(parent.abortController)
+})
 
 describe('prepareForkedCommandContext', () => {
   const command: PromptCommand = {

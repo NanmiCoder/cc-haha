@@ -80,6 +80,7 @@ export type ComputerUseStatus = {
     available: boolean
     binaryPath: string | null
     reason: string | null
+    message?: string
     detail?: unknown
   }
   systemVersion: string | null

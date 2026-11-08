@@ -434,7 +434,7 @@ function NativeComputerUse({
               title={t('settings.computerUse.nativeUnavailableTitle')}
               detail={missing
                 ? t('settings.computerUse.agentDesktopMissing')
-                : t('settings.computerUse.agentDesktopProbeFailed', {
+                : runtime?.message ?? t('settings.computerUse.agentDesktopProbeFailed', {
                     reason: runtime?.reason ?? t('settings.computerUse.agentDesktopNoStatus'),
                   })}
               tone="strong"

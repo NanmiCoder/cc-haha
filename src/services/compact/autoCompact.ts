@@ -12,8 +12,9 @@ import { hasExactErrorMessage } from '../../utils/errors.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { logError } from '../../utils/log.js'
 import { findLastCompactBoundaryIndex } from '../../utils/messages.js'
-import { roughTokenCountEstimation } from '../../services/tokenEstimation.js'
+import { roughContextTokenCountEstimation } from '../../services/tokenEstimation.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { getToolSchemaCache } from '../../utils/toolSchemaCache.js'
 import {
   getTokenUsage,
   hasUsableContextUsage,
@@ -247,11 +248,21 @@ export function isAutoCompactEnabled(): boolean {
 export function estimateFallbackFixedContextTokens(
   cacheSafeParams: CacheSafeParams,
 ): number {
-  const tools = cacheSafeParams.toolUseContext.options.tools.map(tool => ({
-    name: tool.name,
-    input_schema: tool.inputJSONSchema ?? zodToJsonSchema(tool.inputSchema),
-  }))
-  return roughTokenCountEstimation(jsonStringify({
+  // Tool descriptions come from async tool.prompt() and are usually the
+  // largest part of the prefix. Once a request has been sent they sit in the
+  // session tool schema cache (same keys as toolToAPISchema); tools not yet
+  // rendered fall back to name + input_schema.
+  const schemaCache = getToolSchemaCache()
+  const tools = cacheSafeParams.toolUseContext.options.tools.map(tool => {
+    const cacheKey = tool.inputJSONSchema
+      ? `${tool.name}:${jsonStringify(tool.inputJSONSchema)}`
+      : tool.name
+    return schemaCache.get(cacheKey) ?? {
+      name: tool.name,
+      input_schema: tool.inputJSONSchema ?? zodToJsonSchema(tool.inputSchema),
+    }
+  })
+  return roughContextTokenCountEstimation(jsonStringify({
     systemPrompt: cacheSafeParams.systemPrompt,
     systemContext: cacheSafeParams.systemContext,
     userContext: cacheSafeParams.userContext,

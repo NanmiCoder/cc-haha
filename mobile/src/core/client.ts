@@ -1,3 +1,4 @@
+import { bytesToBase64 } from './base64'
 import { connectionHeaders, hostOrigin } from './connection'
 import type {
   CreateSessionInput,
@@ -35,6 +36,8 @@ export type FetchResponse = {
   text(): Promise<string>
   /** Binary bodies (tool images). Expo's fetch and the web fetch provide both. */
   arrayBuffer?(): Promise<ArrayBuffer>
+  /** The body as base64, when it already arrived that way (the direct path): no decode and re-encode. */
+  base64?(): Promise<string>
   headers?: { get(name: string): string | null }
 }
 export type FetchAdapter = (
@@ -128,12 +131,15 @@ export class ApiClient {
         }
         throw failure(response.status, value)
       }
-      if (!response.arrayBuffer)
+      if (!response.arrayBuffer && !response.base64)
         throw new ApiError('当前网络组件无法读取图片', 0, 'UNSUPPORTED')
       const type = response.headers?.get('Content-Type')?.split(';')[0]?.trim()
       if (!type?.startsWith('image/') || type === 'image/svg+xml')
         throw new ApiError('服务器返回了无效图片', response.status, 'INVALID_RESPONSE')
-      return `data:${type};base64,${bytesToBase64(new Uint8Array(await response.arrayBuffer()))}`
+      const encoded = response.base64
+        ? await response.base64()
+        : bytesToBase64(new Uint8Array(await response.arrayBuffer!()))
+      return `data:${type};base64,${encoded}`
     })
   }
 
@@ -319,25 +325,4 @@ function failure(status: number, value: unknown): ApiError {
   )
 }
 
-const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-/** Hermes has no Buffer. Slices are multiples of 3 bytes, so only the last one pads. */
-export function bytesToBase64(bytes: Uint8Array): string {
-  const parts: string[] = []
-  for (let start = 0; start < bytes.length; start += 3 * 4096) {
-    const end = Math.min(bytes.length, start + 3 * 4096)
-    let out = ''
-    for (let i = start; i < end; i += 3) {
-      const a = bytes[i]!
-      const b = i + 1 < end ? bytes[i + 1]! : 0
-      const c = i + 2 < end ? bytes[i + 2]! : 0
-      out +=
-        BASE64[a >> 2] +
-        BASE64[((a & 3) << 4) | (b >> 4)] +
-        (i + 1 < end ? BASE64[((b & 15) << 2) | (c >> 6)] : '=') +
-        (i + 2 < end ? BASE64[c & 63] : '=')
-    }
-    parts.push(out)
-  }
-  return parts.join('')
-}
+export { bytesToBase64 }

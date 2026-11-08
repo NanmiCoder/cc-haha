@@ -16,6 +16,7 @@ import {
   isProxyStreamTransportError,
   isRetryableStreamError,
   isRetryableStreamTransportError,
+  isStreamRequestRejection,
   RetriableStreamError,
   withRetry,
 } from './withRetry.js'
@@ -201,6 +202,46 @@ describe('context overflow wrapped in 401 (#1162)', () => {
     expect((thrown as CannotRetryError).originalError).toBe(overflow401)
     expect(attempts).toBe(1)
   })
+
+  test('does not retry a relay 5xx that reports a context overflow', async () => {
+    let attempts = 0
+    const message = 'Upstream returned HTTP 500: {"error":{"message":"Range of input length should be [1, 60000]"}}'
+    const overflow500 = new APIError(
+      500,
+      { type: 'error', error: { type: 'api_error', message } },
+      message,
+      undefined,
+    )
+
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => {
+        attempts += 1
+        throw overflow500
+      },
+      {
+        model: 'qwen-plus',
+        thinkingConfig: { type: 'disabled' },
+        maxRetries: 5,
+      },
+    )
+
+    let thrown: unknown
+    try {
+      while (!(await generator.next()).done) {
+        // Drain retry status messages until the generator terminates.
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    // A relay that wraps the provider's overflow in a 500 would otherwise
+    // burn every retry (and the compaction request's retries) on a request
+    // that can only be fixed by compacting.
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).originalError).toBe(overflow500)
+    expect(attempts).toBe(1)
+  })
 })
 
 describe('withRetry local service refused', () => {
@@ -355,6 +396,19 @@ describe('isRetryableStreamError', () => {
     expect(isRetryableStreamError(err)).toBe(true)
   })
 
+  test('does not match a mid-stream api_error that reports a context overflow', () => {
+    // The local proxy relays an OpenAI-style `data: {"error":...}` chunk as an
+    // api_error; resending the same oversized request cannot succeed.
+    const err = apiErrorWithBody({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: 'Your request exceeded model token limit: 60000 (requested: 64735)',
+      },
+    })
+    expect(isRetryableStreamError(err)).toBe(false)
+  })
+
   test('does not match a client invalid_request_error', () => {
     const err = apiErrorWithBody(
       {
@@ -480,6 +534,23 @@ describe('isProxyStreamTransportError', () => {
     expect(isProxyStreamTransportError(new APIError(undefined, {
       type: 'error', error: { type: 'stream_error', code: 'cyber_policy', message: 'Rejected' },
     }, undefined, undefined))).toBe(false)
+  })
+})
+
+describe('isStreamRequestRejection', () => {
+  test('treats an overflow inside the stream as a rejection whatever event type carries it', () => {
+    // The proxy relays an OpenAI `data: {"error":...}` overflow as api_error;
+    // a non-streaming copy of the same request would be refused the same way.
+    expect(isStreamRequestRejection(sseErrorEvent(
+      'api_error',
+      'Your request exceeded model token limit: 60000 (requested: 64735)',
+    ))).toBe(true)
+    expect(isStreamRequestRejection(sseErrorEvent('invalid_request_error', 'bad input'))).toBe(true)
+  })
+
+  test('leaves transient stream failures to the fallback', () => {
+    expect(isStreamRequestRejection(sseErrorEvent('api_error', 'Failed to generate a valid tool call.'))).toBe(false)
+    expect(isStreamRequestRejection(sseErrorEvent('overloaded_error', 'Overloaded'))).toBe(false)
   })
 })
 

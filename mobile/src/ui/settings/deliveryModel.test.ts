@@ -272,7 +272,7 @@ describe('remote test notification', () => {
   }
 
   test('every server status has its own sentence', () => {
-    expect(results.sent).toBe('电脑已发送测试通知，请回到手机主屏幕查看。')
+    expect(results.sent).toBe('电脑已发送测试通知，屏幕顶部应弹出横幅。')
     expect(results.notConfigured).toContain('电脑推送尚未设置')
     expect(results.noRegistration).toContain('电脑还未识别这台手机')
     expect(new Set(Object.values(results)).size).toBe(3)

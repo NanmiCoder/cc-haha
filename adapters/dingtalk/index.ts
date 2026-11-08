@@ -52,7 +52,7 @@ import {
   DINGTALK_PERMISSION_CARD_CALLBACK_ROUTE,
   parseDingTalkPermissionCardAction,
 } from './permission-card.js'
-import { finishAndResetDingTalkStreamingState, resetDingTalkStreamingState } from './stream-state.js'
+import { finishAndResetDingTalkStreamingState, flushDingTalkAiCard, resetDingTalkStreamingState } from './stream-state.js'
 
 const DINGTALK_API = 'https://api.dingtalk.com'
 
@@ -147,10 +147,12 @@ async function getAccessToken(): Promise<string> {
   return data.accessToken
 }
 
-async function sendText(chatId: string, text: string): Promise<void> {
+async function sendText(chatId: string, text: string, options: { requireDelivery?: boolean } = {}): Promise<void> {
   const sessionWebhook = sessionWebhooks.get(chatId)
   if (!sessionWebhook) {
-    console.warn(`[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`)
+    const message = `[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`
+    if (options.requireDelivery) throw new Error(message)
+    console.warn(message)
     return
   }
 
@@ -172,7 +174,9 @@ async function sendText(chatId: string, text: string): Promise<void> {
     })
     if (!res.ok) {
       const body = await res.text().catch(() => '')
-      console.warn(`[DingTalk] sendText failed: ${res.status} ${body}`)
+      const message = `[DingTalk] sendText failed: ${res.status} ${body}`
+      if (options.requireDelivery) throw new Error(message)
+      console.warn(message)
     }
   }
 }
@@ -203,32 +207,17 @@ function getOrCreateAiCard(chatId: string): Promise<DingTalkAiCardInstance | nul
 }
 
 async function flushToAiCard(chatId: string, newText: string, isComplete: boolean): Promise<void> {
-  const fullText = (streamingCardText.get(chatId) ?? '') + newText
-  streamingCardText.set(chatId, fullText)
-  if (!fullText.trim()) return
-
-  const cardPromise = getOrCreateAiCard(chatId)
-  const card = cardPromise ? await cardPromise : null
-  if (!card) {
-    if (isComplete) await sendText(chatId, fullText)
-    return
-  }
-
-  try {
-    if (isComplete) {
-      await aiCards.finish(card, fullText)
-      streamingCards.delete(chatId)
-      streamingCardText.delete(chatId)
-      aiCardBuffers.get(chatId)?.reset()
-      aiCardBuffers.delete(chatId)
-    } else {
-      await aiCards.stream(card, `${fullText} ▍`, false)
-    }
-  } catch (err) {
-    console.warn('[DingTalk][AICard] stream failed, falling back to markdown:', err instanceof Error ? err.message : err)
-    streamingCards.delete(chatId)
-    if (isComplete) await sendText(chatId, fullText)
-  }
+  await flushDingTalkAiCard(
+    { aiCardBuffers, streamingCards, streamingCardText },
+    chatId,
+    newText,
+    isComplete,
+    {
+      getOrCreateCard: () => getOrCreateAiCard(chatId),
+      sendText: (text) => sendText(chatId, text, { requireDelivery: true }),
+      aiCards,
+    },
+  )
 }
 
 function clearTransientChatState(chatId: string): void {

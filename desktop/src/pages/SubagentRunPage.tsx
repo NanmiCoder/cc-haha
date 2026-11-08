@@ -23,7 +23,7 @@ import type { TeamTaskAnchor } from '../api/teams'
 import { Badge, type Tone as BadgeTone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
-import { useTranslation } from '../i18n'
+import { useTranslation, type TranslationKey } from '../i18n'
 import {
   createDefaultSessionState,
   mapHistoryMessagesToUiMessages,
@@ -343,6 +343,8 @@ export function SubagentRunPage({
       activityMessages={activityProjectionMessages}
       title={title}
       status={effectiveStatus}
+      model={data?.model}
+      effort={data?.effort}
       identity={`${sourceSessionId} / ${toolUseId}`}
       details={data ? (
         <>
@@ -601,6 +603,8 @@ function AgentSessionView({
   activityMessages,
   title,
   status,
+  model,
+  effort,
   identity,
   details,
   backLabel,
@@ -629,6 +633,10 @@ function AgentSessionView({
   activityMessages?: UIMessage[]
   title: string
   status?: SubagentRunStatus
+  /** The run's served model as the server read it; live stream text names none. */
+  model?: string
+  /** Launch effort; `null` is the model's default, `undefined` unknown. */
+  effort?: string | null
   identity: string
   details?: ReactNode
   backLabel: string
@@ -647,7 +655,9 @@ function AgentSessionView({
   const t = useTranslation()
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const sessionState = useChatStore((state) => state.sessions[sessionId])
-  const runModel = useMemo(() => latestRunModel(sessionState?.messages), [sessionState?.messages])
+  const liveRunModel = useMemo(() => latestRunModel(sessionState?.messages), [sessionState?.messages])
+  const runModel = model ?? liveRunModel
+  const runEffort = effort === undefined ? undefined : effortLabel(effort, t)
   const isActivityPanelOpen = useActivityPanelStore((state) => state.isOpen(sessionId))
   const closeActivityPanel = useActivityPanelStore((state) => state.close)
   const dismissBackgroundTaskKeys = useActivityPanelStore((state) => state.dismissBackgroundTaskKeys)
@@ -822,6 +832,17 @@ function AgentSessionView({
                 {runModel}
               </Badge>
             ) : null}
+            {runEffort ? (
+              <Badge
+                tone="neutral"
+                size="xs"
+                bordered
+                title={t('model.effort')}
+                aria-label={`${t('model.effort')}: ${runEffort}`}
+              >
+                {t('model.effort')} {runEffort}
+              </Badge>
+            ) : null}
           </>
         )}
         actions={(
@@ -895,6 +916,19 @@ function latestRunModel(messages: UIMessage[] | undefined): string | undefined {
     if (message?.type === 'assistant_text' && message.model) return message.model
   }
   return undefined
+}
+
+const EFFORT_LABEL_KEYS: Record<string, TranslationKey> = {
+  low: 'settings.general.effort.low',
+  medium: 'settings.general.effort.medium',
+  high: 'settings.general.effort.high',
+  xhigh: 'settings.general.effort.xhigh',
+  max: 'settings.general.effort.max',
+}
+
+function effortLabel(effort: string | null, t: TranslationFn): string {
+  if (effort === null) return t('model.effortUnset')
+  return Object.hasOwn(EFFORT_LABEL_KEYS, effort) ? t(EFFORT_LABEL_KEYS[effort]!) : effort
 }
 
 function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationFn }) {

@@ -86,7 +86,7 @@ describe('Cloudflare settings migration', () => {
     expect(f.startTunnel).not.toHaveBeenCalled()
     expect(JSON.stringify(f.manager.getStatus())).not.toContain('fake-retired-secret')
     const persisted = JSON.parse(readFileSync(f.file, 'utf8'))
-    expect(persisted).toMatchObject({ version: 5, futureSetting: { enabled: true }, legacyRemoteConfiguration: original })
+    expect(persisted).toMatchObject({ version: 6, futureSetting: { enabled: true }, legacyRemoteConfiguration: original, p2pEnabled: true })
     expect(migratePublicAccessSettings(persisted)).toEqual(persisted)
     await expect(f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION - 1)).rejects.toThrow('consent')
     await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
@@ -95,8 +95,40 @@ describe('Cloudflare settings migration', () => {
   })
 
   it('migrates a new profile into disabled Quick mode and preserves newer unknown fields', () => {
-    expect(migratePublicAccessSettings({})).toEqual({ version: 5, ...quick, tunnelToken: '', autoStart: false, consentVersion: 0, migrationRequired: false })
+    expect(migratePublicAccessSettings({})).toEqual({ version: 6, ...quick, tunnelToken: '', autoStart: false, consentVersion: 0, migrationRequired: false, p2pEnabled: true })
     expect(migratePublicAccessSettings({ ...named, version: 8, future: 7, autoStart: true, consentVersion: 4 })).toMatchObject({ version: 8, future: 7, autoStart: true, consentVersion: 4 })
+  })
+
+  it('a version 5 file gains direct connections switched on and keeps everything else', async () => {
+    const saved = { ...quick, version: 5, tunnelToken: '', autoStart: true, consentVersion: 4, migrationRequired: false, futureSetting: { kept: true } }
+    const f = fixture(saved)
+    expect(f.manager.getStatus().p2pEnabled).toBe(true)
+    const persisted = JSON.parse(readFileSync(f.file, 'utf8'))
+    expect(persisted).toEqual({ ...saved, version: 6, p2pEnabled: true })
+    // An explicit opt-out survives every later migration.
+    expect(migratePublicAccessSettings({ ...persisted, p2pEnabled: false }).p2pEnabled).toBe(false)
+  })
+
+  it('switching direct connections persists and notifies without touching the tunnel', async () => {
+    const states: Array<boolean | undefined> = []
+    const f = fixture()
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => states.push(status.p2pEnabled) })
+    managers.push(manager)
+    expect(manager.setP2PEnabled(false).p2pEnabled).toBe(false)
+    expect(manager.setP2PEnabled(false).p2pEnabled).toBe(false)
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).p2pEnabled).toBe(false)
+    expect(states).toEqual([false])
+    expect(f.request).not.toHaveBeenCalled()
+  })
+
+  it('reports connection state changes so the P2P endpoint can follow them', async () => {
+    const seen: string[] = []
+    const f = fixture()
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => seen.push(status.state) })
+    managers.push(manager)
+    await manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await manager.stop()
+    expect(seen).toEqual(['connecting', 'online', 'disabled'])
   })
 
   it.each(['{broken', { mode: 'unknown' }, { ...quick, version: 5, localPort: null }, { ...named, tunnelToken: 'fake\nsecret' }, { version: 4, mode: 'tailscale', customUrl: 'http://unsafe.test', localPort: 17463 }])('preserves corrupt or invalid saved settings: %j', async saved => {
@@ -109,6 +141,22 @@ describe('Cloudflare settings migration', () => {
     expect(readFileSync(f.file, 'utf8')).toBe(serialized)
     await f.manager.configure(quick)
     expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', error: null })
+  })
+
+  it.each(['{broken', { ...named, version: 5, tunnelToken: 'fake\nsecret' }])('switching direct connections never overwrites invalid saved settings: %j', saved => {
+    const f = fixture(saved)
+    const serialized = typeof saved === 'string' ? saved : JSON.stringify(saved)
+    expect(() => f.manager.setP2PEnabled(false)).toThrow('configuration')
+    expect(readFileSync(f.file, 'utf8')).toBe(serialized)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'unconfigured', error: 'configuration', p2pEnabled: true })
+  })
+
+  it.each(['{broken', { ...named, version: 5, tunnelToken: 'fake\nsecret' }])('switching auto start never overwrites invalid saved settings: %j', saved => {
+    const f = fixture(saved)
+    const serialized = typeof saved === 'string' ? saved : JSON.stringify(saved)
+    expect(() => f.manager.setAutoStart(true)).toThrow('configuration')
+    expect(readFileSync(f.file, 'utf8')).toBe(serialized)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'unconfigured', error: 'configuration' })
   })
 })
 
@@ -377,6 +425,69 @@ describe('Cloudflare gateway lifecycle', () => {
     f.exit()
     await advance(60000)
     expect(f.startTunnel).toHaveBeenCalledTimes(2)
+  })
+
+  it('a recovery restart keeps phone streams resumable; an explicit stop ends them', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.exit()
+    await advance(0)
+    expect(f.request.mock.calls.filter(([route]) => route === '/disable')).toEqual([['/disable', 'POST', { reason: 'restart' }]])
+    await advance(1000)
+    f.request.mockClear()
+    await f.manager.serverUnavailable()
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST', { reason: 'restart' })
+    f.request.mockClear()
+    await f.manager.stop()
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+  })
+
+  it('a failed automatic retry keeps phone streams resumable while it keeps retrying', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.request.mockClear()
+    // cloudflared exits and the network is still down on the first retry.
+    f.reachable(false)
+    f.exit()
+    await advance(0)
+    await advance(1000)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'network' })
+    const disables = f.request.mock.calls.filter(([route]) => route === '/disable')
+    expect(disables).toEqual([['/disable', 'POST', { reason: 'restart' }], ['/disable', 'POST', { reason: 'restart' }]])
+    f.reachable(true)
+    await advance(2000)
+    expect(f.manager.getStatus().state).toBe('online')
+  })
+
+  it('a failure that will not be retried ends phone streams', async () => {
+    const f = fixture()
+    // The gateway came up on another port: a configuration problem, not a network blip.
+    f.request.mockImplementation(async (route: string) => route === '/enable' ? { port: 17464 } : {})
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'configuration' })
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+  })
+
+  it('a tunnel recovery stays reconnecting until it is back online, without passing through disabled or failed', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const states: string[] = []
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => states.push(status.state) })
+    managers.push(manager)
+    await manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.reachable(false)
+    f.exit()
+    await advance(0)
+    await advance(1000)
+    f.reachable(true)
+    await advance(2000)
+    expect(manager.getStatus().state).toBe('online')
+    expect(states).toEqual(['connecting', 'online', 'reconnecting', 'online'])
+    states.length = 0
+    await manager.serverUnavailable()
+    expect(states).toEqual(['reconnecting'])
   })
 
   it('waits for cancelled startup cleanup before honoring a new enable request', async () => {

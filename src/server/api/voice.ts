@@ -15,8 +15,8 @@
  * PUT    /api/voice/vocabulary/terms            — { from, term, aliases } replace one entry
  * DELETE /api/voice/vocabulary/terms?term=      — remove one entry (and stop suggesting it)
  * POST   /api/voice/vocabulary/suggestions/dismiss — { term } stop suggesting a term
- * GET    /api/voice/vocabulary/history/sources  — which chat histories exist locally
- * POST   /api/voice/vocabulary/history/suggest  — { sources, providerId, modelId } local count + one model pick
+ * GET    /api/voice/vocabulary/history/sources  — which chat histories have recent sessions, and how many days back
+ * POST   /api/voice/vocabulary/history/suggest  — { sources, providerId, modelId } local count of recent messages + model pick
  *
  * Voice errors use `{ error: 'voice/...', message, reason? }` with 400/404/409/500/502.
  * Everything except catalog, provider status and transcribe is desktop-only
@@ -166,7 +166,7 @@ async function handleVocabulary(
 
   if (route === 'history/sources') {
     requireMethod(req, 'GET')
-    return Response.json({ sources: await service.historySources() })
+    return Response.json(await service.historySources())
   }
 
   if (route === 'history/suggest') {

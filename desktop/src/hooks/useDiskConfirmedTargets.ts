@@ -6,16 +6,47 @@ type Listing = { key: string; namesByDir: Map<string, Set<string>> }
 
 const DIR_SEPARATOR = '\u0000'
 const LISTING_TTL_MS = 5_000
+const LISTING_CACHE_LIMIT = 256
 
 // A long reply history mounts many messages naming files in the same folder; one
 // listing serves them all for a few seconds, then a fresh one sees new files.
 const listingCache = new Map<string, { at: number; names: Promise<Set<string> | null> }>()
+let listingExpiryTimer: ReturnType<typeof setTimeout> | null = null
+
+function pruneListings(): void {
+  const now = Date.now()
+  for (const [key, entry] of listingCache) {
+    if (now - entry.at >= LISTING_TTL_MS) listingCache.delete(key)
+  }
+  while (listingCache.size > LISTING_CACHE_LIMIT) {
+    const oldest = listingCache.keys().next()
+    if (oldest.done) break
+    listingCache.delete(oldest.value)
+  }
+}
+
+function scheduleListingExpiry(): void {
+  if (listingExpiryTimer !== null || listingCache.size === 0) return
+  const oldest = listingCache.values().next().value!
+  listingExpiryTimer = setTimeout(() => {
+    listingExpiryTimer = null
+    pruneListings()
+    scheduleListingExpiry()
+  }, Math.max(0, oldest.at + LISTING_TTL_MS - Date.now()))
+}
 
 export function resetDiskListingCacheForTests() {
+  if (listingExpiryTimer !== null) clearTimeout(listingExpiryTimer)
+  listingExpiryTimer = null
   listingCache.clear()
 }
 
+export function diskListingCacheSizeForTests(): number {
+  return listingCache.size
+}
+
 function listFileNames(sessionId: string, directory: string): Promise<Set<string> | null> {
+  pruneListings()
   const cacheKey = `${sessionId}${DIR_SEPARATOR}${directory}`
   const cached = listingCache.get(cacheKey)
   if (cached && Date.now() - cached.at < LISTING_TTL_MS) return cached.names
@@ -26,6 +57,8 @@ function listFileNames(sessionId: string, directory: string): Promise<Set<string
       : null)
     .catch(() => null)
   listingCache.set(cacheKey, { at: Date.now(), names })
+  pruneListings()
+  scheduleListingExpiry()
   return names
 }
 

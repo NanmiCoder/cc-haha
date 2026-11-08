@@ -25,7 +25,7 @@ use crate::cli_args::{
     system::{
         AppRefArgs, ClipboardGetArgs, ClipboardSetArgs, CloseAppArgs, FocusWindowArgs, LaunchArgs,
         ListAppsArgs, ListWindowsArgs, MoveWindowCliArgs, OpenSystemSurfaceArgs, PermissionsArgs,
-        ResizeWindowCliArgs, WaitArgs,
+        ResizeWindowCliArgs, StatusArgs, WaitArgs,
     },
     trace::TraceArgs,
 };
@@ -149,7 +149,7 @@ pub(crate) enum Commands {
     #[command(about = "Wait for time (ms), element presence, text, or window appearance")]
     Wait(WaitArgs),
     #[command(about = "Show adapter health, platform info, and permission state")]
-    Status,
+    Status(StatusArgs),
     #[command(
         about = "Check nested permission states: accessibility/screen_recording/automation each return {state,...}"
     )]
@@ -240,7 +240,7 @@ impl Commands {
             Self::ClipboardSet(_) => CommandMetadata::new("clipboard-set", false),
             Self::ClipboardClear => CommandMetadata::new("clipboard-clear", false),
             Self::Wait(_) => CommandMetadata::new("wait", false),
-            Self::Status => CommandMetadata::new("status", false),
+            Self::Status(_) => CommandMetadata::new("status", false),
             Self::Permissions(_) => CommandMetadata::new("permissions", false),
             Self::Version => CommandMetadata::new("version", false),
             Self::Batch(_) => CommandMetadata::new("batch", false),
@@ -329,7 +329,7 @@ impl Commands {
             | Self::ListSurfaces(_)
             | Self::ListNotifications(_)
             | Self::Wait(_)
-            | Self::Status
+            | Self::Status(_)
             | Self::Version
             | Self::Skills(_) => false,
         }

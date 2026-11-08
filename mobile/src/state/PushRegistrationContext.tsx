@@ -7,6 +7,8 @@ import {
   type PropsWithChildren,
 } from 'react'
 import { AppState, Platform } from 'react-native'
+import { isAppForeground } from '../core/appVisibility'
+import { foregroundGate } from '../core/foregroundGate'
 import * as Notifications from 'expo-notifications'
 import { backgroundDuty, pushRegistrations, pushTokens, useApp, useConnection } from './AppContext'
 import { usePreferences } from './PreferencesContext'
@@ -143,12 +145,12 @@ function RegisterHost({
       } catch (error) {
         return pushRegistrationFailure(error, stage)
       }
-    }, (info) => onChange(id, info))
+    }, (info) => onChange(id, info), { gate: foregroundGate })
     const refresh = () => recovery.refresh()
     retries.set(id, refresh)
-    recovery.setActive(AppState.currentState === 'active')
+    recovery.setActive(isAppForeground(AppState.currentState))
     const listener = AppState.addEventListener('change', (state) => {
-      recovery.setActive(state === 'active')
+      recovery.setActive(isAppForeground(state))
     })
     const decided = subscribePermissionDecided(refresh)
     const tokens = Notifications.addPushTokenListener((token) => {

@@ -452,6 +452,21 @@ describe('slow links and tool images', () => {
     expect(calls[0].init.headers).toMatchObject({ Authorization: 'Bearer fake-token', Origin: remote.url, Accept: 'image/*' })
   })
 
+  test('an image body that arrived base64-encoded (direct path) goes into the data URI as is', async () => {
+    const encoded = Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 255, 7])).toString('base64')
+    const client = new ApiClient(remote, 'fake-token', {
+      fetch: async () =>
+        response({}, 200, {
+          headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'image/png' : null) },
+          base64: async () => encoded,
+          arrayBuffer: async () => {
+            throw new Error('decoded and re-encoded the image')
+          },
+        }),
+    })
+    expect(await client.image('/api/sessions/s-1/tool-images/toolu_1/0', 'full')).toBe(`data:image/png;base64,${encoded}`)
+  })
+
   test('refuses non-image paths, active image types and error bodies', async () => {
     const client = (contentType: string, status = 200) => new ApiClient(lan, 'fake', {
       fetch: async () => response({ error: 'Tool image not found' }, status, {

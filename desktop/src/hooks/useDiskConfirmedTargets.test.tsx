@@ -2,7 +2,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { sessionsApi, type WorkspaceTreeResult } from '@/api/sessions'
 import { extractAssistantOutputTargets } from '@/lib/assistantOutputTargets'
-import { resetDiskListingCacheForTests, useDiskConfirmedTargets } from './useDiskConfirmedTargets'
+import { confirmDiskTargets, diskListingCacheSizeForTests, resetDiskListingCacheForTests, useDiskConfirmedTargets } from './useDiskConfirmedTargets'
 
 let getWorkspaceTree: MockInstance<typeof sessionsApi.getWorkspaceTree>
 
@@ -32,10 +32,43 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetDiskListingCacheForTests()
+  vi.useRealTimers()
   getWorkspaceTree.mockRestore()
 })
 
 describe('useDiskConfirmedTargets', () => {
+  it('expires listings even when their directories are never read again', async () => {
+    vi.useFakeTimers()
+    onDisk({ '': ['报告v2.docx'] })
+    const targets = cards('已生成报告v2.docx')
+    await confirmDiskTargets('s1', targets)
+    await confirmDiskTargets('s2', targets)
+    await confirmDiskTargets('s1', targets)
+    expect(getWorkspaceTree).toHaveBeenCalledTimes(2)
+    expect(diskListingCacheSizeForTests()).toBe(2)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(diskListingCacheSizeForTests()).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    await confirmDiskTargets('s1', targets)
+    expect(getWorkspaceTree).toHaveBeenCalledTimes(3)
+  })
+
+  it('bounds bursts of listings while retaining recent shared lookups', async () => {
+    vi.useFakeTimers()
+    onDisk({ '': ['报告v2.docx'] })
+    const targets = cards('已生成报告v2.docx')
+    for (let index = 0; index <= 256; index += 1) {
+      await confirmDiskTargets(`s${index}`, targets)
+    }
+    expect(diskListingCacheSizeForTests()).toBe(256)
+    await confirmDiskTargets('s256', targets)
+    expect(getWorkspaceTree).toHaveBeenCalledTimes(257)
+    await confirmDiskTargets('s0', targets)
+    expect(getWorkspaceTree).toHaveBeenCalledTimes(258)
+    expect(vi.getTimerCount()).toBe(1)
+  })
+
   it('renames a card to the longest reading that exists on disk', async () => {
     onDisk({ '': ['报告v2.docx', 'v2.docx.bak'] })
     const targets = cards('已生成报告v2.docx')

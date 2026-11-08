@@ -250,6 +250,37 @@ fn non_mutating_commands_skip_cursor_overlay_lifecycle() {
 }
 
 #[test]
+fn headed_lifecycle_targets_the_active_agent_renderer_in_a_multi_agent_session() {
+    let _home = HomeGuard::new();
+    let manifest = started_overlay_session();
+    let config = agent_desktop_core::CursorOverlayConfig::enabled(None, 6)
+        .unwrap()
+        .with_multi_agent(true);
+    agent_desktop_core::session::set_cursor_overlay(&manifest.id, config).unwrap();
+    let context = headed_context(&manifest)
+        .with_agent_id(Some("writer".to_string()))
+        .unwrap();
+    let adapter = RecordingOverlayAdapter::new();
+
+    dispatch(
+        Commands::ClipboardClear,
+        &adapter,
+        &PermissionReport::default(),
+        &context,
+    )
+    .unwrap();
+
+    let controls = adapter.controls.lock().unwrap();
+    assert_eq!(controls.len(), 2);
+    assert!(controls[0].is_hide() && controls[1].is_show());
+    assert!(
+        controls
+            .iter()
+            .all(|control| control.agent_id() == Some("writer"))
+    );
+}
+
+#[test]
 fn cursor_overlay_show_fires_even_when_the_mutating_command_errors() {
     let _home = HomeGuard::new();
     let manifest = started_overlay_session();
