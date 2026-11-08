@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { Marked } from 'marked'
 import { ThinkingBlock } from './ThinkingBlock'
+import { splitStreamingMarkdown } from '../../lib/streamingMarkdownSegments'
 
 const parse = new Marked({ gfm: true, breaks: true })
 const paragraph = 'Long reasoning: ' + 'reasoning about the request '.repeat(100)
@@ -56,5 +57,26 @@ describe('ThinkingBlock streaming Markdown regressions', () => {
     rerender(<ThinkingBlock content={before + '\n\n[doc]: https://example.com/documentation'} isActive />)
 
     expect(container.querySelector('a[href="https://example.com/documentation"]')).not.toBeNull()
+  })
+
+  it('resolves a document-scoped link definition inside a block quote', () => {
+    const content = paragraph + ' [the doc][doc]\n\n> [doc]: https://example.com/documentation\n\nStill streaming'
+    expect(parse.parse(content)).toContain('href="https://example.com/documentation"')
+    const { container } = renderActive(content)
+    expect(container.querySelector('a[href="https://example.com/documentation"]')).not.toBeNull()
+  })
+
+  it('keeps the table header when the delimiter arrives incrementally at a fallback boundary', () => {
+    const prefix = 'Reasoning '.repeat(590) + '\n| ' + 'field '.repeat(30) + ' | Other |\n'
+    const before = prefix + '|'
+    const content = prefix + '| --- | --- |\n| value | other |\n\nStill streaming'
+    expect(parse.parse(content)).toContain('<table>')
+    const previous = splitStreamingMarkdown(before)
+    const { container, rerender } = renderActive(before)
+
+    rerender(<ThinkingBlock content={content} isActive />)
+
+    expect(container.querySelectorAll('table')).toHaveLength(1)
+    expect(splitStreamingMarkdown(content, previous)).toEqual(splitStreamingMarkdown(content))
   })
 })

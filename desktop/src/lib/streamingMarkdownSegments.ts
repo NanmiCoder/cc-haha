@@ -33,7 +33,6 @@ export const EMPTY_STREAMING_MARKDOWN_SEGMENTS: StreamingMarkdownSegments = { se
 const DEFAULT_MIN_SEGMENT_CHARS = 2_000
 const DEFAULT_MAX_SEGMENT_CHARS = 6_000
 const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})/
-const REFERENCE_DEFINITION = /^ {0,3}\[(?:[^\]\\]|\\.)+\]:/m
 
 function isTableDelimiter(line: string): boolean {
   const cells = line.trim().replace(/^\||\|$/g, '').split('|')
@@ -51,10 +50,10 @@ export function splitStreamingMarkdown(
   previous: StreamingMarkdownSegments = EMPTY_STREAMING_MARKDOWN_SEGMENTS,
   options: StreamingMarkdownSegmentOptions = {},
 ): StreamingMarkdownSegments {
-  // Reference definitions apply to the whole document, including earlier
-  // paragraphs. Keep that uncommon case whole so new definitions can resolve
-  // links which were already rendered before the definition arrived.
-  if (REFERENCE_DEFINITION.test(content)) return { settled: [], live: content }
+  // Reference definitions, including ones nested in quotes/lists, apply to
+  // earlier paragraphs. Conservatively keep any definition candidate whole
+  // so a later delta can resolve a link which has already been rendered.
+  if (content.includes(']:')) return { settled: [], live: content }
 
   const minSegmentChars = Math.max(1, options.minSegmentChars ?? DEFAULT_MIN_SEGMENT_CHARS)
   const maxSegmentChars = Math.max(minSegmentChars, options.maxSegmentChars ?? DEFAULT_MAX_SEGMENT_CHARS)
@@ -91,7 +90,7 @@ export function splitStreamingMarkdown(
         settled.push(content.slice(segmentStart, position))
         segmentStart = position
         lineBreakCut = -1
-      } else if (position - segmentStart >= maxSegmentChars && lineBreakCut > segmentStart) {
+      } else if (lineComplete && position - segmentStart >= maxSegmentChars && lineBreakCut > segmentStart) {
         settled.push(content.slice(segmentStart, lineBreakCut))
         segmentStart = lineBreakCut
         lineBreakCut = -1
