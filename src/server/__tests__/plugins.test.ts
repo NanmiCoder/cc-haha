@@ -235,10 +235,42 @@ describe('Plugins API', () => {
     }
     expect(body.marketplaces).toEqual([
       { name: 'empty-market', source: emptyMarketplaceRoot, lastUpdated, autoUpdate: false, installedCount: 0 },
-      { name: 'test-market', source: marketplaceRoot, lastUpdated, autoUpdate: true, installedCount: 1 },
+      { name: 'test-market', source: marketplaceRoot, lastUpdated, autoUpdate: false, installedCount: 1 },
     ])
     expect(body.summary.marketplaceCount).toBe(2)
   })
+
+  it.each([
+    ['third-party', undefined, undefined, false],
+    ['claude-plugins-official', undefined, undefined, true],
+    ['knowledge-work-plugins', undefined, undefined, false],
+    ['third-party', true, undefined, true],
+    ['claude-plugins-official', false, undefined, false],
+    ['third-party', false, true, true],
+    ['claude-plugins-official', true, false, false],
+  ] as const)(
+    'reports effective auto-update for %s (stored=%s, declared=%s)',
+    async (name, stored, declared, expected) => {
+      const marketplaceRoot = path.join(tmpDir, 'marketplace-root')
+      const source = { source: 'directory', path: marketplaceRoot }
+      await fs.mkdir(path.join(tmpDir, 'plugins'), { recursive: true })
+      await fs.mkdir(marketplaceRoot, { recursive: true })
+      await fs.writeFile(path.join(tmpDir, 'plugins', 'known_marketplaces.json'), JSON.stringify({
+        [name]: { source, installLocation: marketplaceRoot, lastUpdated: new Date(0).toISOString(), autoUpdate: stored },
+      }))
+      if (declared !== undefined) {
+        await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({
+          extraKnownMarketplaces: { [name]: { source, autoUpdate: declared } },
+        }))
+      }
+
+      const { req, url, segments } = makeRequest('GET', '/api/plugins')
+      const res = await handlePluginsApi(req, url, segments)
+      expect(res.status).toBe(200)
+      const body = await res.json() as { marketplaces: Array<{ name: string; autoUpdate: boolean }> }
+      expect(body.marketplaces).toEqual([expect.objectContaining({ name, autoUpdate: expected })])
+    },
+  )
 
   it('POST /api/plugins/reload returns numeric counters', async () => {
     const { req, url, segments } = makeRequest('POST', '/api/plugins/reload', {})
