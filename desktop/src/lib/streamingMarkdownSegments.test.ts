@@ -82,4 +82,11 @@ describe('splitStreamingMarkdown', () => {
     expect(result.settled.join('') + result.live).toBe(replaced)
     expect(result).toEqual(splitStreamingMarkdown(replaced))
   })
+
+  it('does not close a fence with a matching marker followed by an info string', () => {
+    const code = '```md\n' + paragraph(1) + '\n```ts\n\nkeep this code\n```\n'
+    const result = splitStreamingMarkdown(code + '\nStill streaming', undefined, { minSegmentChars: 100 })
+    expect(result.settled).toEqual([code + '\n'])
+    expect(result.live).toBe('Still streaming')
+  })
 })

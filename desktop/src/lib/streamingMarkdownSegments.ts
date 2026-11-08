@@ -33,6 +33,12 @@ export const EMPTY_STREAMING_MARKDOWN_SEGMENTS: StreamingMarkdownSegments = { se
 const DEFAULT_MIN_SEGMENT_CHARS = 2_000
 const DEFAULT_MAX_SEGMENT_CHARS = 6_000
 const CODE_FENCE_LINE = /^ {0,3}(`{3,}|~{3,})/
+const REFERENCE_DEFINITION = /^ {0,3}\[(?:[^\]\\]|\\.)+\]:/m
+
+function isTableDelimiter(line: string): boolean {
+  const cells = line.trim().replace(/^\||\|$/g, '').split('|')
+  return cells.length > 0 && cells.every((cell) => /^\s*:?-+:?\s*$/.test(cell))
+}
 
 /**
  * `previous` is the result for an earlier prefix of `content`: its settled
@@ -45,6 +51,11 @@ export function splitStreamingMarkdown(
   previous: StreamingMarkdownSegments = EMPTY_STREAMING_MARKDOWN_SEGMENTS,
   options: StreamingMarkdownSegmentOptions = {},
 ): StreamingMarkdownSegments {
+  // Reference definitions apply to the whole document, including earlier
+  // paragraphs. Keep that uncommon case whole so new definitions can resolve
+  // links which were already rendered before the definition arrived.
+  if (REFERENCE_DEFINITION.test(content)) return { settled: [], live: content }
+
   const minSegmentChars = Math.max(1, options.minSegmentChars ?? DEFAULT_MIN_SEGMENT_CHARS)
   const maxSegmentChars = Math.max(minSegmentChars, options.maxSegmentChars ?? DEFAULT_MAX_SEGMENT_CHARS)
 
@@ -57,6 +68,7 @@ export function splitStreamingMarkdown(
   }
 
   let fence: string | null = null
+  let table = false
   // Where a line break could cut, if the segment overflows before a blank line.
   let lineBreakCut = -1
   let afterBlankLine = false
@@ -69,8 +81,9 @@ export function splitStreamingMarkdown(
     const lineComplete = lineEnd !== -1
     const line = content.slice(position, lineComplete ? lineEnd : content.length)
     const blank = line.trim().length === 0
+    if (blank) table = false
 
-    if (fence === null && !blank && !/\s/.test(line.charAt(0))) {
+    if (fence === null && !table && !blank && !/\s/.test(line.charAt(0))) {
       // A line that starts a new top-level block is where the text before it
       // can be settled: after a paragraph break once the segment is long
       // enough, otherwise at the last line break once it has overflowed.
@@ -87,11 +100,21 @@ export function splitStreamingMarkdown(
 
     if (!lineComplete) break
 
+    if (fence === null && !table && line.includes('|')) {
+      const nextLineEnd = content.indexOf('\n', lineEnd + 1)
+      const nextLine = content.slice(lineEnd + 1, nextLineEnd === -1 ? content.length : nextLineEnd)
+      table = isTableDelimiter(nextLine)
+    }
+
     const fenceMatch = CODE_FENCE_LINE.exec(line)
     if (fenceMatch) {
-      const marker = fenceMatch[1]!.charAt(0)
-      if (fence === null) fence = marker
-      else if (fence === marker) fence = null
+      const marker = fenceMatch[1]!
+      const suffix = line.slice(fenceMatch[0].length)
+      if (fence === null) {
+        if (marker[0] === '~' || !suffix.includes('`')) fence = marker
+      } else if (fence[0] === marker[0] && marker.length >= fence.length && suffix.trim() === '') {
+        fence = null
+      }
     }
 
     const next = lineEnd + 1

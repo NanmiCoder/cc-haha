@@ -117,7 +117,7 @@ export function ThinkingBlock({
   )
 }
 
-const STREAMING_SEGMENT_CLASS = 'chat-reading-markdown text-[var(--color-text-secondary)]'
+const STREAMING_SEGMENT_CLASS = 'thinking-markdown thinking-markdown-segment chat-reading-markdown text-[var(--color-text-secondary)]'
 
 /**
  * The body while it streams: the settled segments are rendered once and left
@@ -234,12 +234,12 @@ const thinkingStyles = `
   content: '';
   animation: thinking-dots 1.4s steps(1, end) infinite;
 }
-.thinking-markdown > :first-child,
-.thinking-markdown > :first-child > :first-child {
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :first-child > :first-child {
   margin-top: 0;
 }
-.thinking-markdown > :last-child,
-.thinking-markdown > :last-child > :last-child {
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child,
+.thinking-markdown:not(.thinking-markdown-segment) > :last-child > :last-child {
   margin-bottom: 0;
 }
 .thinking-markdown-live > :first-child > :first-child,
