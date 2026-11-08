@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { searchBody } from '../../scripts/generate-docs-manifest.mjs'
 import { highlightParts, queryTerms, searchEntries, shouldOpenSearchResult } from './searchResults.js'
 
 const index = [
@@ -20,6 +21,23 @@ test('search keeps locale, requires every term and ranks title matches above bod
 test('body-only matches expose the matched context without an unnecessary trailing ellipsis', () => {
   const result = searchEntries(index, 'en', ['models'])
   assert.equal(result.results[0].excerpt, 'Configure desktop agents and models.')
+})
+
+test('document search finds an exact environment variable and highlights the original spelling', () => {
+  const entries = [
+    { l: 'en', p: '/en/cli/env', t: 'Environment variables', x: searchBody('| `ANTHROPIC_BASE_URL` | _Optional_ |') },
+    { l: 'zh', p: '/cli/env', t: '环境变量', x: searchBody('| `ANTHROPIC_BASE_URL` | __可选__ |') }
+  ]
+  const terms = queryTerms('anthropic_base_url')
+
+  for (const entry of entries) {
+    const { results } = searchEntries(entries, entry.l, terms)
+    assert.deepEqual(results.map(result => result.path), [entry.p])
+    assert.equal(results[0].excerpt, entry.l === 'en' ? 'ANTHROPIC_BASE_URL Optional' : 'ANTHROPIC_BASE_URL 可选')
+    assert.deepEqual(highlightParts(results[0].excerpt, terms).filter(part => part.match), [
+      { text: 'ANTHROPIC_BASE_URL', match: true }
+    ])
+  }
 })
 
 test('highlights literal punctuation, preserves case and merges overlapping terms', () => {
