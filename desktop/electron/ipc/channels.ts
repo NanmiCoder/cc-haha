@@ -5,6 +5,7 @@ export const ELECTRON_IPC_CHANNELS = {
   publicAccessStop: 'desktop:public-access:stop',
   publicAccessSetAutoStart: 'desktop:public-access:set-auto-start',
   publicAccessSetP2PEnabled: 'desktop:public-access:set-p2p-enabled',
+  publicAccessSetKeepAwake: 'desktop:public-access:set-keep-awake',
   appGetVersion: 'desktop:app:get-version',
   powerSetPreventSleepWhileRunning: 'desktop:power:set-prevent-sleep-while-running',
   powerGetIdleActionState: 'desktop:power:get-idle-action-state',

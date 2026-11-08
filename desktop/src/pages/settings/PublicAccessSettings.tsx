@@ -349,6 +349,15 @@ export function PublicAccessSettings() {
           disabled={busy || stopUnconfirmed || !configured || configurationChanged || status?.consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION}
           onChange={(checked) => void run(() => bridge.setAutoStart(checked))}
         />
+        {status?.keepAwake !== undefined && (
+          <SettingsSwitchRow
+            title={t('publicAccess.keepAwake')}
+            description={t('publicAccess.keepAwakeHint')}
+            checked={status.keepAwake}
+            disabled={busy || savedSettingsInvalid}
+            onChange={(checked) => void run(() => bridge.setKeepAwake(checked))}
+          />
+        )}
         {status?.p2pEnabled !== undefined && (
           <SettingsSwitchRow
             title={t('publicAccess.p2p')}
