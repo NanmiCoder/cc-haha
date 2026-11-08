@@ -823,13 +823,14 @@ function ChatSession({
   const openFiles = (tab: 'changed' | 'all') =>
     router.push({ pathname: '/files', params: { id, host: hostId, tab } })
 
-  function submit() {
-    if (workspaceMissing) return
+  /** Returns true when the draft was sent or queued (and is being cleared). */
+  function submit(): boolean {
+    if (workspaceMissing) return false
     try {
       const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
-        if (approval) return
+        if (approval) return false
         setQueue((items) => [
           ...items,
           {
@@ -847,7 +848,7 @@ function ChatSession({
         setTeam(false)
         drafts.delete(draftKey)
         setError('')
-        return
+        return true
       }
       if (dispatch(message)) {
         setDraft('')
@@ -859,10 +860,12 @@ function ChatSession({
         handoff.current.phase = 'done'
         showLatest()
         setNotice('')
+        return true
       }
     } catch (e) {
       setError(errorText(e))
     }
+    return false
   }
   async function rename() {
     const nextTitle = titleDraft.trim()

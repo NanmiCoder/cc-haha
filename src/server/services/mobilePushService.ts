@@ -199,7 +199,10 @@ export class MobilePushService {
     if (!configured.length) return { status: 'notConfigured' }
     let failed = false
     for (const row of configured) {
-      const payload = alertPayload(row, { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。', category: 'cchahaResult', channel: androidChannel(row.delivery, 'completed'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
+      // The test exists to show a banner. Android's "completed" channel is created at
+      // default importance (sound, never a heads-up), so it uses the decisions channel,
+      // the same one the phone's local test uses.
+      const payload = alertPayload(row, { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。', category: 'cchahaResult', channel: androidChannel(row.delivery, 'decision'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
       try {
         const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', ...(row.provider ? { provider: row.provider } : {}), token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
         this.recordExpo(row)
