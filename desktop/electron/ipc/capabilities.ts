@@ -342,6 +342,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.publicAccessStart]: value => value === PUBLIC_ACCESS_CONSENT_VERSION,
   [ELECTRON_IPC_CHANNELS.publicAccessStop]: noPayload,
   [ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart]: booleanPayload,
+  [ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled]: booleanPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken]: noPayload,

@@ -8,7 +8,7 @@ import { VoiceServiceError } from '../errors.js'
 import type { HistoryPaths } from '../history/scan.js'
 import { VoiceProviderRegistry } from '../registry.js'
 import { FileVoiceVocabularyStore } from '../vocabulary/store.js'
-import { CORRECTION_TIMEOUT_MS, VoiceService } from '../voiceService.js'
+import { CORRECTION_TIMEOUT_MS, HISTORY_PICK_TIMEOUT_MS, VoiceService } from '../voiceService.js'
 import { fakeProviderRecord, fakeTargets, scriptedCompletion, text } from './fakeCorrection.js'
 import { FakeProvider, memoryPreferencesStore } from './fakeProvider.js'
 
@@ -189,12 +189,17 @@ describe('VoiceService catalog correction info', () => {
   })
 })
 
-async function writeTranscript(session: string, texts: string[]) {
+async function writeTranscript(session: string, texts: string[], modifiedAt?: Date) {
   const dir = path.join(historyPaths.claudeConfigDir, 'projects', '-work')
   await fs.mkdir(dir, { recursive: true })
   const lines = texts.map(content => JSON.stringify({ type: 'user', message: { role: 'user', content } }))
-  await fs.writeFile(path.join(dir, `${session}.jsonl`), lines.join('\n') + '\n')
+  const file = path.join(dir, `${session}.jsonl`)
+  await fs.writeFile(file, lines.join('\n') + '\n')
+  if (modifiedAt) await fs.utimes(file, modifiedAt, modifiedAt)
 }
+
+const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000)
+const PICK = JSON.stringify({ groups: [{ category: 'tool', terms: [{ term: 'Codex', doubtful: false }] }] })
 
 describe('VoiceService history suggestions', () => {
   test('counts locally, sends only words and counts, and marks the run', async () => {
@@ -268,17 +273,73 @@ describe('VoiceService history suggestions', () => {
       .toMatchObject({ error: 'voice/correction-failed', reason: 'rate-limit' })
     expect((await failing.vocabulary.read()).history).toBeNull()
 
+    // A failed request is reported as it is, not asked again.
+    expect(failing.completion.requests).toHaveLength(1)
+
     const garbled = createService({ replies: [text('Sorry, no JSON here')] })
     expect(((await rejection(garbled.service.suggestFromHistory({ sources: ['claude-code'] }, signal()))) as VoiceServiceError).toBody())
-      .toMatchObject({ error: 'voice/correction-failed', reason: 'invalid-output' })
+      .toMatchObject({ error: 'voice/correction-failed', message: 'The model did not return a term list', reason: 'invalid-output' })
+    expect(garbled.completion.requests).toHaveLength(2)
   })
 
-  test('lists sources from the configured history paths', async () => {
-    await writeTranscript('s1', ['hello'])
-    const { service } = createService()
-    expect(await service.historySources()).toEqual([
-      { id: 'claude-code', available: true, sessions: 1 },
-      { id: 'codex', available: false, sessions: 0 },
+  test('asks once more when the model answers without a term list, within one shared time budget', async () => {
+    await writeTranscript('s1', ['Codex DeepSeek'])
+    await writeTranscript('s2', ['Codex DeepSeek'])
+
+    // DeepSeek Flash answering in thinking mode spends the budget reasoning: no text at all.
+    const recovered = createService({ replies: [text(''), text(PICK)] })
+    const result = await recovered.service.suggestFromHistory({ sources: ['claude-code'] }, signal())
+    expect(result.groups).toEqual([
+      { category: 'tool', terms: [{ term: 'Codex', sessions: 2, doubtful: false, inVocabulary: false }] },
     ])
+    const [first, second] = recovered.completion.requests
+    // A reasoning model that ends up thinking used up to ~13,000 tokens before
+    // answering (DeepSeek Flash); at 4,096 it stopped with no text at all.
+    expect(first!.maxTokens).toBeGreaterThanOrEqual(16_000)
+    expect(second!.user).toBe(first!.user)
+    expect(first!.timeoutMs).toBeLessThanOrEqual(HISTORY_PICK_TIMEOUT_MS)
+    expect(second!.timeoutMs).toBeLessThanOrEqual(first!.timeoutMs!)
+    expect(second!.attemptTimeoutMs).toBe(second!.timeoutMs)
+
+    const silent = createService({ replies: [text('   ')] })
+    expect(((await rejection(silent.service.suggestFromHistory({ sources: ['claude-code'] }, signal()))) as VoiceServiceError).toBody())
+      .toMatchObject({ error: 'voice/correction-failed', message: 'The model answered without any text', reason: 'invalid-output' })
+    expect(silent.completion.requests).toHaveLength(2)
+
+    // The message tells a rejected thinking-disabled request apart from a provider that ignored it.
+    const resent = createService({
+      replies: [{ ok: true, text: '', firstAttemptRejected: { status: 400, detail: '{"error":"bad thinking"}' } }],
+    })
+    expect(((await rejection(resent.service.suggestFromHistory({ sources: ['claude-code'] }, signal()))) as VoiceServiceError).toBody())
+      .toMatchObject({
+        message: 'The model answered without any text (the provider rejected the request with thinking disabled, HTTP 400: {"error":"bad thinking"}; it was resent with thinking on)',
+        reason: 'invalid-output',
+      })
+  })
+
+  test('reads only the last two weeks of history', async () => {
+    await writeTranscript('old1', ['Stale Stale'], daysAgo(20))
+    await writeTranscript('old2', ['Stale'], daysAgo(20))
+    await writeTranscript('new1', ['Codex'], daysAgo(1))
+    await writeTranscript('new2', ['Codex'])
+    const { service, completion } = createService({ replies: [text(PICK)] })
+
+    const result = await service.suggestFromHistory({ sources: ['claude-code'] }, signal())
+
+    expect(result).toMatchObject({ sessions: 2, messages: 2, candidates: 1 })
+    expect(completion.requests[0]!.user).toBe('Codex\t2')
+  })
+
+  test('lists sources with their recent sessions and how many days back that is', async () => {
+    await writeTranscript('s1', ['hello'])
+    await writeTranscript('s2', ['hello'], daysAgo(15))
+    const { service } = createService()
+    expect(await service.historySources()).toEqual({
+      sources: [
+        { id: 'claude-code', available: true, sessions: 1 },
+        { id: 'codex', available: false, sessions: 0 },
+      ],
+      days: 14,
+    })
   })
 })

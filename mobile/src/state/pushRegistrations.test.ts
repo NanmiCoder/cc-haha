@@ -208,10 +208,15 @@ test('process restart revokes ordinary and Live Activity registrations using the
   ])
 })
 
-test('a host that no longer accepts our credential can still be removed locally', async () => {
-  // 每种回答用一台全新登记过的电脑：401/403 说明电脑不再认这份凭据，仍要能移除；
-  // 其他错误（5xx）必须继续拒绝移除，连接、凭据和登记凭证都保留。
-  for (const [status, removable] of [[401, true], [403, true], [500, false]] as const) {
+test('a computer that cannot be told is still removed, however it fails', async () => {
+  // 想移除一台电脑，多半正因为连不上它：拒绝凭据、服务出错、网络不通，一律不拦移除。
+  // 每种失败用一台全新登记过的电脑。
+  for (const failure of [
+    new ApiError('不被接受', 401),
+    new ApiError('不被接受', 403),
+    new ApiError('服务出错', 500),
+    new ApiError('无法连接服务器，请检查地址与网络', 0, 'NETWORK_ERROR'),
+  ]) {
     const store = memory(),
       hosts = new HostRepository(memory(), store),
       api = server(),
@@ -222,20 +227,105 @@ test('a host that no longer accepts our credential can still be removed locally'
     const failing = {
       host: api.client('a').host,
       request: (async () => {
-        throw new ApiError('不被接受', status)
+        throw failure
       }) as ApiClient['request'],
     }
-    const removal = coordinator.removeHost('a', failing, () => hosts.remove('a'))
-    if (removable) {
-      await removal
-      expect(await hosts.credential('a')).toBeNull()
-      expect(await store.getItem(pushProofKey('a'))).toBeNull()
-    } else {
-      await expect(removal).rejects.toThrow('移除未完成')
-      expect(await hosts.credential('a')).toBe('credential-a')
-      expect(migratePushProofs(await store.getItem(pushProofKey('a'))).tokens).toEqual([token])
-    }
+    await coordinator.removeHost('a', failing, () => hosts.remove('a'))
+    expect((await hosts.load()).hosts).toEqual([])
+    expect(await hosts.credential('a')).toBeNull()
+    expect(await store.getItem(pushProofKey('a'))).toBeNull()
   }
+})
+
+test('a computer whose address cannot be reached is removed over the real fetch', async () => {
+  // 用户现场的失败：旧的局域网地址、已失效的隧道，请求真的发不到电脑，不是手写的错误。
+  // 连接被拒还是被本机代理回 502 取决于环境，这里只要求「发出过、没成功」。
+  const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } })
+  const port = listener.port
+  listener.stop(true)
+  const store = memory(),
+    api = server()
+  await new PushRegistrationCoordinator(store).register(api.client('a'), input('a'))
+  const outcomes: number[] = []
+  const dead = new ApiClient(
+    { id: 'a', name: 'a', url: `http://127.0.0.1:${port}`, auth: 'lan' },
+    'fake-a',
+    {
+      fetch: async (url, init) => {
+        try {
+          const response = await fetch(url, init)
+          outcomes.push(response.status)
+          return response
+        } catch (error) {
+          outcomes.push(0)
+          throw error
+        }
+      },
+    }
+  )
+  let removed = false
+  await new PushRegistrationCoordinator(store, { revokeBudgetMs: 1000 }).removeHost(
+    'a',
+    dead,
+    async () => {
+      removed = true
+    }
+  )
+  expect(outcomes).toHaveLength(1)
+  expect(outcomes[0]).not.toBe(200)
+  expect(removed).toBe(true)
+  expect(await store.getItem(pushProofKey('a'))).toBeNull()
+})
+
+test('a computer that never answers holds removal up for the revoke budget at most', async () => {
+  const store = memory(),
+    api = server()
+  await new PushRegistrationCoordinator(store).register(api.client('a'), input('a'))
+  let aborted = false
+  // 请求一直挂着直到被取消，像局域网里被丢包的旧地址。没有预算，这个用例会卡满请求自己的 6 秒。
+  const hanging = new ApiClient(
+    { id: 'a', name: 'a', url: 'http://127.0.0.1:9000', auth: 'lan' },
+    'fake-a',
+    {
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            aborted = true
+            reject(new Error('aborted'))
+          })
+        }),
+    }
+  )
+  let removed = false
+  await new PushRegistrationCoordinator(store, { revokeBudgetMs: 20 }).removeHost(
+    'a',
+    hanging,
+    async () => {
+      removed = true
+    }
+  )
+  expect(aborted).toBe(true)
+  expect(removed).toBe(true)
+  expect(await store.getItem(pushProofKey('a'))).toBeNull()
+})
+
+test('clearing registrations keeps the proof while the computer is unreachable and drops it once the computer rejects our credential', async () => {
+  const store = memory(),
+    api = server(),
+    coordinator = new PushRegistrationCoordinator(store)
+  await coordinator.register(api.client('a'), input('a'))
+  const failing = (error: Error) => ({
+    host: api.client('a').host,
+    request: (async () => {
+      throw error
+    }) as ApiClient['request'],
+  })
+  await expect(
+    coordinator.clearRegistrations(failing(new ApiError('offline', 0, 'NETWORK_ERROR')))
+  ).rejects.toThrow('offline')
+  expect(migratePushProofs(await store.getItem(pushProofKey('a'))).tokens).toEqual([token])
+  await coordinator.clearRegistrations(failing(new ApiError('不被接受', 401)))
+  expect(await store.getItem(pushProofKey('a'))).toBeNull()
 })
 
 test('removing host A never removes host B proofs, registrations, or metadata', async () => {
@@ -346,7 +436,7 @@ test('removal drains a delayed accepted PUT, blocks queued writes, then ends nat
   ).rejects.toMatchObject({ code: 'ABORTED' })
 })
 
-test('offline unregister preserves host credential and proof across restart, then retry succeeds', async () => {
+test('an offline computer is asked once and removal goes ahead without it', async () => {
   const store = memory(),
     metadata = memory(),
     hosts = new HostRepository(metadata, store),
@@ -357,21 +447,20 @@ test('offline unregister preserves host credential and proof across restart, the
     input('a')
   )
   const restarted = new PushRegistrationCoordinator(store)
+  let asked = 0
   api.before(async (method) => {
-    if (method === 'DELETE') throw new Error('offline')
+    if (method === 'DELETE') {
+      asked++
+      throw new Error('offline')
+    }
   })
-  await expect(
-    restarted.removeHost('a', api.client('a'), () => hosts.remove('a'))
-  ).rejects.toThrow('电脑和凭据已保留')
-  expect((await hosts.load()).hosts).toHaveLength(1)
-  expect(await hosts.credential('a')).toBe('fake-host-secret')
-  expect(
-    migratePushProofs(await store.getItem(pushProofKey('a'))).tokens
-  ).toEqual([token])
-  api.before()
   await restarted.removeHost('a', api.client('a'), () => hosts.remove('a'))
+  expect(asked).toBe(1)
   expect((await hosts.load()).hosts).toHaveLength(0)
-  expect(api.records.size).toBe(0)
+  expect(await hosts.credential('a')).toBeNull()
+  expect(await store.getItem(pushProofKey('a'))).toBeNull()
+  // 电脑没收到注销：登记留在它那边，等它过期或撤销配对后清掉。
+  expect(api.records.size).toBe(1)
 })
 
 test('rotated device tokens remain revocable after a lost PUT response and a process restart', async () => {
@@ -469,7 +558,7 @@ test('native cleanup can finish a previously queued single revoke without deadlo
   expect(api.records.size).toBe(0)
 })
 
-test('a host with no remote registration can be removed offline, but missing credentials cannot discard known registration', async () => {
+test('a host whose connection credential is gone is still removed, without contacting anything', async () => {
   const store = memory(),
     coordinator = new PushRegistrationCoordinator(store)
   expect(await coordinator.removeHost('new', null, async () => 'done')).toBe(
@@ -479,13 +568,10 @@ test('a host with no remote registration can be removed offline, but missing cre
     pushProofKey('old'),
     JSON.stringify({ version: 1, tokens: [token] })
   )
-  let removed = false
-  await expect(
-    coordinator.removeHost('old', null, async () => {
-      removed = true
-    })
-  ).rejects.toThrow('连接已保留')
-  expect(removed).toBe(false)
+  expect(await coordinator.removeHost('old', null, async () => 'removed')).toBe(
+    'removed'
+  )
+  expect(await store.getItem(pushProofKey('old'))).toBeNull()
 })
 
 test('duplicate remove calls share one transaction and local cleanup failures retain a retryable host', async () => {

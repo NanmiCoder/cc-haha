@@ -104,6 +104,10 @@ impl PrivateFileOps for WindowsPrivateFile {
         path::ensure_private_directory_chain(path)?;
         Ok(())
     }
+
+    fn pin_private_directory(&self, path: &Path) -> std::io::Result<Box<dyn Send>> {
+        Ok(Box::new(path::ensure_private_directory_chain(path)?))
+    }
 }
 
 /// The same bounded, no-follow, owner-checked read the private-file seam

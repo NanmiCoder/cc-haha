@@ -83,3 +83,14 @@ fn an_unexpected_answer_is_described_by_what_was_read_not_by_an_errno() {
         "the byte that came back is the whole finding: {wrong_detail}"
     );
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+fn a_renderer_that_could_not_paint_reports_failure_instead_of_success() {
+    use super::framing::{ACKNOWLEDGEMENT, PAINT_FAILED};
+
+    assert!(super::imp::interpret_answer(1, ACKNOWLEDGEMENT).is_ok());
+    let error = super::imp::interpret_answer(1, PAINT_FAILED).unwrap_err();
+    assert_eq!(error.code, agent_desktop_core::ErrorCode::ActionFailed);
+    assert_eq!(error.message, "Windows could not paint the cursor overlay");
+}

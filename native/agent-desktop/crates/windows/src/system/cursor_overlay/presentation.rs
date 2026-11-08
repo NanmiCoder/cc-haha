@@ -62,9 +62,8 @@ mod imp {
 
         /// The label's pill, sized to the text as it is set at this size, or
         /// nothing when there is no label or it cannot be measured.
-        pub(crate) fn label_pill(&self) -> Option<LabelPill> {
+        pub(crate) fn label_pill(&self, scale: f64) -> Option<LabelPill> {
             let label = self.label.as_deref()?;
-            let scale = self.style.size();
             let width = crate::system::cursor_overlay::text::measure_label(
                 label,
                 LABEL_FONT_POINTS * scale,
@@ -75,8 +74,9 @@ mod imp {
         /// The style a frame is drawn with: the session's own, with the
         /// pointer image standing in for the arrow while the cursor rests on
         /// a pressable control.
-        pub(crate) fn shown_style(&self) -> CursorOverlayStyle {
+        pub(crate) fn shown_style(&self, monitor_scale: f64) -> CursorOverlayStyle {
             let mut shown = self.style.clone();
+            shown.set_size(shown.size() * monitor_scale);
             if self.pointing
                 && let Some(pointer) = self.style.pointer_image()
             {
@@ -96,3 +96,7 @@ mod imp {
         pub(crate) quiet_since: Instant,
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "presentation_tests.rs"]
+mod tests;

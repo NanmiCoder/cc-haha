@@ -209,6 +209,41 @@ export function roughTokenCountEstimation(
 }
 
 /**
+ * Whether a UTF-16 code unit is CJK text that tokenizers charge about one
+ * token for: CJK symbols/punctuation, kana, extension A, unified ideographs,
+ * hangul syllables, compatibility ideographs and full-width forms.
+ */
+function isCJKCodeUnit(code: number): boolean {
+  return (
+    (code >= 0x3000 && code <= 0x30ff) ||
+    (code >= 0x3400 && code <= 0x4dbf) ||
+    (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xac00 && code <= 0xd7af) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xff00 && code <= 0xffef)
+  )
+}
+
+/**
+ * Conversation-size estimate used when the provider reports no usable usage.
+ * chars/4 undercounts Chinese, Japanese and Korean text 3-4x (tokenizers spend
+ * ~0.6-1.2 tokens per character), which let relays without usage run past the
+ * auto-compact threshold into the upstream limit. CJK characters count as one
+ * token each; everything else keeps chars/4.
+ *
+ * Kept separate from {@link roughTokenCountEstimation}, whose chars/ratio
+ * semantics back file-read size limits. Counts with a charCodeAt loop rather
+ * than a regex match because it runs over whole transcripts.
+ */
+export function roughContextTokenCountEstimation(content: string): number {
+  let cjkChars = 0
+  for (let i = 0; i < content.length; i++) {
+    if (isCJKCodeUnit(content.charCodeAt(i))) cjkChars++
+  }
+  return cjkChars + Math.round((content.length - cjkChars) / 4)
+}
+
+/**
  * Returns an estimated bytes-per-token ratio for a given file extension.
  * Dense JSON has many single-character tokens (`{`, `}`, `:`, `,`, `"`)
  * which makes the real ratio closer to 2 rather than the default 4.
@@ -398,7 +433,7 @@ export function roughTokenCountEstimationForContent(
     return 0
   }
   if (typeof content === 'string') {
-    return roughTokenCountEstimation(content)
+    return roughContextTokenCountEstimation(content)
   }
   let totalTokens = 0
   for (const block of content) {
@@ -411,10 +446,10 @@ function roughTokenCountEstimationForBlock(
   block: string | Anthropic.ContentBlock | Anthropic.ContentBlockParam,
 ): number {
   if (typeof block === 'string') {
-    return roughTokenCountEstimation(block)
+    return roughContextTokenCountEstimation(block)
   }
   if (block.type === 'text') {
-    return roughTokenCountEstimation(block.text)
+    return roughContextTokenCountEstimation(block.text)
   }
   if (block.type === 'image' || block.type === 'document') {
     // https://platform.claude.com/docs/en/build-with-claude/vision#calculate-image-costs
@@ -436,27 +471,27 @@ function roughTokenCountEstimationForBlock(
     // input is the JSON the model generated — arbitrarily large (bash
     // commands, Edit diffs, file contents).  Stringify once for the
     // char count; the API re-serializes anyway so this is what it sees.
-    return roughTokenCountEstimation(
+    return roughContextTokenCountEstimation(
       block.name + jsonStringify(block.input ?? {}),
     )
   }
   if (block.type === 'thinking') {
-    return roughTokenCountEstimation(block.thinking)
+    return roughContextTokenCountEstimation(block.thinking)
   }
   if (block.type === 'redacted_thinking') {
     const openAIReasoning = parseOpenAIReasoningEnvelope(block.data)
     if (openAIReasoning) {
-      return roughTokenCountEstimation(
+      return roughContextTokenCountEstimation(
         openAIReasoning.summary.map(entry => entry.text).join('\n'),
       )
     }
-    return roughTokenCountEstimation(block.data)
+    return roughContextTokenCountEstimation(block.data)
   }
   // server_tool_use, web_search_tool_result, mcp_tool_use, etc. —
   // text-like payloads (tool inputs, search results, no base64).
   // Stringify-length tracks the serialized form the API sees; the
   // key/bracket overhead is single-digit percent on real blocks.
-  return roughTokenCountEstimation(jsonStringify(block))
+  return roughContextTokenCountEstimation(jsonStringify(block))
 }
 
 async function countTokensWithBedrock({

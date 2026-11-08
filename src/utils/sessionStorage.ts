@@ -80,6 +80,7 @@ import { gracefulShutdownSync, isShuttingDown } from './gracefulShutdown.js'
 import { parseJSONL } from './json.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
+import type { EffortLevel } from './effort.js'
 import type { ModelAlias } from './model/aliases.js'
 import { sanitizePath } from './path.js'
 import type { PermissionMode } from './permissions/PermissionMode.js'
@@ -281,6 +282,13 @@ export type AgentMetadata = {
   ownerAgentId?: string
   /** Per-invocation Agent tool model override. Retained across follow-ups. */
   model?: ModelAlias
+  /**
+   * Effort level the run launched with: the Agent's pinned effort, otherwise
+   * the parent session's. `null` means neither set one, so the model's own
+   * default applies. Absent in metadata written before this was recorded,
+   * which says nothing about the effort that run used.
+   */
+  effort?: EffortLevel | null
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -701,6 +709,8 @@ class Project {
   private transcriptFileIdentities = new Map<string, { dev: number; ino: number }>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private activeDrain: Promise<void> | null = null
+  private flushInFlight: Promise<void> | null = null
+  private messageCacheInvalidationPending = false
   private FLUSH_INTERVAL_MS = 100
   private readonly MAX_CHUNK_BYTES = 100 * 1024 * 1024
 
@@ -713,6 +723,8 @@ class Project {
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = null
     this.activeDrain = null
+    this.flushInFlight = null
+    this.messageCacheInvalidationPending = false
     this.writeQueues = new Map()
   }
 
@@ -1039,7 +1051,47 @@ class Project {
     }
   }
 
-  async flush(): Promise<void> {
+  private hasPendingWrites(): boolean {
+    return this.pendingWriteCount > 0 || this.writeQueues.size > 0 ||
+      this.flushTimer !== null || this.activeDrain !== null
+  }
+
+  invalidateSessionMessageCache(): void {
+    if (!this.hasPendingWrites()) {
+      getSessionMessages.cache.clear?.()
+      return
+    }
+    if (this.messageCacheInvalidationPending) return
+    this.messageCacheInvalidationPending = true
+    // Appends can still hold the old Set across an await. Reloading it from
+    // disk before their queue is durable gives other writers a second Set
+    // without those UUIDs, so the same text can be written after its tool.
+    void this.flush().then(() => {
+      this.messageCacheInvalidationPending = false
+      if (project === this) this.invalidateSessionMessageCache()
+    }, error => {
+      this.messageCacheInvalidationPending = false
+      logError(error)
+    })
+  }
+
+  flush(): Promise<void> {
+    if (this.flushInFlight) {
+      return this.flushInFlight.then(() => {
+        // A writer can start after the shared drain's final idle check but
+        // before its promise settles. A caller that joined after that writer
+        // must wait for the next drain as well.
+        if (this.hasPendingWrites()) return this.flush()
+      })
+    }
+    const inFlight = this.flushPendingWrites().finally(() => {
+      if (this.flushInFlight === inFlight) this.flushInFlight = null
+    })
+    this.flushInFlight = inFlight
+    return inFlight
+  }
+
+  private async flushPendingWrites(): Promise<void> {
     while (true) {
       // Cancel pending timer so process shutdown does not wait for the next
       // interval tick before draining already queued transcript writes.
@@ -1479,8 +1531,17 @@ class Project {
         // exhausts retries → gracefulShutdownSync(1). See inc-4718.
         const isNewUuid = !messageSet.has(entry.uuid)
         if (isAgentSidechain || isNewUuid) {
+          // Reserve before yielding: completed text and tool blocks can start
+          // overlapping recordTranscript calls with the same growing history.
+          // Marking only after enqueueWrite lets both append the same UUID.
+          if (!isAgentSidechain) messageSet.add(entry.uuid)
           // The message-chain entry point has already materialized the file.
-          await this.enqueueWrite(targetFile, entry)
+          try {
+            await this.enqueueWrite(targetFile, entry)
+          } catch (error) {
+            if (!isAgentSidechain) messageSet.delete(entry.uuid)
+            throw error
+          }
 
           if (!isAgentSidechain) {
             // messageSet is main-file-authoritative. Sidechain entries go to a
@@ -1491,8 +1552,6 @@ class Project {
             // and --resume's buildConversationChain terminates at the dangling ref.
             // Same constraint for remote (inc-4718 above): sidechain persisting a
             // UUID the main thread hasn't written yet → 409 when main writes it.
-            messageSet.add(entry.uuid)
-
             if (isTranscriptMessage(entry)) {
               await this.persistToRemote(sessionId, entry)
             }
@@ -4143,9 +4202,11 @@ const getSessionMessages = memoize(
 /**
  * Clear the memoized session messages cache.
  * Call after compaction when old message UUIDs are no longer valid.
+ * Pending writers retain their shared Set until their entries are durable.
  */
 export function clearSessionMessagesCache(): void {
-  getSessionMessages.cache.clear?.()
+  if (project) project.invalidateSessionMessageCache()
+  else getSessionMessages.cache.clear?.()
 }
 
 /**

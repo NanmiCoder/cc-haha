@@ -13,7 +13,7 @@ import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { PROMPT_TOO_LONG_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
+import { PROMPT_TOO_LONG_TRIGGER, RELAY_OVERFLOW_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 
 export type MockAgentScenario = { id: string; title: string }
@@ -21,6 +21,7 @@ export type MockAgentScenario = { id: string; title: string }
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
   { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
+  { id: 'mock-live-permission-switch', title: 'A permission switch during a running turn applies to the real CLI\'s next tool call' },
   { id: 'mock-team-task-owner', title: 'Real task tools reject an unknown teammate and recover with a valid assignment' },
   { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
@@ -57,6 +58,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   {
     id: 'mock-prompt-too-long-compacts',
     title: 'A history the provider rejects as too long is compacted and retried instead of ending the turn',
+  },
+  {
+    id: 'mock-relay-overflow-compacts',
+    title: 'A relay-wrapped overflow in a provider\'s own wording, with no token counts, is compacted and retried without burning retries',
   },
   {
     id: 'mock-provider-refusal-recovers',
@@ -188,6 +193,40 @@ export function createMockOnlyRunners(
         await socket.waitFor(message => message.type === 'message_complete',
           ctx.stepTimeoutMs, 'denied default-mode turn', resetStart)
         if (existsSync(deniedTarget)) throw new Error('Default mode unexpectedly kept bypass permissions')
+      } finally { socket.close() }
+    },
+    async 'mock-live-permission-switch'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      // Outside the workspace, but still inside the disposable config fixture.
+      const first = join(ctx.configDir, `live-permission-first-${sessionId}.txt`)
+      const second = join(ctx.configDir, `live-permission-second-${sessionId}.txt`)
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: `MOCK_WRITE_SEQUENCE ${JSON.stringify([
+          { file_path: first, content: 'ASKED_UNDER_DEFAULT' },
+          { file_path: second, content: 'WRITTEN_UNDER_BYPASS' },
+        ])}` })
+        const request = await socket.waitFor(message => ['permission_request', 'message_complete', 'error'].includes(message.type),
+          ctx.stepTimeoutMs, 'default mode asks for the first write', start)
+        if (request.type !== 'permission_request') throw new Error(`The first write did not ask under default mode: ${JSON.stringify(request)}`)
+
+        // The turn is parked on that approval: switch without interrupting it.
+        socket.send({ type: 'set_permission_mode', mode: 'bypassPermissions' })
+        await socket.waitFor(message => message.type === 'permission_mode_changed' && message.mode === 'bypassPermissions',
+          ctx.stepTimeoutMs, 'mid-turn switch confirmed by the CLI', start)
+        if (socket.messages.slice(start).some(message => message.type === 'message_complete')) {
+          throw new Error('The permission switch waited for the turn to end')
+        }
+        socket.send({ type: 'permission_response', requestId: request.requestId, allowed: true })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'turn after the mid-turn switch', start)
+
+        const prompts = socket.messages.slice(start).filter(message => message.type === 'permission_request')
+        if (prompts.length !== 1) throw new Error(`The write after the switch still asked: ${JSON.stringify(prompts)}`)
+        if (!existsSync(first) || !existsSync(second) || readFileSync(second, 'utf8') !== 'WRITTEN_UNDER_BYPASS') {
+          throw new Error('The writes around the mid-turn switch did not reach the real disk')
+        }
       } finally { socket.close() }
     },
     async 'mock-team-task-owner'(ctx) {
@@ -684,34 +723,42 @@ export function createMockOnlyRunners(
     },
     async 'mock-tool-result-roundtrip'(ctx) {
       const nonce = `nonce-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const unicode = `中文 🙂 ${nonce}`
+      const failure = `PowerShell fixture error ${nonce}`
+      const cases = [
+        { prompt: `Run the shell command \`echo ${nonce}\` and tell me what it printed.`, expected: nonce, isError: false },
+        ...(process.platform === 'win32' ? [
+          { prompt: `MOCK_NATIVE_POWERSHELL ${JSON.stringify(`Write-Output '${unicode}'`)}`, expected: unicode, isError: false },
+          { prompt: `MOCK_NATIVE_POWERSHELL ${JSON.stringify(`Write-Error '${failure}'; Write-Output 'continued'`)}`, expected: failure, isError: true },
+        ] : []),
+      ]
       const socket = await ctx.openSocket(await ctx.createSession())
       try {
         ctx.pinRuntime(socket)
-        const start = socket.messages.length
-        const upstreamStart = requests.length
-        socket.send({ type: 'user_message', content: `Run the shell command \`echo ${nonce}\` and tell me what it printed.` })
+        for (const { prompt, expected, isError } of cases) {
+          const start = socket.messages.length
+          const upstreamStart = requests.length
+          socket.send({ type: 'user_message', content: prompt })
 
-        // Whether `echo` needs approval is the permission engine's call, not this
-        // scenario's; approve if asked so the run does not depend on that policy.
-        const settled = await socket.waitFor(
-          (message) => message.type === 'permission_request' || message.type === 'message_complete',
-          ctx.stepTimeoutMs,
-          'permission_request or message_complete',
-          start,
-        )
-        if (settled.type === 'permission_request') {
-          socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
-          await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete', start)
-        }
+          const settled = await socket.waitFor(
+            (message) => message.type === 'permission_request' || message.type === 'message_complete',
+            ctx.stepTimeoutMs,
+            'shell permission or completion',
+            start,
+          )
+          if (settled.type === 'permission_request') {
+            socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+            await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'shell completion', start)
+          }
 
-        const results = toolResultsSentUpstream(requests, upstreamStart)
-        const echoed = results.find((block) => contentText(block.content).includes(nonce))
-        if (!echoed) {
-          throw new Error(`the model never received the command output; tool_results sent upstream: ${JSON.stringify(results)}`)
-        }
-        if (echoed.is_error) throw new Error('the command output came back flagged as an error')
-        if (!streamedText(socket.messages.slice(start)).includes(nonce)) {
-          throw new Error('the model\'s reply quoting the output never streamed to the client')
+          const results = toolResultsSentUpstream(requests, upstreamStart)
+          const echoed = results.find((block) => contentText(block.content).includes(expected))
+          if (!echoed || Boolean(echoed.is_error) !== isError) {
+            throw new Error(`unexpected shell result sent to the model: ${JSON.stringify(results)}`)
+          }
+          if (!streamedText(socket.messages.slice(start)).includes(expected)) {
+            throw new Error('the model\'s reply quoting the output never streamed to the client')
+          }
         }
       } finally {
         socket.close()
@@ -867,6 +914,33 @@ export function createMockOnlyRunners(
         // Upstream saw the rejected request, the summary request, and the retry.
         const agentRequests = requests.slice(since).filter((request) => (request.body.tools ?? []).length > 0)
         if (agentRequests.length < 2) throw new Error(`expected the rejected request and its retry upstream, saw ${agentRequests.length}`)
+      } finally {
+        socket.close()
+      }
+    },
+
+    async 'mock-relay-overflow-compacts'(ctx) {
+      const socket = await ctx.openSocket(await ctx.createSession())
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        const since = requests.length
+        socket.send({ type: 'user_message', content: `${RELAY_OVERFLOW_TRIGGER}: the relay rejects this history as too long.` })
+        await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'the turn to finish after compaction', start)
+        const frames = socket.messages.slice(start)
+        const shown = frames.find((m) => m.type === 'error')
+        if (shown) throw new Error(`the relay's rejection reached the user instead of being recovered: ${JSON.stringify(shown).slice(0, 300)}`)
+        if (!frames.some((m) => m.type === 'system_notification' && m.subtype === 'compact_boundary')) {
+          throw new Error('the rejected history was never compacted')
+        }
+        if (!streamedText(frames).trim()) throw new Error('no reply after the compacted retry')
+        // The 500 is an overflow, not an outage: the relay refuses the agent
+        // request once and the compacted retry goes through, with no
+        // transient-error retries in between.
+        const agentRequests = requests.slice(since).filter((request) => (request.body.tools ?? []).length > 0)
+        const rejected = agentRequests.filter((request) => request.outcome === 'error')
+        if (rejected.length !== 1) throw new Error(`expected the relay to refuse the agent request once, it refused ${rejected.length}`)
+        if (!agentRequests.some((request) => request.outcome === 'completed')) throw new Error('the compacted retry never reached the relay')
       } finally {
         socket.close()
       }

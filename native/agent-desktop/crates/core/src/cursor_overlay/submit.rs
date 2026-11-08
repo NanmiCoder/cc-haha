@@ -207,6 +207,7 @@ fn send(
         Ok(instruction) => instruction,
         Err(error) => {
             tracing::warn!(code = %error.code.as_str(), "agent cursor instruction was skipped");
+            cursor_feedback(false, Some(&error));
             return false;
         }
     };
@@ -237,11 +238,34 @@ fn enabled_session(context: &CommandContext) -> Option<&str> {
 }
 
 fn update(adapter: &dyn PlatformAdapter, control: &super::CursorOverlayControl) -> bool {
-    if let Err(error) = adapter.update_cursor_overlay(control) {
+    let result = adapter.update_cursor_overlay(control);
+    if control.instruction().is_some() {
+        cursor_feedback(result.is_ok() && control.is_travel(), result.as_ref().err());
+    }
+    if let Err(error) = result {
         tracing::warn!(code = %error.code.as_str(), "agent cursor presentation was skipped");
         return false;
     }
     true
+}
+
+fn cursor_feedback(acknowledged: bool, error: Option<&AdapterError>) {
+    use std::io::Write;
+
+    if std::env::var_os("AGENT_DESKTOP_CURSOR_FEEDBACK").is_none() {
+        return;
+    }
+    let warning = error.map(|error| {
+        serde_json::json!({
+            "code": error.code.as_str(),
+            "message": error.message.chars().take(160).collect::<String>(),
+        })
+    });
+    let data = serde_json::json!({
+        "acknowledged": acknowledged,
+        "warning": warning,
+    });
+    let _ = writeln!(std::io::stderr().lock(), "CC_HAHA_CURSOR_FEEDBACK {data}");
 }
 
 pub(crate) fn dispatch_mouse_event_with_cursor(

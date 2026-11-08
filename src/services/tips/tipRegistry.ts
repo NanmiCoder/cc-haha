@@ -237,15 +237,6 @@ const externalTips: Tip[] = [
     isRelevant: async () => !process.env.COLORTERM && chalk.level < 3,
   },
   {
-    id: 'powershell-tool-env',
-    content: async () =>
-      'Set CLAUDE_CODE_USE_POWERSHELL_TOOL=1 to enable the PowerShell tool (preview)',
-    cooldownSessions: 10,
-    isRelevant: async () =>
-      getPlatform() === 'windows' &&
-      process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL === undefined,
-  },
-  {
     id: 'status-line',
     content: async () =>
       'Use /statusline to set up a custom status line that will display beneath the input box',

@@ -5,6 +5,7 @@ import { AppState, FlatList, Platform, View, type NativeScrollEvent } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
+import { getRandomValues } from 'expo-crypto'
 import { Text } from '../../ui/Text'
 import { useApp, useConnection } from '../../state/AppContext'
 import { isH5, reconnectH5 } from '../../state/h5'
@@ -22,7 +23,11 @@ import { notificationPermissionResponse, runtimeMatches } from '../../core/chatA
 import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
 import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
 import { sessionHistory } from '../../core/historyCache'
-import { shouldReconnectOnResume } from '../../core/resume'
+import { isAppForeground } from '../../core/appVisibility'
+import { foregroundGate } from '../../core/foregroundGate'
+import { newStreamId } from '../../core/resumableStream'
+import type { LinkPath } from '../../core/hostLink'
+import { hostLinkFor, nativeSocketFactory, watchDeviceNetwork } from '../../state/api'
 import { takeSessionStale } from '../../core/sessionStale'
 import {
   listCheckpoints,
@@ -98,6 +103,7 @@ import {
 } from '../../ui/chat/sheets'
 import {
   connectionLabels,
+  linkPathLabels,
   contextWindow,
   displayPath,
   latestTurnCheckpoint,
@@ -105,13 +111,9 @@ import {
   sessionSubtitle,
   turnMeta,
 } from '../../ui/chat/session'
+import { showsReconnectBanner, useConnectionNotice } from '../../ui/chat/connectionNotice'
 import { simulatedPhoneChrome } from '../../ui/webChrome'
 
-const NativeSocket = WebSocket as unknown as new (
-  url: string,
-  protocols?: string[],
-  options?: { headers?: Record<string, string> }
-) => SocketLike
 type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'context' | null
 type RewindPreview = {
   target: { targetUserMessageId: string }
@@ -196,6 +198,10 @@ function ChatSession({
   const [chosenModel, setChosenModel] = useState<Model | null>(null)
   const [state, setState] = useState<ChatState>(() => createChatState(id))
   const [connection, setConnection] = useState<ConnectionState>('connecting')
+  // 真正和电脑对齐（读过历史）的次数：续传、换路接回不变，分支和检查点只跟它重读。
+  const [syncEpoch, setSyncEpoch] = useState(0)
+  // 连着失败的建连次数：两次就不再等满十秒才提示。
+  const [failures, setFailures] = useState(0)
   const [session, setSession] = useState<Session | null>(null)
   const [error, setError] = useState('')
   const [recoveryError, setRecoveryError] = useState('')
@@ -222,7 +228,9 @@ function ChatSession({
   const [ui, setUi] = useState<StepUi>(() => ({ expanded: new Set(), open: new Set(), closed: new Set(), revealed: new Set() }))
   const [turnClock, setTurnClock] = useState<{ startedAt?: number; endedAt?: number; live?: boolean }>({})
   // 进页面时已经在跑的一轮，用电脑给的开始时间，和首页一致。
-  const { snapshot: dashboard } = useDashboard()
+  const { snapshot: dashboard, holdActivityScope } = useDashboard()
+  // 聊天页只用到运行状态；聚焦期间不再反复拉整份会话列表，把隧道留给聊天。
+  useFocusEffect(useCallback(() => holdActivityScope(), [holdActivityScope]))
   const liveActivity =
     dashboard?.hostId === hostId ? dashboard.activity.find((item) => item.id === id) : undefined
   const serverTurnStart =
@@ -231,6 +239,8 @@ function ChatSession({
       : undefined
   const clockRef = useRef<{ active: boolean; startedAt?: number; live: boolean } | undefined>(undefined)
   const connectionRef = useRef<ConnectionState>('connecting')
+  // 远程电脑的连接路径：经 Cloudflare，还是已升级成直连。
+  const [linkPath, setLinkPath] = useState<LinkPath | null>(null)
   const transport = useRef<SessionTransport | null>(null)
   // 消息流是倒置列表：offset 0 就是最新处。打开会话、键盘弹起、输入框变高、流式输出变长时
   // 由原生保持在底部，不需要 JS 算位置补滚动（那样会和原生尺寸变化赛跑，滚不到底）。
@@ -294,16 +304,21 @@ function ChatSession({
         if (alive) setError(value.message)
       },
     })
+    const link = credential ? hostLinkFor(client.host, credential) : undefined
     const channel = new SessionTransport({
       client,
       credential,
       sessionId: id,
       platform: Platform.OS === 'web' ? 'web' : 'native',
       history: sessionHistory.store(hostId, id),
+      gate: foregroundGate,
+      // 断线后接回原来的流：只补发错过的部分，不重读历史（电脑不支持时自动退回旧方式）。
+      newStreamId: () =>
+        newStreamId(Platform.OS === 'web' ? globalThis.crypto : { getRandomValues }),
       socketFactory: (options) =>
         Platform.OS === 'web'
           ? (new WebSocket(options.url) as unknown as SocketLike)
-          : new NativeSocket(options.url, undefined, { headers: options.headers }),
+          : (link?.socketFactory ?? nativeSocketFactory)(options),
       onState: (value) => {
         if (alive) {
           setState(value)
@@ -315,6 +330,8 @@ function ChatSession({
         if (alive) {
           connectionRef.current = value
           setConnection(value)
+          setSyncEpoch(channel.syncEpoch)
+          setFailures(channel.failures)
           // 重新连上后，之前因为断线没翻成的可以再自动翻。
           if (value === 'ready') {
             olderFailedRef.current = false
@@ -337,30 +354,38 @@ function ChatSession({
     channel.start()
     let hiddenAt: number | undefined
     const listener = AppState.addEventListener('change', (value) => {
-      if (value !== 'active') {
+      if (!isAppForeground(value)) {
         hiddenAt ??= Date.now()
         return
       }
-      if (
-        shouldReconnectOnResume({
-          connection: connectionRef.current,
-          hiddenAt,
-          now: Date.now(),
-        })
-      )
-        channel.reconnect()
+      if (value !== 'active') return
+      // 离开多久都先探活；连接还活着就接着用，不拆掉重来。
+      channel.resume(hiddenAt)
       hiddenAt = undefined
     })
+    // 直连打通了：会话带着已看到的帧号换到新路上；直连断了由续传经 Cloudflare 接回。
+    queueMicrotask(() => {
+      if (alive) setLinkPath(link?.path ?? null)
+    })
+    const stopPath = link?.onPathChange((path) => {
+      if (alive) setLinkPath(path)
+      if (path !== 'cf') channel.migrate()
+    })
+    // 换了网络：不等心跳漏掉，马上探一次。
+    const stopNetwork = watchDeviceNetwork(() => channel.resume())
     return () => {
       alive = false
       recovery.dispose()
       listener.remove()
+      stopNetwork()
+      stopPath?.()
       channel.dispose()
       if (transport.current === channel) transport.current = null
     }
   }, [client, credential, hostId, id, revision])
 
   const ready = connection === 'ready'
+  const connectionNotice = useConnectionNotice(connection, failures)
   const busy =
     state.turnActive ||
     state.permissions.length > 0 ||
@@ -539,9 +564,10 @@ function ChatSession({
     (teamPlan.plan?.state === 'launching' || teamPlan.plan?.state === 'running') &&
     !teamMembersAllStopped(activity.team)
 
-  // 分支只用于副标题与菜单；取不到就只显示项目名。
+  // 分支只用于副标题与菜单；取不到就只显示项目名。只在真正和电脑重新对齐后重读：
+  // 续传、换到直连这类接回不读历史，也不该在回前台时顺带多发一个请求。
   useEffect(() => {
-    if (!client || !ready) return
+    if (!client || !syncEpoch) return
     const controller = new AbortController()
     client
       .get<{ branch: string | null }>(`${sessionPath(id)}/git-info`, { signal: controller.signal })
@@ -550,12 +576,12 @@ function ChatSession({
       })
       .catch(() => {})
     return () => controller.abort()
-  }, [client, id, ready])
+  }, [client, id, syncEpoch])
 
-  // 本轮改动卡和菜单里的文件数都来自最新一轮检查点；运行中不读。
+  // 本轮改动卡和菜单里的文件数都来自最新一轮检查点；运行中不读，一轮结束或重新对齐后再读。
   const hasItems = state.items.length > 0
   useEffect(() => {
-    if (!client || !ready || state.turnActive || !hasItems) return
+    if (!client || !syncEpoch || state.turnActive || !hasItems) return
     const controller = new AbortController()
     listCheckpoints(client, id, controller.signal)
       .then((value) => {
@@ -565,7 +591,7 @@ function ChatSession({
         if (!controller.signal.aborted) setCheckpoints([])
       })
     return () => controller.abort()
-  }, [client, id, ready, state.turnActive, hasItems, revision])
+  }, [client, id, syncEpoch, state.turnActive, hasItems, revision])
   const latest = useMemo(() => latestTurnCheckpoint(checkpoints), [checkpoints])
 
   // 后台任务列表只用来把“后台进行中”对到具体的子 Agent 步骤上。
@@ -797,13 +823,14 @@ function ChatSession({
   const openFiles = (tab: 'changed' | 'all') =>
     router.push({ pathname: '/files', params: { id, host: hostId, tab } })
 
-  function submit() {
-    if (workspaceMissing) return
+  /** Returns true when the draft was sent or queued (and is being cleared). */
+  function submit(): boolean {
+    if (workspaceMissing) return false
     try {
       const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
-        if (approval) return
+        if (approval) return false
         setQueue((items) => [
           ...items,
           {
@@ -821,7 +848,7 @@ function ChatSession({
         setTeam(false)
         drafts.delete(draftKey)
         setError('')
-        return
+        return true
       }
       if (dispatch(message)) {
         setDraft('')
@@ -833,10 +860,12 @@ function ChatSession({
         handoff.current.phase = 'done'
         showLatest()
         setNotice('')
+        return true
       }
     } catch (e) {
       setError(errorText(e))
     }
+    return false
   }
   async function rename() {
     const nextTitle = titleDraft.trim()
@@ -1050,6 +1079,7 @@ function ChatSession({
     : ''
 
   // 连接问题只在这一处说明并给出重试；导航栏副标题只显示状态。
+  // 回到前台、切网这类短暂断线通常自己就恢复了，过一会儿还没好才提示。
   const reconnect = () => transport.current?.reconnect()
   const connectionProblem: {
     tone: 'attention' | 'error'
@@ -1063,7 +1093,9 @@ function ChatSession({
           text: recoveryError || '这台电脑的配对已经失效，重新配对后才能继续。',
           action: 'hosts',
         }
-      : connection === 'reconnecting' || connection === 'offline'
+      : !connectionNotice.banner && connection !== 'ready'
+        ? null
+      : showsReconnectBanner(connection)
         ? {
             tone: 'attention',
             text: recoveryError || '和电脑的连接断开了，正在自动重连。',
@@ -1306,7 +1338,7 @@ function ChatSession({
         floating
         back
         title={title}
-        subtitle={ready ? sessionSubtitle(session, branch) || host?.name : connectionLabels[connection]}
+        subtitle={connectionNotice.label ? connectionLabels[connection] : sessionSubtitle(session, branch) || host?.name}
         right={
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <ActivityCapsule
@@ -1560,6 +1592,11 @@ function ChatSession({
             <Mono numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12.5, color: colors.ink3 }}>
               {[displayPath(session?.workDir) || '默认目录', branch].filter(Boolean).join(' · ')}
             </Mono>
+            {linkPath ? (
+              <Text style={{ fontSize: 12, color: colors.ink3 }}>
+                {`连接：${linkPathLabels[linkPath]}`}
+              </Text>
+            ) : null}
             <ContextMenuHeader
               modelLabel={runtime ? modelLabel : undefined}
               summary={usageSummary}

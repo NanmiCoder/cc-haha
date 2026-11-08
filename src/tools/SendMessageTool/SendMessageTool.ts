@@ -486,6 +486,26 @@ async function handleShutdownRequest(
   const appState = context.getAppState()
   const teamName = getTeamName(appState.teamContext)
   const senderName = getAgentName() || TEAM_LEAD_NAME
+
+  // A desktop member the user stopped has already shut down: it no longer
+  // blocks TeamDelete. Mail would only make the server restart it, from its
+  // whole conversation, to approve, and TeamDelete would refuse meanwhile.
+  if (teamName) {
+    const member = (await readTeamFileAsync(teamName))?.members.find(
+      entry => entry.name === targetName,
+    )
+    if (member?.backendType === 'process' && member.terminated === true) {
+      return {
+        data: {
+          success: true,
+          message: `${targetName} is already stopped, so nothing was sent and no approval will come. It does not block TeamDelete.`,
+          request_id: '',
+          target: targetName,
+        },
+      }
+    }
+  }
+
   const requestId = generateRequestId('shutdown', targetName)
 
   const shutdownMessage = createShutdownRequestMessage({

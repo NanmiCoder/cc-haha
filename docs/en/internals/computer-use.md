@@ -24,6 +24,8 @@ Model / MCP client
 
 `setupComputerUseMCP()` registers tools only on supported platforms when the relevant binary resolves. The Settings API additionally performs a real native status probe: Windows/Linux return `engine: "agent-desktop"`, `runtime: "agent-desktop"`, and an `agentDesktop` status. A missing binary, denied accessibility service, or unresponsive Linux bus must not appear ready. Ready means the runtime is available, not that every command or app is supported.
 
+Desktop sessions refresh the Computer Use tool list before each turn. When the user explicitly requests Computer Use, the CLI checks the final tool list before sampling the model. An unavailable tool produces a specific error. When the tool is available, the turn uses native tools for desktop actions.
+
 ## One application authorization boundary
 
 Enabling Computer Use in Settings and confirming its consent dialog authorizes all supported apps. Runtime calls do not add per-app prompts, application allowlists or denylists, or `read/click/full` permission tiers. Global disablement, OS permissions, and target-process/window validity still apply.
@@ -69,7 +71,7 @@ The default headless policy lets supported semantic ref actions run without movi
 
 | Path | Actual behavior |
 |---|---|
-| Windows semantic refs | UIA Invoke, Value, Selection, Toggle, and similar patterns; `set-value` is the background text-replacement path for supported controls |
+| Windows semantic refs | Use UIA Invoke, Value, Selection, Toggle, and similar patterns. Standard WinForms buttons and text fields use LegacyIAccessible for background clicks, value writes, and clears to avoid the Windows proxy's focus change |
 | Windows `type`, right-click, multiple clicks, focus | Require `headed: true`; `type` uses `SendInput`, not background per-process keyboard delivery |
 | Linux headless refs | AT-SPI semantic actions work on X11 and Wayland, subject to control capabilities and live identity |
 | Linux headed refs | `click`, `right-click`, and `type` try physical input first; semantic fallback is possible only after a supported refusal that proves no input was delivered |
@@ -82,13 +84,13 @@ Keep JSON envelope delivery, retry, and verification information. Unverified del
 
 ## Sessions, traces, and per-agent cursors
 
-The bridge redirects `AGENT_DESKTOP_HOME` into `.runtime/agent-desktop/` beneath the product config directory. It does not use a standalone CLI user's `~/.agent-desktop`. The first operation needing a session creates a host-owned native session with default tracing and multi-agent cursors; metadata requests such as status, skills, and help do not start a cursor session for this purpose.
+The bridge redirects `AGENT_DESKTOP_HOME` beneath the product config directory. On Windows, the native engine creates `.runtime/agent-desktop-private/` with a private DACL. Linux uses `.runtime/agent-desktop/`. The Windows readiness probe verifies that it can write, read, and clean up a file in session storage. Settings shows the reason if the probe fails. The first operation needing a session creates a host-owned native session and configures multi-agent cursors. Eligible actions start the renderer on demand.
 
 Business commands retain the calling Agent's async `getCwd()` context, so relative image and file paths resolve in that working directory. `AGENT_DESKTOP_HOME` controls state independently. Every native process dispatch rechecks saved global consent, including the actual action after session initialization and cursor configuration. Revocation still permits necessary resource cleanup.
 
 Each product session maps to a native session. The host passes distinct `agent-id` values for the main agent and subagents, with stable hashes for invalid names. Native session namespaces scope snapshots and traces. Treat traces as user data because they can contain interface and action details. Images are read from a bounded host artifact directory and delivered as MCP images. Native trace export remains available.
 
-Cursors use the product's arrow shape and colors. Windows retains upstream animation; Linux X11 displays a static arrow at action positions. Wayland's `data.rendered: false` explicitly means no cursor was drawn. These are visual indicators, not separate mice, windows, or clipboards.
+Windows positions the cursor in physical pixels and scales the arrow and label to the monitor's DPI. The host sets the in-turn idle fade delay to 45 seconds. The renderer acknowledges arrival after submitting the destination frame to the Windows compositor and returns a warning if the paint fails. Linux X11 displays a static arrow at action positions. The `cursor_overlay` field in action results reports configuration, renderer acknowledgement, and warnings separately. Input devices and the clipboard remain shared.
 
 The existing product `computer-use.lock` remains owned by product session. Only one product session holds it at a time, and turn completion or cancellation releases it. Main agents and subagents in one process share the binder, retain their own async context, and run through its queue. Upstream interaction leases additionally coordinate native actions. Agent identity and multiple cursors do not mean independent desktops can be written concurrently.
 

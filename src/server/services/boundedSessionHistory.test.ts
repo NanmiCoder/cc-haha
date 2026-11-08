@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
 import { readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, HISTORY_SCAN_BYTES, HISTORY_FULL_SCAN_BYTES, HISTORY_RECORD_BYTES, HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, HISTORY_PAGE_ROWS } from './boundedSessionHistory.js'
+import { measureEntryWithMediaRefs } from './toolImageMedia.js'
 
 let directory: string
 let file: string
@@ -280,5 +281,169 @@ describe('bounded history pages', () => {
     await Promise.all(active)
     expect(await Promise.all(queued)).toEqual(Array(7).fill('ok'))
     expect(await replacement).toBe('replacement')
+  })
+})
+
+describe('follow cursor', () => {
+  test('the newest page carries a tail cursor that returns only records appended later', async () => {
+    await writeFile(file, Array.from({ length: 5 }, (_, index) => row(String(index))).join(''))
+    const latest = await readBoundedHistoryPage(file)
+    expect(latest.page.tailCursor).toBeString()
+    expect(latest.page.tailComplete).toBe(true)
+    await appendFile(file, row('5') + row('6'))
+    const delta = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(delta.entries.map(item => item.entry.uuid)).toEqual(['5', '6'])
+    expect(delta.page.tailComplete).toBe(true)
+    // Nothing new: no records, and a tail cursor that still works.
+    const idle = await readBoundedHistoryPage(file, { cursor: delta.page.tailCursor! })
+    expect(idle.entries).toEqual([])
+    expect(idle.page.tailComplete).toBe(true)
+    await appendFile(file, row('7'))
+    const next = await readBoundedHistoryPage(file, { cursor: idle.page.tailCursor! })
+    expect(next.entries.map(item => item.entry.uuid)).toEqual(['7'])
+  })
+
+  test('a line the writer has not finished is left for the next read, never skipped', async () => {
+    await writeFile(file, row('a'))
+    const latest = await readBoundedHistoryPage(file)
+    const whole = row('b')
+    await appendFile(file, whole.slice(0, 20))
+    const partial = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(partial.entries).toEqual([])
+    expect(partial.page.omittedOversizedEntries).toBe(0)
+    await appendFile(file, whole.slice(20))
+    const done = await readBoundedHistoryPage(file, { cursor: partial.page.tailCursor! })
+    expect(done.entries.map(item => item.entry.uuid)).toEqual(['b'])
+  })
+
+  test('a latest page read while the last line is still being written stops its tail before it', async () => {
+    await writeFile(file, row('a') + row('b').slice(0, 15))
+    const latest = await readBoundedHistoryPage(file)
+    await appendFile(file, row('b').slice(15))
+    const delta = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(delta.entries.map(item => item.entry.uuid)).toEqual(['b'])
+  })
+
+  test('a follow read stops at its page budget and says the tail is not reached', async () => {
+    await writeFile(file, row('start'))
+    const latest = await readBoundedHistoryPage(file)
+    await appendFile(file, Array.from({ length: 10 }, (_, index) => row(`n${index}`)).join(''))
+    const first = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor!, limit: 4 })
+    expect(first.entries.map(item => item.entry.uuid)).toEqual(['n0', 'n1', 'n2', 'n3'])
+    expect(first.page.tailComplete).toBe(false)
+    const rest = await readBoundedHistoryPage(file, { cursor: first.page.tailCursor! })
+    expect(rest.entries.map(item => item.entry.uuid)).toEqual(['n4', 'n5', 'n6', 'n7', 'n8', 'n9'])
+    expect(rest.page.tailComplete).toBe(true)
+  })
+
+  test('a rewritten or truncated-and-regrown transcript is rejected', async () => {
+    await writeFile(file, Array.from({ length: 5 }, (_, index) => row(`old-${index}`)).join(''))
+    const latest = await readBoundedHistoryPage(file)
+    await writeFile(file, Array.from({ length: 8 }, (_, index) => row(`new-${index}`)).join(''))
+    await expect(readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })).rejects.toMatchObject({ statusCode: 409, code: 'HISTORY_CHANGED' })
+    const fresh = await readBoundedHistoryPage(file)
+    await writeFile(file, row('x'))
+    await expect(readBoundedHistoryPage(file, { cursor: fresh.page.tailCursor! })).rejects.toMatchObject({ statusCode: 409 })
+  })
+
+  test('a follow page keeps older paging cursors free of the follow flag', async () => {
+    await writeFile(file, Array.from({ length: 3 }, (_, index) => row(String(index))).join(''))
+    const latest = await readBoundedHistoryPage(file)
+    await appendFile(file, row('3'))
+    const delta = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    const decoded = JSON.parse(Buffer.from(delta.page.nextCursor!, 'base64url').toString('utf8'))
+    expect(decoded.follow).toBeUndefined()
+    const older = await readBoundedHistoryPage(file, { cursor: delta.page.nextCursor! })
+    expect(older.entries.map(item => item.entry.uuid)).toEqual(['0', '1', '2'])
+  })
+
+  test('a forged follow flag on an older or fingerprint-free cursor is refused', async () => {
+    await writeFile(file, row('a') + row('b'))
+    const latest = await readBoundedHistoryPage(file, { limit: 1 })
+    const older = JSON.parse(Buffer.from(latest.page.nextCursor!, 'base64url').toString('utf8'))
+    const forge = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url')
+    await expect(readBoundedHistoryPage(file, { cursor: forge({ ...older, follow: true }) })).rejects.toThrow('Invalid history cursor')
+    await expect(readBoundedHistoryPage(file, { cursor: forge({ ...older, direction: 'newer', follow: true, fingerprints: undefined }) })).rejects.toThrow('Invalid history cursor')
+  })
+
+  test('the full-history read is unchanged and carries no tail cursor', async () => {
+    await writeFile(file, row('a'))
+    const full = await readBoundedHistoryPage(file, { full: true })
+    expect(full.page.tailCursor).toBeUndefined()
+    expect(full.page.tailComplete).toBeUndefined()
+  })
+
+  test('the tail cursor adds nothing to a page\'s scanned bytes', async () => {
+    const text = row('a') + row('b')
+    await writeFile(file, text)
+    const latest = await readBoundedHistoryPage(file)
+    expect(latest.page.tailCursor).toBeString()
+    // Source anchors before and after the read (two each) plus the read itself.
+    expect(latest.page.scannedBytes).toBe(5 * Buffer.byteLength(text))
+  })
+
+  test('more than a scan budget of appended screenshots is read over several follows, never reported complete early', async () => {
+    await writeFile(file, row('start'))
+    const latest = await readBoundedHistoryPage(file, { measure: measureEntryWithMediaRefs })
+    // With image refs the page budget no longer stops the read; only the scan budget does.
+    const shot = 'A'.repeat(900 * 1024)
+    const ids = Array.from({ length: 24 }, (_, index) => `shot-${index}`)
+    await appendFile(file, ids.map(id => JSON.stringify({
+      type: 'user', uuid: id,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: shot } }] }] },
+    }) + '\n').join(''))
+    const first = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor!, measure: measureEntryWithMediaRefs })
+    expect(first.page.scannedBytes).toBeLessThanOrEqual(HISTORY_SCAN_BYTES)
+    expect(first.entries.length).toBeLessThan(ids.length)
+    expect(first.page.tailComplete).toBe(false)
+    const seen = first.entries.map(item => item.entry.uuid)
+    let page = first.page
+    for (let follows = 0; !page.tailComplete && follows < 4; follows++) {
+      const next = await readBoundedHistoryPage(file, { cursor: page.tailCursor!, measure: measureEntryWithMediaRefs })
+      seen.push(...next.entries.map(item => item.entry.uuid))
+      page = next.page
+    }
+    expect(page.tailComplete).toBe(true)
+    expect(seen).toEqual(ids)
+  })
+
+  test('a complete record larger than the scan budget is skipped once and the cursor moves past it', async () => {
+    await writeFile(file, row('a'))
+    const latest = await readBoundedHistoryPage(file)
+    await appendFile(file, row('huge', 'y'.repeat(HISTORY_SCAN_BYTES + 1024 * 1024)) + row('after'))
+    const first = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(first.entries).toEqual([])
+    expect(first.page.omittedOversizedEntries).toBe(1)
+    expect(first.page.tailComplete).toBe(false)
+    expect(first.page.tailCursor).not.toBe(latest.page.tailCursor)
+    const second = await readBoundedHistoryPage(file, { cursor: first.page.tailCursor! })
+    expect(second.entries.map(item => item.entry.uuid)).toEqual(['after'])
+    expect(second.page.omittedOversizedEntries).toBe(0)
+    expect(second.page.tailComplete).toBe(true)
+  })
+
+  test('an oversized record that fits the scan budget is counted and passed in one follow', async () => {
+    await writeFile(file, row('a'))
+    const latest = await readBoundedHistoryPage(file)
+    await appendFile(file, row('big', 'y'.repeat(HISTORY_SEMANTIC_RECORD_BYTES + 1024)) + row('after'))
+    const delta = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(delta.entries.map(item => item.entry.uuid)).toEqual(['after'])
+    expect(delta.page.omittedOversizedEntries).toBe(1)
+    expect(delta.page.tailComplete).toBe(true)
+  })
+
+  test('an oversized record still being written is skipped across follows and counted once', async () => {
+    await writeFile(file, row('a'))
+    const latest = await readBoundedHistoryPage(file)
+    const big = row('big', 'y'.repeat(HISTORY_SEMANTIC_RECORD_BYTES + 1024))
+    await appendFile(file, big.slice(0, HISTORY_SEMANTIC_RECORD_BYTES + 512))
+    const partial = await readBoundedHistoryPage(file, { cursor: latest.page.tailCursor! })
+    expect(partial.entries).toEqual([])
+    expect(partial.page.omittedOversizedEntries).toBe(1)
+    expect(partial.page.tailComplete).toBe(true)
+    await appendFile(file, big.slice(HISTORY_SEMANTIC_RECORD_BYTES + 512) + row('after'))
+    const done = await readBoundedHistoryPage(file, { cursor: partial.page.tailCursor! })
+    expect(done.entries.map(item => item.entry.uuid)).toEqual(['after'])
+    expect(done.page.omittedOversizedEntries).toBe(0)
   })
 })

@@ -28,9 +28,12 @@ import {
 } from './history/pick.js'
 import {
   defaultHistoryPaths,
+  HISTORY_WINDOW_DAYS,
+  historyWindowStart,
   isVoiceHistorySourceId,
   listHistorySources,
   scanHistoryTerms,
+  type HistoryCandidate,
   type HistoryPaths,
 } from './history/scan.js'
 import { isVoiceDownloadSource, isVoiceLanguage } from './preferences.js'
@@ -41,8 +44,9 @@ import {
   type SpeechProvider,
   type VoiceCatalog,
   type VoiceCorrection,
-  type VoiceHistorySource,
+  type VoiceHistoryGroup,
   type VoiceHistorySourceId,
+  type VoiceHistorySourceList,
   type VoiceHistorySuggestions,
   type VoiceLanguage,
   type VoicePreferences,
@@ -70,8 +74,14 @@ export type VoiceServiceOptions = {
 
 /** Hard server-side limit on one correction; the composer gives up sooner (3 s). */
 export const CORRECTION_TIMEOUT_MS = 10_000
-/** The pick answers ~100 grouped terms; the desktop waits up to 120 s for scan + pick. */
+/**
+ * The pick answers ~100 grouped terms in a few seconds, or in about a minute
+ * when a reasoning model ends up thinking first (see HISTORY_PICK_MAX_TOKENS).
+ * This bounds every attempt together; the desktop waits up to 120 s for scan + pick.
+ */
 export const HISTORY_PICK_TIMEOUT_MS = 90_000
+/** A second request when the first answer held no term list. */
+const HISTORY_PICK_ATTEMPTS = 2
 const MAX_CORRECTION_PROVIDER_ID_LENGTH = 80
 const MAX_CORRECTION_MODEL_ID_LENGTH = 200
 
@@ -107,6 +117,18 @@ function parseModelChoice(
 function correctionFailure(result: Extract<ProviderTextCompletionResult, { ok: false }>, what: string): Error {
   if (result.reason === 'aborted') return abortError()
   return new VoiceServiceError('voice/correction-failed', `${what} failed: ${result.message}`, result.reason)
+}
+
+/**
+ * Why a pick answer held no term list, for the diagnostics log. Whether the
+ * provider rejected the thinking-disabled request tells apart the two ways a
+ * reasoning model ends up thinking: the resend, or the provider ignoring it.
+ */
+function unusablePick(result: Extract<ProviderTextCompletionResult, { ok: true }>): string {
+  const answer = result.text.trim() ? 'The model did not return a term list' : 'The model answered without any text'
+  const rejected = result.firstAttemptRejected
+  if (!rejected) return answer
+  return `${answer} (the provider rejected the request with thinking disabled, HTTP ${rejected.status}: ${rejected.detail}; it was resent with thinking on)`
 }
 
 type PrepareTask = {
@@ -363,13 +385,16 @@ export class VoiceService {
 
   // --- Vocabulary from chat history ------------------------------------------
 
-  async historySources(): Promise<VoiceHistorySource[]> {
-    return listHistorySources(this.historyPaths())
+  async historySources(): Promise<VoiceHistorySourceList> {
+    return {
+      sources: await listHistorySources(this.historyPaths(), historyWindowStart()),
+      days: HISTORY_WINDOW_DAYS,
+    }
   }
 
   /**
-   * Counts terms in the user's own messages locally, then asks the model once
-   * to pick vocabulary from the candidate words and their session counts.
+   * Counts terms in the user's own recent messages locally, then asks the
+   * model to pick vocabulary from the candidate words and their session counts.
    */
   async suggestFromHistory(body: unknown, signal: AbortSignal): Promise<VoiceHistorySuggestions> {
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -391,29 +416,12 @@ export class VoiceService {
       paths: this.historyPaths(),
       signal,
       exclude: vocabulary.excluded,
+      since: historyWindowStart(),
     })
 
-    let groups: VoiceHistorySuggestions['groups'] = []
-    if (scan.candidates.length > 0) {
-      const result = await this.completeText({
-        provider: resolved.provider,
-        modelId: resolved.target.modelId,
-        system: HISTORY_PICK_SYSTEM_PROMPT,
-        user: buildPickUserMessage(scan.candidates),
-        maxTokens: HISTORY_PICK_MAX_TOKENS,
-        temperature: 0,
-        reasoningEffort: 'low',
-        signal,
-        timeoutMs: HISTORY_PICK_TIMEOUT_MS,
-        attemptTimeoutMs: HISTORY_PICK_TIMEOUT_MS,
-      })
-      if (!result.ok) throw correctionFailure(result, 'Picking vocabulary')
-      const picked = parsePickResponse(result.text, scan.candidates, vocabulary.known)
-      if (!picked) {
-        throw new VoiceServiceError('voice/correction-failed', 'The model did not return a term list', 'invalid-output')
-      }
-      groups = picked
-    }
+    const groups = scan.candidates.length > 0
+      ? await this.pickHistoryTerms(resolved, scan.candidates, vocabulary.known, signal)
+      : []
     if (signal.aborted) throw abortError()
 
     await this.vocabularyStore.markHistoryRun()
@@ -425,6 +433,40 @@ export class VoiceService {
       target: resolved.target,
       seconds: elapsedSeconds(started),
     }
+  }
+
+  /**
+   * Asks the model to pick terms, and asks once more, within the same time
+   * budget, when the answer holds no term list (empty or malformed output).
+   */
+  private async pickHistoryTerms(
+    resolved: ResolvedCorrectionTarget,
+    candidates: readonly HistoryCandidate[],
+    known: ReadonlySet<string>,
+    signal: AbortSignal,
+  ): Promise<VoiceHistoryGroup[]> {
+    const deadline = performance.now() + HISTORY_PICK_TIMEOUT_MS
+    let unusable = ''
+    for (let attempt = 0; attempt < HISTORY_PICK_ATTEMPTS; attempt += 1) {
+      const remainingMs = Math.max(1, Math.round(deadline - performance.now()))
+      const result = await this.completeText({
+        provider: resolved.provider,
+        modelId: resolved.target.modelId,
+        system: HISTORY_PICK_SYSTEM_PROMPT,
+        user: buildPickUserMessage(candidates),
+        maxTokens: HISTORY_PICK_MAX_TOKENS,
+        temperature: 0,
+        reasoningEffort: 'low',
+        signal,
+        timeoutMs: remainingMs,
+        attemptTimeoutMs: remainingMs,
+      })
+      if (!result.ok) throw correctionFailure(result, 'Picking vocabulary')
+      const picked = parsePickResponse(result.text, candidates, known)
+      if (picked) return picked
+      unusable = unusablePick(result)
+    }
+    throw new VoiceServiceError('voice/correction-failed', unusable, 'invalid-output')
   }
 
   /** Starts (or joins) the background download for a provider; returns immediately. */

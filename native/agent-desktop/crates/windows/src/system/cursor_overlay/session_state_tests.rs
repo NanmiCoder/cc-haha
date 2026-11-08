@@ -162,9 +162,17 @@ mod hardened_read {
     use crate::system::private_file::tests::Scratch;
     use crate::system::private_file::{WindowsPrivateFile, read_private_bounded_path};
     use agent_desktop_core::PrivateFileOps;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     const MANIFEST_READ_LIMIT: u64 = 64 * 1024;
+
+    fn private_manifest_path(scratch: &Scratch) -> PathBuf {
+        let directory = scratch.path().join("private");
+        WindowsPrivateFile::new()
+            .ensure_private(&directory)
+            .expect("the native store protects its scratch directory");
+        directory.join("session.json")
+    }
 
     /// A manifest that is gone must still read as gone THROUGH the hardened
     /// path, or the renderer that outlived its session never learns the
@@ -218,7 +226,7 @@ mod hardened_read {
     #[test]
     fn an_ordinary_file_written_beside_it_reads_straight_back() {
         let scratch = Scratch::new("plain");
-        let path = scratch.path().join("session.json");
+        let path = private_manifest_path(&scratch);
         std::fs::write(&path, "{\"id\":\"s0000001\"}").expect("the scratch file writes");
 
         assert_eq!(read_back(&path), "{\"id\":\"s0000001\"}");
@@ -232,7 +240,7 @@ mod hardened_read {
     #[test]
     fn a_manifest_written_by_the_product_reads_back_as_a_live_session() {
         let scratch = Scratch::new("manifest");
-        let path = scratch.path().join("session.json");
+        let path = private_manifest_path(&scratch);
         let manifest = agent_desktop_core::session::SessionManifest {
             id: "s0000001".to_owned(),
             name: None,
@@ -256,7 +264,7 @@ mod hardened_read {
     #[test]
     fn a_file_past_the_read_limit_is_refused_rather_than_read() {
         let scratch = Scratch::new("oversized");
-        let path = scratch.path().join("session.json");
+        let path = private_manifest_path(&scratch);
         std::fs::write(&path, vec![b'x'; (MANIFEST_READ_LIMIT + 1) as usize])
             .expect("the oversized scratch file writes");
 

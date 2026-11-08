@@ -95,7 +95,7 @@ pub(crate) fn parse_command(item: BatchCommand) -> Result<Commands, AppError> {
         "clipboard-set" => decode(command, item.args).map(Commands::ClipboardSet),
         "clipboard-clear" => no_args(command, item.args).map(|()| Commands::ClipboardClear),
         "wait" => decode(command, item.args).map(Commands::Wait),
-        "status" => no_args(command, item.args).map(|()| Commands::Status),
+        "status" => no_args(command, item.args).map(|()| Commands::Status(Default::default())),
         "permissions" => decode(command, item.args).map(Commands::Permissions),
         "version" => no_args(command, item.args).map(|()| Commands::Version),
         "skills" => parse_skills(item.args).map(Commands::Skills),

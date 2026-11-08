@@ -5,6 +5,7 @@ import {
   type AskUserQuestionDraft,
 } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useTeamStore } from '../../stores/teamStore'
 import { useTranslation } from '../../i18n'
 import { ArrowRight, Check, CircleCheck, Info, MessageCircleQuestion, MessagesSquare, Send } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
@@ -112,9 +113,24 @@ export function AskUserQuestion({
   const respondToPermission = useChatStore((s) => s.respondToPermission)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
-  const pendingRequest = useChatStore((s) => targetSessionId
-    ? listPendingPermissions(s.sessions[targetSessionId])
-      .find((permission) => permission.toolUseId === toolUseId) ?? null
+  // A team member's page shows the member's transcript under its own tab id,
+  // which nothing connects to the member's CLI. The server forwards the
+  // member's requests to the lead session, named after the member, and hands
+  // an answer sent there to the member that asked — so that is where its
+  // question waits and gets answered.
+  const memberLeadSessionId = useTabStore((s) => {
+    const tab = targetSessionId ? s.tabs.find((candidate) => candidate.sessionId === targetSessionId) : undefined
+    return tab?.type === 'team-member' ? tab.teamLeadSessionId ?? null : null
+  })
+  const memberName = useTeamStore((s) => memberLeadSessionId && targetSessionId
+    ? s.getMemberBySessionId(targetSessionId)?.name ?? null
+    : null)
+  const requestSessionId = memberLeadSessionId ?? targetSessionId
+  const pendingRequest = useChatStore((s) => requestSessionId
+    ? listPendingPermissions(s.sessions[requestSessionId])
+      .find((permission) => permission.toolUseId === toolUseId &&
+        // The lead session also holds its own requests and other members'.
+        (!memberLeadSessionId || (memberName !== null && permission.displayName === memberName))) ?? null
     : null)
   // The card is rendered from the transcript, but answering it needs the live
   // permission request. Both facts below come from the session, never from the
@@ -144,13 +160,13 @@ export function AskUserQuestion({
   // A choice can be made before the SDK permission request reaches the UI.
   // Protect that draft as soon as the matching request arrives.
   useEffect(() => {
-    if (!targetSessionId || !pendingRequest || hasSubmitted ||
+    if (!requestSessionId || !pendingRequest || hasSubmitted ||
       activitySentForRequest.current === pendingRequest.requestId) return
     if (!Object.values(selections).some((labels) => labels.length > 0) &&
       !Object.values(freeTexts).some((value) => value.trim())) return
     activitySentForRequest.current = pendingRequest.requestId
-    useChatStore.getState().recordAskUserQuestionActivity(targetSessionId, pendingRequest.requestId)
-  }, [freeTexts, hasSubmitted, pendingRequest, selections, targetSessionId])
+    useChatStore.getState().recordAskUserQuestionActivity(requestSessionId, pendingRequest.requestId)
+  }, [freeTexts, hasSubmitted, pendingRequest, requestSessionId, selections])
 
   const resultAnswers = useMemo(() => {
     if (!result || typeof result !== 'object') return {}
@@ -285,10 +301,10 @@ export function AskUserQuestion({
   }
 
   const markUserActivity = () => {
-    if (!targetSessionId || !pendingRequest || submitted ||
+    if (!requestSessionId || !pendingRequest || submitted ||
       activitySentForRequest.current === pendingRequest.requestId) return
     activitySentForRequest.current = pendingRequest.requestId
-    useChatStore.getState().recordAskUserQuestionActivity(targetSessionId, pendingRequest.requestId)
+    useChatStore.getState().recordAskUserQuestionActivity(requestSessionId, pendingRequest.requestId)
   }
 
   const handleSelect = (qIndex: number, label: string) => {
@@ -376,7 +392,7 @@ export function AskUserQuestion({
       return
     }
 
-    if (!targetSessionId || !pendingRequest) return
+    if (!requestSessionId || !pendingRequest) return
 
     const answers = questions.reduce<Record<string, string>>((acc, question, index) => {
       const freeText = freeTexts[index]?.trim()
@@ -391,7 +407,7 @@ export function AskUserQuestion({
 
     setHasSubmitted(true)
     const metadata = inputObject.metadata
-    respondToPermission(targetSessionId, pendingRequest.requestId, true, {
+    respondToPermission(requestSessionId, pendingRequest.requestId, true, {
       updatedInput: {
         ...inputObject,
         answers,
@@ -430,10 +446,10 @@ export function AskUserQuestion({
       return
     }
 
-    if (!targetSessionId || !pendingRequest) return
+    if (!requestSessionId || !pendingRequest) return
 
     setHasRequestedChat(true)
-    respondToPermission(targetSessionId, pendingRequest.requestId, false, {
+    respondToPermission(requestSessionId, pendingRequest.requestId, false, {
       // Carry whatever was already picked, so switching to a conversation isn't
       // punished by losing the partial answers.
       denyMessage: describeAnswers(),

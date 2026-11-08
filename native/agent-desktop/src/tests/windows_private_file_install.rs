@@ -96,3 +96,52 @@ fn session_start_in_a_real_home_succeeds_as_the_junction_control() {
         "the control session manifest must exist under the real home"
     );
 }
+
+#[test]
+fn status_probe_refuses_inherited_access_and_accepts_a_native_created_root() {
+    let scratch = Scratch::create("readiness");
+    let parent = scratch.dir("runtime");
+    let acl = Command::new("icacls.exe")
+        .arg(&parent)
+        .args(["/grant", "*S-1-1-0:(OI)(CI)RX"])
+        .output()
+        .expect("icacls can grant inherited access on the fixture");
+    assert!(acl.status.success(), "fixture ACL failed: {:?}", acl);
+    let precreated = scratch.dir("runtime/precreated");
+    let native = parent.join("native-private");
+    let run = |home: &Path, args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_agent-desktop"))
+            .args(args)
+            .env("AGENT_DESKTOP_HOME", home)
+            .env_remove("AGENT_DESKTOP_SESSION")
+            .env_remove("AGENT_DESKTOP_AGENT_ID")
+            .env_remove("AGENT_DESKTOP_CURSOR_OVERLAY_CHILD")
+            .output()
+            .expect("binary starts");
+        assert!(output.status.success(), "native call failed: {:?}", output);
+        parse_envelope(&output)
+    };
+    let status = ["status", "--check-session-storage"];
+    let rejected = run(&precreated, &status);
+    assert_eq!(rejected["data"]["session_storage"]["ready"], false);
+    assert!(
+        rejected["data"]["session_storage"]["message"]
+            .as_str()
+            .is_some_and(
+                |message| message.contains("private file DACL grants an untrusted principal")
+            )
+    );
+    assert!(!precreated.join("sessions").exists());
+
+    for _ in 0..2 {
+        let accepted = run(&native, &status);
+        assert_eq!(accepted["data"]["session_storage"]["ready"], true);
+        assert_eq!(
+            std::fs::read_dir(native.join("sessions")).unwrap().count(),
+            0,
+            "readiness must leave no probe or session behind"
+        );
+    }
+    let started = run(&native, &["session", "start", "--no-trace"]);
+    assert!(started["data"]["session_id"].is_string());
+}

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createResumableSocketHandler } from './ws/resumableStreams.js'
 import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessStore } from './publicAccess.js'
 import { handleVoiceApi } from './api/voice.js'
 import { fakeProviderRecord, fakeTargets } from './services/voice/__tests__/fakeCorrection.js'
@@ -19,6 +20,7 @@ function fixture(
     async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
   origin = 'https://fixture.trycloudflare.com',
   connectivity: { resolveProxy?: () => Promise<{ proxyUrl: string | null }>, verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean> } = {},
+  sockets: Pick<ConstructorParameters<typeof PublicAccessServer>[0], 'websocket' | 'terminateDeviceStreams'> = {} as never,
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-test-'))
   const oldToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
@@ -32,6 +34,7 @@ function fixture(
     handleApiRequest,
     handleStatic: async () => new Response('<html>fixture</html>'),
     websocket: { message: (_ws, payload) => { messages.push(payload) } },
+    ...sockets,
   })
   service.enable(origin)
   const base = `http://127.0.0.1:${service.status().port}`
@@ -904,4 +907,88 @@ describe('paired phone voice input', () => {
       controller.abort()
     }
   }, 5000)
+})
+
+describe('resumable session streams through the gateway', () => {
+  const STREAM = 'GGGGGGGGGGGGGGGGGGGGGG'
+  function streamFixture() {
+    const opened: unknown[] = []
+    const closed: number[] = []
+    const inner = {
+      open(ws: { send(text: string): unknown }) { opened.push(ws); ws.send('{"type":"connected"}') },
+      message() {},
+      close(_ws: unknown, code: number) { closed.push(code) },
+    }
+    const handler = createResumableSocketHandler(inner as never, { epoch: 'gateway-epoch' })
+    const f = fixture(undefined, undefined, undefined, {
+      websocket: handler as never,
+      terminateDeviceStreams: id => handler.terminateIdentity(id),
+    })
+    return { f, opened, closed, handler }
+  }
+  async function connect(base: string, token: string, query: string) {
+    const ws = new WebSocket(base.replace('http:', 'ws:') + `/ws/fixture?${query}`, { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${token}` } })
+    cleanups.push(() => ws.close())
+    const frames: Record<string, unknown>[] = []
+    ws.onmessage = event => frames.push(JSON.parse(String(event.data)))
+    await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
+    await Bun.sleep(10)
+    return { ws, frames }
+  }
+  const closedCode = (ws: WebSocket) => new Promise<number>(resolve => {
+    if (ws.readyState === WebSocket.CLOSED) resolve(-1)
+    ws.onclose = event => resolve(event.code)
+  })
+
+  test('revoking a device ends its streams, including one whose socket is already gone', async () => {
+    const { f, closed, handler } = streamFixture()
+    const { claim, pending } = await f.pairNative()
+    const { ws, frames } = await connect(f.base, claim.token, `stream=${STREAM}`)
+    expect(frames[0]).toMatchObject({ type: 'stream_attached', resumed: false })
+    const gone = closedCode(ws)
+    ws.close()
+    await gone
+    await Bun.sleep(10)
+    expect(closed).toEqual([])
+    expect(handler.streamCount).toBe(1)
+    await f.control('revoke', { id: pending.id })
+    expect(closed).toEqual([1008])
+    expect(handler.streamCount).toBe(0)
+  })
+
+  test('a resume the server cannot honor is refused on that socket, without opening a session', async () => {
+    const { f, opened, handler } = streamFixture()
+    const { claim } = await f.pairNative()
+    const ws = new WebSocket(f.base.replace('http:', 'ws:') + `/ws/fixture?stream=${STREAM}&ack=3&epoch=gateway-epoch`, { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` } })
+    cleanups.push(() => ws.close())
+    const frames: Record<string, unknown>[] = []
+    ws.onmessage = event => frames.push(JSON.parse(String(event.data)))
+    const closed = await new Promise<{ code: number; reason: string }>(resolve => { ws.onclose = event => resolve({ code: event.code, reason: event.reason }) })
+    expect(closed).toEqual({ code: 4001, reason: 'Stream not resumable' })
+    expect(frames).toEqual([{ type: 'stream_attached', v: 1, stream: STREAM, epoch: 'gateway-epoch', resumed: false, reason: 'expired', cack: 0, next: 1, last: 0 }])
+    expect(opened).toHaveLength(0)
+    expect(handler.streamCount).toBe(0)
+  })
+
+  test('a tunnel restart keeps the stream resumable; a user disable ends it', async () => {
+    const { f, opened, closed, handler } = streamFixture()
+    const { claim } = await f.pairNative()
+    const first = await connect(f.base, claim.token, `stream=${STREAM}`)
+    const port = f.service.status().port!
+    const restarted = closedCode(first.ws)
+    await f.control('disable', { reason: 'restart' })
+    expect(await restarted).toBe(1012)
+    await Bun.sleep(10)
+    expect(closed).toEqual([])
+    f.service.enable('https://fixture.trycloudflare.com', port)
+    const second = await connect(f.base, claim.token, `stream=${STREAM}&ack=1&epoch=gateway-epoch`)
+    expect(second.frames[0]).toMatchObject({ type: 'stream_attached', resumed: true, next: 2 })
+    expect(opened).toHaveLength(1)
+    const ended = closedCode(second.ws)
+    await f.control('disable')
+    expect(await ended).toBe(1012)
+    await Bun.sleep(10)
+    expect(closed).toEqual([1012])
+    expect(handler.streamCount).toBe(0)
+  })
 })

@@ -149,6 +149,8 @@ export class ElectronServerRuntime {
   private readonly resolveSystemProxy?: (url: string) => Promise<string>
   private readonly localAccessToken = randomBytes(32).toString('base64url')
   private readonly petAccessToken = randomBytes(32).toString('base64url')
+  /** Authorizes only the hidden P2P host window's loopback endpoint, never the local API. */
+  private readonly p2pEndpointToken = randomBytes(32).toString('base64url')
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private systemProxyBridge: SystemProxyBridgeLike | null = null
   private server: ActiveServer | null = null
@@ -226,6 +228,10 @@ export class ElectronServerRuntime {
 
   getPetAccessToken(): string {
     return this.petAccessToken
+  }
+
+  getP2PEndpointToken(): string {
+    return this.p2pEndpointToken
   }
 
   getActiveServerUrl(): string | null {
@@ -575,6 +581,7 @@ export class ElectronServerRuntime {
     return {
       ...this.withLocalAccessToken(env),
       CC_HAHA_PET_ACCESS_TOKEN: this.petAccessToken,
+      CC_HAHA_P2P_ENDPOINT_TOKEN: this.p2pEndpointToken,
     }
   }
 
