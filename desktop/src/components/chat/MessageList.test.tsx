@@ -10807,7 +10807,7 @@ describe('MessageList edit and resend', () => {
   function setup(messages: UIMessage[], checkpoints: Checkpoint[], sessionOverrides: Partial<PerSessionState> = {}) {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({ checkpoints })
     const reloadHistory = vi.fn().mockResolvedValue(undefined)
-    const sendMessage = vi.fn()
+    const sendMessage = vi.fn(() => true)
     const queueComposerPrefill = vi.fn()
     const stopGeneration = vi.fn()
     useChatStore.setState({
