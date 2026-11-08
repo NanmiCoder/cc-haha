@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { Marked } from 'marked'
-import { ThinkingBlock } from './ThinkingBlock'
-import { splitStreamingMarkdown } from '../../lib/streamingMarkdownSegments'
+import { ThinkingBlock } from '@/components/chat/ThinkingBlock'
+import { splitStreamingMarkdown } from '@/lib/streamingMarkdownSegments'
 
 const parse = new Marked({ gfm: true, breaks: true })
 const paragraph = 'Long reasoning: ' + 'reasoning about the request '.repeat(100)
