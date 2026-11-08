@@ -3757,7 +3757,6 @@ export const jp: Record<TranslationKey, string> = {
   'permMode.permShell': '任意のシェルコマンドの実行',
   'permMode.permPackages': 'パッケージのインストールまたは削除',
   'permMode.enableBypassBtn': 'バイパスを有効化',
-  'permMode.disabledDuringTurn': 'セッションの実行中は権限を切り替えられません',
   'permMode.enableAutoTitle': '自動モードを有効にしますか？',
   'permMode.enableAutoBody': '自動モードは権限確認を減らしますが、安全を保証するものではありません。',
   'permMode.enableAutoDetail': 'Claude はツール呼び出しの危険な操作やプロンプトインジェクションを確認し、安全と判断した操作を実行して、危険と判断した操作をブロックします。隔離された環境でのみ使用してください。',

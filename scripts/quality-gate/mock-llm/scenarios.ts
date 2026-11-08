@@ -21,6 +21,7 @@ export type MockAgentScenario = { id: string; title: string }
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
   { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
+  { id: 'mock-live-permission-switch', title: 'A permission switch during a running turn applies to the real CLI\'s next tool call' },
   { id: 'mock-team-task-owner', title: 'Real task tools reject an unknown teammate and recover with a valid assignment' },
   { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
@@ -192,6 +193,40 @@ export function createMockOnlyRunners(
         await socket.waitFor(message => message.type === 'message_complete',
           ctx.stepTimeoutMs, 'denied default-mode turn', resetStart)
         if (existsSync(deniedTarget)) throw new Error('Default mode unexpectedly kept bypass permissions')
+      } finally { socket.close() }
+    },
+    async 'mock-live-permission-switch'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      // Outside the workspace, but still inside the disposable config fixture.
+      const first = join(ctx.configDir, `live-permission-first-${sessionId}.txt`)
+      const second = join(ctx.configDir, `live-permission-second-${sessionId}.txt`)
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: `MOCK_WRITE_SEQUENCE ${JSON.stringify([
+          { file_path: first, content: 'ASKED_UNDER_DEFAULT' },
+          { file_path: second, content: 'WRITTEN_UNDER_BYPASS' },
+        ])}` })
+        const request = await socket.waitFor(message => ['permission_request', 'message_complete', 'error'].includes(message.type),
+          ctx.stepTimeoutMs, 'default mode asks for the first write', start)
+        if (request.type !== 'permission_request') throw new Error(`The first write did not ask under default mode: ${JSON.stringify(request)}`)
+
+        // The turn is parked on that approval: switch without interrupting it.
+        socket.send({ type: 'set_permission_mode', mode: 'bypassPermissions' })
+        await socket.waitFor(message => message.type === 'permission_mode_changed' && message.mode === 'bypassPermissions',
+          ctx.stepTimeoutMs, 'mid-turn switch confirmed by the CLI', start)
+        if (socket.messages.slice(start).some(message => message.type === 'message_complete')) {
+          throw new Error('The permission switch waited for the turn to end')
+        }
+        socket.send({ type: 'permission_response', requestId: request.requestId, allowed: true })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'turn after the mid-turn switch', start)
+
+        const prompts = socket.messages.slice(start).filter(message => message.type === 'permission_request')
+        if (prompts.length !== 1) throw new Error(`The write after the switch still asked: ${JSON.stringify(prompts)}`)
+        if (!existsSync(first) || !existsSync(second) || readFileSync(second, 'utf8') !== 'WRITTEN_UNDER_BYPASS') {
+          throw new Error('The writes around the mid-turn switch did not reach the real disk')
+        }
       } finally { socket.close() }
     },
     async 'mock-team-task-owner'(ctx) {

@@ -3759,7 +3759,6 @@ export const kr: Record<TranslationKey, string> = {
   'permMode.permShell': '임의의 셸 명령 실행',
   'permMode.permPackages': '패키지 설치 또는 제거',
   'permMode.enableBypassBtn': '우회 사용',
-  'permMode.disabledDuringTurn': '세션이 진행 중일 때는 권한을 변경할 수 없습니다',
   'permMode.enableAutoTitle': '자동 모드를 활성화할까요?',
   'permMode.enableAutoBody': '자동 모드는 권한 확인을 줄이지만 안전을 보장하지는 않습니다.',
   'permMode.enableAutoDetail': 'Claude는 도구 호출에서 위험한 작업과 프롬프트 인젝션을 확인하고, 안전하다고 판단한 작업을 실행하며 위험하다고 판단한 작업을 차단합니다. 격리된 환경에서만 사용하세요.',
