@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
-const { logoutMock, startMock, statusMock } = vi.hoisted(() => ({
+const { logoutMock, planUsageMock, startMock, statusMock } = vi.hoisted(() => ({
   logoutMock: vi.fn(),
+  planUsageMock: vi.fn(),
   startMock: vi.fn(),
   statusMock: vi.fn(),
 }))
@@ -13,6 +14,7 @@ vi.mock('../../api/hahaOAuth', () => ({
     start: startMock,
     status: statusMock,
     logout: logoutMock,
+    planUsage: planUsageMock,
   },
 }))
 
@@ -29,6 +31,7 @@ describe('ClaudeOfficialLogin', () => {
     statusMock.mockReset()
     startMock.mockReset()
     logoutMock.mockReset()
+    planUsageMock.mockReset()
     statusMock.mockResolvedValue({ loggedIn: false })
     startMock.mockResolvedValue({ authorizeUrl, state: 'claude-state' })
     useSettingsStore.setState({ locale: 'en' })
@@ -105,5 +108,29 @@ describe('ClaudeOfficialLogin', () => {
     expect(open).not.toHaveBeenCalled()
     expect(useHahaOAuthStore.getState().isPolling).toBe(false)
     expect(screen.getByRole('button', { name: 'Sign in to Claude' })).toBeInTheDocument()
+  })
+
+  it('shows the subscription usage once the account is logged in (#1804)', async () => {
+    statusMock.mockResolvedValue({ loggedIn: true, expiresAt: null, scopes: ['user:inference', 'user:profile'], subscriptionType: 'max' })
+    planUsageMock.mockResolvedValue({
+      available: true,
+      fetchedAt: '2026-11-08T12:00:00.000Z',
+      usage: { five_hour: { utilization: 30, resets_at: null }, seven_day: { utilization: 5, resets_at: null } },
+    })
+
+    render(<ClaudeOfficialLogin />)
+
+    const section = await screen.findByRole('region', { name: 'Plan usage' })
+    expect(await within(section).findByText('30% used')).toBeInTheDocument()
+    expect(within(section).getByText('5% used')).toBeInTheDocument()
+    expect(planUsageMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not ask for usage while logged out', async () => {
+    render(<ClaudeOfficialLogin />)
+    await screen.findByRole('button', { name: 'Sign in to Claude' })
+
+    expect(screen.queryByRole('region', { name: 'Plan usage' })).not.toBeInTheDocument()
+    expect(planUsageMock).not.toHaveBeenCalled()
   })
 })
