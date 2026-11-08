@@ -13,7 +13,17 @@ import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { PROMPT_TOO_LONG_TRIGGER, RELAY_OVERFLOW_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
+import {
+  GOOGLE_ADC_QUOTA_PROJECT_MESSAGE,
+  GOOGLE_ADC_QUOTA_PROJECT_TRIGGER,
+  KIMI_USAGE_LIMIT_MESSAGE,
+  KIMI_USAGE_LIMIT_TRIGGER,
+  PROMPT_TOO_LONG_TRIGGER,
+  RELAY_OVERFLOW_TRIGGER,
+  UPSTREAM_ERROR_MESSAGE,
+  UPSTREAM_ERROR_TRIGGER,
+  UPSTREAM_REFUSAL_TRIGGER,
+} from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 
 export type MockAgentScenario = { id: string; title: string }
@@ -53,7 +63,7 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   },
   {
     id: 'mock-upstream-error-recovers',
-    title: 'An upstream error ends the turn visibly and the next turn still works',
+    title: 'Upstream errors preserve billing and authentication guidance and the next turn still works',
   },
   {
     id: 'mock-prompt-too-long-compacts',
@@ -947,36 +957,51 @@ export function createMockOnlyRunners(
     },
 
     async 'mock-upstream-error-recovers'(ctx) {
-      const socket = await ctx.openSocket(await ctx.createSession())
-      try {
-        ctx.pinRuntime(socket)
-        const start = socket.messages.length
-        socket.send({ type: 'user_message', content: `${UPSTREAM_ERROR_TRIGGER}: this request should fail upstream.` })
-        const failure = await socket.waitFor(
-          (m) => m.type === 'error' || (m.type === 'message_complete' && streamedText(socket.messages.slice(start)).length === 0),
-          ctx.stepTimeoutMs,
-          'an error frame for the failed turn',
-          start,
-        )
-        if (failure.type !== 'error') {
-          throw new Error('the failed turn completed silently with no error shown to the user')
-        }
-        // Let the failed turn finish settling before the next prompt.
-        await socket.waitFor(
-          (m) => m.type === 'message_complete' || (m.type === 'session_state_changed' && m.state === 'idle'),
-          ctx.stepTimeoutMs,
-          'failed turn to settle',
-          start,
-        ).catch(() => undefined)
+      for (const sample of [
+        { trigger: UPSTREAM_ERROR_TRIGGER, message: UPSTREAM_ERROR_MESSAGE, code: undefined, authentication: undefined },
+        { trigger: KIMI_USAGE_LIMIT_TRIGGER, message: KIMI_USAGE_LIMIT_MESSAGE, code: 'billing_error', authentication: false },
+        { trigger: GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, message: GOOGLE_ADC_QUOTA_PROJECT_MESSAGE, code: 'authentication_failed', authentication: true },
+      ]) {
+        const socket = await ctx.openSocket(await ctx.createSession())
+        try {
+          ctx.pinRuntime(socket)
+          const start = socket.messages.length
+          socket.send({ type: 'user_message', content: `${sample.trigger}: this request should fail upstream.` })
+          const failure = await socket.waitFor(
+            (m) => m.type === 'error' || (m.type === 'message_complete' && streamedText(socket.messages.slice(start)).length === 0),
+            ctx.stepTimeoutMs,
+            `an error frame for ${sample.trigger}`,
+            start,
+          )
+          if (failure.type !== 'error') {
+            throw new Error(`${sample.trigger} completed silently with no error shown to the user`)
+          }
+          if (sample.code && failure.code !== sample.code) {
+            throw new Error(`${sample.trigger} returned ${failure.code}, expected ${sample.code}`)
+          }
+          const detail = String(failure.message ?? '')
+          if (!detail.includes(sample.message)) throw new Error(`${sample.trigger} lost the upstream error message: ${detail}`)
+          if (sample.authentication !== undefined && /\/login|Failed to authenticate/i.test(detail) !== sample.authentication) {
+            throw new Error(`${sample.trigger} showed incorrect authentication guidance: ${detail}`)
+          }
+          // Let the failed turn finish settling before the next prompt.
+          await socket.waitFor(
+            (m) => m.type === 'message_complete' || (m.type === 'session_state_changed' && m.state === 'idle'),
+            ctx.stepTimeoutMs,
+            'failed turn to settle',
+            start,
+          ).catch(() => undefined)
 
-        const next = socket.messages.length
-        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
-        await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete after an upstream error', next)
-        if (!streamedText(socket.messages.slice(next)).trim()) {
-          throw new Error('the session did not answer again after an upstream error')
+          const next = socket.messages.length
+          socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+          await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete after an upstream error', next)
+          const recovered = socket.messages.slice(next)
+          if (recovered.some((m) => m.type === 'error') || !streamedText(recovered).trim()) {
+            throw new Error(`the session did not answer again after ${sample.trigger}`)
+          }
+        } finally {
+          socket.close()
         }
-      } finally {
-        socket.close()
       }
     },
   }

@@ -526,6 +526,15 @@ describe('provider usage limits reported as 401/403 (#1208)', () => {
     return block && block.type === 'text' ? block.text : ''
   }
 
+  test.each([
+    [403, 'The aiplatform.googleapis.com API requires a quota project, which is not set by default.'],
+    [401, 'Invalid API key. Check quota and billing cycle settings in your account.'],
+    [403, 'The access token is invalid. Review your usage limit settings.'],
+  ])('preserves %i permission or credential failures that mention quota setup', (status, message) => {
+    const error = APIError.generate(status, { error: { code: status, message, status: 'PERMISSION_DENIED' } }, undefined, new Headers())
+    expect(getAssistantMessageFromError(error, MODEL).error).toBe('authentication_failed')
+  })
+
   test('shows a used-up plan as a billing error in the provider\'s words, never as a login problem', () => {
     const original = getIsInteractive()
     try {

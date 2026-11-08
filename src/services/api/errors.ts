@@ -331,9 +331,10 @@ export const CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE = 'Credit balance is too low'
  * reached your usage limit for this billing cycle" with a 403 (#1208).
  */
 const PROVIDER_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
-  /\busage limit\b/i,
-  /\bbilling cycle\b/i,
-  /\bquota\b/i,
+  // Require exhaustion wording in the same short clause. Permission failures
+  // can also mention a quota project or account billing settings.
+  /\b(?:reached|exceeded|exhausted|depleted)\b[^.!?\n]{0,80}\b(?:usage limit|quota)\b/i,
+  /\b(?:usage limit|quota)\b[^.!?\n]{0,80}\b(?:reached|exceeded|exhausted|depleted|used[ -]up)\b/i,
   /\binsufficient[ _](?:balance|quota|credits?)\b/i,
 ]
 
