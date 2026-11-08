@@ -469,6 +469,29 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByTestId('diff-comment-card')).not.toBeInTheDocument()
   })
 
+  it('holds a long run of selected-text references in a capped tray above the editor (#1838)', () => {
+    act(() => {
+      for (let index = 0; index < 20; index += 1) {
+        useWorkspaceChatContextStore.getState().addReference(sessionId, {
+          kind: 'chat-selection',
+          path: 'chat://assistant/reply-1',
+          name: 'AI reply',
+          quote: `selected passage ${index}`,
+          sourceRole: 'assistant',
+          messageId: 'reply-1',
+        })
+      }
+    })
+
+    render(<ChatInput />)
+
+    const tray = within(screen.getByTestId('chat-input-panel')).getByTestId('composer-attachment-tray')
+    expect(within(tray).getAllByRole('button', { name: 'Remove AI reply' })).toHaveLength(20)
+    expect(tray.className).toMatch(/(^|\s)max-h-\[/)
+    expect(tray).toHaveClass('overflow-y-auto')
+    expect(tray).not.toContainElement(screen.getByRole('textbox'))
+  })
+
   it('keeps unsent composer drafts isolated when switching between session tabs', async () => {
     const historySessionId = 'history-session'
     useTabStore.setState({
