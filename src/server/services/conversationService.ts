@@ -794,6 +794,13 @@ export class ConversationService {
       )
     }
 
+    // `--resume` finds the conversation only from the folder that holds it.
+    // After EnterWorktree that is not where the CLI works; the resumed CLI
+    // re-enters the worktree itself from the transcript's worktree state.
+    const cliCwd = shouldResume && !side && !options?.teamWorker
+      ? await sessionService.resolveResumeLaunchDir(sessionId, launchWorkDir)
+      : launchWorkDir
+
     const args = this.buildSessionCliArgs(
       sessionId,
       sdkUrl,
@@ -805,7 +812,7 @@ export class ConversationService {
     )
 
     console.log(
-      `[ConversationService] Starting CLI for ${sessionId}, cwd: ${launchWorkDir} (process.cwd()=${process.cwd()}, CALLER_DIR will be pinned to workDir)`,
+      `[ConversationService] Starting CLI for ${sessionId}, cwd: ${cliCwd} (process.cwd()=${process.cwd()}, CALLER_DIR will be pinned to workDir)`,
     )
 
     // IMPORTANT (Bug#5): 必须覆盖子进程继承的 CALLER_DIR / PWD。
@@ -826,7 +833,7 @@ export class ConversationService {
     }
     const providerCapture: { fingerprint?: string } = {}
     const childEnv = await this.buildChildEnv(
-      launchWorkDir,
+      cliCwd,
       sdkUrl,
       options,
       networkSettings,
@@ -874,7 +881,7 @@ export class ConversationService {
       this.stopSession(sessionId, { keepTeamWorkers: true })
     }
     try {
-      proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
+      proc = Bun.spawn(args, buildConversationCliSpawnOptions(cliCwd, childEnv))
       if (side) side.started = true
     } catch (spawnErr) {
       void diagnosticsService.recordEvent({
@@ -891,7 +898,7 @@ export class ConversationService {
         },
       })
       throw new ConversationStartupError(
-        `Failed to spawn CLI in ${launchWorkDir}: ${
+        `Failed to spawn CLI in ${cliCwd}: ${
           spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
         }`,
         'CLI_SPAWN_FAILED',
