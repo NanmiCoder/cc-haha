@@ -47,6 +47,7 @@ cc-haha 自己不带模型，它只是那个替你干活的壳。装完之后第
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
 - **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
 - **七牛云 AI** · **OpenRouter** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
+- **LLMTR** — OpenAI Chat Completions 网关，见下面的 LLMTR 一节。
 - **LM Studio** · **Ollama** — 本地模型，见下一节。
 - **Custom** — 上面都没有，自己填。
 
@@ -63,6 +64,16 @@ OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kim
 - **模型 ID 带 `author/slug` 命名空间**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4-pro`。预设的四个槽位预填的都是 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑，别照抄别处的名字——模型一多，手写很容易拼错。
 - **Claude Code 只保证 Anthropic 第一方服务商的完全兼容。** 经 OpenRouter 调其他厂商的模型，工具调用、thinking 或参数形态可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
 - **要用 `/fast`**，模型槽位得固定写一个具体的 Opus ID（`~…-latest` 这类别名不会带上 fast 参数），并在「设置 JSON」的 `env` 里加 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`。想让 Claude Code 用自带的模型发现，同样在 `env` 里加 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
+
+### LLMTR
+
+[LLMTR](https://llmtr.com) 使用 OpenAI Chat Completions。预设名称为 LLMTR，接口地址是 `https://llmtr.com/v1`。应用经本机回环代理把对话转到 `https://llmtr.com/v1/chat/completions`，密钥以 `Authorization: Bearer` 发出。对话不会改走 `/v1/responses`，请求里也不附带 Responses API 的 `reasoning` 对象。
+
+四个槽位的默认模型提示都是 `minimax/minimax-m3.1-flash`。从「拉取模型」得到的 ID 要原样保留，已经带 `llmtr/` 前缀的 ID 也不要截短。公开目录里这条 ID 的上下文长度是 1000000，补全上限是 524288；预设只记录这两个数。目录里的原始价格是 prompt `0.00000015`、completion `0.0000006`、input_cache_read `0.000000015`，应用不拿它们计价。推理在服务端默认开启。请求省略 `reasoning` 参数，不要写成 false，也不要附带 reasoning 对象。一次性脚本的 `max_tokens` 仍是 64，不用目录里的补全上限。
+
+`GET https://llmtr.com/v1/models` 是公开目录，不校验 API Key。密钥是否有效，以服务商列表里的「测试」为准；测试打的是 Chat Completions，不是模型列表。
+
+桌面端把密钥存在服务商记录里，不读取 `LLMTR_API_KEY`。这个变量只给仓库里的一次性脚本 `scripts/llmtr/chat-smoke.ts` 使用：一条不带工具的 Chat Completions 请求，`max_tokens` 为 64，可用 `LLMTR_MODEL` 覆盖模型 ID，不自动重试。
 
 ## 本地模型
 
@@ -126,7 +137,7 @@ Magpie 没开时，这条配置会显示「没有运行」，发消息也会提�
 
 每个槽位下面有个 `1M` 复选框，只有当这个模型确实支持一百万 token 上下文时才勾。
 
-**API 格式** — 这一项只在选了 `Custom` 预设、或者编辑已有服务商时才出现，三个选项：Anthropic Messages（原生）、OpenAI Chat Completions（代理转换）、OpenAI Responses API（代理转换）。后两种会由应用在本机起一个回环代理做协议转换，你不用自己部署任何东西。所有内置预设走的都是 Anthropic 原生，所以看不到这一项。
+**API 格式** — 这一项只在选了 `Custom` 预设、或者编辑已有服务商时才出现，三个选项：Anthropic Messages（原生）、OpenAI Chat Completions（代理转换）、OpenAI Responses API（代理转换）。后两种会由应用在本机起一个回环代理做协议转换，你不用自己部署任何东西。LLMTR 预设固定走 Chat Completions，请求发到 `/v1/chat/completions`，不会改走 `/v1/responses`。多数其他内置预设是 Anthropic 原生，添加时看不到这一项。
 
 填完点「添加」。
 

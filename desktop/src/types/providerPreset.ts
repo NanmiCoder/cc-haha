@@ -35,6 +35,8 @@ export type ProviderPreset = {
   authStrategy?: ProviderAuthStrategy
   defaultEnv?: Record<string, string>
   modelContextWindows?: Record<string, number>
+  /** Catalog reply ceiling. Not the tokens a single smoke request should ask for. */
+  modelMaxOutputTokens?: Record<string, number>
   /**
    * Per-model protocol overrides for gateways that bind the wire format to the
    * request path (OpenCode Go). Only the exceptions are listed; a model matching
