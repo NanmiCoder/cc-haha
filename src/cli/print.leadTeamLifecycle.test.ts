@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +20,7 @@ const CREATED_AT = 1_790_000_000_000
 
 // Each lead turn records its prompt instead of calling a model.
 const prompts: Array<{ text: string; isMeta?: boolean }> = []
+let onPrompt: ((text: string) => void) | undefined
 const queryEngine = await import('../QueryEngine.js')
 const originalQueryEngine = { ...queryEngine }
 mock.module('../QueryEngine.js', () => ({
@@ -32,6 +33,7 @@ mock.module('../QueryEngine.js', () => ({
           : JSON.stringify(params.prompt),
       isMeta: params.isMeta,
     })
+    onPrompt?.(prompts[prompts.length - 1]!.text)
   },
 }))
 
@@ -39,7 +41,8 @@ const { __runHeadlessStreamingForTests, TEAM_FINISHED_SETTLE_MS } = await import
 const { StructuredIO } = await import('./structuredIO.js')
 const { Stream } = await import('../utils/stream.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
-const { clearCommandQueue } = await import('../utils/messageQueueManager.js')
+const commandQueue = await import('../utils/messageQueueManager.js')
+const { clearCommandQueue } = commandQueue
 const { setIsInteractive, getIsInteractive } = await import(
   '../bootstrap/state.js'
 )
@@ -62,6 +65,7 @@ afterAll(() => {
 
 beforeEach(() => {
   prompts.length = 0
+  onPrompt = undefined
   clearCommandQueue()
 })
 
@@ -146,6 +150,7 @@ function startLead(team: string) {
   const send = (message: unknown) => input.enqueue(`${JSON.stringify(message)}\n`)
   return {
     say: (content: string) => send({ type: 'user', message: { role: 'user', content } }),
+    endInput: () => input.done(),
     teamName: () => state.teamContext?.teamName,
     async control(subtype: string, fields: Record<string, unknown> = {}) {
       const id = `${subtype}-${Math.random()}`
@@ -171,6 +176,76 @@ async function until(done: () => boolean, ms = 10_000): Promise<void> {
 
 const reminders = () =>
   prompts.filter(prompt => prompt.text.includes('Every task on the shared task list'))
+
+test('a mailbox poll released after its lead closes cannot enqueue another turn', async () => {
+  const team = 'closed-lead-poll'
+  await finishedTeam(team)
+  let releaseRead!: () => void
+  let readStarted!: () => void
+  const started = new Promise<void>(resolve => { readStarted = resolve })
+  const released = new Promise<void>(resolve => { releaseRead = resolve })
+  const realRead = mailbox.readUnreadMessages
+  let held = false
+  const read = spyOn(mailbox, 'readUnreadMessages').mockImplementation(async (...args: Parameters<typeof realRead>) => {
+    if (args[1] === team && !held) {
+      held = true
+      readStarted()
+      await released
+      return []
+    }
+    return realRead(...args)
+  })
+  const lead = startLead(team)
+  let closed = false
+  let unsubscribe: (() => void) | undefined
+  try {
+    lead.say('prior turn')
+    await Promise.race([started, Bun.sleep(3000).then(() => { throw new Error('mailbox read did not start') })])
+    await lead.close()
+    closed = true
+    prompts.length = 0
+    clearCommandQueue()
+    const enqueued: unknown[] = []
+    unsubscribe = commandQueue.subscribeToCommandQueue(() => {
+      enqueued.push(...commandQueue.getCommandQueue().map(command => command.value))
+    })
+    releaseRead()
+    // Drain the released read's continuations. The subscriber observes even a
+    // stale command that run() immediately consumes from the global queue.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(enqueued).toEqual([])
+    expect(prompts).toEqual([])
+  } finally {
+    releaseRead()
+    read.mockRestore()
+    unsubscribe?.()
+    if (!closed) await lead.close()
+    clearCommandQueue()
+  }
+}, 10_000)
+
+test('closing input during a turn still lets the lead shut down its team', async () => {
+  const team = 'input-closed-team'
+  await finishedTeam(team)
+  const lead = startLead(team)
+  let closed: Promise<void> | undefined
+  onPrompt = text => {
+    if (text === 'finish the team') lead.endInput()
+    else if (text.includes('Shut down your team and prepare your final response')) closed = lead.close()
+  }
+  try {
+    lead.say('finish the team')
+    await until(() => closed !== undefined)
+    await closed
+    expect(prompts.map(prompt => prompt.text)).toHaveLength(2)
+    expect(prompts[0]!.text).toBe('finish the team')
+    expect(prompts[1]!.isMeta).toBe(true)
+    expect(prompts[1]!.text).toContain('Shut down your team and prepare your final response')
+  } finally {
+    onPrompt = undefined
+    await lead.close()
+  }
+}, 10_000)
 
 test('a lead that stops after its members approve the shutdown is reminded again, to delete the team', async () => {
   const team = 'finished-team'
