@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronLeft, Folder, RotateCcw } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { sessionsApi } from '@/api/sessions'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { IconButton } from '@/components/ui/IconButton'
+import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import { formatRelativeTime } from '@/lib/formatRelativeTime'
@@ -58,6 +60,12 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
   const retryResetRef = useRef(true)
 
   useDismissable({ open: menu !== null, refs: [menuRef], onDismiss: () => setMenu(null), closeOnViewportChange: true })
+  const menuPosition = useAnchoredPosition({
+    open: menu !== null,
+    anchorRect: { top: menu?.y ?? 0, bottom: menu?.y ?? 0, left: menu?.x ?? 0, right: menu?.x ?? 0 },
+    floatingRef: menuRef,
+    offset: 0,
+  })
 
   const loadPage = useCallback(async (reset: boolean) => {
     if (requestRef.current && !reset) return
@@ -282,12 +290,17 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
         </button>
       )}
 
-      {menu && (
+      {/* The panel renders inside the sidebar's list section, whose transform
+          makes it the containing block of any fixed descendant and whose
+          overflow clips it: an inline menu opened as far below the pointer as
+          the section sits below the window top, or was cut off entirely.
+          Portalled, it is placed against the window. */}
+      {menu && createPortal(
         <div
           ref={menuRef}
           role="menu"
           className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
-          style={{ left: menu.x, top: menu.y }}
+          style={menuPosition.style}
         >
           <SidebarMenuItem
             icon={<RotateCcw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
@@ -296,7 +309,8 @@ function ArchivedSessionList({ projectRoot, onBack }: Props) {
           >
             {t('sidebar.restoreSession')}
           </SidebarMenuItem>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
