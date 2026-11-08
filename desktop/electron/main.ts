@@ -194,6 +194,10 @@ function petPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
 }
 
+function p2pHostScriptPath() {
+  return path.join(appRoot(), 'electron-dist', 'p2p-host.js')
+}
+
 function previewAgentPath() {
   return path.join(appRoot(), 'src-tauri', 'resources', 'preview-agent.js')
 }
@@ -318,7 +322,7 @@ function getP2PTerminator() {
       }
       return new BrowserWindow(options)
     },
-    hostScript: () => readFileSync(path.join(__dirname, 'p2p-host.js'), 'utf8'),
+    hostScript: () => readFileSync(p2pHostScriptPath(), 'utf8'),
     endpoint: () => {
       const runtime = getServerRuntime()
       const serverUrl = runtime.getActiveServerUrl()
