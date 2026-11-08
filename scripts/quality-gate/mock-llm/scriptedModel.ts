@@ -52,6 +52,10 @@ export type MockRequest = {
 /** Prompt that makes the scripted model fail the request the way a provider would. */
 export const UPSTREAM_ERROR_TRIGGER = 'MOCK_UPSTREAM_ERROR'
 export const UPSTREAM_ERROR_MESSAGE = 'mock upstream rejected this request'
+export const KIMI_USAGE_LIMIT_TRIGGER = 'MOCK_KIMI_USAGE_LIMIT'
+export const KIMI_USAGE_LIMIT_MESSAGE = "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing"
+export const GOOGLE_ADC_QUOTA_PROJECT_TRIGGER = 'MOCK_GOOGLE_ADC_QUOTA_PROJECT'
+export const GOOGLE_ADC_QUOTA_PROJECT_MESSAGE = 'The aiplatform.googleapis.com API requires a quota project, which is not set by default.'
 export const UPSTREAM_REFUSAL_TRIGGER = 'MOCK_UPSTREAM_REFUSAL'
 /**
  * Prompt whose history the provider rejects as too long, worded the way
@@ -176,6 +180,14 @@ export function decideReply(request: MockRequest): MockReply {
 
   if (prompt.includes(UPSTREAM_ERROR_TRIGGER)) {
     return { kind: 'error', status: 400, errorType: 'invalid_request_error', message: UPSTREAM_ERROR_MESSAGE }
+  }
+
+  if (prompt.includes(KIMI_USAGE_LIMIT_TRIGGER)) {
+    return { kind: 'error', status: 403, errorType: 'permission_error', message: KIMI_USAGE_LIMIT_MESSAGE }
+  }
+
+  if (prompt.includes(GOOGLE_ADC_QUOTA_PROJECT_TRIGGER)) {
+    return { kind: 'error', status: 403, errorType: 'permission_error', message: GOOGLE_ADC_QUOTA_PROJECT_MESSAGE }
   }
 
   if (prompt.includes(UPSTREAM_REFUSAL_TRIGGER)) {

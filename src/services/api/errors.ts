@@ -324,6 +324,33 @@ export function isMediaSizeErrorMessage(msg: AssistantMessage): boolean {
   )
 }
 export const CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE = 'Credit balance is too low'
+
+/**
+ * Wordings a provider uses when a plan, quota or balance is used up. Some
+ * relays send that as 401/403 rather than 429 — Kimi Code answers "You've
+ * reached your usage limit for this billing cycle" with a 403 (#1208).
+ */
+const PROVIDER_USAGE_LIMIT_PATTERNS: readonly RegExp[] = [
+  // Require exhaustion wording in the same short clause. Permission failures
+  // can also mention a quota project or account billing settings.
+  /\b(?:reached|exceeded|exhausted|depleted)\b[^.!?\n]{0,80}\b(?:usage limit|quota)\b/i,
+  /\b(?:usage limit|quota)\b[^.!?\n]{0,80}\b(?:reached|exceeded|exhausted|depleted|used[ -]up)\b/i,
+  /\binsufficient[ _](?:balance|quota|credits?)\b/i,
+]
+
+/**
+ * A 401/403 whose message says the provider's usage limit, quota or balance is
+ * exhausted. The credential works; reporting it as "Failed to authenticate" or
+ * sending the user to /login points at the wrong fix.
+ */
+export function isProviderUsageLimitAuthError(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    (error.status === 401 || error.status === 403) &&
+    PROVIDER_USAGE_LIMIT_PATTERNS.some((pattern) => pattern.test(error.message))
+  )
+}
+
 export const INVALID_API_KEY_ERROR_MESSAGE = 'Not logged in · Please run /login'
 export const INVALID_API_KEY_ERROR_MESSAGE_EXTERNAL =
   'Invalid API key · Fix external API key'
@@ -1165,6 +1192,16 @@ export function getAssistantMessageFromError(
     return createAssistantAPIErrorMessage({
       error: 'authentication_failed',
       content: getOauthOrgNotAllowedErrorMessage(),
+    })
+  }
+
+  // A used-up plan or balance that the provider reports as 401/403. Show the
+  // provider's own words as a billing error instead of an authentication
+  // failure, which would also prompt clients to start a login.
+  if (isProviderUsageLimitAuthError(error)) {
+    return createAssistantAPIErrorMessage({
+      error: 'billing_error',
+      content: `${API_ERROR_MESSAGE_PREFIX}: ${formatAPIErrorForDisplay(error)}`,
     })
   }
 
