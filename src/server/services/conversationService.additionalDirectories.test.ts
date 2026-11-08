@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
@@ -200,6 +200,7 @@ test('worktree SDK init transfers the snapshot before deleting the launch placeh
   const created = await sessions.createSession(mainDirectory)
   await sessions.appendSessionMetadata(created.sessionId, {
     workDir: mainDirectory,
+    customTitle: 'Worktree collaboration title',
     repository: {
       requestedWorkDir: mainDirectory, repoRoot: mainDirectory, branch: 'main', worktree: true,
       baseRef: 'main', worktreePath: worktreeDirectory, worktreeSlug: 'fixture-branch', worktreeBranch: 'fixture-branch',
@@ -216,6 +217,7 @@ test('worktree SDK init transfers the snapshot before deleting the launch placeh
   expect(saved?.filePath).toBe(join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(worktreeDirectory), `${created.sessionId}.jsonl`))
   expect(saved?.workDir).toBe(worktreeDirectory)
   expect(saved?.additionalDirectories).toEqual(configured)
+  expect(saved?.customTitle).toBe('Worktree collaboration title')
   await service.stopSessionAndWait(created.sessionId)
   await service.startSession(created.sessionId, worktreeDirectory, sdkUrl(created.sessionId))
   const [firstLaunch, resumedLaunch] = await captures()
@@ -225,8 +227,15 @@ test('worktree SDK init transfers the snapshot before deleting the launch placeh
   expect(resumedLaunch!.args).toContain('--resume')
   expect(additionalDirectories(firstLaunch!)).toEqual(configured)
   expect(additionalDirectories(resumedLaunch!)).toEqual(configured)
-  expect((await readFile(saved!.filePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line)))
-    .toContainEqual(expect.objectContaining({ type: 'session-meta', additionalDirectories: configured }))
+  const entries = (await readFile(saved!.filePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  expect(entries).toContainEqual(expect.objectContaining({ type: 'session-meta', additionalDirectories: configured }))
+  expect(entries).toContainEqual(expect.objectContaining({ type: 'custom-title', customTitle: 'Worktree collaboration title' }))
+  const projects = join(process.env.CLAUDE_CONFIG_DIR!, 'projects')
+  const survivors = (await Promise.all((await readdir(projects)).map(async project => {
+    const candidate = join(projects, project, created.sessionId + '.jsonl')
+    return await stat(candidate).then(() => candidate, () => null)
+  }))).filter(Boolean)
+  expect(survivors).toEqual([saved!.filePath])
 }, 20_000)
 
 test('a startup snapshot that lands after worktree init keeps the init cwd', async () => {
