@@ -37,7 +37,7 @@ bun run android
 
 原生目录由 Expo 根据 `app.json`、`app.config.ts` 和配置插件生成，禁止手工维护生成的 `ios/`、`android/`。原生依赖或配置变化后需要重新构建。
 
-Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
+Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。同一插件在 React 启动前给 `expo/fetch` 和 WebSocket 装上 `modules/cchaha-network`：系统解析结果全部落在 Cloudflare 网段的主机名（Quick Tunnel、用户自己的 Cloudflare 域名）会在解析结果和内置的 Cloudflare 入口地址间错峰竞速 TCP 连接，避开运营商临时丢弃的个别地址；其他主机名照常解析、不做探测。竞速逻辑的 JVM 单测：`./android/gradlew -p android :cchaha-network:testDebugUnitTest`。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
 
 同一套界面也是手机浏览器的 H5：桌面 `bun run build` 调用 `bun run export:h5`，以 `EXPO_PUBLIC_CC_HAHA_H5=1` 导出到 `desktop/dist/m`，由桌面服务端托管在 `/m/`。H5 只连接托管它的电脑（`src/state/h5.ts`），沿用桌面 H5 入口验证过的令牌或远程设备 Cookie；扫码、多台电脑、推送和锁屏实时活动不进入 H5，文件改为浏览器下载。expo-router 在子路径下会把 `/member`、`/models` 误剥成 `/ember`、`/odels`，`patches/expo-router@58.0.25.patch` 修正了这一点；升级 expo-router 时用 `src/core/h5BasePath.test.ts` 确认是否还需要它。
 

@@ -74,11 +74,16 @@ describe('electron desktop host', () => {
     await host.publicAccess.start(PUBLIC_ACCESS_CONSENT_VERSION)
     await host.publicAccess.setAutoStart(false)
     await host.publicAccess.stop()
+    await host.publicAccess.setKeepAwake(false)
+    await expect(host.publicAccess.setKeepAwake('no' as never)).rejects.toThrow('Invalid Electron IPC payload')
     expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
     expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
     expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
+    expect(invoke).toHaveBeenNthCalledWith(4, ELECTRON_IPC_CHANNELS.publicAccessSetKeepAwake, false)
+    expect(invoke).toHaveBeenCalledTimes(4)
     const { browserHost } = await import('./browserHost')
     await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.publicAccess.setKeepAwake(true)).rejects.toThrow('desktop app runtime')
   })
 
   it('carries Cloudflare tunnel configuration through validated IPC and rejects unsafe local targets', async () => {

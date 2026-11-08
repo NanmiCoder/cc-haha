@@ -21,3 +21,11 @@ test('the settings test shows its banner even though the app is on screen', () =
   // The phone's own fallback test.
   expect(notificationPresentation(true, testNotificationContent.data)).toEqual(banner)
 })
+
+// The app applies a computer's new address itself while it is on screen; in the
+// background it stays in the notification center until the app picks it up.
+test('a new computer address is not shown while the app is open, and pops up otherwise', () => {
+  const update = { hostId: 'h', eventType: 'hostUrl', url: 'https://new.example', mac: 'm' }
+  expect(notificationPresentation(true, update)).toEqual({ ...quiet, shouldShowList: false })
+  expect(notificationPresentation(false, update)).toEqual(banner)
+})

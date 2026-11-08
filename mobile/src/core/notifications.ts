@@ -154,24 +154,47 @@ function notificationRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-export function notificationRequestTarget(
-  request: NotificationRequestData,
-  action: string,
-  hostIds: Set<string>
-): NotificationTarget | null {
+/** The custom fields a notification carries, wherever Expo put them. */
+export function notificationRequestData(
+  request: NotificationRequestData
+): Record<string, unknown> | null {
   const data = request.content.data
   // Expo 58 iOS exposes direct APNs custom fields in trigger.payload; content.data
   // only contains userInfo.body. Local/Expo/FCM data remains authoritative when set.
   if (data != null && (!notificationRecord(data) || Object.keys(data).length))
-    return notificationRecord(data) ? notificationTarget(data, action, hostIds) : null
+    return notificationRecord(data) ? data : null
   const trigger = request.trigger
   if (
     notificationRecord(trigger) &&
     trigger.type === 'push' &&
     notificationRecord(trigger.payload)
   )
-    return notificationTarget(trigger.payload, action, hostIds)
+    return trigger.payload
   return null
+}
+
+export function notificationRequestTarget(
+  request: NotificationRequestData,
+  action: string,
+  hostIds: Set<string>
+): NotificationTarget | null {
+  const data = notificationRequestData(request)
+  return data ? notificationTarget(data, action, hostIds) : null
+}
+
+/** 电脑推来的新公网地址（`eventType: 'hostUrl'`），还没核对签名。 */
+export type HostUrlUpdate = { hostId: string; url: string; mac: string }
+export function hostUrlUpdate(request: NotificationRequestData): HostUrlUpdate | null {
+  const data = notificationRequestData(request)
+  if (
+    !data ||
+    data.eventType !== 'hostUrl' ||
+    typeof data.hostId !== 'string' ||
+    typeof data.url !== 'string' ||
+    typeof data.mac !== 'string'
+  )
+    return null
+  return { hostId: data.hostId, url: data.url, mac: data.mac }
 }
 
 export function routeNotificationResponse(
@@ -205,6 +228,8 @@ export function notificationTarget(
   action: string,
   hostIds: Set<string>
 ): NotificationTarget | null {
+  // 地址更新只给 App 自己看，不是哪个会话的消息。
+  if (data.eventType === 'hostUrl') return null
   if (
     typeof data.hostId !== 'string' ||
     !hostIds.has(data.hostId) ||
