@@ -1780,6 +1780,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.providers.testConnection': '測試連線',
   'settings.providers.settingsJson': '設定 JSON',
   'settings.providers.settingsJsonDesc': '~/.claude/cc-haha/settings.json — 直接編輯，儲存時寫入。',
+  'settings.providers.settingsJsonInactiveDesc': '此服務商設為預設後 ~/.claude/cc-haha/settings.json 的內容。儲存不會變更目前的預設服務商。',
   'settings.providers.jsonError': 'JSON 語法錯誤: {error}',
   'settings.providers.proxyMode': "網路代理",
   'settings.providers.proxyModeHelp': "網路代理模式設定說明",

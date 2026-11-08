@@ -263,11 +263,21 @@ export class ProviderService {
     return this.readSettings()
   }
 
-  async updateManagedSettings(settings: Record<string, unknown>): Promise<void> {
-    await this.managedSettingsService.updateSettings((current) => ({
-      settings: Object.assign({}, current, settings),
-      result: undefined,
-    }))
+  async updateManagedSettings(settings: Record<string, unknown>, expectedActiveProviderId?: string): Promise<void> {
+    await this.managedSettingsService.updateSettings(async (current) => {
+      // Check after earlier settings writes finish: another client may have
+      // switched the default while this editor still showed the old provider.
+      if (expectedActiveProviderId !== undefined) {
+        const index = await this.readIndex()
+        if (index.activeId !== expectedActiveProviderId) {
+          throw new ApiError(409, 'The default provider changed. Review it before saving again.', 'PROVIDER_SETTINGS_OWNER_CHANGED')
+        }
+      }
+      return {
+        settings: Object.assign({}, current, settings),
+        result: undefined,
+      }
+    })
   }
 
   // --- CRUD ---

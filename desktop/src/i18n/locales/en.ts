@@ -1780,6 +1780,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.providers.testConnection': 'Test Connection',
   'settings.providers.settingsJson': 'Settings JSON',
   'settings.providers.settingsJsonDesc': '~/.claude/cc-haha/settings.json — edit directly, will be written on save.',
+  'settings.providers.settingsJsonInactiveDesc': '~/.claude/cc-haha/settings.json as it will be once this provider is the default. Saving does not change the current default.',
   'settings.providers.jsonError': 'JSON syntax error: {error}',
   'settings.providers.proxyMode': "Network proxy",
   'settings.providers.proxyModeHelp': "Network proxy mode setting help",

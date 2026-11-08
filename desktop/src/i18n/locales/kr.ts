@@ -1783,6 +1783,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.providers.testConnection': '연결 테스트',
   'settings.providers.settingsJson': '설정 JSON',
   'settings.providers.settingsJsonDesc': '~/.claude/cc-haha/settings.json — 직접 편집할 수 있습니다. 저장 시 기록됩니다.',
+  'settings.providers.settingsJsonInactiveDesc': '이 공급자를 기본값으로 설정했을 때의 ~/.claude/cc-haha/settings.json 입니다. 저장해도 현재 기본값은 바뀌지 않습니다.',
   'settings.providers.jsonError': 'JSON 구문 오류: {error}',
   'settings.providers.proxyMode': "네트워크 프록시",
   'settings.providers.proxyModeHelp': "네트워크 프록시 모드 설정 도움말",
