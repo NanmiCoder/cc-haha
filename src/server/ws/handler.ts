@@ -2298,16 +2298,16 @@ async function applyPermissionModeToActiveSession(
   sessionId: string,
   mode: PermissionMode,
 ): Promise<void> {
+  // The latest choice wins over a restart still waiting for the turn to end.
+  deferredPermissionModes.delete(sessionId)
   const currentMode = conversationService.getSessionPermissionMode(sessionId)
-  if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
-    deferredPermissionModes.set(sessionId, mode)
-    return
-  }
-
   if (currentMode === mode) {
     sendToSession(sessionId, { type: 'permission_mode_changed', mode })
     return
   }
+  // The CLI applies set_permission_mode in-process, mid-turn included: tool
+  // calls after the switch are checked under the new mode, while a request the
+  // user is already looking at stays pending until they answer it.
   try {
     const ok = await conversationService.setPermissionMode(sessionId, mode)
     if (!ok) {
@@ -2317,6 +2317,11 @@ async function applyPermissionModeToActiveSession(
     await commitConfirmedPermissionMode(sessionId, mode)
   } catch (err) {
     if (!isSideChatId(sessionId) && shouldFallbackToPermissionRestart(mode, err)) {
+      // Only the legacy restart would end the running turn; let it finish first.
+      if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
+        deferredPermissionModes.set(sessionId, mode)
+        return
+      }
       await restartSessionWithPermissionMode(ws, sessionId, mode)
       return
     }

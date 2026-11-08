@@ -69,6 +69,31 @@ test('document blocks contribute to the cloud-provider threshold only', async ()
   expect(later[0]!.message.content[0]).toBe(image)
 })
 
+test('an image no request can verify becomes a note instead of failing every later request', async () => {
+  // BMP bytes behind an image extension: tool entry points pass it through,
+  // and the request snapshot is rebuilt from that same history every turn.
+  const undecodable = { type: 'image', source: { type: 'base64', media_type: 'image/png',
+    data: Buffer.concat([Buffer.from('BM'), Buffer.alloc(64)]).toString('base64') } }
+  const valid = await largeImage()
+  const cached = { ...undecodable, cache_control: { type: 'ephemeral' } }
+  const messages = [{ message: { content: [
+    { type: 'tool_result', tool_use_id: 'read', content: [{ type: 'text', text: 'caption' }, undecodable, cached] },
+    valid,
+  ] } }]
+  const before = JSON.stringify(messages)
+  const output = await normalizeImagesForAPI(messages)
+  const tool = output[0]!.message.content[0] as { content: Array<{ type: string; text?: string; cache_control?: unknown }> }
+  expect(tool.content[0]).toEqual({ type: 'text', text: 'caption' })
+  for (const note of tool.content.slice(1)) {
+    expect(note.type).toBe('text')
+    expect(note.text).toStartWith('[Image omitted from this request: Unable to verify image dimensions')
+  }
+  expect(tool.content[1]!.cache_control).toBeUndefined()
+  expect(tool.content[2]!.cache_control).toEqual(cached.cache_control)
+  expect(output[0]!.message.content[1]).toBe(valid)
+  expect(JSON.stringify(messages)).toBe(before)
+})
+
 test('tool screenshots retain their action units and get an adjacent current pixel grid', async () => {
   const image = await largeImage()
   const caption = '\nImage 1: 3000×60 pixels. Image pixel bounds: top-left (0,0), bottom-right (2999,59). Zoom image for inspection; action coordinates still refer to the full-screen screenshot in the tool\'s documented units.\n'
