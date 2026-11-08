@@ -437,6 +437,10 @@ export class ConversationService {
   }
 
   cancelAutoQuestionAnswer(sessionId: string, requestId: string): void {
+    // A team member's question reaches the desktop through its lead's session,
+    // so the user's activity arrives there too; it belongs to the member.
+    const child = [...this.sessions.entries()].find(([, entry]) => entry.teamWorker?.parentSessionId === sessionId && entry.pendingPermissionRequests.has(requestId))
+    if (child) return this.cancelAutoQuestionAnswer(child[0], requestId)
     const session = this.sessions.get(sessionId)
     const request = session?.pendingPermissionRequests.get(requestId)
     if (request?.toolName !== 'AskUserQuestion' || request.autoAnswerCancelled) return

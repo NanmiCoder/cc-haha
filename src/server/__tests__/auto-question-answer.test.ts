@@ -275,6 +275,30 @@ describe('automatic AskUserQuestion answers', () => {
     expect(service.getPendingPermissionRequests('session-1')).toHaveLength(1)
   })
 
+  // Issue #1839: a team member's question is waited on through the lead session,
+  // so that is where the desktop reports the user's first touch of the card.
+  it("cancels a team member's deadline when the activity arrives on the lead session", async () => {
+    await fs.writeFile(path.join(configDir, 'settings.json'), JSON.stringify({
+      autoQuestion: { enabled: true, timeoutMinutes: 5 },
+    }))
+    const { service, session, request, sent } = createPendingService()
+    Object.assign(session, { teamWorker: { parentSessionId: 'lead-1', teamName: 'greeting-team', name: 'asker' } })
+    const leadOutput: any[] = []
+    ;(service as any).sessions.set('lead-1', {
+      pendingPermissionRequests: new Map(),
+      outputCallbacks: [(message: unknown) => leadOutput.push(message)],
+    })
+    await (service as any).scheduleAutoQuestionAnswer('session-1', session, 'req-1', request)
+    expect(leadOutput.at(-1).request.auto_answer_deadline).toEqual(expect.any(Number))
+
+    service.cancelAutoQuestionAnswer('lead-1', 'req-1')
+    await (service as any).autoAnswerQuestion('session-1', session, 'req-1', request)
+
+    expect(sent).toHaveLength(0)
+    expect(leadOutput.at(-1).request.auto_answer_deadline).toBeNull()
+    expect(service.getPendingPermissionRequests('lead-1')).toMatchObject([{ requestId: 'req-1', autoAnswerDeadline: null }])
+  })
+
   it('does not schedule a deadline when interaction arrives during the settings read', async () => {
     await fs.writeFile(path.join(configDir, 'settings.json'), JSON.stringify({
       autoQuestion: { enabled: true, timeoutMinutes: 5 },
