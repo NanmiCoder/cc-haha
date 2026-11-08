@@ -16,7 +16,10 @@ beforeEach(() => {
 })
 
 it('keeps the selected screenshot batch when sending is refused', async () => {
-  usePreviewSelectionStore.getState().add('page', { pageUrl: '', element: { selector: '#x', tag: 'h1', classes: [] }, screenshot: { dataUrl: 'data:image/png;base64,AAAA' } })
+  usePreviewSelectionStore.getState().add('page', { pageUrl: '', element: {
+    selector: '#x', nthPath: 'h1', tag: 'h1', classes: [],
+    boundingBox: { x: 0, y: 0, w: 1, h: 1 }, computedStyles: {},
+  }, screenshot: { dataUrl: 'data:image/png;base64,AAAA' } })
   sendMessage.mockReturnValue(false)
   await sendBrowserSelections('task', 'page')
 
