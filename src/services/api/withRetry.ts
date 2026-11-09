@@ -49,6 +49,7 @@ import {
 } from '../rateLimitMocking.js'
 import {
   isContextOverflowErrorText,
+  isProviderUsageLimitError,
   REPEATED_529_ERROR_MESSAGE,
 } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
@@ -545,9 +546,9 @@ export async function* withRetry<T>(
 
       return await operation(client, attempt, retryContext)
     } catch (error) {
-      // Policy rejection is final even when a gateway labels it 401/429/5xx.
-      // Stop before auth refresh, fast-mode changes or persistent/model fallback.
-      if (isOpenAIPolicyError(error)) {
+      // Policy and exhausted plan/balance rejections are final. Stop before
+      // auth refresh, fast-mode changes or persistent/model fallback.
+      if (isOpenAIPolicyError(error) || isProviderUsageLimitError(error)) {
         throw new CannotRetryError(error, retryContext)
       }
       lastError = error

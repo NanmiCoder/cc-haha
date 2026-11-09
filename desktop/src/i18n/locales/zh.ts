@@ -4205,6 +4205,7 @@ export const zh: Record<TranslationKey, string> = {
   'app.launching': '正在启动本地工作区...',
 
   // ─── Error Codes ──────────────────────────────────────
+  'error.billing_error': '供应商额度或余额不足。请检查供应商的计费信息、等待额度恢复，或切换到其他供应商。',
   'error.CLI_NOT_RUNNING': 'CLI 进程未运行。会话可能已结束或进程已崩溃。',
   'error.CLI_START_FAILED': 'CLI 进程启动失败。',
   'error.CLI_AUTH_REQUIRED': '需要认证。请先登录。',

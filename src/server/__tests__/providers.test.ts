@@ -4842,6 +4842,68 @@ describe('OpenCode Go preset request contract', () => {
     return handleProxyRequest(req, new URL(req.url))
   }
 
+  for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+    test(`${apiFormat} keeps long explicit quota errors intact for the CLI`, async () => {
+      const { provider } = await createProvider({ presetId: 'custom', apiFormat })
+      const originalFetch = globalThis.fetch
+      try {
+        for (const upstream of [
+          { type: 'error', error: { type: 'GoUsageLimitError', message: `Go usage limit exceeded ${'x'.repeat(600)}` }, metadata: { workspace: 'fixture', limitName: 'monthly' } },
+          { error: { message: `Check your plan ${'x'.repeat(600)}`, type: 'insufficient_quota', code: 'insufficient_quota' } },
+        ]) {
+          globalThis.fetch = (async () => Response.json(upstream, { status: 429 })) as typeof fetch
+          const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+          const body = await response.json() as { error: { message: string } }
+          expect(response.status).toBe(429)
+          expect(body.error.message).toContain(JSON.stringify(upstream))
+        }
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  }
+
+  test('keeps an invalid key as authentication through the OpenAI proxy and SDK', async () => {
+    const { APIError } = await import('@anthropic-ai/sdk')
+    const { getAssistantMessageFromError } = await import('../../services/api/errors.js')
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'openai_chat' })
+    const originalFetch = globalThis.fetch
+    try {
+      for (const upstream of [
+        { error: { type: 'authentication_error', message: 'Invalid bearer token. Your monthly quota was exceeded.' } },
+        { error: { message: `Your quota has been exhausted. ${'x'.repeat(600)}`, type: 'authentication_error', code: 'invalid_api_key' } },
+      ]) {
+        globalThis.fetch = (async () => Response.json(upstream, { status: 401 })) as typeof fetch
+        const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        const error = APIError.generate(response.status, await response.json(), undefined, response.headers)
+        const message = getAssistantMessageFromError(error, 'fixture-model')
+        expect(message.error).toBe('authentication_failed')
+        expect(JSON.stringify(message.message.content)).toContain(upstream.error.message)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('does not turn a long temporary 429 into a billing failure after proxy truncation', async () => {
+    const { APIError } = await import('@anthropic-ai/sdk')
+    const { classifyAPIError, getAssistantMessageFromError } = await import('../../services/api/errors.js')
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'openai_chat' })
+    const originalFetch = globalThis.fetch
+    try {
+      for (const length of [600, 65_000]) {
+        const upstream = { error: { type: 'rate_limit_error', message: `Quota exceeded for this plan. ${'x'.repeat(length)} requests/minute; retry in 30 seconds.` } }
+        globalThis.fetch = (async () => Response.json(upstream, { status: 429 })) as typeof fetch
+        const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        const error = APIError.generate(response.status, await response.json(), undefined, response.headers)
+        expect(getAssistantMessageFromError(error, 'fixture-model').error).not.toBe('billing_error')
+        expect(classifyAPIError(error)).toBe('rate_limit')
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('routes each model family to the endpoint the gateway serves it on, with that endpoint credential', async () => {
     const { provider } = await createProvider()
     const calls: UpstreamCall[] = []

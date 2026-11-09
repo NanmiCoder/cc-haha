@@ -21,6 +21,42 @@ import {
   withRetry,
 } from './withRetry.js'
 
+describe('withRetry provider quota', () => {
+  test.each([false, true])('does not retry a monthly quota with fast mode %s, even with a retry header', async fastMode => {
+    let attempts = 0
+    const upstream = { type: 'error', error: { type: 'GoUsageLimitError', message: 'Go usage limit exceeded' }, metadata: { limitName: 'monthly' } }
+    const detail = `Upstream returned HTTP 429: ${JSON.stringify(upstream)}`
+    const quota = APIError.generate(429, { type: 'error', error: { type: 'api_error', message: detail } }, undefined, new Headers({ 'x-should-retry': 'true', 'retry-after': '0' }))
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => { attempts++; throw quota },
+      { model: 'fixture', thinkingConfig: { type: 'disabled' }, fastMode, maxRetries: 2 },
+    )
+    let caught: unknown
+    try { await generator.next() } catch (error) { caught = error }
+    finally { await generator.return(undefined as never) }
+    expect(caught).toBeInstanceOf(CannotRetryError)
+    expect((caught as CannotRetryError).originalError).toBe(quota)
+    expect(attempts).toBe(1)
+  })
+
+  test('retries a temporary 429 and succeeds', async () => {
+    let attempts = 0
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => {
+        if (++attempts === 1) throw new APIError(429, { error: { type: 'rate_limit_error', message: 'requests per minute exceeded' } }, undefined, new Headers({ 'retry-after': '0' }))
+        return 'recovered'
+      },
+      { model: 'fixture', thinkingConfig: { type: 'disabled' }, maxRetries: 1 },
+    )
+    const first = await generator.next()
+    expect(first.done).toBe(false)
+    expect(await generator.next()).toEqual({ done: true, value: 'recovered' })
+    expect(attempts).toBe(2)
+  })
+})
+
 describe('withRetry stale connections', () => {
   test('disables keep-alive before retrying ECONNRESET connection failures', async () => {
     _resetKeepAliveForTesting()

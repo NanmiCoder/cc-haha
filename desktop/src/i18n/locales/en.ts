@@ -4207,6 +4207,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'app.launching': 'Launching local workspace...',
 
   // ─── Error Codes ──────────────────────────────────────
+  'error.billing_error': 'The provider’s quota or balance is exhausted. Check its billing, wait for the quota to reset, or switch providers.',
   'error.CLI_NOT_RUNNING': 'CLI process is not running. The session may have ended or the process crashed.',
   'error.CLI_START_FAILED': 'Failed to start CLI process.',
   'error.CLI_AUTH_REQUIRED': 'Authentication is required. Please log in.',

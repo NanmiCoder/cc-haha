@@ -4165,6 +4165,9 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           type: 'error',
           message,
           code,
+          ...(typeof cliMsg.uuid === 'string' && cliMsg.uuid.trim()
+            ? { transcriptMessageId: cliMsg.uuid }
+            : {}),
           ...(typeof cliMsg.businessErrorCode === 'string'
             ? { businessErrorCode: cliMsg.businessErrorCode }
             : {}),

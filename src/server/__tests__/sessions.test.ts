@@ -1707,6 +1707,18 @@ describe('SessionService', () => {
     expect(messages).toHaveLength(2)
   })
 
+  it('preserves API error identity and provider details when reading transcript history', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      { ...makeAssistantEntry('API Error: Go usage limit exceeded'), isApiErrorMessage: true, error: 'billing_error' },
+      makeAssistantEntry('A normal answer mentioning API Error.'),
+    ])
+    const messages = await service.getSessionMessages(sessionId)
+    expect(messages[0]).toMatchObject({ type: 'assistant', isApiErrorMessage: true, error: 'billing_error' })
+    expect(messages[1]).not.toHaveProperty('isApiErrorMessage')
+  })
+
   it('preserves structured toolUseResult metadata for AskUserQuestion answers', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-project', sessionId, [
