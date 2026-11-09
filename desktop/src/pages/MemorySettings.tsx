@@ -153,7 +153,7 @@ export function MemorySettings() {
   }
 
   const handleFileOpen = (file: MemoryFile) => {
-    if (!selectedProjectId || file.path === selectedFile?.path) return
+    if (!selectedProjectId) return
     if (!canLeaveDirtyEdit()) return
     void openFile(selectedProjectId, file.path)
   }
