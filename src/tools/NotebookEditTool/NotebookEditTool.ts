@@ -87,6 +87,9 @@ type OutputSchema = ReturnType<typeof outputSchema>
 
 export type Output = z.infer<OutputSchema>
 
+const NOTEBOOK_NOT_READ_ERROR = 'File has not been read yet. Read it first before writing to it.'
+const NOTEBOOK_MODIFIED_ERROR = 'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.'
+
 export const NotebookEditTool = buildTool({
   name: NOTEBOOK_EDIT_TOOL_NAME,
   searchHint: 'edit Jupyter notebook cells (.ipynb)',
@@ -219,19 +222,17 @@ export const NotebookEditTool = buildTool({
     // this, the model could edit a notebook it never saw, or edit against a
     // stale view after an external change — silent data loss.
     const readTimestamp = toolUseContext.readFileState.get(fullPath)
-    if (!readTimestamp) {
+    if (!readTimestamp || readTimestamp.isPartialView) {
       return {
         result: false,
-        message:
-          'File has not been read yet. Read it first before writing to it.',
+        message: NOTEBOOK_NOT_READ_ERROR,
         errorCode: 9,
       }
     }
     if (getFileModificationTime(fullPath) > readTimestamp.timestamp) {
       return {
         result: false,
-        message:
-          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
+        message: NOTEBOOK_MODIFIED_ERROR,
         errorCode: 10,
       }
     }
@@ -317,6 +318,13 @@ export const NotebookEditTool = buildTool({
     }
 
     try {
+      // Permission confirmation and checkpointing can outlive validation.
+      // Recheck the authorized read view inside the synchronous read/write
+      // section, and do not yield until the notebook has been written.
+      const lastRead = readFileState.get(fullPath)
+      if (!lastRead || lastRead.isPartialView) throw new Error(NOTEBOOK_NOT_READ_ERROR)
+      const sourceModificationTime = getFileModificationTime(fullPath)
+      if (sourceModificationTime > lastRead.timestamp) throw new Error(NOTEBOOK_MODIFIED_ERROR)
       // readFileSyncWithMetadata gives content + encoding + line endings in
       // one safeResolvePath + readFileSync pass, replacing the previous
       // detectFileEncoding + readFile + detectLineEndings chain (each of
@@ -429,6 +437,11 @@ export const NotebookEditTool = buildTool({
       // Write back to file
       const IPYNB_INDENT = 1
       const updatedContent = jsonStringify(notebook, null, IPYNB_INDENT)
+      // An external writer can still change the notebook while it is parsed
+      // and serialized. Preserve their version instead of overwriting it.
+      if (getFileModificationTime(fullPath) !== sourceModificationTime) {
+        throw new Error(NOTEBOOK_MODIFIED_ERROR)
+      }
       writeTextContent(fullPath, updatedContent, encoding, lineEndings)
       // Update readFileState with post-write mtime (matches FileEditTool/
       // FileWriteTool). offset:undefined breaks FileReadTool's dedup match —
