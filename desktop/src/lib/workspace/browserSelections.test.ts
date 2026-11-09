@@ -1,17 +1,40 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { usePreviewSelectionStore, MAX_PREVIEW_SELECTIONS } from '../../stores/previewSelectionStore'
-import { discardNavigatedBrowserSelections, handleBrowserSelectionEvent } from './browserSelections'
+import { discardNavigatedBrowserSelections, handleBrowserSelectionEvent, sendBrowserSelections } from './browserSelections'
 
-const { sendMessage, message, addToast } = vi.hoisted(() => ({ sendMessage: vi.fn(), message: vi.fn(async () => ({ ok: true })), addToast: vi.fn() }))
-vi.mock('../../stores/chatStore', () => ({ useChatStore: { getState: () => ({ sendMessage }) } }))
+const { sendMessage, queueComposerPrefill, message, addToast } = vi.hoisted(() => ({ sendMessage: vi.fn(), queueComposerPrefill: vi.fn(), message: vi.fn(async () => ({ ok: true })), addToast: vi.fn() }))
+vi.mock('../../stores/chatStore', () => ({ useChatStore: { getState: () => ({ sendMessage, queueComposerPrefill }) } }))
 vi.mock('../../stores/uiStore', () => ({ useUIStore: { getState: () => ({ addToast }) } }))
 vi.mock('./browserHost', () => ({ workspaceBrowserHost: { message } }))
 
 beforeEach(() => {
   usePreviewSelectionStore.setState({ bySession: {} })
-  sendMessage.mockClear()
+  sendMessage.mockReset().mockReturnValue(true)
+  queueComposerPrefill.mockClear()
   message.mockClear()
   addToast.mockClear()
+})
+
+it('keeps the selected screenshot batch when sending is refused', async () => {
+  usePreviewSelectionStore.getState().add('page', { pageUrl: '', element: {
+    selector: '#x', nthPath: 'h1', tag: 'h1', classes: [],
+    boundingBox: { x: 0, y: 0, w: 1, h: 1 }, computedStyles: {},
+  }, screenshot: { dataUrl: 'data:image/png;base64,AAAA' } })
+  sendMessage.mockReturnValue(false)
+  await sendBrowserSelections('task', 'page')
+
+  expect(usePreviewSelectionStore.getState().bySession.page?.items).toHaveLength(1)
+  expect(message).not.toHaveBeenCalledWith('page', expect.objectContaining({ type: 'commit-selection-draft' }))
+})
+
+it('recovers a refused direct screenshot selection into the composer', () => {
+  sendMessage.mockReturnValue(false)
+  handleBrowserSelectionEvent('task', 'page', { type: 'selection', payload: { pageUrl: '', element: { selector: '#x', tag: 'h1', classes: [] }, screenshot: { dataUrl: 'data:image/png;base64,AAAA' } } })
+
+  expect(queueComposerPrefill).toHaveBeenCalledWith('task', expect.objectContaining({
+    attachments: [expect.objectContaining({ data: 'data:image/png;base64,AAAA' })],
+    mode: 'append',
+  }))
 })
 
 it('preserves direct send with its annotated screenshot', () => {

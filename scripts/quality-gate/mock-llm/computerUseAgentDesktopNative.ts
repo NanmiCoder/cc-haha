@@ -1,5 +1,5 @@
 /** Compiled fixture executable. It models a button and never calls a desktop API. */
-import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 
 const config = process.env.CLAUDE_CONFIG_DIR
@@ -38,9 +38,10 @@ const output = (data: unknown) => console.log(JSON.stringify({ version: '2.5', o
 const statePath = join(home, 'fixture-button.json')
 const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { saved: false }
 if (command === 'session') {
+  if (args[0] === 'start') mkdirSync(home, { recursive: true, mode: 0o700 })
   output(args[0] === 'start' ? { session_id: 'fixture-native-session' } : { ended: true })
 } else if (command === 'cursor-overlay') {
-  output({ rendered: true, cursor_overlay: { enabled: args[0] === 'enable' } })
+  output({ cursor_overlay: { enabled: args[0] === 'enable' } })
 } else if (command === 'snapshot') {
   const snapshotId = state.saved ? 'safter' : 'sbefore'
   output({
@@ -58,6 +59,9 @@ if (command === 'session') {
     process.exitCode = 1
   } else {
     writeFileSync(statePath, JSON.stringify({ saved: true }))
+    if (process.env.AGENT_DESKTOP_CURSOR_FEEDBACK === '1') {
+      console.error('CC_HAHA_CURSOR_FEEDBACK {"acknowledged":true,"warning":null}')
+    }
     output({ disposition: { delivery: 'delivered_verified', retry: 'unsafe' } })
   }
 } else if (command === 'wait') {
@@ -71,7 +75,14 @@ if (command === 'session') {
   record('unexpected-wait-completed')
   output({ completed: true })
 } else if (command === 'status') {
-  output({ platform: process.env.MOCK_AGENT_DESKTOP_PLATFORM, supported_surfaces: ['window'], permissions: { accessibility: { state: 'granted' } } })
+  const checkStorage = args.includes('--check-session-storage')
+  if (checkStorage) mkdirSync(home, { recursive: true, mode: 0o700 })
+  output({
+    platform: process.env.MOCK_AGENT_DESKTOP_PLATFORM,
+    supported_surfaces: ['window'],
+    permissions: { accessibility: { state: 'granted' } },
+    ...(checkStorage ? { session_storage: { ready: true } } : {}),
+  })
 } else if (command === 'skills') {
   output({ content: 'Fixture native desktop workflow: snapshot, act on the qualified ref, verify.' })
 } else {

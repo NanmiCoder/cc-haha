@@ -412,6 +412,20 @@ export type DesktopPublicAccessStatus = Omit<DesktopPublicAccessConfiguration, '
   autoStart: boolean
   consentVersion: number
   migrationRequired: boolean
+  /** Paired phones may upgrade to a direct (P2P) path. Absent on hosts without P2P. */
+  p2pEnabled?: boolean
+  /**
+   * While remote access is on (or reconnecting) the computer does not idle-sleep;
+   * the display may still sleep and closing a lid still sleeps. Absent on hosts
+   * that cannot hold a power assertion.
+   */
+  keepAwake?: boolean
+  /**
+   * The desktop's direct-connection endpoint: `off` while it is not wanted,
+   * `starting` until it runs, `ready` once it runs, `failed` while it backs off
+   * after a crash or has given up until the next change. Absent on hosts without P2P.
+   */
+  p2pState?: 'off' | 'starting' | 'ready' | 'failed'
 }
 
 export type DesktopHost = {
@@ -421,6 +435,8 @@ export type DesktopHost = {
     start(consentVersion: number): Promise<DesktopPublicAccessStatus>
     stop(): Promise<DesktopPublicAccessStatus>
     setAutoStart(enabled: boolean): Promise<DesktopPublicAccessStatus>
+    setP2PEnabled(enabled: boolean): Promise<DesktopPublicAccessStatus>
+    setKeepAwake(enabled: boolean): Promise<DesktopPublicAccessStatus>
   }
   kind: DesktopHostKind
   isDesktop: boolean

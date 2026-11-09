@@ -65,6 +65,8 @@ describe('OfficialProviderModelSettings', () => {
         sonnet: 'gpt-6-sol',
         opus: 'gpt-6-astra',
       },
+      // ChatGPT Official always sends its window overrides, so an empty map is how they are cleared.
+      {},
     ))
     expect(await screen.findByRole('status')).toHaveTextContent('Model mapping saved')
     expect(useSettingsStore.getState().fetchAll).toHaveBeenCalled()
@@ -108,6 +110,7 @@ describe('OfficialProviderModelSettings', () => {
     await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
       'openai-official',
       expect.objectContaining({ main: 'future-oauth-model' }),
+      {},
     ))
   })
 
@@ -136,7 +139,7 @@ describe('OfficialProviderModelSettings', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'gpt-future' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save model mapping' }))
     await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
-      'openai-official', expect.objectContaining({ main: 'gpt-future' }),
+      'openai-official', expect.objectContaining({ main: 'gpt-future' }), {},
     ))
   })
 
@@ -249,5 +252,131 @@ describe('OfficialProviderModelSettings', () => {
     expect(screen.queryByRole('option', { name: 'gpt-future' })).not.toBeInTheDocument()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
     expect(useSettingsStore.getState().fetchAll).not.toHaveBeenCalled()
+  })
+
+  describe('context window overrides (ChatGPT Official)', () => {
+    const withLimits = {
+      models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map((id) => (
+        { id, name: id, description: '', context: '258400', maxContext: '828400' }
+      )),
+    }
+    const field = (model: string) => screen.findByRole('textbox', { name: model })
+    const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save model mapping' }))
+
+    beforeEach(() => {
+      vi.mocked(modelsApi.catalog).mockResolvedValue(withLimits)
+    })
+
+    it('offers one field per mapped model, not per alias, with its default and limit', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+
+      // gpt-6-sol backs both the Main and Sonnet aliases but has a single window.
+      expect(await field('gpt-6-sol')).toHaveAttribute('placeholder', '258,400')
+      expect(screen.getAllByRole('textbox', { name: 'gpt-6-sol' })).toHaveLength(1)
+      expect(await field('gpt-6-luna')).toBeInTheDocument()
+      expect(await field('gpt-6-astra')).toBeInTheDocument()
+      expect(screen.getAllByText('Default 258,400, up to 828,400')).toHaveLength(3)
+    })
+
+    it('saves a typed window with the mapping', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      fireEvent.change(await field('gpt-6-astra'), { target: { value: '600000' } })
+      save()
+
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', mapping, { 'gpt-6-astra': 600_000 },
+      ))
+      expect(await screen.findByRole('status')).toHaveTextContent('Model mapping saved')
+    })
+
+    it('starts from the saved windows, and an emptied field clears its override', async () => {
+      vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+        models: mapping,
+        modelContextWindows: { 'gpt-6-astra': 600_000, 'gpt-6-sol': 300_000 },
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      const astra = await field('gpt-6-astra')
+      expect(astra).toHaveValue('600000')
+      expect(await field('gpt-6-sol')).toHaveValue('300000')
+
+      fireEvent.change(astra, { target: { value: '' } })
+      save()
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', mapping, { 'gpt-6-sol': 300_000 },
+      ))
+    })
+
+    it('blocks saving a window above the model limit or out of range and says why', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      const astra = await field('gpt-6-astra')
+      const saveButton = screen.getByRole('button', { name: 'Save model mapping' })
+
+      fireEvent.change(astra, { target: { value: '900000' } })
+      expect(screen.getByRole('alert')).toHaveTextContent("Cannot exceed this model's limit of 828,400.")
+      expect(astra).toHaveAttribute('aria-invalid', 'true')
+      expect(astra).toHaveAccessibleDescription("Cannot exceed this model's limit of 828,400.")
+      expect(saveButton).toBeDisabled()
+
+      fireEvent.change(astra, { target: { value: '15000' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('Must be between 16000 and 10000000.')
+      fireEvent.change(astra, { target: { value: 'big' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('Enter an integer.')
+      expect(saveButton).toBeDisabled()
+
+      // The ceiling itself is allowed.
+      fireEvent.change(astra, { target: { value: '828400' } })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(saveButton).toBeEnabled()
+      expect(providersApi.updateOfficialModels).not.toHaveBeenCalled()
+    })
+
+    it('does not invent a limit for a model whose catalog states none', async () => {
+      vi.mocked(modelsApi.catalog).mockResolvedValue({
+        models: withLimits.models.map(({ maxContext: _max, ...model }) => model),
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      fireEvent.change(await field('gpt-6-astra'), { target: { value: '2000000' } })
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(screen.getAllByText('Default 258,400')).toHaveLength(3)
+    })
+
+    it('keeps the window of a model the mapping stops using', async () => {
+      vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+        models: mapping,
+        modelContextWindows: { 'gpt-6-astra': 600_000 },
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      await field('gpt-6-astra')
+
+      // Opus moves from astra to luna: astra loses its row but not its saved value.
+      fireEvent.change(screen.getByRole('combobox', { name: /Opus Model/ }), { target: { value: 'gpt-6-luna' } })
+      expect(screen.queryByRole('textbox', { name: 'gpt-6-astra' })).not.toBeInTheDocument()
+      save()
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', { ...mapping, opus: 'gpt-6-luna' }, { 'gpt-6-astra': 600_000 },
+      ))
+    })
+
+    it('adds no field for an ID that is only half typed', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      await field('gpt-6-astra')
+      expect(screen.getAllByRole('textbox')).toHaveLength(3)
+
+      fireEvent.change(screen.getByRole('combobox', { name: /Fable Model/ }), { target: { value: 'gpt-6-a' } })
+      expect(screen.getAllByRole('textbox')).toHaveLength(3)
+    })
+
+    it('does not offer window fields on the other official accounts', async () => {
+      render(<OfficialProviderModelSettings providerId="grok-official" />)
+      await screen.findByRole('combobox', { name: /Main Model/ })
+      expect(screen.queryByRole('group', { name: 'Context window (optional)' })).not.toBeInTheDocument()
+
+      save()
+      // Nothing about windows is sent, so a shared client cannot touch another account's settings.
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'grok-official', mapping, undefined,
+      ))
+    })
   })
 })

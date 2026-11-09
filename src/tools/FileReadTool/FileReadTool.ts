@@ -74,7 +74,9 @@ import type { PermissionDecision } from '../../utils/permissions/PermissionResul
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { readFileInRange } from '../../utils/readFileInRange.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
+import { decodeShellOutput } from '../../utils/shell/outputEncoding.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { getToolResultsDir } from '../../utils/toolResultStorage.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 import { getDefaultFileReadingLimits } from './limits.js'
 import { getImageProcessor } from './imageProcessor.js'
@@ -1050,6 +1052,11 @@ async function callInner(
 
   // --- Text file (single async read via readFileInRange) ---
   const lineOffset = offset === 0 ? 0 : offset - 1
+  // Large shell outputs are persisted as raw files. A subsequent Read should
+  // decode them the same way as the inline preview without changing how
+  // ordinary project files are interpreted.
+  const isWindowsToolOutput = process.platform === 'win32' && ext === 'txt' &&
+    path.relative(getToolResultsDir(), path.dirname(fullFilePath)) === ''
   const { content, lineCount, totalLines, totalBytes, readBytes, mtimeMs } =
     await readFileInRange(
       resolvedFilePath,
@@ -1057,6 +1064,7 @@ async function callInner(
       limit,
       limit === undefined ? maxSizeBytes : undefined,
       context.abortController.signal,
+      isWindowsToolOutput ? { decode: (bytes, partial) => decodeShellOutput(bytes, false, partial) } : undefined,
     )
 
   await validateContentTokens(content, ext, maxTokens)

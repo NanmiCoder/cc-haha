@@ -79,7 +79,12 @@ export function syncImPermissionState(
         promptDeliveries.get(pending)?.delete(id)
       }
     }
-    for (const id of ids) pending.add(id)
+    for (const id of ids) {
+      // A local response is optimistic until the server confirms it. If the
+      // snapshot restores that request, its old prompt no longer owns delivery.
+      if (!pending.has(id)) promptDeliveries.get(pending)?.delete(id)
+      pending.add(id)
+    }
     if (pending.size) pendingPermissions.set(chatId, pending)
     else pendingPermissions.delete(chatId)
   }

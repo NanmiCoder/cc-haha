@@ -13,7 +13,7 @@ vi.mock('@/lib/workspace/browserHost', () => ({ workspaceBrowserHost: { message 
 beforeEach(() => {
   useSettingsStore.setState({ locale: 'en' })
   usePreviewSelectionStore.setState({ bySession: {} })
-  sendMessage.mockClear()
+  sendMessage.mockReset().mockReturnValue(true)
   message.mockClear()
 })
 afterEach(cleanup)

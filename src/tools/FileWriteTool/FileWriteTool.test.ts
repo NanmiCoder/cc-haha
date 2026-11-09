@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { z } from 'zod/v4'
 import { getEmptyToolPermissionContext, type ToolUseContext } from '../../Tool.js'
+import { windowsPathToPosixPath } from '../../utils/windowsPaths.js'
 import { FileReadTool } from '../FileReadTool/FileReadTool.js'
 import { FileWriteTool } from './FileWriteTool.js'
 
@@ -29,7 +32,10 @@ afterEach(async () => {
 
 function context(deniedPath?: string): ToolUseContext {
   const permissions = getEmptyToolPermissionContext()
-  if (deniedPath) permissions.alwaysDenyRules.session = [`Edit(/${deniedPath})`]
+  if (deniedPath) {
+    const absoluteRulePath = process.platform === 'win32' ? windowsPathToPosixPath(deniedPath) : deniedPath
+    permissions.alwaysDenyRules.session = [`Edit(/${absoluteRulePath})`]
+  }
   return {
     readFileState: new Map(), abortController: new AbortController(),
     updateFileHistoryState: () => {},
@@ -123,4 +129,45 @@ test('alias normalization preserves stale-file validation and execution guards',
   expect(await FileWriteTool.validateInput(input, ctx)).toMatchObject({ result: false, errorCode: 3 })
   await expect(FileWriteTool.call(input, ctx, undefined as never, { uuid: 'stale-write' } as never)).rejects.toThrow('unexpectedly modified')
   expect(await readFile(path, 'utf8')).toBe('external change')
+})
+
+test('Write adds a compatibility BOM only to new Windows PowerShell scripts with Unicode', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'write-ps-encoding-'))
+  directories.push(root)
+  const command = "param([string]$Text = '喜欢你 邓紫棋')\n" +
+    'Write-Output ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Text)))\n'
+  const windows = process.platform === 'win32'
+  const ctx = context()
+  const write = (path: string, content: string) =>
+    FileWriteTool.call({ file_path: path, content }, ctx, undefined as never, { uuid: 'write-ps-encoding' } as never)
+
+  for (const [name, content, bom] of [
+    ['search.PS1', command, windows],
+    ['ascii.ps1', 'Write-Output 123\n', false],
+    ['notes.txt', command, false],
+    ['explicit.ps1', '\uFEFF' + command, false],
+  ] as const) {
+    const path = join(root, name)
+    await write(path, content)
+    expect(await readFile(path, 'utf8')).toBe((bom ? '\uFEFF' : '') + content)
+  }
+
+  const existing = join(root, 'existing.ps1')
+  await writeFile(existing, "Write-Output 'original'\n", 'utf8')
+  await FileReadTool.call({ file_path: existing }, ctx)
+  await write(existing, command)
+  expect(await readFile(existing, 'utf8')).toBe(command)
+
+  const explicit = join(root, 'explicit.ps1')
+  await FileReadTool.call({ file_path: explicit }, ctx)
+  await write(explicit, command)
+  expect(await readFile(explicit, 'utf8')).toBe('\uFEFF' + command)
+
+  if (windows) {
+    const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    const { stdout } = await promisify(execFile)(powershell, [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'search.PS1'),
+    ], { windowsHide: true, timeout: 10_000 })
+    expect(stdout.trim()).toBe(Buffer.from('喜欢你 邓紫棋').toString('base64'))
+  }
 })

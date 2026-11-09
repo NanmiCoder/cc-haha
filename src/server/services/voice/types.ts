@@ -180,8 +180,15 @@ export type VoiceHistorySourceId = 'claude-code' | 'codex'
 
 export interface VoiceHistorySource {
   id: VoiceHistorySourceId
+  /** Whether it has sessions within the analyzed days. */
   available: boolean
   sessions: number
+}
+
+export interface VoiceHistorySourceList {
+  sources: VoiceHistorySource[]
+  /** How many days back the analysis reads. */
+  days: number
 }
 
 export type VoiceHistoryCategory = 'project' | 'model' | 'tool' | 'other'

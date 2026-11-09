@@ -3,7 +3,17 @@ import { isExpectedRoutingCliExit } from './agentModelRouting'
 import { forwardProvenanceRequest } from './leanSkillProvenance'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
-import { decideReply, UPSTREAM_ERROR_MESSAGE, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER, type MockRequest } from './scriptedModel'
+import {
+  decideReply,
+  GOOGLE_ADC_QUOTA_PROJECT_MESSAGE,
+  GOOGLE_ADC_QUOTA_PROJECT_TRIGGER,
+  KIMI_USAGE_LIMIT_MESSAGE,
+  KIMI_USAGE_LIMIT_TRIGGER,
+  UPSTREAM_ERROR_MESSAGE,
+  UPSTREAM_ERROR_TRIGGER,
+  UPSTREAM_REFUSAL_TRIGGER,
+  type MockRequest,
+} from './scriptedModel'
 import { startMockLlmServer, type MockLlmServer, type RecordedRequest } from './server'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 
@@ -128,19 +138,23 @@ describe('scripted model', () => {
     expect(failed).toMatchObject({ content: [{ type: 'text', text: 'The tool failed: Permission denied' }] })
   })
 
-  test('fails on the error trigger, and answers the next prompt merged into the same user message', () => {
-    expect(decideReply(agentRequest([{ role: 'user', content: `${UPSTREAM_ERROR_TRIGGER}: please fail` }]))).toEqual({
+  test.each([
+    [UPSTREAM_ERROR_TRIGGER, 400, 'invalid_request_error', UPSTREAM_ERROR_MESSAGE],
+    [KIMI_USAGE_LIMIT_TRIGGER, 403, 'permission_error', KIMI_USAGE_LIMIT_MESSAGE],
+    [GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, 403, 'permission_error', GOOGLE_ADC_QUOTA_PROJECT_MESSAGE],
+  ] as const)('fails on %s, and answers the next prompt merged into the same user message', (trigger, status, errorType, message) => {
+    expect(decideReply(agentRequest([{ role: 'user', content: `${trigger}: please fail` }]))).toEqual({
       kind: 'error',
-      status: 400,
-      errorType: 'invalid_request_error',
-      message: UPSTREAM_ERROR_MESSAGE,
+      status,
+      errorType,
+      message,
     })
 
     // After a failed turn the CLI merges the next prompt into the same user message.
     const recovered = decideReply(agentRequest([{
       role: 'user',
       content: [
-        { type: 'text', text: `${UPSTREAM_ERROR_TRIGGER}: please fail` },
+        { type: 'text', text: `${trigger}: please fail` },
         { type: 'text', text: 'Reply with one short sentence.' },
       ],
     }]))
@@ -307,11 +321,22 @@ describe('mock Anthropic endpoint', () => {
     }
   })
 
-  test('returns provider-shaped errors', async () => {
-    const response = await post({ ...agentRequest([{ role: 'user', content: UPSTREAM_ERROR_TRIGGER }]), stream: true })
-    expect(response.status).toBe(400)
-    expect(await response.json()).toEqual({ type: 'error', error: { type: 'invalid_request_error', message: UPSTREAM_ERROR_MESSAGE } })
+  test.each([
+    [UPSTREAM_ERROR_TRIGGER, 400, 'invalid_request_error', UPSTREAM_ERROR_MESSAGE],
+    [KIMI_USAGE_LIMIT_TRIGGER, 403, 'permission_error', KIMI_USAGE_LIMIT_MESSAGE],
+    [GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, 403, 'permission_error', GOOGLE_ADC_QUOTA_PROJECT_MESSAGE],
+  ] as const)('returns the provider-shaped error for %s and accepts the next prompt', async (trigger, status, errorType, message) => {
+    const response = await post({ ...agentRequest([{ role: 'user', content: trigger }]), stream: true })
+    expect(response.status).toBe(status)
+    expect(await response.json()).toEqual({ type: 'error', error: { type: errorType, message } })
     expect(server!.requests[0]!.outcome).toBe('error')
+    const recovered = await post({ ...agentRequest([{ role: 'user', content: [
+      { type: 'text', text: trigger },
+      { type: 'text', text: 'Reply with one short sentence.' },
+    ] }]), stream: true })
+    expect(recovered.status).toBe(200)
+    expect(parseSse(await recovered.text())).toContainEqual(expect.objectContaining({ event: 'message_stop' }))
+    expect(server!.requests[1]!.outcome).toBe('completed')
   })
 
   test('streams an empty provider refusal without inventing Anthropic text', async () => {

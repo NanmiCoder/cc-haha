@@ -86,8 +86,21 @@ describe('providerTextCompletion', () => {
       ? Response.json({ error: 'thinking unsupported' }, { status })
       : reply('ok'))
 
-    expect(await request(provider(server.url))).toEqual({ ok: true, text: 'ok' })
+    // The result says the text came from the resend, so a caller can report it when the answer is unusable.
+    expect(await request(provider(server.url))).toEqual({
+      ok: true,
+      text: 'ok',
+      firstAttemptRejected: { status, detail: '{"error":"thinking unsupported"}' },
+    })
     expect(server.bodies.map(body => body.thinking)).toEqual([{ type: 'disabled' }, undefined])
+  })
+
+  test('keeps why the first attempt was rejected short and on one line', async () => {
+    const reason = `invalid request:\n  ${'x'.repeat(400)}`
+    const server = upstream((body) => body.thinking ? new Response(reason, { status: 400 }) : reply('ok'))
+
+    const result = await request(provider(server.url))
+    expect(result.ok && result.firstAttemptRejected?.detail).toBe(`invalid request: ${'x'.repeat(183)}`)
   })
 
   test('answers a rate limit as is instead of resending with thinking back on', async () => {
@@ -111,11 +124,30 @@ describe('providerTextCompletion', () => {
       ? Response.json({ error: 'temperature not allowed here' }, { status: 400 })
       : reply('ok'))
 
-    expect(await request(provider(server.url), { temperature: 0 })).toEqual({ ok: true, text: 'ok' })
+    expect(await request(provider(server.url), { temperature: 0 })).toEqual({
+      ok: true,
+      text: 'ok',
+      firstAttemptRejected: { status: 400, detail: '{"error":"temperature not allowed here"}' },
+    })
     expect(server.bodies.map(body => [body.thinking, body.temperature])).toEqual([
       [{ type: 'disabled' }, 0],
       [undefined, undefined],
     ])
+  })
+
+  test('lowers the budget to the output limits saved on the provider, as chat does', async () => {
+    const server = upstream(() => reply('ok'))
+    const sent = async (overrides: Partial<SavedProvider>) => {
+      await request(provider(server.url, overrides), { maxTokens: 32_000 })
+      return server.bodies.at(-1)!.max_tokens
+    }
+
+    expect(await sent({})).toBe(32_000)
+    // Matched like chat matches it: the saved id `fast-model[1m]` is sent as `fast-model`.
+    expect(await sent({ modelMaxOutputTokens: { 'fast-model': 8_192, other: 2_048 } })).toBe(8_192)
+    expect(await sent({ modelMaxOutputTokens: { 'fast-model': 64_000 } })).toBe(32_000)
+    expect(await sent({ requestCompatibility: { outputTokenLimit: 16_384 } })).toBe(16_384)
+    expect(await sent({ requestCompatibility: { maxOutputTokens: 12_000 } })).toBe(12_000)
   })
 
   test('omits temperature unless the caller asks for one', async () => {
@@ -196,7 +228,7 @@ describe('providerTextCompletion', () => {
   })
 
   test.each([
-    [400, { ok: true, text: 'ok' }, 2],
+    [400, { ok: true, text: 'ok', firstAttemptRejected: { status: 400 } }, 2],
     [429, { ok: false, reason: 'rate-limit', status: 429 }, 1],
   ] as const)('through the local proxy, HTTP %i from the upstream ends as %o after %i request(s)', async (status, expected, requests) => {
     const sent: Array<Record<string, unknown>> = []

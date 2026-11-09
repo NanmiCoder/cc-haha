@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { getEmptyToolPermissionContext, type Tool, type Tools } from '../Tool.js'
 import type { MCPServerConnection, ScopedMcpServerConfig } from '../services/mcp/types.js'
 import { getAgentProfile, setAgentProfile } from '../utils/agentProfile.js'
+import { isComputerUseRuntimeTool } from '../utils/computerUse/common.js'
 import * as helperBridge from '../utils/computerUse/cuHelperBridge.js'
 import { getComputerUseConfigPath } from '../utils/computerUse/preauthorizedConfig.js'
 import { getProjectPathForConfig } from '../utils/config.js'
@@ -12,7 +13,7 @@ import { getCwd } from '../utils/cwd.js'
 import { getGlobalClaudeFile } from '../utils/env.js'
 import { getCachedSettingsForSource, getSessionSettingsCache, resetSettingsCache, setCachedSettingsForSource, setSessionSettingsCache } from '../utils/settings/settingsCache.js'
 import { SETTING_SOURCES } from '../utils/settings/constants.js'
-import { computerUsePermissionContext, createComputerUseMcpRefresh, isComputerUseRuntimeTool, readComputerUseRefreshConfiguration } from './computerUseMcpRefresh.js'
+import { computerUsePermissionContext, createComputerUseMcpRefresh, readComputerUseRefreshConfiguration } from './computerUseMcpRefresh.js'
 
 const config: ScopedMcpServerConfig = { type: 'stdio', command: 'fixture', args: [], scope: 'dynamic' }
 const names = ['mcp__computer-use__js', 'mcp__computer-use__js_reset']
@@ -32,7 +33,7 @@ function fixture() {
     tools: Tools
   }>) | undefined
   const refresh = createComputerUseMcpRefresh({
-    readConfiguration: async () => enabled ? { config, allowedTools: names } : null,
+    readConfiguration: async () => enabled ? { config, allowedTools: names } : { unavailable: 'settings_disabled' },
     snapshot: () => ({ clients, tools: inventory }),
     connect: async (_config, reconnect) => {
       connects++
@@ -120,75 +121,77 @@ describe('headless Computer Use configuration gates', () => {
 
   test('respects CLI opt-out, lean, the environment kill switch, and unsupported platforms before helper resolution', async () => {
     store('{"enabled":true}')
-    expect(await readComputerUseRefreshConfiguration(false)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(false)).toEqual({ unavailable: 'session_disabled' })
     setAgentProfile('lean')
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'profile_disabled' })
     setAgentProfile('standard')
     process.env.CLAUDE_COMPUTER_USE_ENABLED = 'false'
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'environment_disabled' })
     process.env.CLAUDE_COMPUTER_USE_ENABLED = 'true'
     Object.defineProperty(process, 'platform', { ...previousPlatform, value: 'freebsd' })
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'unsupported_platform' })
     expect(helper).not.toHaveBeenCalled()
   })
 
   test('reads first creation and every later setting from disk, and fails closed on corrupt config', async () => {
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'settings_disabled' })
     store('{"enabled":false}')
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'settings_disabled' })
     store('{"enabled":true')
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'settings_invalid' })
     expect(helper).not.toHaveBeenCalled()
     store('{"enabled":true}')
     const enabled = await readComputerUseRefreshConfiguration(true)
-    expect(enabled?.allowedTools).toEqual(names)
-    expect(enabled?.config.scope).toBe('dynamic')
+    expect(enabled).toMatchObject({ allowedTools: names, config: { scope: 'dynamic' } })
     store('{"enabled":false}')
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'settings_disabled' })
     expect(helper).toHaveBeenCalledTimes(1)
   })
 
   test('retains the canonical native-helper gate after consent', async () => {
     store('{"enabled":true}')
     helper.mockReturnValue(null)
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'runtime_missing' })
     helper.mockReturnValue('/fixture/cu-helper')
-    expect((await readComputerUseRefreshConfiguration(true))?.allowedTools).toEqual(names)
+    expect(await readComputerUseRefreshConfiguration(true)).toMatchObject({ allowedTools: names })
     expect(helper).toHaveBeenCalledTimes(2)
   })
 
   test('respects managed policy and a freshly persisted MCP disable', async () => {
     store('{"enabled":true}')
     setSessionSettingsCache({ settings: { deniedMcpServers: [{ serverName: 'computer-use' }] }, errors: [] })
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'policy_disabled' })
     setSessionSettingsCache({ settings: {}, errors: [] })
     const policyPath = getGlobalClaudeFile()
     const projectPath = getProjectPathForConfig(getCwd())
     writeFileSync(policyPath, JSON.stringify({ projects: { [projectPath]: { disabledMcpServers: ['computer-use'] } } }))
-    expect(await readComputerUseRefreshConfiguration(true)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(true)).toEqual({ unavailable: 'policy_disabled' })
     writeFileSync(policyPath, '{}')
-    expect((await readComputerUseRefreshConfiguration(true))?.allowedTools).toEqual(names)
+    expect(await readComputerUseRefreshConfiguration(true)).toMatchObject({ allowedTools: names })
   })
 })
 
 describe('headless Computer Use inventory refresh', () => {
   test('does not read configuration when the caller has not enabled the runtime integration', async () => {
-    expect(await readComputerUseRefreshConfiguration(false)).toBeNull()
+    expect(await readComputerUseRefreshConfiguration(false)).toEqual({ unavailable: 'session_disabled' })
   })
 
   test('late enablement connects before the query, stays connected, and removes old startup tools on disable', async () => {
     const f = fixture()
     await f.refresh.sync()
     expect(f.state().connects).toBe(0)
+    expect(f.refresh.unavailableReason()).toBe('settings_disabled')
     f.enable(true)
     await f.refresh.sync()
     expect(f.refresh.tools().map(tool => tool.name)).toEqual(names)
+    expect(f.refresh.unavailableReason()).toBeUndefined()
     expect(f.state().allowed).toEqual(names)
     await f.refresh.sync()
     expect(f.state().connects).toBe(1)
     f.enable(false)
     await f.refresh.sync()
     expect(f.refresh.tools()).toEqual([])
+    expect(f.refresh.unavailableReason()).toBe('settings_disabled')
     expect(f.state().allowed).toEqual([])
     f.enable(true)
     await f.refresh.sync()
@@ -226,6 +229,7 @@ describe('headless Computer Use inventory refresh', () => {
     finish({ client: connected(), tools })
     await first
     expect(f.refresh.tools()).toEqual([])
+    expect(f.refresh.unavailableReason()).toBe('settings_disabled')
     expect(f.state().allowed).toEqual([])
     expect(f.state().retires).toBe(1)
   })
@@ -236,6 +240,7 @@ describe('headless Computer Use inventory refresh', () => {
     f.connectWith(async () => { throw new Error('tools/list failed') })
     await f.refresh.sync()
     expect(f.refresh.tools()).toEqual([])
+    expect(f.refresh.unavailableReason()).toBe('connection_unavailable')
     f.connectWith(async () => ({ client: connected(), tools }))
     await f.refresh.sync()
     expect(f.state().reconnects).toEqual([false, true])

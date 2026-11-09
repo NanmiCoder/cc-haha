@@ -184,6 +184,8 @@ describe('package smoke args', () => {
     expect(parsePackageSmokeArgs(['--platform', 'macos']).packageKind).toBe('auto')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--package-kind', 'dir']).packageKind).toBe('dir')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--require-macos-gatekeeper']).requireMacosGatekeeper).toBe(true)
+    expect(parsePackageSmokeArgs(['--platform', 'macos']).requireMacosComputerUseSigning).toBe(false)
+    expect(parsePackageSmokeArgs(['--platform', 'macos', '--require-macos-computer-use-signing']).requireMacosComputerUseSigning).toBe(true)
     expect(parsePackageSmokeArgs(['--platform', 'linux', '--max-linux-glibc', '2.28']).maxLinuxGlibc).toBe('2.28')
     expect(() => parsePackageSmokeArgs(['--platform', 'linux', '--max-linux-glibc', 'GLIBC_2.28'])).toThrow('<major.minor>')
   })
@@ -695,6 +697,74 @@ describe('packaged artifact inspection', () => {
     const mismatched = await inspect('Developer ID Application: Other (TEAM123456)')
     expect(mismatched.passed).toBe(false)
     expect(mismatched.notes.join('\n')).toContain('mismatched Developer ID authority/team')
+  })
+
+  test('checks the Computer Use signing chain of an unnotarized build without Gatekeeper', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    const appRoot = 'desktop/build-artifacts/electron/mac/Claude Code Haha.app'
+    const resources = `${appRoot}/Contents/Resources`
+    const sidecarRoot = `${resources}/app.asar.unpacked/src-tauri/binaries`
+    const nodePtyRoot = `${resources}/app.asar.unpacked/node_modules/node-pty`
+    writeFile(rootDir, `${appRoot}/Contents/Info.plist`)
+    writeFile(rootDir, `${appRoot}/Contents/MacOS/Claude Code Haha`, thinMachO('x64'))
+    writeFile(rootDir, `${resources}/app.asar`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/dist/index.html`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/dist/m/index.html`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/dist/m/h5.json`)
+    writeFile(rootDir, `${sidecarRoot}/claude-sidecar-x86_64-apple-darwin`, thinMachO('x64'))
+    writeFile(rootDir, `${nodePtyRoot}/package.json`)
+    writeFile(rootDir, `${nodePtyRoot}/prebuilds/darwin-x64/pty.node`, thinMachO('x64'))
+    writeFile(rootDir, `${nodePtyRoot}/prebuilds/darwin-x64/spawn-helper`, thinMachO('x64'))
+
+    const inspect = (hostAuthority: string | null) => {
+      const commands: string[] = []
+      return inspectPackagedArtifacts(rootDir, {
+        platform: 'macos',
+        arch: 'x64',
+        packageKind: 'dir',
+        requireMacosComputerUseSigning: true,
+        hostPlatform: 'macos',
+        commandRunner: (command, args) => {
+          commands.push(command)
+          if (command.endsWith('/codesign') && args[0] === '-dv') {
+            const target = args.at(-1) ?? ''
+            const isHost = target.endsWith('Claude Code Haha.app')
+            const identifier = target.endsWith('cc-haha-computer-use.app')
+              ? 'dev.cchaha.cu-helper'
+              : isHost
+                ? 'com.claude-code-haha.desktop'
+                : 'com.claude-code-haha.desktop.sidecar'
+            const authority = isHost ? hostAuthority : 'Developer ID Application: Example (TEAM123456)'
+            return {
+              status: 0,
+              stdout: '',
+              stderr: [
+                `Identifier=${identifier}`,
+                ...(authority ? [`Authority=${authority}`] : []),
+                'Timestamp=Sep 1, 2026 at 18:43:53',
+                `TeamIdentifier=${authority ? 'TEAM123456' : 'not set'}`,
+              ].join('\n'),
+            }
+          }
+          return { status: 0, stdout: '', stderr: '' }
+        },
+      }).then(report => ({ report, commands }))
+    }
+
+    const signed = await inspect('Developer ID Application: Example (TEAM123456)')
+    expect(signed.report.passedChecks.some(
+      check => check.label === 'macOS Computer Use signing attestation chain',
+    )).toBe(true)
+    expect(signed.commands.some(command => command.endsWith('/spctl'))).toBe(false)
+    expect(signed.report.notes.join('\n')).toContain('macOS Gatekeeper launch approval was not assessed')
+
+    const adHocHost = await inspect(null)
+    expect(adHocHost.report.passed).toBe(false)
+    expect(adHocHost.report.missingChecks.some(
+      check => check.label === 'macOS Computer Use signing attestation chain',
+    )).toBe(true)
+    expect(adHocHost.report.notes.join('\n')).toContain('rejected host')
   })
 
   test('retries macOS Gatekeeper assessment with a raised file limit when spctl hits open-file limits', async () => {

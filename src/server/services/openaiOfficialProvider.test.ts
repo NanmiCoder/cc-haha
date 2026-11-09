@@ -9,7 +9,7 @@ describe('ChatGPT Official runtime environment', () => {
 
     expect(windows['gpt-6-astra']).toBe(258_400)
     expect(windows['gpt-6-sol']).toBe(258_400)
-    expect(windows['gpt-6.1-sol']).toBe(258_400)
+    expect(windows['gpt-6.1-sol']).toBe(475_000)
     expect(windows['gpt-6.1-terra']).toBe(475_000)
     expect(windows['gpt-6-luna']).toBe(258_400)
     expect(windows['gpt-5.6-sol']).toBe(353_400)

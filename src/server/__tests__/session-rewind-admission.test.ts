@@ -326,4 +326,44 @@ describe('HTTP rewind admission over WebSocket', () => {
       fixture.upstream.stop(true)
     }
   }, 30000)
+
+  it('preserves a queued user turn when a later rewind rejects its already removed target', async () => {
+    const fixture = await seedSession()
+    const { sessionId, oldUser, client } = fixture
+    const gate = deferred()
+    const paused = deferred()
+    const originalTrim = sessionService.trimSessionMessagesFrom.bind(sessionService)
+    const trimSpy = spyOn(sessionService, 'trimSessionMessagesFrom').mockImplementation(async (...args) => {
+      paused.resolve()
+      await gate.promise
+      return originalTrim(...args)
+    })
+    const { runSessionRewind } = await import('../ws/handler.js')
+    const { executeSessionRewind } = await import('../services/sessionRewindService.js')
+    let first: Promise<Response> | undefined
+    let second: Promise<unknown> | undefined
+    try {
+      first = rewind(sessionId, oldUser)
+      await paused.promise
+      const after = client.events.length
+      client.send({ type: 'user_message', content: 'USER_TURN_BETWEEN_TWO_REWINDS' })
+      await client.wait(event => event.type === 'status' && event.state === 'thinking', after)
+      // This is exactly the callback installed by the HTTP route. Calling the
+      // exported queue boundary makes the second queue reservation deterministic.
+      second = runSessionRewind(sessionId, stopRuntime => executeSessionRewind(
+        sessionId, { targetUserMessageId: oldUser }, 'conversation', stopRuntime,
+      )).catch(error => error)
+      gate.resolve()
+      expect((await first).status).toBe(200)
+      expect(await second).toBeInstanceOf(Error)
+      const result = await client.wait(event => event.type === 'message_complete' || event.type === 'error', after)
+      expect(result.type).toBe('message_complete')
+      expect(await readFile(fixture.transcriptPath, 'utf8')).toContain('USER_TURN_BETWEEN_TWO_REWINDS')
+    } finally {
+      gate.resolve()
+      await Promise.allSettled([first, second].filter(Boolean))
+      trimSpy.mockRestore()
+      fixture.upstream.stop(true)
+    }
+  }, 30000)
 })

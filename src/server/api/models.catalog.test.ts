@@ -131,6 +131,26 @@ describe('official model catalog API refresh', () => {
     })
   }
 
+  test('openai-official lists each model\'s default window and the highest one it can be set to', async () => {
+    fetchSpy.mockImplementation((async (input) => {
+      if ((OPENAI_CODEX_RELEASE_SOURCES as readonly string[]).includes(String(input))) {
+        return Response.json({ version: OPENAI_CODEX_CLIENT_VERSION })
+      }
+      return Response.json({ models: [
+        { slug: 'gpt-6-astra', visibility: 'list', context_window: 272_000, max_context_window: 872_000 },
+        // Not in the bundled catalog and no stated maximum: no cap is invented.
+        { slug: 'codex-future', visibility: 'list', context_window: 500_000 },
+      ] })
+    }) as typeof fetch)
+
+    const response = await handleModelsApi(...request('/api/models/catalog?provider=openai-official&refresh=true'))
+    const { models } = await response.json() as { models: Array<{ id: string; context: string; maxContext?: string }> }
+    expect(models.find(model => model.id === 'gpt-6-astra')).toMatchObject({ context: '258400', maxContext: '828400' })
+    const future = models.find(model => model.id === 'codex-future')!
+    expect(future.context).toBe('475000')
+    expect(future.maxContext).toBeUndefined()
+  })
+
   test('refresh without a desktop login reports failure for every account provider', async () => {
     await hahaOAuthService.deleteTokens()
     await hahaOpenAIOAuthService.deleteTokens()

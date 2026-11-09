@@ -12,7 +12,7 @@ import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-b
 import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
 import { loadConfig } from '../common/config.js'
-import { formatImHelp, formatImStatus, formatPermissionRequest } from '../common/format.js'
+import { formatImHelp, formatImStatus, formatPermissionRequest, splitMessage } from '../common/format.js'
 import {
   formatPermissionDecisionStatus,
   formatPermissionInstructions,
@@ -151,14 +151,34 @@ async function getAccessToken(): Promise<string> {
   return data.accessToken
 }
 
-async function sendText(chatId: string, text: string, onChunkDelivered?: (remainingText: string) => void): Promise<void> {
+async function sendText(chatId: string, text: string, options: {
+  requireDelivery?: boolean
+  onChunkDelivered?: (remainingText: string) => void
+} = {}): Promise<void> {
   const sessionWebhook = sessionWebhooks.get(chatId)
   if (!sessionWebhook) {
-    throw new Error(`Missing DingTalk sessionWebhook for ${chatId}; cannot send response`)
+    const message = `[DingTalk] Missing sessionWebhook for ${chatId}; cannot send response`
+    if (options.requireDelivery) throw new Error(message)
+    console.warn(message)
+    return
   }
 
   const token = await getAccessToken()
-  await sendDingTalkMarkdown(sessionWebhook, token, text, onChunkDelivered)
+  if (options.requireDelivery) {
+    await sendDingTalkMarkdown(sessionWebhook, token, text, options.onChunkDelivered)
+    return
+  }
+  for (const chunk of splitMessage(text, 3500)) {
+    const response = await fetch(sessionWebhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-acs-dingtalk-access-token': token },
+      body: JSON.stringify({ msgtype: 'markdown', markdown: { title: 'Claude Code', text: chunk } }),
+    })
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      console.warn(`[DingTalk] sendText failed: ${response.status} ${body}`)
+    }
+  }
 }
 
 function getAiCardBuffer(chatId: string): MessageBuffer {
@@ -196,7 +216,7 @@ async function flushToAiCard(chatId: string, newText: string, isComplete: boolea
       getOrCreateCard: () => getOrCreateAiCard(chatId),
       sendText: async (text, onChunkDelivered) => {
         await retryUndeliveredReplies(chatId)
-        await sendText(chatId, text, onChunkDelivered)
+        await sendText(chatId, text, { requireDelivery: true, onChunkDelivered })
       },
       aiCards,
     },
@@ -210,7 +230,7 @@ async function retryUndeliveredReplies(chatId: string): Promise<void> {
   if (!replies) return
   const retry = (async () => {
     while (replies.length) {
-      if (replies[0]) await sendText(chatId, replies[0], remaining => { replies[0] = remaining })
+      if (replies[0]) await sendText(chatId, replies[0], { requireDelivery: true, onChunkDelivered: remaining => { replies[0] = remaining } })
       replies.shift()
     }
     undeliveredReplies.delete(chatId)
@@ -462,7 +482,7 @@ async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promis
         return
       }
     }
-    await sendText(chatId, `${requestText}\n\n${instructions}`)
+    await sendText(chatId, `${requestText}\n\n${instructions}`, { requireDelivery: true })
   })
 }
 

@@ -13,11 +13,16 @@ fn root() -> &'static Path {
 
 const SESSION: &str = "s0000001";
 
-/// While the ledger holds only the live generation, there is no earlier renderer to
-/// clear and the sweep costs an enable nothing.
+fn agentless(root: &Path, session_id: &str, generation: &str) -> Vec<String> {
+    vec![pipe_name_for_generation(root, session_id, None, generation)]
+}
+
 #[test]
-fn the_shipped_ledger_gives_the_sweep_nothing_to_do() {
-    assert!(retirement_targets(root(), SESSION, &PROTOCOL_GENERATIONS).is_empty());
+fn the_shipped_ledger_retires_the_renderer_that_could_acknowledge_failed_paints() {
+    assert_eq!(
+        retirement_targets(root(), SESSION, &PROTOCOL_GENERATIONS, agentless),
+        [pipe_name_for_generation(root(), SESSION, None, "w1")]
+    );
 }
 
 /// What a bump must produce: the displaced generation's name becomes a target,
@@ -26,7 +31,7 @@ fn the_shipped_ledger_gives_the_sweep_nothing_to_do() {
 /// to start, or end that renderer's process outright.
 #[test]
 fn a_bumped_ledger_targets_the_displaced_generation_and_never_the_live_one() {
-    let targets = retirement_targets(root(), SESSION, &["w1", "w2"]);
+    let targets = retirement_targets(root(), SESSION, &["w1", "w2"], agentless);
 
     assert_eq!(
         targets,
@@ -48,7 +53,7 @@ fn a_bumped_ledger_targets_the_displaced_generation_and_never_the_live_one() {
 /// question rather than a comparison of a value with itself.
 #[test]
 fn a_target_is_scoped_to_the_session_being_enabled() {
-    let targets = retirement_targets(root(), SESSION, &["x1", "x2"]);
+    let targets = retirement_targets(root(), SESSION, &["x1", "x2"], agentless);
 
     assert_eq!(
         targets,

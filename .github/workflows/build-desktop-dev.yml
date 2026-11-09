@@ -106,6 +106,55 @@ jobs:
         working-directory: desktop
         run: bun run test:windows-storage-recovery
 
+      # cu-helper refuses ad-hoc signing in CI, and Computer Use only trusts an
+      # app, sidecar and helper signed by one Developer ID, so macOS dev builds
+      # sign with the release certificate. They skip notarization.
+      - name: Import macOS signing identity for native runtimes
+        if: matrix.smoke_platform == 'macos'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::Missing MACOS_CERTIFICATE or MACOS_CERTIFICATE_PASSWORD: macOS builds need a stable Developer ID to sign the Computer Use helper."
+            exit 1
+          fi
+          set -euo pipefail
+          certificate_path="${RUNNER_TEMP}/cc-haha-signing.p12"
+          keychain_path="${RUNNER_TEMP}/cc-haha-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          printf '%s' "$CSC_LINK" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$CSC_KEY_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          identity="$(
+            security find-identity -v -p codesigning "$keychain_path" \
+              | grep -E '"Developer ID Application:' \
+              | head -1 \
+              | sed -E 's/^[^"]*"([^"]+)".*$/\1/'
+          )"
+          if [ -z "$identity" ]; then
+            echo "::error::Imported certificate does not contain a Developer ID Application identity."
+            exit 1
+          fi
+          echo "CC_HAHA_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "CC_HAHA_CI_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          echo "CC_HAHA_CI_CERTIFICATE=$certificate_path" >> "$GITHUB_ENV"
+          echo "Imported native-runtime signing identity: $identity"
+
       - name: Prepare bundled ripgrep
         working-directory: desktop
         env:
@@ -153,7 +202,17 @@ jobs:
         working-directory: desktop
         run: bash ./scripts/rebuild-node-pty-linux.sh
 
+      - name: Build signed macOS Electron app
+        if: matrix.smoke_platform == 'macos'
+        working-directory: desktop
+        # Reuse the native-runtime keychain so the app is signed by the same
+        # Developer ID as the sidecar and helper.
+        run: |
+          export CSC_KEYCHAIN="${CC_HAHA_CI_KEYCHAIN:?macOS signing keychain was not prepared}"
+          node ./node_modules/electron-builder/out/cli/cli.js ${{ matrix.builder_args }} --publish never -c.mac.notarize=false
+
       - name: Build Electron app
+        if: matrix.smoke_platform != 'macos'
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -166,7 +225,18 @@ jobs:
         run: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-installer-smoke.ps1 -ArtifactsDir ./build-artifacts/electron -Arch x64
 
       - name: Verify packaged app structure
-        run: bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --arch ${{ matrix.arch }} --package-kind release --artifacts-dir desktop/build-artifacts/electron ${{ matrix.smoke_platform == 'linux' && '--max-linux-glibc 2.28' || '' }}
+        run: bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --arch ${{ matrix.arch }} --package-kind release --artifacts-dir desktop/build-artifacts/electron ${{ matrix.smoke_platform == 'linux' && '--max-linux-glibc 2.28' || '' }} ${{ matrix.smoke_platform == 'macos' && '--require-macos-computer-use-signing' || '' }}
+
+      - name: Remove temporary macOS signing keychain
+        if: always() && matrix.smoke_platform == 'macos'
+        shell: bash
+        run: |
+          if [ -n "${CC_HAHA_CI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$CC_HAHA_CI_KEYCHAIN" 2>/dev/null || true
+          fi
+          if [ -n "${CC_HAHA_CI_CERTIFICATE:-}" ]; then
+            rm -f "$CC_HAHA_CI_CERTIFICATE"
+          fi
 
       - name: Collect artifacts
         id: collect

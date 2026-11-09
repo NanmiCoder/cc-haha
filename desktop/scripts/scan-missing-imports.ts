@@ -90,6 +90,9 @@ const IMPORT_PATTERNS = [
 ]
 
 const SOURCE_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'])
+// 测试文件不会被编进 sidecar；它们还会在子进程源码字符串里写相对仓库根的
+// import('./src/...')，按测试文件目录解析会在 src/ 下生成假 stub。
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/
 
 async function* walk(dir: string): AsyncGenerator<string> {
   const entries = await readdir(dir, { withFileTypes: true })
@@ -100,7 +103,11 @@ async function* walk(dir: string): AsyncGenerator<string> {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
       yield* walk(full)
-    } else if (entry.isFile() && SOURCE_EXT.has(path.extname(entry.name))) {
+    } else if (
+      entry.isFile() &&
+      SOURCE_EXT.has(path.extname(entry.name)) &&
+      !TEST_FILE.test(entry.name)
+    ) {
       yield full
     }
   }

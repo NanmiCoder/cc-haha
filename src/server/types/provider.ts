@@ -169,12 +169,23 @@ export const SavedProviderSchema = z.object({
   notes: z.string().optional(),
 })
 
+/**
+ * A built-in OAuth provider has no saved record, so a user's per-model window
+ * override lives beside its model mapping, keyed by provider id then model id.
+ * Absent on older indexes, which read as "no overrides".
+ */
+export const OfficialProviderContextWindowsSchema = z.record(
+  z.string(),
+  ModelContextWindowsSchema,
+)
+
 export const ProvidersIndexSchema = z.object({
   schemaVersion: z.number().int().positive().optional(),
   activeId: z.string().nullable(),
   providers: z.array(SavedProviderSchema),
   providerOrder: z.array(z.string()).default([]),
   officialProviderModels: OfficialProviderModelsSchema.default({}),
+  officialProviderContextWindows: OfficialProviderContextWindowsSchema.default({}),
 })
 
 export const CreateProviderSchema = z.object({

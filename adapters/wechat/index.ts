@@ -438,7 +438,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       runtime.state = 'idle'
       runtime.verb = undefined
       typingController.stop(chatId)
-      blockBuffers.get(chatId)?.reset()
+      await blockBuffers.get(chatId)?.complete()
       blockBuffers.delete(chatId)
       await sendText(chatId, `错误: ${msg.message}`)
       break

@@ -22,7 +22,7 @@ use crate::system::cursor_overlay::{
 };
 #[cfg(target_os = "windows")]
 use agent_desktop_core::{
-    CURSOR_HIGHLIGHT_HOLD_MS, CURSOR_IDLE_REST_MS, CURSOR_REST_FADE_MS, CursorMotion,
+    AdapterError, CURSOR_HIGHLIGHT_HOLD_MS, CURSOR_IDLE_REST_MS, CURSOR_REST_FADE_MS, CursorMotion,
     CursorOverlayControl, CursorPhase, LABEL_FONT_POINTS, Point, Rect,
 };
 #[cfg(target_os = "windows")]
@@ -40,13 +40,14 @@ pub(crate) struct SurfaceHost {
     session_id: String,
     presentation: Presentation,
     rest: RestState,
+    idle_rest_delay: Duration,
     watch: session_state::EndWatch,
     topology: DisplayTopology,
 }
 
 #[cfg(target_os = "windows")]
 impl SurfaceHost {
-    pub(crate) fn create(session_id: String) -> Result<Self, agent_desktop_core::AdapterError> {
+    pub(crate) fn create(session_id: String) -> Result<Self, AdapterError> {
         let topology = DisplayTopology::probe();
         let pose = monitors::resting_point(topology.monitors()).unwrap_or(Point { x: 0.0, y: 0.0 });
         Ok(Self {
@@ -58,6 +59,11 @@ impl SurfaceHost {
                 resting: false,
                 quiet_since: Instant::now(),
             },
+            idle_rest_delay: schedule::idle_rest_delay(
+                std::env::var("AGENT_DESKTOP_CURSOR_IDLE_MS")
+                    .ok()
+                    .as_deref(),
+            ),
             watch: session_state::EndWatch::default(),
             topology,
         })
@@ -71,9 +77,9 @@ impl SurfaceHost {
     /// answered, and nothing else. A travel is here because the action
     /// dispatches the moment its acknowledgement arrives, so the cursor
     /// has to already be where the click will land.
-    pub(crate) fn apply(&mut self, control: &CursorOverlayControl) {
+    pub(crate) fn apply(&mut self, control: &CursorOverlayControl) -> Result<(), AdapterError> {
         if self.rest.resting && control.is_caret_follow() {
-            return;
+            return Ok(());
         }
         self.rest.resting = false;
         self.rest.quiet_since = Instant::now();
@@ -84,10 +90,11 @@ impl SurfaceHost {
         match control {
             CursorOverlayControl::Enable { .. } | CursorOverlayControl::Show { .. } => {
                 self.begin_reveal();
-                self.draw(0.0, None, 0.0);
+                self.draw(0.0, None, 0.0)?;
             }
             CursorOverlayControl::Hide { .. } | CursorOverlayControl::Disable { .. } => {
                 self.clear();
+                self.rest.resting = true;
             }
             CursorOverlayControl::Present { instruction, .. } => match instruction.phase() {
                 CursorPhase::Travel => {
@@ -95,7 +102,7 @@ impl SurfaceHost {
                     self.travel(
                         instruction.destination().clone(),
                         instruction.target().cloned(),
-                    );
+                    )?;
                 }
                 CursorPhase::Drag => self.take_drag_origin(
                     instruction
@@ -103,7 +110,7 @@ impl SurfaceHost {
                         .unwrap_or_else(|| instruction.destination())
                         .clone(),
                     instruction.target().cloned(),
-                ),
+                )?,
                 phase @ (CursorPhase::Caret | CursorPhase::CaretFollow) => {
                     let accent = self.presentation.style.accent_rgb();
                     let follow = phase == CursorPhase::CaretFollow;
@@ -112,6 +119,7 @@ impl SurfaceHost {
                 CursorPhase::Effect => {}
             },
         }
+        Ok(())
     }
 
     /// Everything nothing waits on, played after the sender has been
@@ -145,27 +153,21 @@ impl SurfaceHost {
         }
     }
 
-    /// Travels to where a drag begins and stays there.
-    ///
-    /// The reference arms pointer tracking here, so its overlay follows
-    /// the real pointer for the length of the drag and draws a trail
-    /// behind it. This does not, and the reason is the platform's own
-    /// rule rather than an omission: a drag is physical input, headed
-    /// actions hand the pointer to the operator, and this overlay is
-    /// suppressed for the rest of a session that takes one. Standing at
-    /// the origin is the whole of what can be shown truthfully, and it is
-    /// shown before the acknowledgement because a drag is a pre-dispatch
-    /// control that its caller blocks on.
-    fn take_drag_origin(&mut self, origin: Point, target: Option<Rect>) {
+    /// Marks the drag origin before dispatching the physical pointer action.
+    fn take_drag_origin(
+        &mut self,
+        origin: Point,
+        target: Option<Rect>,
+    ) -> Result<(), AdapterError> {
         self.presentation.depart(false);
-        self.travel(origin, target);
+        self.travel(origin, target)
     }
 
     /// Plays the motion core computed, then leaves the cursor at its
     /// destination. Deliberately unstoppable: this is the one loop an
     /// action is blocked on, so giving it up for a newer control would
     /// dispatch a click at wherever the cursor had got to.
-    fn travel(&mut self, destination: Point, target: Option<Rect>) {
+    fn travel(&mut self, destination: Point, target: Option<Rect>) -> Result<(), AdapterError> {
         self.caret
             .hide_when_leaving(&self.presentation.pose, &destination);
         let motion = CursorMotion::new(self.presentation.pose.clone(), destination.clone())
@@ -174,17 +176,20 @@ impl SurfaceHost {
         let frames = animation::Frames::at(self.topology.refresh_hz());
         loop {
             let elapsed = frames.elapsed_ms();
-            self.presentation.pose = motion.pose(elapsed).point;
-            self.draw(0.0, target.as_ref(), 0.0);
             if schedule::has_arrived(elapsed, motion.duration_ms()) {
                 break;
             }
+            self.presentation.pose = motion.pose(elapsed).point;
+            // Intermediate frames may be dropped. Only the destination
+            // frame determines whether this travel can be acknowledged.
+            let _ = self.draw(0.0, target.as_ref(), 0.0);
             frames.wait();
         }
         self.presentation.pose = destination;
         self.presentation.arrive();
-        self.draw(0.0, target.as_ref(), 0.0);
+        self.draw(0.0, target.as_ref(), 0.0)?;
         self.begin_reveal();
+        Ok(())
     }
 
     /// The click flourish and the outline, after dispatch has already
@@ -207,9 +212,11 @@ impl SurfaceHost {
             let elapsed = frames.elapsed_ms();
             let pose = motion.pose(elapsed);
             let opacity = schedule::highlight_progress(elapsed, CURSOR_HIGHLIGHT_HOLD_MS);
-            self.draw(pose.ripple, target.as_ref(), opacity);
+            if self.draw(pose.ripple, target.as_ref(), opacity).is_err() {
+                return;
+            }
             if elapsed >= motion.total_ms().max(CURSOR_HIGHLIGHT_HOLD_MS) {
-                self.draw(0.0, None, 0.0);
+                let _ = self.draw(0.0, None, 0.0);
                 return;
             }
             if frames.wait_unless(interrupt) == animation::Continuation::Stop {
@@ -220,48 +227,46 @@ impl SurfaceHost {
 
     /// One frame at full strength, with the card at whatever point of
     /// its reveal it has reached.
-    fn draw(&self, ripple_phase: f64, target: Option<&Rect>, highlight_opacity: f64) {
-        self.paint(ripple_phase, target, highlight_opacity, 1.0);
+    fn draw(
+        &self,
+        ripple_phase: f64,
+        target: Option<&Rect>,
+        highlight_opacity: f64,
+    ) -> Result<(), AdapterError> {
+        self.paint(ripple_phase, target, highlight_opacity, 1.0)
     }
 
     /// One frame, dimmed to `overlay_opacity`.
     ///
-    /// Both fades happen here and after everything is drawn, which is
-    /// forced rather than chosen: GDI writes the label's text with no
-    /// alpha, so it may only be drawn where the card beneath it is
-    /// already opaque. Fading the card before the text went on would put
-    /// the glyphs onto transparency and then force them back to full
-    /// strength - a card that appears to arrive complete while only its
-    /// border catches up.
+    /// Fade after drawing the text because GDI writes text without alpha.
     ///
-    /// The two monitor lookups are not one lookup done twice. The first
-    /// asks which screen the cursor is on, to lay the card out inside its
-    /// work area; the second asks which screen the composed surface's own
-    /// corner falls on, to place the window in that monitor's physical
-    /// pixels. A card near an edge routinely straddles the two.
+    /// The position and target bounds are already in physical pixels. Only
+    /// the cursor's chrome is scaled for the monitor under its tip.
     fn paint(
         &self,
         ripple_phase: f64,
         target: Option<&Rect>,
         highlight_opacity: f64,
         overlay_opacity: f64,
-    ) {
-        let screen = monitors::monitor_for_point(self.topology.monitors(), &self.presentation.pose)
-            .map(|monitor| monitor.work_area)
-            .unwrap_or(Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 1920.0,
-                height: 1080.0,
-            });
-        let shown = self.presentation.shown_style();
+    ) -> Result<(), AdapterError> {
+        let monitor =
+            monitors::monitor_for_point(self.topology.monitors(), &self.presentation.pose);
+        let screen = monitor.map(|monitor| monitor.work_area).unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        });
+        let shown = self
+            .presentation
+            .shown_style(monitor.map_or(1.0, |monitor| monitor.scale));
         let frame = render::Frame {
             tip: self.presentation.pose.clone(),
             style: &shown,
             ripple_phase,
             target: target.cloned(),
             highlight_opacity,
-            label: self.presentation.label_pill(),
+            label: self.presentation.label_pill(shown.size()),
             screen,
         };
         let mut composed = render::compose(&frame);
@@ -273,15 +278,14 @@ impl SurfaceHost {
                 &text_rect,
                 label,
                 [1.0, 1.0, 1.0],
-                LABEL_FONT_POINTS * self.presentation.style.size(),
+                LABEL_FONT_POINTS * shown.size(),
             );
         }
         if let Some(card) = composed.card_rect {
             fade::dim_region(&mut composed.surface, &card, self.card_opacity());
         }
         fade::dim_surface(&mut composed.surface, overlay_opacity);
-        self.window.raise();
-        let _ = self.window.present(
+        let result = self.window.present(
             composed.origin.x as i32,
             composed.origin.y as i32,
             composed.surface.width,
@@ -289,10 +293,11 @@ impl SurfaceHost {
             &composed.surface.pixels,
         );
         self.window.pump();
+        result
     }
 
     fn clear(&self) {
-        let _ = self.window.present(0, 0, 1, 1, &[0u32]);
+        self.window.hide();
         self.window.pump();
         self.caret.hide();
     }
@@ -300,21 +305,15 @@ impl SurfaceHost {
     /// One quiet tick: pump the window, re-read the display topology, and
     /// fade the overlay away once it has been quiet long enough.
     ///
-    /// The monitors and refresh rate are sampled when the renderer starts
-    /// and would otherwise stay fixed for its whole life, so a resolution
-    /// change, a scale change or a monitor plugged in mid-session would
-    /// leave every later frame mapped against a desktop that no longer
-    /// exists. Re-probing on the idle tick is how that is noticed: the
-    /// window procedure is a plain `DefWindowProcW` and handles no
-    /// topology message, and a message handler could not reach this state
-    /// anyway without sharing it across the callback boundary.
+    /// Polling keeps display changes current without sharing state with the
+    /// window procedure.
     pub(crate) fn rest(&mut self) {
         self.window.pump();
         self.topology.reprobe();
         if self.rest.resting {
             return;
         }
-        if self.rest.quiet_since.elapsed() < Duration::from_millis(CURSOR_IDLE_REST_MS) {
+        if self.rest.quiet_since.elapsed() < self.idle_rest_delay {
             return;
         }
         self.fade_away();
@@ -331,7 +330,7 @@ impl SurfaceHost {
         let steps = REST_FADE_STEPS;
         let interval = Duration::from_millis(CURSOR_REST_FADE_MS / u64::from(steps));
         for step in 1..=steps {
-            self.paint(0.0, None, 0.0, schedule::rest_fade(step, steps));
+            let _ = self.paint(0.0, None, 0.0, schedule::rest_fade(step, steps));
             std::thread::sleep(interval);
         }
         self.clear();
@@ -376,12 +375,14 @@ impl SurfaceHost {
     fn play_reveal(&mut self, target: Option<&Rect>, interrupt: &dyn Fn() -> bool) {
         let frames = animation::Frames::at(self.topology.refresh_hz());
         while self.presentation.reveal.is_playing() {
-            self.draw(0.0, target, 0.0);
+            if self.draw(0.0, target, 0.0).is_err() {
+                return;
+            }
             if frames.wait_unless(interrupt) == animation::Continuation::Stop {
                 return;
             }
         }
-        self.draw(0.0, target, 0.0);
+        let _ = self.draw(0.0, target, 0.0);
     }
 
     /// How far through its reveal the card is, or fully present when it

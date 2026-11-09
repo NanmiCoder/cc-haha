@@ -32,7 +32,12 @@ type MemoryStore = {
 
   fetchProjects: (cwd?: string) => Promise<void>
   selectProject: (projectId: string) => void
-  fetchFiles: (projectId: string) => Promise<void>
+  /**
+   * Reload the file list. With `reloadSelectedFile`, a file that is still listed is
+   * read again too, so a body changed on disk (by a session, the CLI or an editor)
+   * replaces the copy loaded earlier instead of staying on screen.
+   */
+  fetchFiles: (projectId: string, options?: { reloadSelectedFile?: boolean }) => Promise<void>
   openFile: (projectId: string, path: string) => Promise<boolean>
   updateDraft: (content: string) => void
   saveFile: () => Promise<boolean>
@@ -106,8 +111,11 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
     })
   },
 
-  fetchFiles: async (projectId) => {
+  fetchFiles: async (projectId, options) => {
     const request = ++filesRequest
+    const initial = get()
+    const initialFileRequest = fileRequest
+    const initialSaveRequest = saveRequest
     set({ isLoadingFiles: true, error: null })
     try {
       const { files } = await memoryApi.listFiles(projectId)
@@ -121,6 +129,15 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
           isLoadingFiles: false,
         }
       })
+      const current = get()
+      if (
+        options?.reloadSelectedFile && initial.selectedFile &&
+        !initial.isLoadingFile && !initial.isSaving && !current.isSaving &&
+        fileRequest === initialFileRequest && saveRequest === initialSaveRequest &&
+        current.selectedFile === initial.selectedFile && current.draftContent === initial.draftContent
+      ) {
+        await current.openFile(projectId, initial.selectedFile.path)
+      }
     } catch (err) {
       if (request !== filesRequest || get().selectedProjectId !== projectId) return
       set({ error: (err as Error).message, isLoadingFiles: false })
@@ -129,6 +146,8 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
 
   openFile: async (projectId, path) => {
     const request = ++fileRequest
+    const initial = get()
+    const initialSaveRequest = saveRequest
     set({ isLoadingFile: true, error: null })
     try {
       const { file } = await memoryApi.readFile(projectId, path)
@@ -136,6 +155,19 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
         request !== fileRequest ||
         get().selectedProjectId !== projectId
       ) {
+        return false
+      }
+      // A reload may finish after the user has edited or saved the open file.
+      // Keep that newer state; the discard confirmation only covered the draft
+      // that existed when the refresh began.
+      const current = get()
+      if (
+        initial.selectedFile?.path === path && (
+          current.selectedFile !== initial.selectedFile || current.draftContent !== initial.draftContent ||
+          current.isSaving || saveRequest !== initialSaveRequest
+        )
+      ) {
+        set({ isLoadingFile: false })
         return false
       }
       set({

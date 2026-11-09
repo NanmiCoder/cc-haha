@@ -106,6 +106,24 @@ describe('OpenAI Codex model catalog', () => {
     ])
   })
 
+  test('reads the highest window a model allows, and keeps the bundled one when the account omits it', async () => {
+    const models = await fetchOpenAICodexModelCatalog(async () => Response.json({
+      models: [
+        { slug: 'gpt-next-account-only', visibility: 'list', context_window: 400_000, max_context_window: 900_000, effective_context_window_percent: 90 },
+        { slug: 'gpt-6-astra', visibility: 'list', context_window: 272_000 },
+        { slug: 'gpt-unlisted-limit', visibility: 'list', context_window: 272_000 },
+      ],
+    }))
+    const byValue = Object.fromEntries(models.map(model => [model.value, model]))
+
+    // The account's own number, scaled by the same percent as the default window.
+    expect(byValue['gpt-next-account-only']!.maxContextWindow).toBe(810_000)
+    // Omitted by the account: the bundled GPT-6 limit (872,000 x 95%).
+    expect(byValue['gpt-6-astra']!.maxContextWindow).toBe(828_400)
+    // Omitted and unknown to us: no limit is claimed.
+    expect(byValue['gpt-unlisted-limit']!.maxContextWindow).toBeUndefined()
+  })
+
   // Live behavior: the endpoint lists a model only from its rollout gate, which
   // for GPT-6.1 is client_version 0.159.0 though the entries report 0.153.0.
   const gatedModelsEndpoint = (gates: Record<string, string>, seen: { versions: string[]; userAgents: (string | null)[] }) =>

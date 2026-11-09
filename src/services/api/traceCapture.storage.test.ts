@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   clearTraceCaptureStateForTests,
+  createTraceBodySnapshot,
   drainTraceCaptureForTests,
   getTraceStorageDir,
   readTraceCaptureSettings,
   readTraceCaptureSettingsSync,
   setTraceAppendBeforeWriteHookForTests,
+  TRACE_CAPTURE_CHAR_LIMIT,
   traceCaptureService,
   updateTraceCaptureSettings,
 } from './traceCapture.js'
@@ -48,6 +50,49 @@ function record(id: string, sessionId = 'shared-session') {
     response: { status: 200, body: { ok: true } },
   })
 }
+
+test.each(['anthropic', 'proxy'] as const)('retains request evidence after a large screenshot (%s)', async source => {
+  const data = 'AQID'.repeat(TRACE_CAPTURE_CHAR_LIMIT / 4 + 1)
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }
+  const request = {
+    model: 'fixture-model',
+    messages: [{ role: 'user', content: [{
+      type: 'tool_result', tool_use_id: 'read-1', content: [image, { type: 'text', text: 'Image captured' }],
+    }] }],
+    system: [{ type: 'text', text: 'Use the recorded tool inventory.' }],
+    tools: [{ name: 'Read', description: 'Read a file' }],
+    api_key: 'fixture-secret-value',
+  }
+
+  const callIdentity = { id: 'image-request', sessionId: 'fixture', source }
+  const pending = await traceCaptureService.recordCall({
+    ...callIdentity,
+    status: 'pending',
+    request: { bodySnapshot: createTraceBodySnapshot({ pending: true }) },
+  })
+  expect(JSON.parse(pending!.request.body.preview)).toEqual({ pending: true })
+  await traceCaptureService.recordCall({
+    ...callIdentity,
+    request: { body: source === 'anthropic' ? JSON.stringify(request) : { anthropic: request } },
+    response: { status: 200, body: { ok: true } },
+  })
+  const call = await traceCaptureService.getSessionTraceCall('fixture', 'image-request')
+  const expected = {
+    ...request,
+    messages: [{ role: 'user', content: [{
+      type: 'tool_result', tool_use_id: 'read-1', content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', encodedChars: data.length } },
+        { type: 'text', text: 'Image captured' },
+      ],
+    }] }],
+    api_key: '[redacted]',
+  }
+  expect(call?.status).toBe('ok')
+  expect(call?.request.body.truncated).toBe(true)
+  expect(call?.request.body.captureOmitted).toBeUndefined()
+  expect(JSON.parse(call!.request.body.preview)).toEqual(source === 'anthropic' ? expected : { anthropic: expected })
+  expect(call?.request.semantic?.request).toEqual(expected)
+})
 
 test('preserves legacy settings and the default JSONL and SQLite locations', async () => {
   const settingsFile = join(config, 'cc-haha', 'settings.json')

@@ -131,11 +131,17 @@ jobs:
           fi
           echo "Change policy passed"
 
+  # Sharded for wall time, not selection: the shards together run every desktop
+  # check (shard 1 also lints, the last also builds). Unsharded it took ~8 minutes.
   desktop-checks:
     name: desktop-checks
     needs: scope-plan
     if: needs.scope-plan.outputs.desktop_checks == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -161,7 +167,7 @@ jobs:
         working-directory: mobile
         run: bun install --frozen-lockfile
       - name: Run desktop checks
-        run: bun run check:desktop
+        run: bun run check:desktop --shard=${{ matrix.shard }}/2
 
   mobile-checks:
     name: mobile-checks
@@ -186,11 +192,17 @@ jobs:
       - name: Run offline mobile checks
         run: bun run check:mobile
 
+  # Sharded for wall time, not selection: every root test file runs in exactly one
+  # shard. One runner took ~9 minutes for ~770 per-file test processes.
   server-checks:
     name: server-checks
     needs: scope-plan
     if: needs.scope-plan.outputs.server_checks == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,7 +221,7 @@ jobs:
         working-directory: adapters
         run: bun install --frozen-lockfile
       - name: Run root runtime checks
-        run: bun run check:server
+        run: bun run check:server --shard=${{ matrix.shard }}/3
 
   provider-contract-checks:
     name: provider-contract-checks
@@ -416,9 +428,11 @@ jobs:
       - name: Run docs checks
         run: npm --prefix site ci && npm --prefix site run build && npm --prefix site run check
 
-  # Advisory: reported on the pull request, never a merge blocker. None of the agent
-  # projects this gate was modelled on block on coverage, and a 16-minute job that
-  # fails for reasons unrelated to the diff trains everyone to ignore the gate.
+  # Advisory: reported on the pull request as its own check, never a merge blocker.
+  # None of the agent projects this gate was modelled on block on coverage, and a
+  # job that fails for reasons unrelated to the diff trains everyone to ignore the
+  # gate. It is also kept out of pr-quality-gate's needs: it takes ~25 minutes, and
+  # the required status used to wait for a lane that never decided it.
   coverage-checks:
     name: coverage-checks
     needs: scope-plan
@@ -478,7 +492,6 @@ jobs:
       - macos-swift-checks
       - persistence-checks
       - docs-checks
-      - coverage-checks
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -494,18 +507,6 @@ jobs:
               failures=$((failures + 1))
             else
               echo "$name: success"
-            fi
-          }
-
-          # Advisory lanes report their result without failing the gate.
-          advise_selected() {
-            local name="$1"
-            local expected="$2"
-            local result="$3"
-            if [ "$expected" = "true" ] && [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
-              echo "::warning::$name (advisory) ended with result: $result"
-            else
-              echo "$name (advisory): $result"
             fi
           }
 
@@ -537,7 +538,6 @@ jobs:
           require_selected "macos-swift-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.macos-swift-checks.result }}"
           require_selected "persistence-checks" "${{ needs.scope-plan.outputs.persistence_checks }}" "${{ needs.persistence-checks.result }}"
           require_selected "docs-checks" "${{ needs.scope-plan.outputs.docs_checks }}" "${{ needs.docs-checks.result }}"
-          advise_selected "coverage-checks" "${{ needs.scope-plan.outputs.coverage_checks }}" "${{ needs.coverage-checks.result }}"
 
           if [ "$failures" -gt 0 ]; then
             exit 1

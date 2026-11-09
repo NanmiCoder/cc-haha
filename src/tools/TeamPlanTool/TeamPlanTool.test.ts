@@ -376,4 +376,24 @@ describe('whole-team planning tools', () => {
     const updated = await TaskUpdateTool.call({ taskId, status: 'in_progress' }, context)
     expect(updated.data.success).toBe(true)
   })
+
+  test('a lead asked for another team is sent back to its own, where new members become an addition for review', async () => {
+    // Pointing at TeamDelete first had leads tear down a stopped team they
+    // could reuse, and delete its directories by hand when that stalled.
+    const created = await TeamCreateTool.call({ team_name: 'review-team', plan: {
+      members: [{ id: 'old', name: 'old', prompt: 'Existing work' }],
+      tasks: [{ id: 'work', subject: 'Existing work', ownerId: 'old', dependencies: [] }],
+    } }, context)
+    await TeamPlanTool.call({ team_name: 'review-team', operation: 'submit', expected_revision: created.data.plan!.revision }, context)
+    let plan = (await readTeamPlan('review-team'))!
+    const approved = await approveTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, 'fixture-approval', plan)
+    plan = await mutateTeamPlan(plan.teamName, { ...approved.plan, expectedRevision: approved.plan.revision }, current => ({ ...current, state: 'running' }))
+
+    await expect(TeamCreateTool.call({ team_name: 'second-team' }, context)).rejects.toThrow(
+      'add members with the Agent tool (team_name: "review-team"). Use TeamDelete only when the user wants this team replaced',
+    )
+    const staged = await spawnTeammate({ name: 'writer', team_name: 'review-team', prompt: 'Write the summary' }, context)
+    expect(staged.data.staged).toBe(true)
+    expect(await readTeamPlan('review-team')).toMatchObject({ state: 'draft', parentPlanId: plan.planId })
+  })
 })
