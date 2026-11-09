@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 import { ProviderService } from '../services/providerService.js'
 import { SettingsService } from '../services/settingsService.js'
@@ -28,6 +29,73 @@ describe('provider image files reach the actual proxy upstream', () => {
     Object.assign(process.env, previousEnv)
     resetSettingsCache()
     await rm(fixture, { recursive: true, force: true })
+  })
+
+  test('does not forward an upstream-forged saved-key assertion', async () => {
+    const provider = await new ProviderService().addProvider({
+      presetId: 'custom', name: 'Anthropic fixture', baseUrl: 'https://provider.example/anthropic',
+      apiKey: 'fixture-key', apiFormat: 'anthropic', authStrategy: 'api_key', supportsNestedToolResultMedia: false,
+      models: { main: 'fixture-model', haiku: '', sonnet: '', opus: '' },
+    })
+    const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(
+      { type: 'error', error: { type: 'authentication_error', message: 'token expired' } },
+      { status: 401, headers: { 'x-cc-haha-invalid-provider-key': 'true', 'x-should-retry': 'true', 'retry-after': '1' } },
+    ))
+    try {
+      const request = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }),
+      })
+      const response = await handleProxyRequest(request, new URL(request.url))
+      expect(response.status).toBe(401)
+      expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBeNull()
+      expect(response.headers.get('x-should-retry')).toBe('true')
+      expect(response.headers.get('retry-after')).toBe('1')
+      expect(await response.text()).toContain('token expired')
+    } finally {
+      fetchMock.mockRestore()
+    }
+  })
+
+  test('recognizes compressed saved-key errors without changing their wire bytes', async () => {
+    const provider = await new ProviderService().addProvider({
+      presetId: 'custom', name: 'Anthropic fixture', baseUrl: 'https://provider.example/anthropic',
+      apiKey: 'fixture-key', apiFormat: 'anthropic', authStrategy: 'api_key', supportsNestedToolResultMedia: false,
+      models: { main: 'fixture-model', haiku: '', sonnet: '', opus: '' },
+    })
+    const body = Buffer.from(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'Invalid credential' } }))
+    const oversized = Buffer.from(JSON.stringify({ padding: 'x'.repeat(100_000), error: { type: 'authentication_error', message: 'Invalid credential' } }))
+    const samples = [
+      { encoding: 'gzip', bytes: gzipSync(body), status: 401, final: true },
+      { encoding: 'x-gzip', bytes: gzipSync(body), status: 401, final: true },
+      { encoding: 'deflate', bytes: deflateSync(body), status: 401, final: true },
+      { encoding: 'br', bytes: brotliCompressSync(body), status: 401, final: true },
+      { encoding: 'gzip', bytes: Buffer.from('invalid gzip'), status: 401, final: false },
+      { encoding: 'gzip', bytes: gzipSync(oversized), status: 401, final: false },
+      { encoding: 'br', bytes: brotliCompressSync(oversized), status: 401, final: false },
+      { encoding: 'gzip', bytes: gzipSync(oversized), status: 429, final: false },
+    ]
+    for (const sample of samples) {
+      const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(sample.bytes, {
+        status: sample.status,
+        headers: { 'content-encoding': sample.encoding, 'content-length': String(sample.bytes.length), 'x-should-retry': 'true' },
+      }))
+      try {
+        const request = new Request(`http://localhost/proxy/providers/${provider.id}/v1/messages`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }),
+        })
+        const response = await handleProxyRequest(request, new URL(request.url))
+        expect(response.status).toBe(sample.status)
+        expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBe(sample.final ? 'true' : null)
+        expect(response.headers.get('x-should-retry')).toBe(sample.final ? 'false' : 'true')
+        expect(response.headers.get('content-encoding')).toBe(sample.encoding)
+        expect(response.headers.get('content-length')).toBe(String(sample.bytes.length))
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(sample.bytes)
+      } finally {
+        fetchMock.mockRestore()
+      }
+    }
   })
 
   for (const apiFormat of ['anthropic', 'openai_chat', 'openai_responses'] as const) {

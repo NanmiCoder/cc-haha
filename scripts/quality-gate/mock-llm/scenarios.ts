@@ -70,6 +70,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
     title: 'An OpenAI-compatible monthly quota error fails once and switching providers recovers the session',
   },
   {
+    id: 'mock-provider-invalid-key',
+    title: 'An explicitly invalid saved provider key fails once and switching providers recovers the session',
+  },
+  {
     id: 'mock-prompt-too-long-compacts',
     title: 'A history the provider rejects as too long is compacted and retried instead of ending the turn',
   },
@@ -957,6 +961,63 @@ export function createMockOnlyRunners(
         if (!agentRequests.some((request) => request.outcome === 'completed')) throw new Error('the compacted retry never reached the relay')
       } finally {
         socket.close()
+      }
+    },
+
+    async 'mock-provider-invalid-key'(ctx) {
+      let agentRequests = 0
+      const upstream = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        async fetch(request) {
+          const body = await request.json() as { tools?: unknown[] }
+          if ((body.tools ?? []).length > 0) agentRequests++
+          return Response.json({ error: { type: 'authentication_error', message: 'Invalid credential' } }, { status: 401 })
+        },
+      })
+      let providerId: string | undefined
+      let socket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      try {
+        const response = await fetch(`${ctx.baseUrl}/api/providers`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presetId: 'opencode-go', name: 'Invalid key fixture', apiKey: 'fixture-key',
+            baseUrl: `http://127.0.0.1:${upstream.port}`, apiFormat: 'openai_chat',
+            models: { main: 'deepseek-v4.1-flash', haiku: 'deepseek-v4.1-flash', sonnet: 'deepseek-v4.1-flash', opus: 'deepseek-v4.1-flash' },
+          }),
+        })
+        if (!response.ok) throw new Error(`Creating invalid key provider failed: ${response.status}`)
+        providerId = ((await response.json()) as { provider: { id: string } }).provider.id
+        socket = await ctx.openSocket(await ctx.createSession())
+        socket.send({ type: 'set_runtime_config', providerId, modelId: 'deepseek-v4.1-flash[1m]' })
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: 'Please answer the invalid key fixture.' })
+        const failure = await socket.waitFor(
+          message => message.type === 'error' || message.type === 'api_retry',
+          ctx.stepTimeoutMs, 'invalid key error without a retry', start,
+        )
+        if (failure.type === 'api_retry') throw new Error('invalid saved provider key was retried')
+        if (failure.code !== 'authentication_failed' || !String(failure.message ?? '').includes('Invalid credential')) {
+          throw new Error(`invalid key lost authentication classification or upstream detail: ${JSON.stringify(failure)}`)
+        }
+        await socket.waitFor(
+          message => message.type === 'message_complete' || (message.type === 'session_state_changed' && message.state === 'idle'),
+          ctx.stepTimeoutMs, 'invalid key turn to settle', start,
+        )
+        if (socket.messages.slice(start).some(message => message.type === 'api_retry')) throw new Error('invalid key turn emitted a retry')
+        if (agentRequests !== 1) throw new Error(`invalid key reached the upstream ${agentRequests} times`)
+
+        const next = socket.messages.length
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'reply after switching providers', next)
+        const recovered = socket.messages.slice(next)
+        if (recovered.some(message => message.type === 'error') || !streamedText(recovered).trim()) {
+          throw new Error('the same session did not recover after switching providers')
+        }
+      } finally {
+        socket?.close()
+        if (providerId) await fetch(`${ctx.baseUrl}/api/providers/${providerId}`, { method: 'DELETE' })
+        await upstream.stop(true)
       }
     },
 

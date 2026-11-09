@@ -4643,13 +4643,14 @@ describe('OpenCode Go preset request contract', () => {
     return preset!
   }
 
-  async function createProvider(overrides?: { presetId?: string; apiFormat?: string }) {
+  async function createProvider(overrides?: { presetId?: string; apiFormat?: string; authStrategy?: string }) {
     const preset = await loadPreset()
     const { req, url, segments } = makeRequest('POST', '/api/providers', {
       presetId: overrides?.presetId ?? preset.id,
       name: preset.name,
       baseUrl: preset.baseUrl,
       apiFormat: overrides?.apiFormat ?? preset.apiFormat,
+      ...(overrides?.authStrategy && { authStrategy: overrides.authStrategy }),
       apiKey,
       models: preset.defaultModels,
     })
@@ -4719,7 +4720,71 @@ describe('OpenCode Go preset request contract', () => {
     return handleProxyRequest(req, new URL(req.url))
   }
 
+  test('marks invalid OpenCode Go keys across its model protocol routes', async () => {
+    const { provider } = await createProvider()
+    const originalFetch = globalThis.fetch
+    const upstream = { error: { type: 'authentication_error', message: 'Invalid credential' } }
+    const paths: string[] = []
+    try {
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        paths.push(new URL(String(input)).pathname)
+        return Response.json(upstream, { status: 401 })
+      }) as typeof fetch
+      for (const model of ['deepseek-v4.1-flash[1m]', 'gpt-fixture', 'minimax-fixture', 'gemini-4-argon[1m]']) {
+        const response = await proxy(provider.id, { model, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(response.status).toBe(401)
+        expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBe('true')
+        expect(response.headers.get('x-should-retry')).toBe('false')
+        expect(await response.text()).toContain('Invalid credential')
+      }
+      expect(paths[0]).toEndWith('/chat/completions')
+      expect(paths[1]).toEndWith('/responses')
+      expect(paths[2]).toEndWith('/messages')
+      expect(paths[3]).toContain('/models/gemini-4-argon:generateContent')
+      const tokenProvider = (await createProvider({ authStrategy: 'auth_token' })).provider
+      for (const model of ['minimax-fixture', 'gemini-4-argon[1m]']) {
+        const response = await proxy(tokenProvider.id, { model, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBeNull()
+        expect(response.headers.get('x-should-retry')).toBeNull()
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+    test(`${apiFormat} marks only explicit invalid saved keys as final`, async () => {
+      const { provider } = await createProvider({ presetId: 'custom', apiFormat, authStrategy: 'api_key' })
+      const originalFetch = globalThis.fetch
+      try {
+        for (const sample of [
+          { status: 401, body: { error: { type: 'authentication_error', message: 'Invalid credential' } }, final: true },
+          { status: 401, body: { error: { code: 'invalid_api_key', message: 'Check your account' } }, final: true },
+          { status: 401, body: { padding: 'x'.repeat(65_000), error: { type: 'authentication_error', message: 'Invalid credential' } }, final: true },
+          { status: 401, body: { error: { message: 'x'.repeat(65_000), code: 'invalid_api_key' } }, final: true },
+          { status: 401, body: { error: { type: 'authentication_error', message: 'Authentication service unavailable' } }, final: false },
+          { status: 401, body: { error: { code: 'invalid_token', message: 'Invalid bearer token' } }, final: false },
+          { status: 401, body: { error: { type: 'authentication_error', code: 'invalid_token', message: 'Invalid credential' } }, final: false },
+          { status: 429, body: { error: { type: 'authentication_error', message: 'Invalid credential' } }, final: false },
+        ]) {
+          globalThis.fetch = (async () => Response.json(sample.body, { status: sample.status })) as typeof fetch
+          const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+          const body = await response.json() as { error: { message: string } }
+          expect(response.status).toBe(sample.status)
+          expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBe(sample.final ? 'true' : null)
+          expect(response.headers.get('x-should-retry')).toBe(sample.final ? 'false' : null)
+          expect(body.error.message).toContain(JSON.stringify(sample.body))
+        }
+        const tokenProvider = (await createProvider({ presetId: 'custom', apiFormat, authStrategy: 'auth_token' })).provider
+        globalThis.fetch = (async () => Response.json({ error: { type: 'authentication_error', message: 'Invalid credential' } }, { status: 401 })) as typeof fetch
+        const tokenResponse = await proxy(tokenProvider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(tokenResponse.headers.get('x-cc-haha-invalid-provider-key')).toBeNull()
+        expect(tokenResponse.headers.get('x-should-retry')).toBeNull()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
     test(`${apiFormat} keeps long explicit quota errors intact for the CLI`, async () => {
       const { provider } = await createProvider({ presetId: 'custom', apiFormat })
       const originalFetch = globalThis.fetch
