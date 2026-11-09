@@ -10,6 +10,7 @@
  */
 
 import { getOpenAIPolicyError } from '../../services/openaiAuth/policyError.js'
+import { inspectProviderUsageError } from '../../shared/providerUsageLimit.js'
 import { buildOpenaiEndpoint } from './openaiEndpoint.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
 import { buildProviderMediaFetch } from '../../services/api/providerMedia/fetch.js'
@@ -64,6 +65,21 @@ import { resolveModelApiBaseUrl, resolveModelApiRule } from '../../shared/modelA
 import { applyUpstreamHeaders, resolveUpstreamHeaders } from './upstreamHeaders.js'
 
 const providerService = new ProviderService()
+
+function formatUpstreamErrorMessage(status: number, text: string): string {
+  let detail = text.slice(0, 500)
+  if (status === 401 || status === 403 || status === 429) {
+    try {
+      const classification = inspectProviderUsageError(JSON.parse(text))
+      // A quota or credential code can occur after the message. Preserve the
+      // envelope so the CLI sees both it and the provider's own words.
+      if (text.length <= 64_000 || classification.usageLimit || classification.invalidCredential) detail = text
+    } catch {
+      // Unstructured upstream failures retain the bounded diagnostic text.
+    }
+  }
+  return `Upstream returned HTTP ${status}: ${detail}`
+}
 
 type ProxyFetchOptions = ReturnType<typeof getProxyFetchOptions>
 // `decompress` is a Bun fetch option absent from the DOM RequestInit type.
@@ -892,7 +908,7 @@ async function handleOpenaiChat(
       type: 'error',
       error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
-        message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
+        message: formatUpstreamErrorMessage(upstream.status, errText),
       },
     }
     if (traceContext) {
@@ -1081,7 +1097,7 @@ async function handleOpenaiResponses(
       type: 'error',
       error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
-        message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
+        message: formatUpstreamErrorMessage(upstream.status, errText),
       },
     }
     if (traceContext) {

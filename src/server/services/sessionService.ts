@@ -268,6 +268,9 @@ export type MessageEntry = {
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown
+  isApiErrorMessage?: boolean
+  error?: string
+  businessErrorCode?: string
   bodyTruncated?: boolean
   toolUseResult?: unknown
   timestamp: string
@@ -2236,6 +2239,9 @@ export class SessionService {
       id: entry.uuid || crypto.randomUUID(),
       type,
       content,
+      ...(type === 'assistant' && entry.isApiErrorMessage === true ? { isApiErrorMessage: true } : {}),
+      ...(type === 'assistant' && typeof entry.error === 'string' ? { error: entry.error } : {}),
+      ...(type === 'assistant' && typeof entry.businessErrorCode === 'string' ? { businessErrorCode: entry.businessErrorCode } : {}),
       ...(sessionReferences ? { sessionReferences } : {}),
       ...(collaboration ? { collaboration } : {}),
       ...(scheduledTask ? { scheduledTask } : {}),
