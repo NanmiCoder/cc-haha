@@ -4202,6 +4202,7 @@ export const jp: Record<TranslationKey, string> = {
   'app.launching': 'ローカルワークスペースを起動中...',
 
   // ─── Error Codes ──────────────────────────────────────
+  'error.billing_error': 'プロバイダーの利用枠または残高が不足しています。請求情報を確認し、利用枠の回復を待つか、別のプロバイダーに切り替えてください。',
   'error.CLI_NOT_RUNNING': 'CLI プロセスが実行されていません。セッションが終了したか、プロセスがクラッシュした可能性があります。',
   'error.CLI_START_FAILED': 'CLI プロセスの起動に失敗しました。',
   'error.CLI_AUTH_REQUIRED': '認証が必要です。ログインしてください。',

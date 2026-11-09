@@ -4204,6 +4204,7 @@ export const kr: Record<TranslationKey, string> = {
   'app.launching': '로컬 작업 공간을 시작하는 중...',
 
   // ─── Error Codes ──────────────────────────────────────
+  'error.billing_error': '공급자의 사용 한도 또는 잔액이 소진되었습니다. 결제 정보를 확인하거나 한도가 갱신될 때까지 기다리거나 다른 공급자로 전환하세요.',
   'error.CLI_NOT_RUNNING': 'CLI 프로세스가 실행되고 있지 않습니다. 세션이 종료되었거나 프로세스가 충돌했을 수 있습니다.',
   'error.CLI_START_FAILED': 'CLI 프로세스를 시작하지 못했습니다.',
   'error.CLI_AUTH_REQUIRED': '인증이 필요합니다. 로그인하세요.',
