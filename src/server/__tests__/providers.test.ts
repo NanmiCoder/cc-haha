@@ -4434,6 +4434,27 @@ describe('ChatGPT Official context window overrides', () => {
     expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({})
   })
 
+  test('keeps saved windows when an API-key provider is added and removed', async () => {
+    const svc = new ProviderService()
+    const response = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    expect(response.status).toBe(200)
+
+    const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat' }))
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+
+    await svc.deleteProvider(provider.id)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+    expect(await new ProviderService().getOfficialProviderContextWindows('openai-official'))
+      .toEqual({ 'gpt-6-astra': 600_000 })
+  })
+
   test('a window above the model\'s Codex limit is rejected and nothing is saved', async () => {
     // 872,000 x 95%: the most Codex lets a GPT-6 model's window be raised to.
     const accepted = await putModels('openai-official', {
