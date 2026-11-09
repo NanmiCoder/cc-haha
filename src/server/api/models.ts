@@ -79,6 +79,8 @@ type ApiModelInfo = {
   name: string
   description: string
   context: string
+  /** Highest window a user may set for this model, when the catalog states one. */
+  maxContext?: string
   defaultReasoningEffort?: string
   supportedReasoningEfforts?: string[]
 }
@@ -160,6 +162,7 @@ function buildOpenAIModelList(catalog: OpenAIModelCatalogEntry[]): ApiModelInfo[
     name: model.label,
     description: model.description,
     context: model.contextWindow ? String(model.contextWindow) : '',
+    ...(model.maxContextWindow ? { maxContext: String(model.maxContextWindow) } : {}),
     defaultReasoningEffort: model.defaultReasoningEffort,
     supportedReasoningEfforts: model.supportedReasoningEfforts,
   }))
