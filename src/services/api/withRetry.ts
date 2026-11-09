@@ -35,7 +35,8 @@ import {
   triggerFastModeCooldown,
 } from '../../utils/fastMode.js'
 import { isNonCustomOpusModel } from '../../utils/model/model.js'
-import { readProviderEnv } from '../../utils/model/providerEnvScope.js'
+import { getRequestProviderRoute, readProviderEnv } from '../../utils/model/providerEnvScope.js'
+import { INVALID_PROVIDER_KEY_HEADER } from '../../shared/providerCredentialError.js'
 import { disableKeepAlive } from '../../utils/proxy.js'
 import { sleep } from '../../utils/sleep.js'
 import type { ThinkingConfig } from '../../utils/thinking.js'
@@ -49,6 +50,7 @@ import {
 } from '../rateLimitMocking.js'
 import {
   isContextOverflowErrorText,
+  isProviderUsageLimitError,
   REPEATED_529_ERROR_MESSAGE,
 } from './errors.js'
 import { extractConnectionErrorDetails } from './errorUtils.js'
@@ -58,6 +60,22 @@ import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 import { isOpenAIPolicyError } from '../openaiAuth/policyError.js'
 
 const abortError = () => new APIUserAbortError()
+
+function isInvalidSavedProviderKeyError(error: unknown): boolean {
+  if (!(error instanceof APIError) || error.status !== 401 ||
+    error.headers?.get(INVALID_PROVIDER_KEY_HEADER) !== 'true' ||
+    readProviderEnv('ANTHROPIC_API_KEY') !== 'proxy-managed' ||
+    (!getRequestProviderRoute() && !isEnvTruthy(process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST))) return false
+  try {
+    const url = new URL(readProviderEnv('ANTHROPIC_BASE_URL') ?? '')
+    const pathname = url.pathname.replace(/\/+$/, '') || '/'
+    return url.protocol === 'http:' && url.hostname === '127.0.0.1' &&
+      !url.username && !url.password && !url.search && !url.hash &&
+      (pathname === '/proxy' || /^\/proxy\/providers\/[^/]+$/.test(pathname))
+  } catch {
+    return false
+  }
+}
 
 const DEFAULT_MAX_RETRIES = 10
 const FLOOR_OUTPUT_TOKENS = 3000
@@ -545,9 +563,9 @@ export async function* withRetry<T>(
 
       return await operation(client, attempt, retryContext)
     } catch (error) {
-      // Policy rejection is final even when a gateway labels it 401/429/5xx.
-      // Stop before auth refresh, fast-mode changes or persistent/model fallback.
-      if (isOpenAIPolicyError(error)) {
+      // Policy, exhausted plan/balance and explicitly invalid saved keys are
+      // final. Stop before auth refresh, fast-mode changes or model fallback.
+      if (isOpenAIPolicyError(error) || isProviderUsageLimitError(error) || isInvalidSavedProviderKeyError(error)) {
         throw new CannotRetryError(error, retryContext)
       }
       lastError = error

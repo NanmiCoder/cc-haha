@@ -1,5 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import { diagnosticsService } from '../services/diagnosticsService.js'
+import * as installedApps from '../api/macInstalledApps.js'
+import * as appIcons from '../services/macAppIcon.js'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -681,6 +683,20 @@ describe('parsePermissionSnapshot', () => {
  * itself, and there is deliberately no parameter that names a file.
  */
 describe('app icon endpoint input', () => {
+  let restoreApps: (() => void) | undefined
+  beforeEach(() => {
+    // Security assertions must not depend on the host's installed applications
+    // or the time required to spawn plutil for every bundle on the machine.
+    const scan = spyOn(installedApps, 'listInstalledMacApps').mockResolvedValue([
+      { bundleId: 'com.example.App', displayName: 'Fixture App', path: '/Applications/App.app' },
+    ])
+    restoreApps = () => scan.mockRestore()
+  })
+  afterEach(() => {
+    restoreApps?.()
+    restoreApps = undefined
+  })
+
   async function requestIcon(query: string): Promise<Response> {
     const { handleComputerUseApi, __resetInstalledAppPathCacheForTests } =
       await importComputerUseApi()
@@ -702,18 +718,23 @@ describe('app icon endpoint input', () => {
   it('refuses paths dressed up as bundle ids', async () => {
     // None of these resolve through the installed-app list, so none of them can
     // reach the filesystem — the point is that a path is not a way in.
-    for (const attempt of [
-      '/Applications/Safari.app',
-      '../../../etc/passwd',
-      '/etc/passwd',
-      '/System/Library/CoreServices/Finder.app/Contents/Resources/Finder.icns',
-    ]) {
-      const response = await requestIcon(
-        `?bundleId=${encodeURIComponent(attempt)}`,
-      )
-      expect(response.status).toBe(404)
-      expect(response.headers.get('Content-Type')).not.toBe('image/png')
-    }
+    const rasterize = spyOn(appIcons, 'readAppIconPng').mockRejectedValue(new Error('A path must not reach icon rasterization'))
+    try {
+      for (const attempt of [
+        '/Applications/App.app',
+        '/Applications/Safari.app',
+        '../../../etc/passwd',
+        '/etc/passwd',
+        '/System/Library/CoreServices/Finder.app/Contents/Resources/Finder.icns',
+      ]) {
+        const response = await requestIcon(
+          `?bundleId=${encodeURIComponent(attempt)}`,
+        )
+        expect(response.status).toBe(404)
+        expect(response.headers.get('Content-Type')).not.toBe('image/png')
+      }
+      expect(rasterize).not.toHaveBeenCalled()
+    } finally { rasterize.mockRestore() }
   })
 
   it('reports an unknown bundle id as missing rather than erroring', async () => {

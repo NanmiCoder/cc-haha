@@ -61,10 +61,18 @@ export const OPENAI_OFFICIAL_PROVIDER: SavedProvider = {
   modelContextWindows,
 }
 
+/**
+ * `windowOverrides` are the user's own per-model windows. They sit on top of
+ * the built-in catalog values, so a model the user left alone keeps its default.
+ */
 export function buildOpenAIOfficialRuntimeEnv(
   models: SavedProvider['models'] = OPENAI_OFFICIAL_PROVIDER.models,
+  windowOverrides?: Record<string, number>,
 ): Record<string, string> {
-  const modelContextWindows = OPENAI_OFFICIAL_PROVIDER.modelContextWindows ?? {}
+  const modelContextWindows = {
+    ...OPENAI_OFFICIAL_PROVIDER.modelContextWindows,
+    ...windowOverrides,
+  }
   return {
     [OPENAI_OAUTH_PROVIDER_ENV_KEY]: '1',
     [OPENAI_CODEX_OAUTH_FILE_ENV_KEY]: getHahaOpenAIOAuthFilePath(),

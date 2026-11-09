@@ -266,3 +266,57 @@ describe('memoryStore request ownership', () => {
     })
   })
 })
+
+describe('memoryStore refresh', () => {
+  const opened = (content: string, updatedAt: string, bytes: number) => ({
+    file: { path: 'MEMORY.md', content, updatedAt, bytes },
+  })
+
+  beforeEach(() => {
+    // clearAllMocks keeps queued one-shot values; a test must not inherit them.
+    memoryApiMock.readFile.mockReset()
+    memoryApiMock.listFiles.mockReset()
+  })
+
+  it('re-reads the open file when the list is refreshed after it changed on disk', async () => {
+    useMemoryStore.setState({ projects: [project('demo')], selectedProjectId: 'demo' })
+    memoryApiMock.readFile.mockResolvedValueOnce(opened('# Before\n', '2026-07-24T00:00:00.000Z', 9))
+    await useMemoryStore.getState().openFile('demo', 'MEMORY.md')
+
+    // A session rewrote the file: the list reports the new revision and a read
+    // returns the new body.
+    memoryApiMock.listFiles.mockResolvedValueOnce({
+      files: [{ ...file('MEMORY.md'), bytes: 31, updatedAt: '2026-07-24T00:05:00.000Z' }],
+    })
+    memoryApiMock.readFile.mockResolvedValueOnce(
+      opened('# After\n\n- Written by a session\n', '2026-07-24T00:05:00.000Z', 31),
+    )
+
+    await useMemoryStore.getState().fetchFiles('demo', { reloadSelectedFile: true })
+
+    expect(memoryApiMock.readFile).toHaveBeenLastCalledWith('demo', 'MEMORY.md')
+    expect(useMemoryStore.getState()).toMatchObject({
+      selectedFile: {
+        path: 'MEMORY.md',
+        content: '# After\n\n- Written by a session\n',
+        updatedAt: '2026-07-24T00:05:00.000Z',
+        bytes: 31,
+      },
+      draftContent: '# After\n\n- Written by a session\n',
+      isLoadingFiles: false,
+      isLoadingFile: false,
+    })
+  })
+
+  it('keeps the loaded body when the list is reloaded without asking for it', async () => {
+    useMemoryStore.setState({ projects: [project('demo')], selectedProjectId: 'demo' })
+    memoryApiMock.readFile.mockResolvedValueOnce(opened('# Before\n', '2026-07-24T00:00:00.000Z', 9))
+    await useMemoryStore.getState().openFile('demo', 'MEMORY.md')
+    memoryApiMock.listFiles.mockResolvedValueOnce({ files: [file('MEMORY.md')] })
+
+    await useMemoryStore.getState().fetchFiles('demo')
+
+    expect(memoryApiMock.readFile).toHaveBeenCalledTimes(1)
+    expect(useMemoryStore.getState().selectedFile?.content).toBe('# Before\n')
+  })
+})

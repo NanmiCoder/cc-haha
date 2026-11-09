@@ -168,7 +168,7 @@ export type ServerMessage =
     }
   // 流式请求失败后的恢复状态：可能安全重试流，也可能降级为非流式请求。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
-  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
+  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string }
   | { type: 'background_task_stop_failed'; taskId: string; message: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
@@ -446,5 +446,5 @@ export type UIMessage =
       displayName?: string
       timestamp: number
     }
-  | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; timestamp: number }
+  | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; transcriptMessageId?: string; timestamp: number }
   | { id: string; type: 'task_summary'; tasks: TaskSummaryItem[]; timestamp: number }

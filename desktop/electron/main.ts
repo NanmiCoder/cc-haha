@@ -194,6 +194,10 @@ function petPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
 }
 
+function p2pHostScriptPath() {
+  return path.join(appRoot(), 'electron-dist', 'p2p-host.js')
+}
+
 function previewAgentPath() {
   return path.join(appRoot(), 'src-tauri', 'resources', 'preview-agent.js')
 }
@@ -318,7 +322,7 @@ function getP2PTerminator() {
       }
       return new BrowserWindow(options)
     },
-    hostScript: () => readFileSync(path.join(__dirname, 'p2p-host.js'), 'utf8'),
+    hostScript: () => readFileSync(p2pHostScriptPath(), 'utf8'),
     endpoint: () => {
       const runtime = getServerRuntime()
       const serverUrl = runtime.getActiveServerUrl()
@@ -340,6 +344,7 @@ function getPublicAccessManager() {
   publicAccessManager = new PublicAccessManager({
     desktopRoot: unpackedRoot(),
     onState: status => { void getP2PTerminator().update(p2pHostWanted(status)) },
+    powerSaveBlocker,
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -632,6 +637,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, async () => publicAccessStatus(await getPublicAccessManager().stop()))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => publicAccessStatus(getPublicAccessManager().setAutoStart(payload as boolean)))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, (_event, payload) => publicAccessStatus(getPublicAccessManager().setP2PEnabled(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetKeepAwake, (_event, payload) => publicAccessStatus(getPublicAccessManager().setKeepAwake(payload as boolean)))
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
   registerHandler(ELECTRON_IPC_CHANNELS.powerGetIdleActionState, async () => (await getIdlePowerService()).getState())
   registerHandler(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, async (_event, payload) => (await getIdlePowerService()).configure(payload as IdlePowerSettings))

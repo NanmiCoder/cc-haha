@@ -9,6 +9,7 @@ import type {
 } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { AFK_MODE_BETA_HEADER } from 'src/constants/betas.js'
 import { BUSINESS_ERROR_CODES } from 'src/constants/businessErrors.js'
+import { inspectProviderUsageError, isProviderUsageLimitText } from 'src/shared/providerUsageLimit.js'
 import type { SDKAssistantMessageError } from 'src/entrypoints/agentSdkTypes.js'
 import type {
   AssistantMessage,
@@ -324,6 +325,30 @@ export function isMediaSizeErrorMessage(msg: AssistantMessage): boolean {
   )
 }
 export const CREDIT_BALANCE_TOO_LOW_ERROR_MESSAGE = 'Credit balance is too low'
+
+/**
+ * A 401/403 whose message says the provider's usage limit, quota or balance is
+ * exhausted. The credential works; reporting it as "Failed to authenticate" or
+ * sending the user to /login points at the wrong fix (e.g. Kimi Code #1208).
+ */
+export function isProviderUsageLimitAuthError(error: unknown): error is APIError {
+  return (
+    error instanceof APIError &&
+    (error.status === 401 || error.status === 403) &&
+    !inspectProviderUsageError(error.error ?? error.message).invalidCredential &&
+    isProviderUsageLimitText(error.message)
+  )
+}
+
+/** A durable plan/balance limit, not a short request or token rate limit. */
+export function isProviderUsageLimitError(error: unknown): error is APIError {
+  if (isProviderUsageLimitAuthError(error)) return true
+  if (!(error instanceof APIError) || error.status !== 429) return false
+
+  const result = inspectProviderUsageError(error.error ?? error.message)
+  return result.usageLimit && !result.invalidCredential
+}
+
 export const INVALID_API_KEY_ERROR_MESSAGE = 'Not logged in · Please run /login'
 export const INVALID_API_KEY_ERROR_MESSAGE_EXTERNAL =
   'Invalid API key · Fix external API key'
@@ -753,6 +778,13 @@ export function getAssistantMessageFromError(
     })
   }
 
+  if (error instanceof APIError && error.status === 429 && isProviderUsageLimitError(error)) {
+    return createAssistantAPIErrorMessage({
+      error: 'billing_error',
+      content: `${API_ERROR_MESSAGE_PREFIX}: ${formatAPIErrorForDisplay(error)} · Check the provider's billing or wait for the quota to reset, or switch to another provider.`,
+    })
+  }
+
   if (
     error instanceof APIError &&
     error.status === 429 &&
@@ -1117,6 +1149,15 @@ export function getAssistantMessageFromError(
     }
   }
 
+  // A provider may mention the key in an exhausted-plan error; it is still a
+  // billing problem, not a reason to replace the key or initiate login.
+  if (isProviderUsageLimitAuthError(error)) {
+    return createAssistantAPIErrorMessage({
+      error: 'billing_error',
+      content: `${API_ERROR_MESSAGE_PREFIX}: ${formatAPIErrorForDisplay(error)}`,
+    })
+  }
+
   if (
     error instanceof Error &&
     error.message.toLowerCase().includes('x-api-key')
@@ -1322,6 +1363,8 @@ export function classifyAPIError(error: unknown): string {
   ) {
     return 'capacity_off_switch'
   }
+
+  if (isProviderUsageLimitError(error)) return 'provider_usage_limit'
 
   // Rate limiting
   if (error instanceof APIError && error.status === 429) {

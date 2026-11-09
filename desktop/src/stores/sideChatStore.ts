@@ -55,8 +55,9 @@ export const useSideChatStore = create<SideChatStore>((set, get) => ({
       const chat = useChatStore.getState()
       const text = options.question.trim()
       if (options.submit) {
-        if ((chat.sessions[id]?.chatState ?? 'idle') === 'idle') chat.sendMessage(id, text)
-        else chat.queueUserMessage(id, { content: text, displayContent: text })
+        if ((chat.sessions[id]?.chatState ?? 'idle') === 'idle') {
+          if (!chat.sendMessage(id, text)) chat.queueComposerPrefill(id, { text, mode: 'append' })
+        } else chat.queueUserMessage(id, { content: text, displayContent: text })
       } else chat.queueComposerInsertion(id, { text })
     }
     return id

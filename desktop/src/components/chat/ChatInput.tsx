@@ -6,6 +6,8 @@ import { parseSideQuestionCommand } from './composerUtils'
 import { getSessionReferences } from '@/lib/composerMentions'
 import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
+import { formatBytes } from '@/lib/formatBytes'
+import { checkUserMessageBudget } from '@/lib/userMessageBudget'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { ArrowUp, CornerDownRight, Cpu, Feather, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
@@ -553,6 +555,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
     if (composerPrefill.mode === 'append') {
       setComposerAttachments((previous) => [...previous, ...uploads])
+      if (composerPrefill.text) {
+        // A refused send can recover both text and screenshots. Append at the
+        // end so the existing draft and its mention ordinals stay intact.
+        setComposerInput([inputRef.current, composerPrefill.text].filter(Boolean).join('\n\n'))
+      }
     } else {
       // The draft's structured pills travel with its projected text; restoring
       // both keeps @-file references as pills instead of demoting them to
@@ -1088,6 +1095,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         quote: reference.quote,
       })),
     ]
+
+    // The local server drops a frame over its input budget by closing the
+    // socket, and the composer would only reconnect: the turn, with its pasted
+    // screenshots inlined as data URLs, would vanish without a trace. Say why
+    // and keep the draft instead.
+    if (!isMemberSession) {
+      const budget = checkUserMessageBudget({
+        type: 'user_message',
+        content: contentForModel,
+        attachments: [...uploadAttachmentPayload, ...workspaceAttachmentPayload],
+        ...(sessionReferences.length ? { sessionReferences } : {}),
+      })
+      if (!budget.ok) {
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+        })
+        return
+      }
+    }
 
     let targetSessionId = activeTabId!
     // A chat can wait a long time for its first message, and the server switches

@@ -256,6 +256,28 @@ describe('load', () => {
 })
 
 describe('snapshot invalidation', () => {
+  it.each(['rejection', 'error response'])('retries a diff %s after refreshing an unchanged snapshot', async (failure) => {
+    reviewApi.getStatus.mockResolvedValue(status('snap-1'))
+    await store().load(SESSION, UNSTAGED)
+    reviewApi.getDiff.mockResolvedValueOnce(diff('src/b.ts', 'snap-1'))
+    await store().loadDiff(SESSION, UNSTAGED, 'src/b.ts')
+    if (failure === 'rejection') reviewApi.getDiff.mockRejectedValueOnce(new Error('offline'))
+    else reviewApi.getDiff.mockResolvedValueOnce({ ...diff('src/a.ts', 'snap-1'), state: 'error', error: 'offline' })
+    await store().loadDiff(SESSION, UNSTAGED, 'src/a.ts')
+    expect(entry().diffsByPath['src/a.ts']?.state).toBe('error')
+    // A render must not immediately retry and create a request loop.
+    await store().loadDiff(SESSION, UNSTAGED, 'src/a.ts')
+    expect(reviewApi.getDiff).toHaveBeenCalledTimes(2)
+
+    await store().load(SESSION, UNSTAGED, { force: true })
+    reviewApi.getDiff.mockResolvedValueOnce(diff('src/a.ts', 'snap-1'))
+    await store().loadDiff(SESSION, UNSTAGED, 'src/a.ts')
+    await store().loadDiff(SESSION, UNSTAGED, 'src/b.ts')
+    expect(reviewApi.getDiff).toHaveBeenCalledTimes(3)
+    expect(entry().diffsByPath['src/a.ts']?.state).toBe('ok')
+    expect(entry().diffsByPath['src/b.ts']?.state).toBe('ok')
+  })
+
   it('drops every cached per-file diff when the snapshot changes', async () => {
     // This is the data-integrity guard: a hunk read against an old snapshot
     // describes content the user is no longer looking at, and applying it would

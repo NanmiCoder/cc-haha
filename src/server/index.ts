@@ -287,6 +287,10 @@ export function startServer(port = PORT, host = HOST) {
   const publicAccess = new PublicAccessServer({
     resolveProxy: resolveRemoteAccessProxy,
     verifyGateway: verifyRemoteAccessGateway,
+    onOriginChanged: ({ url, sign }) => {
+      if (migrationMaintenance.isActive) return
+      void getMobilePushService().notifyAddressChanged(url, sign).catch(() => {})
+    },
     handleApiRequest: (request, url, context) => migrationMaintenance.isActive
       ? Promise.resolve(migrationUnavailableResponse())
       : migrationMaintenance.track(handleApiRequest(request, url, context)),

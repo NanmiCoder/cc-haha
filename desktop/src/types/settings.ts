@@ -147,6 +147,8 @@ export type ModelInfo = {
   name: string
   description: string
   context: string
+  /** Highest window a user may set for this model; absent when no cap is known. */
+  maxContext?: string
   defaultReasoningEffort?: ReasoningEffortLevel
   supportedReasoningEfforts?: ReasoningEffortLevel[]
 }

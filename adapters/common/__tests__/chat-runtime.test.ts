@@ -243,6 +243,56 @@ afterEach(() => {
 })
 
 describe('ImChatRuntime authorization', () => {
+  it.each(['reconnect', 'send', 'download', 'lease'])('allows redelivery of the same id after a failed %s attempt', async failure => {
+    const { runtime, bridge, httpClient, sessionStore, dedup } = createRuntime()
+    sessionStore.set(CHAT_ID, 'old-session', tmpDir)
+    httpClient.existingSessions.add('old-session')
+    let failing = true
+    bridge.isSessionOpen = () => false
+    bridge.waitForOpen = async () => !(failing && failure === 'reconnect')
+    httpClient.acquireLeaseHook = async () => {
+      if (failing && failure === 'lease') throw new Error('lease failed')
+    }
+    const loadAttachments = async () => {
+      if (failing && failure === 'download') throw new Error('download failed')
+      return []
+    }
+    bridge.sendResult = failure !== 'send'
+    const message = { dedupKey: 'retry-same-id', hasAttachments: true, loadAttachments }
+    try {
+      await inbound(runtime, 'retry me', message)
+      expect(bridge.sent).toHaveLength(0)
+      failing = false
+      bridge.sendResult = true
+      await inbound(runtime, 'retry me', message)
+      await inbound(runtime, 'retry me', message)
+      expect(bridge.sent.map(item => item.content)).toEqual(['retry me'])
+      expect(httpClient.acquiredLeases).toHaveLength(2)
+      expect(httpClient.releasedLeases).toHaveLength(failure === 'lease' ? 0 : 1)
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('suppresses concurrent redelivery while the first attempt is still pending', async () => {
+    const { runtime, bridge, httpClient, dedup } = createRuntime()
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    httpClient.acquireLeaseHook = () => pending
+    try {
+      const first = inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      await inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      expect(httpClient.acquiredLeases).toHaveLength(1)
+      release()
+      await first
+      await inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      expect(bridge.sent.map(item => item.content)).toEqual(['once'])
+    } finally {
+      release()
+      dedup.destroy()
+    }
+  })
+
   it('refuses an unpaired sender and forwards nothing to the session', async () => {
     writeAdapterConfig({ wecom: { pairedUsers: [], allowedUsers: [] } })
     const { runtime, notices, bridge, httpClient } = createRuntime()
@@ -375,6 +425,60 @@ describe('ImChatRuntime inbound power activity', () => {
 })
 
 describe('ImChatRuntime session lifecycle', () => {
+  it.each(['/status', '/stop', '/clear'])('retries the same %s message id after the connection recovers', async command => {
+    const { runtime, bridge, httpClient, sessionStore, notices, dedup } = createRuntime()
+    sessionStore.set(CHAT_ID, 'old-session', tmpDir)
+    httpClient.existingSessions.add('old-session')
+    let online = false
+    bridge.isSessionOpen = () => online
+    bridge.waitForOpen = async () => online
+    try {
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      expect(notices[0]).toContain('重试')
+      online = true
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      expect(notices).toHaveLength(2)
+      if (command === '/stop') expect(bridge.stopped).toEqual([CHAT_ID])
+      if (command === '/clear') expect(bridge.sent.map(item => item.content)).toEqual(['/clear'])
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('retains dedup after /clear was sent even if the confirmation notice fails', async () => {
+    const { runtime, bridge, port, dedup } = createRuntime()
+    try {
+      await inbound(runtime, 'hello')
+      port.sendNotice = async () => { throw new Error('notice unavailable') }
+      await inbound(runtime, '/clear', { dedupKey: 'clear-once' })
+      await inbound(runtime, '/clear', { dedupKey: 'clear-once' })
+      expect(bridge.sent.map(item => item.content)).toEqual(['hello', '/clear'])
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('retries the same permission reply id after a rejected socket send', async () => {
+    const { runtime, bridge, dedup } = createRuntime()
+    try {
+      await runtime.handleServerMessage(CHAT_ID, {
+        type: 'permission_request', requestId: 'retry-permission', toolName: 'Bash', input: {},
+      })
+      const send = bridge.sendPermissionResponse.bind(bridge)
+      bridge.sendPermissionResponse = () => false
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      expect(bridge.permissionResponses).toHaveLength(0)
+      bridge.sendPermissionResponse = send
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      expect(bridge.permissionResponses).toEqual([{ requestId: 'retry-permission', allowed: true, rule: undefined }])
+      expect(bridge.sent).toHaveLength(0)
+    } finally {
+      dedup.destroy()
+    }
+  })
+
   it.each(['/status', '/stop', '/clear'])('reports a retryable disconnect for %s without changing the binding', async (command) => {
     const { runtime, bridge, httpClient, sessionStore, notices } = createRuntime()
     sessionStore.set(CHAT_ID, 'old-session', path.join(tmpDir, 'original-project'))
@@ -541,6 +645,26 @@ describe('ImChatRuntime server stream', () => {
     expect(notices.filter(notice => notice.includes('ask-1'))).toHaveLength(1)
   })
 
+  it('retries an undelivered approval after a reconnect snapshot without inflating pending count', async () => {
+    const { runtime, port, notices, dedup } = createRuntime()
+    const request = { type: 'permission_request', requestId: 'retry-prompt', toolName: 'Bash', input: {} }
+    const send = port.sendNotice
+    let failing = true
+    port.sendNotice = async (chatId, text) => {
+      if (failing) throw new Error('platform offline')
+      await send(chatId, text)
+    }
+    try {
+      await expect(runtime.handleServerMessage(CHAT_ID, request)).rejects.toThrow('platform offline')
+      await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+      failing = false
+      await runtime.handleServerMessage(CHAT_ID, request)
+      await runtime.handleServerMessage(CHAT_ID, request)
+      expect(notices.filter(text => text.includes(request.requestId))).toHaveLength(1)
+      expect(runtime.getRuntimeState(CHAT_ID).pendingPermissionCount).toBe(1)
+    } finally { dedup.destroy() }
+  })
+
   it('routes a numeric reply to the single pending permission request', async () => {
     const { runtime, bridge } = createRuntime()
 
@@ -635,8 +759,12 @@ describe('ImChatRuntime server stream', () => {
       text: `![inside](${insidePath}) ![outside](/etc/hosts)`,
     })
     await runtime.handleServerMessage(CHAT_ID, { type: 'message_complete' })
-    // The upload is dispatched without blocking the stream.
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The upload is dispatched without blocking the stream. Wait for its
+    // observable result rather than depending on a 20 ms filesystem deadline.
+    const uploadDeadline = Date.now() + 2000
+    while (images.length === 0 && Date.now() < uploadDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
 
     expect(images).toEqual([{ mime: 'image/png', alt: 'inside' }])
   })
