@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
@@ -6,6 +6,11 @@ import { AdapterSettings } from './AdapterSettings'
 import { useAdapterStore } from '../stores/adapterStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import type { AdapterFileConfig } from '../types/adapter'
+import { adaptersApi } from '../api/adapters'
+
+beforeEach(() => {
+  vi.spyOn(adaptersApi, 'getWechatRuntime').mockResolvedValue({ state: 'stopped', serverReachable: false })
+})
 
 const FEISHU_CREATE_BOT_URL = 'https://open.feishu.cn/page/openclaw?form=multiAgent'
 const IM_CONFIG_DOCS_URL = 'https://cchaha.ai/im/'

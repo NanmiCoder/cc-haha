@@ -6,6 +6,7 @@
  */
 
 import { adapterService, type AdapterFileConfig, type PairedUser } from '../services/adapterService.js'
+import { wechatRuntimeService, type WechatRuntimeReport } from '../services/wechatRuntimeService.js'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
@@ -789,6 +790,50 @@ async function handleSlackAdaptersApi(req: Request, tail: string[]): Promise<Res
 }
 
 async function handleWechatAdaptersApi(req: Request, tail: string[]): Promise<Response> {
+  if (req.method === 'GET' && tail[0] === 'runtime' && tail.length === 1) {
+    return Response.json(wechatRuntimeService.getSnapshot())
+  }
+  if (req.method === 'POST' && tail[0] === 'runtime') {
+    if (tail[1] === 'invalidate') {
+      wechatRuntimeService.invalidate()
+      return Response.json({ ok: true })
+    }
+    const body = await req.json().catch(() => { throw ApiError.badRequest('Invalid runtime report') })
+    if (!isRecord(body)) throw ApiError.badRequest('Invalid runtime report')
+    if (tail[1] === 'register') {
+      if (typeof body.instanceId !== 'string' || !body.instanceId || body.instanceId.length > 128
+        || typeof body.startedAt !== 'number' || !Number.isSafeInteger(body.startedAt)
+        || body.startedAt < 0 || body.startedAt > Date.now() + 60_000) {
+        throw ApiError.badRequest('Invalid runtime instance')
+      }
+      const registration = wechatRuntimeService.register(body.instanceId, body.startedAt)
+      if (!registration) throw new ApiError(409, 'Runtime instance expired', 'RUNTIME_LEASE_EXPIRED')
+      return Response.json(registration)
+    }
+    if (tail[1] === 'report') {
+      if (typeof body.leaseId !== 'string' || body.leaseId.length > 128 || typeof body.state !== 'string'
+        || !['starting', 'online', 'reconnecting', 'auth_expired', 'error', 'stopped'].includes(body.state)) {
+        throw ApiError.badRequest('Invalid runtime report')
+      }
+      const report: WechatRuntimeReport = { state: body.state as WechatRuntimeReport['state'] }
+      for (const key of ['lastPollOkAt', 'lastReceiveAt', 'lastSendAt'] as const) {
+        if (body[key] !== undefined) {
+          if (typeof body[key] !== 'number' || !Number.isSafeInteger(body[key]) || body[key] < 0 || body[key] > Date.now() + 60_000) {
+            throw ApiError.badRequest('Invalid runtime timestamp')
+          }
+          report[key] = body[key]
+        }
+      }
+      if (body.errorCode !== undefined) {
+        if (typeof body.errorCode !== 'string' || !/^[A-Z0-9_]{1,64}$/.test(body.errorCode)) {
+          throw ApiError.badRequest('Invalid runtime error code')
+        }
+        report.errorCode = body.errorCode
+      }
+      if (!wechatRuntimeService.report(body.leaseId, report)) throw new ApiError(409, 'Runtime lease expired', 'RUNTIME_LEASE_EXPIRED')
+      return Response.json({ ok: true })
+    }
+  }
   if (req.method === 'POST' && tail[0] === 'login' && tail[1] === 'start') {
     const result = await startWechatLoginWithQr({ force: true })
     return Response.json(result)
@@ -813,6 +858,7 @@ async function handleWechatAdaptersApi(req: Request, tail: string[]): Promise<Re
           pairedUsers: [],
         },
       })
+      wechatRuntimeService.invalidate()
     }
     return Response.json(result.connected ? await adapterService.getConfig() : result)
   }
@@ -828,6 +874,7 @@ async function handleWechatAdaptersApi(req: Request, tail: string[]): Promise<Re
         allowedUsers: [],
       },
     })
+    wechatRuntimeService.invalidate()
     return Response.json(await adapterService.getConfig())
   }
 
