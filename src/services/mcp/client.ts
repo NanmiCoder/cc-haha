@@ -141,6 +141,7 @@ import {
 import { getAllMcpConfigs, isMcpServerDisabled, isMcpServerDisabledForExecution } from './config.js'
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 import { getMcpServerHeaders } from './headersHelper.js'
+import { resolveMcpHostProxy } from './hostProxy.js'
 import { SdkControlClientTransport } from './SdkControlTransport.js'
 import type {
   ConnectedMCPServer,
@@ -762,6 +763,10 @@ const connectToServerMemoized = memoize(
         // Get combined headers (static + dynamic)
         const combinedHeaders = await getMcpServerHeaders(name, serverRef)
 
+        // A host such as the desktop server has no proxy variables and passes
+        // its network setting instead; it applies to every request below.
+        const hostProxyOptions = await resolveMcpHostProxy(serverRef.url)
+
         // Use the auth provider with SSEClientTransport
         const transportOptions: SSEClientTransportOptions = {
           authProvider,
@@ -769,7 +774,10 @@ const connectToServerMemoized = memoize(
           // Step-up detection wraps innermost so the 403 is seen before the
           // SDK's handler calls auth() → tokens().
           fetch: wrapFetchWithTimeout(
-            wrapFetchWithStepUpDetection(createFetchWithInit(), authProvider),
+            wrapFetchWithStepUpDetection(
+              createFetchWithInit(undefined, hostProxyOptions),
+              authProvider,
+            ),
           ),
           requestInit: {
             headers: {
@@ -793,7 +801,7 @@ const connectToServerMemoized = memoize(
               authHeaders.Authorization = `Bearer ${tokens.access_token}`
             }
 
-            const proxyOptions = getProxyFetchOptions()
+            const proxyOptions = hostProxyOptions ?? getProxyFetchOptions()
             // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
             return fetch(url, {
               ...init,
@@ -950,8 +958,12 @@ const connectToServerMemoized = memoize(
         // get the ingress token. See PR #24454 discussion.
         const hasOAuthTokens = !!(await authProvider.tokens())
 
-        // Use the auth provider with StreamableHTTPClientTransport
-        const proxyOptions = getProxyFetchOptions()
+        // Use the auth provider with StreamableHTTPClientTransport.
+        // A host such as the desktop server has no proxy variables and passes
+        // its network setting instead. The SDK leaves requestInit off its GET
+        // stream, so the host proxy also goes on the base fetch.
+        const hostProxyOptions = await resolveMcpHostProxy(serverRef.url)
+        const proxyOptions = hostProxyOptions ?? getProxyFetchOptions()
         logMCPDebug(
           name,
           `Proxy options: ${proxyOptions.dispatcher ? 'custom dispatcher' : 'default'}`,
@@ -963,7 +975,10 @@ const connectToServerMemoized = memoize(
           // Step-up detection wraps innermost so the 403 is seen before the
           // SDK's handler calls auth() → tokens().
           fetch: wrapFetchWithTimeout(
-            wrapFetchWithStepUpDetection(createFetchWithInit(), authProvider),
+            wrapFetchWithStepUpDetection(
+              createFetchWithInit(undefined, hostProxyOptions),
+              authProvider,
+            ),
           ),
           requestInit: {
             ...proxyOptions,

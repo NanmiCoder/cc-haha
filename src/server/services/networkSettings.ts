@@ -1,6 +1,7 @@
 import { SettingsService } from './settingsService.js'
 import type { ProviderProxyConfig } from '../types/provider.js'
 import { getProxyFetchOptions, getProxyUrl } from '../../utils/proxy.js'
+import { setMcpHostProxyResolver } from '../../services/mcp/hostProxy.js'
 
 export type NetworkProxyMode = 'direct' | 'system' | 'manual'
 
@@ -237,4 +238,14 @@ export function getNetworkProxyFetchOptions(
 export async function loadNetworkSettings(): Promise<NetworkSettings> {
   const settings = await new SettingsService().getUserSettings()
   return normalizeNetworkSettings(settings)
+}
+
+/**
+ * MCP connections the server opens itself (connector checks, MCP status in
+ * Settings) follow the network setting like its other requests do. The
+ * desktop host starts this process without proxy variables (#1864).
+ */
+export function configureMcpHostProxy(): () => void {
+  return setMcpHostProxyResolver(async targetUrl =>
+    getNetworkProxyFetchOptions(await loadNetworkSettings(), targetUrl))
 }
