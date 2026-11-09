@@ -421,7 +421,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.migrationStart]: migrationIdentity,
   [ELECTRON_IPC_CHANNELS.migrationStatus]: noPayload,
   [ELECTRON_IPC_CHANNELS.migrationCancel]: migrationIdentity,
-  [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: noPayload,
+  [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: value => value === undefined || (isRecord(value) && hasOnlyKeys(value, ['target']) && value.target === 'wechat'),
   [ELECTRON_IPC_CHANNELS.zoomSet]: zoomPayload,
   [ELECTRON_IPC_CHANNELS.appearanceSetApplied]: appliedAppearance,
 } satisfies Record<ElectronIpcChannel, Validator>
