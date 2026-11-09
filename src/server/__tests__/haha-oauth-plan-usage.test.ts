@@ -29,7 +29,17 @@ const USAGE = {
   seven_day: { utilization: 7, resets_at: '2026-11-12T09:00:00.000Z' },
 }
 
-const ENV_KEYS = ['CLAUDE_CONFIG_DIR', SYSTEM_PROXY_URL_ENV, 'USER_TYPE', 'USE_LOCAL_OAUTH', 'CLAUDE_LOCAL_OAUTH_API_BASE'] as const
+// The inherited proxy variables are cleared too: with one set in the shell that
+// runs the tests, the "no proxy configured" cases would read it.
+const INHERITED_PROXY_ENV_KEYS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'] as const
+const ENV_KEYS = [
+  'CLAUDE_CONFIG_DIR',
+  SYSTEM_PROXY_URL_ENV,
+  ...INHERITED_PROXY_ENV_KEYS,
+  'USER_TYPE',
+  'USE_LOCAL_OAUTH',
+  'CLAUDE_LOCAL_OAUTH_API_BASE',
+] as const
 let saved: Record<string, string | undefined> = {}
 let tmpDir = ''
 let service: HahaOAuthService
@@ -43,6 +53,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'haha-oauth-usage-test-'))
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   delete process.env[SYSTEM_PROXY_URL_ENV]
+  for (const key of INHERITED_PROXY_ENV_KEYS) delete process.env[key]
   service = new HahaOAuthService()
 })
 
