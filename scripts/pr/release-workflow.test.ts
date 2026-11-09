@@ -261,6 +261,53 @@ describe('release desktop workflow', () => {
     expect(collectStep).not.toContain('-type d -name "*.app"')
   })
 
+  test('development macOS builds sign every Computer Use executable with the release Developer ID', () => {
+    type Step = { name?: string, if?: string, env?: Record<string, string>, run?: string }
+    const steps = (workflowPath: string): Step[] =>
+      parse(readFileSync(workflowPath, 'utf8')).jobs.build.steps
+    const devSteps = steps('.github/workflows/build-desktop-dev.yml')
+    const releaseSteps = steps('.github/workflows/release-desktop.yml')
+    const step = (all: Step[], name: string) => {
+      const found = all.find(candidate => candidate.name === name)
+      expect(found, name).toBeDefined()
+      return found as Step
+    }
+    const indexOf = (name: string) => devSteps.findIndex(candidate => candidate.name === name)
+
+    // cu-helper refuses ad-hoc signing in CI, so the identity must be in the
+    // keychain before sidecars are built, imported exactly as releases do.
+    const importStep = step(devSteps, 'Import macOS signing identity for native runtimes')
+    const releaseImportStep = step(releaseSteps, 'Import macOS signing identity for native runtimes')
+    expect(importStep.if).toBe("matrix.smoke_platform == 'macos'")
+    expect(importStep.env).toEqual(releaseImportStep.env)
+    expect(importStep.run).toContain('Missing MACOS_CERTIFICATE or MACOS_CERTIFICATE_PASSWORD')
+    expect(importStep.run).toContain(releaseImportStep.run)
+    expect(indexOf('Import macOS signing identity for native runtimes'))
+      .toBeLessThan(indexOf('Build sidecars'))
+
+    const signedBuild = step(devSteps, 'Build signed macOS Electron app')
+    expect(signedBuild.if).toBe("matrix.smoke_platform == 'macos'")
+    expect(signedBuild.env).toBeUndefined()
+    expect(signedBuild.run).toContain('export CSC_KEYCHAIN="${CC_HAHA_CI_KEYCHAIN:?macOS signing keychain was not prepared}"')
+    expect(signedBuild.run).toContain(`${electronBuilderCli} -c.mac.notarize=false`)
+
+    const unsignedBuild = step(devSteps, 'Build Electron app')
+    expect(unsignedBuild.if).toBe("matrix.smoke_platform != 'macos'")
+    expect(unsignedBuild.env?.CSC_IDENTITY_AUTO_DISCOVERY).toBe('false')
+
+    expect(step(devSteps, 'Verify packaged app structure').run)
+      .toContain("${{ matrix.smoke_platform == 'macos' && '--require-macos-computer-use-signing' || '' }}")
+
+    const cleanup = step(devSteps, 'Remove temporary macOS signing keychain')
+    expect(cleanup.if).toBe("always() && matrix.smoke_platform == 'macos'")
+    expect(cleanup.run).toContain('security delete-keychain "$CC_HAHA_CI_KEYCHAIN"')
+    expect(cleanup.run).toContain('rm -f "$CC_HAHA_CI_CERTIFICATE"')
+    expect(indexOf('Remove temporary macOS signing keychain'))
+      .toBeGreaterThan(indexOf('Verify packaged app structure'))
+    expect(indexOf('Remove temporary macOS signing keychain'))
+      .toBeLessThan(indexOf('Upload artifacts'))
+  })
+
   test('desktop package includes Linux deb metadata required by electron-builder', () => {
     const desktopPackage = JSON.parse(readFileSync('desktop/package.json', 'utf8')) as {
       description?: string
