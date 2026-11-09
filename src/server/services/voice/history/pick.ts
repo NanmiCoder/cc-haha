@@ -17,8 +17,15 @@ export const HISTORY_PICK_SYSTEM_PROMPT = [
   '只输出 JSON：{"groups":[{"category":"project|model|tool|other","terms":[{"term":"…","doubtful":false}]}]}',
 ].join('\n')
 
-/** Room for 100 grouped `{"term","doubtful"}` objects. */
-export const HISTORY_PICK_MAX_TOKENS = 4096
+/**
+ * The budget chat gives a model with no known limit. The term list itself takes
+ * about 1,000 tokens, but a reasoning model that ends up thinking (the provider
+ * ignored or rejected `thinking: disabled`) reasons first: DeepSeek Flash used
+ * 10,000-13,000 tokens and about a minute that way, and at 4,096 it stopped
+ * before writing any text.
+ * Unused budget costs nothing, so a thinking-off answer is unaffected.
+ */
+export const HISTORY_PICK_MAX_TOKENS = 32_000
 export const HISTORY_PICK_MAX_TERMS = 100
 
 const CATEGORIES: readonly VoiceHistoryCategory[] = ['project', 'model', 'tool', 'other']

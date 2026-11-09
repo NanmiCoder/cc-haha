@@ -18,6 +18,13 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import type { ModelMapping } from '@/types/provider'
 import { useTranslation, type TranslationKey } from '@/i18n'
 import { ModelIdCombobox } from './ModelIdCombobox'
+import {
+  OfficialModelContextWindows,
+  getOfficialContextWindowError,
+  toOfficialWindowInfo,
+  type OfficialModelWindowInfo,
+} from './OfficialModelContextWindows'
+import { parseModelContextWindowsInput } from '@/lib/providerModelContext'
 
 type ModelSlot = keyof ModelMapping
 
@@ -34,6 +41,21 @@ const MODEL_SLOT_LABELS: Record<ModelSlot, TranslationKey> = {
 type OfficialProviderModelSettingsProps = {
   providerId: string
 }
+
+/** The mapping as saved: an empty alias follows the main model, an empty Fable slot stays unset. */
+function normalizeMapping(models: ModelMapping): ModelMapping {
+  const main = models.main.trim()
+  return {
+    main,
+    ...(models.fable?.trim() ? { fable: models.fable.trim() } : {}),
+    haiku: models.haiku.trim() || main,
+    sonnet: models.sonnet.trim() || main,
+    opus: models.opus.trim() || main,
+  }
+}
+
+const windowsToInputs = (windows: Record<string, number> | undefined): Record<string, string> =>
+  Object.fromEntries(Object.entries(windows ?? {}).map(([model, window]) => [model, String(window)]))
 
 function useOfficialAccountKey(providerId: string): string {
   const claude = useHahaOAuthStore((state) => providerId === CLAUDE_OFFICIAL_PROVIDER_ID ? state.status : null)
@@ -52,6 +74,12 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
   const accountKey = useOfficialAccountKey(providerId)
   const [models, setModels] = useState<ModelMapping | null>(null)
   const [availableModelIds, setAvailableModelIds] = useState<string[]>([])
+  // Only ChatGPT Official runs on a window the user can set; the other
+  // accounts take theirs from their own catalogs.
+  const supportsContextWindows = providerId === OPENAI_OFFICIAL_PROVIDER_ID
+  const [windowInfo, setWindowInfo] = useState<Record<string, OfficialModelWindowInfo>>({})
+  const [contextInputs, setContextInputs] = useState<Record<string, string>>({})
+  const [savedModelIds, setSavedModelIds] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -66,6 +94,9 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
     const generation = ++requestGeneration.current
     setModels(null)
     setAvailableModelIds([])
+    setWindowInfo({})
+    setContextInputs({})
+    setSavedModelIds([])
     setIsLoading(true)
     setIsSaving(false)
     setIsRefreshing(false)
@@ -81,11 +112,14 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
       if (generation !== requestGeneration.current) return
       if (mappingResult.status === 'fulfilled') {
         setModels(mappingResult.value.models)
+        setSavedModelIds(Object.values(mappingResult.value.models))
+        setContextInputs(windowsToInputs(mappingResult.value.modelContextWindows))
       } else {
         setError(t('settings.providers.officialModelsLoadError'))
       }
       if (catalogResult.status === 'fulfilled') {
         setAvailableModelIds(catalogResult.value.models.map((model) => model.id))
+        setWindowInfo(toOfficialWindowInfo(catalogResult.value.models))
       }
       setIsLoading(false)
     })
@@ -122,6 +156,7 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
       await useSettingsStore.getState().fetchAll()
       if (generation !== requestGeneration.current) return
       setAvailableModelIds(result.models.map((model) => model.id))
+      setWindowInfo(toOfficialWindowInfo(result.models))
       setRefreshedCount(result.models.length)
     } catch {
       if (generation === requestGeneration.current) setCatalogError(true)
@@ -130,26 +165,46 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
     }
   }
 
+  // One row per model the mapping uses. A half-typed ID gets no row of its
+  // own: only models the account lists, the saved mapping uses, or that
+  // already carry a value, so rows do not flicker while the user types.
+  const contextRows = useMemo(() => {
+    if (!supportsContextWindows || !models) return []
+    const mapped = Object.values(normalizeMapping(models)).filter(Boolean)
+    return [...new Set(mapped)].filter((id) =>
+      windowInfo[id] !== undefined || savedModelIds.includes(id) || contextInputs[id] !== undefined)
+  }, [supportsContextWindows, models, windowInfo, savedModelIds, contextInputs])
+  const hasContextError = contextRows.some((id) =>
+    getOfficialContextWindowError(contextInputs[id] ?? '', windowInfo[id]?.maxContext) !== null)
+
+  const updateContextWindow = (modelId: string, value: string) => {
+    setSaved(false)
+    setContextInputs((current) => ({ ...current, [modelId]: value }))
+  }
+
   const handleSave = async () => {
     if (!models) return
-    const main = models.main.trim()
-    if (!main) return
-    const normalized: ModelMapping = {
-      main,
-      ...(models.fable?.trim() ? { fable: models.fable.trim() } : {}),
-      haiku: models.haiku.trim() || main,
-      sonnet: models.sonnet.trim() || main,
-      opus: models.opus.trim() || main,
-    }
+    if (!models.main.trim()) return
+    if (hasContextError) return
+    const normalized = normalizeMapping(models)
+    // Values for models the mapping no longer shows are kept as saved.
+    const windows = supportsContextWindows
+      ? Object.fromEntries(Object.entries(contextInputs).flatMap(([model, value]) => {
+          const parsed = parseModelContextWindowsInput(value)
+          return parsed === undefined ? [] : [[model, parsed] as const]
+        }))
+      : undefined
 
     const generation = requestGeneration.current
     setIsSaving(true)
     setError(null)
     setSaved(false)
     try {
-      const result = await providersApi.updateOfficialModels(providerId, normalized)
+      const result = await providersApi.updateOfficialModels(providerId, normalized, windows)
       if (generation !== requestGeneration.current) return
       setModels(result.models)
+      setSavedModelIds(Object.values(result.models))
+      if (supportsContextWindows) setContextInputs(windowsToInputs(result.modelContextWindows))
       // The model picker reads saved alias mappings from the provider store.
       await Promise.all([
         useSettingsStore.getState().fetchAll(),
@@ -225,12 +280,21 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
             })}
           </div>
 
+          {supportsContextWindows && (
+            <OfficialModelContextWindows
+              modelIds={contextRows}
+              values={contextInputs}
+              info={windowInfo}
+              onChange={updateContextWindow}
+            />
+          )}
+
           <div className="flex items-center gap-3">
             <Button
               size="base"
               onClick={handleSave}
               loading={isSaving}
-              disabled={!models.main.trim()}
+              disabled={!models.main.trim() || hasContextError}
             >
               {t('settings.providers.officialModelsSave')}
             </Button>

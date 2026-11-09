@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -15,7 +16,8 @@ import { PushRegistrationCoordinator } from './pushRegistrations'
 import { PushTokens } from './pushProvider'
 import { BackgroundDuty } from './backgroundDuty'
 import { getDevicePushToken, getExpoPushToken } from './devicePushToken'
-import { createApiClient } from './api'
+import { createApiClient, hostRelocator } from './api'
+import { hostLinks } from '../core/hostLink'
 import type { Host } from '../core/types'
 import { h5CredentialValue, resolveH5Session, type H5Storage } from '../core/h5Session'
 import { h5Location, isH5 } from './h5'
@@ -60,6 +62,8 @@ type AppContextValue = {
   add(host: Host, credential: string, signal?: AbortSignal): Promise<void>
   select(id: string): Promise<void>
   remove(id: string): Promise<void>
+  /** A remote computer's verified new public address (its tunnel restarted). */
+  relocate(id: string, url: string): Promise<void>
 }
 const Context = createContext<AppContextValue | null>(null)
 
@@ -93,8 +97,30 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
     return () => listener.remove()
   }, [])
   useEffect(() => {
-    if (ready && !error) backgroundDuty.retain(registry.hosts.map((host) => host.id))
+    if (!ready || error) return
+    backgroundDuty.retain(registry.hosts.map((host) => host.id))
+    // A removed computer's direct-connection link must stop signaling on every
+    // foreground and network change.
+    hostLinks.retain(registry.hosts.map((host) => host.id))
+    // ...and its local-network hints go with it.
+    void hostRelocator.retain(registry.hosts.map((host) => host.id)).catch(() => {})
   }, [ready, error, registry.hosts])
+  const relocate = useCallback(async (id: string, url: string) => {
+    const next = await repository.updateUrl(id, url)
+    if (!next) return
+    // Links are cached per computer and keep the address they were made with:
+    // drop it before anything rebuilds a client for the new address.
+    hostLinks.forget(id)
+    setRegistry(next)
+  }, [])
+  useEffect(() => {
+    if (!ready || error) return
+    return hostRelocator.attach({
+      host: (id) => registry.hosts.find((host) => host.id === id),
+      credential: storedCredential,
+      relocate,
+    })
+  }, [ready, error, registry.hosts, relocate])
   return (
     <Context.Provider
       value={{
@@ -122,8 +148,11 @@ function NativeAppProvider({ children }: React.PropsWithChildren) {
               repository.remove(id)
             )
           )
+          // The unregister request above may have created this computer's link.
+          hostLinks.forget(id)
           drafts.removeHost(id)
         },
+        relocate,
       }}
     >
       {children}
@@ -182,6 +211,7 @@ function H5AppProvider({ children }: React.PropsWithChildren) {
       add: unsupported,
       select: unsupported,
       remove: unsupported,
+      relocate: unsupported,
     }
   }, [state, error, drafts])
   return <Context.Provider value={value}>{children}</Context.Provider>

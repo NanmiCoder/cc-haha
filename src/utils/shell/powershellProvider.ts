@@ -38,6 +38,7 @@ export function createPowerShellProvider(shellPath: string): ShellProvider {
         id: number | string
         sandboxTmpDir?: string
         useSandbox: boolean
+        failOnPowerShellError?: boolean
       },
     ): Promise<{ commandString: string; cwdFilePath: string }> {
       // Stash sandboxTmpDir for getEnvironmentOverrides (mirrors bashProvider)
@@ -63,7 +64,17 @@ export function createPowerShellProvider(shellPath: string): ShellProvider {
       // exit code (was 0 — old logic only looked at $? which the trailing
       // cmdlet set true). Both rarer than the git/npm/curl stderr case.
       const cwdTracking = `\n; $_ec = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }\n; (Get-Location).Path | Out-File -FilePath '${escapedCwdFilePath}' -Encoding utf8 -NoNewline\n; exit $_ec`
-      const psCommand = command + cwdTracking
+      // Evaluate an unchanged command in the session so using/param statements
+      // still parse first. PowerShell treats typographic single quotes as
+      // delimiters too. Double all of them when building the literal.
+      const commandBody = opts.failOnPowerShellError && process.platform === 'win32'
+        ? [
+            "if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage') { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) }",
+            "$ErrorActionPreference = 'Stop'",
+            `Invoke-Expression '${command.replace(/['\u2018-\u201B]/g, '$&$&')}'`,
+          ].join('\n')
+        : command
+      const psCommand = commandBody + cwdTracking
 
       // Sandbox wraps the returned commandString as `<binShell> -c '<cmd>'` —
       // hardcoded `-c`, no way to inject -NoProfile -NonInteractive. So for

@@ -29,7 +29,18 @@ export async function runAgentDesktopChecks(options: { run?: Runner; source?: No
       [...cargo, '-p', 'agent-desktop-core', '--lib', '--', '--test-threads=1'],
       [...cargo, '-p', 'agent-desktop-core', '--test', 'product_cursor_visuals'],
       [...cargo, '-p', 'agent-desktop', '--bin', 'agent-desktop', 'cli::', '--', '--test-threads=1'],
+      [...cargo, '-p', 'agent-desktop', '--bin', 'agent-desktop', 'dispatch::cursor_overlay_lifecycle_tests::', '--', '--test-threads=1'],
     ]
+    if (process.platform === 'win32') {
+      commands.push([
+        ...cargo, '-p', 'agent-desktop-windows', '--lib', '--',
+        'system::cursor_overlay::', 'winforms', '--test-threads=1', '--skip', 'system::cursor_overlay::window::tests::',
+      ])
+      commands.push([
+        ...cargo, '-p', 'agent-desktop', '--test', 'windows_private_file_install',
+        'status_probe_refuses_inherited_access_and_accepts_a_native_created_root', '--', '--exact',
+      ])
+    }
     for (const command of commands) {
       const code = await run(command, { cwd: root, env })
       if (code !== 0) return code

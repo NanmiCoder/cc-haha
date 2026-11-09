@@ -274,7 +274,8 @@ export function createQualityGateSandbox(options: {
       return describeUserStateMutations(guardedBefore, fingerprintUserState(sourceConfigDir))
     },
     cleanup() {
-      rmSync(home, { recursive: true, force: true })
+      // A just-exited Windows CLI can leave an MCP child releasing its cwd.
+      rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
     },
   }
 }

@@ -37,7 +37,7 @@ bun run android
 
 原生目录由 Expo 根据 `app.json`、`app.config.ts` 和配置插件生成，禁止手工维护生成的 `ios/`、`android/`。原生依赖或配置变化后需要重新构建。
 
-Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
+Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。同一插件在 React 启动前给 `expo/fetch` 和 WebSocket 装上 `modules/cchaha-network`：系统解析结果全部落在 Cloudflare 网段的主机名（Quick Tunnel、用户自己的 Cloudflare 域名）会在解析结果和内置的 Cloudflare 入口地址间错峰竞速 TCP 连接，避开运营商临时丢弃的个别地址；其他主机名照常解析、不做探测。竞速逻辑的 JVM 单测：`./android/gradlew -p android :cchaha-network:testDebugUnitTest`。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
 
 同一套界面也是手机浏览器的 H5：桌面 `bun run build` 调用 `bun run export:h5`，以 `EXPO_PUBLIC_CC_HAHA_H5=1` 导出到 `desktop/dist/m`，由桌面服务端托管在 `/m/`。H5 只连接托管它的电脑（`src/state/h5.ts`），沿用桌面 H5 入口验证过的令牌或远程设备 Cookie；扫码、多台电脑、推送和锁屏实时活动不进入 H5，文件改为浏览器下载。expo-router 在子路径下会把 `/member`、`/models` 误剥成 `/ember`、`/odels`，`patches/expo-router@58.0.25.patch` 修正了这一点；升级 expo-router 时用 `src/core/h5BasePath.test.ts` 确认是否还需要它。
 
@@ -69,7 +69,7 @@ bunx expo prebuild --platform android --no-install
 
 每台电脑独立保存元数据（AsyncStorage）与连接凭据（SecureStore）。手机设置有版本迁移；不能读取的未来版本不会被覆盖。远程 HTTPS 地址保持不变时，临时断线或网关重启后使用原凭据重连并同步历史和运行状态，结果不确定的消息不自动重发；确认凭据失效才要求重新配对。远程设备凭据有效 30 天，当前不自动续期。电脑休眠或退出时 App 不能代替电脑执行任务，也不提供远程唤醒；桌面启动后恢复远程入口仍需用户主动开启对应选项。快速连接重建后要重新扫码；固定域名恢复后可继续使用已保存的连接。
 
-移除电脑会先撤销已登记的通知和 Live Activity，再清理手机凭据；若电脑不可达且仍有登记，保留连接供重试。电脑会话不会被删除。远程设备的整个访问授权可另在桌面撤销。
+移除电脑只取决于手机本身：先请电脑撤销已登记的通知和 Live Activity（只试一次，最多等 3 秒），再清理手机上的连接和凭据。电脑休眠、换了地址、拒绝凭据或没有回应，都不会拦住移除；没送达的登记留在电脑上，最长 30 天后失效；远程连接的手机在桌面撤销授权时也会一并清掉。电脑会话不会被删除。
 
 ## 定时任务
 

@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use agent_desktop_core::CursorOverlayControl;
 
-use super::pipe_name;
 use super::transport::{self, ReachOutcome};
+use super::{discover, pipe_name};
 
 /// Short on purpose. The sweep runs on the enable path ahead of the reach that
 /// decides `data.rendered`, so whatever it spends is spent by every enable. A
@@ -33,18 +33,27 @@ const RETIREMENT_BUDGET: Duration = Duration::from_millis(300);
 /// and a sweep that failed must not turn a working enable into an error — the
 /// overlay is fail-soft, and the caller asked to draw, not to tidy up.
 pub(crate) fn sweep(root: &Path, session_id: &str) {
-    for name in retirement_targets(root, session_id, &pipe_name::PROTOCOL_GENERATIONS) {
+    for name in retirement_targets(
+        root,
+        session_id,
+        &pipe_name::PROTOCOL_GENERATIONS,
+        discover::session_endpoints,
+    ) {
         retire(&name, session_id);
     }
 }
 
-/// The pipe names a sweep must clear: one per retired generation, and never
-/// the one this build is about to use. Pure, so what the sweep aims at can be
-/// asserted without a renderer to aim at.
-fn retirement_targets(root: &Path, session_id: &str, ledger: &[&'static str]) -> Vec<String> {
+/// The pipe names a sweep must clear, including every agent in a retired
+/// generation, while leaving the current generation alone.
+fn retirement_targets(
+    root: &Path,
+    session_id: &str,
+    ledger: &[&'static str],
+    find: impl Fn(&Path, &str, &str) -> Vec<String>,
+) -> Vec<String> {
     pipe_name::retired_generations(ledger)
         .iter()
-        .map(|generation| pipe_name::pipe_name_for_generation(root, session_id, None, generation))
+        .flat_map(|generation| find(root, session_id, generation))
         .collect()
 }
 

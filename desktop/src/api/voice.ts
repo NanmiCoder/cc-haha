@@ -154,8 +154,15 @@ export type VoiceHistorySourceId = 'claude-code' | 'codex'
 
 export type VoiceHistorySource = {
   id: VoiceHistorySourceId
+  /** Whether it has sessions within the analyzed days. */
   available: boolean
   sessions: number
+}
+
+export type VoiceHistorySourceList = {
+  sources: VoiceHistorySource[]
+  /** How many days back the analysis reads. */
+  days: number
 }
 
 export type VoiceHistoryCategory = 'project' | 'model' | 'tool' | 'other'
@@ -269,7 +276,7 @@ export const voiceApi = {
 
   /** Which chat histories exist on this computer, with session counts. Local only. */
   historySources: () =>
-    api.get<{ sources: VoiceHistorySource[] }>('/api/voice/vocabulary/history/sources'),
+    api.get<VoiceHistorySourceList>('/api/voice/vocabulary/history/sources'),
 
   /**
    * Counts terms in the user's own messages locally, then makes one model call

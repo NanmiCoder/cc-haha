@@ -183,6 +183,7 @@ describe('history routes', () => {
         { id: 'claude-code', available: true, sessions: 2 },
         { id: 'codex', available: false, sessions: 0 },
       ],
+      days: 14,
     })
 
     replies = [text('{"groups":[{"category":"tool","terms":[{"term":"Codex","doubtful":false}]}]}')]

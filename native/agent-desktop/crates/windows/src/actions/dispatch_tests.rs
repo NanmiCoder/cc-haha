@@ -231,6 +231,7 @@ fn no_affordance_click_chain_exhausts_not_delivered() {
         ClickAvailability {
             invoke_available: false,
             legacy_available: false,
+            invoke_requires_headed: false,
         },
         || Ok(DeliveryOutcome::DeliveredUnverified),
         || Ok(DeliveryOutcome::DeliveredUnverified),

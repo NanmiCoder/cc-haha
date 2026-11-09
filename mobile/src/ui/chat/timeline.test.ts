@@ -29,6 +29,9 @@ test.each(['ios', 'android'])('%s: short conversations keep both messages mounte
       router: {}, useFocusEffect: () => {}, useLocalSearchParams: () => ({ id: 'fixture', host: 'fixture' }),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('expo-clipboard'))}, () => ({}))
+    mock.module(${JSON.stringify(import.meta.resolve('expo-crypto'))}, () => ({ getRandomValues: array => array }))
+    mock.module(${JSON.stringify(import.meta.resolve('expo-network'))}, () => ({ addNetworkStateListener: () => ({ remove() {} }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../state/api'))}, () => ({ hostLinkFor: () => undefined, nativeSocketFactory: () => ({}), watchDeviceNetwork: () => () => {} }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/AppContext'))}, () => ({
       useApp: () => ({ drafts: new Map() }), useConnection: () => ({ client: null, host: { name: 'Fixture' } }),
     }))

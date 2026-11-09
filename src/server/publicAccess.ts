@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +7,8 @@ import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
 import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
+import { parseResumeRequest } from './ws/resumableStreams.js'
+import type { TunnelGateway } from './p2p/mux.js'
 
 const PREFIX = '/api/public-access'
 const COOKIE = '__Host-haha-remote'
@@ -17,8 +19,29 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = () => randomBytes(32).toString('base64url')
 type Device = { id: string, name: string, createdAt: number, expiresAt: number, tokenHash: string }
 type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected', clientType: 'browser' | 'native' }
-type Stored = Record<string, unknown> & { version: number, devices: Device[] }
+/** `lastPublicUrl`: the address phones were last given, so a new one can be announced. */
+type Stored = Record<string, unknown> & { version: number, devices: Device[], lastPublicUrl?: unknown }
 type RemoteData = WebSocketData & { remoteDeviceId: string }
+
+/**
+ * Proof that a computer holding this device's pairing produced `message`. The
+ * phone derives the same key from its own credential (`sha256hex(token)`), so a
+ * relayed or LAN answer cannot be forged without the pairing.
+ */
+export const deviceMac = (tokenHash: string, message: string) =>
+  createHmac('sha256', tokenHash).update(message).digest('base64url')
+
+const PRIVATE_V4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/
+/** Addresses a phone on the same network (or tailnet) may reach the gateway's port at. */
+export function lanAddresses(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): string[] {
+  const found: string[] = []
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal && PRIVATE_V4.test(entry.address) && !found.includes(entry.address)) found.push(entry.address)
+    }
+  }
+  return found.slice(0, 6)
+}
 
 /** v0 did not store devices. Never adopt legacy LAN bearer tokens as remote sessions. */
 export function migratePublicAccessStore(value: unknown): Stored {
@@ -121,20 +144,42 @@ function remoteComputerUseConsentPatch(value: unknown): boolean {
 }
 const json = (value: unknown, status = 200) => secure(Response.json(value, { status }))
 
+/** The P2P broker as the gateway sees it (see p2p/broker.ts). */
+type P2PSignaling = {
+  readonly available: boolean
+  iceServers(): unknown
+  offer(deviceId: string, input: Record<string, unknown>): Promise<unknown>
+  candidates(deviceId: string, input: Record<string, unknown>): Promise<unknown>
+}
+/** Bun's upgrade entry point, or the P2P multiplexer's stand-in for it. */
+type Upgrader = { upgrade(request: Request, options: { data: RemoteData }): boolean }
+
 type Dependencies = {
   handleApiRequest: (request: Request, url: URL, context?: ApiRequestContext) => Promise<Response>
   handleStatic: (request: Request, url: URL) => Promise<Response | null>
   websocket: WebSocketHandler<WebSocketData>
+  /** End a device's resumable streams, including detached ones no socket points at. */
+  terminateDeviceStreams?: (deviceId: string) => void
+  /** Phone-to-desktop direct connections; absent on hosts without P2P. */
+  p2p?: () => P2PSignaling | undefined
   serverPort: () => number
   storePath?: string
   now?: () => number
   resolveProxy?: () => Promise<{ proxyUrl: string | null }>
   verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean>
+  /**
+   * The public address differs from the one phones were last given (a Quick
+   * Tunnel restarted). `sign` proves the address to one paired device.
+   */
+  onOriginChanged?: (change: { url: string, previous: string, sign: (deviceId: string) => string | undefined }) => void
+  networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>
 }
 
 /** The listener, not attacker-controlled headers, establishes the remote trust boundary. */
 export class PublicAccessServer {
   private server: Server<RemoteData> | null = null
+  /** Answers only the address lookup, on every interface (see `lanFetch`). */
+  private lan: Server<undefined> | null = null
   private publicUrl: string | null = null
   private gatewayId: string | null = null
   private stored: Stored = { version: 1, devices: [] }
@@ -185,8 +230,20 @@ export class PublicAccessServer {
   private prune() {
     for (const [key, rate] of this.rates) if (this.now() - rate.start >= 60_000) this.rates.delete(key)
     for (const [id, p] of this.pending) if (p.expiresAt <= this.now()) this.pending.delete(id)
-    this.stored.devices = this.stored.devices.filter(d => d.expiresAt > this.now())
-    for (const ws of this.sockets) if (!this.authorizedDevice(ws.data.remoteDeviceId)) ws.close(1008, 'Remote access revoked')
+    const before = this.stored.devices
+    this.stored.devices = before.filter(d => d.expiresAt > this.now())
+    for (const device of before) if (!this.stored.devices.includes(device)) this.deps.terminateDeviceStreams?.(device.id)
+    for (const ws of this.sockets) if (!this.authorizedDevice(ws.data.remoteDeviceId)) this.closeTerminal(ws, 1008, 'Remote access revoked')
+  }
+
+  /** Close a socket so that its resumable stream ends instead of waiting for the client. */
+  private closeTerminal(ws: ServerWebSocket<RemoteData>, code: number, reason: string) {
+    ws.data.terminal = true
+    ws.close(code, reason)
+  }
+
+  private terminateAllStreams() {
+    for (const device of this.stored.devices) this.deps.terminateDeviceStreams?.(device.id)
   }
 
   private authorizedDevice(id: string) {
@@ -239,9 +296,60 @@ export class PublicAccessServer {
     if (this.publicUrl && this.publicUrl !== url.origin) {
       this.pending.clear()
       this.pairing = null
-      for (const ws of this.sockets) ws.close(1008, 'Remote origin changed')
+      for (const ws of this.sockets) this.closeTerminal(ws, 1008, 'Remote origin changed')
+      this.terminateAllStreams()
     }
     this.publicUrl = url.origin
+    this.load()
+    const previous = typeof this.stored.lastPublicUrl === 'string' ? this.stored.lastPublicUrl : null
+    if (previous === url.origin) return
+    this.stored.lastPublicUrl = url.origin
+    this.persist()
+    if (!previous) return
+    const announced = url.origin
+    try {
+      this.deps.onOriginChanged?.({
+        url: announced, previous,
+        sign: deviceId => {
+          const device = this.stored.devices.find(d => d.id === deviceId && d.expiresAt > this.now())
+          return device && deviceMac(device.tokenHash, `cc-haha-host-url\n${announced}`)
+        },
+      })
+    } catch { /* announcing is best-effort; the gateway is up either way */ }
+  }
+
+  /**
+   * WebSocket handlers shared by Bun's sockets and sockets carried over a P2P
+   * data channel, so per-device limits, rate limits and revocation apply to both.
+   */
+  readonly socketHandlers = {
+    open: (ws: ServerWebSocket<RemoteData>) => {
+      if (!this.authorizedDevice(ws.data.remoteDeviceId) || this.sockets.size >= 64 || [...this.sockets].filter(s => s.data.remoteDeviceId === ws.data.remoteDeviceId).length >= 8) {
+        ws.close(1008, 'Remote connection limit')
+        return
+      }
+      this.sockets.add(ws)
+      this.deps.websocket.open?.(ws)
+    },
+    message: (ws: ServerWebSocket<RemoteData>, message: string | Buffer) => {
+      if (!this.authorizedDevice(ws.data.remoteDeviceId)) { ws.close(1008, 'Remote access revoked'); return }
+      if (!this.rate(`ws:${ws.data.remoteDeviceId}`, 600)) { ws.close(1008, 'Remote rate limit'); return }
+      return this.deps.websocket.message(ws, message)
+    },
+    close: (ws: ServerWebSocket<RemoteData>, code: number, reason: string) => {
+      if (this.sockets.delete(ws)) this.deps.websocket.close?.(ws, code, reason)
+    },
+    drain: (ws: ServerWebSocket<RemoteData>) => this.deps.websocket.drain?.(ws),
+  }
+
+  /** The gateway as a P2P peer's multiplexer uses it: the same entry point as Cloudflare. */
+  tunnel(): TunnelGateway {
+    return {
+      fetch: (request, server) => this.fetch(request, server as Upgrader),
+      socketHandlers: this.socketHandlers as unknown as TunnelGateway['socketHandlers'],
+      deviceIdFor: request => this.deviceFor(request)?.id,
+      publicUrl: () => this.publicUrl,
+    }
   }
 
   enable(publicUrl?: string, port?: number) {
@@ -256,33 +364,29 @@ export class PublicAccessServer {
     this.server = Bun.serve<RemoteData>({
       hostname: '127.0.0.1', port: port ?? 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
       fetch: (req, server) => this.fetch(req, server),
-      websocket: {
-        maxPayloadLength: 1024 * 1024,
-        open: ws => {
-          if (!this.authorizedDevice(ws.data.remoteDeviceId) || this.sockets.size >= 64 || [...this.sockets].filter(s => s.data.remoteDeviceId === ws.data.remoteDeviceId).length >= 8) {
-            ws.close(1008, 'Remote connection limit')
-            return
-          }
-          this.sockets.add(ws)
-          this.deps.websocket.open?.(ws)
-        },
-        message: (ws, message) => {
-          if (!this.authorizedDevice(ws.data.remoteDeviceId)) { ws.close(1008, 'Remote access revoked'); return }
-          if (!this.rate(`ws:${ws.data.remoteDeviceId}`, 600)) { ws.close(1008, 'Remote rate limit'); return }
-          return this.deps.websocket.message(ws, message)
-        },
-        close: (ws, code, reason) => {
-          if (this.sockets.delete(ws)) this.deps.websocket.close?.(ws, code, reason)
-        },
-        drain: ws => this.deps.websocket.drain?.(ws),
-      },
+      websocket: { maxPayloadLength: 1024 * 1024, ...this.socketHandlers },
     })
+    // The gateway stays loopback-only (a wildcard bind could share the fixed port
+    // with another loopback service). The LAN gets only the address lookup, on
+    // the next port, so a phone finds it again after the public URL changed.
+    if (this.server.port < 65535) {
+      try {
+        this.lan = Bun.serve({
+          hostname: '0.0.0.0', port: this.server.port + 1, idleTimeout: 10,
+          fetch: (req, server) => this.lanFetch(req, server.requestIP(req)?.address ?? ''),
+        })
+      } catch { this.lan = null }
+    }
     this.timer = setInterval(() => this.prune(), 10_000)
     this.timer.unref()
     return this.status()
   }
 
-  disable() {
+  /**
+   * `restart`: the desktop is recovering the tunnel and brings the same gateway
+   * back, so resumable streams stay detached and phones resume afterwards.
+   */
+  disable(options: { restart?: boolean } = {}) {
     const listener = this.server
     this.server = null
     this.publicUrl = null
@@ -293,9 +397,38 @@ export class PublicAccessServer {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     // Disabling/rebuilding the tunnel does not revoke the stored device token.
-    for (const ws of this.sockets) ws.close(1012, 'Remote access disabled')
+    for (const ws of this.sockets) {
+      if (options.restart) ws.close(1012, 'Remote access restarting')
+      else this.closeTerminal(ws, 1012, 'Remote access disabled')
+    }
+    if (!options.restart) this.terminateAllStreams()
     listener?.stop(true)
+    this.lan?.stop(true)
+    this.lan = null
     return this.status()
+  }
+
+  private async p2pRoute(request: Request, route: string): Promise<Response> {
+    const broker = this.deps.p2p?.()
+    if (!broker) return json({ error: 'Not found' }, 404)
+    const device = this.deviceFor(request)
+    if (!device) return json({ error: 'Device pairing required' }, 401)
+    if (request.headers.get('Origin') !== this.publicUrl) return json({ error: 'Origin required' }, 403)
+    if (!this.rate(`p2p:${device.id}`, 30)) return json({ error: 'Too many requests' }, 429)
+    if (route === 'api/public-access/p2p' && request.method === 'GET') {
+      return json({ v: 1, available: broker.available, iceServers: broker.iceServers(), gatherMs: 300 })
+    }
+    const step = route === 'api/public-access/p2p/offer' ? 'offer' : route === 'api/public-access/p2p/candidates' ? 'candidates' : null
+    if (!step || request.method !== 'POST') return json({ error: 'Not found' }, 404)
+    let input: Record<string, unknown>
+    try { input = await this.readInput(request, 32 * 1024) } catch { return json({ error: 'Invalid direct connection request' }, 400) }
+    try {
+      return json(await (step === 'offer' ? broker.offer(device.id, input) : broker.candidates(device.id, input)))
+    } catch (error) {
+      const status = error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : 500
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'P2P_FAILED'
+      return json({ error: error instanceof Error ? error.message : 'Direct connection failed', code }, status)
+    }
   }
 
   /** This control route never inherits tokenless loopback or query-token trust. */
@@ -322,7 +455,7 @@ export class PublicAccessServer {
         if (!this.server || !this.publicUrl || !this.gatewayId || !this.deps.verifyGateway) return json({ ok: false })
         return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId) })
       }
-      if (route === 'disable' && request.method === 'POST') return json(this.disable())
+      if (route === 'disable' && request.method === 'POST') return json(this.disable({ restart: input.reason === 'restart' }))
       if (route === 'pairing' && request.method === 'POST') {
         if (!this.server || !this.publicUrl) return json({ error: 'Remote access is not ready' }, 409)
         const token = secret()
@@ -333,6 +466,7 @@ export class PublicAccessServer {
       if (route === 'revoke' && request.method === 'POST') {
         this.stored.devices = this.stored.devices.filter(d => d.id !== id)
         this.persist()
+        if (id) this.deps.terminateDeviceStreams?.(id)
         this.prune()
         return json(this.status())
       }
@@ -347,16 +481,37 @@ export class PublicAccessServer {
     } catch { return json({ error: 'Invalid remote access request or unavailable device store' }, 400) }
   }
 
-  private async readInput(request: Request): Promise<Record<string, unknown>> {
+  private async readInput(request: Request, limit = 4096): Promise<Record<string, unknown>> {
     const text = await request.text()
-    if (text.length > 4096) throw new Error('Request too large')
+    if (text.length > limit) throw new Error('Request too large')
     if (!text) return {}
     const input: unknown = JSON.parse(text)
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Object required')
     return input as Record<string, unknown>
   }
 
-  async fetch(request: Request, server: Server<RemoteData>): Promise<Response | undefined> {
+  /**
+   * A request from the local network (not Cloudflare, not P2P). Its only use is
+   * telling a paired phone the current public address after a Quick Tunnel
+   * restart. Nothing secret crosses the network: the phone sends a hash of its
+   * pairing hash and a nonce, and checks the answer's MAC with its credential.
+   */
+  private lanFetch(request: Request, address: string): Response {
+    try {
+      const url = new URL(request.url)
+      if (request.method !== 'GET' || url.pathname !== `${PREFIX}/locate`) return json({ error: 'Not found' }, 404)
+      if (!this.rate(`locate:${address}`, 30) || !this.rate('locate-global', 300)) return json({ error: 'Too many requests' }, 429)
+      const id = url.searchParams.get('id') ?? ''
+      const nonce = url.searchParams.get('nonce') ?? ''
+      if (!/^[a-f0-9]{64}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return json({ error: 'Invalid request' }, 400)
+      const publicUrl = this.publicUrl
+      const device = this.stored.devices.find(d => d.expiresAt > this.now() && hash(d.tokenHash) === id)
+      if (!device || !publicUrl) return json({ error: 'Not found' }, 404)
+      return json({ url: publicUrl, mac: deviceMac(device.tokenHash, `cc-haha-locate\n${nonce}\n${publicUrl}`) })
+    } catch { return json({ error: 'Invalid request' }, 400) }
+  }
+
+  async fetch(request: Request, server: Upgrader): Promise<Response | undefined> {
     try {
       if (!this.server || !this.publicUrl) return json({ error: 'Remote access unavailable' }, 503)
       const url = new URL(request.url)
@@ -369,6 +524,16 @@ export class PublicAccessServer {
       }
       if (url.pathname === '/health' && request.method === 'GET') return json({ status: 'ok', gatewayId: this.gatewayId })
       const route = url.pathname.split('/').filter(Boolean).join('/')
+      // Direct-connection signaling: an authenticated device only, with its own
+      // limit, so it never competes with the shared pairing budget.
+      if (route === 'api/public-access/p2p' || route.startsWith('api/public-access/p2p/')) return await this.p2pRoute(request, route)
+      if (route === 'api/public-access/locator' && request.method === 'GET') {
+        const device = this.deviceFor(request)
+        if (!device) return json({ error: 'Device pairing required' }, 401)
+        if (!this.rate(`locator:${device.id}`, 30)) return json({ error: 'Too many requests' }, 429)
+        if (!this.lan) return json({ port: null, addresses: [] })
+        return json({ port: this.lan.port, addresses: lanAddresses((this.deps.networkInterfaces ?? os.networkInterfaces)()) })
+      }
       if (route.startsWith('api/public-access/')) {
         if (!this.rate('pairing-global', 180)) return json({ error: 'Too many requests' }, 429)
         if (route === 'api/public-access/session' && request.method === 'GET') {
@@ -419,7 +584,7 @@ export class PublicAccessServer {
         }
         if (!this.rate(`api:${device.id}`, 1200)) return json({ error: 'Too many requests' }, 429)
         if (url.pathname.startsWith('/ws/')) {
-          const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id, mediaRefs: url.searchParams.get('media') === 'ref' } })
+          const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id, mediaRefs: url.searchParams.get('media') === 'ref', resume: parseResumeRequest(url.searchParams) } })
           return upgraded ? undefined : json({ error: 'Upgrade failed' }, 400)
         }
         const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true, remoteDeviceId: device.id, remoteDeviceExpiresAt: device.expiresAt })

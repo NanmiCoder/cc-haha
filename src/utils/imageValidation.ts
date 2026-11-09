@@ -6,6 +6,8 @@ import {
 } from '../constants/apiLimits.js'
 import { logEvent } from '../services/analytics/index.js'
 import { getImageProcessor } from '../tools/FileReadTool/imageProcessor.js'
+import { logForDebugging } from './debug.js'
+import { errorMessage } from './errors.js'
 import { formatFileSize } from './format.js'
 import { ImageResizeError, maybeResizeAndDownsampleImageBuffer, type ImageDimensions } from './imageResizer.js'
 
@@ -116,6 +118,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined
 }
 
+type NormalizedImage =
+  | { data: string; media_type: string; dimensions?: ImageDimensions }
+  | { omitted: string }
+
 // Follow only API content containers, never arbitrary JSON inside tool inputs.
 function nestedContent(block: Record<string, unknown>): unknown {
   if (block.type === 'tool_result' || block.type === 'mcp_tool_result') return block.content
@@ -149,7 +155,38 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
     ? API_MANY_IMAGE_MAX_DIMENSION : IMAGE_MAX_WIDTH
   // Bound concurrency and reuse identical payloads only within this request.
   // A cross-request cache would need the count-dependent dimension limit too.
-  const resized = new Map<string, { data: string; media_type: string; dimensions?: ImageDimensions }>()
+  const resized = new Map<string, NormalizedImage>()
+  async function normalizeImage(data: string): Promise<NormalizedImage> {
+    const buffer = Buffer.from(data, 'base64')
+    try {
+      const result = await maybeResizeAndDownsampleImageBuffer(
+        buffer, buffer.length, '', dimensionLimit,
+      )
+      let dimensions = result.dimensions
+      if (result.buffer !== buffer) {
+        // fit:inside can encode fewer pixels than its rounded target box.
+        // Coordinate notes and the final cap must use the actual output.
+        const processor = await getImageProcessor({ requireAutoOrient: true })
+        const { width, height } = await processor(result.buffer).metadata()
+        if (!width || !height || width > dimensionLimit || height > dimensionLimit) {
+          throw new ImageResizeError('Resized image does not meet the request dimension limit')
+        }
+        dimensions = { ...dimensions, displayWidth: width, displayHeight: height }
+      }
+      return {
+        data: result.buffer === buffer ? data : result.buffer.toString('base64'),
+        media_type: `image/${result.mediaType}`,
+        dimensions,
+      }
+    } catch (error) {
+      // History is immutable and replayed into every request, so one image that
+      // cannot be made compliant would fail this turn and every later one. It is
+      // still never sent unverified: the model gets a note in its place.
+      const reason = errorMessage(error)
+      logForDebugging(`Omitting an image from the API request: ${reason}`, { level: 'warn' })
+      return { omitted: `[Image omitted from this request: ${reason}]` }
+    }
+  }
   async function normalize(content: unknown): Promise<unknown> {
     if (!Array.isArray(content)) return content
     let changed = false
@@ -161,32 +198,16 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
         const data = block.source.data
         let image = resized.get(data)
         if (!image) {
-          const buffer = Buffer.from(data, 'base64')
-          const result = await maybeResizeAndDownsampleImageBuffer(
-            buffer, buffer.length, '', dimensionLimit,
-          )
-          let dimensions = result.dimensions
-          if (result.buffer !== buffer) {
-            // fit:inside can encode fewer pixels than its rounded target box.
-            // Coordinate notes and the final cap must use the actual output.
-            const processor = await getImageProcessor({ requireAutoOrient: true })
-            const { width, height } = await processor(result.buffer).metadata()
-            if (!width || !height || width > dimensionLimit || height > dimensionLimit) {
-              throw new ImageResizeError('Resized image does not meet the request dimension limit')
-            }
-            dimensions = { ...dimensions, displayWidth: width, displayHeight: height }
-          }
-          image = {
-            data: result.buffer === buffer ? data : result.buffer.toString('base64'),
-            media_type: `image/${result.mediaType}`,
-            dimensions,
-          }
+          image = await normalizeImage(data)
           resized.set(data, image)
         }
-        if (image.data !== data || asRecord(block.source)?.media_type !== image.media_type) {
+        if ('omitted' in image) {
+          next = { type: 'text', text: image.omitted,
+            ...(block.cache_control ? { cache_control: block.cache_control } : {}) }
+        } else if (image.data !== data || asRecord(block.source)?.media_type !== image.media_type) {
           next = { ...block, source: { ...block.source, data: image.data, media_type: image.media_type } }
         }
-        const dims = image.dimensions
+        const dims = 'omitted' in image ? undefined : image.dimensions
         if (dims?.originalWidth && dims.originalHeight && dims.displayWidth && dims.displayHeight &&
           (dims.originalWidth !== dims.displayWidth || dims.originalHeight !== dims.displayHeight)) {
           // Keep the current grid tied to this exact image, including tools with
@@ -226,7 +247,7 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
   // unambiguous new grid; otherwise identify it as the earlier mapping.
   const grids = new Map<string, Set<string>>()
   for (const image of resized.values()) {
-    const d = image.dimensions
+    const d = 'omitted' in image ? undefined : image.dimensions
     if (!d?.originalWidth || !d.originalHeight || !d.displayWidth || !d.displayHeight) continue
     const key = `${d.originalWidth}x${d.originalHeight}`
     if (!grids.has(key)) grids.set(key, new Set())

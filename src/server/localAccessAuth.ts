@@ -1,7 +1,10 @@
 import { timingSafeEqual } from 'node:crypto'
+import { isLoopbackHost } from './h5AccessPolicy.js'
 
 export const LOCAL_ACCESS_TOKEN_ENV = 'CC_HAHA_LOCAL_ACCESS_TOKEN'
 export const PET_ACCESS_TOKEN_ENV = 'CC_HAHA_PET_ACCESS_TOKEN'
+/** Per-launch credential of the desktop's P2P endpoint link (set by Electron). */
+export const P2P_ENDPOINT_TOKEN_ENV = 'CC_HAHA_P2P_ENDPOINT_TOKEN'
 
 function configuredAccessToken(envName: string): string | null {
   const token = process.env[envName]?.trim()
@@ -47,6 +50,16 @@ export function isLocalAccessAuthorized(
 
   const candidate = tokenOverride ?? bearerToken(request)
   return candidate ? tokensEqual(candidate, expected) : false
+}
+
+/**
+ * The desktop's WebRTC endpoint (a hidden window) relays P2P frames only, so it
+ * holds its own token instead of the local access token that opens every
+ * local API. Loopback only; without the variable the link stays closed.
+ */
+export function isP2PEndpointAuthorized(token: string | null, address: string): boolean {
+  const expected = configuredAccessToken(P2P_ENDPOINT_TOKEN_ENV)
+  return !!expected && !!token && isLoopbackHost(address) && tokensEqual(token, expected)
 }
 
 export function isPetAccessAuthorized(

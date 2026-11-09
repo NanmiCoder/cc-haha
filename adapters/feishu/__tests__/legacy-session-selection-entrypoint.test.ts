@@ -583,6 +583,12 @@ for (const platform of platforms) {
       await send(platform, '/resume 1')
       await enqueue(chatId, async () => {})
       expect(adapter.sessionStore.get(chatId)?.sessionId).toBe('history-active')
+      // Binding commit/socket open can precede application of the server's
+      // initial snapshot. Assert its state after that asynchronous boundary.
+      const deadline = Date.now() + 1000
+      while (adapter.getRuntimeState(chatId).state !== 'thinking' && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 1))
+      }
       expect(adapter.getRuntimeState(chatId).state).toBe('thinking')
       expect(newSessionCount).toBe(creationsBefore)
       expect(sendSpy).not.toHaveBeenCalled()
@@ -1193,7 +1199,10 @@ describe('DingTalk reply delivery through the adapter entrypoint', () => {
       const warning = spyOn(console, 'warn').mockImplementation(() => {})
       try {
         await send('dingtalk', '/allow permission-1', { unauthorized: permissionState === 'unpaired' })
-        await Bun.sleep(0)
+        const deadline = Date.now() + 1000
+        while (!warning.mock.calls.some(args => args.join(' ').includes('sendText failed')) && Date.now() < deadline) {
+          await Bun.sleep(1)
+        }
 
         expect(dingtalkDelivery!.markdownAttempts).toBe(1)
         expect(dingtalkDelivery!.delivered).toEqual([])
@@ -1205,3 +1214,21 @@ describe('DingTalk reply delivery through the adapter entrypoint', () => {
     })
   }
 })
+
+  it('preserves a short partial reply when the server connection fails', async () => {
+    const chatId = chatFor('wechat')
+    wechat.clearTransientChatState(chatId)
+    wechat.bridge.resetSession(chatId)
+    wechat.sessionStore.set(chatId, `short-reply-${++sequence}`, temporaryRoot)
+    await send('wechat', '/status')
+    const before = notices.length
+    try {
+      await wechat.handleServerMessage(chatId, { type: 'content_delta', text: 'Important partial answer' })
+      await wechat.handleServerMessage(chatId, { type: 'error', message: 'ADAPTER_CONNECTION_LOST' })
+      const textReplies = () => notices.slice(before).map(text => JSON.parse(text).msg?.item_list?.[0]?.text_item?.text)
+      expect(textReplies()).toContain('Important partial answer')
+      expect(textReplies()).toContain('错误: ADAPTER_CONNECTION_LOST')
+      await wechat.handleServerMessage(chatId, { type: 'message_complete' })
+      expect(textReplies().filter(text => text === 'Important partial answer')).toHaveLength(1)
+    } finally { wechat.clearTransientChatState(chatId) }
+  })

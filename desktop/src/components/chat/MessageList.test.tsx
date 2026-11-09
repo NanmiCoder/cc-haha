@@ -9125,6 +9125,22 @@ describe('MessageList nested tool calls', () => {
     ).toBeTruthy()
   })
 
+  it('explains provider quota exhaustion in the active locale and preserves upstream detail', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    const raw = 'API Error: 429 Go usage limit exceeded · monthly'
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [{ id: 'quota', type: 'error', code: 'billing_error', message: raw, timestamp: 1 }],
+        }),
+      },
+    })
+    render(<MessageList />)
+    expect(screen.getByText('供应商额度或余额不足。请检查供应商的计费信息、等待额度恢复，或切换到其他供应商。')).toBeTruthy()
+    expect(screen.getByText(raw)).toBeTruthy()
+    expect(screen.queryByText(/请先登录/)).toBeNull()
+  })
+
   it('renders business API errors in the active locale without raw English fallback', () => {
     useSettingsStore.setState({ locale: 'zh' })
     useChatStore.setState({
@@ -10807,7 +10823,7 @@ describe('MessageList edit and resend', () => {
   function setup(messages: UIMessage[], checkpoints: Checkpoint[], sessionOverrides: Partial<PerSessionState> = {}) {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({ checkpoints })
     const reloadHistory = vi.fn().mockResolvedValue(undefined)
-    const sendMessage = vi.fn()
+    const sendMessage = vi.fn().mockReturnValue(true)
     const queueComposerPrefill = vi.fn()
     const stopGeneration = vi.fn()
     useChatStore.setState({

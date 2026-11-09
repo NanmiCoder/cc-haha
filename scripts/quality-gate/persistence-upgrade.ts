@@ -73,6 +73,10 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/utils/swarm/inProcessRunner.resume.test.ts', '--test-name-pattern', 'metadata written before'],
   },
   {
+    title: 'SubAgent runs from agent metadata written before launch effort was recorded report no effort',
+    command: ['bun', 'test', './src/server/services/subagentRunService.test.ts', '--test-name-pattern', 'metadata written before effort was recorded'],
+  },
+  {
     title: 'Session collaboration state migration and recovery',
     command: ['bun', 'test', './src/server/services/sessionCollaborationService.test.ts', './src/server/services/sessionCollaborationService.delegation.test.ts', '--test-name-pattern', 'migrat|recover'],
   },

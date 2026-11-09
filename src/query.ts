@@ -18,8 +18,9 @@ import { buildPostCompactMessages } from './services/compact/compact.js'
 import {
   canRecoverFromPromptTooLong,
   compactAfterPromptTooLong,
+  estimateRejectedRequestTokens,
   getProviderContextLimit,
-  isPromptTooLongApiError,
+  isRecoverableContextRejection,
 } from './services/compact/promptTooLongRecovery.js'
 import { rememberProviderContextLimit } from './utils/context.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -118,6 +119,8 @@ import { productionDeps, type QueryDeps } from './query/deps.js'
 import type { Terminal, Continue } from './query/transitions.js'
 import { consumeTeamPlanTurnPause } from './utils/swarm/teamPlanTurnBoundary.js'
 import { feature } from 'bun:bundle'
+import { requiresComputerUse } from './utils/computerUse/turnIntent.js'
+import { isLockHeldLocally } from './utils/computerUse/computerUseLock.js'
 import {
   getCurrentTurnTokenBudget,
   getTurnOutputTokens,
@@ -242,15 +245,26 @@ export async function* query(
   Terminal
 > {
   const consumedCommandUuids: string[] = []
-  const terminal = yield* queryLoop(params, consumedCommandUuids)
-  // Only reached if queryLoop returned normally. Skipped on throw (error
-  // propagates through yield*) and on .return() (Return completion closes
-  // both generators). This gives the same asymmetric started-without-completed
-  // signal as print.ts's drainCommandQueue when the turn fails.
-  for (const uuid of consumedCommandUuids) {
-    notifyCommandLifecycle(uuid, 'completed')
+  const turn = params.toolUseContext.agentId ? undefined : Symbol()
+  const toolUseContext = turn ? { ...params.toolUseContext, computerUseTurn: turn } : params.toolUseContext
+  try {
+    const terminal = yield* queryLoop({ ...params, toolUseContext }, consumedCommandUuids)
+    // A throw or .return() skips this notification, as in print.ts.
+    for (const uuid of consumedCommandUuids) {
+      notifyCommandLifecycle(uuid, 'completed')
+    }
+    return terminal
+  } finally {
+    // API failures, turn limits and iterator closure can bypass Stop hooks.
+    if (turn && isLockHeldLocally(turn)) {
+      try {
+        const { cleanupComputerUseAfterTurn } = await import('./utils/computerUse/cleanup.js')
+        await cleanupComputerUseAfterTurn(toolUseContext, { ownedTurn: turn })
+      } catch (error) {
+        logForDebugging(`Could not finish Computer Use cleanup: ${String(error)}`)
+      }
+    }
   }
-  return terminal
 }
 
 async function* queryLoop(
@@ -873,7 +887,7 @@ async function* queryLoop(
             }
             if (
               promptTooLongRecoveryEnabled &&
-              isPromptTooLongApiError(message)
+              isRecoverableContextRejection(message, messagesForQuery)
             ) {
               withheld = true
             }
@@ -1267,20 +1281,25 @@ async function* queryLoop(
       if (
         promptTooLongRecoveryEnabled &&
         lastMessage &&
-        isPromptTooLongApiError(lastMessage)
+        isRecoverableContextRejection(lastMessage, messagesForQuery)
       ) {
+        const rejectedCacheSafeParams = {
+          systemPrompt,
+          userContext,
+          systemContext,
+          toolUseContext,
+          forkContextMessages: messagesForQuery,
+        }
+        const rejectedRequestTokens = estimateRejectedRequestTokens(
+          messagesForQuery,
+          rejectedCacheSafeParams,
+        )
         const compacted = await (
           deps.compactAfterPromptTooLong ?? compactAfterPromptTooLong
         )({
           messages: messagesForQuery,
           toolUseContext,
-          cacheSafeParams: {
-            systemPrompt,
-            userContext,
-            systemContext,
-            toolUseContext,
-            forkContextMessages: messagesForQuery,
-          },
+          cacheSafeParams: rejectedCacheSafeParams,
           querySource,
         })
         if (compacted) {
@@ -1293,7 +1312,10 @@ async function* queryLoop(
                 preCompactContext,
             )
           }
-          const limit = getProviderContextLimit(lastMessage)
+          const limit = getProviderContextLimit(
+            lastMessage,
+            rejectedRequestTokens,
+          )
           pendingProviderContextLimit =
             limit === undefined ? undefined : { model: currentModel, limit }
           const postCompactMessages = buildPostCompactMessages(compacted)
@@ -1721,6 +1743,9 @@ async function* queryLoop(
       sleepRan ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
+      // Explicit desktop requests need their own SDK turn and its refreshed
+      // Computer Use inventory. Do not merge them into a general-tool turn.
+      if (querySource === 'sdk' && requiresComputerUse(cmd)) return false
       if (isMainThread) return cmd.agentId === undefined
       // Subagents only drain task-notifications addressed to them — never
       // user prompts, even if someone stamps an agentId on one.

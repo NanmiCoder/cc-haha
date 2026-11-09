@@ -1,4 +1,5 @@
 import { normalizeNameForMCP } from '../../services/mcp/normalization.js'
+import type { Tool } from '../../Tool.js'
 import { env } from '../env.js'
 
 export const COMPUTER_USE_MCP_SERVER_NAME = 'computer-use'
@@ -85,4 +86,9 @@ export function getCliComputerUseCapabilities(
 
 export function isComputerUseMCPServer(name: string): boolean {
   return normalizeNameForMCP(name) === COMPUTER_USE_MCP_SERVER_NAME
+}
+
+export function isComputerUseRuntimeTool(tool: Pick<Tool, 'name' | 'mcpInfo'>): boolean {
+  return tool.name.startsWith(`mcp__${COMPUTER_USE_MCP_SERVER_NAME}__`)
+    || Boolean(tool.mcpInfo && isComputerUseMCPServer(tool.mcpInfo.serverName))
 }

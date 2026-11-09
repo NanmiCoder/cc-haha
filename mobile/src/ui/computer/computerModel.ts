@@ -97,7 +97,7 @@ export function removeConfirmText(hostName: string) {
   return {
     title: `移除「${hostName}」？`,
     message:
-      '将注销这台电脑的手机通知并删除手机连接。电脑上的会话会保留。已登记推送时，需要连接电脑完成注销；失败可重试。',
+      '只删除手机上的连接，电脑上的会话会保留。电脑在线时会一并注销手机通知；连不上也能移除，那边的通知登记最长 30 天后失效。',
   }
 }
 

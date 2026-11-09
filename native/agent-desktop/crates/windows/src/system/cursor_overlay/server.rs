@@ -177,8 +177,12 @@ impl Listener {
     /// then immediately tears down is `Disable` - so without this, the
     /// caller waiting on a teardown that did succeed would see a broken
     /// pipe. The waiting is bounded, for the reason the helper gives.
-    pub(crate) fn acknowledge(&self) {
-        let byte = [framing::ACKNOWLEDGEMENT];
+    pub(crate) fn acknowledge(&self, applied: bool) {
+        let byte = [if applied {
+            framing::ACKNOWLEDGEMENT
+        } else {
+            framing::PAINT_FAILED
+        }];
         let mut written = 0u32;
         unsafe {
             WriteFile(

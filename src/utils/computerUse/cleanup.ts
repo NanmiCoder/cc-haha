@@ -42,7 +42,8 @@ const OVERLAY_HIDE_TIMEOUT_MS = 2000
  * disconnect and dies with the CLI process; a session-archive hook is a
  * separate follow-up.
  *
- * `deps` is injectable for unit tests only.
+ * The fallback finalizer supplies `ownedTurn` to avoid closing a later turn's lock.
+ * The overlay callbacks are injectable for unit tests.
  */
 export async function cleanupComputerUseAfterTurn(
   ctx: Pick<
@@ -52,8 +53,12 @@ export async function cleanupComputerUseAfterTurn(
   deps: {
     overlayHide?: () => Promise<void>
     hideCursorBadge?: () => void
+    ownedTurn?: symbol
   } = {},
 ): Promise<void> {
+  const { ownedTurn } = deps
+  if (ownedTurn !== undefined && !isLockHeldLocally(ownedTurn)) return
+
   // Windows counterpart to the macOS overlay. Synchronous, no-throw, and a
   // no-op off-Windows, so it goes first and unconditionally: an orphaned badge
   // would sit on screen claiming the agent is holding the mouse after the turn
@@ -118,7 +123,7 @@ export async function cleanupComputerUseAfterTurn(
 
   // Zero-syscall pre-check so non-CU turns don't touch disk. Release is still
   // idempotent (returns false if already released or owned by another session).
-  if (!isLockHeldLocally()) return
+  if (!isLockHeldLocally(ownedTurn)) return
 
   // Unregister before lock release so the pump-retain drops as soon as the
   // CU session ends. Idempotent — no-ops if registration failed at acquire.
@@ -132,7 +137,7 @@ export async function cleanupComputerUseAfterTurn(
     )
   }
 
-  if (await releaseComputerUseLock()) {
+  if (await releaseComputerUseLock(ownedTurn)) {
     ctx.sendOSNotification?.({
       message: 'Claude is done using your computer',
       notificationType: 'computer_use_exit',

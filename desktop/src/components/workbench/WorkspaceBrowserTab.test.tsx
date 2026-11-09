@@ -394,7 +394,7 @@ it('does not offer annotation against a blank browser page', async () => {
 })
 
 it('sends an annotated selection from the address toolbar into its owning chat session', async () => {
-  const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockResolvedValue(undefined)
+  const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(true)
   const tab = openBrowserTab()
   await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
   fireEvent.click(screen.getByTestId('workspace-browser-annotate'))

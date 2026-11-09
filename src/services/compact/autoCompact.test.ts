@@ -14,14 +14,24 @@ import {
   MODEL_MAX_OUTPUT_TOKENS_ENV_KEY,
 } from '../../utils/model/modelContextWindows.js'
 import { getModelMaxOutputTokens } from '../../utils/context.js'
+import { jsonStringify } from '../../utils/slowOperations.js'
+import {
+  clearToolSchemaCache,
+  getToolSchemaCache,
+} from '../../utils/toolSchemaCache.js'
+import { zodToJsonSchema } from '../../utils/zodToJsonSchema.js'
+import { z } from 'zod/v4'
 
 let originalAutoCompactWindow: string | undefined
 let originalContextWindows: string | undefined
 let originalMaxOutputTokens: string | undefined
 let originalDisableCompact: string | undefined
 let originalDisableAutoCompact: string | undefined
+let originalToolSchemaCache = [...getToolSchemaCache()]
 
 beforeEach(() => {
+  originalToolSchemaCache = [...getToolSchemaCache()]
+  clearToolSchemaCache()
   originalAutoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   originalContextWindows = process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
   originalMaxOutputTokens = process.env[MODEL_MAX_OUTPUT_TOKENS_ENV_KEY]
@@ -35,6 +45,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  clearToolSchemaCache()
+  for (const [key, schema] of originalToolSchemaCache) {
+    getToolSchemaCache().set(key, schema)
+  }
   if (originalAutoCompactWindow === undefined) {
     delete process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
   } else {
@@ -270,6 +284,63 @@ describe('model context window resolution', () => {
       0,
       fixedTokens,
     )).toBe(true)
+  })
+
+  test('counts the tool descriptions a session already sent in the fixed prefix', () => {
+    // Tool descriptions come from async tool.prompt() and are the largest part
+    // of the fixed prefix (~15K of ~26K tokens in a real relay request). The
+    // estimate only saw name + input_schema, so relays without usage never
+    // reached the auto-compact threshold.
+    const description = 'Reads a file from the local filesystem. '.repeat(400)
+    const inputSchema = z.object({ file_path: z.string() })
+    const mcpSchema = {
+      type: 'object' as const,
+      properties: { query: { type: 'string' } },
+    }
+    const params = {
+      systemPrompt: ['system'],
+      systemContext: {},
+      userContext: {},
+      toolUseContext: {
+        options: {
+          tools: [
+            { name: 'Read', inputSchema },
+            { name: 'mcp__docs__search', inputSchema, inputJSONSchema: mcpSchema },
+          ],
+        },
+      },
+    } as never
+    const withoutDescriptions = estimateFallbackFixedContextTokens(params)
+
+    // Same keys toolToAPISchema writes: name, or name:schema for tools that
+    // carry an inputJSONSchema.
+    const cache = getToolSchemaCache()
+    cache.set('Read', {
+      name: 'Read',
+      description,
+      input_schema: zodToJsonSchema(inputSchema) as never,
+    })
+    cache.set(`mcp__docs__search:${jsonStringify(mcpSchema)}`, {
+      name: 'mcp__docs__search',
+      description,
+      input_schema: mcpSchema,
+    })
+
+    expect(estimateFallbackFixedContextTokens(params)).toBeGreaterThanOrEqual(
+      withoutDescriptions + 2 * (description.length / 4),
+    )
+  })
+
+  test('counts a Chinese system prompt at about one token per character', () => {
+    const systemPrompt = '你是一个编程助手，请用中文回答。'.repeat(500)
+    const fixedTokens = estimateFallbackFixedContextTokens({
+      systemPrompt: [systemPrompt],
+      systemContext: {},
+      userContext: {},
+      toolUseContext: { options: { tools: [] } },
+    } as never)
+
+    expect(fixedTokens).toBeGreaterThanOrEqual(systemPrompt.length)
   })
 
   test('crosses the GPT-5.6 threshold without recounting encrypted siblings', async () => {

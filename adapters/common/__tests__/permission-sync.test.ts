@@ -8,6 +8,24 @@ function harness() {
 }
 
 describe('IM approval reconciliation for restored sessions (#1286)', () => {
+  it('redelivers an approval restored after its local response was lost', async () => {
+    const { runtime, pending } = harness()
+    let prompts = 0
+    const deliver = async () => { prompts++ }
+    await deliverImPermissionPrompt('chat', 'first', runtime, pending, deliver)
+    // The adapter optimistically removes the request after a socket write.
+    // A reconnect can prove that the server never received that response.
+    pending.get('chat')!.delete('first')
+    const snapshot = { type: 'permission_requests_snapshot', toolRequestIds: ['first', 'second'], turnActive: true }
+    syncImPermissionState('chat', snapshot, runtime, pending)
+    await deliverImPermissionPrompt('chat', 'first', runtime, pending, deliver)
+    expect(prompts).toBe(2)
+    syncImPermissionState('chat', snapshot, runtime, pending)
+    await deliverImPermissionPrompt('chat', 'first', runtime, pending, deliver)
+    expect(prompts).toBe(2)
+    expect(runtime.pendingPermissionCount).toBe(2)
+  })
+
   it('retries failed delivery after a snapshot and deduplicates successful delivery across snapshots', async () => {
     const { runtime, pending } = harness()
     let attempts = 0

@@ -21,6 +21,7 @@ type InspectOptions = {
   arch?: PackageSmokeArch
   artifactsDir?: string
   requireMacosGatekeeper?: boolean
+  requireMacosComputerUseSigning?: boolean
   maxLinuxGlibc?: string
   packageKind?: PackageKind
   commandRunner?: PackageSmokeCommandRunner
@@ -33,6 +34,7 @@ export type PackageSmokeArgs = {
   arch?: PackageSmokeArch
   artifactsDir?: string
   requireMacosGatekeeper?: boolean
+  requireMacosComputerUseSigning?: boolean
   maxLinuxGlibc?: string
   packageKind?: PackageKind
 }
@@ -75,7 +77,7 @@ type PackageSmokeCommandOptions = {
 type PackageSmokeCommandRunner = (command: string, args: string[], options?: PackageSmokeCommandOptions) => PackageSmokeCommandResult
 
 function usage() {
-  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper] [--max-linux-glibc <major.minor>]'
+  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper] [--require-macos-computer-use-signing] [--max-linux-glibc <major.minor>]'
 }
 
 function readArgValue(argv: string[], index: number, flag: string) {
@@ -91,6 +93,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
   let arch: PackageSmokeArch | undefined
   let artifactsDir: string | undefined
   let requireMacosGatekeeper = false
+  let requireMacosComputerUseSigning = false
   let maxLinuxGlibc: string | undefined
   let packageKind: PackageKind = 'auto'
 
@@ -140,6 +143,11 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
       continue
     }
 
+    if (arg === '--require-macos-computer-use-signing') {
+      requireMacosComputerUseSigning = true
+      continue
+    }
+
     if (arg === '--max-linux-glibc') {
       const value = readArgValue(argv, index, arg)
       if (!/^\d+\.\d+$/.test(value)) {
@@ -160,6 +168,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
     arch,
     artifactsDir,
     requireMacosGatekeeper,
+    requireMacosComputerUseSigning,
     maxLinuxGlibc,
     packageKind,
   }
@@ -1123,20 +1132,22 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
   }
 
   report.notes.push('No GUI launch was attempted. Matching macOS helper architectures also run an input-free resource probe from a disposable copy of the final package.')
+  // Notarized releases imply the signing chain; signed-but-unnotarized
+  // development builds ask for it alone.
+  if ((options.requireMacosGatekeeper || options.requireMacosComputerUseSigning) && report.arch) {
+    const targetTriple = report.arch === 'arm64'
+      ? 'aarch64-apple-darwin'
+      : 'x86_64-apple-darwin'
+    addMacosComputerUseAttestationCheck(
+      report,
+      rootDir,
+      appBundle,
+      join(sidecarDir, `claude-sidecar-${targetTriple}`),
+      helperApp,
+      options.commandRunner ?? defaultCommandRunner,
+    )
+  }
   if (options.requireMacosGatekeeper) {
-    if (report.arch) {
-      const targetTriple = report.arch === 'arm64'
-        ? 'aarch64-apple-darwin'
-        : 'x86_64-apple-darwin'
-      addMacosComputerUseAttestationCheck(
-        report,
-        rootDir,
-        appBundle,
-        join(sidecarDir, `claude-sidecar-${targetTriple}`),
-        helperApp,
-        options.commandRunner ?? defaultCommandRunner,
-      )
-    }
     addMacosGatekeeperCheck(report, rootDir, appBundle, options.commandRunner)
   } else if (report.hostPlatform === 'macos') {
     report.notes.push('macOS Gatekeeper launch approval was not assessed. Add --require-macos-gatekeeper for release-readiness launch policy checks.')

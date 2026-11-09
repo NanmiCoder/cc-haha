@@ -580,7 +580,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       runtime.state = 'idle'
       runtime.verb = undefined
       typingController.stop(chatId)
-      blockBuffers.get(chatId)?.reset()
+      await blockBuffers.get(chatId)?.complete()
       blockBuffers.delete(chatId)
       await sendText(chatId, `错误: ${msg.message}`)
       break
@@ -662,7 +662,11 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     }
     if (!hasAttachments && /^\/(send|speak|voice|transcode)(?:\s|$)/.test(text)) {
       if (text === '/voice off') { await mediaActions.command(chatId, text); return }
-      if (await ensureSession(chatId) && isCurrentInput()) await mediaActions.command(chatId, text)
+      if (!await ensureSession(chatId)) {
+        delivery?.failedCurrent()
+        return
+      }
+      if (isCurrentInput()) await mediaActions.command(chatId, text)
       return
     }
     if (!hasAttachments && (text === '/status' || text === '状态')) {
@@ -681,12 +685,14 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     if (!hasAttachments && (text === '/clear' || text === '清空')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
+        delivery?.failedCurrent()
         await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) delivery?.submittedToServer(chatId)
+      else delivery?.failedCurrent()
       if (sent) getRuntimeState(chatId).state = 'thinking'
       await sendText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
       return
@@ -708,7 +714,7 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
       if (sent) {
         runtime.pendingPermissionCount = Math.max(0, runtime.pendingPermissionCount - 1)
         pending.delete(requestId)
-      }
+      } else delivery?.failedCurrent()
       await sendText(chatId, sent ? `${formatPermissionDecisionStatus(permissionDecision)}。` : '权限响应发送失败，请检查会话状态。')
       return
     }
@@ -720,7 +726,11 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     }
 
     const ready = await ensureSession(chatId)
-    if (!ready || !isCurrentInput()) return
+    if (!ready) {
+      delivery?.failedCurrent()
+      return
+    }
+    if (!isCurrentInput()) return
     if (stoppedTurnFor(chatId)?.awaitingEnd) {
       await sendText(chatId, '上一轮仍在停止中，尚未确认结束。请稍后重发，或用 /new 开始新会话。')
       return
@@ -739,7 +749,10 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     if (sent) stoppedTurns.delete(chatId)
     if (sent) delivery?.submittedToServer(chatId)
     if (sent) getRuntimeState(chatId).state = 'thinking'
-    if (!sent) await sendText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+    if (!sent) {
+      delivery?.failedCurrent()
+      await sendText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+    }
   })
   if (awaitQueuedWork) await queued
   else void queued.catch(() => {})

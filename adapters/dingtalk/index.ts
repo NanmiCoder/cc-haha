@@ -169,24 +169,14 @@ async function sendText(chatId: string, text: string, options: {
     return
   }
   for (const chunk of splitMessage(text, 3500)) {
-    const res = await fetch(sessionWebhook, {
+    const response = await fetch(sessionWebhook, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-acs-dingtalk-access-token': token,
-      },
-      body: JSON.stringify({
-        msgtype: 'markdown',
-        markdown: {
-          title: 'Claude Code',
-          text: chunk,
-        },
-      }),
+      headers: { 'Content-Type': 'application/json', 'x-acs-dingtalk-access-token': token },
+      body: JSON.stringify({ msgtype: 'markdown', markdown: { title: 'Claude Code', text: chunk } }),
     })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      const message = `[DingTalk] sendText failed: ${res.status} ${body}`
-      console.warn(message)
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      console.warn(`[DingTalk] sendText failed: ${response.status} ${body}`)
     }
   }
 }
