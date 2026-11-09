@@ -86,6 +86,7 @@ import type {
   ProviderProxyConfig,
   ProvidersIndex,
   CreateProviderInput,
+  ImportProviderInput,
   UpdateProviderInput,
   TestProviderInput,
   ProviderTestResult,
@@ -157,7 +158,7 @@ function mergeSavedOrderIntoDisplayOrder(providerOrder: string[], savedOrder: st
   })
 }
 
-function buildSavedProvider(input: CreateProviderInput): SavedProvider {
+function buildSavedProvider(input: ImportProviderInput): SavedProvider {
   const imageGeneration = normalizeImageGeneration(input.imageGeneration)
   return {
     id: crypto.randomUUID(),
@@ -180,6 +181,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     ...(imageGeneration !== undefined && { imageGeneration }),
     ...(input.proxy !== undefined && { proxy: input.proxy }),
     ...(input.notes !== undefined && { notes: input.notes }),
+    ...(input.usageScript !== undefined && { usageScript: input.usageScript }),
   }
 }
 
@@ -378,10 +380,11 @@ export class ProviderService {
    * Append several providers in one pass.
    *
    * Bulk imports (cc-switch) read the index once and write it once so a partial
-   * failure cannot leave half the batch behind. The persisted shape is identical
-   * to addProvider, so no storage migration is involved.
+   * failure cannot leave half the batch behind. The persisted shape is
+   * addProvider's plus an optional `usageScript`, which index readers keep like
+   * any field they do not know, so no storage migration is involved.
    */
-  async importProviders(inputs: CreateProviderInput[]): Promise<SavedProvider[]> {
+  async importProviders(inputs: ImportProviderInput[]): Promise<SavedProvider[]> {
     if (inputs.length === 0) return []
 
     const index = await this.readIndex()

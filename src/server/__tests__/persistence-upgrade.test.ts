@@ -759,4 +759,52 @@ describe('persistent storage upgrade migrations', () => {
       'future-official': { main: 'future-model' },
     })
   })
+
+  test('keeps an imported usage script, and providers saved without one, unchanged through startup and edits', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const models = { main: 'chat-model', haiku: 'chat-model', sonnet: 'chat-model', opus: 'chat-model' }
+    const usageScript = {
+      enabled: true,
+      language: 'javascript',
+      code: '({ request: { url: "{{baseUrl}}/api/user/self" }, extractor: (r) => ({ remaining: r.quota }) })',
+      templateType: 'newapi',
+      accessToken: 'fake-usage-token',
+      codingPlanProvider: 'kimi',
+    }
+    // `old` is an entry as cc-haha wrote it before usage scripts existed.
+    const fixture = {
+      schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
+      activeId: null,
+      providers: [
+        {
+          id: 'old', presetId: 'custom', name: 'Old', apiKey: 'fake-old-key',
+          baseUrl: 'https://old.example.test', apiFormat: 'anthropic',
+          runtimeKind: 'anthropic_compatible', toolSearchEnabled: false, models,
+          futureProvider: 'keep',
+        },
+        {
+          id: 'scripted', presetId: 'custom', name: 'Scripted', apiKey: 'fake-relay-key',
+          baseUrl: 'https://relay.example.test', apiFormat: 'anthropic',
+          runtimeKind: 'anthropic_compatible', toolSearchEnabled: false, models, usageScript,
+        },
+      ],
+      providerOrder: ['old', 'scripted', 'claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
+      officialProviderModels: {},
+    }
+    await fs.writeFile(file, JSON.stringify(fixture, null, 2))
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).not.toContain('cc-haha/providers.json')
+
+    const service = new ProviderService()
+    await service.updateProvider('old', { notes: 'edited' })
+    await service.updateProvider('scripted', { name: 'Renamed' })
+    const rewritten = JSON.parse(await fs.readFile(file, 'utf8')) as { providers: Array<Record<string, unknown>> }
+    expect(rewritten.providers[0]).toEqual({ ...fixture.providers[0], notes: 'edited' })
+    expect(rewritten.providers[0]).not.toHaveProperty('usageScript')
+    expect(rewritten.providers[1]).toEqual({ ...fixture.providers[1], name: 'Renamed' })
+  })
 })

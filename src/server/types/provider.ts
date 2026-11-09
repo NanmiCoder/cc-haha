@@ -146,6 +146,28 @@ export const ProviderProxyConfigSchema = z.object({
 })
 export type ProviderProxyConfig = z.infer<typeof ProviderProxyConfigSchema>
 
+/**
+ * A provider's balance/quota query, as cc-switch stores it in a provider's
+ * `meta.usage_script`. It is kept exactly as cc-switch wrote it, field names
+ * included, so the same scripts and template settings can run once cc-haha has
+ * a runner for them; template fields not listed here (Coding Plan ids,
+ * Volcengine signing keys, ...) are preserved. cc-haha does not run it yet.
+ */
+export const ProviderUsageScriptSchema = z.object({
+  enabled: z.boolean(),
+  language: z.string().optional(),
+  code: z.string(),
+  timeout: z.number().int().nonnegative().optional(),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  accessToken: z.string().optional(),
+  userId: z.string().optional(),
+  templateType: z.string().optional(),
+  autoQueryInterval: z.number().int().nonnegative().optional(),
+}).passthrough()
+
+export type ProviderUsageScript = z.infer<typeof ProviderUsageScriptSchema>
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -167,6 +189,7 @@ export const SavedProviderSchema = z.object({
   imageGeneration: ImageGenerationConfigSchema.optional(),
   proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
+  usageScript: ProviderUsageScriptSchema.optional(),
 })
 
 export const ProvidersIndexSchema = z.object({
@@ -251,6 +274,12 @@ export type ImageGenerationConfig = z.infer<typeof ImageGenerationConfigSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>
 export type ProvidersIndex = z.infer<typeof ProvidersIndexSchema>
 export type CreateProviderInput = z.infer<typeof CreateProviderSchema>
+/**
+ * What an import may persist on top of `CreateProviderInput`. The usage script
+ * is accepted only from an import read on this machine, not from the public
+ * create route.
+ */
+export type ImportProviderInput = CreateProviderInput & { usageScript?: ProviderUsageScript }
 export type UpdateProviderInput = z.infer<typeof UpdateProviderSchema>
 export type TestProviderInput = z.infer<typeof TestProviderSchema>
 export type ReorderProvidersInput = z.infer<typeof ReorderProvidersSchema>
