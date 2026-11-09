@@ -167,9 +167,10 @@ export function PublicAccessSettings() {
   const validConfiguration = validPort && (mode === 'quick' || validToken)
   // A named tunnel's hostname comes from its Cloudflare route; keep any address saved by older versions.
   const configuration = { mode, customUrl: mode === 'quick' ? '' : status?.customUrl ?? '', localPort: port }
+  // The saved settings file could not be loaded; it stays untouched until the user configures again.
+  const savedSettingsInvalid = status?.state === 'unconfigured' && status.error === 'configuration'
   const configurationChanged = configuration.mode !== status?.mode || configuration.customUrl !== (status?.customUrl ?? '') ||
-    configuration.localPort !== (status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT) || !!tunnelToken.trim() ||
-    (status?.state === 'unconfigured' && status.error === 'configuration')
+    configuration.localPort !== (status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT) || !!tunnelToken.trim() || savedSettingsInvalid
   const start = () => run(async (generation) => {
     if (!validConfiguration) return
     setConsent(false)
@@ -205,6 +206,11 @@ export function PublicAccessSettings() {
     token: t('publicAccess.tokenRejectedError'),
     route: t('publicAccess.routeMissingError', { service: savedServiceUrl }),
   }
+  const p2pStateLabels = {
+    off: t('publicAccess.p2pStateOff'), starting: t('publicAccess.p2pStateStarting'),
+    ready: t('publicAccess.p2pStateReady'), failed: t('publicAccess.p2pStateFailed'),
+  }
+  const p2pStateTones = { off: 'neutral', starting: 'info', ready: 'success', failed: 'danger' } as const
   const online = status?.state === 'online'
   const stopUnconfirmed = status?.error === 'stop'
   const running = online || status?.state === 'connecting' || status?.state === 'reconnecting' || stopUnconfirmed
@@ -343,6 +349,30 @@ export function PublicAccessSettings() {
           disabled={busy || stopUnconfirmed || !configured || configurationChanged || status?.consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION}
           onChange={(checked) => void run(() => bridge.setAutoStart(checked))}
         />
+        {status?.keepAwake !== undefined && (
+          <SettingsSwitchRow
+            title={t('publicAccess.keepAwake')}
+            description={t('publicAccess.keepAwakeHint')}
+            checked={status.keepAwake}
+            disabled={busy || savedSettingsInvalid}
+            onChange={(checked) => void run(() => bridge.setKeepAwake(checked))}
+          />
+        )}
+        {status?.p2pEnabled !== undefined && (
+          <SettingsSwitchRow
+            title={t('publicAccess.p2p')}
+            description={t('publicAccess.p2pHint')}
+            checked={status.p2pEnabled}
+            disabled={busy || savedSettingsInvalid}
+            onChange={(checked) => void run(() => bridge.setP2PEnabled(checked))}
+            footer={status.p2pState && (
+              <p data-testid="public-access-p2p-state" className="inline-flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+                <StatusDot tone={p2pStateTones[status.p2pState]} />
+                <span>{p2pStateLabels[status.p2pState]}</span>
+              </p>
+            )}
+          />
+        )}
         <SettingsBlock className="space-y-2">
           <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.proxyHint')}</p>
           <Button size="base" variant="link" onClick={() => useUIStore.getState().setActiveSettingsTab('general')}>{t('publicAccess.proxySettings')}</Button>

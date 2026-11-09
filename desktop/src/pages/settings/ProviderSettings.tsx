@@ -1420,7 +1420,12 @@ function openExternalUrl(url: string) {
 }
 
 function ProviderFormModal({ open, onClose, mode, provider, presets, initialPresetId, onPickMagpie, browserMode = false }: ProviderFormProps) {
-  const { createProvider, updateProvider, testConfig, fetchModels } = useProviderStore()
+  const { createProvider, updateProvider, testConfig, fetchModels, fetchProviders, activeId } = useProviderStore()
+  // cc-haha/settings.json carries the default provider's runtime env, which every
+  // session started on the default reads (Claude Official too). Only an edit of
+  // that provider may write it; saving any other provider must leave it alone,
+  // or the default silently starts routing to this provider's endpoint and key.
+  const writesManagedSettings = mode === 'edit' && provider?.id === activeId
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const addToast = useUIStore((s) => s.addToast)
   const t = useTranslation()
@@ -2025,21 +2030,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
     try {
       // Write the edited cc-haha settings.json first so provider-specific model
       // settings never conflict with the user's global ~/.claude/settings.json.
-      if (!browserMode && settingsJson.trim()) {
-        try {
-          const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
-          const { providersApi } = await import('../../api/providers')
-          const settings = writeCompatibilityJson(parsed, storedCompatibility)
-          delete settings.requestCompatibility
-          // The editor never owns the session default model. updateSettings merges
-          // by replacing the whole object, so omitting these keys keeps the
-          // model picker's selection instead of clearing it.
-          delete settings.model
-          delete settings.modelContext
-          await providersApi.updateSettings(settings)
-        } catch {
-          // JSON validation already prevents this
-        }
+      if (!browserMode && writesManagedSettings && provider && settingsJson.trim()) {
+        const parsed = restoreSettingsJsonSecrets(JSON.parse(settingsJson), settingsJson, apiKey)
+        const { providersApi } = await import('../../api/providers')
+        const settings = writeCompatibilityJson(parsed, storedCompatibility)
+        delete settings.requestCompatibility
+        // The editor never owns the session default model. updateSettings merges
+        // by replacing the whole object, so omitting these keys keeps the
+        // model picker's selection instead of clearing it.
+        delete settings.model
+        delete settings.modelContext
+        await providersApi.updateSettings(settings, provider.id)
       }
 
       if (mode === 'create') {
@@ -2088,6 +2089,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
       await fetchSettings()
       onClose()
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409 &&
+        error.body && typeof error.body === 'object' && 'error' in error.body &&
+        error.body.error === 'PROVIDER_SETTINGS_OWNER_CHANGED') {
+        await fetchProviders()
+      }
       setCredentialRequired(browserMode && error instanceof ApiError &&
         !!error.body && typeof error.body === 'object' && 'code' in error.body &&
         error.body.code === 'REMOTE_PROVIDER_CREDENTIAL_REQUIRED')
@@ -2669,7 +2675,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
           {settingsJsonError && (
             <p className="text-[11px] text-[var(--color-error)] mt-1">{t('settings.providers.jsonError', { error: settingsJsonError })}</p>
           )}
-          <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.settingsJsonDesc')}</p>
+          <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t(writesManagedSettings ? 'settings.providers.settingsJsonDesc' : 'settings.providers.settingsJsonInactiveDesc')}</p>
           {apiFormat !== 'anthropic' && <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.compatibilityJsonHint')}</p>}
         </div>}
 

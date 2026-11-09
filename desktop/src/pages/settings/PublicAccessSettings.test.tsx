@@ -9,7 +9,7 @@ import { useUIStore } from '@/stores/uiStore'
 
 const mocks = vi.hoisted(() => ({
   status: { state: 'disabled', publicUrl: null, error: null, autoStart: false, consentVersion: 0, mode: 'quick', customUrl: '', localPort: 17463, tokenSet: false, tunnelId: null, phase: null, migrationRequired: false },
-  getStatus: vi.fn(), configure: vi.fn(), start: vi.fn(), stop: vi.fn(), setAutoStart: vi.fn(),
+  getStatus: vi.fn(), configure: vi.fn(), start: vi.fn(), stop: vi.fn(), setAutoStart: vi.fn(), setP2PEnabled: vi.fn(), setKeepAwake: vi.fn(),
   open: vi.fn(), get: vi.fn(), pairing: vi.fn(), approve: vi.fn(), reject: vi.fn(), revoke: vi.fn(), qr: vi.fn(), copy: vi.fn(),
 }))
 vi.mock('@/lib/desktopHost', () => ({ getDesktopHost: () => host }))
@@ -674,4 +674,80 @@ it('explains a proxy failure and links to the existing network settings', async 
   fireEvent.click(screen.getByRole('button', { name: 'Network proxy settings' }))
   expect(openSettings).toHaveBeenCalledWith('general')
   expect(mocks.start).not.toHaveBeenCalled()
+})
+
+it('direct phone connections are on by default and can be switched off', async () => {
+  const online = { ...mockOnline(), p2pEnabled: true }
+  mocks.getStatus.mockResolvedValue(online)
+  mocks.setP2PEnabled.mockImplementation(async (enabled: boolean) => {
+    const next = { ...online, p2pEnabled: enabled }
+    mocks.getStatus.mockResolvedValue(next)
+    return next
+  })
+  render(<PublicAccessSettings />)
+  const toggle = await screen.findByRole('switch', { name: 'Allow direct phone connections (P2P)' })
+  expect(toggle).toBeChecked()
+  fireEvent.click(toggle)
+  await waitFor(() => expect(mocks.setP2PEnabled).toHaveBeenCalledWith(false))
+  expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.stop).not.toHaveBeenCalled()
+})
+
+it('a host without direct connections shows no switch for them', async () => {
+  mockOnline()
+  render(<PublicAccessSettings />)
+  await screen.findByRole('switch', { name: 'Restore connection when the desktop starts' })
+  expect(screen.queryByRole('switch', { name: 'Allow direct phone connections (P2P)' })).toBeNull()
+  expect(screen.queryByRole('switch', { name: 'Keep this computer awake while away' })).toBeNull()
+})
+
+it('keeping the computer awake is on by default, explains the lid and battery, and switches off and on without touching the connection', async () => {
+  const online = { ...mockOnline(), keepAwake: true }
+  mocks.getStatus.mockResolvedValue(online)
+  mocks.setKeepAwake.mockImplementation(async (enabled: boolean) => {
+    const next = { ...online, keepAwake: enabled }
+    mocks.getStatus.mockResolvedValue(next)
+    return next
+  })
+  render(<PublicAccessSettings />)
+  const toggle = await screen.findByRole('switch', { name: 'Keep this computer awake while away' })
+  expect(toggle).toBeChecked()
+  expect(screen.getByText(/Closing a laptop lid still puts it to sleep/)).toBeInTheDocument()
+  fireEvent.click(toggle)
+  await waitFor(() => expect(mocks.setKeepAwake).toHaveBeenCalledWith(false))
+  await waitFor(() => expect(toggle).not.toBeChecked())
+  await waitFor(() => expect(toggle).toBeEnabled())
+  fireEvent.click(toggle)
+  await waitFor(() => expect(mocks.setKeepAwake).toHaveBeenLastCalledWith(true))
+  await waitFor(() => expect(toggle).toBeChecked())
+  expect(mocks.setKeepAwake).toHaveBeenCalledTimes(2)
+  expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.stop).not.toHaveBeenCalled()
+})
+
+it('the keep awake switch is locked while the saved settings could not be loaded', async () => {
+  mocks.getStatus.mockResolvedValue({ ...mocks.status, state: 'unconfigured', error: 'configuration', keepAwake: true })
+  render(<PublicAccessSettings />)
+  expect(await screen.findByRole('switch', { name: 'Keep this computer awake while away' })).toBeDisabled()
+})
+
+it('the direct connection switch is locked while the saved settings could not be loaded', async () => {
+  // Same rule as the auto-start switch: a broken settings file stays untouched until it is configured again.
+  mocks.getStatus.mockResolvedValue({ ...mocks.status, state: 'unconfigured', error: 'configuration', p2pEnabled: true, p2pState: 'off' })
+  render(<PublicAccessSettings />)
+  const toggle = await screen.findByRole('switch', { name: 'Allow direct phone connections (P2P)' })
+  expect(toggle).toBeDisabled()
+  expect(screen.getByRole('switch', { name: 'Restore connection when the desktop starts' })).toBeDisabled()
+})
+
+it.each([
+  ['off', 'Direct connections are off'],
+  ['starting', 'Preparing direct connections…'],
+  ['ready', 'Direct connections are ready'],
+  ['failed', 'Direct connections could not start'],
+] as const)('shows the direct connection state %s under its switch', async (p2pState, label) => {
+  mocks.getStatus.mockResolvedValue({ ...mockOnline(), p2pEnabled: true, p2pState })
+  render(<PublicAccessSettings />)
+  await screen.findByRole('switch', { name: 'Allow direct phone connections (P2P)' })
+  expect(screen.getByTestId('public-access-p2p-state')).toHaveTextContent(label)
 })

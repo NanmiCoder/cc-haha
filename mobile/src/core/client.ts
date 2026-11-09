@@ -1,3 +1,4 @@
+import { bytesToBase64 } from './base64'
 import { connectionHeaders, hostOrigin } from './connection'
 import type {
   CreateSessionInput,
@@ -35,6 +36,8 @@ export type FetchResponse = {
   text(): Promise<string>
   /** Binary bodies (tool images). Expo's fetch and the web fetch provide both. */
   arrayBuffer?(): Promise<ArrayBuffer>
+  /** The body as base64, when it already arrived that way (the direct path): no decode and re-encode. */
+  base64?(): Promise<string>
   headers?: { get(name: string): string | null }
 }
 export type FetchAdapter = (
@@ -61,6 +64,12 @@ export type ApiClientOptions = {
   timeoutMs?: number
   /** Reading the body once the computer has answered. */
   bodyTimeoutMs?: number
+  /**
+   * Told how each request ended: `null` on success, otherwise the error it
+   * throws. Lets one place notice a computer whose address went away; it never
+   * changes the request's own result.
+   */
+  onSettled?: (error: ApiError | null) => void
 }
 /**
  * Once headers arrive the computer is clearly online; a large body over a slow
@@ -78,6 +87,7 @@ export class ApiClient {
   #timeoutMs: number
   #bodyTimeoutMs: number
   #credentials: FetchCredentials
+  #onSettled?: (error: ApiError | null) => void
   constructor(host: Host, credential: string, options: ApiClientOptions = {}) {
     this.host = Object.freeze({
       ...host,
@@ -88,6 +98,7 @@ export class ApiClient {
     this.#timeoutMs = options.timeoutMs ?? 15000
     this.#bodyTimeoutMs = options.bodyTimeoutMs ?? BODY_TIMEOUT_MS
     this.#credentials = options.credentials ?? 'omit'
+    this.#onSettled = options.onSettled
     connectionHeaders(this.host, credential)
     Object.freeze(this)
   }
@@ -128,12 +139,15 @@ export class ApiClient {
         }
         throw failure(response.status, value)
       }
-      if (!response.arrayBuffer)
+      if (!response.arrayBuffer && !response.base64)
         throw new ApiError('当前网络组件无法读取图片', 0, 'UNSUPPORTED')
       const type = response.headers?.get('Content-Type')?.split(';')[0]?.trim()
       if (!type?.startsWith('image/') || type === 'image/svg+xml')
         throw new ApiError('服务器返回了无效图片', response.status, 'INVALID_RESPONSE')
-      return `data:${type};base64,${bytesToBase64(new Uint8Array(await response.arrayBuffer()))}`
+      const encoded = response.base64
+        ? await response.base64()
+        : bytesToBase64(new Uint8Array(await response.arrayBuffer!()))
+      return `data:${type};base64,${encoded}`
     })
   }
 
@@ -208,19 +222,32 @@ export class ApiClient {
       // The computer answered; from here a slow link only needs more time.
       clearTimeout(timer)
       timer = setTimeout(expire('body'), Math.max(timeoutMs, this.#bodyTimeoutMs))
-      return await read(response)
+      const value = await read(response)
+      this.#settled(null)
+      return value
     } catch (error) {
-      if (timedOut === 'headers')
-        throw new ApiError('连接超时，请检查电脑是否在线', 0, 'TIMEOUT')
-      if (timedOut === 'body')
-        throw new ApiError('网络太慢，内容没能及时传完，请稍后重试', 0, 'TIMEOUT')
-      if (options.signal?.aborted)
-        throw new ApiError('请求已取消', 0, 'ABORTED')
-      if (error instanceof ApiError) throw error
-      throw new ApiError('无法连接服务器，请检查地址与网络', 0, 'NETWORK_ERROR')
+      const failure =
+        timedOut === 'headers'
+          ? new ApiError('连接超时，请检查电脑是否在线', 0, 'TIMEOUT')
+          : timedOut === 'body'
+            ? new ApiError('网络太慢，内容没能及时传完，请稍后重试', 0, 'TIMEOUT')
+            : options.signal?.aborted
+              ? new ApiError('请求已取消', 0, 'ABORTED')
+              : error instanceof ApiError
+                ? error
+                : new ApiError('无法连接服务器，请检查地址与网络', 0, 'NETWORK_ERROR')
+      this.#settled(failure)
+      throw failure
     } finally {
       clearTimeout(timer)
       options.signal?.removeEventListener('abort', abort)
+    }
+  }
+  #settled(error: ApiError | null) {
+    try {
+      this.#onSettled?.(error)
+    } catch {
+      /* An observer never changes the request's result. */
     }
   }
   get<T>(path: string, options?: RequestControlOptions) {
@@ -319,25 +346,4 @@ function failure(status: number, value: unknown): ApiError {
   )
 }
 
-const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-
-/** Hermes has no Buffer. Slices are multiples of 3 bytes, so only the last one pads. */
-export function bytesToBase64(bytes: Uint8Array): string {
-  const parts: string[] = []
-  for (let start = 0; start < bytes.length; start += 3 * 4096) {
-    const end = Math.min(bytes.length, start + 3 * 4096)
-    let out = ''
-    for (let i = start; i < end; i += 3) {
-      const a = bytes[i]!
-      const b = i + 1 < end ? bytes[i + 1]! : 0
-      const c = i + 2 < end ? bytes[i + 2]! : 0
-      out +=
-        BASE64[a >> 2] +
-        BASE64[((a & 3) << 4) | (b >> 4)] +
-        (i + 1 < end ? BASE64[((b & 15) << 2) | (c >> 6)] : '=') +
-        (i + 2 < end ? BASE64[c & 63] : '=')
-    }
-    parts.push(out)
-  }
-  return parts.join('')
-}
+export { bytesToBase64 }

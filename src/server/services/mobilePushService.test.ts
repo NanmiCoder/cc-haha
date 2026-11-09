@@ -97,7 +97,9 @@ test('the phone test reaches a pull registration and Expo reports removed device
   const f = relayFixture()
   f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, delivery: { channels: 'split' } }), {})
   expect(await f.service.sendTest(pullToken, undefined, {})).toEqual({ status: 'sent' })
-  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-completed', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
+  // The test must be able to show a banner: the phone creates "completed" at default
+  // importance (no heads-up), so the test rides the high-importance decisions channel.
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-decisions', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
   f.service.register(input({ provider: 'expo', token: expoToken }), {})
   expect(await f.service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
   expect(f.sent[0]?.payload).toMatchObject({ title: '测试通知 · cc-haha', categoryId: 'cchahaResult', data: { eventType: 'test' } })
@@ -668,7 +670,7 @@ test('explicit push test bypasses preferences and quiet hours, honours ownership
   expect(await f.service.sendTest(input().token, 'local-phone-host-a', { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
   expect(f.sent[0]!.payload).toEqual({ aps: { alert: { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。' }, sound: 'default', category: 'cchahaResult' }, hostId: 'local-phone-host-a', eventType: 'test' })
   expect(await f.service.sendTest(androidToken, undefined, { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
-  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-completed' } } })
+  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-decisions' } } })
   const lan = fixture()
   lan.service.register(input(), {})
   expect(await lan.service.sendTest(input().token, undefined, {})).toEqual({ status: 'sent' })
@@ -691,4 +693,21 @@ test('explicit push test reports notConfigured and failures without credentials'
   expect((await invalid.sendTest(input().token, undefined, {})).status).toBe('failed')
   expect(await invalid.sendTest(input().token, undefined, {})).toEqual({ status: 'noRegistration' })
   void broken.stop(); void invalid.stop()
+})
+
+test('a changed public address goes to remotely paired phones that do not pull from the old one, signed per pairing', async () => {
+  const f = relayFixture()
+  f.service.register(input({ provider: 'expo', token: expoToken, hostId: 'host-on-phone-a', hostName: 'Studio Mac' }), { remoteDeviceId: 'phone-a' })
+  f.service.register(input({ provider: 'expo', token: 'ExponentPushToken[fixture-device-b]', hostId: 'host-on-phone-b' }), { remoteDeviceId: 'phone-revoked' })
+  f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, hostId: 'host-pulling' }), { remoteDeviceId: 'phone-a' })
+  f.service.register(input({ provider: 'expo', token: 'ExponentPushToken[fixture-lan-phone]', hostId: 'host-on-lan' }), {})
+  await f.service.notifyAddressChanged('https://new-name.trycloudflare.com', id => id === 'phone-a' ? 'mac-for-phone-a' : undefined)
+  expect(f.sent.map(delivery => ({ provider: delivery.provider, token: delivery.token, payload: delivery.payload }))).toEqual([{
+    provider: 'expo', token: expoToken,
+    payload: {
+      title: '电脑地址已更新 · cc-haha', body: 'Studio Mac重新建立了外出连接，打开 App 会自动换到新地址。',
+      data: { hostId: 'host-on-phone-a', eventType: 'hostUrl', url: 'https://new-name.trycloudflare.com', mac: 'mac-for-phone-a' },
+      categoryId: 'cchahaResult', sound: 'default', priority: 'high', ttl: 300,
+    },
+  }])
 })

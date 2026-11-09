@@ -186,6 +186,8 @@ export type ToolUseContext = {
     refreshTools?: () => Tools
   }
   abortController: AbortController
+  /** Root query that owns Computer Use, shared with that query's subagents. */
+  computerUseTurn?: symbol
   readFileState: FileStateCache
   getAppState(): AppState
   setAppState(f: (prev: AppState) => AppState): void

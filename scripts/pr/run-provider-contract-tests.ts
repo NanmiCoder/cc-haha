@@ -31,6 +31,7 @@ const testFiles = [
   'src/services/openaiAuth/models.test.ts',
   'src/services/openaiAuth/storage.test.ts',
   'src/services/openaiAuth/refresh.test.ts',
+  'src/services/openaiAuth/refresh.secureStore.test.ts',
   'src/services/grokAuth/refresh.test.ts',
   'src/services/oauth/refresh-coordinator.test.ts',
   'src/server/__tests__/oauth-refresh-concurrency.test.ts',

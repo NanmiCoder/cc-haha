@@ -39,6 +39,13 @@ export type SubagentRunResponse = {
   activityComplete?: boolean
   updatedAt?: string
   source: SubagentRunSource
+  /** The model that served the run's newest answer. Absent until it answers. */
+  model?: string
+  /**
+   * Effort level the run launched with. `null` means the model's own default;
+   * absent when the run predates recording it.
+   */
+  effort?: string | null
   /**
    * Whether a follow-up can still reach this agent. Only named teammates and
    * in-flight background agents have an inbox — a one-shot subagent answers

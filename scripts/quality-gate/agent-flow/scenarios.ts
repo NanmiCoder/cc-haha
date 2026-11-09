@@ -80,6 +80,11 @@ export const AGENT_FLOW_SCENARIOS: AgentFlowScenario[] = [
     covers: ['reconnect'],
   },
   {
+    id: 'stream-resume-mid-turn',
+    title: 'Drop a resumable stream while a permission waits, reattach, and finish the turn exactly once',
+    covers: ['reconnect'],
+  },
+  {
     id: 'session-recovery',
     title: 'Recover a session after the client disconnects and keep transcripts in the sandbox',
     covers: ['session-recover'],

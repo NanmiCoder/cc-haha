@@ -199,7 +199,10 @@ export class MobilePushService {
     if (!configured.length) return { status: 'notConfigured' }
     let failed = false
     for (const row of configured) {
-      const payload = alertPayload(row, { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。', category: 'cchahaResult', channel: androidChannel(row.delivery, 'completed'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
+      // The test exists to show a banner. Android's "completed" channel is created at
+      // default importance (sound, never a heads-up), so it uses the decisions channel,
+      // the same one the phone's local test uses.
+      const payload = alertPayload(row, { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。', category: 'cchahaResult', channel: androidChannel(row.delivery, 'decision'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
       try {
         const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', ...(row.provider ? { provider: row.provider } : {}), token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
         this.recordExpo(row)
@@ -207,6 +210,29 @@ export class MobilePushService {
       } catch (error) { this.recordExpo(row, error); failed = true }
     }
     return failed ? { status: 'failed', error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。' } : { status: 'sent' }
+  }
+  /**
+   * The computer's public address changed (a Quick Tunnel restarted). Paired
+   * phones can't reach the old one, so the new address goes out through every
+   * push path that doesn't depend on it, signed for each pairing (`sign`). The
+   * `desktop` provider is skipped: those phones pull from the old address.
+   */
+  async notifyAddressChanged(url: string, sign: (remoteDeviceId: string) => string | undefined) {
+    this.load()
+    const rows = this.stored!.registrations.filter(row => row.kind === 'notification' && row.provider !== 'desktop' && row.owner.startsWith('remote:') && row.expiresAt > this.now() && this.configured(row))
+    let changed = false
+    for (const row of rows) {
+      const mac = sign(row.owner.slice('remote:'.length))
+      if (!mac) continue
+      const name = row.hostName?.trim() || '电脑'
+      const payload = alertPayload(row, { title: '电脑地址已更新 · cc-haha', body: `${name}重新建立了外出连接，打开 App 会自动换到新地址。`, category: 'cchahaResult', channel: androidChannel(row.delivery, 'completed'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'hostUrl', url, mac } })
+      try {
+        const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', ...(row.provider ? { provider: row.provider } : {}), token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
+        this.recordExpo(row)
+        if (result === 'invalidToken') { this.stored!.registrations = this.stored!.registrations.filter(item => item !== row); this.previous.delete(row.id); changed = true }
+      } catch (error) { this.recordExpo(row, error) }
+    }
+    if (changed) this.persist()
   }
   /** The phone's long poll for `desktop` registrations; `undefined` when the caller owns none. */
   async pull(token: string, ack: string | undefined, context: PushOwner, signal: AbortSignal): Promise<PulledNotification[] | undefined> {

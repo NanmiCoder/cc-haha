@@ -19,6 +19,7 @@ import {
   getOpenAIOAuthTokensAsync,
   getOpenAIOAuthTokens,
   getOpenAIOAuthAuthority,
+  getOpenAIOAuthTokensForRefresh,
   saveOpenAIOAuthTokens,
 } from './storage.js'
 import type { OpenAIOAuthTokens } from './types.js'
@@ -198,13 +199,11 @@ export async function ensureFreshOpenAITokens(): Promise<OpenAIOAuthTokens | nul
 
   await coordinateOAuthRefresh('openai', authority, tokens, async (assertOwnership) => {
     if (getOpenAIOAuthAuthority() !== authority) throw new Error('OpenAI credential store changed during refresh; retry the request')
-    clearOpenAIOAuthTokenCache()
-    const current = getOpenAIOAuthTokens()
+    const current = getOpenAIOAuthTokensForRefresh()
     if (current && !isOpenAITokenExpired(current.expiresAt)) return
     if (JSON.stringify(current) !== JSON.stringify(tokens)) throw new Error("OpenAI credentials changed during refresh; retry the request")
     const refreshed = await refreshOpenAITokens(tokens.refreshToken)
-    clearOpenAIOAuthTokenCache()
-    if (getOpenAIOAuthAuthority() !== authority || JSON.stringify(getOpenAIOAuthTokens()) !== JSON.stringify(tokens)) {
+    if (getOpenAIOAuthAuthority() !== authority || JSON.stringify(getOpenAIOAuthTokensForRefresh()) !== JSON.stringify(tokens)) {
       throw new Error('OpenAI credentials changed during refresh; retry the request')
     }
     const updated = withRefreshedAccessToken(tokens, refreshed)

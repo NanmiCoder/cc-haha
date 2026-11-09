@@ -41,6 +41,7 @@ mod imp {
     };
     use crate::actions::chain::{after_delivery, gated};
     use crate::actions::mutation::{classify_success, classify_write};
+    use crate::actions::winforms::{headless_winforms_control, legacy_edit_steps};
     use crate::tree::properties::element_properties::ElementProperties;
     use crate::tree::properties::property_ids::TreeProperty;
     use crate::tree::properties::property_outcome::PropertyOutcome;
@@ -53,13 +54,18 @@ mod imp {
         policy: InteractionPolicy,
         deadline: Deadline,
     ) -> Result<Vec<ActionStep>, AdapterError> {
+        let value_writable = value_writable(element);
+        if headless_winforms_control(element, policy, "EDIT") {
+            return legacy_edit_steps(element, value, deadline, value_writable)
+                .map_err(|error| attach_value_chars(error, value));
+        }
         let parsed = parse_finite_f64(value);
         set_value_judged_for(
             deadline,
             policy,
             SetValuePlan {
                 value,
-                value_writable: value_writable(element),
+                value_writable,
                 range_available: range_available(element),
             },
             || invoke_value_set(element, value),
@@ -76,6 +82,10 @@ mod imp {
         deadline: Deadline,
     ) -> Result<Vec<ActionStep>, AdapterError> {
         let value_ok = value_writable(element);
+        if headless_winforms_control(element, policy, "EDIT") {
+            return legacy_edit_steps(element, "", deadline, value_ok)
+                .map_err(|error| attach_value_chars(error, ""));
+        }
         clear_judged_for(deadline, policy, value_ok, || invoke_value_set(element, ""))
             .map_err(|error| attach_value_chars(error, ""))
     }

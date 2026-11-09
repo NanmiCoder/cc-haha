@@ -65,10 +65,33 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
     useChatStore.setState({ ...useChatStore.getInitialState(), sessions: { 'session-a': makeSession(), 'session-b': makeSession() } }, true)
     useUIStore.setState({ toasts: [] })
     vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
-    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => true)
   })
 
   afterEach(() => { vi.restoreAllMocks() })
+
+  it('keeps an oversized edit and its history before any rewind', async () => {
+    const oversized = { ...draft, text: 'x'.repeat(16 * 1024 * 1024) }
+    const { result } = setup()
+    act(() => result.current.editActionByMessageId.get('shared-user')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(oversized))
+
+    expect(sessionsApi.rewind).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toEqual(messages)
+    expect(result.current.editActionByMessageId.get('shared-user')!.editing).toBe(true)
+    expect(result.current.editActionByMessageId.get('shared-user')!.getDraft().text.length).toBe(oversized.text.length)
+  })
+
+  it('recovers the edit into the composer when a committed rewind cannot send it', async () => {
+    vi.mocked(useChatStore.getState().sendMessage).mockReturnValue(false)
+    vi.spyOn(useChatStore.getState(), 'reloadHistory').mockResolvedValue(undefined)
+    const { result } = setup()
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(draft))
+
+    expect(sessionsApi.rewind).toHaveBeenCalledTimes(2)
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill?.text).toBe(draft.text)
+  })
 
   it.each([preview, codePreview])('ignores a pending preview after switching session instead of rewinding either session', async (response) => {
     const pending = deferred<SessionRewindResponse>()
@@ -279,7 +302,7 @@ describe('useUserMessageEditResend unconfirmed prompt', () => {
     }, true)
     useUIStore.setState({ toasts: [] })
     vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
-    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => true)
     return renderHook(() => useUserMessageEditResend({
       sessionId: 'session-a',
       messages: unconfirmedMessages,
@@ -302,6 +325,23 @@ describe('useUserMessageEditResend unconfirmed prompt', () => {
     expect(useChatStore.getState().sessions['session-a']!.messages).toEqual([])
     expect(useChatStore.getState().sendMessage).toHaveBeenCalledWith('session-a', 'Build a page', [], expect.any(Object))
     expect(result.current.editActionByMessageId.get('lost')!.editing).toBe(false)
+  })
+
+  it('keeps the unconfirmed bubble and editor when the edited frame is too large', async () => {
+    const { result } = setupUnconfirmed()
+    act(() => result.current.editActionByMessageId.get('lost')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit({ ...draft, text: 'x'.repeat(16 * 1024 * 1024) }))
+
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toEqual(unconfirmedMessages)
+    expect(result.current.editActionByMessageId.get('lost')!.editing).toBe(true)
+  })
+
+  it('recovers an unconfirmed edit if sending is refused after replacing its bubble', async () => {
+    const { result } = setupUnconfirmed()
+    vi.mocked(useChatStore.getState().sendMessage).mockReturnValue(false)
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit(draft))
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill?.text).toBe(draft.text)
   })
 
   it('keeps the editor and the bubble when the prompt was acknowledged in the meantime', async () => {

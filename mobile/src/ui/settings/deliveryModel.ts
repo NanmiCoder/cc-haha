@@ -287,11 +287,14 @@ export function remindFootnote(permission: PermissionSnapshot | null) {
 
 export const TEST_NOTIFICATION_DELAY_SECONDS = 5
 
-/** 本地测试通知：延迟几秒再发，留时间回到主屏幕（前台时 App 不弹横幅）。 */
+/**
+ * 本地测试通知：延迟几秒再发，留时间回到主屏幕。标记和电脑发来的测试推送一样
+ * （`eventType: 'test'`），App 在前台时也弹横幅。
+ */
 export const testNotificationContent = {
   title: '测试通知 · cc-haha',
   body: '看到这条，说明这台手机的系统通知正常。',
-  data: { kind: 'test' },
+  data: { eventType: 'test' },
 }
 
 /** 电脑还不支持远程测试（旧版桌面没有接口）时退回本地通知，要说清它只测了系统横幅。 */
@@ -310,7 +313,7 @@ export type PushTestResult = {
 export function pushTestNote(result: PushTestResult): string {
   switch (result.status) {
     case 'sent':
-      return '电脑已发送测试通知，请回到手机主屏幕查看。'
+      return '电脑已发送测试通知，屏幕顶部应弹出横幅。'
     case 'notConfigured':
       return '电脑推送尚未设置，请查看「推送设置说明」。'
     case 'noRegistration':

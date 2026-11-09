@@ -12,6 +12,7 @@
 //! produce a budget the paint cannot meet. Both ends are bounded here so no
 //! caller has to remember to.
 
+use agent_desktop_core::CURSOR_IDLE_REST_MS;
 use std::time::Duration;
 
 /// Below this, a reading is treated as absent. Some drivers report 0 or 1 for
@@ -26,6 +27,14 @@ const FALLBACK_REFRESH_HZ: u32 = 60;
 /// visibly cruder cue.
 const HIGHLIGHT_RISE: f64 = 0.08;
 const HIGHLIGHT_FALL: f64 = 0.35;
+
+pub(crate) fn idle_rest_delay(configured: Option<&str>) -> Duration {
+    let milliseconds = configured
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|value| value.clamp(CURSOR_IDLE_REST_MS, 60_000))
+        .unwrap_or(CURSOR_IDLE_REST_MS);
+    Duration::from_millis(milliseconds)
+}
 
 pub(crate) fn frame_interval(reported_hz: u32) -> Duration {
     let hz = clamp_refresh(reported_hz);

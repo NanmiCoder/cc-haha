@@ -7,7 +7,8 @@
 //! cannot.
 //!
 //! Points arrive in physical pixels, because the CLI and the renderer are both
-//! per-monitor DPI aware, so the overlay draws at them without scaling.
+//! per-monitor DPI aware, so the overlay leaves the hotspot in physical
+//! pixels while scaling the glyph and other chrome to the selected monitor.
 //!
 //! The list is crate-local rather than core's `DisplayInfo`, and that is a
 //! decision rather than an oversight. `DisplayInfo` carries id, bounds,

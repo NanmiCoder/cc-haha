@@ -700,7 +700,10 @@ describe('Content-only pages render without errors', () => {
 
     expect(sendMessage).not.toHaveBeenCalled()
     expect(await screen.findByText('Session inspector')).toBeInTheDocument()
-    expect(vi.mocked(sessionsApi.getInspection)).toHaveBeenCalledWith(SESSION_ID, { includeContext: false })
+    expect(vi.mocked(sessionsApi.getInspection)).toHaveBeenCalledWith(SESSION_ID, {
+      statusOnly: true,
+      signal: expect.any(AbortSignal),
+    })
     // The inspector is a token-colored popover card, not the old hex-tinted sheet.
     expect(screen.getByText('Session inspector').closest('.absolute')).toHaveClass(
       'bg-[var(--color-surface-container-lowest)]',

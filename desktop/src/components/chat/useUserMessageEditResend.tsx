@@ -4,6 +4,8 @@ import type { ActionDialogAction } from '@/components/ui/ActionDialog'
 import type { TranslationKey } from '../../i18n/locales/en'
 import { useChatStore } from '../../stores/chatStore'
 import { useUIStore } from '../../stores/uiStore'
+import { checkUserMessageBudget } from '@/lib/userMessageBudget'
+import { formatBytes } from '@/lib/formatBytes'
 import type { UIMessage } from '../../types/chat'
 import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from './turnRewind'
 import type { UserMessageEditAction } from './UserMessage'
@@ -205,8 +207,7 @@ export function useUserMessageEditResend({
         backgroundAgentTasks: session?.backgroundAgentTasks,
       }, { requireApplied: true })
       if (useChatStore.getState().sessions[targetSessionId]?.chatState === 'idle') {
-        useChatStore.getState().sendMessage(targetSessionId, payload.content, payload.attachments, payload.options)
-        sent = true
+        sent = useChatStore.getState().sendMessage(targetSessionId, payload.content, payload.attachments, payload.options)
       }
     } catch {
       sent = false
@@ -234,6 +235,18 @@ export function useUserMessageEditResend({
     if (!payload) return
     draftsRef.current.set(JSON.stringify([sessionId, messageId]), draft)
 
+    const budget = checkUserMessageBudget({
+      type: 'user_message', content: payload.content, attachments: payload.attachments,
+      ...(payload.options.sessionReferences?.length ? { sessionReferences: payload.options.sessionReferences } : {}),
+    })
+    if (!budget.ok) {
+      useUIStore.getState().addToast({
+        type: 'error',
+        message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+      })
+      return
+    }
+
     if ('unconfirmed' in card) {
       // Nothing was committed anywhere, so there is nothing to confirm: swap
       // the bubble for the edit. If the prompt got acknowledged meanwhile the
@@ -243,7 +256,15 @@ export function useUserMessageEditResend({
         return
       }
       closeEditor(sessionId, messageId)
-      useChatStore.getState().sendMessage(sessionId, payload.content, payload.attachments, payload.options)
+      if (!useChatStore.getState().sendMessage(sessionId, payload.content, payload.attachments, payload.options)) {
+        useChatStore.getState().queueComposerPrefill(sessionId, {
+          text: draft.text,
+          attachments: draft.attachments.filter((attachment) => attachment.sendable),
+          ...(draft.sessionReferences.length ? { sessionReferences: draft.sessionReferences } : {}),
+          ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
+        }, { restoreMissingSession: true })
+        useUIStore.getState().addToast({ type: 'warning', message: t('chat.editResendPrefilled') })
+      }
       return
     }
 

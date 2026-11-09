@@ -4,6 +4,7 @@ import * as os from 'os'
 import * as path from 'path'
 import memoize from 'lodash-es/memoize.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
+import { clearKeychainCache, keychainCacheState } from '../../utils/secureStorage/macOsKeychainHelpers.js'
 import { errorMessage } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
 import type { OpenAIOAuthTokens } from './types.js'
@@ -30,10 +31,11 @@ function getCcHahaDir(): string {
   return path.join(configDir, 'cc-haha')
 }
 
-/** Scope in-process refresh coordination to the actual credential store. */
+/** Use one process-shared mutex per credential store, including the keychain. */
 export function getOpenAIOAuthAuthority(): string {
   const filePath = getDesktopTokenFilePath()
-  return filePath ? oauthFileAuthority(filePath) : `secure:${path.resolve(getCcHahaDir())}`
+  // A lock anchor does not move keychain/plaintext credentials into this file.
+  return oauthFileAuthority(filePath ?? path.join(getCcHahaDir(), 'openai-oauth-secure-store'))
 }
 
 function getFileBackedStorageMarkerPath(): string {
@@ -224,8 +226,29 @@ export async function getOpenAIOAuthTokensAsync(): Promise<OpenAIOAuthTokens | n
   }
 }
 
-export function clearOpenAIOAuthTokenCache(): void {
+export function clearOpenAIOAuthTokenCache(forceStorageRead = false): void {
   getOpenAIOAuthTokensCached.cache?.clear?.()
+  // A different CLI may have rotated tokens or replaced the account. The
+  // keychain's own TTL must not hide that change from lock/CAS checks.
+  // Keep ordinary reads' stale-on-error behavior. Refresh transactions must
+  // explicitly request an authoritative read before using/saving a grant.
+  if (forceStorageRead && !getDesktopTokenFilePath()) clearKeychainCache()
+}
+
+/** Refresh/CAS callers must reject a missing authoritative snapshot. Keep a
+ * failed lookup from poisoning the next ordinary read with a cached null. */
+export function getOpenAIOAuthTokensForRefresh(): OpenAIOAuthTokens | null {
+  const previousKeychain = keychainCacheState.cache
+  clearOpenAIOAuthTokenCache(true)
+  const tokens = getOpenAIOAuthTokens()
+  if (!tokens && !getDesktopTokenFilePath() && previousKeychain.data !== null
+    && keychainCacheState.cache.data === null) {
+    // This value cannot authorize this refresh: return null to the CAS check.
+    // On retry, cachedAt=0 forces a new OS lookup; stale-on-error can still
+    // distinguish a known login from an initial absence of credentials.
+    keychainCacheState.cache = { data: previousKeychain.data, cachedAt: 0 }
+  }
+  return tokens
 }
 
 export function deleteOpenAIOAuthTokens(): boolean {

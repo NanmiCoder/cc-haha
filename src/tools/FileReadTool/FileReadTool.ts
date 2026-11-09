@@ -74,7 +74,9 @@ import type { PermissionDecision } from '../../utils/permissions/PermissionResul
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { readFileInRange } from '../../utils/readFileInRange.js'
 import { semanticNumber } from '../../utils/semanticNumber.js'
+import { decodeShellOutput } from '../../utils/shell/outputEncoding.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import { getToolResultsDir } from '../../utils/toolResultStorage.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 import { getDefaultFileReadingLimits } from './limits.js'
 import { getImageProcessor } from './imageProcessor.js'
@@ -840,6 +842,7 @@ async function callInner(
 }> {
   // --- Notebook ---
   if (ext === 'ipynb') {
+    const beforeRead = await getFsImplementation().stat(resolvedFilePath)
     const cells = await readNotebook(resolvedFilePath)
     const cellsJson = jsonStringify(cells)
 
@@ -857,8 +860,13 @@ async function callInner(
 
     await validateContentTokens(cellsJson, ext, maxTokens)
 
-    // Get mtime via async stat (single call, no prior existence check)
     const stats = await getFsImplementation().stat(resolvedFilePath)
+    // The edit guard must describe the bytes returned to the model. A stat
+    // acquired only after Read could authorize unseen concurrent changes.
+    if (stats.mtimeMs !== beforeRead.mtimeMs || stats.size !== beforeRead.size || stats.ino !== beforeRead.ino) {
+      readFileState.delete(fullFilePath)
+      throw new Error('Notebook changed while reading. Read it again before editing.')
+    }
     readFileState.set(fullFilePath, {
       content: cellsJson,
       timestamp: Math.floor(stats.mtimeMs),
@@ -1050,6 +1058,11 @@ async function callInner(
 
   // --- Text file (single async read via readFileInRange) ---
   const lineOffset = offset === 0 ? 0 : offset - 1
+  // Large shell outputs are persisted as raw files. A subsequent Read should
+  // decode them the same way as the inline preview without changing how
+  // ordinary project files are interpreted.
+  const isWindowsToolOutput = process.platform === 'win32' && ext === 'txt' &&
+    path.relative(getToolResultsDir(), path.dirname(fullFilePath)) === ''
   const { content, lineCount, totalLines, totalBytes, readBytes, mtimeMs } =
     await readFileInRange(
       resolvedFilePath,
@@ -1057,6 +1070,7 @@ async function callInner(
       limit,
       limit === undefined ? maxSizeBytes : undefined,
       context.abortController.signal,
+      isWindowsToolOutput ? { decode: (bytes, partial) => decodeShellOutput(bytes, false, partial) } : undefined,
     )
 
   await validateContentTokens(content, ext, maxTokens)

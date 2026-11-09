@@ -43,6 +43,8 @@ export const browserHost: DesktopHost = {
     async start() { return unsupported('Public access management') },
     async stop() { return unsupported('Public access management') },
     async setAutoStart() { return unsupported('Public access management') },
+    async setP2PEnabled() { return unsupported('Public access management') },
+    async setKeepAwake() { return unsupported('Public access management') },
   },
   kind: 'browser',
   isDesktop: false,

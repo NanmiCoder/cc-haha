@@ -40,6 +40,7 @@ import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { categorizeRetryableAPIError, getRetryableAPIErrorDiagnostics } from './services/api/errors.js'
 import type { MCPServerConnection } from './services/mcp/types.js'
+import { getComputerUsePrompt } from './skills/bundled/computerUse.js'
 import type { AppState } from './state/AppState.js'
 import {
   type SDKStatusDetail,
@@ -48,13 +49,15 @@ import {
   toolMatchesName,
 } from './Tool.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
+import { ASK_USER_QUESTION_TOOL_NAME } from './tools/AskUserQuestionTool/prompt.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import type { Message, MessageOrigin } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
+import { isComputerUseMCPServer, isComputerUseRuntimeTool } from './utils/computerUse/common.js'
 import { getGlobalConfig } from './utils/config.js'
-import { formatCommandInputTags } from './utils/messages.js'
+import { createAssistantMessage, createUserMessage, formatCommandInputTags } from './utils/messages.js'
 import { parseSlashCommand } from './utils/slashCommandParsing.js'
 import { getCwd } from './utils/cwd.js'
 import { isBareMode, isEnvTruthy } from './utils/envUtils.js'
@@ -170,6 +173,7 @@ export type QueryEngineConfig = {
   setSDKStatus?: (status: SDKStatus, detail?: SDKStatusDetail) => void
   abortController?: AbortController
   orphanedPermission?: OrphanedPermission
+  requiredComputerUse?: { unavailableMessage: string }
   /**
    * Snip-boundary handler: receives each yielded system message plus the
    * current mutableMessages store. Returns undefined if the message is not a
@@ -236,7 +240,7 @@ export class QueryEngine {
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const {
       cwd,
-      commands,
+      commands: baseCommands,
       tools: baseTools,
       mcpClients: baseMcpClients,
       verbose = false,
@@ -257,6 +261,7 @@ export class QueryEngine {
       agents = [],
       setSDKStatus,
       orphanedPermission,
+      requiredComputerUse,
     } = this.config
 
     setCwd(cwd)
@@ -274,12 +279,63 @@ export class QueryEngine {
       const { prepareTeamWorkerPreset } = await import('./utils/swarm/teamWorkerPreset.js')
       workerPreset.runtime = await prepareTeamWorkerPreset(workerAgent, baseTools, baseMcpClients)
     }
-    const tools = workerPreset?.runtime?.tools ?? baseTools
-    const mcpClients = workerPreset?.runtime?.clients ?? baseMcpClients
+    const availableTools = workerPreset?.runtime?.tools ?? baseTools
+    const availableClients = workerPreset?.runtime?.clients ?? baseMcpClients
+    const tools = requiredComputerUse
+      ? availableTools.filter(tool => isComputerUseRuntimeTool(tool)
+        || toolMatchesName(tool, ASK_USER_QUESTION_TOOL_NAME)
+        || toolMatchesName(tool, SYNTHETIC_OUTPUT_TOOL_NAME))
+      : availableTools
+    const mcpClients = requiredComputerUse
+      ? availableClients.filter(client => isComputerUseMCPServer(client.name))
+      : availableClients
+    const commands = requiredComputerUse
+      ? baseCommands.filter(command => command.name === 'computer-use' && command.type === 'prompt' && command.source === 'bundled')
+      : baseCommands
 
     this.discoveredSkillNames.clear()
     const persistSession = !isSessionPersistenceDisabled()
     const startTime = Date.now()
+
+    // A reset-only tool is not a usable desktop action. Stop before hooks,
+    // skill expansion or model sampling when the requested method is absent.
+    if (requiredComputerUse && !tools.some(tool => isComputerUseRuntimeTool(tool) && !tool.name.endsWith('__js_reset'))) {
+      const user = createUserMessage({ content: prompt, uuid: options?.uuid, permissionMode: getAppState().toolPermissionContext.mode })
+      const assistant = createAssistantMessage({ content: requiredComputerUse.unavailableMessage })
+      this.mutableMessages.push(user, assistant)
+      if (persistSession) {
+        await recordTranscript(this.mutableMessages)
+        await flushSessionStorage()
+      }
+      if (replayUserMessages) {
+        yield {
+          type: 'user',
+          message: user.message,
+          uuid: user.uuid,
+          timestamp: user.timestamp,
+          session_id: getSessionId(),
+          parent_tool_use_id: null,
+          isReplay: true,
+        }
+      }
+      yield {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        duration_ms: Date.now() - startTime,
+        duration_api_ms: 0,
+        num_turns: 0,
+        stop_reason: null,
+        session_id: getSessionId(),
+        total_cost_usd: 0,
+        usage: EMPTY_USAGE,
+        modelUsage: {},
+        permission_denials: [],
+        errors: [requiredComputerUse.unavailableMessage],
+        uuid: randomUUID(),
+      }
+      return
+    }
 
     // Wrap canUseTool to track permission denials
     const wrappedCanUseTool: CanUseToolFn = async (
@@ -365,6 +421,10 @@ export class QueryEngine {
       ...(customPrompt !== undefined ? [customPrompt] : defaultSystemPrompt),
       ...(memoryMechanicsPrompt ? [memoryMechanicsPrompt] : []),
       ...(appendSystemPrompt ? [appendSystemPrompt] : []),
+      ...(requiredComputerUse ? [
+        getComputerUsePrompt(process.platform === 'darwin' ? 'darwin' : process.platform === 'win32' ? 'win32' : 'linux'),
+        'The user explicitly requested Computer Use for this turn. Use the native desktop tools for desktop actions. If they cannot complete an action, explain the limitation before changing methods.',
+      ] : []),
     ])
 
     // Register function hook for structured output enforcement
@@ -1434,6 +1494,7 @@ export async function* ask({
   agents = [],
   setSDKStatus,
   orphanedPermission,
+  requiredComputerUse,
 }: {
   commands: Command[]
   prompt: string | Array<ContentBlockParam>
@@ -1466,6 +1527,7 @@ export async function* ask({
   agents?: AgentDefinition[]
   setSDKStatus?: (status: SDKStatus, detail?: SDKStatusDetail) => void
   orphanedPermission?: OrphanedPermission
+  requiredComputerUse?: QueryEngineConfig['requiredComputerUse']
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
     cwd,
@@ -1494,6 +1556,7 @@ export async function* ask({
     setSDKStatus,
     abortController,
     orphanedPermission,
+    requiredComputerUse,
     ...(feature('HISTORY_SNIP')
       ? {
           snipReplay: (yielded: Message, store: Message[]) => {

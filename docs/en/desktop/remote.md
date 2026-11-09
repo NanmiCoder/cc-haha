@@ -21,7 +21,7 @@ The mobile app works with desktop v0.7.6 or later. Its interface is currently Ch
 
 **Use phone browser** selects **Same Wi-Fi**. You still need to read the notice and enable the connection yourself. Connect directly when your phone and computer share a trusted Wi-Fi network. Use **Cloudflare remote connection** below over cellular data or another Wi-Fi network. Neither method needs another VPN app on the phone.
 
-Keep the computer on, awake, and running cc-haha. Tasks always execute on the computer. Cloudflare Tunnel provides connectivity while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
+Keep the computer on, awake, and running cc-haha. While the remote connection is on, cc-haha keeps the computer from sleeping on its own by default (see **Keep this computer awake while away** below). Tasks always execute on the computer. Cloudflare Tunnel provides connectivity while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
 
 Approval, completion and error alerts after you leave the app need no setup on the computer. On iPhone, the Expo push service relays system notifications, so the computer must be able to reach `exp.host`. On Android, the persistent 「正在值守」 (on duty) notification keeps a direct connection to the computer without Google services; on Xiaomi, Huawei, OPPO, vivo and similar phones, also tap 「允许后台运行」 (allow background running) under the app's 设置 → 通知, and allow cc-haha to auto-start and stay locked in recent apps in the system settings.
 
@@ -92,7 +92,13 @@ Away from home or the office, use **Cloudflare** to connect to this computer. Th
 4. Scan with your phone camera or the cc-haha app. Browser users should open the link in their usual Safari, Chrome, or system browser.
 5. Check and approve the phone on your computer. After pairing, view tasks and respond to approvals from the phone.
 
-Quick connection assigns a temporary `https://random-name.trycloudflare.com` address. **Each newly created tunnel gets a new address and requires a new scan.** Reconnecting the same tunnel after a brief network interruption does not itself require pairing again. Cloudflare positions Quick Tunnels for temporary development and testing, without an uptime guarantee. See the [official Quick Tunnel guide](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/). Use the fixed-domain method below to retain the address across restarts.
+Quick connection assigns a temporary `https://random-name.trycloudflare.com` address. **Each newly created tunnel gets a new address.** Reconnecting the same tunnel after a brief network interruption does not itself require pairing again, and the tunnel and its address also survive a restart of cc-haha's internal service. After the address changes, a paired phone finds the computer again like this:
+
+- On the same local network, the app asks the computer for its new address when the old one stops answering, checks the answer against its pairing credential, and switches over. For this the computer listens on the LAN on the port after the remote-access port and answers only that lookup; Windows Firewall may ask whether to allow it.
+- An iPhone with notifications on receives a "computer address updated" push and switches over when you tap it or next open the app.
+- Otherwise (away from home, or on Android) it updates once the phone is back on the same Wi-Fi as the computer, or after a new scan.
+
+Cloudflare positions Quick Tunnels for temporary development and testing, without an uptime guarantee. See the [official Quick Tunnel guide](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/). Use the fixed-domain method below to retain the address across restarts.
 
 **Connection ready** means the computer verified the public entry. Your phone's network still needs its own check: turn off Wi-Fi and scan over cellular data.
 
@@ -133,13 +139,28 @@ The computer's proxy handles its connection to Cloudflare; it does not enable a 
 
 The official connector's data connection uses outbound port `7844`. Restricted networks or proxies may block it. Choosing HTTP/2 does not change that data connection to port `443`. See [Cloudflare connection troubleshooting](https://developers.cloudflare.com/tunnel/troubleshooting/).
 
+### Direct connections and coming back to the app
+
+The phone app connects through Cloudflare first, then tries to set up a **direct connection** (P2P) to the computer in the background. On the same Wi-Fi, or when the network allows it (for example when both ends have working IPv6), requests and sessions switch to the direct path, which is usually much faster than going around through Cloudflare. If no direct path works, the app simply stays on Cloudflare. There is nothing to configure. The chat menu shows whether the app is on a LAN direct connection, a direct connection, or Cloudflare.
+
+- Direct connections are on by default. Turn off **Allow direct phone connections (P2P)** under **Phone connection → Away from home** to disable them. Only paired phones can use them, with exactly the same authorization and features as through Cloudflare.
+- Paired phones can see this computer's LAN and public IP addresses.
+- The connection details are exchanged through the Cloudflare gateway; cc-haha runs no relay server of its own. The data channel is encrypted by WebRTC (DTLS).
+- To find a working public path, the computer and the phone ask the public STUN servers of Cloudflare (`stun.cloudflare.com`), Xiaomi (`stun.miwifi.com`), and Google (`stun.l.google.com`) for their own public addresses. These servers can see both ends' public IP addresses, but none of the session content. Turn direct connections off if you do not want that.
+- The status line under the switch shows how direct connections stand on the computer's side: **Direct connections are off** means the switch is off or remote connection is not turned on; **Preparing direct connections** means the direct-connection component is starting, which it does whenever the remote connection turns on or reconnects; **Direct connections are ready** means phones can switch to a direct connection at any time; **Direct connections could not start** means the computer's direct-connection component failed to start or stopped unexpectedly. It retries on its own and pauses after several failures in a row until the remote connection is turned on again or reconnects. Meanwhile phones keep working through Cloudflare.
+- Browsers always go through Cloudflare. Direct connections need a phone app version that includes the direct-connection module; older versions keep working through Cloudflare.
+
+When you come back to the app after it was in the background, the phone was locked, or the network changed, it first checks whether the existing connection still works and keeps using it if so. If it dropped, the app picks the conversation up where it left off and receives only what it missed, without reloading the whole history, and a drop of a few seconds shows no warning. The computer keeps a disconnected phone's recent output for about 3 minutes, during which the session is not treated as closed; after that the app resyncs, again reading only what is new.
+
 ### Pairing, turning off, and restoring
 
 A QR pairing secret is valid for five minutes and one use. Phone credentials are valid for 30 days by default. Do not share the code. Revoke an individual phone or turn off the connection to disconnect remote access immediately. Tasks that already started continue running.
 
 The phone app stores credentials in system secure storage; browsers use a secure cookie. Authorization is not shared across browsers, private windows, or domains. If a QR scanner opens its own embedded browser, switch to your usual browser before pairing. Expired or revoked authorization requires pairing again; the current implementation does not automatically extend the 30-day lifetime.
 
-**Restore connection when the desktop starts** is off by default. It restores an approved Cloudflare connection. A new quick tunnel gets a new address and needs another scan; a fixed-domain tunnel keeps its address. Keep the computer powered on, online, and awake.
+**Restore connection when the desktop starts** is off by default. It restores an approved Cloudflare connection. A new quick tunnel gets a new address (see above for how phones find it again); a fixed-domain tunnel keeps its address. Keep the computer powered on, online, and awake.
+
+**Keep this computer awake while away** is on by default: while the remote connection is on or reconnecting, the computer does not go to sleep from inactivity, and the display still turns off as usual. Closing a laptop lid, choosing Sleep, or shutting down still disconnects phones, and keeping the computer awake uses more battery. Turn the switch off if you do not need it.
 
 After upgrading an old remote configuration, access will not start automatically. Choose a Cloudflare method, enable it, and pair using a new code. LAN settings, computer conversations, and user data are retained.
 

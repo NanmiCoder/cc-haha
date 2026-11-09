@@ -26,17 +26,25 @@ async function advance(milliseconds: number) {
   for (let index = 0; index < 30; index++) await Promise.resolve()
 }
 
+/** The pauses before the 2nd–5th reachability checks of a public hostname. */
+const VERIFY_PAUSES = [2_000, 4_000, 8_000, 15_000]
+/** Runs every spaced reachability check of the current attempt. */
+async function exhaustVerification() {
+  for (const pause of VERIFY_PAUSES) await advance(pause)
+}
+const quickUrl = 'https://fixture-phone.trycloudflare.com'
+
 function fixture(saved?: unknown) {
   const directory = mkdtempSync(path.join(tmpdir(), 'cloudflare-host-test-'))
   directories.push(directory)
   const file = path.join(directory, 'public-access-private.json')
   if (saved !== undefined) writeFileSync(file, typeof saved === 'string' ? saved : JSON.stringify(saved))
-  let reachable = true
+  let reachable: boolean | (() => boolean) = true
   let proxyUrl: string | null = null
   const request = vi.fn(async (route: string, _method?: string, body?: unknown): Promise<unknown> => {
     if (route === '/enable') return { port: (body as { port: number }).port }
     if (route === '/network') return { proxyUrl }
-    if (route === '/verify') return { ok: reachable }
+    if (route === '/verify') return { ok: typeof reachable === 'function' ? reachable() : reachable }
     return {}
   })
   const exits = new Set<(exit: CloudflareTunnelExit) => void>()
@@ -62,10 +70,18 @@ function fixture(saved?: unknown) {
     stop,
     onExit(callback: (exit: CloudflareTunnelExit) => void) { exits.add(callback); return () => { exits.delete(callback) } },
   }))
-  const manager = new PublicAccessManager({ directory, backend: { request: request as never }, startTunnel })
+  // Electron hands out a fresh id per assertion; `held` is what still keeps the computer awake.
+  const held = new Set<number>()
+  let nextBlockerId = 0
+  const blocker = {
+    start: vi.fn((_type: 'prevent-app-suspension' | 'prevent-display-sleep') => { const id = ++nextBlockerId; held.add(id); return id }),
+    stop: vi.fn((id: number) => held.delete(id)),
+  }
+  const manager = new PublicAccessManager({ directory, backend: { request: request as never }, startTunnel, powerSaveBlocker: blocker })
   managers.push(manager)
-  return { directory, file, request, manager, startTunnel, stop, publishedRoutes,
-    reachable(value: boolean) { reachable = value }, proxy(value: string | null) { proxyUrl = value },
+  return { directory, file, request, manager, startTunnel, stop, publishedRoutes, blocker, held,
+    verifies() { return request.mock.calls.filter(([route]) => route === '/verify').length },
+    reachable(value: boolean | (() => boolean)) { reachable = value }, proxy(value: string | null) { proxyUrl = value },
     routes(value: CloudflareTunnelRoute[] | null) { routes = value; for (const release of [...routeWaiters]) release() },
     exit() { for (const callback of [...exits]) callback({ code: 1, signal: null }) },
   }
@@ -86,7 +102,7 @@ describe('Cloudflare settings migration', () => {
     expect(f.startTunnel).not.toHaveBeenCalled()
     expect(JSON.stringify(f.manager.getStatus())).not.toContain('fake-retired-secret')
     const persisted = JSON.parse(readFileSync(f.file, 'utf8'))
-    expect(persisted).toMatchObject({ version: 5, futureSetting: { enabled: true }, legacyRemoteConfiguration: original })
+    expect(persisted).toMatchObject({ version: 7, futureSetting: { enabled: true }, legacyRemoteConfiguration: original, p2pEnabled: true, keepAwake: true })
     expect(migratePublicAccessSettings(persisted)).toEqual(persisted)
     await expect(f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION - 1)).rejects.toThrow('consent')
     await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
@@ -95,8 +111,74 @@ describe('Cloudflare settings migration', () => {
   })
 
   it('migrates a new profile into disabled Quick mode and preserves newer unknown fields', () => {
-    expect(migratePublicAccessSettings({})).toEqual({ version: 5, ...quick, tunnelToken: '', autoStart: false, consentVersion: 0, migrationRequired: false })
+    expect(migratePublicAccessSettings({})).toEqual({ version: 7, ...quick, tunnelToken: '', autoStart: false, consentVersion: 0, migrationRequired: false, p2pEnabled: true, keepAwake: true })
     expect(migratePublicAccessSettings({ ...named, version: 8, future: 7, autoStart: true, consentVersion: 4 })).toMatchObject({ version: 8, future: 7, autoStart: true, consentVersion: 4 })
+  })
+
+  it('a version 5 file gains direct connections switched on and keeps everything else', async () => {
+    const saved = { ...quick, version: 5, tunnelToken: '', autoStart: true, consentVersion: 4, migrationRequired: false, futureSetting: { kept: true } }
+    const f = fixture(saved)
+    expect(f.manager.getStatus().p2pEnabled).toBe(true)
+    const persisted = JSON.parse(readFileSync(f.file, 'utf8'))
+    expect(persisted).toEqual({ ...saved, version: 7, p2pEnabled: true, keepAwake: true })
+    // An explicit opt-out survives every later migration.
+    expect(migratePublicAccessSettings({ ...persisted, p2pEnabled: false }).p2pEnabled).toBe(false)
+  })
+
+  it('a version 6 file migrates to version 7 with keep awake switched on and keeps everything else', async () => {
+    // Written by the release that added direct connections, before keep awake existed.
+    const saved = { ...quick, version: 6, tunnelToken: '', autoStart: true, consentVersion: PUBLIC_ACCESS_CONSENT_VERSION, migrationRequired: false, p2pEnabled: false, futureSetting: { kept: true } }
+    const f = fixture(saved)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', keepAwake: true, p2pEnabled: false, autoStart: true })
+    const persisted = JSON.parse(readFileSync(f.file, 'utf8'))
+    expect(persisted).toEqual({ ...saved, version: 7, keepAwake: true })
+    expect(migratePublicAccessSettings(persisted)).toEqual(persisted)
+    // An explicit opt-out survives every later migration.
+    expect(migratePublicAccessSettings({ ...persisted, keepAwake: false }).keepAwake).toBe(false)
+    await f.manager.restore()
+    expect(f.manager.getStatus().state).toBe('online')
+    expect(f.held.size).toBe(1)
+  })
+
+  it('switching keep awake persists, follows the connection and never touches the tunnel', async () => {
+    const f = fixture()
+    expect(f.manager.setKeepAwake(false).keepAwake).toBe(false)
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).keepAwake).toBe(false)
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.blocker.start).not.toHaveBeenCalled()
+    f.request.mockClear()
+    expect(f.manager.setKeepAwake(true).keepAwake).toBe(true)
+    expect(f.blocker.start).toHaveBeenCalledOnce()
+    expect(f.blocker.start).toHaveBeenCalledWith('prevent-app-suspension')
+    expect(f.manager.setKeepAwake(true).keepAwake).toBe(true)
+    expect(f.blocker.start).toHaveBeenCalledOnce()
+    expect(f.manager.setKeepAwake(false).keepAwake).toBe(false)
+    expect(f.held.size).toBe(0)
+    expect(f.request).not.toHaveBeenCalled()
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    expect(f.manager.getStatus().state).toBe('online')
+  })
+
+  it('switching direct connections persists and notifies without touching the tunnel', async () => {
+    const states: Array<boolean | undefined> = []
+    const f = fixture()
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => states.push(status.p2pEnabled) })
+    managers.push(manager)
+    expect(manager.setP2PEnabled(false).p2pEnabled).toBe(false)
+    expect(manager.setP2PEnabled(false).p2pEnabled).toBe(false)
+    expect(JSON.parse(readFileSync(f.file, 'utf8')).p2pEnabled).toBe(false)
+    expect(states).toEqual([false])
+    expect(f.request).not.toHaveBeenCalled()
+  })
+
+  it('reports connection state changes so the P2P endpoint can follow them', async () => {
+    const seen: string[] = []
+    const f = fixture()
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => seen.push(status.state) })
+    managers.push(manager)
+    await manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await manager.stop()
+    expect(seen).toEqual(['connecting', 'online', 'disabled'])
   })
 
   it.each(['{broken', { mode: 'unknown' }, { ...quick, version: 5, localPort: null }, { ...named, tunnelToken: 'fake\nsecret' }, { version: 4, mode: 'tailscale', customUrl: 'http://unsafe.test', localPort: 17463 }])('preserves corrupt or invalid saved settings: %j', async saved => {
@@ -109,6 +191,30 @@ describe('Cloudflare settings migration', () => {
     expect(readFileSync(f.file, 'utf8')).toBe(serialized)
     await f.manager.configure(quick)
     expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', error: null })
+  })
+
+  it.each(['{broken', { ...named, version: 5, tunnelToken: 'fake\nsecret' }])('switching direct connections never overwrites invalid saved settings: %j', saved => {
+    const f = fixture(saved)
+    const serialized = typeof saved === 'string' ? saved : JSON.stringify(saved)
+    expect(() => f.manager.setP2PEnabled(false)).toThrow('configuration')
+    expect(readFileSync(f.file, 'utf8')).toBe(serialized)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'unconfigured', error: 'configuration', p2pEnabled: true })
+  })
+
+  it.each(['{broken', { ...named, version: 6, tunnelToken: 'fake\nsecret' }])('switching keep awake never overwrites invalid saved settings: %j', saved => {
+    const f = fixture(saved)
+    const serialized = typeof saved === 'string' ? saved : JSON.stringify(saved)
+    expect(() => f.manager.setKeepAwake(false)).toThrow('configuration')
+    expect(readFileSync(f.file, 'utf8')).toBe(serialized)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'unconfigured', error: 'configuration', keepAwake: true })
+  })
+
+  it.each(['{broken', { ...named, version: 5, tunnelToken: 'fake\nsecret' }])('switching auto start never overwrites invalid saved settings: %j', saved => {
+    const f = fixture(saved)
+    const serialized = typeof saved === 'string' ? saved : JSON.stringify(saved)
+    expect(() => f.manager.setAutoStart(true)).toThrow('configuration')
+    expect(readFileSync(f.file, 'utf8')).toBe(serialized)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'unconfigured', error: 'configuration' })
   })
 })
 
@@ -176,10 +282,14 @@ describe('Cloudflare gateway lifecycle', () => {
     vi.useFakeTimers()
     const f = fixture()
     f.reachable(false)
-    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'connecting', phase: 'checking', publicUrl: null })
+    await exhaustVerification()
+    await started
     expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'network', publicUrl: null })
     expect(f.stop).toHaveBeenCalledTimes(1)
-    expect(f.request.mock.calls.filter(([route]) => route === '/verify')).toHaveLength(3)
+    expect(f.verifies()).toBe(5)
     f.reachable(true)
     await advance(1000)
     expect(f.manager.getStatus()).toMatchObject({ state: 'online', error: null })
@@ -261,7 +371,10 @@ describe('Cloudflare gateway lifecycle', () => {
     await f.manager.configure(named)
     f.reachable(false)
     f.routes([{ hostname: 'phone.example.test', service: 'http://localhost:17463' }])
-    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await exhaustVerification()
+    await started
     expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'network' })
     f.reachable(true)
     await advance(1000)
@@ -379,6 +492,75 @@ describe('Cloudflare gateway lifecycle', () => {
     expect(f.startTunnel).toHaveBeenCalledTimes(2)
   })
 
+  it('a recovery restart keeps phone streams resumable; an explicit stop ends them', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.exit()
+    await advance(0)
+    expect(f.request.mock.calls.filter(([route]) => route === '/disable')).toEqual([['/disable', 'POST', { reason: 'restart' }]])
+    await advance(1000)
+    f.request.mockClear()
+    // A sidecar restart keeps the tunnel: nothing ends phone streams, and the new
+    // gateway is opened without closing anything first.
+    await f.manager.serverUnavailable()
+    await f.manager.serverChanged()
+    expect(f.request.mock.calls.some(([route]) => route === '/disable')).toBe(false)
+    expect(f.manager.getStatus().state).toBe('online')
+    f.request.mockClear()
+    await f.manager.stop()
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+  })
+
+  it('a failed automatic retry keeps phone streams resumable while it keeps retrying', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.request.mockClear()
+    // cloudflared exits and the network is still down on the first retry.
+    f.reachable(false)
+    f.exit()
+    await advance(0)
+    await advance(1000)
+    await exhaustVerification()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'network' })
+    const disables = f.request.mock.calls.filter(([route]) => route === '/disable')
+    expect(disables).toEqual([['/disable', 'POST', { reason: 'restart' }], ['/disable', 'POST', { reason: 'restart' }]])
+    f.reachable(true)
+    await advance(2000)
+    expect(f.manager.getStatus().state).toBe('online')
+  })
+
+  it('a failure that will not be retried ends phone streams', async () => {
+    const f = fixture()
+    // The gateway came up on another port: a configuration problem, not a network blip.
+    f.request.mockImplementation(async (route: string) => route === '/enable' ? { port: 17464 } : {})
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'configuration' })
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+  })
+
+  it('a tunnel recovery stays reconnecting until it is back online, without passing through disabled or failed', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const states: string[] = []
+    const manager = new PublicAccessManager({ directory: f.directory, backend: { request: f.request as never }, startTunnel: f.startTunnel, onState: status => states.push(status.state) })
+    managers.push(manager)
+    await manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    f.reachable(false)
+    f.exit()
+    await advance(0)
+    await advance(1000)
+    await exhaustVerification()
+    f.reachable(true)
+    await advance(2000)
+    expect(manager.getStatus().state).toBe('online')
+    expect(states).toEqual(['connecting', 'online', 'reconnecting', 'online'])
+    states.length = 0
+    await manager.serverUnavailable()
+    expect(states).toEqual(['reconnecting'])
+  })
+
   it('waits for cancelled startup cleanup before honoring a new enable request', async () => {
     const f = fixture()
     let finish!: (value: Awaited<ReturnType<typeof f.startTunnel>>) => void
@@ -439,14 +621,273 @@ describe('Cloudflare gateway lifecycle', () => {
   it('restores the tunnel after a sidecar restart without reviving an explicitly stopped connection', async () => {
     const f = fixture()
     await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
-    f.request.mockRejectedValueOnce(new Error('Server unavailable'))
     await f.manager.serverUnavailable()
+    // Turned off while the sidecar is away: the gateway is already gone with it.
+    f.request.mockRejectedValueOnce(new Error('Server unavailable'))
+    await f.manager.stop()
+    expect(f.stop).toHaveBeenCalledOnce()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'stop' })
+    // The new sidecar confirms its gateway is closed and nothing is revived.
+    await f.manager.serverChanged()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', error: null })
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+    await f.manager.serverChanged()
+    expect(f.manager.getStatus().state).toBe('disabled')
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+  })
+
+  it('a sidecar that is not connected yet still rebuilds the connection once it is back', async () => {
+    const f = fixture()
+    let finish!: (value: Awaited<ReturnType<typeof f.startTunnel>>) => void
+    let entered!: () => void
+    const entering = new Promise<void>(resolve => { entered = resolve })
+    f.startTunnel.mockImplementationOnce(async () => { entered(); return await new Promise(resolve => { finish = resolve }) })
+    const connecting = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await entering
+    // Nothing verified yet, so there is no address worth keeping.
+    f.request.mockRejectedValueOnce(new Error('Server unavailable'))
+    const unavailable = f.manager.serverUnavailable()
+    finish({ url: 'https://late.trycloudflare.com', stop: f.stop, publishedRoutes: f.publishedRoutes, onExit: () => () => {} })
+    await Promise.all([connecting, unavailable])
     expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'stop' })
     await f.manager.serverChanged()
-    expect(f.manager.getStatus().state).toBe('online')
-    await f.manager.stop()
-    await f.manager.serverChanged()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
     expect(f.startTunnel).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Keeping the public address', () => {
+  it('waits for a fresh hostname with spaced checks instead of rebuilding the tunnel under a new address', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.reachable(false)
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    expect(f.verifies()).toBe(1)
+    await advance(1_999)
+    expect(f.verifies()).toBe(1)
+    await advance(1)
+    await advance(4_000)
+    expect(f.verifies()).toBe(3)
+    expect(f.stop).not.toHaveBeenCalled()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'connecting', phase: 'checking', publicUrl: null })
+    // Cloudflare's edge starts answering for the new hostname.
+    f.reachable(true)
+    await advance(8_000)
+    expect(await started).toMatchObject({ state: 'online', publicUrl: quickUrl, error: null })
+    expect(f.verifies()).toBe(4)
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    expect(f.stop).not.toHaveBeenCalled()
+  })
+
+  it('cancels the spaced checks on stop without leaving a timer behind', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.reachable(false)
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await advance(2_000)
+    expect(f.verifies()).toBe(2)
+    expect(vi.getTimerCount()).toBe(1)
+    await f.manager.stop()
+    await started
+    expect(vi.getTimerCount()).toBe(0)
+    await advance(60_000)
+    expect(f.verifies()).toBe(2)
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', publicUrl: null })
+  })
+
+  it.each([
+    ['quick', quickUrl],
+    ['named', named.customUrl],
+  ] as const)('a sidecar restart keeps the %s tunnel and re-attaches the new gateway to the same address', async (mode, publicUrl) => {
+    const f = fixture()
+    if (mode === 'named') {
+      f.routes([gatewayRoute])
+      await f.manager.configure(named)
+    }
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl })
+    f.request.mockClear()
+    await f.manager.serverUnavailable()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', publicUrl: null, error: null })
+    // The old gateway went down with its sidecar; cloudflared keeps running.
+    expect(f.stop).not.toHaveBeenCalled()
+    expect(f.request).not.toHaveBeenCalled()
+    await f.manager.serverChanged()
+    expect(f.request.mock.calls).toEqual([
+      ['/enable', 'POST', { port: 17463 }],
+      ['/origin', 'PUT', { publicUrl }],
+      ['/verify', 'POST'],
+    ])
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl, phase: null, error: null })
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    expect(f.stop).not.toHaveBeenCalled()
+  })
+
+  it('a start request while the tunnel waits for the next sidecar launches no second connector', async () => {
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await f.manager.serverUnavailable()
+    expect(await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)).toMatchObject({ state: 'reconnecting' })
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    await f.manager.serverChanged()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+  })
+
+  it('rebuilds the tunnel when the new sidecar opens its gateway on another port', async () => {
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await f.manager.serverUnavailable()
+    f.request.mockClear()
+    f.request.mockResolvedValueOnce({ port: 32123 })
+    await f.manager.serverChanged()
+    // Re-attaching is tried first; only its failure stops the kept connector.
+    expect(f.request.mock.calls[0]).toEqual(['/enable', 'POST', { port: 17463 }])
+    expect(f.request.mock.calls[1]![0]).toBe('/disable')
+    expect(f.stop).toHaveBeenCalledOnce()
+    expect(f.startTunnel).toHaveBeenCalledTimes(2)
+    // The rebuild keeps phone streams resumable.
+    expect(f.request.mock.calls.filter(([route]) => route === '/disable')).toEqual([['/disable', 'POST', { reason: 'restart' }]])
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
+  })
+
+  it('rebuilds the tunnel when the kept address no longer reaches the new gateway', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await started
+    await f.manager.serverUnavailable()
+    // Every patient check of the kept address fails; the rebuilt tunnel answers at once.
+    let checks = 0
+    f.reachable(() => ++checks > 5)
+    f.request.mockClear()
+    const changed = f.manager.serverChanged()
+    await advance(0)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', phase: 'checking' })
+    expect(f.request.mock.calls.map(([route]) => route)).toEqual(['/enable', '/origin', '/verify'])
+    await advance(2_000)
+    await advance(4_000)
+    await advance(8_000)
+    expect(f.stop).not.toHaveBeenCalled()
+    await advance(15_000)
+    await changed
+    expect(checks).toBe(6)
+    expect(f.stop).toHaveBeenCalledOnce()
+    expect(f.startTunnel).toHaveBeenCalledTimes(2)
+    expect(f.request.mock.calls.filter(([route]) => route === '/disable')).toEqual([['/disable', 'POST', { reason: 'restart' }]])
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
+  })
+
+  it('a stop during re-attach wins and nothing is rebuilt', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await started
+    await f.manager.serverUnavailable()
+    f.reachable(false)
+    const changed = f.manager.serverChanged()
+    await advance(0)
+    await advance(2_000)
+    await f.manager.stop()
+    await changed
+    expect(vi.getTimerCount()).toBe(0)
+    await advance(60_000)
+    expect(f.stop).toHaveBeenCalledOnce()
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', publicUrl: null })
+  })
+
+  it('a sidecar that leaves again during re-attach keeps the tunnel for the next one', async () => {
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await f.manager.serverUnavailable()
+    let answer!: (value: unknown) => void
+    f.request.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const changed = f.manager.serverChanged()
+    await f.manager.serverUnavailable()
+    answer({ port: 17463 })
+    await changed
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', publicUrl: null })
+    expect(f.stop).not.toHaveBeenCalled()
+    await f.manager.serverChanged()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+  })
+
+  it('a cloudflared exit while the sidecar is away is rebuilt once the sidecar is back', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await started
+    await f.manager.serverUnavailable()
+    // No sidecar can confirm the gateway closed, so nothing launches until one can.
+    f.request.mockRejectedValueOnce(new Error('Server unavailable'))
+    f.exit()
+    await advance(0)
+    expect(f.stop).toHaveBeenCalledOnce()
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'stop' })
+    await advance(60_000)
+    expect(f.startTunnel).toHaveBeenCalledOnce()
+    const changed = f.manager.serverChanged()
+    await advance(0)
+    await changed
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', publicUrl: quickUrl })
+    expect(f.startTunnel).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Keeping the computer awake', () => {
+  it('holds one sleep assertion while remote access is wanted, across a sidecar restart, and releases it on stop', async () => {
+    const f = fixture()
+    expect(f.blocker.start).not.toHaveBeenCalled()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.blocker.start).toHaveBeenCalledOnce()
+    expect(f.blocker.start).toHaveBeenCalledWith('prevent-app-suspension')
+    await f.manager.serverUnavailable()
+    await f.manager.serverChanged()
+    expect(f.manager.getStatus().state).toBe('online')
+    expect(f.blocker.start).toHaveBeenCalledOnce()
+    expect(f.held.size).toBe(1)
+    await f.manager.stop()
+    expect(f.held.size).toBe(0)
+    expect(f.blocker.stop).toHaveBeenCalledOnce()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.held.size).toBe(1)
+    expect(f.blocker.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps holding while a network failure is retried and releases a final failure', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    f.reachable(false)
+    const started = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    await advance(0)
+    await exhaustVerification()
+    await started
+    expect(f.manager.getStatus().state).toBe('reconnecting')
+    expect(f.held.size).toBe(1)
+    await f.manager.stop()
+    expect(f.held.size).toBe(0)
+    f.startTunnel.mockRejectedValueOnce(new CloudflareTunnelError('runtime', 'fixture unavailable'))
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'runtime' })
+    expect(f.held.size).toBe(0)
+    expect(f.blocker.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('releases the assertion on dispose', async () => {
+    const f = fixture()
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.held.size).toBe(1)
+    await f.manager.dispose()
+    expect(f.held.size).toBe(0)
+    expect(f.blocker.start).toHaveBeenCalledOnce()
   })
 })
 

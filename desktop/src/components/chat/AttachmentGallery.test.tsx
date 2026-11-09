@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom'
-import { fireEvent, render, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -538,4 +538,180 @@ it.each(['composer', 'message'] as const)('labels a selected-text reference as t
   const view = render(<AttachmentGallery variant={variant} attachments={[{ type: 'file', name: 'AI reply', quote: 'quoted text', referenceKind: 'chat-selection' }]} />)
   expect(view.getByText('Selected text')).toBeInTheDocument()
   expect(view.queryByText('File')).not.toBeInTheDocument()
+})
+
+/**
+ * #1838: past a handful of selected-text references the composer's cards
+ * wrapped onto row after row with nothing bounding them. The composer grew
+ * until the transcript above it had no height left; at 20 cards in a 1280×820
+ * window the editor and the send button went off the bottom as well.
+ */
+describe('composer attachment tray', () => {
+  const selections = (count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `selection-${index}`,
+    type: 'file' as const,
+    name: `AI reply ${index}`,
+    referenceKind: 'chat-selection' as const,
+    quote: `quoted text ${index}`,
+  }))
+
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  it('scrolls a long run of cards inside a capped tray instead of growing the composer', () => {
+    const view = render(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={selections(20)} />)
+
+    const tray = view.getByTestId('composer-attachment-tray')
+    expect(tray.className).toMatch(/(^|\s)max-h-\[/)
+    expect(tray).toHaveClass('overflow-y-auto')
+    for (let index = 0; index < 20; index += 1) {
+      expect(within(tray).getByRole('button', { name: `Remove AI reply ${index}` })).toBeInTheDocument()
+    }
+  })
+
+  it('leaves the attachments of a sent message uncapped', () => {
+    const view = render(<AttachmentGallery variant="message" attachments={selections(20)} />)
+
+    expect(view.queryByTestId('composer-attachment-tray')).not.toBeInTheDocument()
+  })
+
+  describe('revealing a new card', () => {
+    // jsdom has no layout. The stub puts the tray's visible box at 100–288px
+    // and its cards two to a row on a 76px pitch, moved up by its scrollTop.
+    const TRAY_TOP = 100
+    const TRAY_BOTTOM = 288
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+
+    beforeEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(this: HTMLElement) {
+        const tray = this.closest<HTMLElement>('[data-testid="composer-attachment-tray"]')
+        let box = { top: 0, bottom: 0 }
+        if (tray === this) {
+          box = { top: TRAY_TOP, bottom: TRAY_BOTTOM }
+        } else if (tray && this.parentElement === tray) {
+          const top = TRAY_TOP + 4 + Math.floor([...tray.children].indexOf(this) / 2) * 76 - tray.scrollTop
+          box = { top, bottom: top + 68 }
+        }
+        return { left: 0, right: 0, width: 0, height: box.bottom - box.top, x: 0, y: box.top, toJSON: () => ({}), ...box } as DOMRect
+      }
+    })
+
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+    })
+
+    function trackScrollTop(tray: HTMLElement) {
+      let scrollTop = 0
+      Object.defineProperty(tray, 'scrollTop', {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => { scrollTop = value },
+      })
+    }
+
+    it('reveals the last image when an empty composer mounts a large first batch, then respects manual scrolling', () => {
+      const images = Array.from({ length: 30 }, (_, index) => ({
+        id: `image-${index}`,
+        type: 'image' as const,
+        name: `image-${index}.png`,
+        data: 'data:image/png;base64,AAAA',
+      }))
+      const onRemove = vi.fn()
+      const composer = (attachments: typeof images) => attachments.length > 0
+        ? <AttachmentGallery variant="composer" onRemove={onRemove} attachments={attachments} />
+        : null
+      const view = render(composer([]))
+
+      // Both composer entry points mount the gallery only after the first add.
+      view.rerender(composer(images))
+      const tray = view.getByTestId('composer-attachment-tray')
+      const lastCard = within(tray).getByRole('button', { name: 'Open image-29.png' }).parentElement!
+      expect(tray.scrollTop).toBeGreaterThan(0)
+      expect(lastCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(tray.getBoundingClientRect().bottom)
+
+      tray.scrollTop = 0
+      view.rerender(composer([...images]))
+      expect(tray.scrollTop).toBe(0)
+    })
+
+    it('scrolls a card added below the fold into view, and leaves the tray alone otherwise', () => {
+      const attachments = selections(7)
+      const view = render(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={attachments.slice(0, 2)} />)
+      const tray = view.getByTestId('composer-attachment-tray')
+      trackScrollTop(tray)
+
+      // Cards 3 and 4 open the second row, still inside the tray.
+      view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={attachments.slice(0, 4)} />)
+      expect(tray.scrollTop).toBe(0)
+
+      // Card 7 opens a fourth row at 332–400px, 112px past the tray's edge.
+      view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={attachments} />)
+      expect(tray.scrollTop).toBe(112)
+
+      // Removing a card is not an addition to reveal, even when the card left
+      // last (256–324px with the tray back at the top) is out of view.
+      tray.scrollTop = 0
+      view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={attachments.slice(0, 6)} />)
+      expect(tray.scrollTop).toBe(0)
+    })
+
+    it('reveals a file attached ahead of the references, not the last card', () => {
+      const references = selections(6)
+      const view = render(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={references} />)
+      const tray = view.getByTestId('composer-attachment-tray')
+      trackScrollTop(tray)
+      tray.scrollTop = 80
+
+      // The composer lists uploads before references, so a new upload lands in
+      // the first row: at 24px, above the visible box while the tray is scrolled.
+      const upload = { id: 'upload-1', type: 'file' as const, name: 'notes.md', path: '/repo/notes.md' }
+      view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={[upload, ...references]} />)
+
+      expect(tray.scrollTop).toBe(4)
+    })
+
+    it('reveals a reference added again, which moves its card to the end', () => {
+      const references = selections(6)
+      const view = render(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={references} />)
+      const tray = view.getByTestId('composer-attachment-tray')
+      trackScrollTop(tray)
+
+      // The store drops the earlier copy and appends the reference again: no new
+      // id, but the first card is now the sixth, at 256–324px.
+      view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={[...references.slice(1), references[0]!]} />)
+
+      expect(tray.scrollTop).toBe(36)
+    })
+
+    it('preserves manual position for edits and removals, then reveals a re-added diff among mixed cards', () => {
+      const onRemove = vi.fn()
+      const mixed = [
+        { id: 'image', type: 'image' as const, name: 'shot.png', data: 'data:image/png;base64,AAAA' },
+        { id: 'file', type: 'file' as const, name: 'notes.md', path: '/repo/notes.md' },
+        { id: 'text', type: 'file' as const, name: 'AI reply', referenceKind: 'chat-selection' as const, quote: 'Original text' },
+        { id: 'selection', type: 'file' as const, name: 'App.tsx', path: 'src/App.tsx', lineStart: 5, quote: 'selected code' },
+        { id: 'file-2', type: 'file' as const, name: 'index.ts', path: 'src/index.ts' },
+        { id: 'diff', type: 'file' as const, name: 'diff.ts', path: 'src/diff.ts', diffSide: 'new' as const, note: 'Review this' },
+      ]
+      const view = render(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={mixed} />)
+      const tray = view.getByTestId('composer-attachment-tray')
+      trackScrollTop(tray)
+
+      const edited = mixed.map((item) => item.id === 'text' ? { ...item, quote: 'Updated text' } : item)
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited} />)
+      expect(within(tray).getByText('Updated text')).toBeInTheDocument()
+      expect(tray.scrollTop).toBe(0)
+
+      fireEvent.click(within(tray).getByRole('button', { name: 'Remove diff.ts' }))
+      expect(onRemove).toHaveBeenCalledWith('diff')
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited.slice(0, -1)} />)
+      expect(tray.scrollTop).toBe(0)
+
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited} />)
+      const diff = within(tray).getByTestId('diff-comment-card')
+      expect(tray.scrollTop).toBe(36)
+      expect(diff.getBoundingClientRect().bottom).toBeLessThanOrEqual(tray.getBoundingClientRect().bottom)
+    })
+  })
 })

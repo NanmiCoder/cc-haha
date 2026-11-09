@@ -317,10 +317,27 @@ describe('providerStore runtime refresh', () => {
     })
 
     const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ providers: [makeProvider()], activeId: provider.id })
     await useProviderStore.getState().updateProvider(provider.id, { models: provider.models })
 
     expect(settingsSetModelMock).toHaveBeenCalledWith('model-flash')
     expect(settingsFetchAllMock).toHaveBeenCalled()
+  })
+
+  it.each(['name', 'other slot'])('keeps the picker model when saving %s with an unchanged main mapping', async (change) => {
+    const previous = makeProvider()
+    const provider = change === 'name'
+      ? { ...previous, name: 'Renamed provider' }
+      : { ...previous, models: { ...previous.models, haiku: 'new-small' } }
+    providersApiMock.update.mockResolvedValue({ provider })
+    providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ providers: [previous], activeId: previous.id })
+
+    await useProviderStore.getState().updateProvider(provider.id, { name: provider.name, models: provider.models })
+
+    expect(settingsSetModelMock).not.toHaveBeenCalled()
+    expect(settingsFetchAllMock).not.toHaveBeenCalled()
   })
 })
 

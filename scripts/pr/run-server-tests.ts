@@ -7,6 +7,7 @@ import { loadQuarantineManifest, quarantinedPathSet } from '../quality-gate/quar
 import { rootBunTestFilter } from './bun-test-filter'
 import { classifyFailedFiles, formatFlakeReport } from './server-test-flakes'
 import { createSandboxedTestEnvironment } from './test-environment'
+import { parseShardArg, selectShard } from './test-shard'
 
 const root = process.cwd()
 // The root runtime is wider than src/server: CLI commands, query handling,
@@ -17,6 +18,9 @@ const roots = ['src']
 const excludedFiles = quarantinedPathSet(loadQuarantineManifest())
 const TEST_PROCESS_CONCURRENCY = 4
 const TEST_FILE_PATTERN = /\.test\.[cm]?[jt]sx?$/
+// CI splits the suite across runners with --shard=<index>/<total>; locally and in
+// the nightly sweep there is no flag and every file runs here.
+const shard = parseShardArg(process.argv.slice(2))
 
 function normalize(path: string) {
   return relative(root, path).split(sep).join('/')
@@ -52,6 +56,11 @@ testFiles.sort()
 if (testFiles.length === 0) {
   console.log('No server-side test files found.')
   process.exit(0)
+}
+
+const selectedFiles = selectShard(testFiles, shard)
+if (shard) {
+  console.log(`[server-tests] shard ${shard.index}/${shard.total}: ${selectedFiles.length} of ${testFiles.length} files`)
 }
 
 type TestFileResult = {
@@ -122,8 +131,8 @@ async function runTestFile(file: string): Promise<TestFileResult> {
 let nextFile = 0
 const results: TestFileResult[] = []
 async function runWorker() {
-  while (nextFile < testFiles.length) {
-    const file = testFiles[nextFile]
+  while (nextFile < selectedFiles.length) {
+    const file = selectedFiles[nextFile]
     nextFile += 1
     results.push(await runTestFile(file))
   }
@@ -131,7 +140,7 @@ async function runWorker() {
 
 await Promise.all(
   Array.from(
-    { length: Math.min(TEST_PROCESS_CONCURRENCY, testFiles.length) },
+    { length: Math.min(TEST_PROCESS_CONCURRENCY, selectedFiles.length) },
     () => runWorker(),
   ),
 )

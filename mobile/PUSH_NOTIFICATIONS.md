@@ -47,7 +47,7 @@ Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.js
 - `PUT /api/sessions/mobile-push` → `{ registered, status: 'registered' | 'notConfigured', id?, expiresAt? }`。
 - `DELETE /api/sessions/mobile-push`，body `{ token: ordinaryDevicePushToken, hostId }` → `{ removed: number }`，幂等删除本手机在此主机的普通通知和关联的实时活动。未配置 provider 时也能删除旧登记。
 - `DELETE /api/sessions/mobile-push/:id`，body `{ token }` 保留单项注销；不匹配返回 404。
-- `POST /api/sessions/mobile-push/test`，body `{ token: ordinaryDevicePushToken, hostId?: string }` → `{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed', error? }`。只匹配当前调用者（LAN 为该 token 的归属，远程为已验证的配对设备）自己的普通通知登记，不接受 owner/device ID；`hostId` 给出时只发该主机的登记。发送标题“测试通知 · cc-haha”、正文“电脑推送正常：这条是电脑发给你手机的。”，APNs category 为 `cchahaResult`，data 为 `{ hostId, eventType: 'test' }`（没有 sessionId）。这是用户主动测试，不受通知类别偏好和免打扰限制；Android 在拆分渠道下使用 `cc-haha-completed`。`notConfigured` 表示电脑没有该平台的 APNs / FCM 配置，`noRegistration` 表示没有匹配登记，`failed` 的 `error` 不含 token 或凭据。
+- `POST /api/sessions/mobile-push/test`，body `{ token: ordinaryDevicePushToken, hostId?: string }` → `{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed', error? }`。只匹配当前调用者（LAN 为该 token 的归属，远程为已验证的配对设备）自己的普通通知登记，不接受 owner/device ID；`hostId` 给出时只发该主机的登记。发送标题“测试通知 · cc-haha”、正文“电脑推送正常：这条是电脑发给你手机的。”，APNs category 为 `cchahaResult`，data 为 `{ hostId, eventType: 'test' }`（没有 sessionId）。这是用户主动测试，不受通知类别偏好和免打扰限制。测试是为了看到横幅：Android 在拆分渠道下使用高重要程度的 `cc-haha-decisions`（「任务完成」渠道是默认重要程度，只响铃不弹横幅），手机在 App 前台时也照常弹出测试通知（其余提醒在前台只进通知栏）。`notConfigured` 表示电脑没有该平台的 APNs / FCM 配置，`noRegistration` 表示没有匹配登记，`failed` 的 `error` 不含 token 或凭据。
 
 普通注册 body：
 
@@ -82,7 +82,7 @@ delivery?: {
 - `liveActivity: 'decisions'`：只在等待决定时远程更新实时活动；运行中状态不发 `update`，而是对仅在运行的活动发送 `end` 并移除登记，避免远程推送把它重新唤起。缺省或 `'running'` 保持原样。
 - `showCommand: false`：实时活动 `detail` 不含原始命令 / 预览：等待中的 Bash 为“打开 App 查看命令”，其他等待为“需要你做决定”，运行中为空，结束为“本次运行已结束”。
 
-`hostId` 仅用于返回手机后的主机导航，不能建立或改变授权。客户端需要安全保存注册 ID 及原 token，以便重启后、移除主机时或 token 轮换时撤销旧登记。离线注销不能表示成功，应保留待注销记录以重试。注册有效期为 30 天，不超过远程配对的实际期限；实时活动登记最多 8 小时。
+`hostId` 仅用于返回手机后的主机导航，不能建立或改变授权。客户端需要安全保存注册 ID 及原 token，以便重启后、移除主机时或 token 轮换时撤销旧登记。因关闭通知权限等原因撤销时，离线注销不能表示成功，应保留待注销记录以重试；移除电脑是例外：连不上电脑也必须能移除，所以只尝试撤销一次（最多等 3 秒），失败不拦移除也不再重试——连接凭据随移除一起删除，没送达的登记留在电脑上等它过期或撤销配对。注册有效期为 30 天，不超过远程配对的实际期限；实时活动登记最多 8 小时。
 
 Live Activity 只走电脑直连（Expo 中转不支持 ActivityKit 推送），登记不能带 `provider`。Live Activity 增加 `{ kind: 'liveActivity', sessionId, activityId, name: 'CCHahaTaskActivity', deviceToken: ordinaryDevicePushToken }`，`token` 使用 ActivityKit 的专用推送 token；`deviceToken` 只保存摘要，用于关联普通设备登记和整机注销。服务端发送 `aps.event=update/end`、`timestamp`、`stale-date`，以及 `content-state: { name, props: JSON.stringify(props) }`。持续运行或等待中的活动每 60 秒刷新一次，stale-date 延长到本次投递后 90 秒；电脑离线时不会继续伪造新鲜状态。真实会话结束后会发送 end 并移除登记。客户端仍应在本地结束活动时撤销注册。
 

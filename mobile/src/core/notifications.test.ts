@@ -4,6 +4,7 @@ import { migratePreferences } from '../state/preferences'
 import {
   NOTIFICATION_COPY,
   decisionLabel,
+  hostUrlUpdate,
   notificationEvents,
   notificationRequestTarget,
   notificationTarget,
@@ -130,6 +131,28 @@ test('a removed host or failed navigation does not consume the cached response',
   expect(routeNotificationResponse(response, { ...options, open: (target) => opened.push(target) })).toBe(true)
   expect(opened[0].action).toBe('deny')
   expect(opened[0].requestId).toBe('pending-plan')
+})
+test('a new computer address is read from Expo/FCM data or a direct APNs payload and is never routed to a chat', () => {
+  const update = { hostId: 'known-host', eventType: 'hostUrl', url: 'https://new.trycloudflare.com', mac: 'fixture-mac' }
+  for (const request of [
+    { identifier: 'expo', content: { data: update }, trigger: { type: 'push' } },
+    { identifier: 'apns', content: { data: {} }, trigger: { type: 'push', payload: { aps: {}, ...update } } },
+  ]) {
+    expect(hostUrlUpdate(request)).toEqual({ hostId: 'known-host', url: 'https://new.trycloudflare.com', mac: 'fixture-mac' })
+    // Even a payload that also names a session opens nothing.
+    const withSession = { ...request, content: { data: { ...update, sessionId: 'plan-session' } } }
+    expect(notificationRequestTarget(withSession, 'expo.modules.notifications.actions.DEFAULT', new Set(['known-host']))).toBeNull()
+    const opened: NotificationTarget[] = []
+    expect(routeNotificationResponse(
+      { actionIdentifier: 'expo.modules.notifications.actions.DEFAULT', notification: { request: withSession } },
+      { ready: true, hostIds: new Set(['known-host']), handled: new Set(), open: (target) => opened.push(target) }
+    )).toBe(false)
+    expect(opened).toEqual([])
+  }
+  for (const data of [planPayload, { ...update, eventType: 'test' }, { ...update, mac: undefined }, { ...update, url: 1 }, { ...update, hostId: undefined }])
+    expect(hostUrlUpdate({ identifier: 'other', content: { data } })).toBeNull()
+  // The settings test notification keeps its own path.
+  expect(notificationTarget({ hostId: 'known-host', sessionId: 'plan-session', eventType: 'test' }, 'x', new Set(['known-host']))?.sessionId).toBe('plan-session')
 })
 test('only new real waiting requests alert, questions never get tool allow actions', () => {
   const request = {

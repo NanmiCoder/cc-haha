@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { Host } from '../core/types'
 import {
+  HostLocators,
   HostRepository,
   migrateRegistry,
+  parseHostLocators,
   type Registry,
   type Storage,
 } from './storage'
@@ -520,5 +522,118 @@ describe('host repository isolation and transactions', () => {
     expect(await repository.credential(hostA.id)).toBe(tokenA)
     expect((await repository.load()).selectedId).toBe(hostA.id)
     expect((await repository.add(hostB, tokenB)).hosts).toEqual([hostA, hostB])
+  })
+})
+
+describe('a remote computer moving to a new public address', () => {
+  const newUrl = 'https://new-tunnel.trycloudflare.com'
+
+  test('only the address changes: id, name, kind, selection, other hosts and credentials stay', async () => {
+    const { repository, metadata, secrets } = setup(
+      JSON.stringify({ version: 1, hosts: [hostA, hostB], selectedId: hostA.id })
+    )
+    secrets.values.set(credentialKey(hostA.id), tokenA)
+    secrets.values.set(credentialKey(hostB.id), tokenB)
+    const next = await repository.updateUrl(hostB.id, `${newUrl}/`)
+    const expected: Registry = {
+      version: 1,
+      hosts: [hostA, { ...hostB, url: newUrl }],
+      selectedId: hostA.id,
+    }
+    expect(next).toEqual(expected)
+    expect(persisted(metadata)).toEqual(expected)
+    expect(await repository.credential(hostB.id)).toBe(tokenB)
+    expect(await repository.credential(hostA.id)).toBe(tokenA)
+    expect(secrets.calls.filter((call) => call.operation !== 'getItem')).toEqual([])
+    expect(await repository.load()).toEqual(expected)
+  })
+
+  test('the same address writes nothing; bad addresses, LAN hosts and unknown hosts are refused', async () => {
+    const raw = JSON.stringify({ version: 1, hosts: [hostA, hostB], selectedId: hostB.id })
+    const { repository, metadata } = setup(raw)
+    expect(await repository.updateUrl(hostB.id, hostB.url)).toBeNull()
+    for (const url of ['http://plain.example', 'https://x.example/remote', 'https://x.example/?a=1', 'https://u:p@x.example'])
+      await expect(repository.updateUrl(hostB.id, url)).rejects.toThrow()
+    await expect(repository.updateUrl(hostA.id, newUrl)).rejects.toThrow('只有远程连接')
+    await expect(repository.updateUrl('missing', newUrl)).rejects.toThrow('主机不存在')
+    expect(metadata.calls.filter((call) => call.operation === 'setItem')).toEqual([])
+    expect(metadata.values.get(registryKey)).toBe(raw)
+    // The queue stays usable after the refusals.
+    expect((await repository.updateUrl(hostB.id, newUrl))?.hosts[1]?.url).toBe(newUrl)
+  })
+
+  test('a move queued behind a removal of that host fails instead of resurrecting it', async () => {
+    const { repository, metadata } = setup(
+      JSON.stringify({ version: 1, hosts: [hostA, hostB], selectedId: hostA.id })
+    )
+    const removed = repository.remove(hostB.id)
+    const moved = repository.updateUrl(hostB.id, newUrl)
+    await removed
+    await expect(moved).rejects.toThrow('主机不存在')
+    expect(persisted(metadata).hosts).toEqual([hostA])
+  })
+})
+
+describe('local-network hints for finding a moved computer', () => {
+  const locatorsKey = 'cc-haha.host-locators'
+  const record = { port: 3456, addresses: ['192.168.1.8'], updatedAt: 1_700_000_000_000 }
+
+  test('missing, corrupt, unversioned or newer data reads as empty', () => {
+    for (const raw of [
+      null,
+      '',
+      'not json',
+      '[]',
+      'null',
+      JSON.stringify({ hosts: { [hostB.id]: record } }),
+      JSON.stringify({ version: 2, hosts: { [hostB.id]: record } }),
+      JSON.stringify({ version: 1, hosts: [record] }),
+      JSON.stringify({ version: 1 }),
+    ])
+      expect(parseHostLocators(raw).size).toBe(0)
+  })
+
+  test('a malformed entry is dropped alone and unusable addresses are filtered', () => {
+    const parsed = parseHostLocators(JSON.stringify({
+      version: 1,
+      hosts: {
+        [hostB.id]: { ...record, addresses: ['192.168.1.8', 'fe80::1', '127.0.0.1'] },
+        'other-host': { ...record, port: 'x' },
+        third: { port: 3456, addresses: [] },
+        fourth: { ...record, updatedAt: -1 },
+        'bad id!': record,
+      },
+    }))
+    expect([...parsed]).toEqual([[hostB.id, record]])
+  })
+
+  test('set, get and retain round-trip; retain writes only when a computer goes', async () => {
+    const storage = new MemoryStorage()
+    const locators = new HostLocators(storage)
+    expect(await locators.get(hostB.id)).toBeNull()
+    await locators.set(hostB.id, record)
+    await locators.set('host-c', { ...record, port: 4000 })
+    expect(await locators.get(hostB.id)).toEqual(record)
+    expect(JSON.parse(storage.values.get(locatorsKey)!)).toEqual({
+      version: 1,
+      hosts: { [hostB.id]: record, 'host-c': { ...record, port: 4000 } },
+    })
+    const writes = () => storage.calls.filter((call) => call.operation !== 'getItem').length
+    const before = writes()
+    await locators.retain([hostB.id, 'host-c', hostA.id])
+    expect(writes()).toBe(before)
+    await locators.retain([hostA.id, 'host-c'])
+    expect(await locators.get(hostB.id)).toBeNull()
+    expect(await locators.get('host-c')).toEqual({ ...record, port: 4000 })
+    await locators.retain([])
+    expect(storage.values.has(locatorsKey)).toBe(false)
+  })
+
+  test('corrupt stored hints are replaced by the next good write', async () => {
+    const storage = new MemoryStorage({ [locatorsKey]: '{broken' })
+    const locators = new HostLocators(storage)
+    expect(await locators.get(hostB.id)).toBeNull()
+    await locators.set(hostB.id, record)
+    expect(await locators.get(hostB.id)).toEqual(record)
   })
 })

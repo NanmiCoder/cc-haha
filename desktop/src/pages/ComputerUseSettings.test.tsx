@@ -178,6 +178,22 @@ describe('ComputerUseSettings', () => {
   })
 
   describe('agent-desktop native branch', () => {
+    it('shows a Windows session storage error in place of the ready badge', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue({
+        ...readyStatus,
+        agentDesktop: {
+          available: false,
+          binaryPath: '/fixture/agent-desktop.exe',
+          reason: 'session_storage_unavailable',
+          message: 'private file DACL grants an untrusted principal',
+        },
+      })
+      render(<ComputerUseSettings />)
+
+      expect(await screen.findByText(/private file DACL grants an untrusted principal/)).toBeInTheDocument()
+      expect(screen.queryByText('The native runtime is ready. No Python environment is required.')).not.toBeInTheDocument()
+    })
+
     for (const platform of ['win32', 'linux'] as const) {
       it(`uses the native settings and single consent on ${platform}`, async () => {
         computerUseApiMock.getStatus.mockResolvedValue({

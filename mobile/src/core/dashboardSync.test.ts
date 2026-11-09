@@ -2,10 +2,12 @@ import { expect, test } from 'bun:test'
 import { ApiClient, ApiError } from './client'
 import {
   DashboardPoller,
+  RESUME_YIELD_MS,
   classifyDashboardError,
   loadDashboardSnapshot,
   type DashboardSnapshot,
 } from './dashboardSync'
+import { ForegroundGate } from './foregroundGate'
 import { groupDashboard } from './dashboard'
 import type { Session } from './types'
 
@@ -437,5 +439,76 @@ test('the poller reports the failure kind with the message and clears it on reco
   time.advance(3000)
   await flush()
   expect(kinds).toEqual(['offline', 'unauthorized', 'slow', 'clear'])
+  poller.stop()
+})
+
+test('returning to the foreground lets a reconnecting chat go first, up to a cap', async () => {
+  const time = clock()
+  const gate = new ForegroundGate(time)
+  let loads = 0
+  const poller = new DashboardPoller(
+    client(() => ({})),
+    observer().callbacks,
+    time,
+    async () => {
+      loads++
+      return snapshot('a', time.now())
+    },
+    gate
+  )
+  poller.start(false)
+  const release = gate.hold()
+  poller.setActive(true)
+  await flush()
+  expect(loads).toBe(0)
+  release()
+  await flush()
+  expect(loads).toBe(1)
+
+  // A chat that never gets back in sync cannot hold the home screen forever.
+  poller.setActive(false)
+  gate.hold()
+  poller.setActive(true)
+  await flush()
+  time.advance(RESUME_YIELD_MS - 1)
+  await flush()
+  expect(loads).toBe(1)
+  time.advance(1)
+  await flush()
+  expect(loads).toBe(2)
+  poller.stop()
+})
+
+test('while a chat is open only activity is polled; leaving it refreshes the full list at once', async () => {
+  const time = clock()
+  const paths: string[] = []
+  const api = client((path) => {
+    paths.push(path)
+    if (path === '/api/sessions/mobile-status')
+      return { sessions: [{ id: 'a', activityState: 'running' }] }
+    return { sessions: [session('a')], total: 1 }
+  })
+  const seen = observer()
+  const poller = new DashboardPoller(api, seen.callbacks, time)
+  poller.start()
+  await flush()
+  expect(paths.filter((path) => path.startsWith('/api/sessions?'))).toHaveLength(1)
+  poller.setScope('activity')
+  paths.length = 0
+  time.advance(3000)
+  await flush()
+  time.advance(5000)
+  await flush()
+  time.advance(5000)
+  await flush()
+  expect(paths.length).toBeGreaterThan(0)
+  expect(paths.every((path) => path === '/api/sessions/mobile-status')).toBe(true)
+  const last = seen.state.snapshots.at(-1)!
+  expect(last.sessions.map((item) => item.id)).toEqual(['a'])
+  expect(last.activity).toEqual([{ id: 'a', activityState: 'running' } as never])
+  paths.length = 0
+  poller.setScope('full')
+  await flush()
+  expect(paths.some((path) => path.startsWith('/api/sessions?limit=500'))).toBe(true)
   poller.stop()
 })

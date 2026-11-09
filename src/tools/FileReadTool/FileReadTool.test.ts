@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { PDF_MAX_PAGES_PER_READ } from '../../constants/apiLimits.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
+import { decodeShellOutput } from '../../utils/shell/outputEncoding.js'
+import { getToolResultsDir } from '../../utils/toolResultStorage.js'
 import { FileReadTool, readImageWithTokenBudget } from './FileReadTool.js'
 import { getImageCreator, getImageProcessor } from './imageProcessor.js'
 import * as imageResizer from '../../utils/imageResizer.js'
@@ -30,6 +32,19 @@ afterAll(async () => {
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   await rm(isolatedConfig, { recursive: true, force: true })
+})
+
+test.skipIf(process.platform !== 'win32')('Windows Read decodes persisted tool output while leaving project files as UTF-8', async () => {
+  const resultsDirectory = getToolResultsDir()
+  const result = join(resultsDirectory, 'legacy-output.txt')
+  const ordinaryFile = join(isolatedConfig, 'ordinary.txt')
+  const raw = Buffer.from([0xd6, 0xd0, 0xce, 0xc4])
+  await mkdir(resultsDirectory, { recursive: true })
+  await writeFile(result, raw)
+  await writeFile(ordinaryFile, raw)
+  const read = (path: string) => FileReadTool.call({ file_path: path }, makeToolUseContext())
+  expect((await read(result)).data).toMatchObject({ file: { content: decodeShellOutput(raw).content } })
+  expect((await read(ordinaryFile)).data).toMatchObject({ file: { content: raw.toString('utf8') } })
 })
 
 test('uses the relocated managed upload for permissions and reading, preserving the original path input', async () => {

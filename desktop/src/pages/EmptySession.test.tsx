@@ -1451,6 +1451,31 @@ describe('EmptySession', () => {
     })
   })
 
+  it('keeps the draft and creates no session when the first message is over the server budget', async () => {
+    // A 4K screenshot pasted as a bitmap is a ~13 MB PNG. With no native path
+    // the composer inlines it as a data URL, so the first frame alone is over
+    // the server's 16 MiB budget: the socket would close and the turn vanish.
+    render(<EmptySession />)
+    const screenshot = new File([new Uint8Array(13 * 1024 * 1024)], 'screenshot.png', { type: 'image/png' })
+    fireEvent.drop(screen.getByTestId('empty-session-composer-panel'), {
+      dataTransfer: { types: ['Files'], files: [screenshot], dropEffect: '' },
+    })
+    expect(await screen.findByRole('img', { name: 'screenshot.png' })).toBeInTheDocument()
+    setComposerText('what is wrong here', 18)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: expect.stringContaining('over the 16 MB limit'),
+      })
+    })
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('what is wrong here')
+    expect(screen.getByRole('img', { name: 'screenshot.png' })).toBeInTheDocument()
+  })
+
   it('selects a plugin on the landing composer and sends its runtime request only after Run', async () => {
     const modelText = 'Use plugin "hyperframes@curated" for this request.'
     mocks.listReferences.mockResolvedValue({ skills: [], plugins: [{

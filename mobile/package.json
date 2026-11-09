@@ -1,6 +1,6 @@
 {
   "name": "cc-haha-mobile",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~58.0.22",
@@ -19,6 +19,7 @@
     "expo-image-picker": "~58.0.10",
     "expo-linear-gradient": "~58.0.3",
     "expo-linking": "~58.0.14",
+    "expo-network": "~58.0.4",
     "expo-notifications": "~58.1.6",
     "expo-router": "~58.0.25",
     "expo-secure-store": "~58.0.2",
@@ -34,7 +35,8 @@
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
     "react-native-svg": "15.16.0",
-    "react-native-web": "^0.21.4"
+    "react-native-web": "^0.21.4",
+    "react-native-webrtc": "^155.0.1"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",
