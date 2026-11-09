@@ -22,6 +22,7 @@ import {
 import type { CreateProviderInput } from '../types/provider.js'
 import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
 import { GROK_MODEL_CATALOG, setGrokRuntimeModelCatalog } from '../../services/grokAuth/models.js'
+import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -712,7 +713,7 @@ describe('ProviderService', () => {
         expect(typeof env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBe('string')
         expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toEqual({
           'gpt-6-sol': 258_400,
-          'gpt-6.1-sol': 258_400,
+          'gpt-6.1-sol': 475_000,
           'gpt-6.1-terra': 475_000,
           'gpt-6-luna': 258_400,
           'gpt-5.6-sol': 353_400,
@@ -4327,7 +4328,7 @@ describe('Providers API', () => {
       putRequest.segments,
     )
     expect(updated.status).toBe(200)
-    expect(await updated.json()).toEqual({ models: configured })
+    expect(await updated.json()).toEqual({ models: configured, modelContextWindows: {} })
   })
 
   test('PUT /api/providers/:id/models rejects saved providers', async () => {
@@ -4362,6 +4363,128 @@ describe('Providers API', () => {
     const res = await handleProvidersApi(req, url, segments)
 
     expect(res.status).toBe(405)
+  })
+})
+
+describe('ChatGPT Official context window overrides', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const mapping = {
+    main: 'gpt-6-astra',
+    haiku: 'gpt-6.1-terra',
+    sonnet: 'gpt-6.1-terra',
+    opus: 'gpt-6-sol',
+  }
+
+  async function putModels(id: string, body: Record<string, unknown>) {
+    const request = makeRequest('PUT', `/api/providers/${id}/models`, body)
+    return handleProvidersApi(request.req, request.url, request.segments)
+  }
+
+  function runtimeWindows(env: Record<string, string> | null | undefined): Record<string, number> {
+    return JSON.parse(env![MODEL_CONTEXT_WINDOWS_ENV_KEY]!)
+  }
+
+  test('a saved window overrides that model in the next session\'s env and leaves the others on their defaults', async () => {
+    const svc = new ProviderService()
+    const response = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    await svc.activateProvider('openai-official')
+
+    const windows = runtimeWindows(readActiveProviderManagedEnv(tmpDir))
+    expect(windows['gpt-6-astra']).toBe(600_000)
+    expect(windows['gpt-6-sol']).toBe(258_400)
+    expect(windows['gpt-6.1-terra']).toBe(475_000)
+    // The managed settings file and the saved-provider view carry the same map.
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['gpt-6-astra']).toBe(600_000)
+    expect((await svc.getProvider('openai-official')).modelContextWindows?.['gpt-6-astra']).toBe(600_000)
+    expect(runtimeWindows(await svc.getProviderRuntimeEnv('openai-official'))['gpt-6-astra']).toBe(600_000)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+  })
+
+  test('saving the mapping without windows keeps them, and an empty map clears them', async () => {
+    const svc = new ProviderService()
+    await svc.activateProvider('openai-official')
+    await putModels('openai-official', { models: mapping, modelContextWindows: { 'gpt-6-astra': 600_000 } })
+
+    // The provider is already active, so a save has to rewrite the managed settings itself.
+    const settingsWindows = async () =>
+      runtimeWindows((await readSettings()).env as Record<string, string>)['gpt-6-astra']
+    expect(await settingsWindows()).toBe(600_000)
+
+    const kept = await putModels('openai-official', { models: { ...mapping, main: 'gpt-6-sol' } })
+    expect((await kept.json()).modelContextWindows).toEqual({ 'gpt-6-astra': 600_000 })
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['gpt-6-astra']).toBe(600_000)
+    expect(await settingsWindows()).toBe(600_000)
+
+    const cleared = await putModels('openai-official', { models: mapping, modelContextWindows: {} })
+    expect((await cleared.json()).modelContextWindows).toEqual({})
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['gpt-6-astra']).toBe(258_400)
+    expect(await settingsWindows()).toBe(258_400)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({})
+  })
+
+  test('a window above the model\'s Codex limit is rejected and nothing is saved', async () => {
+    // 872,000 x 95%: the most Codex lets a GPT-6 model's window be raised to.
+    const accepted = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 828_400 },
+    })
+    expect(accepted.status).toBe(200)
+
+    const tooHigh = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 828_401 },
+    })
+    expect(tooHigh.status).toBe(400)
+    // gpt-5.5 cannot be raised past its own default.
+    const fixedModel = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-5.5': 300_000 },
+    })
+    expect(fixedModel.status).toBe(400)
+    expect(await new ProviderService().getOfficialProviderContextWindows('openai-official'))
+      .toEqual({ 'gpt-6-astra': 828_400 })
+  })
+
+  test('a model the catalog states no limit for is accepted, and the schema range still applies', async () => {
+    const future = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-future': 2_000_000 },
+    })
+    expect(future.status).toBe(200)
+    const tooSmall = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 15_999 },
+    })
+    expect(tooSmall.status).toBe(400)
+  })
+
+  test('only ChatGPT Official accepts window overrides', async () => {
+    for (const id of ['grok-official', 'claude-official', 'deepseek-account']) {
+      const response = await putModels(id, { models: mapping, modelContextWindows: { 'some-model': 300_000 } })
+      expect(response.status).toBe(400)
+    }
+    // An empty map is a no-op everywhere, so a shared client can always send it.
+    const empty = await putModels('grok-official', { models: mapping, modelContextWindows: {} })
+    expect(empty.status).toBe(200)
+  })
+
+  test('GET returns the saved overrides next to the mapping', async () => {
+    await putModels('openai-official', { models: mapping, modelContextWindows: { 'gpt-6-sol': 300_000 } })
+    const request = makeRequest('GET', '/api/providers/openai-official/models')
+    const response = await handleProvidersApi(request.req, request.url, request.segments)
+    expect(await response.json()).toEqual({ models: mapping, modelContextWindows: { 'gpt-6-sol': 300_000 } })
   })
 })
 
