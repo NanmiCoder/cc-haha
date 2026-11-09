@@ -3016,7 +3016,7 @@ describe('WebSocket Chat Integration', () => {
   })
 
   it('keeps inspection status available after an oversized screenshot is recorded', async () => {
-    const workDir = await fs.mkdtemp(path.join(tmpDir, 'inspection-'))
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'inspection-')))
     const created = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
