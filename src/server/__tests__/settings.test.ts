@@ -1516,7 +1516,8 @@ describe('Models API', () => {
     })
     expect(body.models.find(model => model.id === 'gpt-6.1-sol')).toMatchObject({
       id: 'gpt-6.1-sol',
-      context: '258400',
+      // Codex's default for GPT-6.1 Sol is 500K, at 95%.
+      context: '475000',
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
