@@ -189,4 +189,15 @@ describe('ChatGPTOfficialLogin', () => {
     expect(startMock).not.toHaveBeenCalled()
     expect(hostOpen).not.toHaveBeenCalled()
   })
+
+  it('shows a refresh failure while retaining the signed-in account', async () => {
+    useHahaOpenAIOAuthStore.setState({ status: {
+      loggedIn: true, expiresAt: 1, email: 'user@example.com', accountId: 'acct_123',
+    } })
+    statusMock.mockRejectedValue(new Error('Unable to verify OpenAI sign-in status right now. Please retry.'))
+    render(<ChatGPTOfficialLogin />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Please retry')
+    expect(screen.getByText(/user@example.com/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).not.toBeInTheDocument()
+  })
 })

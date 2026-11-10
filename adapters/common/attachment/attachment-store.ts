@@ -33,12 +33,14 @@ function defaultRoot(): string {
   return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'im-downloads')
 }
 
-/** Strip path separators / .. / control chars from a filename. */
+/** Produce portable file components. In particular ':' must never reach NTFS,
+ * where a WeChat message ID such as v1:... would create an alternate stream. */
 function sanitizeFilename(name: string): string {
   // eslint-disable-next-line no-control-regex
   const base = path.basename(name || '').replace(/[\x00-\x1f]/g, '')
-  const cleaned = base.replace(/[\/\\]/g, '_').replace(/\.\.+/g, '_')
-  return cleaned.trim() || 'unnamed'
+  const cleaned = base.replace(/[<>:"/\\|?*]/g, '_').replace(/\.\.+/g, '_').trim().replace(/[. ]+$/, '')
+  const safe = cleaned || 'unnamed'
+  return /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(safe) ? `_${safe}` : safe
 }
 
 export class AttachmentStore {

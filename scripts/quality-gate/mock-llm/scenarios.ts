@@ -25,10 +25,14 @@ import {
   UPSTREAM_REFUSAL_TRIGGER,
 } from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
+import { runGlobPermissions } from './globPermissions'
+import { runNotebookReadGuards } from './notebookReadGuards'
 
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-glob-absolute-permissions', title: 'Absolute Glob roots require approval and denied enumeration recovers on the next workspace turn' },
+  { id: 'mock-notebook-read-guards', title: 'Notebook edits reject unread and concurrently modified files, then recover after a fresh read' },
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
   { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
   { id: 'mock-live-permission-switch', title: 'A permission switch during a running turn applies to the real CLI\'s next tool call' },
@@ -127,6 +131,8 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    'mock-glob-absolute-permissions': ctx => runGlobPermissions(ctx, () => toolResultsSentUpstream(requests)),
+    'mock-notebook-read-guards': ctx => runNotebookReadGuards(ctx, () => toolResultsSentUpstream(requests)),
     async 'mock-project-additional-directories'(ctx) {
       const directory = join(dirname(ctx.workRoot), 'auxiliary 数据 files')
       mkdirSync(directory, { recursive: true })

@@ -725,7 +725,7 @@ describe('MemorySettings', () => {
       ? new Promise((resolve) => { finishRead = resolve })
       : Promise.resolve({ file: { path, content: '# Manual selected later', updatedAt: '2026-05-01T00:02:00.000Z', bytes: 23 } }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'MEMORY.md' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'MEMORY.md' }))
     fireEvent.click(screen.getByRole('button', { name: 'Manual' }))
     await waitFor(() => expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Manual selected later'))
     await act(async () => finishRead({ file: {

@@ -57,9 +57,14 @@ export function parsePermitCallbackData(data: string): PermissionDecision | null
   }
 }
 
-export function formatPermissionInstructions(requestId: string): string {
+export function formatPermissionInstructions(requestId: string, options: { pendingCount?: number } = {}): string {
+  const shortcuts = '回复 1 允许一次，2 永久允许，3 拒绝。'
+  if (options.pendingCount === 1) return shortcuts
+  if (options.pendingCount !== undefined && options.pendingCount > 1) {
+    return `当前有多个待审批请求，请使用带请求 ID 的命令：\n/allow ${requestId}、/always ${requestId}、/deny ${requestId}。`
+  }
   return [
-    '回复 1 允许一次，2 永久允许，3 拒绝。',
+    shortcuts,
     `也可回复 /allow ${requestId}、/always ${requestId}、/deny ${requestId}。`,
   ].join('\n')
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { buildClientVersion, extractWechatText, sendWechatText, sendWechatTyping } from '../protocol.js'
+import { buildClientVersion, extractWechatText, getWechatUpdates, sendWechatText, sendWechatTyping, WechatApiError, isWechatAuthenticationError } from '../protocol.js'
 import { collectWechatMediaCandidates } from '../media.js'
 
 const originalFetch = globalThis.fetch
@@ -9,6 +9,12 @@ afterEach(() => {
 })
 
 describe('WeChat protocol helpers', () => {
+  it('distinguishes known authentication failure from network and unknown protocol errors', () => {
+    expect(isWechatAuthenticationError(new WechatApiError('fixture', 401))).toBe(true)
+    expect(isWechatAuthenticationError(new WechatApiError('fixture', undefined, -14))).toBe(true)
+    expect(isWechatAuthenticationError(new WechatApiError('fixture', 500))).toBe(false)
+    expect(isWechatAuthenticationError(new WechatApiError('fixture', undefined, 99))).toBe(false)
+  })
   it('encodes iLink client versions like the OpenClaw Weixin plugin', () => {
     expect(buildClientVersion('2.1.7')).toBe((2 << 16) | (1 << 8) | 7)
     expect(buildClientVersion('1.0.11')).toBe(65547)
@@ -87,7 +93,7 @@ describe('WeChat protocol helpers', () => {
       to: 'user',
       text: 'hello',
       contextToken: 'stale-context',
-    })).rejects.toThrow('wechatSendMessage returned 40001: bad context_token')
+    })).rejects.toThrow('wechatSendMessage returned 40001')
   })
 
   it('allows successful sendmessage responses', async () => {
@@ -103,10 +109,12 @@ describe('WeChat protocol helpers', () => {
       to: 'user',
       text: 'hello',
       contextToken: 'ctx',
+      clientId: 'stable-fixture-id',
     })
 
     expect(requests).toHaveLength(1)
     expect(JSON.parse(requests[0]!).msg.context_token).toBe('ctx')
+    expect(JSON.parse(requests[0]!).msg.client_id).toBe('stable-fixture-id')
   })
 
   it('throws when sendtyping returns a non-zero WeChat ret code', async () => {
@@ -118,6 +126,23 @@ describe('WeChat protocol helpers', () => {
       ilinkUserId: 'user',
       typingTicket: 'ticket',
       status: 'typing',
-    })).rejects.toThrow('wechatSendTyping returned 42001: typing ticket expired')
+    })).rejects.toThrow('wechatSendTyping returned 42001')
+  })
+
+  it('does not call a broken or rejected response a successful delivery', async () => {
+    for (const body of ['', 'not JSON', 'null', '[]', '{"ret":0,"errcode":9}', '{"ret":"0"}']) {
+      globalThis.fetch = (async () => new Response(body)) as typeof fetch
+      await expect(sendWechatText({ baseUrl: 'https://api.example.com', token: 'fixture', to: 'peer', text: 'test' })).rejects.toThrow()
+    }
+  })
+
+  it('does not turn a network abort into a healthy empty poll', async () => {
+    globalThis.fetch = (async () => { throw new DOMException('aborted', 'AbortError') }) as typeof fetch
+    await expect(getWechatUpdates({ baseUrl: 'https://api.example.com', token: 'fixture' })).rejects.toThrow('aborted')
+  })
+
+  it('keeps response secrets out of HTTP errors', async () => {
+    globalThis.fetch = (async () => new Response('secret-context-fixture', { status: 401 })) as typeof fetch
+    await expect(sendWechatText({ baseUrl: 'https://api.example.com', token: 'fixture', to: 'peer', text: 'test' })).rejects.toThrow('wechatSendMessage HTTP 401')
   })
 })

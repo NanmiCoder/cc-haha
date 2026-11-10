@@ -63,6 +63,23 @@ export function extractGlobBaseDirectory(pattern: string): {
   return { baseDir, relativePattern }
 }
 
+/** Share the effective root between permission checks and execution. An
+ * absolute pattern takes precedence over the optional cwd/path argument. */
+export function resolveGlobSearch(filePattern: string, cwd: string): {
+  searchDir: string
+  searchPattern: string
+} {
+  // Handle absolute paths by extracting the base directory and converting to relative pattern
+  // ripgrep's --glob flag only works with relative patterns
+  if (isAbsolute(filePattern)) {
+    const { baseDir, relativePattern } = extractGlobBaseDirectory(filePattern)
+    if (baseDir) {
+      return { searchDir: baseDir, searchPattern: relativePattern }
+    }
+  }
+  return { searchDir: cwd, searchPattern: filePattern }
+}
+
 export async function glob(
   filePattern: string,
   cwd: string,
@@ -70,18 +87,7 @@ export async function glob(
   abortSignal: AbortSignal,
   toolPermissionContext: ToolPermissionContext,
 ): Promise<{ files: string[]; truncated: boolean }> {
-  let searchDir = cwd
-  let searchPattern = filePattern
-
-  // Handle absolute paths by extracting the base directory and converting to relative pattern
-  // ripgrep's --glob flag only works with relative patterns
-  if (isAbsolute(filePattern)) {
-    const { baseDir, relativePattern } = extractGlobBaseDirectory(filePattern)
-    if (baseDir) {
-      searchDir = baseDir
-      searchPattern = relativePattern
-    }
-  }
+  const { searchDir, searchPattern } = resolveGlobSearch(filePattern, cwd)
 
   const ignorePatterns = normalizePatternsToPath(
     getFileReadIgnorePatterns(toolPermissionContext),

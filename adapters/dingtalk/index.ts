@@ -477,7 +477,7 @@ async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promis
       if (card) {
         // The actionable card was delivered. A failed supplementary notice
         // must not cause replay to send another copy of that card.
-        await sendText(chatId, `${requestText}\n\n已发送钉钉权限卡片；如果卡片不可见，也可以${instructions}`)
+        await sendText(chatId, `${requestText}\n\n已发送钉钉权限卡片；如果卡片不可见，也可以${instructions}`, { requireDelivery: true })
           .catch(error => console.warn('[DingTalk] Permission card notice failed:', error))
         return
       }
