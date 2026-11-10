@@ -49,6 +49,7 @@ const SETTINGS_TABS = [
   'general',
   'voice',
   'h5Access',
+  'remoteWorkspace',
   'adapters',
   'terminal',
   'mcp',
@@ -247,6 +248,7 @@ export type SettingsTab =
   | 'general'
   | 'voice'
   | 'h5Access'
+  | 'remoteWorkspace'
   | 'adapters'
   | 'terminal'
   | 'mcp'

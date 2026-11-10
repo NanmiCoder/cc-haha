@@ -8,6 +8,11 @@ import {
 } from '../api/client'
 import { getDesktopHost } from './desktopHost'
 import { isPublicAccessRuntime } from './publicAccessRuntime'
+import {
+  clearRemoteWorkspace,
+  getEnabledRemoteWorkspace,
+  writeRemoteWorkspace,
+} from './remoteWorkspace'
 
 export const H5_SERVER_URL_STORAGE_KEY = 'cc-haha-h5-server-url'
 export const H5_TOKEN_STORAGE_KEY = 'cc-haha-h5-token'
@@ -149,12 +154,102 @@ export function isH5ConnectionRequiredError(error: unknown): error is H5Connecti
   return error instanceof H5ConnectionRequiredError
 }
 
+/**
+ * Remote workspace connection.
+ *
+ * The renderer talks to exactly one cc-haha server, and that server owns the
+ * working directory, the agent process, every tool execution and every
+ * permission check. Pointing the base URL at a server running on another
+ * machine therefore moves the whole workspace there.
+ *
+ * Only a loopback URL is accepted: the expected transport is an `ssh -L`
+ * forward, so the address is always this machine's. That keeps this path clear
+ * of credentials — the forwarded server sees a loopback peer and no
+ * `X-Forwarded-*` header, which is what its local-trust rule is built on — and
+ * it means this feature can never point the renderer at an arbitrary origin. A
+ * non-loopback server is the H5 flow's job, which carries a token.
+ */
+export async function connectRemoteWorkspace(serverUrl: string, sshHost: string): Promise<string> {
+  const normalizedUrl = normalizeServerUrl(serverUrl)
+  const normalizedHost = sshHost.trim()
+
+  if (!normalizedUrl) {
+    throw new Error('Enter a valid server URL.')
+  }
+  if (!isLoopbackServerUrl(normalizedUrl)) {
+    throw new Error('A remote workspace is reached through an SSH tunnel, so its URL must be on this machine.')
+  }
+  if (!normalizedHost) {
+    throw new Error('Enter the SSH host this tunnel forwards to.')
+  }
+
+  // Probe before switching: a failed connection must never leave the renderer
+  // pointed at a server that is not there.
+  await waitForHealth(normalizedUrl)
+
+  setBaseUrl(normalizedUrl)
+  setAuthToken(null)
+  writeRemoteWorkspace({
+    url: normalizedUrl,
+    sshHost: normalizedHost,
+    enabled: true,
+    connectedAt: new Date().toISOString(),
+  })
+
+  return normalizedUrl
+}
+
+/** Forget the remote choice. The next startup resolves the local server. */
+export function disconnectRemoteWorkspace(): void {
+  clearRemoteWorkspace()
+}
+
+/**
+ * A startup that cannot reach the saved remote must still open the app.
+ *
+ * The tunnel is a separate process, so it is routinely down when the desktop
+ * starts — after a reboot, say. Leaving the profile enabled would make every
+ * startup pay the healthcheck before falling back, so it is remembered but
+ * switched off: the host stays in the UI, the next startup is instant, and
+ * reconnecting is one click once the tunnel is up again.
+ */
+function disableUnreachableRemoteWorkspace(): void {
+  const profile = getEnabledRemoteWorkspace()
+  if (!profile) return
+  writeRemoteWorkspace({ ...profile, enabled: false, connectedAt: null })
+}
+
+async function initializeRemoteWorkspaceUrl(): Promise<string | null> {
+  const profile = getEnabledRemoteWorkspace()
+  if (!profile) return null
+
+  try {
+    await waitForHealth(profile.url)
+  } catch {
+    disableUnreachableRemoteWorkspace()
+    return null
+  }
+
+  setBaseUrl(profile.url)
+  setAuthToken(null)
+  markDesktopServerReady()
+  return profile.url
+}
+
 export async function initializeDesktopServerUrl() {
   const fallbackUrl = getDefaultBaseUrl()
   const host = getDetectedDesktopHost()
 
   if (!host.isDesktop) {
     return initializeBrowserServerUrl(fallbackUrl)
+  }
+
+  // A saved remote workspace takes the place of the local sidecar. Its tunnel is
+  // a separate process and may be down at startup; on failure this disables the
+  // profile and returns null so the app still opens against the local server.
+  const remoteUrl = await initializeRemoteWorkspaceUrl()
+  if (remoteUrl) {
+    return remoteUrl
   }
 
   try {
@@ -287,7 +382,13 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
   return requestedUrl
 }
 
-async function waitForHealth(serverUrl: string) {
+/**
+ * Wait for `GET <serverUrl>/health` to answer `{status:'ok'}`.
+ *
+ * Shared by startup and by the Remote Workspace pane's "test connection", so
+ * both agree on what a reachable server looks like.
+ */
+export async function waitForHealth(serverUrl: string) {
   let lastError: unknown
 
   for (let attempt = 0; attempt < 30; attempt++) {

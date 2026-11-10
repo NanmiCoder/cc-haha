@@ -7,6 +7,10 @@ import {
 import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  REMOTE_WORKSPACE_STORAGE_KEY,
+  serializeRemoteWorkspaceProfile,
+} from './remoteWorkspace'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
@@ -496,6 +500,34 @@ describe('desktop persistence migrations', () => {
 
     expect(report.migratedKeys).toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test('upgrades a frozen schema-7 install that never set a remote workspace', () => {
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '7')
+    localStorage.setItem('unrelated-user-key', 'keep')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).not.toContain(REMOTE_WORKSPACE_STORAGE_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)).toBeNull()
+    expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY))
+      .toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+  })
+
+  test('preserves a readable remote workspace and drops one it cannot parse', () => {
+    const valid = serializeRemoteWorkspaceProfile({
+      url: 'http://127.0.0.1:9411', sshHost: 'my-gpu-server', enabled: true, connectedAt: null,
+    })
+    localStorage.setItem(REMOTE_WORKSPACE_STORAGE_KEY, valid)
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(REMOTE_WORKSPACE_STORAGE_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)).toBe(valid)
+
+    // A profile this build cannot vouch for must not be half-applied: it would
+    // leave the renderer on one machine and its sessions on another.
+    localStorage.setItem(REMOTE_WORKSPACE_STORAGE_KEY, '{"version":99,"url":"http://127.0.0.1:9411"}')
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain(REMOTE_WORKSPACE_STORAGE_KEY)
+    expect(localStorage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)).toBeNull()
   })
 
 })

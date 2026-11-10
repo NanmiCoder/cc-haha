@@ -12,8 +12,12 @@ import {
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
+import {
+  REMOTE_WORKSPACE_STORAGE_KEY,
+  parseRemoteWorkspaceProfile,
+} from './remoteWorkspace'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 7
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 8
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -379,6 +383,18 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
     if (stored !== '0' && stored !== '1') {
       storage.setItem(PREVENT_SLEEP_STORAGE_KEY, '0')
       report.migratedKeys.push(PREVENT_SLEEP_STORAGE_KEY)
+    }
+  })
+  // Schema 8 adds an opt-in remote workspace. Nothing to write for an install
+  // that never set one — the absence already means "stay local". An entry this
+  // build cannot parse is dropped rather than half-applied, so a corrupt or
+  // newer-schema profile cannot leave the renderer split across two machines.
+  runMigrationStep(report, REMOTE_WORKSPACE_STORAGE_KEY, () => {
+    const stored = storage.getItem(REMOTE_WORKSPACE_STORAGE_KEY)
+    if (stored === null) return
+    if (parseRemoteWorkspaceProfile(stored) === null) {
+      storage.removeItem(REMOTE_WORKSPACE_STORAGE_KEY)
+      report.migratedKeys.push(REMOTE_WORKSPACE_STORAGE_KEY)
     }
   })
   try {
