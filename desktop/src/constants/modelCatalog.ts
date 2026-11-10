@@ -4,6 +4,14 @@ export const OFFICIAL_DEFAULT_MODEL_ID = 'claude-opus-5-5'
 
 export const OFFICIAL_MODELS: ModelInfo[] = [
   {
+    id: 'claude-fable-5-2',
+    name: 'Fable 5.2',
+    description: 'Highest capability for long-running tasks',
+    context: '1m',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-fable-5-1',
     name: 'Fable 5.1',
     description: 'Highest capability for long-running tasks',

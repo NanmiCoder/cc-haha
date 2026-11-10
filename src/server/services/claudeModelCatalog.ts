@@ -18,6 +18,14 @@ export type ClaudeModelCatalogEntry = {
 
 export const CLAUDE_MODEL_CATALOG: ClaudeModelCatalogEntry[] = [
   {
+    id: 'claude-fable-5-2',
+    name: 'Fable 5.2',
+    description: 'Highest capability for long-running tasks',
+    context: '1m',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-fable-5-1',
     name: 'Fable 5.1',
     description: 'Highest capability for long-running tasks',

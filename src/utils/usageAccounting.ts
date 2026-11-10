@@ -1,5 +1,6 @@
 import {
   COST_FABLE_51,
+  COST_FABLE_52,
   COST_HAIKU_35,
   COST_HAIKU_45,
   COST_HAIKU_55,
@@ -59,6 +60,7 @@ const MODEL_TIERS: ReadonlyArray<readonly [prefix: string, costs: ModelCosts]> =
   ['claude-opus-4', COST_TIER_15_75],
   ['claude-fable-5', COST_TIER_10_50],
   ['claude-fable-5-1', COST_FABLE_51],
+  ['claude-fable-5-2', COST_FABLE_52],
   ['claude-mythos-5', COST_TIER_10_50],
   ['claude-sonnet-5-5', COST_TIER_2_10],
   ['claude-sonnet-5', COST_TIER_2_10],

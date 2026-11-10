@@ -386,7 +386,11 @@ export function getModelMaxOutputTokens(model: string): {
 
   const m = getCanonicalName(model)
 
-  if (m === 'claude-opus-5-5' || m === 'claude-sonnet-5-5') {
+  if (
+    m === 'claude-opus-5-5' ||
+    m === 'claude-sonnet-5-5' ||
+    m === 'claude-fable-5-2'
+  ) {
     defaultTokens = 128_000
     upperLimit = 128_000
   } else if (
