@@ -1,6 +1,9 @@
 import { Marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import { docsContent, docsIndex, imageSizes, sections } from '../generated/docs-index'
+import { getDocHeading } from './docHeading.js'
+
+export { slugifyHeading } from './docHeading.js'
 
 const EXTERNAL_PROTOCOL = /^(?:[a-z][a-z\d+.-]*:|\/\/)/i
 const SITE_BASE = `/${String(import.meta.env.BASE_URL || '/').replace(/^\/+|\/+$/g, '')}`
@@ -232,31 +235,6 @@ export function resolveDocAsset(doc, href) {
   return `${toSiteHref(`/${reference.sourcePath}`)}${reference.suffix}`
 }
 
-function plainText(value) {
-  return value
-    .replace(/<[^>]*>/g, '')
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[*_`~]/g, '')
-    .trim()
-}
-
-function textFromTokens(tokens = []) {
-  return tokens.map((token) => {
-    if (typeof token.text === 'string') return plainText(token.text)
-    if (Array.isArray(token.tokens)) return textFromTokens(token.tokens)
-    return ''
-  }).join('')
-}
-
-export function slugifyHeading(value) {
-  return plainText(value)
-    .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, '')
-    .trim()
-    .replace(/\s+/g, '-')
-}
-
 function escapeAttribute(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -341,8 +319,7 @@ export function renderMarkdown(doc, markdown) {
 
   renderer.heading = function heading({ tokens, depth }) {
     const content = this.parser.parseInline(tokens)
-    const text = textFromTokens(tokens) || plainText(content)
-    const baseSlug = slugifyHeading(text) || 'section'
+    const { text, baseSlug } = getDocHeading(tokens, content)
     const count = headingCounts.get(baseSlug) || 0
     const id = count === 0 ? baseSlug : `${baseSlug}-${count}`
     headingCounts.set(baseSlug, count + 1)

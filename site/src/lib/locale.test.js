@@ -10,14 +10,23 @@ const bootstrap = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map((match) => match[1])
   .find((script) => script.includes('window.location.pathname'))
 
-function runBootstrap({ pathname = '/', stored = null, languages, language = '' }) {
+function runBootstrap({ location = new URL('https://cchaha.ai/?from=homepage#discover'), stored = null, languages, language = '' }) {
   let redirectedTo = null
+  location.replace = (url) => { redirectedTo = url }
+  const history = {
+    state: { entry: 1 },
+    replaceState(state, _title, url) {
+      assert.equal(state, this.state)
+      location.href = new URL(url, location).href
+    }
+  }
   const document = { documentElement: { lang: 'en' } }
   runInNewContext(bootstrap, {
+    URL,
     document,
     localStorage: { getItem: () => stored },
     navigator: { languages, language },
-    window: { location: { pathname, search: '?from=homepage', hash: '#discover', replace: (url) => { redirectedTo = url } } }
+    window: { location, history }
   })
   return { redirectedTo, lang: document.documentElement.lang }
 }
@@ -94,6 +103,31 @@ describe('index.html 首帧语言分流', () => {
   it('手动选择优先于浏览器语言，明确路径不重定向', () => {
     assert.deepEqual(runBootstrap({ languages: ['zh-CN'], stored: 'en' }), { redirectedTo: '/en?from=homepage#discover', lang: 'en' })
     assert.deepEqual(runBootstrap({ languages: ['ja-JP'], stored: 'zh' }), { redirectedTo: null, lang: 'zh-CN' })
-    assert.deepEqual(runBootstrap({ pathname: '/start', languages: ['ja-JP'] }), { redirectedTo: null, lang: 'en' })
+    assert.deepEqual(runBootstrap({ location: new URL('https://cchaha.ai/start'), languages: ['ja-JP'] }), { redirectedTo: null, lang: 'en' })
+  })
+
+  it('直接访问生成的 index.html 时使用对应文档或英文首页路由，并保留查询和锚点', () => {
+    for (const route of ['/start/install', '/en/start/install', '/en']) {
+      const location = new URL(`https://cchaha.ai${route}/index.html?from=docs#install`)
+      const { redirectedTo } = runBootstrap({ location, languages: ['zh-CN'] })
+      assert.equal(location.href, `https://cchaha.ai${route}?from=docs#install`)
+      assert.equal(redirectedTo, null)
+    }
+  })
+
+  it('根目录的 index.html 按已有语言选择打开首页', () => {
+    for (const locale of ['en', 'zh']) {
+      const location = new URL('https://cchaha.ai/index.html?from=docs#install')
+      const { redirectedTo } = runBootstrap({ location, stored: locale })
+      assert.equal(location.pathname, '/')
+      assert.equal(redirectedTo, locale === 'en' ? '/en?from=docs#install' : null)
+    }
+  })
+
+  it('保留其他 HTML 文件的原地址', () => {
+    const href = 'https://cchaha.ai/examples/demo.html?from=docs#install'
+    const location = new URL(href)
+    assert.equal(runBootstrap({ location }).redirectedTo, null)
+    assert.equal(location.href, href)
   })
 })

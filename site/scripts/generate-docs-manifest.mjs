@@ -102,7 +102,9 @@ function plainText(value) {
     .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
     .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/[`*_~>#|]/g, ' ')
+    // Underscores inside identifiers such as ANTHROPIC_BASE_URL are literal Markdown text.
+    .replace(/(?<![\p{L}\p{N}_])_+|_+(?![\p{L}\p{N}_])/gu, ' ')
+    .replace(/[`*~>#|]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -131,7 +133,7 @@ function extractDescription(body, frontmatter) {
 }
 
 /** 搜索用的正文摘要：去掉代码块和标记，保留可读文字。 */
-function searchBody(body) {
+export function searchBody(body) {
   return plainText(body.replace(/```[\s\S]*?```/g, ' ')).slice(0, 1400)
 }
 
