@@ -9,6 +9,7 @@ import {
   CLAUDE_3_7_SONNET_CONFIG,
   CLAUDE_FABLE_5_CONFIG,
   CLAUDE_FABLE_5_1_CONFIG,
+  CLAUDE_FABLE_5_2_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
   CLAUDE_HAIKU_5_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
@@ -91,6 +92,16 @@ export const COST_TIER_10_50 = {
 export const COST_FABLE_51 = {
   ...COST_TIER_10_50,
   promptCacheReadTokens: 0.25,
+} as const satisfies ModelCosts
+
+// Fable 5.2 is cheaper than Fable 5.1: $8 input / $40 output per Mtok, with the same
+// 0.025x cache-read multiplier (official pricing page and Claude Code catalog).
+export const COST_FABLE_52 = {
+  inputTokens: 8,
+  outputTokens: 40,
+  promptCacheWriteTokens: 10,
+  promptCacheReadTokens: 0.2,
+  webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
 // Opus 5.5 standard pricing from the official Claude Code model catalog.
@@ -187,6 +198,8 @@ export function getOpus46CostTier(fastMode: boolean): ModelCosts {
 export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
   [firstPartyNameToCanonical(CLAUDE_OPUS_5_5_CONFIG.firstParty)]: COST_OPUS_55,
   [firstPartyNameToCanonical(CLAUDE_OPUS_5_CONFIG.firstParty)]: COST_TIER_5_25,
+  [firstPartyNameToCanonical(CLAUDE_FABLE_5_2_CONFIG.firstParty)]:
+    COST_FABLE_52,
   [firstPartyNameToCanonical(CLAUDE_FABLE_5_1_CONFIG.firstParty)]:
     COST_FABLE_51,
   [firstPartyNameToCanonical(CLAUDE_FABLE_5_CONFIG.firstParty)]:

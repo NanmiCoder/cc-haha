@@ -9,7 +9,7 @@ import {
 } from '../auth.js'
 import { getModelStrings } from './modelStrings.js'
 import {
-  COST_TIER_10_50,
+  COST_FABLE_52,
   COST_TIER_2_10,
   COST_HAIKU_35,
   COST_HAIKU_45,
@@ -175,9 +175,9 @@ function getFable5Option(): ModelOption | undefined {
   return {
     value: 'fable',
     label: 'Fable',
-    description: `Fable 5 · Highest capability for long-running tasks · ${formatModelPricing(COST_TIER_10_50)}`,
+    description: `Fable 5.2 · Highest capability for long-running tasks · ${formatModelPricing(COST_FABLE_52)}`,
     descriptionForModel:
-      'Fable 5 - highest capability for hard, long-running tasks',
+      'Fable 5.2 - highest capability for hard, long-running tasks',
   }
 }
 

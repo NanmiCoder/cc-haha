@@ -72,6 +72,9 @@ describe('resolveModelCosts', () => {
     expect(resolveModelCosts('claude-sonnet-5-5')?.inputTokens).toBe(2)
     expect(resolveModelCosts('claude-fable-5')?.promptCacheReadTokens).toBe(1)
     expect(resolveModelCosts('claude-fable-5-1')?.promptCacheReadTokens).toBe(0.25)
+    // 5.2 must not fall back to the shorter `claude-fable-5` prefix ($10/$50).
+    expect(resolveModelCosts('claude-fable-5-2')?.inputTokens).toBe(8)
+    expect(resolveModelCosts('claude-fable-5-2')?.promptCacheReadTokens).toBe(0.2)
   })
 
   it('returns null for third-party models instead of guessing Claude rates', () => {
@@ -139,6 +142,17 @@ describe('isBillableUsageRecord', () => {
 })
 
 describe('estimateCostUSD', () => {
+  it('prices Fable 5.2 at $8/$40 including dated and namespaced ids', () => {
+    const all = tokens({
+      inputTokens: ONE_MILLION,
+      outputTokens: ONE_MILLION,
+      cacheReadInputTokens: ONE_MILLION,
+      cacheCreationInputTokens: ONE_MILLION,
+    })
+    expect(estimateCostUSD('claude-fable-5-2', all)).toBe(58.2)
+    expect(estimateCostUSD('anthropic/claude-fable-5-2-20261109', all)).toBe(58.2)
+  })
+
   it('uses the reduced Fable 5.1 cache-read rate without changing Fable 5', () => {
     const cacheReads = tokens({ cacheReadInputTokens: ONE_MILLION })
     expect(estimateCostUSD('claude-fable-5-1', cacheReads)).toBe(0.25)
