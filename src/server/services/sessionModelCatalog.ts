@@ -56,7 +56,7 @@ export function buildSessionModelCatalog(saved: SavedProvider[], accounts: { cla
       ...(defaultEffort ?? profile?.defaultReasoningEffort ? { defaultEffort: defaultEffort ?? profile?.defaultReasoningEffort } : {}),
     })
   }
-  if (accounts.claude) for (const model of [...Object.values(CLAUDE_OFFICIAL_DEFAULT_MODELS), 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5']) add(null, 'Claude Official', model, model, model === CLAUDE_OFFICIAL_DEFAULT_MODELS.main)
+  if (accounts.claude) for (const model of [...Object.values(CLAUDE_OFFICIAL_DEFAULT_MODELS), 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5']) add(null, 'Claude Official', model, model, model === CLAUDE_OFFICIAL_DEFAULT_MODELS.main)
   if (accounts.openai) for (const model of OPENAI_CODEX_MODEL_CATALOG) add('openai-official', 'ChatGPT Official', model.value, model.label, model.value === OPENAI_DEFAULT_MAIN_MODEL, model.supportedReasoningEfforts, model.defaultReasoningEffort)
   if (accounts.grok) for (const model of GROK_MODEL_CATALOG) add('grok-official', 'Grok Official', model.value, model.label, model.value === GROK_DEFAULT_MAIN_MODEL, model.reasoningEfforts ?? [], model.reasoningEffort)
   if (accounts.deepseek) for (const [i, model] of DEEPSEEK_ACCOUNT_MODEL_CATALOG.entries()) add('deepseek-account', 'DeepSeek Account', model.id, model.name, i === 0)

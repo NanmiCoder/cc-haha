@@ -8,17 +8,18 @@ export const CLAUDE_OFFICIAL_HAIKU_MODEL_ID = 'claude-haiku-5-5'
 
 export const CLAUDE_OFFICIAL_DEFAULT_MODELS: ModelMapping = {
   main: CLAUDE_OFFICIAL_OPUS_MODEL_ID,
-  fable: 'claude-fable-5-1',
+  fable: 'claude-fable-5-2',
   haiku: CLAUDE_OFFICIAL_HAIKU_MODEL_ID,
   sonnet: CLAUDE_OFFICIAL_SONNET_MODEL_ID,
   opus: CLAUDE_OFFICIAL_OPUS_MODEL_ID,
 }
 
 const CURRENT_MODEL_ALIASES = new Map<string, string>([
-  ['fable', 'claude-fable-5'],
+  ['fable', 'claude-fable-5-2'],
   ['opus', CLAUDE_OFFICIAL_OPUS_MODEL_ID],
   ['sonnet', CLAUDE_OFFICIAL_SONNET_MODEL_ID],
   ['haiku', CLAUDE_OFFICIAL_HAIKU_MODEL_ID],
+  ['claude-fable-5-2', 'claude-fable-5-2'],
   ['claude-fable-5', 'claude-fable-5'],
   [CLAUDE_OFFICIAL_OPUS_MODEL_ID, CLAUDE_OFFICIAL_OPUS_MODEL_ID],
   [CLAUDE_OFFICIAL_SONNET_MODEL_ID, CLAUDE_OFFICIAL_SONNET_MODEL_ID],

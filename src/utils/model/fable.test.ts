@@ -8,6 +8,7 @@ import { getAgentModel, getAgentModelOptions } from './agent.js'
 import { isModelAlias, isModelFamilyAlias } from './aliases.js'
 import {
   CLAUDE_FABLE_5_1_CONFIG,
+  CLAUDE_FABLE_5_2_CONFIG,
   CLAUDE_FABLE_5_CONFIG,
   CLAUDE_OPUS_4_6_CONFIG,
   CLAUDE_OPUS_4_8_CONFIG,
@@ -54,6 +55,14 @@ afterEach(() => {
 
 describe('Fable model configuration', () => {
   test('uses the official provider IDs', () => {
+    expect(CLAUDE_FABLE_5_2_CONFIG).toEqual({
+      firstParty: 'claude-fable-5-2',
+      bedrock: 'anthropic.claude-fable-5-2',
+      vertex: 'claude-fable-5-2',
+      foundry: 'claude-fable-5-2',
+      azureOpenAI: 'claude-fable-5-2',
+    })
+    expect(getModelStrings().fable52).toBe('claude-fable-5-2')
     expect(CLAUDE_FABLE_5_1_CONFIG).toEqual({
       firstParty: 'claude-fable-5-1',
       bedrock: 'anthropic.claude-fable-5-1',
@@ -92,8 +101,9 @@ describe('Fable model configuration', () => {
   })
 
   test('resolves the alias without changing unrelated model defaults', () => {
-    expect(getDefaultFableModel()).toBe(getModelStrings().fable5)
-    expect(parseUserSpecifiedModel('fable')).toBe(getModelStrings().fable5)
+    expect(getDefaultFableModel()).toBe(getModelStrings().fable52)
+    expect(parseUserSpecifiedModel('fable')).toBe(getModelStrings().fable52)
+    expect(parseUserSpecifiedModel('fable[1m]')).toBe('claude-fable-5-2[1m]')
 
     process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = 'provider-owned-fable'
 
@@ -133,6 +143,25 @@ describe('Fable model configuration', () => {
     )
   })
 
+  test('keeps Fable 5.2 identity distinct from Fable 5.1 and Fable 5', () => {
+    expect(firstPartyNameToCanonical('us.anthropic.claude-fable-5-2-v1:0')).toBe(
+      'claude-fable-5-2',
+    )
+    expect(firstPartyNameToCanonical('anthropic.claude-fable-5-2')).toBe('claude-fable-5-2')
+    expect(getPublicModelDisplayName('claude-fable-5-2')).toBe('Fable 5.2')
+    expect(getPublicModelDisplayName('claude-fable-5-2[1m]')).toBe('Fable 5.2 (1M context)')
+    expect(getMarketingNameForModel('claude-fable-5-2[1m]')).toBe(
+      'Fable 5.2 (with 1M context)',
+    )
+    expect(parseUserSpecifiedModel('claude-fable-5-2')).toBe('claude-fable-5-2')
+    expect(modelSupports1M('claude-fable-5-2')).toBe(true)
+    expect(getContextWindowForModel('claude-fable-5-2')).toBe(1_000_000)
+    expect(getContextWindowForModel('anthropic/claude-fable-5-2')).toBe(1_000_000)
+    // The older releases keep their own names.
+    expect(getPublicModelDisplayName('claude-fable-5-1')).toBe('Fable 5.1')
+    expect(getPublicModelDisplayName('claude-fable-5')).toBe('Fable 5')
+  })
+
   test('keeps Fable 5.1 identity distinct from the Fable 5 default', () => {
     expect(firstPartyNameToCanonical('us.anthropic.claude-fable-5-1-v1:0')).toBe(
       'claude-fable-5-1',
@@ -142,15 +171,26 @@ describe('Fable model configuration', () => {
     expect(getMarketingNameForModel('claude-fable-5-1[1m]')).toBe(
       'Fable 5.1 (with 1M context)',
     )
-    expect(parseUserSpecifiedModel('fable')).toBe('claude-fable-5')
+    expect(parseUserSpecifiedModel('claude-fable-5')).toBe('claude-fable-5')
     expect(parseUserSpecifiedModel('claude-fable-5-1')).toBe('claude-fable-5-1')
     expect(modelSupports1M('claude-fable-5-1')).toBe(true)
     expect(getContextWindowForModel('claude-fable-5-1')).toBe(1_000_000)
   })
 
-  test('does not recommend downgrading a pinned Fable 5.1 to the Fable 5 alias', () => {
+  test('recommends the newer Fable alias for a pinned Fable 5.1', () => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
     process.env.ANTHROPIC_MODEL = 'claude-fable-5-1'
+    expect(getModelOptions()).toContainEqual({
+      value: 'claude-fable-5-1',
+      label: 'Fable 5.1',
+      description: 'Newer version available · select Fable for Fable 5.2',
+    })
+  })
+
+  test('does not recommend downgrading a pinned Fable 5.1 to a lagging Fable 5 alias', () => {
+    process.env.ANTHROPIC_API_KEY = 'test-api-key'
+    process.env.ANTHROPIC_MODEL = 'claude-fable-5-1'
+    process.env.ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5'
     expect(getModelOptions()).toContainEqual({
       value: 'claude-fable-5-1',
       label: 'Fable 5.1',
@@ -167,10 +207,10 @@ describe('Fable model configuration', () => {
       PREV_SONNET_ID: 'claude-sonnet-5',
     })
 
-    for (const model of ['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5']) {
+    for (const model of ['claude-fable-5-2', 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5']) {
       const info = await computeSimpleEnvInfo(model)
       expect(info).toContain('The most recent Claude models are the Claude 5 family.')
-      expect(info).toContain("Fable 5.1: 'claude-fable-5-1'")
+      expect(info).toContain("Fable 5.2: 'claude-fable-5-2'")
       expect(info).toContain("Opus 5.5: 'claude-opus-5-5'")
       expect(info).toContain("Sonnet 5.5: 'claude-sonnet-5-5'")
       expect(info).toContain("Haiku 5.5: 'claude-haiku-5-5'")
@@ -183,6 +223,7 @@ describe('Fable model configuration', () => {
   // Reliable knowledge cutoffs: https://platform.claude.com/docs/en/models/overview and each
   // model's page, which match the official Claude Code model catalog.
   test.each([
+    ['claude-fable-5-2', 'June 2026'],
     ['claude-fable-5-1', 'June 2026'],
     ['claude-opus-5-5', 'June 2026'],
     ['claude-sonnet-5-5', 'June 2026'],
@@ -202,6 +243,7 @@ describe('Fable model configuration', () => {
   })
 
   test('sanitizes new model trailers and keeps teammate fallbacks provider-safe', () => {
+    expect(sanitizeModelName('claude-fable-5-2-experimental')).toBe('claude-fable-5-2')
     expect(sanitizeModelName('claude-fable-5-1-experimental')).toBe('claude-fable-5-1')
     expect(sanitizeModelName('claude-fable-5-experimental')).toBe('claude-fable-5')
     expect(sanitizeModelName('claude-opus-4-8-experimental')).toBe('claude-opus-4-8')
