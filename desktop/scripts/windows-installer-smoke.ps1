@@ -43,6 +43,7 @@ $processHelper = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\build\c
 $siblingProcess = $null
 $installProcess = $null
 $bundledHelperProcess = $null
+$installHelperProcess = $null
 
 $savedEnvironment = @{}
 foreach ($name in @('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CC_HAHA_APP_PORTABLE_DIR', 'COMPLUS_Version')) {
@@ -119,9 +120,9 @@ function Test-IsProcessElevated {
 
 # The exact image names installer.nsh falls back to when PowerShell is
 # unavailable (see CcHahaFindInstallProcess's findstr list). Without a CLR the
-# installer cannot resolve paths, so it matches on these names alone and any
-# process carrying one -- whoever started it -- reads as "the app is still
-# running". Keep this in sync with installer.nsh.
+# installer starts from these names, then reads each match's executable path:
+# one that runs from the install directory, or whose path it cannot read, reads
+# as "the app is still running". Keep this in sync with installer.nsh.
 $installerFallbackImageNames = @(
   'Claude Code Haha.exe',
   'claude-sidecar-x86_64-pc-windows-msvc.exe',
@@ -472,20 +473,23 @@ try {
   $siblingProcess.Dispose()
   $siblingProcess = $null
 
-  $bundledHelperProbe = Join-Path $siblingDir 'OpenConsole.exe'
-  Copy-Item -LiteralPath $processProbeSource -Destination $bundledHelperProbe
-  $bundledHelperProcess = Start-Process -FilePath $bundledHelperProbe -ArgumentList @('-t', '127.0.0.1') -PassThru
+  # A helper running from the install directory blocks the no-CLR reinstall,
+  # and the fallback never terminates by image name.
+  $installHelperProbe = Join-Path $installDir 'OpenConsole.exe'
+  Copy-Item -LiteralPath $processProbeSource -Destination $installHelperProbe
+  $installHelperProcess = Start-Process -FilePath $installHelperProbe -ArgumentList @('-t', '127.0.0.1') -PassThru
   Start-Sleep -Milliseconds 500
   $env:COMPLUS_Version = 'v0.0.0-test-invalid-clr'
-  Invoke-ProcessExpectFailure -FilePath $installer -Stage 'No-CLR external bundled-helper process reinstall' -ExpectedExitCode 22 -Arguments @('--updated', '/S', '/currentuser', "/D=$installDir")
-  if ($bundledHelperProcess.HasExited) {
-    throw 'No-CLR exact-image fallback terminated an external bundled-helper process.'
+  Invoke-ProcessExpectFailure -FilePath $installer -Stage 'No-CLR install-directory bundled-helper process reinstall' -ExpectedExitCode 22 -Arguments @('--updated', '/S', '/currentuser', "/D=$installDir")
+  if ($installHelperProcess.HasExited) {
+    throw 'No-CLR exact-image fallback terminated an install-directory bundled-helper process.'
   }
   Remove-Item Env:COMPLUS_Version -ErrorAction SilentlyContinue
-  Stop-Process -Id $bundledHelperProcess.Id -Force
-  $bundledHelperProcess.WaitForExit()
-  $bundledHelperProcess.Dispose()
-  $bundledHelperProcess = $null
+  Stop-Process -Id $installHelperProcess.Id -Force
+  $installHelperProcess.WaitForExit()
+  $installHelperProcess.Dispose()
+  $installHelperProcess = $null
+  Remove-Item -LiteralPath $installHelperProbe -Force
 
   # WaitForExit covers the PID this script started; the fallback matches on the
   # image name, so it also sees anything left over from earlier steps of this
@@ -494,6 +498,13 @@ try {
   # only reach if nothing matches the name list first.
   Clear-InstallerFallbackProcesses -Context 'Before no-CLR default-mode reinstall'
 
+  # Other software ships helpers with the same image names (Windows Terminal's
+  # console host is OpenConsole.exe). One running outside the install directory
+  # must not change the outcome of this stage (#1879).
+  $bundledHelperProbe = Join-Path $siblingDir 'OpenConsole.exe'
+  Copy-Item -LiteralPath $processProbeSource -Destination $bundledHelperProbe
+  $bundledHelperProcess = Start-Process -FilePath $bundledHelperProbe -ArgumentList @('-t', '127.0.0.1') -PassThru
+  Start-Sleep -Milliseconds 500
   $env:COMPLUS_Version = 'v0.0.0-test-invalid-clr'
   if (Test-IsProcessElevated) {
     Invoke-ProcessExpectFailure -FilePath $installer -Stage 'Elevated default-mode reinstall without CLR' -ExpectedExitCode 20 -Arguments @('--updated', '/S', '/currentuser', "/D=$installDir")
@@ -501,6 +512,13 @@ try {
     Invoke-CheckedProcess -FilePath $installer -Stage 'Trusted-user default-mode reinstall without CLR' -Arguments @('--updated', '/S', '/currentuser', "/D=$installDir")
   }
   Remove-Item Env:COMPLUS_Version -ErrorAction SilentlyContinue
+  if ($bundledHelperProcess.HasExited) {
+    throw 'No-CLR exact-image fallback terminated an external bundled-helper process.'
+  }
+  Stop-Process -Id $bundledHelperProcess.Id -Force
+  $bundledHelperProcess.WaitForExit()
+  $bundledHelperProcess.Dispose()
+  $bundledHelperProcess = $null
   if (-not (Test-Path -LiteralPath $appExe -PathType Leaf)) {
     throw "Reinstall removed the application executable: $appExe"
   }
@@ -522,7 +540,7 @@ try {
 
   [Console]::Out.WriteLine('Windows installer Unicode-path launch, fresh-install, no-CLR default reinstall, and fail-closed portable reinstall smoke passed.')
 } finally {
-  foreach ($probeProcess in @($installProcess, $siblingProcess, $bundledHelperProcess)) {
+  foreach ($probeProcess in @($installProcess, $siblingProcess, $bundledHelperProcess, $installHelperProcess)) {
     if ($null -ne $probeProcess) {
       if (-not $probeProcess.HasExited) {
         Stop-Process -Id $probeProcess.Id -Force -ErrorAction SilentlyContinue

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
@@ -222,6 +222,108 @@ SectionEnd
     }
   }, 90_000)
 
+  test.skipIf(process.platform !== 'win32')('blocks the no-PowerShell fallback only for helpers that run from the install directory (#1879)', async () => {
+    const compiler = process.env.CC_HAHA_TEST_MAKENSIS ?? path.join(
+      process.env.LOCALAPPDATA ?? '', 'electron-builder', 'Cache', 'nsis',
+      'nsis-3.0.4.1-nsis-3.0.4.1', 'Bin', 'makensis.exe',
+    )
+    const templates = process.env.CC_HAHA_TEST_NSIS_TEMPLATES
+      ?? path.resolve('desktop/node_modules/app-builder-lib/templates/nsis')
+    if (!existsSync(compiler) || !existsSync(path.join(templates, 'include/getProcessInfo.nsh'))) {
+      throw new Error('Native NSIS regression requires electron-builder dependencies and its cached compiler, or CC_HAHA_TEST_MAKENSIS/CC_HAHA_TEST_NSIS_TEMPLATES')
+    }
+    const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-nsis-fallback-'))
+    const env = createSandboxedTestEnvironment(path.join(root, 'home'))
+    const installDir = path.join(root, 'Claude Code Haha')
+    // A sibling whose name starts with the install directory's: Windows
+    // Terminal's console host and the app's bundled one share an image name.
+    const foreignDir = `${installDir} Tools`
+    const bundledDir = path.join(installDir, 'resources')
+    mkdirSync(foreignDir, { recursive: true })
+    mkdirSync(bundledDir, { recursive: true })
+    const probeSource = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'ping.exe')
+    const probes: ChildProcess[] = []
+    const startProbe = async (directory: string) => {
+      const executable = path.join(directory, 'OpenConsole.exe')
+      copyFileSync(probeSource, executable)
+      const probe = spawn(executable, ['-t', '127.0.0.1'], { stdio: 'ignore', windowsHide: true })
+      probes.push(probe)
+      await new Promise(resolve => setTimeout(resolve, 500))
+      expect(probe.exitCode).toBeNull()
+      return probe.pid!
+    }
+    const executable = path.join(root, 'fallback.exe')
+    const journal = path.join(root, 'fallback.log')
+    const script = String.raw`
+Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+Name "Isolated installer fallback regression"
+OutFile "${executable}"
+!addincludedir "${templates}\include"
+!define APP_GUID "cc-haha-nsis-test-no-user-state"
+!define UNINSTALL_APP_KEY "cc-haha-nsis-test-no-user-state"
+!define APP_FILENAME "isolated-test"
+!define PRODUCT_FILENAME "isolated-test"
+!define BUILD_RESOURCES_DIR "${path.resolve('desktop/build')}"
+!include "${path.resolve('desktop/build/installer.nsh')}"
+LoadLanguageFile "${'${NSISDIR}'}\Contrib\Language files\English.nlf"
+LangString uninstallFailed 1033 "Uninstall failed"
+Var IsPowerShellAvailable
+Var PowerShellPath
+Var CmdPath
+Var journalHandle
+Section
+  InitPluginsDir
+  StrCpy $IsPowerShellAvailable 1
+  StrCpy $CmdPath "$SYSDIR\cmd.exe"
+  StrCpy $INSTDIR "${installDir}"
+  ${'${GetProcessInfo}'} 0 $pid $1 $2 $3 $4
+  !insertmacro CcHahaFindInstallProcess "Claude Code Haha.exe" $R0
+  FileOpen $journalHandle "${journal}" w
+  FileWrite $journalHandle "result=$R0; $ccHahaProcessDiagnostic"
+  FileClose $journalHandle
+SectionEnd
+`
+    const source = path.join(root, 'fallback.nsi')
+    writeFileSync(source, script)
+    const check = () => {
+      const run = spawnSync(executable, ['/S'], { env, timeout: 60_000, windowsHide: true })
+      expect(run.error).toBeUndefined()
+      expect(run.status).toBe(0)
+      return readFileSync(journal, 'utf8')
+    }
+    try {
+      const compile = spawnSync(compiler, ['/V2', source], { env, encoding: 'utf8', timeout: 15_000 })
+      expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
+      expect(compile.status, compile.stderr || compile.stdout).toBe(0)
+
+      const foreignPid = await startProbe(foreignDir)
+      const foreignOnly = check()
+      expect(foreignOnly).not.toContain(`PID ${foreignPid})`)
+      // A same-named process this user cannot inspect may exist on the machine
+      // running the test; it legitimately keeps setup blocked.
+      if (!foreignOnly.includes('path unavailable')) {
+        expect(foreignOnly).toStartWith('result=1; ')
+        expect(foreignOnly).toContain('other software outside the install directory')
+      }
+
+      const bundledPid = await startProbe(bundledDir)
+      const withBundled = check()
+      expect(withBundled).toStartWith('result=0; ')
+      expect(withBundled).toContain(`OpenConsole.exe (PID ${bundledPid});`)
+      expect(withBundled).not.toContain(`PID ${foreignPid})`)
+      expect(withBundled).toContain('Close them manually.')
+    } finally {
+      await Promise.all(probes.map(probe => new Promise<void>((resolve) => {
+        if (probe.exitCode !== null || probe.signalCode !== null) return resolve()
+        probe.once('exit', () => resolve())
+        probe.kill()
+      })))
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   test('uses a directory-boundary-aware process helper', () => {
     // A Windows checkout has CRLF line endings.
     const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
@@ -258,7 +360,7 @@ SectionEnd
       /tasklist \/FO CSV \/NH > [^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} != 0\n/,
     )
     expect(installerHook).toMatch(
-      /findstr\.exe[^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} == 0\n[^\n]*\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
+      /findstr\.exe[^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} == 0\n[^\n]*\n[^\n]*\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
     )
     expect(installerHook).toContain('possibly in another user\'s session')
     expect(installerHook).toContain('claude-sidecar-x86_64-pc-windows-msvc.exe')
@@ -268,6 +370,21 @@ SectionEnd
     expect(installerHook).toContain('/C:"rg.exe"')
     expect(installerHook).toContain('bundled terminal/search helper')
     expect(installerHook).toContain('Differently named child processes cannot be attributed')
+    // A name hit is attributed by executable path before it blocks setup, and
+    // the two name lists stay in sync (#1879).
+    expect(installerHook).toMatch(
+      /\$\{If\} \$\{_RETURN\} == 0\n[^\n]*possibly in another user's session[^\n]*\n\s*!insertmacro CcHahaAttributeFallbackMatches "\$\{_FILE\}" \$\{_RETURN\}\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
+    )
+    const attribution = installerHook.slice(
+      installerHook.indexOf('!macro CcHahaAttributeFallbackMatches'),
+      installerHook.indexOf('!macro CcHahaFindInstallProcess'),
+    )
+    const findstrNames = [...installerHook.matchAll(/\/C:"([^"$]+\.exe)"/g)].map(([, name]) => name!)
+    expect(findstrNames.length).toBeGreaterThan(0)
+    for (const name of findstrNames) {
+      expect(attribution).toContain(`$R5 == "${name}"`)
+    }
+    expect(attribution).toContain('$R5 == "${_FILE}"')
     expect(installerHook).not.toContain('| "$FindPath"')
 
     expect(processHelper).toContain('function Test-PathInsideInstallDirectory')
@@ -365,11 +482,17 @@ SectionEnd
     expect(installerSmoke).toContain('Sibling-prefix process remains running')
     expect(installerSmoke).toContain('Install-directory parent process detection')
     expect(installerSmoke).toContain('Install-directory process was not terminated')
-    expect(installerSmoke).toContain("$bundledHelperProbe = Join-Path $siblingDir 'OpenConsole.exe'")
-    expect(installerSmoke).toContain('No-CLR external bundled-helper process reinstall')
+    // Only a helper inside the install directory blocks the no-CLR fallback; a
+    // same-named one next to it (other software) runs through a whole reinstall.
+    expect(installerSmoke).toContain("$installHelperProbe = Join-Path $installDir 'OpenConsole.exe'")
     expect(installerSmoke).toMatch(
-      /No-CLR external bundled-helper process reinstall' -ExpectedExitCode 22/,
+      /No-CLR install-directory bundled-helper process reinstall' -ExpectedExitCode 22/,
     )
-    expect(installerSmoke).toContain('No-CLR exact-image fallback terminated an external bundled-helper')
+    expect(installerSmoke).toContain('No-CLR exact-image fallback terminated an install-directory bundled-helper')
+    expect(installerSmoke).toContain("$bundledHelperProbe = Join-Path $siblingDir 'OpenConsole.exe'")
+    expect(installerSmoke).not.toContain('No-CLR external bundled-helper process reinstall')
+    expect(installerSmoke).toMatch(
+      /\$bundledHelperProcess = Start-Process[\s\S]*?default-mode reinstall without CLR[\s\S]*?No-CLR exact-image fallback terminated an external bundled-helper/,
+    )
   })
 })

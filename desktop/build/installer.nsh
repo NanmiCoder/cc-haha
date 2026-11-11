@@ -297,6 +297,107 @@ FunctionEnd
   System::Call 'kernel32::SetEnvironmentVariable(w "PSModulePath", p 0)'
 !macroend
 
+; The tasklist fallback below matches image names only, and other software
+; ships the same helpers: Windows Terminal's console host is OpenConsole.exe,
+; and Claude Code and VS Code bundle rg.exe. An open terminal therefore made
+; every upgrade stop at "close it manually" (#1879). Reading a process's
+; executable path needs no PowerShell, so a name match only blocks setup when it
+; runs from the install directory, or when its path cannot be read (for example
+; another user's session), which stays fail-closed. Keep the names in sync with
+; the findstr list in CcHahaFindInstallProcess.
+!macro CcHahaAttributeFallbackMatches _FILE _RETURN
+  Push $R1 ; install directory, long form, with a trailing backslash
+  Push $R2 ; process snapshot
+  Push $R3 ; PROCESSENTRY32W
+  Push $R4 ; process id
+  Push $R5 ; image name
+  Push $R6 ; process handle, then scratch
+  Push $R7 ; executable path
+  Push $R8 ; call results
+  Push $R9 ; processes that block setup
+  StrCpy $R9 ""
+  StrCpy $R1 "$INSTDIR"
+  System::Call 'kernel32::GetFullPathNameW(w R1, i ${NSIS_MAX_STRLEN}, w .R7, p 0) i.R8'
+  ${If} $R8 <> 0
+    StrCpy $R1 $R7
+  ${EndIf}
+  System::Call 'kernel32::GetLongPathNameW(w R1, w .R7, i ${NSIS_MAX_STRLEN}) i.R8'
+  ${If} $R8 <> 0
+    StrCpy $R1 $R7
+  ${EndIf}
+  StrCpy $R8 $R1 1 -1
+  ${If} $R8 != "\"
+    StrCpy $R1 "$R1\"
+  ${EndIf}
+
+  ; TH32CS_SNAPPROCESS
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) i.R2'
+  ${If} $R2 = -1
+    StrCpy $R9 " (the process list could not be read);"
+  ${Else}
+    System::Alloc 1024
+    Pop $R3
+    ; dwSize of the 32-bit PROCESSENTRY32W this installer stub uses.
+    System::Call '*$R3(i 556)'
+    System::Call 'kernel32::Process32FirstW(i R2, p R3) i.R8'
+    ${While} $R8 <> 0
+      System::Call '*$R3(i, i, i .R4, i, i, i, i, i, i, &w260 .R5)'
+      ${If} $R4 != $pid
+        ${If} $R5 == "${_FILE}"
+        ${OrIf} $R5 == "claude-sidecar-x86_64-pc-windows-msvc.exe"
+        ${OrIf} $R5 == "claude-sidecar-aarch64-pc-windows-msvc.exe"
+        ${OrIf} $R5 == "claude-sidecar.exe"
+        ${OrIf} $R5 == "OpenConsole.exe"
+        ${OrIf} $R5 == "winpty-agent.exe"
+        ${OrIf} $R5 == "rg.exe"
+          StrCpy $R7 ""
+          ; PROCESS_QUERY_LIMITED_INFORMATION
+          System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i R4) i.R6'
+          ${If} $R6 <> 0
+            System::Call 'kernel32::QueryFullProcessImageNameW(i R6, i 0, w .R7, *i ${NSIS_MAX_STRLEN}) i.R8'
+            ${If} $R8 = 0
+              StrCpy $R7 ""
+            ${EndIf}
+            System::Call 'kernel32::CloseHandle(i R6)'
+          ${EndIf}
+          ${If} $R7 == ""
+            StrCpy $R9 "$R9 $R5 (PID $R4, path unavailable);"
+          ${Else}
+            System::Call 'kernel32::GetLongPathNameW(w R7, w .R6, i ${NSIS_MAX_STRLEN}) i.R8'
+            ${If} $R8 <> 0
+              StrCpy $R7 $R6
+            ${EndIf}
+            StrLen $R8 $R1
+            StrCpy $R8 $R7 $R8
+            ${If} $R8 == $R1
+              StrCpy $R9 "$R9 $R5 (PID $R4);"
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      System::Call 'kernel32::Process32NextW(i R2, p R3) i.R8'
+    ${EndWhile}
+    System::Free $R3
+    System::Call 'kernel32::CloseHandle(i R2)'
+  ${EndIf}
+
+  ${If} $R9 == ""
+    StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the matching image names belong to other software outside the install directory, so setup continues."
+    StrCpy ${_RETURN} 1
+  ${Else}
+    StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; these processes run from the install directory, or their path cannot be read (possibly another user's session):$R9 Close them manually."
+  ${EndIf}
+  Pop $R9
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+!macroend
+
 !macro CcHahaFindInstallProcess _FILE _RETURN
   ${If} $IsPowerShellAvailable == 0
     nsExec::ExecToStack '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\check-install-processes.ps1" -InstallDir "$INSTDIR" -ProcessName "${_FILE}" -Action Find -InstallerPid "$pid" -InstallerParentPid "$1"'
@@ -333,6 +434,7 @@ FunctionEnd
       Pop ${_RETURN}
       ${If} ${_RETURN} == 0
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path, possibly in another user's session. Close it manually."
+        !insertmacro CcHahaAttributeFallbackMatches "${_FILE}" ${_RETURN}
       ${ElseIf} ${_RETURN} == 1
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; exact-image fallback found no main app, known sidecar, or bundled terminal/search helper. Differently named child processes cannot be attributed without path data."
       ${Else}
