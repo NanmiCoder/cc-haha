@@ -38,9 +38,19 @@ describe('Claude official model catalog', () => {
     expect(ids.indexOf('claude-haiku-5-5')).toBeLessThan(ids.indexOf('claude-haiku-4-5'))
   })
 
+  it('offers Fable 5.2 first, with Claude Code\'s medium default effort', () => {
+    expect(OFFICIAL_MODELS[0]).toMatchObject({
+      id: 'claude-fable-5-2',
+      name: 'Fable 5.2',
+      context: '1m',
+      defaultReasoningEffort: 'medium',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+  })
+
   it('keeps older explicit model selections available', () => {
     expect(OFFICIAL_MODELS.map(model => model.id)).toEqual(expect.arrayContaining([
-      'claude-opus-5', 'claude-opus-4-8', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-haiku-4-5',
+      'claude-opus-5', 'claude-opus-4-8', 'claude-fable-5', 'claude-fable-5-1', 'claude-sonnet-5', 'claude-haiku-4-5',
     ]))
   })
 })

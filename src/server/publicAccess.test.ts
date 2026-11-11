@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { createHash, createHmac } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,7 +20,7 @@ function fixture(
   handleApiRequest: (request: Request, url: URL) => Promise<Response> =
     async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
   origin = 'https://fixture.trycloudflare.com',
-  connectivity: { resolveProxy?: () => Promise<{ proxyUrl: string | null }>, verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean> } = {},
+  connectivity: Pick<ConstructorParameters<typeof PublicAccessServer>[0], 'resolveProxy' | 'verifyGateway' | 'onOriginChanged' | 'networkInterfaces'> = {},
   sockets: Pick<ConstructorParameters<typeof PublicAccessServer>[0], 'websocket' | 'terminateDeviceStreams'> = {} as never,
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-test-'))
@@ -990,5 +991,92 @@ describe('resumable session streams through the gateway', () => {
     await Bun.sleep(10)
     expect(closed).toEqual([1012])
     expect(handler.streamCount).toBe(0)
+  })
+})
+
+describe('a changed public address reaches paired phones', () => {
+  const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
+  const macFor = (token: string, message: string) => createHmac('sha256', sha256(token)).update(message).digest('base64url')
+  /** A non-loopback address of this machine: requests to it arrive like a phone's on the LAN. */
+  const lanAddress = Object.values(os.networkInterfaces()).flat().find(entry => entry?.family === 'IPv4' && !entry.internal)?.address
+  const bareServer = (storePath: string, onOriginChanged: ConstructorParameters<typeof PublicAccessServer>[0]['onOriginChanged']) => new PublicAccessServer({
+    storePath, serverPort: () => 3456, onOriginChanged,
+    handleApiRequest: async () => Response.json({}), handleStatic: async () => null,
+    websocket: { message: () => {} },
+  })
+
+  test('a paired phone learns where to find the gateway on its local network', async () => {
+    const remote = fixture(undefined, undefined, {
+      networkInterfaces: () => ({
+        lo0: [{ address: '127.0.0.1', family: 'IPv4', internal: true } as os.NetworkInterfaceInfo],
+        en0: [
+          { address: '192.168.1.5', family: 'IPv4', internal: false } as os.NetworkInterfaceInfo,
+          { address: 'fe80::1', family: 'IPv6', internal: false } as os.NetworkInterfaceInfo,
+        ],
+        utun4: [{ address: '100.101.1.2', family: 'IPv4', internal: false } as os.NetworkInterfaceInfo],
+        en1: [{ address: '203.0.113.9', family: 'IPv4', internal: false } as os.NetworkInterfaceInfo],
+      }),
+    })
+    const { claim } = await remote.pairNative()
+    const response = await remote.native('/api/public-access/locator', claim.token)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ port: remote.service.status().port! + 1, addresses: ['192.168.1.5', '100.101.1.2'] })
+    expect((await remote.remote('/api/public-access/locator')).status).toBe(401)
+  })
+
+  test.skipIf(!lanAddress)('from the LAN only the signed address lookup answers, never the gateway', async () => {
+    const remote = fixture()
+    const { claim } = await remote.pairNative()
+    const lan = `http://${lanAddress}:${remote.service.status().port! + 1}`
+    const nonce = 'n'.repeat(22)
+    const id = sha256(sha256(claim.token))
+    const located = await fetch(`${lan}/api/public-access/locate?id=${id}&nonce=${nonce}`)
+    expect(located.status).toBe(200)
+    const body = await located.json() as { url: string, mac: string }
+    expect(body).toEqual({ url: 'https://fixture.trycloudflare.com', mac: macFor(claim.token, `cc-haha-locate\n${nonce}\nhttps://fixture.trycloudflare.com`) })
+    expect((await fetch(`${lan}/api/public-access/locate?id=${'0'.repeat(64)}&nonce=${nonce}`)).status).toBe(404)
+    expect((await fetch(`${lan}/api/public-access/locate?id=${id}&nonce=short`)).status).toBe(400)
+    // The credential opens nothing else from the LAN.
+    for (const route of ['/health', '/api/public-access/session', '/api/public-access/locator', '/api/sessions']) {
+      const response = await fetch(`${lan}${route}`, { headers: { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` } })
+      expect([route, response.status]).toEqual([route, 404])
+    }
+    // The gateway itself is never reachable from the LAN; loopback (Cloudflare's connector) still is.
+    await expect(fetch(`http://${lanAddress}:${remote.service.status().port}/health`)).rejects.toThrow()
+    expect((await remote.native('/api/public-access/session', claim.token)).status).toBe(200)
+    remote.service.disable()
+    await expect(fetch(`${lan}/api/public-access/locate?id=${id}&nonce=${nonce}`)).rejects.toThrow()
+  })
+
+  test('a new address is announced once, signed per pairing, and remembered across restarts', async () => {
+    const changes: Array<{ url: string, previous: string, sign: (deviceId: string) => string | undefined }> = []
+    const remote = fixture(undefined, 'https://first-name.trycloudflare.com', { onOriginChanged: change => { changes.push(change) } })
+    const { claim } = await remote.pairNative()
+    expect(changes).toEqual([])
+    await remote.control('origin', { publicUrl: 'https://second-name.trycloudflare.com' }, 'PUT')
+    await remote.control('origin', { publicUrl: 'https://second-name.trycloudflare.com' }, 'PUT')
+    expect(changes.map(({ url, previous }) => ({ url, previous }))).toEqual([{ url: 'https://second-name.trycloudflare.com', previous: 'https://first-name.trycloudflare.com' }])
+    expect(changes[0]!.sign(claim.deviceId)).toBe(macFor(claim.token, 'cc-haha-host-url\nhttps://second-name.trycloudflare.com'))
+    expect(changes[0]!.sign('not-a-device')).toBeUndefined()
+
+    const restarted = bareServer(remote.storePath, change => { changes.push(change) })
+    restarted.enable('https://second-name.trycloudflare.com')
+    restarted.disable()
+    expect(changes).toHaveLength(1)
+  })
+
+  test('a store written before addresses were remembered announces nothing on its first address', () => {
+    const changes: unknown[] = []
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-legacy-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const storePath = path.join(dir, 'devices.json')
+    writeFileSync(storePath, JSON.stringify({ version: 1, devices: [{ id: 'old', name: 'Old phone', createdAt: 1, expiresAt: Date.now() + 60_000, tokenHash: 'a'.repeat(64) }] }))
+    const service = bareServer(storePath, change => { changes.push(change) })
+    service.enable('https://first-name.trycloudflare.com')
+    service.disable()
+    expect(changes).toEqual([])
+    const stored = JSON.parse(readFileSync(storePath, 'utf8')) as { devices: Array<{ id: string }>, lastPublicUrl: string }
+    expect(stored.devices.map(device => device.id)).toEqual(['old'])
+    expect(stored.lastPublicUrl).toBe('https://first-name.trycloudflare.com')
   })
 })

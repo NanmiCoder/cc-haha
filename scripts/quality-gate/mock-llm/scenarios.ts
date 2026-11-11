@@ -13,12 +13,26 @@ import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { PROMPT_TOO_LONG_TRIGGER, RELAY_OVERFLOW_TRIGGER, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
+import {
+  GOOGLE_ADC_QUOTA_PROJECT_MESSAGE,
+  GOOGLE_ADC_QUOTA_PROJECT_TRIGGER,
+  KIMI_USAGE_LIMIT_MESSAGE,
+  KIMI_USAGE_LIMIT_TRIGGER,
+  PROMPT_TOO_LONG_TRIGGER,
+  RELAY_OVERFLOW_TRIGGER,
+  UPSTREAM_ERROR_MESSAGE,
+  UPSTREAM_ERROR_TRIGGER,
+  UPSTREAM_REFUSAL_TRIGGER,
+} from './scriptedModel'
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
+import { runGlobPermissions } from './globPermissions'
+import { runNotebookReadGuards } from './notebookReadGuards'
 
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-glob-absolute-permissions', title: 'Absolute Glob roots require approval and denied enumeration recovers on the next workspace turn' },
+  { id: 'mock-notebook-read-guards', title: 'Notebook edits reject unread and concurrently modified files, then recover after a fresh read' },
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
   { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
   { id: 'mock-live-permission-switch', title: 'A permission switch during a running turn applies to the real CLI\'s next tool call' },
@@ -53,7 +67,15 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   },
   {
     id: 'mock-upstream-error-recovers',
-    title: 'An upstream error ends the turn visibly and the next turn still works',
+    title: 'Upstream errors preserve billing and authentication guidance and the next turn still works',
+  },
+  {
+    id: 'mock-provider-monthly-quota',
+    title: 'An OpenAI-compatible monthly quota error fails once and switching providers recovers the session',
+  },
+  {
+    id: 'mock-provider-invalid-key',
+    title: 'An explicitly invalid saved provider key fails once and switching providers recovers the session',
   },
   {
     id: 'mock-prompt-too-long-compacts',
@@ -109,6 +131,8 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    'mock-glob-absolute-permissions': ctx => runGlobPermissions(ctx, () => toolResultsSentUpstream(requests)),
+    'mock-notebook-read-guards': ctx => runNotebookReadGuards(ctx, () => toolResultsSentUpstream(requests)),
     async 'mock-project-additional-directories'(ctx) {
       const directory = join(dirname(ctx.workRoot), 'auxiliary 数据 files')
       mkdirSync(directory, { recursive: true })
@@ -946,37 +970,217 @@ export function createMockOnlyRunners(
       }
     },
 
-    async 'mock-upstream-error-recovers'(ctx) {
-      const socket = await ctx.openSocket(await ctx.createSession())
+    async 'mock-provider-invalid-key'(ctx) {
+      let agentRequests = 0
+      const upstream = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        async fetch(request) {
+          const body = await request.json() as { tools?: unknown[] }
+          if ((body.tools ?? []).length > 0) agentRequests++
+          return Response.json({ error: { type: 'authentication_error', message: 'Invalid credential' } }, { status: 401 })
+        },
+      })
+      let providerId: string | undefined
+      let socket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
       try {
-        ctx.pinRuntime(socket)
+        const response = await fetch(`${ctx.baseUrl}/api/providers`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presetId: 'opencode-go', name: 'Invalid key fixture', apiKey: 'fixture-key',
+            baseUrl: `http://127.0.0.1:${upstream.port}`, apiFormat: 'openai_chat',
+            models: { main: 'deepseek-v4.1-flash', haiku: 'deepseek-v4.1-flash', sonnet: 'deepseek-v4.1-flash', opus: 'deepseek-v4.1-flash' },
+          }),
+        })
+        if (!response.ok) throw new Error(`Creating invalid key provider failed: ${response.status}`)
+        providerId = ((await response.json()) as { provider: { id: string } }).provider.id
+        socket = await ctx.openSocket(await ctx.createSession())
+        socket.send({ type: 'set_runtime_config', providerId, modelId: 'deepseek-v4.1-flash[1m]' })
         const start = socket.messages.length
-        socket.send({ type: 'user_message', content: `${UPSTREAM_ERROR_TRIGGER}: this request should fail upstream.` })
+        socket.send({ type: 'user_message', content: 'Please answer the invalid key fixture.' })
         const failure = await socket.waitFor(
-          (m) => m.type === 'error' || (m.type === 'message_complete' && streamedText(socket.messages.slice(start)).length === 0),
-          ctx.stepTimeoutMs,
-          'an error frame for the failed turn',
-          start,
+          message => message.type === 'error' || message.type === 'api_retry',
+          ctx.stepTimeoutMs, 'invalid key error without a retry', start,
         )
-        if (failure.type !== 'error') {
-          throw new Error('the failed turn completed silently with no error shown to the user')
+        if (failure.type === 'api_retry') throw new Error('invalid saved provider key was retried')
+        if (failure.code !== 'authentication_failed' || !String(failure.message ?? '').includes('Invalid credential')) {
+          throw new Error(`invalid key lost authentication classification or upstream detail: ${JSON.stringify(failure)}`)
         }
-        // Let the failed turn finish settling before the next prompt.
         await socket.waitFor(
-          (m) => m.type === 'message_complete' || (m.type === 'session_state_changed' && m.state === 'idle'),
-          ctx.stepTimeoutMs,
-          'failed turn to settle',
-          start,
-        ).catch(() => undefined)
+          message => message.type === 'message_complete' || (message.type === 'session_state_changed' && message.state === 'idle'),
+          ctx.stepTimeoutMs, 'invalid key turn to settle', start,
+        )
+        if (socket.messages.slice(start).some(message => message.type === 'api_retry')) throw new Error('invalid key turn emitted a retry')
+        if (agentRequests !== 1) throw new Error(`invalid key reached the upstream ${agentRequests} times`)
 
         const next = socket.messages.length
+        ctx.pinRuntime(socket)
         socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
-        await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete after an upstream error', next)
-        if (!streamedText(socket.messages.slice(next)).trim()) {
-          throw new Error('the session did not answer again after an upstream error')
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'reply after switching providers', next)
+        const recovered = socket.messages.slice(next)
+        if (recovered.some(message => message.type === 'error') || !streamedText(recovered).trim()) {
+          throw new Error('the same session did not recover after switching providers')
         }
       } finally {
-        socket.close()
+        socket?.close()
+        if (providerId) await fetch(`${ctx.baseUrl}/api/providers/${providerId}`, { method: 'DELETE' })
+        await upstream.stop(true)
+      }
+    },
+
+    async 'mock-provider-monthly-quota'(ctx) {
+      const upstreamRequests: Array<{ tools?: unknown[] }> = []
+      let temporaryRequests = 0
+      const upstream = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        async fetch(request) {
+          const body = await request.json() as { tools?: unknown[]; messages?: unknown }
+          upstreamRequests.push(body)
+          if ((body.tools ?? []).length > 0 && JSON.stringify(body.messages).includes('TEMPORARY_RATE_LIMIT_FIXTURE')) {
+            temporaryRequests++
+            if (temporaryRequests === 1) {
+              return Response.json({ error: { type: 'rate_limit_error', message: 'Too many requests, retry shortly.' } }, { status: 429 })
+            }
+            const chunk = (delta: object, finishReason: string | null) =>
+              `data: ${JSON.stringify({ id: 'chatcmpl-fixture', object: 'chat.completion.chunk', model: 'fixture-model', choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`
+            return new Response(chunk({ role: 'assistant', content: 'TEMPORARY_RATE_RECOVERED' }, null) + chunk({}, 'stop') + 'data: [DONE]\n\n', {
+              headers: { 'content-type': 'text/event-stream' },
+            })
+          }
+          return Response.json({
+            type: 'error',
+            error: { type: 'GoUsageLimitError', message: `Go usage limit exceeded ${'x'.repeat(600)}` },
+            metadata: { workspace: 'fixture-workspace', limitName: 'monthly' },
+          }, { status: 429 })
+        },
+      })
+      let providerId: string | undefined
+      let socket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      try {
+        const response = await fetch(`${ctx.baseUrl}/api/providers`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presetId: 'custom', name: 'Monthly quota fixture', apiKey: 'fixture-key',
+            baseUrl: `http://127.0.0.1:${upstream.port}`, apiFormat: 'openai_chat',
+            models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
+          }),
+        })
+        if (!response.ok) throw new Error(`Creating quota provider failed: ${response.status}`)
+        providerId = ((await response.json()) as { provider: { id: string } }).provider.id
+        const sessionId = await ctx.createSession()
+        socket = await ctx.openSocket(sessionId)
+        socket.send({ type: 'set_runtime_config', providerId, modelId: 'fixture-model' })
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: 'Please answer the quota fixture.' })
+        const failure = await socket.waitFor(
+          message => message.type === 'error' || message.type === 'api_retry',
+          ctx.stepTimeoutMs, 'monthly quota error without a retry', start,
+        )
+        if (failure.type === 'api_retry') throw new Error('monthly quota was retried as a temporary 429')
+        if (failure.code !== 'billing_error') throw new Error(`monthly quota classified as ${failure.code}`)
+        const detail = String(failure.message ?? '')
+        if (!detail.includes(`Go usage limit exceeded ${'x'.repeat(600)}`) || !detail.includes('monthly')) {
+          throw new Error(`monthly quota lost upstream details: ${detail}`)
+        }
+        if (!/reset/i.test(detail) || !/switch.*provider/i.test(detail) || /\/login|Failed to authenticate/i.test(detail)) {
+          throw new Error(`monthly quota has incorrect guidance: ${detail}`)
+        }
+        await socket.waitFor(
+          message => message.type === 'message_complete' || (message.type === 'session_state_changed' && message.state === 'idle'),
+          ctx.stepTimeoutMs, 'failed turn to settle', start,
+        )
+        const agentRequests = upstreamRequests.filter(request => (request.tools ?? []).length > 0)
+        if (agentRequests.length !== 1) throw new Error(`monthly quota reached the upstream ${agentRequests.length} times`)
+
+        let savedError: { id: string } | undefined
+        const historyDeadline = Date.now() + 5_000
+        while (!savedError && Date.now() < historyDeadline) {
+          const historyResponse = await fetch(`${ctx.baseUrl}/api/sessions/${sessionId}/messages?mode=full`)
+          if (!historyResponse.ok) throw new Error(`loading quota history failed: ${historyResponse.status}`)
+          const history = await historyResponse.json() as { messages: Array<{ id: string; isApiErrorMessage?: boolean; error?: string; content?: unknown }> }
+          savedError = history.messages.find(message => message.isApiErrorMessage && message.error === 'billing_error' && JSON.stringify(message.content).includes('Go usage limit exceeded'))
+          if (!savedError) await Bun.sleep(50)
+        }
+        if (!savedError) {
+          throw new Error('the saved history lost the quota error identity or upstream detail')
+        }
+        if (failure.transcriptMessageId !== savedError.id) throw new Error('live and saved quota errors lost their shared transcript identity')
+
+        const next = socket.messages.length
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'reply after switching providers', next)
+        const recovered = socket.messages.slice(next)
+        if (recovered.some(message => message.type === 'error') || !streamedText(recovered).trim()) {
+          throw new Error('the same session did not recover after switching providers')
+        }
+
+        const rateSocket = await ctx.openSocket(await ctx.createSession())
+        try {
+          rateSocket.send({ type: 'set_runtime_config', providerId, modelId: 'fixture-model' })
+          const rateStart = rateSocket.messages.length
+          rateSocket.send({ type: 'user_message', content: 'TEMPORARY_RATE_LIMIT_FIXTURE' })
+          await rateSocket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'temporary 429 to recover', rateStart)
+          const rateFrames = rateSocket.messages.slice(rateStart)
+          if (!rateFrames.some(message => message.type === 'api_retry') ||
+            !streamedText(rateFrames).includes('TEMPORARY_RATE_RECOVERED') || temporaryRequests !== 2) {
+            throw new Error(`temporary 429 did not retry and recover (requests: ${temporaryRequests})`)
+          }
+        } finally {
+          rateSocket.close()
+        }
+      } finally {
+        socket?.close()
+        if (providerId) await fetch(`${ctx.baseUrl}/api/providers/${providerId}`, { method: 'DELETE' })
+        await upstream.stop(true)
+      }
+    },
+
+    async 'mock-upstream-error-recovers'(ctx) {
+      for (const sample of [
+        { trigger: UPSTREAM_ERROR_TRIGGER, message: UPSTREAM_ERROR_MESSAGE, code: undefined, authentication: undefined },
+        { trigger: KIMI_USAGE_LIMIT_TRIGGER, message: KIMI_USAGE_LIMIT_MESSAGE, code: 'billing_error', authentication: false },
+        { trigger: GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, message: GOOGLE_ADC_QUOTA_PROJECT_MESSAGE, code: 'authentication_failed', authentication: true },
+      ]) {
+        const socket = await ctx.openSocket(await ctx.createSession())
+        try {
+          ctx.pinRuntime(socket)
+          const start = socket.messages.length
+          socket.send({ type: 'user_message', content: `${sample.trigger}: this request should fail upstream.` })
+          const failure = await socket.waitFor(
+            (m) => m.type === 'error' || (m.type === 'message_complete' && streamedText(socket.messages.slice(start)).length === 0),
+            ctx.stepTimeoutMs,
+            `an error frame for ${sample.trigger}`,
+            start,
+          )
+          if (failure.type !== 'error') {
+            throw new Error(`${sample.trigger} completed silently with no error shown to the user`)
+          }
+          if (sample.code && failure.code !== sample.code) {
+            throw new Error(`${sample.trigger} returned ${failure.code}, expected ${sample.code}`)
+          }
+          const detail = String(failure.message ?? '')
+          if (!detail.includes(sample.message)) throw new Error(`${sample.trigger} lost the upstream error message: ${detail}`)
+          if (sample.authentication !== undefined && /\/login|Failed to authenticate/i.test(detail) !== sample.authentication) {
+            throw new Error(`${sample.trigger} showed incorrect authentication guidance: ${detail}`)
+          }
+          // Let the failed turn finish settling before the next prompt.
+          await socket.waitFor(
+            (m) => m.type === 'message_complete' || (m.type === 'session_state_changed' && m.state === 'idle'),
+            ctx.stepTimeoutMs,
+            'failed turn to settle',
+            start,
+          ).catch(() => undefined)
+
+          const next = socket.messages.length
+          socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+          await socket.waitFor((m) => m.type === 'message_complete', ctx.stepTimeoutMs, 'message_complete after an upstream error', next)
+          const recovered = socket.messages.slice(next)
+          if (recovered.some((m) => m.type === 'error') || !streamedText(recovered).trim()) {
+            throw new Error(`the session did not answer again after ${sample.trigger}`)
+          }
+        } finally {
+          socket.close()
+        }
       }
     },
   }

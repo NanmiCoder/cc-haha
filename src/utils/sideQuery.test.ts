@@ -45,7 +45,7 @@ async function withCapturedRequests<T>(
       const body = await request.json() as Record<string, any>
       requests.push(body)
       headers.push(request.headers)
-      if (model === 'claude-fable-5-1' &&
+      if ((model === 'claude-fable-5-1' || model === 'claude-fable-5-2') &&
         (body.tool_choice?.type === 'tool' || body.tool_choice?.type === 'any' ||
           body.thinking?.type === 'disabled' || 'temperature' in body)) {
         return Response.json({ type: 'error', error: {
@@ -86,8 +86,9 @@ async function withCapturedRequests<T>(
   }
 }
 
-test('permission explanations work with Fable 5.1 without forced tool choice', async () => {
-  const { result, requests, headers } = await withCapturedRequests('claude-fable-5-1', () =>
+for (const fableModel of ['claude-fable-5-1', 'claude-fable-5-2']) {
+test(`permission explanations work with ${fableModel} without forced tool choice`, async () => {
+  const { result, requests, headers } = await withCapturedRequests(fableModel, () =>
     generatePermissionExplanation({
       toolName: 'Bash', toolInput: { command: 'ls' },
       signal: new AbortController().signal,
@@ -102,6 +103,7 @@ test('permission explanations work with Fable 5.1 without forced tool choice', a
   expect(JSON.stringify(requests[0]?.system)).toContain('explain_command')
   expect(requests[0]?.tools.map((tool: any) => tool.name)).toEqual(['explain_command'])
 })
+}
 
 test('Fable side classifiers retain output headroom and omit incompatible sampling controls', async () => {
   const { requests } = await withCapturedRequests('claude-fable-5-1', () => sideQuery({

@@ -37,7 +37,7 @@ import {
 } from './permission.js'
 import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from './session-recovery.js'
 import { SessionSelectionController } from './session-selection.js'
-import { syncImPermissionState } from './permission-sync.js'
+import { deliverImPermissionPrompt, syncImPermissionState } from './permission-sync.js'
 import type { SessionStore } from './session-store.js'
 import type { AttachmentRef, ServerMessage, WsBridge } from './ws-bridge.js'
 import { ImageBlockWatcher } from './attachment/image-block-watcher.js'
@@ -142,6 +142,7 @@ export class ImChatRuntime {
   private readonly httpClient: AdapterHttpClient
   private readonly defaultWorkDir: string
   private readonly dedup: MessageDedup
+  private readonly pendingInboundKeys = new Set<string>()
   private readonly flushIntervalMs: number
   private readonly flushCharThreshold: number
 
@@ -192,33 +193,46 @@ export class ImChatRuntime {
    * their session mutations. The returned promise settles when this message
    * has been handled; adapters normally ignore it, tests await it.
    */
-  handleInbound(message: InboundChatMessage): Promise<void> {
+  async handleInbound(message: InboundChatMessage): Promise<void> {
     const { chatId, dedupKey } = message
-    if (!chatId || adapterMigrationLifecycle.isQuiescing) return Promise.resolve()
-    if (dedupKey && !this.dedup.tryRecord(`${this.port.platform}:${dedupKey}`)) {
-      return Promise.resolve()
-    }
+    if (!chatId || adapterMigrationLifecycle.isQuiescing) return
 
     const text = message.text.trim()
     const hasAttachments = message.hasAttachments
       ?? ((message.attachments?.length ?? 0) > 0 || Boolean(message.loadAttachments))
-    if (!text && !hasAttachments) return Promise.resolve()
+    if (!text && !hasAttachments) return
+    const key = dedupKey ? `${this.port.platform}:${dedupKey}` : ''
+    if (key && (this.pendingInboundKeys.has(key) || this.dedup.has(key))) return
+    // Reserve during queueing/downloads, but only retain a replay key after
+    // handling succeeds. A disconnected or rejected send must remain retryable.
+    if (key) this.pendingInboundKeys.add(key)
+    try {
+      // Unpaired strangers must not hold the host awake. Pair synchronously before
+      // admission so the next message can observe the newly authorized sender.
+      if (!isAllowedUser(this.port.platform, message.userId)) {
+        await this.handlePairing({ ...message, text })
+        if (key) this.dedup.tryRecord(key)
+        return
+      }
 
-    // Unpaired strangers must not hold the host awake. Pair synchronously before
-    // admission so the next message can observe the newly authorized sender.
-    if (!isAllowedUser(this.port.platform, message.userId)) return this.handlePairing({ ...message, text })
-
-    return enqueueInboundPowerActivity(
-      this.httpClient,
-      chatId,
-      lease => this.routeInbound({ ...message, text }, hasAttachments, lease),
-      async err => {
-        this.port.setBusy?.(chatId, false)
-        const detail = err instanceof Error ? err.message : String(err)
-        console.error(`${this.port.logPrefix} Failed to handle message for ${chatId}:`, err)
-        await this.notifySafely(chatId, `处理消息失败：${detail}`)
-      },
-    )
+      await enqueueInboundPowerActivity(
+        this.httpClient,
+        chatId,
+        async lease => {
+          if (await this.routeInbound({ ...message, text }, hasAttachments, lease)) {
+            if (key) this.dedup.tryRecord(key)
+          }
+        },
+        async err => {
+          this.port.setBusy?.(chatId, false)
+          const detail = err instanceof Error ? err.message : String(err)
+          console.error(`${this.port.logPrefix} Failed to handle message for ${chatId}:`, err)
+          await this.notifySafely(chatId, `处理消息失败：${detail}`)
+        },
+      )
+    } finally {
+      if (key) this.pendingInboundKeys.delete(key)
+    }
   }
 
   private async handlePairing(message: InboundChatMessage): Promise<void> {
@@ -236,33 +250,35 @@ export class ImChatRuntime {
     message: InboundChatMessage,
     hasAttachments: boolean,
     lease?: InboundPowerLease,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const { chatId, userId, text } = message
 
     if (!isAllowedUser(this.port.platform, userId)) {
       await this.handlePairing(message)
-      return
+      return true
     }
 
-    if (!hasAttachments && (await this.tryHandleCommand(chatId, text, lease))) return
+    if (!hasAttachments) {
+      const handled = await this.tryHandleCommand(chatId, text, lease)
+      if (handled !== null) return handled
+    }
 
     const decision = hasAttachments
       ? null
       : parsePermissionCommand(text, this.pendingPermissions.get(chatId))
     if (decision) {
-      await this.applyPermissionDecision(chatId, decision)
-      return
+      return this.applyPermissionDecision(chatId, decision)
     }
 
-    if (!hasAttachments && await this.sessionSelection.handleInput(chatId, text)) return
+    if (!hasAttachments && await this.sessionSelection.handleInput(chatId, text)) return true
 
     if (!hasAttachments && this.pendingProjectSelection.has(chatId)) {
       if (text) await this.startNewSession(chatId, text)
-      return
+      return true
     }
 
     const ready = await this.ensureSession(chatId)
-    if (!ready) return
+    if (!ready) return false
 
     // Only now — sender authorized, session bound, still inside this chat's
     // queue — is it safe to pull the bytes down.
@@ -270,7 +286,7 @@ export class ImChatRuntime {
       ?? (message.loadAttachments ? await message.loadAttachments() : [])
 
     const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
-    if (!effective && attachments.length === 0) return
+    if (!effective && attachments.length === 0) return false
 
     this.port.setBusy?.(chatId, true)
     this.getRuntimeState(chatId).state = 'thinking'
@@ -288,17 +304,19 @@ export class ImChatRuntime {
       this.getRuntimeState(chatId).state = 'idle'
       await this.port.sendNotice(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
     }
+    return sent
   }
 
-  /** Returns true when `text` was a command and has been fully handled. */
-  private async tryHandleCommand(chatId: string, text: string, lease?: InboundPowerLease): Promise<boolean> {
+  /** null means ordinary text; false means a command failed and can be retried. */
+  private async tryHandleCommand(chatId: string, text: string, lease?: InboundPowerLease): Promise<boolean | null> {
     if (HELP_ALIASES.has(text)) {
       await this.port.sendNotice(chatId, formatImHelp())
       return true
     }
     if (STATUS_ALIASES.has(text)) {
-      await this.port.sendNotice(chatId, await this.buildStatusText(chatId))
-      return true
+      const status = await this.buildStatusText(chatId)
+      await this.port.sendNotice(chatId, status)
+      return status !== SESSION_RECONNECT_NOTICE
     }
     if (PROJECTS_ALIASES.has(text)) {
       await this.showProjectPicker(chatId)
@@ -317,39 +335,39 @@ export class ImChatRuntime {
       const result = await this.ensureExistingSession(chatId)
       if (result.status !== 'restored') {
         await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
-        return true
+        return result.status !== 'unavailable'
       }
-      this.bridge.sendStopGeneration(chatId)
-      await this.port.sendNotice(chatId, '已发送停止信号。')
-      return true
+      const sent = this.bridge.sendStopGeneration(chatId)
+      await this.notifySafely(chatId, sent ? '已发送停止信号。' : '停止信号发送失败，请检查会话状态。')
+      return sent
     }
     if (CLEAR_ALIASES.has(text)) {
       const result = await this.ensureExistingSession(chatId)
       if (result.status !== 'restored') {
         await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
-        return true
+        return result.status !== 'unavailable'
       }
       this.clearTransientChatState(chatId)
       const sent = this.bridge.sendUserMessage(chatId, '/clear', undefined, lease?.id)
       if (sent && lease) lease.transferred = true
       if (sent) this.getRuntimeState(chatId).state = 'thinking'
-      await this.port.sendNotice(
+      await this.notifySafely(
         chatId,
         sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。',
       )
-      return true
+      return sent
     }
-    return false
+    return null
   }
 
   private async applyPermissionDecision(
     chatId: string,
     decision: PermissionDecision,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pending = this.pendingPermissions.get(chatId)
     if (!pending?.has(decision.requestId)) {
       await this.port.sendNotice(chatId, `未找到待确认的权限请求：${decision.requestId}`)
-      return
+      return true
     }
     const sent = this.bridge.sendPermissionResponse(
       chatId,
@@ -362,10 +380,11 @@ export class ImChatRuntime {
       const runtime = this.getRuntimeState(chatId)
       runtime.pendingPermissionCount = Math.max(0, runtime.pendingPermissionCount - 1)
     }
-    await this.port.sendNotice(
+    await this.notifySafely(
       chatId,
       sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
     )
+    return sent
   }
 
   // ---------- server stream ----------
@@ -422,25 +441,16 @@ export class ImChatRuntime {
         break
 
       case 'permission_request': {
-        let pending = this.pendingPermissions.get(chatId)
-        if (!pending) {
-          pending = new Set()
-          this.pendingPermissions.set(chatId, pending)
-        }
-        // The server re-announces a request when its auto-answer deadline changes;
-        // the prompt has already been sent, so a repeat must not notify again.
-        if (pending.has(msg.requestId)) break
-        runtime.pendingPermissionCount += 1
-        runtime.state = 'permission_pending'
-        pending.add(msg.requestId)
-        this.port.setBusy?.(chatId, false)
-        // Close the in-flight reply first: the approval prompt is a separate
-        // message and must not be swallowed by an editing stream.
-        await this.finishResponse(chatId)
-        await this.port.sendNotice(
-          chatId,
-          `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
-        )
+        await deliverImPermissionPrompt(chatId, msg.requestId, runtime, this.pendingPermissions, async (isCurrent) => {
+          this.port.setBusy?.(chatId, false)
+          // Close the reply before sending the separate approval prompt.
+          await this.finishResponse(chatId)
+          if (!isCurrent()) return
+          await this.port.sendNotice(
+            chatId,
+            `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`,
+          )
+        })
         break
       }
 

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { fetchWechatMediaResource } from './media-network.js'
 
 export const WECHAT_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 export const WECHAT_DEFAULT_BOT_TYPE = '3'
@@ -71,6 +72,7 @@ export type WechatMessageItem = {
   video_item?: {
     media?: WechatCdnMedia
     thumb_media?: WechatCdnMedia
+    video_size?: number
   }
   ref_msg?: {
     title?: string
@@ -82,6 +84,42 @@ export type WechatCdnMedia = {
   encrypt_query_param?: string
   aes_key?: string
   full_url?: string
+  encrypt_type?: number
+}
+
+/** Bounded, authenticated media API calls. Errors deliberately omit response bodies. */
+export async function requestWechatMediaApi(params: {
+  baseUrl: string
+  token: string
+  endpoint: 'getuploadurl' | 'sendmessage'
+  payload: Record<string, unknown>
+  timeoutMs?: number
+  signal?: AbortSignal
+}): Promise<Record<string, unknown>> {
+  const body = JSON.stringify({ ...params.payload, base_info: buildBaseInfo() })
+  const response = await fetchWechatMediaResource({
+    url: new URL(`ilink/bot/${params.endpoint}`, ensureTrailingSlash(params.baseUrl)).toString(),
+    service: 'api',
+    init: { method: 'POST', headers: buildHeaders({ token: params.token, body }), body },
+    maxBytes: 64 * 1024,
+    timeoutMs: params.timeoutMs ?? API_TIMEOUT_MS,
+    signal: params.signal,
+  })
+  let parsed: unknown
+  try { parsed = JSON.parse(response.bytes.toString('utf8')) } catch {
+    throw new Error(`WeChat ${params.endpoint} returned invalid JSON`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`WeChat ${params.endpoint} returned invalid response`)
+  }
+  const record = parsed as Record<string, unknown>
+  for (const key of ['ret', 'errcode']) {
+    if (record[key] !== undefined && (typeof record[key] !== 'number' || record[key] !== 0)) {
+      const code = typeof record[key] === 'number' ? record[key] : 'invalid'
+      throw new Error(`WeChat ${params.endpoint} returned ${code}`)
+    }
+  }
+  return record
 }
 
 export type WechatMessage = {
@@ -232,9 +270,9 @@ export async function getWechatUpdates(params: {
   token: string
   getUpdatesBuf?: string
   timeoutMs?: number
+  signal?: AbortSignal
 }): Promise<WechatGetUpdatesResp> {
-  try {
-    const rawText = await apiPostFetch({
+  const rawText = await apiPostFetch({
       baseUrl: params.baseUrl,
       endpoint: 'ilink/bot/getupdates',
       body: JSON.stringify({
@@ -244,14 +282,16 @@ export async function getWechatUpdates(params: {
       token: params.token,
       timeoutMs: params.timeoutMs ?? GET_UPDATES_TIMEOUT_MS,
       label: 'wechatGetUpdates',
+      signal: params.signal,
     })
-    return JSON.parse(rawText) as WechatGetUpdatesResp
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      return { ret: 0, msgs: [], get_updates_buf: params.getUpdatesBuf }
-    }
-    throw err
+  const response = JSON.parse(rawText)
+  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('wechatGetUpdates invalid response')
+  if (response.msgs !== undefined && !Array.isArray(response.msgs)) throw new Error('wechatGetUpdates invalid messages')
+  if (response.get_updates_buf !== undefined && typeof response.get_updates_buf !== 'string') throw new Error('wechatGetUpdates invalid cursor')
+  for (const key of ['ret', 'errcode']) {
+    if (response[key] !== undefined && typeof response[key] !== 'number') throw new Error('wechatGetUpdates invalid status')
   }
+  return response as WechatGetUpdatesResp
 }
 
 export async function sendWechatText(params: {
@@ -261,12 +301,13 @@ export async function sendWechatText(params: {
   text: string
   contextToken?: string
   timeoutMs?: number
+  clientId?: string
 }): Promise<void> {
   const body = {
     msg: {
       from_user_id: '',
       to_user_id: params.to,
-      client_id: `claude-code-haha-wechat-${crypto.randomUUID()}`,
+      client_id: params.clientId ?? `claude-code-haha-wechat-${crypto.randomUUID()}`,
       message_type: 2,
       message_state: 2,
       item_list: params.text ? [{ type: 1, text_item: { text: params.text } }] : undefined,
@@ -377,9 +418,13 @@ async function apiPostFetch(params: {
   token?: string
   timeoutMs: number
   label: string
+  signal?: AbortSignal
 }): Promise<string> {
   const url = new URL(params.endpoint, ensureTrailingSlash(params.baseUrl))
   const controller = new AbortController()
+  params.signal?.throwIfAborted()
+  const abort = () => controller.abort()
+  params.signal?.addEventListener('abort', abort, { once: true })
   const timer = setTimeout(() => controller.abort(), params.timeoutMs)
   try {
     const res = await fetch(url.toString(), {
@@ -389,10 +434,11 @@ async function apiPostFetch(params: {
       signal: controller.signal,
     })
     const rawText = await res.text()
-    if (!res.ok) throw new Error(`${params.label} ${res.status}: ${rawText}`)
+    if (!res.ok) throw new WechatApiError(`${params.label} HTTP ${res.status}`, res.status, undefined)
     return rawText
   } finally {
     clearTimeout(timer)
+    params.signal?.removeEventListener('abort', abort)
   }
 }
 
@@ -430,28 +476,36 @@ function randomWechatUin(): string {
   return Buffer.from(String(uint32), 'utf-8').toString('base64')
 }
 
+export class WechatApiError extends Error {
+  constructor(message: string, readonly httpStatus?: number, readonly apiCode?: number) {
+    super(message)
+    this.name = 'WechatApiError'
+  }
+}
+
+/** Tencent's documented account-session pause code, distinct from network errors. */
+export function isWechatAuthenticationError(error: unknown): boolean {
+  return error instanceof WechatApiError && (error.httpStatus === 401 || error.apiCode === -14)
+}
+
 function assertWechatApiOk(rawText: string, label: string): void {
-  if (!rawText.trim()) return
 
   let body: unknown
   try {
     body = JSON.parse(rawText)
   } catch {
-    return
+    throw new Error(`${label} invalid response`)
   }
 
-  if (!body || typeof body !== 'object') return
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error(`${label} invalid response`)
 
   const record = body as Record<string, unknown>
-  const code = typeof record.ret === 'number'
-    ? record.ret
-    : typeof record.errcode === 'number'
-      ? record.errcode
-      : 0
-  if (code === 0) return
-
-  const message = typeof record.errmsg === 'string' ? record.errmsg : rawText
-  throw new Error(`${label} returned ${code}: ${message}`)
+  for (const key of ['ret', 'errcode']) {
+    if (record[key] !== undefined && typeof record[key] !== 'number') throw new Error(`${label} invalid response`)
+    if (typeof record[key] === 'number' && record[key] !== 0) {
+      throw new WechatApiError(`${label} returned ${record[key]}`, undefined, record[key])
+    }
+  }
 }
 
 function isLoginFresh(login: ActiveLogin): boolean {

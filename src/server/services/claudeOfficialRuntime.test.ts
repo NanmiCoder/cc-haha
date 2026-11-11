@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { getClaudeOfficialDefaultModelId, resolveClaudeOfficialRuntimeModel } from './claudeOfficialRuntime.js'
+import {
+  CLAUDE_OFFICIAL_DEFAULT_MODELS,
+  getClaudeOfficialDefaultModelId,
+  normalizeExplicitClaudeOfficialModelId,
+  resolveClaudeOfficialRuntimeModel,
+} from './claudeOfficialRuntime.js'
 import { hahaOAuthService } from './hahaOAuthService.js'
 
 describe('Claude official runtime model selection', () => {
@@ -70,5 +75,20 @@ describe('Claude official runtime model selection', () => {
   test('leaves provider selection alone without managed OAuth', async () => {
     tokenSpy.mockResolvedValue(null)
     expect(await resolveClaudeOfficialRuntimeModel('opus')).toBeNull()
+  })
+})
+
+describe('Claude official runtime Fable identity', () => {
+  test('the Fable alias and slot resolve to the latest Fable', () => {
+    expect(CLAUDE_OFFICIAL_DEFAULT_MODELS.fable).toBe('claude-fable-5-2')
+    expect(normalizeExplicitClaudeOfficialModelId('fable')).toBe('claude-fable-5-2')
+    expect(normalizeExplicitClaudeOfficialModelId('fable[1m]')).toBe('claude-fable-5-2')
+  })
+
+  test('an explicitly chosen Fable release is never rewritten', () => {
+    expect(normalizeExplicitClaudeOfficialModelId('claude-fable-5-2')).toBe('claude-fable-5-2')
+    expect(normalizeExplicitClaudeOfficialModelId('claude-fable-5-2[1m]')).toBe('claude-fable-5-2')
+    expect(normalizeExplicitClaudeOfficialModelId('claude-fable-5-1')).toBe('claude-fable-5-1')
+    expect(normalizeExplicitClaudeOfficialModelId('claude-fable-5')).toBe('claude-fable-5')
   })
 })

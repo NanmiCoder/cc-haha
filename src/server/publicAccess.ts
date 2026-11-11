@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,8 +19,29 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = () => randomBytes(32).toString('base64url')
 type Device = { id: string, name: string, createdAt: number, expiresAt: number, tokenHash: string }
 type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected', clientType: 'browser' | 'native' }
-type Stored = Record<string, unknown> & { version: number, devices: Device[] }
+/** `lastPublicUrl`: the address phones were last given, so a new one can be announced. */
+type Stored = Record<string, unknown> & { version: number, devices: Device[], lastPublicUrl?: unknown }
 type RemoteData = WebSocketData & { remoteDeviceId: string }
+
+/**
+ * Proof that a computer holding this device's pairing produced `message`. The
+ * phone derives the same key from its own credential (`sha256hex(token)`), so a
+ * relayed or LAN answer cannot be forged without the pairing.
+ */
+export const deviceMac = (tokenHash: string, message: string) =>
+  createHmac('sha256', tokenHash).update(message).digest('base64url')
+
+const PRIVATE_V4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/
+/** Addresses a phone on the same network (or tailnet) may reach the gateway's port at. */
+export function lanAddresses(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): string[] {
+  const found: string[] = []
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal && PRIVATE_V4.test(entry.address) && !found.includes(entry.address)) found.push(entry.address)
+    }
+  }
+  return found.slice(0, 6)
+}
 
 /** v0 did not store devices. Never adopt legacy LAN bearer tokens as remote sessions. */
 export function migratePublicAccessStore(value: unknown): Stored {
@@ -146,11 +167,19 @@ type Dependencies = {
   now?: () => number
   resolveProxy?: () => Promise<{ proxyUrl: string | null }>
   verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean>
+  /**
+   * The public address differs from the one phones were last given (a Quick
+   * Tunnel restarted). `sign` proves the address to one paired device.
+   */
+  onOriginChanged?: (change: { url: string, previous: string, sign: (deviceId: string) => string | undefined }) => void
+  networkInterfaces?: () => NodeJS.Dict<os.NetworkInterfaceInfo[]>
 }
 
 /** The listener, not attacker-controlled headers, establishes the remote trust boundary. */
 export class PublicAccessServer {
   private server: Server<RemoteData> | null = null
+  /** Answers only the address lookup, on every interface (see `lanFetch`). */
+  private lan: Server<undefined> | null = null
   private publicUrl: string | null = null
   private gatewayId: string | null = null
   private stored: Stored = { version: 1, devices: [] }
@@ -271,6 +300,22 @@ export class PublicAccessServer {
       this.terminateAllStreams()
     }
     this.publicUrl = url.origin
+    this.load()
+    const previous = typeof this.stored.lastPublicUrl === 'string' ? this.stored.lastPublicUrl : null
+    if (previous === url.origin) return
+    this.stored.lastPublicUrl = url.origin
+    this.persist()
+    if (!previous) return
+    const announced = url.origin
+    try {
+      this.deps.onOriginChanged?.({
+        url: announced, previous,
+        sign: deviceId => {
+          const device = this.stored.devices.find(d => d.id === deviceId && d.expiresAt > this.now())
+          return device && deviceMac(device.tokenHash, `cc-haha-host-url\n${announced}`)
+        },
+      })
+    } catch { /* announcing is best-effort; the gateway is up either way */ }
   }
 
   /**
@@ -321,6 +366,17 @@ export class PublicAccessServer {
       fetch: (req, server) => this.fetch(req, server),
       websocket: { maxPayloadLength: 1024 * 1024, ...this.socketHandlers },
     })
+    // The gateway stays loopback-only (a wildcard bind could share the fixed port
+    // with another loopback service). The LAN gets only the address lookup, on
+    // the next port, so a phone finds it again after the public URL changed.
+    if (this.server.port < 65535) {
+      try {
+        this.lan = Bun.serve({
+          hostname: '0.0.0.0', port: this.server.port + 1, idleTimeout: 10,
+          fetch: (req, server) => this.lanFetch(req, server.requestIP(req)?.address ?? ''),
+        })
+      } catch { this.lan = null }
+    }
     this.timer = setInterval(() => this.prune(), 10_000)
     this.timer.unref()
     return this.status()
@@ -347,6 +403,8 @@ export class PublicAccessServer {
     }
     if (!options.restart) this.terminateAllStreams()
     listener?.stop(true)
+    this.lan?.stop(true)
+    this.lan = null
     return this.status()
   }
 
@@ -432,6 +490,27 @@ export class PublicAccessServer {
     return input as Record<string, unknown>
   }
 
+  /**
+   * A request from the local network (not Cloudflare, not P2P). Its only use is
+   * telling a paired phone the current public address after a Quick Tunnel
+   * restart. Nothing secret crosses the network: the phone sends a hash of its
+   * pairing hash and a nonce, and checks the answer's MAC with its credential.
+   */
+  private lanFetch(request: Request, address: string): Response {
+    try {
+      const url = new URL(request.url)
+      if (request.method !== 'GET' || url.pathname !== `${PREFIX}/locate`) return json({ error: 'Not found' }, 404)
+      if (!this.rate(`locate:${address}`, 30) || !this.rate('locate-global', 300)) return json({ error: 'Too many requests' }, 429)
+      const id = url.searchParams.get('id') ?? ''
+      const nonce = url.searchParams.get('nonce') ?? ''
+      if (!/^[a-f0-9]{64}$/.test(id) || !/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) return json({ error: 'Invalid request' }, 400)
+      const publicUrl = this.publicUrl
+      const device = this.stored.devices.find(d => d.expiresAt > this.now() && hash(d.tokenHash) === id)
+      if (!device || !publicUrl) return json({ error: 'Not found' }, 404)
+      return json({ url: publicUrl, mac: deviceMac(device.tokenHash, `cc-haha-locate\n${nonce}\n${publicUrl}`) })
+    } catch { return json({ error: 'Invalid request' }, 400) }
+  }
+
   async fetch(request: Request, server: Upgrader): Promise<Response | undefined> {
     try {
       if (!this.server || !this.publicUrl) return json({ error: 'Remote access unavailable' }, 503)
@@ -448,6 +527,13 @@ export class PublicAccessServer {
       // Direct-connection signaling: an authenticated device only, with its own
       // limit, so it never competes with the shared pairing budget.
       if (route === 'api/public-access/p2p' || route.startsWith('api/public-access/p2p/')) return await this.p2pRoute(request, route)
+      if (route === 'api/public-access/locator' && request.method === 'GET') {
+        const device = this.deviceFor(request)
+        if (!device) return json({ error: 'Device pairing required' }, 401)
+        if (!this.rate(`locator:${device.id}`, 30)) return json({ error: 'Too many requests' }, 429)
+        if (!this.lan) return json({ port: null, addresses: [] })
+        return json({ port: this.lan.port, addresses: lanAddresses((this.deps.networkInterfaces ?? os.networkInterfaces)()) })
+      }
       if (route.startsWith('api/public-access/')) {
         if (!this.rate('pairing-global', 180)) return json({ error: 'Too many requests' }, 429)
         if (route === 'api/public-access/session' && request.method === 'GET') {

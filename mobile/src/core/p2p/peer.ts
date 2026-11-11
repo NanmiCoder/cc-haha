@@ -22,8 +22,10 @@ export type RtcPeer = {
   close(): void
 }
 export type RtcFactory = (config: { iceServers: unknown[] }) => RtcPeer
+/** 电脑的直连信息：开没开、用哪些 STUN 服务器、收集候选等多久。 */
+export type P2PInfo = { available: boolean; iceServers: unknown[]; gatherMs?: number }
 export type Signaling = {
-  info(): Promise<{ available: boolean; iceServers: unknown[]; gatherMs?: number }>
+  info(): Promise<P2PInfo>
   offer(body: { v: 1; sdp: string; candidates: string[]; complete: boolean }): Promise<{ peerId: string; sdp: string; candidates: string[]; complete: boolean }>
   candidates(body: { peerId: string; candidates: string[]; complete: boolean }): Promise<{ candidates: string[]; complete: boolean }>
 }
@@ -56,6 +58,8 @@ export class P2PPeer {
   #awaiting?: number
   #health?: unknown
   #pongTimer?: unknown
+  /** 正在等自己那个 pong 的确认（见 `check`），按 ping 序号。 */
+  #checks = new Map<number, (alive: boolean) => void>()
 
   constructor(
     private options: {
@@ -169,11 +173,32 @@ export class P2PPeer {
     }
   }
 
+  /**
+   * 这条路眼下还通不通（回到前台时问）：发一个 ping，限时内等到它自己的 pong 才算通。
+   * 挂起期间压在缓冲里的旧帧、之前心跳的 pong 只能说明那时还通，不算数。
+   * 不通也不在这里断开，由调用方决定。
+   */
+  check(timeoutMs = P2P_PONG_MS): Promise<boolean> {
+    if (!this.open) return Promise.resolve(false)
+    const n = ++this.#ping
+    return new Promise<boolean>((resolve) => {
+      const timer = this.options.timers.set(() => settle(false), timeoutMs)
+      const settle = (alive: boolean) => {
+        if (!this.#checks.delete(n)) return
+        this.options.timers.clear(timer)
+        resolve(alive)
+      }
+      this.#checks.set(n, settle)
+      if (!this.send('ctl', encodeFrame({ t: 'ping', n }))) settle(false)
+    })
+  }
+
   close() {
     if (this.#closed) return
     this.#closed = true
     this.options.timers.clear(this.#health)
     this.options.timers.clear(this.#pongTimer)
+    for (const settle of [...this.#checks.values()]) settle(false)
     try {
       this.#peer?.close()
     } catch {
@@ -189,7 +214,13 @@ export class P2PPeer {
     this.#awaiting = undefined
     this.#misses = 0
     this.options.timers.clear(this.#pongTimer)
-    if (data.startsWith('{"t":"pong"') && decodeFrame(data)?.header.t === 'pong') return
+    if (data.startsWith('{"t":"pong"')) {
+      const header = decodeFrame(data)?.header
+      if (header?.t === 'pong') {
+        this.#checks.get(header.n)?.(true)
+        return
+      }
+    }
     this.options.onFrame(data)
   }
 

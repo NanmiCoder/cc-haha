@@ -1792,6 +1792,10 @@ function strongHistoryMessageIdentities(message: UIMessage): string[] {
     ]))
   }
 
+  if (message.type === 'error' && nonEmptyHistoryIdentityPart(message.transcriptMessageId)) {
+    identities.push(JSON.stringify(['transcript', 'error', message.transcriptMessageId!.trim()]))
+  }
+
   if (message.type === 'tool_use' || message.type === 'tool_result') {
     const toolUseId = nonEmptyHistoryIdentityPart(message.originalToolUseId) ??
       nonEmptyHistoryIdentityPart(message.toolUseId)
@@ -5941,6 +5945,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           type: 'error',
           message: msg.message,
           code: msg.code,
+          ...(msg.transcriptMessageId ? { transcriptMessageId: msg.transcriptMessageId } : {}),
           ...(msg.businessErrorCode ? { businessErrorCode: msg.businessErrorCode } : {}),
           timestamp: Date.now(),
         }
@@ -8390,6 +8395,27 @@ export function mapHistoryMessagesToUiMessages(
         ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
         timestamp,
       })
+      continue
+    }
+    if (msg.type === 'assistant' && (msg.isApiErrorMessage || msg.error)) {
+      const message = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.flatMap((block: unknown) => {
+              if (!block || typeof block !== 'object') return []
+              const value = block as { type?: unknown; text?: unknown }
+              return value.type === 'text' && typeof value.text === 'string' ? [value.text] : []
+            }).join('\n')
+          : ''
+      if (message.trim()) {
+        uiMessages.push({
+          id: msg.id || nextId(), type: 'error', message,
+          code: msg.error || 'API_ERROR',
+          ...(msg.id ? { transcriptMessageId: msg.id } : {}),
+          ...(msg.businessErrorCode ? { businessErrorCode: msg.businessErrorCode } : {}),
+          timestamp,
+        })
+      }
       continue
     }
     if (msg.type === 'assistant' && typeof msg.content === 'string') {

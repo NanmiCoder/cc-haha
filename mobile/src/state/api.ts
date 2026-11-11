@@ -1,14 +1,19 @@
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { fetch as expoFetch } from 'expo/fetch'
+import { getRandomBytes } from 'expo-crypto'
 import { addNetworkStateListener, getNetworkStateAsync } from 'expo-network'
 import { AppState, Platform } from 'react-native'
 import { ApiClient, type FetchAdapter } from '../core/client'
 import { foregroundTransitions } from '../core/appVisibility'
 import { HostLink, hostLinks } from '../core/hostLink'
+import { HostRelocator } from '../core/hostRelocator'
 import { watchNetwork } from '../core/networkWatcher'
 import { nativeRtc } from '../core/p2p/rtc'
+import { locate } from '../core/relocate'
 import type { SocketFactory, SocketLike } from '../core/sessionTransport'
 import type { Host } from '../core/types'
 import { isH5 } from './h5'
+import { HostLocators } from './storage'
 
 /** The H5 page's requests carry the remote device cookie; nothing else sends cookies. */
 export const fetchCredentials = isH5 ? 'same-origin' : 'omit'
@@ -79,10 +84,24 @@ export function hostLinkFor(host: Host, credential: string) {
   }))
 }
 
+/**
+ * Finds a remote computer again after its public address changed (see
+ * core/hostRelocator.ts). AppContext attaches the host registry to it.
+ */
+export const hostRelocator = new HostRelocator({
+  hints: new HostLocators(AsyncStorage),
+  locate: (hints, credential) =>
+    locate({ hints, credential, fetch: cloudflareFetch, random: getRandomBytes }),
+})
+
 export function createApiClient(host: Host, credential: string) {
   const link = hostLinkFor(host, credential)
-  return new ApiClient(host, credential, {
+  // Every request to a remote computer reports how it ended, in one place.
+  const relocatable = host.auth === 'remote' && !host.page && Platform.OS !== 'web'
+  const client: ApiClient = new ApiClient(host, credential, {
     fetch: link?.fetch ?? cloudflareFetch,
     credentials: fetchCredentials,
+    ...(relocatable ? { onSettled: (error) => hostRelocator.settled(client, error) } : {}),
   })
+  return client
 }

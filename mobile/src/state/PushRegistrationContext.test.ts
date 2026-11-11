@@ -60,7 +60,7 @@ function runCase(body: string) {
     let registerImpl = async () => ({ registered: true, status: 'registered', id: 'fixture-registration' })
     let revokeImpl = async () => {}
     const inputs = [], signals = []
-    const client = {
+    let client = {
       host: { id: 'fixture-host', name: 'Fixture Mac', url: 'http://192.168.1.8:3456', auth: 'lan' },
       get: async (_path, options) => { hostCalls++; signals.push(options.signal); return hostImpl() },
     }
@@ -456,6 +456,26 @@ test('the background service stops for a computer when every reminder is off or 
     retry(); await flush()
     assert.equal(status().issue, 'network')
     assert.equal(duty.length, kept)
+  `)
+})
+
+test('a remote computer that moved hands its new address to the Android background service', () => {
+  runCase(`
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
+    tokenImpl = async () => 'p'.repeat(43)
+    const remoteHost = { id: 'fixture-host', name: 'Fixture Mac', url: 'https://old-tunnel.trycloudflare.com', auth: 'remote' }
+    client = { ...client, host: remoteHost }
+    await render()
+    assert.equal(duty.at(-1)[1].origin, 'https://old-tunnel.trycloudflare.com')
+    // After a relocation useConnection rebuilds the client for the new address.
+    client = { ...client, host: { ...remoteHost, url: 'https://new-tunnel.trycloudflare.com' } }
+    await render()
+    assert.equal(registerCalls, 2)
+    assert.deepEqual(duty.at(-1), ['fixture-host', {
+      hostId: 'fixture-host', hostName: 'Fixture Mac', origin: 'https://new-tunnel.trycloudflare.com',
+      headers: { Authorization: 'Bearer fixture-credential', Origin: 'https://new-tunnel.trycloudflare.com' },
+      token: 'p'.repeat(43),
+    }])
   `)
 })
 

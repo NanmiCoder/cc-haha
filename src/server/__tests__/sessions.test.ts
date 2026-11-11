@@ -1707,6 +1707,18 @@ describe('SessionService', () => {
     expect(messages).toHaveLength(2)
   })
 
+  it('preserves API error identity and provider details when reading transcript history', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      { ...makeAssistantEntry('API Error: Go usage limit exceeded'), isApiErrorMessage: true, error: 'billing_error' },
+      makeAssistantEntry('A normal answer mentioning API Error.'),
+    ])
+    const messages = await service.getSessionMessages(sessionId)
+    expect(messages[0]).toMatchObject({ type: 'assistant', isApiErrorMessage: true, error: 'billing_error' })
+    expect(messages[1]).not.toHaveProperty('isApiErrorMessage')
+  })
+
   it('preserves structured toolUseResult metadata for AskUserQuestion answers', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-project', sessionId, [
@@ -10240,7 +10252,7 @@ describe('Sessions API', () => {
     expect(body.activityState).toBe('idle')
   })
 
-  it('POST /api/sessions/:id/chat should queue a message', async () => {
+  it('POST /api/sessions/:id/chat rejects unimplemented delivery without leaving running activity', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-api-test', sessionId, [
       makeSnapshotEntry(),
@@ -10252,18 +10264,17 @@ describe('Sessions API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: 'New question' }),
     })
-    expect(res.status).toBe(202)
+    expect(res.status).toBe(501)
 
-    const body = (await res.json()) as { messageId: string; status: string }
-    expect(body.status).toBe('queued')
-    expect(body.messageId).toBeTruthy()
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('REST_CHAT_NOT_IMPLEMENTED')
+    expect(body.message).toContain('WebSocket')
+    expect(body).not.toHaveProperty('messageId')
 
     const statusRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
     const status = (await statusRes.json()) as { state: string; activityState: string }
-    expect(status.state).toBe('thinking')
-    expect(status.activityState).toBe('running')
-
-    await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/stop`, { method: 'POST' })
+    expect(status.state).toBe('idle')
+    expect(status.activityState).toBe('idle')
   })
 
   it('POST /api/sessions/:id/chat/stop should reset state to idle', async () => {

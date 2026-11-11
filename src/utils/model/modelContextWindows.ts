@@ -14,6 +14,7 @@ export const MODEL_MAX_OUTPUT_TOKENS_MIN = 1_024
 export const MODEL_MAX_OUTPUT_TOKENS_MAX = MODEL_CONTEXT_WINDOW_MAX
 
 const DIRECT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-fable-5-2': 1_000_000,
   'claude-fable-5-1': 1_000_000,
   'claude-fable-5': 1_000_000,
   'claude-opus-5-5': 1_000_000,

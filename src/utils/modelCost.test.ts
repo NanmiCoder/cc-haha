@@ -1,6 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import { calculateCostFromTokens, getModelPricingString } from './modelCost.js'
 
+describe('Fable 5.2 query costs', () => {
+  test('is cheaper than Fable 5.1 at $8/$40 with $0.20 cached reads', () => {
+    expect(calculateCostFromTokens('claude-fable-5-2', {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadInputTokens: 1_000_000,
+      cacheCreationInputTokens: 1_000_000,
+    })).toBe(58.2)
+    expect(calculateCostFromTokens('claude-fable-5-1', {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    })).toBe(60)
+    expect(getModelPricingString('claude-fable-5-2')).toBe('$8/$40 per Mtok')
+  })
+})
+
 describe('Fable 5.1 query costs', () => {
   const cacheReads = {
     inputTokens: 0,

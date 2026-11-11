@@ -843,6 +843,35 @@ describe('chatStore history mapping', () => {
     expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'prewarm_session' })
   })
 
+  it('restores a provider error as an error rather than an assistant reply', () => {
+    const messages = [
+      { id: 'quota-error', type: 'assistant', timestamp: '2026-04-06T00:00:00.000Z', isApiErrorMessage: true, error: 'billing_error', content: [{ type: 'text', text: 'API Error: Go usage limit exceeded' }] },
+      { id: 'reply', type: 'assistant', timestamp: '2026-04-06T00:00:01.000Z', content: [{ type: 'text', text: 'A normal answer mentioning API Error.' }] },
+    ] as MessageEntry[]
+    expect(mapHistoryMessagesToUiMessages(messages)).toMatchObject([
+      { type: 'error', code: 'billing_error', message: 'API Error: Go usage limit exceeded' },
+      { type: 'assistant_text', content: 'A normal answer mentioning API Error.' },
+    ])
+  })
+
+  it('coalesces an error arriving during cold history without merging an older identical error', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise(resolve => { resolveHistory = resolve }))
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ messages: [], chatState: 'thinking' }) } })
+    const loading = useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'error', code: 'billing_error', message: 'Go usage limit exceeded', transcriptMessageId: 'current-error',
+    })
+    resolveHistory({ messages: ['older-error', 'current-error'].map(id => ({
+      id, type: 'assistant', timestamp: '2026-04-06T00:00:00.000Z', isApiErrorMessage: true, error: 'billing_error',
+      content: [{ type: 'text', text: 'Go usage limit exceeded' }],
+    })) })
+    await loading
+    const errors = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages.filter(message => message.type === 'error') ?? []
+    expect(errors).toHaveLength(2)
+    expect(errors.map(message => message.transcriptMessageId).sort()).toEqual(['current-error', 'older-error'])
+  })
+
   it('preserves thinking blocks when restoring transcript history', () => {
     const messages: MessageEntry[] = [
       {

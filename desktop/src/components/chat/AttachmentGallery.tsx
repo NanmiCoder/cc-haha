@@ -104,13 +104,15 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
   // newest one. Not always the last card: uploads are listed ahead of
   // references. Every composer attachment carries an id.
   const composerTrayRef = useRef<HTMLDivElement>(null)
-  const shownAttachmentIdsRef = useRef<ReadonlyArray<string | undefined> | null>(null)
+  // The gallery mounts only after the first attachment is added, so its first
+  // render must be compared with an empty tray rather than skipped.
+  const shownAttachmentIdsRef = useRef<ReadonlyArray<string | undefined>>([])
   useLayoutEffect(() => {
     const ids = attachments.map((attachment) => attachment.id)
     const shown = shownAttachmentIdsRef.current
     shownAttachmentIdsRef.current = ids
     const tray = composerTrayRef.current
-    if (!tray || !shown) return
+    if (!tray) return
     let addedIndex = -1
     for (let index = ids.length - 1; index >= 0 && addedIndex < 0; index -= 1) {
       if (ids[index] && !shown.includes(ids[index])) addedIndex = index

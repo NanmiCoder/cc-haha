@@ -344,6 +344,7 @@ function getPublicAccessManager() {
   publicAccessManager = new PublicAccessManager({
     desktopRoot: unpackedRoot(),
     onState: status => { void getP2PTerminator().update(p2pHostWanted(status)) },
+    powerSaveBlocker,
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -636,6 +637,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, async () => publicAccessStatus(await getPublicAccessManager().stop()))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => publicAccessStatus(getPublicAccessManager().setAutoStart(payload as boolean)))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, (_event, payload) => publicAccessStatus(getPublicAccessManager().setP2PEnabled(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetKeepAwake, (_event, payload) => publicAccessStatus(getPublicAccessManager().setKeepAwake(payload as boolean)))
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
   registerHandler(ELECTRON_IPC_CHANNELS.powerGetIdleActionState, async () => (await getIdlePowerService()).getState())
   registerHandler(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, async (_event, payload) => (await getIdlePowerService()).configure(payload as IdlePowerSettings))
@@ -979,7 +981,7 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
     window.webContents.setZoomFactor(normalizeZoomFactor(payload))

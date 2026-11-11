@@ -10,7 +10,7 @@ export type DingTalkStreamingState = {
 
 type DingTalkStreamingDelivery = {
   getOrCreateCard: () => Promise<DingTalkAiCardInstance | null> | null
-  sendText: (text: string) => Promise<void>
+  sendText: (text: string, onChunkDelivered?: (remainingText: string) => void) => Promise<void>
   aiCards: Pick<DingTalkAiCardService, 'stream' | 'finish'>
 }
 
@@ -27,9 +27,12 @@ export async function flushDingTalkAiCard(
 
   const cardPromise = delivery.getOrCreateCard()
   const card = cardPromise ? await cardPromise : null
+  const sendRemainingText = () => delivery.sendText(fullText, remainingText => {
+    state.streamingCardText.set(chatId, remainingText)
+  })
   if (!card) {
     if (isComplete) {
-      await delivery.sendText(fullText)
+      await sendRemainingText()
       // Terminal markdown delivery consumes the same state as a finished card.
       // Otherwise finishAndReset will finalize this text a second time.
       resetDingTalkStreamingState(state, chatId)
@@ -48,7 +51,7 @@ export async function flushDingTalkAiCard(
     console.warn('[DingTalk][AICard] stream failed, falling back to markdown:', err instanceof Error ? err.message : err)
     state.streamingCards.delete(chatId)
     if (isComplete) {
-      await delivery.sendText(fullText)
+      await sendRemainingText()
       resetDingTalkStreamingState(state, chatId)
     }
   }

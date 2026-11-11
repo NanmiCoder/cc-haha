@@ -1,15 +1,27 @@
 const { withMainApplication } = require('expo/config-plugins')
 
-const moduleImport =
-  'import com.facebook.react.modules.websocket.WebSocketModule'
-const startMarker = '// cc-haha: pinned WebSocket origin (begin)'
-const endMarker = '// cc-haha: pinned WebSocket origin (end)'
+// In order; missing ones go before the first one already present.
+const imports = [
+  'import app.cchaha.network.CloudflareEdge',
+  'import com.facebook.react.modules.websocket.WebSocketModule',
+]
+const startMarker = '// cc-haha: native network policy (begin)'
+const endMarker = '// cc-haha: native network policy (end)'
+// The block generated before the Cloudflare edge fallback. `expo prebuild`
+// without --clean edits the existing MainApplication, so it is upgraded in place.
+const legacyStartMarker = '// cc-haha: pinned WebSocket origin (begin)'
+const legacyEndMarker = '// cc-haha: pinned WebSocket origin (end)'
 const failure = (detail) =>
   new Error(
-    `withPinnedWebSockets: ${detail}. Refusing to generate Android with redirectable WebSockets.`
+    `withPinnedWebSockets: ${detail}. Refusing to generate Android with redirectable WebSockets or without the Cloudflare edge fallback.`
   )
+const count = (source, text) => source.split(text).length - 1
 
-/** Pin Android's native WebSocket to its requested endpoint, before React starts. */
+/**
+ * Before React starts: pin Android's native WebSocket to its requested
+ * endpoint, and route React Native's HTTP and WebSocket clients through the
+ * Cloudflare edge fallback in `modules/cchaha-network`.
+ */
 function pinWebSockets(source, language) {
   if (language !== 'kt')
     throw failure('Only the Expo Kotlin MainApplication template is supported')
@@ -28,58 +40,87 @@ function pinWebSockets(source, language) {
     throw failure('Unrecognized MainApplication.onCreate template')
   const anchor = anchors[0]
   const indent = anchor[2]
-  const block = [
-    `${indent}${startMarker}`,
-    `${indent}WebSocketModule.setCustomClientBuilder { builder ->`,
-    `${indent}  builder.followRedirects(false)`,
-    `${indent}  builder.followSslRedirects(false)`,
-    `${indent}}`,
-    `${indent}${endMarker}`,
-  ].join(eol)
-  const importLines =
-    source.match(
-      /^import com\.facebook\.react\.modules\.websocket\.WebSocketModule[^\r\n]*/gm
-    ) ?? []
+  const placed = (lines) =>
+    [anchor[0], ...lines.map((line) => `${indent}${line}`)].join(eol)
+  const block = placed([
+    startMarker,
+    'CloudflareEdge.install(this)',
+    'WebSocketModule.setCustomClientBuilder { builder ->',
+    '  builder.followRedirects(false)',
+    '  builder.followSslRedirects(false)',
+    '  CloudflareEdge.configureWebSocket(builder)',
+    '}',
+    endMarker,
+  ])
+  const legacyBlock = placed([
+    legacyStartMarker,
+    'WebSocketModule.setCustomClientBuilder { builder ->',
+    '  builder.followRedirects(false)',
+    '  builder.followSslRedirects(false)',
+    '}',
+    legacyEndMarker,
+  ])
+  const importLines = imports.map((line) => {
+    const name = line.slice('import '.length).replace(/\./g, '\\.')
+    const found =
+      source.match(new RegExp(`^import ${name}\\b[^\\r\\n]*`, 'gm')) ?? []
+    if (found.length > 1 || (found.length === 1 && found[0] !== line))
+      throw failure(`Conflicting ${line.split('.').pop()} import`)
+    return found.length === 1
+  })
+  if (/\bsetOkHttpClientFactory\b/.test(source))
+    throw failure('Another OkHttp client factory already exists')
+
+  let result = source
   if (
-    importLines.length > 1 ||
-    (importLines.length === 1 && importLines[0] !== moduleImport)
-  )
-    throw failure('Conflicting WebSocketModule import')
-  const setters = source.match(/\bsetCustomClientBuilder\b/g) ?? []
-  if (source.includes(startMarker) || source.includes(endMarker)) {
-    const startCount = source.split(startMarker).length - 1
-    const endCount = source.split(endMarker).length - 1
-    const expected = `${anchor[0]}${eol}${block}`
+    result.includes(legacyStartMarker) ||
+    result.includes(legacyEndMarker)
+  ) {
     if (
-      startCount !== 1 ||
-      endCount !== 1 ||
-      setters.length !== 1 ||
-      importLines.length !== 1 ||
-      !source.includes(expected)
+      count(result, legacyStartMarker) !== 1 ||
+      count(result, legacyEndMarker) !== 1 ||
+      count(result, 'setCustomClientBuilder') !== 1 ||
+      result.includes(startMarker) ||
+      !result.includes(legacyBlock)
     )
       throw failure('Existing WebSocket policy was modified or moved')
-    return source
+    result = result.replace(legacyBlock, () => block)
   }
-  if (setters.length)
-    throw failure('Another custom WebSocket client builder already exists')
-  const packages = [
-    ...source.matchAll(
-      /^package [A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*[ \t]*(?=\r?$)/gm
-    ),
-  ]
-  if (packages.length !== 1)
-    throw failure('Unrecognized Kotlin package declaration')
-  let result =
-    source.slice(0, anchor.index) +
-    anchor[0] +
-    eol +
-    block +
-    source.slice(anchor.index + anchor[0].length)
-  if (!importLines.length)
-    result = result.replace(
-      packages[0][0],
-      `${packages[0][0]}${eol}${eol}${moduleImport}`
+  const setters = count(result, 'setCustomClientBuilder')
+  if (result.includes(startMarker) || result.includes(endMarker)) {
+    if (
+      count(result, startMarker) !== 1 ||
+      count(result, endMarker) !== 1 ||
+      setters !== 1 ||
+      !result.includes(block)
     )
+      throw failure('Existing network policy was modified or moved')
+  } else {
+    if (setters)
+      throw failure('Another custom WebSocket client builder already exists')
+    result = result.replace(anchor[0], () => block)
+  }
+
+  const missing = imports.filter((_, index) => !importLines[index])
+  if (missing.length) {
+    const present = imports.find((_, index) => importLines[index])
+    if (present) {
+      result = result.replace(present, () =>
+        [...missing, present].join(eol)
+      )
+    } else {
+      const packages = [
+        ...result.matchAll(
+          /^package [A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*[ \t]*(?=\r?$)/gm
+        ),
+      ]
+      if (packages.length !== 1)
+        throw failure('Unrecognized Kotlin package declaration')
+      result = result.replace(packages[0][0], () =>
+        [packages[0][0], '', ...missing].join(eol)
+      )
+    }
+  }
   return result
 }
 

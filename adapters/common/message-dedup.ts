@@ -22,12 +22,8 @@ export class MessageDedup {
 
   /** Returns true if this is a NEW message, false if duplicate. */
   tryRecord(id: string): boolean {
+    if (this.has(id)) return false
     const now = Date.now()
-    const existing = this.store.get(id)
-
-    if (existing !== undefined && now - existing < this.ttlMs) {
-      return false // duplicate
-    }
 
     // Evict oldest if at capacity
     if (this.store.size >= this.maxEntries) {
@@ -37,6 +33,15 @@ export class MessageDedup {
 
     this.store.set(id, now)
     return true
+  }
+
+  /** Check an accepted message without recording an unaccepted attempt. */
+  has(id: string): boolean {
+    const existing = this.store.get(id)
+    if (existing === undefined) return false
+    if (Date.now() - existing < this.ttlMs) return true
+    this.store.delete(id)
+    return false
   }
 
   private sweep(): void {

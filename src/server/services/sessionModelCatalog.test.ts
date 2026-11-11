@@ -37,6 +37,13 @@ describe('session model catalog and strict runtime identity', () => {
     expect(() => resolveSessionRuntimeFromCatalog({ runtime: { providerId: 'second', modelId: 'shared-model', effortLevel: 'invalid' } }, parent, catalog)).toThrow('effort')
     expect(() => resolveSessionRuntimeFromCatalog({ runtime: parent, model: 'shared-model' }, parent, catalog)).toThrow('not both')
   })
+  test('the Claude catalog offers Fable 5.2 and keeps the older Fable releases selectable', () => {
+    const catalog = buildSessionModelCatalog([], { ...accounts, claude: true })
+    const fableIds = catalog.filter(item => item.providerId === null && item.modelId.startsWith('claude-fable-')).map(item => item.modelId)
+    expect(fableIds).toEqual(['claude-fable-5-2', 'claude-fable-5-1', 'claude-fable-5'])
+    expect(catalog.find(item => item.modelId === 'claude-fable-5-2')?.supportedEfforts)
+      .toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
   test('all official accounts are catalogued locally and Claude external ID normalizes to null', () => {
     const catalog = buildSessionModelCatalog([], { claude: true, openai: true, grok: true, deepseek: true })
     expect(new Set(catalog.map(item => item.providerId))).toEqual(new Set([null, 'openai-official', 'grok-official', 'deepseek-account']))
