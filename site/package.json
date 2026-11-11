@@ -11,7 +11,7 @@
     "postbuild": "node scripts/prepare-static-output.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "check:docs": "node scripts/check-docs.mjs",
-    "test": "node --test \"src/**/*.test.js\"",
+    "test": "node --test --test-concurrency=2 \"src/**/*.test.js\" \"scripts/*.test.mjs\"",
     "check": "npm run typecheck && npm run check:docs && npm test",
     "typecheck": "tsc -p tsconfig.json"
   },
