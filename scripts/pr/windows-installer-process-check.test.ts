@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -234,17 +234,22 @@ SectionEnd
     }
     const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-nsis-fallback-'))
     const env = createSandboxedTestEnvironment(path.join(root, 'home'))
+    // Setup knows the install directory through a junction (a Programs folder
+    // moved to another drive), while Windows reports process paths resolved.
+    const realInstallDir = path.join(root, 'Moved Programs', 'Claude Code Haha')
     const installDir = path.join(root, 'Claude Code Haha')
     // A sibling whose name starts with the install directory's: Windows
     // Terminal's console host and the app's bundled one share an image name.
-    const foreignDir = `${installDir} Tools`
+    const foreignDir = `${realInstallDir} Tools`
     const bundledDir = path.join(installDir, 'resources')
     mkdirSync(foreignDir, { recursive: true })
+    mkdirSync(realInstallDir, { recursive: true })
+    symlinkSync(realInstallDir, installDir, 'junction')
     mkdirSync(bundledDir, { recursive: true })
     const probeSource = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'ping.exe')
     const probes: ChildProcess[] = []
-    const startProbe = async (directory: string) => {
-      const executable = path.join(directory, 'OpenConsole.exe')
+    const startProbe = async (directory: string, imageName = 'OpenConsole.exe') => {
+      const executable = path.join(directory, imageName)
       copyFileSync(probeSource, executable)
       const probe = spawn(executable, ['-t', '127.0.0.1'], { stdio: 'ignore', windowsHide: true })
       probes.push(probe)
@@ -314,6 +319,14 @@ SectionEnd
       expect(withBundled).toContain(`OpenConsole.exe (PID ${bundledPid});`)
       expect(withBundled).not.toContain(`PID ${foreignPid})`)
       expect(withBundled).toContain('Close them manually.')
+      probes.pop()!.kill()
+
+      // Names only this app uses still block wherever the process runs from.
+      const sidecarPid = await startProbe(foreignDir, 'claude-sidecar.exe')
+      const withSidecar = check()
+      expect(withSidecar).toStartWith('result=0; ')
+      expect(withSidecar).toContain(`claude-sidecar.exe (PID ${sidecarPid});`)
+      expect(withSidecar).not.toContain(`PID ${bundledPid})`)
     } finally {
       await Promise.all(probes.map(probe => new Promise<void>((resolve) => {
         if (probe.exitCode !== null || probe.signalCode !== null) return resolve()
@@ -483,7 +496,9 @@ SectionEnd
     expect(installerSmoke).toContain('Install-directory parent process detection')
     expect(installerSmoke).toContain('Install-directory process was not terminated')
     // Only a helper inside the install directory blocks the no-CLR fallback; a
-    // same-named one next to it (other software) runs through a whole reinstall.
+    // same-named one next to it (other software) stays alive through the next
+    // no-CLR stage without changing its outcome: exit 20 on the elevated CI
+    // runner (22 before the fix), a completed reinstall for a trusted user.
     expect(installerSmoke).toContain("$installHelperProbe = Join-Path $installDir 'OpenConsole.exe'")
     expect(installerSmoke).toMatch(
       /No-CLR install-directory bundled-helper process reinstall' -ExpectedExitCode 22/,
