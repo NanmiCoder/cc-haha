@@ -880,6 +880,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             ref={workbenchPanelRef}
             data-testid="workbench-panel"
             data-workspace-layout={isWorkspaceFull ? 'full' : workspaceLayout}
+            data-wallpaper-surface="surface"
             className={`flex h-full flex-col bg-[var(--color-surface)] ${isWorkspaceFull ? 'min-w-0' : WORKSPACE_SPLIT_PANEL_BOUNDS}`}
             style={isWorkspaceFull
               ? { flex: '1 1 auto' }

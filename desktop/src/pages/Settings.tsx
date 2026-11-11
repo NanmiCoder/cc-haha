@@ -90,7 +90,10 @@ export function DesktopSettings() {
   )
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)]">
+    <div
+      className="flex-1 flex flex-col overflow-hidden bg-[var(--color-surface)]"
+      data-wallpaper-surface="surface"
+    >
       <div className="flex-1 flex overflow-hidden">
         {/* The rail sits on the page's own paper, separated by the rule, the
             way every other secondary panel in the app is (the workbench, the
@@ -100,6 +103,7 @@ export function DesktopSettings() {
         <nav
           data-testid="settings-navigation"
           aria-label={t('settings.title')}
+          data-wallpaper-surface="surface"
           className="w-[216px] flex-shrink-0 flex flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-[18px]"
         >
           <div className="px-2.5 pb-2 text-xs font-semibold text-[var(--color-text-tertiary)]">{t('settings.title')}</div>

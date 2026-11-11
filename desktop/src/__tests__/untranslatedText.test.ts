@@ -61,6 +61,7 @@ const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'pages/settings/GeneralSettings.tsx': ['http://127.0.0.1:7890', 'tvly-...'], // example proxy, key format
   'pages/settings/ProviderSettings.tsx': ['sk-...'], // key format
   'pages/settings/PublicAccessSettings.tsx': ['/remote'], // URL path
+  'pages/settings/WallpaperSettings.tsx': ['px'], // unit
 }
 
 /** Untranslated text that needs a wider change first. Keep this short; each entry says why. */
