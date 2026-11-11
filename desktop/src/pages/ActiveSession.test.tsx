@@ -886,6 +886,57 @@ describe('ActiveSession task polling', () => {
     expect(screen.getByRole('heading', { name: 'Regular Header Session' })).toBeInTheDocument()
   })
 
+  it('switches only the notified session workspace and refreshes Git without another chat message', async () => {
+    const source = '/workspace/project'
+    const worktreePath = `${source}/.claude/worktrees/entered`
+    let liveCwd = source
+    const oldInfo = { branch: 'main', repoName: 'project', workDir: source, changedFiles: 0, worktree: null }
+    let resolveOld!: (info: typeof oldInfo) => void
+    const oldRequest = new Promise<typeof oldInfo>(resolve => { resolveOld = resolve })
+    let switching = false
+    sessionApiMocks.getGitInfo.mockImplementation(async (id: string) => !switching && id === 'entered' ? oldRequest : ({
+      branch: id === 'entered' && liveCwd === worktreePath ? 'worktree-entered' : 'main',
+      repoName: 'project', workDir: id === 'entered' ? liveCwd : '/workspace/other', changedFiles: 0,
+      worktree: id === 'entered' && liveCwd === worktreePath
+        ? { enabled: true, path: worktreePath, plannedPath: worktreePath, sourceWorkDir: source, slug: 'entered', branch: 'worktree-entered' }
+        : null,
+    }))
+    useSessionStore.setState({ sessions: ['entered', 'other'].map(id => ({
+      id, title: id, createdAt: '2026-08-07T00:00:00.000Z', modifiedAt: '2026-08-07T00:00:00.000Z',
+      messageCount: 1, projectPath: source, projectRoot: id === 'entered' ? source : '/workspace/other',
+      workDir: id === 'entered' ? source : '/workspace/other', workDirExists: true,
+    })), activeSessionId: 'entered', isLoading: false, error: null })
+    useTabStore.setState({ tabs: ['entered', 'other'].map(sessionId => ({ sessionId, title: sessionId, type: 'session' as const, status: 'idle' as const })), activeTabId: 'entered' })
+    useChatStore.setState({ sessions: Object.fromEntries(['entered', 'other'].map(id => [id, {
+      ...createDefaultSessionState(), connectionState: 'connected' as const,
+      messages: [{ id: `${id}-ready`, type: 'assistant_text' as const, content: 'ready', timestamp: 1 }],
+    }])) })
+    render(<ActiveSession />)
+    await waitFor(() => expect(sessionApiMocks.getGitInfo).toHaveBeenCalledWith('entered'))
+    expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument()
+
+    liveCwd = worktreePath
+    switching = true
+    act(() => useChatStore.getState().handleServerMessage('entered', { type: 'system_notification', subtype: 'init', data: { cwd: worktreePath } }))
+    await waitFor(() => expect(useSessionStore.getState().sessions.find(row => row.id === 'entered')?.workDir).toBe(worktreePath))
+    expect(await screen.findByTestId('session-worktree-indicator')).toHaveTextContent('entered')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); resolveOld(oldInfo); await oldRequest })
+    expect(screen.getByTestId('session-worktree-indicator')).toHaveTextContent('entered')
+    expect(useSessionStore.getState().sessions.find(row => row.id === 'entered')?.projectRoot).toBe(source)
+    expect(useSessionStore.getState().sessions.find(row => row.id === 'other')?.workDir).toBe('/workspace/other')
+    expect(useChatStore.getState().sessions.entered?.messages).toHaveLength(1)
+
+    act(() => useTabStore.getState().setActiveTab('other'))
+    await waitFor(() => expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument())
+    act(() => useTabStore.getState().setActiveTab('entered'))
+    expect(await screen.findByTestId('session-worktree-indicator')).toHaveTextContent('entered')
+
+    liveCwd = source
+    act(() => useChatStore.getState().handleServerMessage('entered', { type: 'system_notification', subtype: 'init', data: { cwd: source } }))
+    await waitFor(() => expect(screen.queryByTestId('session-worktree-indicator')).not.toBeInTheDocument())
+    expect(useSessionStore.getState().sessions.find(row => row.id === 'entered')?.workDir).toBe(source)
+  })
+
   it('shows a loading state for historical sessions while messages are loading', () => {
     const sessionId = 'history-visible-loading-session'
 
