@@ -28,6 +28,17 @@ const DEFAULT_VOICE_INPUT_PREFERENCES = {
   correctionModelId: null,
 }
 
+const DEFAULT_WALLPAPER_PREFERENCES = {
+  enabled: false,
+  focusX: 50,
+  focusY: 50,
+  zoom: 100,
+  blur: 8,
+  panelOpacity: 88,
+  file: null,
+  updatedAt: null,
+}
+
 async function setup() {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'desktop-ui-preferences-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
@@ -76,7 +87,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(result.exists).toBe(false)
     expect(result.preferences).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 11,
       profile: {
         displayName: 'cc-haha',
         subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -84,6 +95,7 @@ describe('DesktopUiPreferencesService', () => {
         avatarUpdatedAt: null,
       },
       pet: DEFAULT_PET_PREFERENCES,
+      wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
       projectDisplayNames: {},
@@ -133,7 +145,7 @@ describe('DesktopUiPreferencesService', () => {
 
     expect(before.exists).toBe(true)
     expect(before.preferences).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -142,6 +154,7 @@ describe('DesktopUiPreferencesService', () => {
         avatarUpdatedAt: null,
       },
       pet: DEFAULT_PET_PREFERENCES,
+      wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
       projectDisplayNames: {
@@ -156,7 +169,7 @@ describe('DesktopUiPreferencesService', () => {
       },
     })
     expect(after).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       profile: {
         displayName: 'cc-haha',
@@ -165,6 +178,7 @@ describe('DesktopUiPreferencesService', () => {
         avatarUpdatedAt: null,
       },
       pet: DEFAULT_PET_PREFERENCES,
+      wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
       projectDisplayNames: {
@@ -324,7 +338,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       profile: {
         displayName: 'Local Operator',
@@ -403,7 +417,7 @@ describe('DesktopUiPreferencesService', () => {
     const after = await new DesktopUiPreferencesService().updatePetPreferences({ enabled: true })
 
     expect(after).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       pet: {
         futurePetField: { keep: 'pet-too' },
@@ -502,7 +516,7 @@ describe('DesktopUiPreferencesService', () => {
     })
 
     expect(after).toEqual({
-      schemaVersion: 7,
+      schemaVersion: 11,
       profile: {
         displayName: 'Claude Captain',
         subtitle: 'local.example/profile',
@@ -510,6 +524,7 @@ describe('DesktopUiPreferencesService', () => {
         avatarUpdatedAt: null,
       },
       pet: DEFAULT_PET_PREFERENCES,
+      wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
       projectAdditionalDirectories: {},
       projectDisplayNames: {},
@@ -575,6 +590,202 @@ describe('DesktopUiPreferencesService', () => {
     await expect(service.updateProfileAvatar(new Uint8Array([1, 2, 3]), 'image/gif')).rejects.toThrow('Unsupported avatar type')
     await expect(service.updateProfileAvatar(new Uint8Array(2_000_001), 'image/png')).rejects.toThrow('Avatar image is too large')
   })
+
+  test('adds wallpaper defaults when upgrading a schema-7 file and keeps unknown wallpaper fields', async () => {
+    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'cc-haha', 'desktop-ui.json'),
+      JSON.stringify({
+        schemaVersion: 7,
+        futureField: { keep: true },
+        wallpaper: {
+          enabled: true,
+          dim: 150,
+          blur: -3,
+          panelOpacity: 20,
+          file: 'wallpaper/png.exe',
+          futureWallpaper: { keep: 'wallpaper' },
+        },
+      }),
+      'utf-8',
+    )
+
+    const { preferences } = await new DesktopUiPreferencesService().readPreferences()
+
+    expect(preferences.schemaVersion).toBe(11)
+    expect(preferences.wallpaper).toEqual({
+      enabled: false,
+      focusX: 50,
+      focusY: 50,
+      zoom: 100,
+      blur: 0,
+      panelOpacity: 60,
+      file: null,
+      updatedAt: null,
+      futureWallpaper: { keep: 'wallpaper' },
+    })
+    expect(preferences.futureField).toEqual({ keep: true })
+  })
+
+  test('drops the retired dim field when upgrading a schema-9 file', async () => {
+    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'cc-haha', 'desktop-ui.json'),
+      JSON.stringify({
+        schemaVersion: 9,
+        wallpaper: { enabled: true, dim: 48, blur: 8, panelOpacity: 88, file: 'wallpaper.png', updatedAt: 'then' },
+      }),
+      'utf-8',
+    )
+
+    const { preferences } = await new DesktopUiPreferencesService().readPreferences()
+
+    expect(preferences.schemaVersion).toBe(11)
+    expect(preferences.wallpaper).toEqual({
+      enabled: true,
+      focusX: 50,
+      focusY: 50,
+      zoom: 100,
+      blur: 8,
+      panelOpacity: 88,
+      file: 'wallpaper.png',
+      updatedAt: 'then',
+    })
+    expect('dim' in (preferences.wallpaper as Record<string, unknown>)).toBe(false)
+  })
+
+  test('normalizes focal values and drops the retired fit field', async () => {
+    await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'cc-haha', 'desktop-ui.json'),
+      JSON.stringify({
+        schemaVersion: 9,
+        wallpaper: { enabled: false, fit: 'stretch', focusX: 140, focusY: -8, zoom: 999, blur: 8, panelOpacity: 88 },
+      }),
+      'utf-8',
+    )
+
+    const { preferences } = await new DesktopUiPreferencesService().readPreferences()
+
+    expect('fit' in (preferences.wallpaper as Record<string, unknown>)).toBe(false)
+    expect(preferences.wallpaper.focusX).toBe(100)
+    expect(preferences.wallpaper.focusY).toBe(0)
+    expect(preferences.wallpaper.zoom).toBe(300)
+  })
+
+  test('rejects malformed wallpaper patches and clamps accepted values on write', async () => {
+    const service = new DesktopUiPreferencesService()
+
+    await expect(service.updateWallpaperPreferences([])).rejects.toThrow('Wallpaper preferences must be an object')
+    await expect(service.updateWallpaperPreferences({ enabled: 'yes' })).rejects.toThrow('enabled must be a boolean')
+    await expect(service.updateWallpaperPreferences({ focusX: 101 })).rejects.toThrow(
+      'focusX must be a number between 0 and 100',
+    )
+    await expect(service.updateWallpaperPreferences({ focusY: -1 })).rejects.toThrow(
+      'focusY must be a number between 0 and 100',
+    )
+    await expect(service.updateWallpaperPreferences({ zoom: 99 })).rejects.toThrow(
+      'zoom must be a number between 100 and 300',
+    )
+    await expect(service.updateWallpaperPreferences({ zoom: 301 })).rejects.toThrow(
+      'zoom must be a number between 100 and 300',
+    )
+    await expect(service.updateWallpaperPreferences({ blur: -1 })).rejects.toThrow('blur must be a number between 0 and 40')
+    await expect(service.updateWallpaperPreferences({ panelOpacity: 59 })).rejects.toThrow(
+      'panelOpacity must be a number between 60 and 100',
+    )
+    await expect(service.updateWallpaperPreferences({ focusX: '35' })).rejects.toThrow(
+      'focusX must be a number between 0 and 100',
+    )
+
+    const after = await service.updateWallpaperPreferences({
+      focusX: 55.6,
+      focusY: 24,
+      zoom: 180.4,
+      blur: 12,
+      panelOpacity: 72,
+    })
+
+    expect(after.wallpaper).toEqual({
+      ...DEFAULT_WALLPAPER_PREFERENCES,
+      focusX: 56,
+      focusY: 24,
+      zoom: 180,
+      blur: 12,
+      panelOpacity: 72,
+    })
+    expect((await readDesktopUiFile()).wallpaper).toEqual(after.wallpaper)
+  })
+
+  test('keeps wallpaper disabled until an image exists and preserves its settings across patches', async () => {
+    const service = new DesktopUiPreferencesService()
+
+    const enabledWithoutImage = await service.updateWallpaperPreferences({
+      enabled: true,
+      focusX: 20,
+      zoom: 220,
+    })
+    expect(enabledWithoutImage.wallpaper.enabled).toBe(false)
+    expect(enabledWithoutImage.wallpaper.focusX).toBe(20)
+    expect(enabledWithoutImage.wallpaper.zoom).toBe(220)
+
+    // A new picture must not inherit the previous one's framing.
+    const uploaded = await service.updateWallpaperImage(new Uint8Array([137, 80, 78, 71]), 'image/png')
+    expect(uploaded.wallpaper.file).toBe('wallpaper.png')
+    expect(typeof uploaded.wallpaper.updatedAt).toBe('string')
+    expect(uploaded.wallpaper.enabled).toBe(false)
+    expect(uploaded.wallpaper.focusX).toBe(50)
+    expect(uploaded.wallpaper.focusY).toBe(50)
+    expect(uploaded.wallpaper.zoom).toBe(100)
+
+    const enabled = await service.updateWallpaperPreferences({ enabled: true })
+    expect(enabled.wallpaper.enabled).toBe(true)
+    expect(enabled.wallpaper.file).toBe('wallpaper.png')
+  })
+
+  test('replaces stale wallpaper variants and clears all managed images', async () => {
+    const service = new DesktopUiPreferencesService()
+    const wallpaperDir = path.join(tmpDir, 'cc-haha', 'wallpaper')
+    await service.updateWallpaperImage(new Uint8Array([137, 80, 78, 71]), 'image/png')
+    await fs.writeFile(path.join(wallpaperDir, 'wallpaper.webp'), new Uint8Array([1, 2, 3]))
+    await fs.writeFile(path.join(wallpaperDir, 'local-note.txt'), 'keep me', 'utf-8')
+
+    const afterJpeg = await service.updateWallpaperImage(new Uint8Array([255, 216, 255]), 'image/jpeg')
+    expect(afterJpeg.wallpaper.file).toBe('wallpaper.jpg')
+    await expect(fs.readFile(path.join(wallpaperDir, 'wallpaper.png'))).rejects.toThrow()
+    await expect(fs.readFile(path.join(wallpaperDir, 'wallpaper.webp'))).rejects.toThrow()
+    expect([...await fs.readFile(path.join(wallpaperDir, 'wallpaper.jpg'))]).toEqual([255, 216, 255])
+
+    const cleared = await service.clearWallpaper()
+    expect(cleared.wallpaper).toEqual(DEFAULT_WALLPAPER_PREFERENCES)
+    await expect(fs.readFile(path.join(wallpaperDir, 'wallpaper.jpg'))).rejects.toThrow()
+    await expect(fs.readFile(path.join(wallpaperDir, 'local-note.txt'), 'utf-8')).resolves.toBe('keep me')
+  })
+
+  test('rejects unsupported or oversized wallpaper images', async () => {
+    const service = new DesktopUiPreferencesService()
+
+    await expect(service.updateWallpaperImage(new Uint8Array([1, 2, 3]), 'image/gif')).rejects.toThrow(
+      'Unsupported wallpaper type',
+    )
+    await expect(service.updateWallpaperImage(new Uint8Array(8_000_001), 'image/png')).rejects.toThrow(
+      'Wallpaper image is too large',
+    )
+  })
+
+  test('reads the wallpaper image relative to recorded preferences', async () => {
+    const service = new DesktopUiPreferencesService()
+    await expect(service.readWallpaperImage()).resolves.toBeNull()
+
+    await service.updateWallpaperImage(new Uint8Array([82, 73, 70, 70]), 'image/webp; charset=binary')
+    const image = await service.readWallpaperImage()
+
+    expect(image?.contentType).toBe('image/webp')
+    expect([...(image?.bytes ?? [])]).toEqual([82, 73, 70, 70])
+
+    await fs.unlink(path.join(tmpDir, 'cc-haha', 'wallpaper', 'wallpaper.webp'))
+    await expect(service.readWallpaperImage()).resolves.toBeNull()
+  })
 })
 
 describe('desktop UI preferences API', () => {
@@ -597,7 +808,7 @@ describe('desktop UI preferences API', () => {
     expect(putBody).toEqual({
       ok: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 11,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -605,6 +816,7 @@ describe('desktop UI preferences API', () => {
           avatarUpdatedAt: null,
         },
         pet: DEFAULT_PET_PREFERENCES,
+        wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
         projectAdditionalDirectories: {},
         projectDisplayNames: {},
@@ -626,7 +838,7 @@ describe('desktop UI preferences API', () => {
     expect(getBody).toEqual({
       exists: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 11,
         profile: {
           displayName: 'cc-haha',
           subtitle: 'github.com/NanmiCoder/cc-haha',
@@ -634,6 +846,7 @@ describe('desktop UI preferences API', () => {
           avatarUpdatedAt: null,
         },
         pet: DEFAULT_PET_PREFERENCES,
+        wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
         voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
         projectAdditionalDirectories: {},
         projectDisplayNames: {},
@@ -726,7 +939,7 @@ describe('desktop UI preferences API', () => {
     await expect(putRes.json()).resolves.toMatchObject({
       ok: true,
       preferences: {
-        schemaVersion: 7,
+        schemaVersion: 11,
         pet: {
           enabled: true,
           selectedPetId: 'seedy',
@@ -1004,6 +1217,120 @@ describe('desktop UI preferences API', () => {
       message: 'Method PATCH not allowed',
     })
   })
+
+  test('reads and patches wallpaper preferences through the API', async () => {
+    const initialReq = makeRequest('GET', '/api/desktop-ui/preferences/wallpaper')
+    const initialRes = await handleDesktopUiApi(initialReq.req, initialReq.url, initialReq.segments)
+
+    expect(initialRes.status).toBe(200)
+    await expect(initialRes.json()).resolves.toEqual({
+      exists: false,
+      wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
+    })
+
+    const putReq = makeRequest('PUT', '/api/desktop-ui/preferences/wallpaper', {
+      focusX: 40,
+      focusY: 60,
+      zoom: 150,
+      blur: 10,
+      panelOpacity: 80,
+    })
+    const putRes = await handleDesktopUiApi(putReq.req, putReq.url, putReq.segments)
+    const putBody = await putRes.json() as Record<string, unknown>
+
+    expect(putRes.status).toBe(200)
+    expect(putBody).toMatchObject({
+      ok: true,
+      wallpaper: {
+        enabled: false,
+        focusX: 40,
+        focusY: 60,
+        zoom: 150,
+        blur: 10,
+        panelOpacity: 80,
+        file: null,
+      },
+    })
+
+    const invalidReq = makeRequest('PUT', '/api/desktop-ui/preferences/wallpaper', { zoom: 99 })
+    const invalidRes = await handleDesktopUiApi(invalidReq.req, invalidReq.url, invalidReq.segments)
+    expect(invalidRes.status).toBe(400)
+    await expect(invalidRes.json()).resolves.toMatchObject({
+      error: 'BAD_REQUEST',
+      message: 'zoom must be a number between 100 and 300',
+    })
+  })
+
+  test('uploads, serves, and clears a wallpaper image through the API', async () => {
+    const putReq = makeRequest(
+      'PUT',
+      '/api/desktop-ui/preferences/wallpaper/image',
+      new Uint8Array([137, 80, 78, 71]),
+      'image/png',
+    )
+    const putRes = await handleDesktopUiApi(putReq.req, putReq.url, putReq.segments)
+    const putBody = await putRes.json() as Record<string, unknown>
+
+    expect(putRes.status).toBe(200)
+    expect(putBody).toMatchObject({
+      ok: true,
+      preferences: {
+        wallpaper: {
+          enabled: false,
+          file: 'wallpaper.png',
+        },
+      },
+    })
+
+    const getReq = makeRequest('GET', '/api/desktop-ui/preferences/wallpaper/image')
+    const getRes = await handleDesktopUiApi(getReq.req, getReq.url, getReq.segments)
+
+    expect(getRes.status).toBe(200)
+    expect(getRes.headers.get('Content-Type')).toBe('image/png')
+    expect(getRes.headers.get('Cache-Control')).toBe('no-store')
+    expect([...new Uint8Array(await getRes.arrayBuffer())]).toEqual([137, 80, 78, 71])
+
+    const deleteReq = makeRequest('DELETE', '/api/desktop-ui/preferences/wallpaper/image')
+    const deleteRes = await handleDesktopUiApi(deleteReq.req, deleteReq.url, deleteReq.segments)
+    expect(deleteRes.status).toBe(200)
+    await expect(deleteRes.json()).resolves.toMatchObject({
+      ok: true,
+      preferences: {
+        wallpaper: DEFAULT_WALLPAPER_PREFERENCES,
+      },
+    })
+
+    const missingReq = makeRequest('GET', '/api/desktop-ui/preferences/wallpaper/image')
+    const missingRes = await handleDesktopUiApi(missingReq.req, missingReq.url, missingReq.segments)
+    expect(missingRes.status).toBe(404)
+    await expect(missingRes.json()).resolves.toMatchObject({
+      error: 'NOT_FOUND',
+      message: 'Wallpaper image is not configured',
+    })
+  })
+
+  test('rejects unsupported wallpaper types and methods through the API', async () => {
+    const badTypeReq = makeRequest(
+      'PUT',
+      '/api/desktop-ui/preferences/wallpaper/image',
+      new Uint8Array([1, 2, 3]),
+      'image/gif',
+    )
+    const badTypeRes = await handleDesktopUiApi(badTypeReq.req, badTypeReq.url, badTypeReq.segments)
+    expect(badTypeRes.status).toBe(400)
+    await expect(badTypeRes.json()).resolves.toMatchObject({
+      error: 'BAD_REQUEST',
+      message: 'Unsupported wallpaper type',
+    })
+
+    const patchReq = makeRequest('PATCH', '/api/desktop-ui/preferences/wallpaper')
+    const patchRes = await handleDesktopUiApi(patchReq.req, patchReq.url, patchReq.segments)
+    expect(patchRes.status).toBe(405)
+
+    const unknownReq = makeRequest('GET', '/api/desktop-ui/preferences/wallpaper/gradient')
+    const unknownRes = await handleDesktopUiApi(unknownReq.req, unknownReq.url, unknownReq.segments)
+    expect(unknownRes.status).toBe(404)
+  })
 })
 
 describe('DesktopUiPreferencesService voiceInput section', () => {
@@ -1027,7 +1354,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
     const read = await service.readPreferences()
     expect(read.exists).toBe(true)
     expect(read.preferences).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       pet: { enabled: true },
       voiceInput: DEFAULT_VOICE_INPUT_PREFERENCES,
@@ -1037,7 +1364,7 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
 
     expect(after.voiceInput).toEqual({ ...DEFAULT_VOICE_INPUT_PREFERENCES, language: 'zh' })
     expect(await readDesktopUiFile()).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 11,
       futureField: { keep: true },
       pet: { enabled: true },
       sidebar: { projectOrder: ['/workspace/alpha'] },
