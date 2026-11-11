@@ -87,4 +87,24 @@ describe('applyWallpaper', () => {
     )
     expect(document.documentElement.hasAttribute('data-wallpaper')).toBe(false)
   })
+
+  it('never paints over an active video or web pack', () => {
+    const root = document.documentElement
+    root.setAttribute('data-wallpaper', 'on')
+    root.setAttribute('data-wallpaper-source', 'video')
+    root.style.setProperty('--wallpaper-zoom', '1.3')
+
+    applyWallpaper(
+      { enabled: true, focusX: 30, focusY: 70, zoom: 150, blur: 12, panelOpacity: 77 },
+      'blob:wallpaper-1',
+    )
+    clearWallpaper()
+
+    expect(root.getAttribute('data-wallpaper')).toBe('on')
+    expect(root.style.getPropertyValue('--wallpaper-image')).toBe('')
+    expect(root.style.getPropertyValue('--wallpaper-zoom')).toBe('1.3')
+    root.removeAttribute('data-wallpaper')
+    root.removeAttribute('data-wallpaper-source')
+    root.style.removeProperty('--wallpaper-zoom')
+  })
 })

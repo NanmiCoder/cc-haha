@@ -11,6 +11,7 @@ const browserCapabilities: DesktopHostCapabilities = {
   appMode: false,
   clipboard: false,
   dialogs: false,
+  dynamicWallpaper: false,
   notifications: false,
   previewWebview: false,
   workspaceBrowser: false,
@@ -359,6 +360,26 @@ export const browserHost: DesktopHost = {
       async status() { return null },
       async cancel() { unsupported('Data migration') },
       async onProgress() { return noopUnlisten },
+    },
+  },
+  dynamicWallpaper: {
+    async get() {
+      unsupported('Dynamic wallpapers')
+    },
+    async update() {
+      unsupported('Dynamic wallpapers')
+    },
+    async pickVideo() {
+      unsupported('Dynamic wallpapers')
+    },
+    async pickWeb() {
+      unsupported('Dynamic wallpapers')
+    },
+    async clear() {
+      unsupported('Dynamic wallpapers')
+    },
+    async reload() {
+      unsupported('Dynamic wallpapers')
     },
   },
   adapters: {

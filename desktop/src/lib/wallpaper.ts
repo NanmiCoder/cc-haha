@@ -1,4 +1,5 @@
 import type { DesktopWallpaperPreferences } from '../api/desktopUiPreferences'
+import { WALLPAPER_SOURCE_ATTRIBUTE } from './dynamicWallpaper'
 
 export const MAX_WALLPAPER_EDGE = 2560
 export const WALLPAPER_JPEG_QUALITY = 0.85
@@ -67,11 +68,18 @@ export type AppliedWallpaperPreferences = Pick<
   'enabled' | 'focusX' | 'focusY' | 'zoom' | 'blur' | 'panelOpacity'
 >
 
+function dynamicWallpaperOwnsTheBackground(): boolean {
+  const source = document.documentElement.getAttribute(WALLPAPER_SOURCE_ATTRIBUTE)
+  return source === 'video' || source === 'web'
+}
+
 export function applyWallpaper(
   preferences: AppliedWallpaperPreferences | null,
   objectUrl: string | null,
 ): void {
   if (typeof document === 'undefined') return
+  // A late image hydration must not paint over a video/web pack.
+  if (dynamicWallpaperOwnsTheBackground()) return
   const root = document.documentElement
   if (!preferences?.enabled || !objectUrl) {
     clearWallpaper()
@@ -92,6 +100,7 @@ export function applyWallpaper(
 
 export function clearWallpaper(): void {
   if (typeof document === 'undefined') return
+  if (dynamicWallpaperOwnsTheBackground()) return
   const root = document.documentElement
   root.removeAttribute(WALLPAPER_ATTRIBUTE)
   for (const name of WALLPAPER_VARIABLES) {

@@ -11,6 +11,7 @@ describe('desktop host contract', () => {
       appMode: false,
       clipboard: false,
       dialogs: false,
+      dynamicWallpaper: false,
       notifications: false,
       previewWebview: false,
       workspaceBrowser: false,
@@ -31,6 +32,12 @@ describe('desktop host contract', () => {
     await expect(browserHost.runtime.getServerUrl()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.runtime.getLocalAccessToken()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.dialogs.open({ directory: true })).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.get()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.pickVideo()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.pickWeb()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.update({ enabled: true })).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.clear()).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.dynamicWallpaper.reload()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.shell.openPath('/tmp/report.md')).rejects.toThrow('desktop app runtime')
     await expect(browserHost.terminal.spawn({ cwd: '/tmp', cols: 80, rows: 24 })).rejects.toThrow(
       'desktop app runtime',

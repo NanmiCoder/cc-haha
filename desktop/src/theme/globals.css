@@ -3429,6 +3429,39 @@ html[data-wallpaper="on"] #root {
   background-color: transparent;
 }
 
+/* Video and web-pack wallpapers paint their own layer instead of the
+   pseudo-element. */
+html[data-wallpaper-source="video"] body::before,
+html[data-wallpaper-source="web"] body::before {
+  display: none;
+}
+
+.wallpaper-media-layer {
+  position: fixed;
+  inset: -64px;
+  z-index: -2;
+  overflow: hidden;
+  pointer-events: none;
+  /* The negative inset gives blur and zoom room so their edges never show. */
+}
+
+.wallpaper-media-layer .wallpaper-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  filter: blur(var(--wallpaper-blur, 0px));
+  transform: scale(calc(var(--wallpaper-zoom, 1) * 1.03));
+  transform-origin: var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 50%);
+  pointer-events: none;
+}
+
+.wallpaper-media-layer video.wallpaper-media {
+  object-fit: cover;
+}
+
 html[data-wallpaper="on"] body::before {
   content: '';
   position: fixed;
