@@ -27,11 +27,13 @@ import {
 import { createScheduleInput, newScheduleDraft } from '../../../mobile/src/core/scheduleDraft'
 import { runGlobPermissions } from './globPermissions'
 import { runNotebookReadGuards } from './notebookReadGuards'
+import { runWorktreeSession } from './worktreeSession'
 
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   { id: 'mock-provider-subagent-model', title: 'Provider JSON subagent models survive save and reach real child requests in new sessions' },
+  { id: 'mock-worktree-session', title: 'Enter/ExitWorktree synchronizes the same turn, reconnect, Git and persisted session without changing other sessions' },
   { id: 'mock-glob-absolute-permissions', title: 'Absolute Glob roots require approval and denied enumeration recovers on the next workspace turn' },
   { id: 'mock-notebook-read-guards', title: 'Notebook edits reject unread and concurrently modified files, then recover after a fresh read' },
   { id: 'mock-project-additional-directories', title: 'Project directory snapshots grant real CLI file access only to newly created tasks' },
@@ -189,6 +191,7 @@ export function createMockOnlyRunners(
         else rmSync(settingsPath, { force: true })
       }
     },
+    'mock-worktree-session': ctx => runWorktreeSession(ctx, () => toolResultsSentUpstream(requests)),
     'mock-glob-absolute-permissions': ctx => runGlobPermissions(ctx, () => toolResultsSentUpstream(requests)),
     'mock-notebook-read-guards': ctx => runNotebookReadGuards(ctx, () => toolResultsSentUpstream(requests)),
     async 'mock-project-additional-directories'(ctx) {
