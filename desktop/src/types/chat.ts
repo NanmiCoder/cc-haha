@@ -1,3 +1,4 @@
+import type { ScheduledTaskTrigger } from './task'
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
 import type { TeamMemberActivity, TeamMemberAutoRetry } from './team'
@@ -133,8 +134,8 @@ type ServerMessageContent =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
-  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
+  | { type: 'user_message_replay'; content: string; scheduledTask?: ScheduledTaskTrigger; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
+  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming; scheduledTask?: ScheduledTaskTrigger }
   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
   | { type: 'thinking'; text: string; complete?: boolean }
   | {
@@ -164,10 +165,11 @@ type ServerMessageContent =
       errorStatus: number | null
       errorType?: string
       errorMessage?: string
+      requestId?: string
     }
   // 流式请求失败后的恢复状态：可能安全重试流，也可能降级为非流式请求。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
-  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
+  | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string }
   | { type: 'background_task_stop_failed'; taskId: string; message: string }
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
@@ -178,6 +180,8 @@ type ServerMessageContent =
   | { type: 'team_deleted'; teamName: string; incarnationId?: string; leadSessionId?: string; createdAt?: number }
   | { type: 'task_update'; taskId: string; status: string; progress?: string }
   | { type: 'session_title_updated'; sessionId: string; title: string }
+  /** Predicted next user prompt for the composer; sent after a turn ends. */
+  | { type: 'prompt_suggestion'; suggestion: string }
 
 export type CompactProgress = {
   /** Cumulative summary characters for the current compaction attempt; restarts from 0 on a CLI retry. */
@@ -191,7 +195,7 @@ export type AgentRunStreamMessage =
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
-  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
+  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string; requestId?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
 
@@ -219,6 +223,7 @@ export type ApiRetryState = {
   errorStatus: number | null
   errorType?: string
   errorMessage?: string
+  requestId?: string
   receivedAt: number
 }
 
@@ -387,7 +392,7 @@ type UIMessageContent =
    * the user's own prompt render identically, which is what flattened the
    * member transcript.
    */
-  | { id: string; type: 'user_text'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; awaitingReplay?: boolean; teammateFrom?: string }
+  | { id: string; type: 'user_text'; content: string; scheduledTask?: ScheduledTaskTrigger; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; awaitingReplay?: boolean; teammateFrom?: string }
   | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
   | { id: string; type: 'thinking'; content: string; timestamp: number }
   | {
@@ -405,7 +410,16 @@ type UIMessageContent =
     }
   | { id: string; type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }
   | { id: string; type: 'background_task'; task: BackgroundAgentTask; timestamp: number }
-  | { id: string; type: 'system'; content: string; generationStopped?: boolean; transcriptMessageId?: string; timestamp: number }
+  | {
+      id: string
+      type: 'system'
+      content: string
+      generationStopped?: boolean
+      /** Background tasks whose results started this turn without a user send. */
+      backgroundContinueTaskIds?: string[]
+      transcriptMessageId?: string
+      timestamp: number
+    }
   | {
       id: string
       type: 'compact_summary'
@@ -451,5 +465,5 @@ type UIMessageContent =
       displayName?: string
       timestamp: number
     }
-  | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; timestamp: number }
+  | { id: string; type: 'error'; message: string; code: string; businessErrorCode?: string; transcriptMessageId?: string; timestamp: number }
   | { id: string; type: 'task_summary'; tasks: TaskSummaryItem[]; timestamp: number }

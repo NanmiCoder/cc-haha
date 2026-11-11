@@ -14,6 +14,8 @@ declare global {
   interface Window {
     __CC_HAHA_BOOTSTRAPPED__?: boolean
     __CC_HAHA_SHOW_STARTUP_ERROR__?: (reason: unknown) => void
+    __CC_HAHA_SET_STARTUP_PHASE__?: (phase: 'locale' | 'modules' | 'render') => void
+    __CC_HAHA_BOOTSTRAP_COMPLETE__?: () => void
   }
 }
 
@@ -62,7 +64,9 @@ export async function bootstrapDesktopApp(
   loadModules: () => Promise<DesktopBootstrapModules> = loadDesktopBootstrapModules,
 ) {
   try {
+    window.__CC_HAHA_SET_STARTUP_PHASE__?.('locale')
     await initializeLocale(getDesktopHost().app)
+    window.__CC_HAHA_SET_STARTUP_PHASE__?.('modules')
     const [{ App }, { ErrorBoundary }, { installClientDiagnosticsCapture }, { initializeTheme }] = await loadModules()
     initializeTheme()
     installClientDiagnosticsCapture()
@@ -71,6 +75,7 @@ export async function bootstrapDesktopApp(
       throw new Error('Desktop root element not found')
     }
 
+    window.__CC_HAHA_SET_STARTUP_PHASE__?.('render')
     ReactDOM.createRoot(root).render(
       <React.StrictMode>
         <ErrorBoundary>
@@ -79,6 +84,7 @@ export async function bootstrapDesktopApp(
       </React.StrictMode>,
     )
     window.__CC_HAHA_BOOTSTRAPPED__ = true
+    window.__CC_HAHA_BOOTSTRAP_COMPLETE__?.()
   } catch (error) {
     console.error('[desktop] Failed to bootstrap app', error)
     if (root) {

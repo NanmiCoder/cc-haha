@@ -74,13 +74,23 @@ Ultracode 常驻范围是当前运行中的会话进程：普通后续消息不�
 
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
 - **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
-- **七牛云 AI** — 聚合类 MaaS 平台，一个密钥调 DeepSeek、GLM、Kimi、通义等多家模型。
+- **七牛云 AI** · **OpenRouter** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
 - **LM Studio** · **Ollama** — 本地模型，见下一节。
 - **Custom** — 上面都没有，自己填。
 
 FennoAI 和七牛云 AI 能用哪些模型取决于你买的套餐，所以这两个预设只填接口地址、不预填模型：粘好密钥后点「拉取模型」，从实时列表里挑一个即可。
 
 选中预设后，如果这家服务商有申请密钥的页面，密钥输入框下面会出现一颗「获取 API Key」按钮，点开就是注册/取密钥的地址。
+
+### OpenRouter
+
+OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kimi 等多家厂商的模型。预设把接口地址填成 `https://openrouter.ai/api`：它在这条地址上提供 Anthropic 原生协议，应用直连、不经过本地代理，thinking、工具调用和提示词缓存都按原生语义走。和本地模型一样，这个地址后面不要再补 `/v1`。
+
+三点需要留意：
+
+- **模型 ID 带 `author/slug` 命名空间**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4-pro`。预设的四个槽位预填的都是 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑，别照抄别处的名字——模型一多，手写很容易拼错。
+- **Claude Code 只保证 Anthropic 第一方服务商的完全兼容。** 经 OpenRouter 调其他厂商的模型，工具调用、thinking 或参数形态可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
+- **要用 `/fast`**，模型槽位得固定写一个具体的 Opus ID（`~…-latest` 这类别名不会带上 fast 参数），并在「设置 JSON」的 `env` 里加 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`。想让 Claude Code 用自带的模型发现，同样在 `env` 里加 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
 
 ## 本地模型
 
@@ -96,6 +106,17 @@ FennoAI 和七牛云 AI 能用哪些模型取决于你买的套餐，所以这�
 2. **按模型实际支持的大小配置上下文窗口。** 200K 不是统一的最低门槛；窗口需要容纳系统提示词、工具定义、已加载的 Skills 和当前任务。较小窗口可能容纳不下这些内容，长任务也更容易触发压缩。服务端的实际窗口在 LM Studio 或 Ollama 自己的模型配置里设置，不要声明超出实际支持范围的数值。
 
 本地模型能否完成 Agent 工作流，取决于模型的工具调用能力、接口兼容性、配置和任务。如果出现只输出文字却不调用工具，应结合请求、响应和工具配置排查，不能仅凭模型参数量判断原因。
+
+## Magpie
+
+[Magpie](https://usemagpie.ai) 是一个本机网关：你在它里面配好的 API Key、订阅、本地模型和路由组，都从同一个地址转给各个 Agent。已经在用 Magpie 的话，不用再在这里重复填一遍。
+
+1. 打开 Magpie。模型配置页的「API Key」列表最上面会出现「Magpie 正在本机运行」，点「接入」。
+2. 选一个主模型，点「接入并设为默认」。不需要密钥，也不用填地址。
+
+接入后，输入框的模型选择里会列出 Magpie 的全部模型，每个对话随时换。每个模型的上下文长度和最大输出都直接用 Magpie 给的值，压缩点和上下文百分比跟着模型走；Magpie 没给出上下文长度的模型（本地模型常见）先按 200K 计算，最好在 Magpie 里给它填上。默认在上下文快用满时压缩，想省用量可以在 Magpie 配置的「编辑」里改成「到 272K 时」。
+
+Magpie 没开时，这条配置会显示「没有运行」，发消息也会提示去打开 Magpie；它不会自动换到别的配置。在 Magpie 里改了端口，下次检测时自动跟上。
 
 ## 「添加服务商」弹窗逐个字段
 

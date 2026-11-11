@@ -1,4 +1,5 @@
 import { normalizeNameForMCP } from '../../services/mcp/normalization.js'
+import type { Tool } from '../../Tool.js'
 import { env } from '../env.js'
 
 export const COMPUTER_USE_MCP_SERVER_NAME = 'computer-use'
@@ -6,8 +7,8 @@ export const CLI_HOST_PLATFORM_BUNDLE_ID = 'com.anthropic.claude-code.cli-no-win
 
 export function isComputerUseSupportedPlatform(
   platform: NodeJS.Platform = process.platform,
-): platform is 'darwin' | 'win32' {
-  return platform === 'darwin' || platform === 'win32'
+): platform is 'darwin' | 'win32' | 'linux' {
+  return platform === 'darwin' || platform === 'win32' || platform === 'linux'
 }
 
 /**
@@ -60,7 +61,8 @@ export function getCliComputerUseCapabilities(
   platform: NodeJS.Platform = process.platform,
 ): {
   screenshotFiltering: 'native' | 'none'
-  platform: 'darwin' | 'win32'
+  platform: 'darwin' | 'win32' | 'linux'
+  agentDesktop?: boolean
 } {
   if (platform === 'darwin') {
     return {
@@ -69,18 +71,24 @@ export function getCliComputerUseCapabilities(
     }
   }
 
-  if (platform !== 'win32') {
+  if (platform !== 'win32' && platform !== 'linux') {
     throw new Error(
-      `Computer Use is only supported on macOS and Windows (received ${platform}).`,
+      `Computer Use is only supported on macOS, Windows and Linux (received ${platform}).`,
     )
   }
 
   return {
     screenshotFiltering: 'none',
-    platform: 'win32',
+    platform,
+    agentDesktop: true,
   }
 }
 
 export function isComputerUseMCPServer(name: string): boolean {
   return normalizeNameForMCP(name) === COMPUTER_USE_MCP_SERVER_NAME
+}
+
+export function isComputerUseRuntimeTool(tool: Pick<Tool, 'name' | 'mcpInfo'>): boolean {
+  return tool.name.startsWith(`mcp__${COMPUTER_USE_MCP_SERVER_NAME}__`)
+    || Boolean(tool.mcpInfo && isComputerUseMCPServer(tool.mcpInfo.serverName))
 }

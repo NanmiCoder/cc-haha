@@ -1,0 +1,33 @@
+[Unit]
+Description=Private cc-haha remote address directory
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cc-haha-directory
+Group=cc-haha-directory
+EnvironmentFile=/etc/cc-haha-remote-directory.env
+ExecStart=/opt/cc-haha-remote-directory/cc-haha-remote-directory
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+StateDirectory=cc-haha-remote-directory
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

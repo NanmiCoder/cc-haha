@@ -59,6 +59,7 @@ AZURE_OPENAI_CODEX_DEPLOYMENT=your_codex_deployment
 | Variable | Description |
 |----------|-------------|
 | `CLAUDE_CONFIG_DIR` | Use a specific configuration directory instead of `~/.claude`; useful for portable mode and isolated tests |
+| `CC_HAHA_TRACE_DIR` | Separate Agent Trace storage directory; must be an absolute path. When empty, defaults to `cc-haha/traces` under the configuration directory. See [Settings](../desktop/settings.md) |
 | `CLAUDE_CODE_FORCE_RECOVERY_CLI` | Set to `1` to use the simplified Recovery CLI |
 | `CLAUDE_CODE_SHELL_PREFIX` | Prefix Bash tool commands, for example `wsl -e bash -lc` on Windows |
 | `DISABLE_TELEMETRY` | Set to `1` to disable telemetry |

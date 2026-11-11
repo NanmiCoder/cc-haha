@@ -1,7 +1,11 @@
-import { chmod, open, rename, stat, unlink } from 'fs/promises'
+import { createHash, randomUUID } from 'crypto'
+import { realpathSync } from 'fs'
+import { chmod, open, stat, unlink } from 'fs/promises'
 import mapValues from 'lodash-es/mapValues.js'
 import memoize from 'lodash-es/memoize.js'
-import { dirname, join, parse } from 'path'
+import { dirname, isAbsolute, join, parse } from 'path'
+import { readNativeProjectDirectoryIdentity } from './projectDirectoryIdentity.js'
+import { readProjectDirectory } from './projectDirectoryIo.js'
 import { getPlatform } from 'src/utils/platform.js'
 import type { PluginError } from '../../types/plugin.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
@@ -21,6 +25,8 @@ import { getErrnoCode } from '../../utils/errors.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import { safeParseJSON, safeParseJSONWithoutCache } from '../../utils/json.js'
 import { logError } from '../../utils/log.js'
+import * as lockfile from '../../utils/lockfile.js'
+import { normalizePathForConfigKey } from '../../utils/path.js'
 import { getPluginMcpServers } from '../../utils/plugins/mcpPluginIntegration.js'
 import { loadAllPluginsCacheOnly } from '../../utils/plugins/pluginLoader.js'
 import { isSettingSourceEnabled } from '../../utils/settings/constants.js'
@@ -99,10 +105,12 @@ function addScopeToServers(
  * Defaults to the cwd's .mcp.json; project-scoped servers inherited from a
  * parent directory are written back to the file that declares them.
  */
-async function writeMcpjsonFile(
+export async function writeMcpjsonFile(
   config: McpJsonConfig | Record<string, unknown>,
   mcpJsonPath: string = join(getCwd(), '.mcp.json'),
+  options: { expectedRevision?: string | null; assertLockHeld?: () => void } = {},
 ): Promise<void> {
+  options.assertLockHeld?.()
   // Read existing file permissions to preserve them
   let existingMode: number | undefined
   try {
@@ -117,23 +125,27 @@ async function writeMcpjsonFile(
   }
 
   // Write to temp file, flush to disk, then atomic rename
-  const tempPath = `${mcpJsonPath}.tmp.${process.pid}.${Date.now()}`
-  const handle = await open(tempPath, 'w', existingMode ?? 0o644)
+  const tempPath = `${mcpJsonPath}.tmp.${process.pid}.${randomUUID()}`
   try {
-    await handle.writeFile(jsonStringify(config, null, 2), {
-      encoding: 'utf8',
-    })
-    await handle.datasync()
-  } finally {
-    await handle.close()
-  }
-
-  try {
+    const handle = await open(tempPath, 'wx', existingMode ?? 0o644)
+    try {
+      await handle.writeFile(jsonStringify(config, null, 2), { encoding: 'utf8' })
+      await handle.datasync()
+    } finally {
+      await handle.close()
+    }
     // Restore original file permissions on the temp file before rename
     if (existingMode !== undefined) {
       await chmod(tempPath, existingMode)
     }
-    await rename(tempPath, mcpJsonPath)
+    options.assertLockHeld?.()
+    if (options.expectedRevision !== undefined && readProjectMcpJsonSnapshot(mcpJsonPath).revision !== options.expectedRevision) {
+      throw new Error('Project .mcp.json changed; reload the project list and retry')
+    }
+    // Keep the final re-read and replacement in one JS turn. An unrelated
+    // process can still race this pair; only cooperating writers hold our lock.
+    options.assertLockHeld?.()
+    getFsImplementation().renameSync(tempPath, mcpJsonPath)
   } catch (e: unknown) {
     // Clean up temp file on failure
     try {
@@ -142,6 +154,127 @@ async function writeMcpjsonFile(
       // Best-effort cleanup
     }
     throw e
+  }
+}
+
+export type ProjectMcpJsonSnapshot = {
+  revision: string | null
+  config: Record<string, unknown>
+  servers: Record<string, unknown>
+}
+
+/** Strict, uncached reads for mutations. Only a missing file means an empty file. */
+export function readProjectMcpJsonSnapshot(mcpJsonPath: string): ProjectMcpJsonSnapshot {
+  let contents: string
+  try {
+    contents = getFsImplementation().readFileSync(mcpJsonPath, { encoding: 'utf8' })
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') return { revision: null, config: {}, servers: {} }
+    throw new Error('Cannot read project .mcp.json')
+  }
+  const config = safeParseJSONWithoutCache(contents, false)
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('Project .mcp.json must contain a valid JSON object')
+  }
+  const raw = config as Record<string, unknown>
+  const servers = raw.mcpServers
+  if (servers !== undefined && (!servers || typeof servers !== 'object' || Array.isArray(servers))) {
+    throw new Error('Project .mcp.json mcpServers must be an object')
+  }
+  return {
+    revision: createHash('sha256').update(contents).digest('hex'),
+    config: raw,
+    servers: (servers ?? {}) as Record<string, unknown>,
+  }
+}
+
+function readProjectMcpDirectoryIdentity(projectPath: string): { directory: string; dev: number; ino: number } {
+  const identity = readNativeProjectDirectoryIdentity(projectPath, { statSync: getFsImplementation().statSync, realpathSync }, { isAbsolute })
+  return { ...identity, directory: getPlatform() === 'windows' ? normalizePathForConfigKey(identity.directory) : identity.directory }
+}
+
+/** File targets must prove physical identity before realpath may redirect them. */
+export function resolveProjectMcpDirectorySync(projectPath: string): string {
+  return readProjectMcpDirectoryIdentity(projectPath).directory
+}
+
+export async function resolveProjectMcpDirectory(projectPath: string): Promise<string> {
+  if (!projectPath || !isAbsolute(projectPath) || projectPath.includes('\0')) throw new Error('Project path must be an absolute directory path')
+  const { directory } = await readProjectDirectory({ kind: 'identity', path: projectPath })
+  return getPlatform() === 'windows' ? normalizePathForConfigKey(directory) : directory
+}
+
+export function getProjectMcpDirectoryIdentity(projectPath: string): string {
+  return getPlatform() === 'windows' ? normalizePathForConfigKey(projectPath).toLowerCase() : projectPath
+}
+
+/** Reuse existing registry aliases without migrating their keys or project state. */
+export function findProjectMcpRegistryKey(
+  projectPath: string,
+  projects: Record<string, unknown>,
+): string | undefined {
+  let identity: string
+  try {
+    identity = getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(projectPath))
+  } catch {
+    return undefined
+  }
+  return Object.keys(projects).find(key => {
+    try {
+      return getProjectMcpDirectoryIdentity(resolveProjectMcpDirectorySync(key)) === identity
+    } catch {
+      return false
+    }
+  })
+}
+
+/** All project writers share the same lock, including legacy add/remove callers. */
+export async function withProjectMcpConfigLock<T>(
+  projectPath: string,
+  update: (mcpJsonPath: string, assertLockHeld: () => void) => Promise<T>,
+): Promise<T> {
+  const initial = readProjectMcpDirectoryIdentity(projectPath)
+  const directory = initial.directory
+  const file = join(directory, '.mcp.json')
+  let compromised = false
+  const assertLockHeld = () => {
+    if (compromised) throw new Error('Project MCP configuration lock was lost')
+    try {
+      const fs = getFsImplementation()
+      for (const path of [projectPath, directory]) {
+        const current = fs.statSync(path)
+        if (!current.isDirectory() || current.dev !== initial.dev || current.ino !== initial.ino) {
+          throw new Error('changed')
+        }
+      }
+    } catch {
+      throw new Error('Project directory identity changed')
+    }
+  }
+  const release = await lockfile.lock(file, {
+    realpath: false,
+    lockfilePath: `${file}.lock`,
+    retries: { retries: 40, factor: 1, minTimeout: 10, maxTimeout: 25 },
+    onCompromised: error => {
+      compromised = true
+      logForDebugging(`Project MCP config lock compromised: ${getErrnoCode(error) ?? 'unknown'}`, { level: 'error' })
+    },
+  })
+  let updateFailed = false
+  try {
+    assertLockHeld()
+    const result = await update(file, assertLockHeld)
+    assertLockHeld()
+    return result
+  } catch (error) {
+    updateFailed = true
+    throw error
+  } finally {
+    try {
+      await release()
+    } catch (error) {
+      if (!compromised && !updateFailed) throw error
+    }
   }
 }
 
@@ -631,18 +764,16 @@ function expandEnvVars(config: McpServerConfig): {
 }
 
 /**
- * Add a new MCP server configuration
+ * Validate additions across all writable scopes using the same name and policy boundary.
  * @param name The name of the server
  * @param config The server configuration
- * @param scope The configuration scope
- * @throws Error if name is invalid or server already exists, or if the config is invalid
+ * @throws Error if the server name, configuration or enterprise policy rejects the addition
  */
-export async function addMcpConfig(
+export async function validateMcpConfigForWrite(
   name: string,
   config: unknown,
-  scope: ConfigScope,
-): Promise<void> {
-  if (name.match(/[^\p{L}\p{N}_-]/u)) {
+): Promise<McpServerConfig> {
+  if (!name || name.match(/[^\p{L}\p{N}_-]/u)) {
     throw new Error(
       `Invalid name ${name}. Names can only contain letters, numbers, hyphens, and underscores.`,
     )
@@ -691,15 +822,20 @@ export async function addMcpConfig(
     )
   }
 
+  return validatedConfig
+}
+
+export async function addMcpConfig(
+  name: string,
+  config: unknown,
+  scope: ConfigScope,
+): Promise<void> {
+  const validatedConfig = await validateMcpConfigForWrite(name, config)
+
   // Check if server already exists in the target scope
   switch (scope) {
     case 'project': {
-      // Check the raw file so a name already present in a .mcp.json that fails
-      // validation is still reported as a conflict rather than silently
-      // overwritten by the raw rewrite below.
-      if (readCwdMcpJsonServers().servers[name]) {
-        throw new Error(`MCP server ${name} already exists in .mcp.json`)
-      }
+      // Project conflicts are checked under the file lock below.
       break
     }
     case 'user': {
@@ -729,17 +865,19 @@ export async function addMcpConfig(
     case 'project': {
       // Insert into the raw file so unrelated servers keep their unexpanded
       // ${VAR} values and any other top-level keys survive the rewrite.
-      const { path: mcpJsonPath, config: mcpConfig, servers: mcpServers } =
-        readCwdMcpJsonServers()
-      mcpServers[name] = validatedConfig
-      mcpConfig.mcpServers = mcpServers
-
-      // Write back to .mcp.json
-      try {
-        await writeMcpjsonFile(mcpConfig, mcpJsonPath)
-      } catch (error) {
-        throw new Error(`Failed to write to .mcp.json: ${error}`)
-      }
+      await withProjectMcpConfigLock(getCwd(), async (mcpJsonPath, assertLockHeld) => {
+        const { config: mcpConfig, servers: mcpServers, revision } = readProjectMcpJsonSnapshot(mcpJsonPath)
+        if (Object.hasOwn(mcpServers, name)) {
+          throw new Error(`MCP server ${name} already exists in .mcp.json`)
+        }
+        mcpServers[name] = validatedConfig
+        mcpConfig.mcpServers = mcpServers
+        try {
+          await writeMcpjsonFile(mcpConfig, mcpJsonPath, { expectedRevision: revision, assertLockHeld })
+        } catch (error) {
+          throw new Error(`Failed to write to .mcp.json: ${error}`)
+        }
+      })
 
       // Register the target project in the global config's project registry.
       // A directory that has never hosted a session has no `projects` entry,
@@ -797,21 +935,18 @@ export async function removeMcpConfig(
         throw new Error(`No MCP server found with name: ${name} in .mcp.json`)
       }
 
-      const mcpConfig = readRawMcpJsonFile(mcpJsonPath)
-      const mcpServers = mcpConfig?.mcpServers
-      if (!mcpConfig || !mcpServers || typeof mcpServers !== 'object') {
-        throw new Error(`No MCP server found with name: ${name} in ${mcpJsonPath}`)
-      }
-
-      // Edit the raw object so unrelated servers, unexpanded ${VAR} values and
-      // any other top-level keys survive the rewrite untouched.
-      delete (mcpServers as Record<string, unknown>)[name]
-
-      try {
-        await writeMcpjsonFile(mcpConfig, mcpJsonPath)
-      } catch (error) {
-        throw new Error(`Failed to remove from ${mcpJsonPath}: ${error}`)
-      }
+      await withProjectMcpConfigLock(dirname(mcpJsonPath), async (lockedPath, assertLockHeld) => {
+        const { config: mcpConfig, servers: mcpServers, revision } = readProjectMcpJsonSnapshot(lockedPath)
+        if (!Object.hasOwn(mcpServers, name)) {
+          throw new Error(`No MCP server found with name: ${name} in ${mcpJsonPath}`)
+        }
+        delete mcpServers[name]
+        try {
+          await writeMcpjsonFile(mcpConfig, lockedPath, { expectedRevision: revision, assertLockHeld })
+        } catch (error) {
+          throw new Error(`Failed to remove from ${mcpJsonPath}: ${error}`)
+        }
+      })
       break
     }
 
@@ -855,7 +990,7 @@ export async function removeMcpConfig(
  * Get MCP configs from current directory only (no parent traversal).
  *
  * Note: addMcpConfig and removeMcpConfig no longer read through this. They edit
- * the raw .mcp.json instead (see readCwdMcpJsonServers), because rewriting a
+ * the raw .mcp.json instead (see readProjectMcpJsonSnapshot), because rewriting a
  * file from validated configs expands ${VAR} placeholders and drops unknown
  * top-level keys. This currently has no callers.
  *
@@ -1011,30 +1146,15 @@ export function projectDirDeclaresMcpServers(dir: string): boolean {
  * registered. (GH #1126)
  */
 export function registerCwdProjectIfDeclaresMcpServers(): void {
-  if (getGlobalConfig().projects?.[getProjectPathForConfig(getCwd())]) return
+  try {
+    resolveProjectMcpDirectorySync(getCwd())
+  } catch {
+    return
+  }
+  const projects = getGlobalConfig().projects ?? {}
+  if (projects[getProjectPathForConfig(getCwd())] || findProjectMcpRegistryKey(getCwd(), projects)) return
   if (!projectDirDeclaresMcpServers(getCwd())) return
   saveMcpProjectConfig(current => ({ ...current }))
-}
-
-/**
- * Open the cwd's .mcp.json for editing, as a raw object plus a mutable handle
- * on its mcpServers map. Missing or unusable files yield empty structures so
- * callers can treat creation and update the same way.
- */
-function readCwdMcpJsonServers(): {
-  path: string
-  config: Record<string, unknown>
-  servers: Record<string, unknown>
-} {
-  const path = join(getCwd(), '.mcp.json')
-  const config = readRawMcpJsonFile(path) ?? {}
-  const existing = config.mcpServers
-  const servers =
-    existing && typeof existing === 'object' && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {}
-
-  return { path, config, servers }
 }
 
 /**

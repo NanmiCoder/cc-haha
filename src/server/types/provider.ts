@@ -16,7 +16,8 @@ export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
 export const PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION = 6
 export const PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION = 7
 export const PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION = 8
-export const PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION = 9
+export const PROVIDER_PROXY_CONFIG_SCHEMA_VERSION = 9
+export const PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION = 10
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -93,6 +94,11 @@ export const ModelContextWindowsSchema = z.record(
   z.string().min(1),
   z.number().int().min(16000).max(10000000),
 )
+/** Per-model reply limits, keyed like `modelContextWindows` (a gateway's catalog). */
+export const ModelMaxOutputTokensSchema = z.record(
+  z.string().min(1),
+  z.number().int().min(1024).max(10000000),
+)
 export const ToolSearchEnabledSchema = z.boolean()
 export const DisableExperimentalBetasSchema = z.boolean()
 export const SupportsNestedToolResultMediaSchema = z.boolean()
@@ -121,6 +127,29 @@ export const ImageGenerationConfigSchema = z.object({
   apiKey: z.string().trim().optional(),
 }).passthrough()
 
+export const ProviderProxyModeSchema = z.enum(['follow_global', 'direct', 'manual'])
+export type ProviderProxyMode = z.infer<typeof ProviderProxyModeSchema>
+
+/**
+ * Per-provider network proxy override. Absent (or mode 'follow_global') means
+ * the provider keeps using the global NetworkSettings proxy — built-in
+ * official providers never grow this field, so they always follow the global
+ * setting by construction.
+ */
+export const ProviderProxyConfigSchema = z.object({
+  mode: ProviderProxyModeSchema,
+  url: z.string().trim().optional(),
+}).superRefine((config, ctx) => {
+  if (config.mode === 'manual' && !config.url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['url'],
+      message: 'proxy.url is required when proxy.mode is manual',
+    })
+  }
+})
+export type ProviderProxyConfig = z.infer<typeof ProviderProxyConfigSchema>
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -135,13 +164,25 @@ export const SavedProviderSchema = z.object({
   model1mSupport: Model1mSupportSchema.optional(),
   autoCompactWindow: AutoCompactWindowSchema.optional(),
   modelContextWindows: ModelContextWindowsSchema.optional(),
+  modelMaxOutputTokens: ModelMaxOutputTokensSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
 })
+
+/**
+ * A built-in OAuth provider has no saved record, so a user's per-model window
+ * override lives beside its model mapping, keyed by provider id then model id.
+ * Absent on older indexes, which read as "no overrides".
+ */
+export const OfficialProviderContextWindowsSchema = z.record(
+  z.string(),
+  ModelContextWindowsSchema,
+)
 
 export const ProvidersIndexSchema = z.object({
   schemaVersion: z.number().int().positive().optional(),
@@ -149,6 +190,7 @@ export const ProvidersIndexSchema = z.object({
   providers: z.array(SavedProviderSchema),
   providerOrder: z.array(z.string()).default([]),
   officialProviderModels: OfficialProviderModelsSchema.default({}),
+  officialProviderContextWindows: OfficialProviderContextWindowsSchema.default({}),
 })
 
 export const CreateProviderSchema = z.object({
@@ -164,11 +206,13 @@ export const CreateProviderSchema = z.object({
   model1mSupport: Model1mSupportSchema.optional(),
   autoCompactWindow: AutoCompactWindowSchema.optional(),
   modelContextWindows: ModelContextWindowsSchema.optional(),
+  modelMaxOutputTokens: ModelMaxOutputTokensSchema.optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -184,11 +228,13 @@ export const UpdateProviderSchema = z.object({
   model1mSupport: Model1mSupportSchema.nullable().optional(),
   autoCompactWindow: AutoCompactWindowSchema.nullable().optional(),
   modelContextWindows: ModelContextWindowsSchema.nullable().optional(),
+  modelMaxOutputTokens: ModelMaxOutputTokensSchema.nullable().optional(),
   toolSearchEnabled: ToolSearchEnabledSchema.optional(),
   disableExperimentalBetas: DisableExperimentalBetasSchema.optional(),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.nullable().optional(),
   imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
+  proxy: ProviderProxyConfigSchema.nullable().optional(),
   notes: z.string().optional(),
 })
 
@@ -206,6 +252,7 @@ export const TestProviderSchema = z.object({
    * wire — the rules themselves stay server-side.
    */
   presetId: z.string().optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
 })
 
 export const ReorderProvidersSchema = z.object({

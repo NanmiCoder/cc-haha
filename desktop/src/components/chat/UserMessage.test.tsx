@@ -79,7 +79,7 @@ describe('UserMessage', () => {
 
     expect(container.querySelector('[data-message-body="user"]')).toBeNull()
     expect(container.querySelector('[data-message-actions]')).toBeNull()
-    expect((screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement).value).toBe('Draft kept by the list')
+    expect(screen.getByRole('textbox', { name: 'Edited message' }).textContent).toBe('Draft kept by the list')
   })
 
   it('offers edit on an attachment-only prompt, which has no text to copy', () => {

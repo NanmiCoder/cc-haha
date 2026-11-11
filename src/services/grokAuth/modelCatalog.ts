@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
   buildGrokIdentityHeaders,
   GROK_CLI_BASE_URL,
@@ -16,47 +18,63 @@ const MODEL_CATALOG_FAILURE_BACKOFF_MS = 60_000
 const catalogCache = createModelCatalogCache<GrokModelCatalogEntry[]>({
   ttlMs: MODEL_CATALOG_TTL_MS,
   failureBackoffMs: MODEL_CATALOG_FAILURE_BACKOFF_MS,
+  onChange: setGrokRuntimeModelCatalog,
 })
 
 export async function fetchGrokModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
-  accessToken?: string,
+  accessToken?: string | null,
+  proxyUrl?: string | null,
 ): Promise<GrokModelCatalogEntry[]> {
-  const token = accessToken || (await ensureFreshGrokTokens({ fetchOverride }))?.accessToken
+  const token = accessToken === undefined
+    ? (await ensureFreshGrokTokens({ fetchOverride }))?.accessToken
+    : accessToken
   if (!token) throw new Error('Grok OAuth token is unavailable')
   const response = await fetchOverride(GROK_MODELS_ENDPOINT, {
     method: 'GET',
     headers: buildGrokIdentityHeaders(token),
+    redirect: 'error',
     signal: AbortSignal.timeout(5_000),
+    ...(proxyUrl === undefined ? {} : getProxyFetchOptions({ proxyUrl, targetUrl: GROK_MODELS_ENDPOINT })),
   })
   if (!response.ok) {
     throw new Error(`Grok models endpoint returned HTTP ${response.status}`)
   }
   const body = await response.json() as unknown
   const rows = extractModelRows(body)
+  const seen = new Set<string>()
   const models = rows
     .map(normalizeRemoteModel)
     .filter((model): model is GrokModelCatalogEntry => model !== null)
+    .filter((model) => {
+      if (seen.has(model.value)) return false
+      seen.add(model.value)
+      return true
+    })
   if (!models.length) throw new Error('Grok models endpoint returned no models')
-  setGrokRuntimeModelCatalog(models)
   return models
 }
 
 export async function getGrokModelCatalog(options?: {
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
-  accessToken?: string
+  throwOnError?: boolean
+  resolveProxyUrl?: () => Promise<string | null | undefined>
+  accessToken?: string | null
   accountKey?: string
 }): Promise<GrokModelCatalogEntry[]> {
-  const accountKey = options?.accountKey ?? (options?.accessToken ? 'authenticated' : 'default')
-  const models = await catalogCache.resolve({
+  const accountKey = options?.accessToken
+    ? createHash('sha256').update(options.accessToken).digest('hex')
+    : options?.accessToken === null ? 'logged-out' : options?.accountKey ?? 'default'
+  return catalogCache.resolve({
     accountKey,
-    fetchCatalog: () => fetchGrokModelCatalog(options?.fetchOverride, options?.accessToken),
+    fetchCatalog: async () => fetchGrokModelCatalog(
+      options?.fetchOverride, options?.accessToken, await options?.resolveProxyUrl?.(),
+    ),
     fallback: GROK_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
+    ...(options?.throwOnError ? { throwOnError: true } : {}),
   })
-  setGrokRuntimeModelCatalog(models)
-  return models
 }
 
 export function clearGrokModelCatalogCache(): void {
@@ -68,6 +86,9 @@ function extractModelRows(body: unknown): unknown[] {
   if (Array.isArray(body)) return body
   if (!body || typeof body !== 'object') return []
   const record = body as Record<string, unknown>
+  if ('error' in record || record.success === false) {
+    throw new Error('Grok models endpoint returned an error response')
+  }
   if (Array.isArray(record.models)) return record.models
   if (isKeyedObject(record.models)) return keyedModelRows(record.models)
   if (Array.isArray(record.data)) return record.data
@@ -84,13 +105,13 @@ function keyedModelRows(record: Record<string, unknown>): unknown[] {
 function normalizeRemoteModel(value: unknown): GrokModelCatalogEntry | null {
   if (!value || typeof value !== 'object') return null
   const outer = value as Record<string, unknown>
-  const meta = isKeyedObject(outer.meta) ? outer.meta : {}
+  const meta = isKeyedObject(outer._meta) ? outer._meta : isKeyedObject(outer.meta) ? outer.meta : {}
   const info = isKeyedObject(outer.info) ? outer.info : {}
   const record = { ...outer, ...meta, ...info }
   if (record.hidden === true || record.supported_in_api === false || record.supportedInApi === false) {
     return null
   }
-  const id = firstString(record.id, record.slug, record.model, record.value, record.__key)
+  const id = firstString(record.model, record.modelId, record.model_id, record.id, record.slug, record.value, record.__key)
   if (!id) return null
   const fallback = GROK_MODEL_CATALOG.find((model) => model.value === id)
   const label = firstString(record.display_name, record.displayName, record.name, record.label) ?? fallback?.label ?? id

@@ -1,0 +1,102 @@
+import { parseConnectionInput, type ParsedConnection } from '../../core/connection'
+
+/** 手动连接面板顶部的两种方式。真正走哪条协议仍由地址本身决定。 */
+export type ConnectMode = 'lan' | 'remote'
+
+export const defaultHostName = '我的电脑'
+
+function parse(value: string): ParsedConnection | null {
+  try {
+    return parseConnectionInput(value)
+  } catch {
+    // The field can be incomplete while the user is typing.
+    return null
+  }
+}
+
+/** 输入框里的地址能解析出什么；解析不了时返回 null（还在输入中）。 */
+export function inspectAddress(value: string) {
+  const parsed = parse(value)
+  if (!parsed) return null
+  return {
+    auth: parsed.auth,
+    hostname: new URL(parsed.url).hostname,
+    pairing: Boolean(parsed.pairSecret),
+    embeddedCredential: Boolean(parsed.credential),
+  }
+}
+
+/**
+ * 地址变化后面板应切到哪种方式：带 #pair= 的配对链接切到公网，
+ * 带局域网凭据的二维码切回局域网，其余保持用户当前的选择。
+ */
+export function modeForAddress(value: string, current: ConnectMode): ConnectMode {
+  const info = inspectAddress(value)
+  if (info?.pairing) return 'remote'
+  if (info?.embeddedCredential) return 'lan'
+  return current
+}
+
+/** 扫码或粘贴进来的内容：解析失败直接抛出原有的错误文案。 */
+export function receivedConnection(value: string) {
+  const parsed = parseConnectionInput(value)
+  return {
+    address: value,
+    name: new URL(parsed.url).hostname,
+    mode: (parsed.auth === 'remote' ? 'remote' : 'lan') as ConnectMode,
+  }
+}
+
+/** 地址里带配对码或局域网令牌时按密码框打码。 */
+export function shouldMaskAddress(value: string) {
+  return value.includes('#pair=') || value.includes('h5Token=')
+}
+
+/** 局域网且链接里没带凭据时，才需要手动填访问令牌。 */
+export function needsToken(mode: ConnectMode, value: string) {
+  return mode === 'lan' && !inspectAddress(value)?.embeddedCredential
+}
+
+/** 用户选的方式和地址对不上时，先在本地说明，不去联系电脑。 */
+export function connectionBlocker(mode: ConnectMode, value: string): string {
+  const info = inspectAddress(value)
+  if (!info) return ''
+  if (mode === 'remote' && info.auth === 'lan')
+    return '这是局域网地址。远程连接请粘贴电脑生成的 HTTPS 配对链接，或切换到「同一个局域网」。'
+  if (mode === 'lan' && info.pairing)
+    return '这是远程配对链接，请切换到「远程连接」后再连接。'
+  return ''
+}
+
+export function formFootnote(mode: ConnectMode, value: string) {
+  if (mode === 'remote')
+    return '在电脑的「外出连接」中开启 Cloudflare，选择快速连接或固定域名后扫码，再在电脑上批准。二维码过期或快速连接重建后，请重新扫码。'
+  const parsed = parse(value)
+  const credential = parsed?.credential
+    ? '二维码已包含局域网凭据。手机和电脑需要能通过这个地址互相访问。'
+    : '手机需要能访问这个地址。令牌在电脑的「设置 → 手机连接」里。'
+  if (parsed?.url.startsWith('http:'))
+    return `HTTP 连接未加密，请仅在可信网络中使用。${credential}`
+  if (parsed?.credential) return credential
+  return '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
+}
+
+export const addressPlaceholder = (mode: ConnectMode) =>
+  mode === 'remote' ? 'https://xxxx.trycloudflare.com/remote#pair=…' : 'http://192.168.1.10:3456'
+
+export const primaryTitle = (mode: ConnectMode) =>
+  mode === 'remote' ? '请求电脑授权' : '连接'
+
+/** 等电脑批准页上的等宽胶囊。 */
+export function remoteBadge(value: string) {
+  const info = inspectAddress(value)
+  return info ? `远程 · ${info.hostname}` : '远程连接'
+}
+
+/** 连接页的两个入口：默认先开扫码；欢迎页的「手动输入地址」带 `mode=manual` 直接开表单。 */
+export type ConnectStage = 'scan' | 'form'
+
+export function initialStage(mode?: string | string[]): ConnectStage {
+  const value = Array.isArray(mode) ? mode[0] : mode
+  return value === 'manual' ? 'form' : 'scan'
+}

@@ -1,5 +1,6 @@
+import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, SquarePen, Store, X } from 'lucide-react'
+import { Archive, Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pencil, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, Trash2, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -17,6 +18,9 @@ import { ProjectEditorModal, type ProjectEditorSubmission } from './ProjectEdito
 import { SidebarTaskList } from './SidebarTaskList'
 import { SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT } from '../../lib/sessionListPagination'
 import { ProjectSessionList, notifyProjectHistoryAtSidebarBottom } from '@/components/layout/ProjectSessionList'
+import { ArchivedSessionsPanel } from '@/components/layout/ArchivedSessionsPanel'
+import { SidebarMenuItem } from '@/components/layout/SidebarMenuItem'
+import { ApiError } from '@/api/client'
 import {
   buildSidebarTaskGroups,
   getSessionProjectKey,
@@ -77,6 +81,8 @@ const KBD_CLASS = 'pointer-events-none inline-flex h-[18px] min-w-[18px] shrink-
 const SIDEBAR_ROW_RAISED = 'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
 const ICON_STROKE = 1.75
 const PROJECT_GROUP_VISIBLE_COUNT = SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT
+// Long enough to notice a mistaken archive and take it back.
+const ARCHIVE_UNDO_DURATION_MS = 6000
 
 type SidebarHeaderMenuType = 'main' | 'organize' | 'sort' | 'create'
 
@@ -131,6 +137,7 @@ export function Sidebar({
   const sessions = useSessionStore((s) => s.sessions)
   const projectHistory = useSessionStore((s) => s.projectHistory)
   const projectSessionTotals = useSessionStore((s) => s.projectSessionTotals)
+  const projectArchivedTotals = useSessionStore((s) => s.projectArchivedTotals)
   const isLoading = useSessionStore((s) => s.isLoading)
   const indexStatus = useSessionStore((s) => s.indexStatus)
   const indexBuilding = indexStatus?.mode === 'on' && indexStatus.state === 'building'
@@ -145,6 +152,8 @@ export function Sidebar({
   const selectSessions = useSessionStore((s) => s.selectSessions)
   const deselectSessions = useSessionStore((s) => s.deselectSessions)
   const renameSession = useSessionStore((s) => s.renameSession)
+  const setSessionArchived = useSessionStore((s) => s.setSessionArchived)
+  const setSessionsArchived = useSessionStore((s) => s.setSessionsArchived)
   const addToast = useUIStore((s) => s.addToast)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
@@ -153,6 +162,9 @@ export function Sidebar({
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
+  const activeSettingsTab = useUIStore((s) => s.activeSettingsTab)
+  const showPhoneConnection = getDesktopHost().isDesktop
+  const phoneConnectionActive = showPhoneConnection && activeTabId === SETTINGS_TAB_ID && activeSettingsTab === 'h5Access'
   // Only which sessions are running or waiting, never the session map itself:
   // that changes on every streamed token of every session, and re-rendering the
   // whole project tree for each one kept the window busy while long runs
@@ -170,12 +182,15 @@ export function Sidebar({
   ))
   const ensureOpenTargets = useOpenTargetStore((s) => s.ensureTargets)
   const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Archived sessions replace the project list in place, for one project or all.
+  const [archiveView, setArchiveView] = useState<{ projectRoot?: string } | null>(null)
   const [projectContextMenu, setProjectContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [projectHeaderMenu, setProjectHeaderMenu] = useState<{ type: SidebarHeaderMenuType; x: number; y: number } | null>(null)
   const [projectHeaderSubmenu, setProjectHeaderSubmenu] = useState<{ type: 'organize' | 'sort'; x: number; y: number } | null>(null)
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState<string | null>(null)
   const [pendingBatchDeleteSessionIds, setPendingBatchDeleteSessionIds] = useState<string[] | null>(null)
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
+  const [isBatchArchiving, setIsBatchArchiving] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [lastSelectedSessionId, setLastSelectedSessionId] = useState<string | null>(null)
@@ -271,12 +286,12 @@ export function Sidebar({
     onDismiss: closeAllSidebarMenus,
   })
 
-  // Title filtering moved into the global search modal (Cmd+K); the list shows all sessions.
-  const filteredSessions = sessions
+  // Open archive tabs keep their metadata in the store, outside the default list.
+  const filteredSessions = useMemo(() => sessions.filter((session) => !session.archived), [sessions])
 
   const projectGroups = useMemo(
-    () => groupByProject(filteredSessions, projectSortBy, resolveProjectDisplayName),
-    [filteredSessions, projectDisplayNameRevision, projectSortBy],
+    () => groupByProject(filteredSessions, projectSortBy, resolveProjectDisplayName, projectArchivedTotals),
+    [filteredSessions, projectDisplayNameRevision, projectSortBy, projectArchivedTotals],
   )
   const orderedProjectGroups = useMemo(
     () => applyProjectOrder(projectGroups, projectOrder, pinnedProjectKeys, projectOrganization, projectSortBy),
@@ -659,7 +674,7 @@ export function Sidebar({
       })
   }, [])
 
-  const submitProjectCreation = useCallback(async ({ name, sourceFolder, logicalRoot }: ProjectEditorSubmission) => {
+  const submitProjectCreation = useCallback(async ({ name, sourceFolder, logicalRoot, additionalDirectories }: ProjectEditorSubmission) => {
     setProjectEditorLoading(true)
     setProjectEditorError(null)
     try {
@@ -668,6 +683,7 @@ export function Sidebar({
         ? cachedLookup.request
         : sessionsApi.getRepositoryContext(sourceFolder))
         .catch(() => null)
+      await desktopUiPreferencesApi.updateProjectDirectories(sourceFolder, additionalDirectories)
       const sessionId = await useSessionStore.getState().createSession(sourceFolder)
       restoreHiddenProjectForWorkDir(sourceFolder)
 
@@ -702,10 +718,11 @@ export function Sidebar({
     setProjectEditor({ mode: 'edit', logicalRoot: project.key })
   }, [])
 
-  const submitProjectEdit = useCallback(async ({ name, logicalRoot }: ProjectEditorSubmission) => {
+  const submitProjectEdit = useCallback(async ({ name, logicalRoot, additionalDirectories }: ProjectEditorSubmission) => {
     setProjectEditorLoading(true)
     setProjectEditorError(null)
     try {
+      await desktopUiPreferencesApi.updateProjectDirectories(logicalRoot, additionalDirectories)
       await saveProjectDisplayName(logicalRoot, name)
       closeProjectEditor()
     } catch (error) {
@@ -825,6 +842,31 @@ export function Sidebar({
     setPendingDeleteSessionId(id)
   }, [])
 
+  const restoreArchivedSessions = useCallback(async (ids: string[]) => {
+    const { failures } = await setSessionsArchived(ids, false)
+    if (failures.length > 0) addToast({ type: 'error', message: t('sidebar.archiveRestoreFailed') })
+  }, [addToast, setSessionsArchived, t])
+
+  const handleArchive = useCallback(async (id: string) => {
+    setContextMenu(null)
+    const title = sessions.find((session) => session.id === id)?.title || t('tabs.untitled')
+    try {
+      await setSessionArchived(id, true)
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: t(error instanceof ApiError && error.status === 409 ? 'sidebar.archiveBusy' : 'sidebar.archiveFailed'),
+      })
+      return
+    }
+    addToast({
+      type: 'success',
+      message: t('sidebar.archivedToast', { title }),
+      duration: ARCHIVE_UNDO_DURATION_MS,
+      action: { label: t('common.undo'), onClick: () => void restoreArchivedSessions([id]) },
+    })
+  }, [addToast, restoreArchivedSessions, sessions, setSessionArchived, t])
+
   const confirmDelete = useCallback(async () => {
     if (!pendingDeleteSessionId) return
     await deleteSession(pendingDeleteSessionId)
@@ -865,6 +907,41 @@ export function Sidebar({
     setLastSelectedSessionId(null)
     setPendingBatchDeleteSessionIds(null)
   }, [exitBatchMode])
+
+  const openArchiveView = useCallback((projectRoot?: string) => {
+    closeAllSidebarMenus()
+    if (isBatchMode) handleExitBatchMode()
+    setArchiveView({ projectRoot })
+  }, [closeAllSidebarMenus, handleExitBatchMode, isBatchMode])
+
+  const handleBatchArchive = useCallback(async (ids: string[]) => {
+    // Running or waiting sessions would be refused one by one; skip them up
+    // front and count them with the server's refusals.
+    const busyIds = ids.filter((id) => runningSessionIds.has(id) || attentionSessionIds.has(id))
+    const eligibleIds = ids.filter((id) => !busyIds.includes(id))
+    setIsBatchArchiving(true)
+    try {
+      const { successes, failures } = eligibleIds.length > 0
+        ? await setSessionsArchived(eligibleIds, true)
+        : { successes: [], failures: [] }
+      if (successes.length > 0) {
+        addToast({
+          type: 'success',
+          message: t('sidebar.batchArchiveSucceeded', { count: successes.length }),
+          duration: ARCHIVE_UNDO_DURATION_MS,
+          action: { label: t('common.undo'), onClick: () => void restoreArchivedSessions(successes) },
+        })
+      }
+      const failedCount = busyIds.length + failures.length
+      if (failedCount > 0) {
+        addToast({ type: 'error', message: t('sidebar.batchArchiveFailed', { count: failedCount }) })
+      } else {
+        handleExitBatchMode()
+      }
+    } finally {
+      setIsBatchArchiving(false)
+    }
+  }, [addToast, attentionSessionIds, handleExitBatchMode, restoreArchivedSessions, runningSessionIds, setSessionsArchived, t])
 
   const requestBatchDelete = useCallback((ids: string[]) => {
     if (ids.length === 0) return
@@ -1085,6 +1162,19 @@ export function Sidebar({
         >
           {t('sidebar.scheduled')}
         </NavItem>
+        {showPhoneConnection && <NavItem
+          active={phoneConnectionActive}
+          collapsed={!expanded}
+          label={t('settings.tab.h5Access')}
+          onClick={() => {
+            useUIStore.getState().setPendingSettingsTab('h5Access')
+            useUIStore.getState().setActiveSettingsTab('h5Access')
+            useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+          }}
+          icon={<Smartphone size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+        >
+          {t('settings.tab.h5Access')}
+        </NavItem>}
         <NavItem
           active={activeTabId === MARKET_TAB_ID || activeTabId === CONNECTORS_TAB_ID}
           collapsed={!expanded}
@@ -1125,10 +1215,26 @@ export function Sidebar({
           >
             {isBatchMode && (
               <div className="mx-2 mb-1 mt-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2">
-                <div className="flex items-center justify-between gap-2 pl-1">
-                  <span className="min-w-0 text-[12px] font-medium tabular-nums text-[var(--color-text-primary)]">
+                <div className="flex items-center gap-1 pl-1">
+                  <span className="min-w-0 flex-1 text-[12px] font-medium tabular-nums text-[var(--color-text-primary)]">
                     {t('sidebar.batchSelectedCount', { count: selectedCount })}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (filteredSessionIds.every((id) => selectedSessionIds.has(id))) {
+                        deselectSessions(filteredSessionIds)
+                      } else {
+                        selectSessions(filteredSessionIds)
+                      }
+                    }}
+                    disabled={filteredSessionIds.length === 0}
+                    className="h-6 flex-shrink-0 rounded-[var(--radius-sm)] px-1.5 text-[11px] font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
+                  >
+                    {filteredSessionIds.length > 0 && filteredSessionIds.every((id) => selectedSessionIds.has(id))
+                      ? t('sidebar.batchDeselectAll')
+                      : t('sidebar.batchSelectAll')}
+                  </button>
                   <IconButton
                     icon={<X size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />}
                     label={t('sidebar.batchExit')}
@@ -1141,24 +1247,18 @@ export function Sidebar({
                   <Button
                     variant="secondary"
                     size="base"
-                    onClick={() => {
-                      if (filteredSessionIds.every((id) => selectedSessionIds.has(id))) {
-                        deselectSessions(filteredSessionIds)
-                      } else {
-                        selectSessions(filteredSessionIds)
-                      }
-                    }}
-                    disabled={filteredSessionIds.length === 0}
+                    icon={<Archive size={14} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+                    onClick={() => void handleBatchArchive([...selectedSessionIds])}
+                    disabled={selectedCount === 0 || isBatchArchiving}
+                    loading={isBatchArchiving}
                   >
-                    {filteredSessionIds.length > 0 && filteredSessionIds.every((id) => selectedSessionIds.has(id))
-                      ? t('sidebar.batchDeselectAll')
-                      : t('sidebar.batchSelectAll')}
+                    {t('sidebar.batchArchiveSelected', { count: selectedCount })}
                   </Button>
                   <Button
                     variant="danger"
                     size="base"
                     onClick={() => requestBatchDelete([...selectedSessionIds])}
-                    disabled={selectedCount === 0}
+                    disabled={selectedCount === 0 || isBatchArchiving}
                   >
                     {t('sidebar.batchDeleteSelected', { count: selectedCount })}
                   </Button>
@@ -1178,30 +1278,34 @@ export function Sidebar({
                   actions. The header stays
                   rendered while the first load is in flight, so a stuck load can
                   still be retried by hand. */}
-              <ProjectHeaderActions
-                title={isTaskView ? t('sidebar.tasks') : t('sidebar.projects')}
-                menuLabel={t('sidebar.projectMenu')}
-                createLabel={t('sidebar.newProject')}
-                refreshLabel={t('sidebar.refreshSessions')}
-                refreshing={showRefreshLoading}
-                onRefresh={() => void refreshSessionsNow()}
-                batchLabel={isBatchMode ? t('sidebar.batchExit') : t('sidebar.batchManage')}
-                batchActive={isBatchMode}
-                onToggleBatch={isBatchMode ? handleExitBatchMode : enterBatchMode}
-                onOpenMenu={(event) => openProjectHeaderMenu(event, 'main')}
-                onOpenCreate={(event) => openProjectHeaderMenu(event, 'create')}
-                actionsRef={projectHeaderActionsRef}
-              />
-              {showInitialLoading ? (
+              {!archiveView && (
+                <ProjectHeaderActions
+                  title={isTaskView ? t('sidebar.tasks') : t('sidebar.projects')}
+                  menuLabel={t('sidebar.projectMenu')}
+                  createLabel={t('sidebar.newProject')}
+                  refreshLabel={t('sidebar.refreshSessions')}
+                  refreshing={showRefreshLoading}
+                  onRefresh={() => void refreshSessionsNow()}
+                  batchLabel={isBatchMode ? t('sidebar.batchExit') : t('sidebar.batchManage')}
+                  batchActive={isBatchMode}
+                  onToggleBatch={isBatchMode ? handleExitBatchMode : enterBatchMode}
+                  onOpenMenu={(event) => openProjectHeaderMenu(event, 'main')}
+                  onOpenCreate={(event) => openProjectHeaderMenu(event, 'create')}
+                  actionsRef={projectHeaderActionsRef}
+                />
+              )}
+              {archiveView ? null : showInitialLoading ? (
                 <div className="px-2 py-4 text-center text-[12px] text-[var(--color-text-tertiary)]">
                   {t('common.loading')}
                 </div>
-              ) : filteredSessions.length === 0 && (
+              ) : filteredSessions.length === 0 && (isTaskView || visibleProjectGroups.length === 0) && (
                 <div className="px-2 py-2">
                   <EmptyState variant="inline" title={t('sidebar.noSessions')} />
                 </div>
               )}
-              {isTaskView ? (
+              {archiveView ? (
+                <ArchivedSessionsPanel projectRoot={archiveView.projectRoot} onBack={() => setArchiveView(null)} />
+              ) : isTaskView ? (
                 <SidebarTaskList
                   groups={taskGroups}
                   activeTabId={activeTabId}
@@ -1227,6 +1331,8 @@ export function Sidebar({
                   : getVisibleProjectSessions(project.sessions, sessionsExpanded, activeTabId, attentionSessionIds)
                 const hiddenCount = project.sessions.length - visibleItems.length
                 const projectSessionTotal = projectSessionTotals[project.key]
+                // Kept in the list only by its archive: no session left to show.
+                const archiveOnly = project.sessions.length === 0 && !projectSessionTotal
                 const hasUnloadedSessions = projectSessionTotal === undefined
                   ? false
                   : projectSessionTotal > project.sessions.length
@@ -1287,7 +1393,7 @@ export function Sidebar({
                         {isProjectPinned && (
                           <Pin size={12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                         )}
-                        {!isBatchMode && (
+                        {!isBatchMode && !archiveOnly && (
                           <span
                             data-testid={`sidebar-project-count-${domSafeProjectKey(project.key)}`}
                             className="flex-shrink-0 text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)] group-hover/project:hidden group-focus-within/project:hidden"
@@ -1297,7 +1403,7 @@ export function Sidebar({
                         )}
                       </button>
                       <div className="flex flex-shrink-0 items-center gap-1">
-                        {isBatchMode && (
+                        {isBatchMode && !archiveOnly && (
                           <button
                             type="button"
                             onClick={() => toggleGroupSelection(groupIds)}
@@ -1428,6 +1534,7 @@ export function Sidebar({
                                         {t('sidebar.missingDir')}
                                       </span>
                                     )}
+                                    <SessionScheduleMark sessionId={session.id} />
                                     <SessionRowMeta
                                       isRunning={runningSessionIds.has(session.id)}
                                       needsAttention={attentionSessionIds.has(session.id)}
@@ -1441,6 +1548,13 @@ export function Sidebar({
                             </div>
                           ))}
                         </ProjectSessionList>
+                        {archiveOnly && (
+                          // Every session here is archived. The project keeps its
+                          // place; its menu opens the archive.
+                          <div className="flex h-[30px] items-center pl-8 pr-2 text-[12px] text-[var(--color-text-tertiary)]">
+                            {t('sidebar.projectAllArchived')}
+                          </div>
+                        )}
                         {showSessionFoldControl && (
                           <div className="mt-px flex justify-start">
                             <button
@@ -1477,10 +1591,14 @@ export function Sidebar({
         >
           <div className={expanded ? 'flex min-w-0 flex-1' : 'flex'}>
           <NavItem
-            active={activeTabId === SETTINGS_TAB_ID}
+            active={activeTabId === SETTINGS_TAB_ID && !phoneConnectionActive}
             collapsed={!expanded}
             label={t('sidebar.settings')}
             onClick={() => {
+              if (showPhoneConnection && activeSettingsTab === 'h5Access') {
+                useUIStore.getState().setPendingSettingsTab(null)
+                useUIStore.getState().setActiveSettingsTab('general')
+              }
               useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
             }}
             icon={<Settings size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
@@ -1502,24 +1620,35 @@ export function Sidebar({
       {contextMenu && (
         <div
           ref={sessionContextMenuRef}
+          role="menu"
           className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <button
+          <SidebarMenuItem
+            icon={<Pencil size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             onClick={() => {
               const session = sessions.find((s) => s.id === contextMenu.id)
               handleStartRename(contextMenu.id, session?.title || '')
             }}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('common.rename')}
-          </button>
-          <button
+          </SidebarMenuItem>
+          <SidebarMenuItem
+            icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            disabled={runningSessionIds.has(contextMenu.id) || attentionSessionIds.has(contextMenu.id)}
+            title={runningSessionIds.has(contextMenu.id) || attentionSessionIds.has(contextMenu.id) ? t('sidebar.archiveBusy') : undefined}
+            onClick={() => void handleArchive(contextMenu.id)}
+          >
+            {t('sidebar.archiveSession')}
+          </SidebarMenuItem>
+          <div className="mx-1 my-1 border-t border-[var(--color-border)]" role="separator" />
+          <SidebarMenuItem
+            icon={<Trash2 size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             onClick={() => handleDelete(contextMenu.id)}
-            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
+            danger
           >
             {t('common.delete')}
-          </button>
+          </SidebarMenuItem>
         </div>
       )}
 
@@ -1537,32 +1666,38 @@ export function Sidebar({
             onClick={(event) => event.stopPropagation()}
           >
             {project.key !== 'unknown' && project.workDir && (
-              <ProjectMenuItem
+              <SidebarMenuItem
                 icon={<SquarePen size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
                 onClick={() => openProjectEditor(project)}
               >
                 {t('sidebar.projectEditor.editTitle')}
-              </ProjectMenuItem>
+              </SidebarMenuItem>
             )}
-            <ProjectMenuItem
+            <SidebarMenuItem
+              icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+              onClick={() => openArchiveView(project.key)}
+            >
+              {t('sidebar.archivedSessions')}
+            </SidebarMenuItem>
+            <SidebarMenuItem
               icon={pinned ? <PinOff size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <Pin size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
               onClick={() => togglePinnedProject(project.key)}
             >
               {t(pinned ? 'sidebar.unpinProject' : 'sidebar.pinProject')}
-            </ProjectMenuItem>
-            <ProjectMenuItem
+            </SidebarMenuItem>
+            <SidebarMenuItem
               icon={<FolderOpen size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
               onClick={() => void openProjectInFileManager(project)}
             >
               {t(openInFileManagerKey(fileManagerPlatform))}
-            </ProjectMenuItem>
-            <ProjectMenuItem
+            </SidebarMenuItem>
+            <SidebarMenuItem
               icon={hidden ? <RotateCcw size={16} strokeWidth={ICON_STROKE} aria-hidden="true" /> : <X size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
               onClick={() => toggleHiddenProject(project)}
               danger={!hidden}
             >
               {t(hidden ? 'sidebar.restoreProjectToSidebar' : 'sidebar.hideProjectFromSidebar')}
-            </ProjectMenuItem>
+            </SidebarMenuItem>
           </div>
         )
       })()}
@@ -1581,6 +1716,7 @@ export function Sidebar({
           onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
+          onOpenArchives={() => openArchiveView()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
         />
@@ -1600,6 +1736,7 @@ export function Sidebar({
           onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
+          onOpenArchives={() => openArchiveView()}
           hiddenProjectCount={hiddenProjectKeys.size}
           t={t}
         />
@@ -1824,6 +1961,7 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
   onCreateBlank: () => void
   onUseExistingFolder: () => void
   onRestoreHiddenProjects: () => void
+  onOpenArchives: () => void
   hiddenProjectCount: number
   t: ReturnType<typeof useTranslation>
 }>(function ProjectHeaderMenu({
@@ -1838,6 +1976,7 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
   onCreateBlank,
   onUseExistingFolder,
   onRestoreHiddenProjects,
+  onOpenArchives,
   hiddenProjectCount,
   t,
 }, ref) {
@@ -1913,6 +2052,9 @@ const ProjectHeaderMenu = forwardRef<HTMLDivElement, {
           {t('sidebar.restoreHiddenProjects', { count: hiddenProjectCount })}
         </HeaderMenuItem>
       )}
+      <HeaderMenuItem icon={<Archive size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />} onClick={onOpenArchives}>
+        {t('sidebar.archivedSessions')}
+      </HeaderMenuItem>
     </div>
   )
 })
@@ -1956,6 +2098,7 @@ function groupByProject(
   sessions: SessionListItem[],
   sortBy: SidebarProjectSortBy,
   displayNameForProject: (projectKey: string) => string | null,
+  archivedTotals: Record<string, number>,
 ): ProjectGroup[] {
   const groupsByKey = new Map<string, SessionListItem[]>()
   for (const session of sessions) {
@@ -1963,6 +2106,9 @@ function groupByProject(
     const items = groupsByKey.get(key) ?? []
     items.push(session)
     groupsByKey.set(key, items)
+  }
+  for (const [root, count] of Object.entries(archivedTotals)) {
+    if (count > 0 && !groupsByKey.has(root)) groupsByKey.set(root, [])
   }
 
   const groups = [...groupsByKey.entries()].map(([key, items]) => {
@@ -2117,39 +2263,6 @@ function positionProjectMenu(clientX: number, clientY: number): React.CSSPropert
   }
 }
 
-function ProjectMenuItem({
-  icon,
-  children,
-  onClick,
-  disabled = false,
-  danger = false,
-}: {
-  icon: React.ReactNode
-  children: React.ReactNode
-  onClick?: () => void
-  disabled?: boolean
-  danger?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      disabled={disabled}
-      onClick={disabled ? undefined : onClick}
-      className={`flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:opacity-45 ${
-        danger
-          ? 'text-[var(--color-error)] enabled:hover:bg-[var(--color-error-container)]'
-          : 'text-[var(--color-text-primary)] enabled:hover:bg-[var(--color-surface-hover)]'
-      }`}
-    >
-      <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${danger ? 'text-current' : 'text-[var(--color-text-tertiary)]'}`}>
-        {icon}
-      </span>
-      <span className="min-w-0 truncate">{children}</span>
-    </button>
-  )
-}
-
 function SessionRowMeta({
   isRunning,
   needsAttention,
@@ -2231,6 +2344,7 @@ function NavItem({
     <button
       onClick={onClick}
       aria-label={label}
+      aria-current={active ? 'page' : undefined}
       title={collapsed ? label : undefined}
       className={`
         group/nav flex items-center text-[13px] transition-colors duration-150

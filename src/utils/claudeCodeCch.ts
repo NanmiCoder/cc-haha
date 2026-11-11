@@ -99,8 +99,11 @@ function countLiteralOccurrences(body: string, literal: string): number {
   return count
 }
 
+// Use Bun's native xxHash64 on the request path: the pure-JS BigInt version
+// below allocates ~1M BigInt temporaries per MB of body, and DFG-compiled
+// BigInt ops freeing those temporaries are where the Windows segfaults landed.
 function computeClaudeCodeCCH(body: string): string {
-  return (xxHash64Seeded(encoder.encode(body), CCH_SEED) & 0xfffffn)
+  return (BigInt(Bun.hash.xxHash64(encoder.encode(body), CCH_SEED)) & 0xfffffn)
     .toString(16)
     .padStart(5, '0')
 }

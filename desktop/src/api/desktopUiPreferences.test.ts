@@ -36,6 +36,30 @@ describe('desktopUiPreferencesApi', () => {
     vi.restoreAllMocks()
   })
 
+  it('saves server-owned directory configuration and encodes space, Unicode and Windows paths when reloading', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    const project = { projectKey: 'C:\\代码 space', mainDirectory: 'C:\\代码 space', additionalDirectories: ['C:\\数据 files'] }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(project), { status: 200 }))
+    await expect(desktopUiPreferencesApi.updateProjectDirectories(project.mainDirectory, project.additionalDirectories)).resolves.toEqual(project)
+    await expect(desktopUiPreferencesApi.getProjectDirectories(project.mainDirectory)).resolves.toEqual(project)
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:49237/api/desktop-ui/preferences/project-directories', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ workDir: project.mainDirectory, additionalDirectories: project.additionalDirectories }) }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `http://127.0.0.1:49237/api/desktop-ui/preferences/project-directories?workDir=${encodeURIComponent(project.mainDirectory)}`, expect.objectContaining({ method: 'GET' }))
+  })
+
+  it('loads only the shareable profile through its read-only endpoint', async () => {
+    setBaseUrl('http://127.0.0.1:49237')
+    const profile = { displayName: 'Ada', subtitle: 'My activity', avatarDataUrl: null }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ profile }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    await expect(desktopUiPreferencesApi.getProfile()).resolves.toEqual({ profile })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:49237/api/desktop-ui/preferences/profile',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
   it('sends only the requested pet preference fields through the pet endpoint', async () => {
     setBaseUrl('http://127.0.0.1:49237')
     const fetchMock = vi.spyOn(globalThis, 'fetch')

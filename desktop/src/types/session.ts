@@ -1,3 +1,4 @@
+import type { ScheduledTaskTrigger } from './task'
 // Source: src/server/services/sessionService.ts
 
 import type { ReasoningEffortLevel } from './settings'
@@ -23,6 +24,7 @@ export type SessionListItem = {
   /** Server-owned, immutable after creation; absent legacy values mean standard. */
   agentProfile?: AgentProfile
   id: string
+  archived?: boolean
   title: string
   createdAt: string
   modifiedAt: string
@@ -49,12 +51,16 @@ export type MessageUsage = {
 }
 
 export type MessageEntry = {
+  scheduledTask?: ScheduledTaskTrigger
   sessionReferences?: Array<{ sessionId: string }>
   /** Present when this user-position message was delivered from another session. */
   collaboration?: { sourceSessionId: string; messageId?: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown
+  isApiErrorMessage?: boolean
+  error?: string
+  businessErrorCode?: string
   toolUseResult?: unknown
   timestamp: string
   model?: string

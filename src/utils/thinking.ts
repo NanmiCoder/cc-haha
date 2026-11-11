@@ -5,6 +5,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growt
 import { getCanonicalName } from './model/model.js'
 import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './model/providers.js'
+import { readProviderEnv } from './model/providerEnvScope.js'
 import { getSettingsWithErrors } from './settings/settings.js'
 import { isEnvTruthy } from './envUtils.js'
 
@@ -156,9 +157,14 @@ export function modelRejectsManualThinking(model: string): boolean {
   )
 }
 
-/** Fable 5.1 binds replayed thinking to the preceding system, tools and history. */
+/**
+ * Fable 5.1 and 5.2 bind replayed thinking to the preceding system, tools and history.
+ * On 5.2 the prefix check applies to every account, so a request that replays a stale
+ * block without `prefix_mismatch_behavior` fails with a 400.
+ */
 export function modelUsesBoundThinking(model: string): boolean {
-  return getCanonicalName(model) === 'claude-fable-5-1'
+  const canonical = getCanonicalName(model)
+  return canonical === 'claude-fable-5-1' || canonical === 'claude-fable-5-2'
 }
 
 export function resolveModelThinkingEnabled(
@@ -169,7 +175,7 @@ export function resolveModelThinkingEnabled(
 }
 
 function isMiniMaxAnthropicEndpoint(): boolean {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL?.toLowerCase() ?? ''
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL')?.toLowerCase() ?? ''
   return baseUrl.includes('minimax') || baseUrl.includes('minimaxi')
 }
 
@@ -246,5 +252,5 @@ export function shouldEnableThinkingByDefault(): boolean {
 }
 
 export function shouldSendExplicitDisabledThinking(): boolean {
-  return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
+  return isEnvTruthy(readProviderEnv('CC_HAHA_SEND_DISABLED_THINKING'))
 }

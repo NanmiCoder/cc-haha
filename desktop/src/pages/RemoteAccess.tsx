@@ -11,6 +11,8 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
   const t = useTranslation()
   const secret = useRef<string | null>(null)
   const initialized = useRef(false)
+  const authRequestRevision = useRef(0)
+  const authResultRevision = useRef(0)
   useLayoutEffect(() => {
     // Capture after React commits: StrictMode may discard the first render's refs.
     // A layout effect still clears the address before paint and any API request.
@@ -24,10 +26,46 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
   const [claim, setClaim] = useState<{ id: string, claimSecret: string } | null>(null)
   useEffect(() => {
     let active = true
+    const revision = ++authRequestRevision.current
     remoteAccessApi.session().then((result) => {
-      if (active) setState(result.authenticated ? 'ready' : secret.current ? 'pair' : 'unpaired')
-    }).catch(() => { if (active) setState('error') })
+      if (!active || revision < authResultRevision.current) return
+      authResultRevision.current = revision
+      setState(result.authenticated ? 'ready' : secret.current ? 'pair' : 'unpaired')
+    }).catch(() => { if (active && revision >= authResultRevision.current) setState('error') })
     return () => { active = false }
+  }, [])
+  useEffect(() => {
+    let active = true
+    const check = () => {
+      const revision = ++authRequestRevision.current
+      // Native resume follows a cookie refresh. Earlier requests used the old
+      // cookie and must not unmount a chat while this fresh check is pending.
+      authResultRevision.current = revision
+      void remoteAccessApi.session().then((result) => {
+        if (!active || revision < authResultRevision.current) return
+        authResultRevision.current = revision
+        if (result.authenticated) {
+          setClaim(null)
+          setState('ready')
+          return
+        }
+        setState((current) => current === 'ready' || current === 'loading'
+          ? secret.current ? 'pair' : 'unpaired'
+          : current)
+      }).catch(() => {
+        if (!active || revision < authResultRevision.current) return
+        // Keep an established screen on transient failures. Initial loading
+        // needs a retry path now that its older request has been superseded.
+        setState(current => current === 'loading' ? 'error' : current)
+      })
+    }
+    // The native host refreshes its cookie before dispatching this single event.
+    // Listen even while unpaired so a retained WebView can recover without a reload.
+    window.addEventListener('cc-haha:resume', check)
+    return () => {
+      active = false
+      window.removeEventListener('cc-haha:resume', check)
+    }
   }, [])
   useEffect(() => {
     if (!claim || state !== 'pending') return
@@ -57,8 +95,11 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
     let active = true
     const check = () => {
       if (document.visibilityState === 'hidden') return
+      const revision = ++authRequestRevision.current
       void remoteAccessApi.session().then((result) => {
-        if (active && !result.authenticated) setState('unpaired')
+        if (!active || revision < authResultRevision.current) return
+        authResultRevision.current = revision
+        if (!result.authenticated) setState('unpaired')
       }).catch(() => { /* Existing chat reconnection owns transient network failures. */ })
     }
     const timer = setInterval(check, 30000)
@@ -73,9 +114,12 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
   }, [state])
   const retry = async () => {
     setState('loading')
+    const revision = ++authRequestRevision.current
     try {
       // The cookie may have arrived even if the one-use claim response was lost.
       const session = await remoteAccessApi.session()
+      if (revision < authResultRevision.current) return
+      authResultRevision.current = revision
       if (session.authenticated) {
         setClaim(null)
         setState('ready')
@@ -84,7 +128,7 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
       } else {
         setState(secret.current ? 'pair' : 'unpaired')
       }
-    } catch { setState('error') }
+    } catch { if (revision >= authResultRevision.current) setState('error') }
   }
   const pair = async () => {
     if (!secret.current || !name.trim()) return

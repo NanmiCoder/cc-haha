@@ -127,6 +127,21 @@ describe('projectTrajectoryRows', () => {
     expect(byId(rows, 'c:s-05')).toMatchObject({ kind: 'context', label: 'api_error', isError: true, preview: 'overloaded' })
   })
 
+  it('only marks visible or explicitly redacted thinking on an assistant row', () => {
+    const rows = projectTrajectoryRows(page([
+      assistant('a-01', 'msg_empty', [{ type: 'thinking', thinking: '', signature: 'signed' }]),
+      assistant('a-02', 'msg_empty', [
+        { type: 'thinking', thinking: ' \n ' },
+        { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} },
+      ]),
+      assistant('a-03', 'msg_redacted', [{ type: 'redacted_thinking', data: 'hidden' }]),
+    ]), { turnBase: 0, skipSidechain: true })
+
+    expect(byId(rows, 'a:msg_empty')).toMatchObject({ hasThinking: false, toolOnly: true })
+    expect(byId(rows, 't:toolu_1').toolName).toBe('Read')
+    expect(byId(rows, 'a:msg_redacted').hasThinking).toBe(true)
+  })
+
   it('emits an orphan tool_result as a partial tool row and extracts subagent ids', () => {
     const entries = page([
       user('u-01', [{ type: 'tool_result', tool_use_id: 'toolu_old', content: 'done' }]),

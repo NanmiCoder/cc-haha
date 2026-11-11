@@ -65,7 +65,7 @@ export function extractDetailContent(row: TrajectoryRow, entries: readonly Recor
           if (typeof block.text === 'string' && row.kind !== 'tool') texts.push(block.text)
           break
         case 'thinking':
-          if (typeof block.thinking === 'string' && block.thinking) content.thinking.push(block.thinking)
+          if (typeof block.thinking === 'string' && block.thinking.trim()) content.thinking.push(block.thinking)
           break
         case 'redacted_thinking':
           content.thinking.push('[redacted thinking]')

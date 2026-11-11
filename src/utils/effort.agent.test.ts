@@ -122,6 +122,40 @@ describe('agent effort values', () => {
     }
   })
 
+  test('preserves saved Grok effort while discovery is cold without overriding known capabilities', () => {
+    const originalProvider = process.env.CC_HAHA_GROK_OAUTH_PROVIDER
+    const originalEffort = process.env.CLAUDE_CODE_EFFORT_LEVEL
+    delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+    setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+    try {
+      process.env.CC_HAHA_GROK_OAUTH_PROVIDER = '1'
+      expect(modelSupportsEffort('grok-future-release')).toBe(true)
+      expect(resolveAppliedEffort('grok-future-release', 'xhigh')).toBe('xhigh')
+      expect(resolveAppliedEffort('grok-future-release', 'max')).toBe('max')
+      expect(resolveAppliedEffort('grok-4.5', 'xhigh')).toBe('high')
+      expect(resolveAppliedEffort('grok-4.7', 'max')).toBe('high')
+
+      setGrokRuntimeModelCatalog([{
+        value: 'grok-future-release', label: 'Future', description: '',
+        supportsReasoningEffort: false,
+      }])
+      expect(modelSupportsEffort('grok-future-release')).toBe(false)
+      expect(modelSupportsXHighEffort('grok-future-release')).toBe(false)
+      expect(modelSupportsMaxEffort('grok-future-release')).toBe(false)
+
+      setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+      process.env.CC_HAHA_GROK_OAUTH_PROVIDER = '0'
+      expect(resolveAppliedEffort('grok-future-release', 'xhigh')).toBe('high')
+      expect(resolveAppliedEffort('grok-future-release', 'max')).toBe('high')
+    } finally {
+      setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+      if (originalProvider === undefined) delete process.env.CC_HAHA_GROK_OAUTH_PROVIDER
+      else process.env.CC_HAHA_GROK_OAUTH_PROVIDER = originalProvider
+      if (originalEffort === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+      else process.env.CLAUDE_CODE_EFFORT_LEVEL = originalEffort
+    }
+  })
+
   test('lets request-scoped Agent effort override session env only when marked', () => {
     const originalOverride = process.env.CLAUDE_CODE_EFFORT_LEVEL
     try {

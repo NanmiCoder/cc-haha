@@ -1,11 +1,14 @@
 import '@testing-library/jest-dom'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { AttachmentGallery } from '@/components/chat/AttachmentGallery'
+import { collectConversationImages } from '@/components/chat/conversationImages'
 import { ImageGalleryModal } from './ImageGalleryModal'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { openLocalFileWithSystem, reportOpenFailure } from '../../lib/systemFileOpen'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { ConversationImageGalleryContext, type GalleryImage } from '@/components/chat/conversationImageGallery'
 
 vi.mock('../../lib/systemFileOpen', () => ({
   openLocalFileWithSystem: vi.fn().mockResolvedValue(undefined),
@@ -42,10 +45,13 @@ describe('ImageGalleryModal · navigation', () => {
     expect(screen.queryByRole('button', { name: 'Next image' })).not.toBeInTheDocument()
   })
 
-  it('uses an immersive media stage with a named close control', () => {
+  it('uses a transparent lightbox stage with named download and close controls', () => {
     render(<ImageGalleryModal open images={images} activeIndex={0} onClose={() => {}} onSelect={() => {}} />)
 
-    expect(screen.getByRole('dialog', { name: 'a.png' })).toHaveClass('bg-[var(--color-media-bg)]')
+    const dialog = screen.getByRole('dialog', { name: 'a.png' })
+    expect(dialog).not.toHaveClass('bg-[var(--color-media-bg)]', 'dialog-panel')
+    expect(dialog.previousElementSibling).toHaveClass('bg-[var(--color-lightbox-scrim)]')
+    expect(screen.getByRole('button', { name: 'Download image' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
   })
 
@@ -61,6 +67,33 @@ describe('ImageGalleryModal · navigation', () => {
     rerender(<ImageGalleryModal open images={gallery} activeIndex={2} onClose={() => {}} onSelect={onSelect} />)
     fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
     expect(onSelect).toHaveBeenLastCalledWith(0)
+  })
+
+  it('closes on stage whitespace without closing on pictures, controls, or a pan gesture', () => {
+    const onClose = vi.fn()
+    render(<ImageGalleryModal open images={gallery} activeIndex={0} onClose={onClose} onSelect={() => {}} />)
+    const image = screen.getByRole('img', { name: 'a.png' })
+    const stage = screen.getByRole('group', { name: 'a.png' })
+    const press = (node: Element) => {
+      const event = createEvent.pointerDown(node)
+      Object.defineProperties(event, { clientX: { value: 80 }, clientY: { value: 80 } })
+      fireEvent(node, event)
+    }
+    fireEvent.click(image)
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+    expect(onClose).not.toHaveBeenCalled()
+
+    // Pointer capture can retarget a click from the picture to its scroll stage.
+    press(image)
+    fireEvent.click(stage, { clientX: 80, clientY: 80 })
+    press(stage)
+    fireEvent.click(stage, { clientX: 120, clientY: 80 })
+    expect(onClose).not.toHaveBeenCalled()
+
+    press(stage)
+    fireEvent.click(stage, { clientX: 80, clientY: 80 })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('steps back and wraps before the first image', () => {
@@ -101,6 +134,150 @@ describe('ImageGalleryModal · navigation', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+describe('ImageGalleryModal · conversation history', () => {
+  it('opens the clicked picture in the full session and owns cross-message navigation', () => {
+    const onSelect = vi.fn()
+    const getImages = vi.fn(() => gallery)
+    render(
+      <ConversationImageGalleryContext.Provider value={getImages}>
+        <ImageGalleryModal open images={[gallery[1]!]} activeIndex={0} onClose={() => {}} onSelect={onSelect} />
+      </ConversationImageGalleryContext.Provider>,
+    )
+
+    expect(screen.getByText('2 / 3')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'b.png' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(screen.getByRole('dialog', { name: 'c.png' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('dialog', { name: 'a.png' })).toBeInTheDocument()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(getImages).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens each uploaded snapshot even when both retain the same source filename', () => {
+    const attachments = gallery.slice(0, 2).map((image) => ({
+      type: 'image' as const, name: image.name, path: '/tmp/screenshot.png', data: image.src,
+    }))
+    const getImages = () => collectConversationImages([
+      { id: 'user', type: 'user_text', content: 'Compare', timestamp: 1, attachments },
+    ], { sessionId: 'snapshots', baseUrl: 'http://localhost', imageLabel: 'Image' })
+    render(
+      <ConversationImageGalleryContext.Provider value={getImages}>
+        <AttachmentGallery attachments={attachments} />
+      </ConversationImageGalleryContext.Provider>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open a.png' }))
+    expect(screen.getByText('1 / 2')).toBeInTheDocument()
+    expect(screen.getByRole('dialog').querySelector('img')).toHaveAttribute('src', gallery[0]!.src)
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(screen.getByText('2 / 2')).toBeInTheDocument()
+    expect(screen.getByRole('dialog').querySelector('img')).toHaveAttribute('src', gallery[1]!.src)
+  })
+
+  it('preserves navigation while disk-confirmed history is loading', async () => {
+    let resolve!: (images: GalleryImage[]) => void
+    const pending = new Promise<GalleryImage[]>((done) => { resolve = done })
+    render(
+      <ConversationImageGalleryContext.Provider value={() => pending}>
+        <ImageGalleryModal open images={gallery.slice(1)} activeIndex={0} onClose={() => {}} onSelect={() => {}} />
+      </ConversationImageGalleryContext.Provider>,
+    )
+    expect(screen.getByText('1 / 2')).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    await act(async () => resolve(gallery))
+    expect(screen.getByText('3 / 3')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'c.png' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(screen.getByRole('dialog', { name: 'a.png' })).toBeInTheDocument()
+  })
+
+  it('ignores history completed after closing and keeps local pictures if a new load fails', async () => {
+    let resolve!: (images: GalleryImage[]) => void
+    const pending = new Promise<GalleryImage[]>((done) => { resolve = done })
+    const getImages = vi.fn<() => Promise<GalleryImage[]>>().mockReturnValueOnce(pending).mockRejectedValueOnce(new Error('offline'))
+    const view = (open: boolean) => (
+      <ConversationImageGalleryContext.Provider value={getImages}>
+        <ImageGalleryModal open={open} images={[gallery[1]!]} activeIndex={0} onClose={() => {}} onSelect={() => {}} />
+      </ConversationImageGalleryContext.Provider>
+    )
+    const { rerender } = render(view(true))
+    rerender(view(false))
+    await act(async () => resolve(gallery))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    await act(async () => rerender(view(true)))
+    expect(screen.getByText('1 / 1')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'b.png' })).toBeInTheDocument()
+  })
+
+  it('retains its opening snapshot during streaming and refreshes it after reopening', () => {
+    const extra = { src: 'data:image/png;base64,DDDD', name: 'new.png' }
+    let conversation = gallery
+    const getImages = () => conversation
+    const view = (open: boolean) => (
+      <ConversationImageGalleryContext.Provider value={getImages}>
+        <ImageGalleryModal open={open} images={[gallery[0]!]} activeIndex={0} onClose={() => {}} onSelect={() => {}} />
+      </ConversationImageGalleryContext.Provider>
+    )
+    const { rerender } = render(view(true))
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    conversation = [...gallery, extra]
+    rerender(view(true))
+    expect(screen.getByText('2 / 3')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'b.png' })).toBeInTheDocument()
+    rerender(view(false))
+    rerender(view(true))
+    expect(screen.getByText('1 / 4')).toBeInTheDocument()
+  })
+
+  it('decodes only the active tool image and releases every gallery-owned blob URL', () => {
+    let nextUrl = 0
+    const create = vi.fn((_: Blob) => `blob:gallery-${++nextUrl}`)
+    const revoke = vi.fn()
+    const originalCreate = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const originalRevoke = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: create })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revoke })
+    try {
+      const toolImages: GalleryImage[] = Array.from({ length: 30 }, (_, index) => ({
+        src: '', name: `tool-${index}.png`, inline: { mediaType: 'image/png', data: btoa(`picture ${index}`) },
+      }))
+      const clicked = { ...toolImages[0]!, src: 'blob:source-row' }
+      const { unmount } = render(
+        <ConversationImageGalleryContext.Provider value={() => toolImages}>
+          <ImageGalleryModal open images={[clicked]} activeIndex={0} onClose={() => {}} onSelect={() => {}} />
+        </ConversationImageGalleryContext.Provider>,
+      )
+      expect(create).toHaveBeenCalledTimes(1)
+      expect(screen.getByText('1 / 30')).toBeInTheDocument()
+      expect(screen.getAllByRole('img').every((image) => image.getAttribute('src') !== 'blob:source-row')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Previous image' }))
+      expect(screen.getByText('30 / 30')).toBeInTheDocument()
+      expect(create.mock.calls.length - revoke.mock.calls.length).toBe(1)
+      unmount()
+      expect(new Set(revoke.mock.calls.map(([url]) => url))).toEqual(new Set(create.mock.results.map(({ value }) => value)))
+      expect(revoke).not.toHaveBeenCalledWith('blob:source-row')
+    } finally {
+      cleanup()
+      if (originalCreate) Object.defineProperty(URL, 'createObjectURL', originalCreate)
+      else Reflect.deleteProperty(URL, 'createObjectURL')
+      if (originalRevoke) Object.defineProperty(URL, 'revokeObjectURL', originalRevoke)
+      else Reflect.deleteProperty(URL, 'revokeObjectURL')
+    }
+  })
+
+  it('keeps navigation available when a tool picture cannot decode', () => {
+    const corrupt: GalleryImage = { src: '', name: 'corrupt.png', inline: { mediaType: 'image/png', data: 'invalid%%%' } }
+    render(
+      <ConversationImageGalleryContext.Provider value={() => [corrupt, gallery[0]!] }>
+        <ImageGalleryModal open images={[corrupt]} activeIndex={0} onClose={() => {}} onSelect={() => {}} />
+      </ConversationImageGalleryContext.Provider>,
+    )
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('dialog', { name: 'a.png' })).toBeInTheDocument()
   })
 })
 

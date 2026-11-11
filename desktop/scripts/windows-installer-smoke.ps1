@@ -25,7 +25,7 @@ try {
 
 $resolvedArtifactsDir = (Resolve-Path -LiteralPath $ArtifactsDir).Path
 $installers = @(Get-ChildItem -LiteralPath $resolvedArtifactsDir -File |
-  Where-Object { $_.Name -like "Claude-Code-Haha-*-win-$Arch.exe" })
+  Where-Object { $_.Name -like "Claude-Code-Haha-*-Windows-$Arch-Setup.exe" })
 if ($installers.Count -ne 1) {
   throw "Expected exactly one Windows $Arch installer in $resolvedArtifactsDir, found $($installers.Count)."
 }

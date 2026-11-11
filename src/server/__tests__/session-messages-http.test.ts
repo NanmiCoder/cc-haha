@@ -137,6 +137,56 @@ afterEach(async () => {
 })
 
 describe('session messages HTTP surface', () => {
+  it('projects replayed transcript UUIDs once without rewriting the saved history', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const filePath = path.join(tmpDir, 'projects', '-tmp-replayed-history', `${sessionId}.jsonl`)
+    const user = (uuid: string, timestamp: string) => ({
+      type: 'user', uuid, timestamp,
+      message: { role: 'user', content: 'Try again' },
+    })
+    const error = {
+      type: 'assistant', uuid: 'quota-error', timestamp: '2026-01-01T00:00:01Z',
+      isApiErrorMessage: true, error: 'rate_limit',
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 429 quota exhausted' }] },
+    }
+    const answer = {
+      type: 'assistant', uuid: 'answer', timestamp: '2026-01-01T00:00:02Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Partial reply' }] },
+    }
+    const updatedAnswer = {
+      ...answer,
+      message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'Preserved thinking' },
+        { type: 'text', text: 'Completed reply' },
+        { type: 'tool_use', id: 'read-fixture', name: 'Read', input: { file_path: '/tmp/fixture' } },
+      ] },
+    }
+    // Compaction/replay can append existing UUIDs again. A repeated human
+    // prompt with a new UUID is a separate message and must remain visible.
+    await writeJsonl(filePath, [
+      user('first-user', '2026-01-01T00:00:00Z'),
+      error,
+      answer,
+      user('second-user', '2026-01-01T00:00:03Z'),
+      error,
+      updatedAnswer,
+    ])
+    const original = await fs.readFile(filePath, 'utf-8')
+
+    const histories = [(await sessionService.getSessionHistory(sessionId)).messages]
+    for (const suffix of ['', '/messages', '/messages?mode=full']) {
+      const response = await api('GET', `/api/sessions/${sessionId}${suffix}`)
+      expect(response.status).toBe(200)
+      histories.push((await response.json() as { messages: typeof histories[number] }).messages)
+    }
+    for (const messages of histories) {
+      expect(messages.map(message => message.id)).toEqual(['first-user', 'quota-error', 'answer', 'second-user'])
+      expect(messages.filter(message => message.content === 'Try again')).toHaveLength(2)
+      expect(messages.find(message => message.id === 'answer')?.content).toEqual(updatedAnswer.message.content)
+    }
+    expect(await fs.readFile(filePath, 'utf-8')).toBe(original)
+  })
+
   it('keeps a transcript readable when checkpoint previews exceed their budget (#1373)', async () => {
     const sessionId = await seedSessionWithSubagent()
     const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
@@ -222,6 +272,40 @@ describe('session messages HTTP surface', () => {
     expect(ids).toEqual(Array.from({ length: 60 }, (_, n) => `full-${n}`))
     expect(body.page.historyComplete).toBe(true)
     expect(body.page.nextCursor).toBeNull()
+  })
+
+  it('adds only a tail cursor to the paged response, and nothing to mode=full', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const paged = await (await api('GET', `/api/sessions/${sessionId}/messages`)).json() as { page: Record<string, unknown> }
+    expect(Object.keys(paged).sort()).toEqual(['messages', 'page', 'taskNotifications'])
+    expect(Object.keys(paged.page).sort()).toEqual([
+      'contextScanBytes', 'hasMore', 'historyComplete', 'nextCursor', 'omittedOversizedEntries',
+      'previousCursor', 'scannedBytes', 'sourceVersion', 'tailComplete', 'tailCursor',
+    ])
+    const full = await (await api('GET', `/api/sessions/${sessionId}/messages?mode=full`)).json() as { page: Record<string, unknown> }
+    expect(full.page.tailCursor).toBeUndefined()
+    expect(full.page.tailComplete).toBeUndefined()
+  })
+
+  it('a reconnecting client downloads only what was appended since its tail cursor', async () => {
+    const sessionId = await seedSessionWithSubagent()
+    const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
+    const first = await (await api('GET', `/api/sessions/${sessionId}/messages?media=ref`)).json() as {
+      messages: Array<{ id: string }>
+      page: { tailCursor: string }
+    }
+    expect(first.messages.length).toBeGreaterThan(0)
+    await fs.appendFile(filePath, [
+      { type: 'user', uuid: 'follow-user', timestamp: '2026-01-03T00:00:00Z', message: { role: 'user', content: 'next question' } },
+      { type: 'assistant', uuid: 'follow-answer', timestamp: '2026-01-03T00:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'next answer' }] } },
+    ].map(entry => JSON.stringify(entry)).join('\n') + '\n')
+    const response = await api('GET', `/api/sessions/${sessionId}/messages?media=ref&cursor=${encodeURIComponent(first.page.tailCursor)}`)
+    expect(response.status).toBe(200)
+    const delta = await response.json() as { messages: Array<{ id: string }>; page: { tailCursor: string; tailComplete: boolean } }
+    expect(delta.messages.map(message => message.id)).toEqual(['follow-user', 'follow-answer'])
+    expect(delta.page.tailComplete).toBe(true)
+    const idle = await (await api('GET', `/api/sessions/${sessionId}/messages?media=ref&cursor=${encodeURIComponent(delta.page.tailCursor)}`)).json() as { messages: unknown[] }
+    expect(idle.messages).toEqual([])
   })
 
   it('rejects an unknown history mode', async () => {

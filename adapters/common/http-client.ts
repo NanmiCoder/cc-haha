@@ -101,6 +101,30 @@ export class AdapterHttpClient {
     return fetch(`${this.httpBaseUrl}${pathname}`, { ...init, headers })
   }
 
+  /** Reuse the desktop's prepared speech recognizer; never download a model
+   * or silently select an external provider on behalf of an IM attachment. */
+  async transcribeAudio(wav: Buffer, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted()
+    if (!wav.length || wav.length > 4 * 1024 * 1024) throw new Error('音轨必须为不超过 4 MiB 的 16 kHz 单声道 WAV')
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    signal?.addEventListener('abort', abort, { once: true })
+    const timer = setTimeout(abort, 120_000)
+    try {
+      const response = await this.request('/api/voice/transcribe', {
+        method: 'POST', headers: { 'Content-Type': 'audio/wav' },
+        body: new Uint8Array(wav), signal: controller.signal, redirect: 'error',
+      })
+      if (!response.ok) throw new Error(`音轨识别不可用 (${response.status})，请在桌面语音设置中准备识别模型`)
+      const body: unknown = await response.json()
+      if (!body || typeof body !== 'object' || !('text' in body) || typeof body.text !== 'string') throw new Error('音轨识别返回了无效结果')
+      return body.text
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', abort)
+    }
+  }
+
   /** Create an AbortController with timeout */
   private createTimeoutController(timeoutMs = AdapterHttpClient.DEFAULT_TIMEOUT_MS): {
     controller: AbortController
@@ -109,6 +133,37 @@ export class AdapterHttpClient {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     return { controller, timer }
+  }
+
+  /** A 404 covers older servers and source servers without native power authority. */
+  async acquirePowerActivityLease(leaseId: string): Promise<boolean> {
+    return this.setPowerActivityLease(leaseId, true)
+  }
+
+  async releasePowerActivityLease(leaseId: string): Promise<void> {
+    await this.setPowerActivityLease(leaseId, false)
+  }
+
+  private async setPowerActivityLease(leaseId: string, active: boolean): Promise<boolean> {
+    const { controller, timer } = this.createTimeoutController()
+    try {
+      const response = await this.request('/api/sessions/power-activity-lease', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leaseId, active }),
+        signal: controller.signal,
+        redirect: 'error',
+      })
+      if (response.status === 404) return false
+      if (!response.ok) throw new Error(`Activity lease request failed (${response.status})`)
+      const body: unknown = await response.json()
+      if (!body || typeof body !== 'object' || !('ok' in body) || body.ok !== true) {
+        throw new Error('Activity lease was not acknowledged')
+      }
+      return true
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   async createSession(workDir: string): Promise<string> {

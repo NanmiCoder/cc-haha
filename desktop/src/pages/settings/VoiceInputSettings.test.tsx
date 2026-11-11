@@ -4,11 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
 import type {
   VoiceCatalog,
+  VoiceCorrectionTarget,
   VoiceLanguage,
+  VoicePreferences,
   VoicePreparationState,
   VoiceProviderStatus,
   VoiceTranscript,
+  VoiceVocabulary,
 } from '@/api/voice'
+import type { SavedProvider } from '@/types/provider'
 
 vi.mock('@/api/voice', () => ({
   voiceApi: {
@@ -19,6 +23,14 @@ vi.mock('@/api/voice', () => ({
     providerStatus: vi.fn(),
     removeAssets: vi.fn(),
     transcribe: vi.fn(),
+    correct: vi.fn(),
+    vocabulary: vi.fn(),
+    addVocabulary: vi.fn(),
+    updateVocabulary: vi.fn(),
+    removeVocabulary: vi.fn(),
+    dismissSuggestion: vi.fn(),
+    historySources: vi.fn(),
+    suggestFromHistory: vi.fn(),
   },
 }))
 
@@ -41,9 +53,11 @@ import {
   VoiceRecorderError,
   type StartRecordingOptions,
 } from '@/features/voiceInput/recorder'
+import { useProviderStore } from '@/stores/providerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { useVoiceInputStore } from '@/stores/voiceInputStore'
+import { useVoiceVocabularyStore } from '@/stores/voiceVocabularyStore'
 import { VoiceInputSettings } from './VoiceInputSettings'
 
 const api = vi.mocked(voiceApi)
@@ -52,6 +66,20 @@ const captureSupported = vi.mocked(isVoiceCaptureSupported)
 const start = vi.mocked(startRecording)
 
 const MODEL_BYTES = 241_357_257
+const DEFAULT_TARGET: VoiceCorrectionTarget = { providerId: 'deepseek', providerName: 'DeepSeek', modelId: 'deepseek-flash' }
+
+function prefs(patch: Partial<VoicePreferences> = {}): VoicePreferences {
+  return {
+    enabled: false,
+    providerId: 'sensevoice-local',
+    language: 'auto',
+    downloadSource: 'auto',
+    correctionEnabled: false,
+    correctionProviderId: null,
+    correctionModelId: null,
+    ...patch,
+  }
+}
 
 function makeProvider(
   preparation: VoicePreparationState,
@@ -77,8 +105,9 @@ function makeCatalog(
   return {
     supported: true,
     providers: [makeProvider(preparation)],
-    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+    preferences: prefs(),
     limits: { maxAudioSeconds: 60, maxAudioBytes: 5_000_000 },
+    correction: { defaultTarget: DEFAULT_TARGET, target: null },
     ...patch,
   }
 }
@@ -86,11 +115,38 @@ function makeCatalog(
 const READY: VoicePreparationState = { phase: 'ready' }
 const UNPREPARED: VoicePreparationState = { phase: 'unprepared' }
 
+const FUNASR = { id: 'funasr-nano-local', name: 'Fun-ASR-Nano', languages: ['auto'] as VoiceLanguage[], downloadBytes: 950 * 1024 * 1024 }
+const QWEN = { id: 'qwen3-asr-local', name: 'Qwen3-ASR 0.6B', languages: ['auto'] as VoiceLanguage[], downloadBytes: 980 * 1024 * 1024 }
+
+/** The three local models in server order; each phase can be set, the rest are not downloaded. */
+function threeModels(
+  phases: { sense?: VoicePreparationState; nano?: VoicePreparationState; qwen?: VoicePreparationState } = {},
+  preferences: Partial<VoicePreferences> = {},
+): VoiceCatalog {
+  return makeCatalog(READY, {
+    providers: [
+      makeProvider(phases.sense ?? READY),
+      makeProvider(phases.nano ?? UNPREPARED, FUNASR),
+      makeProvider(phases.qwen ?? UNPREPARED, QWEN),
+    ],
+    preferences: prefs(preferences),
+  })
+}
+
+const EMPTY_VOCABULARY: VoiceVocabulary = { terms: [], suggestions: [], history: null, maxTerms: 500 }
+
 async function renderPage(catalog: VoiceCatalog) {
   api.catalog.mockResolvedValue(catalog)
   render(<VoiceInputSettings />)
   await screen.findByRole('heading', { name: 'Voice Input' })
-  await screen.findByTestId('voice-model-status')
+  await screen.findAllByTestId('voice-model-row')
+}
+
+/** A model's row in the recognition list. */
+const modelRow = (id = 'sensevoice-local') => {
+  const row = screen.getAllByTestId('voice-model-row').find(element => element.dataset.provider === id)
+  if (!row) throw new Error(`no row for ${id}`)
+  return row
 }
 
 /** The library Dropdown: a trigger button, then a listbox of role=option rows once opened. */
@@ -113,6 +169,16 @@ function fakeRecording(overrides: Partial<{ level: number; wav: Blob; seconds: n
 
 const TRANSCRIPT: VoiceTranscript = { text: 'hello from the microphone', audioSeconds: 5.6, inferenceSeconds: 0.104 }
 
+const KIMI: SavedProvider = {
+  id: 'kimi',
+  presetId: 'custom',
+  name: 'Kimi',
+  apiKey: 'fixture',
+  baseUrl: 'http://127.0.0.1:1',
+  apiFormat: 'anthropic',
+  models: { main: 'kimi-k2', haiku: 'kimi-k2', sonnet: '', opus: '' },
+}
+
 let mediaDevices: EventTarget
 let objectUrlCounter: number
 const createObjectURL = vi.fn()
@@ -123,8 +189,12 @@ beforeEach(() => {
   localStorage.clear()
   useSettingsStore.setState({ locale: 'en' })
   useVoiceInputStore.setState({ catalog: null, loading: false, error: null })
+  useVoiceVocabularyStore.setState({ vocabulary: null, loading: false, error: null })
+  // Saved providers are already known, so the correction field never fetches.
+  useProviderStore.setState({ providers: [KIMI], activeId: 'kimi', hasLoadedProviders: true, isLoading: false })
   captureSupported.mockReturnValue(true)
   listInputs.mockResolvedValue([])
+  api.vocabulary.mockResolvedValue(EMPTY_VOCABULARY)
   api.updatePreferences.mockImplementation(async (patch) => ({
     preferences: { ...useVoiceInputStore.getState().catalog!.preferences, ...patch },
   }))
@@ -141,9 +211,11 @@ afterEach(async () => {
   cleanup()
   // Stop any status poll a test left running so it cannot leak into the next one.
   api.cancelPrepare.mockResolvedValue(makeProvider(UNPREPARED))
-  await useVoiceInputStore.getState().cancelPrepare('sensevoice-local')
+  for (const id of ['sensevoice-local', FUNASR.id, QWEN.id]) await useVoiceInputStore.getState().cancelPrepare(id)
   Reflect.deleteProperty(navigator, 'mediaDevices')
   useSettingsStore.setState(useSettingsStore.getInitialState(), true)
+  useProviderStore.setState(useProviderStore.getInitialState(), true)
+  useUIStore.setState(useUIStore.getInitialState(), true)
 })
 
 describe('VoiceInputSettings loading states', () => {
@@ -156,7 +228,7 @@ describe('VoiceInputSettings loading states', () => {
 
     api.catalog.mockResolvedValue(makeCatalog(UNPREPARED))
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(await screen.findByTestId('voice-model-status')).toBeInTheDocument()
+    expect(await screen.findByTestId('voice-model-row')).toBeInTheDocument()
   })
 
   it('replaces the whole page with a notice when the platform is unsupported', async () => {
@@ -165,7 +237,7 @@ describe('VoiceInputSettings loading states', () => {
 
     expect(await screen.findByText('Local speech recognition is not supported on this platform yet')).toBeInTheDocument()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('voice-model-status')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('voice-model-row')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Start test' })).not.toBeInTheDocument()
   })
 
@@ -174,70 +246,94 @@ describe('VoiceInputSettings loading states', () => {
     api.catalog.mockResolvedValue(makeCatalog(READY))
     render(<VoiceInputSettings />)
 
-    await waitFor(() => expect(screen.getByTestId('voice-model-status')).toHaveAttribute('data-phase', 'ready'))
+    await waitFor(() => expect(modelRow()).toHaveAttribute('data-phase', 'ready'))
     expect(api.catalog).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('VoiceInputSettings layout', () => {
-  it('keeps four cards under short headings: recognition, microphone, shortcut, test', async () => {
-    await renderPage(makeCatalog(READY))
+  it('orders the sections: models, AI correction, vocabulary, microphone, shortcut, test', async () => {
+    await renderPage(threeModels())
 
     expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual(['Voice Input'])
     expect(screen.getAllByRole('heading', { level: 3 }).map(heading => heading.textContent)).toEqual([
-      'Recognition engine',
+      'Recognition model',
+      'AI correction',
+      expect.stringMatching(/^Personal vocabulary/),
       'Microphone',
       'Keyboard shortcut',
       'Transcription test',
     ])
-    // Enable, engine, model and language are rows of the first card, not cards of their own.
-    const card = screen.getByRole('switch', { name: 'Enable voice input' }).closest('section')!
-    expect(within(card).getByRole('button', { name: 'Engine' })).toBeInTheDocument()
-    expect(within(card).getByTestId('voice-model-status')).toBeInTheDocument()
-    expect(within(card).getByRole('button', { name: 'Language' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Input device' }).closest('section')).not.toBe(card)
-    // No bordered box nested in the card.
-    expect(screen.getByTestId('voice-model-status').className).not.toMatch(/\bborder\b/)
+    // The header says recognition is local and correction sends only text.
+    expect(screen.getByText(/it sends the text, never the audio/)).toBeInTheDocument()
   })
 
-  it('separates the rows of a card with the divider token', async () => {
-    await renderPage(makeCatalog(READY))
-    const rows = screen.getByTestId('voice-model-status').parentElement!
-    expect(rows.className).toContain('divide-y')
-    expect(rows.className).toContain('divide-[var(--color-border)]')
+  it('keeps the on switch and the model list in one card, with language and source under it', async () => {
+    await renderPage(threeModels({ qwen: UNPREPARED }))
+    const section = screen.getByRole('switch', { name: 'Enable voice input' }).closest('section')!
+    const list = within(section).getByRole('radiogroup', { name: 'Recognition model' })
+    expect(within(list).getAllByRole('radio').map(radio => radio.getAttribute('aria-labelledby') && document.getElementById(radio.getAttribute('aria-labelledby')!)?.textContent))
+      .toEqual(['SenseVoice (local)', 'Fun-ASR-Nano', 'Qwen3-ASR 0.6B'])
+    expect(within(section).getByRole('button', { name: 'Language' })).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: 'Download source' })).toBeInTheDocument()
+    expect(list.className).toContain('divide-[var(--color-border)]')
   })
 })
 
-describe('VoiceInputSettings model status', () => {
-  it('shows a quiet local size line from the provider, and not for a cloud provider or an unknown size', async () => {
-    await renderPage(makeCatalog(UNPREPARED))
-    expect(screen.getByText('Local recognition · about 230 MB')).toBeInTheDocument()
+describe('VoiceInputSettings recognition models', () => {
+  it('describes each known model: badges, what it is good at, vendor, size, speed and memory', async () => {
+    await renderPage(threeModels())
 
-    cleanup()
-    useVoiceInputStore.setState({ catalog: null })
-    const cloud = makeCatalog(UNPREPARED)
-    cloud.providers[0]!.info.location = 'cloud'
-    await renderPage(cloud)
-    expect(screen.queryByText(/Local recognition/)).not.toBeInTheDocument()
+    const sense = modelRow('sensevoice-local')
+    expect(within(sense).getByText('Default')).toBeInTheDocument()
+    expect(within(sense).getByText('In use')).toBeInTheDocument()
+    expect(sense).toHaveTextContent('The fastest: text appears almost as soon as you stop.')
+    expect(sense).toHaveTextContent('Alibaba Tongyi · 230 MB · about 0.1 s per sentence · about 1 GB of memory while running')
 
-    cleanup()
-    useVoiceInputStore.setState({ catalog: null })
-    const unknown = makeCatalog(UNPREPARED)
-    delete unknown.providers[0]!.info.downloadBytes
-    await renderPage(unknown)
-    expect(screen.queryByText(/Local recognition/)).not.toBeInTheDocument()
+    const qwen = modelRow(QWEN.id)
+    expect(within(qwen).queryByText('Default')).toBeNull()
+    expect(within(qwen).queryByText('In use')).toBeNull()
+    expect(qwen).toHaveTextContent('Alibaba Qwen · 980 MB · about 0.6 s per sentence · about 3 GB of memory while running')
+    expect(modelRow(FUNASR.id)).toHaveTextContent('about 0.5 s per sentence · about 3 GB of memory')
   })
 
-  it('offers the download and starts it on click', async () => {
-    await renderPage(makeCatalog(UNPREPARED))
-    expect(screen.getByText('The speech model is not downloaded.')).toBeInTheDocument()
+  it('falls back to name and size for a model it has no copy for, and to nothing without a size', async () => {
+    const catalog = threeModels()
+    catalog.providers.push(makeProvider(UNPREPARED, { id: 'future-local', name: 'Future ASR', downloadBytes: 10 * 1024 * 1024 }))
+    catalog.providers.push(makeProvider(UNPREPARED, { id: 'cloud-asr', name: 'Cloud ASR', location: 'cloud', downloadBytes: undefined }))
+    await renderPage(catalog)
 
-    api.prepare.mockResolvedValue(makeProvider({ phase: 'downloading', step: 'runtime', resource: 'runtime.tar.gz', completedBytes: 0, totalBytes: 1000 }))
-    api.providerStatus.mockResolvedValue(makeProvider({ phase: 'downloading', step: 'runtime', resource: 'runtime.tar.gz', completedBytes: 0, totalBytes: 1000 }))
-    fireEvent.click(screen.getByRole('button', { name: 'Download' }))
+    expect(modelRow('future-local')).toHaveTextContent('Future ASRLocal recognition · about 10 MB')
+    expect(modelRow('cloud-asr')).not.toHaveTextContent('Local recognition')
+  })
 
-    await waitFor(() => expect(api.prepare).toHaveBeenCalledWith('sensevoice-local'))
-    await waitFor(() => expect(screen.getByTestId('voice-model-status')).toHaveAttribute('data-phase', 'downloading'))
+  it('lets only a downloaded model be picked, and saves it with a language it supports', async () => {
+    await renderPage(threeModels({ nano: READY }, { language: 'zh' }))
+
+    const radio = (id: string) => within(modelRow(id)).getByRole('radio')
+    expect(radio('sensevoice-local')).toBeChecked()
+    expect(radio(FUNASR.id)).toBeEnabled()
+    expect(radio(FUNASR.id)).not.toBeChecked()
+    expect(radio(QWEN.id)).toBeDisabled()
+    expect(modelRow(FUNASR.id)).toHaveTextContent('Select it to switch; it takes effect from the next dictation.')
+
+    fireEvent.click(radio(FUNASR.id))
+
+    await waitFor(() => expect(api.updatePreferences).toHaveBeenCalledWith({ providerId: FUNASR.id, language: 'auto' }))
+    await waitFor(() => expect(radio(FUNASR.id)).toBeChecked())
+    expect(within(modelRow(FUNASR.id)).getByText('In use')).toBeInTheDocument()
+  })
+
+  it('downloads a model from its own row', async () => {
+    await renderPage(threeModels())
+    const downloading = makeProvider({ phase: 'downloading', step: 'model', completedBytes: 0, totalBytes: 1000 }, QWEN)
+    api.prepare.mockResolvedValue(downloading)
+    api.providerStatus.mockResolvedValue(downloading)
+
+    fireEvent.click(within(modelRow(QWEN.id)).getByRole('button', { name: 'Download Qwen3-ASR 0.6B' }))
+
+    await waitFor(() => expect(api.prepare).toHaveBeenCalledWith(QWEN.id))
+    await waitFor(() => expect(modelRow(QWEN.id)).toHaveAttribute('data-phase', 'downloading'))
     // Downloading only starts from the explicit click, never from the toggle or the page load.
     expect(api.prepare).toHaveBeenCalledTimes(1)
   })
@@ -254,72 +350,48 @@ describe('VoiceInputSettings model status', () => {
       source: 'https://hf-mirror.com/model.int8.onnx',
     }))
 
-    const card = screen.getByTestId('voice-model-status')
-    expect(within(card).getByText(/Downloading speech model/)).toBeInTheDocument()
-    expect(within(card).getByText('· model.int8.onnx')).toBeInTheDocument()
-    expect(within(card).getByText('100 MB / 200 MB')).toBeInTheDocument()
-    expect(within(card).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50')
-    expect(within(card).getByText('Resumed from 60 MB that was already downloaded')).toBeInTheDocument()
-    expect(within(card).getByText('Source: https://hf-mirror.com/model.int8.onnx')).toBeInTheDocument()
+    const row = modelRow()
+    expect(row).toHaveTextContent('Downloading speech model · model.int8.onnx')
+    expect(within(row).getByText('100 MB / 200 MB')).toBeInTheDocument()
+    expect(within(row).getByRole('progressbar', { name: 'SenseVoice (local) download progress' })).toHaveAttribute('aria-valuenow', '50')
+    expect(within(row).getByText('Resumed from 60 MB that was already downloaded')).toBeInTheDocument()
+    expect(within(row).getByText('Source: https://hf-mirror.com/model.int8.onnx')).toBeInTheDocument()
+    expect(within(row).getByRole('radio')).toBeDisabled()
   })
 
   it('omits the resume note for a fresh download and uses an indeterminate bar without a total', async () => {
     api.providerStatus.mockResolvedValue(makeProvider(UNPREPARED))
     await renderPage(makeCatalog({ phase: 'downloading', step: 'runtime', resource: 'runtime.tar.gz' }))
 
-    const card = screen.getByTestId('voice-model-status')
-    expect(within(card).queryByText(/Resumed from/)).not.toBeInTheDocument()
-    expect(within(card).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+    const row = modelRow()
+    expect(within(row).queryByText(/Resumed from/)).not.toBeInTheDocument()
+    expect(within(row).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
   })
 
-  it('cancels a running download', async () => {
+  it('pauses a running download, and the paused one can continue', async () => {
     api.providerStatus.mockResolvedValue(makeProvider({ phase: 'downloading', step: 'model', completedBytes: 1, totalBytes: 2 }))
     await renderPage(makeCatalog({ phase: 'downloading', step: 'model', completedBytes: 1, totalBytes: 2 }))
 
-    api.cancelPrepare.mockResolvedValue(makeProvider({ phase: 'cancelled' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    api.cancelPrepare.mockResolvedValue(makeProvider({ phase: 'cancelled', completedBytes: 1 }))
+    fireEvent.click(within(modelRow()).getByRole('button', { name: 'Pause' }))
 
     await waitFor(() => expect(api.cancelPrepare).toHaveBeenCalledWith('sensevoice-local'))
-    await waitFor(() => expect(screen.getByTestId('voice-model-status')).toHaveAttribute('data-phase', 'cancelled'))
-  })
+    await waitFor(() => expect(modelRow()).toHaveAttribute('data-phase', 'cancelled'))
+    expect(modelRow()).toHaveTextContent('Paused. Parts already downloaded are kept')
 
-  it('reports verification without offering cancel', async () => {
-    api.providerStatus.mockResolvedValue(makeProvider({ phase: 'verifying' }))
-    await renderPage(makeCatalog({ phase: 'verifying' }))
-
-    const card = screen.getByTestId('voice-model-status')
-    expect(within(card).getAllByText('Verifying downloaded files…').length).toBeGreaterThan(0)
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument()
-  })
-
-  it('shows a paused download as resumable', async () => {
-    await renderPage(makeCatalog({ phase: 'cancelled' }))
-    expect(screen.getByText(/Paused\. Parts already downloaded are kept/)).toBeInTheDocument()
-
-    api.prepare.mockResolvedValue(makeProvider({ phase: 'ready' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Continue download' }))
+    api.prepare.mockResolvedValue(makeProvider(READY))
+    fireEvent.click(within(modelRow()).getByRole('button', { name: 'Continue download' }))
     await waitFor(() => expect(api.prepare).toHaveBeenCalledWith('sensevoice-local'))
   })
 
-  it('confirms before deleting a ready model, and keeps it when the dialog is dismissed', async () => {
-    await renderPage(makeCatalog(READY))
-    expect(screen.getByText('Local model is ready. It wakes up automatically when you record.')).toBeInTheDocument()
+  it('reports verification without offering any action', async () => {
+    api.providerStatus.mockResolvedValue(makeProvider({ phase: 'verifying' }))
+    await renderPage(makeCatalog({ phase: 'verifying' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete model' }))
-    expect(await screen.findByText('Delete the local speech model?')).toBeInTheDocument()
-    expect(api.removeAssets).not.toHaveBeenCalled()
-
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
-    await waitFor(() => expect(screen.queryByText('Delete the local speech model?')).not.toBeInTheDocument())
-    expect(api.removeAssets).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete model' }))
-    api.removeAssets.mockResolvedValue(makeProvider(UNPREPARED))
-    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }))
-
-    await waitFor(() => expect(api.removeAssets).toHaveBeenCalledWith('sensevoice-local'))
-    await waitFor(() => expect(screen.getByTestId('voice-model-status')).toHaveAttribute('data-phase', 'unprepared'))
-    expect(screen.queryByText('Delete the local speech model?')).not.toBeInTheDocument()
+    const row = modelRow()
+    expect(within(row).getAllByText('Verifying downloaded files…').length).toBeGreaterThan(0)
+    expect(within(row).getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+    expect(within(row).queryByRole('button')).not.toBeInTheDocument()
   })
 
   it.each([
@@ -337,12 +409,13 @@ describe('VoiceInputSettings model status', () => {
       error: { reason, source: 'https://huggingface.co/model.onnx', message: 'raw failure detail' },
     }))
 
-    expect(screen.getByRole('alert', { name: '' })).toHaveTextContent(text)
-    expect(screen.getByText('raw failure detail')).toBeInTheDocument()
-    expect(screen.getByText('Source: https://huggingface.co/model.onnx')).toBeInTheDocument()
+    const row = modelRow()
+    expect(within(row).getByRole('alert')).toHaveTextContent(text)
+    expect(within(row).getByText('raw failure detail')).toBeInTheDocument()
+    expect(within(row).getByText('Source: https://huggingface.co/model.onnx')).toBeInTheDocument()
 
-    api.prepare.mockResolvedValue(makeProvider({ phase: 'ready' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    api.prepare.mockResolvedValue(makeProvider(READY))
+    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(api.prepare).toHaveBeenCalledWith('sensevoice-local'))
   })
 
@@ -361,20 +434,54 @@ describe('VoiceInputSettings model status', () => {
     expect(screen.getByText('This platform is not supported by the local speech runtime')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
   })
-})
 
-describe('VoiceInputSettings partial downloads', () => {
+  it('confirms before deleting a downloaded model, and keeps it when the dialog is dismissed', async () => {
+    await renderPage(threeModels({ nano: READY }))
+    const remove = () => within(modelRow(FUNASR.id)).getByRole('button', { name: 'Delete Fun-ASR-Nano' })
+    expect(within(modelRow(FUNASR.id)).getByText('Downloaded')).toBeInTheDocument()
+
+    fireEvent.click(remove())
+    expect(await screen.findByText('Delete Fun-ASR-Nano?')).toBeInTheDocument()
+    expect(api.removeAssets).not.toHaveBeenCalled()
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByText('Delete Fun-ASR-Nano?')).not.toBeInTheDocument())
+    expect(api.removeAssets).not.toHaveBeenCalled()
+
+    fireEvent.click(remove())
+    api.removeAssets.mockResolvedValue(makeProvider(UNPREPARED, FUNASR))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(api.removeAssets).toHaveBeenCalledWith(FUNASR.id))
+    await waitFor(() => expect(modelRow(FUNASR.id)).toHaveAttribute('data-phase', 'unprepared'))
+    // Not the model in use, so the choice stays where it was.
+    expect(api.updatePreferences).not.toHaveBeenCalled()
+  })
+
+  it('switches back to SenseVoice after deleting the model in use', async () => {
+    await renderPage(threeModels({ qwen: READY }, { enabled: true, providerId: QWEN.id }))
+
+    fireEvent.click(within(modelRow(QWEN.id)).getByRole('button', { name: 'Delete Qwen3-ASR 0.6B' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('This is the model in use; once it is deleted, dictation switches back to SenseVoice (local).')
+
+    api.removeAssets.mockResolvedValue(makeProvider(UNPREPARED, QWEN))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(api.updatePreferences).toHaveBeenCalledWith({ providerId: 'sensevoice-local' }))
+    await waitFor(() => expect(within(modelRow('sensevoice-local')).getByRole('radio')).toBeChecked())
+  })
+
   it.each([
     ['cancelled', { phase: 'cancelled', completedBytes: 50 * 1024 * 1024, totalBytes: 200 * 1024 * 1024 }],
     ['failed', { phase: 'failed', completedBytes: 50 * 1024 * 1024, error: { reason: 'network', message: 'boom' } }],
     ['unprepared', { phase: 'unprepared', completedBytes: 50 * 1024 * 1024 }],
   ] as const)('lets a %s download with bytes on disk be deleted, after confirming', async (phase, preparation) => {
     await renderPage(makeCatalog(preparation as VoicePreparationState))
-    expect(screen.getByTestId('voice-model-status')).toHaveAttribute('data-phase', phase)
+    expect(modelRow()).toHaveAttribute('data-phase', phase)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete model' }))
-    expect(await screen.findByText('Delete the local speech model?')).toBeInTheDocument()
-    expect(api.removeAssets).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete SenseVoice (local)' }))
+    expect(await screen.findByText('Delete SenseVoice (local)?')).toBeInTheDocument()
 
     api.removeAssets.mockResolvedValue(makeProvider(UNPREPARED))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
@@ -385,15 +492,11 @@ describe('VoiceInputSettings partial downloads', () => {
     ['cancelled', { phase: 'cancelled' }],
     ['failed', { phase: 'failed', completedBytes: 0, error: { reason: 'network', message: 'boom' } }],
     ['unprepared', { phase: 'unprepared' }],
-  ] as const)('offers no delete for a %s download with nothing on disk', async (_phase, preparation) => {
+    ['downloading', { phase: 'downloading', completedBytes: 5, totalBytes: 10 }],
+  ] as const)('offers no delete for a %s model with nothing finished on disk', async (_phase, preparation) => {
+    api.providerStatus.mockResolvedValue(makeProvider(preparation as VoicePreparationState))
     await renderPage(makeCatalog(preparation as VoicePreparationState))
-    expect(screen.queryByRole('button', { name: 'Delete model' })).not.toBeInTheDocument()
-  })
-
-  it('does not offer delete while a download is running', async () => {
-    api.providerStatus.mockResolvedValue(makeProvider({ phase: 'downloading', completedBytes: 5, totalBytes: 10 }))
-    await renderPage(makeCatalog({ phase: 'downloading', completedBytes: 5, totalBytes: 10 }))
-    expect(screen.queryByRole('button', { name: 'Delete model' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete SenseVoice (local)' })).not.toBeInTheDocument()
   })
 })
 
@@ -410,7 +513,7 @@ describe('VoiceInputSettings preferences', () => {
   })
 
   it('does not warn about a missing model once it is ready', async () => {
-    await renderPage(makeCatalog(READY, { preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' } }))
+    await renderPage(makeCatalog(READY, { preferences: prefs({ enabled: true }) }))
     expect(screen.getByRole('switch', { name: 'Enable voice input' })).toBeChecked()
     expect(screen.queryByText(/Voice input is on, but the speech model is not downloaded yet/)).not.toBeInTheDocument()
   })
@@ -425,7 +528,7 @@ describe('VoiceInputSettings preferences', () => {
     expect(screen.getByRole('switch', { name: 'Enable voice input' })).not.toBeChecked()
   })
 
-  it('offers only the languages the provider lists, labelled, and saves the pick', async () => {
+  it('offers only the languages the model in use lists, labelled, and saves the pick', async () => {
     const catalog = makeCatalog(READY)
     catalog.providers[0]!.info.languages = ['auto', 'zh', 'yue']
     await renderPage(catalog)
@@ -449,33 +552,22 @@ describe('VoiceInputSettings preferences', () => {
     expect(within(openPicker('Language')).getByRole('option', { name: 'fr' })).toBeInTheDocument()
   })
 
-  it('renders every provider and moves to a language the new provider supports', async () => {
-    const second: VoiceProviderStatus = makeProvider(READY, { id: 'other-engine', name: 'Other engine', languages: ['auto', 'en'] })
-    const catalog = makeCatalog(READY, {
-      preferences: { enabled: true, providerId: 'sensevoice-local', language: 'yue', downloadSource: 'auto' },
-    })
-    catalog.providers.push(second)
-    await renderPage(catalog)
+  it('locks the language for a model that only detects it itself', async () => {
+    await renderPage(threeModels({ qwen: READY }, { providerId: QWEN.id }))
 
-    expect(optionLabels(openPicker('Engine'))).toEqual(['SenseVoice (local)', 'Other engine'])
-
-    fireEvent.click(screen.getByRole('option', { name: 'Other engine' }))
-    await waitFor(() => expect(api.updatePreferences).toHaveBeenCalledWith({ providerId: 'other-engine', language: 'auto' }))
-  })
-
-  it('renders a single provider as a normal engine control', async () => {
-    await renderPage(makeCatalog(READY))
-    expect(trigger('Engine')).toHaveTextContent('SenseVoice (local)')
-    expect(within(openPicker('Engine')).getAllByRole('option')).toHaveLength(1)
+    expect(trigger('Language')).toBeDisabled()
+    expect(trigger('Language')).toHaveTextContent('Auto detect')
+    expect(screen.getByText('Qwen3-ASR 0.6B detects the language automatically.')).toBeInTheDocument()
   })
 })
 
 describe('VoiceInputSettings download source', () => {
   const hint = () => screen.getByRole('button', { name: 'Change proxy' }).closest('p')!
 
-  it('offers the three sources before a download and saves the chosen one', async () => {
-    await renderPage(makeCatalog(UNPREPARED))
+  it('offers the three sources for every model and saves the chosen one', async () => {
+    await renderPage(threeModels())
 
+    expect(hint()).toHaveTextContent('Applies to every model.')
     const list = openPicker('Download source')
     expect(optionLabels(list)).toEqual([
       'Automatic (first to respond)',
@@ -489,8 +581,8 @@ describe('VoiceInputSettings download source', () => {
     await waitFor(() => expect(trigger('Download source')).toHaveTextContent('Official (Hugging Face, npm)'))
   })
 
-  it('hides the source picker once the model is installed', async () => {
-    await renderPage(makeCatalog(READY))
+  it('hides the source picker once every model is installed', async () => {
+    await renderPage(threeModels({ nano: READY, qwen: READY }))
 
     expect(screen.queryByRole('button', { name: 'Download source' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Change proxy' })).not.toBeInTheDocument()
@@ -524,6 +616,74 @@ describe('VoiceInputSettings download source', () => {
   })
 })
 
+describe('VoiceInputSettings AI correction', () => {
+  const correctionSwitch = () => screen.getByRole('switch', { name: 'Fix terms with AI after recognition' })
+  const modelField = () => screen.getByRole('button', { name: 'Correction model' })
+
+  it('is off by default: only the switch, explained, and nothing to pick', async () => {
+    await renderPage(threeModels())
+
+    expect(correctionSwitch()).not.toBeChecked()
+    expect(screen.getByText('Only the recognized text is sent, never the audio. Each dictation takes about 1 second longer.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Correction model' })).not.toBeInTheDocument()
+    // The "?" card says what it is, who it suits and what it costs.
+    fireEvent.click(screen.getByRole('button', { name: 'What is AI correction?' }))
+    expect(await screen.findByText(/the audio never does/)).toBeInTheDocument()
+  })
+
+  it('switches on and then offers the model, following the default provider\'s fast model', async () => {
+    await renderPage(threeModels())
+    api.catalog.mockResolvedValue(makeCatalog(READY, { correction: { defaultTarget: DEFAULT_TARGET, target: DEFAULT_TARGET } }))
+
+    fireEvent.click(correctionSwitch())
+
+    await waitFor(() => expect(api.updatePreferences).toHaveBeenCalledWith({ correctionEnabled: true }))
+    await waitFor(() => expect(correctionSwitch()).toBeChecked())
+    expect(modelField()).toHaveTextContent('Follow default provider')
+    expect(modelField()).toHaveTextContent('deepseek-flash')
+    expect(screen.getByText(/If nothing comes back within 3 seconds, the original text is used\./)).toBeInTheDocument()
+  })
+
+  it('pins a saved provider\'s model, and goes back to following the default', async () => {
+    await renderPage(threeModels({}, { correctionEnabled: true }))
+
+    fireEvent.click(modelField())
+    const picker = screen.getByTestId('model-selector-dropdown')
+    expect(within(picker).getByRole('button', { name: /^Follow default provider/ })).toHaveTextContent('Uses DeepSeek\'s Haiku model')
+    expect(within(picker).getByText('Kimi')).toBeInTheDocument()
+    fireEvent.click(within(picker).getByRole('button', { name: /^kimi-k2/ }))
+
+    await waitFor(() => expect(api.updatePreferences).toHaveBeenCalledWith({ correctionProviderId: 'kimi', correctionModelId: 'kimi-k2' }))
+    await waitFor(() => expect(modelField()).toHaveTextContent('kimi-k2'))
+
+    fireEvent.click(modelField())
+    fireEvent.click(within(screen.getByTestId('model-selector-dropdown')).getByRole('button', { name: /^Follow default provider/ }))
+    await waitFor(() => expect(api.updatePreferences).toHaveBeenLastCalledWith({ correctionProviderId: null, correctionModelId: null }))
+  })
+
+  it('cannot be switched on without any model service, and points to where one is added', async () => {
+    useProviderStore.setState({ providers: [], activeId: null })
+    useUIStore.setState({ activeSettingsTab: 'voice' })
+    await renderPage(makeCatalog(READY, { correction: { defaultTarget: null, target: null } }))
+
+    expect(correctionSwitch()).toBeDisabled()
+    expect(screen.getByText('Add a model provider first.')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add a provider' }))
+    expect(useUIStore.getState().activeSettingsTab).toBe('providers')
+  })
+
+  it('says when the chosen model is gone and dictation falls back to the original text', async () => {
+    await renderPage(makeCatalog(READY, {
+      preferences: prefs({ correctionEnabled: true, correctionProviderId: 'deleted', correctionModelId: 'k3.1-pro' }),
+      correction: { defaultTarget: DEFAULT_TARGET, target: null },
+    }))
+
+    expect(screen.getByText(/The model you chose earlier, "k3.1-pro", is no longer in your providers\./)).toBeInTheDocument()
+    // The field keeps naming the saved choice rather than quietly showing another model.
+    expect(modelField()).toHaveTextContent('k3.1-pro')
+  })
+})
 describe('VoiceInputSettings microphone', () => {
   it('lists devices without asking for permission and stores the choice locally', async () => {
     listInputs.mockResolvedValue([
@@ -769,7 +929,7 @@ describe('VoiceInputSettings transcription test', () => {
       { deviceId: 'mic-a', label: 'Built-in Microphone' },
       { deviceId: 'mic-b', label: 'USB Microphone' },
     ])
-    const catalog = makeCatalog(READY, { preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' } })
+    const catalog = makeCatalog(READY, { preferences: prefs({ enabled: true, language: 'zh' }) })
     await renderPage(catalog)
     await waitFor(() => expect(trigger('Input device')).toHaveTextContent('USB Microphone'))
 
@@ -977,5 +1137,101 @@ describe('VoiceInputSettings transcription test', () => {
 
     await act(async () => { resolveStart(recording) })
     expect(recording.cancel).toHaveBeenCalled()
+  })
+})
+
+describe('VoiceInputSettings transcription test with AI correction', () => {
+  const HEARD = '开源的这一个 agent brother skills，后来在 coded 里面去用'
+  const CORRECTED = '开源的这一个 Agent Browser skills，后来在 Codex 里面去用'
+  const at = (to: string) => CORRECTED.indexOf(to)
+
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
+    // The trace's animation frames are not what these cases are about.
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  /** The test returns to idle once both steps have finished. */
+  const idle = () => waitFor(() => expect(screen.getByRole('button', { name: 'Start test' })).toBeEnabled())
+
+  async function runTest() {
+    start.mockResolvedValue(fakeRecording())
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start test' }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    })
+  }
+
+  const correctionOn = () => makeCatalog(READY, {
+    preferences: prefs({ enabled: true, correctionEnabled: true }),
+    correction: { defaultTarget: DEFAULT_TARGET, target: DEFAULT_TARGET },
+  })
+
+  it('shows what was heard beside the corrected text, with each change marked, and both timings', async () => {
+    await renderPage(correctionOn())
+    api.transcribe.mockResolvedValue({ text: HEARD, audioSeconds: 4.2, inferenceSeconds: 0.12 })
+    let finish!: (value: Awaited<ReturnType<typeof api.correct>>) => void
+    api.correct.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+
+    await runTest()
+
+    // The second step shows while it runs.
+    expect(await screen.findByRole('button', { name: 'AI correcting…' })).toBeInTheDocument()
+    expect(api.correct).toHaveBeenCalledWith(HEARD, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+
+    await act(async () => {
+      finish({
+        text: CORRECTED,
+        changes: [
+          { from: 'agent brother', to: 'Agent Browser', start: at('Agent Browser'), end: at('Agent Browser') + 13, inVocabulary: true },
+          { from: 'coded', to: 'Codex', start: at('Codex'), end: at('Codex') + 5, inVocabulary: false },
+        ],
+        target: DEFAULT_TARGET,
+        seconds: 0.84,
+      })
+    })
+
+    const heard = screen.getByTestId('voice-transcript')
+    expect(heard).toHaveTextContent(HEARD)
+    expect([...heard.querySelectorAll('mark')].map(mark => mark.textContent)).toEqual(['agent brother', 'coded'])
+    const corrected = screen.getByTestId('voice-corrected')
+    expect(corrected).toHaveTextContent(CORRECTED)
+    expect([...corrected.querySelectorAll('mark')].map(mark => mark.textContent)).toEqual(['Agent Browser', 'Codex'])
+    expect(screen.getByText('Corrected · changes: 2')).toBeInTheDocument()
+    expect(screen.getByText('Audio 4.2 s · Recognition 0.12 s · Correction 0.84 s · deepseek-flash')).toBeInTheDocument()
+    await idle()
+  })
+
+  it('shows a failed correction as part of the result, not as an error', async () => {
+    await renderPage(correctionOn())
+    api.transcribe.mockResolvedValue({ text: HEARD, audioSeconds: 4.2, inferenceSeconds: 0.12 })
+    api.correct.mockRejectedValue(new ApiError(502, { error: 'voice/correction-failed', reason: 'auth', message: 'x' }))
+
+    await runTest()
+
+    expect(await screen.findByText('The correction model\'s API key is invalid.')).toBeInTheDocument()
+    expect(screen.getByTestId('voice-transcript')).toHaveTextContent(HEARD)
+    expect(screen.queryByRole('alert')).toBeNull()
+    await idle()
+  })
+
+  it('skips the second step while correction is off', async () => {
+    await renderPage(makeCatalog(READY))
+    api.transcribe.mockResolvedValue(TRANSCRIPT)
+
+    await runTest()
+
+    expect(await screen.findByTestId('voice-transcript')).toHaveTextContent('hello from the microphone')
+    expect(api.correct).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('voice-corrected')).toBeNull()
+    await idle()
   })
 })

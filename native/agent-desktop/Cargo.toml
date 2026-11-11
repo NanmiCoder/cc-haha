@@ -1,0 +1,68 @@
+[workspace]
+members         = ["crates/core", "crates/macos", "crates/windows", "crates/linux", "crates/ffi", "src"]
+default-members = ["crates/core", "crates/macos", "crates/windows", "crates/linux", "src"]
+resolver = "2"
+
+[workspace.package]
+edition      = "2024"
+rust-version = "1.89"
+license      = "Apache-2.0"
+version      = "1.0.2"
+
+[workspace.dependencies]
+clap               = { version = "4.6", features = ["derive"] }
+serde              = { version = "1.0", features = ["derive"] }
+serde_json         = { version = "1.0", features = ["float_roundtrip"] }
+thiserror          = "2.0"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64             = "0.23"
+rustc-hash         = "2.1"
+libc               = "0.2"
+smallvec           = { version = "1.13", features = ["serde", "union"] }
+agent-desktop-core = { path = "crates/core" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unreachable_pub        = "allow"
+unused_must_use        = "deny"
+let_underscore_drop    = "allow"
+
+[workspace.lints.clippy]
+dbg_macro              = "deny"
+todo                   = "warn"
+needless_collect       = "warn"
+redundant_clone        = "allow"
+unwrap_used            = "allow"
+expect_used            = "allow"
+needless_pass_by_value = "allow"
+manual_let_else        = "allow"
+items_after_statements = "allow"
+collapsible_if         = "allow"
+print_stdout           = "allow"
+print_stderr           = "allow"
+
+[profile.release]
+opt-level     = "z"
+lto           = true
+codegen-units = 1
+strip         = true
+panic         = "abort"
+
+[profile.release.package.agent-desktop-core]
+opt-level = 3
+
+[profile.release.package.agent-desktop-macos]
+opt-level = 3
+
+[profile.ci]
+inherits      = "release"
+opt-level     = 1
+lto           = false
+codegen-units = 16
+strip         = false
+debug         = 1
+
+[profile.release-ffi]
+inherits = "release"
+panic    = "unwind"

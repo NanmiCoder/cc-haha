@@ -137,6 +137,9 @@ export type DesktopTerminalStartupShell =
 export type DesktopTerminalSettings = {
   startupShell: DesktopTerminalStartupShell
   customShellPath: string
+  /** An installed font family name; empty keeps the built-in monospace stack. */
+  fontFamily: string
+  fontSize: number
 }
 
 export type ModelInfo = {
@@ -144,6 +147,8 @@ export type ModelInfo = {
   name: string
   description: string
   context: string
+  /** Highest window a user may set for this model; absent when no cap is known. */
+  maxContext?: string
   defaultReasoningEffort?: ReasoningEffortLevel
   supportedReasoningEfforts?: ReasoningEffortLevel[]
 }
@@ -159,6 +164,8 @@ export type UserSettings = {
   effort?: EffortLevel
   alwaysThinkingEnabled?: boolean
   workflowKeywordTriggerEnabled?: boolean
+  /** Desktop composer next-prompt suggestions; absent means off (opt-in, costs tokens). */
+  nextPromptSuggestionsEnabled?: boolean
   leanModeEnabled?: boolean
   agentTeamsEnabled?: boolean
   /** 同一会话的普通前台/后台 SubAgent 并发上限，缺省或 null 表示不限。 */

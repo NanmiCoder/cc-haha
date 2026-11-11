@@ -57,6 +57,42 @@ function recordingFetch(respond: () => Response) {
 }
 
 describe('buildDeepSeekFetch', () => {
+  test('uploads large images after replacing the dummy key with the account grant', async () => {
+    storeGrant('dsh_media_fixture_token')
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(41 * 1024 * 1024) } }
+    const original = { model: 'deepseek-flash', messages: [{ role: 'user', content: [image] }] }
+    const paths: string[] = []
+    const controller = new AbortController()
+    const wrapped = buildDeepSeekFetch((async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      paths.push(url.pathname)
+      const headers = new Headers(init?.headers)
+      expect(headers.get('x-dsh-auth-token')).toBe('dsh_media_fixture_token')
+      expect(headers.has('x-api-key')).toBe(false)
+      expect(headers.has('authorization')).toBe(false)
+      expect(init?.redirect).toBe('error')
+      expect(init?.signal).toBe(controller.signal)
+      if (url.pathname === '/files') {
+        expect(init?.body instanceof FormData).toBe(true)
+        return Response.json({ id: 'file-account-media' })
+      }
+      expect(url.pathname).toBe('/anthropic/v1/messages')
+      expect(headers.get('anthropic-beta')).toBe('existing-beta,files-api-2025-04-14')
+      expect(JSON.parse(String(init?.body)).messages[0].content).toEqual([{ type: 'image', source: { type: 'file', file_id: 'file-account-media' } }])
+      return Response.json({ type: 'message', content: [{ type: 'text', text: 'Image received' }] })
+    }) as typeof fetch)
+    const response = await wrapped(`${DEEPSEEK_INFERENCE_ORIGIN}/anthropic/v1/messages`, {
+      method: 'POST',
+      headers: { 'x-api-key': 'deepseek-oauth-dummy-key', authorization: 'Bearer dummy', 'anthropic-beta': 'existing-beta' },
+      body: JSON.stringify(original),
+      signal: controller.signal,
+    })
+    expect(response.status).toBe(200)
+    expect(paths).toEqual(['/files', '/anthropic/v1/messages'])
+    expect(image.source.type).toBe('base64')
+    expect(image.source.data.length).toBe(41 * 1024 * 1024)
+  })
+
   test('replaces the Anthropic key headers with the account token for the inference origin', async () => {
     storeGrant()
     const upstream = recordingFetch(() => new Response('{}'))

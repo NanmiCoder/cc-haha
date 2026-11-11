@@ -123,6 +123,33 @@ test('SDK side chat forks include trailing native system records instead of cutt
   expect(getSideChat(result.sessionId)?.resumeAt).toBe(boundary)
 })
 
+test('mobile conversation-only rewind removes native trailing chain records while preserving SDK runtime and model settings', async () => {
+  const source = await nativeFixture()
+  const trailingId = crypto.randomUUID()
+  await appendFile(source.info.filePath, JSON.stringify({
+    type: 'system', subtype: 'turn_duration', uuid: trailingId, parentUuid: source.ids[3],
+    sessionId: source.sessionId, timestamp: new Date(Date.now() + 10_000).toISOString(),
+    durationMs: 10, isSidechain: false,
+  }) + '\n')
+  const original = await readFile(source.info.filePath, 'utf8')
+  const selector = { targetUserMessageId: source.ids[2], expectedContent: 'native fixture 2' }
+  const preview = await request(source.sessionId, 'rewind', { ...selector, dryRun: true })
+  expect(preview.status).toBe(200)
+  expect(await readFile(source.info.filePath, 'utf8')).toBe(original)
+
+  const response = await request(source.sessionId, 'rewind', { ...selector, mode: 'conversation' })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ mode: 'conversation', target: { targetUserMessageId: source.ids[2] } })
+  const retained = (await readFile(source.info.filePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  expect(retained.filter(entry => ['user', 'assistant'].includes(entry.type)).map(entry => entry.uuid)).toEqual(source.ids.slice(0, 2))
+  expect(retained.some(entry => entry.uuid === trailingId)).toBe(false)
+  expect(retained.find(entry => entry.fixtureExtension)).toMatchObject({ fixtureExtension: { preserved: true } })
+  expect(readConversationRuntime(directory, source.sessionId)).toBe('agent-sdk')
+  expect(await sessionService.getSessionLaunchInfo(source.sessionId)).toMatchObject({
+    runtimeProviderId: 'official-sdk-fixture', runtimeModelId: 'claude-haiku-5-5', effortLevel: 'low', permissionMode: 'default',
+  })
+})
+
 test('unmarked legacy sessions continue through the existing branch validation', async () => {
   const launch = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
   const response = await request(crypto.randomUUID(), 'branch', { targetMessageId: 'fixture-user-message' })

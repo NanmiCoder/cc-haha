@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>agent-desktop visual debug</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<header>
+<h1>agent-desktop <span>Visual debug</span></h1>
+<p id="summary"></p>
+<p id="explanation"></p>
+</header>
+<main>
+<section aria-label="Screenshot visualization">
+<div class="toolbar">
+<button id="before" type="button">Before click</button>
+<button id="after" type="button">After command</button>
+<label><input id="highlights" type="checkbox" checked> Highlights</label>
+</div>
+<p id="phase" role="status"></p>
+<div id="stage"><img id="capture" alt="Captured target application window"><svg id="overlay" xmlns="http://www.w3.org/2000/svg" aria-label="Element highlights"></svg></div>
+<p id="warning" role="status"></p>
+</section>
+<aside aria-label="Returned elements">
+<h2 id="list-title">Returned elements</h2>
+<p>Check roles to filter highlights. Expand a group to inspect its elements. No roles checked means show all.</p>
+<button id="all" type="button">Show all elements</button>
+<p id="filter-status" role="status"></p>
+<div id="nodes" aria-label="Element groups"></div>
+<details><summary>Command result</summary><pre id="result"></pre></details>
+</aside>
+</main>
+<footer id="notice"></footer>
+<script id="debug-data" type="application/json">{{DATA}}</script>
+<script>{{JS}}</script>
+</body>
+</html>

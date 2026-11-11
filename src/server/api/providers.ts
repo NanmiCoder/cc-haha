@@ -7,6 +7,8 @@
  *                                           (?providerId=<id>: only that provider's own auth)
  * GET    /api/providers/settings          — read cc-haha managed settings.json
  * GET    /api/providers/cc-switch/scan    — scan a local cc-switch install
+ * GET    /api/providers/magpie            — the local Magpie gateway's state and catalog
+ * POST   /api/providers/magpie/open       — open the Magpie app (macOS)
  * POST   /api/providers                  — add a provider
  * POST   /api/providers/cc-switch/import  — import scanned cc-switch providers
  * POST   /api/providers/models            — list upstream models for a config
@@ -23,11 +25,14 @@
 
 import { z } from 'zod'
 import { ProviderService } from '../services/providerService.js'
+import { openMagpieApp } from '../services/magpieGateway.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
   CreateProviderSchema,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
+  ModelContextWindowsSchema,
   ModelMappingSchema,
+  ProviderProxyConfigSchema,
   UpdateProviderSchema,
   TestProviderSchema,
   ReorderProvidersSchema,
@@ -51,6 +56,7 @@ const FetchProviderModelsSchema = z.object({
   baseUrl: z.string().min(1),
   apiKey: z.string().min(1),
   isFullUrl: z.boolean().optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   // `modelsUrl` is deliberately NOT accepted over HTTP. The service still
   // supports the override for internal callers, but exposing a free-form
   // endpoint on an authenticated route only widens the request surface — no
@@ -61,6 +67,8 @@ const OfficialProviderModelsUpdateSchema = z.object({
   models: ModelMappingSchema.extend({
     main: z.string().trim().min(1),
   }),
+  // Omitted keeps the saved overrides; `{}` clears them.
+  modelContextWindows: ModelContextWindowsSchema.optional(),
 })
 
 export async function handleProvidersApi(
@@ -95,6 +103,19 @@ export async function handleProvidersApi(
       throw ApiError.notFound(`Unknown cc-switch route: ${action ?? ''}`)
     }
 
+    // /api/providers/magpie — the local gateway, ahead of the generic :id handlers
+    if (id === 'magpie') {
+      if (!action) {
+        if (req.method !== 'GET') throw methodNotAllowed(req.method)
+        return Response.json(await providerService.getMagpieState({ force: url.searchParams.get('refresh') === '1' }))
+      }
+      if (action === 'open') {
+        if (req.method !== 'POST') throw methodNotAllowed(req.method)
+        return Response.json(await openMagpieApp())
+      }
+      throw ApiError.notFound(`Unknown Magpie route: ${action}`)
+    }
+
     // GET /api/providers/presets
     // Carries retired presets too (flagged `deprecated`), so a consumer resolving a saved
     // provider's presetId still finds it. Filter on `deprecated` to build add-provider choices.
@@ -115,7 +136,11 @@ export async function handleProvidersApi(
       }
       if (req.method === 'PUT') {
         const body = await parseJsonBody(req)
-        await providerService.updateManagedSettings(body)
+        const expectedActiveProviderId = url.searchParams.get('expectedActiveProviderId')
+        if (expectedActiveProviderId !== null && !expectedActiveProviderId.trim()) {
+          throw ApiError.badRequest('expectedActiveProviderId must not be empty')
+        }
+        await providerService.updateManagedSettings(body, expectedActiveProviderId ?? undefined)
         return Response.json({ ok: true })
       }
       throw methodNotAllowed(req.method)
@@ -139,9 +164,11 @@ export async function handleProvidersApi(
         const { providers, activeId, providerOrder } = await providerService.listProviders()
         // The built-in DeepSeek account is not a saved provider, but the model
         // picker shows its alias rows like one, from the mapping the user saved.
-        const deepSeekAccountModels =
-          await providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID)
-        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels })
+        const [deepSeekAccountModels, builtInProviderAvailability] = await Promise.all([
+          providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID),
+          providerService.getBuiltInProviderAvailability(),
+        ])
+        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels, builtInProviderAvailability })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)
@@ -160,15 +187,21 @@ export async function handleProvidersApi(
     if (action === 'models') {
       if (req.method === 'GET') {
         const models = await providerService.getOfficialProviderModels(id)
-        return Response.json({ models })
+        const modelContextWindows = await providerService.getOfficialProviderContextWindows(id)
+        return Response.json({ models, modelContextWindows })
       }
       if (req.method === 'PUT') {
         const parsed = OfficialProviderModelsUpdateSchema.safeParse(await parseJsonBody(req))
         if (!parsed.success) {
           throw ApiError.badRequest(parsed.error.issues.map((issue) => issue.message).join('; '))
         }
-        const models = await providerService.updateOfficialProviderModels(id, parsed.data.models)
-        return Response.json({ models })
+        const models = await providerService.updateOfficialProviderModels(
+          id,
+          parsed.data.models,
+          { modelContextWindows: parsed.data.modelContextWindows },
+        )
+        const modelContextWindows = await providerService.getOfficialProviderContextWindows(id)
+        return Response.json({ models, modelContextWindows })
       }
       throw methodNotAllowed(req.method)
     }

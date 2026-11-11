@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useUIStore } from '@/stores/uiStore'
 import { useTabStore, type Tab } from '../../stores/tabStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -29,28 +30,24 @@ vi.mock('../../i18n', () => ({
     params ? `${key}:${JSON.stringify(params)}` : key,
 }))
 
-// The router mounts real chat pages; the shell's job is only to choose between
-// home and a page and to frame the page, so a stub that shows which it chose
-// is enough here.
+// Navigation tests isolate chat rendering; browser smoke uses the real router.
 vi.mock('../layout/ContentRouter', () => ({
-  ContentRouter: ({ homePage }: { homePage?: ReactNode }) => {
-    const activeTabId = useTabStore((state) => state.activeTabId)
-    if (!activeTabId) return <>{homePage ?? <div>desktop new-session page</div>}</>
-    return <div data-testid="routed-page">page for {activeTabId}</div>
+  ContentRouter: () => {
+    const activeTabId = useTabStore(state => state.activeTabId)
+    const draft = useUIStore(state => state.newSessionDraft)
+    useEffect(() => {
+      if (!activeTabId && !draft) useUIStore.getState().startNewSessionDraft()
+    }, [activeTabId, draft])
+    return activeTabId
+      ? <div data-testid="routed-page">page for {activeTabId}</div>
+      : <div data-testid="new-task-page">new task in {draft?.workDir || '(no project)'}</div>
   },
-}))
-
-vi.mock('../../pages/EmptySession', () => ({
-  EmptySession: ({ initialWorkDir }: { initialWorkDir?: string }) => (
-    <div data-testid="new-task-page">new task in {initialWorkDir || '(no project)'}</div>
-  ),
 }))
 
 vi.mock('../layout/UpdateChecker', () => ({ UpdateChecker: () => null }))
 vi.mock('../layout/Toast', () => ({ ToastContainer: () => null }))
 
 import { MobileShell } from './MobileShell'
-import { SHEET_DISMISS_DISTANCE_PX } from './MobileNewTaskSheet'
 
 class TestPointerEvent extends MouseEvent {
   pointerType: string
@@ -105,255 +102,295 @@ function renderShell(layout: 'phone' | 'tablet' = 'phone') {
 
 describe('MobileShell', () => {
   beforeAll(() => {
-    if (!('PointerEvent' in window)) {
-      Object.defineProperty(window, 'PointerEvent', { configurable: true, value: TestPointerEvent })
-    }
+    if (!('PointerEvent' in window)) Object.defineProperty(window, 'PointerEvent', { configurable: true, value: TestPointerEvent })
   })
-
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.live = []
     window.history.replaceState(null, '', '/')
+    useUIStore.setState({ newSessionDraft: null })
     seed()
   })
+  afterEach(() => { vi.useRealTimers() })
 
-  afterEach(() => {
-    vi.useRealTimers()
+  const openDrawer = () => fireEvent.click(screen.getByTestId('mobile-open-sessions'))
+  const nativeBack = () => {
+    let handled: boolean | undefined
+    act(() => { handled = window.__CC_HAHA_MOBILE_NAVIGATE_BACK__?.() })
+    return handled
+  }
+  const seedChat = (project = '/work/current-project') => seed({
+    tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
+    activeTabId: 's-login',
+    sessions: [session('s-login', 'Fix login i18n', 60, project), session('s-newer', 'Another project')],
   })
 
-  it('opens on the session list, with sessions waiting elsewhere listed first', async () => {
+  it('starts on a full-page composer instead of making the session list the phone home', () => {
+    renderShell()
+    expect(screen.queryByTestId('mobile-session-list')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mobile-open-sessions')).toBeInTheDocument()
+    expect(screen.getByTestId('new-task-page')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(nativeBack()).toBe(false)
+  })
+
+  it('keeps a viewed archived session out of the mobile default list and project filters', async () => {
+    seed({ sessions: [session('active', 'Active conversation'), { ...session('archived', 'Archived conversation', 90, '/work/archive-only'), archived: true }] })
+    renderShell()
+    openDrawer()
+    expect(await screen.findByText('Active conversation')).toBeInTheDocument()
+    expect(screen.queryByText('Archived conversation')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'archive-only' })).not.toBeInTheDocument()
+  })
+
+  it('opens sessions beside the retained conversation without clearing its active tab', () => {
+    seedChat()
+    renderShell()
+    openDrawer()
+    expect(screen.getByTestId('mobile-session-drawer')).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-session-drawer-panel')).toHaveClass('w-[min(86vw,340px)]')
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-login')
+    expect(connectToSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /Fix login i18n/ })).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('closes the drawer on native Back and reports chat root without returning to pairing', async () => {
+    seedChat()
+    renderShell()
+    expect(nativeBack()).toBe(false)
+    openDrawer()
+    expect(nativeBack()).toBe(true)
+    expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument()
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    await waitFor(() => expect(window.history.state).toBeNull())
+    expect(nativeBack()).toBe(false)
+  })
+
+  it('closes navigation with browser Back without releasing the selected chat', async () => {
+    seedChat()
+    renderShell()
+    openDrawer()
+    act(() => window.history.back())
+    await waitFor(() => expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument())
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    expect(disconnectSession).not.toHaveBeenCalled()
+  })
+
+  it('closes the drawer when selecting the current row without reconnecting it', async () => {
+    seedChat()
+    renderShell()
+    openDrawer()
+    fireEvent.click(await screen.findByRole('button', { name: /Fix login i18n/ }))
+    expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument()
+    expect(connectToSession).not.toHaveBeenCalled()
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    await waitFor(() => expect(window.history.state).toBeNull())
+  })
+
+  it('selects another session and closes navigation', async () => {
+    renderShell()
+    openDrawer()
+    fireEvent.click(await screen.findByRole('button', { name: /Fix login i18n/ }))
+    expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-login')
+    expect(connectToSession).toHaveBeenCalledTimes(1)
+    expect(connectToSession).toHaveBeenCalledWith('s-login')
+    await waitFor(() => expect(window.history.state).toBeNull())
+  })
+
+  it('keeps attention grouping and project filters inside the drawer', async () => {
     mocks.live = [{ id: 's-release', activityState: 'waiting' }]
     renderShell()
-
+    openDrawer()
     const list = await screen.findByTestId('mobile-session-list')
-    await waitFor(() => {
-      expect(within(list).getAllByRole('heading')[0]).toHaveTextContent('mobile.group.attention')
-    })
-    const sections = within(list).getAllByRole('region')
-    expect(within(sections[0]!).getByText('Draft release notes')).toBeInTheDocument()
-    // Home is the list alone; a new task is one tap away, not a composer.
-    expect(screen.queryByTestId('new-task-page')).not.toBeInTheDocument()
-    expect(screen.getByTestId('mobile-new-task')).toHaveTextContent('mobile.home.newTask')
-    expect(screen.queryByTestId('mobile-top-bar')).not.toBeInTheDocument()
+    await waitFor(() => expect(within(list).getAllByRole('heading')[0]).toHaveTextContent('mobile.group.attention'))
+    expect(within(within(list).getAllByRole('region')[0]!).getByText('Draft release notes')).toBeInTheDocument()
   })
 
-  it('opens a new task over the list in the filtered project, and the back gesture closes it', async () => {
-    seed({
-      sessions: [
-        session('s-login', 'Fix login i18n'),
-        session('s-crawl', 'Export comments', 60, '/work/media-crawler'),
-      ],
-    })
+  it('starts a full-page chat in the filtered project without a new connection', async () => {
+    seed({ sessions: [session('s-login', 'Fix login i18n'), session('s-crawl', 'Export comments', 60, '/work/media-crawler')] })
     renderShell()
-
+    openDrawer()
     fireEvent.click(await screen.findByRole('button', { name: 'media-crawler' }))
     fireEvent.click(screen.getByTestId('mobile-new-task'))
-
-    const sheet = screen.getByTestId('mobile-new-task-sheet')
-    expect(within(sheet).getByRole('dialog', { name: 'mobile.newTask.title' })).toBeInTheDocument()
-    expect(within(sheet).getByTestId('new-task-page')).toHaveTextContent('new task in /work/media-crawler')
-    // The list stays underneath, and the sheet is a level the system back leaves.
-    expect(screen.getByTestId('mobile-session-list')).toBeInTheDocument()
-    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
-
-    act(() => { window.history.back() })
-
-    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
-    expect(useTabStore.getState().activeTabId).toBeNull()
-    expect(window.history.state).toBeNull()
-  })
-
-  it('starts a new task in the project of the newest task when no filter is picked', async () => {
-    seed({
-      sessions: [
-        // Touched most recently, but started long ago.
-        { ...session('s-old', 'Long running refactor', 600, '/work/legacy'), modifiedAt: new Date().toISOString() },
-        session('s-new', 'Export comments', 30, '/work/media-crawler'),
-      ],
-    })
-    renderShell()
-
-    fireEvent.click(await screen.findByTestId('mobile-new-task'))
-
     expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/media-crawler')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument()
+    expect(connectToSession).not.toHaveBeenCalled()
+    await waitFor(() => expect(window.history.state).toBeNull())
   })
 
-  it('closes the new task with Cancel or a long enough pull on its bar', async () => {
+  it('starts a new page from a chat and native Back returns to the same chat', async () => {
+    seedChat()
     renderShell()
+    fireEvent.click(within(screen.getByTestId('mobile-top-bar')).getByRole('button', { name: 'mobile.home.newTask' }))
+    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/current-project')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(connectToSession).not.toHaveBeenCalled()
+    expect(nativeBack()).toBe(true)
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-login')
+    await waitFor(() => expect(window.history.state).toBeNull())
+  })
 
-    fireEvent.click(await screen.findByTestId('mobile-new-task'))
-    fireEvent.click(within(screen.getByTestId('mobile-new-task-sheet')).getByRole('button', { name: 'common.cancel' }))
-    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
+  it('keeps a draft when returning to its chat, then opens the same draft again', async () => {
+    seedChat()
+    renderShell()
+    fireEvent.click(screen.getByRole('button', { name: 'mobile.home.newTask' }))
+    const draft = useUIStore.getState().newSessionDraft!
+    act(() => useUIStore.getState().setNewSessionDraftContent(draft.revision, true))
+    expect(nativeBack()).toBe(true)
+    await waitFor(() => expect(window.history.state).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'mobile.home.newTask' }))
+    expect(useUIStore.getState().newSessionDraft).toMatchObject({ revision: draft.revision, hasContent: true })
+  })
 
-    fireEvent.click(screen.getByTestId('mobile-new-task'))
-    const grabber = screen.getByTestId('mobile-new-task-grabber')
-    // A small nudge springs back.
-    fireEvent.pointerDown(grabber, { clientY: 100 })
-    fireEvent.pointerMove(grabber, { clientY: 115 })
-    fireEvent.pointerUp(grabber, { clientY: 115 })
-    // Closing goes through history.back(), which lands a tick later: wait it out.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
-    expect(screen.getByTestId('mobile-new-task-sheet')).toBeInTheDocument()
-    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
-
-    fireEvent.pointerDown(grabber, { clientY: 100 })
-    fireEvent.pointerMove(grabber, { clientY: 100 + SHEET_DISMISS_DISTANCE_PX + 10 })
-    fireEvent.pointerUp(grabber, { clientY: 100 + SHEET_DISMISS_DISTANCE_PX + 10 })
-    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
+  it('browser Back closes the draft sidebar first, then returns from the draft to its chat', async () => {
+    seedChat()
+    renderShell()
+    fireEvent.click(screen.getByRole('button', { name: 'mobile.home.newTask' }))
+    openDrawer()
+    act(() => window.history.back())
+    await waitFor(() => expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument())
+    expect(screen.getByTestId('new-task-page')).toBeInTheDocument()
+    await waitFor(() => expect(window.history.state).toEqual({ ccHahaMobileGuard: true }))
+    act(() => window.history.back())
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe('s-login'))
     expect(window.history.state).toBeNull()
   })
 
-  it('swaps the new task for the session it started, with Back going to the list', async () => {
+  it('does not suggest a removed project when starting from a conversation', () => {
+    seedChat()
+    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, workDirExists: false })) }))
     renderShell()
-    fireEvent.click(await screen.findByTestId('mobile-new-task'))
-
-    // What sending does: open the new session's tab.
-    act(() => useTabStore.getState().openTab('s-started', 'New Session'))
-
-    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
-    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-started')
-    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
-
-    fireEvent.click(screen.getByTestId('mobile-back'))
-
-    await waitFor(() => expect(useTabStore.getState().activeTabId).toBeNull())
-    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
-    expect(screen.getByTestId('mobile-session-list')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'mobile.home.newTask' }))
+    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in (no project)')
   })
 
-  it('goes into a session and comes back with the Back button', async () => {
+  it('starts in the project of the newest task when no filter is selected', async () => {
+    seed({ sessions: [
+      { ...session('s-old', 'Old refactor', 600, '/work/legacy'), modifiedAt: new Date().toISOString() },
+      session('s-new', 'Export comments', 30, '/work/media-crawler'),
+    ] })
     renderShell()
+    openDrawer()
+    fireEvent.click(screen.getByTestId('mobile-new-task'))
+    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/media-crawler')
+    await waitFor(() => expect(window.history.state).toBeNull())
+  })
 
-    fireEvent.click(await screen.findByText('Fix login i18n'))
-
-    expect(connectToSession).toHaveBeenCalledWith('s-login')
-    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-login')
-    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Fix login i18n')
-    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
-
-    fireEvent.click(screen.getByTestId('mobile-back'))
-
-    await waitFor(() => expect(useTabStore.getState().activeTabId).toBeNull())
-    expect(screen.getByTestId('mobile-session-list')).toBeInTheDocument()
+  it('returns from settings to the conversation where navigation was opened', async () => {
+    seedChat()
+    renderShell()
+    openDrawer()
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.settings' }))
+    expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('sidebar.settings')
+    expect(nativeBack()).toBe(true)
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    await waitFor(() => expect(window.history.state).toBeNull())
   })
 
   it('lets the system back gesture leave a detail page for its session', async () => {
     const tabs: Tab[] = [
       { sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' },
-      {
-        sessionId: '__subagent__s-login:tool-1',
-        title: 'Explore the H5 shell',
-        type: 'subagent',
-        status: 'idle',
-        sourceSessionId: 's-login',
-        subagentToolUseId: 'tool-1',
-      },
+      { sessionId: '__subagent__s-login:tool-1', title: 'Explore H5', type: 'subagent', status: 'idle', sourceSessionId: 's-login', subagentToolUseId: 'tool-1' },
     ]
     seed({ tabs, activeTabId: '__subagent__s-login:tool-1' })
     renderShell()
-
-    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Explore the H5 shell')
-
-    act(() => { window.history.back() })
-
+    act(() => window.history.back())
     await waitFor(() => expect(useTabStore.getState().activeTabId).toBe('s-login'))
-    expect(useTabStore.getState().tabs.some((tab) => tab.type === 'subagent')).toBe(false)
-    // Still above home, so the next back must be caught too.
-    await waitFor(() => expect(window.history.state).toEqual({ ccHahaMobileGuard: true }))
+    expect(useTabStore.getState().tabs.some(tab => tab.type === 'subagent')).toBe(false)
+    expect(nativeBack()).toBe(false)
   })
 
-  it('sends a desktop-only tab home instead of showing a blank frame', async () => {
-    seed({
-      tabs: [{ sessionId: '__terminal__1', title: 'Terminal', type: 'terminal', status: 'idle' }],
-      activeTabId: '__terminal__1',
-    })
+  it('sends a desktop-only tab to the composer without deleting the tab', async () => {
+    seed({ tabs: [{ sessionId: '__terminal__1', title: 'Terminal', type: 'terminal', status: 'idle' }], activeTabId: '__terminal__1' })
     renderShell()
-
     await waitFor(() => expect(useTabStore.getState().activeTabId).toBeNull())
+    expect(screen.getByTestId('new-task-page')).toBeInTheDocument()
     expect(useTabStore.getState().tabs).toHaveLength(1)
   })
 
-  it('keeps the list beside the session on a tablet, without a Back for it', async () => {
-    seed({
-      tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
-      activeTabId: 's-login',
-    })
+  it('keeps the list beside the session on a tablet without a drawer', async () => {
+    seedChat()
     renderShell('tablet')
-
     const pane = screen.getByTestId('mobile-tablet-pane')
-    const row = await within(pane).findByText('Fix login i18n')
-    expect(row.closest('button')).toHaveAttribute('aria-current', 'true')
-    expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Fix login i18n')
+    expect((await within(pane).findByText('Fix login i18n')).closest('button')).toHaveAttribute('aria-current', 'true')
+    expect(screen.queryByTestId('mobile-open-sessions')).not.toBeInTheDocument()
     expect(screen.queryByTestId('mobile-back')).not.toBeInTheDocument()
-  })
-
-  it('shows a new task beside the list on a tablet instead of a sheet over it', async () => {
-    seed({
-      tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
-      activeTabId: 's-login',
-    })
-    renderShell('tablet')
-    const pane = screen.getByTestId('mobile-tablet-pane')
-    await within(pane).findByText('Fix login i18n')
-
     fireEvent.click(within(pane).getByTestId('mobile-new-task'))
-
-    expect(useTabStore.getState().activeTabId).toBeNull()
-    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/cc-haha')
-    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
+    expect(screen.getByTestId('new-task-page')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('puts the parallel work behind a pill in the session bar, once there is some', async () => {
-    seed({
-      tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
-      activeTabId: 's-login',
-    })
+  it('puts parallel work behind the existing activity pill', () => {
+    seedChat()
     renderShell()
     expect(screen.queryByTestId('mobile-activity-pill')).not.toBeInTheDocument()
-
     act(() => useActivityPanelStore.getState().setMobileSummary('s-login', { visible: true, count: 3 }))
-    const pill = screen.getByTestId('mobile-activity-pill')
-    expect(pill).toHaveTextContent('mobile.activity.inProgress:{"count":3}')
-
-    fireEvent.click(pill)
+    fireEvent.click(screen.getByTestId('mobile-activity-pill'))
     expect(useActivityPanelStore.getState().isOpen('s-login')).toBe(true)
     act(() => useActivityPanelStore.getState().close())
   })
 
-  it('renames a session from the press-and-hold sheet', async () => {
+  it('renames a session from the press-and-hold sheet inside navigation', async () => {
     renderShell()
+    openDrawer()
     const row = (await screen.findByText('Fix login i18n')).closest('button')!
-
     vi.useFakeTimers()
     fireEvent.pointerDown(row, { pointerType: 'touch', isPrimary: true, clientX: 5, clientY: 5 })
-    act(() => { vi.advanceTimersByTime(LONG_PRESS_DELAY_MS) })
+    act(() => vi.advanceTimersByTime(LONG_PRESS_DELAY_MS))
     fireEvent.pointerUp(row)
     fireEvent.click(row)
     vi.useRealTimers()
-
-    // The press opened the sheet, not the session underneath it.
     expect(useTabStore.getState().activeTabId).toBeNull()
-    const sheet = screen.getByTestId('mobile-session-actions')
-    fireEvent.click(within(sheet).getByRole('menuitem', { name: 'common.rename' }))
-
-    const field = within(screen.getByTestId('mobile-session-rename')).getByRole('textbox')
-    fireEvent.change(field, { target: { value: 'Login copy in five languages' } })
+    fireEvent.click(within(screen.getByTestId('mobile-session-actions')).getByRole('menuitem', { name: 'common.rename' }))
+    fireEvent.change(within(screen.getByTestId('mobile-session-rename')).getByRole('textbox'), { target: { value: 'Renamed chat' } })
     fireEvent.click(screen.getByRole('button', { name: 'common.save' }))
-
-    await waitFor(() => expect(renameSession).toHaveBeenCalledWith('s-login', 'Login copy in five languages'))
+    await waitFor(() => expect(renameSession).toHaveBeenCalledWith('s-login', 'Renamed chat'))
   })
 
-  it('deletes a session after confirming, and lets go of its socket and tab', async () => {
+  it('deletes a session after confirmation and releases its socket and tab', async () => {
     seed({ tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }] })
     renderShell()
-    const row = (await screen.findByText('Fix login i18n')).closest('button')!
-
-    fireEvent.contextMenu(row)
+    openDrawer()
+    fireEvent.contextMenu((await screen.findByText('Fix login i18n')).closest('button')!)
     fireEvent.click(within(screen.getByTestId('mobile-session-actions')).getByRole('menuitem', { name: 'common.delete' }))
     fireEvent.click(screen.getByRole('button', { name: 'common.delete' }))
-
     await waitFor(() => expect(deleteSession).toHaveBeenCalledWith('s-login'))
-    await waitFor(() => expect(disconnectSession).toHaveBeenCalledWith('s-login'))
+    expect(disconnectSession).toHaveBeenCalledWith('s-login')
     expect(useTabStore.getState().tabs).toHaveLength(0)
+  })
+
+  it('gives a nested sheet native Back before closing the drawer', async () => {
+    seedChat()
+    renderShell()
+    openDrawer()
+    fireEvent.contextMenu((await screen.findByRole('button', { name: /Fix login i18n/ })))
+    expect(screen.getByTestId('mobile-session-actions')).toBeInTheDocument()
+    expect(nativeBack()).toBe(true)
+    expect(screen.queryByTestId('mobile-session-actions')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mobile-session-drawer')).toBeInTheDocument()
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+  })
+
+  it('browser Back also dismisses a nested sheet before the drawer and restores trigger focus', async () => {
+    seedChat()
+    renderShell()
+    const opener = screen.getByTestId('mobile-open-sessions')
+    opener.focus()
+    openDrawer()
+    fireEvent.contextMenu(await screen.findByRole('button', { name: /Fix login i18n/ }))
+    act(() => window.history.back())
+    await waitFor(() => expect(screen.queryByTestId('mobile-session-actions')).not.toBeInTheDocument())
+    expect(screen.getByTestId('mobile-session-drawer')).toBeInTheDocument()
+    await waitFor(() => expect(window.history.state).toEqual({ ccHahaMobileGuard: true }))
+    act(() => window.history.back())
+    await waitFor(() => expect(screen.queryByTestId('mobile-session-drawer')).not.toBeInTheDocument())
+    expect(useTabStore.getState().activeTabId).toBe('s-login')
+    expect(opener).toHaveFocus()
   })
 })

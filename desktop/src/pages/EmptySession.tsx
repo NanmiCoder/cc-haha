@@ -10,7 +10,7 @@ import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { Button } from '@/components/ui/Button'
-import { ApiError } from '../api/client'
+import { ApiError, rawRecordDiagnosticEvent } from '../api/client'
 import { agentsApi } from '../api/agents'
 import { providersApi } from '../api/providers'
 import { getBundledPresetReasoningProviderKind } from '../config/providerPresets'
@@ -23,6 +23,7 @@ import { useProviderStore } from '../stores/providerStore'
 import { useSessionRuntimeStore, DRAFT_RUNTIME_SELECTION_KEY } from '../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
 import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from '@/components/chat/RepositoryLaunchControls'
 import { PermissionModeSelector, type PermissionModeSelectorHandle } from '../components/controls/PermissionModeSelector'
@@ -48,6 +49,7 @@ import {
 } from '../constants/deepseekAccountProvider'
 import { CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
+import { getSessionBrowsablePath } from '../lib/sessionWorkspace'
 import {
   normalizeRuntimeSelection,
   resolveActiveProviderRuntimeSelection,
@@ -90,7 +92,9 @@ import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEn
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
-import type { AttachmentRef } from '../types/chat'
+import { formatBytes } from '@/lib/formatBytes'
+import { checkUserMessageBudget } from '@/lib/userMessageBudget'
+import type { AttachmentRef, UIAttachment } from '../types/chat'
 import type { SavedProvider } from '../types/provider'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
@@ -101,6 +105,30 @@ import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
 type Attachment = ComposerAttachment
 
 type Translate = ReturnType<typeof useTranslation>
+
+type MaterializedDraftSession = {
+  sessionId: string
+  ownsDraft: () => boolean
+  finishDraft: () => void
+}
+
+function toUIAttachment(attachment: Attachment): UIAttachment {
+  return {
+    type: attachment.type,
+    name: attachment.name,
+    path: attachment.path,
+    data: attachment.data,
+    mimeType: attachment.mimeType,
+    isDirectory: attachment.isDirectory,
+    lineStart: attachment.lineStart,
+    lineEnd: attachment.lineEnd,
+    diffSide: attachment.diffSide,
+    hunkId: attachment.hunkId,
+    note: attachment.note,
+    referenceKind: attachment.referenceKind,
+    quote: attachment.quote,
+  }
+}
 
 function getApiErrorCode(error: unknown): string | null {
   if (!(error instanceof ApiError)) return null
@@ -156,6 +184,14 @@ function resolveProviderName(providerId: string | null, providers: SavedProvider
 }
 
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
+
+function reportDraftWorkspaceStaleRequest() {
+  void rawRecordDiagnosticEvent({
+    type: 'draft_workspace_request_stale',
+    severity: 'warn',
+    summary: 'A draft workspace request became stale before it could be consumed.',
+  })
+}
 
 type EmptySessionProps = {
   /** The folder the task starts in; the phone's new-task sheet suggests one. */
@@ -223,6 +259,16 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
+  const materializingRef = useRef<{
+    revision: number | undefined
+    promise: Promise<MaterializedDraftSession | null>
+  } | null>(null)
+  const workspaceRequestInFlightRef = useRef(new Set<number>())
+  const runSubmittingRef = useRef(false)
+  const draftComposerRef = useRef({ input, attachments, mentions })
+  draftComposerRef.current = { input, attachments, mentions }
+  const workspaceRequestAttemptRef = useRef(new Map<number, number>())
+  const [materializationAttempt, setMaterializationAttempt] = useState(0)
   const composerContainerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -242,6 +288,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const connectToSession = useChatStore((state) => state.connectToSession)
   const setActiveView = useUIStore((state) => state.setActiveView)
   const addToast = useUIStore((state) => state.addToast)
+  const draftWorkspaceRequest = useUIStore((state) => state.draftWorkspaceRequest)
   const currentModel = useSettingsStore((state) => state.currentModel)
   const activeProviderName = useSettingsStore((state) => state.activeProviderName)
   const effortLevel = useSettingsStore((state) => state.effortLevel)
@@ -480,58 +527,21 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
   }, [slashMenuOpen, slashSelectedIndex])
 
-  const handleSubmit = async () => {
-    const text = input.trim()
-    if (!canSubmit || !visible) return
-    if (isLean && isUnsupportedLeanSlashInput(text, [...allSlashCommands, ...slashCommands, ...getLocalizedFallbackCommands(t)], listedLeanNames)) {
-      addToast({ type: 'info', message: t('agentProfile.draftCommandUnavailable') })
-      return
-    }
-
-    if (isLean && draftPermissionMode === 'plan') {
-      addToast({ type: 'info', message: t('agentProfile.planUnavailable') })
-      return
-    }
-
-    const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
-    if (slashUiAction?.type === 'panel') {
-      setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
-      setInput('')
-      setMentions([])
-      setSlashMenuOpen(false)
-      setFileSearchOpen(false)
-      setPlusMenuOpen(false)
-      return
-    }
-
-    if (slashUiAction?.type === 'settings') {
-      useUIStore.getState().setPendingSettingsTab(slashUiAction.tab)
-      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
-      setInput('')
-      setMentions([])
-      setSlashMenuOpen(false)
-      setFileSearchOpen(false)
-      setPlusMenuOpen(false)
-      return
-    }
-
-    if (slashUiAction?.type === 'model') {
-      modelSelectorRef.current?.open()
-      setInput('')
-      setMentions([])
-      setSlashMenuOpen(false)
-      setFileSearchOpen(false)
-      setPlusMenuOpen(false)
-      return
-    }
-
+  /**
+   * Assigns the retained draft a real session without sending anything.
+   *
+   * Both Enter and a workspace control need this: the draft holds no server
+   * session until then (the immutable agent profile has to be chosen first),
+   * while every workspace panel is keyed by a session id. The draft is cleared
+   * only when this call still owns it, so a late response cannot discard a
+   * newer draft.
+   */
+  const createDraftSession = useCallback(async (): Promise<MaterializedDraftSession | null> => {
     const runtimeStore = useSessionRuntimeStore.getState()
     const explicitDraftSelection = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
     const submittedDraft = useUIStore.getState().newSessionDraft
-    const submittedTabId = useTabStore.getState().activeTabId
-    const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     const ownsDraft = () => mounted.current && useUIStore.getState().newSessionDraft?.revision === submittedDraft?.revision
-    setIsSubmitting(true)
+
     try {
       // A model picked in this draft runs on its own provider, whatever the
       // global default is, so that provider's credentials are the ones to check.
@@ -554,7 +564,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         })
         useUIStore.getState().setPendingSettingsTab('providers')
         useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
-        return
+        return null
       }
 
       const defaultActiveProviderSelection = explicitDraftSelection
@@ -620,28 +630,151 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       if (runtimeSelection) {
         runtimeStore.setSelection(sessionId, runtimeSelection)
       }
+      const finishDraft = () => {
+        if (!ownsDraft()) return
+        if (explicitDraftSelection && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
+          runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+        }
+        if (!useUIStore.getState().draftWorkspaceRequest) {
+          useUIStore.setState({ newSessionDraft: null })
+        }
+      }
+      return { sessionId, ownsDraft, finishDraft }
+    } catch (error) {
+      addToast({
+        type: 'error',
+        message: resolveCreateSessionErrorMessage(error, t),
+      })
+      return null
+    }
+  }, [
+    activeProviderId,
+    activeProviderName,
+    addToast,
+    agentProfile,
+    createSession,
+    currentModel?.id,
+    currentModel?.name,
+    draftPermissionMode,
+    effortLevel,
+    isLean,
+    providers,
+    selectedBranch,
+    t,
+    useWorktree,
+    workDir,
+  ])
+
+  const materializeDraftSession = useCallback(() => {
+    const revision = draftRevision ?? useUIStore.getState().newSessionDraft?.revision
+    const cached = materializingRef.current
+    if (cached && cached.revision === revision) return cached.promise
+
+    const promise = createDraftSession()
+    const materialization = { revision, promise }
+    materializingRef.current = materialization
+    void promise.then((result) => {
+      if (materializingRef.current !== materialization) return
+      const pendingRequest = useUIStore.getState().draftWorkspaceRequest
+      const draftStillOwnsRequest =
+        result !== null &&
+        pendingRequest?.revision === revision &&
+        useUIStore.getState().newSessionDraft?.revision === revision
+      if (!draftStillOwnsRequest) materializingRef.current = null
+    })
+    return promise
+  }, [createDraftSession, draftRevision])
+
+  const handleSubmit = async () => {
+    const text = input.trim()
+    if (!canSubmit || !visible) return
+    if (isLean && isUnsupportedLeanSlashInput(text, [...allSlashCommands, ...slashCommands, ...getLocalizedFallbackCommands(t)], listedLeanNames)) {
+      addToast({ type: 'info', message: t('agentProfile.draftCommandUnavailable') })
+      return
+    }
+
+    if (isLean && draftPermissionMode === 'plan') {
+      addToast({ type: 'info', message: t('agentProfile.planUnavailable') })
+      return
+    }
+
+    const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
+    if (slashUiAction?.type === 'panel') {
+      setLocalSlashPanel(slashUiAction.command as LocalSlashCommandName)
+      setInput('')
+      setMentions([])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      return
+    }
+
+    if (slashUiAction?.type === 'settings') {
+      useUIStore.getState().setPendingSettingsTab(slashUiAction.tab)
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+      setInput('')
+      setMentions([])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      return
+    }
+
+    if (slashUiAction?.type === 'model') {
+      modelSelectorRef.current?.open()
+      setInput('')
+      setMentions([])
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setPlusMenuOpen(false)
+      return
+    }
+
+    const submittedTabId = useTabStore.getState().activeTabId
+    const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
+    const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
+      type: attachment.type,
+      name: attachment.name,
+      path: attachment.path,
+      data: attachment.data,
+      mimeType: attachment.mimeType,
+    }))
+    // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
+    // serialized from the live document; the bubble keeps the pill text.
+    // Agent Team armed in the + menu: the model gets the team instruction,
+    // the bubble keeps what the user typed.
+    const sendAsTeam = capabilityMenu.agentTeamArmed
+    const contentForModel = sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText
+    // The local server drops a frame over its input budget by closing the
+    // socket, and the client would only reconnect: the first turn, with its
+    // pasted screenshots inlined as data URLs, would vanish without a trace.
+    // Checked before the draft becomes a session, so the draft stays as it is.
+    const budget = checkUserMessageBudget({ type: 'user_message', content: contentForModel, attachments: attachmentPayload })
+    if (!budget.ok) {
+      addToast({
+        type: 'error',
+        message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+      })
+      return
+    }
+    setIsSubmitting(true)
+    runSubmittingRef.current = true
+    setMaterializationAttempt((attempt) => attempt + 1)
+    try {
+      const materialized = await materializeDraftSession()
+      if (!materialized) return
+      const { sessionId, ownsDraft, finishDraft } = materialized
       connectToSession(sessionId)
-      const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
-        type: attachment.type,
-        name: attachment.name,
-        path: attachment.path,
-        data: attachment.data,
-        mimeType: attachment.mimeType,
-      }))
-      // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
-      // serialized from the live document; the bubble keeps the pill text.
-      // Agent Team armed in the + menu: the model gets the team instruction,
-      // the bubble keeps what the user typed.
-      const sendAsTeam = capabilityMenu.agentTeamArmed
       if (serializedText || attachmentPayload.length > 0) {
-        const sent = sendMessage(sessionId, sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText, attachmentPayload, { displayContent: text })
+        const sent = sendMessage(sessionId, contentForModel, attachmentPayload, { displayContent: text })
         if (!sent) {
-          // Do not navigate away from the only remaining copy of the draft.
-          // If its editor has already gone, keep that copy with the new session.
+          // If a newer draft has replaced this editor, keep the old input with
+          // the session that was already created for it.
           if (!ownsDraft()) {
             useChatStore.getState().queueComposerPrefill(sessionId, {
-              text: serializedText,
-              attachments,
+              text,
+              attachments: attachments.map(toUIAttachment),
+              ...(mentions.length ? { mentions } : {}),
             }, { restoreMissingSession: true })
           }
           const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
@@ -650,16 +783,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
           return
         }
       }
-      if (explicitDraftSelection && ownsDraft() && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
-        runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
-      }
       if (ownsDraft()) {
+        finishDraft()
         if (useTabStore.getState().activeTabId === submittedTabId) {
           setActiveView('code')
-          const title = useSessionStore.getState().sessions.find(session => session.id === sessionId)?.title ?? 'New Session'
+          const title = useSessionStore.getState().sessions.find(session => session.id === sessionId)?.title ?? t('sidebar.newSession')
           useTabStore.getState().openTab(sessionId, title)
         }
-        useUIStore.setState({ newSessionDraft: null })
       } else {
         const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
         useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
@@ -675,9 +805,99 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         message: resolveCreateSessionErrorMessage(error, t),
       })
     } finally {
+      runSubmittingRef.current = false
       setIsSubmitting(false)
     }
   }
+
+  // A workspace action belongs to its draft even if session creation is also
+  // being driven by Run. Keep it queued until one shared creation has completed.
+  useEffect(() => {
+    const request = draftWorkspaceRequest
+    if (!request || !visible || draftRevision === undefined || request.revision !== draftRevision) return
+    if (workspaceRequestInFlightRef.current.has(request.nonce)) return
+    if (workspaceRequestAttemptRef.current.get(request.nonce) === materializationAttempt) return
+    workspaceRequestAttemptRef.current.set(request.nonce, materializationAttempt)
+    workspaceRequestInFlightRef.current.add(request.nonce)
+
+    const draftWorkDir = workDir
+    const runAlreadySubmitting = runSubmittingRef.current
+    setIsSubmitting(true)
+    void (async () => {
+      let consumed = false
+      try {
+        const materialized = await materializeDraftSession()
+        const currentRequest = useUIStore.getState().draftWorkspaceRequest
+        if (
+          !materialized ||
+          !materialized.ownsDraft() ||
+          currentRequest?.nonce !== request.nonce ||
+          currentRequest.revision !== request.revision
+        ) {
+          if (materialized && !materialized.ownsDraft()) reportDraftWorkspaceStaleRequest()
+          return
+        }
+
+        const { sessionId, finishDraft } = materialized
+        finishDraft()
+        const activeTabId = useTabStore.getState().activeTabId
+        if (activeTabId === request.originatingTabId && useUIStore.getState().activeView === request.originatingView) {
+          setActiveView('code')
+        }
+        useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
+        if (activeTabId !== request.originatingTabId && activeTabId !== sessionId) useTabStore.getState().setActiveTab(activeTabId)
+        connectToSession(sessionId)
+        // The editor stays usable during creation; carry its latest content.
+        const { input: draftText, attachments: draftAttachments, mentions: draftMentions } = draftComposerRef.current
+        if (!runAlreadySubmitting && (draftText || draftAttachments.length > 0 || draftMentions.length > 0)) {
+          useChatStore.getState().queueComposerPrefill(sessionId, {
+            text: draftText,
+            attachments: draftAttachments.map(toUIAttachment),
+            mentions: draftMentions,
+            mode: 'replace',
+          })
+        }
+
+        const createdSession = useSessionStore.getState().sessions.find((session) => session.id === sessionId)
+        const bottomCwd = getSessionBrowsablePath(createdSession) ?? draftWorkDir
+        const workspace = useWorkspaceStore.getState()
+        if (request.action === 'toggle-side') {
+          workspace.toggleWorkspace(sessionId)
+        } else if (request.action === 'toggle-bottom') {
+          workspace.toggleBottomPanel(sessionId, bottomCwd)
+        } else {
+          workspace.toggleWorkspace(sessionId)
+          workspace.toggleFullscreen(sessionId)
+        }
+        consumed = true
+      } finally {
+        if (mounted.current) setIsSubmitting(false)
+        if (consumed) {
+          useUIStore.getState().clearDraftWorkspaceRequest(request.nonce)
+          if (useUIStore.getState().newSessionDraft?.revision === request.revision) {
+            useUIStore.setState({ newSessionDraft: null })
+          }
+          if (materializingRef.current?.revision === request.revision) {
+            materializingRef.current = null
+          }
+        }
+        workspaceRequestInFlightRef.current.delete(request.nonce)
+      }
+    })()
+  }, [
+    attachments,
+    connectToSession,
+    draftRevision,
+    draftWorkspaceRequest,
+    setActiveView,
+    input,
+    materializationAttempt,
+    materializeDraftSession,
+    mentions,
+    t,
+    visible,
+    workDir,
+  ])
 
   const handleComposerChange = (value: string, nextMentions: ComposerMention[]) => {
     setInput(value)
@@ -1299,7 +1519,13 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                     disabled={isSubmitting}
                   />}
                   {!isMobileComposer ? permissionSelector : null}
-                  <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
+                  <ModelSelector
+                    ref={modelSelectorRef}
+                    runtimeKey={DRAFT_RUNTIME_SELECTION_KEY}
+                    disabled={isSubmitting}
+                    compact={isMobileComposer}
+                    fluid={isMobileComposer}
+                  />
                   <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same
                       component, shape, size and icon. See the note there for

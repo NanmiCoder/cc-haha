@@ -4,12 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { UIMessage } from '@/types/chat'
+import type { GalleryImage } from '@/components/chat/conversationImageGallery'
 import { ActivityGroup } from './ActivityGroup'
 import type { ActivityStep } from './activityGroupModel'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type ToolResult = Extract<UIMessage, { type: 'tool_result' }>
-type GalleryImages = Array<{ src: string; name: string; path?: string }>
+type GalleryImages = GalleryImage[]
 
 // The lightbox has its own tests; here it only records what each strip hands it.
 const lightbox = vi.hoisted(() => ({ images: [] as GalleryImages }))
@@ -166,10 +167,16 @@ describe('ActivityGroup · pictures in a folded run (#1397)', () => {
     const [first, second] = stripsIn(groupOf())
 
     fireEvent.click(within(first!).getByRole('button', { name: 'Open image 1 of 1' }))
-    expect(lightbox.images).toEqual([{ src: 'blob:run-1', name: 'a.png', path: '/repo/shots/a.png' }])
+    expect(lightbox.images).toEqual([{
+      src: 'blob:run-1', name: 'a.png', path: '/repo/shots/a.png',
+      inline: { mediaType: 'image/png', data: btoa('first picture') },
+    }])
 
     fireEvent.click(within(second!).getByRole('button', { name: 'Open image 1 of 1' }))
-    expect(lightbox.images).toEqual([{ src: 'blob:run-2', name: 'b.png', path: '/repo/shots/b.png' }])
+    expect(lightbox.images).toEqual([{
+      src: 'blob:run-2', name: 'b.png', path: '/repo/shots/b.png',
+      inline: { mediaType: 'image/png', data: btoa('second picture') },
+    }])
   })
 
   it('keeps every strip with its own tool, in step order, and skips calls with nothing to show', () => {

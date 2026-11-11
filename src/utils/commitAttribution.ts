@@ -153,6 +153,7 @@ export function sanitizeSurfaceKey(surfaceKey: string): string {
  */
 export function sanitizeModelName(shortName: string): string {
   // Map internal variants to public equivalents based on model family
+  if (shortName.includes('fable-5-2')) return 'claude-fable-5-2'
   if (shortName.includes('fable-5-1')) return 'claude-fable-5-1'
   if (shortName.includes('fable-5')) return 'claude-fable-5'
   if (shortName.includes('opus-5-5')) return 'claude-opus-5-5'

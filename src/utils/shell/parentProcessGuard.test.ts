@@ -44,18 +44,31 @@ function ticks(path: string): number {
   try { return readFileSync(path, 'utf8').trim().split('\n').length } catch { return 0 }
 }
 
+function publishedPid(path: string): number | undefined {
+  try {
+    const pid = Number(readFileSync(path, 'utf8'))
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
 test.skipIf(process.platform === 'win32')('kills a detached shell and its descendants after the runtime receives SIGKILL', async () => {
   const directory = fixtureDirectory()
   const output = join(directory, 'ticks')
   const pidPath = join(directory, 'child-pid')
+  const cleanupPidPath = join(directory, 'cleanup-pid')
+  const publishPidPath = join(directory, 'publish-pid')
   const fixture = join(directory, 'runtime.ts')
   writeFileSync(fixture, `
-    import { openSync, writeFileSync } from 'fs'
+    import { existsSync, openSync, writeFileSync } from 'fs'
     import { spawnWithParentProcessGuard } from ${JSON.stringify(import.meta.dir + '/parentProcessGuard.ts')}
     const child = spawnWithParentProcessGuard('/bin/sh', ['-c', 'while true; do echo alive; sleep 0.02; done', 'shell'], {
       detached: true,
       stdio: ['pipe', openSync(${JSON.stringify(output)}, 'a'), 'ignore'],
     })
+    writeFileSync(${JSON.stringify(cleanupPidPath)}, String(child.pid))
+    while (!existsSync(${JSON.stringify(publishPidPath)})) await Bun.sleep(10)
     writeFileSync(${JSON.stringify(pidPath)}, String(child.pid))
     setInterval(() => {}, 1000)
   `)
@@ -69,9 +82,28 @@ test.skipIf(process.platform === 'win32')('kills a detached shell and its descen
   })
   children.push(runtime)
   let shellPid: number | undefined
+  let cleanupPid: number | undefined
+  let publicationRequested = false
+  const readyForKill = () => {
+    shellPid = publishedPid(pidPath)
+    return shellPid !== undefined && ticks(output) >= 3
+  }
   try {
-    await waitUntil(() => ticks(output) >= 3)
-    shellPid = Number(readFileSync(pidPath, 'utf8'))
+    // Ticks can arrive before spawn returns and the runtime publishes its PID.
+    // Hold publication behind a file latch to exercise that ordering without
+    // adding another stdio fd (see the Bun fd-3 regression below).
+    await waitUntil(() => {
+      cleanupPid = publishedPid(cleanupPidPath)
+      if (!publicationRequested && cleanupPid !== undefined && ticks(output) >= 3) {
+        expect(readyForKill()).toBe(false)
+        writeFileSync(pidPath, '')
+        expect(readyForKill()).toBe(false)
+        writeFileSync(publishPidPath, 'ready')
+        publicationRequested = true
+      }
+      return readyForKill()
+    })
+    expect(shellPid).toBe(cleanupPid)
     runtime.kill('SIGKILL')
     await exited(runtime)
     expect(runtime.signalCode).toBe('SIGKILL')
@@ -83,8 +115,15 @@ test.skipIf(process.platform === 'win32')('kills a detached shell and its descen
     await wait(150)
     expect(ticks(output)).toBe(afterExit)
   } finally {
-    if (shellPid) {
-      try { process.kill(-shellPid, 'SIGKILL') } catch {}
+    try { process.kill(-runtime.pid!, 'SIGKILL') } catch {}
+    try { runtime.kill('SIGKILL') } catch {}
+    await exited(runtime)
+    const groupPid = cleanupPid ?? publishedPid(cleanupPidPath) ?? shellPid
+    if (groupPid) {
+      try { process.kill(-groupPid, 'SIGKILL') } catch {}
+      await waitUntil(() => {
+        try { process.kill(-groupPid, 0); return false } catch { return true }
+      }, 4_000)
     }
   }
 })

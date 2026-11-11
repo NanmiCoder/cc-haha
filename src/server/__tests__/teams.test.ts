@@ -4406,6 +4406,22 @@ describe('TeamService', () => {
     })
   })
 
+  it("refuses commands that would undo a member, and passes its other commands to its inbox as typed", async () => {
+    await writeTeamConfig('command-team', makeTeamConfig({ name: 'command-team' }))
+
+    for (const command of ['/clear', '  /Reset now', '/new', '/model opus']) {
+      await expect(service.sendMemberMessage('command-team', 'agent-worker', command))
+        .rejects.toMatchObject({ statusCode: 400, code: 'MEMBER_COMMAND_UNSUPPORTED' })
+    }
+    await service.sendMemberMessage('command-team', 'agent-worker', '/compact')
+
+    const inbox = JSON.parse(await fs.readFile(
+      path.join(tmpDir, 'teams', 'command-team', 'inboxes', 'Worker-Agent.json'),
+      'utf-8',
+    )) as Array<{ from: string, text: string }>
+    expect(inbox.map(message => message.text)).toEqual(['/compact'])
+  })
+
   it('reports a member message that could not be written instead of claiming it was sent', async () => {
     await writeTeamConfig('blocked-mailbox-team', makeTeamConfig({ name: 'blocked-mailbox-team' }))
     // An inbox that cannot be read back can never take the message.
@@ -4414,11 +4430,19 @@ describe('TeamService', () => {
       { recursive: true },
     )
 
-    await expect(service.sendMemberMessage(
+    const { powerActivityClock } = await import('../services/powerActivityClock.js')
+    const before = powerActivityClock.read(false)
+    const sending = service.sendMemberMessage(
       'blocked-mailbox-team',
       'agent-worker',
       'Please review the latest diff',
-    )).rejects.toMatchObject({ statusCode: 503, code: 'MAILBOX_UNAVAILABLE' })
+    )
+    expect(service.hasPendingMemberMessages()).toBe(true)
+    await expect(sending).rejects.toMatchObject({ statusCode: 503, code: 'MAILBOX_UNAVAILABLE' })
+    expect(service.hasPendingMemberMessages()).toBe(false)
+    const after = powerActivityClock.read(false)
+    expect(after.revision).toBeGreaterThan(before.revision)
+    expect(after.completionSequence).toBe(before.completionSequence)
   })
 
   it('should send messages to inbox-discovered members', async () => {
@@ -5053,6 +5077,30 @@ describe('Teams API', () => {
     )
     const inbox = JSON.parse(rawInbox) as Array<{ text: string }>
     expect(inbox.at(-1)?.text).toBe('Please continue with the failing test')
+  })
+
+  it('PATCH /api/teams/:name/members/:id/runtime checks the requested model before touching the team', async () => {
+    await writeTeamConfig('runtime-team', makeTeamConfig({ name: 'runtime-team' }))
+    const patch = (body: string) => fetch(
+      `${baseUrl}/api/teams/runtime-team/members/${encodeURIComponent('agent-worker@runtime-team')}/runtime`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body },
+    )
+
+    for (const body of [
+      '{not json',
+      JSON.stringify({ providerId: null }),
+      JSON.stringify({ providerId: null, modelId: '  ' }),
+      JSON.stringify({ providerId: 7, modelId: 'claude-sonnet-4-6' }),
+      JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 3 }),
+    ]) {
+      const res = await patch(body)
+      expect(res.status, body).toBe(400)
+    }
+
+    // A team written without an approved plan has no running members to switch.
+    const res = await patch(JSON.stringify({ providerId: null, modelId: 'claude-sonnet-4-6', effortLevel: 'high' }))
+    expect(res.status).toBe(404)
+    expect(((await res.json()) as { message?: string }).message).toContain('is not a member of a running team')
   })
 
   it('DELETE /api/teams/:name should delete team', async () => {

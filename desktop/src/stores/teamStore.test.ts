@@ -1,6 +1,8 @@
+import { ApiError } from '../api/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   memberSessionId,
+  memberReplySettlement,
   mergeMemberTranscriptDelta,
   mergeMemberTranscriptMessages,
   useTeamStore,
@@ -139,6 +141,103 @@ describe('teamStore incremental transcript polling', () => {
     const merged = mergeMemberTranscriptMessages([], transcript)
 
     expect(merged.map(message => message.id)).toEqual(['server-1', 'server-2'])
+  })
+
+  it('reconciles a steered send with its mailbox echo persisted minutes later', () => {
+    // A steer sent mid-turn persists only when the member consumes its mailbox,
+    // so the durable user echo can carry a timestamp minutes after the send.
+    const existing = [
+      userMessage('durable-1', 'queued output', 900),
+      userMessage('pending-1', '改为 portal 渲染', 1_000, true),
+    ]
+    const delta = [
+      { ...userMessage('server-echo', '改为 portal 渲染', 400_000), teammateFrom: 'user' },
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, delta)
+
+    expect(merged.map(message => message.id)).toEqual(['durable-1', 'server-echo'])
+  })
+
+  it('does not let an older identical user echo consume a newer pending send', () => {
+    const existing = [
+      userMessage('server-echo', '继续', 1_000),
+      userMessage('pending-1', '继续', 400_000, true),
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, [])
+
+    expect(merged.map(message => message.id)).toEqual(['server-echo', 'pending-1'])
+  })
+
+  it('keeps a pending send unmatched by teammate-to-teammate rows', () => {
+    const existing = [
+      userMessage('pending-1', '重新跑一遍测试', 1_000, true),
+    ]
+    const delta = [
+      { ...userMessage('server-1', '重新跑一遍测试', 1_100), teammateFrom: 'team-lead' },
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, delta)
+
+    expect(merged.map(message => message.id)).toEqual(['server-1', 'pending-1'])
+  })
+
+  describe('memberReplySettlement', () => {
+    function assistantText(id: string, content: string, timestamp: number): UIMessage {
+      return { id, type: 'assistant_text', content, timestamp }
+    }
+
+    function teammateUserEcho(id: string, content: string, timestamp: number): UIMessage {
+      return { id, type: 'user_text', content, timestamp, teammateFrom: 'user' }
+    }
+
+    it('settles a steered turn whose prompt persisted late as a user echo', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-1', '补一下边界钳制', 400_000),
+        assistantText('a1', '已补齐', 401_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '补一下边界钳制',
+        sentAt: 1_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(true)
+      expect(settlement.promptKey).toContain('echo-1')
+    })
+
+    it('does not settle on a prompt row that predates the send', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-0', '继续', 1_000),
+        assistantText('a0', '好的', 2_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '继续',
+        sentAt: 400_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(false)
+    })
+
+    it('bounds the settled turn at the next steered prompt', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-1', '第一步', 400_000),
+        teammateUserEcho('echo-2', '第二步', 500_000),
+        assistantText('a2', '完成第二步', 501_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '第一步',
+        sentAt: 1_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(false)
+    })
   })
 
   it('starts the first transcript read on member selection and shares it with the mounted page', async () => {
@@ -1387,6 +1486,120 @@ describe('teamStore workbench timeline', () => {
     useTeamStore.getState().clearTeam()
   })
 
+  function absentWorkbench(sessionId = 'lead-session') {
+    return new ApiError(404, {
+      error: 'NOT_FOUND',
+      message: `No Agent Teams workbench for session: ${sessionId}`,
+    })
+  }
+
+  it('backs off confirmed absence per session, then discovers a workbench after expiry', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    try {
+      getWorkbenchForSessionMock.mockRejectedValue(absentWorkbench())
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      now.mockReturnValue(60_999)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(1)
+      getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench('other-session'))
+      await useTeamStore.getState().fetchTeamForSession('other-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+      const snapshot = workbench('new-v1', 'in_progress')
+      getWorkbenchForSessionMock.mockResolvedValue({
+        sessionId: 'lead-session', teamName: 'team-workbench', source: 'live', snapshots: [snapshot],
+      })
+      now.mockReturnValue(61_000)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+      expect(useTeamStore.getState().workbenchesBySession['lead-session']?.snapshots).toEqual([snapshot])
+      now.mockReturnValue(66_000)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(4)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it.each([
+    new ApiError(500, { error: 'INTERNAL_ERROR', message: 'unavailable' }),
+    new ApiError(404, { error: 'NOT_FOUND', message: 'Unknown API route' }),
+    new ApiError(404, { error: 'NOT_FOUND', message: 'No Agent Teams workbench for session: other-session' }),
+    new ApiError(403, { error: 'FORBIDDEN', message: 'denied' }),
+    new TypeError('Failed to fetch'),
+    new Error('Request timed out after 120s'),
+  ])('does not cache a discovery failure as absence: %s', async (error) => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+      snapshots: [workbench('v1', 'pending')],
+    })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    expect(useTeamStore.getState().teamNameBySession['lead-session']).toBe('team-workbench')
+  })
+
+  it('invalidates absence on reconnect, team creation and store reset', async () => {
+    getWorkbenchForSessionMock.mockRejectedValue(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    getTeamMock.mockRejectedValue(new Error('not ready'))
+    getWorkbenchMock.mockRejectedValue(new Error('not ready'))
+    useTeamStore.getState().handleTeamCreated('team-workbench', 'lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+    useTeamStore.getState().clearTeam()
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('clears cached absence when a named workbench update arrives', async () => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    getWorkbenchMock.mockResolvedValueOnce(workbench('v1', 'pending'))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    getWorkbenchForSessionMock.mockResolvedValueOnce({
+      sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+      snapshots: [workbench('v2', 'completed')],
+    })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    expect(useTeamStore.getState().workbenchesBySession['lead-session']?.snapshots.at(-1)?.version).toBe('v2')
+  })
+
+  it('does not retain a previous absence when forced discovery fails transiently', async () => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    getWorkbenchForSessionMock.mockRejectedValueOnce(new ApiError(500, { message: 'unavailable' }))
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not let a stale missing response suppress discovery after creation or reset', async () => {
+    for (const invalidate of [
+      () => useTeamStore.getState().handleTeamCreated('team-workbench', 'lead-session'),
+      () => useTeamStore.getState().clearTeam(),
+    ]) {
+      useTeamStore.getState().clearTeam()
+      const pending = deferred<never>()
+      getWorkbenchForSessionMock.mockReset().mockReturnValueOnce(pending.promise)
+      getTeamMock.mockRejectedValue(new Error('not ready'))
+      getWorkbenchMock.mockRejectedValue(new Error('not ready'))
+      const discovery = useTeamStore.getState().fetchTeamForSession('lead-session')
+      invalidate()
+      pending.reject(absentWorkbench())
+      await discovery
+      getWorkbenchForSessionMock.mockResolvedValueOnce({
+        sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+        snapshots: [workbench('v1', 'pending')],
+      })
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+      expect(useTeamStore.getState().teamNameBySession['lead-session']).toBe('team-workbench')
+    }
+  })
+
   it('keeps each member model through the roster read instead of dropping it', async () => {
     const snapshot = workbench('v1', 'in_progress')
     getWorkbenchForSessionMock.mockResolvedValue({
@@ -2198,6 +2411,44 @@ describe('teamStore member recovery states', () => {
       autoRetry: null,
     }])
     expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('idle')
+  })
+
+  it('stops waiting once a command the member ran shows up, even though it never replies', async () => {
+    const timestamp = new Date().toISOString()
+    getMemberTranscriptMock.mockResolvedValue({ messages: [] })
+    getWorkbenchMock.mockResolvedValue(workbenchWithWorker('v1', { status: 'idle', activity: 'idle' }))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    const sessionId = memberSessionId(WORKER_ID)
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+
+    await useTeamStore.getState().sendMessageToMember(sessionId, '/compact')
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('thinking')
+
+    // What the member's CLI records for /compact: a summary and the command, no reply.
+    getMemberTranscriptMock.mockResolvedValue({ messages: [
+      { id: 'boundary', type: 'system', content: 'Conversation compacted', timestamp },
+      { id: 'summary', type: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary: reviewed the routes.', timestamp },
+      { id: 'command', type: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>', timestamp },
+      { id: 'output', type: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>', timestamp },
+    ] })
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('idle')
+  })
+
+  it('keeps waiting for the reply to an ordinary message whose prompt already shows', async () => {
+    const timestamp = new Date().toISOString()
+    getMemberTranscriptMock.mockResolvedValue({ messages: [] })
+    getWorkbenchMock.mockResolvedValue(workbenchWithWorker('v1', { status: 'idle', activity: 'idle' }))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    const sessionId = memberSessionId(WORKER_ID)
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+
+    await useTeamStore.getState().sendMessageToMember(sessionId, 'compact the notes please')
+    getMemberTranscriptMock.mockResolvedValue({ messages: [
+      { id: 'echo', type: 'user', content: 'compact the notes please', timestamp },
+    ] })
+    await useTeamStore.getState().refreshMemberSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]?.chatState).toBe('thinking')
   })
 })
 

@@ -1351,3 +1351,26 @@ describe('WebSocket stream event translation', () => {
     ])
   })
 })
+
+
+it('forwards retry diagnostic detail and provider request id', () => {
+  expect(translateCliMessage({ type: 'system', subtype: 'api_retry', attempt: 2, max_retries: 10,
+    retry_delay_ms: 500, error_status: null, error: 'connection_error',
+    error_message: 'ECONNRESET: socket hang up', request_id: 'req-fixture',
+  }, 'retry-diagnostics')).toEqual([{ type: 'api_retry', attempt: 2, maxRetries: 10,
+    retryDelayMs: 500, errorStatus: null, errorType: 'connection_error',
+    errorMessage: 'ECONNRESET: socket hang up', requestId: 'req-fixture',
+  }])
+})
+
+it('keeps quoted credential suffixes redacted when forwarding retry diagnostics', () => {
+  const [message] = translateCliMessage({
+    type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 10,
+    retry_delay_ms: 500, error_status: null, error: 'connection_error',
+    error_message: 'Proxy rejected password="correct horse battery staple"; {"api_key":"fixture,key,with,commas"}',
+  }, 'retry-quoted-credentials')
+  expect(message).toMatchObject({
+    type: 'api_retry',
+    errorMessage: 'Proxy rejected password="[REDACTED]"; {"api_key":"[REDACTED]"}',
+  })
+})

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-desktop trace</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<div class="signal-bar" aria-hidden="true"></div>
+<header>
+<div class="brand">
+<span class="mark" aria-hidden="true"></span>
+<h1>agent-desktop<span class="brand-sub">trace</span></h1>
+</div>
+<p id="meta" class="stats"></p>
+<div id="warnings" class="banner hidden" role="status"></div>
+<div class="toolbar">
+<label class="filter-label">
+<span class="filter-icon" aria-hidden="true"></span>
+<input id="filter" type="search" placeholder="filter events by name…" autocomplete="off" spellcheck="false">
+<span id="match-count" class="match-count" aria-live="polite"></span>
+</label>
+<span class="legend" aria-hidden="true">
+<span class="legend-item"><i class="dot ok"></i>ok</span>
+<span class="legend-item"><i class="dot err"></i>error</span>
+<span class="legend-item"><i class="dot warn"></i>incomplete</span>
+<span class="legend-item kbd-hint">&uarr;&darr; navigate</span>
+</span>
+</div>
+</header>
+<main id="layout">
+<section id="timeline" aria-label="Event timeline" tabindex="0"></section>
+<section id="detail" aria-label="Event detail">
+<h2 id="detail-title">Detail</h2>
+<pre id="detail-body"></pre>
+<div id="shots"></div>
+</section>
+</main>
+<div id="lightbox" class="lightbox hidden" role="dialog" aria-label="Screenshot" aria-modal="true">
+<img id="lightbox-img" alt="Expanded screenshot">
+<span class="lightbox-hint" aria-hidden="true">esc to close</span>
+</div>
+<script id="trace-data" type="application/json">{{DATA}}</script>
+<script>{{JS}}</script>
+</body>
+</html>

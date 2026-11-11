@@ -4,6 +4,7 @@ import {
   __resetWebSocketHandlerStateForTests,
   getSessionChatActivityState,
   getSessionTurnState,
+  hasSessionPowerActivity,
   handleWebSocket,
   stopSessionTurn,
 } from '../ws/handler.js'
@@ -13,6 +14,7 @@ import { computerUseApprovalService } from '../services/computerUseApprovalServi
 import { sessionService } from '../services/sessionService.js'
 import * as teamPlanRuntime from '../services/teamPlanRuntime.js'
 import { migrationMaintenance } from '../migrationMaintenance.js'
+import { powerActivityClock } from '../services/powerActivityClock.js'
 
 async function flushMicrotasks() {
   for (let index = 0; index < 30; index++) await Promise.resolve()
@@ -76,6 +78,21 @@ afterEach(() => {
 })
 
 describe('background task cleanup boundaries', () => {
+  it.each(['local_bash', 'local_agent', 'remote_agent'])('power counts %s lifecycle success once after the root has ended', async type => {
+    const s = setup()
+    const initial = powerActivityClock.read(false)
+    s.startTask('background-power', type)
+    expect(hasSessionPowerActivity()).toBe(true)
+    const terminal = { type: 'system', subtype: 'task_notification', task_id: 'background-power', status: 'completed' }
+    s.dispatch(terminal)
+    await flushMicrotasks()
+    expect(hasSessionPowerActivity()).toBe(false)
+    expect(powerActivityClock.read(false).completionSequence).toBe(initial.completionSequence + 1)
+    s.dispatch(terminal)
+    await flushMicrotasks()
+    expect(powerActivityClock.read(false).completionSequence).toBe(initial.completionSequence + 1)
+  })
+
   it('bounds a silent task from disconnect and converges both activity and runtime state', async () => {
     const s = setup()
     s.startTask()

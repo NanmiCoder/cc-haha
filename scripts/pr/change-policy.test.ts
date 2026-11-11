@@ -1,10 +1,104 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { codeOwnerLogins, evaluateChangePolicy } from './change-policy'
+import { createSandboxedTestEnvironment } from './test-environment'
 
 describe('evaluateChangePolicy', () => {
+  test.each([
+    'scripts/issue-router/cli.ts',
+    'scripts/issue-router/store.ts',
+    'scripts/issue-router/git.ts',
+    'scripts/issue-router/persistence.test.ts',
+    'scripts/issue-router/fixtures/v1.sql',
+    '.agents/workflows/issue-router.md',
+  ])('keeps issue router behavior and its operating contract on policy and persistence checks: %s', (file) => {
+    const result = evaluateChangePolicy([file])
+    expect(result.checks.policy).toBe(true)
+    expect(result.checks.persistence).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+    expect(result.checks.server).toBe(false)
+    expect(result.checks.mobile).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test('runs issue router regressions in policy and migration tests in persistence checks', () => {
+    const { scripts } = JSON.parse(readFileSync('package.json', 'utf8'))
+    expect(scripts['issue-router']).toBe('bun --no-env-file run scripts/issue-router/cli.ts')
+    expect(scripts['check:issue-router']).toBe('bun --no-env-file test ./scripts/issue-router/')
+    for (const testFile of readdirSync('scripts/issue-router').filter((file) => file.endsWith('.test.ts'))) {
+      expect(scripts['check:policy'].split(/\s+/)).toContain(`./scripts/issue-router/${testFile}`)
+    }
+    const persistence = readFileSync('scripts/quality-gate/persistence-upgrade.ts', 'utf8')
+    expect(persistence).toContain("['bun', '--no-env-file', 'test', './scripts/issue-router/persistence.test.ts']")
+  })
+
+  test('validates mobile archive selection changes without desktop packaging', () => {
+    const result = evaluateChangePolicy(['.easignore'])
+    expect(result.areas).toEqual(['release'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.checks.policy).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test.each(['scripts/mobile-release.ts', 'scripts/mobile-release.test.ts', '.github/workflows/release-mobile.yml'])('routes mobile publishing changes through release policy: %s', file => {
+    const result = evaluateChangePolicy([file])
+    expect(result.areas).toContain('release')
+    expect(result.checks.policy).toBe(true)
+  })
+
+  test.each(['mobile/src/app/index.tsx', 'mobile/app.json', 'mobile/bun.lock', 'mobile/plugins/withPinnedWebSockets.js'])('selects mobile checks for %s without desktop packaging', (file) => {
+    const result = evaluateChangePolicy([file])
+    expect(result.areas).toEqual(['mobile'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+  })
+
+  test('selects mobile consumers of shared code without adding unrelated areas', () => {
+    const files = ['src/shared/modelReasoning.ts', 'src/shared/modelReasoning.test.ts']
+    expect(evaluateChangePolicy(files).checks.mobile).toBe(false)
+    const result = evaluateChangePolicy(files, [], ['mobile/src/core/runtimeCatalog.ts'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.areas).toEqual([])
+    expect(result.blocked).toBe(false)
+    expect(evaluateChangePolicy(['desktop/src/pages/Settings.tsx']).checks.mobile).toBe(false)
+  })
+
+  test('routes discovery deployment and cross-language protocol changes through local workerd', () => {
+    for (const file of ['services/remote-directory/wrangler.jsonc', 'services/remote-directory/package-lock.json', 'src/remote/directory/worker.ts', 'src/shared/remoteIdentityProtocol.ts']) {
+      expect(evaluateChangePolicy([file]).checks.remoteDirectory).toBe(true)
+    }
+    expect(evaluateChangePolicy(['docs/desktop/remote.md']).checks.remoteDirectory).toBe(false)
+    expect(evaluateChangePolicy(['src/server/nativeRemoteIdentity.ts']).checks.persistence).toBe(true)
+    expect(evaluateChangePolicy(['src/server/publicAccess.ts']).checks.persistence).toBe(true)
+  })
+
+  test('routes the Android client to its build and tests without desktop packaging', () => {
+    const result = evaluateChangePolicy(['legacy-mobile/android/app/src/main/java/app/RemoteActivity.java'])
+    expect(result.areas).toEqual(['desktop'])
+    expect(result.checks.mobileAndroid).toBe(true)
+    expect(evaluateChangePolicy(['mobile/src/core/network.ts']).checks.mobileAndroid).toBe(true)
+    expect(result.checks.desktopNative).toBe(false)
+    expect(result.checks.desktop).toBe(false)
+    expect(evaluateChangePolicy(['docs/desktop/remote.md']).checks.mobileAndroid).toBe(false)
+  })
+
+  test('routes remote connection settings changes through old-fixture migrations', () => {
+    const result = evaluateChangePolicy(['desktop/electron/services/publicAccess.ts'])
+    expect(result.checks.persistence).toBe(true)
+  })
+
+  test('routes private discovery SQLite changes through persistence and service checks', () => {
+    const result = evaluateChangePolicy(['src/remote/directory/selfHosted.ts'])
+    expect(result.checks.persistence).toBe(true)
+    expect(result.checks.remoteDirectory).toBe(true)
+  })
+
   test('blocks CLI core changes without an override label', () => {
     const result = evaluateChangePolicy([
       'src/commands/help.ts',
@@ -341,6 +435,62 @@ describe('evaluateChangePolicy', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+describe('change-policy NUL-delimited Git paths', () => {
+  test.each(['src/utils/quote"scope.ts', 'src/utils/tab\tscope.ts', 'src/utils/line\nscope.ts'])(
+    'keeps %j intact and enforces its selected checks', async file => {
+      const dir = mkdtempSync(join(tmpdir(), 'change-policy-nul-'))
+      try {
+        const filesPath = join(dir, 'files.nul')
+        const outputPath = join(dir, 'github-output.txt')
+        writeFileSync(filesPath, `${file}\0`)
+        const proc = Bun.spawn([
+          process.execPath, '--no-env-file', 'run', 'scripts/pr/change-policy.ts',
+          '--files0', filesPath, '--no-dependency-graph',
+        ], {
+          cwd: process.cwd(), env: createSandboxedTestEnvironment(join(dir, 'home'), { GITHUB_OUTPUT: outputPath }),
+          stdout: 'pipe', stderr: 'pipe',
+        })
+        const stdout = await new Response(proc.stdout).text()
+        const stderr = await new Response(proc.stderr).text()
+        expect(await proc.exited, stderr).toBe(1)
+        expect(stdout).toContain(file)
+        const outputs = readFileSync(outputPath, 'utf8')
+        for (const check of ['server', 'agent_e2e', 'coverage']) {
+          expect(outputs).toContain(`${check}_checks=true`)
+        }
+        expect(outputs).toContain('blocked=true')
+        expect(outputs).toContain('CLI core changes require')
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(['src/utils/truncated.ts', 'src/utils/trailing.ts \0', 'src/utils/literal\\name.ts\0', '\0'])(
+    'fails closed for malformed or lossy Git path input %j', async input => {
+      const dir = mkdtempSync(join(tmpdir(), 'change-policy-invalid-nul-'))
+      try {
+        const filesPath = join(dir, 'files.nul')
+        const outputPath = join(dir, 'github-output.txt')
+        writeFileSync(filesPath, input)
+        const proc = Bun.spawn([
+          process.execPath, '--no-env-file', 'run', 'scripts/pr/change-policy.ts',
+          '--files0', filesPath, '--no-dependency-graph', '--plan-only',
+        ], {
+          cwd: process.cwd(), env: createSandboxedTestEnvironment(join(dir, 'home'), { GITHUB_OUTPUT: outputPath }),
+          stdout: 'pipe', stderr: 'pipe',
+        })
+        const stderr = await new Response(proc.stderr).text()
+        expect(await proc.exited, stderr).not.toBe(0)
+        expect(stderr).toContain('Invalid NUL-delimited Git paths')
+        expect(() => readFileSync(outputPath)).toThrow()
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe('change-policy CLI owner exemption', () => {

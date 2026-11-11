@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import {
   voiceApi,
   type VoiceCatalog,
+  type VoiceCorrectionTarget,
   type VoicePreferences,
   type VoiceProviderStatus,
 } from '@/api/voice'
@@ -10,6 +11,11 @@ const POLL_INTERVAL_MS = 500
 // A blip must not freeze the progress of a download the server is still running.
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const TERMINAL_PHASES = new Set(['ready', 'failed', 'cancelled', 'unprepared'])
+const CORRECTION_FIELDS: ReadonlyArray<keyof VoicePreferences> = [
+  'correctionEnabled',
+  'correctionProviderId',
+  'correctionModelId',
+]
 
 const pollTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // Bumped on every stop so a status request already in flight when the user
@@ -38,6 +44,11 @@ function replaceProvider(catalog: VoiceCatalog | null, status: VoiceProviderStat
 }
 
 export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
+  let catalogLoad: Promise<void> | null = null
+  let catalogRefreshRequested = false
+  let preferencesRevision = 0
+  let preferenceUpdates = Promise.resolve()
+
   const applyStatus = (status: VoiceProviderStatus) => {
     set(state => ({ catalog: replaceProvider(state.catalog, status) }))
   }
@@ -83,28 +94,67 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
     error: null,
 
     loadCatalog: async (options) => {
-      if (get().loading) return
+      if (catalogLoad) {
+        // A forced read must start after the active request, which may have
+        // captured the server state before the caller's change.
+        if (options?.force) catalogRefreshRequested = true
+        return catalogLoad
+      }
       if (get().catalog && !options?.force) return
       set({ loading: true })
-      try {
-        const catalog = await voiceApi.catalog()
-        set({ catalog, error: null })
-        // Resume progress display if the server is already downloading.
-        for (const provider of catalog.providers) {
-          if (provider.preparation.phase === 'downloading' || provider.preparation.phase === 'verifying') {
-            poll(provider.info.id)
-          }
+      catalogLoad = (async () => {
+        try {
+          do {
+            catalogRefreshRequested = false
+            const revision = preferencesRevision
+            try {
+              const catalog = await voiceApi.catalog()
+              // Do not publish a superseded snapshot or restart its poll loops.
+              if (catalogRefreshRequested) continue
+              set(state => ({
+                catalog: revision !== preferencesRevision && state.catalog
+                  ? { ...catalog, preferences: state.catalog.preferences, correction: state.catalog.correction }
+                  : catalog,
+                error: null,
+              }))
+              // Resume progress display if the server is already downloading.
+              for (const provider of catalog.providers) {
+                if (provider.preparation.phase === 'downloading' || provider.preparation.phase === 'verifying') {
+                  poll(provider.info.id)
+                }
+              }
+            } catch (error) {
+              if (!catalogRefreshRequested && revision === preferencesRevision) set({ error: String(error) })
+            }
+          } while (catalogRefreshRequested)
+        } finally {
+          catalogLoad = null
+          set({ loading: false })
         }
-      } catch (error) {
-        set({ error: String(error) })
-      } finally {
-        set({ loading: false })
-      }
+      })()
+      return catalogLoad
     },
 
-    updatePreferences: async (patch) => {
-      const { preferences } = await voiceApi.updatePreferences(patch)
-      set(state => ({ catalog: state.catalog ? { ...state.catalog, preferences } : state.catalog }))
+    updatePreferences: (patch) => {
+      // Each response contains all preferences. Serialize writes so an older
+      // save (or its correction lookup) cannot overwrite a later choice.
+      const updating = preferenceUpdates.then(async () => {
+        const { preferences } = await voiceApi.updatePreferences(patch)
+        preferencesRevision += 1
+        if (catalogLoad && !get().catalog) catalogRefreshRequested = true
+        set(state => ({ catalog: state.catalog ? { ...state.catalog, preferences } : state.catalog }))
+        // The server resolves which model correction will use; a changed choice
+        // (or switching it on) has to be read back rather than guessed here.
+        if (!CORRECTION_FIELDS.some(field => field in patch)) return
+        try {
+          const { correction } = await voiceApi.catalog()
+          set(state => ({ catalog: state.catalog ? { ...state.catalog, correction } : state.catalog }))
+        } catch {
+          // Keep the previous resolution; the next catalog load corrects it.
+        }
+      })
+      preferenceUpdates = updating.catch(() => {})
+      return updating
     },
 
     prepare: async (providerId) => {
@@ -150,6 +200,17 @@ export function selectVoiceInputReady(state: Pick<VoiceInputState, 'catalog'>): 
   const catalog = state.catalog
   if (!catalog?.supported || !catalog.preferences.enabled) return false
   return selectActiveVoiceProvider(state)?.preparation.phase === 'ready'
+}
+
+/**
+ * The model AI correction will call after each dictation, or null when
+ * correction is off or has nothing usable to call. Older catalogs (and test
+ * fixtures written before correction existed) carry no `correction` block.
+ */
+export function selectVoiceCorrectionTarget(state: Pick<VoiceInputState, 'catalog'>): VoiceCorrectionTarget | null {
+  const catalog = state.catalog
+  if (!catalog?.preferences.correctionEnabled) return null
+  return (catalog.correction as VoiceCatalog['correction'] | undefined)?.target ?? null
 }
 
 /**

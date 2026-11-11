@@ -235,6 +235,65 @@ describe('providerStore runtime refresh', () => {
     expect(useProviderStore.getState().deepSeekAccountModels).toEqual(saved)
   })
 
+  it('shares the server availability snapshot without starting account refreshes', async () => {
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+    const availability = { 'claude-official': false, 'openai-official': false, 'grok-official': false, 'deepseek-account': true }
+    providersApiMock.list.mockResolvedValue({ providers: [], activeId: 'deepseek-account', builtInProviderAvailability: availability })
+
+    await useProviderStore.getState().fetchProviders()
+    await useProviderStore.getState().fetchProviderAvailability()
+    await useProviderStore.getState().fetchProviderAvailability()
+
+    expect(useProviderStore.getState().builtInProviderAvailability).toEqual(availability)
+    expect(providersApiMock.authStatus).not.toHaveBeenCalled()
+  })
+
+  it('deduplicates old-server checks, retains completed providers, and retries only failures', async () => {
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+    let finishOpenAI!: (value: { hasAuth: boolean, source: string }) => void
+    const openAI = new Promise(resolve => { finishOpenAI = resolve })
+    providersApiMock.authStatus.mockImplementation(async id => {
+      if (id === 'openai-official') return openAI
+      if (id === 'grok-official') throw new Error('Offline')
+      return { hasAuth: id === 'deepseek-account', source: id === 'deepseek-account' ? 'deepseek-oauth' : 'none' }
+    })
+    await useProviderStore.getState().fetchProviders()
+    const first = useProviderStore.getState().fetchProviderAvailability()
+    void useProviderStore.getState().fetchProviderAvailability()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(useProviderStore.getState().builtInProviderAvailability['deepseek-account']).toBe(true)
+    expect(providersApiMock.authStatus).toHaveBeenCalledTimes(4)
+    finishOpenAI({ hasAuth: false, source: 'none' })
+    await first
+    expect(useProviderStore.getState().providerAvailabilityError).toBeTruthy()
+
+    providersApiMock.authStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
+    await useProviderStore.getState().fetchProviderAvailability()
+    expect(providersApiMock.authStatus).toHaveBeenCalledTimes(5)
+    expect(providersApiMock.authStatus).toHaveBeenLastCalledWith('grok-official')
+    expect(useProviderStore.getState().providerAvailabilityError).toBeNull()
+    expect(useProviderStore.getState().builtInProviderAvailability['deepseek-account']).toBe(true)
+  })
+
+  it('does not let a late legacy auth check overwrite a newer provider-list snapshot', async () => {
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState(useProviderStore.getInitialState(), true)
+    let finish!: (value: { hasAuth: boolean, source: string }) => void
+    const delayed = new Promise(resolve => { finish = resolve })
+    providersApiMock.authStatus.mockReturnValue(delayed)
+    const checking = useProviderStore.getState().fetchProviderAvailability()
+    const snapshot = { 'claude-official': false, 'openai-official': false, 'grok-official': false, 'deepseek-account': true }
+    providersApiMock.list.mockResolvedValue({ providers: [], activeId: 'deepseek-account', builtInProviderAvailability: snapshot })
+    await useProviderStore.getState().fetchProviders()
+    finish({ hasAuth: false, source: 'none' })
+    await checking
+    expect(useProviderStore.getState().builtInProviderAvailability).toEqual(snapshot)
+    expect(useProviderStore.getState().providerAvailabilityError).toBeNull()
+  })
+
   it('restores the configured OpenAI model when activating built-in ChatGPT Official', async () => {
     providersApiMock.activate.mockResolvedValue({ ok: true })
     providersApiMock.list.mockResolvedValue({
@@ -317,10 +376,27 @@ describe('providerStore runtime refresh', () => {
     })
 
     const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ providers: [makeProvider()], activeId: provider.id })
     await useProviderStore.getState().updateProvider(provider.id, { models: provider.models })
 
     expect(settingsSetModelMock).toHaveBeenCalledWith('model-flash')
     expect(settingsFetchAllMock).toHaveBeenCalled()
+  })
+
+  it.each(['name', 'other slot'])('keeps the picker model when saving %s with an unchanged main mapping', async (change) => {
+    const previous = makeProvider()
+    const provider = change === 'name'
+      ? { ...previous, name: 'Renamed provider' }
+      : { ...previous, models: { ...previous.models, haiku: 'new-small' } }
+    providersApiMock.update.mockResolvedValue({ provider })
+    providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({ providers: [previous], activeId: previous.id })
+
+    await useProviderStore.getState().updateProvider(provider.id, { name: provider.name, models: provider.models })
+
+    expect(settingsSetModelMock).not.toHaveBeenCalled()
+    expect(settingsFetchAllMock).not.toHaveBeenCalled()
   })
 })
 

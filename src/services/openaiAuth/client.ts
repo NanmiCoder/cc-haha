@@ -11,7 +11,10 @@ export const OPENAI_AUTH_ISSUER = 'https://auth.openai.com'
 export const OPENAI_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 export const OPENAI_CODEX_API_ENDPOINT =
   'https://chatgpt.com/backend-api/codex/responses'
-export const OPENAI_CODEX_CLIENT_VERSION = '0.157.0'
+// An official stable release (`npm view @openai/codex version`). Model
+// listings report the latest release when it can be looked up, with this as
+// the floor (see clientVersion.ts); every other request reports this one.
+export const OPENAI_CODEX_CLIENT_VERSION = '0.166.0'
 export const OPENAI_CODEX_ORIGINATOR = 'codex_cli_rs'
 export const OPENAI_CODEX_OAUTH_PORT = 1455
 export const OPENAI_CODEX_REDIRECT_PATH = '/auth/callback'
@@ -131,16 +134,45 @@ export async function refreshOpenAITokens(
   return (await response.json()) as OpenAIOAuthTokenResponse
 }
 
+export class OpenAITokenHttpError extends Error {
+  constructor(
+    readonly operation: 'exchange' | 'refresh',
+    readonly status: number,
+    sanitizedDetails: string,
+    readonly oauthErrorCode?: string,
+  ) {
+    super(`OpenAI token ${operation} failed: ${status}${sanitizedDetails ? `: ${sanitizedDetails}` : ''}`)
+    this.name = 'OpenAITokenHttpError'
+    // Keep structured metadata restricted to known protocol codes as well;
+    // an arbitrary upstream error string must not become an extra secret field.
+    this.oauthErrorCode = ['invalid_grant', 'invalid_token', 'refresh_token_expired',
+      'refresh_token_reused', 'refresh_token_invalid', 'invalid_client',
+      'unauthorized_client', 'access_denied', 'temporarily_unavailable', 'server_error',
+    ].includes(oauthErrorCode ?? '') ? oauthErrorCode : undefined
+  }
+
+  get requiresReauthentication(): boolean {
+    if (this.operation !== 'refresh') return false
+    if (this.status === 401) return true
+    return this.status === 400 && ['invalid_grant', 'invalid_token',
+      'refresh_token_expired', 'refresh_token_reused', 'refresh_token_invalid',
+    ].includes(this.oauthErrorCode ?? '')
+  }
+}
+
 async function buildOpenAITokenHttpError(
   operation: 'exchange' | 'refresh',
   response: Response,
 ): Promise<Error> {
   const body = await response.text().catch(() => '')
   const sanitizedBody = sanitizeOpenAITokenErrorBody(body)
-  const bodySuffix = sanitizedBody ? `: ${sanitizedBody}` : ''
-  return new Error(
-    `OpenAI token ${operation} failed: ${response.status}${bodySuffix}`,
-  )
+  let oauthErrorCode: string | undefined
+  try {
+    const parsed = JSON.parse(body)
+    const code = typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.code
+    if (typeof code === 'string') oauthErrorCode = code
+  } catch { /* Non-JSON responses are still HTTP errors, not revoked grants. */ }
+  return new OpenAITokenHttpError(operation, response.status, sanitizedBody, oauthErrorCode)
 }
 
 function sanitizeOpenAITokenErrorBody(body: string): string {

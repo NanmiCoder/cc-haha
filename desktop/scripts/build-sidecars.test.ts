@@ -4,7 +4,6 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child
 import { readFileSync } from 'node:fs'
 import { copyFile, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { createServer } from 'node:http'
 import path, { join as joinPath } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -385,6 +384,9 @@ describe('build-sidecars Windows x64 target mapping', () => {
     expect(desktopPackage.scripts?.['test:compiled-sidecar-smoke']).toContain(
       'scripts/image-processor-packaging.test.ts',
     )
+    expect(desktopPackage.scripts?.['test:compiled-sidecar-smoke']).toContain(
+      'scripts/prepare-cloudflared.test.ts',
+    )
     expect(rootPackage.scripts?.['check:native']).toContain(
       'test:compiled-sidecar-smoke',
     )
@@ -463,6 +465,34 @@ describe('build-sidecars Windows x64 target mapping', () => {
     }
   })
 
+  it('does not start a request if the process-alive check exhausts the readiness deadline', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchMock = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchMock
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      const readiness = expect(waitForCompiledSidecar({
+        baseUrl: 'http://127.0.0.1:1',
+        expectedSessionId: 'never-ready',
+        deadlineMs: 25,
+        exited: new Promise(() => {}),
+        logs: () => '',
+        localAccessToken: 'not-used',
+      })).rejects.toThrow(
+        'compiled sidecar did not become ready (compiled sidecar request deadline exceeded)',
+      )
+
+      // Model a busy event loop: wall time passes before the zero-delay alive check.
+      vi.setSystemTime(Date.now() + 25)
+      await vi.advanceTimersByTimeAsync(0)
+      await readiness
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('bounds a sidecar response with headers but a never-ending body and still cleans up', async () => {
     const originalFetch = globalThis.fetch
     const originalEnvironment = {
@@ -487,55 +517,65 @@ describe('build-sidecars Windows x64 target mapping', () => {
       logs: () => '',
     }
     let bodyCancelCount = 0
+    let responseBody: ReadableStream<Uint8Array> | undefined
     let rejectCancellation: ((error: Error) => void) | undefined
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode('{"partial":'))
-      },
-      cancel() {
-        bodyCancelCount += 1
-        return new Promise<void>((_resolve, reject) => {
-          rejectCancellation = reject
-        })
-      },
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    })) as typeof fetch
+    const fetchMock = vi.fn(async () => {
+      responseBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"partial":'))
+        },
+        cancel() {
+          bodyCancelCount += 1
+          return new Promise<void>((_resolve, reject) => {
+            rejectCancellation = reject
+          })
+        },
+      })
+      return new Response(responseBody, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    globalThis.fetch = fetchMock as typeof fetch
 
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    const startedAt = Date.now()
+    let guardTimer: ReturnType<typeof setTimeout> | undefined
     try {
-      const readinessOutcomes: string[] = []
-      void waitForCompiledSidecar({
-        baseUrl: 'http://127.0.0.1:1',
-        expectedSessionId: 'never-ready',
-        deadlineMs: 25,
-        exited,
-        logs: processHandle.logs,
-        localAccessToken: 'hung-sidecar-local-access-token',
-      }).then(
-        () => { readinessOutcomes.push('ready') },
-        error => { readinessOutcomes.push(String(error)) },
+      const readiness = expect(Promise.race([
+        waitForCompiledSidecar({
+          baseUrl: 'http://127.0.0.1:1',
+          expectedSessionId: 'never-ready',
+          deadlineMs: 25,
+          exited,
+          logs: processHandle.logs,
+          localAccessToken: 'hung-sidecar-local-access-token',
+        }),
+        new Promise<never>((_resolve, reject) => {
+          guardTimer = setTimeout(
+            () => reject(new Error('never-ending response body guard fired')),
+            250,
+          )
+        }),
+      ])).rejects.toThrow(
+        'compiled sidecar did not become ready (compiled sidecar request deadline exceeded)',
       )
 
+      // Enter the body read before spending the request's deadline budget.
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(responseBody?.locked).toBe(true)
       await vi.advanceTimersByTimeAsync(24)
-      expect(readinessOutcomes).toEqual([])
       expect(bodyCancelCount).toBe(0)
-
       await vi.advanceTimersByTimeAsync(1)
-      expect(readinessOutcomes).toEqual([
-        expect.stringContaining(
-          'compiled sidecar did not become ready (compiled sidecar request deadline exceeded)',
-        ),
-      ])
+      await readiness
+      expect(Date.now() - startedAt).toBe(25)
       expect(bodyCancelCount).toBe(1)
-      expect(vi.getTimerCount()).toBe(0)
-
-      // The caller must settle before a non-cooperative cancellation settles.
-      // Its eventual rejection must also be consumed without leaking a rejection.
+      expect(rejectCancellation).toBeTypeOf('function')
       rejectCancellation?.(new Error('late body cancellation rejection'))
       await vi.advanceTimersByTimeAsync(0)
     } finally {
+      if (guardTimer) clearTimeout(guardTimer)
       vi.useRealTimers()
       globalThis.fetch = originalFetch
       try {
@@ -667,14 +707,6 @@ describe.skipIf(!compiledSidecarSmokeEnabled)('compiled sidecar local-index smok
 
     expect(await stat(rootDir).then(() => true, () => false)).toBe(false)
   }, Math.max(90_000, compiledSidecarSmokeStarts * 10_000))
-})
-
-describe('compiled sidecar startup configuration', () => {
-  it('disables Bun automatic project environment and preload execution before sidecar routing', () => {
-    const source = readBuildScript()
-    expect(source).toContain('autoloadDotenv: false')
-    expect(source).toContain('autoloadBunfig: false')
-  })
 })
 
 describe('build-sidecars cu-helper macOS gating', () => {
@@ -814,82 +846,5 @@ describe.skipIf(!compiledSidecarSmokeEnabled)('compiled sidecar adapters mode', 
 
     expect(output).toContain('must enable at least one of')
     expect(code).toBe(2)
-  }, 60_000)
-})
-
-describe.skipIf(!compiledSidecarSmokeEnabled)('compiled official Agent SDK mode', () => {
-  it('finds its relocated native runtime and reaches the SDK entrypoint without a global installation', async () => {
-    const exec = promisify(execFile)
-    const desktopRoot = path.resolve(import.meta.dirname, '..')
-    const builtExecutable = resolveSidecarExecutable(desktopRoot, resolveHostTriple())
-    const rootDir = await mkdtemp(path.join(tmpdir(), 'cc-haha-sdk-compiled-'))
-    try {
-      const installDir = path.join(rootDir, '中文 SDK app')
-      const homeDir = path.join(rootDir, 'isolated-home')
-      const configDir = path.join(homeDir, '.claude')
-      await Promise.all([installDir, configDir].map(directory => mkdir(directory, { recursive: true })))
-      const executable = path.join(installDir, path.basename(builtExecutable))
-      const runtimeDirectory = path.join(installDir, 'official-agent-sdk')
-      await copyFile(builtExecutable, executable)
-      await cp(path.join(path.dirname(builtExecutable), 'official-agent-sdk'), runtimeDirectory, { recursive: true })
-      // Bun's defaults load project environment and arbitrary bunfig preloads
-      // before application routing. The packaged launcher must disable them.
-      await writeFile(path.join(rootDir, '.env'), 'ANTHROPIC_API_KEY=project-dotenv-fake-key\n')
-      await writeFile(path.join(rootDir, 'bunfig.toml'), 'preload = ["./project-preload.js"]\n')
-      await writeFile(path.join(rootDir, 'project-preload.js'), 'throw new Error("Project bunfig must not run inside the official SDK sidecar")\n')
-      const env = controlledSidecarEnvironment(homeDir, configDir, 'sdk-smoke-local-token')
-      // The launcher must fail in its own parser, before loading credentials,
-      // connecting a transport, or making any request to a model provider.
-      await expect(exec(executable, ['agent-sdk', '--app-root', rootDir, '--invalid-sdk-smoke-flag'], {
-        cwd: rootDir, env, timeout: 20_000, maxBuffer: 4 * 1024 * 1024,
-      })).rejects.toMatchObject({
-        code: 1,
-        stderr: expect.stringContaining('Unsupported official Agent SDK argument: --invalid-sdk-smoke-flag'),
-      })
-      // Reject the local transport handshake: this exercises the bundled SDK
-      // JavaScript import, but cannot start query() or spend provider quota.
-      const transport = createServer()
-      let upgradeAttempts = 0
-      transport.on('upgrade', (_request, socket) => {
-        upgradeAttempts += 1
-        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
-      })
-      await new Promise<void>((resolve, reject) => {
-        transport.once('error', reject)
-        transport.listen(0, '127.0.0.1', resolve)
-      })
-      try {
-        const address = transport.address()
-        if (!address || typeof address === 'string') throw new Error('Missing local SDK test port')
-        const sessionId = '08a92752-cc74-4fa1-acfc-2469582720ed'
-        await expect(exec(executable, [
-          'agent-sdk', '--app-root', rootDir,
-          '--session-id', sessionId,
-          '--sdk-url', `ws://127.0.0.1:${address.port}/sdk/${sessionId}?token=sdk-smoke-token`,
-        ], {
-          cwd: rootDir, env, timeout: 20_000, maxBuffer: 4 * 1024 * 1024,
-        })).rejects.toMatchObject({
-          code: 1,
-          stderr: expect.stringContaining('The local SDK transport failed'),
-        })
-        expect(upgradeAttempts).toBe(1)
-      } finally {
-        await new Promise<void>(resolve => transport.close(() => resolve()))
-      }
-      const nativeRuntime = path.join(runtimeDirectory, process.platform === 'win32' ? 'claude.exe' : 'claude')
-      const version = await exec(nativeRuntime, ['--version'], {
-        cwd: rootDir, env, timeout: 20_000, maxBuffer: 1024 * 1024,
-      })
-      expect(version.stdout).toMatch(/\d+\.\d+\.\d+ \(Claude Code\)/)
-      await rm(nativeRuntime)
-      await expect(exec(executable, ['agent-sdk', '--app-root', rootDir, '--invalid-sdk-smoke-flag'], {
-        cwd: rootDir, env, timeout: 20_000, maxBuffer: 4 * 1024 * 1024,
-      })).rejects.toMatchObject({
-        code: 1,
-        stderr: expect.stringContaining('The bundled official Agent SDK runtime is missing'),
-      })
-    } finally {
-      await rm(rootDir, { recursive: true, force: true })
-    }
   }, 60_000)
 })

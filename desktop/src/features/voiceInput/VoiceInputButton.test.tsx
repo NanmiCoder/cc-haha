@@ -61,8 +61,18 @@ function catalogFixture(
       info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto', 'zh', 'en'] },
       preparation: { phase },
     }],
-    preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto', ...overrides },
+    preferences: {
+      enabled: true,
+      providerId: 'sensevoice-local',
+      language: 'zh',
+      downloadSource: 'auto',
+      correctionEnabled: false,
+      correctionProviderId: null,
+      correctionModelId: null,
+      ...overrides,
+    },
     limits: { maxAudioSeconds: 60, maxAudioBytes: 10_000_000 },
+    correction: { defaultTarget: null, target: null },
   }
 }
 

@@ -70,6 +70,29 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
 
   afterEach(() => { vi.restoreAllMocks() })
 
+  it('keeps an oversized edit and its history before any rewind', async () => {
+    const oversized = { ...draft, text: 'x'.repeat(16 * 1024 * 1024) }
+    const { result } = setup()
+    act(() => result.current.editActionByMessageId.get('shared-user')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(oversized))
+
+    expect(sessionsApi.rewind).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toEqual(messages)
+    expect(result.current.editActionByMessageId.get('shared-user')!.editing).toBe(true)
+    expect(result.current.editActionByMessageId.get('shared-user')!.getDraft().text.length).toBe(oversized.text.length)
+  })
+
+  it('recovers the edit into the composer when a committed rewind cannot send it', async () => {
+    vi.mocked(useChatStore.getState().sendMessage).mockReturnValue(false)
+    vi.spyOn(useChatStore.getState(), 'reloadHistory').mockResolvedValue(undefined)
+    const { result } = setup()
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(draft))
+
+    expect(sessionsApi.rewind).toHaveBeenCalledTimes(2)
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill?.text).toBe(draft.text)
+  })
+
   it.each([preview, codePreview])('ignores a pending preview after switching session instead of rewinding either session', async (response) => {
     const pending = deferred<SessionRewindResponse>()
     vi.mocked(sessionsApi.rewind).mockReturnValueOnce(pending.promise)
@@ -199,6 +222,20 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
     }))
   })
 
+  it('keeps skill pills when the failed resend is handed back to the composer', async () => {
+    vi.spyOn(sessionsApi, 'getFullHistory').mockRejectedValue(new Error('history offline'))
+    const mentions = [{
+      kind: 'skill' as const, id: 'frontend-design', label: 'Frontend Design', modelText: 'Use the frontend-design skill',
+      path: '', isDirectory: false, tokenOrdinal: 0,
+    }]
+    const withPill: UserMessageEditDraft = { ...draft, text: '@Frontend Design landing page', mentions }
+    const { result } = setup()
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(withPill))
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill).toMatchObject({
+      text: withPill.text, mentions,
+    })
+  })
+
   it('ignores a failed preview after the editor unmounts', async () => {
     const pending = deferred<SessionRewindResponse>()
     vi.mocked(sessionsApi.rewind).mockReturnValueOnce(pending.promise)
@@ -268,5 +305,84 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
       expect(result.current.dialog.open).toBe(false)
       await waitFor(() => expect(useChatStore.getState().sendMessage).toHaveBeenCalledWith('session-a', draft.text, [], expect.any(Object)))
     })
+  })
+})
+
+describe('useUserMessageEditResend unconfirmed prompt', () => {
+  const unconfirmedMessages: UIMessage[] = [
+    { id: 'lost', type: 'user_text', content: 'Build a pgae', awaitingReplay: true, timestamp: 1 },
+  ]
+  const unconfirmedCard: EditableTurnCard = { target: { messageId: 'lost', expectedContent: 'Build a pgae' }, unconfirmed: true }
+
+  function setupUnconfirmed(storeMessages: UIMessage[] = unconfirmedMessages) {
+    useChatStore.setState({
+      ...useChatStore.getInitialState(),
+      sessions: { 'session-a': { ...makeSession(), messages: storeMessages } },
+    }, true)
+    useUIStore.setState({ toasts: [] })
+    vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => true)
+    return renderHook(() => useUserMessageEditResend({
+      sessionId: 'session-a',
+      messages: unconfirmedMessages,
+      turnCards: [unconfirmedCard],
+      completedMessageIds: new Set(),
+      blockedReason: null,
+      pendingReason: null,
+      disabled: false, rewindingTurnId: null, setRewindingTurnId: vi.fn(), t: translate,
+    }))
+  }
+
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('drops the unsent bubble and sends the edit without touching the transcript', async () => {
+    const { result } = setupUnconfirmed()
+    act(() => result.current.editActionByMessageId.get('lost')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit({ ...draft, text: 'Build a page' }))
+
+    expect(sessionsApi.rewind).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toEqual([])
+    expect(useChatStore.getState().sendMessage).toHaveBeenCalledWith('session-a', 'Build a page', [], expect.any(Object))
+    expect(result.current.editActionByMessageId.get('lost')!.editing).toBe(false)
+  })
+
+  it('keeps the unconfirmed bubble and editor when the edited frame is too large', async () => {
+    const { result } = setupUnconfirmed()
+    act(() => result.current.editActionByMessageId.get('lost')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit({ ...draft, text: 'x'.repeat(16 * 1024 * 1024) }))
+
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toEqual(unconfirmedMessages)
+    expect(result.current.editActionByMessageId.get('lost')!.editing).toBe(true)
+  })
+
+  it('recovers an unconfirmed edit if sending is refused after replacing its bubble', async () => {
+    const { result } = setupUnconfirmed()
+    vi.mocked(useChatStore.getState().sendMessage).mockReturnValue(false)
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit(draft))
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill?.text).toBe(draft.text)
+  })
+
+  it('keeps the editor and the bubble when the prompt was acknowledged in the meantime', async () => {
+    // The replay landed after the card was built: the CLI has this prompt, so
+    // replacing it locally would leave the model's history and the screen apart.
+    const { result } = setupUnconfirmed([{ ...unconfirmedMessages[0]!, awaitingReplay: undefined } as UIMessage])
+    act(() => result.current.editActionByMessageId.get('lost')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit(draft))
+
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toHaveLength(1)
+    expect(useUIStore.getState().toasts.some((toast) => toast.message === 'chat.editResendStale')).toBe(true)
+    expect(result.current.editActionByMessageId.get('lost')!.editing).toBe(true)
+  })
+
+  it('refuses to drop a prompt once the session is running again', async () => {
+    const { result } = setupUnconfirmed()
+    useChatStore.setState({ sessions: { 'session-a': { ...useChatStore.getState().sessions['session-a']!, chatState: 'thinking' } } })
+    act(() => result.current.editActionByMessageId.get('lost')!.onStart())
+    await act(async () => result.current.editActionByMessageId.get('lost')!.onSubmit(draft))
+
+    expect(useChatStore.getState().sendMessage).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions['session-a']!.messages).toHaveLength(1)
   })
 })

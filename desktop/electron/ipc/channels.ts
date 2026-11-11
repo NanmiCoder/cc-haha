@@ -1,11 +1,18 @@
 export const ELECTRON_IPC_CHANNELS = {
   publicAccessGetStatus: 'desktop:public-access:get-status',
-  publicAccessSaveCredential: 'desktop:public-access:save-credential',
-  publicAccessDeleteCredential: 'desktop:public-access:delete-credential',
+  publicAccessConfigure: 'desktop:public-access:configure',
   publicAccessStart: 'desktop:public-access:start',
   publicAccessStop: 'desktop:public-access:stop',
   publicAccessSetAutoStart: 'desktop:public-access:set-auto-start',
+  publicAccessSetP2PEnabled: 'desktop:public-access:set-p2p-enabled',
+  publicAccessSetKeepAwake: 'desktop:public-access:set-keep-awake',
+  appGetLoginStartup: 'desktop:app:get-login-startup',
+  appSetLoginStartup: 'desktop:app:set-login-startup',
   appGetVersion: 'desktop:app:get-version',
+  powerSetPreventSleepWhileRunning: 'desktop:power:set-prevent-sleep-while-running',
+  powerGetIdleActionState: 'desktop:power:get-idle-action-state',
+  powerConfigureIdleAction: 'desktop:power:configure-idle-action',
+  powerCancelIdleAction: 'desktop:power:cancel-idle-action',
   appGetLocalePreference: 'desktop:app:get-locale-preference',
   appSetLocalePreference: 'desktop:app:set-locale-preference',
   appGetPreferredSystemLanguages: 'desktop:app:get-preferred-system-languages',
@@ -92,6 +99,7 @@ export const ELECTRON_IPC_CHANNELS = {
 } as const
 
 export const ELECTRON_EVENT_CHANNELS = {
+  powerIdleActionState: 'desktop:power:idle-action-state',
   event: 'desktop:event',
   appLocaleChanged: 'desktop:app:locale-changed',
   webviewDragDrop: 'desktop:webview:drag-drop',

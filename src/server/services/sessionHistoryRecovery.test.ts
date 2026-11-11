@@ -52,6 +52,21 @@ test('recovery retains goal and todo evidence outside the visible tail, includin
   expect(Buffer.byteLength(JSON.stringify(recovery))).toBeLessThan(16 * 1024)
 })
 
+test('recovery counts the final usage of a reply whose first content-block line carried zero output', async () => {
+  const line = (uuid: string, requestId: string, messageId: string, usage: object) => entry('assistant', uuid, [{ type: 'text', text: uuid }], {
+    version: '1.0.0', sessionId: id, requestId,
+    message: { role: 'assistant', id: messageId, content: [{ type: 'text', text: uuid }], usage },
+  })
+  await writeFile(file, [
+    line('a1', 'req-1', 'msg-1', { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 500 }),
+    line('a2', 'req-1', 'msg-1', { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 500 }),
+    line('a3', 'req-1', 'msg-1', { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 500 }),
+    line('b1', 'req-2', 'msg-2', { input_tokens: 4, output_tokens: 6 }),
+  ].map(value => JSON.stringify(value)).join('\n') + '\n')
+  const recovery = await service.getSessionHistoryRecovery(id)
+  expect(recovery.tokenUsage).toEqual({ input_tokens: 14, output_tokens: 26, cache_read_tokens: 500, cache_creation_tokens: 0 })
+})
+
 test('recovery retains tool lifecycle ownership and does not revive child tools as root work', async () => {
   await writeFile(file, [
     entry('assistant', 'root-call', [{ type: 'tool_use', id: 'agent-1', name: 'Agent', input: { description: 'inspect' } }]),
@@ -104,7 +119,7 @@ test('launch metadata, title, work directory and metadata appends never material
 })
 
 
-test('history pages hide the notification turn but keep its reply, preserve sidechain ownership, and index only appended bytes', async () => {
+test('history pages project the notification turn as a status and keep its reply, preserve sidechain ownership, and index only appended bytes', async () => {
   const notification = '<task-notification><task-id>task</task-id><tool-use-id>agent</tool-use-id><status>completed</status></task-notification>'
   await writeFile(file, [
     entry('assistant', 'owner', [{ type: 'tool_use', id: 'agent', name: 'Agent', input: {} }]),
@@ -116,7 +131,12 @@ test('history pages hide the notification turn but keep its reply, preserve side
   expect(latest.messages).toMatchObject([{ id: 'reply' }])
   expect(latest.page.contextScanBytes).toBeGreaterThan(0)
   const noticePage = await service.getSessionHistoryPage(id, { limit: 1, cursor: latest.page.nextCursor! })
-  expect(noticePage.messages).toEqual([])
+  expect(noticePage.messages).toEqual([{
+    id: 'notice',
+    type: 'system',
+    content: { subtype: 'background_continue', notifications: [{ taskId: 'task', status: 'completed' }] },
+    timestamp: '2026-01-01T00:00:00.000Z',
+  }])
   const childPage = await service.getSessionHistoryPage(id, { limit: 1, cursor: noticePage.page.nextCursor! })
   expect(childPage.messages).toMatchObject([{ id: 'child', parentToolUseId: 'agent' }])
   expect(childPage.page.contextScanBytes).toBe(0)

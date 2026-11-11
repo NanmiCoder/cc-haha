@@ -16,6 +16,12 @@ export type DesktopProfilePreferences = {
   avatarUpdatedAt: string | null
 }
 
+export type SharedProfile = {
+  displayName: string
+  subtitle: string
+  avatarDataUrl: string | null
+}
+
 export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
@@ -34,6 +40,7 @@ export type DesktopUiPreferences = {
   /** Absent when talking to a server older than the voice input feature. */
   voiceInput?: VoicePreferences
   projectDisplayNames: Record<string, string>
+  projectAdditionalDirectories?: Record<string, string[]>
 }
 
 export type DesktopUiPreferencesResponse = {
@@ -56,7 +63,25 @@ export type ProjectDisplayNameUpdateResponse = {
   displayName: string | null
 }
 
+export type ProjectDirectories = {
+  projectKey: string
+  mainDirectory: string
+  additionalDirectories: string[]
+}
+
 export const desktopUiPreferencesApi = {
+  getProjectDirectories(workDir: string) {
+    return api.get<ProjectDirectories>(`/api/desktop-ui/preferences/project-directories?workDir=${encodeURIComponent(workDir)}`)
+  },
+
+  updateProjectDirectories(workDir: string, additionalDirectories: string[]) {
+    return api.put<ProjectDirectories & { ok: true }>('/api/desktop-ui/preferences/project-directories', { workDir, additionalDirectories })
+  },
+
+  getProfile() {
+    return api.get<{ profile: SharedProfile }>('/api/desktop-ui/preferences/profile')
+  },
+
   getPreferences() {
     return api.get<DesktopUiPreferencesResponse>('/api/desktop-ui/preferences')
   },

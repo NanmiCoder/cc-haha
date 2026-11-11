@@ -1,0 +1,204 @@
+language = "C"
+cpp_compat = true
+include_guard = "AGENT_DESKTOP_H"
+no_includes = true
+sys_includes = ["stdint.h", "stdbool.h", "stddef.h"]
+style = "both"
+usize_is_size_t = true
+
+# Agent workflow orientation for C/C++ binding authors.
+# Placed after sys-includes and before declarations (inside the include guard).
+after_includes = """
+/*
+ * Agent workflow — quick orientation for C/C++ binding authors:
+ *
+ *  1. (Optional) Call ad_init(AD_ABI_VERSION_MAJOR) to verify at runtime that
+ *     the header you compiled against matches the loaded dylib.  A version
+ *     mismatch returns ErrInvalidArgs; abort rather than proceed.
+ *
+ *  2. Create an adapter:
+ *       AdAdapter *a = ad_adapter_create();            // no session
+ *       AdAdapter *a = ad_adapter_create_with_session(session_id); // with session
+ *
+ *  3. Observe via ad_snapshot().  The returned JSON envelope contains the
+ *     accessibility tree with snapshot-qualified ref IDs (for example,
+ *     "@s8f3k2p9:e5") that address
+ *     individual interactive elements.  A refmap is written under the state
+ *     root (default ~/.agent-desktop, or AGENT_DESKTOP_HOME) and is keyed to
+ *     the snapshot ID.  The envelope carries
+ *     data.snapshot_id. Qualified refs already pin the exact snapshot.
+ *
+ *  4. Act via ad_execute_by_ref(a, "@s8f3k2p9:e5", &action, policy, &out).
+ *     Build an AdAction by zero-initialising it and setting its kind field to
+ *     an AD_ACTION_KIND_* constant plus any kind-specific fields (e.g. .text
+ *     for AD_ACTION_KIND_TYPE_TEXT).  policy=0 (Headless) keeps each action's
+ *     built-in base behaviour; pass 2 (Headed) to additionally allow
+ *     cursor/focus fallbacks.  ref_id must be non-null (null returns
+ *     ErrInvalidArgs immediately).
+ *
+ *  5. Ownership: every non-null *out string must be freed with ad_free_string().
+ *     Destroy the adapter when done with ad_adapter_destroy(a).
+ *
+ * Calls may originate on any host thread. Native element handles remain
+ * thread-affine and must be used and released on the thread that resolved
+ * them. Desktop mutations are serialized by an interaction lease.
+ */
+"""
+
+# ABI layout guards — regenerated automatically by scripts/update-ffi-header.sh.
+# Each sizeof guard references an AD_*_SIZE macro (emitted from the corresponding
+# Rust pub const via [const] allow_static_const = false), so the size literal
+# lives in exactly one place: the Rust source. Alignment and offset guards use
+# literal values because no Rust const tracks those — they are structurally fixed
+# on all 64-bit targets (8-byte pointer alignment; fields in declaration order).
+trailer = """
+/* C11 ABI layout guards — auto-generated; do not hand-edit.
+ * Each sizeof check references the AD_*_SIZE macro defined above so the
+ * size literal lives in exactly one place (the Rust source). Alignment
+ * and offset values are structurally fixed on all 64-bit targets.
+ * The one-shot guard makes double-include safe regardless of C standard. */
+#ifndef AGENT_DESKTOP_ABI_ASSERTS
+#define AGENT_DESKTOP_ABI_ASSERTS
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(AdDragParams) == AD_DRAG_PARAMS_SIZE, "AdDragParams ABI size changed");
+_Static_assert(_Alignof(AdDragParams) == 8, "AdDragParams ABI alignment changed");
+_Static_assert(sizeof(AdAction) == AD_ACTION_SIZE, "AdAction ABI size changed");
+_Static_assert(_Alignof(AdAction) == 8, "AdAction ABI alignment changed");
+_Static_assert(sizeof(AdElementState) == AD_ELEMENT_STATE_SIZE, "AdElementState ABI size changed");
+_Static_assert(_Alignof(AdElementState) == 8, "AdElementState ABI alignment changed");
+_Static_assert(sizeof(AdActionStep) == AD_ACTION_STEP_SIZE, "AdActionStep ABI size changed");
+_Static_assert(_Alignof(AdActionStep) == 8, "AdActionStep ABI alignment changed");
+_Static_assert(offsetof(AdActionStep, label) == 0, "AdActionStep.label offset changed");
+_Static_assert(offsetof(AdActionStep, outcome) == 8, "AdActionStep.outcome offset changed");
+_Static_assert(offsetof(AdActionStep, mechanism) == 16, "AdActionStep.mechanism offset changed");
+_Static_assert(offsetof(AdActionStep, has_mechanism) == 20, "AdActionStep.has_mechanism offset changed");
+_Static_assert(offsetof(AdActionStep, verified) == 21, "AdActionStep.verified offset changed");
+_Static_assert(offsetof(AdActionStep, has_verified) == 22, "AdActionStep.has_verified offset changed");
+_Static_assert(sizeof(AdActionResult) == AD_ACTION_RESULT_SIZE, "AdActionResult ABI size changed");
+_Static_assert(_Alignof(AdActionResult) == 8, "AdActionResult ABI alignment changed");
+_Static_assert(offsetof(AdActionResult, action) == 0, "AdActionResult.action offset changed");
+_Static_assert(offsetof(AdActionResult, ref_id) == 8, "AdActionResult.ref_id offset changed");
+_Static_assert(offsetof(AdActionResult, post_state) == 16, "AdActionResult.post_state offset changed");
+_Static_assert(offsetof(AdActionResult, steps) == 24, "AdActionResult.steps offset changed");
+_Static_assert(offsetof(AdActionResult, step_count) == 32, "AdActionResult.step_count offset changed");
+_Static_assert(offsetof(AdActionResult, details_json) == 40, "AdActionResult.details_json offset changed");
+_Static_assert(offsetof(AdActionResult, disposition) == 48, "AdActionResult.disposition offset changed");
+_Static_assert(sizeof(AdDeliverySemantics) == AD_DELIVERY_SEMANTICS_SIZE, "AdDeliverySemantics ABI size changed");
+_Static_assert(offsetof(AdDeliverySemantics, retry) == 4, "AdDeliverySemantics.retry offset changed");
+_Static_assert(sizeof(AdRefEntry) == AD_REF_ENTRY_SIZE, "AdRefEntry ABI size changed");
+_Static_assert(_Alignof(AdRefEntry) == 8, "AdRefEntry ABI alignment changed");
+_Static_assert(offsetof(AdRefEntry, process) == 0, "AdRefEntry.process offset changed");
+_Static_assert(offsetof(AdRefEntry, identity) == 8, "AdRefEntry.identity offset changed");
+_Static_assert(offsetof(AdRefEntry, geometry) == 48, "AdRefEntry.geometry offset changed");
+_Static_assert(offsetof(AdRefEntry, capabilities) == 96, "AdRefEntry.capabilities offset changed");
+_Static_assert(offsetof(AdRefEntry, source) == 128, "AdRefEntry.source offset changed");
+_Static_assert(offsetof(AdRefEntry, scope) == 168, "AdRefEntry.scope offset changed");
+_Static_assert(sizeof(AdExactRefEntry) == AD_EXACT_REF_ENTRY_SIZE, "AdExactRefEntry ABI size changed");
+_Static_assert(_Alignof(AdExactRefEntry) == 8, "AdExactRefEntry ABI alignment changed");
+_Static_assert(offsetof(AdExactRefEntry, version) == 0, "AdExactRefEntry.version offset changed");
+_Static_assert(offsetof(AdExactRefEntry, size) == 4, "AdExactRefEntry.size offset changed");
+_Static_assert(offsetof(AdExactRefEntry, entry) == 8, "AdExactRefEntry.entry offset changed");
+_Static_assert(offsetof(AdExactRefEntry, process_instance) == 208, "AdExactRefEntry.process_instance offset changed");
+_Static_assert(offsetof(AdExactRefEntry, identifier_kind) == 216, "AdExactRefEntry.identifier_kind offset changed");
+_Static_assert(sizeof(AdExactWindowInfo) == AD_EXACT_WINDOW_INFO_SIZE, "AdExactWindowInfo ABI size changed");
+_Static_assert(_Alignof(AdExactWindowInfo) == 8, "AdExactWindowInfo ABI alignment changed");
+_Static_assert(offsetof(AdExactWindowInfo, version) == 0, "AdExactWindowInfo.version offset changed");
+_Static_assert(offsetof(AdExactWindowInfo, size) == 4, "AdExactWindowInfo.size offset changed");
+_Static_assert(offsetof(AdExactWindowInfo, window) == 8, "AdExactWindowInfo.window offset changed");
+_Static_assert(offsetof(AdExactWindowInfo, process_instance) == 80, "AdExactWindowInfo.process_instance offset changed");
+_Static_assert(offsetof(AdExactWindowInfo, accessible) == 88, "AdExactWindowInfo.accessible offset changed");
+_Static_assert(sizeof(AdExactSurfaceInfo) == AD_EXACT_SURFACE_INFO_SIZE, "AdExactSurfaceInfo ABI size changed");
+_Static_assert(_Alignof(AdExactSurfaceInfo) == 8, "AdExactSurfaceInfo ABI alignment changed");
+_Static_assert(offsetof(AdExactSurfaceInfo, version) == 0, "AdExactSurfaceInfo.version offset changed");
+_Static_assert(offsetof(AdExactSurfaceInfo, size) == 4, "AdExactSurfaceInfo.size offset changed");
+_Static_assert(offsetof(AdExactSurfaceInfo, id) == 8, "AdExactSurfaceInfo.id offset changed");
+_Static_assert(offsetof(AdExactSurfaceInfo, surface) == 16, "AdExactSurfaceInfo.surface offset changed");
+_Static_assert(sizeof(AdDisplayInfo) == AD_DISPLAY_INFO_SIZE, "AdDisplayInfo ABI size changed");
+_Static_assert(_Alignof(AdDisplayInfo) == 8, "AdDisplayInfo ABI alignment changed");
+_Static_assert(offsetof(AdDisplayInfo, version) == 0, "AdDisplayInfo.version offset changed");
+_Static_assert(offsetof(AdDisplayInfo, size) == 4, "AdDisplayInfo.size offset changed");
+_Static_assert(offsetof(AdDisplayInfo, id) == 8, "AdDisplayInfo.id offset changed");
+_Static_assert(offsetof(AdDisplayInfo, bounds) == 16, "AdDisplayInfo.bounds offset changed");
+_Static_assert(offsetof(AdDisplayInfo, is_primary) == 48, "AdDisplayInfo.is_primary offset changed");
+_Static_assert(offsetof(AdDisplayInfo, scale) == 56, "AdDisplayInfo.scale offset changed");
+_Static_assert(sizeof(AdRefProcess) == AD_REF_PROCESS_SIZE, "AdRefProcess ABI size changed");
+_Static_assert(sizeof(AdRefIdentity) == AD_REF_IDENTITY_SIZE, "AdRefIdentity ABI size changed");
+_Static_assert(offsetof(AdRefIdentity, native_id) == 32, "AdRefIdentity.native_id offset changed");
+_Static_assert(sizeof(AdStringSlice) == AD_STRING_SLICE_SIZE, "AdStringSlice ABI size changed");
+_Static_assert(sizeof(AdRefCapabilities) == AD_REF_CAPABILITIES_SIZE, "AdRefCapabilities ABI size changed");
+_Static_assert(sizeof(AdRefGeometry) == AD_REF_GEOMETRY_SIZE, "AdRefGeometry ABI size changed");
+_Static_assert(offsetof(AdRefGeometry, bounds_hash) == 32, "AdRefGeometry.bounds_hash offset changed");
+_Static_assert(offsetof(AdRefGeometry, bounds_space) == 44, "AdRefGeometry.bounds_space offset changed");
+_Static_assert(sizeof(AdRefSource) == AD_REF_SOURCE_SIZE, "AdRefSource ABI size changed");
+_Static_assert(offsetof(AdRefSource, window_bounds_hash) == 24, "AdRefSource.window_bounds_hash offset changed");
+_Static_assert(sizeof(AdRefScope) == AD_REF_SCOPE_SIZE, "AdRefScope ABI size changed");
+_Static_assert(offsetof(AdRefScope, path) == 8, "AdRefScope.path offset changed");
+_Static_assert(sizeof(struct AdWaitArgs) == AD_WAIT_ARGS_SIZE, "AdWaitArgs ABI size drift");
+_Static_assert(_Alignof(struct AdWaitArgs) == 8, "AdWaitArgs ABI alignment changed");
+_Static_assert(offsetof(AdWaitArgs, mode) == 0, "AdWaitArgs.mode offset changed");
+_Static_assert(offsetof(AdWaitArgs, predicate) == 48, "AdWaitArgs.predicate offset changed");
+_Static_assert(offsetof(AdWaitArgs, scope) == 88, "AdWaitArgs.scope offset changed");
+_Static_assert(sizeof(AdOptionalU64) == AD_OPTIONAL_U64_SIZE, "AdOptionalU64 ABI size changed");
+_Static_assert(sizeof(AdOptionalUsize) == AD_OPTIONAL_USIZE_SIZE, "AdOptionalUsize ABI size changed");
+_Static_assert(sizeof(AdWaitSurfaceModes) == AD_WAIT_SURFACE_MODES_SIZE, "AdWaitSurfaceModes ABI size changed");
+_Static_assert(sizeof(AdWaitMode) == AD_WAIT_MODE_SIZE, "AdWaitMode ABI size changed");
+_Static_assert(sizeof(AdWaitPredicate) == AD_WAIT_PREDICATE_SIZE, "AdWaitPredicate ABI size changed");
+_Static_assert(sizeof(AdWaitScope) == AD_WAIT_SCOPE_SIZE, "AdWaitScope ABI size changed");
+_Static_assert(sizeof(AdNode) == AD_NODE_SIZE, "AdNode ABI size changed");
+_Static_assert(offsetof(AdNode, content) == 0, "AdNode.content offset changed");
+_Static_assert(offsetof(AdNode, presentation) == 48, "AdNode.presentation offset changed");
+_Static_assert(offsetof(AdNode, relation) == 96, "AdNode.relation offset changed");
+_Static_assert(sizeof(AdNodeContent) == AD_NODE_CONTENT_SIZE, "AdNodeContent ABI size changed");
+_Static_assert(sizeof(AdNodePresentation) == AD_NODE_PRESENTATION_SIZE, "AdNodePresentation ABI size changed");
+_Static_assert(sizeof(AdNodeRelation) == AD_NODE_RELATION_SIZE, "AdNodeRelation ABI size changed");
+_Static_assert(sizeof(AdNotificationIdentity) == AD_NOTIFICATION_IDENTITY_SIZE, "AdNotificationIdentity ABI size changed");
+_Static_assert(sizeof(AdNotificationActionRequest) == AD_NOTIFICATION_ACTION_REQUEST_SIZE, "AdNotificationActionRequest ABI size changed");
+_Static_assert(offsetof(AdNotificationActionRequest, identity) == 16, "AdNotificationActionRequest.identity offset changed");
+_Static_assert(sizeof(AdFindQuery) == AD_FIND_QUERY_SIZE, "AdFindQuery ABI size changed");
+_Static_assert(offsetof(AdFindQuery, filter) == 24, "AdFindQuery.filter offset changed");
+_Static_assert(sizeof(AdFindControl) == AD_FIND_CONTROL_SIZE, "AdFindControl ABI size changed");
+_Static_assert(offsetof(AdFindControl, timeout_ms) == 16, "AdFindControl.timeout_ms offset changed");
+_Static_assert(sizeof(AdFindSelection) == AD_FIND_SELECTION_SIZE, "AdFindSelection ABI size changed");
+_Static_assert(sizeof(AdFindIdentity) == AD_FIND_IDENTITY_SIZE, "AdFindIdentity ABI size changed");
+_Static_assert(sizeof(AdFindStatePredicate) == AD_FIND_STATE_PREDICATE_SIZE, "AdFindStatePredicate ABI size changed");
+_Static_assert(sizeof(AdFindStateSlice) == AD_FIND_STATE_SLICE_SIZE, "AdFindStateSlice ABI size changed");
+_Static_assert(sizeof(AdFindFilter) == AD_FIND_FILTER_SIZE, "AdFindFilter ABI size changed");
+_Static_assert(offsetof(AdFindFilter, exact) == 80, "AdFindFilter.exact offset changed");
+#endif /* __STDC_VERSION__ >= 201112L */
+#endif /* AGENT_DESKTOP_ABI_ASSERTS */
+"""
+
+[const]
+allow_static_const = false
+
+[defines]
+"feature = panic-injection" = "AGENT_DESKTOP_TEST_PANIC_INJECTION"
+
+[export]
+# Force-emit the enums whose discriminants are the valid values for
+# public `int32_t` fields (AdAction.kind, AdScrollParams.direction, etc.).
+# cbindgen would otherwise drop these because no struct/function field
+# names them directly — we intentionally store the raw i32 on the ABI so
+# foreign callers can't UB with an invalid bit pattern, but C consumers
+# still need the named constants (AD_ACTION_KIND_CLICK etc.) to keep the
+# contract documented and type-checkable.
+include = [
+    "AdActionKind",
+    "AdDirection",
+    "AdDeliveryDisposition",
+    "AdFindSelectionKind",
+    "AdIdentifierKind",
+    "AdModifier",
+    "AdMouseButton",
+    "AdMouseEventKind",
+    "AdPolicyKind",
+    "AdRetryDisposition",
+    "AdScreenshotKind",
+    "AdSnapshotSurface",
+    "AdStepMechanism",
+    "AdWindowOpKind",
+]
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+prefix_with_name = true

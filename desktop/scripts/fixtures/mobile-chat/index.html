@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:*">
+    <title>Mobile chat deterministic smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      // This page always runs in a fresh, isolated browser session. Reset only
+      // this loopback fixture origin, before importing stores that read it.
+      localStorage.clear()
+      sessionStorage.clear()
+      await import('/scripts/fixtures/mobile-chat/main.tsx')
+    </script>
+  </body>
+</html>

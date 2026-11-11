@@ -1,0 +1,161 @@
+import { ApiError } from '../core/client'
+import type { PushProvider } from './pushProvider'
+
+export type PushStatus = 'loading' | 'registered' | 'notConfigured' | 'permissionRequired' | 'unsupported' | 'error'
+/** `relayFailing`: registered, but the computer's last Expo send failed, so alerts are not arriving. */
+export type PushIssue = 'network' | 'authorization' | 'hostUnsupported' | 'deviceNotConfigured' | 'deviceUnavailable' | 'storage' | 'relayFailing' | 'unknown'
+/** `provider`: how a registered computer reaches this phone; tests and the settings card use it. */
+export type PushInfo = { status: PushStatus; issue?: PushIssue; error?: string; provider?: PushProvider }
+export type PushStage = 'permission' | 'device' | 'host' | 'registration'
+type AttemptResult = { info: PushInfo; retry?: boolean }
+
+/** Keep native token availability separate from computer transport and stored proofs. */
+export function pushRegistrationFailure(error: unknown, stage: PushStage): AttemptResult {
+  const message = error instanceof Error ? error.message : '通知登记失败'
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+  if (stage === 'device') {
+    if (code === 'NOT_CONFIGURED')
+      return { info: { status: 'unsupported', issue: 'deviceNotConfigured', error: message } }
+    return { info: { status: 'error', issue: 'deviceUnavailable', error: message }, retry: code === 'UNAVAILABLE' || code === 'TIMEOUT' }
+  }
+  if (error instanceof ApiError) {
+    if ([401, 403].includes(error.status))
+      return { info: { status: 'error', issue: 'authorization', error: message } }
+    if ([404, 405].includes(error.status))
+      return { info: { status: 'unsupported', issue: 'hostUnsupported', error: message } }
+    if (['NETWORK_ERROR', 'TIMEOUT'].includes(error.code ?? '') || [502, 503, 504].includes(error.status))
+      return { info: { status: 'error', issue: 'network', error: message }, retry: true }
+  }
+  return { info: { status: 'error', issue: stage === 'registration' && !(error instanceof ApiError) ? 'storage' : 'unknown', error: message } }
+}
+
+const retryDelays = [2000, 5000, 15000]
+/** 回到前台时，这么久之内登记成功过就不复查；token 轮换另有监听，会立即重新登记。 */
+export const FOREGROUND_RECHECK_AFTER_MS = 30 * 60_000
+/** 回到前台后最多等聊天连接这么久再复查，别和它抢慢的公网隧道。 */
+export const FOREGROUND_YIELD_MS = 5000
+export type RecoveryOptions = {
+  gate?: { readonly busy: boolean; whenIdle(maxMs: number): Promise<void> }
+  now?: () => number
+}
+
+/** Serialize registration; only fresh native tokens may start work in background. */
+export class PushRegistrationRecovery {
+  private alive = true
+  private active = false
+  private running = false
+  private pending = false
+  private pendingToken: string | undefined
+  private retryCount = 0
+  private generation = 0
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private request: AbortController | undefined
+  private registeredAt: number | undefined
+
+  constructor(
+    private attempt: (signal: AbortSignal, token?: string) => Promise<AttemptResult>,
+    private update: (info: PushInfo) => void,
+    private options: RecoveryOptions = {}
+  ) {}
+
+  setActive(active: boolean) {
+    if (!this.alive || this.active === active) return
+    this.active = active
+    this.generation++
+    this.clearTimer()
+    if (active) {
+      // A foreground check reads the current native token again.
+      this.pendingToken = undefined
+      if (
+        this.registeredAt !== undefined &&
+        this.now() - this.registeredAt < FOREGROUND_RECHECK_AFTER_MS
+      )
+        return
+      const gate = this.options.gate
+      if (!gate?.busy) this.refresh()
+      else {
+        const generation = this.generation
+        void gate.whenIdle(FOREGROUND_YIELD_MS).then(() => {
+          if (this.alive && this.active && this.generation === generation) this.refresh()
+        })
+      }
+    } else {
+      // Keep the latest rotation queued behind the in-flight request. Ordinary
+      // refreshes still stop here, while a rotated token gets one background try.
+      this.pending = Boolean(this.pendingToken)
+      // Let an accepted registration finish. Aborting its signal would ask the
+      // coordinator to revoke it, precisely when background push is needed.
+    }
+  }
+
+  refresh(token?: string) {
+    if (!this.alive || (!this.active && !token)) return
+    this.clearTimer()
+    this.retryCount = 0
+    if (this.running) {
+      this.pending = true
+      if (token) this.pendingToken = token
+      return
+    }
+    void this.run(token)
+  }
+
+  stop() {
+    this.alive = false
+    this.active = false
+    this.generation++
+    this.pending = false
+    this.pendingToken = undefined
+    this.clearTimer()
+    this.request?.abort()
+  }
+
+  private now() {
+    return (this.options.now ?? Date.now)()
+  }
+
+  private clearTimer() {
+    clearTimeout(this.timer)
+    this.timer = undefined
+  }
+
+  private async run(token?: string) {
+    if (!this.alive || (!this.active && !token)) return
+    this.running = true
+    const request = new AbortController()
+    this.request = request
+    const generation = this.generation
+    const current = () => this.alive && this.active && this.generation === generation && !request.signal.aborted && this.request === request
+    let retry = false
+    if (this.active) this.update({ status: 'loading' })
+    try {
+      const result = await this.attempt(request.signal, token)
+      // 只有确认送得到（没有任何问题）才算登记好了，回到前台时可以跳过复查。
+      this.registeredAt =
+        result.info.status === 'registered' && !result.info.issue
+          ? this.now()
+          : undefined
+      if (current()) {
+        this.update(result.info)
+        retry = Boolean(result.retry)
+      }
+    } catch (error) {
+      if (current()) this.update(pushRegistrationFailure(error, 'permission').info)
+    } finally {
+      this.running = false
+      if (this.alive && this.pending && (this.active || this.pendingToken)) {
+        const next = this.pendingToken
+        this.pending = false
+        this.pendingToken = undefined
+        void this.run(next)
+      } else if (current() && retry) {
+        const delay = retryDelays[this.retryCount++]
+        if (delay !== undefined)
+          this.timer = setTimeout(() => {
+            this.timer = undefined
+            void this.run()
+          }, delay)
+      }
+    }
+  }
+}

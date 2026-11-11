@@ -4,6 +4,7 @@
  * GET  /api/desktop-ui/preferences          — read cc-haha UI preferences
  * PUT  /api/desktop-ui/preferences/sidebar  — persist sidebar project preferences
  * PUT  /api/desktop-ui/preferences/project-display-name — set or reset one project display name
+ * GET  /api/desktop-ui/preferences/profile  — read profile identity and inline avatar
  * PUT  /api/desktop-ui/preferences/profile  — persist local profile preferences
  * GET  /api/desktop-ui/preferences/pet      — read only desktop pet preferences
  * PUT  /api/desktop-ui/preferences/pet      — patch desktop pet preferences
@@ -47,6 +48,12 @@ export async function handleDesktopUiApi(
       })
     }
 
+    if (detail === 'project-directories') {
+      if (req.method === 'GET') return Response.json(await desktopUiPreferencesService.getProjectDirectories(url.searchParams.get('workDir')))
+      if (req.method !== 'PUT') throw methodNotAllowed(req.method)
+      return Response.json({ ok: true, ...await desktopUiPreferencesService.updateProjectDirectories(await parseJsonBody(req)) })
+    }
+
     if (detail === 'project-display-name') {
       if (req.method !== 'PUT') throw methodNotAllowed(req.method)
       const body = await parseJsonBody(req)
@@ -78,6 +85,11 @@ export async function handleDesktopUiApi(
       const action = segments[4]
 
       if (action === undefined) {
+        if (req.method === 'GET') {
+          return Response.json({ profile: await desktopUiPreferencesService.readProfileSummary() }, {
+            headers: { 'Cache-Control': 'no-store' },
+          })
+        }
         if (req.method !== 'PUT') throw methodNotAllowed(req.method)
         const body = await parseJsonBody(req)
         return Response.json({

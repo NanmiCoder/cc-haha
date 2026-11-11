@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import YAML from 'yaml'
 import type { AppState } from '../../state/AppStateStore.js'
 import { handleAgentsApi } from '../api/agents.js'
 import { clearAgentDefinitionsCache } from '../../tools/AgentTool/loadAgentsDir.js'
@@ -225,6 +226,247 @@ describe('Agents API Markdown CRUD', () => {
       errors: 0,
       error: 'CLI control channel closed',
     })
+  })
+
+  it('pins a saved provider to an agent model and clears it when the agent follows the session again', async () => {
+    await writeSavedProviders(configDir)
+
+    const created = await api('POST', '/api/agents', {
+      scope: 'user',
+      cwd: projectCwd,
+      name: 'provider-reviewer',
+      description: 'Reviews with a pinned provider',
+      systemPrompt: 'Review with the pinned provider.',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      effort: 'max',
+    })
+    expect(created.status).toBe(201)
+    expect(created.data.agent).toMatchObject({
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      providerName: 'DeepSeek',
+      effort: 'max',
+    })
+    const userFile = path.join(configDir, 'agents', 'provider-reviewer.md')
+    expect(await fs.readFile(userFile, 'utf-8')).toContain('provider: deepseek-direct')
+
+    for (const provider of ['missing-provider', 'openai-account']) {
+      const rejected = await api('PUT', '/api/agents/provider-reviewer', {
+        scope: 'user', cwd: projectCwd, provider,
+      })
+      expect(rejected.status).toBe(400)
+      expect(rejected.data.message).toContain(`not a saved API provider: ${provider}`)
+    }
+
+    // A provider that was deleted after saving does not block other edits.
+    const providersFile = path.join(configDir, 'cc-haha', 'providers.json')
+    const providers = JSON.parse(await fs.readFile(providersFile, 'utf-8'))
+    await fs.writeFile(providersFile, JSON.stringify({ ...providers, providers: [] }))
+    const descriptionOnly = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, description: 'Still editable', model: 'deepseek-v4-flash', provider: 'deepseek-direct',
+    })
+    expect(descriptionOnly.status).toBe(200)
+    expect(await fs.readFile(userFile, 'utf-8')).toContain('provider: deepseek-direct')
+    await fs.writeFile(providersFile, JSON.stringify(providers))
+
+    // A new model sent without a provider follows the session again.
+    const modelOnly = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: 'sonnet',
+    })
+    expect(modelOnly.status).toBe(200)
+    expect(await fs.readFile(userFile, 'utf-8')).not.toContain('provider:')
+    await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: 'deepseek-v4-flash', provider: 'deepseek-direct',
+    })
+
+    const followSession = await api('PUT', '/api/agents/provider-reviewer', {
+      scope: 'user', cwd: projectCwd, model: null, provider: null,
+    })
+    expect(followSession.status).toBe(200)
+    expect(followSession.data.agent.provider).toBeUndefined()
+    const rewritten = await fs.readFile(userFile, 'utf-8')
+    expect(rewritten).not.toContain('provider:')
+    expect(rewritten).toContain('effort: max')
+  })
+
+  it('keeps agents the loader accepts editable when their description is unquoted example text', async () => {
+    await writeSavedProviders(configDir)
+    const agentsDir = path.join(configDir, 'agents')
+    const agentFile = path.join(agentsDir, 'codebase-analyzer.md')
+    // The `/agents` generator style: `: ` inside a plain scalar is invalid
+    // strict YAML, but the CLI loader quotes it and activates the agent.
+    const description =
+      "Use this agent for codebase analysis. Examples: <example>Context: User wants to understand auth. user: 'Can you analyze how auth is handled?' assistant: 'I'll use the codebase-analyzer agent.' <commentary>Needs a broad search.</commentary></example>"
+    await fs.mkdir(agentsDir, { recursive: true })
+    await fs.writeFile(
+      agentFile,
+      `---\nname: codebase-analyzer\ndescription: ${description}\nmodel: opus\ncolor: green\n---\n\nAnalyze the codebase.\n`,
+      'utf-8',
+    )
+    const target = await fs.realpath(agentFile)
+    clearAgentDefinitionsCache()
+
+    const findAgent = async () => {
+      const list = await api(
+        'GET',
+        `/api/agents?cwd=${encodeURIComponent(projectCwd)}`,
+      )
+      return list.data.activeAgents.find(
+        (agent: { agentType: string }) => agent.agentType === 'codebase-analyzer',
+      )
+    }
+    expect(await findAgent()).toMatchObject({
+      source: 'userSettings',
+      description,
+      editable: true,
+      target,
+    })
+
+    const update = await api('PUT', '/api/agents/codebase-analyzer', {
+      scope: 'user',
+      cwd: projectCwd,
+      target,
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+    })
+    expect(update.status).toBe(200)
+    expect(update.data.agent).toMatchObject({
+      provider: 'deepseek-direct',
+      editable: true,
+      target,
+    })
+
+    // The save normalizes the file to strict YAML without changing what the
+    // loader reads, so the next edit and the CLI agree on every field.
+    const rewritten = await fs.readFile(agentFile, 'utf-8')
+    const frontmatter = YAML.parseDocument(
+      rewritten.slice(4, rewritten.indexOf('\n---\n', 4)),
+    )
+    expect(frontmatter.errors).toEqual([])
+    expect(frontmatter.toJS()).toEqual({
+      name: 'codebase-analyzer',
+      description,
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      color: 'green',
+    })
+    expect(markdownBody(rewritten)).toBe('\nAnalyze the codebase.\n')
+    clearAgentDefinitionsCache()
+    expect(await findAgent()).toMatchObject({
+      description,
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek-direct',
+      editable: true,
+    })
+  })
+
+  it('keeps agents read-only when quoting would change what the loader reads', async () => {
+    const agentsDir = path.join(configDir, 'agents')
+    const agentFile = path.join(agentsDir, 'release-notes.md')
+    // The loader parses this as written while `yaml` rejects the tag. Quoting
+    // would save the list as a string and the comment into `memory`.
+    const content = [
+      '---',
+      'name: release-notes',
+      'description: Drafts release notes',
+      'created: !!timestamp last week',
+      'memory: project # per-repo notes',
+      'disallowedTools: [Bash, Write]',
+      '---',
+      '',
+      'Draft notes.',
+      '',
+    ].join('\n')
+    await fs.mkdir(agentsDir, { recursive: true })
+    await fs.writeFile(agentFile, content, 'utf-8')
+    const target = await fs.realpath(agentFile)
+    clearAgentDefinitionsCache()
+
+    const list = await api(
+      'GET',
+      `/api/agents?cwd=${encodeURIComponent(projectCwd)}`,
+    )
+    expect(list.status).toBe(200)
+    expect(
+      list.data.activeAgents.find(
+        (agent: { agentType: string }) => agent.agentType === 'release-notes',
+      ),
+    ).toMatchObject({ source: 'userSettings', editable: false })
+
+    const update = await api('PUT', '/api/agents/release-notes', {
+      scope: 'user',
+      cwd: projectCwd,
+      target,
+      model: 'sonnet',
+    })
+    expect(update.status).toBe(400)
+    expect(await fs.readFile(agentFile, 'utf-8')).toBe(content)
+  })
+
+  it('lists every agent when YAML aliases resolve differently across parsers', async () => {
+    const agentsDir = path.join(configDir, 'agents')
+    await fs.mkdir(agentsDir, { recursive: true })
+    // The loader rejects the bare alias and reads the quoted text instead.
+    const wipFile = path.join(agentsDir, 'wip.md')
+    await fs.writeFile(
+      wipFile,
+      '---\nname: wip\ndescription: *WIP\n---\n\nWork in progress.\n',
+      'utf-8',
+    )
+    // The loader expands these aliases; `yaml` refuses them as an exhaustion attack.
+    await fs.writeFile(
+      path.join(agentsDir, 'laughs.md'),
+      [
+        '---',
+        'name: laughs',
+        'description: Expands aliases',
+        'l0: &l0 [x, x, x, x]',
+        'l1: &l1 [*l0, *l0, *l0, *l0]',
+        'l2: &l2 [*l1, *l1, *l1, *l1]',
+        'l3: &l3 [*l2, *l2, *l2, *l2]',
+        '---',
+        'Expand.',
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(agentsDir, 'plain.md'),
+      '---\nname: plain\ndescription: Plain agent\n---\nPlain.\n',
+      'utf-8',
+    )
+    clearAgentDefinitionsCache()
+
+    const list = await api(
+      'GET',
+      `/api/agents?cwd=${encodeURIComponent(projectCwd)}`,
+    )
+    expect(list.status).toBe(200)
+    const listed = (agentType: string) =>
+      list.data.activeAgents.find(
+        (agent: { agentType: string }) => agent.agentType === agentType,
+      )
+    expect(listed('wip')).toMatchObject({ description: '*WIP', editable: true })
+    expect(listed('laughs')).toMatchObject({
+      description: 'Expands aliases',
+      editable: false,
+    })
+    expect(listed('plain')).toMatchObject({ editable: true })
+
+    const update = await api('PUT', '/api/agents/wip', {
+      scope: 'user',
+      cwd: projectCwd,
+      target: await fs.realpath(wipFile),
+      effort: 'high',
+    })
+    expect(update.status).toBe(200)
+    expect(update.data.agent).toMatchObject({
+      description: '*WIP',
+      effort: 'high',
+      editable: true,
+    })
+    expect(await fs.readFile(wipFile, 'utf-8')).toContain('description: "*WIP"')
   })
 
   it('creates, lists, updates, and deletes user and project agents', async () => {
@@ -1421,19 +1663,22 @@ describe('Agents API Markdown CRUD', () => {
     await fs.mkdir(agentsDir, { recursive: true })
 
     const invalidFiles = [
-      ['no-frontmatter', 'plain text only'],
-      ['invalid-yaml', '---\nname: [\n---\nPrompt'],
-      ['non-mapping', '---\n- item\n---\nPrompt'],
+      ['no-frontmatter', 'plain text only', 400],
+      // Invalid even after the loader's quoting retry, so the CLI drops it too.
+      ['invalid-yaml', '---\nname: invalid-yaml\ndescription: "unterminated\n---\nPrompt', 400],
+      // The quoting retry parses this as `name: "["`, another identity.
+      ['invalid-flow', '---\nname: [\n---\nPrompt', 409],
+      ['non-mapping', '---\n- item\n---\nPrompt', 400],
     ] as const
 
-    for (const [name, content] of invalidFiles) {
+    for (const [name, content, status] of invalidFiles) {
       await fs.writeFile(path.join(agentsDir, `${name}.md`), content, 'utf-8')
       const response = await api('PUT', `/api/agents/${name}`, {
         scope: 'user',
         cwd: projectCwd,
         description: 'Must not replace malformed input',
       })
-      expect(response.status).toBe(400)
+      expect(response.status).toBe(status)
       expect(await fs.readFile(path.join(agentsDir, `${name}.md`), 'utf-8')).toBe(
         content,
       )
@@ -1602,6 +1847,33 @@ describe('Agents API built-in overrides', () => {
     )
     expect(readOnlyDelete.status).toBe(403)
     expect(readOnlyDelete.data.error).toBe('READ_ONLY_AGENT')
+  })
+
+  it('saves a built-in provider only together with its model', async () => {
+    await writeSavedProviders(configDir)
+
+    const missingModel = await api('PUT', '/api/agents/Explore/override', {
+      cwd: projectCwd, model: null, provider: 'deepseek-direct',
+    })
+    expect(missingModel.status).toBe(400)
+
+    const pinned = await api('PUT', '/api/agents/Explore/override', {
+      cwd: projectCwd, model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'low',
+    })
+    expect(pinned.status).toBe(200)
+    expect(pinned.data.agent).toMatchObject({
+      model: 'deepseek-v4-flash', provider: 'deepseek-direct', providerName: 'DeepSeek', effort: 'low',
+    })
+    expect(pinned.data.agent.override).toMatchObject({ model: 'deepseek-v4-flash', provider: 'deepseek-direct' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({
+      model: 'deepseek-v4-flash', provider: 'deepseek-direct', effort: 'low',
+    })
+
+    await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, model: 'haiku' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({ model: 'haiku', effort: 'low' })
+
+    await api('DELETE', `/api/agents/Explore/override?cwd=${encodeURIComponent(projectCwd)}`)
+    expect((await readUserSettings()).builtInAgentOverrides).toBeUndefined()
   })
 
   it('writes only the requested field and leaves the rest of settings.json alone', async () => {
@@ -1878,6 +2150,25 @@ describe('Agents API built-in overrides', () => {
     ])
   })
 })
+
+async function writeSavedProviders(configDir: string): Promise<void> {
+  await fs.mkdir(path.join(configDir, 'cc-haha'), { recursive: true })
+  await fs.writeFile(path.join(configDir, 'cc-haha', 'providers.json'), JSON.stringify({
+    schemaVersion: 4,
+    activeId: null,
+    providers: [
+      {
+        id: 'deepseek-direct', presetId: 'deepseek', name: 'DeepSeek', apiKey: 'fake-deepseek-key',
+        baseUrl: 'https://api.deepseek.example/anthropic', apiFormat: 'anthropic',
+        models: { main: 'deepseek-v4-pro', haiku: 'deepseek-v4-flash', sonnet: 'deepseek-v4-pro', opus: 'deepseek-v4-pro' },
+      },
+      {
+        id: 'openai-account', presetId: 'openai', name: 'OpenAI', apiKey: '', runtimeKind: 'openai_oauth',
+        baseUrl: 'https://chatgpt.example', models: { main: 'gpt', haiku: 'gpt', sonnet: 'gpt', opus: 'gpt' },
+      },
+    ],
+  }))
+}
 
 async function api(
   method: string,

@@ -1,0 +1,81 @@
+{
+  "notice": "Deterministic interoperability fixture only. This private key grants no real access.",
+  "algorithm": "RSA-2048/SHA-256/PKCS1-v1_5",
+  "hostId": "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+  "publicKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1H5LTpfa1L8qNJzeJq87_PInTAToWYhuF2AvMuuE2PUrs24yobDdZB9hNTVov4C1TjCQ2vSoLO-CQY2YEcdfZa6Koo3RUuMi90fjfrZ1nIBgJNc3eaQQqtf2iwIpPA7860eA3NIfhknMvEBSU_rVAgZdNI7q4Bd8KbZgc4bJQrILq5uLCjcBp0xV3uks4mJXoJhRqooC89aIz_8x-MepaDUkNBYHzkykrHsIfxGuAe0iBZnoD7jh0VEEiI9dsfe8SmcLLT9_QZHrT6A_EcrcsjsYuIBp7Tv9jhLGSpmL_hymMmCZJ9naDUtfIOQ9cUidVj4QfJZONQ54gQvzYYQKBwIDAQAB",
+  "privateKeyPkcs8": "MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDUfktOl9rUvyo0nN4mrzv88idMBOhZiG4XYC8y64TY9SuzbjKhsN1kH2E1NWi_gLVOMJDa9Kgs74JBjZgRx19lroqijdFS4yL3R-N-tnWcgGAk1zd5pBCq1_aLAik8DvzrR4Dc0h-GScy8QFJT-tUCBl00jurgF3wptmBzhslCsgurm4sKNwGnTFXe6SziYlegmFGqigLz1ojP_zH4x6loNSQ0FgfOTKSsewh_Ea4B7SIFmegPuOHRUQSIj12x97xKZwstP39BketPoD8RytyyOxi4gGntO_2OEsZKmYv-HKYyYJkn2doNS18g5D1xSJ1WPhB8lk41DniBC_NhhAoHAgMBAAECggEAJK_lap1XP9H9hHXs-PraPZLFbB-Qyhx-_XQy0fTNy_OQZvtIrJfvsWCllN0yx5V-OBC0gckp3BBCCfVbYv5sHw8iimw3zrq-h7kWswLnjWywrMunnU3RPt3oiBmIawEfc7O1sOpqXPIS8hGc5TjyW9Yjc3aVYLlNS5pcTrXfu67XLJXNRZTiWszzSkhLlePa7-upriEQaEmhAunai1T1zGyHZABVKd11eYScdAht4ZdWAbHwJGibhYWTxHaUCWjlCYPZDpsUH2AMFH1o5DbopIvbuW63huBa3-Bbq5Rf6aFbCtF35ITdA9u4FYGSsCfGHde1l0sStDgi9lO51PmPaQKBgQDz9V6IsgbtkMqlQpv_YAyDTjLjfsuCxiu7sLlCf0aHm8BP571w0RwXSosuzZJCkf34vGNKJHWAygkyFi_iIYm_sH1o9sI2NzpqsFz7qjUOwpO6qfBepeC6B2p5AXCHf9QBnlnd81axXDBBedTgq7QHqyfCYQTN58xUudj91YT6MwKBgQDe-1XJXdFfUpdcx8AjNevWAEy7qmdcPgBiXazvmy5vcDrp9fh_lykCsV7qlFwPGtZZ1pMWl46V5lYo32q3RXmg3vGP4GBPHcAE1FomqC8AG5RyaaPo2lpL6iIxL-ju0Y9I92INOG6UtYYWXL7EsZ1m9Op4kw7GYwy36kCCAjPE3QKBgQCpkLLUcGlAVpODqnijWC9aVNAqL8dkbjmXi445Gh37w9Y3s-uIrs_HoJh9P4WZn7_XU5nvvsetbMBXf_RoSMdl5VZFzr3O0TRZU5xNkFCwoa3s4JGiN8mrg9wNn2KHy-Gf_mCYVLq9LEaePAAq6S2I5v4LrUOZmrP7b_HS_MYg4QKBgQC646suQEzo-R9WKzGWEW6eCdhGfndtL6ZAy8TTepw72LP4PinOPtKnqCQmtrxGCLdZyuezSsm-R7U1QrR98WQU-mc6sNPn28aCBb2dot7p1zPfhT1VQBXohM-trDsuV0Qh4v4ymHbOeypsecWGtFt53JLdBlye2IvjZho1HUVonQKBgQDU9EoDebfmjUimIzhAXJ4ffOZAr7xfOWHN1b6tlEJuhYVAxsLhlB0MgPH8vtBVsJ8U7c7z8h-wHl9jM1YsXwei6tXuc1_6JRHMPeWqlQGS41NdOIddgrarTiq_AgXWPLCd4YSm3-sil6SOdPe4s8YKnFFV6cj-w7whCFaICnQGxw",
+  "examples": [
+    {
+      "purpose": "announce",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "17",
+        "1800000060000"
+      ],
+      "canonical": "cc-haha-remote-v2\nannounce\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\n17\n1800000060000",
+      "signature": "PANpcD4_zYSzRGphRU6oygCB_bt3rVSJEtpkzGMLKCQkpG_Xz0QsQrFsDqRjOfJUeJKD7kyinCrrhvQ3KjetjU4NqYhhuKF5k0-sgJAbSHQrPgrTXZs1DC8xwSK-3nLZAf1NeVfZHov6NPiFP20q2Fo_9JDAq_2ms6o6WLN7H-Km8M8eoo4yhysQ2z74HCNJ4raFKCibKT-bCRrs4lggMSJCG-WIc5Pg2TqkmB9iM_qXUX9QzNtkPDvBBHBJJw4QpBT9w5IXdPqOAmJzI665_tXW-ZtC4guaB9W6v-bqIeJ2pQioa6M1Wz6_nTPG5U3Vw6AKMZSNHZVgL1IRskiu-Q"
+    },
+    {
+      "purpose": "host-proof",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "1800000060000"
+      ],
+      "canonical": "cc-haha-remote-v2\nhost-proof\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\nAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\nAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\n1800000060000",
+      "signature": "HZeUQNHs37rqrezU8Dh3t3fODfG137h1_TVAuKYhWRlcXNQzierueMcs3kKz0zWcIWyYg2pCypsXxitIpyjHTcncJgQvgP96DsXXQA72OgthDP-lP2oW0cpK4qKLaAfpI-oqV8sZJaKbIxmbZGXK-WdCydJFc_-YoqLVe3lrwblTVNu59iZoBehXqtyqOBpfd_gYlBOpasugHPXgIlMVyk95Tk7VE_nudMWfpIxZdulXgIMNLUVh5G7qt7Vw0ByEtdPV7PneAKQN1gNGlB9cjz3ofLf1S_wMyHkMHqsMBhV1VZhA3aXN3TlHJNQN4dl1Xow-zSue1t0oikOAPh85Cg"
+    },
+    {
+      "purpose": "enroll",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1H5LTpfa1L8qNJzeJq87_PInTAToWYhuF2AvMuuE2PUrs24yobDdZB9hNTVov4C1TjCQ2vSoLO-CQY2YEcdfZa6Koo3RUuMi90fjfrZ1nIBgJNc3eaQQqtf2iwIpPA7860eA3NIfhknMvEBSU_rVAgZdNI7q4Bd8KbZgc4bJQrILq5uLCjcBp0xV3uks4mJXoJhRqooC89aIz_8x-MepaDUkNBYHzkykrHsIfxGuAe0iBZnoD7jh0VEEiI9dsfe8SmcLLT9_QZHrT6A_EcrcsjsYuIBp7Tv9jhLGSpmL_hymMmCZJ9naDUtfIOQ9cUidVj4QfJZONQ54gQvzYYQKBwIDAQAB",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+      ],
+      "canonical": "cc-haha-remote-v2\nenroll\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1H5LTpfa1L8qNJzeJq87_PInTAToWYhuF2AvMuuE2PUrs24yobDdZB9hNTVov4C1TjCQ2vSoLO-CQY2YEcdfZa6Koo3RUuMi90fjfrZ1nIBgJNc3eaQQqtf2iwIpPA7860eA3NIfhknMvEBSU_rVAgZdNI7q4Bd8KbZgc4bJQrILq5uLCjcBp0xV3uks4mJXoJhRqooC89aIz_8x-MepaDUkNBYHzkykrHsIfxGuAe0iBZnoD7jh0VEEiI9dsfe8SmcLLT9_QZHrT6A_EcrcsjsYuIBp7Tv9jhLGSpmL_hymMmCZJ9naDUtfIOQ9cUidVj4QfJZONQ54gQvzYYQKBwIDAQAB\nAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "signature": "thjRWfJi6LCTtHOCqAsyqOSRooOBWPocOo1oAEHDTMhCxTJA7fYlRmE6shrUV-iJXiX_oR7aeSLOP-_YDo2cz4BfHCOJ-cyhsZhw5uglA5x76qrCc_yl1XRftG-OgGJwijz4IP85rD5R-JKize3nBtVaNQExXQFSGfuN02dWzgKRmoVGouNGV0Wh5xDeHaWQ-1HKv9GWVgZiHj_nsxrs96uB34zTItFzM9i3ZGKr5BCY1go5k-Uywk2B2LpIF9plikMxP4MCjvyfEbCsfmtA8IaE7sYGJ2n7c8FKhlFfLb_X1usRuyxzw-8tH6ylJz3R2linH8FkLnfYVfwwCsoG8w"
+    },
+    {
+      "purpose": "enrolled",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "fixture-device",
+        "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1H5LTpfa1L8qNJzeJq87_PInTAToWYhuF2AvMuuE2PUrs24yobDdZB9hNTVov4C1TjCQ2vSoLO-CQY2YEcdfZa6Koo3RUuMi90fjfrZ1nIBgJNc3eaQQqtf2iwIpPA7860eA3NIfhknMvEBSU_rVAgZdNI7q4Bd8KbZgc4bJQrILq5uLCjcBp0xV3uks4mJXoJhRqooC89aIz_8x-MepaDUkNBYHzkykrHsIfxGuAe0iBZnoD7jh0VEEiI9dsfe8SmcLLT9_QZHrT6A_EcrcsjsYuIBp7Tv9jhLGSpmL_hymMmCZJ9naDUtfIOQ9cUidVj4QfJZONQ54gQvzYYQKBwIDAQAB",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+      ],
+      "canonical": "cc-haha-remote-v2\nenrolled\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\nfixture-device\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1H5LTpfa1L8qNJzeJq87_PInTAToWYhuF2AvMuuE2PUrs24yobDdZB9hNTVov4C1TjCQ2vSoLO-CQY2YEcdfZa6Koo3RUuMi90fjfrZ1nIBgJNc3eaQQqtf2iwIpPA7860eA3NIfhknMvEBSU_rVAgZdNI7q4Bd8KbZgc4bJQrILq5uLCjcBp0xV3uks4mJXoJhRqooC89aIz_8x-MepaDUkNBYHzkykrHsIfxGuAe0iBZnoD7jh0VEEiI9dsfe8SmcLLT9_QZHrT6A_EcrcsjsYuIBp7Tv9jhLGSpmL_hymMmCZJ9naDUtfIOQ9cUidVj4QfJZONQ54gQvzYYQKBwIDAQAB\nAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "signature": "OZ0Fx5vIciQfRsHSZ6wsc-l8CYNJNtMAW0lQqz3gyeFOAeIQE6j9_JHIAxUM-29aKJAbLLqEoSmqGcC8SvRvaXRS5idGOj0_U20JYQbByR9hBwGGeCPxVwUQ8SAfmIJgIKm6u_z_5f5C6pFvaRwUBRkxT8QNjuX2a5Q__gyClPl5m5BGvoI9NXm3cEt_r_0oSwYMwQyXeF9qjDtTiiuN7vw7R0G4ESXcs4aInxZilwtZ3RDCB-zq6A2RrHdpL_9HBd-RVtKTwfIX1AVViF5n1q3cRpyQ-x_m_6d39EPDuhOx2KfWleQOayoXRwFKFBk-qFMkqbfMn27YzDlGCZGe-w"
+    },
+    {
+      "purpose": "resume",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "fixture-device",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI",
+        "1800000060000"
+      ],
+      "canonical": "cc-haha-remote-v2\nresume\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\nfixture-device\nAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\nAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\n1800000060000",
+      "signature": "epiKKC9aagGI86BfgyMSK1ZpEZVNf-JEQpvfWqXrC0wNA7BpIV64Kj3eCw4SYApb7RcxpuaTG795yVtpf9aUQ5q7uyKH4wZ3_FieUgqIdyz3qUKiJCz1qBTbz_qmyZIV8gEtLW1FOHz2swSpmylvtUsV7s2iRvfDcPQ0pNpNouIr_dw6mSNIw7Eq3UNXsg5SnwaML3QpiWgydLljh2lBD86TTaF9bG3z6sDuGMidflh9wdbSXVXL__xb9663zTRNAFZW86EsmFsBnmZsFZNhUe1HKViChN-dSZ1DSIlDWl6YJmS8D3Rqdhed4XSNdFOV-ig9rHMTn3uK12n0srmRaQ"
+    },
+    {
+      "purpose": "session",
+      "fields": [
+        "5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871",
+        "https://computer-fixture.example",
+        "fixture-device",
+        "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "1800000060000"
+      ],
+      "canonical": "cc-haha-remote-v2\nsession\n5657471a1b9edf76595399bdfbbe2a466f58378d258002c7a248b7760f20e871\nhttps://computer-fixture.example\nfixture-device\nAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n1800000060000",
+      "signature": "AFNnrHB6Q415mvP_jt11O6ZY_f5xTmphoBdmsc1kmZiLFQ_XHx3zohLftt3bG6M9rRbET64tyc9IAun7r6dfLvH3YTzKq4XmkOrj3M1nxOQ7HRBBMf4ylpceoKmM7Z-jLAU1H9sGF_NvKO-1W8JSp59OtYway5d-gTnc0XhcdcuSGnSWN2gPI4D3X-lNI-02CgD6r1FOtHIxB-ls0nZRB1Y3dPljRE_dUBo0GyQ89XrEeUDePMH3QyTWrE0DGMKaewStW9qbRI6_QZB_yQIzmsLCumgONzcGLBW4TbycLmG7EGCNSuhaaixUFniM6IJWfFh6NMdMU3HGs4uyII23tA"
+    }
+  ]
+}

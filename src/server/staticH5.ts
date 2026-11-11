@@ -1,21 +1,34 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-const CACHEABLE_ASSET_RE = /^\/assets\//
+/**
+ * The phone H5 app: the Expo web export of `mobile/`, built into `dist/m`
+ * (`mobile/app.config.ts` sets this base path). It is its own single-page
+ * app, so a reload anywhere under it must get its own index document.
+ */
+export const MOBILE_H5_BASE_PATH = '/m'
+
+// Content-hashed file names: Vite's `/assets/`, and Expo's bundles and assets.
+const CACHEABLE_ASSET_RE = /^\/(?:assets|m\/_expo\/static|m\/assets)\//
+const COMPRESSIBLE_EXTENSION_RE = /\.(?:css|html|js|json|map|mjs|svg|txt|wasm)$/i
 
 const MIME_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
   '.html': 'text/html; charset=utf-8',
   '.ico': 'image/x-icon',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   // Browsers refuse a module script served as octet-stream, and
   // `WebAssembly.instantiateStreaming` refuses anything but application/wasm.
   '.mjs': 'text/javascript; charset=utf-8',
+  '.otf': 'font/otf',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.ttf': 'font/ttf',
   '.txt': 'text/plain; charset=utf-8',
   '.wasm': 'application/wasm',
   '.webp': 'image/webp',
@@ -33,6 +46,17 @@ export async function handleStaticH5Request(req: Request, url: URL): Promise<Res
     return null
   }
 
+  if (isMobileH5Page(url.pathname) && !(await fileIfExists(mobileIndexPath(distDir)))) {
+    // A phone that index.html sent here, on a server built without the phone
+    // app. The desktop document cannot boot under /m/ (its asset URLs are
+    // relative), so send it back to the entry: arriving straight back skips
+    // the fast path, and the app keeps its own phone layout.
+    return new Response(null, {
+      status: 302,
+      headers: { Location: '/', 'Cache-Control': 'no-store' },
+    })
+  }
+
   const filePath = await resolveStaticFilePath(distDir, url.pathname)
   if (!filePath) {
     return null
@@ -45,13 +69,42 @@ export async function handleStaticH5Request(req: Request, url: URL): Promise<Res
       : 'no-store',
   })
 
+  const stat = await fs.stat(filePath)
+  const compressible = COMPRESSIBLE_EXTENSION_RE.test(filePath) && stat.size >= 1024
+  // Compress before the tunnel uploads the response. Edge compression alone
+  // still transfers the full JavaScript bundle over the computer's uplink.
+  if (compressible) headers.set('Vary', 'Accept-Encoding')
+  const gzip = compressible && acceptsGzip(req.headers.get('accept-encoding'))
+  if (gzip) headers.set('Content-Encoding', 'gzip')
+  const file = Bun.file(filePath)
+  const compressed = gzip ? file.stream().pipeThrough(new CompressionStream('gzip')) : null
+
   if (req.method === 'HEAD') {
-    const stat = await fs.stat(filePath)
-    headers.set('Content-Length', String(stat.size))
+    // Bun otherwise adds Content-Length: 0 to an empty HEAD response. Count
+    // the encoded representation without retaining the bundle in memory.
+    let length = stat.size
+    if (compressed) {
+      length = 0
+      for await (const chunk of compressed) length += chunk.byteLength
+    }
+    headers.set('Content-Length', String(length))
     return new Response(null, { status: 200, headers })
   }
 
-  return new Response(Bun.file(filePath), { status: 200, headers })
+  return new Response(compressed ?? file, { status: 200, headers })
+}
+
+function acceptsGzip(value: string | null): boolean {
+  let wildcard = false
+  for (const entry of (value ?? '').toLowerCase().split(',')) {
+    const [coding, ...parameters] = entry.trim().split(';')
+    if (coding?.trim() !== 'gzip' && coding?.trim() !== '*') continue
+    const quality = parameters.find(parameter => parameter.trim().startsWith('q='))?.trim().slice(2) ?? '1'
+    const accepted = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) && Number(quality) > 0
+    if (coding?.trim() === 'gzip') return accepted
+    wildcard = accepted
+  }
+  return wildcard
 }
 
 async function resolveH5DistDir(): Promise<string | null> {
@@ -116,7 +169,21 @@ async function resolveStaticFilePath(distDir: string, pathname: string): Promise
     return null
   }
 
+  if (isMobileH5Page(pathname)) {
+    return fileIfExists(mobileIndexPath(distDir))
+  }
+
   return fileIfExists(path.join(distDir, 'index.html'))
+}
+
+/** A page (not an asset) of the phone app: its routes are all extensionless. */
+function isMobileH5Page(pathname: string): boolean {
+  return (pathname === MOBILE_H5_BASE_PATH || pathname.startsWith(`${MOBILE_H5_BASE_PATH}/`)) &&
+    !path.extname(pathname)
+}
+
+function mobileIndexPath(distDir: string): string {
+  return path.join(distDir, MOBILE_H5_BASE_PATH.slice(1), 'index.html')
 }
 
 function containedPath(root: string, pathname: string): string | null {

@@ -3,7 +3,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import '@testing-library/jest-dom'
 
 const { runtimeMocks } = vi.hoisted(() => ({
-  runtimeMocks: { isMobileViewport: false, isDesktopRuntime: false },
+  runtimeMocks: { isMobileViewport: false, isDesktopRuntime: false, isPublicAccessRuntime: false },
+}))
+
+vi.mock('@/lib/publicAccessRuntime', () => ({
+  isPublicAccessRuntime: () => runtimeMocks.isPublicAccessRuntime,
 }))
 
 vi.mock('../../hooks/useMobileViewport', () => ({
@@ -26,6 +30,8 @@ import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useMagpieStore } from '../../stores/magpieStore'
+import { providersApi } from '../../api/providers'
 import { useSessionStore } from '@/stores/sessionStore'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import type { ModelInfo } from '../../types/settings'
@@ -44,7 +50,8 @@ async function clickByRole(name: RegExp | string) {
 
 afterEach(() => {
   cleanup()
-  Object.assign(runtimeMocks, { isMobileViewport: false, isDesktopRuntime: false })
+  Object.assign(runtimeMocks, { isMobileViewport: false, isDesktopRuntime: false, isPublicAccessRuntime: false })
+  vi.restoreAllMocks()
   useSettingsStore.setState(useSettingsStore.getInitialState(), true)
   useProviderStore.setState(useProviderStore.getInitialState(), true)
   useSessionRuntimeStore.setState(useSessionRuntimeStore.getInitialState(), true)
@@ -56,6 +63,8 @@ afterEach(() => {
   useHahaDeepSeekOAuthStore.setState(useHahaDeepSeekOAuthStore.getInitialState(), true)
   useTabStore.setState(useTabStore.getInitialState(), true)
   useUIStore.setState(useUIStore.getInitialState(), true)
+  useMagpieStore.setState(useMagpieStore.getInitialState(), true)
+  vi.restoreAllMocks()
 })
 
 beforeEach(() => {
@@ -66,6 +75,113 @@ beforeEach(() => {
 })
 
 describe('ModelSelector', () => {
+  it('lists every model Magpie serves on the Magpie provider, not only its mapped slots', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const magpieState = {
+      status: { installed: true, running: true, baseUrl: 'http://127.0.0.1:3425' },
+      models: [
+        { id: 'kimi/kimi-k3', runtimeId: 'kimi/kimi-k3', displayName: 'Kimi K3', provider: 'kimi', isGroup: false, contextWindow: 262_144, reasoningEfforts: ['high'] },
+        { id: 'deepseek/deepseek-v4-pro', runtimeId: 'deepseek/deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'deepseek', isGroup: false, contextWindow: 1_000_000, reasoningEfforts: [] },
+        { id: 'ollama/qwen3.6:27b', runtimeId: 'ollama/qwen3.6:27b', displayName: 'Qwen3.6 27B', provider: 'ollama', isGroup: false, reasoningEfforts: [] },
+      ],
+    }
+    // Opening the picker reads the catalog again.
+    const refresh = vi.spyOn(providersApi, 'magpie').mockResolvedValue(magpieState)
+    useMagpieStore.setState({ state: magpieState })
+    useProviderStore.setState({
+      activeId: 'magpie-1', hasLoadedProviders: true, isLoading: false,
+      providers: [{
+        id: 'magpie-1', presetId: 'magpie', name: 'Magpie',
+        apiFormat: 'anthropic', apiKey: '', baseUrl: 'http://127.0.0.1:3425',
+        models: { main: 'kimi/kimi-k3', haiku: 'kimi/kimi-k3', sonnet: 'kimi/kimi-k3', opus: 'kimi/kimi-k3' },
+      }],
+    })
+    const runtimeChange = vi.fn()
+    render(<ModelSelector runtimeKey="__draft__" onRuntimeSelectionChange={runtimeChange} />)
+    await clickByRole(/, Magpie$/)
+
+    expect(refresh).toHaveBeenCalled()
+    const dropdown = within(screen.getByTestId('model-selector-dropdown'))
+    expect(dropdown.getByRole('button', { name: /deepseek\/deepseek-v4-pro/ })).toHaveTextContent('DeepSeek V4 Pro · Context 1M')
+    expect(dropdown.getByRole('button', { name: /ollama\/qwen3.6:27b/ })).toHaveTextContent('Qwen3.6 27B · Context unknown')
+    fireEvent.click(dropdown.getByRole('button', { name: /deepseek\/deepseek-v4-pro/ }))
+    expect(runtimeChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      providerId: 'magpie-1', modelId: 'deepseek/deepseek-v4-pro',
+    }))
+  })
+
+  // The public gateway deliberately blocks account-management OAuth routes.
+  // A paired phone must discover account models from the allowed auth-status
+  // endpoint, without account identity or credential access.
+  it('selects the configured DeepSeek account on a paired phone without OAuth access', async () => {
+    Object.assign(runtimeMocks, { isMobileViewport: true, isPublicAccessRuntime: true })
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({ providers: [], activeId: 'deepseek-account', hasLoadedProviders: true })
+    const oauthStatus = vi.fn(async () => {})
+    useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus: oauthStatus })
+    const authStatus = vi.spyOn(providersApi, 'authStatus').mockImplementation(async (id) => ({
+      hasAuth: id === 'deepseek-account', source: id === 'deepseek-account' ? 'deepseek-oauth' : 'none',
+    }))
+
+    render(<ModelSelector runtimeKey="__draft__" compact />)
+    await clickByRole(/Configure model provider|Select model|DeepSeek/i)
+
+    const dropdown = await screen.findByTestId('model-selector-dropdown')
+    const flash = await within(dropdown).findByRole('button', { name: /DeepSeek-V4\.1-Flash/ })
+    fireEvent.pointerDown(flash, { pointerType: 'touch' })
+    fireEvent.click(flash)
+
+    expect(useSessionRuntimeStore.getState().selections.__draft__).toMatchObject({
+      providerId: 'deepseek-account', modelId: 'deepseek-flash[1m]',
+    })
+    expect(authStatus).toHaveBeenCalledWith('deepseek-account')
+    expect(oauthStatus).not.toHaveBeenCalled()
+    expect(useTabStore.getState().activeTabId).not.toBe(SETTINGS_TAB_ID)
+    expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
+  })
+
+  it('keeps a remote model-load failure in the picker and retries without abandoning the draft', async () => {
+    Object.assign(runtimeMocks, { isMobileViewport: true, isPublicAccessRuntime: true })
+    useSettingsStore.setState({ locale: 'en' })
+    useProviderStore.setState({ providers: [], activeId: 'deepseek-account', hasLoadedProviders: true })
+    const authStatus = vi.spyOn(providersApi, 'authStatus').mockRejectedValue(new Error('Offline'))
+
+    render(<ModelSelector runtimeKey="__draft__" compact />)
+    await clickByRole(/Configure model provider|Select model|DeepSeek/)
+    const dropdown = await screen.findByTestId('model-selector-dropdown')
+    expect(await within(dropdown).findByRole('alert')).toHaveTextContent('Could not load configured models')
+    expect(useTabStore.getState().activeTabId).not.toBe(SETTINGS_TAB_ID)
+
+    authStatus.mockImplementation(async (id) => ({
+      hasAuth: id === 'deepseek-account', source: id === 'deepseek-account' ? 'deepseek-oauth' : 'none',
+    }))
+    fireEvent.click(within(dropdown).getByRole('button', { name: 'Retry' }))
+    expect(await within(dropdown).findByRole('button', { name: /DeepSeek-V4\.1-Flash/ })).toBeInTheDocument()
+    expect(within(dropdown).queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('makes DeepSeek selectable while another remote account is still checking its credentials', async () => {
+    Object.assign(runtimeMocks, { isMobileViewport: true, isPublicAccessRuntime: true })
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({ providers: [], activeId: 'deepseek-account', hasLoadedProviders: true })
+    let finishOpenAI!: (value: Awaited<ReturnType<typeof providersApi.authStatus>>) => void
+    const pendingOpenAI = new Promise<Awaited<ReturnType<typeof providersApi.authStatus>>>(resolve => { finishOpenAI = resolve })
+    vi.spyOn(providersApi, 'authStatus').mockImplementation(async id => id === OPENAI_OFFICIAL_PROVIDER_ID
+      ? pendingOpenAI
+      : { hasAuth: id === 'deepseek-account', source: id === 'deepseek-account' ? 'deepseek-oauth' : 'none' })
+
+    render(<ModelSelector runtimeKey="__draft__" compact />)
+    await clickByRole(/Select model|DeepSeek/)
+
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    expect(within(dropdown).getByRole('status')).toHaveTextContent('Loading configured models')
+    fireEvent.click(await within(dropdown).findByRole('button', { name: /DeepSeek-V4\.1-Flash/ }))
+    expect(useSessionRuntimeStore.getState().selections.__draft__).toMatchObject({
+      providerId: 'deepseek-account', modelId: 'deepseek-flash[1m]',
+    })
+    await act(async () => { finishOpenAI({ hasAuth: false, source: 'none' }) })
+  })
+
   it('shows the configured default for an opened session whose saved provider was removed', () => {
     useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
     useProviderStore.setState({
@@ -803,6 +919,10 @@ describe('ModelSelector', () => {
 
     expect(segmented).toHaveClass('items-stretch')
     expect(segmented?.classList.contains('min-h-11')).toBe(expected)
+    const modelButton = screen.getByRole('button', { name: 'Alpha, Claude Official' })
+    expect(modelButton.querySelector('[data-icon="model-dropdown"]') !== null).toBe(expected)
+    expect(modelButton).toHaveAttribute('aria-expanded', 'false')
+    if (expected) expect(modelButton).toHaveAttribute('aria-haspopup', 'dialog')
   })
 
   it('keeps every CLI effort stop scoped to the selected session', async () => {
@@ -1438,10 +1558,10 @@ describe('ModelSelector', () => {
 
       const dropdown = screen.getByTestId('model-selector-dropdown')
       expect(dropdown.textContent).toContain('DeepSeek Account')
-      // The account listing names V4.1 Flash `deepseek-flash`, not the
-      // API-key route's `deepseek-v4-flash`, and the `[1m]` alias row stands
-      // for the listed `deepseek-v4-pro` instead of repeating it.
+      // The `[1m]` alias row stands for the listed Flash model instead of
+      // repeating it; Pro remains available as an explicit alternative.
       expect(dropdown.textContent).not.toContain('deepseek-v4-flash')
+      expect(within(dropdown).getAllByRole('button', { name: /DeepSeek-V4\.1-Flash/ })).toHaveLength(1)
       expect(within(dropdown).getAllByRole('button', { name: /DeepSeek-V4-Pro/ })).toHaveLength(1)
       await act(async () => {
         fireEvent.click(within(dropdown).getByRole('button', { name: /DeepSeek-V4\.1-Flash/ }))
@@ -1450,7 +1570,7 @@ describe('ModelSelector', () => {
 
       expect(useSessionRuntimeStore.getState().selections['session-ds-in']).toMatchObject({
         providerId: 'deepseek-account',
-        modelId: 'deepseek-flash',
+        modelId: 'deepseek-flash[1m]',
       })
     })
 
@@ -1526,17 +1646,24 @@ describe('ModelSelector', () => {
       })
     })
 
-    it('keeps a restored DeepSeek Account selection instead of falling back to the saved provider', () => {
+    it.each([
+      ['deepseek-v4-pro[1m]', 'DeepSeek-V4-Pro'],
+      ['deepseek-flash', 'DeepSeek-V4.1-Flash'],
+    ])('keeps restored DeepSeek selection %s and its catalog display name', (modelId, modelName) => {
       useSavedProviderActive()
       useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus: async () => {} })
       useSessionRuntimeStore.getState().setSelection('session-ds-restored', {
         providerId: 'deepseek-account',
-        modelId: 'deepseek-v4-pro[1m]',
+        modelId,
       })
 
       render(<ModelSelector runtimeKey="session-ds-restored" />)
 
-      expect(screen.getByRole('button', { name: /DeepSeek-V4-Pro, DeepSeek Account/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: `${modelName}, DeepSeek Account` })).toBeInTheDocument()
+      expect(useSessionRuntimeStore.getState().selections['session-ds-restored']).toMatchObject({
+        providerId: 'deepseek-account',
+        modelId,
+      })
     })
 
     it('fetches the DeepSeek sign-in status when the selector opens', async () => {
@@ -1793,4 +1920,87 @@ it('wires a live SDK Ultracode toggle without restarting or changing the chosen 
     expect(useSessionRuntimeStore.getState().selections['sdk-session']).toMatchObject({ modelId: 'claude-haiku-5-5', effortLevel: 'low' })
     expect(screen.getByRole('slider', { name: 'Effort' })).toHaveAttribute('aria-valuetext', 'Low')
   } finally { get.mockRestore(); set.mockRestore() }
+})
+
+describe('controlled runtime pickers outside the composer', () => {
+  const zhipu = {
+    id: 'zhipu', presetId: 'zhipuglm', name: 'Zhipu', apiFormat: 'anthropic' as const,
+    apiKey: 'fixture', baseUrl: 'http://127.0.0.1:1',
+    models: { main: 'glm-5.3', haiku: 'glm-5.3', sonnet: 'glm-5.3', opus: 'glm-5.3' },
+  }
+
+  it('edits a member effort in place, limited to what its provider model accepts', async () => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({ hasLoadedProviders: true, providers: [zhipu], activeId: null })
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector appearance="field" effortEditable ariaLabel="Member model" runtimeSelection={{ providerId: 'zhipu', modelId: 'glm-5.3', effortLevel: 'high' }} onRuntimeSelectionChange={onRuntimeSelectionChange} />)
+
+    // A field shows its provider even while the effort pill is present.
+    expect(screen.getByRole('button', { name: 'Member model' })).toHaveTextContent('Zhipu')
+    await clickByRole(/^Effort: High/)
+    const stops = within(screen.getByTestId('reasoning-effort-popover')).getAllByTestId('reasoning-effort-stop')
+    expect(stops.map(stop => stop.getAttribute('title'))).toEqual(['Low', 'High', 'Max'])
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'ArrowRight' })
+
+    expect(onRuntimeSelectionChange).toHaveBeenCalledWith({ providerId: 'zhipu', modelId: 'glm-5.3', effortLevel: 'max' })
+    // Controlled pickers own no session: nothing is written to the session store.
+    expect(useSessionRuntimeStore.getState().selections).toEqual({})
+  })
+
+  it('says Default for a member without an effort instead of borrowing the composer level', async () => {
+    // A member launched without an effort runs on its model's default, so the
+    // global composer default ("Low" here) must not be shown as its effort.
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'low' })
+    useProviderStore.setState({ hasLoadedProviders: true, providers: [zhipu], activeId: null })
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector appearance="field" effortEditable ariaLabel="Member model" runtimeSelection={{ providerId: 'zhipu', modelId: 'glm-5.3' }} onRuntimeSelectionChange={onRuntimeSelectionChange} />)
+
+    await clickByRole('Effort: Default')
+    const stops = within(screen.getByTestId('reasoning-effort-popover')).getAllByTestId('reasoning-effort-stop')
+    expect(stops.filter(stop => stop.hasAttribute('data-selected'))).toHaveLength(0)
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'End' })
+    expect(onRuntimeSelectionChange).toHaveBeenCalledWith({ providerId: 'zhipu', modelId: 'glm-5.3', effortLevel: 'max' })
+  })
+
+  it('hands an effort change alone to onEffortChange when the picker stands in for several runtimes', async () => {
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
+    useProviderStore.setState({ hasLoadedProviders: true, providers: [zhipu], activeId: null })
+    const onRuntimeSelectionChange = vi.fn()
+    const onEffortChange = vi.fn()
+    render(<ModelSelector appearance="field" effortEditable ariaLabel="Batch model" runtimeSelection={{ providerId: 'zhipu', modelId: 'glm-5.3', effortLevel: 'high' }} onRuntimeSelectionChange={onRuntimeSelectionChange} onEffortChange={onEffortChange} />)
+
+    await clickByRole(/^Effort: High/)
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'ArrowLeft' })
+
+    expect(onEffortChange).toHaveBeenCalledWith('low')
+    expect(onRuntimeSelectionChange).not.toHaveBeenCalled()
+  })
+
+  it('keeps leading non-provider choices intact and lists only saved API providers', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    useProviderStore.setState({ hasLoadedProviders: true, providers: [zhipu], activeId: 'zhipu' })
+    useHahaOAuthStore.setState({ status: { loggedIn: true } as never })
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector
+      appearance="field"
+      ariaLabel="Agent model"
+      savedProvidersOnly
+      leadingChoices={[{ providerId: '__session__', providerName: 'Session provider', isDefault: false, models: [
+        { id: 'inherit', name: 'Inherit from parent', description: '', context: '' },
+        { id: 'opus', name: 'opus', description: '', context: '' },
+      ] }]}
+      runtimeSelection={{ providerId: '__session__', modelId: 'inherit' }}
+      onRuntimeSelectionChange={onRuntimeSelectionChange}
+    />)
+
+    // The unknown leading provider id is not "repaired" into the active provider.
+    expect(screen.getByRole('button', { name: 'Agent model' })).toHaveTextContent('Inherit from parent')
+    await clickByRole('Agent model')
+    const picker = screen.getByTestId('model-selector-dropdown')
+    expect(within(picker).getByText('Session provider')).toBeInTheDocument()
+    expect(within(picker).getByText('Zhipu')).toBeInTheDocument()
+    expect(within(picker).queryByText('Claude Official')).not.toBeInTheDocument()
+    fireEvent.click(within(picker).getByRole('button', { name: /^opus/ }))
+    expect(onRuntimeSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ providerId: '__session__', modelId: 'opus' }))
+  })
 })

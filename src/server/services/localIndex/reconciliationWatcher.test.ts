@@ -81,6 +81,108 @@ describe('local index reconciliation watcher', () => {
     await watcher.stop()
   })
 
+  test('yields to the event loop while it opens watchers for many project directories', async () => {
+    // Opening one fs.watch per project directory is synchronous; with hundreds
+    // of projects a single uninterrupted loop kept /health silent (#1746).
+    const directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
+    const watched: string[] = []
+    const watchedAtYield: number[] = []
+    const watcher = createReconciliationWatcher({
+      scope: '/scope',
+      safetySweepMs: 60_000,
+      listWatchDirectories: async () => directories,
+      watchDirectory: directory => {
+        watched.push(directory)
+        return { close() {} }
+      },
+      yieldToForeground: async () => {
+        watchedAtYield.push(watched.length)
+      },
+      onBatch: async () => {},
+    })
+
+    await watcher.start()
+
+    expect(watched).toEqual(directories)
+    expect(watchedAtYield).toEqual([25, 50])
+    expect(watcher.getMetrics().watchFailures).toBe(0)
+    await watcher.stop()
+  })
+
+  test('stops opening watchers when stopped while yielding between groups', async () => {
+    const directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
+    const watched: string[] = []
+    const closed: string[] = []
+    const paused = deferred()
+    const release = deferred()
+    const watcher = createReconciliationWatcher({
+      scope: '/scope',
+      safetySweepMs: 60_000,
+      listWatchDirectories: async () => directories,
+      watchDirectory: directory => {
+        watched.push(directory)
+        return { close() { closed.push(directory) } }
+      },
+      yieldToForeground: async () => {
+        paused.resolve()
+        await release.promise
+      },
+      onBatch: async () => {},
+    })
+
+    const starting = watcher.start()
+    await paused.promise
+    await watcher.stop()
+    release.resolve()
+    await starting
+
+    expect(watched).toEqual(directories.slice(0, 25))
+    expect(new Set(closed)).toEqual(new Set(watched))
+  })
+
+  test('lets a newer refresh own the directory set while an older one is parked', async () => {
+    let directories = Array.from({ length: 60 }, (_, index) => `/scope/projects/-repo-${index}`)
+    const removed = '/scope/projects/-repo-55'
+    const opened: string[] = []
+    const closed: string[] = []
+    const paused = deferred()
+    const release = deferred()
+    let yields = 0
+    const watcher = createReconciliationWatcher({
+      scope: '/scope',
+      debounceMs: 1,
+      maxWaitMs: 1,
+      safetySweepMs: 60_000,
+      listWatchDirectories: async () => [...directories],
+      watchDirectory: directory => {
+        opened.push(directory)
+        return { close() { closed.push(directory) } }
+      },
+      yieldToForeground: async () => {
+        yields += 1
+        if (yields !== 1) return
+        paused.resolve()
+        await release.promise
+      },
+      onBatch: async () => {},
+    })
+
+    // The startup registration parks at its first yield; a full sweep then
+    // refreshes the set without one directory and runs to completion.
+    const starting = watcher.start()
+    await paused.promise
+    directories = directories.filter(directory => directory !== removed)
+    watcher.queueFullSweep()
+    await waitFor(() => opened.length === 59)
+    release.resolve()
+    await starting
+
+    expect(new Set(opened).size).toBe(opened.length)
+    expect(opened).not.toContain(removed)
+    await watcher.stop()
+    expect(new Set(closed)).toEqual(new Set(opened))
+  })
+
   test('maps exact project events and coalesces unknown watcher events to one full sweep', async () => {
     const scope = await createTempDir()
     const projectDir = join(scope, 'projects', '-repo')

@@ -35,7 +35,9 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-import ScreenCaptureKit
+// Older SDKs omit Sendable annotations on SCK's async result types. Capture
+// remains MainActor-isolated; retain compatibility with those SDK imports.
+@preconcurrency import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 enum WindowShotCaptureSource: String, Equatable, Sendable {

@@ -1,10 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { modelsApi } from '@/api/models'
 import { providersApi } from '@/api/providers'
 import { useProviderStore } from '@/stores/providerStore'
+import { useHahaOpenAIOAuthStore } from '@/stores/hahaOpenAIOAuthStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { OfficialProviderModelSettings } from './OfficialProviderModelSettings'
 
@@ -15,9 +16,14 @@ const mapping = {
   opus: 'gpt-6-astra',
 }
 
+const futureCatalog = {
+  models: [{ id: 'gpt-future', name: 'Future GPT', description: '', context: '1000000' }],
+}
+
 describe('OfficialProviderModelSettings', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
+    useHahaOpenAIOAuthStore.setState({ status: null })
     vi.spyOn(modelsApi, 'catalog').mockResolvedValue({
       models: [
         { id: 'gpt-6-astra', name: 'GPT-6 Astra', description: 'Frontier', context: '258400' },
@@ -59,6 +65,8 @@ describe('OfficialProviderModelSettings', () => {
         sonnet: 'gpt-6-sol',
         opus: 'gpt-6-astra',
       },
+      // ChatGPT Official always sends its window overrides, so an empty map is how they are cleared.
+      {},
     ))
     expect(await screen.findByRole('status')).toHaveTextContent('Model mapping saved')
     expect(useSettingsStore.getState().fetchAll).toHaveBeenCalled()
@@ -102,6 +110,273 @@ describe('OfficialProviderModelSettings', () => {
     await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
       'openai-official',
       expect.objectContaining({ main: 'future-oauth-model' }),
+      {},
     ))
+  })
+
+  it('refreshes upstream models without changing unsaved mappings, then saves a newly discovered model', async () => {
+    render(<OfficialProviderModelSettings providerId="openai-official" />)
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    fireEvent.change(main, { target: { value: 'my-unsaved-model' } })
+
+    let completeRefresh!: (value: typeof futureCatalog) => void
+    vi.mocked(modelsApi.catalog).mockImplementationOnce(() => new Promise((resolve) => { completeRefresh = resolve }))
+    const refresh = screen.getByRole('button', { name: 'Refresh model list' })
+    fireEvent.click(refresh)
+    expect(refresh).toBeDisabled()
+    expect(refresh).toHaveAttribute('aria-busy', 'true')
+    expect(modelsApi.catalog).toHaveBeenLastCalledWith('openai-official', { forceRefresh: true })
+
+    await act(async () => completeRefresh(futureCatalog))
+    expect(main).toHaveValue('my-unsaved-model')
+    expect(providersApi.updateOfficialModels).not.toHaveBeenCalled()
+    expect(useSettingsStore.getState().fetchAll).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status')).toHaveTextContent('Model list updated (1)')
+    expect(refresh).toBeEnabled()
+
+    fireEvent.change(main, { target: { value: '' } })
+    fireEvent.focus(main)
+    fireEvent.click(await screen.findByRole('option', { name: 'gpt-future' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save model mapping' }))
+    await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+      'openai-official', expect.objectContaining({ main: 'gpt-future' }), {},
+    ))
+  })
+
+  it.each(['error', 'empty'] as const)('preserves the previous list on an %s refresh and permits retry', async (outcome) => {
+    render(<OfficialProviderModelSettings providerId="openai-official" />)
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    if (outcome === 'error') {
+      vi.mocked(modelsApi.catalog).mockRejectedValueOnce(new Error('upstream rejected the request'))
+    } else {
+      vi.mocked(modelsApi.catalog).mockResolvedValueOnce({ models: [] })
+    }
+    const refresh = screen.getByRole('button', { name: 'Refresh model list' })
+    fireEvent.click(refresh)
+    const error = await screen.findByRole('alert')
+    expect(error).toHaveTextContent('The previous list is still available')
+    expect(refresh).toHaveAttribute('aria-describedby', error.id)
+    expect(refresh).toBeEnabled()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(main).toHaveValue('gpt-6-sol')
+    fireEvent.focus(main)
+    expect(await screen.findByRole('option', { name: 'gpt-6-astra' })).toBeInTheDocument()
+    expect(useSettingsStore.getState().fetchAll).not.toHaveBeenCalled()
+
+    vi.mocked(modelsApi.catalog).mockResolvedValueOnce(futureCatalog)
+    fireEvent.click(refresh)
+    expect(await screen.findByRole('status')).toHaveTextContent('Model list updated (1)')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps the previous catalog and shows only failure when syncing the chat model list fails', async () => {
+    render(<OfficialProviderModelSettings providerId="openai-official" />)
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    vi.mocked(modelsApi.catalog).mockResolvedValueOnce(futureCatalog)
+    vi.mocked(useSettingsStore.getState().fetchAll).mockRejectedValueOnce(new Error('chat model list unavailable'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh model list' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('The previous list is still available')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh model list' })).toBeEnabled()
+    fireEvent.focus(main)
+    expect(await screen.findByRole('option', { name: 'gpt-6-astra' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'gpt-future' })).not.toBeInTheDocument()
+  })
+
+  it('ignores a refresh from the previous provider after switching cards', async () => {
+    const { rerender } = render(<OfficialProviderModelSettings providerId="openai-official" />)
+    await screen.findByRole('combobox', { name: /Main Model/ })
+    let completeRefresh!: (value: typeof futureCatalog) => void
+    vi.mocked(modelsApi.catalog).mockImplementationOnce(() => new Promise((resolve) => { completeRefresh = resolve }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh model list' }))
+
+    vi.mocked(providersApi.getOfficialModels).mockResolvedValueOnce({
+      models: { main: 'grok-next', haiku: 'grok-next', sonnet: 'grok-next', opus: 'grok-next' },
+    })
+    vi.mocked(modelsApi.catalog).mockResolvedValueOnce({
+      models: [{ id: 'grok-next', name: 'Next Grok', description: '', context: '' }],
+    })
+    rerender(<OfficialProviderModelSettings providerId="grok-official" />)
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    await act(async () => completeRefresh(futureCatalog))
+
+    expect(main).toHaveValue('grok-next')
+    fireEvent.focus(main)
+    expect(await screen.findByRole('option', { name: 'grok-next' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'gpt-future' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(useSettingsStore.getState().fetchAll).not.toHaveBeenCalled()
+  })
+
+  it('clears the old provider catalog when the new provider catalog cannot load', async () => {
+    const { rerender } = render(<OfficialProviderModelSettings providerId="openai-official" />)
+    await screen.findByRole('combobox', { name: /Main Model/ })
+    vi.mocked(modelsApi.catalog).mockRejectedValueOnce(new Error('unavailable'))
+    rerender(<OfficialProviderModelSettings providerId="grok-official" />)
+    await screen.findByRole('textbox', { name: /Main Model/ })
+    expect(screen.queryByRole('combobox', { name: /Main Model/ })).not.toBeInTheDocument()
+  })
+
+  it('does not update the chat model store when a refresh finishes after unmounting', async () => {
+    const { unmount } = render(<OfficialProviderModelSettings providerId="openai-official" />)
+    await screen.findByRole('combobox', { name: /Main Model/ })
+    let completeRefresh!: (value: typeof futureCatalog) => void
+    vi.mocked(modelsApi.catalog).mockImplementationOnce(() => new Promise((resolve) => { completeRefresh = resolve }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh model list' }))
+    unmount()
+    await act(async () => completeRefresh(futureCatalog))
+    expect(useSettingsStore.getState().fetchAll).not.toHaveBeenCalled()
+  })
+
+  it('ignores the previous account refresh after signing in to another account of the same provider', async () => {
+    useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, accountId: 'account-a', email: 'a@example.test', expiresAt: null },
+    })
+    render(<OfficialProviderModelSettings providerId="openai-official" />)
+    await screen.findByRole('combobox', { name: /Main Model/ })
+    let completeRefresh!: (value: typeof futureCatalog) => void
+    vi.mocked(modelsApi.catalog).mockImplementationOnce(() => new Promise((resolve) => { completeRefresh = resolve }))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh model list' }))
+
+    vi.mocked(modelsApi.catalog).mockResolvedValueOnce({
+      models: [{ id: 'account-b-model', name: 'Account B model', description: '', context: '' }],
+    })
+    act(() => useHahaOpenAIOAuthStore.setState({
+      status: { loggedIn: true, accountId: 'account-b', email: 'b@example.test', expiresAt: null },
+    }))
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    await act(async () => completeRefresh(futureCatalog))
+    fireEvent.focus(main)
+    expect(await screen.findByRole('option', { name: 'account-b-model' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'gpt-future' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(useSettingsStore.getState().fetchAll).not.toHaveBeenCalled()
+  })
+
+  describe('context window overrides (ChatGPT Official)', () => {
+    const withLimits = {
+      models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map((id) => (
+        { id, name: id, description: '', context: '258400', maxContext: '828400' }
+      )),
+    }
+    const field = (model: string) => screen.findByRole('textbox', { name: model })
+    const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save model mapping' }))
+
+    beforeEach(() => {
+      vi.mocked(modelsApi.catalog).mockResolvedValue(withLimits)
+    })
+
+    it('offers one field per mapped model, not per alias, with its default and limit', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+
+      // gpt-6-sol backs both the Main and Sonnet aliases but has a single window.
+      expect(await field('gpt-6-sol')).toHaveAttribute('placeholder', '258,400')
+      expect(screen.getAllByRole('textbox', { name: 'gpt-6-sol' })).toHaveLength(1)
+      expect(await field('gpt-6-luna')).toBeInTheDocument()
+      expect(await field('gpt-6-astra')).toBeInTheDocument()
+      expect(screen.getAllByText('Default 258,400, up to 828,400')).toHaveLength(3)
+    })
+
+    it('saves a typed window with the mapping', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      fireEvent.change(await field('gpt-6-astra'), { target: { value: '600000' } })
+      save()
+
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', mapping, { 'gpt-6-astra': 600_000 },
+      ))
+      expect(await screen.findByRole('status')).toHaveTextContent('Model mapping saved')
+    })
+
+    it('starts from the saved windows, and an emptied field clears its override', async () => {
+      vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+        models: mapping,
+        modelContextWindows: { 'gpt-6-astra': 600_000, 'gpt-6-sol': 300_000 },
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      const astra = await field('gpt-6-astra')
+      expect(astra).toHaveValue('600000')
+      expect(await field('gpt-6-sol')).toHaveValue('300000')
+
+      fireEvent.change(astra, { target: { value: '' } })
+      save()
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', mapping, { 'gpt-6-sol': 300_000 },
+      ))
+    })
+
+    it('blocks saving a window above the model limit or out of range and says why', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      const astra = await field('gpt-6-astra')
+      const saveButton = screen.getByRole('button', { name: 'Save model mapping' })
+
+      fireEvent.change(astra, { target: { value: '900000' } })
+      expect(screen.getByRole('alert')).toHaveTextContent("Cannot exceed this model's limit of 828,400.")
+      expect(astra).toHaveAttribute('aria-invalid', 'true')
+      expect(astra).toHaveAccessibleDescription("Cannot exceed this model's limit of 828,400.")
+      expect(saveButton).toBeDisabled()
+
+      fireEvent.change(astra, { target: { value: '15000' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('Must be between 16000 and 10000000.')
+      fireEvent.change(astra, { target: { value: 'big' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('Enter an integer.')
+      expect(saveButton).toBeDisabled()
+
+      // The ceiling itself is allowed.
+      fireEvent.change(astra, { target: { value: '828400' } })
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(saveButton).toBeEnabled()
+      expect(providersApi.updateOfficialModels).not.toHaveBeenCalled()
+    })
+
+    it('does not invent a limit for a model whose catalog states none', async () => {
+      vi.mocked(modelsApi.catalog).mockResolvedValue({
+        models: withLimits.models.map(({ maxContext: _max, ...model }) => model),
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      fireEvent.change(await field('gpt-6-astra'), { target: { value: '2000000' } })
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(screen.getAllByText('Default 258,400')).toHaveLength(3)
+    })
+
+    it('keeps the window of a model the mapping stops using', async () => {
+      vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+        models: mapping,
+        modelContextWindows: { 'gpt-6-astra': 600_000 },
+      })
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      await field('gpt-6-astra')
+
+      // Opus moves from astra to luna: astra loses its row but not its saved value.
+      fireEvent.change(screen.getByRole('combobox', { name: /Opus Model/ }), { target: { value: 'gpt-6-luna' } })
+      expect(screen.queryByRole('textbox', { name: 'gpt-6-astra' })).not.toBeInTheDocument()
+      save()
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'openai-official', { ...mapping, opus: 'gpt-6-luna' }, { 'gpt-6-astra': 600_000 },
+      ))
+    })
+
+    it('adds no field for an ID that is only half typed', async () => {
+      render(<OfficialProviderModelSettings providerId="openai-official" />)
+      await field('gpt-6-astra')
+      expect(screen.getAllByRole('textbox')).toHaveLength(3)
+
+      fireEvent.change(screen.getByRole('combobox', { name: /Fable Model/ }), { target: { value: 'gpt-6-a' } })
+      expect(screen.getAllByRole('textbox')).toHaveLength(3)
+    })
+
+    it('does not offer window fields on the other official accounts', async () => {
+      render(<OfficialProviderModelSettings providerId="grok-official" />)
+      await screen.findByRole('combobox', { name: /Main Model/ })
+      expect(screen.queryByRole('group', { name: 'Context window (optional)' })).not.toBeInTheDocument()
+
+      save()
+      // Nothing about windows is sent, so a shared client cannot touch another account's settings.
+      await waitFor(() => expect(providersApi.updateOfficialModels).toHaveBeenCalledWith(
+        'grok-official', mapping, undefined,
+      ))
+    })
   })
 })

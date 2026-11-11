@@ -34,22 +34,23 @@ import { useLiveSessionActivity } from './useLiveSessionActivity'
 
 type Props = {
   /**
-   * `home` is the phone's first page; `pane` is the tablet's left column,
-   * where the open session is shown beside it.
+   * `drawer` is the phone's navigation; `pane` is the tablet's left column.
+   * `home` remains available to other list-only surfaces.
    */
-  variant: 'home' | 'pane'
+  variant: 'home' | 'pane' | 'drawer'
   selectedSessionId?: string | null
   preferencesRequest?: Promise<DesktopUiPreferencesResponse> | null
   /** Starts a new task, in the folder the list suggests (empty: none). */
   onNewTask: (workDir: string) => void
+  onNavigate?: () => void
+  onClose?: () => void
 }
 
 /**
- * Header, search, project filter and the status-grouped session list, with
- * the New task button floating over its lower corner: what the phone opens
- * on, and what the tablet keeps on its left.
+ * Search, project filters and sessions shared by the phone's drawer and the
+ * tablet's left pane. Opening navigation never changes the current chat.
  */
-export function MobileSessionBrowser({ variant, selectedSessionId = null, preferencesRequest = null, onNewTask }: Props) {
+export function MobileSessionBrowser({ variant, selectedSessionId = null, preferencesRequest = null, onNewTask, onNavigate, onClose }: Props) {
   const t = useTranslation()
   const sessions = useSessionStore((state) => state.sessions)
   const isLoading = useSessionStore((state) => state.isLoading)
@@ -78,9 +79,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
     [projectDisplayNameRevision],
   )
   const visibleSessions = useMemo(
-    () => hiddenProjectKeys.size === 0
-      ? sessions
-      : sessions.filter((session) => !hiddenProjectKeys.has(getSessionProjectKey(session))),
+    () => sessions.filter((session) => !session.archived && !hiddenProjectKeys.has(getSessionProjectKey(session))),
     [hiddenProjectKeys, sessions],
   )
   const projectFilters = useMemo(
@@ -110,6 +109,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
 
   const openSettings = () => {
     useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+    onNavigate?.()
   }
 
   const filtering = Boolean(query.trim()) || effectiveProjectKey !== null
@@ -141,6 +141,8 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
           label={t('sidebar.settings')}
           onClick={openSettings}
         />
+        {onClose ? <IconButton size="2xl" tone="secondary" icon={<X size={20} strokeWidth={1.75} aria-hidden="true" />}
+          label={t('common.close')} onClick={onClose} /> : null}
       </header>
 
       {searchOpen ? (
@@ -199,9 +201,12 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
             groups={groups}
             runningIds={runningIds}
             attentionIds={attentionIds}
-            selectedSessionId={variant === 'pane' ? selectedSessionId : null}
+            selectedSessionId={selectedSessionId}
             workspaceLabelFor={workspaceLabelFor}
-            onOpen={(session) => openMobileSession(session.id)}
+            onOpen={(session) => {
+              if (useTabStore.getState().activeTabId !== session.id) openMobileSession(session.id)
+              onNavigate?.()
+            }}
           />
         )}
       </div>
@@ -210,7 +215,9 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         type="button"
         data-testid="mobile-new-task"
         onClick={() => onNewTask(resolveNewTaskWorkDir(visibleSessions, effectiveProjectKey))}
-        className="absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-full)] bg-[var(--color-text-primary)] pl-4 pr-5 text-[15px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-overlay)] transition-transform active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2"
+        className={`inline-flex h-12 shrink-0 items-center justify-center gap-1.5 bg-[var(--color-text-primary)] px-4 text-[15px] font-medium text-[var(--color-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 ${variant === 'drawer'
+          ? 'mx-4 mb-4 rounded-[var(--radius-lg)]'
+          : 'absolute bottom-5 right-4 z-[var(--z-raised)] rounded-[var(--radius-full)] shadow-[var(--shadow-overlay)]'}`}
       >
         <Plus size={18} strokeWidth={2} aria-hidden="true" />
         {t('mobile.home.newTask')}

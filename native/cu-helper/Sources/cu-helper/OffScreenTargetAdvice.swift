@@ -1,49 +1,79 @@
 import Foundation
 
-/// Told to the model when the app it is looking at cannot be acted on.
-///
-/// Window capture and window actuation disagree about what "exists": the
-/// screenshot path deliberately includes off-screen windows
-/// (`onScreenWindowsOnly: false`), while every actuation path needs an
-/// on-screen window to name. A minimized target therefore produced a perfectly
-/// real screenshot that no click could ever reach — and, before
-/// `requireBindableWindow`, each of those clicks still came back "Action
-/// completed". A whole session was spent clicking and typing into a window that
-/// was in the Dock.
-///
-/// The refusal alone is not enough. Without this notice the model only learns
-/// the target is unreachable by trying, one failed action at a time, and its
-/// natural reading of "that click did nothing" is to try different
-/// coordinates — which cannot work either.
-///
-/// The notice must be precise about WHICH half is blocked. Only coordinate
-/// actuation needs on-screen geometry, because only it hit-tests. Element
-/// actions address a node directly and work on a window in the Dock, which is
-/// exactly how an app gets driven while the user has the screen to themselves —
-/// the capability this whole feature exists for. Saying "nothing works here"
-/// would be simpler, and would switch that capability off.
+/// Told to the model when the app it drives has no window on the Spaces the
+/// user is looking at. Each reason has its own truth, measured on a real
+/// machine, and a notice that claims more than that sends the model the wrong
+/// way:
+/// - Another Space (another desktop, or behind a fullscreen app such as our
+///   own desktop window): clicks and keys still land, but Chromium stops
+///   repainting, so the screenshot lags the page. A model that trusts those
+///   pixels concludes its actions failed and repeats them.
+/// - Hidden (⌘H): read as it is; the synthetic activation before an action
+///   shows it again without taking the foreground.
+/// - Parked: restored from the Dock, or shown after being hidden, while its
+///   Space was not shown. Input did not land until the user visited that
+///   Space, so actions are refused and the model must say so instead of
+///   believing "Action completed".
 enum OffScreenTargetAdvice {
-    static let notice = """
-    NOTE: This app has no window on screen right now — it is minimized, hidden, \
-    or on another Space. The accessibility tree and screenshot above are real, \
-    but every x/y action is refused while it stays this way, and no choice of \
-    coordinates will change that: a window with no on-screen geometry cannot be \
-    hit-tested. Do not retry with different coordinates.
-
-    Element actions still work. `element_index` clicks, `set_value`, \
-    `select_text` and `perform_secondary_action` address the element directly \
-    and need no on-screen geometry, so an app with a real accessibility tree \
-    can be driven exactly like this while it is off screen. Use them.
-
-    If the tree is a bare shell — window frame and menu bar only, as Chromium \
-    and Electron apps report — then there are no elements to address and \
-    nothing here can work. Say so, name the app, and ask the user to bring it \
-    back on screen.
-    """
-
-    /// - Parameter hasWindowOnScreen: whether the target owns an ordinary
-    ///   on-screen window at the moment the state was captured.
-    static func noticeIfUnreachable(hasWindowOnScreen: Bool) -> String? {
-        hasWindowOnScreen ? nil : notice
+    enum Reason: Equatable {
+        case otherSpace
+        case hidden
+        case parked
     }
+
+    static func reason(
+        hasWindowOnScreen: Bool,
+        appIsHidden: Bool,
+        keyWindowIsParked: Bool
+    ) -> Reason? {
+        if keyWindowIsParked { return .parked }
+        if hasWindowOnScreen { return nil }
+        return appIsHidden ? .hidden : .otherSpace
+    }
+
+    static func notice(for reason: Reason) -> String {
+        switch reason {
+        case .otherSpace:
+            return """
+            NOTE: The target window is on a Space the user is not looking at \
+            (another desktop, or behind a fullscreen app). Keep working in the \
+            background: clicks, typing, scrolling and element actions are still \
+            delivered to this window without bringing the app forward. Do not \
+            activate, raise, or reopen the app to make it visible.
+
+            \(staleScreenshot)
+            """
+        case .hidden:
+            return """
+            NOTE: The target app is hidden (⌘H) and was read as it is. Your next \
+            action only shows it again, without bringing it forward or taking \
+            the user's keyboard; read its state after that, then act. Do not \
+            activate or raise it. If its window then sits on a Space the user \
+            is not looking at, actions are refused until the user shows that \
+            Space.
+
+            \(staleScreenshot)
+            """
+        case .parked:
+            return """
+            NOTE: The target window came back onto a Space the user is not \
+            looking at (restored from the Dock, or shown after being hidden). \
+            macOS does not deliver clicks or keys to it until that Space is \
+            shown, so actions on it are refused. Tell the user the app is \
+            waiting on another desktop; do not retry, and do not activate or \
+            raise the app.
+            """
+        }
+    }
+
+    /// Overrides the general "two unchanged screenshots mean the approach is
+    /// wrong" rule, which assumes the picture is live.
+    private static let staleScreenshot = """
+    While the window is not visible, Chromium and Electron apps stop \
+    repainting, so the screenshot above may be older than the accessibility \
+    state. Trust the accessibility tree; an unchanged screenshot here does not \
+    mean an action failed or that the approach is wrong. If the tree is a bare \
+    shell — window frame and menu bar only — results cannot be confirmed until \
+    the window is visible again; say so instead of repeating actions.
+    """
 }

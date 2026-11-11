@@ -1,5 +1,6 @@
 import { feature } from 'bun:bundle'
 import { getAgentModelSetting } from './builtInAgentOverrides.js'
+import { runWithAgentProviderRoute, withAgentProviderRoute } from '../../utils/model/providerEnvScope.js'
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -9,6 +10,7 @@ import { getCommand, getSkillToolCommands, hasCommand } from '../../commands.js'
 import {
   DEFAULT_AGENT_PROMPT,
   enhanceSystemPromptWithEnvDetails,
+  getSystemPrompt,
 } from '../../constants/prompts.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import { getSystemContext, getUserContext } from '../../context.js'
@@ -42,6 +44,8 @@ import type {
   UserMessage,
 } from '../../types/message.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
+import { filterAgentProfileTools, getAgentProfile, isAgentProfileMcpEnabled } from '../../utils/agentProfile.js'
+import { convertEffortValueToLevel, type EffortLevel } from '../../utils/effort.js'
 import { AbortError } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import {
@@ -84,6 +88,8 @@ import { getTeammateContext } from '../../utils/teammateContext.js'
 import { filterToolsForAgent, resolveAgentTools } from './agentToolUtils.js'
 import { createDenialTrackingState } from '../../utils/permissions/denialTracking.js'
 import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
+import { resolveLeanAgentDefinition } from './leanAgents.js'
+import { getSkillSelectionMessages } from '../SkillTool/explicitSkillRequest.js'
 
 export function resolveSubagentThinkingConfig(
   parentThinkingConfig: ToolUseContext['options']['thinkingConfig'],
@@ -96,6 +102,13 @@ export function resolveSubagentEffortValue(
   parentEffort: AgentDefinition['effort'],
 ): AgentDefinition['effort'] {
   return agentEffort ?? parentEffort
+}
+
+/** The effort a run's metadata sidecar records; `null` leaves it to the model. */
+export function recordedSubagentEffort(
+  effort: AgentDefinition['effort'],
+): EffortLevel | null {
+  return effort === undefined ? null : convertEffortValueToLevel(effort)
 }
 
 export function resolvePersistedAgentType(
@@ -176,9 +189,9 @@ export async function initializeAgentMcpServers(
   cleanup: () => Promise<void>
 }> {
   // If no agent-specific servers defined, return parent clients as-is
-  if (!agentDefinition.mcpServers?.length) {
+  if (!isAgentProfileMcpEnabled() || !agentDefinition.mcpServers?.length) {
     return {
-      clients: parentClients,
+      clients: isAgentProfileMcpEnabled() ? parentClients : [],
       tools: [],
       cleanup: async () => {},
     }
@@ -350,9 +363,12 @@ export async function* runAgent({
   extraMetadata,
   workflow,
   onQueryProgress,
+  skillSelectionMessages,
 }: {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
+  /** Human authorization carried separately from model-authored child messages. */
+  skillSelectionMessages?: readonly Message[]
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   isAsync: boolean
@@ -440,6 +456,9 @@ export async function* runAgent({
 }): AsyncGenerator<Message, void> {
   // Track subagent usage for feature discovery
 
+  const lean = getAgentProfile() === 'lean'
+  if (lean) agentDefinition = resolveLeanAgentDefinition(agentDefinition.agentType)
+
   const appState = toolUseContext.getAppState()
   const permissionMode = appState.toolPermissionContext.mode
   // Always-shared channel to the root AppState store. toolUseContext.setAppState
@@ -448,7 +467,18 @@ export async function* runAgent({
   const rootSetAppState =
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
 
-  const resolvedAgentModel = getAgentModel(
+  // A pinned provider owns the model: the saved choice wins over tool-call
+  // aliases and CLAUDE_CODE_SUBAGENT_MODEL, which name the session's slots.
+  // Loaded on demand: the route reaches the provider proxy, whose module
+  // graph imports this one.
+  const providerRoute = agentDefinition.provider
+    ? await (await import('../../utils/model/agentProviderRoute.js')).resolveAgentProviderRoute({
+        agentType: agentDefinition.agentType,
+        providerId: agentDefinition.provider,
+        model: agentDefinition.model,
+      })
+    : undefined
+  const resolvedAgentModel = providerRoute?.model ?? getAgentModel(
     getAgentModelSetting(agentDefinition, toolUseContext.options.mainLoopModel),
     toolUseContext.options.mainLoopModel,
     model,
@@ -631,15 +661,21 @@ export async function* runAgent({
     }
   }
 
-  const resolvedTools = useExactTools
+  const profileTools = filterAgentProfileTools(availableTools)
+  const resolvedTools = useExactTools && !lean
     ? availableTools
-    : resolveAgentTools(agentDefinition, availableTools, isAsync).resolvedTools
+    : resolveAgentTools(agentDefinition, profileTools, isAsync).resolvedTools
 
   const additionalWorkingDirectories = Array.from(
     appState.toolPermissionContext.additionalWorkingDirectories.keys(),
   )
 
-  const agentSystemPrompt = override?.systemPrompt
+  const agentSystemPrompt = lean
+    ? asSystemPrompt([
+        ...await getSystemPrompt(resolvedTools, resolvedAgentModel, additionalWorkingDirectories),
+        agentDefinition.getSystemPrompt({ toolUseContext }),
+      ])
+    : override?.systemPrompt
     ? override.systemPrompt
     : asSystemPrompt(
         await getAgentSystemPrompt(
@@ -709,7 +745,7 @@ export async function* runAgent({
   }
 
   // Preload skills from agent frontmatter
-  const skillsToPreload = agentDefinition.skills ?? []
+  const skillsToPreload = lean ? [] : agentDefinition.skills ?? []
   if (skillsToPreload.length > 0) {
     const allSkills = await getSkillToolCommands(getProjectRoot())
 
@@ -857,6 +893,12 @@ export async function* runAgent({
     contentReplacementState,
   })
 
+  if (lean) {
+    agentToolUseContext.skillSelectionState = {
+      messages: skillSelectionMessages ?? getSkillSelectionMessages(toolUseContext),
+    }
+  }
+
   if (isBackgrounded) {
     const foregroundSetAppState = agentToolUseContext.setAppState
     agentToolUseContext.setAppState = updater => {
@@ -873,13 +915,14 @@ export async function* runAgent({
 
   // Expose cache-safe params for background summarization (prompt cache sharing)
   if (onCacheSafeParams) {
-    onCacheSafeParams({
+    // Summaries it schedules reuse this Agent's model, so they keep its route.
+    runWithAgentProviderRoute(providerRoute, () => onCacheSafeParams({
       systemPrompt: agentSystemPrompt,
       userContext: resolvedUserContext,
       systemContext: resolvedSystemContext,
       toolUseContext: agentToolUseContext,
       forkContextMessages: initialMessages,
-    })
+    }))
   }
 
   // Record initial messages before the query loop starts, plus the agentType
@@ -907,6 +950,9 @@ export async function* runAgent({
       agentDefinition.agentType,
     ),
     ...(model && { model }),
+    effort: recordedSubagentEffort(
+      resolveSubagentEffortValue(agentDefinition.effort, appState.effortValue),
+    ),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     ...(spawningToolUseId && { toolUseId: spawningToolUseId }),
@@ -919,7 +965,7 @@ export async function* runAgent({
   let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
 
   try {
-    for await (const message of query({
+    for await (const message of withAgentProviderRoute(providerRoute, query({
       messages: initialMessages,
       systemPrompt: agentSystemPrompt,
       userContext: resolvedUserContext,
@@ -928,7 +974,7 @@ export async function* runAgent({
       toolUseContext: agentToolUseContext,
       querySource,
       maxTurns: maxTurns ?? agentDefinition.maxTurns,
-    })) {
+    }))) {
       onQueryProgress?.()
       if (
         agentRunRoute &&

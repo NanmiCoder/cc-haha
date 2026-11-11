@@ -7,6 +7,7 @@ import { adapterMigrationLifecycle } from './migration-lifecycle.js'
  */
 
 import WebSocket from 'ws'
+import { currentInboundPowerLease } from './inbound-power-activity.js'
 
 /** Attachment reference — mirrors src/server/ws/events.ts AttachmentRef.
  *  The server will either (a) write base64 `data` to
@@ -31,9 +32,14 @@ export type MessageHandler = (msg: ServerMessage) => void
 
 type Session = {
   sessionId: string
+  /** Stable across transport reconnects, renewed by a logical reset/replacement. */
+  deliveryGeneration: symbol
   ws: WebSocket
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
+  openedAt: number | null
+  awaitingPongAt: number | null
+  terminal: boolean
   /** Last traffic either way; heartbeats do not count. */
   lastActivityAt: number
   /** A user turn the server has not finished yet. */
@@ -63,6 +69,8 @@ export const IDLE_SESSION_RELEASE_MS = 30 * 60_000
 export type WsBridgeOptions = {
   idleReleaseMs?: number
   heartbeatIntervalMs?: number
+  reconnectBaseMs?: number
+  maxReconnectAttempts?: number
   now?: () => number
 }
 
@@ -80,6 +88,9 @@ export class WsBridge {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private destroyed = false
   private readonly idleReleaseMs: number
+  private readonly heartbeatIntervalMs: number
+  private readonly reconnectBaseMs: number
+  private readonly maxReconnectAttempts: number
   private readonly now: () => number
 
   constructor(
@@ -92,14 +103,17 @@ export class WsBridge {
     this.platform = platform
     this.localAccessToken = localAccessToken?.trim() || null
     this.idleReleaseMs = options.idleReleaseMs ?? IDLE_SESSION_RELEASE_MS
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS
+    this.reconnectBaseMs = options.reconnectBaseMs ?? RECONNECT_BASE_MS
+    this.maxReconnectAttempts = options.maxReconnectAttempts ?? MAX_RECONNECT_ATTEMPTS
     this.now = options.now ?? Date.now
-    this.startHeartbeat(options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS)
+    this.startHeartbeat(this.heartbeatIntervalMs)
   }
 
   /** Connect to a session with a known sessionId. Returns false if already connected. */
   connectSession(chatId: string, sessionId: string): boolean {
     const existing = this.sessions.get(chatId)
-    if (existing && existing.ws.readyState === WebSocket.OPEN) {
+    if (existing && this.isSessionOpen(chatId)) {
       return false
     }
     this.connect(chatId, sessionId)
@@ -111,12 +125,18 @@ export class WsBridge {
     chatId: string,
     content: string,
     attachments?: AttachmentRef[],
+    powerActivityLeaseId?: string,
   ): boolean {
+    const lease = currentInboundPowerLease(chatId)
     const payload: Record<string, unknown> = { type: 'user_message', content }
     if (attachments && attachments.length > 0) {
       payload.attachments = attachments
     }
-    return this.send(chatId, payload)
+    const leaseId = powerActivityLeaseId ?? lease?.id
+    if (leaseId) payload.powerActivityLeaseId = leaseId
+    const sent = this.send(chatId, payload)
+    if (sent && lease && leaseId === lease.id) lease.transferred = true
+    return sent
   }
 
   /** Respond to a permission request.
@@ -158,7 +178,12 @@ export class WsBridge {
     const session = this.sessions.get(chatId)
     if (!session) return false
     if (sessionId && session.sessionId !== sessionId) return false
-    return session.ws.readyState === WebSocket.OPEN
+    if (session.terminal || session.ws.readyState !== WebSocket.OPEN) return false
+    if (session.awaitingPongAt !== null && this.now() - session.awaitingPongAt >= this.heartbeatIntervalMs) {
+      this.disconnectUnhealthySession(chatId, session)
+      return false
+    }
+    return true
   }
 
   /** Reset session for a chatId (e.g. /new command). */
@@ -212,12 +237,16 @@ export class WsBridge {
 
     // A reconnect to the same session is not new activity; its snapshot on
     // open refreshes the turn and approval state.
-    const carried = prev?.sessionId === sessionId ? prev : undefined
+    const carried = prev?.sessionId === sessionId && !prev.terminal ? prev : undefined
     const session: Session = {
       sessionId,
+      deliveryGeneration: carried?.deliveryGeneration ?? Symbol(),
       ws,
-      reconnectAttempts: prev?.reconnectAttempts ?? 0,
+      reconnectAttempts: carried?.reconnectAttempts ?? 0,
       reconnectTimer: null,
+      openedAt: null,
+      awaitingPongAt: null,
+      terminal: false,
       lastActivityAt: carried?.lastActivityAt ?? this.now(),
       turnActive: carried?.turnActive ?? false,
       cliRunning: false,
@@ -226,8 +255,9 @@ export class WsBridge {
     this.sessions.set(chatId, session)
 
     ws.on('open', () => {
+      if (this.sessions.get(chatId) !== session) return
       console.log(`[WsBridge] Connected: ${sessionId}`)
-      session.reconnectAttempts = 0
+      session.openedAt = this.now()
     })
 
     ws.on('message', (raw) => {
@@ -238,31 +268,20 @@ export class WsBridge {
         console.error('[WsBridge] Parse error:', err)
         return
       }
-      if (msg.type === 'pong') return
       if (this.sessions.get(chatId) !== session) return
+      if (msg.type === 'pong') {
+        if (session.awaitingPongAt !== null) {
+          session.awaitingPongAt = null
+          // An open handshake alone is not recovery. Require a healthy round
+          // trip after one heartbeat interval before replenishing the budget.
+          if (session.openedAt !== null && this.now() - session.openedAt >= this.heartbeatIntervalMs) {
+            session.reconnectAttempts = 0
+          }
+        }
+        return
+      }
       this.trackInbound(session, msg)
-      if (!this.handlers.has(chatId)) return
-
-      // Serialize per-chat handler calls: chain each message onto the previous
-      // one so a slow handler (e.g. one awaiting im.message.create) fully
-      // finishes before the next message's handler runs. This prevents state
-      // races where a later message reads stale map entries set up by an
-      // earlier-but-still-in-flight handler.
-      const prev = this.handlerChains.get(chatId) ?? Promise.resolve()
-      const next = adapterMigrationLifecycle.track(prev
-        .catch(() => {}) // upstream errors must not poison the chain
-        .then(() => {
-          // Resetting a chat cannot cancel promises already queued for its old
-          // socket. Recheck ownership when delivery actually starts, then use
-          // the current handler so restoration's temporary buffer cannot trap
-          // initial status/permission frames after the live handler replaces it.
-          if (this.sessions.get(chatId) !== session) return
-          return this.handlers.get(chatId)?.(msg)
-        })
-        .catch((err) => {
-          console.error(`[WsBridge] Handler error on ${chatId}:`, err)
-        }))
-      this.handlerChains.set(chatId, next)
+      void this.deliverMessage(chatId, session, msg)
     })
 
     ws.on('close', (code, reason) => {
@@ -283,7 +302,26 @@ export class WsBridge {
     })
   }
 
-  private closeSocket(ws: WebSocket, code: number, reason: string): void {
+  private deliverMessage(chatId: string, session: Session, msg: ServerMessage): Promise<void> {
+    if (!this.handlers.has(chatId)) return Promise.resolve()
+    // Already received frames belong to the logical session, not its socket.
+    // A reconnect must drain them before its snapshot; only a reset/replacement
+    // invalidates them. Terminal notifications use the same FIFO boundary.
+    const prev = this.handlerChains.get(chatId) ?? Promise.resolve()
+    const next = adapterMigrationLifecycle.track(prev
+      .catch(() => {})
+      .then(() => {
+        if (this.sessions.get(chatId)?.deliveryGeneration !== session.deliveryGeneration) return
+        return this.handlers.get(chatId)?.(msg)
+      })
+      .catch((err) => {
+        console.error(`[WsBridge] Handler error on ${chatId}:`, err)
+      }))
+    this.handlerChains.set(chatId, next)
+    return next
+  }
+
+  private closeSocket(ws: WebSocket, code: number, reason: string, terminate = false): void {
     ws.removeAllListeners()
     if (ws.readyState === WebSocket.CLOSED) return
 
@@ -317,14 +355,16 @@ export class WsBridge {
     ws.once('close', () => {
       ws.removeListener('error', swallowTeardownError)
     })
-    ws.close(code, reason)
+    if (terminate) ws.terminate()
+    else ws.close(code, reason)
   }
 
   /** Wait until the WebSocket for chatId is open. Resolves false on timeout or error. */
   waitForOpen(chatId: string, timeoutMs = 10_000): Promise<boolean> {
     const session = this.sessions.get(chatId)
     if (!session) return Promise.resolve(false)
-    if (session.ws.readyState === WebSocket.OPEN) return Promise.resolve(true)
+    if (session.terminal) return Promise.resolve(false)
+    if (session.ws.readyState === WebSocket.OPEN) return Promise.resolve(this.isSessionOpen(chatId))
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         cleanup()
@@ -347,11 +387,17 @@ export class WsBridge {
 
   private send(chatId: string, message: Record<string, unknown>): boolean {
     const session = this.sessions.get(chatId)
-    if (!session || session.ws.readyState !== WebSocket.OPEN) {
+    if (!session || !this.isSessionOpen(chatId)) {
       console.warn(`[WsBridge] Cannot send to ${chatId}: session not ready`)
       return false
     }
-    session.ws.send(JSON.stringify(message))
+    try {
+      session.ws.send(JSON.stringify(message))
+    } catch (err) {
+      console.warn(`[WsBridge] Send failed on ${chatId}:`, err)
+      this.disconnectUnhealthySession(chatId, session)
+      return false
+    }
     session.lastActivityAt = this.now()
     if (message.type === 'user_message') session.turnActive = true
     if (message.type === 'permission_response' && typeof message.requestId === 'string') {
@@ -431,34 +477,63 @@ export class WsBridge {
   private scheduleReconnect(chatId: string, sessionId: string): void {
     if (this.destroyed) return
     const session = this.sessions.get(chatId)
-    if (!session) return
-    if (session.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    if (!session || session.terminal || session.reconnectTimer) return
+    if (session.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error(`[WsBridge] Max reconnect attempts reached for ${sessionId}, giving up`)
-      this.sessions.delete(chatId)
-      this.handlers.delete(chatId)
+      session.terminal = true
+      // Clear local waiting indicators, then report the lost connection through
+      // the adapters' existing error handling. The durable binding stays intact.
+      void this.deliverMessage(chatId, session, {
+        type: 'permission_requests_snapshot', turnActive: false,
+        toolRequestIds: [], computerUseRequestIds: [],
+      })
+      const finished = this.deliverMessage(chatId, session, {
+        type: 'error', code: 'ADAPTER_CONNECTION_LOST',
+        message: '与桌面端的连接已中断，自动重连失败。请检查连接后重试，原会话已保留。',
+      })
+      void finished.then(() => {
+        if (this.sessions.get(chatId) !== session) return
+        this.sessions.delete(chatId)
+        this.handlers.delete(chatId)
+        this.handlerChains.delete(chatId)
+      })
       return
     }
 
     session.reconnectAttempts++
     const delay = Math.min(
-      RECONNECT_BASE_MS * Math.pow(2, session.reconnectAttempts - 1),
+      this.reconnectBaseMs * Math.pow(2, session.reconnectAttempts - 1),
       RECONNECT_MAX_MS,
     )
-    console.log(`[WsBridge] Reconnecting ${sessionId} in ${delay}ms (attempt ${session.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
+    console.log(`[WsBridge] Reconnecting ${sessionId} in ${delay}ms (attempt ${session.reconnectAttempts}/${this.maxReconnectAttempts})`)
     session.reconnectTimer = setTimeout(() => {
+      session.reconnectTimer = null
       if (this.destroyed) return
-      if (this.sessions.get(chatId)?.sessionId === sessionId) {
+      if (this.sessions.get(chatId) === session) {
         this.connect(chatId, sessionId)
       }
     }, delay)
   }
 
+  private disconnectUnhealthySession(chatId: string, session: Session): void {
+    if (this.sessions.get(chatId) !== session || session.terminal || session.reconnectTimer) return
+    // A half-open peer may never acknowledge a close handshake.
+    this.closeSocket(session.ws, 4000, 'connection unresponsive', true)
+    this.scheduleReconnect(chatId, session.sessionId)
+  }
+
   private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimer = setInterval(() => {
       this.releaseIdleSessions()
-      for (const [, session] of this.sessions) {
-        if (session.ws.readyState === WebSocket.OPEN) {
-          session.ws.send(JSON.stringify({ type: 'ping' }))
+      for (const [chatId, session] of this.sessions) {
+        if (this.isSessionOpen(chatId) && session.awaitingPongAt === null) {
+          session.awaitingPongAt = this.now()
+          try {
+            session.ws.send(JSON.stringify({ type: 'ping' }))
+          } catch (err) {
+            console.warn(`[WsBridge] Heartbeat failed on ${chatId}:`, err)
+            this.disconnectUnhealthySession(chatId, session)
+          }
         }
       }
     }, intervalMs)

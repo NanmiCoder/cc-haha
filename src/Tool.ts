@@ -186,6 +186,8 @@ export type ToolUseContext = {
     refreshTools?: () => Tools
   }
   abortController: AbortController
+  /** Root query that owns Computer Use, shared with that query's subagents. */
+  computerUseTurn?: symbol
   readFileState: FileStateCache
   getAppState(): AppState
   setAppState(f: (prev: AppState) => AppState): void
@@ -231,6 +233,10 @@ export type ToolUseContext = {
   dynamicSkillDirTriggers?: Set<string>
   /** Skill names surfaced via skill_discovery this session. Telemetry only (feeds was_discovered). */
   discoveredSkillNames?: Set<string>
+  /** Trusted human skill selections. Shared across query context copies so
+   * consuming a follow-up changes this run's authorization at that boundary.
+   * Runtime-only: delegated prompts and transcripts never grant access. */
+  skillSelectionState?: { messages: readonly Message[] }
   userModified?: boolean
   setInProgressToolUseIDs: (f: (prev: Set<string>) => Set<string>) => void
   /** Only wired in interactive (REPL) contexts; SDK/QueryEngine don't set this. */

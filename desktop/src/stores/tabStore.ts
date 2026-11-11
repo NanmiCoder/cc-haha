@@ -7,6 +7,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { t } from '../i18n'
 import { teamMemberSessionId } from '../types/team'
 import { readTabBehavior } from '../lib/tabBehavior'
+import { useUIStore } from './uiStore'
 
 const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
 const MAX_CLOSED_SESSION_TABS = 10
@@ -451,7 +452,16 @@ export const useTabStore = create<TabStore>((set, get) => ({
     }
     try {
       localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(data))
-    } catch { /* noop */ }
+    } catch (error) {
+      console.error('[tabs] Saving tabs failed:', error)
+      if (!useUIStore.getState().toasts.some((toast) => toast.message === t('tabs.saveFailed'))) {
+        useUIStore.getState().addToast({
+          type: 'error',
+          message: t('tabs.saveFailed'),
+          action: { label: t('common.retry'), onClick: () => get().saveTabs() },
+        })
+      }
+    }
   },
 
   restoreTabs: async () => {
@@ -470,6 +480,9 @@ export const useTabStore = create<TabStore>((set, get) => ({
       if (!raw) return
 
       const parsed = JSON.parse(raw) as TabPersistence
+      if (!parsed || !Array.isArray(parsed.openTabs) || parsed.openTabs.some((tab) => (
+        !tab || typeof tab.sessionId !== 'string' || typeof tab.title !== 'string'
+      ))) throw new Error('Invalid saved tabs')
       const data: TabPersistence = {
         openTabs: Array.isArray(parsed.openTabs)
           ? parsed.openTabs.flatMap((tab) => {
@@ -553,7 +566,11 @@ export const useTabStore = create<TabStore>((set, get) => ({
       const uniqueTabs = validTabs.filter((tab, index) => validTabs.findIndex(other => other.sessionId === tab.sessionId) === index)
       if (uniqueTabs.length === 0) {
         set({ tabs: [], activeTabId: null })
-        localStorage.removeItem(TAB_STORAGE_KEY)
+        // A restore attempt is not permission to discard the last saved layout.
+        // Keep it available for another attempt, even if every lookup was 404.
+        if (data.openTabs.some((tab) => getPersistedSessionId(tab))) {
+          throw new Error('Saved sessions are unavailable')
+        }
         return
       }
 
@@ -563,7 +580,14 @@ export const useTabStore = create<TabStore>((set, get) => ({
       const activeId = normalizedActive && uniqueTabs.some(tab => tab.sessionId === normalizedActive) ? normalizedActive : uniqueTabs[0]!.sessionId
 
       set({ tabs: uniqueTabs, activeTabId: activeId })
-    } catch { /* noop */ }
+    } catch (error) {
+      console.error('[tabs] Restoring tabs failed:', error)
+      useUIStore.getState().addToast({
+        type: 'error',
+        message: t('tabs.restoreFailed'),
+        action: { label: t('common.retry'), onClick: () => { void get().restoreTabs() } },
+      })
+    }
   },
 }))
 

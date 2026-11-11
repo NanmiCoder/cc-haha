@@ -2,13 +2,14 @@ import { useId, useMemo } from 'react'
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer'
+import { AgentTeamsRevealMore } from '@/components/agentTeams/AgentTeamsRevealMore'
 import { MEMBER_AVATARS, memberAccentColor } from '@/components/agentTeams/agentTeamsAvatars'
 import {
   formatWorkbenchMessageTime,
   getMemberAvatarKey,
   getMemberWorkState,
   getWorkbenchTaskState,
-  inferTaskOwner,
+  memberHitContextLimit,
   parseWorkbenchMessageBody,
   resolveMemberModel,
   resolveTeamMemberIdentity,
@@ -19,6 +20,8 @@ import {
   type WorkbenchMessageBody,
   type WorkbenchTaskState,
 } from '@/components/agentTeams/agentTeamsModel'
+import { useProgressiveReveal } from '@/components/agentTeams/useProgressiveReveal'
+import { useTranscriptFind } from '@/components/agentTeams/useTranscriptFind'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -99,9 +102,7 @@ function taskBelongsToMember(
   member: TeamMember,
   snapshot: TeamWorkbenchSnapshot,
 ): boolean {
-  if (taskOwnedByMember(task, member)) return true
-  const attribution = inferTaskOwner(task, snapshot)
-  return attribution ? memberMatchesIdentity(member, attribution.identity) : false
+  return taskOwnedByMember(task, member, snapshot)
 }
 
 function visibleSnapshots(
@@ -153,6 +154,13 @@ function deriveTaskHistory(
   const selectedTime = timestampMs(snapshot.generatedAt)
 
   return Array.from(history.values())
+    // A reassignment must not leave the former owner's last frame in the
+    // upcoming/running queue. Replay still shows it before the hand-off, and
+    // the communication history retains the assignment messages.
+    .filter(entry => {
+      const currentTask = tasksById.get(entry.task.id)
+      return currentTask ? taskBelongsToMember(currentTask, member, snapshot) : entry.task.status === 'completed'
+    })
     .map((entry): TaskHistoryEntry => {
       const currentTask = tasksById.get(entry.task.id)
       const task = currentTask && taskBelongsToMember(currentTask, member, snapshot)
@@ -364,6 +372,19 @@ export function AgentTeamsMemberInspector({
     () => deriveMemberMessages(snapshot, member, t),
     [member, snapshot, t],
   )
+  const reveal = useProgressiveReveal(messages.length, member.agentId)
+  useTranscriptFind({
+    rows: messages,
+    rowKey: (row) => row.message.id,
+    rowText: (row) => [
+      t(row.direction === 'sent' ? 'agentTeams.inspector.sent' : 'agentTeams.inspector.received'),
+      row.peerName,
+      formatWorkbenchMessageTime(row.message.timestamp),
+      row.body.kind === 'text' ? row.body.text : protocolNarration(row, snapshot, t),
+    ].join('\n'),
+    revealThrough: reveal.revealThrough,
+    anchorRef: reveal.scrollRootRef,
+  })
   const completedTasks = taskHistory.filter(entry => entry.state === 'completed').length
   const runningTask = taskHistory.find(entry => entry.state === 'running')?.task
   const blockedTask = taskHistory.find(entry => entry.state === 'blocked')?.task
@@ -389,15 +410,20 @@ export function AgentTeamsMemberInspector({
     workState === 'stopped' || workState === 'retrying' || workState === 'error'
   )
   const failureReason = awaitsRecovery ? member.lastError : undefined
+  // Resending into a context that no longer fits fails the same way, so the
+  // hint names the step that clears it. A scheduled retry keeps its countdown.
+  const contextLimited = workState !== 'retrying' && memberHitContextLimit(member)
   const recoveryHint = !awaitsRecovery
     ? undefined
-    : workState === 'stopped'
-      ? t('agentTeams.member.stoppedHint')
-      : workState === 'error'
-        ? t('agentTeams.member.errorHint')
-        : member.autoRetry && now !== undefined
-          ? retryCountdown(member.autoRetry, now, t)
-          : undefined
+    : contextLimited
+      ? t('agentTeams.member.contextLimitHint')
+      : workState === 'stopped'
+        ? t('agentTeams.member.stoppedHint')
+        : workState === 'error'
+          ? t('agentTeams.member.errorHint')
+          : member.autoRetry && now !== undefined
+            ? retryCountdown(member.autoRetry, now, t)
+            : undefined
 
   return (
     <section
@@ -525,7 +551,7 @@ export function AgentTeamsMemberInspector({
         ) : null}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={reveal.scrollRootRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <section
           aria-labelledby={`${headingId}-tasks`}
           className="border-b border-[var(--color-border)] px-3.5 py-3"
@@ -615,13 +641,14 @@ export function AgentTeamsMemberInspector({
             {t('agentTeams.inspector.messages')}
           </h3>
           {messages.length > 0 ? (
-            <ol className="mt-2" data-testid="agent-teams-member-messages">
-              {messages.map(row => {
+            <ol className="mt-2" data-testid="agent-teams-member-messages" data-find-transcript="">
+              {messages.slice(0, reveal.limit).map(row => {
                 const sent = row.direction === 'sent'
                 return (
                   <li
                     key={row.message.id}
                     data-testid={`agent-teams-member-message-${row.message.id}`}
+                    data-find-row={row.message.id}
                     data-message-direction={row.direction}
                     data-message-body={row.body.kind}
                     className={`mb-2 border-l-2 pb-2 pl-2.5 last:mb-0 ${sent ? 'border-l-[var(--color-info)]' : 'border-l-[var(--color-tertiary)]'}`}
@@ -663,6 +690,7 @@ export function AgentTeamsMemberInspector({
               {t('agentTeams.noMemberMessages')}
             </p>
           )}
+          <AgentTeamsRevealMore reveal={reveal} remaining={messages.length - reveal.limit} />
         </section>
       </div>
 

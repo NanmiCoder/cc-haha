@@ -1,3 +1,4 @@
+import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 /**
  * Pure parsing of raw CLI payloads into the shapes the session handler works with.
  *
@@ -158,7 +159,8 @@ export function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
   const errorType = typeof cliMsg.error === 'string' && cliMsg.error.trim()
     ? cliMsg.error.trim()
     : readRetryErrorString(cliMsg.error, ['type', 'code', 'name'])
-  const errorMessage = readRetryErrorString(cliMsg.error, ['message', 'error'])
+  const errorMessage = readRetryErrorString(cliMsg, ['error_message']) ?? readRetryErrorString(cliMsg.error, ['message', 'error'])
+  const requestId = readRetryErrorString(cliMsg, ['request_id'])
 
   return {
     type: 'api_retry',
@@ -167,7 +169,8 @@ export function toApiRetryServerMessage(cliMsg: any): ServerMessage | null {
     retryDelayMs,
     errorStatus: rawStatus === null ? null : Math.trunc(rawStatus),
     ...(errorType ? { errorType } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
+    ...(errorMessage ? { errorMessage: sanitizeRetryDiagnosticText(errorMessage) } : {}),
+    ...(requestId ? { requestId: sanitizeRetryDiagnosticText(requestId).slice(0, 200) } : {}),
   }
 }
 

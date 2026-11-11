@@ -1,8 +1,20 @@
+import { readProviderEnvForModel } from './providerEnvScope.js'
+
 export const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
+export const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 export const MODEL_CONTEXT_WINDOW_MIN = 16_000
 export const MODEL_CONTEXT_WINDOW_MAX = 10_000_000
+/**
+ * A provider's per-model reply limits, the same shape as the window map. A
+ * gateway serving many models (Magpie) knows each one's limit; one
+ * provider-wide number would cut the long-reply models or overrun the others.
+ */
+export const MODEL_MAX_OUTPUT_TOKENS_ENV_KEY = 'CLAUDE_CODE_MODEL_MAX_OUTPUT_TOKENS'
+export const MODEL_MAX_OUTPUT_TOKENS_MIN = 1_024
+export const MODEL_MAX_OUTPUT_TOKENS_MAX = MODEL_CONTEXT_WINDOW_MAX
 
 const DIRECT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-fable-5-2': 1_000_000,
   'claude-fable-5-1': 1_000_000,
   'claude-fable-5': 1_000_000,
   'claude-opus-5-5': 1_000_000,
@@ -80,32 +92,40 @@ export function normalizeModelContextKey(model: string): string {
     .toLowerCase()
 }
 
-function normalizeWindow(value: unknown): number | undefined {
+function normalizeModelLimit(value: unknown, min: number, max: number): number | undefined {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     return undefined
   }
-  if (value < MODEL_CONTEXT_WINDOW_MIN || value > MODEL_CONTEXT_WINDOW_MAX) {
+  if (value < min || value > max) {
     return undefined
   }
   return value
 }
 
-function normalizeConfiguredContextWindows(parsed: unknown): Record<string, number> {
+function normalizeConfiguredModelLimits(
+  parsed: unknown,
+  min: number,
+  max: number,
+): Record<string, number> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {}
   }
 
-  const windows: Record<string, number> = {}
+  const limits: Record<string, number> = {}
   for (const [model, value] of Object.entries(parsed)) {
-    const normalized = normalizeWindow(value)
+    const normalized = normalizeModelLimit(value, min, max)
     if (normalized !== undefined) {
-      windows[normalizeModelContextKey(model)] = normalized
+      limits[normalizeModelContextKey(model)] = normalized
     }
   }
-  return windows
+  return limits
 }
 
-function findConfiguredModelContextWindow(
+function normalizeConfiguredContextWindows(parsed: unknown): Record<string, number> {
+  return normalizeConfiguredModelLimits(parsed, MODEL_CONTEXT_WINDOW_MIN, MODEL_CONTEXT_WINDOW_MAX)
+}
+
+function findConfiguredModelLimit(
   model: string,
   configured: Record<string, number>,
 ): number | undefined {
@@ -136,7 +156,7 @@ export function getModelContextWindowFromEnvValue(
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    return findConfiguredModelContextWindow(
+    return findConfiguredModelLimit(
       model,
       normalizeConfiguredContextWindows(parsed),
     )
@@ -145,8 +165,8 @@ export function getModelContextWindowFromEnvValue(
   }
 }
 
-function parseConfiguredContextWindows(): Record<string, number> {
-  const raw = process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+function parseConfiguredContextWindows(model: string): Record<string, number> {
+  const raw = readProviderEnvForModel(model, MODEL_CONTEXT_WINDOWS_ENV_KEY)
   if (!raw?.trim()) {
     return {}
   }
@@ -161,7 +181,29 @@ function parseConfiguredContextWindows(): Record<string, number> {
 export function getConfiguredModelContextWindow(
   model: string,
 ): number | undefined {
-  return findConfiguredModelContextWindow(model, parseConfiguredContextWindows())
+  return findConfiguredModelLimit(model, parseConfiguredContextWindows(model))
+}
+
+/** The reply limit the model's provider configured for it, matched like the windows. */
+export function getConfiguredModelMaxOutputTokens(model: string): number | undefined {
+  const raw = readProviderEnvForModel(model, MODEL_MAX_OUTPUT_TOKENS_ENV_KEY)
+  if (!raw?.trim()) {
+    return undefined
+  }
+
+  try {
+    return findModelMaxOutputTokens(model, JSON.parse(raw) as unknown)
+  } catch {
+    return undefined
+  }
+}
+
+/** The reply limit listed for `model` in a provider's `modelMaxOutputTokens`, matched like the windows. */
+export function findModelMaxOutputTokens(model: string, limits: unknown): number | undefined {
+  return findConfiguredModelLimit(
+    model,
+    normalizeConfiguredModelLimits(limits, MODEL_MAX_OUTPUT_TOKENS_MIN, MODEL_MAX_OUTPUT_TOKENS_MAX),
+  )
 }
 
 export function getBuiltInModelContextWindow(model: string): number | undefined {

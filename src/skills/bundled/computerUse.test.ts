@@ -42,6 +42,16 @@ describe('computer-use skill content', () => {
     expect(prompt).toContain('menu bar')
   })
 
+  test('does not read a stale off-Space screenshot as a failed approach', async () => {
+    // Observed: a Chromium window behind the user's fullscreen app kept taking
+    // clicks and keys while every capture returned the same frame. The
+    // unchanged-screenshot rule alone sends the model to switch approaches
+    // against actions that worked.
+    const prompt = await computerUsePrompt()
+    expect(prompt).toContain('the approach is wrong —\nunless the state says the window is on another Space or hidden')
+    expect(prompt).toContain('judge from the accessibility state there')
+  })
+
   test('treats a timed-out paste as result-unknown and refreshes before retry', async () => {
     const prompt = await computerUsePrompt()
     expect(prompt).toContain('may have consumed the paste late')
@@ -90,8 +100,8 @@ describe('computer-use skill registration', () => {
     // first words must carry what this is FOR.
     expect(
       skill!.description.startsWith(
-        process.platform === 'win32'
-          ? "Operate apps on the user's Windows desktop"
+        process.platform === 'win32' ? "Operate apps on the user's Windows desktop"
+          : process.platform === 'linux' ? "Operate apps on the user's Linux desktop"
           : "Operate apps on the user's Mac",
       ),
     ).toBe(true)
@@ -104,16 +114,15 @@ describe('computer-use skill registration', () => {
   test('binds exactly the Computer Use tools advertised on this platform', () => {
     registerComputerUseSkill()
     const skill = getBundledSkills().find(s => s.name === 'computer-use')
-    const platform = process.platform === 'win32' ? 'win32' : 'darwin'
+    const platform = process.platform === 'win32' || process.platform === 'linux' ? process.platform : 'darwin'
     expect(skill!.allowedTools).toEqual(getComputerUseToolAllowlist(platform))
     expect(skill!.allowedTools).toEqual(buildPlatformComputerUseTools({
       platform,
-      screenshotFiltering: platform === 'win32' ? 'none' : 'native',
+      screenshotFiltering: platform === 'darwin' ? 'native' : 'none',
+      agentDesktop: platform !== 'darwin',
     }, 'pixels').map(tool => `mcp__computer-use__${tool.name}`))
     expect(skill!.allowedTools).toContain(
-      process.platform === 'win32'
-        ? 'mcp__computer-use__screenshot'
-        : 'mcp__computer-use__js',
+      process.platform === 'darwin' ? 'mcp__computer-use__js' : 'mcp__computer-use__desktop',
     )
     expect(skill!.allowedTools).not.toContain('mcp__computer-use__request_access')
     expect(
@@ -128,20 +137,19 @@ describe('computer-use skill registration', () => {
   })
 })
 
-describe('computer-use Windows guidance', () => {
-  test('matches the unfiltered, feature-authorized pixel tool face', () => {
-    const prompt = getComputerUsePrompt('win32')
-    expect(prompt).not.toContain('request_access')
-    expect(prompt).toContain('without an app-by-app approval prompt')
-    expect(prompt).toContain('screenshots are NOT filtered')
-    expect(prompt).toContain('most recent full screenshot')
-    expect(prompt).toContain('UNKNOWN result')
-
-    const tools = getComputerUseToolAllowlist('win32')
-    expect(tools).toContain('mcp__computer-use__screenshot')
-    expect(tools).toContain('mcp__computer-use__left_click')
-    expect(tools).toContain('mcp__computer-use__type')
-    expect(tools).not.toContain('mcp__computer-use__get_app_state')
+describe('computer-use native Windows/Linux guidance', () => {
+  test('matches the feature-authorized native tool and its physical-input boundary', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      const prompt = getComputerUsePrompt(platform)
+      expect(prompt).not.toContain('request_access')
+      expect(prompt).toContain('without an app-by-app approval prompt')
+      expect(prompt).toContain('snapshot-qualified ref')
+      expect(prompt).toContain('headed:true')
+      expect(prompt).toContain('UNKNOWN result')
+      expect(prompt).toContain('get","platform')
+      expect(prompt).toContain('Wayland')
+      expect(getComputerUseToolAllowlist(platform)).toEqual(['mcp__computer-use__desktop'])
+    }
   })
 })
 

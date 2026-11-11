@@ -12,7 +12,9 @@ import * as queryModule from '../../query.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId, type SessionId } from '../../types/ids.js'
+import { getAgentProfile, setAgentProfile } from '../../utils/agentProfile.js'
 import type { Message } from '../../types/message.js'
+import type { EffortValue } from '../../utils/effort.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import {
   createAssistantMessage,
@@ -28,8 +30,13 @@ import {
 } from '../../utils/sessionStorage.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { runAgent } from './runAgent.js'
+import * as agentRunner from './runAgent.js'
+import * as agentToolUtils from './agentToolUtils.js'
+import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import { resumeAgentBackground } from './resumeAgent.js'
 
 const AGENT_ID = asAgentId('aworker-00112233445566aa')
+const originalProfile = getAgentProfile()
 const writeAgentMetadata = sessionStorage.writeAgentMetadata
 const savedEnv = {
   configDir: process.env.CLAUDE_CONFIG_DIR,
@@ -79,6 +86,7 @@ afterEach(async () => {
     }
   } finally {
     mock.restore()
+    setAgentProfile(originalProfile)
     resetProjectForTesting()
     restoreEnv('CLAUDE_CONFIG_DIR', savedEnv.configDir)
     restoreEnv('TEST_ENABLE_SESSION_PERSISTENCE', savedEnv.persistence)
@@ -88,7 +96,7 @@ afterEach(async () => {
   }
 })
 
-function parentContext(): ToolUseContext {
+function parentContext(sessionEffort?: EffortValue): ToolUseContext {
   const agentDefinition = {
     agentType: 'worker',
     whenToUse: 'Teammate',
@@ -96,7 +104,7 @@ function parentContext(): ToolUseContext {
     getSystemPrompt: () => 'Work.',
     source: 'projectSettings',
   } as const
-  const state = getDefaultAppState()
+  const state = { ...getDefaultAppState(), effortValue: sessionEffort }
   return {
     options: {
       commands: [],
@@ -127,6 +135,8 @@ async function runTurn(params: {
   context?: Message[]
   answer: Message
   recordedUuids: Set<UUID>
+  agentEffort?: EffortValue
+  sessionEffort?: EffortValue
 }): Promise<Message[]> {
   spyOn(queryModule, 'query').mockImplementation(async function* () {
     yield params.answer
@@ -138,9 +148,10 @@ async function runTurn(params: {
       whenToUse: 'Teammate',
       getSystemPrompt: () => 'Work.',
       source: 'projectSettings',
+      ...(params.agentEffort !== undefined ? { effort: params.agentEffort } : {}),
     } as never,
     promptMessages: [params.prompt],
-    toolUseContext: parentContext(),
+    toolUseContext: parentContext(params.sessionEffort),
     canUseTool: (async () => ({ behavior: 'allow' })) as never,
     isAsync: true,
     forkContextMessages: params.context,
@@ -168,6 +179,29 @@ async function runTurn(params: {
 }
 
 describe('a teammate transcript kept across runs', () => {
+  test('immediately resumes a completed lean subagent while its transcript is still buffered', async () => {
+    setAgentProfile('lean')
+    const initial = createUserMessage({ content: 'Inspect the parser.' })
+    const answer = createAssistantMessage({ content: 'The parser accepts empty arrays.' })
+    // Recording resolves after enqueueing; the normal disk drain runs later.
+    await sessionStorage.recordSidechainTranscript([initial, answer], AGENT_ID)
+    await sessionStorage.writeAgentMetadata(AGENT_ID, { agentType: 'general-purpose' })
+    spyOn(localAgentTask, 'registerAsyncAgent').mockReturnValue({ agentId: AGENT_ID, abortController: new AbortController() } as never)
+    let lifecycle: Parameters<typeof agentToolUtils.runAsyncAgentLifecycle>[0] | undefined
+    spyOn(agentToolUtils, 'runAsyncAgentLifecycle').mockImplementation(async params => { lifecycle = params })
+    const runner = spyOn(agentRunner, 'runAgent').mockImplementation(async function* () {})
+
+    const result = await resumeAgentBackground({
+      agentId: AGENT_ID, prompt: 'Check the related tests.',
+      toolUseContext: parentContext(), canUseTool: (async () => ({ behavior: 'allow' })) as never,
+    })
+    expect(result.agentId).toBe(AGENT_ID)
+    lifecycle?.makeStream(undefined)
+    const messages = runner.mock.calls[0]?.[0].promptMessages
+    expect(messages?.map(message => message.uuid).slice(0, 2)).toEqual([initial.uuid, answer.uuid])
+    expect(JSON.stringify(messages?.at(-1))).toContain('Check the related tests.')
+  })
+
   test('appends each turn once and keeps one parent chain', async () => {
     const recordedUuids = new Set<UUID>()
     const firstPrompt = createUserMessage({ content: 'Investigate the failing build' })
@@ -213,6 +247,7 @@ describe('a teammate transcript kept across runs', () => {
 
     expect(await readAgentMetadata(AGENT_ID)).toEqual({
       agentType: 'worker',
+      effort: null,
       taskKind: 'in_process_teammate',
       teamName: 'team',
       name: 'worker',
@@ -220,5 +255,26 @@ describe('a teammate transcript kept across runs', () => {
       planModeRequired: false,
       permissionMode: 'default',
     })
+  })
+
+  test('records the effort the run launched with', async () => {
+    const launch = async (efforts: { agentEffort?: EffortValue; sessionEffort?: EffortValue }) => {
+      await runTurn({
+        prompt: createUserMessage({ content: 'Start' }),
+        answer: createAssistantMessage({ content: 'Started.' }),
+        recordedUuids: new Set(),
+        ...efforts,
+      })
+      await Promise.all(metadataWrites)
+      return (await readAgentMetadata(AGENT_ID))?.effort
+    }
+
+    // An Agent's pinned effort wins over the session's.
+    expect(await launch({ agentEffort: 'max', sessionEffort: 'low' })).toBe('max')
+    // Without one, the run inherits the session's.
+    expect(await launch({ sessionEffort: 'low' })).toBe('low')
+    // Neither: the model's own default, recorded as an explicit null so it is
+    // distinguishable from metadata written before effort was recorded.
+    expect(await launch({})).toBeNull()
   })
 })

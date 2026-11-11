@@ -93,4 +93,25 @@ describe('ApiPerformanceMonitor', () => {
 
     expect(recordEvent).not.toHaveBeenCalled()
   })
+
+  it('does not report the phone push long poll, which waits on purpose', () => {
+    let now = 0
+    const recordEvent = vi.fn()
+    const monitor = new ApiPerformanceMonitor({
+      now: () => now,
+      cpuUsage: () => ({ user: 0, system: 0 }),
+      memoryUsage: () => MEMORY,
+      recordEvent,
+      slowRequestMs: 1_000,
+    })
+    const pull = monitor.begin('POST', '/api/sessions/mobile-push/pull')
+    now = 25_000
+    pull.complete(Response.json({ notifications: [] }))
+    expect(recordEvent).not.toHaveBeenCalled()
+
+    const test = monitor.begin('POST', '/api/sessions/mobile-push/test')
+    now = 50_000
+    test.complete(Response.json({ status: 'sent' }))
+    expect(recordEvent).toHaveBeenCalledTimes(1)
+  })
 })

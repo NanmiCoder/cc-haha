@@ -13,6 +13,65 @@ const makeCache = (overrides?: { ttlMs?: number; failureBackoffMs?: number }) =>
   })
 
 describe('model catalog cache', () => {
+  test('reports an explicit refresh failure while retaining the last successful listing', async () => {
+    const cache = makeCache()
+    await cache.resolve({ accountKey: 'a', fetchCatalog: async () => REMOTE, fallback: FALLBACK, forceRefresh: true })
+    await expect(cache.resolve({
+      accountKey: 'a', fallback: FALLBACK, forceRefresh: true, throwOnError: true,
+      fetchCatalog: async () => { throw new Error('upstream unavailable') },
+    })).rejects.toThrow('upstream unavailable')
+    expect(await cache.resolve({ accountKey: 'a', fetchCatalog: async () => [], fallback: FALLBACK })).toEqual(REMOTE)
+  })
+
+  test('a late background response cannot overwrite an explicit refresh', async () => {
+    const cache = makeCache()
+    let complete!: (models: string[]) => void
+    await cache.resolve({ accountKey: 'a', fallback: FALLBACK,
+      fetchCatalog: () => new Promise<string[]>(resolve => { complete = resolve }) })
+    await cache.resolve({ accountKey: 'a', fallback: FALLBACK, forceRefresh: true, fetchCatalog: async () => REMOTE })
+    complete(['outdated'])
+    await sleep(5)
+    expect(await cache.resolve({ accountKey: 'a', fallback: FALLBACK, fetchCatalog: async () => [] })).toEqual(REMOTE)
+  })
+
+  test('ordinary reads during a forced refresh cannot launch a competing background refresh', async () => {
+    const cache = makeCache()
+    let complete!: (models: string[]) => void
+    const refresh = cache.resolve({ accountKey: 'a', fallback: FALLBACK, forceRefresh: true,
+      fetchCatalog: () => new Promise<string[]>(resolve => { complete = resolve }) })
+    let backgroundCalls = 0
+    expect(await cache.resolve({ accountKey: 'a', fallback: FALLBACK,
+      fetchCatalog: async () => { backgroundCalls += 1; return ['outdated'] } })).toEqual(FALLBACK)
+    complete(REMOTE)
+    expect(await refresh).toEqual(REMOTE)
+    expect(backgroundCalls).toBe(0)
+    expect(await cache.resolve({ accountKey: 'a', fallback: FALLBACK, fetchCatalog: async () => [] })).toEqual(REMOTE)
+  })
+
+  test('switching accounts starts a separate refresh and ignores the previous response', async () => {
+    const cache = makeCache()
+    let complete!: (models: string[]) => void
+    await cache.resolve({ accountKey: 'a', fallback: FALLBACK,
+      fetchCatalog: () => new Promise<string[]>(resolve => { complete = resolve }) })
+    await cache.resolve({ accountKey: 'b', fallback: FALLBACK, fetchCatalog: async () => ['b'] })
+    await sleep(5)
+    complete(['a'])
+    await sleep(5)
+    expect(await cache.resolve({ accountKey: 'b', fallback: FALLBACK, fetchCatalog: async () => [] })).toEqual(['b'])
+  })
+
+  test('clear invalidates pending responses as well as cached entries', async () => {
+    const cache = makeCache()
+    let complete!: (models: string[]) => void
+    await cache.resolve({ accountKey: 'a', fallback: FALLBACK,
+      fetchCatalog: () => new Promise<string[]>(resolve => { complete = resolve }) })
+    cache.clear()
+    complete(REMOTE)
+    await sleep(5)
+    expect(await cache.resolve({ accountKey: 'a', fallback: FALLBACK,
+      fetchCatalog: () => new Promise<string[]>(() => {}) })).toEqual(FALLBACK)
+  })
+
   test('answers from the fallback without waiting on the upstream request', async () => {
     const cache = makeCache()
     let settled = false

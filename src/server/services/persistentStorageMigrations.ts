@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises'
+import { migrateScheduledTasks } from './scheduledTaskMigrations.js'
 import * as os from 'os'
 import * as path from 'path'
 import { randomBytes } from 'node:crypto'
@@ -197,6 +198,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     activeProviderId: _legacyActiveProviderId,
     providerOrder: rawProviderOrder,
     officialProviderModels: rawOfficialProviderModels,
+    officialProviderContextWindows,
     ...rest
   } = value
   const sourceSchemaVersion = typeof value.schemaVersion === 'number' ? value.schemaVersion : 1
@@ -205,7 +207,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
   // from old Claude defaults. Spreading providers also preserves future fields.
   const providers = value.providers
     .filter(isSavedProvider)
-    // v9 makes runtime selection explicit. Existing providers keep their original
+    // v10 makes runtime selection explicit. Existing providers keep their original
     // Claude Code backend; preserve any explicitly saved or future runtime value.
     .map((provider) => sourceSchemaVersion < PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION && provider.runtime === undefined
       ? { ...provider, runtime: 'claude-code' }
@@ -247,6 +249,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     providers,
     providerOrder: normalizeProviderOrder(rawProviderOrder, providers),
     officialProviderModels: normalizeOfficialProviderModels(rawOfficialProviderModels, sourceSchemaVersion),
+    ...(officialProviderContextWindows !== undefined ? { officialProviderContextWindows } : {}),
   }
 }
 
@@ -433,6 +436,22 @@ async function migrateLegacyRootProviders(
 async function runPersistentStorageMigrations(configDir: string): Promise<MigrationReport> {
   const report: MigrationReport = { migratedEntries: [], failures: [] }
   const ccHahaDir = path.join(configDir, 'cc-haha')
+
+  // Task definitions are user-authored data: never quarantine/reset malformed JSON.
+  const tasksPath = path.join(configDir, 'scheduled_tasks.json')
+  try {
+    const current = await readJsonFile(tasksPath)
+    if (!current.missing) {
+      const migrated = migrateScheduledTasks(current.value)
+      if (stableStringify(migrated) !== stableStringify(current.value)) {
+        await backupFile(tasksPath, 'bak-before-migration')
+        await writeJsonFile(tasksPath, migrated)
+        report.migratedEntries.push('scheduled_tasks.json')
+      }
+    }
+  } catch (error) {
+    report.failures.push(`scheduled_tasks.json: ${error instanceof Error ? error.message : String(error)}`)
+  }
 
   await migrateLegacyRootProviders(configDir, ccHahaDir, report)
 

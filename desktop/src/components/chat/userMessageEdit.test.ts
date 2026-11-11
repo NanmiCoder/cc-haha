@@ -307,7 +307,10 @@ describe('capability pills in edit and resend', () => {
       attachments: [],
       sessionReferences: [],
       agentTeam: true,
-      mentions: [{ label: '@frontend-design', modelText: SKILL }],
+      mentions: [{
+        kind: 'skill', id: 'frontend-design', label: 'frontend-design', modelText: SKILL,
+        path: '', isDirectory: false, tokenOrdinal: 0,
+      }],
     })
 
     const payload = buildUserMessageResendPayload({ ...draft, text: '@frontend-design 做个官网' }, labels)
@@ -339,5 +342,20 @@ describe('capability pills in edit and resend', () => {
     expect(draft.text).toBe('@frontend-design 做个落地页')
     expect(draft.agentTeam).toBeUndefined()
     expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} 做个落地页`)
+  })
+
+  it('tells a pill from literal text that spells the same token, in both directions', () => {
+    // The user typed "@frontend-design" by hand, then picked the real pill.
+    const draft = createUserMessageEditDraft({ content: `写 @frontend-design 文档，然后 ${SKILL} 做页面` })
+    expect(draft.text).toBe('写 @frontend-design 文档，然后 @frontend-design 做页面')
+    expect(draft.mentions).toEqual([expect.objectContaining({ id: 'frontend-design', tokenOrdinal: 1 })])
+    expect(buildUserMessageResendPayload(draft, labels)?.content)
+      .toBe(`写 @frontend-design 文档，然后 ${SKILL} 做页面`)
+  })
+
+  it('sends the model text of the pill the editor kept, wherever the user moved it', () => {
+    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
+    const moved = { ...draft, text: '做个落地页 @frontend-design', mentions: [{ ...draft.mentions![0]!, tokenOrdinal: 0 }] }
+    expect(buildUserMessageResendPayload(moved, labels)?.content).toBe(`做个落地页 ${SKILL}`)
   })
 })

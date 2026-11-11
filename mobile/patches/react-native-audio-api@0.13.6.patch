@@ -1,0 +1,89 @@
+diff --git a/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp b/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
+index 0f997f8ebaae0243057cc920be5c86a7fbf679ad..8f5ed14e965b720753d4bdcd56802987e5276929 100644
+--- a/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
++++ b/android/src/main/cpp/audioapi/android/core/AndroidAudioRecorder.cpp
+@@ -180,7 +180,9 @@ AudioRecorder::StopResult AndroidAudioRecorder::stop() {
+   {
+     std::scoped_lock stopLock(callbackMutex_, fileWriterMutex_, adapterNodeMutex_);
+ 
+-    if (isIdle()) {
++    // A failed start can leave an opened stream while state is still Idle.
++    // stop() must also retire that stream and break its shared callback cycle.
++    if (isIdle() && mStream_ == nullptr) {
+       return StopResult::Err("Recorder is not in recording state.");
+     }
+ 
+@@ -478,7 +480,7 @@ void AndroidAudioRecorder::cleanup() {
+ 
+ /// @brief onError callback that is invoked by the Oboe stream when an error occurs.
+ /// This method runs on the audio thread.
+-/// If the error is a disconnection, it attempts to reopen the stream and resume recording.
++/// Disconnections are reported to the caller, which owns stopping/discarding the clip.
+ /// @param oboeStream Pointer to the Oboe audio stream.
+ /// @param error The oboe::Result error code.
+ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Result error) {
+@@ -488,11 +490,9 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
+     return;
+   }
+ 
+-  // Only reclaim the stream if the recorder still owns a session. Reopening
+-  // unconditionally resurrected stopped recorders, so any audio route change
+-  // (e.g. a Bluetooth headset connecting or disconnecting) turned the mic
+-  // back on after stop().
+-  if (isIdle()) {
++  // Do not resurrect stopped/paused recordings or report an old stream's error
++  // against a newer capture. The consumer will stop an active interrupted clip.
++  if (isIdle() || isPaused()) {
+     return;
+   }
+ 
+@@ -507,28 +507,11 @@ void AndroidAudioRecorder::onErrorAfterClose(oboe::AudioStream *stream, oboe::Re
+     return;
+   }
+ 
+-  // A paused session keeps its state across the reclaim: the fresh stream is
+-  // left stopped until resume(), instead of forcing the recorder back to recording.
+-  const auto stateBeforeTeardown = state_.load(std::memory_order_acquire);
+-
+-  cleanup();
+-
+-  if (stateBeforeTeardown == RecorderState::Idle) {
+-    return;
+-  }
+-
+-  auto streamResult = openAudioStream();
+-
+-  if (!streamResult.is_ok()) {
+-    std::string message = "Android recorder error: " + streamResult.unwrap_err();
+-    errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
+-    return;
+-  }
+-
+-  if (stateBeforeTeardown == RecorderState::Recording) {
+-    mStream_->requestStart();
+-  }
+-  state_.store(stateBeforeTeardown, std::memory_order_release);
++  // Reopening may select a different hardware rate/channel layout while the
++  // existing file writer and PCM callback still use the old converters.
++  // Report interruption instead of silently producing a corrupted recording.
++  std::string message = "Android recorder disconnected: " + std::string(oboe::convertToText(error));
++  errorEvent().dispatch(StringPayload{.name = "message", .reason = std::move(message)});
+ }
+ 
+ } // namespace audioapi
+diff --git a/android/src/main/cpp/audioapi/android/core/utils/miniaudioBackend/MiniAudioFileWriter.cpp b/android/src/main/cpp/audioapi/android/core/utils/miniaudioBackend/MiniAudioFileWriter.cpp
+index 293e1b0072346e1eb5f5d7e54e55834271acf9bf..652c7e947e91dbbcf1910f3fd76c35ba0c9a7a3a 100644
+--- a/android/src/main/cpp/audioapi/android/core/utils/miniaudioBackend/MiniAudioFileWriter.cpp
++++ b/android/src/main/cpp/audioapi/android/core/utils/miniaudioBackend/MiniAudioFileWriter.cpp
+@@ -223,7 +223,10 @@ void MiniAudioFileWriter::processWriterData(void *audioData, int numFrames) {
+   ma_uint64 framesWritten = 0;
+   ma_result result;
+ 
+-  if (!isFileOpen()) {
++  // closeFile() closes the producer gate before draining accepted queue items.
++  // Their encoder remains alive until cleanupPreallocatedInputPool() joins the
++  // worker, so pending tail frames must still be encoded while that gate is shut.
++  if (encoder_ == nullptr) {
+     return;
+   }
+ 

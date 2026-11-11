@@ -39,9 +39,91 @@
     <link rel="icon" href="/app-icon.png" type="image/png" />
     <!-- Fonts are self-hosted in /fonts/ and declared via @font-face in globals.css -->
     <script>
+      /*
+        Browsers that deny web storage outright (iOS Safari with "Block All
+        Cookies", some locked-down in-app browsers) throw on every access to
+        localStorage / sessionStorage, and the app reads them while its
+        modules load, before any error handling exists. Only there, swap in a
+        storage that lives in this page's memory: the app runs, nothing
+        survives a reload. A browser whose storage can be read keeps it
+        untouched. __CC_HAHA_MEMORY_STORAGE__ lists what was swapped, for code
+        that needs storage to outlive the page (src/lib/browserStorage.ts).
+      */
+      (function () {
+        function memoryStorage() {
+          var data = Object.create(null)
+          var storage = {
+            getItem: function (key) {
+              key = String(key)
+              return key in data ? data[key] : null
+            },
+            setItem: function (key, value) { data[String(key)] = String(value) },
+            removeItem: function (key) { delete data[String(key)] },
+            clear: function () { data = Object.create(null) },
+            key: function (index) {
+              var keys = Object.keys(data)
+              return index >= 0 && index < keys.length ? keys[index] : null
+            }
+          }
+          Object.defineProperty(storage, 'length', { get: function () { return Object.keys(data).length } })
+          return storage
+        }
+        var swapped = []
+        var names = ['localStorage', 'sessionStorage']
+        for (var i = 0; i < names.length; i++) {
+          try {
+            window[names[i]].getItem('cc-haha-storage-probe')
+            continue
+          } catch (_) {
+            /* Denied: replace it below. */
+          }
+          try {
+            Object.defineProperty(window, names[i], { configurable: true, value: memoryStorage() })
+            swapped.push(names[i])
+          } catch (_) {
+            /* Not replaceable here; the app's own error handling applies. */
+          }
+        }
+        if (swapped.length) window.__CC_HAHA_MEMORY_STORAGE__ = swapped
+      })()
+    </script>
+    <script>
       if (new URLSearchParams(window.location.search).get('petWindow') === '1') {
         document.documentElement.dataset.windowKind = 'pet'
       }
+    </script>
+    <script>
+      /*
+        Returning phones go straight to the phone app (/m/), before this
+        page downloads the desktop bundles it would only leave again. Only
+        when this browser already holds the H5 token it verified for this
+        server; a first visit, a scanned QR (it has a query), /remote and a
+        reconnect run the full entry, which hands off to /m/ itself once the
+        connection is ready (src/components/mobile/mobileH5Handoff.ts).
+        The layout test mirrors resolveMobileShellLayout: a phone-wide window,
+        or a wider one whose primary pointer is touch. A touch-screen laptop
+        (mouse or trackpad first) keeps the desktop app.
+      */
+      (function () {
+        try {
+          if (window.desktopHost || window.__TAURI_INTERNALS__) return
+          if (window.location.pathname !== '/' || window.location.search || window.location.hash) return
+          var narrow = window.matchMedia('(max-width: 767px)').matches
+          var coarse = window.matchMedia('(pointer: coarse)').matches
+          if (!narrow && !coarse) return
+          var server = window.localStorage.getItem('cc-haha-h5-server-url')
+          var token = window.localStorage.getItem('cc-haha-h5-token')
+          if (!server || !token || new URL(server).origin !== window.location.origin) return
+          // Landing back here right after leaving means /m/ could not take the
+          // page (not built into this server): let the app's entry decide.
+          var key = 'cc-haha-mobile-h5-handoff'
+          if (Date.now() - Number(window.sessionStorage.getItem(key) || 0) < 15000) return
+          window.sessionStorage.setItem(key, String(Date.now()))
+          window.location.replace('/m/')
+        } catch (_) {
+          /* Storage or matchMedia unavailable: the app's entry handles it. */
+        }
+      })()
     </script>
     <script>
       /*
@@ -138,41 +220,68 @@
     </style>
     <script>
       (function () {
-        var bootDeadlineMs = 8000
+        var remote = window.location.pathname === '/remote' || window.location.pathname.indexOf('/remote/') === 0
+        var bootDeadlineMs = remote ? 60000 : 8000
+        var phase = 'entry'
+        var failed = false
+        var slow = false
+        var timers = []
+        // These labels must work before the application/locales download.
+        var messages = {
+          en: ['Connecting to your computer', 'Still connecting', 'The first download may take longer on a mobile network. Keep your computer online.', 'Loading the app', 'Opening your sessions', 'Connection timed out', 'Could not load the app', 'Check your connection and keep cc-haha open on your computer, then try again.', 'Try again', 'Startup details'],
+          zh: ['正在连接你的电脑', '仍在连接', '首次下载在移动网络上可能较慢，请保持电脑在线。', '正在加载应用', '正在打开会话', '连接超时', '无法加载应用', '请检查网络，并保持电脑上的 cc-haha 打开，然后重试。', '重试', '启动详情'],
+          'zh-TW': ['正在連線至你的電腦', '仍在連線', '首次下載在行動網路上可能較慢，請保持電腦在線。', '正在載入應用程式', '正在開啟工作階段', '連線逾時', '無法載入應用程式', '請檢查網路，並保持電腦上的 cc-haha 開啟，然後重試。', '重試', '啟動詳情'],
+          jp: ['パソコンに接続しています', '引き続き接続しています', 'モバイル回線での初回ダウンロードには時間がかかる場合があります。パソコンをオンラインにしてください。', 'アプリを読み込んでいます', 'セッションを開いています', '接続がタイムアウトしました', 'アプリを読み込めませんでした', '接続を確認し、パソコンで cc-haha を開いたまま、もう一度お試しください。', '再試行', '起動の詳細'],
+          kr: ['컴퓨터에 연결하는 중', '계속 연결하는 중', '모바일 네트워크에서는 첫 다운로드가 오래 걸릴 수 있습니다. 컴퓨터를 온라인 상태로 유지하세요.', '앱을 불러오는 중', '세션을 여는 중', '연결 시간 초과', '앱을 불러올 수 없습니다', '연결을 확인하고 컴퓨터에서 cc-haha를 열어 둔 다음 다시 시도하세요.', '다시 시도', '시작 세부 정보']
+        }
+        var language = (navigator.language || 'en').toLowerCase()
+        var locale = language.indexOf('zh') === 0
+          ? (/tw|hk|mo|hant/.test(language) ? 'zh-TW' : 'zh')
+          : language.indexOf('ja') === 0 ? 'jp' : language.indexOf('ko') === 0 ? 'kr' : 'en'
+        try {
+          var storedLocale = window.localStorage.getItem('cc-haha-locale')
+          if (messages[storedLocale]) locale = storedLocale
+        } catch (_) { /* browser storage is optional */ }
+        var text = messages[locale]
 
-        function summarize(value) {
-          if (!value) return 'Unknown startup error'
-          if (typeof value === 'string') return value
-          if (value.message) return value.message
+        function diagnosticUrl(value) {
           try {
-            return JSON.stringify(value)
+            var url = new URL(value, window.location.href)
+            // Never include credentials, query values or fragments in reports.
+            return (url.origin === 'null' ? url.protocol : url.origin) + url.pathname
           } catch (_) {
-            return String(value)
+            return '[URL omitted]'
           }
         }
 
-        function renderStartupError(reason) {
+        function redact(value) {
+          return String(value).replace(/(?:[a-z][a-z\d+.-]*:\/\/|\/)[^\s<>"']+/gi, diagnosticUrl)
+            .replace(/\b((?:pair|(?:access_|refresh_)?token)\s*[:=]\s*)[^&\s#,"']+/gi, '$1[redacted]')
+        }
+
+        function summarize(value) {
+          if (!value) return 'Unknown startup error'
+          if (typeof value === 'string') return redact(value)
+          if (value.message) return redact(value.message)
+          try {
+            return redact(JSON.stringify(value))
+          } catch (_) {
+            return redact(String(value))
+          }
+        }
+
+        function renderPanel(titleText, bodyText, details) {
           if (window.__CC_HAHA_BOOTSTRAPPED__) return
           var root = document.getElementById('root')
           if (!root) return
-
-          var summary = summarize(reason)
-          var details = [
-            summary,
-            '',
-            'URL: ' + window.location.href,
-            'User Agent: ' + navigator.userAgent,
-            'Time: ' + new Date().toISOString()
-          ].join('\n')
-
           root.innerHTML = ''
+          var dark = document.documentElement.style.colorScheme === 'dark'
           var shell = document.createElement('main')
           shell.style.cssText = [
             'box-sizing:border-box',
             'min-height:100vh',
-            'padding:32px',
-            'background:#fff',
-            'color:#151515',
+            'padding:24px',
+            'color:' + (dark ? '#eee' : '#151515'),
             'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
             'display:flex',
             'align-items:center',
@@ -180,28 +289,75 @@
           ].join(';')
 
           var panel = document.createElement('section')
-          panel.style.cssText = 'width:min(760px,100%);border:1px solid #d8d8d8;border-radius:8px;padding:24px;background:#fff'
+          panel.style.cssText = 'box-sizing:border-box;width:min(760px,100%);border:1px solid ' + (dark ? '#555' : '#d8d8d8') + ';border-radius:12px;padding:24px'
+          panel.setAttribute('role', details ? 'alert' : 'status')
 
           var title = document.createElement('h1')
-          title.textContent = 'Desktop startup failed'
-          title.style.cssText = 'margin:0 0 8px;font-size:20px;line-height:1.3;font-weight:700;color:#111'
+          title.textContent = titleText
+          title.style.cssText = 'margin:0 0 8px;font-size:20px;line-height:1.3;font-weight:700'
 
           var body = document.createElement('p')
-          body.textContent = 'The app could not finish booting. Keep this text when reporting the issue.'
-          body.style.cssText = 'margin:0 0 16px;font-size:14px;line-height:1.6;color:#555'
-
-          var pre = document.createElement('pre')
-          pre.textContent = details
-          pre.style.cssText = 'box-sizing:border-box;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0;padding:14px;border-radius:6px;background:#f6f6f6;color:#222;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace'
-
+          body.textContent = bodyText
+          body.style.cssText = 'margin:0 0 16px;font-size:14px;line-height:1.6'
           panel.appendChild(title)
           panel.appendChild(body)
-          panel.appendChild(pre)
+          if (details) {
+            var retry = document.createElement('button')
+            retry.type = 'button'
+            retry.textContent = text[8]
+            retry.style.cssText = 'min-height:44px;padding:10px 20px;margin:0 0 16px;border:0;border-radius:8px;background:#2563eb;color:#fff;font:inherit;cursor:pointer'
+            retry.addEventListener('click', function () {
+              if (retry.disabled) return
+              retry.disabled = true
+              window.location.reload()
+            })
+            panel.appendChild(retry)
+            var disclosure = document.createElement('details')
+            disclosure.open = !remote
+            var label = document.createElement('summary')
+            label.textContent = text[9]
+            disclosure.appendChild(label)
+            var pre = document.createElement('pre')
+            pre.textContent = details
+            pre.style.cssText = 'box-sizing:border-box;max-height:360px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:12px 0 0;padding:14px;border-radius:6px;background:' + (dark ? '#292929' : '#f6f6f6') + ';font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace'
+            disclosure.appendChild(pre)
+            panel.appendChild(disclosure)
+          }
           shell.appendChild(panel)
           root.appendChild(shell)
         }
 
+        function renderLoading() {
+          if (!remote || failed) return
+          var title = phase === 'modules' ? text[3] : phase === 'render' ? text[4] : slow ? text[1] : text[0]
+          renderPanel(title, text[2])
+        }
+
+        function renderStartupError(reason, timeout) {
+          if (window.__CC_HAHA_BOOTSTRAPPED__) return
+          failed = true
+          var details = [
+            summarize(reason),
+            '',
+            'Phase: ' + phase,
+            'URL: ' + diagnosticUrl(window.location.href),
+            'User Agent: ' + navigator.userAgent,
+            'Time: ' + new Date().toISOString()
+          ].join('\n')
+          renderPanel(remote ? text[timeout ? 5 : 6] : 'Desktop startup failed',
+            remote ? text[7] : 'The app could not finish booting. Keep this text when reporting the issue.', details)
+        }
+
         window.__CC_HAHA_SHOW_STARTUP_ERROR__ = renderStartupError
+        window.__CC_HAHA_SET_STARTUP_PHASE__ = function (next) {
+          if (next !== 'entry' && next !== 'locale' && next !== 'modules' && next !== 'render') return
+          phase = next
+          renderLoading()
+        }
+        window.__CC_HAHA_BOOTSTRAP_COMPLETE__ = function () {
+          window.__CC_HAHA_BOOTSTRAPPED__ = true
+          timers.forEach(function (timer) { window.clearTimeout(timer) })
+        }
 
         window.addEventListener('error', function (event) {
           var target = event.target
@@ -219,14 +375,26 @@
           renderStartupError(event.reason || 'Unhandled startup promise rejection')
         })
 
-        window.setTimeout(function () {
-          renderStartupError('Desktop app did not finish bootstrapping within ' + bootDeadlineMs + 'ms. This usually means the WebView could not execute the app bundle or startup code stopped before React mounted.')
-        }, bootDeadlineMs)
+        if (remote) {
+          renderLoading()
+          timers.push(window.setTimeout(function () {
+            slow = true
+            renderLoading()
+          }, 8000))
+        }
+        timers.push(window.setTimeout(function () {
+          if (failed) return
+          renderStartupError('Desktop app did not finish bootstrapping within ' + bootDeadlineMs + 'ms. The app bundle may still be downloading or startup code stopped before React mounted.', true)
+        }, bootDeadlineMs))
       })()
     </script>
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Run after #root exists, without waiting for the deferred app module.
+      window.__CC_HAHA_SET_STARTUP_PHASE__('entry')
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

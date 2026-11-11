@@ -1,0 +1,13 @@
+{
+  "name": "cc-haha-remote-directory",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node smoke.mjs",
+    "test:self-hosted": "bun test ../../src/remote/directory/selfHosted.test.ts ../../src/remote/directory/selfHostedMain.test.ts && bun self-hosted-smoke.ts",
+    "start:self-hosted": "bun ../../src/remote/directory/selfHostedMain.ts",
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": { "wrangler": "4.152.0" }
+}

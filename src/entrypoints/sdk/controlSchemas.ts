@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod/v4'
+import { scheduledTaskMessageInputSchema } from '../../utils/scheduledTaskMessage.js'
 import { sessionMessageInputSchema } from '../../utils/sessionMessageInbox.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import {
@@ -173,6 +174,17 @@ export const SDKControlSetMaxThinkingTokensRequestSchema = lazySchema(() =>
     })
     .describe(
       'Sets the maximum number of thinking tokens for extended thinking.',
+    ),
+)
+
+export const SDKControlSetPromptSuggestionsRequestSchema = lazySchema(() =>
+  z
+    .object({
+      subtype: z.literal('set_prompt_suggestions'),
+      enabled: z.boolean(),
+    })
+    .describe(
+      'Turns next-prompt suggestions on or off for subsequent turns. Unlike the initialize option, it can be sent at any time.',
     ),
 )
 
@@ -644,8 +656,10 @@ export const SDKControlElicitationResponseSchema = lazySchema(() =>
 export const SDKControlRequestInnerSchema = lazySchema(() =>
   z.union([
     z.object({ subtype: z.literal('team_runtime_snapshot'), team_name: z.string().min(1), created_at: z.number() }),
+    z.object({ subtype: z.literal('team_runtime_ended'), team_name: z.string().min(1) }),
     z.object({ subtype: z.literal('team_plan_pause') }),
     sessionMessageInputSchema,
+    scheduledTaskMessageInputSchema,
     SDKControlInterruptRequestSchema(),
     SDKControlPermissionRequestSchema(),
     SDKControlInitializeRequestSchema(),
@@ -653,6 +667,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     SDKControlSetComputerUseApprovalTokenRequestSchema(),
     SDKControlSetModelRequestSchema(),
     SDKControlSetMaxThinkingTokensRequestSchema(),
+    SDKControlSetPromptSuggestionsRequestSchema(),
     SDKControlMcpStatusRequestSchema(),
     SDKControlGetContextUsageRequestSchema(),
     SDKControlGetSessionUsageRequestSchema(),

@@ -40,6 +40,12 @@ export function registerFilesystemAccessRoot(rootPath: string | null | undefined
   registeredRoots.add(canonicalizeFilesystemAccessPath(rootPath))
 }
 
+/** Only for an existing canonical directory already verified by directory I/O.
+ * Avoid repeating native realpath on the API event loop after that boundary. */
+export function registerCanonicalFilesystemAccessRoot(rootPath: string): void {
+  registeredRoots.add(path.resolve(normalizeDriveRootPathForPlatform(rootPath)))
+}
+
 /**
  * Register the directory of a file this session actually changed so it becomes
  * previewable, even when the user pointed the model at an absolute path outside

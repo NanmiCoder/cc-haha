@@ -8,9 +8,15 @@ import { openLocalFileWithSystem } from '../../lib/systemFileOpen'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { AssistantMessage } from './AssistantMessage'
+import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
+import { collectConversationImages } from '@/components/chat/conversationImages'
 
 const BASE = 'http://127.0.0.1:4321'
 const apiGetBlob = vi.hoisted(() => vi.fn())
+const objectUrlDescriptors = {
+  createObjectURL: Object.getOwnPropertyDescriptor(URL, 'createObjectURL'),
+  revokeObjectURL: Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL'),
+}
 
 vi.mock('../../api/client', async (original) => ({
   ...(await original<Record<string, unknown>>()),
@@ -58,6 +64,11 @@ afterEach(() => {
   act(() => withWorkDir(undefined))
   Reflect.deleteProperty(window, 'desktopHost')
   vi.restoreAllMocks()
+  for (const name of ['createObjectURL', 'revokeObjectURL'] as const) {
+    const descriptor = objectUrlDescriptors[name]
+    if (descriptor) Object.defineProperty(URL, name, descriptor)
+    else Reflect.deleteProperty(URL, name)
+  }
 })
 
 describe('AssistantMessage · Markdown pictures on disk', () => {
@@ -154,6 +165,35 @@ describe('AssistantMessage · Markdown pictures on disk', () => {
 
 describe('AssistantMessage · looking closer at a picture', () => {
   const TWO = '![first](/Users/me/one.png)\n\n![second](/repo/two.png)'
+
+  it('keeps authenticated Markdown images in their original conversation positions after blob fallback', async () => {
+    apiGetBlob.mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    let blobIndex = 0
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => `blob:markdown-${++blobIndex}`), configurable: true, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true, writable: true })
+    const getImages = () => collectConversationImages([
+      { id: 'a', type: 'assistant_text', content: TWO, timestamp: 1 },
+    ], { sessionId: 's1', baseUrl: BASE, workDir: '/repo', imageLabel: 'Image' })
+    const { container } = render(
+      <ConversationImageGalleryContext.Provider value={getImages}>
+        <AssistantMessage sessionId="s1" content={TWO} />
+      </ConversationImageGalleryContext.Provider>,
+    )
+    const images = proseImages(container)
+    images.forEach((image) => fireEvent.error(image))
+    await waitFor(() => expect(images.every((image) => image.src.startsWith('blob:markdown-'))).toBe(true))
+
+    fireEvent.click(images[0]!)
+
+    const dialog = screen.getByRole('dialog', { name: 'first' })
+    // The row's authenticated blob used to be appended as a third gallery image.
+    expect(within(dialog).getByText('1 / 2')).toBeInTheDocument()
+    expect(dialog.querySelector('img')).toHaveAttribute('src', filesystem('/Users/me/one.png'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('dialog', { name: 'second' }).querySelector('img'))
+      .toHaveAttribute('src', `${BASE}/preview-fs/s1//repo/two.png`)
+    expect(screen.getByText('2 / 2')).toBeInTheDocument()
+  })
 
   it('opens the picture clicked in a viewer, and says which of how many', () => {
     const { container } = renderMessage(TWO)

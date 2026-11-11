@@ -13,8 +13,8 @@ import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLa
 
 type ContentRouterProps = {
   /**
-   * What shows when no tab is active. The desktop shows the new-session page;
-   * the phone shows its session list with the new-task composer under it.
+   * Optional custom home. Desktop and mobile both use the retained full-page
+   * new-chat composer by default.
    */
   homePage?: ReactNode
 }
@@ -50,10 +50,8 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
   }, [activeTabId, activeTabType, tabs])
 
   const draftVisible = !activeTabId || !activeTabType
-  // The retained draft is the desktop's new-session page. A shell with a home
-  // of its own (the phone's session list, the tablet's new-task page) starts
-  // tasks its own way, and a desktop draft left over from a wider window must
-  // not cover that home.
+  // A custom home owns its own draft behavior. The shared desktop/mobile
+  // composer otherwise stays mounted when switching between chats.
   const retainsDraft = !homePage
   const draft = retainsDraft ? newSessionDraft : null
   useEffect(() => {

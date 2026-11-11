@@ -2,10 +2,12 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { providersApi } from '../../api/providers'
+import { modelsApi } from '../../api/models'
 import { ApiError } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { MAGPIE_BANNER_DISMISSED_KEY, useMagpieStore } from '../../stores/magpieStore'
 import { BUNDLED_PROVIDER_PRESETS } from '../../config/providerPresets'
 import type { SavedProvider } from '../../types/provider'
 import { ProviderSettings } from './ProviderSettings'
@@ -114,6 +116,47 @@ describe('official Agent SDK provider settings', () => {
     fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       presetId: 'custom', runtime: 'agent-sdk', baseUrl: 'https://api.anthropic.com', authStrategy: 'api_key', apiKey: 'fake-sdk-key',
+    })))
+  })
+})
+
+describe('DeepSeek preset defaults', () => {
+  const originalState = useProviderStore.getState()
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState(originalState)
+  })
+
+  it('fills and saves all five slots as Flash with 1M enabled', async () => {
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'new-deepseek', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'DeepSeek' }))
+    expect(dialog.getAllByDisplayValue('deepseek-flash')).toHaveLength(5)
+    const contextCheckboxes = dialog.getAllByRole('checkbox', { name: /1M/ })
+    expect(contextCheckboxes).toHaveLength(5)
+    for (const checkbox of contextCheckboxes) expect(checkbox).toBeChecked()
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-deepseek-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'deepseek',
+      models: {
+        main: 'deepseek-flash', fable: 'deepseek-flash', haiku: 'deepseek-flash',
+        sonnet: 'deepseek-flash', opus: 'deepseek-flash',
+      },
+      model1mSupport: { main: true, fable: true, haiku: true, sonnet: true, opus: true },
     })))
   })
 })
@@ -253,6 +296,24 @@ describe('active sponsor providers', () => {
       apiKey: 'fake-aruhub-key',
       models: { main: 'claude-opus-5-5', haiku: 'claude-sonnet-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' },
     })))
+  })
+
+  it('fetches models through the proxy mode chosen in the form, not the global one', async () => {
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      endpoint: 'https://modelflare.dev/v1/models',
+      models: [{ id: 'claude-opus-5-5', ownedBy: 'anthropic' }],
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Modelflare' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-modelflare-key' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Direct' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith({
+      baseUrl: 'https://modelflare.dev', apiKey: 'fake-modelflare-key', proxy: { mode: 'direct' },
+    }))
   })
 
   it('adds Modelflare from the second sponsor pill with badges, model discovery and Claude 5.5 defaults', async () => {
@@ -411,6 +472,7 @@ describe('built-in DeepSeek Account provider', () => {
     })
 
     render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('tab', { name: /Official sign-in/ }))
 
     const card = await screen.findByTestId('deepseek-account-provider')
     expect(within(card).getByText('DeepSeek Account')).toBeInTheDocument()
@@ -541,7 +603,9 @@ describe('provider request compatibility', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
     vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
-    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: null })
+    // The provider is the default: only the default's edits are written to
+    // cc-haha/settings.json, which these tests inspect.
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: provider.id })
     vi.spyOn(providersApi, 'getSettings').mockResolvedValue({ env: { CUSTOM_ENV: 'keep' }, futureSetting: true })
     vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
     vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({ provider: { ...provider, ...input } as SavedProvider }))
@@ -597,7 +661,7 @@ describe('provider request compatibility', () => {
     await waitFor(() => expect(providersApi.update).toHaveBeenCalledWith('compat-provider', expect.objectContaining({ requestCompatibility: null, baseUrl: provider.baseUrl })))
   })
   it('shows Responses capabilities without Chat-only token parameter controls', async () => {
-    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{ ...provider, apiFormat: 'openai_responses' }], activeId: null })
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{ ...provider, apiFormat: 'openai_responses' }], activeId: provider.id })
     const dialog = await open()
     fireEvent.click(dialog.getByRole('button', { name: 'Advanced compatibility' }))
     expect(dialog.queryByRole('combobox', { name: 'Output token field' })).not.toBeInTheDocument()
@@ -608,7 +672,7 @@ describe('provider request compatibility', () => {
     // not apply to a native Anthropic endpoint. For Anthropic the editor keeps
     // the budget visible and editable, hides the advanced controls, and strips
     // any stale compat options on save so they cannot leak into the provider.
-    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{ ...provider, apiFormat: 'anthropic' }], activeId: null })
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{ ...provider, apiFormat: 'anthropic' }], activeId: provider.id })
     const dialog = await open()
     const budget = dialog.getByRole('textbox', { name: 'Reply output budget' })
     expect(budget).toHaveValue('64000')
@@ -623,6 +687,175 @@ describe('provider request compatibility', () => {
     const settings = vi.mocked(providersApi.updateSettings).mock.calls.at(-1)?.[0]
     expect(settings).not.toHaveProperty('requestCompatibility')
     expect(settings).toMatchObject({ env: { CUSTOM_ENV: 'keep', CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '4096' } })
+  })
+})
+
+/**
+ * cc-haha/settings.json holds the default provider's runtime env, and every session
+ * on the default (Claude Official included) reads it. Saving any other provider
+ * must not rewrite it, or the default starts sending to that provider (#1806).
+ */
+describe('default provider settings ownership', () => {
+  const originalState = useProviderStore.getState()
+  const originalSettingsState = useSettingsStore.getState()
+
+  beforeEach(() => {
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState(originalState)
+    useSettingsStore.setState(originalSettingsState)
+  })
+
+  const settingsJsonOf = (dialog: ReturnType<typeof within>) =>
+    (dialog.getByRole('textbox', { name: 'Settings JSON' }) as HTMLTextAreaElement).value
+
+  it('adds a provider while Claude Official is the default without rewriting its settings', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({ skipWebFetchPreflight: true })
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'new-relay', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'DeepSeek' }))
+    // The preview is built: it shows the new provider's endpoint and model env.
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('ANTHROPIC_BASE_URL'))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-deepseek-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'deepseek' })))
+    expect(providersApi.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('saves a provider that is not the default without rewriting the default settings', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: 'saved-xuanshuapi' })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      env: { ANTHROPIC_BASE_URL: 'https://www.xuanshuapi.com', ANTHROPIC_MODEL: 'claude-sonnet-5' },
+    })
+    const update = vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+
+    render(<ProviderSettings />)
+    const card = await screen.findByTestId('provider-saved-fennoai')
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('https://api.fenno.ai'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith('saved-fennoai', expect.objectContaining({ baseUrl: 'https://api.fenno.ai' })))
+    expect(providersApi.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('says the preview applies once the provider is the default', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'DeepSeek' }))
+
+    expect(dialog.getByText(/once this provider is the default/)).toBeInTheDocument()
+    expect(dialog.queryByText(/will be written on save/)).not.toBeInTheDocument()
+  })
+
+  it('still writes the settings when the default provider itself is saved', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: 'saved-fennoai' })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({
+      model: 'grok-4.7', modelContext: '1m', futureSetting: true, env: { CUSTOM_ENV: 'keep' },
+    })
+    vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+
+    render(<ProviderSettings />)
+    const card = await screen.findByTestId('provider-saved-fennoai')
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('https://api.fenno.ai'))
+    expect(dialog.getByText(/will be written on save/)).toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      futureSetting: true,
+      env: expect.objectContaining({ CUSTOM_ENV: 'keep', ANTHROPIC_BASE_URL: 'https://api.fenno.ai' }),
+    }), 'saved-fennoai'))
+    // The editor never owns the session default model chosen in the model picker.
+    const saved = vi.mocked(providersApi.updateSettings).mock.calls.at(-1)?.[0]
+    expect(saved).not.toHaveProperty('model')
+    expect(saved).not.toHaveProperty('modelContext')
+  })
+
+  it.each([null, 'saved-xuanshuapi'])('keeps the draft and refreshes the default after a settings ownership conflict (default=%s)', async (destination) => {
+    let serverActive: string | null = 'saved-fennoai'
+    vi.spyOn(providersApi, 'list').mockImplementation(async () => ({ providers: savedProviders, activeId: serverActive }))
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({ futureSetting: true, env: { CUSTOM_ENV: 'keep' } })
+    const update = vi.spyOn(providersApi, 'update').mockImplementation(async (id, input) => ({
+      provider: { ...savedProviders.find((saved) => saved.id === id)!, ...input } as SavedProvider,
+    }))
+    vi.mocked(providersApi.updateSettings).mockRejectedValue(new ApiError(409, {
+      error: 'PROVIDER_SETTINGS_OWNER_CHANGED', message: 'The default provider changed. Save again after reviewing it.',
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('CUSTOM_ENV'))
+    fireEvent.change(dialog.getByDisplayValue('FennoAI'), { target: { value: 'Unsaved draft name' } })
+    const draft = settingsJsonOf(dialog)
+    // A different client switches the server default without updating this store.
+    serverActive = destination
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(dialog.getByRole('alert')).toBeInTheDocument())
+    expect(providersApi.updateSettings).toHaveBeenCalledWith(expect.any(Object), 'saved-fennoai')
+    expect(update).not.toHaveBeenCalled()
+    expect(useProviderStore.getState().activeId).toBe(destination)
+    expect(dialog.getByDisplayValue('Unsaved draft name')).toBeInTheDocument()
+    expect(settingsJsonOf(dialog)).toBe(draft)
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('preserves the picker model and 1M context when the default provider is saved with an unchanged main model', async () => {
+    const provider = { ...savedProviders[1]!, models: { ...savedProviders[1]!.models, haiku: 'chosen-small' } }
+    let selection: { model: string; modelContext?: string } = { model: provider.models.main }
+    const setCurrent = vi.spyOn(modelsApi, 'setCurrent').mockImplementation(async (modelId) => {
+      selection = modelId === 'chosen-small:1m'
+        ? { model: 'chosen-small', modelContext: '1m' }
+        : { model: modelId }
+      return { ok: true, model: selection.model }
+    })
+    vi.spyOn(modelsApi, 'getCurrent').mockImplementation(async () => ({
+      model: { id: selection.model, name: selection.model, description: '', context: selection.modelContext ?? 'default' },
+    }))
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: provider.id })
+    vi.spyOn(providersApi, 'getSettings').mockImplementation(async () => ({ ...selection, futureSetting: true }))
+    vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({ provider: { ...provider, ...input } as SavedProvider }))
+    // This is the real settings-store action used by the picker, before editing.
+    await useSettingsStore.getState().setModel('chosen-small:1m')
+
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-fennoai')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    await waitFor(() => expect(settingsJsonOf(dialog)).toContain('futureSetting'))
+    fireEvent.change(dialog.getByDisplayValue('FennoAI'), { target: { value: 'Renamed provider' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(setCurrent).toHaveBeenCalledTimes(1)
+    expect(selection).toEqual({ model: 'chosen-small', modelContext: '1m' })
+    expect(useSettingsStore.getState().currentModel).toMatchObject({ id: 'chosen-small', context: '1m' })
   })
 })
 
@@ -775,4 +1008,295 @@ describe('OpenCode Go provider', () => {
     })))
   })
 
+})
+
+/**
+ * OpenRouter is a one-key aggregation gateway: the user pastes an sk-or- key and
+ * the preset supplies the endpoint, the credential header and the Claude 5.5
+ * defaults. Nothing here may require hand-entering an URL or a format.
+ */
+describe('OpenRouter provider', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('is added with an API key alone, prefilled with the direct endpoint and Claude 5.5 slots', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'saved-openrouter', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    // The root, not /api/v1 — the CLI appends /v1/messages itself.
+    expect(dialog.getByDisplayValue('https://openrouter.ai/api')).toBeInTheDocument()
+    // Main and Sonnet share the balanced default; Haiku and Opus stay distinct.
+    expect(dialog.getAllByDisplayValue('anthropic/claude-sonnet-5.5')).toHaveLength(2)
+    expect(dialog.getByDisplayValue('anthropic/claude-haiku-5.5')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('anthropic/claude-opus-5.5')).toBeInTheDocument()
+
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'sk-or-v1-fake' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      apiKey: 'sk-or-v1-fake',
+      models: {
+        main: 'anthropic/claude-sonnet-5.5',
+        haiku: 'anthropic/claude-haiku-5.5',
+        sonnet: 'anthropic/claude-sonnet-5.5',
+        opus: 'anthropic/claude-opus-5.5',
+      },
+    })))
+  })
+
+  it('links the key field to the OpenRouter key page', async () => {
+    const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    expect(open).toHaveBeenCalledWith('https://openrouter.ai/settings/keys')
+  })
+})
+
+describe('provider list tabs and search', () => {
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(useSettingsStore.getState(), 'setModel').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'getOfficialModels').mockResolvedValue({
+      models: { main: 'claude-fixture', haiku: 'claude-fixture', sonnet: 'claude-fixture', opus: 'claude-fixture' },
+    })
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    // A previous test's list must not decide which tab this one opens on.
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false, providerOrder: [],
+      presets: BUNDLED_PROVIDER_PRESETS,
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+  })
+
+  it('opens a fresh install on API Key with presets to start from', async () => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [], activeId: null })
+    render(<ProviderSettings />)
+
+    expect(await screen.findByRole('heading', { name: 'No API key providers yet' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /API Key/ })).toHaveAttribute('aria-selected', 'true')
+    // Claude Official is still the fallback default, so its tab carries the marker.
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveTextContent('(contains the default)')
+    expect(screen.getByRole('tab', { name: /API Key/ })).not.toHaveTextContent('(contains the default)')
+    // Four built-in cards are not worth searching.
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Kimi' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: 'Kimi' })).toHaveAttribute('aria-pressed', 'true')
+    expect(dialog.getByDisplayValue('Kimi')).toBeInTheDocument()
+  })
+
+  it('opens on Official sign-in when one was made the default, and stays there when the default changes', async () => {
+    let activeId: string | null = 'openai-official'
+    vi.mocked(providersApi.list).mockImplementation(async () => ({ providers: savedProviders, activeId }))
+    const activate = vi.spyOn(providersApi, 'activateOfficial').mockImplementation(async () => {
+      activeId = null
+      return { ok: true }
+    })
+    render(<ProviderSettings />)
+
+    const officialTab = await screen.findByRole('tab', { name: /Official sign-in/ })
+    await waitFor(() => expect(officialTab).toHaveAttribute('aria-selected', 'true'))
+    expect(officialTab).toHaveTextContent('(contains the default)')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+
+    fireEvent.click(within(screen.getByTestId('claude-official-provider')).getByRole('button', { name: /Claude Official/ }))
+    await waitFor(() => expect(activate).toHaveBeenCalled())
+    await waitFor(() => expect(within(screen.getByTestId('claude-official-provider')).getByText('Default')).toBeInTheDocument())
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('filters the open tab by model ID, highlights it, and points at matches in the other tab', async () => {
+    render(<ProviderSettings />)
+    const search = await screen.findByRole('searchbox', { name: 'Search providers' })
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Drag to reorder' })).toHaveLength(3))
+
+    fireEvent.change(search, { target: { value: 'DeepSeek' } })
+
+    const match = screen.getByTestId('provider-saved-qiniuai')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+    expect(within(match).getAllByText(/^deepseek$/i, { selector: 'mark' })).toHaveLength(2)
+    expect(screen.getByRole('tab', { name: /API Key/ })).toHaveTextContent(/API Key\s*1/)
+    // A filtered list is not an order to drag within.
+    expect(screen.queryByRole('button', { name: 'Drag to reorder' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /1 more in Official sign-in/ }))
+    expect(screen.getByTestId('deepseek-account-provider')).toBeInTheDocument()
+    expect(screen.queryByTestId('claude-official-provider')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(search, { key: 'Escape' })
+    expect(search).toHaveValue('')
+    expect(screen.getByTestId('claude-official-provider')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Drag to reorder' })).toHaveLength(4)
+  })
+
+  it('offers the other tab when the open one has no match', async () => {
+    render(<ProviderSettings />)
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search providers' }), { target: { value: 'grok' } })
+
+    expect(screen.getByRole('heading', { name: 'Nothing in API Key matches "grok"' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View 1 in Official sign-in' }))
+    expect(screen.getByTestId('grok-official-provider')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Official sign-in/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('says which hidden field matched, matches every word, and never searches the API key', async () => {
+    const hidden: SavedProvider = {
+      ...savedProviders[1]!,
+      id: 'saved-hidden',
+      name: 'Fixture Gateway',
+      notes: 'team billing account',
+      models: { main: 'main-fixture', haiku: 'haiku-only-fixture', sonnet: 'main-fixture', opus: 'main-fixture' },
+    }
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [...savedProviders, hidden], activeId: null })
+    render(<ProviderSettings />)
+    const search = await screen.findByRole('searchbox', { name: 'Search providers' })
+
+    fireEvent.change(search, { target: { value: 'haiku-only' } })
+    expect(screen.getByTestId('provider-saved-hidden')).toHaveTextContent('Matched Haiku Model · haiku-only-fixture')
+
+    fireEvent.change(search, { target: { value: 'gateway billing' } })
+    expect(screen.getByTestId('provider-saved-hidden')).toHaveTextContent('Matched Notes · team billing account')
+    expect(screen.queryByTestId('provider-saved-fennoai')).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'gateway kimi' } })
+    expect(screen.queryByTestId('provider-saved-hidden')).not.toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'fake-saved-api-key' } })
+    expect(screen.getByRole('heading', { name: 'Nothing in API Key matches "fake-saved-api-key"' })).toBeInTheDocument()
+    expect(screen.getByText('Search by name, provider, endpoint or model ID')).toBeInTheDocument()
+  })
+})
+
+describe('Magpie on the provider list', () => {
+  const running = {
+    status: { installed: true, running: true, baseUrl: 'http://127.0.0.1:3425' },
+    models: [
+      { id: 'kimi/kimi-k3', runtimeId: 'kimi/kimi-k3', displayName: 'Kimi K3', provider: 'kimi', isGroup: false, contextWindow: 262_144, reasoningEfforts: [] },
+      { id: 'ollama/qwen3.6:27b', runtimeId: 'ollama/qwen3.6:27b', displayName: 'Qwen3.6 27B', provider: 'ollama', isGroup: false, reasoningEfforts: [] },
+    ],
+  }
+  const magpieProvider: SavedProvider = {
+    id: 'magpie-1', presetId: 'magpie', name: 'Magpie', apiKey: '', baseUrl: 'http://127.0.0.1:3425', apiFormat: 'anthropic',
+    models: { main: 'kimi/kimi-k3', haiku: 'ollama/qwen3.6:27b', sonnet: 'kimi/kimi-k3', opus: 'kimi/kimi-k3' },
+  }
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false, providerOrder: [],
+      presets: BUNDLED_PROVIDER_PRESETS,
+    })
+    useMagpieStore.setState({ state: null, loading: false, bannerDismissed: false })
+    localStorage.removeItem(MAGPIE_BANNER_DISMISSED_KEY)
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+    localStorage.removeItem(MAGPIE_BANNER_DISMISSED_KEY)
+  })
+
+  it('offers Magpie at the top of API Key while it runs unconnected, and × hides it for good', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    const banner = await screen.findByTestId('magpie-connect-banner')
+    expect(banner).toHaveTextContent('Magpie is running on this computer')
+    expect(banner).toHaveTextContent('2 models, no key needed')
+    fireEvent.click(within(banner).getByRole('button', { name: 'Connect' }))
+    expect(await screen.findByRole('dialog', { name: 'Connect Magpie' })).toBeInTheDocument()
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+
+    fireEvent.click(within(screen.getByTestId('magpie-connect-banner')).getByRole('button', { name: "Don't show again" }))
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+    expect(localStorage.getItem(MAGPIE_BANNER_DISMISSED_KEY)).toBe('1')
+  })
+
+  it('stays quiet while Magpie is not running', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    const check = vi.spyOn(providersApi, 'magpie').mockResolvedValue({ ...running, status: { ...running.status, running: false }, models: null })
+    render(<ProviderSettings />)
+
+    await waitFor(() => expect(check).toHaveBeenCalled())
+    await screen.findByTestId('provider-saved-fennoai')
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+  })
+
+  it('shows a connected Magpie as a local gateway with its state, and edits it in its own dialog', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [magpieProvider], activeId: 'magpie-1' })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('provider-magpie-1')
+    await waitFor(() => expect(card).toHaveTextContent('Running, 2 models available'))
+    expect(card).toHaveTextContent('Local gateway')
+    // The connect bar is for an unconnected Magpie only.
+    expect(screen.queryByTestId('magpie-connect-banner')).not.toBeInTheDocument()
+    expect(within(card).getByText('Background tasks').parentElement).toHaveTextContent('ollama/qwen3.6:27b')
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    expect(await screen.findByRole('dialog', { name: 'Edit Magpie' })).toBeInTheDocument()
+  })
+
+  it('tells a stopped Magpie apart and offers to open it', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [magpieProvider], activeId: 'magpie-1' })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue({ ...running, status: { ...running.status, running: false }, models: null })
+    const open = vi.spyOn(providersApi, 'openMagpie').mockResolvedValue({ ok: true })
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('provider-magpie-1')
+    await waitFor(() => expect(card).toHaveTextContent('Not running'))
+    fireEvent.click(within(card).getByRole('button', { name: 'Open Magpie' }))
+    await waitFor(() => expect(open).toHaveBeenCalled())
+  })
+
+  it('hands the add dialog\'s Magpie preset over to the connect dialog', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: savedProviders, activeId: null })
+    vi.spyOn(providersApi, 'magpie').mockResolvedValue(running)
+    render(<ProviderSettings />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Magpie' }))
+    expect(await screen.findByRole('dialog', { name: 'Connect Magpie' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Add Model' })).not.toBeInTheDocument()
+  })
 })

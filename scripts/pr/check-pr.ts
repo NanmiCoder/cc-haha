@@ -58,6 +58,10 @@ if (result.checks.desktop) {
   await run(['bun', 'run', 'check:desktop'])
 }
 
+if (result.checks.mobile) {
+  await run(['bun', 'run', 'check:mobile'])
+}
+
 if (result.checks.server) {
   await run(['bun', 'run', 'check:server'])
 }
@@ -76,6 +80,14 @@ if (result.checks.adapters) {
 
 if (result.checks.desktopNative) {
   await run(['bun', 'run', 'check:native'])
+}
+
+if (result.checks.mobileAndroid) {
+  await run(['bun', 'run', 'check:android'])
+}
+
+if (result.checks.remoteDirectory) {
+  await run(['bun', 'run', 'check:remote-directory'])
 }
 
 if (result.checks.persistence) {

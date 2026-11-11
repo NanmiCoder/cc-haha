@@ -33,6 +33,9 @@ function commandList(result: ReturnType<typeof evaluateChangePolicy>) {
   if (result.checks.desktop) {
     commands.push('bun run check:desktop')
   }
+  if (result.checks.mobile) {
+    commands.push('bun run check:mobile')
+  }
   if (result.checks.server) {
     commands.push('bun run check:server')
   }
@@ -53,6 +56,12 @@ function commandList(result: ReturnType<typeof evaluateChangePolicy>) {
   }
   if (result.checks.desktopNative) {
     commands.push('bun run check:native')
+  }
+  if (result.checks.mobileAndroid) {
+    commands.push('bun run check:android')
+  }
+  if (result.checks.remoteDirectory) {
+    commands.push('bun run check:remote-directory')
   }
   if (result.checks.persistence) {
     commands.push('bun run check:persistence-upgrade')
@@ -200,9 +209,10 @@ if (dependency.degraded) {
       const example = dependency.dependents.find((file) => (
         check === 'desktop' ? file.startsWith('desktop/src/')
           : check === 'desktopNative' ? file.startsWith('desktop/electron/') || file.startsWith('desktop/scripts/')
-            : check === 'adapters' ? file.startsWith('adapters/')
-              : check === 'server' ? file.startsWith('src/')
-                : true
+            : check === 'mobile' ? file.startsWith('mobile/')
+              : check === 'adapters' ? file.startsWith('adapters/')
+                : check === 'server' ? file.startsWith('src/')
+                  : true
       ))
       console.log(`- Selected \`${check}\` because a changed file is imported by \`${example ?? dependency.dependents[0]}\`.`)
     }

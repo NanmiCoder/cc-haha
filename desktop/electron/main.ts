@@ -1,7 +1,11 @@
-import { PublicAccessManager } from './services/publicAccess'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
+import { LoginStartupService } from './services/loginStartup'
+import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
+import { configureP2PSessionPermissions, P2P_PARTITION, p2pEndpointUrl, p2pHostWanted, P2PTerminator } from './services/p2pTerminator'
+import type { DesktopPublicAccessConfiguration, DesktopPublicAccessStatus } from '../src/lib/desktopHost/types'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
   isElectronIpcChannel,
@@ -71,7 +75,11 @@ import {
 } from './services/nativeAppearance'
 import { createRendererUrlMatcher, installMicrophonePermissions } from './services/microphonePermissions'
 import { resolveRendererEntry } from './services/rendererEntry'
-import { installRendererLifecycle } from './services/rendererLifecycle'
+import { installRendererLifecycle, showRendererRecoveryFailure } from './services/rendererLifecycle'
+import type { IdlePowerSettings } from '../src/lib/idlePower'
+import { IdlePowerService, readIdlePowerActivity } from './services/idlePower'
+import { createIdlePowerHost, installIdlePowerLifecycle } from './services/idlePowerHost'
+import { installPreventSleepLifecycle, PreventSleepService, readPreventSleepActivity } from './services/preventSleep'
 import { writeWindowSmokeSnapshot } from './services/windowSmoke'
 import { loadAndRevealMainWindow } from './services/windowStartup'
 import {
@@ -114,6 +122,9 @@ let serverRuntime: ElectronServerRuntime | null = null
 let dataMigration: DataMigration | null = null
 const hostOperations = new Set<Promise<unknown>>()
 let publicAccessManager: PublicAccessManager | null = null
+/** The WebRTC endpoint phones upgrade to; runs only while remote access is wanted (see p2pHostWanted). */
+let p2pTerminator: P2PTerminator | null = null
+let p2pSessionConfigured = false
 let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
 let previewService: ElectronPreviewService | null = null
@@ -124,6 +135,39 @@ let isQuitting = false
 let quitCleanupStarted = false
 let quitCleanupFinished = false
 let trayController: TrayController | null = null
+let idlePowerRendererGeneration = 0
+let idlePowerService: IdlePowerService | null = null
+let idlePowerInitialization: Promise<IdlePowerService> | null = null
+async function getIdlePowerService(): Promise<IdlePowerService> {
+  const rendererGeneration = idlePowerRendererGeneration
+  idlePowerInitialization ??= createIdlePowerHost({
+    app, blocker: powerSaveBlocker, monitor: powerMonitor, screen, NotificationClass: Notification,
+    locale: () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
+    readActivity: signal => {
+      if (isQuitting || dataMigration?.running || areStorageWritesFrozen()) throw new Error('Desktop is unavailable')
+      return readIdlePowerActivity(resolveMainRendererServerAccess(), signal)
+    },
+    onChange: state => {
+      const window = mainWindow
+      if (isQuitting || !window || window.isDestroyed()) return
+      const contents = window.webContents
+      // WebContents is destroyed before its owning window during shutdown.
+      // stop() still emits so live renderers can clear a cancelled countdown.
+      if (!contents.isDestroyed()) contents.send(ELECTRON_EVENT_CHANNELS.powerIdleActionState, state)
+    },
+  }).then(service => { idlePowerService = service; return service }).catch(error => { idlePowerInitialization = null; throw error })
+  const service = await idlePowerInitialization
+  if (isQuitting) { service.dispose(); throw new Error('Application is quitting') }
+  if (rendererGeneration !== idlePowerRendererGeneration) { service.stop(); throw new Error('Desktop window changed') }
+  service.start()
+  return service
+}
+const preventSleepService = new PreventSleepService({
+  blocker: powerSaveBlocker,
+  readActivity: signal => readPreventSleepActivity(resolveMainRendererServerAccess(), signal),
+  onError: () => console.warn('[desktop] failed to refresh prevent-sleep activity'),
+  beforeIdleRelease: () => idlePowerService?.prepareIdleHandoff(),
+})
 
 // Must run before anything logs: a Finder/Dock launch inherits unreadable
 // stdio, and an unguarded write failure there surfaces as a crash dialog.
@@ -149,6 +193,10 @@ function previewPreloadPath() {
 
 function petPreloadPath() {
   return path.join(appRoot(), 'electron-dist', 'pet-preload.cjs')
+}
+
+function p2pHostScriptPath() {
+  return path.join(appRoot(), 'electron-dist', 'p2p-host.js')
 }
 
 function previewAgentPath() {
@@ -220,7 +268,10 @@ async function loadRendererEntry(
 function getServerRuntime() {
   serverRuntime ??= new ElectronServerRuntime({
     onServerUnavailable: () => { void publicAccessManager?.serverUnavailable() },
-    onServerReady: () => { void publicAccessManager?.serverChanged() },
+    onServerReady: () => {
+      void publicAccessManager?.serverChanged()
+      void p2pTerminator?.refresh()
+    },
     desktopRoot: unpackedRoot(),
     appRoot: appRoot(),
     h5DistDir: path.join(unpackedRoot(), 'dist'),
@@ -238,6 +289,7 @@ function getDataMigration() {
       if (mainWindow && !mainWindow.isDestroyed()) saveWindowState(app, mainWindow)
       petWindowController?.dispose()
       petWindowController = null
+      await p2pTerminator?.dispose()
       await publicAccessManager?.dispose()
       publicAccessManager = null
       setStorageWritesFrozen(true)
@@ -246,7 +298,7 @@ function getDataMigration() {
     async resume() {
       setStorageWritesFrozen(false)
       await getServerRuntime().resumeAfterMigration()
-      await getPublicAccessManager().restore().catch(() => {})
+      void getPublicAccessManager().restore().catch(() => {})
     },
     restart() {
       isQuitting = true
@@ -262,10 +314,40 @@ function getDataMigration() {
   return dataMigration
 }
 
+function getP2PTerminator() {
+  p2pTerminator ??= new P2PTerminator({
+    createWindow: options => {
+      if (!p2pSessionConfigured) {
+        configureP2PSessionPermissions(session.fromPartition(P2P_PARTITION))
+        p2pSessionConfigured = true
+      }
+      return new BrowserWindow(options)
+    },
+    hostScript: () => readFileSync(p2pHostScriptPath(), 'utf8'),
+    endpoint: () => {
+      const runtime = getServerRuntime()
+      const serverUrl = runtime.getActiveServerUrl()
+      // The hidden window gets only its own endpoint capability, never the local API token.
+      return serverUrl ? p2pEndpointUrl(serverUrl, runtime.getP2PEndpointToken()) : null
+    },
+  })
+  return p2pTerminator
+}
+
+/** What the settings page reads: the connection, plus the direct-connection host's own state. */
+function publicAccessStatus(status: DesktopPublicAccessStatus): DesktopPublicAccessStatus {
+  return { ...status, p2pState: p2pTerminator?.state ?? 'off' }
+}
+
+const loginStartup = new LoginStartupService(app)
+
 function getPublicAccessManager() {
   if (publicAccessManager) return publicAccessManager
   let queue: Promise<unknown> = Promise.resolve()
   publicAccessManager = new PublicAccessManager({
+    desktopRoot: unpackedRoot(),
+    onState: status => { void getP2PTerminator().update(p2pHostWanted(status)) },
+    powerSaveBlocker,
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -280,8 +362,7 @@ function getPublicAccessManager() {
             body: body === undefined ? undefined : JSON.stringify(body),
             signal: AbortSignal.timeout(10_000),
           })
-          if (!response.ok) throw new Error('Public access configuration failed')
-          return await response.json() as T
+          return await readPublicAccessControlResponse<T>(response)
         })
         queue = operation
         return operation
@@ -478,6 +559,9 @@ function registerHandler<T>(
       throw new Error(`Invalid Electron IPC payload for ${channel}`)
     }
     const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    if (channel.startsWith('desktop:power:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame || isQuitting)) {
+      throw new Error('Power settings require the main desktop window')
+    }
     const migrationControl = channel.startsWith('desktop:app-mode:migration:')
     if (migrationControl && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Data migration requires the main desktop window')
@@ -485,7 +569,7 @@ function registerHandler<T>(
     if ((dataMigration?.running || areStorageWritesFrozen()) && !migrationControl && channel !== ELECTRON_IPC_CHANNELS.shellOpenPath) {
       throw new Error('Data migration is in progress')
     }
-    if (channel.startsWith('desktop:public-access:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
+    if ((channel.startsWith('desktop:public-access:') || channel === ELECTRON_IPC_CHANNELS.appGetLoginStartup || channel === ELECTRON_IPC_CHANNELS.appSetLoginStartup) && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Public access management requires the main desktop window')
     }
     if (
@@ -550,13 +634,26 @@ function registerIpcHandlers() {
     if (getWorkspaceBrowserService().handleMessageFromView(event.sender, raw)) return
     void getPreviewService().sendMessageToRenderer(event.sender, raw, mainWindow?.webContents)
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => getPublicAccessManager().getStatus())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, (_event, payload) => getPublicAccessManager().saveCredential(payload as string))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential, () => getPublicAccessManager().deleteCredential())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, (_event, payload) => getPublicAccessManager().start(payload as number))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, () => getPublicAccessManager().stop())
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => getPublicAccessManager().setAutoStart(payload as boolean))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => publicAccessStatus(getPublicAccessManager().getStatus()))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessConfigure, async (_event, payload) => publicAccessStatus(await getPublicAccessManager().configure(payload as DesktopPublicAccessConfiguration)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, async (_event, payload) => publicAccessStatus(await getPublicAccessManager().start(payload as number)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, async () => publicAccessStatus(await getPublicAccessManager().stop()))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => publicAccessStatus(getPublicAccessManager().setAutoStart(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, (_event, payload) => publicAccessStatus(getPublicAccessManager().setP2PEnabled(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetKeepAwake, (_event, payload) => publicAccessStatus(getPublicAccessManager().setKeepAwake(payload as boolean)))
+  registerHandler(ELECTRON_IPC_CHANNELS.appGetLoginStartup, () => loginStartup.get())
+  registerHandler(ELECTRON_IPC_CHANNELS.appSetLoginStartup, (_event, payload) => loginStartup.set(payload as boolean))
   registerHandler(ELECTRON_IPC_CHANNELS.appGetVersion, () => app.getVersion())
+  registerHandler(ELECTRON_IPC_CHANNELS.powerGetIdleActionState, async () => (await getIdlePowerService()).getState())
+  registerHandler(ELECTRON_IPC_CHANNELS.powerConfigureIdleAction, async (_event, payload) => (await getIdlePowerService()).configure(payload as IdlePowerSettings))
+  registerHandler(ELECTRON_IPC_CHANNELS.powerCancelIdleAction, async () => { (await getIdlePowerService()).cancel() })
+  registerHandler(ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, (event, payload) => {
+    if (currentWindow(event) !== mainWindow || event.senderFrame !== event.sender.mainFrame) {
+      throw new Error('Prevent-sleep settings require the main desktop window')
+    }
+    if (isQuitting) throw new Error('Application is quitting')
+    preventSleepService.setEnabled(payload as boolean)
+  })
   registerHandler(
     ELECTRON_IPC_CHANNELS.appGetLocalePreference,
     () => readLocalePreference(app),
@@ -740,7 +837,23 @@ function registerIpcHandlers() {
     mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.updateDownloadEvent, event)
   }))
   registerHandler(ELECTRON_IPC_CHANNELS.updateInstall, () => getUpdaterService().stageDownloadedUpdate())
-  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => { await publicAccessManager?.stop(); getServerRuntime().stopAll() })
+  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => {
+    await publicAccessManager?.stop()
+    // stopAll() hands the runtime's children off without tracking them, so the
+    // before-quit stopAllAndWait() finds nothing left to wait for and the app
+    // can quit, and quitAndInstall start the installer, while the sidecar and
+    // its CLI children are still shutting down. Wait here, before the renderer
+    // asks for the relaunch. If they do not exit, fail the install so the
+    // renderer keeps the update retryable and brings the runtime back.
+    try {
+      await getServerRuntime().stopAllAndWait()
+    } catch (error) {
+      throw new Error(
+        'The local runtime is still shutting down, so the update was not installed. Wait a moment and try again. ' +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      )
+    }
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.updateCancelInstall, () => getUpdaterService().cancelInstall())
   registerHandler(ELECTRON_IPC_CHANNELS.updateRelaunch, () => {
     if (getUpdaterService().hasStagedUpdate()) {
@@ -873,7 +986,7 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
     window.webContents.setZoomFactor(normalizeZoomFactor(payload))
@@ -946,6 +1059,8 @@ async function createMainWindow() {
     systemPreferences,
   })
   installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
+  installPreventSleepLifecycle(mainWindow.webContents, preventSleepService)
+  installIdlePowerLifecycle(mainWindow.webContents, () => idlePowerService, () => { idlePowerRendererGeneration += 1 })
   await installRendererContextMenu(
     mainWindow,
     () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
@@ -986,10 +1101,8 @@ async function createMainWindow() {
     },
     onRecoveryExhausted: detail => {
       console.error(`[desktop] Electron renderer recovery exhausted: ${detail}`)
-      dialog.showErrorBox(
-        '界面恢复失败 / Interface Recovery Failed',
-        `桌面界面意外退出或持续无响应，自动恢复未能解决问题。请重启应用；如果问题持续存在，请附上诊断日志反馈。\n\nThe desktop interface exited unexpectedly or remained unresponsive, and automatic recovery did not resolve it. Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
-      )
+      void showRendererRecoveryFailure({ window, isQuitting: () => isQuitting, dialog, app, detail })
+        .catch(error => recordRendererDiagnostic(`[recovery-dialog-failed] ${String(error)}`))
     },
   })
   writeWindowSmokeSnapshot(mainWindow, 'after-create')
@@ -1032,6 +1145,9 @@ app.whenReady().then(async () => {
     return
   }
   if (validation) process.env.CC_HAHA_MIGRATION_VALIDATION = '1'
+  powerMonitor.on('suspend', () => idlePowerService?.stop())
+  powerMonitor.on('resume', () => { if (!isQuitting) idlePowerService?.start() })
+  powerMonitor.on('lock-screen', () => { if (idlePowerService?.getState().countdown) idlePowerService.cancel('user-activity') })
   installSystemAppearanceWatch()
   screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
     if (changedMetrics.includes('scaleFactor') || changedMetrics.includes('bounds')) {
@@ -1065,7 +1181,6 @@ app.whenReady().then(async () => {
       }
     } else console.error('[desktop] failed to start Electron server sidecar', error)
   }
-  await getPublicAccessManager().restore().catch(() => {})
   await installApplicationMenu(app, () => mainWindow)
   if (shouldInstallTray(process.platform)) {
     trayController = await installTray({
@@ -1095,6 +1210,10 @@ app.whenReady().then(async () => {
     }
     void createMainWindow()
   })
+
+  // A saved tunnel can wait on cloudflared and public network verification.
+  // Finish local startup first so its settings and stop controls stay available.
+  if (!isQuitting) void getPublicAccessManager().restore().catch(() => {})
 })
 
 app.on('window-all-closed', () => {
@@ -1114,6 +1233,8 @@ app.on('before-quit', event => {
   if (quitCleanupStarted) return
   quitCleanupStarted = true
   const cleanupSteps = {
+    preventSleep: () => preventSleepService.dispose(),
+    idlePower: () => idlePowerService?.dispose(),
     window: () => { if (mainWindow) saveWindowState(app, mainWindow) },
     tray: () => { trayController?.dispose() },
     terminal: () => { terminalService?.killAll() },
@@ -1138,6 +1259,15 @@ app.on('before-quit', event => {
   // can strand its active turn across an immediate app restart.
   void (async () => {
     try {
+      // Phones get a closed direct connection instead of a dead one. The host
+      // bounds its own goodbye, and the tunnel shuts down meanwhile.
+      const directConnectionsClosed = (async () => {
+        try {
+          await p2pTerminator?.dispose()
+        } catch {
+          console.error('[desktop] direct connection cleanup failed during quit')
+        }
+      })()
       try {
         await publicAccessManager?.dispose()
       } catch {
@@ -1145,6 +1275,7 @@ app.on('before-quit', event => {
         // must never bypass the sidecar's graceful shutdown.
         console.error('[desktop] public access cleanup failed during quit')
       }
+      await directConnectionsClosed
       await getServerRuntime().stopAllAndWait()
     } catch (error) {
       console.error('[desktop] graceful server shutdown failed', error)

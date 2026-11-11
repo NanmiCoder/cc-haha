@@ -2,6 +2,7 @@ import { sessionService } from './sessionService.js'
 import { z } from 'zod/v4'
 import { teamPlanRuntimeSchema, type TeamPlanAction, type TeamPlanIdentity, type TeamPlanRecord } from '../../shared/teamPlan.js'
 import { approveTeamPlan, findTeamPlanForSession, mutateTeamPlan, readTeamPlan, replaceTeamPlan, TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
+import { resolvePresetProviderRuntime } from '../../utils/swarm/teamPlanPresetRuntime.js'
 
 const identitySchema = z.object({
   sessionId: z.string().min(1), planId: z.string().min(1), incarnationId: z.string().min(1), expectedRevision: z.number().int().positive(),
@@ -19,13 +20,21 @@ export type TeamPlanRuntimeAdapter = {
   isRunning?(planId: string): boolean | Promise<boolean>
   /** Re-own an approved team whose owner was lost; its members restart on demand. */
   rehydrate?(plan: TeamPlanRecord): Promise<boolean>
-  notifyLeader?(plan: TeamPlanRecord, kind: 'approved' | 'returned' | 'cancelled'): Promise<void>
+  /** End the plan's team for good; with `unlessStarted`, only one no member joined. */
+  end?(plan: TeamPlanRecord, options?: { unlessStarted?: boolean }): Promise<boolean>
+  /** Take back a launch whose owner was lost, if it had not started any member. */
+  reclaimUnstarted?(plan: TeamPlanRecord): Promise<boolean>
+  notifyLeader?(plan: TeamPlanRecord, kind: TeamPlanLeaderNotice): Promise<void>
 }
+/** What the lead is told: `removed` is a cancel that also removed a team no member joined. */
+export type TeamPlanLeaderNotice = 'approved' | 'returned' | 'cancelled' | 'removed' | 'ended'
 const defaultRuntime: TeamPlanRuntimeAdapter = {
   isRunning: async id => (await import('./teamPlanRuntime.js')).isTeamPlanRuntimeActive(id),
   rehydrate: async plan => (await import('./teamPlanRuntime.js')).rehydrateTeamPlanRuntimesForSession(plan.sessionId),
   validate: async plan => (await import('./teamPlanRuntime.js')).validateTeamPlanRuntime(plan),
   launch: async plan => (await import('./teamPlanRuntime.js')).launchTeamPlanRuntime(plan),
+  end: async (plan, options) => (await import('./teamPlanRuntime.js')).endTeamOfPlan(plan, options),
+  reclaimUnstarted: async plan => (await import('./teamPlanRuntime.js')).reclaimUnstartedLaunch(plan),
   notifyLeader: async (plan, kind) => { await (await import('./teamPlanRuntime.js')).notifyTeamPlanLeader(plan, kind) },
   stop: async id => { await (await import('./teamPlanRuntime.js')).stopTeamPlanRuntime(id) },
 }
@@ -36,10 +45,16 @@ export class TeamPlanService {
   /** Approvals whose plan may already read `launching` before its launch is registered. */
   private approving = new Set<string>()
   constructor(private runtime: TeamPlanRuntimeAdapter = defaultRuntime) {}
+  hasActiveOperations(): boolean { return this.approving.size > 0 || this.launches.size > 0 }
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
     // A server restart lost ownership of an unfinished launch. Never silently replay it.
     if (plan?.state === 'launching' && !this.launches.has(plan.planId) && !this.approving.has(plan.planId)) {
+      // One that had started no member failed like any launch: the user can
+      // approve it again. Otherwise work may have started.
+      if (await this.runtime.reclaimUnstarted?.(plan).catch(() => false)) {
+        return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'launch_failed', launch: { ...current.launch, status: 'failed', error: 'Team startup stopped before any member started, because the app or its server stopped. Review the plan to start it again.' } }))
+      }
       return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'Launch ownership was lost. Work may have started and will not be replayed.' } }))
     }
     if (plan?.state === 'running' && this.runtime.isRunning && !await this.runtime.isRunning(plan.planId)) {
@@ -66,7 +81,8 @@ export class TeamPlanService {
       const inheritedModel = member.runtime.providerId === current.leaderRuntime.providerId
         ? current.leaderRuntime.modelId : member.runtime.modelId
       const presetModel = snapshot.model && snapshot.model !== 'inherit' ? snapshot.model : inheritedModel
-      const suggestedRuntime = { providerId: member.runtime.providerId, modelId: presetModel, ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}) }
+      const suggestedRuntime = resolvePresetProviderRuntime(snapshot)
+        ?? { providerId: member.runtime.providerId, modelId: presetModel, ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}) }
       return { ...member, agentType, agentSnapshot: structuredClone(snapshot),
         ...(presetChanged ? { suggestedRuntime } : {}),
         ...(presetChanged && !edit.runtime && member.runtimeSource !== 'human' ? { runtime: suggestedRuntime } : {}),
@@ -119,7 +135,13 @@ export class TeamPlanService {
       this.approving.delete(current.planId)
     }
   }
-  async action(teamName: string, kind: 'return' | 'cancel' | 'retry', action: TeamPlanAction): Promise<TeamPlanRecord> {
+  /**
+   * `cancel` ends a team no member joined (a plan under review, or a launch that
+   * failed before any member started) together with its plan; `end` ends an
+   * interrupted team whose members did start. Either leaves nothing behind that
+   * would still read as a team in progress.
+   */
+  async action(teamName: string, kind: 'return' | 'cancel' | 'retry' | 'end', action: TeamPlanAction): Promise<TeamPlanRecord> {
     if (kind === 'retry') {
       const plan = await mutateTeamPlan(teamName, action, current => {
         if (current.state !== 'launch_failed') throw new TeamPlanError('Only failed launches can retry')
@@ -130,14 +152,25 @@ export class TeamPlanService {
     const plan = await mutateTeamPlan(teamName, action, current => {
       if (kind === 'return' && current.state !== 'draft' && current.state !== 'review_pending') throw new TeamPlanError('Only a pending plan can return to planning')
       if (kind === 'cancel' && current.state === 'running') throw new TeamPlanError('Use the running team stop control')
-      return { ...current, state: kind === 'cancel' ? 'cancelled' : 'draft', feedback: action.feedback }
+      if (kind === 'end' && current.state !== 'interrupted') throw new TeamPlanError('Only an interrupted team can be ended')
+      return { ...current, state: kind === 'return' ? 'draft' : 'cancelled', feedback: action.feedback }
     })
-    if (kind === 'cancel') await this.runtime.stop(plan.planId)
+    let notice: TeamPlanLeaderNotice = kind === 'return' ? 'returned' : 'cancelled'
+    if (kind === 'cancel') {
+      await this.runtime.stop(plan.planId)
+      if (await this.runtime.end?.(plan, { unlessStarted: true })) notice = 'removed'
+    }
+    if (kind === 'end') {
+      await this.runtime.end?.(plan)
+      notice = 'ended'
+    }
     try {
-      await this.runtime.notifyLeader?.(plan, kind === 'cancel' ? 'cancelled' : 'returned')
+      await this.runtime.notifyLeader?.(plan, notice)
     } catch (error) {
       // The control transition already committed. Preserve the delivery failure
-      // on the durable draft instead of inviting a duplicate control action.
+      // on the durable draft instead of inviting a duplicate control action; a
+      // removed team has no record left to keep it on.
+      if (notice === 'removed' || notice === 'ended') return plan
       return mutateTeamPlan(teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, controlDeliveryError: error instanceof Error ? error.message : String(error) }))
     }
     return plan

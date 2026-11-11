@@ -10,8 +10,8 @@ export type PublicAccessServerStatus = {
 }
 
 export const publicAccessApi = {
-  get: () => api.get<PublicAccessServerStatus>('/api/public-access'),
-  pairing: () => api.post<{ secret: string, expiresAt: number }>('/api/public-access/pairing'),
+  get: (signal?: AbortSignal) => api.get<PublicAccessServerStatus>('/api/public-access', { timeout: 3000, signal }),
+  pairing: () => api.post<{ secret: string, expiresAt: number, nativeBinding?: { version: 2, hostId: string, publicKey: string, directoryUrl: string } }>('/api/public-access/pairing'),
   approve: (id: string) => api.post('/api/public-access/approve', { id }),
   reject: (id: string) => api.post('/api/public-access/reject', { id }),
   revoke: (id: string) => api.post('/api/public-access/revoke', { id }),

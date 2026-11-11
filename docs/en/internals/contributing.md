@@ -24,6 +24,16 @@ cd desktop
 bun install
 ```
 
+Before your first desktop development run or `check:native`, run `bun run prepare:cloudflared` from `desktop/`. It downloads the pinned official connector, verifies SHA-256, and stages it in the Git-ignored local cache; distributed apps already include it. Native checks only validate and use that cache and do not download it. Cross-platform builds can select a target with `--target-triple`.
+
+Downloads show progress, allow up to 10 minutes per attempt, stop after 60 seconds without progress, and make at most 3 attempts for transient network failures. Build commands use the terminal's `HTTPS_PROXY` / `https_proxy`, not the desktop app's proxy settings. Set your HTTP proxy in the same terminal if needed, for example:
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 bun run prepare:cloudflared
+```
+
+Replace the example with your proxy address. If this network cannot download the file, download the matching version and platform asset from the official URL in the error, then import it with `CC_HAHA_CLOUDFLARED_ARCHIVE=/absolute/path/to/asset bun run prepare:cloudflared`. Offline imports still require the pinned SHA-256; other versions and unverified executables are rejected.
+
 If your change touches `adapters/`, or if you run `check:adapters` / `check:native`, install adapter dependencies:
 
 ```bash
@@ -105,7 +115,7 @@ artifacts/coverage/<timestamp>/coverage-report.json
 
 Include the commands you ran and the report summary in your PR description. `quality:pr` / `quality:verify` remain available for contributors who prefer explicit quality command names, but docs and AI prompts should prefer `bun run verify`.
 
-Coverage is reported on pull requests but never blocks a merge (a failed job is only a warning in `pr-quality-gate`). It still does four things: measures source-only coverage, enforces the baseline ratchet, reports target gaps against 75-80%+ maintained-area goals, and enforces changed-line coverage for new or modified executable production lines. The current baseline lives in `scripts/quality-gate/coverage-baseline.json`, and CI compares against the base branch baseline when available. New PRs must not lower coverage beyond the allowed window. Changes to `coverage-baseline.json` or `coverage-thresholds.json` require the maintainer-only `allow-coverage-baseline-change` label. Quarantine is reserved for maintainer baseline/release tracking and must never hide deterministic provider/chat contract tests; the normal PR gate does not depend on quarantine to pass.
+Coverage is reported on pull requests but never blocks a merge: `coverage-checks` reports as its own check and is not in `pr-quality-gate`'s `needs`, so the required status does not wait for its ~25 minutes. It still does four things: measures source-only coverage, enforces the baseline ratchet, reports target gaps against 75-80%+ maintained-area goals, and enforces changed-line coverage for new or modified executable production lines. The current baseline lives in `scripts/quality-gate/coverage-baseline.json`, and CI compares against the base branch baseline when available. New PRs must not lower coverage beyond the allowed window. Changes to `coverage-baseline.json` or `coverage-thresholds.json` require the maintainer-only `allow-coverage-baseline-change` label. Quarantine is reserved for maintainer baseline/release tracking and must never hide deterministic provider/chat contract tests; the normal PR gate does not depend on quarantine to pass.
 
 ## AI Coding Agent Fix Loop
 
@@ -192,7 +202,7 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 ## PR CI Merge Gate
 
-`.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events, and again after each merge to `main`, scoped to what that push changed (label-based exceptions are judged on the PR only and never re-block `main`). `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success.
+`.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events, and again after each merge to `main`, scoped to what that push changed (label-based exceptions are judged on the PR only and never re-block `main`). `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success. The two longest lanes, server and desktop, are split across runners with `--shard=<i>/<n>` purely to cut wall time: the shards together run the whole check (the first desktop shard also lints, the last also builds), and any failing shard fails the job. Local runs and the daily full sweep are not sharded.
 
 Branch protection on `main` requires the `pr-quality-gate` status check and applies to admins too: nobody can merge a red PR, so releases also go through a PR (see "Release steps"). A PR authored by a CODEOWNER needs no `allow-cli-core-change` label; an external contributor's CLI core change still needs the maintainer's label. The local hook only reminds; the PR gate is what blocks low-quality merges.
 
@@ -320,10 +330,22 @@ In-app updates are driven by `electron-updater`, with artifacts hosted on GitHub
 |---|---|---|
 | macOS arm64 / x64 | `dmg` for first install, `zip` for Squirrel.Mac updates | `latest-mac.yml` |
 | Windows x64 / ARM64 | NSIS `.exe` | `latest.yml` |
-| Linux x64 | `.AppImage` for updates, `.deb` for manual install | `latest-linux.yml` |
-| Linux arm64 | `.AppImage` for updates, `.deb` for manual install | `latest-linux-arm64.yml` |
+| Linux x64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux.yml` |
+| Linux arm64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux-arm64.yml` |
 
 The release workflow generates `latest*.yml` inside each platform matrix job, renames colliding metadata to `latest-<platform>.yml`, and finally lets `scripts/release-update-metadata.ts` merge them back into the standard filenames electron-updater expects. Do not change this so each matrix job publishes the GitHub Release directly — the metadata files would overwrite each other.
+
+### Artifact names
+
+File names are written for the people downloading them: `Claude-Code-Haha-<version>-macOS-Apple-Silicon.dmg` / `-macOS-Intel.dmg`, `-Windows-x64-Setup.exe` / `-Windows-arm64-Setup.exe`, and `-Linux-x64` / `-Linux-arm64` with `.AppImage`, `.deb` and `.rpm`. The Mac auto-update zips are `-macOS-arm64-update.zip` / `-macOS-x64-update.zip`. Default names live in the `artifactName` of `mac`, `dmg`, `nsis` and `linux` in `desktop/package.json`; the DMG chip names and the uniform Linux `x64` are overridden per row in the release matrix `builder_args`, because electron-builder spells `${arch}` per Linux format (`x86_64`, `amd64`, `aarch64`). Those overrides must stay in single quotes, or the shell expands `${version}` first.
+
+Renames have three hard constraints, each checked by `scripts/pr/release-workflow.test.ts` against electron-updater's selection logic:
+
+- `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and `latest-linux-arm64.yml` are hard-coded by installed clients and cannot change.
+- The Apple Silicon zip name must contain `arm64` and the Intel one must not; otherwise Apple Silicon machines get "updated" to the Intel build.
+- Both Windows installers share one `latest.yml`, and the updater picks by the `x64` / `arm64` in the name; without them, ARM devices install the x64 build.
+
+`.blockmap` files are still generated on the runner for package-smoke but no longer published: the app has disabled differential downloads since v0.4.7, and older clients fall back to a full download when a blockmap is missing. Releases also no longer attach `install-macos-unsigned.sh`, since release Mac builds are always signed and notarized.
 
 ### Signing secrets
 
@@ -339,14 +361,15 @@ APPLE_TEAM_ID
 
 `MACOS_CERTIFICATE` is the base64 content of a Developer ID Application `.p12`. The project does not ship a `.pkg`, so no Developer ID Installer certificate is needed.
 
-Windows signing is optional:
+Windows signing goes through SignPath and is off until approval lands: tag pushes, manual releases and manual drafts all produce unsigned Windows installers. Auto-update still works; users may just see a SmartScreen prompt. The switch is the `WINDOWS_SIGNING_ENABLED` repository variable:
 
-```text
-WINDOWS_CERTIFICATE
-WINDOWS_CERTIFICATE_PASSWORD
-```
+- Unset or anything but `true`: Windows is not signed, and the preflight only emits a notice.
+- `true`: the `SIGNPATH_*` variables and `SIGNPATH_API_TOKEN` are required, and a non-draft release with missing configuration is refused.
+- A manual `Release Desktop` run can override it with the `windows_signing` input: `auto` follows the variable, `unsigned` skips signing for that run, and `signed` forces it (failing if configuration is incomplete), so a draft can be trial-signed before the variable is turned on.
 
-Auto-update still works without Windows signing; users may just see a SmartScreen prompt.
+Before turning signing on, update the installer artifact configuration in SignPath to match `.github/signpath/windows-installer.xml` (`Claude-Code-Haha-*-Windows-*-Setup.exe`), then trial-sign a draft. As long as unsigned Windows releases remain possible, never add `publisherName` or `verifyUpdateCodeSignature` to `desktop/package.json`: clients built with either would reject every later unsigned update, with no way to recover in place.
+
+The application artifact configuration must also match `.github/signpath/windows-application.xml`: it includes the source-built `agent-desktop.exe` alongside the main application and sidecar. When signing is enabled, the workflow submits, restores, and verifies all three executables before building the installer. After adding the native runtime, synchronize the SignPath configuration and trial-sign a draft first; signing the installer does not sign its embedded runtime executables.
 
 ### Pre-release checks
 
@@ -364,6 +387,7 @@ Confirm `release-notes/v<version>.md` exists before running `bun run scripts/rel
 
 1. `bun run scripts/release.ts <version>` commits the version bump and release notes on a `release/v<version>` branch, without a tag. Push the branch, open the PR as the script prints, and merge it once PR Quality is green.
 2. After the merge, run `bun run scripts/release.ts --tag <version>`. The script checks that `origin/main` carries desktop version `<version>` and its release notes, tags the merged commit, and you push only the tag: `git push origin v<version>`.
+3. The tag push triggers `Release Desktop`, and that run builds and publishes the release, with the mobile delivery chained after it. No manual workflow run is needed. Only if that run fails before publishing, re-run it with `gh workflow run release-desktop.yml --ref v<version> -f draft=false`. Once a release is published, every run is refused at the preflight, so nothing can overwrite installers users are downloading.
 
 ### Verify one real update path
 
@@ -376,7 +400,7 @@ Every release should be verified by upgrading from the previous stable build at 
 5. After restart, confirm the version in About, and that providers, sessions, skills, agents, memories, custom pets, and a custom data directory all still work.
 6. Confirm historical attachment context, subagent details, and task state restore correctly; open a pet window and check the overlay and current-session navigation.
 
-Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml`, `.exe`, and `.exe.blockmap` are all in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` ships as a manual installer only.
+Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml` and both `-Setup.exe` installers are in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` and `.rpm` ship as manual installers only.
 
 ## PR Workflow
 

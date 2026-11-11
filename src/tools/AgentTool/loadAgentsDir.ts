@@ -83,6 +83,7 @@ const AgentJsonSchema = lazySchema(() =>
       .min(1, 'Model cannot be empty')
       .transform(m => (m.toLowerCase() === 'inherit' ? 'inherit' : m))
       .optional(),
+    provider: z.string().trim().min(1).optional(),
     effort: z.union([z.enum(EFFORT_LEVELS), z.number().int()]).optional(),
     permissionMode: z.enum(PERMISSION_MODES).optional(),
     mcpServers: z.array(AgentMcpServerSpecSchema()).optional(),
@@ -124,6 +125,8 @@ export type BaseAgentDefinition = {
   hooks?: HooksSettings // Session-scoped hooks registered when agent starts
   color?: AgentColorName
   model?: string
+  /** Saved cc-haha provider id that serves this Agent's model instead of the session's provider. */
+  provider?: string
   effort?: EffortValue
   permissionMode?: PermissionMode
   maxTurns?: number // Maximum number of agentic turns before stopping
@@ -526,6 +529,7 @@ export function parseAgentFromJson(
       },
       source,
       ...(parsed.model ? { model: parsed.model } : {}),
+      ...(parsed.provider ? { provider: parsed.provider } : {}),
       ...(parsed.effort !== undefined ? { effort: parsed.effort } : {}),
       ...(parsed.permissionMode
         ? { permissionMode: parsed.permissionMode }
@@ -617,6 +621,19 @@ export function parseAgentFromMarkdown(
       }
       const trimmed = modelRaw.trim()
       model = trimmed.toLowerCase() === 'inherit' ? 'inherit' : trimmed
+    }
+
+    // An unusable provider must not drop the Agent: running it then reports
+    // the missing provider instead of the Agent silently vanishing.
+    const providerRaw = frontmatter['provider']
+    const provider =
+      typeof providerRaw === 'string' && providerRaw.trim().length > 0
+        ? providerRaw.trim()
+        : undefined
+    if (providerRaw !== undefined && provider === undefined) {
+      logForDebugging(
+        `Agent file ${filePath} has invalid provider '${providerRaw}'. Expected a saved provider id.`,
+      )
     }
 
     // Parse background flag
@@ -789,6 +806,7 @@ export function parseAgentFromMarkdown(
         ? { color }
         : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { provider } : {}),
       ...(parsedEffort !== undefined ? { effort: parsedEffort } : {}),
       ...(isValidPermissionMode
         ? { permissionMode: permissionModeRaw as PermissionMode }

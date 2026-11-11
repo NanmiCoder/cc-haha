@@ -79,6 +79,34 @@ const DESKTOP_SLASH_COMMAND_NAMES: readonly string[] = [
 /** Commands the desktop reserves for itself; new workflows must not claim them. */
 const DESKTOP_RESERVED_SLASH_COMMAND_NAMES = new Set(DESKTOP_SLASH_COMMAND_NAMES.map(name => name.toLowerCase()))
 
+/**
+ * What a desktop team member's conversation leaves out of its slash menu. A
+ * member runs in its own CLI, and a command typed there goes to that CLI as is.
+ * The server refuses to clear a member or swap its model from inside its CLI
+ * (the composer's model picker changes the model through the team runtime).
+ * The rest are things this desktop does itself, against the chat on screen: a
+ * side chat (`btw`), a goal it tracks for that chat, a local panel, a Settings
+ * page — none of which would reach the member.
+ */
+const TEAM_MEMBER_EXCLUDED_SLASH_COMMAND_NAMES = new Set([
+  'clear', 'reset', 'new', 'model',
+  'btw', 'goal',
+  ...DESKTOP_SLASH_COMMAND_NAMES,
+].map(name => name.toLowerCase()))
+
+export function isTeamMemberSlashCommand(name: string): boolean {
+  const command = name.trim().toLowerCase().split(/\s+/)[0] ?? ''
+  return !TEAM_MEMBER_EXCLUDED_SLASH_COMMAND_NAMES.has(command)
+}
+
+/** Commands the server refuses to run in a member's CLI (see memberCommand.ts). */
+const TEAM_MEMBER_REFUSED_COMMAND = /^\/(clear|reset|new|model)(?:\s|$)/i
+
+/** Typed input the member's CLI would never get to run; the composer says why instead of sending it. */
+export function isRefusedTeamMemberCommand(text: string): boolean {
+  return TEAM_MEMBER_REFUSED_COMMAND.test(text.trim())
+}
+
 export type SlashCommandNameConflict = 'reserved' | 'existing'
 
 /** A saved workflow must not claim a slash command that the desktop already owns. */

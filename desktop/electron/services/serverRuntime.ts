@@ -84,6 +84,10 @@ type ServerStartState = {
   child: SidecarChild
   adapterChildren: SidecarChild[]
   childStopped: boolean
+  readonly port: number
+  readonly url: string
+  readonly logs: string[]
+  readonly generation: number
   readonly failure: Error | null
   failurePromise: Promise<never>
   fail: (error: Error) => void
@@ -96,16 +100,31 @@ type ActiveServer = {
   startedAt: number
 }
 
-function createServerStartState(child: SidecarChild): ServerStartState {
+type ServerStartInput = {
+  child: SidecarChild
+  port: number
+  url: string
+  logs: string[]
+  generation: number
+}
+
+function createServerStartState(input: ServerStartInput): ServerStartState {
   let failure: Error | null = null
   let rejectFailure!: (error: Error) => void
   const failurePromise = new Promise<never>((_resolve, reject) => {
     rejectFailure = reject
   })
+  // A retained start state outlives the call that raced it, so its rejection
+  // must never surface as an unhandled rejection (#1746).
+  void failurePromise.catch(() => undefined)
   return {
-    child,
+    child: input.child,
     adapterChildren: [],
     childStopped: false,
+    port: input.port,
+    url: input.url,
+    logs: input.logs,
+    generation: input.generation,
     get failure() {
       return failure
     },
@@ -130,10 +149,14 @@ export class ElectronServerRuntime {
   private readonly resolveSystemProxy?: (url: string) => Promise<string>
   private readonly localAccessToken = randomBytes(32).toString('base64url')
   private readonly petAccessToken = randomBytes(32).toString('base64url')
+  /** Authorizes only the hidden P2P host window's loopback endpoint, never the local API. */
+  private readonly p2pEndpointToken = randomBytes(32).toString('base64url')
   private sidecarEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
   private systemProxyBridge: SystemProxyBridgeLike | null = null
   private server: ActiveServer | null = null
   private adapters: SidecarChild[] = []
+  private adapterLabels = new WeakMap<SidecarChild, string>()
+  private adapterRestartTarget: 'wechat' | undefined
   private startupError: string | null = null
   private restartAfterExit = false
   private automaticRestartAttempts = 0
@@ -183,8 +206,22 @@ export class ElectronServerRuntime {
     if (this.server) return this.server.url
     if (this.startPromise) return await this.startServer()
     this.assertRestartCircuitAllowsStart()
-    if (this.startupError && !this.restartAfterExit) throw new Error(this.startupError)
+    // A retained start state means the sidecar is alive but not healthy yet
+    // (typically a local index rebuild). Retrying must resume probing it, not
+    // replay the previous timeout error or spawn a second process (#1746).
+    if (this.startupError && !this.restartAfterExit && !this.hasReusablePendingStart()) {
+      throw new Error(this.startupError)
+    }
     return await this.startServer()
+  }
+
+  /** Whether a previously spawned sidecar is still alive and worth re-probing. */
+  private hasReusablePendingStart(): boolean {
+    const pending = this.startingServer
+    return pending !== null &&
+      pending.generation === this.lifecycleGeneration &&
+      !pending.failure &&
+      !pending.childStopped
   }
 
   getLocalAccessToken(): string {
@@ -193,6 +230,10 @@ export class ElectronServerRuntime {
 
   getPetAccessToken(): string {
     return this.petAccessToken
+  }
+
+  getP2PEndpointToken(): string {
+    return this.p2pEndpointToken
   }
 
   getActiveServerUrl(): string | null {
@@ -281,10 +322,14 @@ export class ElectronServerRuntime {
     return result
   }
 
-  restartAdaptersSidecars(): Promise<void> {
+  restartAdaptersSidecars(target?: 'wechat'): Promise<void> {
     if (this.migrationActive || this.baseEnv.CC_HAHA_MIGRATION_VALIDATION === '1') return Promise.reject(new Error('Data migration is in progress'))
-    if (this.adapterRestartPromise) return this.adapterRestartPromise
-    const operation = this.restartAdaptersSidecarsOnce()
+    if (this.adapterRestartPromise) {
+      return this.adapterRestartTarget === target ? this.adapterRestartPromise
+        : this.adapterRestartPromise.then(() => this.restartAdaptersSidecars(target))
+    }
+    this.adapterRestartTarget = target
+    const operation = this.restartAdaptersSidecarsOnce(target)
     const tracked = operation.finally(() => {
       if (this.adapterRestartPromise === tracked) this.adapterRestartPromise = null
     })
@@ -292,12 +337,26 @@ export class ElectronServerRuntime {
     return tracked
   }
 
-  private async restartAdaptersSidecarsOnce(): Promise<void> {
+  private async restartAdaptersSidecarsOnce(target?: 'wechat'): Promise<void> {
     const serverUrl = await this.getServerUrl()
     const server = this.server
     if (!server || server.url !== serverUrl) return
-    this.stopAdapterChildren(server.adapterChildren)
-    await this.startAdaptersSidecars(serverUrl, undefined, server)
+    if (target === 'wechat') {
+      const response = await this.deps.fetch(`${serverUrl}/api/adapters/wechat/runtime/invalidate`, {
+        method: 'POST', headers: { Authorization: `Bearer ${this.localAccessToken}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) throw new Error('Unable to reset WeChat connection state')
+    }
+    const children = server.adapterChildren.filter(child => !target || this.adapterLabels.get(child) === target)
+    const exits = children.map(child => waitForSidecarExit(child, 5_000))
+    for (const child of children) this.deps.killSidecar(child)
+    const results = await Promise.all(exits)
+    const stopped = children.filter((_child, index) => results[index])
+    this.removeOwnedAdapters(server.adapterChildren, stopped)
+    this.removeOwnedAdapters(this.adapters, stopped)
+    if (results.some(exited => !exited)) throw new Error('Adapter process has not stopped; retry after it exits')
+    await this.startAdaptersSidecars(serverUrl, undefined, server, target)
   }
 
   stopAll(sync = false) {
@@ -357,6 +416,13 @@ export class ElectronServerRuntime {
   }
 
   private async startServerOnce(generation: number): Promise<string> {
+    // A sidecar from a previous, timed-out attempt is still alive. Probing it
+    // again is the whole recovery: the local index rebuild that made it slow is
+    // cumulative, so the same process finishes it instead of restarting from
+    // zero (#1746).
+    const pending = this.hasReusablePendingStart() ? this.startingServer : null
+    if (pending) return await this.awaitPendingServer(pending)
+
     // Prefer the configured fixed port, then the previous run's port, so
     // phone bookmarks / QR codes / reverse proxies survive restarts (#767).
     const port = await this.deps.reserveServerPort(
@@ -365,7 +431,6 @@ export class ElectronServerRuntime {
     )
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
-    let startState: ServerStartState | null = null
     const env = this.withServerAccessTokens(await this.resolveSidecarBaseEnv())
     this.assertCurrentGeneration(generation)
     const plan = createServerPlan({
@@ -378,15 +443,37 @@ export class ElectronServerRuntime {
         : env,
     })
 
+    let startState: ServerStartState
     try {
       const child = this.deps.spawnSidecar(plan)
-      startState = createServerStartState(child)
+      startState = createServerStartState({ child, port, url, logs, generation })
       this.startingServer = startState
       this.captureLogs(child, 'claude-server', logs, (code, signal) => {
         this.handleServerExit(child, code, signal, logs)
       }, error => {
         this.handleServerError(child, error, logs)
       })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.deps.appendHostDiagnostic(this.diagnosticsFile, `[claude-server] [startup-error] ${message}`)
+      this.startupError = formatStartupError(message, logs)
+      throw new Error(this.startupError)
+    }
+
+    return await this.awaitPendingServer(startState)
+  }
+
+  /**
+   * Wait for an already spawned sidecar to report healthy. A startup timeout is
+   * a retryable state, not a reason to kill the process: the child stays owned
+   * by `startingServer` so the next `getServerUrl()` re-probes it (#1746).
+   */
+  private async awaitPendingServer(startState: ServerStartState): Promise<string> {
+    const { child, port, url, logs, generation } = startState
+
+    try {
+      this.assertCurrentGeneration(generation)
+      this.startingServer = startState
       await Promise.race([
         this.deps.waitForServer(SERVER_CONTROL_HOST, port, SERVER_STARTUP_TIMEOUT_MS),
         startState.failurePromise,
@@ -409,26 +496,33 @@ export class ElectronServerRuntime {
         ])
       }
       if (startState.failure) throw startState.failure
+      this.startingServer = null
       this.onServerReady?.()
       return url
     } catch (error) {
-      if (startState) {
+      if (startState.failure) {
+        // The child reported its own failure; it is already gone.
+        if (this.startingServer === startState) this.startingServer = null
+        throw new Error(this.startupError ?? startState.failure.message)
+      }
+      if (this.server?.child === child) {
+        // Published, but adapter startup failed. Keep the previous contract of
+        // tearing down rather than advertising a URL without its adapters.
+        this.server = null
         this.stopAdaptersForStart(startState)
-        if (this.server?.child === startState.child) this.server = null
         if (!startState.childStopped) {
           startState.childStopped = true
-          this.deps.killSidecar(startState.child)
+          this.deps.killSidecar(child)
         }
-      }
-      if (startState?.failure) {
-        throw new Error(this.startupError ?? startState.failure.message)
+        if (this.startingServer === startState) this.startingServer = null
+      } else if (!this.hasReusablePendingStart()) {
+        if (this.startingServer === startState) this.startingServer = null
+        this.stopAdaptersForStart(startState)
       }
       const message = error instanceof Error ? error.message : String(error)
       this.deps.appendHostDiagnostic(this.diagnosticsFile, `[claude-server] [startup-error] ${message}`)
       this.startupError = formatStartupError(message, logs)
       throw new Error(this.startupError)
-    } finally {
-      if (this.startingServer === startState) this.startingServer = null
     }
   }
 
@@ -440,6 +534,7 @@ export class ElectronServerRuntime {
     serverUrl: string,
     startState?: ServerStartState,
     activeServer?: ActiveServer,
+    target?: 'wechat',
   ): Promise<void> {
     const baseEnv: NodeJS.ProcessEnv = { ...this.withLocalAccessToken(await this.resolveSidecarBaseEnv()), CC_HAHA_MIGRATION_CONTROL: '1' }
     const bridgeUrl = baseEnv.CC_HAHA_SYSTEM_PROXY_URL
@@ -464,6 +559,7 @@ export class ElectronServerRuntime {
       ['qq', '--qq'],
       ['slack', '--slack'],
     ] as const) {
+      if (target && label !== target) continue
       if (!isCurrentGeneration()) break
       try {
         const child = this.deps.spawnSidecar(createAdapterPlan({
@@ -479,10 +575,12 @@ export class ElectronServerRuntime {
           break
         }
         this.captureLogs(child, `claude-adapters:${label}`)
+        this.adapterLabels.set(child, label)
         this.adapters.push(child)
         ownedAdapters?.push(child)
       } catch (error) {
         console.error(`[desktop] failed to start ${label} adapter sidecar`, error)
+        if (target) throw error
       }
     }
   }
@@ -507,6 +605,7 @@ export class ElectronServerRuntime {
     return {
       ...this.withLocalAccessToken(env),
       CC_HAHA_PET_ACCESS_TOKEN: this.petAccessToken,
+      CC_HAHA_P2P_ENDPOINT_TOKEN: this.p2pEndpointToken,
     }
   }
 
@@ -608,7 +707,12 @@ export class ElectronServerRuntime {
     }
     this.restartAfterExit = true
     this.startupError = formatStartupError(message, logs)
-    if (starting) this.startingServer?.fail(new Error(message))
+    if (starting) {
+      // The process is gone; a later retry must spawn a fresh one instead of
+      // re-probing (and then killing) the dead child.
+      this.startingServer!.childStopped = true
+      this.startingServer!.fail(new Error(message))
+    }
     if (failedServer && !starting) {
       const now = this.deps.now()
       if (now - failedServer.startedAt >= AUTOMATIC_RESTART_STABLE_MS) {

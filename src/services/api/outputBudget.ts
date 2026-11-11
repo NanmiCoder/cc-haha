@@ -1,3 +1,5 @@
+import { readProviderEnv, readProviderEnvForModel } from '../../utils/model/providerEnvScope.js'
+
 export const OUTPUT_BUDGET_SOURCE_HEADER = 'x-cc-haha-output-budget-source'
 export type OutputBudgetSource = 'default' | 'explicit'
 
@@ -23,15 +25,24 @@ export function isLocalProtocolProxy(baseUrl: string | undefined): boolean {
 
 export function getOutputBudgetHeaders(
   params: object,
-  baseUrl = process.env.ANTHROPIC_BASE_URL,
+  baseUrl = readProviderEnv('ANTHROPIC_BASE_URL'),
 ): Record<string, string> {
   return isLocalProtocolProxy(baseUrl)
     ? { [OUTPUT_BUDGET_SOURCE_HEADER]: sources.get(params) ?? 'explicit' }
     : {}
 }
 
-export function getConfiguredProviderOutputBudget(env: NodeJS.ProcessEnv = process.env): number | undefined {
-  const raw = env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS
+export function getConfiguredProviderOutputBudget(
+  env?: NodeJS.ProcessEnv,
+  model?: string,
+): number | undefined {
+  // A model names its provider even before a request is built (compaction
+  // budgets), so a routed Agent's model reads its own provider's cap.
+  const raw = env
+    ? env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS
+    : model
+      ? readProviderEnvForModel(model, 'CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS')
+      : readProviderEnv('CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS')
   if (!raw || !/^\d+$/.test(raw)) return undefined
   const value = Number(raw)
   return Number.isSafeInteger(value) && value > 0 ? value : undefined

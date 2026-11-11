@@ -11,12 +11,15 @@ import { Profiler, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
+import { resolveAppRegion } from '../../test/appRegion'
 import type {
   DesktopUiPreferencesResponse,
   SidebarProjectPreferences,
 } from '../../api/desktopUiPreferences'
 
 const desktopUiPreferencesApiMock = vi.hoisted(() => ({
+  getProjectDirectories: vi.fn(),
+  updateProjectDirectories: vi.fn(),
   updateSidebarPreferences: vi.fn(),
   updateProjectDisplayName: vi.fn(),
 }))
@@ -70,6 +73,7 @@ vi.mock('../../i18n', () => ({
       'sidebar.scheduled': 'Scheduled',
       'sidebar.extensions': 'Extension Market',
       'sidebar.settings': 'Settings',
+      'settings.tab.h5Access': 'Phone connection',
       'sidebar.searchPlaceholder': 'Search sessions',
       'sidebar.noSessions': 'No sessions',
       'sidebar.noMatching': 'No matching sessions',
@@ -240,6 +244,7 @@ vi.mock('./ProjectEditorModal', () => ({
 }))
 
 import { Sidebar } from './Sidebar'
+import { browserHost } from '@/lib/desktopHost/browserHost'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -419,6 +424,8 @@ describe('Sidebar', () => {
   const createSession = vi.fn()
   const deleteSession = vi.fn()
   const deleteSessions = vi.fn()
+  const setSessionArchived = vi.fn()
+  const setSessionsArchived = vi.fn()
   const addToast = vi.fn()
 
   beforeEach(() => {
@@ -428,8 +435,15 @@ describe('Sidebar', () => {
     createSession.mockReset()
     deleteSession.mockReset()
     deleteSessions.mockReset()
+    setSessionArchived.mockReset()
+    setSessionsArchived.mockReset()
+    setSessionsArchived.mockResolvedValue({ successes: [], failures: [] })
     addToast.mockReset()
     desktopUiPreferencesApiMock.updateSidebarPreferences.mockReset()
+    desktopUiPreferencesApiMock.getProjectDirectories.mockReset()
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockReset()
+    desktopUiPreferencesApiMock.getProjectDirectories.mockImplementation(async (workDir: string) => ({ projectKey: workDir, mainDirectory: workDir, additionalDirectories: [] }))
+    desktopUiPreferencesApiMock.updateProjectDirectories.mockImplementation(async (workDir: string, additionalDirectories: string[]) => ({ ok: true, projectKey: workDir, mainDirectory: workDir, additionalDirectories }))
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockReset()
     desktopUiPreferencesApiMock.updateProjectDisplayName.mockImplementation((projectKey: string, displayName: string | null) => Promise.resolve({
       ok: true,
@@ -475,11 +489,12 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
 
     useTabStore.setState({ tabs: [], activeTabId: null })
-    useUIStore.setState({ newSessionDraft: null })
+    useUIStore.setState({ newSessionDraft: null, activeSettingsTab: 'providers', pendingSettingsTab: null })
     useSessionStore.setState({
       sessions: [],
       projectHistory: {},
       projectSessionTotals: {},
+      projectArchivedTotals: {},
       recentSessionIds: new Set(),
       recentProjectBoundaries: {},
       historicalSessionIds: new Set(),
@@ -493,6 +508,8 @@ describe('Sidebar', () => {
       createSession,
       deleteSession,
       deleteSessions,
+      setSessionArchived,
+      setSessionsArchived,
     })
     useChatStore.setState({
       connectToSession,
@@ -520,6 +537,161 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
   })
 
+  it('keeps an archive-only project as a quiet row and browses its archive in place of the list', async () => {
+    const archived = { ...makeSession('archived-1', 'Archived conversation', '/workspace/alpha', '2026-01-01'), archived: true }
+    useSessionStore.setState({ sessions: [archived], projectArchivedTotals: { '/workspace/alpha': 1 } })
+    sessionsApiMock.listProjectHistory.mockResolvedValue({ sessions: [archived], nextCursor: null })
+    render(<Sidebar />)
+
+    const group = screen.getByTestId('sidebar-project-group-workspace-alpha')
+    expect(within(group).queryByText('Archived conversation')).not.toBeInTheDocument()
+    expect(within(group).getByText('sidebar.projectAllArchived')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-project-count-workspace-alpha')).not.toBeInTheDocument()
+    expect(within(group).queryByRole('button', { name: /sidebar\.archivedSessions/ })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project actions for alpha' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archivedSessions' }))
+
+    const view = screen.getByTestId('sidebar-archive-view')
+    expect(await within(view).findByText('Archived conversation')).toBeInTheDocument()
+    expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ projectRoot: '/workspace/alpha', archived: true }), expect.anything(),
+    )
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-projects-header')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-project-group-workspace-alpha')).not.toBeInTheDocument()
+
+    fireEvent.click(within(view).getByRole('button', { name: 'sidebar.archiveBack' }))
+    expect(screen.queryByTestId('sidebar-archive-view')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-projects-header')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-project-group-workspace-alpha')).toBeInTheDocument()
+  })
+
+  it('offers no group selection for an archive-only project in batch mode', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/beta', '2026-01-02')],
+      projectArchivedTotals: { '/workspace/alpha': 2 },
+      isBatchMode: true,
+    })
+    render(<Sidebar />)
+
+    expect(screen.getByRole('button', { name: 'Select beta' })).toHaveTextContent('Select all')
+    expect(screen.queryByRole('button', { name: 'Select alpha' })).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('sidebar-project-group-workspace-alpha')).getByText('sidebar.projectAllArchived')).toBeInTheDocument()
+  })
+
+  it('does not put an archive entry inside a project that still has sessions', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/alpha', '2026-01-02')],
+      projectSessionTotals: { '/workspace/alpha': 1 },
+      projectArchivedTotals: { '/workspace/alpha': 5 },
+    })
+    render(<Sidebar />)
+
+    const group = screen.getByTestId('sidebar-project-group-workspace-alpha')
+    expect(within(group).getByText('Live session')).toBeInTheDocument()
+    expect(within(group).queryByText(/sidebar\.archivedSessions/)).not.toBeInTheDocument()
+    expect(within(group).queryByText('sidebar.projectAllArchived')).not.toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-project-count-workspace-alpha')).toHaveTextContent('1')
+  })
+
+  it('opens every archived session from the projects menu and leaves batch mode first', async () => {
+    useSessionStore.setState({
+      sessions: [makeSession('live-1', 'Live session', '/workspace/alpha', '2026-01-02')],
+      isBatchMode: true,
+    })
+    sessionsApiMock.list.mockResolvedValue({ sessions: [], total: 0 })
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project menu' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archivedSessions' }))
+
+    const view = screen.getByTestId('sidebar-archive-view')
+    expect(within(view).getByText('sidebar.archivedSessions')).toBeInTheDocument()
+    await waitFor(() => expect(sessionsApiMock.list).toHaveBeenCalledWith(
+      expect.objectContaining({ archived: true, offset: 0 }), expect.anything(),
+    ))
+    expect(useSessionStore.getState().isBatchMode).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Cancel batch mode' })).not.toBeInTheDocument()
+  })
+
+  it('archives from the session menu and offers one undo', async () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-target', 'Archive target', '/workspace/alpha', '2026-01-01')] })
+    setSessionArchived.mockResolvedValueOnce(undefined)
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Archive target'))
+    const menu = screen.getByRole('menu')
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Rename', 'sidebar.archiveSession', 'Delete',
+    ])
+    expect(within(menu).getByRole('separator')).toBeInTheDocument()
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'sidebar.archiveSession' }))
+
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'success',
+      message: 'sidebar.archivedToast',
+      action: expect.objectContaining({ label: 'common.undo' }),
+    })))
+    expect(setSessionArchived).toHaveBeenCalledWith('archive-target', true)
+    expect(setSessionsArchived).not.toHaveBeenCalled()
+
+    await act(async () => addToast.mock.calls[0]![0].action.onClick())
+    expect(setSessionsArchived).toHaveBeenCalledWith(['archive-target'], false)
+  })
+
+  it('leaves a rejected session usable and without an undo', async () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-target', 'Archive target', '/workspace/alpha', '2026-01-01')] })
+    setSessionArchived.mockRejectedValueOnce(new Error('fixture write failure'))
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Archive target'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sidebar.archiveSession' }))
+    await waitFor(() => expect(setSessionArchived).toHaveBeenCalledWith('archive-target', true))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'sidebar.archiveFailed' }))
+    expect(addToast).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Archive target')).toBeInTheDocument()
+    expect(disconnectSession).not.toHaveBeenCalled()
+    expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('disables archiving when the session is waiting for approval', () => {
+    useSessionStore.setState({ sessions: [makeSession('archive-waiting', 'Waiting session', '/workspace/alpha', '2026-01-01')] })
+    useChatStore.setState({ sessions: { 'archive-waiting': makeChatSessionState(openRequest) } })
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getByText('Waiting session'))
+    const archive = screen.getByRole('menuitem', { name: 'sidebar.archiveSession' })
+    expect(archive).toBeDisabled()
+    expect(archive).toHaveAttribute('title', 'sidebar.archiveBusy')
+  })
+
+  it('archives the batch selection, skips busy sessions, and undoes the archived ones together', async () => {
+    useSessionStore.setState({
+      sessions: [
+        makeSession('batch-1', 'First batch session', '/workspace/alpha', '2026-01-03'),
+        makeSession('batch-2', 'Second batch session', '/workspace/alpha', '2026-01-02'),
+        makeSession('batch-waiting', 'Waiting batch session', '/workspace/alpha', '2026-01-01'),
+      ],
+    })
+    useChatStore.setState({ sessions: { 'batch-waiting': makeChatSessionState(openRequest) } })
+    setSessionsArchived.mockResolvedValueOnce({ successes: ['batch-1', 'batch-2'], failures: [] })
+    render(<Sidebar />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Batch manage' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+    expect(screen.getByText('3 selected')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'sidebar.batchArchiveSelected' }))
+
+    await waitFor(() => expect(setSessionsArchived).toHaveBeenCalledWith(['batch-1', 'batch-2'], true))
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: 'sidebar.batchArchiveFailed' }))
+    const success = addToast.mock.calls.find(([toast]) => toast.type === 'success')![0]
+    expect(success).toMatchObject({ message: 'sidebar.batchArchiveSucceeded', action: { label: 'common.undo' } })
+    // A refused session stays selected, so batch mode stays open for it.
+    expect(useSessionStore.getState().isBatchMode).toBe(true)
+
+    await act(async () => success.action.onClick())
+    expect(setSessionsArchived).toHaveBeenLastCalledWith(['batch-1', 'batch-2'], false)
+  })
+
   it('opens an editable draft without allocating a session from the sidebar', async () => {
     createSession.mockResolvedValue('session-new-1')
 
@@ -539,6 +711,25 @@ describe('Sidebar', () => {
     expect(useTabStore.getState().activeTabId).toBeNull()
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
+  })
+
+  it('keeps every control in the title region clickable on the drag region', async () => {
+    // Only controls inside a drag region are no-drag now, so the rule has to
+    // name every kind the titlebars hold — the repository link here is an <a>,
+    // not a button, and dropping `a` from the rule would let a press on it
+    // drag the window instead.
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    render(<Sidebar />, { container: root })
+
+    const titleRegion = screen.getByTestId('sidebar-title-region')
+    expect(resolveAppRegion(titleRegion)).toBe('drag')
+    const controls = Array.from(titleRegion.querySelectorAll('a, button'))
+    expect(controls.some((control) => control.tagName === 'A')).toBe(true)
+    expect(controls.some((control) => control.tagName === 'BUTTON')).toBe(true)
+    for (const control of controls) {
+      expect(resolveAppRegion(control), control.outerHTML).toBe('no-drag')
+    }
   })
 
   it('answers the Cmd+N request like the New Session item, in the project on screen', async () => {
@@ -2229,7 +2420,7 @@ describe('Sidebar', () => {
 
     fireEvent.contextMenu(screen.getByRole('button', { name: /Open Session/ }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
 
     expect(deleteSession).not.toHaveBeenCalled()
     const dialog = screen.getByRole('dialog')
@@ -2519,6 +2710,32 @@ describe('Sidebar', () => {
         expect.objectContaining({ sessionId: '__market__', title: 'Extension Market', type: 'market' }),
       ]),
     )
+  })
+
+  it.each([true, false])('opens phone connection directly from the desktop sidebar (expanded=%s)', (expanded) => {
+    const previousHost = window.desktopHost
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    useUIStore.setState({ sidebarOpen: expanded, activeSettingsTab: 'providers', pendingSettingsTab: 'about' })
+    try {
+      render(<Sidebar />)
+      fireEvent.click(screen.getByRole('button', { name: 'Phone connection' }))
+      expect(useUIStore.getState().activeSettingsTab).toBe('h5Access')
+      expect(useUIStore.getState().pendingSettingsTab).toBe('h5Access')
+      expect(useTabStore.getState().activeTabId).toBe('__settings__')
+      expect(screen.getByRole('button', { name: 'Phone connection' })).toHaveAttribute('aria-current', 'page')
+      expect(screen.getByRole('button', { name: 'Settings' })).not.toHaveAttribute('aria-current')
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+      expect(useUIStore.getState().activeSettingsTab).toBe('general')
+      expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+      expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
+    } finally {
+      window.desktopHost = previousHost
+    }
+  })
+
+  it('keeps the desktop phone setup entry out of the browser sidebar', () => {
+    render(<Sidebar />)
+    expect(screen.queryByRole('button', { name: 'Phone connection' })).not.toBeInTheDocument()
   })
 
   it('shows a loading state instead of an empty session list while initial fetch is pending', () => {

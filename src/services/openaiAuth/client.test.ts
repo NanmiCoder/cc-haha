@@ -7,9 +7,33 @@ import {
   OPENAI_CODEX_CLIENT_ID,
   OPENAI_CODEX_TOKEN_USER_AGENT,
   refreshOpenAITokens,
+  OpenAITokenHttpError,
 } from './client.js'
 
 describe('OpenAI Codex OAuth client', () => {
+  test('distinguishes revoked grants from transient token endpoint failures using structured status', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      for (const [status, code, requiresLogin] of [
+        [400, 'invalid_grant', true],
+        [401, 'invalid_token', true],
+        [503, 'invalid_grant', false],
+        [429, 'temporarily_unavailable', false],
+        [403, 'forbidden', false],
+      ] as const) {
+        globalThis.fetch = (async () => Response.json({ error: { code }, refresh_token: 'secret-refresh' }, { status })) as typeof fetch
+        const result = await refreshOpenAITokens('fixture-refresh').catch(error => error)
+        expect(result).toBeInstanceOf(OpenAITokenHttpError)
+        expect(result.status).toBe(status)
+        expect(result.requiresReauthentication).toBe(requiresLogin)
+        expect(result.message).not.toContain('secret-refresh')
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+    expect(new OpenAITokenHttpError('refresh', 503, '', 'unexpected-secret').oauthErrorCode).toBeUndefined()
+  })
+
   test('generates hex PKCE verifier and state like the Codex-compatible flow', () => {
     const verifier = generateOpenAICodeVerifier()
     const state = generateOpenAIState()
@@ -75,7 +99,7 @@ describe('OpenAI Codex OAuth client', () => {
         'application/x-www-form-urlencoded',
       )
       expect(tokenRequestHeaders.get('User-Agent')).toBe(
-        'codex-cli/0.157.0',
+        'codex-cli/0.166.0',
       )
       expect(tokenRequestBody).toContain('grant_type=authorization_code')
       expect(tokenRequestBody).toContain('client_id=app_EMoamEEZ73f0CkXaXp7hrann')

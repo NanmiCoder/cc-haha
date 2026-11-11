@@ -17,16 +17,16 @@ Everything lives on [GitHub Releases](https://github.com/NanmiCoder/cc-haha/rele
 
 | Your system | Download |
 |---|---|
-| macOS, Apple Silicon | `Claude-Code-Haha-<version>-mac-arm64.dmg` |
-| macOS, Intel | `Claude-Code-Haha-<version>-mac-x64.dmg` |
-| Windows x64 | `Claude-Code-Haha-<version>-win-x64.exe` |
-| Windows ARM64 | `Claude-Code-Haha-<version>-win-arm64.exe` |
-| Linux x64 | `Claude-Code-Haha-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` |
-| Linux ARM64 | `Claude-Code-Haha-<version>-linux-arm64.AppImage` or `-linux-arm64.deb` |
+| macOS, Apple Silicon (M series) | `Claude-Code-Haha-<version>-macOS-Apple-Silicon.dmg` |
+| macOS, Intel | `Claude-Code-Haha-<version>-macOS-Intel.dmg` |
+| Windows x64 | `Claude-Code-Haha-<version>-Windows-x64-Setup.exe` |
+| Windows ARM64 | `Claude-Code-Haha-<version>-Windows-arm64-Setup.exe` |
+| Linux x64 | `Claude-Code-Haha-<version>-Linux-x64.AppImage`, `.deb` or `.rpm` |
+| Linux ARM64 | `Claude-Code-Haha-<version>-Linux-arm64.AppImage`, `.deb` or `.rpm` |
 
 Not sure which architecture you have? On macOS check the chip listed in "About This Mac"; on Windows check the system type under Settings → System → About. Don't guess from the brand of the machine.
 
-The `.blockmap` and `latest*.yml` files are used by the app's own updater. You don't need to download them.
+Files ending in `-update.zip` and the `latest*.yml` files are used by the app's own updater. You don't need to download them. v0.7.6 and earlier used older names such as `mac-arm64`, `win-x64` and `linux-x86_64`.
 
 ## macOS
 
@@ -36,11 +36,11 @@ The `.blockmap` and `latest*.yml` files are used by the app's own updater. You d
 
 ### If macOS says the app is damaged
 
-Nothing is actually damaged. macOS quarantines anything downloaded from the web and refuses to launch it without an Apple signature — but it words the error as "damaged", which is thoroughly misleading. Signed and notarized releases skip this entirely; if you have an unsigned build, use one of the two routes below.
+Nothing is actually damaged. macOS quarantines anything downloaded from the web and refuses to launch it without an Apple signature — but it words the error as "damaged", which is thoroughly misleading. Releases are signed and notarized and skip this entirely; if you have an unsigned development build, use one of the two routes below.
 
-**Option 1: the official script (recommended)**
+**Option 1: the script that ships with the build**
 
-Download `install-macos-unsigned.sh` from the same Release into **the same folder as the DMG** (Downloads, for example), then run:
+Unsigned development builds include `install-macos-unsigned.sh`. Put it in **the same folder as the DMG** (Downloads, for example), then run:
 
 ```bash
 cd ~/Downloads
@@ -74,19 +74,25 @@ When upgrading in place, the installer inspects user data in the old install dir
 **AppImage** (no installation, just run it):
 
 ```bash
-chmod +x Claude-Code-Haha-<version>-linux-x86_64.AppImage
-./Claude-Code-Haha-<version>-linux-x86_64.AppImage
+chmod +x Claude-Code-Haha-<version>-Linux-x64.AppImage
+./Claude-Code-Haha-<version>-Linux-x64.AppImage
 ```
 
 If it fails with a FUSE-related error, install the runtime: `sudo apt install libfuse2` on Ubuntu 22.04 and earlier, `libfuse2t64` on 24.04 and later.
 
-**deb** (installs into your application menu):
+**deb** (Ubuntu, Debian and similar; installs into your application menu):
 
 ```bash
-sudo apt install ./Claude-Code-Haha-<version>-linux-amd64.deb
+sudo apt install ./Claude-Code-Haha-<version>-Linux-x64.deb
 ```
 
-On ARM64 machines, use the corresponding `linux-arm64` file.
+**rpm** (Fedora, openSUSE and similar):
+
+```bash
+sudo dnf install ./Claude-Code-Haha-<version>-Linux-x64.rpm
+```
+
+On ARM64 machines, use the corresponding `Linux-arm64` file.
 
 ## Running from source
 

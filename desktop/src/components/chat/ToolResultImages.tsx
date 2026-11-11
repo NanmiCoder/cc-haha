@@ -73,6 +73,7 @@ export function ToolResultImages({ images, omitted = 0, originalPath, toolName, 
     src: url,
     name: originalName || t('chat.toolResultImage.alt', { index: index + 1, count }),
     ...(galleryPath ? { path: galleryPath } : {}),
+    inline: sources[index],
   }))
   const activeIndex = activeUrl === null ? -1 : galleryImages.findIndex((image) => image.src === activeUrl)
 

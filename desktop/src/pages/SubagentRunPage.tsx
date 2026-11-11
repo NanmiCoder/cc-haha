@@ -23,13 +23,14 @@ import type { TeamTaskAnchor } from '../api/teams'
 import { Badge, type Tone as BadgeTone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
-import { useTranslation } from '../i18n'
+import { useTranslation, type TranslationKey } from '../i18n'
 import {
   createDefaultSessionState,
   mapHistoryMessagesToUiMessages,
   mergeReconstructedRunActivity,
   registerAgentRunSession,
   reconstructRunActivityFromTranscript,
+  settleAgentRunSession,
   useChatStore,
 } from '../stores/chatStore'
 import { SUBAGENT_TAB_PREFIX, useTabStore } from '../stores/tabStore'
@@ -71,9 +72,12 @@ export function SubagentRunPage({
   title: string
 }) {
   const t = useTranslation()
-  const [data, setData] = useState<SubagentRunResponse | null>(null)
-  const [responseActivityEpoch, setResponseActivityEpoch] = useState(0)
-  const [responseStreamRevision, setResponseStreamRevision] = useState(0)
+  const [response, setResponse] = useState<{
+    tabId: string
+    data: SubagentRunResponse
+    activityEpoch: number
+    streamRevision: number
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestIdRef = useRef(0)
@@ -83,6 +87,12 @@ export function SubagentRunPage({
       ? activeTab.sessionId
       : `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
   })
+  // A reused page retains state while switching tabs. Stream revisions are
+  // local to each session, so another tab's data must not reach its consumers.
+  const currentResponse = response?.tabId === tabId ? response : null
+  const data = currentResponse?.data ?? null
+  const responseActivityEpoch = currentResponse?.activityEpoch ?? 0
+  const responseStreamRevision = currentResponse?.streamRevision ?? 0
   const discoveredTaskId = useChatStore((state) => {
     const session = state.sessions[sourceSessionId]
     const liveTask = Object.values(session?.backgroundAgentTasks ?? {})
@@ -179,7 +189,7 @@ export function SubagentRunPage({
     const requestedStreamRevision = requestedSession?.agentStreamRevision ?? 0
     setLoading(true)
     setError(null)
-    if (options?.resetData) setData(null)
+    if (options?.resetData) setResponse(null)
     try {
       // A workflow agent has no parent Agent tool call, so it is addressed by
       // agent id. Everything downstream of this line is identical.
@@ -187,9 +197,12 @@ export function SubagentRunPage({
         ? await subagentsApi.getRunByAgent(sourceSessionId, readAgentIdRef(toolUseId))
         : await subagentsApi.getRunByTool(sourceSessionId, toolUseId, resolvedTaskId)
       if (requestIdRef.current !== requestId) return
-      setData(nextData)
-      setResponseActivityEpoch(requestedActivityEpoch)
-      setResponseStreamRevision(requestedStreamRevision)
+      setResponse({
+        tabId,
+        data: nextData,
+        activityEpoch: requestedActivityEpoch,
+        streamRevision: requestedStreamRevision,
+      })
     } catch (err) {
       if (requestIdRef.current !== requestId) return
       setError(err instanceof Error ? err.message : String(err))
@@ -211,6 +224,12 @@ export function SubagentRunPage({
 
   useEffect(() => {
     if (!data) return
+    // A teammate's completed launch still has a live inbox; it is not the
+    // terminal of that member's current turn.
+    const isTerminal = data.canSendMessage !== true && (
+      effectiveStatus === 'completed' || effectiveStatus === 'failed' || effectiveStatus === 'stopped'
+    )
+    if (isTerminal) settleAgentRunSession(tabId, responseStreamRevision)
     const transcriptMessages = buildSubagentConversationMessages(data)
     const runActivity = reconstructRunActivityFromTranscript(
       data.activityMessages ?? data.messages,
@@ -239,8 +258,10 @@ export function SubagentRunPage({
         preferCurrent: (existing.historyMutationEpoch ?? 0) !== responseActivityEpoch,
       })
       const currentStreamRevision = existing.agentStreamRevision ?? 0
+      // A reconnect can miss the stream's idle event. A fresh durable terminal
+      // settles that stream; an older poll must still preserve a newer turn.
       const preserveLiveConversation = currentStreamRevision > 0 && (
-        existing.chatState !== 'idle' ||
+        (existing.chatState !== 'idle' && !isTerminal) ||
         currentStreamRevision !== responseStreamRevision
       )
       return {
@@ -322,6 +343,8 @@ export function SubagentRunPage({
       activityMessages={activityProjectionMessages}
       title={title}
       status={effectiveStatus}
+      model={data?.model}
+      effort={data?.effort}
       identity={`${sourceSessionId} / ${toolUseId}`}
       details={data ? (
         <>
@@ -580,6 +603,8 @@ function AgentSessionView({
   activityMessages,
   title,
   status,
+  model,
+  effort,
   identity,
   details,
   backLabel,
@@ -608,6 +633,10 @@ function AgentSessionView({
   activityMessages?: UIMessage[]
   title: string
   status?: SubagentRunStatus
+  /** The run's served model as the server read it; live stream text names none. */
+  model?: string
+  /** Launch effort; `null` is the model's default, `undefined` unknown. */
+  effort?: string | null
   identity: string
   details?: ReactNode
   backLabel: string
@@ -626,7 +655,9 @@ function AgentSessionView({
   const t = useTranslation()
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const sessionState = useChatStore((state) => state.sessions[sessionId])
-  const runModel = useMemo(() => latestRunModel(sessionState?.messages), [sessionState?.messages])
+  const liveRunModel = useMemo(() => latestRunModel(sessionState?.messages), [sessionState?.messages])
+  const runModel = model ?? liveRunModel
+  const runEffort = effort === undefined ? undefined : effortLabel(effort, t)
   const isActivityPanelOpen = useActivityPanelStore((state) => state.isOpen(sessionId))
   const closeActivityPanel = useActivityPanelStore((state) => state.close)
   const dismissBackgroundTaskKeys = useActivityPanelStore((state) => state.dismissBackgroundTaskKeys)
@@ -801,6 +832,17 @@ function AgentSessionView({
                 {runModel}
               </Badge>
             ) : null}
+            {runEffort ? (
+              <Badge
+                tone="neutral"
+                size="xs"
+                bordered
+                title={t('model.effort')}
+                aria-label={`${t('model.effort')}: ${runEffort}`}
+              >
+                {t('model.effort')} {runEffort}
+              </Badge>
+            ) : null}
           </>
         )}
         actions={(
@@ -874,6 +916,19 @@ function latestRunModel(messages: UIMessage[] | undefined): string | undefined {
     if (message?.type === 'assistant_text' && message.model) return message.model
   }
   return undefined
+}
+
+const EFFORT_LABEL_KEYS: Record<string, TranslationKey> = {
+  low: 'settings.general.effort.low',
+  medium: 'settings.general.effort.medium',
+  high: 'settings.general.effort.high',
+  xhigh: 'settings.general.effort.xhigh',
+  max: 'settings.general.effort.max',
+}
+
+function effortLabel(effort: string | null, t: TranslationFn): string {
+  if (effort === null) return t('model.effortUnset')
+  return Object.hasOwn(EFFORT_LABEL_KEYS, effort) ? t(EFFORT_LABEL_KEYS[effort]!) : effort
 }
 
 function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationFn }) {

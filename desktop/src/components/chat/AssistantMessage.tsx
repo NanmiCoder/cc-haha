@@ -150,17 +150,19 @@ export const AssistantMessage = memo(function AssistantMessage({
   )
 
   // A click on a picture in the prose opens it, and its neighbours in the reply, in
-  // the viewer. Each one that is a file on disk carries its path, which is read back
-  // from the URL it was served under rather than from anything on the element.
+  // the viewer. Use the resolved original URL so the viewer owns authenticated
+  // fallback loads independently of a row that virtual scrolling may unmount.
+  // File paths still have to pass the local-server URL validation.
   const handleImageClick = useCallback(
     ({ images, index }: MarkdownImageClick) => {
       const baseUrl = getServerBaseUrl()
       setViewer({
         index,
         images: images.map((image) => {
-          const path = localPathFromMarkdownImageUrl(image.src, { baseUrl, workDir }) ?? undefined
+          const src = image.originalSrc ?? image.src
+          const path = localPathFromMarkdownImageUrl(src, { baseUrl, workDir }) ?? undefined
           const name = image.alt.trim() || path?.split(/[\\/]/).filter(Boolean).pop() || t('assistantOutputs.kind.image')
-          return { src: image.src, name, ...(path ? { path } : {}) }
+          return { src, name, ...(path ? { path } : {}) }
         }),
       })
     },

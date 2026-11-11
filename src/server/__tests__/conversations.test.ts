@@ -29,12 +29,14 @@ import {
   REJECT_MESSAGE_WITH_REASON_PREFIX,
 } from '../../constants/messages.js'
 import { SessionService, sessionService } from '../services/sessionService.js'
+import { HISTORY_SEMANTIC_RECORD_BYTES } from '../services/boundedSessionHistory.js'
 import { createRepositoryBranch } from '../services/repositoryLaunchService.js'
 import { ProviderService } from '../services/providerService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import * as openAIModelCatalog from '../../services/openaiAuth/modelCatalog.js'
+import * as titleService from '../services/titleService.js'
 
 async function rmWithRetry(targetPath: string): Promise<void> {
   const attempts = process.platform === 'win32' ? 5 : 1
@@ -3013,6 +3015,104 @@ describe('WebSocket Chat Integration', () => {
     expect(basicBody.context).toBeUndefined()
   })
 
+  it('keeps inspection status available after an oversized screenshot is recorded', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(tmpDir, 'inspection-')))
+    const created = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir, permissionMode: 'acceptEdits' }),
+    })
+    expect(created.status).toBe(201)
+    const { sessionId } = await created.json() as { sessionId: string }
+    await runTurn(sessionId, 'hello before inspection')
+
+    const transcript = await sessionService.findSessionFile(sessionId)
+    expect(transcript).not.toBeNull()
+    const image = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(HISTORY_SEMANTIC_RECORD_BYTES / 2) },
+    }
+    const screenshot = {
+      type: 'user',
+      uuid: crypto.randomUUID(),
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'screenshot',
+          content: [image],
+        }],
+      },
+      toolUseResult: [image],
+      version: '9.9.9',
+    }
+    const reply = {
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      message: { role: 'assistant', model: 'mock-opus', usage: { input_tokens: 50_000, output_tokens: 10 } },
+    }
+    await fs.appendFile(transcript!.filePath, `${JSON.stringify(screenshot)}\n${JSON.stringify(reply)}\n`)
+
+    const inspectionUrl = `${baseUrl}/api/sessions/${sessionId}/inspection`
+    const readStatus = async () => {
+      const snapshot = spyOn(sessionService, 'getInspectionTranscriptSnapshot')
+      try {
+        const response = await fetch(`${inspectionUrl}?statusOnly=1`)
+        expect(response.status).toBe(200)
+        expect(snapshot).not.toHaveBeenCalled()
+        const body = await response.json()
+        expect(body).not.toHaveProperty('usage')
+        expect(body).not.toHaveProperty('contextEstimate')
+        return body
+      } finally {
+        snapshot.mockRestore()
+      }
+    }
+    const control = spyOn(conversationService, 'requestControl')
+    try {
+      expect(await readStatus()).toMatchObject({
+        active: true,
+        status: { sessionId, workDir, model: 'mock-opus', contextWindow: expect.any(Number), mcpServers: [{ name: 'mock', status: 'connected' }] },
+      })
+      expect(control.mock.calls.map(([, request]) => request.subtype)).toEqual(['mcp_status'])
+    } finally {
+      control.mockRestore()
+    }
+
+    const live = await fetch(`${inspectionUrl}?includeContext=0`)
+    expect(live.status).toBe(200)
+    const liveBody = await live.json()
+    expect(liveBody).toMatchObject({
+      active: true,
+      status: { sessionId, workDir, model: 'mock-opus', mcpServers: [{ name: 'mock', status: 'connected' }] },
+      usage: { source: 'current_process', totalInputTokens: 27_000 },
+    })
+    expect(liveBody.errors).toEqual({})
+
+    const context = await fetch(`${inspectionUrl}?contextOnly=1`)
+    expect(context.status).toBe(200)
+    expect(await context.json()).toMatchObject({ context: { model: 'mock-opus', estimateOnly: true } })
+
+    await conversationService.stopSessionAndWait(sessionId)
+    expect(await readStatus()).toMatchObject({
+      active: false,
+      status: { sessionId, workDir, permissionMode: 'acceptEdits', model: 'mock-opus', version: '9.9.9' },
+    })
+    const stopped = await fetch(inspectionUrl)
+    expect(stopped.status).toBe(200)
+    const stoppedBody = await stopped.json()
+    expect(stoppedBody).toMatchObject({
+      active: false,
+      status: { sessionId, workDir, permissionMode: 'acceptEdits' },
+      errors: {
+        usage: expect.stringContaining('semantic read limit'),
+        context: expect.stringContaining('semantic read limit'),
+      },
+    })
+    expect(stoppedBody).not.toHaveProperty('usage')
+    expect(stoppedBody).not.toHaveProperty('contextEstimate')
+  })
+
   it('should expose context-only inspection without waiting on mcp status', async () => {
     await withMockMcpStatusDelay(2_000, async () => {
       const sessionId = `chat-context-only-${crypto.randomUUID()}`
@@ -3196,6 +3296,23 @@ describe('WebSocket Chat Integration', () => {
     })
     expect(messages.some((m) => m.type === 'message_complete')).toBe(true)
     expect(messages.at(-1)?.type).toBe('message_complete')
+  }, 15_000)
+
+  it('tells a caller waiting on a control request why the CLI exited', async () => {
+    const sessionId = `chat-control-exit-${crypto.randomUUID()}`
+    let rejection: Promise<string> | undefined
+    await runTurnUntilComplete(sessionId, 'hello', (message) => {
+      if (rejection || message.type === 'connected' || !conversationService.hasSession(sessionId)) return
+      rejection = conversationService.requestControl(sessionId, {
+        subtype: 'mock_exit_with_stderr', code: 3, stderr: 'Error: provider settings are unreadable',
+      }).then(() => 'resolved', (error: Error) => error.message)
+    })
+
+    expect(rejection).toBeDefined()
+    const reason = await rejection!
+    expect(reason).toContain('CLI session exited before the control request completed')
+    expect(reason).toContain('code 3')
+    expect(reason).toContain('Error: provider settings are unreadable')
   }, 15_000)
 
   it('should handle permission_response without error', async () => {
@@ -5024,9 +5141,9 @@ describe('WebSocket Chat Integration', () => {
     })
   }, 20_000)
 
-  it('should defer bypass permission changes until the active turn completes without restarting', async () => {
-    // The inspection below must land while the turn is still streaming. 350ms left
-    // too little headroom on a busy CI runner, where the turn could finish first.
+  it('should apply a permission change to the running CLI during an active turn', async () => {
+    // The switch must land while the turn is still streaming. 350ms left too
+    // little headroom on a busy CI runner, where the turn could finish first.
     await withMockStreamDelay(1_500, async () => {
       await fetch(`${baseUrl}/api/permissions/mode`, {
         method: 'PUT',
@@ -5059,24 +5176,15 @@ describe('WebSocket Chat Integration', () => {
       }) as typeof conversationService.startSession
 
       const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      const events: string[] = []
       let switchTriggered = false
-      let turnComplete = false
-      let modeConfirmed = false
-      let deferredInspectionChecked = false
+      let midTurnInspectionMode: string | undefined
       try {
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             ws.close()
-            reject(new Error(`Timed out waiting for active-turn permission switch for session ${sessionId}`))
+            reject(new Error(`Timed out waiting for active-turn permission switch for session ${sessionId}: ${events.join(',')}`))
           }, 10_000)
-          // Resolve only once all three have happened: settling on the first two let
-          // a slow inspection response arrive after the assertions had already run.
-          const settleIfDone = () => {
-            if (turnComplete && modeConfirmed && deferredInspectionChecked) {
-              clearTimeout(timeout)
-              resolve()
-            }
-          }
 
           ws.onmessage = async (event) => {
             const msg = JSON.parse(event.data as string)
@@ -5100,41 +5208,28 @@ describe('WebSocket Chat Integration', () => {
               !switchTriggered
             ) {
               switchTriggered = true
+              events.push('switch_sent')
               ws.send(JSON.stringify({
                 type: 'set_permission_mode',
                 mode: 'bypassPermissions',
               }))
-              await new Promise((resolve) => setTimeout(resolve, 25))
-              const inspectionRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
-              if (!inspectionRes.ok) {
-                clearTimeout(timeout)
-                ws.close()
-                reject(new Error(`Inspection failed while permission switch was deferred: ${inspectionRes.status}`))
-                return
-              }
-              const inspectionBody = await inspectionRes.json() as { status?: { permissionMode?: string } }
-              deferredInspectionChecked = true
-              if (inspectionBody.status?.permissionMode !== 'default') {
-                clearTimeout(timeout)
-                ws.close()
-                reject(new Error(`Deferred permission switch was exposed before restart: ${inspectionBody.status?.permissionMode}`))
-                return
-              }
-              settleIfDone()
               return
             }
 
             if (msg.type === 'permission_mode_changed' && msg.mode === 'bypassPermissions') {
-              modeConfirmed = true
-              settleIfDone()
+              events.push('mode_changed')
+              if (!events.includes('message_complete')) {
+                const inspectionRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+                const inspectionBody = await inspectionRes.json() as { status?: { permissionMode?: string } }
+                midTurnInspectionMode = inspectionBody.status?.permissionMode
+              }
               return
             }
 
-            if (msg.type === 'message_complete' && switchTriggered && !turnComplete) {
-              turnComplete = true
-              expect(startCalls).toHaveLength(1)
-              settleIfDone()
-              return
+            if (msg.type === 'message_complete' && switchTriggered) {
+              events.push('message_complete')
+              clearTimeout(timeout)
+              resolve()
             }
           }
 
@@ -5144,10 +5239,10 @@ describe('WebSocket Chat Integration', () => {
           }
         })
 
-        expect(switchTriggered).toBe(true)
-        expect(turnComplete).toBe(true)
-        expect(modeConfirmed).toBe(true)
-        expect(deferredInspectionChecked).toBe(true)
+        // The running CLI confirmed the switch before the turn ended, so tool
+        // calls later in the same turn are checked under the new mode.
+        expect(events).toEqual(['switch_sent', 'mode_changed', 'message_complete'])
+        expect(midTurnInspectionMode).toBe('bypassPermissions')
         expect(startCalls).toHaveLength(1)
         expect(startCalls[0]).toMatchObject({
           sessionId,
@@ -5166,6 +5261,161 @@ describe('WebSocket Chat Integration', () => {
           body: JSON.stringify({ mode: 'default' }),
         })
       }
+    })
+  }, 20_000)
+
+  it('should defer a legacy bypass restart until the active turn completes', async () => {
+    await withMockPermissionModeBehavior('unavailable', async () => {
+      await withMockStreamDelay(1_500, async () => {
+        const createRes = await fetch(`${baseUrl}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'default' }),
+        })
+        expect(createRes.status).toBe(201)
+        const { sessionId } = await createRes.json() as { sessionId: string }
+
+        const originalStartSession = conversationService.startSession.bind(conversationService)
+        const startModes: Array<string | undefined> = []
+        conversationService.startSession = (async function patchedStartSession(
+          sid: string,
+          workDir: string,
+          sdkUrl: string,
+          options?: { permissionMode?: string; model?: string; effort?: string; thinking?: 'enabled' | 'adaptive' | 'disabled'; providerId?: string | null },
+        ) {
+          startModes.push(options?.permissionMode)
+          return originalStartSession(sid, workDir, sdkUrl, options)
+        }) as typeof conversationService.startSession
+
+        const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+        const messages: any[] = []
+        let switchTriggered = false
+        let midTurnStartModes: Array<string | undefined> | undefined
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error(`Timed out waiting for legacy turn ${sessionId}`)), 10_000)
+            ws.onmessage = (event) => {
+              const msg = JSON.parse(event.data as string)
+              messages.push(msg)
+              if (msg.type === 'connected') {
+                ws.send(JSON.stringify({ type: 'user_message', content: 'legacy active turn permission switch' }))
+                return
+              }
+              if (
+                msg.type === 'content_delta' &&
+                typeof msg.text === 'string' &&
+                msg.text.includes('legacy active turn permission switch') &&
+                !switchTriggered
+              ) {
+                switchTriggered = true
+                ws.send(JSON.stringify({ type: 'set_permission_mode', mode: 'bypassPermissions' }))
+                // The mock holds the turn open for 1.5s after this delta; an
+                // immediate restart would have started a second CLI by now.
+                setTimeout(() => {
+                  if (!messages.some((m) => m.type === 'message_complete')) midTurnStartModes = [...startModes]
+                }, 400)
+                return
+              }
+              if (msg.type === 'message_complete' && switchTriggered) {
+                clearTimeout(timeout)
+                resolve()
+              }
+            }
+            ws.onerror = () => {
+              clearTimeout(timeout)
+              reject(new Error(`WebSocket error for legacy turn ${sessionId}`))
+            }
+          })
+          await waitUntil(
+            () => messages.some((msg) =>
+              msg.type === 'permission_mode_changed' && msg.mode === 'bypassPermissions'
+            ),
+            `legacy bypass restart after the turn ${sessionId}`,
+          )
+
+          // Restarting mid-turn would have ended the turn the user was watching.
+          expect(midTurnStartModes).toEqual(['default'])
+          expect(startModes).toEqual(['default', 'bypassPermissions'])
+          expect(messages.some((msg) => msg.type === 'error')).toBe(false)
+          expect(conversationService.getSessionPermissionMode(sessionId)).toBe('bypassPermissions')
+        } finally {
+          ws.close()
+          conversationService.startSession = originalStartSession
+          conversationService.stopSession(sessionId)
+        }
+      })
+    })
+  }, 20_000)
+
+  it('should drop a deferred legacy bypass restart when the user switches back mid-turn', async () => {
+    await withMockPermissionModeBehavior('unavailable', async () => {
+      await withMockStreamDelay(1_500, async () => {
+        const createRes = await fetch(`${baseUrl}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'default' }),
+        })
+        expect(createRes.status).toBe(201)
+        const { sessionId } = await createRes.json() as { sessionId: string }
+
+        const originalStartSession = conversationService.startSession.bind(conversationService)
+        const startModes: Array<string | undefined> = []
+        conversationService.startSession = (async function patchedStartSession(
+          sid: string,
+          workDir: string,
+          sdkUrl: string,
+          options?: { permissionMode?: string; model?: string; effort?: string; thinking?: 'enabled' | 'adaptive' | 'disabled'; providerId?: string | null },
+        ) {
+          startModes.push(options?.permissionMode)
+          return originalStartSession(sid, workDir, sdkUrl, options)
+        }) as typeof conversationService.startSession
+
+        const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+        const messages: any[] = []
+        let switchTriggered = false
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error(`Timed out waiting for legacy turn ${sessionId}`)), 10_000)
+            ws.onmessage = (event) => {
+              const msg = JSON.parse(event.data as string)
+              messages.push(msg)
+              if (msg.type === 'connected') {
+                ws.send(JSON.stringify({ type: 'user_message', content: 'legacy switch back mid-turn' }))
+                return
+              }
+              if (
+                msg.type === 'content_delta' &&
+                typeof msg.text === 'string' &&
+                msg.text.includes('legacy switch back mid-turn') &&
+                !switchTriggered
+              ) {
+                switchTriggered = true
+                ws.send(JSON.stringify({ type: 'set_permission_mode', mode: 'bypassPermissions' }))
+                ws.send(JSON.stringify({ type: 'set_permission_mode', mode: 'default' }))
+                return
+              }
+              if (msg.type === 'message_complete' && switchTriggered) {
+                clearTimeout(timeout)
+                resolve()
+              }
+            }
+            ws.onerror = () => {
+              clearTimeout(timeout)
+              reject(new Error(`WebSocket error for legacy turn ${sessionId}`))
+            }
+          })
+          // Give a stale deferred restart the chance to run after the turn.
+          await new Promise((resolve) => setTimeout(resolve, 500))
+
+          expect(startModes).toEqual(['default'])
+          expect(messages.some((msg) => msg.type === 'permission_mode_changed' && msg.mode === 'bypassPermissions')).toBe(false)
+          expect(conversationService.getSessionPermissionMode(sessionId)).toBe('default')
+        } finally {
+          ws.close()
+          conversationService.startSession = originalStartSession
+          conversationService.stopSession(sessionId)
+        }
+      })
     })
   }, 20_000)
 
@@ -5443,6 +5693,96 @@ describe('WebSocket Chat Integration', () => {
       })
     }
   }, 20_000)
+
+  for (const stopDuringTitle of [false, true]) {
+    it(`should ${stopDuringTitle ? 'cancel startup' : 'finish the first turn'} after a pending placeholder title save`, async () => {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'acceptEdits' }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+      const titleStarted = withResolvers<void>()
+      const releaseTitle = withResolvers<void>()
+      const titleFinished = withResolvers<void>()
+      let titlePending = false
+      let startupReadDuringTitle = false
+      let startupReads = 0
+      const originalSaveTitle = titleService.saveAiTitle
+      const originalWorkDir = sessionService.getSessionWorkDir.bind(sessionService)
+      const titleSpy = spyOn(titleService, 'saveAiTitle').mockImplementation(async (...args) => {
+        if (args[0] !== sessionId) return originalSaveTitle(...args)
+        titlePending = true
+        titleStarted.resolve()
+        try {
+          await releaseTitle.promise
+          return await originalSaveTitle(...args)
+        } finally {
+          titlePending = false
+          titleFinished.resolve()
+        }
+      })
+      const workDirSpy = spyOn(sessionService, 'getSessionWorkDir').mockImplementation(async (sid) => {
+        if (sid === sessionId) {
+          startupReads++
+          startupReadDuringTitle ||= titlePending
+        }
+        return originalWorkDir(sid)
+      })
+      const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      const messages: any[] = []
+      const connected = withResolvers<void>()
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string)
+        messages.push(message)
+        if (message.type === 'connected') connected.resolve()
+      }
+      try {
+        await connected.promise
+        ws.send(JSON.stringify({ type: 'user_message', content: 'first turn after permission switch' }))
+        await titleStarted.promise
+        if (stopDuringTitle) {
+          ws.send(JSON.stringify({ type: 'stop_generation' }))
+          await waitUntil(() => messages.some(message => message.type === 'status' && message.state === 'idle'), 'stop while saving placeholder title')
+        }
+        releaseTitle.resolve()
+        await titleFinished.promise
+        if (!stopDuringTitle) {
+          await waitUntil(() => messages.some(message => message.type === 'message_complete'), 'first turn after placeholder title save')
+          expect(conversationService.getSessionPermissionMode(sessionId)).toBe('acceptEdits')
+          expect(startupReads).toBeGreaterThan(0)
+        } else {
+          // Let the handler resume from the completed save before observing it.
+          await new Promise<void>(resolve => setImmediate(resolve))
+          expect(startupReads).toBe(0)
+          expect(conversationService.hasSession(sessionId)).toBe(false)
+        }
+        expect(startupReadDuringTitle).toBe(false)
+        expect(messages.filter(message => message.type === 'error')).toEqual([])
+      } finally {
+        releaseTitle.resolve()
+        ws.close()
+        titleSpy.mockRestore()
+        workDirSpy.mockRestore()
+        conversationService.stopSession(sessionId)
+      }
+    }, 20_000)
+  }
+
+  it('should finish the first turn when saving the placeholder title fails', async () => {
+    const sessionId = `title-save-failure-${crypto.randomUUID()}`
+    const titleSpy = spyOn(titleService, 'saveAiTitle').mockRejectedValue(new Error('fixture title write failed'))
+    try {
+      const messages = await runTurnUntilComplete(sessionId, 'continue despite a title write failure')
+      expect(titleSpy).toHaveBeenCalled()
+      expect(messages.some(message => message.type === 'message_complete')).toBe(true)
+      expect(messages.filter(message => message.type === 'error')).toEqual([])
+    } finally {
+      titleSpy.mockRestore()
+      conversationService.stopSession(sessionId)
+    }
+  })
 
   it('should switch from bypass permissions back to default without restarting', async () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {

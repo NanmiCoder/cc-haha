@@ -22,13 +22,16 @@ export type ZoomFitMode = 'window' | 'width'
  * The look of a control floating over a viewer: a hairline-bordered pill. Shared
  * so an extra action placed beside the zoom cluster reads as part of it.
  */
-export function floatingPillClass(surface: 'default' | 'media', { flat = false }: { flat?: boolean } = {}): string {
+export function floatingPillClass(surface: 'default' | 'media' | 'lightbox', { flat = false }: { flat?: boolean } = {}): string {
   return cx(
-    'inline-flex items-center gap-0.5 rounded-[var(--radius-lg)] border p-0.5',
+    'inline-flex items-center gap-0.5 border',
+    surface === 'lightbox' ? 'rounded-[var(--radius-full)] p-1' : 'rounded-[var(--radius-lg)] p-0.5',
     // A pill floating over content lifts off it with a shadow; one sitting in a
     // toolbar is already on a surface of its own.
     !flat && 'shadow-[var(--shadow-card)]',
-    surface === 'media'
+    surface === 'lightbox'
+      ? 'border-[var(--color-lightbox-control-bg)] bg-[var(--color-lightbox-control-bg)] text-[var(--color-lightbox-control-fg)]'
+      : surface === 'media'
       ? 'border-[var(--color-media-border)] bg-[var(--color-media-header)] text-[var(--color-media-muted)]'
       : 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]',
   )
@@ -52,7 +55,7 @@ export type ZoomControlsProps = {
    * `media` for a control that floats over the dark lightbox, whose colors do
    * not follow the theme; `default` for one that sits on a panel.
    */
-  surface?: 'default' | 'media'
+  surface?: 'default' | 'media' | 'lightbox'
   /** No drop shadow: for a cluster that sits in a toolbar rather than floating over content. */
   flat?: boolean
   className?: string
@@ -83,7 +86,7 @@ export function ZoomControls({
   flat = false,
   className,
 }: ZoomControlsProps) {
-  const media = surface === 'media'
+  const lightbox = surface === 'lightbox'
   return (
     <div
       role="group"
@@ -93,19 +96,21 @@ export function ZoomControls({
       <IconButton
         icon={<Minus size={16} strokeWidth={1.9} />}
         label={labels.zoomOut}
-        size="md"
+        size={lightbox ? '2xl' : 'md'}
+        shape={lightbox ? 'circle' : 'square'}
         tone="secondary"
-        surface={media ? 'media' : 'default'}
+        surface={surface}
         disabled={!canZoomOut}
         onClick={onZoomOut}
       />
-      <span className="min-w-[3.25rem] px-1 text-center font-mono text-xs tabular-nums">{percent}%</span>
+      <span className={lightbox ? 'min-w-[4rem] px-2 text-center text-[14px] tabular-nums' : 'min-w-[3.25rem] px-1 text-center font-mono text-xs tabular-nums'}>{percent}%</span>
       <IconButton
         icon={<Plus size={16} strokeWidth={1.9} />}
         label={labels.zoomIn}
-        size="md"
+        size={lightbox ? '2xl' : 'md'}
+        shape={lightbox ? 'circle' : 'square'}
         tone="secondary"
-        surface={media ? 'media' : 'default'}
+        surface={surface}
         disabled={!canZoomIn}
         onClick={onZoomIn}
       />
@@ -114,9 +119,10 @@ export function ZoomControls({
           ? <MoveHorizontal size={16} strokeWidth={1.9} />
           : <Scan size={15} strokeWidth={1.9} />}
         label={labels.fit}
-        size="md"
+        size={lightbox ? '2xl' : 'md'}
+        shape={lightbox ? 'circle' : 'square'}
         tone="secondary"
-        surface={media ? 'media' : 'default'}
+        surface={surface}
         disabled={fitActive}
         onClick={onFit}
       />

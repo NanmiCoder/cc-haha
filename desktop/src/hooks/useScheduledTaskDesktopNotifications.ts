@@ -32,7 +32,7 @@ function isTerminalRun(run: TaskRun): boolean {
 }
 
 function hasDesktopNotification(task: CronTask | undefined): boolean {
-  return !!task?.notification?.enabled && task.notification.channels.includes('desktop')
+  return task?.notificationPolicy !== 'none' && !!task?.notification?.enabled && task.notification.channels.includes('desktop')
 }
 
 function readNotifiedRunIds(): Set<string> {
@@ -211,12 +211,31 @@ export function collectDesktopNotifiableRuns(
   return runs
     .filter((run) => isTerminalRun(run))
     .filter((run) => hasDesktopNotification(taskById.get(run.taskId)))
+    .filter((run) => {
+      const policy = taskById.get(run.taskId)?.notificationPolicy
+      if (policy === 'failed') return run.status === 'failed' || run.status === 'timeout'
+      if (policy === 'important' && run.status === 'completed') return run.notificationDecision !== 'silent'
+      return true
+    })
     .filter((run) => !notifiedRunIds.has(run.id))
     .map((run) => {
       const taskName = taskById.get(run.taskId)?.name
       return taskName ? { ...run, taskName } : run
     })
     .sort((a, b) => Date.parse(a.completedAt ?? a.startedAt) - Date.parse(b.completedAt ?? b.startedAt))
+}
+
+async function resolveNotificationCandidates(tasks: CronTask[], runs: TaskRun[], notifiedRunIds: Set<string>): Promise<TaskRun[]> {
+  const candidates = collectDesktopNotifiableRuns(tasks, runs, notifiedRunIds)
+  const policies = new Map(tasks.map(task => [task.id, task.notificationPolicy]))
+  // Summary rows intentionally omit the agent's decision. Resolve it before
+  // advancing the scan boundary; a failed read retries on the next poll.
+  const resolved = await Promise.all(candidates.map(async run => {
+    if (policies.get(run.taskId) !== 'important' || run.status !== 'completed' || run.notificationDecision !== undefined) return run
+    const { run: detail } = await tasksApi.getRunDetail(run.id)
+    return { ...run, notificationDecision: detail.notificationDecision }
+  }))
+  return collectDesktopNotifiableRuns(tasks, resolved, notifiedRunIds)
 }
 
 export function useScheduledTaskDesktopNotifications(): void {
@@ -286,7 +305,7 @@ export function useScheduledTaskDesktopNotifications(): void {
           const nonterminalBoundary = oldestNonTerminalBoundary(desktopTasks, nonterminalRuns)
           const notifiedRunIds = readNotifiedRunIds()
           const failedRuns: TaskRun[] = []
-          const pendingRuns = collectDesktopNotifiableRuns(
+          const pendingRuns = await resolveNotificationCandidates(
             desktopTasks,
             pageRuns.filter(run => completedAfterInitialization(
               run,
@@ -294,6 +313,7 @@ export function useScheduledTaskDesktopNotifications(): void {
             )),
             notifiedRunIds,
           )
+          if (stopped) return
           for (const run of pendingRuns) {
             if (await deliverTaskRunNotification(run)) notifiedRunIds.add(run.id)
             else failedRuns.push(run)
@@ -356,7 +376,7 @@ export function useScheduledTaskDesktopNotifications(): void {
         const pageLowWater = oldestNonTerminalBoundary(desktopTasks, page.candidates)
         const scanLowWater = pageLowWater ??
           (resetProgress ? undefined : scanState.scanLowWater)
-        const pendingRuns = collectDesktopNotifiableRuns(
+        const pendingRuns = await resolveNotificationCandidates(
           desktopTasks,
           page.candidates.filter(run => completedAfterInitialization(
             run,
@@ -365,6 +385,7 @@ export function useScheduledTaskDesktopNotifications(): void {
           notifiedRunIds,
         )
 
+        if (stopped) return
         let deliveryFailed = false
         for (const run of pendingRuns) {
           const sent = await deliverTaskRunNotification(run)

@@ -1,6 +1,8 @@
+import { configureScheduledTaskHost } from './services/scheduledTaskHost.js'
 import { configureSessionCollaborationHost, getSessionCollaborationService } from './services/sessionCollaborationHost.js'
 import { authenticateCollaborationCaller, collaborationToolAction } from './sessionCollaborationAuth.js'
 import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
+import { handleScheduledTaskToolsApi } from './api/scheduledTaskTools.js'
 /**
  * Claude Code Desktop App — HTTP + WebSocket Server
  *
@@ -10,6 +12,9 @@ import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
 
 import { handleApiRequest } from './router.js'
 import { handleWebSocket, revokeSessionAdmissionsForMigration, drainSessionWritesForMigration, type WebSocketData } from './ws/handler.js'
+import { createResumableSocketHandler, parseResumeRequest } from './ws/resumableStreams.js'
+import { P2PBroker, p2pStateDiagnostic } from './p2p/broker.js'
+import type { ServerWebSocket } from 'bun'
 import { migrationMaintenance, migrationUnavailableResponse } from './migrationMaintenance.js'
 import { countExternalMigrationProcesses } from './migrationInventory.js'
 import { handleMigrationRuntimeRequest, isMigrationRuntimePath } from './migrationRuntimeApi.js'
@@ -52,6 +57,7 @@ import {
   hasConfiguredLocalAccessToken,
   hasConfiguredPetAccessToken,
   isLocalAccessAuthorized,
+  isP2PEndpointAuthorized,
   isPetAccessAuthorized,
 } from './localAccessAuth.js'
 import {
@@ -61,6 +67,8 @@ import {
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
+import { resolveRemoteAccessProxy, verifyRemoteAccessGateway } from './services/remoteAccessConnectivity.js'
+import { getMobilePushService, stopMobilePushServices } from './services/mobilePushRuntime.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 function readArgValue(flag: string): string | undefined {
@@ -234,6 +242,10 @@ function originFromUrl(value: string | null): string | null {
 }
 
 export function startServer(port = PORT, host = HOST) {
+  // Everything before this point is module loading. When a host reports that
+  // the sidecar "never started listening", this line splits that time from
+  // the work below that still runs before Bun.serve binds (#1746).
+  console.log(`[Server] modules loaded ${Math.round(performance.now())} ms after process start; binding ${host}:${port}`)
   if (process.env.CC_HAHA_MIGRATION_VALIDATION === '1') migrationMaintenance.beginValidation()
   if (!migrationMaintenance.isActive) enableConfigs()
   const trustedRendererOrigin = resolveTrustedRendererOrigin(process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN)
@@ -266,22 +278,69 @@ export function startServer(port = PORT, host = HOST) {
     process.env.SERVER_AUTH_REQUIRED === '1'
   const h5AccessService = new H5AccessService()
 
+  // One stream registry for both listeners: a client reattaches on whichever
+  // path it can reach, and the gateway can end a revoked device's streams.
+  const sessionSockets = createResumableSocketHandler(handleWebSocket)
+  // Phone ↔ desktop direct connections, signaled through the gateway and
+  // carried by the desktop's WebRTC endpoint (see p2p/broker.ts).
+  let p2pBroker: P2PBroker | undefined
   const publicAccess = new PublicAccessServer({
+    resolveProxy: resolveRemoteAccessProxy,
+    verifyGateway: verifyRemoteAccessGateway,
+    onOriginChanged: ({ url, sign }) => {
+      if (migrationMaintenance.isActive) return
+      void getMobilePushService().notifyAddressChanged(url, sign).catch(() => {})
+    },
     handleApiRequest: (request, url, context) => migrationMaintenance.isActive
       ? Promise.resolve(migrationUnavailableResponse())
       : migrationMaintenance.track(handleApiRequest(request, url, context)),
     handleStatic: handleStaticH5Request,
-    websocket: handleWebSocket,
+    websocket: sessionSockets,
+    terminateDeviceStreams: deviceId => {
+      sessionSockets.terminateIdentity(deviceId)
+      p2pBroker?.closeDevice(deviceId)
+    },
+    p2p: () => p2pBroker,
     serverPort: () => serverPort,
   })
+  p2pBroker = new P2PBroker({
+    gateway: () => publicAccess.tunnel(),
+    onState: event => { void diagnosticsService.recordEvent(p2pStateDiagnostic(event)) },
+  })
+  const broker = p2pBroker
+  // The main port carries session sockets and, from the desktop itself, the
+  // WebRTC endpoint's relay link. Nothing else ever sees the `p2p` channel.
+  const mainSockets = {
+    ...sessionSockets,
+    open(ws: ServerWebSocket<WebSocketData>) {
+      if (ws.data.channel === 'p2p') broker.attachEndpoint(ws)
+      else sessionSockets.open(ws)
+    },
+    message(ws: ServerWebSocket<WebSocketData>, message: string | Buffer) {
+      if (ws.data.channel === 'p2p') broker.receive(ws, String(message))
+      else sessionSockets.message(ws, message)
+    },
+    close(ws: ServerWebSocket<WebSocketData>, code: number, reason: string) {
+      if (ws.data.channel === 'p2p') broker.detachEndpoint(ws)
+      else sessionSockets.close(ws, code, reason)
+    },
+    drain(ws: ServerWebSocket<WebSocketData>) {
+      if (ws.data.channel !== 'p2p') sessionSockets.drain(ws)
+    },
+  }
   publicAccessServers.add(publicAccess)
+  if (!migrationMaintenance.isActive) getMobilePushService().start(
+    id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)),
+    id => [...publicAccessServers].some(remote => remote.isDevicePaired(id)),
+  )
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
-  // Open SQLite before the first REST request. Discovery still runs in the
-  // background; without this, getPublicStatus() reports `off` and the sidebar
-  // falls through to a full JSONL scan that can exceed the 120s client timeout.
-  if (!migrationMaintenance.isActive) void localIndexCoordinator.start().catch(() => undefined)
-
+  // Index startup runs after `Bun.serve` (see below), never before it. Opening
+  // SQLite and scanning `source_files` happen before the first `await` inside
+  // `localIndexCoordinator.start()`, so doing that here kept the port unbound
+  // for the whole synchronous pass — every host probe then looked like a dead
+  // sidecar (issue #1746). Requests that need the index still await it in the
+  // `fetch` handler.
   try {
     server = Bun.serve<WebSocketData>({
       port,
@@ -314,6 +373,14 @@ export function startServer(port = PORT, host = HOST) {
           (migrationMaintenance.isValidation || !pathname.startsWith('/sdk/'))) return migrationUnavailableResponse()
         return migrationMaintenance.track((async () => {
         const url = new URL(req.url)
+        if (url.pathname === '/api/public-access/p2p/endpoint') {
+          // The desktop's own WebRTC endpoint (a hidden Electron window): loopback
+          // and its own per-launch token only. The public gateway never serves it.
+          const address = server.requestIP(req)?.address ?? ''
+          if (!isP2PEndpointAuthorized(url.searchParams.get('endpointToken'), address)) return new Response('Forbidden', { status: 403 })
+          if (server.upgrade(req, { data: { sessionId: 'p2p', connectedAt: Date.now(), channel: 'p2p', sdkToken: null, serverPort, serverHost: localConnectHost } })) return undefined
+          return new Response('WebSocket upgrade failed', { status: 400 })
+        }
         if (isPublicAccessControlPath(url.pathname)) return publicAccess.control(req)
 
         // Startup probes must not wait on migrations, config reads, or auth.
@@ -334,6 +401,11 @@ export function startServer(port = PORT, host = HOST) {
         if (!migrationMaintenance.isActive) {
           await localIndexCoordinator.start().catch(() => undefined)
           await ensurePersistentStorageUpgraded()
+        }
+        if (url.pathname === '/api/scheduled-task-tools') {
+          const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
+          if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
+          return handleScheduledTaskToolsApi(req, caller)
         }
         const collaborationAction = collaborationToolAction(url.pathname)
         if (collaborationAction) {
@@ -465,9 +537,13 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'client',
               clientKind: petAccessAuthorized ? 'pet' : 'full',
+              powerActivityLeaseAuthorized: !petAccessAuthorized && isLocalAccessAuthorized(req, localTokenOverride),
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,
+              mediaRefs: url.searchParams.get('media') === 'ref',
+              promptSuggestions: !petAccessAuthorized && url.searchParams.get('suggestions') === '1',
+              ...(petAccessAuthorized ? {} : { resume: parseResumeRequest(url.searchParams) }),
             },
           })
           if (upgraded) return undefined
@@ -660,14 +736,17 @@ export function startServer(port = PORT, host = HOST) {
         })())
       },
 
-      websocket: handleWebSocket,
+      websocket: mainSockets,
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
+    const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
+      disposeScheduledTaskHost()
       publicAccess.disable()
+      broker.closeAll()
       publicAccessServers.delete(publicAccess)
       return stop(closeActiveConnections)
     }
@@ -723,6 +802,7 @@ export function quiesceServerRuntimeForMigration(ignoreExternalProcesses = false
     const inventory = await migrationRuntimePreview()
     if (!ignoreExternalProcesses && inventory.externalProcesses > 0) throw new Error('Close external CLI sessions before migrating data')
     for (const remote of publicAccessServers) remote.disable()
+    await stopMobilePushServices()
     await quiesceTeamPlanRuntimesForMigration()
     await Promise.all([teamWatcher.stopAndWait(), cronScheduler.stopAndWait(), conversationService.stopForMigration()])
     await migrationMaintenance.drain()
@@ -754,6 +834,7 @@ export async function quiesceServerRuntimeForRecovery(): Promise<void> {
 export async function stopServerRuntimeForShutdown(
   options: { waitForCli?: boolean } = {},
 ): Promise<void> {
+  await stopMobilePushServices()
   for (const remote of publicAccessServers) remote.disable()
   publicAccessServers.clear()
   teamWatcher.stop()

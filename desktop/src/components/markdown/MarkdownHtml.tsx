@@ -9,6 +9,14 @@ import { useTranslation } from '@/i18n'
 type ImageProps = Pick<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'alt' | 'title' | 'width' | 'height' | 'className'>
 type Props = HTMLAttributes<HTMLDivElement> & { html: string }
 
+// Only the mounts created below can carry source identity. Raw HTML attributes
+// cannot impersonate the URL that passed the caller's image resolver.
+const originalImageSources = new WeakMap<HTMLElement, string>()
+
+export function originalMarkdownImageSource(image: HTMLImageElement): string | undefined {
+  return image.parentElement ? originalImageSources.get(image.parentElement) : undefined
+}
+
 function imageName(src: string, fallback: string): string {
   if (/^(blob:|data:)/i.test(src)) return fallback
   try {
@@ -106,7 +114,12 @@ function MarkdownHtmlContent({ html, ...props }: Props) {
   }, [html])
 
   useLayoutEffect(() => {
-    setMounts(Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-md-image]') ?? []))
+    const imageMounts = Array.from(containerRef.current?.querySelectorAll<HTMLElement>('[data-md-image]') ?? [])
+    imageMounts.forEach((mount, index) => {
+      const src = prepared.images[index]?.src
+      if (src) originalImageSources.set(mount, src)
+    })
+    setMounts(imageMounts)
   }, [prepared])
 
   return (

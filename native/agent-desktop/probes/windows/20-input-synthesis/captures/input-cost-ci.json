@@ -1,0 +1,76 @@
+{
+    "probe":  "20-input-synthesis",
+    "question":  "hot-path foreground verify and SendInput cost (min-of-seven, warm-up discarded per A15-13)",
+    "methodology_cites":  [
+                              "A15-13"
+                          ],
+    "foreground_verify":  {
+                              "samples_ms":  [
+                                                 1.7120000000000002,
+                                                 0.2899,
+                                                 0.13290000000000002,
+                                                 0.0937,
+                                                 0.0753,
+                                                 0.0723,
+                                                 0.0693,
+                                                 0.070500000000000007
+                                             ],
+                              "min_ms":  0.070500000000000007,
+                              "median_ms":  0.0937,
+                              "max_ms":  1.7120000000000002,
+                              "n":  7,
+                              "warmup_discarded":  true
+                          },
+    "single_mouse_move":  {
+                              "samples_ms":  [
+                                                 1.3307,
+                                                 0.46430000000000005,
+                                                 0.5625,
+                                                 0.3151,
+                                                 0.2627,
+                                                 0.3673,
+                                                 0.3143,
+                                                 0.2988
+                                             ],
+                              "min_ms":  0.2988,
+                              "median_ms":  0.3673,
+                              "max_ms":  1.3307,
+                              "n":  7,
+                              "warmup_discarded":  true
+                          },
+    "modifier_chord":  {
+                           "samples_ms":  [
+                                              6.6616,
+                                              1.3913,
+                                              0.7294,
+                                              0.67970000000000008,
+                                              0.68580000000000008,
+                                              0.6761,
+                                              0.72530000000000006,
+                                              0.7727
+                                          ],
+                           "min_ms":  0.67970000000000008,
+                           "median_ms":  0.7294,
+                           "max_ms":  6.6616,
+                           "n":  7,
+                           "warmup_discarded":  true
+                       },
+    "text_chunk_32_units":  {
+                                "samples_ms":  [
+                                                   21.418300000000002,
+                                                   9.608,
+                                                   9.351,
+                                                   9.7096,
+                                                   9.4746,
+                                                   9.0338000000000012,
+                                                   9.762,
+                                                   9.3934
+                                               ],
+                                "min_ms":  9.351,
+                                "median_ms":  9.608,
+                                "max_ms":  21.418300000000002,
+                                "n":  7,
+                                "warmup_discarded":  true
+                            },
+    "text_chunk_note":  "32 UTF-16 units, one KEYEVENTF_UNICODE down/up pair per unit (A4-1 chunk size authority)"
+}

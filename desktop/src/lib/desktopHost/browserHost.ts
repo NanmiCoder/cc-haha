@@ -39,11 +39,12 @@ const defaultPermissionState: NotificationPermissionState = 'default'
 export const browserHost: DesktopHost = {
   publicAccess: {
     async getStatus() { return unsupported('Public access management') },
-    async saveCredential() { return unsupported('Public access management') },
-    async deleteCredential() { return unsupported('Public access management') },
+    async configure() { return unsupported('Public access management') },
     async start() { return unsupported('Public access management') },
     async stop() { return unsupported('Public access management') },
     async setAutoStart() { return unsupported('Public access management') },
+    async setP2PEnabled() { return unsupported('Public access management') },
+    async setKeepAwake() { return unsupported('Public access management') },
   },
   kind: 'browser',
   isDesktop: false,
@@ -57,6 +58,8 @@ export const browserHost: DesktopHost = {
     },
   },
   app: {
+    async getLoginStartup() { return { supported: false, enabled: false, requiresApproval: false } },
+    async setLoginStartup() { return { supported: false, enabled: false, requiresApproval: false } },
     async getVersion() {
       return '0.1.0'
     },
@@ -76,6 +79,15 @@ export const browserHost: DesktopHost = {
   commands: {
     async invoke() {
       unsupported('Native commands')
+    },
+  },
+  power: {
+    async getIdleActionState() { return unsupported('Power actions') },
+    async configureIdleAction() { return unsupported('Power actions') },
+    async cancelIdleAction() { return unsupported('Power actions') },
+    async onIdleActionState() { return noopUnlisten },
+    async setPreventSleepWhileRunning() {
+      unsupported('Preventing system sleep')
     },
   },
   clipboard: {

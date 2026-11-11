@@ -358,8 +358,10 @@ export function normalizeContentBlock(block: unknown): NormalizedBlock | null {
   switch (block.type) {
     case 'text':
       return { type: 'text', text: stringOf(block.text) }
-    case 'thinking':
-      return { type: 'thinking', thinking: stringOf(block.thinking) }
+    case 'thinking': {
+      const thinking = stringOf(block.thinking)
+      return thinking.trim() ? { type: 'thinking', thinking } : null
+    }
     case 'redacted_thinking':
       return { type: 'thinking', thinking: '[redacted thinking]' }
     case 'tool_use':

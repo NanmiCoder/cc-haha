@@ -39,6 +39,15 @@ describe('Electron preview security boundary', () => {
     expect(mainSource).toContain('senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame')
   })
 
+  it('does not block the first window on remote network restoration and preserves intent during updates', () => {
+    expect(mainSource).toContain('void getPublicAccessManager().restore()')
+    expect(mainSource).not.toContain('await getPublicAccessManager().restore()')
+    const updatePreparation = mainSource.slice(mainSource.indexOf('registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall'), mainSource.indexOf('registerHandler(ELECTRON_IPC_CHANNELS.updateCancelInstall'))
+    expect(updatePreparation.indexOf('publicAccessManager?.stop()')).toBeGreaterThanOrEqual(0)
+    expect(updatePreparation.indexOf('stopAllAndWait()', updatePreparation.indexOf('try {'))).toBeGreaterThan(updatePreparation.indexOf('publicAccessManager?.stop()'))
+    expect(mainSource).toContain('channel === ELECTRON_IPC_CHANNELS.appSetLoginStartup')
+  })
+
   it('does not give the pet preload the desktop master access token', () => {
     const petPreloadSource = readFileSync(path.join(desktopRoot, 'electron', 'pet-preload.ts'), 'utf8')
 

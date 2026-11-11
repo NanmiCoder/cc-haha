@@ -1340,7 +1340,7 @@ describe('SessionService', () => {
     ))).toBe(true)
   })
 
-  it('should not coalesce in-flight session list scans across config scopes', async () => {
+  it.each([false, true])('should not coalesce in-flight session list scans across config scopes (archived=%s)', async (archived) => {
     const scopeRoot = path.join(tmpDir, 'session-list-request-scopes')
     const firstConfigDir = path.join(scopeRoot, 'first')
     const secondConfigDir = path.join(scopeRoot, 'second')
@@ -1363,6 +1363,17 @@ describe('SessionService', () => {
       '24300001-bbbb-cccc-dddd-eeeeeeeeeeee',
       'Second in-flight scope',
     )
+    if (archived) {
+      for (const [configDir, id] of [
+        [firstConfigDir, '24300000-bbbb-cccc-dddd-eeeeeeeeeeee'],
+        [secondConfigDir, '24300001-bbbb-cccc-dddd-eeeeeeeeeeee'],
+      ] as const) {
+        await fs.mkdir(path.join(configDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(path.join(configDir, 'cc-haha', 'session-archives.json'), JSON.stringify({
+          schemaVersion: 1, sessions: { [id]: { archived: true } },
+        }))
+      }
+    }
 
     const serviceWithSpy = service as unknown as {
       scanSessionListSummary: (...args: unknown[]) => Promise<unknown>
@@ -1385,10 +1396,10 @@ describe('SessionService', () => {
     }
 
     process.env.CLAUDE_CONFIG_DIR = firstConfigDir
-    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const firstScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await firstScanStarted
     process.env.CLAUDE_CONFIG_DIR = secondConfigDir
-    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0 })
+    const secondScopeRequest = service.listSessions({ limit: 10, offset: 0, archived })
     await new Promise(resolve => setTimeout(resolve, 10))
     releaseFirstScan()
 
@@ -1695,6 +1706,18 @@ describe('SessionService', () => {
 
     const messages = await service.getSessionMessages(sessionId)
     expect(messages).toHaveLength(2)
+  })
+
+  it('preserves API error identity and provider details when reading transcript history', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    await writeSessionFile('-tmp-project', sessionId, [
+      makeSnapshotEntry(),
+      { ...makeAssistantEntry('API Error: Go usage limit exceeded'), isApiErrorMessage: true, error: 'billing_error' },
+      makeAssistantEntry('A normal answer mentioning API Error.'),
+    ])
+    const messages = await service.getSessionMessages(sessionId)
+    expect(messages[0]).toMatchObject({ type: 'assistant', isApiErrorMessage: true, error: 'billing_error' })
+    expect(messages[1]).not.toHaveProperty('isApiErrorMessage')
   })
 
   it('preserves structured toolUseResult metadata for AskUserQuestion answers', async () => {
@@ -2317,7 +2340,7 @@ describe('SessionService', () => {
     ])
   })
 
-  it('should hide the task-notification turn itself but keep everything the assistant does after it', async () => {
+  it('should project the task-notification turn as a status and keep everything the assistant does after it', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const firstUserId = crypto.randomUUID()
     const firstAssistantId = crypto.randomUUID()
@@ -2392,6 +2415,7 @@ describe('SessionService', () => {
     expect(messages.map((message) => message.id)).toEqual([
       firstUserId,
       firstAssistantId,
+      taskNotificationId,
       taskAssistantId,
       taskToolUseMessageId,
       taskToolResultId,
@@ -2399,6 +2423,15 @@ describe('SessionService', () => {
       realFollowUpId,
       realAssistantId,
     ])
+    expect(messages[2]).toEqual({
+      id: taskNotificationId,
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'bg-1', status: 'completed', summary: 'Background command completed' }],
+      },
+      timestamp: '2026-01-01T00:01:00.000Z',
+    })
     expect(JSON.stringify(messages)).not.toContain('<task-notification>')
     expect(JSON.stringify(messages)).toContain('后台命令跑完了，我来重启服务')
     expect(JSON.stringify(messages)).toContain('server restarted')
@@ -2483,6 +2516,55 @@ describe('SessionService', () => {
     expect((await service.getSessionTaskNotifications(sessionId)).map((item) => item.taskId)).toEqual(
       expect.arrayContaining(['alpha', 'bravo']),
     )
+  })
+
+  it('projects the isMeta batch of settled agents as one status listing every agent', async () => {
+    // print.ts joins settled local_agent notifications into one isMeta prompt.
+    const sessionId = 'cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const userId = crypto.randomUUID()
+    const dispatchedId = crypto.randomUUID()
+    const batchId = crypto.randomUUID()
+    const replyId = crypto.randomUUID()
+    const notification = (taskId: string, status: string, summary: string) => [
+      '<task-notification>',
+      `<task-id>${taskId}</task-id>`,
+      `<tool-use-id>call_${taskId}</tool-use-id>`,
+      '<task-type>local_agent</task-type>',
+      `<status>${status}</status>`,
+      `<summary>${summary}</summary>`,
+      '<result>long agent report</result>',
+      '</task-notification>',
+    ].join('\n')
+
+    await writeSessionFile('-tmp-agent-batch', sessionId, [
+      makeSnapshotEntry(),
+      { ...makeUserEntry('review in parallel', userId), parentUuid: null },
+      { ...makeAssistantEntry('two agents started', userId), uuid: dispatchedId },
+      {
+        ...makeUserEntry([
+          notification('agent-a', 'completed', 'Agent "Review API" completed'),
+          notification('agent-b', 'killed', 'Agent "Review UI" was stopped'),
+        ].join('\n'), batchId),
+        isMeta: true,
+        parentUuid: dispatchedId,
+      },
+      { ...makeAssistantEntry('both reviews are in', batchId), uuid: replyId },
+    ])
+
+    const messages = await service.getSessionMessages(sessionId)
+
+    expect(messages.map((message) => message.id)).toEqual([userId, dispatchedId, batchId, replyId])
+    expect(messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [
+          { taskId: 'agent-a', status: 'completed', summary: 'Agent "Review API" completed' },
+          { taskId: 'agent-b', status: 'stopped', summary: 'Agent "Review UI" was stopped' },
+        ],
+      },
+    })
+    expect(JSON.stringify(messages)).not.toContain('long agent report')
   })
 
   it('uses bounded locators for snapshots and task notifications with safe fallback', async () => {
@@ -2585,7 +2667,10 @@ describe('SessionService', () => {
       serveWrongEmptyFingerprint = false
 
       const callsBeforeFullHistory = locatorCalls
-      expect(await indexedService.getSessionMessages(sessionId)).toHaveLength(1)
+      expect((await indexedService.getSessionMessages(sessionId)).map(message => message.id)).toEqual([
+        'task-notification-locator',
+        expect.any(String),
+      ])
       expect(locatorCalls).toBe(callsBeforeFullHistory)
 
       mode = 'shadow'
@@ -3965,6 +4050,78 @@ describe('SessionService', () => {
         totalOutputTokens: 5,
       })
   })
+
+  it('shows the provider fallback window as the context window of a session without a running CLI', async () => {
+    // deepseek-v4-flash is 1M in the built-in table. Capping the provider's
+    // fallback window lowers compaction, and the window shown has to follow.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-cap')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    // The snapshot cache is keyed on the saved providers, so the capped state
+    // has to be visible there as it is when the user saves the setting.
+    let autoCompactWindow: number | undefined
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'cap-provider',
+      providers: [{ id: 'cap-provider', models: {}, autoCompactWindow }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async () => (
+      autoCompactWindow === undefined
+        ? {}
+        : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(autoCompactWindow) }
+    ))
+
+    const uncapped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(uncapped?.contextEstimate?.rawMaxTokens).toBe(1_000_000)
+
+    autoCompactWindow = 200_000
+    const capped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(capped?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
+
+  it('caps a session whose recorded provider was deleted with the provider it now runs on', async () => {
+    // A resumed session is relaunched on the active provider when the recorded
+    // one is gone, so the window shown must use the active provider's cap.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-deleted-provider')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeSessionMetaEntry(workDir), sessionId, runtimeProviderId: 'deleted-provider' },
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'active-provider',
+      providers: [{ id: 'active-provider', models: {}, autoCompactWindow: 200_000 }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async (id: string) => (
+      id === 'active-provider' ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' } : null
+    ))
+
+    const snapshot = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(snapshot?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
 })
 
 // ============================================================================
@@ -4232,6 +4389,54 @@ describe('Sessions API', () => {
       blockLine(),
       blockLine(),
       blockLine(),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      usage?: {
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalCacheReadInputTokens: number
+        totalCacheCreationInputTokens: number
+      }
+    }
+
+    expect(body.usage?.totalInputTokens).toBe(100)
+    expect(body.usage?.totalOutputTokens).toBe(250)
+    expect(body.usage?.totalCacheReadInputTokens).toBe(1_000)
+    expect(body.usage?.totalCacheCreationInputTokens).toBe(20)
+  })
+
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-zero-first-'))
+    const sessionId = '33333333-4444-5555-6666-777777777777'
+    const projectDir = '-tmp-api-session-usage-zero-first'
+    // The first line of a reply can be written before the final usage is known; only a later
+    // line carries the real output tokens. Keeping the first line recorded such replies as ~0.
+    const blockLine = (usage: Record<string, number>) => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: 'msg_zero_first_reply',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'block' }],
+        usage,
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      blockLine({ input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 20 }),
     ])
 
     const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
@@ -4540,12 +4745,19 @@ describe('Sessions API', () => {
       messages: unknown[]
       taskNotifications: unknown[]
     }
-    expect(body.messages).toHaveLength(3)
+    expect(body.messages).toHaveLength(4)
     expect(body.messages[1]).toMatchObject({
       type: 'assistant',
       usage: { input_tokens: 1234, output_tokens: 56 },
     })
     expect(body.messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'bg-1', status: 'failed', summary: 'Background command failed & stopped' }],
+      },
+    })
+    expect(body.messages[3]).toMatchObject({
       type: 'assistant',
       content: [{ type: 'text', text: 'the background command failed, investigating' }],
     })
@@ -4660,7 +4872,14 @@ describe('Sessions API', () => {
       prompt: 'Read session routes',
       source: 'subagent-jsonl',
     })
-    expect(body.messages).toHaveLength(3)
+    expect(body.messages).toHaveLength(4)
+    expect(body.messages[2]).toMatchObject({
+      type: 'system',
+      content: {
+        subtype: 'background_continue',
+        notifications: [{ taskId: 'child-shell-task', status: 'stopped', summary: 'Child shell stopped' }],
+      },
+    })
     expect(JSON.stringify(body.messages)).not.toContain('<task-notification>')
     expect(JSON.stringify(body.messages)).toContain('Child shell stopped, continuing the review')
     expect(body.taskNotifications).toEqual([{
@@ -6337,6 +6556,58 @@ describe('Sessions API', () => {
     expect(launchInfo!.transcriptMessageCount).toBe(0)
   })
 
+  it('POST /api/sessions/:id/rewind keeps hidden entries the remaining conversation is chained through', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-111111111111'
+    const ids = Array.from({ length: 9 }, () => crypto.randomUUID())
+    const [firstUser, skillPrompt, firstReply, interrupted, sentinel, resumed, resumedReply, target, targetReply] = ids
+    const chained = (entry: Record<string, unknown>, uuid: string, parentUuid: string | null) => ({
+      ...entry,
+      uuid,
+      parentUuid,
+      sessionId,
+    })
+    const filePath = await writeSessionFile('-tmp-api-rewind-hidden-chain', sessionId, [
+      makeSnapshotEntry(),
+      chained(makeUserEntry('first prompt'), firstUser, null),
+      // Hidden from history: a skill body and the sentinel a resumed CLI writes
+      // after an interrupted turn. Later messages are chained through both.
+      chained({ ...makeUserEntry('Base directory for this skill: /skills/demo'), isMeta: true }, skillPrompt, firstUser),
+      chained(makeAssistantEntry('first reply'), firstReply, skillPrompt),
+      chained(makeUserEntry('second prompt'), interrupted, firstReply),
+      chained({
+        ...makeAssistantEntry('No response requested.'),
+        message: { model: '<synthetic>', id: 'msg_synthetic', type: 'message', role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] },
+      }, sentinel, interrupted),
+      chained(makeUserEntry('continue'), resumed, sentinel),
+      chained(makeAssistantEntry('continued reply'), resumedReply, resumed),
+      chained(makeUserEntry('prompt to edit and resend'), target, resumedReply),
+      chained(makeAssistantEntry('reply being rewound'), targetReply, target),
+    ])
+
+    const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userMessageIndex: 3,
+        targetUserMessageId: target,
+        expectedContent: 'prompt to edit and resend',
+      }),
+    })
+    expect(executeRes.status).toBe(200)
+    const executeBody = await executeRes.json() as {
+      conversation: { removedMessageIds: string[] }
+    }
+    expect(executeBody.conversation.removedMessageIds).toEqual([target, targetReply])
+
+    // What --resume rebuilds from the rewritten file must still reach the start.
+    const { loadTranscriptFile, buildConversationChain } = await import('../../utils/sessionStorage.js')
+    const loaded = await loadTranscriptFile(filePath)
+    const chain = buildConversationChain(loaded.messages, loaded.messages.get(resumedReply as never)!)
+    expect(chain.map((message) => message.uuid)).toEqual(ids.slice(0, 7))
+    expect(loaded.messages.has(target as never)).toBe(false)
+    expect(loaded.messages.has(targetReply as never)).toBe(false)
+  })
+
   it('POST /api/sessions/:id/rewind should target the selected message id instead of a shifted visible index', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-ffffffffffff'
     const firstUserId = crypto.randomUUID()
@@ -6431,9 +6702,9 @@ describe('Sessions API', () => {
     ])
   })
 
-  it('POST /api/sessions/:id/rewind should restore a single edited file', async () => {
-    const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'
-    const workDir = path.join(tmpDir, 'single-file-fixture')
+  it.each(['both', 'code'] as const)('POST /api/sessions/:id/rewind restores a single file in %s mode', async (mode) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `single-file-fixture-${mode}`)
     const targetFile = path.join(workDir, 'src', 'app.js')
     const userId = crypto.randomUUID()
     const assistantId = crypto.randomUUID()
@@ -6486,7 +6757,7 @@ describe('Sessions API', () => {
     const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userMessageIndex: 0 }),
+      body: JSON.stringify({ userMessageIndex: 0, mode }),
     })
     expect(executeRes.status).toBe(200)
     expect(await fs.readFile(targetFile, 'utf-8')).toBe(
@@ -6494,7 +6765,10 @@ describe('Sessions API', () => {
     )
 
     const remainingMessages = await service.getSessionMessages(sessionId)
-    expect(remainingMessages).toHaveLength(0)
+    expect(remainingMessages.map(message => message.id)).toEqual(mode === 'code' ? [userId, assistantId] : [])
+    const result = await executeRes.json() as { conversation: { messagesRemoved: number }; mode: string }
+    expect(result.mode).toBe(mode)
+    expect(result.conversation.messagesRemoved).toBe(mode === 'code' ? 0 : 2)
   })
 
   it('POST /api/sessions/:id/rewind should reject unsafe tracked paths before any partial restore', async () => {
@@ -9453,7 +9727,7 @@ describe('Sessions API', () => {
 
     const badRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetUserMessageId: userId, mode: 'code' }),
+      body: JSON.stringify({ targetUserMessageId: userId, mode: 'unknown' }),
     })
     expect(badRes.status).toBe(400)
 
@@ -10013,7 +10287,7 @@ describe('Sessions API', () => {
     expect(body.activityState).toBe('idle')
   })
 
-  it('POST /api/sessions/:id/chat should queue a message', async () => {
+  it('POST /api/sessions/:id/chat rejects unimplemented delivery without leaving running activity', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     await writeSessionFile('-tmp-api-test', sessionId, [
       makeSnapshotEntry(),
@@ -10025,18 +10299,17 @@ describe('Sessions API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: 'New question' }),
     })
-    expect(res.status).toBe(202)
+    expect(res.status).toBe(501)
 
-    const body = (await res.json()) as { messageId: string; status: string }
-    expect(body.status).toBe('queued')
-    expect(body.messageId).toBeTruthy()
+    const body = (await res.json()) as { error: string; message: string }
+    expect(body.error).toBe('REST_CHAT_NOT_IMPLEMENTED')
+    expect(body.message).toContain('WebSocket')
+    expect(body).not.toHaveProperty('messageId')
 
     const statusRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/status`)
     const status = (await statusRes.json()) as { state: string; activityState: string }
-    expect(status.state).toBe('thinking')
-    expect(status.activityState).toBe('running')
-
-    await fetch(`${baseUrl}/api/sessions/${sessionId}/chat/stop`, { method: 'POST' })
+    expect(status.state).toBe('idle')
+    expect(status.activityState).toBe('idle')
   })
 
   it('POST /api/sessions/:id/chat/stop should reset state to idle', async () => {

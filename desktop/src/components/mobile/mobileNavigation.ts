@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTabStore, type Tab } from '../../stores/tabStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useChatStore } from '../../stores/chatStore'
 
 /**
- * Where the phone shell is. Home is the session list; a session, Settings and
- * the detail pages (a subagent run, a team member) stack on top of it. Every
+ * Where the phone shell is. Home is the retained new-chat page; Settings and
+ * detail pages (a subagent run, a team member) can sit above a chat. Every
  * other tab type is a desktop surface with no phone layout and is sent home.
  */
 export type MobileRoute =
@@ -32,13 +32,6 @@ export function resolveMobileRoute(tabs: readonly Tab[], activeTabId: string | n
     default:
       return HOME
   }
-}
-
-/** How many pages sit above home; the browser history mirrors this. */
-export function mobileRouteDepth(route: MobileRoute): number {
-  if (route.kind === 'home') return 0
-  if (route.kind === 'detail') return 2
-  return 1
 }
 
 /** Whether a tab can be shown by the phone shell at all. */
@@ -103,8 +96,8 @@ function isGuardState(state: unknown): state is HistoryGuardState {
  * deleted session, a redirect), the spare entry is consumed quietly so the
  * next back leaves the app as expected instead of doing nothing.
  *
- * `goUp` is what one level up means; the shell passes its own when something
- * other than a route (the new-task sheet) is the top level.
+ * `goUp` is what one level up means; the shell also handles the session drawer
+ * and its nested dialogs before returning from a full-page draft or detail.
  */
 export function useMobileHistoryGuard(
   depth: number,
@@ -114,6 +107,7 @@ export function useMobileHistoryGuard(
   const guardedRef = useRef(false)
   const ignoreNextPopRef = useRef(false)
   const goUpRef = useRef(goUp)
+  const [popRevision, setPopRevision] = useState(0)
   goUpRef.current = goUp
 
   useEffect(() => {
@@ -128,7 +122,7 @@ export function useMobileHistoryGuard(
         window.history.back()
       }
     }
-  }, [depth, enabled])
+  }, [depth, enabled, popRevision])
 
   useEffect(() => {
     if (!enabled) return
@@ -140,16 +134,19 @@ export function useMobileHistoryGuard(
       if (!guardedRef.current) return
       guardedRef.current = false
       goUpRef.current()
+      // Closing a nested picker may leave navigation at the same depth. Re-arm
+      // from the next render instead of relying only on a depth change.
+      setPopRevision(revision => revision + 1)
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [enabled])
 
-  return () => {
+  return useCallback(() => {
     if (enabled && guardedRef.current && isGuardState(window.history.state)) {
       window.history.back()
       return
     }
     goUpRef.current()
-  }
+  }, [enabled])
 }

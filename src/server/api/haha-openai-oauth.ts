@@ -11,6 +11,7 @@
 import { z } from 'zod'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { OpenAITokenHttpError } from '../../services/openaiAuth/client.js'
 
 const StartRequestSchema = z.object({
   serverPort: z.number().int().positive(),
@@ -52,7 +53,20 @@ export async function handleHahaOpenAIOAuthApi(
     }
 
     if (action === undefined && req.method === 'GET') {
-      const tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
+      let tokens: Awaited<ReturnType<typeof hahaOpenAIOAuthService.ensureFreshTokens>>
+      try {
+        tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
+      } catch (error) {
+        if (error instanceof OpenAITokenHttpError && error.requiresReauthentication) {
+          return Response.json({ loggedIn: false })
+        }
+        // A failed status check cannot establish that the account is signed out.
+        // Do not expose upstream bodies or credentials through status polling.
+        return Response.json({
+          error: 'OAUTH_REFRESH_UNAVAILABLE',
+          message: 'Unable to verify OpenAI sign-in status right now. Please retry.',
+        }, { status: 503 })
+      }
       if (!tokens) {
         return Response.json({ loggedIn: false })
       }

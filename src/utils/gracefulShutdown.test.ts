@@ -1,8 +1,9 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test'
-import { access, mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
 
 let tempDir: string | null = null
 
@@ -134,4 +135,40 @@ test('subprocess shutdown exits only after pending stdout is flushed', async () 
 
   expect(exitCode, stderr).toBe(0)
   await access(markerPath)
+}, 15_000)
+
+test('extended native cleanup preserves the full SessionEnd hook budget', async () => {
+  tempDir = await mkdtemp(join(tmpdir(), 'cc-haha-native-hook-budget-'))
+  const markerPath = join(tempDir, 'events')
+  const root = process.cwd()
+  const code = `
+    import { appendFileSync } from 'node:fs'
+    import { spyOn } from 'bun:test'
+    const mark = event => appendFileSync(${JSON.stringify(markerPath)}, event + '\\n')
+    const hooks = await import(${JSON.stringify(pathToFileURL(resolve('src/utils/hooks.ts')).href)})
+    spyOn(hooks, 'getSessionEndHookTimeoutMs').mockReturnValue(1500)
+    spyOn(hooks, 'executeSessionEndHooks').mockImplementation(async () => {
+      mark('hook-start')
+      await new Promise(resolve => setTimeout(resolve, 1200))
+      mark('hook-end')
+    })
+    const { registerCleanup } = await import(${JSON.stringify(pathToFileURL(resolve('src/utils/cleanupRegistry.ts')).href)})
+    registerCleanup(async () => {
+      await new Promise(resolve => setTimeout(resolve, 4250))
+      mark('cleanup-end')
+    }, { timeoutMs: 4500 })
+    const { gracefulShutdown } = await import(${JSON.stringify(pathToFileURL(resolve('src/utils/gracefulShutdown.ts')).href)})
+    await gracefulShutdown(0)
+  `
+  const child = Bun.spawn([process.execPath, '--no-env-file', '--preload', resolve('preload.ts'), '-e', code], {
+    cwd: root,
+    env: createSandboxedTestEnvironment(tempDir, {
+      NODE_ENV: 'production', CI: '1', CC_HAHA_SKIP_DOTENV: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1',
+    }),
+    stdout: 'ignore', stderr: 'pipe',
+  })
+  const [exitCode, diagnostic] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  expect(exitCode, diagnostic).toBe(0)
+  expect(await readFile(markerPath, 'utf8')).toBe('cleanup-end\nhook-start\nhook-end\n')
 }, 15_000)

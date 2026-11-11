@@ -39,7 +39,38 @@ test('explicit replacement permits remote endpoint edit and remains redacted', a
   expect(await response.text()).not.toContain('fake-new-key')
 })
 
+test('remote proxy changes reject retained keys before persistence and preserve a name-only edit', async () => {
+  const saved = { ...provider, proxy: { mode: 'manual' as const, url: 'http://fake-user:fake-password@old-proxy.invalid:7890' } }
+  spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(saved)
+  for (const proxy of [null, { mode: 'direct' }, { mode: 'manual', url: 'http://other-proxy.invalid:7890' }]) {
+    const response = await update({ proxy })
+    expect(response.status).toBe(400)
+    expect((await response.json()).code).toBe('REMOTE_PROVIDER_CREDENTIAL_REQUIRED')
+  }
+  expect(ProviderService.prototype.updateProvider).not.toHaveBeenCalled()
+  expect((await update({ name: 'Renamed' })).status).toBe(200)
+  expect(ProviderService.prototype.updateProvider).toHaveBeenCalledWith('fixture', { name: 'Renamed' })
+})
+
+test('remote proxy changes accept explicit replacement keys without exposing the proxy URL', async () => {
+  const saved = { ...provider, imageGeneration: { model: 'image', apiKey: 'fake-saved-image-key' } }
+  spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(saved)
+  const proxy = { mode: 'manual', url: 'http://new-user:new-password@other-proxy.invalid:7890' }
+  const denied = await update({ proxy, apiKey: 'fake-new-main' })
+  expect(denied.status).toBe(400)
+  expect(ProviderService.prototype.updateProvider).not.toHaveBeenCalled()
+  const input = { proxy, apiKey: 'fake-new-main', imageGeneration: { model: 'image', apiKey: 'fake-new-image' } }
+  const accepted = await update(input)
+  expect(accepted.status).toBe(200)
+  expect(ProviderService.prototype.updateProvider).toHaveBeenCalledWith('fixture', input)
+  const text = await accepted.text()
+  expect(JSON.parse(text).provider.proxy).toEqual({ mode: 'manual' })
+  for (const secret of ['new-user', 'new-password', 'fake-new-main', 'fake-new-image']) expect(text).not.toContain(secret)
+})
+
 test('desktop retains the existing endpoint editing contract', async () => {
   expect((await update({ baseUrl: 'https://new.invalid' }, false)).status).toBe(200)
   expect(ProviderService.prototype.updateProvider).toHaveBeenCalledWith('fixture', { baseUrl: 'https://new.invalid' })
+  expect((await update({ proxy: { mode: 'direct' } }, false)).status).toBe(200)
+  expect(ProviderService.prototype.updateProvider).toHaveBeenCalledWith('fixture', { proxy: { mode: 'direct' } })
 })

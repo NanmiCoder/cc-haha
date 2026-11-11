@@ -6,9 +6,10 @@ import { ApiError } from '../middleware/errorHandler.js'
 import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.js'
 import { normalizeVoicePreferences } from './voice/preferences.js'
+import { normalizeProjectAdditionalDirectories, resolveProjectDirectories, validateProjectAdditionalDirectories, type ProjectAdditionalDirectories, type ProjectDirectories } from './projectDirectories.js'
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from './voice/types.js'
 
-const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 6
+const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 7
 const MAX_PROJECT_PREFERENCE_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_KEY_LENGTH = 4_096
@@ -45,6 +46,13 @@ export type DesktopProfilePreferences = {
   avatarUpdatedAt: string | null
 }
 
+/** Read-only identity shared with connected phones; no local paths or unrelated preferences. */
+export type DesktopProfileSummary = {
+  displayName: string
+  subtitle: string
+  avatarDataUrl: string | null
+}
+
 export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
@@ -66,6 +74,7 @@ export type DesktopUiPreferences = {
   pet: DesktopPetPreferences
   voiceInput: DesktopVoiceInputPreferences
   projectDisplayNames: ProjectDisplayNames
+  projectAdditionalDirectories: ProjectAdditionalDirectories
   [key: string]: unknown
 }
 
@@ -111,6 +120,7 @@ function defaultPreferences(): DesktopUiPreferences {
     pet: { ...DEFAULT_PET_PREFERENCES },
     voiceInput: { ...DEFAULT_VOICE_PREFERENCES },
     projectDisplayNames: createProjectDisplayNames(),
+    projectAdditionalDirectories: {},
   }
 }
 
@@ -350,6 +360,7 @@ function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | n
     pet: normalizeDesktopPetPreferences(record.pet),
     voiceInput: normalizeVoicePreferences(record.voiceInput),
     projectDisplayNames: normalizeProjectDisplayNames(record.projectDisplayNames),
+    projectAdditionalDirectories: normalizeProjectAdditionalDirectories(record.projectAdditionalDirectories),
   }
 }
 
@@ -502,6 +513,29 @@ export class DesktopUiPreferencesService {
 
       await this.writePreferences(nextPreferences)
       return nextPreferences
+    })
+  }
+
+  async getProjectDirectories(workDir: unknown): Promise<ProjectDirectories> {
+    const project = await resolveProjectDirectories(workDir)
+    const { preferences } = await this.readPreferences()
+    const directories = preferences.projectAdditionalDirectories
+    return { ...project, additionalDirectories: [...(Object.hasOwn(directories, project.projectKey) ? directories[project.projectKey]! : [])] }
+  }
+
+  async updateProjectDirectories(value: unknown): Promise<ProjectDirectories> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw ApiError.badRequest('Project directories update must be an object')
+    const patch = value as Record<string, unknown>
+    const project = await resolveProjectDirectories(patch.workDir)
+    const additionalDirectories = await validateProjectAdditionalDirectories(project.mainDirectory, patch.additionalDirectories)
+    return this.withWriteLock(this.getPreferencesPath(), async () => {
+      const { preferences } = await this.readPreferences()
+      const projectAdditionalDirectories = {
+        ...preferences.projectAdditionalDirectories,
+        [project.projectKey]: additionalDirectories,
+      }
+      await this.writePreferences({ ...preferences, projectAdditionalDirectories })
+      return { ...project, additionalDirectories }
     })
   }
 
@@ -673,6 +707,20 @@ export class DesktopUiPreferencesService {
       await this.writePreferences(nextPreferences)
       return nextPreferences
     })
+  }
+
+  async readProfileSummary(): Promise<DesktopProfileSummary> {
+    const { preferences } = await this.readPreferences()
+    const avatar = await this.readProfileAvatar()
+    return {
+      displayName: preferences.profile.displayName,
+      subtitle: preferences.profile.subtitle,
+      // Inline bytes keep authenticated native image loads inside the existing API transport.
+      // Out-of-band files must not bypass the managed avatar upload size limit.
+      avatarDataUrl: avatar && avatar.bytes.byteLength <= MAX_PROFILE_AVATAR_BYTES
+        ? `data:${avatar.contentType};base64,${Buffer.from(avatar.bytes).toString('base64')}`
+        : null,
+    }
   }
 
   async readProfileAvatar(): Promise<{ bytes: Uint8Array; contentType: string } | null> {

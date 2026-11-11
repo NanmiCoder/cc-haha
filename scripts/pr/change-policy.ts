@@ -5,6 +5,7 @@ import { dependentFilesForChangeSet } from './module-graph'
 
 export type ChangeArea =
   | 'desktop'
+  | 'mobile'
   | 'server'
   | 'adapters'
   | 'docs'
@@ -26,9 +27,12 @@ export type ChangePolicyResult = {
   missingTestSignals: string[]
   checks: {
     desktop: boolean
+    mobile: boolean
     server: boolean
     adapters: boolean
     desktopNative: boolean
+    mobileAndroid: boolean
+    remoteDirectory: boolean
     providerContract: boolean
     chatContract: boolean
     agentFlow: boolean
@@ -46,6 +50,7 @@ const ALLOW_COVERAGE_BASELINE_LABEL = 'allow-coverage-baseline-change'
 
 const areaLabels: Record<ChangeArea, string> = {
   desktop: 'area:desktop',
+  mobile: 'area:mobile',
   server: 'area:server',
   adapters: 'area:adapters',
   docs: 'area:docs',
@@ -163,6 +168,12 @@ const agentFlowPrefixes = [
 ]
 
 const persistencePrefixes = [
+  'scripts/issue-router/',
+  '.agents/workflows/issue-router.md',
+  'src/remote/directory/selfHosted',
+  'desktop/electron/services/publicAccess',
+  'src/server/publicAccess',
+  'src/server/nativeRemoteIdentity',
   'src/server/services/persistentStorageMigrations',
   'src/server/__tests__/persistence-upgrade',
   'src/server/services/desktopUiPreferencesService',
@@ -184,6 +195,8 @@ const policyPrefixes = [
 ]
 
 const policyExactPaths = new Set([
+  '.agents/workflows/issue-router.md',
+  '.easignore',
   '.github/CODEOWNERS',
   '.github/copilot-instructions.md',
   '.github/pull_request_template.md',
@@ -203,6 +216,7 @@ const docsExactPaths = new Set([
 ])
 
 const releaseExactPaths = new Set([
+  '.easignore',
   '.github/workflows/pr-quality.yml',
   '.github/workflows/pr-triage.yml',
   '.github/workflows/release-desktop.yml',
@@ -212,6 +226,9 @@ const releaseExactPaths = new Set([
   'scripts/pr/check-pr.ts',
   'scripts/pr/run-server-tests.ts',
   'scripts/release.ts',
+  'scripts/mobile-release.ts',
+  'scripts/mobile-release.test.ts',
+  '.github/workflows/release-mobile.yml',
   'desktop/electron/tsconfig.json',
   'desktop/scripts/build-macos-arm64.sh',
   'desktop/scripts/build-windows-x64.ps1',
@@ -246,11 +263,15 @@ function areasForPath(path: string): ChangeArea[] {
     return []
   }
 
-  if (path.startsWith('desktop/') || path.startsWith('native/')) {
+  if (path.startsWith('desktop/') || path.startsWith('native/') || path.startsWith('legacy-mobile/')) {
     areas.add('desktop')
   }
 
-  if (path.startsWith('src/server/')) {
+  if (path.startsWith('mobile/')) {
+    areas.add('mobile')
+  }
+
+  if (path.startsWith('src/server/') || path.startsWith('src/remote/directory/') || path.startsWith('services/remote-directory/')) {
     areas.add('server')
   }
 
@@ -399,6 +420,10 @@ export function evaluateChangePolicy(
     desktopNativeExactPaths.has(file)
   ))
   const touchesProviderContract = selectionFiles.some((file) => startsWithAny(file, providerContractPrefixes))
+  const touchesMobileAndroid = selectionFiles.some((file) => (file.startsWith('mobile/') || file.startsWith('legacy-mobile/')) && !isAgentInstructionPath(file))
+  const touchesRemoteDirectory = selectionFiles.some((file) => (
+    file.startsWith('services/remote-directory/') || file.startsWith('src/remote/directory/') || file.startsWith('src/shared/remoteIdentityProtocol')
+  ))
   const touchesChatContract = selectionFiles.some((file) => startsWithAny(file, chatContractPrefixes))
   const touchesAgentFlow = selectionFiles.some((file) => startsWithAny(file, agentFlowPrefixes))
   const touchesAgentE2e = selectionFiles.some((file) => (
@@ -448,9 +473,19 @@ export function evaluateChangePolicy(
     missingTestSignals: missingTests,
     checks: {
       desktop: touchesDesktopWeb,
+      mobile: selectionFiles.some((file) => (
+        (file.startsWith('mobile/') && !isAgentInstructionPath(file)) ||
+        file === '.easignore' ||
+        file === 'package.json' || file === 'bun.lock' ||
+        file === 'scripts/pr/run-mobile-checks.ts' ||
+        file === '.github/workflows/pr-quality.yml' ||
+        file === '.github/workflows/nightly-quality.yml'
+      )),
       server: selectionFiles.some((file) => file.startsWith('src/') && !isAgentInstructionPath(file)),
       adapters: selectionFiles.some((file) => file.startsWith('adapters/') && !isAgentInstructionPath(file)),
       desktopNative: touchesDesktopNative,
+      mobileAndroid: touchesMobileAndroid,
+      remoteDirectory: touchesRemoteDirectory,
       providerContract: touchesProviderContract,
       chatContract: touchesChatContract,
       agentFlow: touchesAgentFlow,
@@ -508,12 +543,32 @@ function readListFile(path: string) {
     .filter(Boolean)
 }
 
+function readNullDelimitedGitPaths(path: string) {
+  let content: string
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(path))
+  } catch {
+    throw new Error('Invalid NUL-delimited Git paths: expected a readable UTF-8 file.')
+  }
+  if (content === '') return []
+  if (!content.endsWith('\0')) {
+    throw new Error('Invalid NUL-delimited Git paths: missing final NUL.')
+  }
+  const files = content.slice(0, -1).split('\0')
+  // Git uses repo-relative POSIX paths. Fail closed if legacy path normalization
+  // would rewrite a legal filename (for example a literal backslash or end space).
+  if (files.some(file => !file || normalizePath(file) !== file)) {
+    throw new Error('Invalid NUL-delimited Git paths: normalization would lose a filename.')
+  }
+  return files
+}
+
 function formatSummary(result: ChangePolicyResult) {
   const lines = [
     'PR change policy',
     `  Areas: ${result.areas.length ? result.areas.join(', ') : 'none'}`,
     `  Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}`,
-    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, agentE2e=${result.checks.agentE2e}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
+    `  Checks: desktop=${result.checks.desktop}, mobile=${result.checks.mobile}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, agentE2e=${result.checks.agentE2e}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
   ]
 
   if (result.cliCoreOverride) {
@@ -564,9 +619,12 @@ function writeGithubOutputs(result: ChangePolicyResult) {
     blocking_reasons: result.blockingReasons.join(' | '),
     cli_core_override: result.cliCoreOverride ?? '',
     desktop_checks: String(result.checks.desktop),
+    mobile_checks: String(result.checks.mobile),
     server_checks: String(result.checks.server),
     adapter_checks: String(result.checks.adapters),
     desktop_native_checks: String(result.checks.desktopNative),
+    mobile_android_checks: String(result.checks.mobileAndroid),
+    remote_directory_checks: String(result.checks.remoteDirectory),
     provider_contract_checks: String(result.checks.providerContract),
     chat_contract_checks: String(result.checks.chatContract),
     agent_flow_checks: String(result.checks.agentFlow),
@@ -588,17 +646,18 @@ function writeGithubOutputs(result: ChangePolicyResult) {
 if (import.meta.main) {
   const args = parseArgs(process.argv.slice(2))
   const filesPath = args.get('--files')
+  const files0Path = args.get('--files0')
   const labelsPath = args.get('--labels-file')
   const labelsArg = args.get('--labels')
   const authorPath = args.get('--author-file')
   const codeOwnersPath = args.get('--codeowners-file')
 
-  if (!filesPath) {
-    console.error('Usage: bun run scripts/pr/change-policy.ts --files <changed-files.txt> [--labels-file <labels.txt>] [--author-file <author.txt> --codeowners-file <base CODEOWNERS>]')
+  if ((!filesPath && !files0Path) || (filesPath && files0Path)) {
+    console.error('Usage: bun run scripts/pr/change-policy.ts (--files <changed-files.txt> | --files0 <changed-files.nul>) [--labels-file <labels.txt>] [--author-file <author.txt> --codeowners-file <base CODEOWNERS>]')
     process.exit(2)
   }
 
-  const files = readListFile(filesPath)
+  const files = files0Path ? readNullDelimitedGitPaths(files0Path) : readListFile(filesPath!)
   const labels = labelsPath
     ? readListFile(labelsPath)
     : labelsArg?.split(',').map((label) => label.trim()).filter(Boolean) ?? []

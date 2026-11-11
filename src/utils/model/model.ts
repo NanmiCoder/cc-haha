@@ -41,6 +41,7 @@ import {
   resolveOpenAICodexModel,
 } from '../../services/openaiAuth/models.js'
 import { capitalize } from '../stringUtils.js'
+import { getProviderRouteForModel } from './providerEnvScope.js'
 
 export type ModelShortName = string
 export type ModelName = string
@@ -131,7 +132,7 @@ export function getDefaultFableModel(): ModelName {
   if (shouldUseThirdPartyAnthropicModelDefaults()) {
     return getDefaultOpusModel()
   }
-  return getModelStrings().fable5
+  return getModelStrings().fable52
 }
 
 // @[MODEL LAUNCH]: Update the default Opus model (3P providers may lag so keep defaults unchanged).
@@ -193,6 +194,10 @@ export function getRuntimeMainLoopModel(params: {
   exceeds200kTokens?: boolean
 }): ModelName {
   const { permissionMode, mainLoopModel, exceeds200kTokens = false } = params
+
+  // An Agent pinned to a saved provider keeps its model in plan mode too: the
+  // plan-mode swaps below name the session provider's slots.
+  if (getProviderRouteForModel(mainLoopModel)) return mainLoopModel
 
   // opusplan uses Opus in plan mode without [1m] suffix.
   if (
@@ -275,14 +280,19 @@ export function getDefaultMainLoopModel(): ModelName {
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
   // Special cases for Claude 4+ models to differentiate versions
-  // Order matters: check more specific versions first (4-5 before 4)
+  // Order matters: check more specific versions first (4-5 before 4).
+  // OpenRouter uses dotted 5.5 IDs; canonicalize only the internal identity,
+  // leaving the namespaced outbound model ID untouched.
+  if (name.includes('claude-fable-5-2')) {
+    return 'claude-fable-5-2'
+  }
   if (name.includes('claude-fable-5-1')) {
     return 'claude-fable-5-1'
   }
   if (name.includes('claude-fable-5')) {
     return 'claude-fable-5'
   }
-  if (name.includes('claude-opus-5-5')) {
+  if (name.includes('claude-opus-5-5') || name.includes('anthropic/claude-opus-5.5')) {
     return 'claude-opus-5-5'
   }
   if (name.includes('claude-opus-5')) {
@@ -303,7 +313,7 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-opus-4')) {
     return 'claude-opus-4'
   }
-  if (name.includes('claude-sonnet-5-5')) {
+  if (name.includes('claude-sonnet-5-5') || name.includes('anthropic/claude-sonnet-5.5')) {
     return 'claude-sonnet-5-5'
   }
   if (name.includes('claude-sonnet-5')) {
@@ -318,7 +328,7 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-sonnet-4')) {
     return 'claude-sonnet-4'
   }
-  if (name.includes('claude-haiku-5-5')) {
+  if (name.includes('claude-haiku-5-5') || name.includes('anthropic/claude-haiku-5.5')) {
     return 'claude-haiku-5-5'
   }
   if (name.includes('claude-haiku-4-5')) {
@@ -445,6 +455,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     return openAIModelName
   }
   switch (model) {
+    case getModelStrings().fable52:
+      return 'Fable 5.2'
+    case getModelStrings().fable52 + '[1m]':
+      return 'Fable 5.2 (1M context)'
     case getModelStrings().fable51:
       return 'Fable 5.1'
     case getModelStrings().fable51 + '[1m]':
@@ -711,6 +725,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-fable-5-2')) {
+    return has1m ? 'Fable 5.2 (with 1M context)' : 'Fable 5.2'
+  }
   if (canonical.includes('claude-fable-5-1')) {
     return has1m ? 'Fable 5.1 (with 1M context)' : 'Fable 5.1'
   }

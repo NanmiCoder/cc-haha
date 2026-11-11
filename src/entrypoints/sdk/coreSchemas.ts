@@ -7,6 +7,7 @@
  * @see scripts/generate-sdk-types.ts for type generation
  */
 
+import { scheduledTaskMetadataSchema } from '../../utils/scheduledTaskMessage.js'
 import { z } from 'zod/v4'
 import { HooksSchema } from '../../schemas/hooks.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -1289,6 +1290,7 @@ export const NonNullableUsagePlaceholder = lazySchema(() => z.unknown())
 
 export const SDKAssistantMessageErrorSchema = lazySchema(() =>
   z.enum([
+    'connection_error',
     'authentication_failed',
     'billing_error',
     'rate_limit',
@@ -1333,6 +1335,7 @@ export const SDKUserMessageReplaySchema = lazySchema(() =>
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
     isReplay: z.literal(true),
+    scheduledTask: scheduledTaskMetadataSchema.optional(),
   }),
 )
 
@@ -1630,6 +1633,8 @@ export const SDKAPIRetryMessageSchema = lazySchema(() =>
       retry_delay_ms: z.number(),
       error_status: z.number().nullable(),
       error: SDKAssistantMessageErrorSchema(),
+      error_message: z.string().optional(),
+      request_id: z.string().optional(),
       uuid: UUIDPlaceholder(),
       session_id: z.string(),
     })
@@ -1865,6 +1870,18 @@ export const SDKElicitationCompleteMessageSchema = lazySchema(() =>
 )
 
 /** @internal */
+export const SDKPromptSuggestionActivityMessageSchema = lazySchema(() =>
+  z.object({
+    type: z.literal('system'),
+    subtype: z.literal('prompt_suggestion_activity'),
+    generation_id: z.string().min(1).max(128),
+    active: z.boolean(),
+    uuid: UUIDPlaceholder(),
+    session_id: z.string(),
+  }),
+)
+
+/** @internal */
 export const SDKPromptSuggestionMessageSchema = lazySchema(() =>
   z
     .object({
@@ -1951,6 +1968,7 @@ export const SDKMessageSchema = lazySchema(() =>
     SDKRateLimitEventSchema(),
     SDKElicitationCompleteMessageSchema(),
     SDKPromptSuggestionMessageSchema(),
+    SDKPromptSuggestionActivityMessageSchema(),
   ]),
 )
 

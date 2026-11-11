@@ -26,7 +26,7 @@ import {
   OPENAI_OFFICIAL_PROVIDER_NAME,
   isOpenAIOfficialProviderId,
 } from '../services/openaiOfficialProvider.js'
-import { getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
+import { getDesktopGrokModelCatalog } from '../services/grokModelCatalog.js'
 import {
   GROK_DEFAULT_MAIN_MODEL,
   type GrokModelCatalogEntry,
@@ -36,7 +36,6 @@ import {
   GROK_OFFICIAL_PROVIDER_NAME,
   isGrokOfficialProviderId,
 } from '../services/grokOfficialProvider.js'
-import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 import {
   DEEPSEEK_ACCOUNT_PROVIDER,
   isDeepSeekAccountProviderId,
@@ -48,6 +47,7 @@ import {
   isBuiltInProviderId,
 } from '../types/provider.js'
 import { resolveClaudeOfficialRuntimeModel } from '../services/claudeOfficialRuntime.js'
+import { CLAUDE_MODEL_CATALOG as DEFAULT_MODELS, getDesktopClaudeModelCatalog } from '../services/claudeModelCatalog.js'
 import {
   getPresetDefaultEnv,
   getPresetReasoningProviderKind,
@@ -62,76 +62,6 @@ import {
 
 // ─── Fallback models (used when no provider is configured) ────────────────────
 
-const DEFAULT_MODELS = [
-  {
-    id: 'claude-fable-5-1',
-    name: 'Fable 5.1',
-    description: 'Highest capability for long-running tasks',
-    context: '1m',
-    defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-fable-5',
-    name: 'Fable 5',
-    description: 'Highest capability for long-running tasks',
-    context: '1m',
-  },
-  {
-    id: 'claude-opus-5-5',
-    name: 'Opus 5.5',
-    description: 'Best for complex agentic coding and enterprise work',
-    context: '1m',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-opus-5',
-    name: 'Opus 5',
-    description: 'Best for complex agentic coding and enterprise work',
-    context: '1m',
-    defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-opus-4-8',
-    name: 'Opus 4.8',
-    description: 'Best for complex agentic coding and enterprise work',
-    context: '1m',
-    defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-sonnet-5-5',
-    name: 'Sonnet 5.5',
-    description: 'Best combination of speed and intelligence',
-    context: '1m',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-sonnet-5',
-    name: 'Sonnet 5',
-    description: 'Best combination of speed and intelligence',
-    context: '1m',
-    defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-haiku-5-5',
-    name: 'Haiku 5.5',
-    description: 'Fastest for high-volume, latency-sensitive tasks',
-    context: '1m',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-  },
-  {
-    id: 'claude-haiku-4-5',
-    name: 'Haiku 4.5',
-    description: 'Fastest with near-frontier intelligence',
-    context: '200k',
-  },
-] as const
 
 const EFFORT_LEVELS = MODEL_REASONING_EFFORTS
 
@@ -149,6 +79,8 @@ type ApiModelInfo = {
   name: string
   description: string
   context: string
+  /** Highest window a user may set for this model, when the catalog states one. */
+  maxContext?: string
   defaultReasoningEffort?: string
   supportedReasoningEfforts?: string[]
 }
@@ -230,13 +162,16 @@ function buildOpenAIModelList(catalog: OpenAIModelCatalogEntry[]): ApiModelInfo[
     name: model.label,
     description: model.description,
     context: model.contextWindow ? String(model.contextWindow) : '',
+    ...(model.maxContextWindow ? { maxContext: String(model.maxContextWindow) } : {}),
     defaultReasoningEffort: model.defaultReasoningEffort,
     supportedReasoningEfforts: model.supportedReasoningEfforts,
   }))
 }
 
-async function getOpenAIModelList(): Promise<ApiModelInfo[]> {
-  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog())
+type CatalogRefreshOptions = { forceRefresh?: boolean; throwOnError?: boolean }
+
+async function getOpenAIModelList(options?: CatalogRefreshOptions): Promise<ApiModelInfo[]> {
+  return buildOpenAIModelList(await getDesktopOpenAICodexModelCatalog(options))
 }
 
 function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {
@@ -254,12 +189,8 @@ function buildGrokModelList(catalog: GrokModelCatalogEntry[]): ApiModelInfo[] {
   }))
 }
 
-async function getGrokModelList(): Promise<ApiModelInfo[]> {
-  const tokens = await hahaGrokOAuthService.ensureFreshTokens()
-  return buildGrokModelList(await getGrokModelCatalog({
-    ...(tokens?.accessToken ? { accessToken: tokens.accessToken } : {}),
-    accountKey: tokens?.email ?? (tokens ? 'authenticated-default' : 'logged-out'),
-  }))
+async function getGrokModelList(options?: CatalogRefreshOptions): Promise<ApiModelInfo[]> {
+  return buildGrokModelList(await getDesktopGrokModelCatalog(options))
 }
 
 // Effort levels come from the same reasoning profile the CLI runs with, so
@@ -455,9 +386,9 @@ async function handleModelsList(): Promise<Response> {
     })
   }
   if (await resolveClaudeOfficialRuntimeModel()) {
-    return Response.json({ models: DEFAULT_MODELS, provider: null })
+    return Response.json({ models: await getDesktopClaudeModelCatalog(), provider: null })
   }
-  return Response.json({ models: await getStandaloneModelList(), provider: null })
+  return Response.json({ models: await getStandaloneModelList(), provider: null, runtimeSource: 'standalone' })
 }
 
 // The models one built-in OAuth provider's account can use, whichever provider
@@ -468,16 +399,23 @@ async function handleModelCatalog(url: URL): Promise<Response> {
   if (!providerId || !isBuiltInProviderId(providerId)) {
     throw ApiError.notFound(`Official provider not found: ${providerId ?? ''}`)
   }
-  const models = isOpenAIOfficialProviderId(providerId)
-    ? await getOpenAIModelList()
-    : isGrokOfficialProviderId(providerId)
-      ? await getGrokModelList()
-      : isDeepSeekAccountProviderId(providerId)
-        ? buildDeepSeekAccountModelList(await listDeepSeekAccountModels({ forceRefresh: true }))
-        : providerId === CLAUDE_OFFICIAL_PROVIDER_ID
-          ? [...DEFAULT_MODELS]
-          : []
-  return Response.json({ models })
+  const forceRefresh = url.searchParams.get('refresh') === 'true'
+  const options = { forceRefresh, throwOnError: forceRefresh }
+  try {
+    const models = isOpenAIOfficialProviderId(providerId)
+      ? await getOpenAIModelList(options)
+      : isGrokOfficialProviderId(providerId)
+        ? await getGrokModelList(options)
+        : isDeepSeekAccountProviderId(providerId)
+          ? buildDeepSeekAccountModelList(await listDeepSeekAccountModels({ ...options, forceRefresh: true }))
+          : providerId === CLAUDE_OFFICIAL_PROVIDER_ID
+            ? await getDesktopClaudeModelCatalog(options)
+            : []
+    return Response.json({ models })
+  } catch {
+    // Keep raw upstream errors and credentials out of API responses and logs.
+    throw new ApiError(502, 'Could not refresh the account model list. Retry or sign in again.', 'MODEL_CATALOG_REFRESH_FAILED')
+  }
 }
 
 async function handleCurrentModel(req: Request): Promise<Response> {
@@ -543,11 +481,17 @@ async function handleCurrentModel(req: Request): Promise<Response> {
         : activeProvider
           ? await buildActiveProviderModelList(activeProvider)
           : claudeOfficialModel
-            ? [...DEFAULT_MODELS]
+            ? await getDesktopClaudeModelCatalog()
             : await getStandaloneModelList()
 
+    // A saved account model may omit the default alias's 1M marker. Reuse its
+    // catalog metadata without changing the user's selected model id.
+    const accountModelEntry = isDeepSeekAccountProviderId(activeId)
+      ? availableModels.find((model) => baseModelId(model.id) === baseModelId(currentModelId))
+      : undefined
     const modelEntry = availableModels.find((m) => m.id === lookupId)
       || availableModels.find((m) => m.id === currentModelId)
+      || (accountModelEntry && { ...accountModelEntry, id: currentModelId })
       || {
         id: currentModelId,
         name: currentModelName,

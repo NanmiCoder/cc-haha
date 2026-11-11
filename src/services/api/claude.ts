@@ -74,6 +74,7 @@ import { resolveAppliedEffort } from "../../utils/effort.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { errorMessage } from "../../utils/errors.js";
 import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
+import { normalizeImagesForAPI } from '../../utils/imageValidation.js'
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createSystemStreamingFallbackMessage,
@@ -83,9 +84,11 @@ import {
   normalizeMessagesForAPI,
   stripAdvisorBlocks,
   stripCallerFieldFromAssistantMessage,
+  stripSignatureBlocksAfterModelChange,
   stripToolReferenceBlocksFromUserMessage,
 } from "../../utils/messages.js";
 import {
+  getCanonicalName,
   getDefaultOpusModel,
   getDefaultSonnetModel,
   getSmallFastModel,
@@ -273,6 +276,12 @@ import {
   getErrorMessageIfRefusal,
 } from "./errors.js";
 import {
+  isTextOnlyImageModel,
+  rememberTextOnlyImageModel,
+  replaceImagesForTextOnlyModel,
+} from "./imageInputRefusals.js";
+import { isImageInputRefusalMessage } from "./unsupportedImageInput.js";
+import {
   EMPTY_USAGE,
   type GlobalCacheStrategy,
   logAPIError,
@@ -288,6 +297,7 @@ import {
 } from "./promptCacheBreakDetection.js";
 import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
+import { readProviderEnv, withRequestProviderRoute } from "../../utils/model/providerEnvScope.js";
 import {
   type ApiAttemptBudget,
   CannotRetryError,
@@ -538,11 +548,11 @@ export function configureEffortParams(
 }
 
 function shouldSuppressEffortOutputConfig(): boolean {
-  if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
+  if (!isEnvTruthy(readProviderEnv('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'))) {
     return false
   }
 
-  const baseUrl = process.env.ANTHROPIC_BASE_URL ?? ''
+  const baseUrl = readProviderEnv('ANTHROPIC_BASE_URL') ?? ''
   try {
     const url = new URL(baseUrl)
     const proxyPath = url.pathname.replace(/\/+$/, '')
@@ -826,14 +836,14 @@ export async function queryModelWithoutStreaming({
   for await (const message of withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -877,14 +887,14 @@ export async function* queryModelWithStreaming({
   return yield* withStreamingVCR(messages, async function* () {
     yield* withStreamRetry(
       () =>
-        queryModel(
+        withRequestProviderRoute(options.model, queryModel(
           messages,
           systemPrompt,
           thinkingConfig,
           tools,
           signal,
           options,
-        ),
+        )),
       options.model,
       messages,
       { signal, apiAttemptBudget: options.apiAttemptBudget },
@@ -1430,8 +1440,10 @@ async function* queryModel(
   });
 
   queryCheckpoint("query_message_normalization_start");
+  // Every caller replays history through here (main loop, compaction, away
+  // summary), so another model's signed thinking is dropped at this boundary.
   let messagesForAPI = normalizeMessagesForAPI(
-    messages,
+    stripSignatureBlocksAfterModelChange(messages, options.model),
     filteredTools,
     options.model,
   );
@@ -1484,6 +1496,17 @@ async function* queryModel(
     messagesForAPI,
     API_MAX_MEDIA_PER_REQUEST,
   );
+
+  const provider = getAPIProvider()
+  messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
+    countDocuments: provider === 'bedrock' || provider === 'vertex',
+  })
+
+  // A model that recently refused images and then accepted the same request
+  // without them gets placeholders up front instead of failing first.
+  if (isTextOnlyImageModel(options.model)) {
+    messagesForAPI = replaceImagesForTextOnlyModel(messagesForAPI);
+  }
 
   // Instrumentation: Track message count after normalization
   logEvent("tengu_api_after_normalize", {
@@ -1690,6 +1713,7 @@ async function* queryModel(
   let stream: Stream<BetaRawMessageStreamEvent> | undefined = undefined;
   let streamRequestId: string | null | undefined = undefined;
   let clientRequestId: string | undefined = undefined;
+  let imagesOmittedForRetry = false;
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
   let streamResponse: Response | undefined = undefined;
 
@@ -1786,7 +1810,7 @@ async function* queryModel(
 
     // Opus 5 and Haiku 5.5 reject disabled thinking above high effort. Preserve
     // the user's explicit thinking choice and use the highest compatible effort.
-    const modelId = options.model.toLowerCase()
+    const modelId = getCanonicalName(options.model)
     if (
       sendsExplicitDisabledThinking &&
       (modelId.includes('claude-opus-5') || modelId.includes('claude-haiku-5-5')) &&
@@ -2065,6 +2089,12 @@ async function* queryModel(
         isFastModeRequest = context.fastMode ?? false;
         start = Date.now();
         attemptStartTimes.push(start);
+        if (context.withoutImages && !imagesOmittedForRetry) {
+          // Swap the shared request history, not just these params: a final
+          // failure is then classified against what was actually sent.
+          messagesForAPI = replaceImagesForTextOnlyModel(messagesForAPI);
+          imagesOmittedForRetry = true;
+        }
         // Client has been created by withRetry's getClient() call. This fires
         // once per attempt; on retries the client is usually cached (withRetry
         // only calls getClient() again after auth errors), so the delta from
@@ -2121,6 +2151,15 @@ async function* queryModel(
         signal,
         querySource: options.querySource,
         apiAttemptBudget: options.apiAttemptBudget,
+        // Only an explicit refusal of image input, on a request that carried
+        // images, earns the image-free re-send, and only its success is
+        // remembered: other 400/422s (a malformed history block, one bad
+        // image, a one-off failure) say nothing about the model's vision.
+        shouldRetryWithoutImages: (error) =>
+          error instanceof APIError &&
+          (error.status === 400 || error.status === 422) &&
+          isImageInputRefusalMessage(error.message) &&
+          replaceImagesForTextOnlyModel(messagesForAPI) !== messagesForAPI,
       },
     );
 
@@ -2134,6 +2173,12 @@ async function* queryModel(
       }
     } while (!e.done);
     stream = e.value as Stream<BetaRawMessageStreamEvent>;
+    if (imagesOmittedForRetry) {
+      rememberTextOnlyImageModel(options.model);
+      logForDebugging(
+        `${options.model} refused image input and accepted the request without images; omitting images for this model`,
+      );
+    }
 
     // reset state
     newMessages.length = 0;
@@ -4070,7 +4115,7 @@ function isMaxTokensCapEnabled(): boolean {
 
 export function getMaxOutputTokensForModel(model: string): number {
   const maxOutputTokens = getModelMaxOutputTokens(model);
-  const providerBudget = getConfiguredProviderOutputBudget()
+  const providerBudget = getConfiguredProviderOutputBudget(undefined, model)
   const globalBudget = Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
   const hasValidGlobalBudget = Number.isSafeInteger(globalBudget) && globalBudget > 0
   if (!hasValidGlobalBudget && providerBudget !== undefined) {

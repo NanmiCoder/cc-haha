@@ -64,6 +64,31 @@ describe('persistent storage upgrade migrations', () => {
     expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
   })
 
+  test('upgrades v9 provider indexes from both branches and preserves provider proxy settings', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const fixture = {
+      presetId: 'custom', name: 'Fixture', apiKey: 'fixture-key',
+      baseUrl: 'https://provider.example.test', apiFormat: 'anthropic',
+      runtimeKind: 'anthropic_compatible', toolSearchEnabled: false,
+      models: { main: 'fixture', haiku: 'fixture', sonnet: 'fixture', opus: 'fixture' },
+    }
+    const withProxy = { ...fixture, id: 'upstream', proxy: { mode: 'direct' } }
+    const withRuntime = { ...fixture, id: 'local-sdk', runtime: 'agent-sdk' }
+    await fs.writeFile(file, JSON.stringify({
+      schemaVersion: 9,
+      activeId: withProxy.id,
+      providers: [withProxy, withRuntime],
+      providerOrder: [withProxy.id, withRuntime.id],
+    }))
+
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(migrated.schemaVersion).toBe(10)
+    expect(migrated.providers).toEqual([{ ...withProxy, runtime: 'claude-code' }, withRuntime])
+  })
+
   test('upgrades v6 image settings to an explicit protocol and preserves unknown fields on later edits', async () => {
     const dir = path.join(tempDir, 'cc-haha')
     const file = path.join(dir, 'providers.json')
@@ -107,6 +132,46 @@ describe('persistent storage upgrade migrations', () => {
     const env = readActiveProviderManagedEnv(tempDir)
     expect(env.CC_HAHA_IMAGE_PROTOCOL).toBe('future_protocol')
     expect(getImageGenerationRuntimeConfig(env)).toBeNull()
+  })
+
+  test('reads an index saved before ChatGPT window overrides existed and keeps unknown fields beside the new one', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const mapping = { main: 'gpt-6-astra', haiku: 'gpt-6-luna', sonnet: 'gpt-6-astra', opus: 'gpt-6-astra' }
+    // Shape written by a build that predates `officialProviderContextWindows`.
+    await fs.writeFile(file, JSON.stringify({
+      schemaVersion: 7,
+      activeId: 'openai-official',
+      providers: [],
+      officialProviderModels: { 'openai-official': mapping },
+      futureRoot: { keep: true },
+    }))
+
+    const service = new ProviderService()
+    expect(await service.getOfficialProviderContextWindows('openai-official')).toEqual({})
+    // No overrides means the built-in windows, unchanged from before the upgrade.
+    const before = JSON.parse(readActiveProviderManagedEnv(tempDir)!.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)
+    expect(before['gpt-6-astra']).toBe(258_400)
+    expect(before['gpt-6.1-terra']).toBe(475_000)
+
+    await service.updateOfficialProviderModels('openai-official', mapping, {
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    const rewritten = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(rewritten.futureRoot).toEqual({ keep: true })
+    expect(rewritten.officialProviderContextWindows).toEqual({ 'openai-official': { 'gpt-6-astra': 600_000 } })
+
+    // A hand-edited index loses only its bad values, never the good ones beside them.
+    await fs.writeFile(file, JSON.stringify({
+      ...rewritten,
+      officialProviderContextWindows: {
+        'openai-official': { 'gpt-6-astra': 'big', 'gpt-6-sol': 300_000, 'gpt-6-luna': 100, '': 50_000 },
+        'not-a-record': 7,
+      },
+    }))
+    expect(await new ProviderService().getOfficialProviderContextWindows('openai-official'))
+      .toEqual({ 'gpt-6-sol': 300_000 })
   })
 
   test('upgrades legacy team preferences on read and preserves the original settings on save', async () => {

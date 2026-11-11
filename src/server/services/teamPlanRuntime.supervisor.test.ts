@@ -72,18 +72,18 @@ async function startHarness(memberNames: string[], options: {
   // fixture calls the same upstream (launch tells it the team is running) at a
   // time of its own choosing; counted together, its late request became the
   // "last" request or took a reply scripted for a member.
-  const requests: Array<{ agent: string; resumed: string | null; prompt: string }> = []
+  const requests: Array<{ agent: string; resumed: string | null; prompt: string; model?: string }> = []
   const leadRequests: Array<{ prompt: string }> = []
   const replies: string[] = []
   let held: Promise<void> | undefined
   const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
-    const body = await request.json() as { agent?: string | null; resumed?: string | null; prompt?: unknown }
+    const body = await request.json() as { agent?: string | null; resumed?: string | null; prompt?: unknown; model?: string }
     if (!body.agent || !memberNames.includes(body.agent)) {
       leadRequests.push({ prompt: JSON.stringify(body.prompt ?? '') })
       return new Response('fixture result')
     }
     const initialMemberRequest = !requests.some(item => item.agent === body.agent)
-    requests.push({ agent: body.agent, resumed: body.resumed ?? null, prompt: JSON.stringify(body.prompt ?? '') })
+    requests.push({ agent: body.agent, resumed: body.resumed ?? null, prompt: JSON.stringify(body.prompt ?? ''), model: body.model })
     if (initialMemberRequest) await options.initialMemberReply
     await held
     return new Response(replies.shift() ?? 'fixture result')
@@ -124,7 +124,7 @@ async function startHarness(memberNames: string[], options: {
   const instructed = options.instructedAtLaunch ?? memberNames
   await waitFor(() => instructed.every(name => requests.some(request => request.prompt.includes(`Work as ${name}`))), 'initial member turns')
   return {
-    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor,
+    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor, providerId: provider.id, upstreamUrl: upstream.url.toString(),
     memberRequests(name: string) {
       return requests.filter(request => request.agent === name)
     },
@@ -355,6 +355,44 @@ test("a user's direct message resumes a stopped member without waiting for the l
   }
 }, 30_000)
 
+test('a member being restarted counts as running until its process is up', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const sessionId = h.memberIds.reader!
+    await h.service.stopSessionAndWait(sessionId)
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'stopped member to be recorded')
+    const start = h.service.startSession.bind(h.service)
+    let release!: () => void
+    const released = new Promise<void>(resolve => { release = resolve })
+    let restarting = false
+    const spy = spyOn(h.service, 'startSession').mockImplementation(async (...args: Parameters<typeof start>) => {
+      if (args[0] === sessionId) {
+        restarting = true
+        await released
+      }
+      return start(...args)
+    })
+    try {
+      const before = h.requests.length
+      await messageMember(h, 'reader', 'team-lead', 'Check one more file')
+      await h.waitFor(() => restarting, 'restart to begin')
+      // TeamDelete only waits for members that are not terminated, and a lead
+      // whose team looks finished is told to end it.
+      expect(await h.teamMember('reader')).toMatchObject({ isActive: true, terminated: false })
+      release()
+      await h.waitFor(() => h.requests.length > before, 'restarted member turn')
+      await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'restarted turn to end')
+      expect((await h.teamMember('reader'))?.terminated).toBe(false)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
 test('a Stop while a member is restarting leaves that member stopped', async () => {
   const h = await startHarness(['reader'])
   try {
@@ -540,6 +578,34 @@ test('a team whose owner was lost is rehydrated dormant and its members restart 
     expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
   } finally {
     releaseInitialMember()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("after a server restart, the user's next message tells the lead which members the restart stopped, once", async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    const { createShutdownRequestMessage } = await import('../../utils/teammateMailbox.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 2, 'initial turn reports')
+    // writer agreed to leave before the restart; reader was still at work.
+    await messageMember(h, 'writer', 'team-lead', JSON.stringify(createShutdownRequestMessage({ requestId: 'stop-writer', from: 'team-lead', reason: 'FIXTURE_APPROVE_SHUTDOWN' })))
+    await h.waitFor(async () => (await h.teamMember('writer'))?.terminated === true, 'writer gone')
+    const runtime = await import('./teamPlanRuntime.js')
+    // The server restarts: the in-memory owner and every process are gone, and
+    // nothing recorded reader's end (its supervisor died with the server).
+    runtime.forgetTeamPlanRuntimesForTests()
+    await h.service.stopSessionAndWait(h.memberIds.reader!)
+    expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
+
+    // Nothing wakes reader by itself; the lead, waiting for its report, is told.
+    const notices = await userMessagesLead(h)
+    await userMessagesLead(h, notices)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('[Team runtime notice] The app restarted, which stopped these members of your team')
+    expect(notices[0]).toMatch(/- reader: #\d+ Task for reader \(pending\)/)
+    expect(notices[0]).not.toContain('- writer')
+    expect(notices[0]).toContain('SendMessage each member that still has work')
+  } finally {
     await h.cleanup()
   }
 }, 30_000)
@@ -909,6 +975,304 @@ test('a member that leaves after approving a shutdown request is not reported as
     await h.waitFor(async () => (await h.leadNotifications()).some(item => item.from === 'reader' && item.idleReason === 'failed'), 'failure notice for the later crash')
     expect((await h.teamMember('reader'))?.lastError).toBeTruthy()
   } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("a slash command the user types in a member's conversation runs in the member's own CLI, and the lead is not told", async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    // The member failed the way an overflowing context does.
+    h.replies.push('FIXTURE_ERROR:Prompt is too long')
+    await messageMember(h, 'reader', 'team-lead', 'Read every file')
+    await h.waitFor(async () => (await h.teamMember('reader') as any)?.lastError === 'Prompt is too long', 'failure to be recorded')
+    // The roster records the failure before the lead is notified of it; count from the notice.
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.idleReason === 'failed'), 'failure notice')
+    const notices = (await h.leadNotifications()).length
+
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'user', '/compact')
+    await h.waitFor(() => h.memberRequests('reader').length > before, 'command turn')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'command turn to end')
+    // As typed, not a teammate message the model would read as text.
+    expect(JSON.parse(h.memberRequests('reader').at(-1)!.prompt)).toEqual([{ type: 'text', text: '/compact' }])
+    // The command answered the failure it was run for, and no turn report reached the lead.
+    expect((await h.teamMember('reader') as any)?.lastError).toBeUndefined()
+    await new Promise(resolve => setTimeout(resolve, 600))
+    expect((await h.leadNotifications()).length).toBe(notices)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a command waits until the member is idle, and what the user sends after it waits for it', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const release = h.holdReplies()
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'busy turn')
+    await messageMember(h, 'reader', 'user', '/compact')
+    await messageMember(h, 'reader', 'user', 'Then continue')
+    // Queued behind a turn in flight, a command would be read as that turn's text.
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.memberRequests('reader').length).toBe(before + 1)
+    release()
+    await h.waitFor(() => h.memberRequests('reader').length >= before + 3, 'command, then the message')
+    const [command, message] = h.memberRequests('reader').slice(before + 1).map(request => request.prompt)
+    expect(JSON.parse(command!)).toEqual([{ type: 'text', text: '/compact' }])
+    expect(message).toContain('Then continue')
+    expect(message).toContain('teammate-message')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a member that cannot even answer a shutdown request is stopped, so the lead can end the team', async () => {
+  const h = await startHarness(['reader'])
+  const mailbox = await import('../../utils/teammateMailbox.js')
+  const { TEAM_LEAD_NAME } = await import('../../utils/swarm/constants.js')
+  const originalWrite = mailbox.writeToMailbox
+  let releaseNotice!: () => void
+  const noticeGate = new Promise<void>(resolve => { releaseNotice = resolve })
+  let noticeHeld = false
+  let noticeWrite: ReturnType<typeof originalWrite> | undefined
+  const write = spyOn(mailbox, 'writeToMailbox').mockImplementation((...args) => {
+    const notice = mailbox.isIdleNotification(args[1].text)
+    if (args[0] === TEAM_LEAD_NAME && args[1].from === 'reader' && args[2] === h.teamName
+      && notice?.idleReason === 'failed' && notice.failureReason?.includes('could not answer the shutdown request')) {
+      noticeHeld = true
+      noticeWrite = noticeGate.then(() => originalWrite(...args))
+      return noticeWrite
+    }
+    return originalWrite(...args)
+  })
+  const failureNotice = async () => (await h.leadNotifications()).find(item => item.from === 'reader' && item.type === 'idle_notification' && item.idleReason === 'failed')
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    h.replies.push('FIXTURE_ERROR:Prompt is too long')
+    await messageMember(h, 'reader', 'team-lead', JSON.stringify(mailbox.createShutdownRequestMessage({ requestId: 'stop-reader', from: 'team-lead', reason: 'done' })))
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'member to be stopped')
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    // Stopping the member is recorded before its failure notice is published.
+    await h.waitFor(() => noticeHeld, 'shutdown failure notice write to begin')
+    expect(await h.teamMember('reader')).toMatchObject({ terminated: true, isActive: false })
+    expect(await failureNotice()).toBeUndefined()
+    releaseNotice()
+    await h.waitFor(async () => (await failureNotice()) !== undefined, 'shutdown failure notice to reach the lead')
+    const failure = await failureNotice()
+    expect(failure?.failureReason).toContain('could not answer the shutdown request')
+  } finally {
+    releaseNotice()
+    try {
+      // Drain the real write before cleanup can remove the mailbox.
+      await noticeWrite
+    } finally {
+      write.mockRestore()
+      await h.cleanup()
+    }
+  }
+}, 30_000)
+
+test("switching a running member's model applies at once and survives its restart", async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+    const { getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const controls: unknown[] = []
+    const control = h.service.requestControl.bind(h.service)
+    const spy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof control>) => {
+      if (args[0] === h.memberIds.reader) controls.push(args[1])
+      return control(...args)
+    })
+    try {
+      // "opus" on this provider maps to its capable model.
+      const member = await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'opus' })
+      expect(member.model).toBe('capable')
+    } finally {
+      spy.mockRestore()
+    }
+    // Same provider: switched in place, the process keeps running.
+    expect(controls).toEqual([{ subtype: 'set_model', model: 'capable' }])
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(true)
+    expect((await h.teamMember('reader'))?.model).toBe('capable')
+    const plan = JSON.parse(await readFile(join(getTeamDir(h.teamName), 'plan.json'), 'utf8'))
+    expect(plan.approvedSnapshot.members.find((item: any) => item.id === 'reader').runtime.modelId).toBe('capable')
+
+    // A restart rebuilds the member from the approved record with the new model.
+    h.replies.push('FIXTURE_CRASH')
+    await messageMember(h, 'reader', 'team-lead', 'Check one more file')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'crash')
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'team-lead', 'Please continue')
+    await h.waitFor(() => h.memberRequests('reader').length > before, 'restarted turn')
+    expect(h.memberRequests('reader').at(-1)?.resumed).toBe(h.memberIds.reader!)
+    expect(h.memberRequests('reader').at(-1)?.model).toBe('capable')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("an idle member switched to another provider restarts from its own conversation on that provider", async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+    const { ProviderService } = await import('./providerService.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
+    // Same loopback upstream, different provider: its model name shows which one the member uses.
+    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
+    const member = await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })
+    expect(member).toMatchObject({ model: 'other-model', providerId: other.id, providerName: 'other' })
+    await h.waitFor(() => h.service.hasSession(h.memberIds.reader!), 'member restarted')
+    expect(await h.teamMember('reader')).toMatchObject({ model: 'other-model', providerId: other.id, terminated: false })
+
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'team-lead', 'Please continue')
+    await h.waitFor(() => h.memberRequests('reader').length > before, 'turn on the new provider')
+    expect(h.memberRequests('reader').at(-1)).toMatchObject({ resumed: h.memberIds.reader!, model: 'other-model' })
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("a busy member's provider is not switched under it", async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+    const { ProviderService } = await import('./providerService.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: 'http://127.0.0.1:9', apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
+    const release = h.holdReplies()
+    try {
+      await messageMember(h, 'reader', 'team-lead', 'Review the runner')
+      await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === true, 'busy turn')
+      await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })).rejects.toThrow('change its provider once it is idle')
+      expect((await h.teamMember('reader'))?.model).toBe('cheap')
+    } finally {
+      release()
+    }
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a command run on a member the user stopped leaves it stopped, and the lead is still told so', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    h.service.sendInterrupt(h.parentId)
+    await h.service.waitForTeamWorkersStopped(h.parentId)
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'stopped')
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'user', '/compact')
+    await h.waitFor(() => h.memberRequests('reader').length > before, 'command turn')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'command turn to end')
+    await new Promise(resolve => setTimeout(resolve, 400))
+    const told = await userMessagesLead(h)
+    expect(told).toHaveLength(1)
+    expect(told[0]).toContain("The user's Stop")
+    expect(told[0]).toContain('- reader: #1 Task for reader (pending)')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('in a stopped team a command runs even behind a held note, and the user message after it still resumes the member', async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 2, 'initial turn reports')
+    h.service.sendInterrupt(h.parentId)
+    await h.service.waitForTeamWorkersStopped(h.parentId)
+    // A teammate's note that arrived around the Stop waits for the team to resume.
+    await messageMember(h, 'writer', 'reader', 'peer note sent around the Stop')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const before = h.memberRequests('writer').length
+    await messageMember(h, 'writer', 'user', '/compact')
+    await messageMember(h, 'writer', 'user', 'Now continue your task')
+    await h.waitFor(() => h.memberRequests('writer').length >= before + 2, 'the command, then the resumed turn')
+    const [command, resumed] = h.memberRequests('writer').slice(before).map(request => request.prompt)
+    expect(JSON.parse(command!)).toEqual([{ type: 'text', text: '/compact' }])
+    expect(resumed).toContain('peer note sent around the Stop')
+    expect(resumed).toContain('Now continue your task')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('nothing else reaches a member while a command it runs is under way', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
+    const release = h.holdReplies()
+    const before = h.memberRequests('reader').length
+    await messageMember(h, 'reader', 'user', '/my-skill check the routes')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'command turn')
+    // Sent mid-command, the CLI would fold it into the command's turn and the lead would never hear back.
+    await messageMember(h, 'reader', 'team-lead', 'Also check the tests')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.memberRequests('reader').length).toBe(before + 1)
+    h.replies.push('skill done', 'tests checked')
+    release()
+    await h.waitFor(() => h.memberRequests('reader').length === before + 2, "the lead's message on its own turn")
+    expect(h.memberRequests('reader').at(-1)!.prompt).toContain('Also check the tests')
+    await h.waitFor(async () => (await h.leadNotifications()).some(item => item.result === 'tests checked'), "the lead's turn reported")
+    expect((await h.leadNotifications()).some(item => item.result === 'skill done')).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("a reasoning effort change reaches the roster the desktop reads", async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
+    await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'cheap', effortLevel: 'high' })
+    expect(await h.teamMember('reader')).toMatchObject({ model: 'cheap', effortLevel: 'high' })
+    await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'cheap' })
+    expect((await h.teamMember('reader') as any).effortLevel).toBeUndefined()
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a model switch the member cannot take changes nothing, and a failed restart keeps the previous provider', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+    const { ProviderService } = await import('./providerService.js')
+    const { getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
+    const planRuntime = async () => JSON.parse(await readFile(join(getTeamDir(h.teamName), 'plan.json'), 'utf8')).approvedSnapshot.members[0].runtime
+    // The live member refuses the switch.
+    const control = h.service.requestControl.bind(h.service)
+    const spy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof control>) => {
+      if (args[0] === h.memberIds.reader && (args[1] as { subtype?: string }).subtype === 'set_model') throw new Error('Control request timed out')
+      return control(...args)
+    })
+    try {
+      await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'opus' })).rejects.toThrow('Could not switch reader')
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await h.teamMember('reader'))?.model).toBe('cheap')
+    expect((await planRuntime()).modelId).toBe('cheap')
+
+    // A restart on another provider that fails (the fixture member dies when a new process is told its model).
+    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
+    process.env.FIXTURE_EXIT_ON_SET_MODEL = 'reader'
+    await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })).rejects.toThrow('could not start on other')
+    expect(await h.teamMember('reader')).toMatchObject({ model: 'cheap', providerId: h.providerId })
+    expect(await planRuntime()).toMatchObject({ providerId: h.providerId, modelId: 'cheap' })
+  } finally {
+    delete process.env.FIXTURE_EXIT_ON_SET_MODEL
     await h.cleanup()
   }
 }, 30_000)

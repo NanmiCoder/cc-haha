@@ -1,11 +1,12 @@
+import type { IdlePowerSettings, IdlePowerState } from '../idlePower'
 import type {
   AppMode as SettingsAppMode,
   AppModeConfig as SettingsAppModeConfig,
 } from '../../types/settings'
 import type { Locale } from '../../i18n/locale'
 
-// Version 2 adds remote provider management and selected General settings.
-export const PUBLIC_ACCESS_CONSENT_VERSION = 2
+// Version 4 requires fresh consent for the Cloudflare public connection modes.
+export const PUBLIC_ACCESS_CONSENT_VERSION = 4
 
 export type DesktopHostKind = 'browser' | 'electron'
 
@@ -390,23 +391,61 @@ export type MigrationStatus = {
   cancellable: boolean
 }
 
-export type DesktopPublicAccessStatus = {
+export type DesktopLoginStartupStatus = {
+  supported: boolean
+  enabled: boolean
+  requiresApproval: boolean
+  error?: 'unavailable'
+}
+
+export type DesktopPublicAccessConfiguration = {
+  mode: 'quick' | 'named'
+  customUrl: string
+  localPort: number
+  /** Write-only. Omitted or empty retains the saved named-tunnel token. */
+  tunnelToken?: string
+}
+
+export type DesktopPublicAccessStatus = Omit<DesktopPublicAccessConfiguration, 'tunnelToken'> & {
+  directoryState?: 'unconfigured' | 'publishing' | 'ready' | 'retrying'
+  hostId?: string
   state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
-  hasCredential: boolean
   publicUrl: string | null
-  error: 'auth' | 'quota' | 'network' | 'configuration' | null
+  /** `token`: Cloudflare refused the saved credential. `route`: while waiting, the tunnel's pushed routes send no hostname to the local gateway. */
+  error: 'network' | 'configuration' | 'stop' | 'runtime' | 'proxy' | 'token' | 'route' | null
+  tokenSet: boolean
+  /** The tunnel UUID inside the saved token, which is also visible in the Cloudflare dashboard. */
+  tunnelId: string | null
+  /** `routing`: the named tunnel is connected and waits for a Cloudflare route to the local gateway. */
+  phase: 'preparing' | 'connecting' | 'routing' | 'checking' | null
   autoStart: boolean
   consentVersion: number
+  migrationRequired: boolean
+  /** Paired phones may upgrade to a direct (P2P) path. Absent on hosts without P2P. */
+  p2pEnabled?: boolean
+  /**
+   * While remote access is on (or reconnecting) the computer does not idle-sleep;
+   * the display may still sleep and closing a lid still sleeps. Absent on hosts
+   * that cannot hold a power assertion.
+   */
+  keepAwake?: boolean
+  /**
+   * The desktop's direct-connection endpoint: `off` while it is not wanted,
+   * `starting` until it runs, `ready` once it runs, `failed` while it backs off
+   * after a crash or has given up until the next change. Absent on hosts without P2P.
+   */
+  p2pState?: 'off' | 'starting' | 'ready' | 'failed'
 }
 
 export type DesktopHost = {
   publicAccess: {
     getStatus(): Promise<DesktopPublicAccessStatus>
-    saveCredential(token: string): Promise<DesktopPublicAccessStatus>
-    deleteCredential(): Promise<DesktopPublicAccessStatus>
+    configure(configuration: DesktopPublicAccessConfiguration): Promise<DesktopPublicAccessStatus>
     start(consentVersion: number): Promise<DesktopPublicAccessStatus>
     stop(): Promise<DesktopPublicAccessStatus>
     setAutoStart(enabled: boolean): Promise<DesktopPublicAccessStatus>
+    setP2PEnabled(enabled: boolean): Promise<DesktopPublicAccessStatus>
+    setKeepAwake(enabled: boolean): Promise<DesktopPublicAccessStatus>
   }
   kind: DesktopHostKind
   isDesktop: boolean
@@ -416,6 +455,8 @@ export type DesktopHost = {
     getLocalAccessToken(): Promise<string | null>
   }
   app: {
+    getLoginStartup(): Promise<DesktopLoginStartupStatus>
+    setLoginStartup(enabled: boolean): Promise<DesktopLoginStartupStatus>
     getVersion(): Promise<string>
     getLocalePreference(): Promise<Locale | null>
     setLocalePreference(locale: Locale): Promise<void>
@@ -424,6 +465,13 @@ export type DesktopHost = {
   }
   commands: {
     invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
+  }
+  power: {
+    setPreventSleepWhileRunning(enabled: boolean): Promise<void>
+    getIdleActionState(): Promise<IdlePowerState>
+    configureIdleAction(settings: IdlePowerSettings): Promise<IdlePowerState>
+    cancelIdleAction(): Promise<void>
+    onIdleActionState(handler: (state: IdlePowerState) => void): Promise<DesktopHostUnlisten>
   }
   clipboard: {
     readText(): Promise<string>
@@ -553,7 +601,7 @@ export type DesktopHost = {
     }
   }
   adapters: {
-    restartSidecar(): Promise<void>
+    restartSidecar(target?: 'wechat'): Promise<void>
   }
   zoom: {
     set(level: number): Promise<void>

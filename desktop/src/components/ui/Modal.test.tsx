@@ -5,6 +5,13 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Modal } from './Modal'
 
 describe('Modal', () => {
+  it('keeps the app visible through a lightbox scrim without an opaque panel', () => {
+    render(<Modal open onClose={vi.fn()} title="Picture" variant="lightbox"><span>Image</span></Modal>)
+    const dialog = screen.getByRole('dialog', { name: 'Picture' })
+    expect(dialog).toHaveClass('h-dvh', 'w-screen')
+    expect(dialog).not.toHaveClass('dialog-panel', 'bg-[var(--color-media-bg)]')
+    expect(dialog.previousElementSibling).toHaveClass('bg-[var(--color-lightbox-scrim)]')
+  })
   it('supports a scoped interface treatment without changing other dialog defaults', () => {
     render(<Modal open onClose={vi.fn()} title="Roster" className="team-plan-dialog" typography="interface">Team</Modal>)
     expect(screen.getByRole('dialog')).toHaveClass('team-plan-dialog', 'dialog-panel')

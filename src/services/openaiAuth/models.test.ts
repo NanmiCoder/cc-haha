@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import {
   OPENAI_CODEX_FRONTIER_EFFECTIVE_CONTEXT_WINDOW,
   OPENAI_CODEX_MODEL_CATALOG,
@@ -18,18 +18,84 @@ import {
 } from './models.js'
 
 describe('openai auth model resolution', () => {
-  test('supports GPT-6.1 Sol selection, metadata and OAuth context budgeting', () => {
+  let originalProvider: string | undefined
+
+  beforeEach(() => {
+    originalProvider = process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+    delete process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+  })
+
+  afterEach(() => {
+    if (originalProvider === undefined) delete process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER
+    else process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = originalProvider
+  })
+
+  test('recognizes future model names only when the official OpenAI runtime is active', () => {
+    for (const value of ['0', 'false', '']) {
+      process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = value
+      expect(isOpenAIResponsesModel('codex-future')).toBe(false)
+      expect(isOpenAIResponsesModel('claude-opus-4-6')).toBe(false)
+    }
+    for (const value of ['1', 'true']) {
+      process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER = value
+      expect(isOpenAIResponsesModel('codex-future')).toBe(true)
+      expect(isOpenAIResponsesModel('sonnet')).toBe(true)
+    }
+  })
+
+  test('forwards future upstream model ids without silently selecting an older default', () => {
+    expect(resolveOpenAICodexModel('  codex-next-preview  ')).toBe('codex-next-preview')
+    expect(resolveOpenAICodexModel('codex-sonnet-preview')).toBe('codex-sonnet-preview')
+    expect(resolveOpenAICodexModel('default')).toBe(OPENAI_DEFAULT_MAIN_MODEL)
+    expect(resolveOpenAICodexModel('claude-sonnet-5-5')).toBe(OPENAI_DEFAULT_SONNET_MODEL)
+  })
+
+  test('supports GPT-6.1 Sol and Terra selection, metadata and OAuth context budgeting', () => {
     expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-6.1-sol')).toMatchObject({
       label: 'GPT-6.1-Sol',
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      contextWindow: 258_400,
+      // Codex's default for GPT-6.1 Sol is 500K (up from 272K), at 95%.
+      contextWindow: 475_000,
     })
     expect(resolveOpenAICodexModel('gpt-6.1-sol')).toBe('gpt-6.1-sol')
     expect(getOpenAIModelDisplayName('gpt-6.1-sol')).toBe('GPT-6.1-Sol')
-    expect(getOpenAICodexContextWindowForModel('gpt-6.1-sol')).toBe(258_400)
+    expect(getOpenAICodexContextWindowForModel('gpt-6.1-sol')).toBe(475_000)
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', undefined)).toBe('low')
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', 'max')).toBe('max')
+
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-6.1-terra')).toMatchObject({
+      label: 'GPT-6.1 Terra',
+      defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      contextWindow: 475_000,
+    })
+    expect(resolveOpenAICodexModel('gpt-6.1-terra')).toBe('gpt-6.1-terra')
+    expect(getOpenAIModelDisplayName('gpt-6.1-terra')).toBe('GPT-6.1 Terra')
+    expect(getOpenAICodexContextWindowForModel('gpt-6.1-terra')).toBe(475_000)
+    expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', undefined)).toBe('low')
+    expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', 'max')).toBe('max')
+  })
+
+  test('records the highest window Codex allows only where its catalog states one', () => {
+    // openai/codex models.json: max_context_window 872,000 for these, at 95%.
+    for (const slug of [
+      'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra',
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    ]) {
+      expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === slug)?.maxContextWindow).toBe(828_400)
+    }
+    // gpt-5.5's maximum equals its default, so it cannot be raised at all.
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-5.5')?.maxContextWindow)
+      .toBe(OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW)
+    // Nothing is claimed for a model whose limit was not verified.
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-5.4')?.maxContextWindow).toBeUndefined()
+    // A default window can never sit above its own ceiling.
+    for (const model of OPENAI_CODEX_MODEL_CATALOG) {
+      if (model.maxContextWindow !== undefined && model.contextWindow !== undefined) {
+        expect(model.contextWindow).toBeLessThanOrEqual(model.maxContextWindow)
+      }
+    }
   })
 
   test('provides Astra fallback metadata and effective Codex OAuth context', () => {
@@ -101,11 +167,12 @@ describe('openai auth model resolution', () => {
   })
 
   test('exposes GPT-6 Sol and Luna ahead of their GPT-5.6 predecessors', () => {
-    expect(OPENAI_CODEX_MODEL_CATALOG.slice(0, 7).map((model) => model.value)).toEqual([
+    expect(OPENAI_CODEX_MODEL_CATALOG.slice(0, 8).map((model) => model.value)).toEqual([
       'gpt-6-astra',
       'gpt-6-sol',
       'gpt-6-luna',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',

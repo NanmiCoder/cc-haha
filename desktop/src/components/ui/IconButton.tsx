@@ -7,7 +7,7 @@ import { Spinner } from './Spinner'
 export type IconButtonSize = '2xs' | 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl'
 export type IconButtonTone = 'default' | 'secondary' | 'muted' | 'brand' | 'danger'
 /** Which surface this button sits on — decides its hover fill. */
-export type IconButtonSurface = 'default' | 'sidebar' | 'terminal' | 'media'
+export type IconButtonSurface = 'default' | 'sidebar' | 'terminal' | 'media' | 'lightbox'
 
 export type IconButtonProps =
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'aria-label' | 'title'> & {
@@ -118,6 +118,13 @@ const REST_TEXT: Record<IconButtonTone, string> = {
  * so their output is unchanged.
  */
 const SURFACE_REST_TEXT: Partial<Record<IconButtonSurface, Record<IconButtonTone, string>>> = {
+  lightbox: {
+    default: 'text-[var(--color-lightbox-control-fg)]',
+    secondary: 'text-[var(--color-lightbox-control-fg)]',
+    muted: 'text-[var(--color-lightbox-control-fg)]',
+    brand: 'text-[var(--color-lightbox-control-fg)]',
+    danger: 'text-[var(--color-lightbox-control-fg)]',
+  },
   terminal: {
     default: 'text-[var(--color-terminal-fg)]',
     secondary: 'text-[var(--color-terminal-muted)]',
@@ -145,6 +152,13 @@ const SURFACE_REST_TEXT: Partial<Record<IconButtonSurface, Record<IconButtonTone
  * Only one hover text color may ever be emitted.
  */
 const HOVER_BG: Record<IconButtonSurface, Record<IconButtonTone, string>> = {
+  lightbox: {
+    default: 'hover:bg-[var(--color-lightbox-control-hover)]',
+    secondary: 'hover:bg-[var(--color-lightbox-control-hover)]',
+    muted: 'hover:bg-[var(--color-lightbox-control-hover)]',
+    brand: 'hover:bg-[var(--color-lightbox-control-hover)]',
+    danger: 'hover:bg-[var(--color-lightbox-control-hover)]',
+  },
   default: {
     default: 'hover:bg-[var(--color-surface-hover)]',
     secondary: 'hover:bg-[var(--color-surface-hover)]',
@@ -186,6 +200,7 @@ const HOVER_TEXT: Record<IconButtonTone, string> = {
 
 /** See `SURFACE_REST_TEXT`. Only one hover text color may ever be emitted. */
 const SURFACE_HOVER_TEXT: Partial<Record<IconButtonSurface, Record<IconButtonTone, string>>> = {
+  lightbox: { default: '', secondary: '', muted: '', brand: '', danger: '' },
   terminal: {
     default: '',
     secondary: 'hover:text-[var(--color-terminal-fg)]',
@@ -223,6 +238,7 @@ const SOLID_CLASSES: Record<IconButtonTone, string> = {
 const SOFT_CLASSES = 'bg-[var(--color-btn-soft-bg)] hover:bg-[var(--color-btn-soft-hover)]'
 
 const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
+  lightbox: 'bg-[var(--color-lightbox-control-hover)] text-[var(--color-lightbox-control-fg)]',
   default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
   // The sidebar's hover fill is the faintest step on its ground; a toggle that
   // is on must not look like one the pointer is merely over, so it takes the
@@ -291,6 +307,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         BASE_CLASSES,
         DISABLED_OPACITY[disabledStyle],
         SIZE_CLASSES[size],
+        surface === 'lightbox' && !pressed && 'bg-[var(--color-lightbox-control-bg)]',
         // `solid` and `pressed` supply both fill and foreground, so the tone's
         // resting text color is skipped rather than left to compete: two
         // `text-[…]` values resolve by alphabetical order, not by intent.

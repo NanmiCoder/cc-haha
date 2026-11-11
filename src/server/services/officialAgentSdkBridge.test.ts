@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { describe, expect, mock, test } from 'bun:test'
 import type { Options, Query, SDKMessage, SDKUserMessage, query } from '@anthropic-ai/claude-agent-sdk/core'
+import { AGENT_PROFILES } from '../../utils/agentProfile.js'
 import { createOfficialAgentSdkBridge, parseOfficialAgentSdkArgs, type OfficialAgentSdkExtensions } from './officialAgentSdkBridge.js'
 
 const sessionId = '00000000-0000-4000-8000-000000000001'
@@ -581,7 +582,7 @@ describe('official Agent SDK desktop bridge', () => {
     expect(h.options.strictMcpConfig).toBe(true)
     expect(h.options.mcpServers).toBeUndefined()
     expect(configure).not.toHaveBeenCalled()
-    expect(h.options.tools).toEqual(['Bash', 'PowerShell', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'Skill'])
+    expect(h.options.tools).toEqual(AGENT_PROFILES.lean.toolNames)
     expect(h.options.systemPrompt).toContain('Load a skill only when the user explicitly selects it')
     await h.bridge.receive(control('mcp_set_servers', { servers: { blocked: { type: 'http', url: 'http://127.0.0.1:3000' } } }))
     expect(h.sent.at(-1)?.response.subtype).toBe('error')

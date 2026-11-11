@@ -38,6 +38,37 @@ describe('splitMessage', () => {
     expect(chunks.every((c) => c.length <= 20)).toBe(true)
   })
 
+  it('keeps supplementary Unicode characters intact at hard split boundaries', () => {
+    for (const text of ['abc🙂def𠮷ghi', '🙂'.repeat(8), 'a𐐷🙂b中🙂文']) {
+      for (let limit = 2; limit <= 9; limit += 1) {
+        const chunks = splitMessage(text, limit)
+        expect(chunks.join('')).toBe(text)
+        for (const chunk of chunks) {
+          expect(chunk.length).toBeLessThanOrEqual(limit)
+          expect(Buffer.from(chunk, 'utf8').toString('utf8')).toBe(chunk)
+        }
+      }
+    }
+  })
+
+  it('makes progress with whole code points when limit one cannot hold a surrogate pair', () => {
+    expect(splitMessage('a🙂b𐐷', 1)).toEqual(['a', '🙂', 'b', '𐐷'])
+  })
+
+  it('does not exceed the budget to include a sentence delimiter', () => {
+    const text = 'abcd. efgh'
+    const chunks = splitMessage(text, 4)
+    expect(chunks.every((chunk) => chunk.length <= 4)).toBe(true)
+    expect(chunks.join('').replace(/\s/g, '')).toBe(text.replace(/\s/g, ''))
+  })
+
+  it('keeps paragraph, line, sentence, and word splitting priorities', () => {
+    expect(splitMessage('🙂 first\n\nsecond. third last', 22)[0]).toBe('🙂 first')
+    expect(splitMessage('🙂 first\nsecond. third last', 22)[0]).toBe('🙂 first')
+    expect(splitMessage('🙂 first. second third last', 22)[0]).toBe('🙂 first.')
+    expect(splitMessage('🙂 first second third last', 22)[0]).toBe('🙂 first second third')
+  })
+
   it('preserves all content after splitting', () => {
     const text = 'Hello world. This is a test. Foo bar baz.'
     const chunks = splitMessage(text, 15)

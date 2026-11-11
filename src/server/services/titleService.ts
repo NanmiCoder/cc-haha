@@ -7,33 +7,13 @@
  */
 
 import { ProviderService } from './providerService.js'
-import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
-import {
-  getPresetAuthStrategy,
-  providerNeedsProxy,
-  resolveProviderApiFormat,
-} from './providerRuntimeEnv.js'
-import { handleProxyRequest } from '../proxy/handler.js'
-import {
-  getNetworkProxyFetchOptions,
-  loadNetworkSettings,
-  type NetworkSettings,
-} from './networkSettings.js'
+import { loadNetworkSettings } from './networkSettings.js'
 import { sessionService } from './sessionService.js'
-import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
-import {
-  isDeepSeekAccountProviderId,
-  resolveDeepSeekAccountRequestHeaders,
-} from './deepseekAccountProvider.js'
-import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
-import { deepSeekAccountFetchInit } from '../../services/deepseekAuth/client.js'
-import { resolveOpenAICodexModel } from '../../services/openaiAuth/models.js'
-import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
-import { openaiResponsesStreamToAnthropicResponse } from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'
+import { isDeepSeekAccountProviderId } from './deepseekAccountProvider.js'
+import { providerTextCompletion } from './providerTextCompletion.js'
 import { cleanSessionTitleSource, hasSessionTitleMarkup } from '../../utils/sessionTitleText.js'
 import { extractConversationText, SESSION_TITLE_PROMPT } from '../../utils/sessionTitle.js'
-import type { ProviderAuthStrategy } from '../types/provider.js'
 
 const TITLE_MAX_LEN = 50
 // Thinking models that ignore (or silently drop) `thinking: disabled` spend the
@@ -125,36 +105,6 @@ function buildTitleUserPrompt(
   ].join('\n')
 }
 
-function buildAnthropicTitleRequestHeaders(
-  apiKey: string,
-  authStrategy: ProviderAuthStrategy,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'anthropic-version': '2023-06-01',
-  }
-
-  switch (authStrategy) {
-    case 'api_key':
-      headers['x-api-key'] = apiKey
-      break
-    case 'auth_token':
-    case 'auth_token_empty_api_key':
-      headers.Authorization = `Bearer ${apiKey}`
-      break
-    case 'dual_same_token':
-      headers['x-api-key'] = apiKey
-      headers.Authorization = `Bearer ${apiKey}`
-      break
-    case 'dual_dummy':
-      headers['x-api-key'] = 'dummy'
-      headers.Authorization = 'Bearer dummy'
-      break
-  }
-
-  return headers
-}
-
 /**
  * Quick placeholder title derived from user message text.
  * Returns first sentence, collapsed to single line, max 50 chars.
@@ -201,191 +151,29 @@ export async function generateTitle(
         : null
     }
 
-    if (resolvedProvider && isOpenAIOfficialProviderId(resolvedProvider.id)) {
-      return await generateOpenAIOfficialTitle(
-        trimmed,
-        resolvedProvider.models.haiku || resolvedProvider.models.main,
-        languagePreference,
-        networkSettings,
-      )
-    }
+    if (!resolvedProvider) return null
 
-    // The account route authenticates with its grant, not an API key.
-    const accountHeaders = resolvedProvider && isDeepSeekAccountProviderId(resolvedProvider.id)
-      ? await resolveDeepSeekAccountRequestHeaders()
-      : null
-    if (!resolvedProvider?.baseUrl) return null
-    if (!resolvedProvider.apiKey && !accountHeaders) return null
-
-    const model = resolvedProvider.models.haiku || resolvedProvider.models.main
-    const url = `${normalizeAnthropicBaseUrl(resolvedProvider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
-    const authStrategy = resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
-    const requestHeaders = accountHeaders ??
-      buildAnthropicTitleRequestHeaders(resolvedProvider.apiKey, authStrategy)
-    const requestBody = {
-      model,
-      max_tokens: TITLE_MAX_OUTPUT_TOKENS,
-      system: SESSION_TITLE_PROMPT,
-    }
-    // Providers that need local request handling answer on their own wire format.
-    // Talking to them in Anthropic Messages would ignore the preset's per-model
-    // rules and the client headers some gateways require, so these go through the
-    // same proxy the CLI uses instead of a second, parallel code path.
-    const usesLocalProxy = providerNeedsProxy(
-      resolveProviderApiFormat(resolvedProvider),
-      resolvedProvider.supportsNestedToolResultMedia,
-    )
-
+    const provider = resolvedProvider
+    const modelId = provider.models.haiku || provider.models.main
     return await generateTitleWithLanguageRetry(
       async (strictLanguage) => {
-        const body = {
-          ...requestBody,
-          messages: [{
-            role: 'user',
-            content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
-          }],
-        }
-        const response = usesLocalProxy
-          ? await fetchProxiedTitleResponse(resolvedProvider.id, sessionId, body)
-          : await fetchAnthropicTitleResponse(url, requestHeaders, body, networkSettings)
-        if (!response) return null
-        return parseGeneratedTitleText(response)
+        const result = await providerTextCompletion({
+          provider,
+          modelId,
+          system: SESSION_TITLE_PROMPT,
+          user: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
+          maxTokens: TITLE_MAX_OUTPUT_TOKENS,
+          sessionId,
+          networkSettings,
+        })
+        if (!result.ok || !result.text) return null
+        return parseGeneratedTitleText(result.text)
       },
       languagePreference,
     )
   } catch {
     return null
   }
-}
-
-async function generateOpenAIOfficialTitle(
-  trimmed: string,
-  model: string,
-  languagePreference?: TitleLanguagePreference | null,
-  networkSettings?: NetworkSettings,
-): Promise<string | null> {
-  const tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
-  if (!tokens?.accessToken) return null
-
-  const mappedModel = resolveOpenAICodexModel(model)
-  return await generateTitleWithLanguageRetry(
-    async (strictLanguage) => {
-      const requestBody = anthropicToOpenaiResponses({
-        model: mappedModel,
-        max_tokens: TITLE_MAX_OUTPUT_TOKENS,
-        system: SESSION_TITLE_PROMPT,
-        messages: [{
-          role: 'user',
-          content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
-        }],
-        stream: true,
-        thinking: { type: 'disabled' },
-      })
-      requestBody.stream = true
-      requestBody.max_output_tokens = TITLE_MAX_OUTPUT_TOKENS
-
-      const headers = new Headers()
-      headers.set('Content-Type', 'application/json')
-      headers.set('Authorization', `Bearer ${tokens.accessToken}`)
-      if (tokens.accountId) {
-        headers.set('ChatGPT-Account-Id', tokens.accountId)
-      }
-
-      const response = await fetch(OPENAI_CODEX_API_ENDPOINT, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(15_000),
-        ...(networkSettings
-          ? getNetworkProxyFetchOptions(networkSettings, OPENAI_CODEX_API_ENDPOINT)
-          : {}),
-      })
-
-      if (!response.ok || !response.body) return null
-
-      const body = await openaiResponsesStreamToAnthropicResponse(
-        response.body,
-        mappedModel,
-      )
-      const text = body.content.find((b) => b.type === 'text')?.text
-      if (!text) return null
-
-      return parseGeneratedTitleText(text)
-    },
-    languagePreference,
-  )
-}
-
-/**
- * Sends the title request through the in-process proxy, which owns the per-model
- * protocol decision and the preset's upstream headers. Keeps the same
- * disabled-thinking-then-retry shape as the direct path so both behave alike.
- */
-async function fetchProxiedTitleResponse(
-  providerId: string,
-  sessionId: string | undefined,
-  requestBody: Record<string, unknown>,
-): Promise<string | null> {
-  const url = `http://127.0.0.1/proxy/providers/${encodeURIComponent(providerId)}/v1/messages`
-  const send = (body: Record<string, unknown>) => handleProxyRequest(
-    new Request(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(sessionId ? { 'x-claude-code-session-id': sessionId } : {}),
-      },
-      body: JSON.stringify(body),
-    }),
-    new URL(url),
-  )
-
-  let response = await send({ ...requestBody, thinking: { type: 'disabled' } })
-  if (!response.ok && response.status >= 400 && response.status < 500) {
-    response = await send(requestBody)
-  }
-  if (!response.ok) return null
-
-  const body = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>
-  }
-  return body.content?.find((block) => block.type === 'text')?.text ?? null
-}
-
-async function fetchAnthropicTitleResponse(
-  url: string,
-  requestHeaders: Record<string, string>,
-  requestBody: Record<string, unknown>,
-  networkSettings: NetworkSettings,
-): Promise<string | null> {
-  let response = await fetch(url, {
-    method: 'POST',
-    headers: requestHeaders,
-    body: JSON.stringify({
-      ...requestBody,
-      thinking: { type: 'disabled' },
-    }),
-    signal: AbortSignal.timeout(15_000),
-    ...getNetworkProxyFetchOptions(networkSettings, url),
-    ...deepSeekAccountFetchInit(requestHeaders),
-  })
-
-  if (!response.ok && response.status >= 400 && response.status < 500) {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: requestHeaders,
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(15_000),
-      ...getNetworkProxyFetchOptions(networkSettings, url),
-      ...deepSeekAccountFetchInit(requestHeaders),
-    })
-  }
-
-  if (!response.ok) return null
-
-  const body = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>
-  }
-  return body.content?.find((b) => b.type === 'text')?.text ?? null
 }
 
 async function generateTitleWithLanguageRetry(

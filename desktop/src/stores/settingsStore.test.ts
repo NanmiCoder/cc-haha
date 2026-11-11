@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import type { Locale } from '../i18n/locale'
+import terminalSettingsV1 from '../test/fixtures/terminal-settings-v1.json'
 import { browserHost } from '../lib/desktopHost/browserHost'
 
 function createDeferred<T>() {
@@ -1323,6 +1324,66 @@ describe('settingsStore workflow keyword persistence', () => {
   })
 })
 
+describe('settingsStore next-prompt suggestions', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  // Each suggestion costs an extra model request, so only an explicit `true`
+  // turns it on: an old settings file, or a malformed value, stays off.
+  it.each([
+    [{}, false],
+    [{ nextPromptSuggestionsEnabled: 'true' }, false],
+    [{ nextPromptSuggestionsEnabled: false }, false],
+    [{ nextPromptSuggestionsEnabled: true }, true],
+  ])('loads %j as enabled=%s', async (userSettings, expected) => {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn().mockResolvedValue(userSettings),
+        updateUser: vi.fn(),
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+        setPermissionMode: vi.fn(),
+        getCliLauncherStatus: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        setCurrent: vi.fn(),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+        setEffort: vi.fn(),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: {
+        get: vi.fn().mockResolvedValue({
+          settings: {
+            enabled: false,
+            token: null,
+            tokenPreview: null,
+            allowedOrigins: [],
+            publicBaseUrl: null,
+            fixedPort: null,
+            disconnectGraceSeconds: null,
+          },
+        }),
+        enable: vi.fn(),
+        disable: vi.fn(),
+        regenerate: vi.fn(),
+        update: vi.fn(),
+      },
+    }))
+
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().nextPromptSuggestionsEnabled).toBe(expected)
+  })
+})
+
 describe('settingsStore Agent Teams persistence', () => {
   const updateUser = vi.fn()
   const getUser = vi.fn()
@@ -1492,7 +1553,7 @@ describe('settingsStore Auto-dream persistence', () => {
   })
 })
 
-describe('settingsStore desktop terminal shell persistence', () => {
+describe('settingsStore desktop terminal persistence', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
@@ -1502,12 +1563,7 @@ describe('settingsStore desktop terminal shell persistence', () => {
   it('hydrates desktop terminal settings from user settings and falls back to system defaults', async () => {
     vi.doMock('../api/settings', () => ({
       settingsApi: {
-        getUser: vi.fn().mockResolvedValue({
-          desktopTerminal: {
-            startupShell: 'pwsh',
-            customShellPath: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
-          },
-        }),
+        getUser: vi.fn().mockResolvedValue(terminalSettingsV1),
         updateUser: vi.fn(),
         getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
         setPermissionMode: vi.fn(),
@@ -1545,6 +1601,8 @@ describe('settingsStore desktop terminal shell persistence', () => {
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'system',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
 
     await useSettingsStore.getState().fetchAll()
@@ -1552,7 +1610,42 @@ describe('settingsStore desktop terminal shell persistence', () => {
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'pwsh',
       customShellPath: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      fontFamily: '',
+      fontSize: 13,
     })
+    const { settingsApi } = await import('../api/settings')
+    expect(settingsApi.updateUser).not.toHaveBeenCalled()
+    expect(terminalSettingsV1.desktopTerminal).not.toHaveProperty('fontFamily')
+
+    vi.mocked(settingsApi.getUser).mockResolvedValue({ desktopTerminal: { fontFamily: ' Menlo ', fontSize: 18 } })
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().desktopTerminal).toEqual({
+      startupShell: 'system', customShellPath: '', fontFamily: 'Menlo', fontSize: 18,
+    })
+    vi.mocked(settingsApi.getUser).mockResolvedValue({})
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().desktopTerminal).toEqual({
+      startupShell: 'system', customShellPath: '', fontFamily: '', fontSize: 13,
+    })
+    expect(settingsApi.updateUser).not.toHaveBeenCalled()
+  })
+
+  it('preserves shell and font preferences across partial saves and rolls back failed typography', async () => {
+    const updateUser = vi.fn().mockResolvedValue({ ok: true })
+    vi.doMock('../api/settings', () => ({ settingsApi: { updateUser } }))
+    const { useSettingsStore } = await import('./settingsStore')
+    const save = useSettingsStore.getState().setDesktopTerminal
+    await save({ startupShell: 'cmd' })
+    await save({ fontFamily: ' MesloLGS NF ', fontSize: 18 })
+    await save({ startupShell: 'pwsh' })
+    const expected = { startupShell: 'pwsh', customShellPath: '', fontFamily: 'MesloLGS NF', fontSize: 18 }
+    expect(updateUser).toHaveBeenLastCalledWith({ desktopTerminal: expected })
+    expect(useSettingsStore.getState().desktopTerminal).toEqual(expected)
+    updateUser.mockRejectedValueOnce(new Error('disk full'))
+    await expect(save({ fontFamily: 'Hack Nerd Font Mono', fontSize: 24 })).rejects.toThrow('disk full')
+    expect(useSettingsStore.getState().desktopTerminal).toEqual(expected)
+    await save({ fontFamily: '', fontSize: 13 })
+    expect(useSettingsStore.getState().desktopTerminal).toEqual({ ...expected, fontFamily: '', fontSize: 13 })
   })
 
   it('persists desktop terminal settings explicitly', async () => {
@@ -1598,17 +1691,23 @@ describe('settingsStore desktop terminal shell persistence', () => {
     await useSettingsStore.getState().setDesktopTerminal({
       startupShell: 'custom',
       customShellPath: 'C:\\tools\\pwsh.exe',
+      fontFamily: '',
+      fontSize: 13,
     })
 
     expect(updateUser).toHaveBeenCalledWith({
       desktopTerminal: {
         startupShell: 'custom',
         customShellPath: 'C:\\tools\\pwsh.exe',
+        fontFamily: '',
+        fontSize: 13,
       },
     })
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'custom',
       customShellPath: 'C:\\tools\\pwsh.exe',
+      fontFamily: '',
+      fontSize: 13,
     })
   })
 
@@ -1632,16 +1731,22 @@ describe('settingsStore desktop terminal shell persistence', () => {
     const oldRequest = useSettingsStore.getState().setDesktopTerminal({
       startupShell: 'powershell',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
     const oldRequestResult = oldRequest.catch((error) => error)
     const newRequest = useSettingsStore.getState().setDesktopTerminal({
       startupShell: 'pwsh',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
 
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'pwsh',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
     await vi.waitFor(() => {
       expect(updateUser).toHaveBeenCalledTimes(1)
@@ -1656,11 +1761,15 @@ describe('settingsStore desktop terminal shell persistence', () => {
       desktopTerminal: {
         startupShell: 'pwsh',
         customShellPath: '',
+        fontFamily: '',
+        fontSize: 13,
       },
     })
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'pwsh',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
   })
 
@@ -1683,10 +1792,14 @@ describe('settingsStore desktop terminal shell persistence', () => {
     const firstRequest = useSettingsStore.getState().setDesktopTerminal({
       startupShell: 'powershell',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
     const secondRequest = useSettingsStore.getState().setDesktopTerminal({
       startupShell: 'pwsh',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
 
     await firstRequest
@@ -1695,6 +1808,8 @@ describe('settingsStore desktop terminal shell persistence', () => {
     expect(useSettingsStore.getState().desktopTerminal).toEqual({
       startupShell: 'powershell',
       customShellPath: '',
+      fontFamily: '',
+      fontSize: 13,
     })
   })
 })

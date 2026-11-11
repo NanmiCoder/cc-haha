@@ -10,11 +10,13 @@ import {
   getCliComputerUseCapabilities,
 } from './common.js'
 import { resolveLaunchableCuHelperBinary } from './cuHelperBridge.js'
+import { resolveAgentDesktopBinary } from './agentDesktopBridge.js'
 import { getChicagoCoordinateMode, shouldExposeComputerUseMcp } from './gates.js'
 
 type SetupComputerUseDeps = {
   platform?: NodeJS.Platform
   resolveMacosNativeBinary?: () => string | null
+  resolveAgentDesktopBinary?: () => string | null
 }
 
 /**
@@ -36,7 +38,9 @@ export function setupComputerUseMCP(deps: SetupComputerUseDeps = {}): {
   const platform = deps.platform ?? process.platform
   const macosNativeLaunchable = platform === 'darwin'
     && (deps.resolveMacosNativeBinary ?? resolveLaunchableCuHelperBinary)() !== null
-  if (!shouldExposeComputerUseMcp(platform, macosNativeLaunchable)) {
+  const agentDesktopLaunchable = (platform === 'win32' || platform === 'linux')
+    && (deps.resolveAgentDesktopBinary ?? resolveAgentDesktopBinary)() !== null
+  if (!shouldExposeComputerUseMcp(platform, macosNativeLaunchable, agentDesktopLaunchable)) {
     return { mcpConfig: {}, allowedTools: [] }
   }
 

@@ -15,11 +15,12 @@ on:
         required: false
         default: true
         type: boolean
-      skip_windows_signing:
-        description: 'Build unsigned Windows artifacts while SignPath onboarding is pending'
+      windows_signing:
+        description: 'Windows signing: auto follows the WINDOWS_SIGNING_ENABLED repository variable'
         required: false
-        default: false
-        type: boolean
+        default: auto
+        type: choice
+        options: [auto, unsigned, signed]
       publish_draft_release:
         description: 'Publish manual draft artifacts to GitHub Releases'
         required: false
@@ -41,6 +42,31 @@ jobs:
       macos_signed: ${{ steps.validate.outputs.macos_signed }}
       windows_signed: ${{ steps.validate.outputs.windows_signed }}
     steps:
+      - name: Checkout release version
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            desktop/package.json
+            scripts/assert-release-unpublished.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./desktop/package.json').version")
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Fail in seconds instead of after a full build when this run would write
+      # to a release that is already public (for example a manual run started
+      # after the tag-push run already published the tag).
+      - name: Refuse to overwrite an existing published release
+        if: github.event_name == 'push' || inputs.draft == false || inputs.publish_draft_release == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/assert-release-unpublished.sh "${{ steps.version.outputs.value }}"
+
       - name: Validate release signing and notarization secrets
         id: validate
         shell: bash
@@ -57,7 +83,8 @@ jobs:
           SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG }}
           SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft == true }}
-          SKIP_WINDOWS_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_windows_signing == true }}
+          WINDOWS_SIGNING_ENABLED: ${{ vars.WINDOWS_SIGNING_ENABLED == 'true' }}
+          WINDOWS_SIGNING_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_signing || 'auto' }}
         run: |
           # macOS signing + notarization is preferred: Squirrel.Mac auto-update and
           # first-launch Gatekeeper approval and Computer Use client attestation
@@ -76,15 +103,33 @@ jobs:
           else
             echo "macos_signed=true" >> "$GITHUB_OUTPUT"
           fi
-          # A maintainer can explicitly release unsigned Windows builds while
-          # SignPath approval is pending, even when its configuration is present.
-          if [ "$SKIP_WINDOWS_SIGNING" = "true" ]; then
-            echo "::warning::Windows signing explicitly skipped for this manual release; Windows artifacts will be unsigned."
-            echo "windows_signed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Drafts may remain unsigned while SignPath onboarding is being tested. Tags and
-          # non-draft releases otherwise require the full GitHub connector configuration.
+          # Windows signing is opt-in while SignPath approval is pending: the
+          # WINDOWS_SIGNING_ENABLED repository variable turns it on for every
+          # trigger, and a manual run may override it either way (for example
+          # to trial-sign a draft before the variable is enabled). Unsigned
+          # Windows builds are the expected state, so they only get a notice.
+          case "$WINDOWS_SIGNING_MODE" in
+            unsigned)
+              echo "::notice::Windows signing disabled for this manual run; Windows artifacts will be unsigned."
+              echo "windows_signed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            signed)
+              ;;
+            auto)
+              if [ "$WINDOWS_SIGNING_ENABLED" != "true" ]; then
+                echo "::notice::Windows signing is off (repository variable WINDOWS_SIGNING_ENABLED is not true); Windows artifacts will be unsigned."
+                echo "windows_signed=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              ;;
+            *)
+              echo "::error::Unknown windows_signing mode: ${WINDOWS_SIGNING_MODE}"
+              exit 1
+              ;;
+          esac
+          # Once signing is requested, drafts may remain unsigned while SignPath onboarding is
+          # being tested. Tags and non-draft releases require the full GitHub connector configuration.
           win_missing=()
           [ -n "$SIGNPATH_API_TOKEN" ] || win_missing+=("SIGNPATH_API_TOKEN secret")
           [ -n "$SIGNPATH_ORGANIZATION_ID" ] || win_missing+=("SIGNPATH_ORGANIZATION_ID variable")
@@ -93,6 +138,10 @@ jobs:
           [ -n "$SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG" ] || win_missing+=("SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG variable")
           [ -n "$SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG" ] || win_missing+=("SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG variable")
           if [ "${#win_missing[@]}" -gt 0 ]; then
+            if [ "$WINDOWS_SIGNING_MODE" = "signed" ]; then
+              printf '::error::Windows signing was requested for this manual run, but SignPath configuration is missing (%s).\n' "${win_missing[*]}"
+              exit 1
+            fi
             printf '::warning::SignPath configuration missing (%s): the Windows build will be unsigned.\n' "${win_missing[*]}"
             echo "windows_signed=false" >> "$GITHUB_OUTPUT"
             if [ "$RELEASE_DRAFT" != "true" ]; then
@@ -112,27 +161,27 @@ jobs:
         include:
           - platform: macos-latest
             target_triple: aarch64-apple-darwin
-            builder_args: --mac dmg zip --arm64
+            builder_args: --mac dmg zip --arm64 '-c.dmg.artifactName=Claude-Code-Haha-${version}-macOS-Apple-Silicon.${ext}'
             app_bundle_dir: mac-arm64
             label: macOS-ARM64
             smoke_platform: macos
             arch: arm64
           - platform: macos-latest
             target_triple: x86_64-apple-darwin
-            builder_args: --mac dmg zip --x64
+            builder_args: --mac dmg zip --x64 '-c.dmg.artifactName=Claude-Code-Haha-${version}-macOS-Intel.${ext}'
             app_bundle_dir: mac
             label: macOS-x64
             smoke_platform: macos
             arch: x64
           - platform: ubuntu-22.04
             target_triple: x86_64-unknown-linux-gnu
-            builder_args: --linux AppImage deb rpm --x64
+            builder_args: --linux AppImage deb rpm --x64 '-c.linux.artifactName=Claude-Code-Haha-${version}-Linux-x64.${ext}'
             label: Linux-x64
             smoke_platform: linux
             arch: x64
           - platform: ubuntu-22.04-arm
             target_triple: aarch64-unknown-linux-gnu
-            builder_args: --linux AppImage deb rpm --arm64
+            builder_args: --linux AppImage deb rpm --arm64 '-c.linux.artifactName=Claude-Code-Haha-${version}-Linux-arm64.${ext}'
             label: Linux-ARM64
             smoke_platform: linux
             arch: arm64
@@ -207,6 +256,11 @@ jobs:
         working-directory: adapters
         run: bun install
 
+      - name: Install mobile dependencies
+        working-directory: mobile
+        # `bun run build` exports the phone app (mobile/) into dist/m: it is the H5 for phones.
+        run: bun install --frozen-lockfile
+
       - name: Verify Windows legacy data recovery
         if: matrix.smoke_platform == 'windows'
         working-directory: desktop
@@ -259,6 +313,22 @@ jobs:
         env:
           SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
         run: bun run prepare:ripgrep
+
+      - name: Prepare bundled Cloudflare connector
+        working-directory: desktop
+        env:
+          SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
+        run: bun run prepare:cloudflared
+
+      - name: Setup native Computer Use Rust toolchain
+        if: matrix.smoke_platform != 'macos'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target_triple }}
+
+      - name: Prepare native Computer Use dependencies
+        if: matrix.smoke_platform != 'macos'
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml --target ${{ matrix.target_triple }}
 
       - name: Build sidecars
         working-directory: desktop
@@ -508,9 +578,11 @@ jobs:
           $sidecarName = "claude-sidecar-${{ matrix.target_triple }}.exe"
           $mainExecutable = Join-Path $unpackedDir "Claude Code Haha.exe"
           $sidecarExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/$sidecarName"
+          $agentDesktopExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe"
           New-Item -ItemType Directory -Path $stageDir | Out-Null
           Copy-Item -LiteralPath $mainExecutable -Destination (Join-Path $stageDir "Claude Code Haha.exe")
           Copy-Item -LiteralPath $sidecarExecutable -Destination (Join-Path $stageDir $sidecarName)
+          Copy-Item -LiteralPath $agentDesktopExecutable -Destination (Join-Path $stageDir "agent-desktop.exe")
           "stage_dir=$stageDir" >> $env:GITHUB_OUTPUT
           "unpacked_dir=$unpackedDir" >> $env:GITHUB_OUTPUT
           "sidecar_name=$sidecarName" >> $env:GITHUB_OUTPUT
@@ -549,8 +621,10 @@ jobs:
           $sidecarName = "${{ steps.stage-signpath-application.outputs.sidecar_name }}"
           $mainExecutable = Join-Path $unpackedDir "Claude Code Haha.exe"
           $sidecarExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/$sidecarName"
+          $agentDesktopExecutable = Join-Path $unpackedDir "resources/app.asar.unpacked/src-tauri/binaries/agent-desktop.exe"
           Copy-Item -LiteralPath (Join-Path $signedDir "Claude Code Haha.exe") -Destination $mainExecutable -Force
           Copy-Item -LiteralPath (Join-Path $signedDir $sidecarName) -Destination $sidecarExecutable -Force
+          Copy-Item -LiteralPath (Join-Path $signedDir "agent-desktop.exe") -Destination $agentDesktopExecutable -Force
 
           function Assert-SignPathSignature([string] $Path) {
             $signature = Get-AuthenticodeSignature -LiteralPath $Path
@@ -568,6 +642,7 @@ jobs:
 
           Assert-SignPathSignature $mainExecutable
           Assert-SignPathSignature $sidecarExecutable
+          Assert-SignPathSignature $agentDesktopExecutable
 
       - name: Package NSIS installer from signed Windows application
         if: matrix.smoke_platform == 'windows' && needs.signing-preflight.outputs.windows_signed == 'true'
@@ -582,7 +657,7 @@ jobs:
         id: stage-signpath-installer
         shell: pwsh
         run: |
-          $installerName = "Claude-Code-Haha-${{ steps.version.outputs.value }}-win-${{ matrix.arch }}.exe"
+          $installerName = "Claude-Code-Haha-${{ steps.version.outputs.value }}-Windows-${{ matrix.arch }}-Setup.exe"
           $installerPath = Join-Path $PWD "desktop/build-artifacts/electron/$installerName"
           $stageDir = Join-Path $env:RUNNER_TEMP "signpath-installer-${{ matrix.arch }}"
           New-Item -ItemType Directory -Path $stageDir | Out-Null
@@ -658,7 +733,7 @@ jobs:
 
       - name: Warn unsigned macOS launch policy skipped
         if: matrix.smoke_platform == 'macos' && needs.signing-preflight.outputs.macos_signed != 'true'
-        run: echo "::warning::Skipping macOS Gatekeeper package-smoke because this release is unsigned. Ship install-macos-unsigned.sh with the DMG."
+        run: echo "::warning::Skipping macOS Gatekeeper package-smoke because this build is unsigned; users would need install-macos-unsigned.sh or xattr to open it."
 
       - name: Validate matrix release asset set
         shell: bash
@@ -669,49 +744,43 @@ jobs:
           case "${{ matrix.label }}" in
             macOS-ARM64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-mac-arm64.dmg"
-                "Claude-Code-Haha-${APP_VERSION}-mac-arm64.dmg.blockmap"
-                "Claude-Code-Haha-${APP_VERSION}-mac-arm64.zip"
-                "Claude-Code-Haha-${APP_VERSION}-mac-arm64.zip.blockmap"
+                "Claude-Code-Haha-${APP_VERSION}-macOS-Apple-Silicon.dmg"
+                "Claude-Code-Haha-${APP_VERSION}-macOS-arm64-update.zip"
                 "latest-mac.yml"
               )
               ;;
             macOS-x64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-mac-x64.dmg"
-                "Claude-Code-Haha-${APP_VERSION}-mac-x64.dmg.blockmap"
-                "Claude-Code-Haha-${APP_VERSION}-mac-x64.zip"
-                "Claude-Code-Haha-${APP_VERSION}-mac-x64.zip.blockmap"
+                "Claude-Code-Haha-${APP_VERSION}-macOS-Intel.dmg"
+                "Claude-Code-Haha-${APP_VERSION}-macOS-x64-update.zip"
                 "latest-mac.yml"
               )
               ;;
             Linux-x64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-linux-x86_64.AppImage"
-                "Claude-Code-Haha-${APP_VERSION}-linux-amd64.deb"
-                "Claude-Code-Haha-${APP_VERSION}-linux-x86_64.rpm"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-x64.AppImage"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-x64.deb"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-x64.rpm"
                 "latest-linux.yml"
               )
               ;;
             Linux-ARM64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-linux-arm64.AppImage"
-                "Claude-Code-Haha-${APP_VERSION}-linux-arm64.deb"
-                "Claude-Code-Haha-${APP_VERSION}-linux-aarch64.rpm"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.AppImage"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.deb"
+                "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.rpm"
                 "latest-linux-arm64.yml"
               )
               ;;
             Windows-x64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-win-x64.exe"
-                "Claude-Code-Haha-${APP_VERSION}-win-x64.exe.blockmap"
+                "Claude-Code-Haha-${APP_VERSION}-Windows-x64-Setup.exe"
                 "latest.yml"
               )
               ;;
             Windows-ARM64)
               expected=(
-                "Claude-Code-Haha-${APP_VERSION}-win-arm64.exe"
-                "Claude-Code-Haha-${APP_VERSION}-win-arm64.exe.blockmap"
+                "Claude-Code-Haha-${APP_VERSION}-Windows-arm64-Setup.exe"
                 "latest.yml"
               )
               ;;
@@ -768,7 +837,6 @@ jobs:
             desktop/build-artifacts/electron/*.AppImage
             desktop/build-artifacts/electron/*.deb
             desktop/build-artifacts/electron/*.rpm
-            desktop/build-artifacts/electron/*.blockmap
             desktop/build-artifacts/electron/*.yml
           if-no-files-found: error
 
@@ -776,6 +844,8 @@ jobs:
     if: github.event_name == 'push' || inputs.draft == false || inputs.publish_draft_release == true
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: v${{ steps.version.outputs.value }}
 
     steps:
       - name: Checkout
@@ -798,30 +868,14 @@ jobs:
             exit 1
           fi
 
+      # Re-check right before uploading: another run for the same version on a
+      # different ref (outside this run's concurrency group) may have published
+      # while this one was building.
       - name: Refuse to overwrite an existing published release
-        if: github.event_name == 'workflow_dispatch' && inputs.draft == true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          error_file="${RUNNER_TEMP}/release-view-error.txt"
-          set +e
-          release_state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${{ steps.version.outputs.value }}" --jq '.draft' 2>"$error_file")
-          status=$?
-          set -e
-
-          if [ "$status" -ne 0 ]; then
-            if grep -q 'HTTP 404' "$error_file"; then
-              exit 0
-            fi
-            cat "$error_file" >&2
-            exit "$status"
-          fi
-
-          if [ "$release_state" = "false" ]; then
-            echo "::error::Refusing to overwrite published release v${{ steps.version.outputs.value }} with manual draft artifacts."
-            exit 1
-          fi
+        run: bash scripts/assert-release-unpublished.sh "${{ steps.version.outputs.value }}"
 
       - name: Load release notes
         id: release_notes
@@ -860,24 +914,18 @@ jobs:
           APP_VERSION: ${{ steps.version.outputs.value }}
         run: |
           expected=(
-            "Claude-Code-Haha-${APP_VERSION}-mac-arm64.dmg"
-            "Claude-Code-Haha-${APP_VERSION}-mac-arm64.dmg.blockmap"
-            "Claude-Code-Haha-${APP_VERSION}-mac-arm64.zip"
-            "Claude-Code-Haha-${APP_VERSION}-mac-arm64.zip.blockmap"
-            "Claude-Code-Haha-${APP_VERSION}-mac-x64.dmg"
-            "Claude-Code-Haha-${APP_VERSION}-mac-x64.dmg.blockmap"
-            "Claude-Code-Haha-${APP_VERSION}-mac-x64.zip"
-            "Claude-Code-Haha-${APP_VERSION}-mac-x64.zip.blockmap"
-            "Claude-Code-Haha-${APP_VERSION}-linux-x86_64.AppImage"
-            "Claude-Code-Haha-${APP_VERSION}-linux-amd64.deb"
-            "Claude-Code-Haha-${APP_VERSION}-linux-x86_64.rpm"
-            "Claude-Code-Haha-${APP_VERSION}-linux-arm64.AppImage"
-            "Claude-Code-Haha-${APP_VERSION}-linux-arm64.deb"
-            "Claude-Code-Haha-${APP_VERSION}-linux-aarch64.rpm"
-            "Claude-Code-Haha-${APP_VERSION}-win-x64.exe"
-            "Claude-Code-Haha-${APP_VERSION}-win-x64.exe.blockmap"
-            "Claude-Code-Haha-${APP_VERSION}-win-arm64.exe"
-            "Claude-Code-Haha-${APP_VERSION}-win-arm64.exe.blockmap"
+            "Claude-Code-Haha-${APP_VERSION}-macOS-Apple-Silicon.dmg"
+            "Claude-Code-Haha-${APP_VERSION}-macOS-arm64-update.zip"
+            "Claude-Code-Haha-${APP_VERSION}-macOS-Intel.dmg"
+            "Claude-Code-Haha-${APP_VERSION}-macOS-x64-update.zip"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-x64.AppImage"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-x64.deb"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-x64.rpm"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.AppImage"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.deb"
+            "Claude-Code-Haha-${APP_VERSION}-Linux-arm64.rpm"
+            "Claude-Code-Haha-${APP_VERSION}-Windows-x64-Setup.exe"
+            "Claude-Code-Haha-${APP_VERSION}-Windows-arm64-Setup.exe"
           )
 
           missing=()
@@ -933,9 +981,7 @@ jobs:
             artifacts/release-assets/**/*.AppImage
             artifacts/release-assets/**/*.deb
             artifacts/release-assets/**/*.rpm
-            artifacts/release-assets/**/*.blockmap
             artifacts/update-metadata-standard/*.yml
-            desktop/scripts/install-macos-unsigned.sh
 
       - name: Publish GitHub release after complete upload
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.draft == false)
@@ -948,3 +994,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "v${{ steps.version.outputs.value }}" --json isDraft --jq 'if .isDraft then "release remains draft" else error("workflow-dispatch release was published unexpectedly") end' --repo "${{ github.repository }}"
+
+  release-mobile:
+    needs: publish-release
+    if: vars.MOBILE_RELEASE_ENABLED == 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.draft == false))
+    uses: ./.github/workflows/release-mobile.yml
+    with:
+      release_tag: ${{ needs.publish-release.outputs.release_tag }}
+    secrets:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

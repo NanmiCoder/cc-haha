@@ -17,7 +17,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 **Why** — The file isn't damaged. macOS quarantines downloads and refuses to launch anything without an Apple signature, but words the error as "damaged", which sends everyone down the wrong path.
 
-**What to do** — Download `install-macos-unsigned.sh` from the same Release, put it in the same folder as the DMG, and run `bash install-macos-unsigned.sh`. Or, if the app is already in Applications, run `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`. Full details in [Download and install](./install.md).
+**What to do** — Releases are signed and notarized, so this usually means an unsigned development build. Put the `install-macos-unsigned.sh` that ships with the build in the same folder as the DMG, and run `bash install-macos-unsigned.sh`. Or, if the app is already in Applications, run `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`. Full details in [Download and install](./install.md).
 
 ### Windows shows a SmartScreen warning
 
@@ -46,7 +46,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 ### Nothing happens when I launch it
 
-**Why** — Most often the wrong CPU architecture: `mac-x64` on Apple Silicon, or `win-x64` on ARM64 Windows.
+**Why** — Most often the wrong CPU architecture: `macOS-Intel` on Apple Silicon, or `Windows-x64` on ARM64 Windows.
 
 **What to do** — Re-check your architecture against [Download and install](./install.md) and reinstall the right package. An old version still running in the background can also block startup, so quit everything first.
 
@@ -150,24 +150,35 @@ For local models (LM Studio / Ollama), **do not append `/v1` to the base URL** �
 
 **Why** — The local server defaults to port `3456`. If something else already holds that port, the service moves elsewhere or fails to start.
 
-**What to do** — Open Settings → H5 Access and read "Current port" — it may have already moved, leaving your old QR code pointing at the wrong place. If you need a stable address (for a bookmark or a reverse proxy), set "Fixed port" on the same page, anywhere in 1024–65535. Port changes apply after restarting the app.
+**What to do** — Open Settings → Phone connection → Same Wi-Fi, expand "Advanced connection settings", and read "Current port" — it may have already moved, leaving your old QR code pointing at the wrong place. If you need a stable LAN address (for a bookmark or a reverse proxy), set "Fixed port" here, anywhere in 1024–65535. Port changes apply after restarting the app. This port is independent of the local gateway port used for Cloudflare remote connections.
 
 ## Phone won't connect
 
 **What you see** — Scanning the QR code opens nothing, or you get an unauthorized error.
 
-**Why** — Address, port, token, and network all have to line up. Any one of them being wrong breaks the connection.
+**Why** — Same-Wi-Fi connections use a LAN address and access token. Cloudflare remote connections use a public address and individual device pairing. First identify your connection method, then check its address, network, and authorization.
 
-**What to do** — Go through Settings → H5 Access:
+**What to do** — Open Settings → Phone connection and check the method you are using.
 
-1. Is H5 access actually switched on?
+### Same Wi-Fi
+
+1. Is "Enable local connection" actually switched on?
 2. Does "Access host / IP" still match your computer's current network interface? It changes when you switch Wi-Fi.
 3. Does the port in the QR code match "Current port"?
 4. Are the phone and computer on the same local network?
 5. Does your firewall allow that port?
 6. Has the token been regenerated? **The moment you regenerate it, every old QR code is dead.**
 
-If you changed the fixed port, restart the app. Full deployment guidance and security boundaries are in [Phone and IM handoff](../desktop/remote.md).
+If you changed the fixed port, restart the app and use the new QR code.
+
+### Cloudflare remote connection
+
+1. Does the desktop show "Connection ready"? For a network or proxy error, check the computer's network and Settings → General → Network proxy. Turn the connection off and on again after changing settings.
+2. Can the phone's current network open the assigned public hostname? Verification on the computer does not prove the phone's network can reach it. Turn off the phone's Wi-Fi and test over cellular data. Keep the computer running, online, and awake.
+3. Are you using the complete pairing link, such as `https://host/remote#pair=one-time-code`? The code lasts five minutes and works once. If it expired or was already used, click "Connect a phone" on the desktop to generate a new QR code, or copy a new pairing link. **Each newly created quick tunnel changes the address and requires another scan.**
+4. After the phone requests pairing, have you approved that device on the computer? Browser users should open the link in their usual browser. Authorization is not shared across browsers or private windows.
+
+Quick connection needs no account or domain; the desktop manages the connector. Fixed-domain setup, full instructions, and security boundaries are in [Phone and IM handoff](../desktop/remote.md).
 
 ### Does locking my phone kill a running task?
 

@@ -1,7 +1,7 @@
 import React from 'react'
 import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, screen } from '@testing-library/react'
+import { act, cleanup, screen, waitFor } from '@testing-library/react'
 
 const mocks = vi.hoisted(() => ({
   runDesktopPersistenceMigrations: vi.fn(),
@@ -36,6 +36,8 @@ describe('desktop bootstrap', () => {
     document.body.innerHTML = ''
     delete window.__CC_HAHA_BOOTSTRAPPED__
     delete window.__CC_HAHA_SHOW_STARTUP_ERROR__
+    delete window.__CC_HAHA_SET_STARTUP_PHASE__
+    delete window.__CC_HAHA_BOOTSTRAP_COMPLETE__
     vi.restoreAllMocks()
     vi.clearAllMocks()
   })
@@ -58,6 +60,38 @@ describe('desktop bootstrap', () => {
 
     expect(isPetWindowLocation('?petWindow=1')).toBe(true)
     expect(isPetWindowLocation('?petWindow=0')).toBe(false)
+  })
+
+  it('reports pending module downloads and completes the watchdog after rendering', async () => {
+    const { bootstrapDesktopApp } = await import('./main')
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    const phase = vi.fn()
+    const complete = vi.fn()
+    window.__CC_HAHA_SET_STARTUP_PHASE__ = phase
+    window.__CC_HAHA_BOOTSTRAP_COMPLETE__ = complete
+    type Modules = Awaited<ReturnType<NonNullable<Parameters<typeof bootstrapDesktopApp>[1]>>>
+    let finishDownload!: (modules: Modules) => void
+    const download = new Promise<Modules>((resolve) => { finishDownload = resolve })
+    const bootstrap = bootstrapDesktopApp(root, () => download)
+
+    await waitFor(() => expect(phase).toHaveBeenLastCalledWith('modules'))
+    expect(complete).not.toHaveBeenCalled()
+    expect(window.__CC_HAHA_BOOTSTRAPPED__).not.toBe(true)
+
+    await act(async () => {
+      finishDownload([
+        { App: () => <div>Downloaded remote app</div> },
+        { ErrorBoundary: ({ children }) => <>{children}</> },
+        { installClientDiagnosticsCapture: vi.fn() },
+        { initializeTheme: vi.fn() },
+      ])
+      await bootstrap
+    })
+
+    expect(screen.getByText('Downloaded remote app')).toBeInTheDocument()
+    expect(phase.mock.calls.map(([value]) => value)).toEqual(['locale', 'modules', 'render'])
+    expect(complete).toHaveBeenCalledTimes(1)
   })
 
   it('surfaces bootstrap failures in the root element', async () => {

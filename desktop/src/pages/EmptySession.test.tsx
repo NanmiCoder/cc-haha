@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
+import { rawRecordDiagnosticEvent } from '../api/client'
 
 const originalRangeGetClientRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
 const originalRangeGetBoundingClientRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
@@ -35,9 +36,15 @@ const mocks = vi.hoisted(() => ({
   voiceCatalog: vi.fn(async () => ({
     supported: false,
     providers: [],
-    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+    preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
     limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+    correction: { defaultTarget: null, target: null },
   })),
+}))
+
+vi.mock('../api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/client')>(),
+  rawRecordDiagnosticEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../api/sessions', () => ({
@@ -197,6 +204,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useUIStore } from '../stores/uiStore'
+import { useWorkspaceStore } from '../stores/workspaceStore'
 import { usePluginStore } from '../stores/pluginStore'
 import { useWorkflowStore } from '../stores/workflowStore'
 import type { RepositoryContextResult } from '../api/sessions'
@@ -279,6 +287,7 @@ describe('EmptySession', () => {
   const initialSessionState = useSessionStore.getInitialState()
   const initialChatState = useChatStore.getInitialState()
   const initialTabState = useTabStore.getInitialState()
+  const initialWorkspaceState = useWorkspaceStore.getInitialState()
   const initialRuntimeState = useSessionRuntimeStore.getInitialState()
   const initialUiState = useUIStore.getInitialState()
   const initialPluginState = usePluginStore.getInitialState()
@@ -304,6 +313,7 @@ describe('EmptySession', () => {
     useSessionStore.setState(initialSessionState, true)
     useChatStore.setState(initialChatState, true)
     useTabStore.setState(initialTabState, true)
+    useWorkspaceStore.setState(initialWorkspaceState, true)
     useSessionRuntimeStore.setState(initialRuntimeState, true)
     useUIStore.setState(initialUiState, true)
     usePluginStore.setState(initialPluginState, true)
@@ -358,6 +368,7 @@ describe('EmptySession', () => {
     useSessionStore.setState(initialSessionState, true)
     useChatStore.setState(initialChatState, true)
     useTabStore.setState(initialTabState, true)
+    useWorkspaceStore.setState(initialWorkspaceState, true)
     useSessionRuntimeStore.setState(initialRuntimeState, true)
     useUIStore.setState(initialUiState, true)
     usePluginStore.setState(initialPluginState, true)
@@ -443,6 +454,7 @@ describe('EmptySession', () => {
       expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-compact', 'true')
     })
     expect(screen.getByTestId('model-selector')).toHaveAttribute('data-compact', 'true')
+    expect(screen.getByTestId('model-selector')).toHaveAttribute('data-fluid', 'true')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('h-11', 'w-11')
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('px-3')
     expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('rounded-[var(--radius-xl)]')
@@ -1086,7 +1098,7 @@ describe('EmptySession', () => {
     try {
       expect(useSessionRuntimeStore.getState().selections['draft-session']).toEqual({
         providerId: 'deepseek-account',
-        modelId: 'deepseek-v4-pro[1m]',
+        modelId: 'deepseek-flash[1m]',
         effortLevel: 'high',
       })
     } finally {
@@ -1498,6 +1510,31 @@ describe('EmptySession', () => {
     })
   })
 
+  it('keeps the draft and creates no session when the first message is over the server budget', async () => {
+    // A 4K screenshot pasted as a bitmap is a ~13 MB PNG. With no native path
+    // the composer inlines it as a data URL, so the first frame alone is over
+    // the server's 16 MiB budget: the socket would close and the turn vanish.
+    render(<EmptySession />)
+    const screenshot = new File([new Uint8Array(13 * 1024 * 1024)], 'screenshot.png', { type: 'image/png' })
+    fireEvent.drop(screen.getByTestId('empty-session-composer-panel'), {
+      dataTransfer: { types: ['Files'], files: [screenshot], dropEffect: '' },
+    })
+    expect(await screen.findByRole('img', { name: 'screenshot.png' })).toBeInTheDocument()
+    setComposerText('what is wrong here', 18)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(useUIStore.getState().toasts.at(-1)).toMatchObject({
+        type: 'error',
+        message: expect.stringContaining('over the 16 MB limit'),
+      })
+    })
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('what is wrong here')
+    expect(screen.getByRole('img', { name: 'screenshot.png' })).toBeInTheDocument()
+  })
+
   it('selects a plugin on the landing composer and sends its runtime request only after Run', async () => {
     const modelText = 'Use plugin "hyperframes@curated" for this request.'
     mocks.listReferences.mockResolvedValue({ skills: [], plugins: [{
@@ -1857,7 +1894,8 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('Choose before the first message')
     fireEvent.click(within(row).getByRole('radio', { name: 'Lean' }))
     // Lean's limits are read next to the choice, and the toolbar says "Lean".
-    expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('Web search and fetch, connectors (MCP)')
+    expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('web fetch, sub-agents, task lists')
+    expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('Unavailable Connectors (MCP), Agent Teams')
     expect(screen.getByTestId('agent-profile-chip')).toHaveTextContent(/^Lean$/)
   })
 
@@ -1945,7 +1983,7 @@ describe('EmptySession', () => {
     expect(toolbar).toHaveClass('flex-wrap', 'gap-1')
     expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
-    expect(model).toHaveAttribute('data-fluid', 'false')
+    expect(model).toHaveAttribute('data-fluid', 'true')
     // No slot around the picker: it is a direct child of the trailing group.
     expect(model.parentElement).toBe(trailing)
     expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
@@ -2361,6 +2399,252 @@ describe('EmptySession', () => {
       expect(useUIStore.getState().newSessionDraft?.hasContent).toBe(true)
     })
 
+    it('assigns a session and carries text, attachments and file pills when a workspace control is used', async () => {
+      mocks.isTauriRuntime = true
+      mocks.createSession.mockResolvedValue({ sessionId: 'materialized-session' })
+      mocks.search.mockResolvedValue({
+        currentPath: '/workspace/project',
+        parentPath: null,
+        query: 'README',
+        entries: [{ name: 'README.md', path: '/workspace/project/README.md', relativePath: 'README.md', isDirectory: false }],
+      })
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      setComposerText('Review this change', 'Review this change'.length)
+      const file = new File(['notes'], 'ignored-name.md', { type: 'text/markdown' })
+      Object.defineProperty(file, 'path', { configurable: true, value: '/workspace/project/notes.md' })
+      fireEvent.drop(screen.getByTestId('empty-session-composer-panel'), {
+        dataTransfer: { types: ['Files'], files: [file], dropEffect: '' },
+      })
+      expect(await screen.findByText('notes.md')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
+      fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
+      await waitFor(() => expect(getComposerText()).toContain('@README.md'))
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        workDir: '/workspace/project',
+        permissionMode: 'default',
+      }))
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('materialized-session').layout).toBe('split')
+      })
+      expect(useUIStore.getState().newSessionDraft).toBeNull()
+      expect(useTabStore.getState().activeTabId).toBe('materialized-session')
+      expect(mocks.wsSend).not.toHaveBeenCalledWith(
+        'materialized-session',
+        expect.objectContaining({ type: 'user_message' }),
+      )
+
+      const prefill = useChatStore.getState().sessions['materialized-session']?.composerPrefill
+      expect(prefill?.text).toContain('@README.md')
+      expect(prefill?.mentions).toEqual([
+        expect.objectContaining({ label: 'README.md', path: '/workspace/project/README.md' }),
+      ])
+      expect(prefill?.attachments).toEqual([
+        expect.objectContaining({ name: 'notes.md', path: '/workspace/project/notes.md' }),
+      ])
+    })
+
+    it('opens the bottom panel in the new session folder', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'bottom-session' })
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-bottom'))
+
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      await waitFor(() => {
+        const state = useWorkspaceStore.getState().getSession('bottom-session')
+        expect(state.bottomOpen).toBe(true)
+        expect(state.tabs.find((tab) => tab.kind === 'terminal')).toMatchObject({
+          kind: 'terminal',
+          cwd: '/workspace/project',
+        })
+      })
+    })
+
+    it('completes workspace setup in the background after the user switches tabs', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useTabStore.getState().openTab('other-session', 'Other session'))
+
+      await act(async () => complete({ sessionId: 'background-session' }))
+
+      expect(useTabStore.getState().activeTabId).toBe('other-session')
+      expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toContain('background-session')
+      expect(useWorkspaceStore.getState().getSession('background-session').layout).toBe('split')
+      expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+    })
+
+    it('does not apply an in-flight workspace action to a newer draft revision', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.setState({
+        newSessionDraft: { workDir: '/another/project', revision: draft.revision + 1, hasContent: false },
+      }))
+
+      await act(async () => complete({ sessionId: 'stale-session' }))
+
+      expect(useUIStore.getState().newSessionDraft?.revision).toBe(draft.revision + 1)
+      expect(useWorkspaceStore.getState().getSession('stale-session').layout).toBe('hidden')
+      expect(useTabStore.getState().activeTabId).not.toBe('stale-session')
+      expect(rawRecordDiagnosticEvent).toHaveBeenCalledWith({
+        type: 'draft_workspace_request_stale',
+        severity: 'warn',
+        summary: 'A draft workspace request became stale before it could be consumed.',
+      })
+    })
+
+    it('retains a workspace action requested while Run is creating the session', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('run this task', 'run this task'.length)
+
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+
+      await act(async () => complete({ sessionId: 'run-workspace-session' }))
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('run-workspace-session').layout).toBe('split')
+        expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+      expect(mocks.wsSend).toHaveBeenCalledWith('run-workspace-session', expect.objectContaining({
+        type: 'user_message',
+        content: 'run this task',
+      }))
+      expect(useChatStore.getState().sessions['run-workspace-session']?.composerPrefill).toBeNull()
+    })
+
+    it('keeps a failed request queued and consumes it after the next Run retry', async () => {
+      let resolveContext!: (context: RepositoryContextResult) => void
+      mocks.getRepositoryContext.mockImplementationOnce(() => new Promise(resolve => { resolveContext = resolve }))
+      mocks.createSession.mockRejectedValueOnce(new Error('temporary failure'))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('retry this task', 'retry this task'.length)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(useUIStore.getState().toasts.some((toast) => toast.type === 'error')).toBe(true))
+      expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+        action: 'toggle-side',
+        revision: draft.revision,
+      })
+      expect(useUIStore.getState().newSessionDraft).not.toBeNull()
+
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      expect(runButton).toBeDisabled()
+      // Run is unavailable until repository context finishes loading, even
+      // after the failed creation has reported its toast. Retry via the UI
+      // only once that independent prerequisite has completed.
+      await act(async () => resolveContext(okRepositoryContext()))
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('draft-session').layout).toBe('split')
+        expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps the draft and its input when the workspace action cannot create a session', async () => {
+      mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('keep this draft', 'keep this draft'.length)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+
+      await waitFor(() => expect(useUIStore.getState().toasts.length).toBeGreaterThan(0))
+      expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+        action: 'toggle-side',
+        revision: draft.revision,
+      })
+      expect(mocks.createSession).not.toHaveBeenCalled()
+      expect(useUIStore.getState().newSessionDraft).not.toBeNull()
+      expect(getComposerText()).toBe('keep this draft')
+      expect(useWorkspaceStore.getState().bySession).toEqual({})
+    })
+
+    it('assigns only one session when the workspace control is pressed twice', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'double-click-session' })
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => {
+        useUIStore.getState().requestDraftWorkspace('toggle-side')
+        useUIStore.getState().requestDraftWorkspace('toggle-side')
+      })
+
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('double-click-session').layout).toBe('split')
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves draft after a second workspace click while session creation is pending', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('must preserve this input', 'must preserve this input'.length)
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await act(async () => complete({ sessionId: 'twice-session' }))
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+      expect(useWorkspaceStore.getState().getSession('twice-session').layout).toBe('split')
+      expect(useUIStore.getState().newSessionDraft).toBeNull()
+      expect(useChatStore.getState().sessions['twice-session']?.composerPrefill?.text).toBe('must preserve this input')
+    })
+
+    it('preserves typing while workspace creation is pending', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('first input', 'first input'.length)
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      expect(getComposerElement()).toHaveAttribute('contenteditable', 'true')
+      setComposerText('first input plus more', 'first input plus more'.length)
+      expect(getComposerText()).toBe('first input plus more')
+      await act(async () => complete({ sessionId: 'typing-session' }))
+      expect(useUIStore.getState().newSessionDraft).toBeNull()
+      expect(useChatStore.getState().sessions['typing-session']?.composerPrefill?.text).toBe('first input plus more')
+    })
+
     it('does not report into a draft it does not belong to', () => {
       useUIStore.getState().startNewSessionDraft('')
       const draft = useUIStore.getState().newSessionDraft!
@@ -2561,8 +2845,9 @@ describe('EmptySession', () => {
             info: { id: 'sensevoice-local', name: 'SenseVoice', location: 'local', languages: ['auto', 'zh'] },
             preparation: { phase: 'ready' },
           }],
-          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
+          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null },
           limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
+          correction: { defaultTarget: null, target: null },
         },
       })
       mocks.voiceStartRecording.mockImplementation(async () => activeRecording)

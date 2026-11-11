@@ -10,9 +10,12 @@
  */
 
 import { getOpenAIPolicyError } from '../../services/openaiAuth/policyError.js'
+import { INVALID_PROVIDER_KEY_HEADER, isInvalidSavedProviderKey } from '../../shared/providerCredentialError.js'
+import { inspectProviderUsageError } from '../../shared/providerUsageLimit.js'
 import { buildOpenaiEndpoint } from './openaiEndpoint.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
-import { createGunzip, createInflate } from 'node:zlib'
+import { buildProviderMediaFetch } from '../../services/api/providerMedia/fetch.js'
+import { brotliDecompressSync, createGunzip, createInflate, gunzipSync, inflateSync } from 'node:zlib'
 
 import { ProviderService } from '../services/providerService.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
@@ -47,6 +50,7 @@ import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
   type NetworkSettings,
+  resolveProviderNetworkSettings,
 } from '../services/networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import {
@@ -62,6 +66,23 @@ import { resolveModelApiBaseUrl, resolveModelApiRule } from '../../shared/modelA
 import { applyUpstreamHeaders, resolveUpstreamHeaders } from './upstreamHeaders.js'
 
 const providerService = new ProviderService()
+const MAX_CREDENTIAL_ERROR_BYTES = 64_000
+
+function formatUpstreamErrorMessage(status: number, text: string): string {
+  let detail = text.slice(0, 500)
+  if (status === 401 || status === 403 || status === 429) {
+    try {
+      const payload = JSON.parse(text)
+      const classification = inspectProviderUsageError(payload)
+      // A quota or credential code can occur after the message. Preserve the
+      // envelope so the CLI sees both it and the provider's own words.
+      if (text.length <= 64_000 || classification.usageLimit || classification.invalidCredential || isInvalidSavedProviderKey(status, payload)) detail = text
+    } catch {
+      // Unstructured upstream failures retain the bounded diagnostic text.
+    }
+  }
+  return `Upstream returned HTTP ${status}: ${detail}`
+}
 
 type ProxyFetchOptions = ReturnType<typeof getProxyFetchOptions>
 // `decompress` is a Bun fetch option absent from the DOM RequestInit type.
@@ -118,9 +139,20 @@ async function fetchUpstreamWithTimeout(
   init: Omit<UpstreamRequestInit, 'signal'>,
   timeoutMs: number,
   isStream: boolean,
+  onRequest?: (body: string, headers: Headers) => void,
 ): Promise<Response> {
+  // Convert media only after the protocol transform and final authentication.
+  // Observe inference sends (including recovery), never multipart uploads, so
+  // completion traces describe the actual upstream request.
+  const mediaFetch = buildProviderMediaFetch((async (input, requestInit) => {
+    const requestUrl = input instanceof Request ? input.url : String(input)
+    if (requestUrl === url && typeof requestInit?.body === 'string') {
+      onRequest?.(requestInit.body, new Headers(requestInit.headers))
+    }
+    return fetch(input, requestInit)
+  }) as typeof fetch)
   if (!isStream) {
-    return fetch(url, {
+    return mediaFetch(url, {
       ...init,
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -130,7 +162,7 @@ async function fetchUpstreamWithTimeout(
   // response headers. Keeping the signal alive aborts long generations mid-body.
   const timeout = createTimeoutController(timeoutMs)
   try {
-    return await fetch(url, {
+    return await mediaFetch(url, {
       ...init,
       signal: timeout.signal,
     })
@@ -246,7 +278,7 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
 
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
-  const networkSettings = await loadNetworkSettings()
+  const networkSettings = resolveProviderNetworkSettings(await loadNetworkSettings(), config.proxy)
   const traceContext = buildProxyTraceContext(req, config, body)
   const inboundSessionId = req.headers.get('x-claude-code-session-id')
   const promptCacheKey = resolvePromptCacheKey(body, inboundSessionId)
@@ -298,12 +330,12 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
       return await handleAnthropicCompatible(body, upstreamBaseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext, upstreamHeaders, hoistNestedMedia)
     }
     if (apiFormat === 'gemini') {
-      return await handleGemini(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
+      return await handleGemini(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
     }
     if (apiFormat === 'openai_chat') {
-      return await handleOpenaiChat(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
+      return await handleOpenaiChat(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
     }
-    return await handleOpenaiResponses(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, promptCacheKey, requestOptions, upstreamHeaders)
+    return await handleOpenaiResponses(body, upstreamBaseUrl, config.apiKey, config.authStrategy === 'api_key', isStream, networkSettings, traceContext, promptCacheKey, requestOptions, upstreamHeaders)
   } catch (err) {
     if (traceContext && !wasTraceErrorRecorded(err) && !recordedTraceErrorContexts.has(traceContext)) {
       void recordProxyTrace({
@@ -469,9 +501,23 @@ function stripHopByHopHeaders(headers: Headers): Headers {
   const deny = hopByHopDenySet(headers)
   const stripped = new Headers()
   for (const [name, value] of headers.entries()) {
-    if (!deny.has(name.toLowerCase())) stripped.set(name, value)
+    // This assertion is reserved for the local proxy, not the upstream.
+    if (!deny.has(name.toLowerCase()) && name.toLowerCase() !== INVALID_PROVIDER_KEY_HEADER) stripped.set(name, value)
   }
   return stripped
+}
+
+function decodeCredentialError(bytes: ArrayBuffer, headers: Headers): unknown {
+  if (bytes.byteLength > MAX_CREDENTIAL_ERROR_BYTES) return null
+  const input = Buffer.from(bytes)
+  const encoding = (headers.get('content-encoding') ?? '').trim().toLowerCase()
+  const options = { maxOutputLength: MAX_CREDENTIAL_ERROR_BYTES }
+  const decoded = encoding === 'gzip' || encoding === 'x-gzip' ? gunzipSync(input, options)
+    : encoding === 'deflate' ? inflateSync(input, options)
+      : encoding === 'br' ? brotliDecompressSync(input, options)
+        : encoding === '' || encoding === 'identity' ? input : null
+  if (!decoded || decoded.byteLength > MAX_CREDENTIAL_ERROR_BYTES) return null
+  return JSON.parse(decoded.toString('utf8'))
 }
 
 /**
@@ -496,7 +542,7 @@ async function handleAnthropicCompatible(
   // The media hoist is a compatibility rewrite for endpoints that drop media
   // nested in tool_result. A native Messages endpoint accepts it unchanged, so it
   // only runs when the provider actually asked for it.
-  const transformed = hoistNestedMedia ? hoistToolResultMediaForCompatibility(body) : body
+  let transformed = hoistNestedMedia ? hoistToolResultMediaForCompatibility(body) : body
   const url = `${normalizeAnthropicBaseUrl(baseUrl)}/v1/messages`
   const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
 
@@ -570,16 +616,24 @@ async function handleAnthropicCompatible(
 
   let upstream: Response
   try {
+    const initialRequest = transformed
+    const serialized = JSON.stringify(initialRequest)
     upstream = await fetchUpstreamWithTimeout(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(transformed),
+      body: serialized,
       // Keep the raw bytes: Bun decompresses by default, which would leave a
       // decompressed body behind the upstream Content-Encoding/Length headers
       // when forwarding the response unchanged.
       decompress: false,
       ...proxyOptions,
-    }, networkSettings.aiRequestTimeoutMs, isStream)
+    }, networkSettings.aiRequestTimeoutMs, isStream, (sentBody, sentHeaders) => {
+      // Recovery can restore inline media after a file reference fails.
+      transformed = sentBody === serialized ? initialRequest : JSON.parse(sentBody)
+      const beta = sentHeaders.get('anthropic-beta')
+      if (beta) traceHeaders['anthropic-beta'] = beta
+      else delete traceHeaders['anthropic-beta']
+    })
   } catch (err) {
     recordTraceError(err)
     console.error('[Proxy] Upstream anthropic request failed:', err)
@@ -597,12 +651,24 @@ async function handleAnthropicCompatible(
 
   try {
     if (!upstream.ok) {
-      // Pass the upstream error body and headers through unchanged so the SDK
+      // Pass the upstream error body and protocol headers through so the SDK
       // keeps error classification (authentication_error, rate_limit_error, …),
       // request_id, and retry-after semantics. A body read failure here closes
       // the pending trace and surfaces to the caller's unified error handling
       // (structured 502) like any other upstream failure.
       const errBody = await upstream.arrayBuffer()
+      const responseHeaders = stripHopByHopHeaders(upstream.headers)
+      if (upstream.status === 401 && authStrategy === 'api_key') {
+        try {
+          const payload = decodeCredentialError(errBody, upstream.headers)
+          if (isInvalidSavedProviderKey(upstream.status, payload)) {
+            responseHeaders.set(INVALID_PROVIDER_KEY_HEADER, 'true')
+            responseHeaders.set('x-should-retry', 'false')
+          }
+        } catch {
+          // Unstructured or undecodable failures keep upstream retry semantics.
+        }
+      }
       if (traceContext) {
         recordProxyTraceInBackground({
           callId: traceCallId,
@@ -620,7 +686,7 @@ async function handleAnthropicCompatible(
       }
       return new Response(errBody, {
         status: upstream.status,
-        headers: stripHopByHopHeaders(upstream.headers),
+        headers: responseHeaders,
       })
     }
 
@@ -712,6 +778,7 @@ async function handleOpenaiChat(
   body: AnthropicRequest,
   baseUrl: string,
   apiKey: string,
+  isSavedApiKey: boolean,
   isStream: boolean,
   networkSettings: NetworkSettings,
   traceContext: ProxyTraceContext | null,
@@ -728,7 +795,7 @@ async function handleOpenaiChat(
     ...getOpenAIChatUnsupportedReasoningFields(url, body.model),
     ...rejectedReasoningFields,
   ])
-  const transformed = anthropicToOpenaiChat(body, {
+  let transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
     roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
     passThinkingToggle: knownDeepSeekHost && !unsupportedReasoningFields.has('thinking'),
@@ -761,12 +828,16 @@ async function handleOpenaiChat(
 
   let upstream: Response
   try {
+    const initialRequest = transformed
+    const serialized = JSON.stringify(initialRequest)
     upstream = await fetchUpstreamWithTimeout(url, {
       method: 'POST',
       headers: upstreamRequestHeaders,
-      body: JSON.stringify(transformed),
+      body: serialized,
       ...proxyOptions,
-    }, networkSettings.aiRequestTimeoutMs, isStream)
+    }, networkSettings.aiRequestTimeoutMs, isStream, sentBody => {
+      transformed = sentBody === serialized ? initialRequest : JSON.parse(sentBody)
+    })
   } catch (err) {
     if (traceContext) {
       recordProxyTraceInBackground({
@@ -808,7 +879,7 @@ async function handleOpenaiChat(
         })
       }
       const resent = await handleOpenaiChat(
-        body, baseUrl, apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, 'text_only',
+        body, baseUrl, apiKey, isSavedApiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, 'text_only',
         unsupportedReasoningFields,
       )
       if (resent.ok) {
@@ -843,7 +914,7 @@ async function handleOpenaiChat(
         })
       }
       const resent = await handleOpenaiChat(
-        body, baseUrl, apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders,
+        body, baseUrl, apiKey, isSavedApiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders,
         imageContentMode, new Set([...unsupportedReasoningFields, rejectedField]),
       )
       if (resent.ok) {
@@ -858,8 +929,11 @@ async function handleOpenaiChat(
       return resent
     }
     let policyError = null
+    let invalidProviderKey = false
     try {
-      policyError = getOpenAIPolicyError(JSON.parse(errText))
+      const payload = JSON.parse(errText)
+      policyError = getOpenAIPolicyError(payload)
+      invalidProviderKey = isSavedApiKey && !policyError && isInvalidSavedProviderKey(upstream.status, payload)
     } catch {
       // Unstructured upstream failures keep their existing error classification.
     }
@@ -867,7 +941,7 @@ async function handleOpenaiChat(
       type: 'error',
       error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
-        message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
+        message: formatUpstreamErrorMessage(upstream.status, errText),
       },
     }
     if (traceContext) {
@@ -888,7 +962,10 @@ async function handleOpenaiChat(
     }
     return Response.json(
       errorBody,
-      { status: policyError ? 403 : upstream.status },
+      {
+        status: policyError ? 403 : upstream.status,
+        ...(invalidProviderKey && { headers: { [INVALID_PROVIDER_KEY_HEADER]: 'true', 'x-should-retry': 'false' } }),
+      },
     )
   }
 
@@ -981,6 +1058,7 @@ async function handleOpenaiResponses(
   body: AnthropicRequest,
   baseUrl: string,
   apiKey: string,
+  isSavedApiKey: boolean,
   isStream: boolean,
   networkSettings: NetworkSettings,
   traceContext: ProxyTraceContext | null,
@@ -988,7 +1066,7 @@ async function handleOpenaiResponses(
   requestOptions: RequestCompatibilityOptions = {},
   upstreamHeaders: Record<string, string> = {},
 ): Promise<Response> {
-  const transformed = anthropicToOpenaiResponses(body, { ...requestOptions, cacheKey: promptCacheKey })
+  let transformed = anthropicToOpenaiResponses(body, { ...requestOptions, cacheKey: promptCacheKey })
   if (traceContext) {
     traceContext.protocolTrace = new ProtocolTraceObserver('openai_responses', transformed,
       resolveRequestCompatibility(body, { ...requestOptions, protocol: 'openai_responses' }).outputBudget)
@@ -1016,12 +1094,16 @@ async function handleOpenaiResponses(
 
   let upstream: Response
   try {
+    const initialRequest = transformed
+    const serialized = JSON.stringify(initialRequest)
     upstream = await fetchUpstreamWithTimeout(url, {
       method: 'POST',
       headers: upstreamRequestHeaders,
-      body: JSON.stringify(transformed),
+      body: serialized,
       ...proxyOptions,
-    }, networkSettings.aiRequestTimeoutMs, isStream)
+    }, networkSettings.aiRequestTimeoutMs, isStream, sentBody => {
+      transformed = sentBody === serialized ? initialRequest : JSON.parse(sentBody)
+    })
   } catch (err) {
     if (traceContext) {
       recordProxyTraceInBackground({
@@ -1043,8 +1125,11 @@ async function handleOpenaiResponses(
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '')
     let policyError = null
+    let invalidProviderKey = false
     try {
-      policyError = getOpenAIPolicyError(JSON.parse(errText))
+      const payload = JSON.parse(errText)
+      policyError = getOpenAIPolicyError(payload)
+      invalidProviderKey = isSavedApiKey && !policyError && isInvalidSavedProviderKey(upstream.status, payload)
     } catch {
       // Unstructured upstream failures keep their existing error classification.
     }
@@ -1052,7 +1137,7 @@ async function handleOpenaiResponses(
       type: 'error',
       error: policyError ? { type: 'permission_error', ...policyError } : {
         type: 'api_error',
-        message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}`,
+        message: formatUpstreamErrorMessage(upstream.status, errText),
       },
     }
     if (traceContext) {
@@ -1073,7 +1158,10 @@ async function handleOpenaiResponses(
     }
     return Response.json(
       errorBody,
-      { status: policyError ? 403 : upstream.status },
+      {
+        status: policyError ? 403 : upstream.status,
+        ...(invalidProviderKey && { headers: { [INVALID_PROVIDER_KEY_HEADER]: 'true', 'x-should-retry': 'false' } }),
+      },
     )
   }
 
@@ -1164,6 +1252,7 @@ async function handleGemini(
   body: AnthropicRequest,
   baseUrl: string,
   apiKey: string,
+  isSavedApiKey: boolean,
   isStream: boolean,
   networkSettings: NetworkSettings,
   traceContext: ProxyTraceContext | null,
@@ -1225,9 +1314,17 @@ async function handleGemini(
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '')
+    let invalidProviderKey = false
+    if (isSavedApiKey && upstream.status === 401 && errText.length <= MAX_CREDENTIAL_ERROR_BYTES) {
+      try {
+        invalidProviderKey = isInvalidSavedProviderKey(upstream.status, JSON.parse(errText))
+      } catch {
+        // Unstructured upstream failures keep their existing retry behavior.
+      }
+    }
     const errorBody = {
       type: 'error',
-      error: { type: 'api_error', message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}` },
+      error: { type: 'api_error', message: invalidProviderKey ? formatUpstreamErrorMessage(upstream.status, errText) : `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}` },
     }
     trace({
       responseStatus: upstream.status,
@@ -1235,7 +1332,10 @@ async function handleGemini(
       anthropicResponseBody: errorBody,
       responseHeaders: upstream.headers,
     })
-    return Response.json(errorBody, { status: upstream.status })
+    return Response.json(errorBody, {
+      status: upstream.status,
+      ...(invalidProviderKey && { headers: { [INVALID_PROVIDER_KEY_HEADER]: 'true', 'x-should-retry': 'false' } }),
+    })
   }
 
   // Only the first request is traced; continuations carry the same body plus a token.

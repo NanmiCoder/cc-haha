@@ -1,3 +1,6 @@
+import { useTaskStore } from '@/stores/taskStore'
+import { parseScheduledTaskResult, validScheduledTaskTrigger } from '@/lib/scheduledTask'
+import type { ScheduledTaskTrigger } from '@/types/task'
 import { isInlineImagePath } from '@/lib/attachmentImages'
 import { nativeMessageMatches, sameNativeMessageIds, stampNativeMessageProvenance } from './nativeMessageProvenance'
 import { applyOfficialSdkTaskEvent } from './officialAgentSdkEvents'
@@ -9,7 +12,7 @@ import { create } from 'zustand'
 import { boundActivityText, CHAT_TERMINAL_ACTIVITY_MAX_PER_SESSION, CHAT_TERMINAL_ACTIVITY_MAX_TOTAL } from '../lib/chatHistoryBudget'
 import { wsManager } from '../api/websocket'
 import { sessionsApi, type SessionHistoryPage } from '../api/sessions'
-import { ApiResponseParseError } from '../api/client'
+import { ApiError, ApiResponseParseError } from '../api/client'
 import { subagentsApi } from '../api/subagents'
 import { useTeamPlanStore } from './teamPlanStore'
 import { useTeamStore } from './teamStore'
@@ -27,6 +30,8 @@ import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
 import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
+import { formatBytes } from '../lib/formatBytes'
+import { checkUserMessageBudget } from '../lib/userMessageBudget'
 import { t } from '../i18n'
 import {
   VISUAL_SELECTION_BATCH_PROMPT_HEADER,
@@ -48,6 +53,7 @@ import type {
   BackgroundAgentTask,
   BackgroundAgentTaskUsage,
   ChatState,
+  ClientMessage,
   CompactProgress,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
@@ -77,6 +83,20 @@ function reconcileProviderRuntimeSelection(sessionId: string, selection: Runtime
     currentModelId: settings.currentModel?.id,
     defaultEffortLevel: settings.effortLevel,
   })
+}
+
+/**
+ * A member message the server turned down. A slash command the member's CLI
+ * may not run (`/clear`, `/model`) gets the desktop's own localized words,
+ * which point at `/compact` and the model picker; anything else keeps the
+ * server's message.
+ */
+function teamMemberMessageFailure(err: unknown): string {
+  const body = err instanceof ApiError ? err.body : undefined
+  if (body && typeof body === 'object' && (body as { error?: unknown }).error === 'MEMBER_COMMAND_UNSUPPORTED') {
+    return t('teams.memberCommandUnsupported')
+  }
+  return err instanceof Error ? err.message : String(err)
 }
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
 type CompactSummaryMessage = Extract<UIMessage, { type: 'compact_summary' }>
@@ -146,6 +166,8 @@ type PendingComputerUsePermissions = Record<string, PendingComputerUsePermission
 export type PerSessionState = {
   messages: UIMessage[]
   chatState: ChatState
+  /** In-memory turn provenance; task notifications are delivered by the task notifier. */
+  scheduledTaskTurn?: boolean
   /**
    * The CLI's own run state (`session_state_changed`). A run stays `running`
    * while it waits on background tasks and through the replies their
@@ -217,6 +239,14 @@ export type PerSessionState = {
   pendingBackgroundTaskStopFailures?: Record<string, string>
   stopAllSubagentsRequested?: boolean
   awaitingReconnectSync?: boolean
+  /**
+   * Background tasks that ended since the model last started an attempt and
+   * whose result goes back to the model. An attempt that starts while the
+   * session is idle was not sent by anyone: these results reopened the model.
+   */
+  pendingBackgroundContinue?: BackgroundContinueTask[]
+  /** The notice shown for the current turn, withdrawn if a user turn replays. */
+  backgroundContinueNoticeId?: string
   /** A socket gap started before this history lifecycle finished hydration. */
   preHydrationSocketGapPending?: boolean
   historyBootstrapDisabled?: boolean
@@ -230,6 +260,7 @@ export type PerSessionState = {
   composerPrefill?: {
     text: string
     attachments?: UIAttachment[]
+    mentions?: ComposerMention[]
     sessionReferences?: Array<{ sessionId: string }>
     mode?: ComposerPrefillMode
     nonce: number
@@ -238,6 +269,11 @@ export type PerSessionState = {
   composerDraft?: ComposerDraftState | null
   repositoryLaunchDraft?: RepositoryLaunchDraftState | null
   queuedUserMessages?: QueuedUserMessage[]
+  /**
+   * Predicted next prompt for the empty composer (`prompt_suggestion`). In
+   * memory only; cleared when the user sends or the next turn starts.
+   */
+  promptSuggestion?: string | null
 }
 
 const DEFAULT_SESSION_STATE: PerSessionState = {
@@ -286,6 +322,7 @@ const DEFAULT_SESSION_STATE: PerSessionState = {
   composerDraft: null,
   repositoryLaunchDraft: null,
   queuedUserMessages: [],
+  promptSuggestion: null,
 }
 
 export function createDefaultSessionState(): PerSessionState {
@@ -428,6 +465,10 @@ type ChatStore = {
    * off screen, so coming back to it redraws at once and only backfills.
    */
   disconnectSession: (sessionId: string, options?: { keepTranscript?: boolean }) => void
+  /**
+   * Returns `false` when the frame is over the server's input budget: nothing
+   * was sent and an error row explains why, so the caller keeps its draft.
+   */
   sendMessage: (
     sessionId: string,
     content: string,
@@ -477,12 +518,19 @@ type ChatStore = {
     prefill: {
       text: string
       attachments?: UIAttachment[]
+      mentions?: ComposerMention[]
       sessionReferences?: Array<{ sessionId: string }>
       mode?: ComposerPrefillMode
     },
     /** Retain an edit after its committed rewind outlives the source tab. */
     options?: { restoreMissingSession?: boolean },
   ) => void
+  /**
+   * Drop the last prompt when the CLI never acknowledged it and nothing has
+   * answered it, so an edited copy can replace it. False — and nothing removed
+   * — once the prompt has been confirmed, answered or followed by another turn.
+   */
+  discardUnconfirmedUserMessage: (sessionId: string, messageId: string) => boolean
   clearComposerPrefill: (sessionId: string, nonce?: number) => void
   queueComposerInsertion: (
     sessionId: string,
@@ -502,6 +550,7 @@ type ChatStore = {
   removeQueuedUserMessage: (sessionId: string, messageId: string) => void
   sendQueuedUserMessage: (sessionId: string, messageId: string) => void
   clearMessages: (sessionId: string) => void
+  dismissPromptSuggestion: (sessionId: string) => void
   handleServerMessage: (sessionId: string, msg: ServerMessage) => void
 }
 
@@ -741,6 +790,22 @@ function advanceAgentStreamRevision(sessionId: string): void {
       },
     },
   }))
+}
+
+/** Settle a durable terminal only if its read still describes this stream. */
+export function settleAgentRunSession(sessionId: string, requestedStreamRevision: number): void {
+  const session = useChatStore.getState().sessions[sessionId]
+  if (!session || (session.agentStreamRevision ?? 0) !== requestedStreamRevision) return
+
+  const streamId = activeAgentStreamIdBySession.get(sessionId)
+  if (streamId) retireAgentStream(sessionId, streamId)
+  activeAgentStreamIdBySession.delete(sessionId)
+  clearPendingToolInputDelta(sessionId)
+  clearPendingTaskToolUseIds(sessionId)
+  clearPendingToolParentUseIds(sessionId)
+  // Reuse the live idle boundary to drain buffered text, stop the elapsed
+  // timer, clear retry/fallback activity and settle the tab's running marker.
+  useChatStore.getState().handleServerMessage(sessionId, { type: 'status', state: 'idle' })
 }
 
 function dispatchAgentRunEvent(
@@ -1732,6 +1797,10 @@ function strongHistoryMessageIdentities(message: UIMessage): string[] {
     ]))
   }
 
+  if (message.type === 'error' && nonEmptyHistoryIdentityPart(message.transcriptMessageId)) {
+    identities.push(JSON.stringify(['transcript', 'error', message.transcriptMessageId!.trim()]))
+  }
+
   if (message.type === 'tool_use' || message.type === 'tool_result') {
     const toolUseId = nonEmptyHistoryIdentityPart(message.originalToolUseId) ??
       nonEmptyHistoryIdentityPart(message.toolUseId)
@@ -1748,6 +1817,11 @@ function strongHistoryMessageIdentities(message: UIMessage): string[] {
   if (message.type === 'background_task') {
     const taskId = nonEmptyHistoryIdentityPart(message.task.taskId)
     if (taskId) identities.push(`background-task:${taskId}`)
+  }
+
+  // The live notice and its transcript copy name the same finished tasks.
+  if (message.type === 'system' && message.backgroundContinueTaskIds?.length) {
+    identities.push(JSON.stringify(['background-continue', [...message.backgroundContinueTaskIds].sort()]))
   }
 
   if (message.type === 'permission_request') {
@@ -2376,6 +2450,17 @@ function buildAgentCompletionNotification(
   }
 }
 
+function isScheduledTaskTurn(session: PerSessionState): boolean {
+  if (session.scheduledTaskTurn === true) return true
+  // A renderer can join an already-running turn through durable history rather
+  // than its live replay. Ignore unconsumed guides when finding that turn.
+  for (let index = session.messages.length - 1; index >= 0; index--) {
+    const message = session.messages[index]
+    if (message?.type === 'user_text' && !message.optimisticQueued) return !!message.scheduledTask
+  }
+  return false
+}
+
 /** Helper: immutably update a specific session within the sessions record */
 function updateSessionIn(
   sessions: Record<string, PerSessionState>,
@@ -2459,22 +2544,30 @@ function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | 
   let cacheReadTokens = 0
   let cacheCreationTokens = 0
   // A reply with thinking + text + a dozen tool_use blocks arrives as fourteen lines that each
-  // repeat the whole `usage` object. Summing per line is the 2.2x inflation the transcript
-  // readers carry; the server stamps `usageKey` so this only has to dedupe on it. Lines with
-  // no key are always counted, matching the transcript readers.
-  const countedUsageKeys = new Set<string>()
+  // carry a `usage` object, and the lines need not agree: the first can be zero/partial with the
+  // final numbers on a later line. Summing per line is the 2.2x inflation, keeping the first
+  // under-counts. The server stamps `usageKey`; per key each field counts at the largest value any
+  // line reported and only the excess is added. Lines with no key are always counted whole.
+  const counted = new Map<string, [number, number, number, number]>()
 
   for (const message of messages) {
     const usage = message.usage
     if (!usage) continue
-    if (message.usageKey) {
-      if (countedUsageKeys.has(message.usageKey)) continue
-      countedUsageKeys.add(message.usageKey)
-    }
-    inputTokens += readUsageToken(usage.input_tokens)
-    outputTokens += readUsageToken(usage.output_tokens)
-    cacheReadTokens += readUsageToken(usage.cache_read_input_tokens)
-    cacheCreationTokens += readUsageToken(usage.cache_creation_input_tokens)
+    const current: [number, number, number, number] = [
+      readUsageToken(usage.input_tokens),
+      readUsageToken(usage.output_tokens),
+      readUsageToken(usage.cache_read_input_tokens),
+      readUsageToken(usage.cache_creation_input_tokens),
+    ]
+    const previous = message.usageKey ? counted.get(message.usageKey) : undefined
+    const total = previous
+      ? (current.map((value, index) => Math.max(value, previous[index]!)) as [number, number, number, number])
+      : current
+    if (message.usageKey) counted.set(message.usageKey, total)
+    inputTokens += total[0] - (previous?.[0] ?? 0)
+    outputTokens += total[1] - (previous?.[1] ?? 0)
+    cacheReadTokens += total[2] - (previous?.[2] ?? 0)
+    cacheCreationTokens += total[3] - (previous?.[3] ?? 0)
   }
 
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
@@ -3183,6 +3276,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       return sessions === patch.sessions ? patch : { ...patch, sessions }
     })
   }
+  const rejectOversizedMessage = (sessionId: string, message: ClientMessage): boolean => {
+    const budget = checkUserMessageBudget(message)
+    if (budget.ok) return false
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (session) => ({
+        messages: [...session.messages, {
+          id: nextId(), type: 'error',
+          message: t('chat.messageTooLarge', { size: formatBytes(budget.bytes), limit: formatBytes(budget.limit) }),
+          code: 'MESSAGE_TOO_LARGE', timestamp: Date.now(),
+        }],
+      })),
+    }))
+    return true
+  }
   return ({
   applyBoundedUpdate: set,
   markHistoryRowsDurable,
@@ -3429,6 +3536,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 historyError: null,
                 awaitingReconnectSync: true,
                 preHydrationSocketGapPending: false,
+                scheduledTaskTurn: undefined,
                 streamingText: '',
                 streamingToolInput: '',
               }
@@ -3531,6 +3639,19 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       subagentTab?.sourceSessionId && subagentTab.subagentToolUseId,
     )
     const isDirectAgentSession = isMemberSession || isSubagentSession
+    const outgoing: ClientMessage = {
+      type: 'user_message',
+      content,
+      attachments,
+      ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}),
+    }
+    if (!isDirectAgentSession) {
+      // The server closes the socket (1009) for a frame over its input budget
+      // and the client only reconnects, so the turn vanished without a trace:
+      // no bubble, no error. Refuse it before the optimistic row and the title
+      // update, and say why where the reply would have appeared.
+      if (rejectOversizedMessage(sessionId, outgoing)) return false
+    }
     const hideDisplayContent = !isDirectAgentSession && options?.hideDisplayContent === true
     const userFacingContent =
       hideDisplayContent
@@ -3622,9 +3743,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           [sessionId]: {
             ...session,
             messages: newMessages,
+            scheduledTaskTurn: false,
             historyPageLoading: false,
             chatState: 'thinking',
+            pendingBackgroundContinue: [],
+            backgroundContinueNoticeId: undefined,
             isPreparingTurn: false,
+            promptSuggestion: null,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
             elapsedSeconds: 0,
             replaceHistoryOnCompletion: false,
@@ -3651,7 +3776,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 {
                   id: nextId(),
                   type: 'error',
-                  message: err instanceof Error ? err.message : String(err),
+                  message: teamMemberMessageFailure(err),
                   code: 'TEAM_MEMBER_MESSAGE_FAILED',
                   timestamp: Date.now(),
                 },
@@ -3719,7 +3844,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         get().setSessionRuntime(sessionId, defaultSelection)
       }
     }
-    wsManager.send(sessionId, { type: 'user_message', content, attachments, ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}) })
+    wsManager.send(sessionId, outgoing)
     return true
   },
 
@@ -3795,8 +3920,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   setSessionPermissionMode: (sessionId, mode) => {
-    const session = get().sessions[sessionId]
-    if (!session || session.chatState !== 'idle') return
+    // Allowed mid-turn: the server applies it to the running CLI, so tool calls
+    // after the switch use the new mode without interrupting the turn.
+    if (!get().sessions[sessionId]) return
     wsManager.send(sessionId, { type: 'set_permission_mode', mode })
   },
 
@@ -3838,6 +3964,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ...session,
             messages: markPendingToolUseMessagesStopped(stoppedMessages),
             chatState: 'idle',
+            promptSuggestion: null,
             activeToolUseId: null,
             activeToolName: null,
             activeThinkingId: null,
@@ -4639,6 +4766,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             composerPrefill: {
               text: prefill.text,
               attachments: prefill.attachments,
+              ...(prefill.mentions ? { mentions: prefill.mentions } : {}),
               ...(prefill.sessionReferences ? { sessionReferences: prefill.sessionReferences } : {}),
               mode: prefill.mode,
               nonce: Date.now(),
@@ -4647,6 +4775,28 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         },
       }
     })
+  },
+
+  discardUnconfirmedUserMessage: (sessionId, messageId) => {
+    const session = get().sessions[sessionId]
+    if (!session || session.chatState !== 'idle') return false
+    const index = session.messages.findIndex((message) => message.id === messageId)
+    const message = session.messages[index]
+    if (message?.type !== 'user_text' || !message.awaitingReplay || message.transcriptMessageId) return false
+    const answered = session.messages.slice(index + 1).some((later) =>
+      later.type === 'user_text' ||
+      later.type === 'assistant_text' ||
+      later.type === 'tool_use' ||
+      later.type === 'tool_result' ||
+      later.type === 'error')
+    if (answered) return false
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+        messages: current.messages.slice(0, index),
+        historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
+      })),
+    }))
+    return true
   },
 
   clearComposerPrefill: (sessionId, nonce) => {
@@ -4812,6 +4962,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       return
     }
 
+    const outgoing: ClientMessage = {
+      type: 'user_message', content: queuedMessage.content, attachments: queuedMessage.attachments,
+      ...(queuedMessage.sessionReferences?.length ? { sessionReferences: queuedMessage.sessionReferences } : {}),
+    }
+    if (rejectOversizedMessage(sessionId, outgoing)) return
+
     const now = Date.now()
     set((state) => ({
       sessions: updateSessionIn(state.sessions, sessionId, (currentSession) => {
@@ -4829,12 +4985,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }),
     }))
 
-    wsManager.send(sessionId, {
-      type: 'user_message',
-      content: queuedMessage.content,
-      attachments: queuedMessage.attachments,
-      ...(queuedMessage.sessionReferences?.length ? { sessionReferences: queuedMessage.sessionReferences } : {}),
-    })
+    wsManager.send(sessionId, outgoing)
   },
 
   clearMessages: (sessionId) => {
@@ -4849,6 +5000,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     retiredAgentStreamIdsBySession.delete(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
+      scheduledTaskTurn: undefined,
       activeGoal: null,
       streamingText: '',
       chatState: 'idle',
@@ -4861,7 +5013,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       streamingFallback: null,
       replaceHistoryOnCompletion: false,
       queuedUserMessages: [],
+      pendingBackgroundContinue: [],
+      backgroundContinueNoticeId: undefined,
+      promptSuggestion: null,
     })) }))
+  },
+
+  dismissPromptSuggestion: (sessionId) => {
+    if (!get().sessions[sessionId]?.promptSuggestion) return
+    set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({ promptSuggestion: null })) }))
   },
 
   handleServerMessage: (sessionId, msg) => {
@@ -5169,7 +5329,16 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           } else {
             nextMessages = dropTailCompactingCompactSummary(nextMessages)
           }
+          // Results handed back mid-turn ride the next attempt of that turn.
+          // An attempt that starts while idle was opened by the results alone.
+          const continueTasks = msg.attemptStart ? session.pendingBackgroundContinue ?? [] : []
+          const notice = continueTasks.length > 0 && session.chatState === 'idle'
+            ? buildBackgroundContinueMessage(continueTasks, Date.now())
+            : null
+          if (notice) nextMessages = [...nextMessages, notice]
           return {
+            ...(continueTasks.length > 0 ? { pendingBackgroundContinue: [] } : {}),
+            ...(notice ? { backgroundContinueNoticeId: notice.id } : {}),
             chatState: preserveStreamingTurn ? 'streaming' : msg.state,
             statusVerb: msg.state === 'idle'
               ? ''
@@ -5178,6 +5347,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 : '',
             ...(msg.state === 'idle' ? { activeThinkingId: null } : {}),
             ...(msg.state === 'idle' ? { apiRetry: null, streamingFallback: null } : {}),
+            // Any new model activity makes the previous turn's prediction stale.
+            ...(msg.state !== 'idle' && session.promptSuggestion ? { promptSuggestion: null } : {}),
             ...(msg.attemptStart ? {
               streamAttemptStartIndex: session.messages.length,
               streamAttemptStartResponseChars: session.streamingResponseChars,
@@ -5315,6 +5486,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             errorStatus: msg.errorStatus ?? null,
             errorType: msg.errorType,
             errorMessage: msg.errorMessage,
+            requestId: msg.requestId,
             receivedAt: Date.now(),
           },
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
@@ -5563,6 +5735,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_result': {
+        const scheduledResult = parseScheduledTaskResult(findToolUseMessage(get().sessions[sessionId]?.messages ?? [], msg.toolUseId)?.toolName ?? '', msg.content, msg.isError)
+        if (scheduledResult?.kind === 'scheduled_task') {
+          useTaskStore.getState().applyToolResult(scheduledResult)
+          void useTaskStore.getState().fetchTasks()
+        }
         const now = Date.now()
         const pendingParentToolUseId = consumePendingToolParentUseId(sessionId, msg.toolUseId)
         const parentToolUseId = msg.parentToolUseId ?? pendingParentToolUseId
@@ -5792,6 +5969,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         const completedAt = Date.now()
         const wasAgentRunning = session.chatState !== 'idle'
+        const wasScheduledTaskTurn = validScheduledTaskTrigger(msg.scheduledTask) || isScheduledTaskTurn(session)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
         let completionMessages = session.messages
         if (text.trim()) {
@@ -5809,6 +5987,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
         update((current) => ({
           messages: finalMessages,
+          scheduledTaskTurn: false,
           tokenUsage: msg.usage,
           chatState: 'idle',
           activeThinkingId: null,
@@ -5820,10 +5999,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           apiRetry: null,
           streamingFallback: null,
           replaceHistoryOnCompletion: false,
+          backgroundContinueNoticeId: undefined,
           historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
         }))
         useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
-        const notification = wasAgentRunning && appendedCompletionMessage
+        const notification = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
           ? buildAgentCompletionNotification(sessionId, finalMessages, text)
           : null
         if (notification) {
@@ -5849,16 +6029,31 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       case 'user_message_replay': {
         update((session) => {
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
-          const baseMessages = pendingText.trim()
-            ? appendAssistantTextMessage(session.messages, pendingText, Date.now())
+          // Another client's prompt reaches this one only as the CLI's attempt
+          // and then this replay, so a notice shown for that attempt was wrong.
+          const withoutNotice = session.backgroundContinueNoticeId
+            ? session.messages.filter((message) => message.id !== session.backgroundContinueNoticeId)
             : session.messages
+          const baseMessages = pendingText.trim()
+            ? appendAssistantTextMessage(withoutNotice, pendingText, Date.now())
+            : withoutNotice
           return {
-            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.nativeMessageIds),
+            pendingBackgroundContinue: [],
+            backgroundContinueNoticeId: undefined,
+            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask, msg.nativeMessageIds),
+            // A consumed human guide belongs to the existing scheduled turn;
+            // only a new ordinary turn restores ordinary reply notifications.
+            scheduledTaskTurn: validScheduledTaskTrigger(msg.scheduledTask) ||
+              (session.scheduledTaskTurn === true && session.chatState !== 'idle'),
             ...(pendingText.trim() ? { streamingText: '' } : {}),
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
             stopAllSubagentsRequested: false,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
+            // Another client (phone, IM, a second window) started a turn: only
+            // its own socket gets the thinking status, so drop the stale
+            // prediction here rather than at the first streamed event.
+            promptSuggestion: null,
           }
         })
         break
@@ -5875,6 +6070,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           localHistoryRecovery: 'error',
           message: msg.message,
           code: msg.code,
+          ...(msg.transcriptMessageId ? { transcriptMessageId: msg.transcriptMessageId } : {}),
           ...(msg.businessErrorCode ? { businessErrorCode: msg.businessErrorCode } : {}),
           timestamp: Date.now(),
         }
@@ -5988,6 +6184,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
       case 'task_update':
         break
+      case 'prompt_suggestion': {
+        const session = get().sessions[sessionId]
+        // A late prediction for a turn the user already moved past is stale.
+        if (!session || session.chatState !== 'idle' || session.queuedUserMessages?.length) break
+        if (session.promptSuggestion === msg.suggestion) break
+        update(() => ({ promptSuggestion: msg.suggestion }))
+        break
+      }
       case 'session_title_updated':
         useSessionStore.getState().updateSessionTitle(msg.sessionId, msg.title)
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
@@ -6101,6 +6305,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               ...(human?.type === 'user_text' ? { attachments: human.attachments, sessionReferences: human.sessionReferences } : {}),
             })
           }
+          break
+        }
+        if (msg.subtype === 'scheduled_tasks_changed') {
+          void useTaskStore.getState().fetchTasks()
           break
         }
         if (msg.subtype === 'session_state_changed') {
@@ -6359,6 +6567,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         ) {
           const data = msg.data as Record<string, unknown>
           useWorkflowStore.getState().handleTaskEvent(sessionId, 'task_notification', data)
+          const ownedBySubagent = Boolean(readNonEmptyString(data, 'owner_agent_id', 'ownerAgentId'))
           const targets = taskEventTargets(sessionId, data)
           if (targets.length === 0) {
             bufferUnroutedOwnedTaskEvent(sessionId, 'task_notification', data)
@@ -6389,8 +6598,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               const accepted = Boolean(task)
               const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
               delete stoppingBackgroundTaskIds[taskEvent.taskId]
+              // A task owned by a subagent reports to that subagent, not here.
+              const continuesModel = task && !ownedBySubagent &&
+                taskResultReachesModel(task, taskEvent.status)
               return {
                 ...buildBackgroundTaskSessionUpdate(session, backgroundAgentTasks, task, now),
+                ...(continuesModel
+                  ? {
+                      pendingBackgroundContinue: [
+                        ...(session.pendingBackgroundContinue ?? [])
+                          .filter((pending) => pending.taskId !== task.taskId),
+                        { taskId: task.taskId, summary: taskEvent.summary ?? task.description ?? '' },
+                      ],
+                    }
+                  : {}),
                 stoppingBackgroundTaskIds,
                 agentTaskNotifications: {
                   ...session.agentTaskNotifications,
@@ -6715,6 +6936,56 @@ function shouldHideCommandMetadataContent(content: unknown): boolean {
   return getCommandMetadataDisplayText(content) === null
 }
 
+type BackgroundContinueTask = { taskId: string; summary: string }
+
+const BACKGROUND_CONTINUE_SUMMARY_LIMIT = 160
+
+/**
+ * Whether the CLI hands this terminal result back to the model. stopTask
+ * suppresses a stopped shell's notification and only emits the SDK bookend,
+ * so no turn follows it; a stopped agent still reports its partial result.
+ */
+function taskResultReachesModel(
+  task: BackgroundAgentTask,
+  status: BackgroundAgentTask['status'],
+): boolean {
+  if (status === 'completed' || status === 'failed') return true
+  return status === 'stopped' &&
+    (task.taskType === 'local_agent' || task.taskType === 'remote_agent')
+}
+
+function buildBackgroundContinueNotice(summaries: string[]): string {
+  const unique = [...new Set(summaries.map((summary) => {
+    const trimmed = summary.trim()
+    return trimmed.length > BACKGROUND_CONTINUE_SUMMARY_LIMIT
+      ? `${trimmed.slice(0, BACKGROUND_CONTINUE_SUMMARY_LIMIT)}…`
+      : trimmed
+  }).filter(Boolean))]
+  return unique.length > 0
+    ? t('chat.backgroundContinue', { summary: unique.join(' · ') })
+    : t('chat.backgroundContinueGeneric')
+}
+
+/**
+ * The line shown where a turn opened by background task results starts.
+ * Without it the reply looks like the model woke up on its own long after the
+ * chat went idle. The task ids match the live line to its transcript copy.
+ */
+function buildBackgroundContinueMessage(
+  tasks: BackgroundContinueTask[],
+  timestamp: number,
+  transcriptMessageId?: string,
+): Extract<UIMessage, { type: 'system' }> {
+  return {
+    id: transcriptMessageId ?? nextId(),
+    type: 'system',
+    content: buildBackgroundContinueNotice(tasks.map((task) => task.summary)),
+    backgroundContinueTaskIds: tasks.map((task) => task.taskId),
+    ...(transcriptMessageId ? { transcriptMessageId } : {}),
+    timestamp,
+  }
+}
+
 function isTaskNotificationContent(content: unknown): boolean {
   const textBlocks = extractHistoryTextBlocks(content)
   return textBlocks.length > 0 && textBlocks.every((text) => extractTaskNotificationXml(text) !== null)
@@ -6755,6 +7026,7 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeHistoryToolResultContent(content: unknown, toolUseResult: unknown): unknown {
   const result = readRecord(toolUseResult)
+  if (parseScheduledTaskResult('ScheduledTask', result)) return result
   const answers = readRecord(result?.answers)
   if (!result || !answers || !Array.isArray(result.questions)) return content
   return {
@@ -7574,7 +7846,7 @@ export type VisibleTeammateMessage = { from: string; content: string }
  * Teammate turns carry the sender in the tag; keeping it lets the transcript
  * attribute the message instead of rendering it as an anonymous user turn.
  */
-function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
+export function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
   const messages: VisibleTeammateMessage[] = []
 
   for (const match of text.matchAll(TEAMMATE_CONTENT_REGEX)) {
@@ -7606,11 +7878,13 @@ function pushAssistantHistoryText(
   model?: string,
   transcriptMessageId?: string,
   stableId?: string,
+  allowMerge = true,
 ): void {
   if (!content.trim()) return
 
   const last = messages[messages.length - 1]
   const canMergeIntoLast =
+    allowMerge &&
     last?.type === 'assistant_text' &&
     (
       transcriptMessageId
@@ -7933,7 +8207,12 @@ function replayMatchesCurrentUserMessage(
   replayDisplay: RestoredUserDisplay,
   replayModelContent: string,
 ): boolean {
-  const currentModelContent = (message.modelContent ?? message.content).trim()
+  const storedModelContent = (message.modelContent ?? message.content).trim()
+  // History can hydrate a guide before its delayed replay arrives. It retains
+  // the image source/resize notes in modelContent, whereas replay comparison
+  // already strips them. Normalize both sides without changing the stored
+  // prompt or its attachments.
+  const currentModelContent = stripGeneratedImageMetadataLines(storedModelContent) || storedModelContent
   if (currentModelContent === replayModelContent) return true
   if (
     collapseWhitespaceRuns(currentModelContent) === collapseWhitespaceRuns(replayModelContent)
@@ -7971,8 +8250,16 @@ export function appendReplayedUserMessage(
   timestamp: number,
   sessionReferences?: Array<{ sessionId: string }>,
   collaboration?: { sourceSessionId: string; messageId?: string },
+  scheduledTask?: ScheduledTaskTrigger,
   nativeMessageIds?: string[],
 ): UIMessage[] {
+  if (validScheduledTaskTrigger(scheduledTask)) {
+    if (messages.some(message => message.type === 'user_text' && message.scheduledTask?.runId === scheduledTask.runId)) return messages
+    return [...messages, {
+      id: `scheduled-run-${scheduledTask.runId}`, type: 'user_text', content, timestamp, scheduledTask,
+      ...(nativeMessageIds?.length ? { nativeMessageIds } : {}),
+    }]
+  }
   // The replayed text carries server-appended image-metadata lines that the
   // optimistic message never had. Normalize them away (same as the history
   // mapping) so the dedupe below can match the already-rendered message instead
@@ -8197,6 +8484,27 @@ export function reconstructAgentNotifications(messages: MessageEntry[]): Record<
   return notifications
 }
 
+function latestHistoryRecords(messages: MessageEntry[]): MessageEntry[] {
+  const records: MessageEntry[] = []
+  const positions = new Map<string, number>()
+  for (const message of messages) {
+    // Compaction can append an existing UUID again. Keep its latest snapshot
+    // at its first position, without changing the durable transcript. Child
+    // transcripts can be projected under different parent tools, so those
+    // projections retain their own identities.
+    const identity = message.id
+      ? JSON.stringify([message.parentToolUseId ?? null, message.id])
+      : undefined
+    const position = identity === undefined ? undefined : positions.get(identity)
+    if (position !== undefined) records[position] = message
+    else {
+      if (identity !== undefined) positions.set(identity, records.length)
+      records.push(message)
+    }
+  }
+  return records
+}
+
 export function mapHistoryMessagesToUiMessages(
   messages: MessageEntry[],
   options?: HistoryMappingOptions,
@@ -8205,7 +8513,8 @@ export function mapHistoryMessagesToUiMessages(
   const uiMessages: UIMessage[] = []
   let pendingGoalCommand: { name: string; args: string } | null = null
 
-  for (const msg of messages) {
+  for (const msg of latestHistoryRecords(messages)) {
+    const messageId = msg.id || nextId()
     // A task notification is a system-injected prompt: the background task
     // cards already stand for it. What the assistant does in the turn that
     // answers it (thinking, text, tool calls) is ordinary transcript content
@@ -8215,7 +8524,7 @@ export function mapHistoryMessagesToUiMessages(
       const commandDisplayText = getCommandMetadataDisplayText(msg.content)
       if (commandDisplayText) {
         uiMessages.push({
-          id: msg.id || nextId(),
+          id: messageId,
           type: 'user_text',
           content: commandDisplayText,
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
@@ -8235,13 +8544,31 @@ export function mapHistoryMessagesToUiMessages(
       (msg.content as { subtype?: unknown }).subtype === 'generation_stopped'
     ) {
       uiMessages.push({
-        id: msg.id || nextId(),
+        id: messageId,
         type: 'system',
         content: t('chat.generationStopped'),
         generationStopped: true,
         ...(msg.id ? { transcriptMessageId: msg.id } : {}),
         timestamp,
       })
+      continue
+    }
+    if (
+      msg.type === 'system' &&
+      msg.content && typeof msg.content === 'object' &&
+      (msg.content as { subtype?: unknown }).subtype === 'background_continue'
+    ) {
+      // The server projects the <task-notification> prompt that opened this
+      // turn; its XML never reaches the UI.
+      const notifications = (msg.content as { notifications?: unknown }).notifications
+      const tasks = (Array.isArray(notifications) ? notifications : []).flatMap((item) => {
+        if (!item || typeof item !== 'object') return []
+        const { taskId, summary } = item as { taskId?: unknown; summary?: unknown }
+        return typeof taskId === 'string' && taskId
+          ? [{ taskId, summary: typeof summary === 'string' ? summary : '' }]
+          : []
+      })
+      uiMessages.push(buildBackgroundContinueMessage(tasks, timestamp, msg.id || undefined))
       continue
     }
     if (msg.type === 'system' && typeof msg.content === 'string') {
@@ -8260,7 +8587,7 @@ export function mapHistoryMessagesToUiMessages(
         pendingGoalCommand = localCommand
         if (localCommand.name === 'goal') {
           uiMessages.push({
-            id: msg.id || nextId(),
+            id: messageId,
             type: 'user_text',
             content: formatVisibleLocalCommand(localCommand),
             timestamp,
@@ -8275,7 +8602,7 @@ export function mapHistoryMessagesToUiMessages(
         pendingGoalCommand = null
         if (goalEvent) {
           uiMessages.push({
-            id: msg.id || nextId(),
+            id: messageId,
             type: 'goal_event',
             ...goalEvent,
             timestamp,
@@ -8311,9 +8638,12 @@ export function mapHistoryMessagesToUiMessages(
         if (teammateMessages.length === 0) continue
         const sender = teammateMessages[0]!.from
         uiMessages.push({
-          id: msg.id || nextId(),
+          id: messageId,
           type: 'user_text',
           content: teammateMessages.map((message) => message.content).join('\n\n'),
+          // Preserve envelope occurrences for member-send reconciliation. A
+          // mailbox batch is one model prompt but can acknowledge many sends.
+          modelContent: msg.content,
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(sender ? { teammateFrom: sender } : {}),
           timestamp,
@@ -8323,11 +8653,12 @@ export function mapHistoryMessagesToUiMessages(
       const parsed = extractRestoredUserDisplay(msg.content)
       const references = normalizeSessionReferences(msg.sessionReferences ?? parsed.sessionReferences)
       uiMessages.push({
-        id: msg.id || nextId(),
+        id: messageId,
         type: 'user_text',
         content: parsed.content,
         ...(references.length ? { sessionReferences: references } : {}),
         ...(msg.collaboration ? { collaboration: msg.collaboration } : {}),
+        ...(validScheduledTaskTrigger(msg.scheduledTask) ? { scheduledTask: msg.scheduledTask } : {}),
         ...(msg.id ? { transcriptMessageId: msg.id } : {}),
         ...(parsed.modelContent ? { modelContent: parsed.modelContent } : {}),
         ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
@@ -8335,10 +8666,31 @@ export function mapHistoryMessagesToUiMessages(
       })
       continue
     }
+    if (msg.type === 'assistant' && (msg.isApiErrorMessage || msg.error)) {
+      const message = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content.flatMap((block: unknown) => {
+              if (!block || typeof block !== 'object') return []
+              const value = block as { type?: unknown; text?: unknown }
+              return value.type === 'text' && typeof value.text === 'string' ? [value.text] : []
+            }).join('\n')
+          : ''
+      if (message.trim()) {
+        uiMessages.push({
+          id: msg.id || nextId(), type: 'error', message,
+          code: msg.error || 'API_ERROR',
+          ...(msg.id ? { transcriptMessageId: msg.id } : {}),
+          ...(msg.businessErrorCode ? { businessErrorCode: msg.businessErrorCode } : {}),
+          timestamp,
+        })
+      }
+      continue
+    }
     if (msg.type === 'assistant' && typeof msg.content === 'string') {
       if (!msg.content.trim()) continue
       uiMessages.push({
-        id: msg.id || nextId(),
+        id: messageId,
         type: 'assistant_text',
         content: msg.content,
         ...(msg.id ? { transcriptMessageId: msg.id } : {}),
@@ -8348,8 +8700,9 @@ export function mapHistoryMessagesToUiMessages(
       continue
     }
     if ((msg.type === 'assistant' || msg.type === 'tool_use') && Array.isArray(msg.content)) {
+      const recordStartIndex = uiMessages.length
       for (const [blockIndex, block] of (msg.content as AssistantHistoryBlock[]).entries()) {
-        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp)
+        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${messageId}-block-${blockIndex}`, block.thinking, timestamp)
         else if (block.type === 'text' && block.text) {
           pushAssistantHistoryText(
             uiMessages,
@@ -8357,10 +8710,11 @@ export function mapHistoryMessagesToUiMessages(
             timestamp,
             msg.model,
             msg.id || undefined,
-            msg.id ? `${msg.id}-block-${blockIndex}` : undefined,
+            `${messageId}-block-${blockIndex}`,
+            uiMessages.length > recordStartIndex,
           )
         }
-        else if (block.type === 'tool_use') uiMessages.push({ id: `${msg.id}-block-${blockIndex}`, type: 'tool_use', toolName: block.name ?? 'unknown', toolUseId: block.id ?? '', originalToolUseId: block.original_tool_use_id, input: block.input, timestamp, parentToolUseId: msg.parentToolUseId })
+        else if (block.type === 'tool_use') uiMessages.push({ id: `${messageId}-block-${blockIndex}`, type: 'tool_use', toolName: block.name ?? 'unknown', toolUseId: block.id ?? '', originalToolUseId: block.original_tool_use_id, input: block.input, timestamp, parentToolUseId: msg.parentToolUseId })
       }
       continue
     }
@@ -8391,7 +8745,7 @@ export function mapHistoryMessagesToUiMessages(
         else if (block.type === 'image') attachments.push(normalizeHistoryImageAttachment(block))
         else if (block.type === 'file') attachments.push({ type: 'file', name: block.name || 'file' })
         else if (block.type === 'tool_result') uiMessages.push({
-          id: `${msg.id}-block-${blockIndex}`,
+          id: `${messageId}-block-${blockIndex}`,
           type: 'tool_result',
           toolUseId: block.tool_use_id ?? '',
           originalToolUseId: block.original_tool_use_id,
@@ -8422,9 +8776,10 @@ export function mapHistoryMessagesToUiMessages(
         const modelContent = visualSelectionDisplay || modelText !== visibleText ? modelText : parsed.modelContent
         const allAttachments = [...(parsed.attachments ?? []), ...attachments]
         uiMessages.push({
-          id: msg.id || nextId(),
+          id: messageId,
           type: 'user_text',
           content: userContent,
+          ...(validScheduledTaskTrigger(msg.scheduledTask) ? { scheduledTask: msg.scheduledTask } : {}),
           ...(references.length ? { sessionReferences: references } : {}),
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(modelContent ? { modelContent } : {}),
@@ -8440,7 +8795,7 @@ export function mapHistoryMessagesToUiMessages(
         const files = normalizeMemoryEventFiles(msg.content)
         if (files.length > 0) {
           uiMessages.push({
-            id: msg.id || nextId(),
+            id: messageId,
             type: 'memory_event',
             event: 'saved',
             files,

@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cc-haha-remote-directory",
+  "main": "../../src/remote/directory/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "durable_objects": {
+    "bindings": [{ "name": "HOSTS", "class_name": "MachineDirectory" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MachineDirectory"] }],
+  "ratelimits": [
+    { "name": "REQUEST_LIMIT", "namespace_id": "740201", "simple": { "limit": 300, "period": 60 } },
+    { "name": "PUBLISH_LIMIT", "namespace_id": "740202", "simple": { "limit": 30, "period": 60 } }
+  ],
+  "observability": { "enabled": false }
+}

@@ -476,6 +476,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
         } catch {
           // Best effort: keep the update prompt recoverable even if native reset fails.
         }
+        // prepareInstall stopped the local runtime; the app stays open, so
+        // bring it back the same way the relaunch watchdog does.
+        void host.runtime.getServerUrl().catch(() => undefined)
       }
       set((state) => ({
         ...state,

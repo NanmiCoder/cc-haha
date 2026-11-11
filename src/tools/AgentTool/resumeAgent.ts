@@ -9,6 +9,7 @@ import { registerAsyncAgent } from '../../tasks/LocalAgentTask/LocalAgentTask.js
 import { assembleToolPool } from '../../tools.js'
 import { asAgentId } from '../../types/ids.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -26,6 +27,7 @@ import {
 import { getQuerySourceForAgent } from '../../utils/promptCategory.js'
 import {
   getAgentTranscript,
+  flushSessionStorage,
   readAgentMetadata,
   type AgentMetadata,
 } from '../../utils/sessionStorage.js'
@@ -41,6 +43,8 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { resolvePersistedAgentType, runAgent } from './runAgent.js'
 import { reserveSubagentSlot } from './subagentConcurrency.js'
+import { resolveLeanAgentDefinition } from './leanAgents.js'
+import { getSkillSelectionMessages } from '../SkillTool/explicitSkillRequest.js'
 
 export type ResumeAgentResult = {
   agentId: string
@@ -71,12 +75,15 @@ export async function resumeAgentBackground({
   toolUseContext,
   canUseTool,
   invokingRequestId,
+  promptOrigin,
 }: {
   agentId: string
   prompt: string
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   invokingRequestId?: string
+  /** Tool-authored follow-ups differ from direct human SDK/REPL input. */
+  promptOrigin?: 'human' | 'coordinator'
 }): Promise<ResumeAgentResult> {
   // 恢复已结束的普通 SubAgent 也会启动模型，必须与新建任务共用名额。
   const releaseSubagentSlot = reserveSubagentSlot()
@@ -94,6 +101,9 @@ export async function resumeAgentBackground({
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
   const permissionMode = appState.toolPermissionContext.mode
 
+  // A foreground agent can complete before its buffered transcript reaches
+  // disk. A follow-up in the next tool round must observe that completed run.
+  await flushSessionStorage()
   const [transcript, meta] = await Promise.all([
     getAgentTranscript(asAgentId(agentId)),
     readAgentMetadata(asAgentId(agentId)),
@@ -142,7 +152,9 @@ export async function resumeAgentBackground({
   // Skip filterDeniedAgents re-gating — original spawn already passed permission checks
   let selectedAgent: AgentDefinition
   let isResumedFork = false
-  if (meta?.agentType === FORK_AGENT.agentType) {
+  if (getAgentProfile() === 'lean') {
+    selectedAgent = resolveLeanAgentDefinition(meta?.agentType ?? GENERAL_PURPOSE_AGENT.agentType)
+  } else if (meta?.agentType === FORK_AGENT.agentType) {
     selectedAgent = FORK_AGENT
     isResumedFork = true
   } else if (meta?.agentType) {
@@ -220,12 +232,21 @@ export async function resumeAgentBackground({
     selectedAgent.agentType,
   )
 
+  const followup = createUserMessage({
+    content: prompt,
+    ...(promptOrigin && { origin: { kind: promptOrigin } }),
+  })
   const runAgentParams: Parameters<typeof runAgent>[0] = {
     agentDefinition: selectedAgent,
     promptMessages: [
       ...resumedMessages,
-      createUserMessage({ content: prompt }),
+      followup,
     ],
+    ...(getAgentProfile() === 'lean' && {
+      skillSelectionMessages: promptOrigin === 'coordinator'
+        ? getSkillSelectionMessages(toolUseContext)
+        : [followup],
+    }),
     toolUseContext,
     canUseTool,
     isAsync: true,

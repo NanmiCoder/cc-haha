@@ -309,6 +309,7 @@ describe('TabBar', () => {
     const { useTeamStore } = await import('../../stores/teamStore')
     const { useWorkflowStore } = await import('../../stores/workflowStore')
     const { useWorkspaceStore } = await import('../../stores/workspaceStore')
+    const { useUIStore } = await import('../../stores/uiStore')
 
     useTabStore.setState({ tabs: [], activeTabId: null })
     useChatStore.setState({
@@ -327,6 +328,7 @@ describe('TabBar', () => {
     useCLITaskStore.setState(useCLITaskStore.getInitialState(), true)
     useTeamStore.setState(useTeamStore.getInitialState(), true)
     useWorkflowStore.setState({ runs: {} })
+    useUIStore.setState({ newSessionDraft: null, draftWorkspaceRequest: null })
 
     Reflect.deleteProperty(window, 'desktopHost')
     Reflect.deleteProperty(window, '__TAURI__')
@@ -379,6 +381,46 @@ describe('TabBar', () => {
     fireEvent.click(side)
     expect(useWorkspaceStore.getState().getSession('second-session').layout).toBe('split')
     expect(useWorkspaceStore.getState().getSession(sessionId).tabs).toEqual(before)
+  })
+
+  it('offers the project and workspace entry points on the retained new-session draft', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useUIStore } = await import('../../stores/uiStore')
+    const { useWorkspaceStore } = await import('../../stores/workspaceStore')
+    useUIStore.setState({
+      newSessionDraft: { workDir: '/repo/project', revision: 7, hasContent: false },
+      draftWorkspaceRequest: null,
+    })
+    render(<TabBar />)
+
+    expect(screen.getByTestId('open-project-menu')).toHaveTextContent('/repo/project')
+    const side = screen.getByTestId('workspace-toggle-side')
+    const bottom = screen.getByTestId('workspace-toggle-bottom')
+    expect(screen.queryByTestId('workspace-toggle-fullscreen')).not.toBeInTheDocument()
+
+    fireEvent.click(side)
+    fireEvent.click(bottom)
+
+    // The draft has no session yet, so the controls only record the intent.
+    expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+      action: 'toggle-bottom',
+      revision: 7,
+    })
+    expect(useWorkspaceStore.getState().bySession).toEqual({})
+  })
+
+  it('keeps the draft workspace controls when the draft has no project yet', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useUIStore } = await import('../../stores/uiStore')
+    useUIStore.setState({
+      newSessionDraft: { workDir: '', revision: 8, hasContent: false },
+      draftWorkspaceRequest: null,
+    })
+    render(<TabBar />)
+
+    expect(screen.queryByTestId('open-project-menu')).not.toBeInTheDocument()
+    expect(screen.getByTestId('workspace-toggle-side')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-toggle-bottom')).toBeInTheDocument()
   })
 
   it('hides the activity button for no-activity chat session tabs', async () => {
@@ -1346,13 +1388,18 @@ describe('TabBar', () => {
     let position = 0
     Object.defineProperty(strip, 'clientWidth', { configurable: true, get: () => viewport })
     Object.defineProperty(strip, 'scrollLeft', { configurable: true, get: () => position })
+    // As Chromium lays them out: the strip's `px-1` puts the first chip 4px
+    // in, and offsetLeft does not move when the strip scrolls.
     items.forEach((item, index) => {
-      Object.defineProperty(item, 'offsetLeft', { configurable: true, get: () => index * 142 })
+      Object.defineProperty(item, 'offsetLeft', { configurable: true, get: () => 4 + index * 142 })
       Object.defineProperty(item, 'offsetWidth', { configurable: true, get: () => 140 })
     })
     fireStripResize()
     const hitRegion = screen.getByTestId('tab-bar-hit-region')
-    expect(hitRegion).toHaveStyle({ width: '282px' })
+    // The mask starts at the strip's left edge, so it reaches the last chip's
+    // right edge (4 + 142 + 140). Measured from the first chip it stopped 4px
+    // short, and pressing the last tab's edge dragged the window instead.
+    expect(hitRegion).toHaveStyle({ width: '286px' })
     expect(strip).not.toContainElement(hitRegion)
     // The no-drag rectangle covers the 28px chips only (12px above and below
     // in the 52px strip), so the space around them still drags the window.
@@ -1363,10 +1410,16 @@ describe('TabBar', () => {
     position = 82
     fireEvent.scroll(strip)
     expect(hitRegion).toHaveStyle({ width: '200px' })
+    // Scrolled to the end with room to spare: the mask stops where the last
+    // chip now ends, not at the viewport edge.
+    viewport = 250
+    position = 40
+    fireEvent.scroll(strip)
+    expect(hitRegion).toHaveStyle({ width: '246px' })
     position = 0
     viewport = 600
     fireStripResize()
-    expect(hitRegion).toHaveStyle({ width: '282px' })
+    expect(hitRegion).toHaveStyle({ width: '286px' })
   })
 
   it('scrolls by a fraction of the visible strip rather than a fixed tab width', async () => {
@@ -1677,6 +1730,107 @@ describe('TabBar', () => {
     const tab = screen.getByText('Untitled Session').closest('.tab-bar-interactive')
     expect(tab).toBeInTheDocument()
     expect(tab).not.toHaveAttribute('data-desktop-drag-region')
+  })
+
+  it('lets only titlebar controls carve the drag region, not the content rendered after it', async () => {
+    // Chromium reports a rectangle for every box whose app-region is drag or
+    // no-drag — unclipped by overflow, whatever its opacity — and Electron
+    // lets the later one win. ContentRouter renders after TabBar, so when
+    // every button in the app was no-drag, the transcript scrolled under the
+    // 52px titlebar (or kept mounted at opacity 0 behind Settings) punched
+    // holes in the empty strip beside the tabs: Windows users could not drag
+    // the window there once a few sessions were open.
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { resolveAppRegion } = await import('../../test/appRegion')
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-1', title: 'First Session', type: 'session', status: 'idle' },
+        { sessionId: 'tab-2', title: 'Second Session', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-1',
+    })
+    useChatStore.setState({
+      sessions: {},
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    // Every kind of control, once in titlebar chrome and once in the content.
+    const controls = () => (
+      <>
+        <button type="button">Copy prompt</button>
+        <a href="#trajectory">View in trajectory</a>
+        <div role="button" tabIndex={0}>Tool call</div>
+        <div draggable="true">Session row</div>
+        <input aria-label="Search" />
+        <textarea aria-label="Note" />
+        <select aria-label="Mode"><option>Auto</option></select>
+      </>
+    )
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    await act(async () => {
+      render(
+        <>
+          <div data-testid="titlebar-chrome" data-desktop-drag-region>{controls()}</div>
+          <TabBar />
+          <main data-testid="content-under-titlebar">{controls()}</main>
+        </>,
+        { container: root },
+      )
+    })
+
+    for (const control of Array.from(screen.getByTestId('titlebar-chrome').children)) {
+      expect(resolveAppRegion(control), control.outerHTML).toBe('no-drag')
+    }
+    for (const control of Array.from(screen.getByTestId('content-under-titlebar').children)) {
+      expect(resolveAppRegion(control), control.outerHTML).toBe('none')
+    }
+
+    const tabBar = screen.getByTestId('tab-bar')
+    expect(resolveAppRegion(tabBar)).toBe('drag')
+    expect(resolveAppRegion(screen.getByTestId('tab-bar-scroll-region'))).toBe('drag')
+    expect(resolveAppRegion(screen.getByTestId('tab-bar-drag-gutter'))).toBe('drag')
+
+    // Scrolled tabs report nothing; the stationary sibling stands in for them.
+    expect(resolveAppRegion(screen.getByTestId('tab-bar-hit-region'))).toBe('no-drag')
+    for (const title of ['First Session', 'Second Session']) {
+      const tab = screen.getByText(title).closest('.tab-bar-interactive')!
+      for (const node of [tab, ...Array.from(tab.querySelectorAll('*'))]) {
+        expect(resolveAppRegion(node), node.outerHTML).toBe('none')
+      }
+    }
+
+    // Every other control in the titlebar still takes its own clicks.
+    const toolbarButtons = Array.from(tabBar.querySelectorAll('button'))
+      .filter((button) => !button.closest('.tab-strip-scroll'))
+    expect(toolbarButtons.length).toBeGreaterThan(0)
+    for (const button of toolbarButtons) {
+      expect(resolveAppRegion(button), button.outerHTML).toBe('no-drag')
+    }
+  })
+
+  it('gives an overlay portalled over the titlebar its own pixels, but not a tooltip', async () => {
+    const { resolveAppRegion } = await import('../../test/appRegion')
+    const root = document.body.appendChild(document.createElement('div'))
+    root.id = 'root'
+    const menu = document.body.appendChild(document.createElement('div'))
+    const item = menu.appendChild(document.createElement('button'))
+    const tooltip = document.body.appendChild(document.createElement('div'))
+    tooltip.setAttribute('role', 'tooltip')
+    try {
+      expect(resolveAppRegion(menu)).toBe('no-drag')
+      // The menu's own box is the rectangle; a row scrolled inside it is not.
+      expect(resolveAppRegion(item)).toBe('none')
+      expect(resolveAppRegion(tooltip)).toBe('none')
+      expect(resolveAppRegion(root)).toBe('none')
+    } finally {
+      root.remove()
+      menu.remove()
+      tooltip.remove()
+    }
   })
 
   it('keeps the desktop tab strip at a roomier titlebar height', async () => {

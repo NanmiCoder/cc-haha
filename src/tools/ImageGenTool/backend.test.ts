@@ -32,6 +32,54 @@ const PNG_BYTES = Buffer.from([
   0x00, 0x00, 0x00, 0x00,
 ])
 
+test('Grok image retry reuses a rotation completed before its 401 arrives', async () => {
+  const previousFile = process.env.GROK_OAUTH_FILE
+  const previousFetch = globalThis.fetch
+  outputDir = await mkdtemp(join(tmpdir(), 'grok-image-refresh-'))
+  const tokenFile = join(outputDir, 'tokens.json')
+  process.env.GROK_OAUTH_FILE = tokenFile
+  const tokens = { accessToken: 'old', refreshToken: 'old-refresh', expiresAt: Date.now() + 3_600_000 }
+  await writeFile(tokenFile, JSON.stringify(tokens))
+  globalThis.fetch = (async () => { throw new Error('Unexpected extra token refresh') }) as typeof fetch
+  const auth: string[] = []
+  try {
+    const result = await generateImages({ prompt: 'A paper fox', count: 1 }, {
+      kind: 'grok_oauth', providerId: 'grok-fixture', model: 'grok-imagine-image',
+    }, { outputDir, fetchImpl: async (_input, init) => {
+      auth.push(new Headers(init?.headers).get('Authorization') ?? '')
+      if (auth.length === 1) {
+        await writeFile(tokenFile, JSON.stringify({ ...tokens, accessToken: 'fresh', refreshToken: 'rotated' }))
+        return new Response('expired', { status: 401 })
+      }
+      return Response.json({ data: [{ b64_json: PNG_BYTES.toString('base64') }] })
+    } })
+    expect(result.images).toHaveLength(1)
+    expect(auth).toEqual(['Bearer old', 'Bearer fresh'])
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousFile === undefined) delete process.env.GROK_OAUTH_FILE
+    else process.env.GROK_OAUTH_FILE = previousFile
+  }
+})
+
+test('Grok image refresh preserves the upstream error instead of dereferencing missing tokens', async () => {
+  const previousFile = process.env.GROK_OAUTH_FILE
+  const previousFetch = globalThis.fetch
+  outputDir = await mkdtemp(join(tmpdir(), 'grok-image-refresh-failure-'))
+  process.env.GROK_OAUTH_FILE = join(outputDir, 'tokens.json')
+  await writeFile(process.env.GROK_OAUTH_FILE, JSON.stringify({ accessToken: 'old', refreshToken: 'refresh', expiresAt: Date.now() + 3_600_000 }))
+  globalThis.fetch = (async () => new Response('Temporarily unavailable', { status: 503 })) as typeof fetch
+  try {
+    await expect(generateImages({ prompt: 'A paper fox', count: 1 }, {
+      kind: 'grok_oauth', providerId: 'grok-fixture', model: 'grok-imagine-image',
+    }, { outputDir, fetchImpl: async () => new Response('expired', { status: 401 }) })).rejects.toThrow('503')
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousFile === undefined) delete process.env.GROK_OAUTH_FILE
+    else process.env.GROK_OAUTH_FILE = previousFile
+  }
+})
+
 const customConfig: ImageGenerationRuntimeConfig = {
   kind: 'openai_images',
   providerId: 'relay-provider',

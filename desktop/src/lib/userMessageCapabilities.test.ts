@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { parseUserMessageSegments as parseSharedMessage, hasCapabilitySentence as sharedHasCapability } from '../../../src/shared/userMessageCapabilities'
 import { capabilityLabel, hasCapabilitySentence, parseUserMessageSegments } from './userMessageCapabilities'
 
 // Literal copies of what capabilityMentionService.ts sends; the server test
@@ -52,4 +53,22 @@ describe('parseUserMessageSegments', () => {
     expect(parseUserMessageSegments('run /commit later')).toEqual([{ type: 'text', text: 'run /commit later' }])
     expect(parseUserMessageSegments('/ alone')).toEqual([{ type: 'text', text: '/ alone' }])
   })
+
+  it('keeps desktop history rendering compatible with native prompts across shared-parser calls', () => {
+    const id = 'project:审查-"quoted"'
+    const invocation = `Use the Skill tool with skill: ${JSON.stringify(id)} for this request.`
+    const malformed = 'Use the Skill tool with skill: "bad\\q" for this request.'
+    const prompt = `${invocation}\n\n${malformed}\n检查结果`
+    const expected = [
+      { type: 'skill', id, label: '审查-"quoted"', modelText: invocation },
+      { type: 'text', text: `\n\n${malformed}\n检查结果` },
+    ]
+    // Native history and the desktop detection pass share the reader after
+    // extraction; either may leave a global regexp cursor behind.
+    expect(parseSharedMessage(prompt)).toEqual(expected)
+    expect(sharedHasCapability(prompt)).toBe(true)
+    expect(parseUserMessageSegments(prompt)).toEqual(expected)
+    expect(parseUserMessageSegments(prompt)).toEqual(expected)
+  })
+
 })

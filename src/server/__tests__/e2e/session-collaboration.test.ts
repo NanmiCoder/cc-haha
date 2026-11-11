@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +29,7 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
   let server: ReturnType<typeof Bun.serve> | undefined
   let socket: WebSocket | undefined
   let shutdown: (() => Promise<void>) | undefined
+  let restoreStartup = () => {}
   try {
     const workDir = join(home, 'project')
     await mkdir(workDir)
@@ -56,9 +57,19 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
     const processRecord = (conversationService as unknown as { sessions: Map<string, { sdkToken: string }> }).sessions.get(root.sessionId)!
     const headers = { authorization: `Bearer ${processRecord.sdkToken}`, 'x-session-id': root.sessionId }
     const tool = (action: string, body: unknown) => api(`/api/session-collaboration/${action}`, body, headers)
+    const startSession = conversationService.startSession.bind(conversationService)
+    // A launched batch can still be starting its CLI. Reproduce that boundary
+    // explicitly instead of depending on a fast or slow CI scheduler.
+    let releaseStarts!: () => void
+    const childStartup = new Promise<void>(resolve => { releaseStarts = resolve })
+    const startup = spyOn(conversationService, 'startSession').mockImplementation(async (...args) => {
+      if (args[0] !== root.sessionId) await childStartup
+      return startSession(...args)
+    })
+    restoreStartup = () => { releaseStarts(); startup.mockRestore() }
     const proposals = await Promise.all([
-      tool('create', { prompt: 'Review alpha', title: 'Alpha session', requestId: 'alpha-create' }),
-      tool('create', { prompt: 'Review beta', title: 'Beta session', requestId: 'beta-create' }),
+      tool('create', { prompt: 'MOCK_RECONNECT_GATE Review alpha', title: 'Alpha session', requestId: 'alpha-create' }),
+      tool('create', { prompt: 'MOCK_RECONNECT_GATE Review beta', title: 'Beta session', requestId: 'beta-create' }),
     ])
     expect(proposals.every(batch => batch.state === 'review' && batch.sessions.every((item: any) => !item.sessionId))).toBe(true)
     const children = []
@@ -70,10 +81,20 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
     }
     expect(new Set([root.sessionId, ...children.map(child => child.sessionId)]).size).toBe(3)
     const busyDelivery = await tool('send', { targetSessionId: children[0].sessionId, content: 'Progress while running', messageId: 'busy-message' })
-    expect(['queued', 'accepted', 'consumed']).toContain(busyDelivery.status)
+    expect(['queued', 'accepted']).toContain(busyDelivery.status)
+    expect(conversationService.hasSession(children[0].sessionId)).toBe(false)
+    restoreStartup()
+    for (const child of children) {
+      await eventually(async () => conversationService.getRecentSdkMessages(child.sessionId),
+        messages => messages.some(message => message.type === 'stream_event' && message.event?.type === 'message_start'), 'child CLI reached the stream gate')
+    }
     const childToken = (conversationService as unknown as { sessions: Map<string, { sdkToken: string }> }).sessions.get(children[0].sessionId)!.sdkToken
     const peerDelivery = await api('/api/session-collaboration/send', { targetSessionId: children[1].sessionId, content: 'Peer finding from alpha', messageId: 'peer-message' }, { authorization: `Bearer ${childToken}`, 'x-session-id': children[0].sessionId })
     expect(peerDelivery.sourceSessionId).toBe(children[0].sessionId)
+    for (const child of children) {
+      expect(conversationService.getRecentSdkMessages(child.sessionId).some(message => message.type === 'result')).toBe(false)
+      await conversationService.requestControl(child.sessionId, { subtype: 'mock_release_reconnect_stream' }, 1000)
+    }
     const groupPath = `/api/session-collaboration/${root.sessionId}/status`
     const completed = await eventually(() => api(groupPath), status => children.every(child => status.members.some((member: any) => member.sessionId === child.sessionId && member.state === 'completed')) && status.messages.filter((message: any) => message.targetSessionId !== root.sessionId).every((message: any) => message.status === 'consumed'), 'children completed')
     expect(completed.members).toHaveLength(3)
@@ -85,7 +106,9 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
     const change = await api(`/api/session-collaboration/${root.sessionId}/model-changes`, {
       requestId: 'after-turn-change', mode: 'after_turn', selections: [{ sessionId: children[0].sessionId, runtime: { providerId: alternateId, modelId: 'mock-opus' } }],
     })
-    expect(['pending', 'applied']).toContain(change.state)
+    // The route does not wait: when the child's turn ends while the change is
+    // being recorded, the change is already applying when the route answers.
+    expect(['pending', 'applying', 'applied']).toContain(change.state)
     const changed = await eventually(() => api(`/api/session-collaboration/${root.sessionId}/delegation`), value => value.changes.some((item: any) => item.id === change.id && item.state === 'applied'), 'after-turn provider applied')
     expect(changed.sessions.find((item: any) => item.sessionId === children[0].sessionId)?.runtime).toMatchObject({ providerId: alternateId, modelId: 'mock-opus' })
     const listed = await api('/api/sessions')
@@ -112,6 +135,7 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
     expect(stopped.members.every((member: any) => member.stopped)).toBe(true)
     expect(events.some(event => event.type === 'system_notification' && event.subtype === 'session_collaboration_updated')).toBe(true)
   } finally {
+    restoreStartup()
     socket?.close()
     await shutdown?.()
     server?.stop(true)

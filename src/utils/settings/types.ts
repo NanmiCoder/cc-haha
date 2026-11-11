@@ -485,6 +485,13 @@ export const SettingsSchema = lazySchema(() =>
           'Enable the "ultracode" keyword trigger: including the keyword in a prompt ' +
             'opts that turn into the Workflow tool. Set to false to disable the trigger. Default: true.',
         ),
+      nextPromptSuggestionsEnabled: z
+        .boolean()
+        .optional()
+        .describe(
+          'Desktop: show a predicted next prompt in the empty composer after each reply ' +
+            '(one extra model request per turn). Default: false.',
+        ),
       workflowSizeGuideline: z
         .enum(['unrestricted', 'small', 'medium', 'large'])
         .optional()
@@ -819,6 +826,8 @@ export const SettingsSchema = lazySchema(() =>
               // Any non-empty string, matching the Markdown `model` frontmatter
               // parser — third-party model IDs are not aliases.
               model: z.string().trim().min(1).optional().catch(undefined),
+              // Saved cc-haha provider id that serves `model` for this agent.
+              provider: z.string().trim().min(1).optional().catch(undefined),
               // Agent-level effort takes the full level set, unlike the
               // session-level `effortLevel` above. Levels are inlined rather
               // than imported from utils/effort.js: that module reads settings,
@@ -843,7 +852,7 @@ export const SettingsSchema = lazySchema(() =>
         // parseSettingsFileUncached drops every setting when the schema throws.
         .catch(undefined)
         .describe(
-          'Per-agent model/effort overrides for built-in agents. Keys are the ' +
+          'Per-agent model/provider/effort overrides for built-in agents. Keys are the ' +
             'agentType as spawned (e.g. "Explore"), case-sensitive. Other ' +
             'built-in fields stay read-only.',
         ),

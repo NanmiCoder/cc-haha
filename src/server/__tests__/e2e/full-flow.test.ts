@@ -216,8 +216,8 @@ describe('E2E: Full Flow', () => {
 
   it('should list available models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(9)
-    expect(data.models[0].name).toBe('Fable 5.1')
+    expect(data.models.length).toBe(10)
+    expect(data.models[0].name).toBe('Fable 5.2')
   })
 
   it('should switch model', async () => {

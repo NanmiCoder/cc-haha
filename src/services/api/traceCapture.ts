@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { promises as fs } from 'fs'
 import type { Stats } from 'fs'
-import { dirname, join } from 'path'
+import { dirname, isAbsolute, join, resolve } from 'path'
 import { getClaudeConfigHomeDir, isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import {
   openTraceIndexDatabase,
@@ -294,6 +294,7 @@ type CanonicalTraceRevisionState = {
 export type TraceIndexTarget = {
   path: string
   scope: string
+  customStorage?: boolean
 }
 
 type TraceScopeContext = {
@@ -345,17 +346,29 @@ export function isTraceCaptureEnabled(): boolean {
 }
 
 export function getTraceStorageDir(): string {
-  return join(getClaudeConfigHomeDir(), 'cc-haha', 'traces')
+  return currentTraceScopeContext().storageDir
 }
 
 function currentTraceScopeContext(): TraceScopeContext {
   const scope = getClaudeConfigHomeDir()
+  const configuredDir = process.env.CC_HAHA_TRACE_DIR?.trim()
+  if (configuredDir && (!isAbsolute(configuredDir) || configuredDir.includes('\0'))) {
+    throw traceResourceError('TRACE_INVALID_STORAGE_DIR', 'CC_HAHA_TRACE_DIR must be an absolute directory path')
+  }
+  const storageDir = configuredDir ? resolve(configuredDir) : join(scope, 'cc-haha', 'traces')
+  // Keep the managed settings scope separate from the trace storage scope.
+  // A custom directory gets its own disposable index under the existing
+  // managed-path boundary, rather than sharing an index with another root.
+  const indexScope = configuredDir ? storageDir : scope
   return {
     scope,
-    storageDir: join(scope, 'cc-haha', 'traces'),
+    storageDir,
     target: {
-      path: join(scope, 'cc-haha', 'db', 'trace-index-v1.sqlite'),
-      scope,
+      // The storage root may equal the config root, whose legacy index describes
+      // a different JSONL directory. Never share that index with custom storage.
+      path: join(indexScope, 'cc-haha', 'db', configuredDir ? 'trace-storage-index-v1.sqlite' : 'trace-index-v1.sqlite'),
+      scope: indexScope,
+      customStorage: Boolean(configuredDir),
     },
   }
 }
@@ -365,19 +378,19 @@ function currentTraceIndexTarget(): TraceIndexTarget {
 }
 
 export function readTraceCaptureSettingsSync(): TraceCaptureSettings {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const settings = readManagedSettingsSync(scope)
-  return normalizeTraceCaptureSettings(settings, scope)
+  return normalizeTraceCaptureSettings(settings, storageDir)
 }
 
 export async function readTraceCaptureSettings(): Promise<TraceCaptureSettings> {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const settings = await readManagedSettings(scope)
-  return normalizeTraceCaptureSettings(settings, scope)
+  return normalizeTraceCaptureSettings(settings, storageDir)
 }
 
 export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptureSettings, 'enabled'>>): Promise<TraceCaptureSettings> {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const current = await readManagedSettings(scope)
   const traceCapture = current[TRACE_SETTINGS_KEY]
   const previous = traceCapture && typeof traceCapture === 'object' && !Array.isArray(traceCapture)
@@ -392,18 +405,44 @@ export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptur
     [TRACE_SETTINGS_KEY]: nextTraceCapture,
   }
   await writeManagedSettings(nextSettings, scope)
-  return normalizeTraceCaptureSettings(nextSettings, scope)
+  return normalizeTraceCaptureSettings(nextSettings, storageDir)
 }
 
 export const TRACE_CAPTURE_NODE_LIMIT = 4096
 export const TRACE_CAPTURE_DEPTH_LIMIT = 32
 export const TRACE_CAPTURE_CHAR_LIMIT = 1024 * 1024
+const TRACE_REQUEST_PARSE_CHAR_LIMIT = 64 * TRACE_CAPTURE_CHAR_LIMIT
+const TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT = 64 * 1024
+const TRACE_INLINE_IMAGE_MARKER_RE = /"base64"|data:image\/|"inlineData"/i
 
 type BoundedTraceValue = { value: unknown; omitted?: string }
-function boundedTraceValue(input: unknown): BoundedTraceValue {
+type RequestImageMode = 'preview' | 'semantic'
+type RequestImageSource = 'anthropic' | 'gemini' | 'url'
+
+function ownTraceValue(value: object, key: string): unknown {
+  const property = Object.getOwnPropertyDescriptor(value, key)
+  return property?.enumerable ? property.value : undefined
+}
+
+function requestImageSource(key: string, type: unknown, parent?: RequestImageSource): RequestImageSource | undefined {
+  if (key === 'source' && type === 'image') return 'anthropic'
+  if (key === 'inlineData') return 'gemini'
+  if (key === 'image_url' && (type === 'image_url' || type === 'input_image')) return 'url'
+  if (key === 'url' && parent === 'url') return 'url'
+  return undefined
+}
+
+function boundedTraceValue(input: unknown, requestImages?: RequestImageMode): BoundedTraceValue {
   let nodes = 0
   let chars = 0
   let bytes = 0
+  let imageChars = 0
+  const imageCharLimit = requestImages === 'semantic' ? TRACE_CAPTURE_CHAR_LIMIT : TRACE_REQUEST_PREVIEW_IMAGE_CHAR_LIMIT
+  const reserveImageChars = (length: number) => {
+    if (length > imageCharLimit - imageChars) return false
+    imageChars += length
+    return true
+  }
   const countText = (text: string) => {
     chars += text.length
     if (chars > TRACE_CAPTURE_CHAR_LIMIT) throw new Error('string-budget')
@@ -414,11 +453,18 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
     }
   }
   const seen = new WeakSet<object>()
-  const visit = (value: unknown, depth: number): unknown => {
+  const visit = (value: unknown, depth: number, imageSource?: RequestImageSource): unknown => {
     if (++nodes > TRACE_CAPTURE_NODE_LIMIT) throw new Error('node-budget')
     bytes += 16
     if (depth > TRACE_CAPTURE_DEPTH_LIMIT) throw new Error('depth-budget')
     if (typeof value === 'string') {
+      if (imageSource === 'url') {
+        // The prefix is bounded even when the encoded data is very large.
+        const header = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(value.slice(0, 80))
+        if (header && (requestImages === 'semantic' || !reserveImageChars(value.length))) {
+          value = `[${header[1]} data omitted (${value.length - header[0].length} encoded characters)]`
+        }
+      }
       countText(value)
       return value
     }
@@ -437,6 +483,13 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
       seen.delete(value)
       return result
     }
+    const type = requestImages ? ownTraceValue(value, 'type') : undefined
+    const mime = imageSource === 'gemini' ? ownTraceValue(value, 'mimeType') : undefined
+    const base64Image = imageSource === 'anthropic' && type === 'base64'
+    const inlineImage = typeof mime === 'string' && mime.startsWith('image/')
+    const imageData = base64Image || inlineImage ? ownTraceValue(value, 'data') : undefined
+    const smallImage = typeof imageData === 'string' && reserveImageChars(imageData.length)
+    const compactImage = typeof imageData === 'string' && (requestImages === 'semantic' || !smallImage)
     const result: Record<string, unknown> = {}
     for (const key in value) {
       if (!Object.prototype.hasOwnProperty.call(value, key)) continue
@@ -444,7 +497,23 @@ function boundedTraceValue(input: unknown): BoundedTraceValue {
       countText(key)
       const property = Object.getOwnPropertyDescriptor(value, key)
       if (property?.get || property?.set) throw new Error('accessor')
-      Object.defineProperty(result, key, { value: visit(property?.value, depth + 1), enumerable: true, configurable: true, writable: true })
+      if (compactImage && key === 'data') continue
+      const nestedSource = requestImages ? requestImageSource(key, type, imageSource) : undefined
+      Object.defineProperty(result, key, { value: visit(property?.value, depth + 1, nestedSource), enumerable: true, configurable: true, writable: true })
+    }
+    if (compactImage) {
+      // A digest is available for the same small images as before. Large
+      // payloads need only their encoded length, with no scan or decode.
+      if (smallImage) {
+        const decoded = Buffer.from(imageData, 'base64')
+        countText('bytes')
+        result.bytes = visit(decoded.byteLength, depth + 1)
+        countText('sha256')
+        result.sha256 = visit(createHash('sha256').update(decoded).digest('hex'), depth + 1)
+      } else {
+        countText('encodedChars')
+        result.encodedChars = visit(imageData.length, depth + 1)
+      }
     }
     seen.delete(value)
     return result
@@ -495,10 +564,16 @@ function boundedBodySnapshot(snapshot: TraceBodySnapshot): TraceBodySnapshot {
 
 export function createTraceBodySnapshot(
   body: unknown,
-  options?: { maxPreviewChars?: number; alreadyTruncated?: boolean },
+  options?: { maxPreviewChars?: number; alreadyTruncated?: boolean; compactRequestImages?: boolean },
 ): TraceBodySnapshot {
   const maxPreviewChars = options?.maxPreviewChars ?? TRACE_PREVIEW_CHARS
-  const bounded = boundedTraceValue(body)
+  const initial = boundedTraceValue(body)
+  // Keep the ordinary raw preview contract. When binary media would make
+  // the capture lose the whole request, retry with a smaller media allowance.
+  const bounded = options?.compactRequestImages && isTraceRecord(body)
+    && (initial.omitted === 'string-budget' || initial.omitted === 'byte-budget')
+    ? boundedTraceValue(body, 'preview')
+    : initial
   const { serialized, contentType } = serializeTraceBody(bounded.value)
   const bytes = Buffer.byteLength(serialized)
   const preview = serialized.length > maxPreviewChars
@@ -510,7 +585,7 @@ export function createTraceBodySnapshot(
     bytes,
     sha256: createHash('sha256').update(serialized).digest('hex'),
     preview,
-    truncated: Boolean(bounded.omitted) || Boolean(options?.alreadyTruncated) || serialized.length > maxPreviewChars,
+    truncated: Boolean(initial.omitted) || Boolean(options?.alreadyTruncated) || serialized.length > maxPreviewChars,
     ...(bounded.omitted ? { captureOmitted: bounded.omitted } : {}),
   }
 }
@@ -557,7 +632,7 @@ function createRequestSemanticField(
   body: unknown,
   source: TraceCallRecord['source'],
 ): { semantic: TraceRequestSemantic } | Record<string, never> {
-  const semantic = createTraceRequestSemantic(body, source)
+  const semantic = traceRequestSemanticFromValue(body, source)
   return semantic ? { semantic } : {}
 }
 
@@ -571,10 +646,17 @@ export function createTraceRequestSemantic(
   body: unknown,
   source: TraceCallRecord['source'],
 ): TraceRequestSemantic | null {
-  const bounded = boundedTraceValue(body)
+  return traceRequestSemanticFromValue(parseTraceRequestBody(body), source)
+}
+
+function traceRequestSemanticFromValue(
+  body: unknown,
+  source: TraceCallRecord['source'],
+): TraceRequestSemantic | null {
+  const bounded = boundedTraceValue(body, 'semantic')
   if (bounded.omitted) return { version: 1, request: bounded.value as TraceJsonRecord }
-  const parsed = parseTraceRequestValue(bounded.value)
-  if (!parsed) return null
+  const parsed = bounded.value
+  if (!isTraceRecord(parsed)) return null
   const request = source === 'proxy' && isTraceRecord(parsed.anthropic)
     ? parsed.anthropic
     : parsed
@@ -588,56 +670,16 @@ export function createTraceRequestSemantic(
   }
   return {
     version: 1,
-    request: compactTraceSemanticValue(boundedTraceValue(request).value) as TraceJsonRecord,
+    request: redactBoundedValue(request) as TraceJsonRecord,
   }
 }
 
-function parseTraceRequestValue(body: unknown): TraceJsonRecord | null {
-  if (isTraceRecord(body)) return body
-  if (typeof body !== 'string') return null
-  const trimmed = body.trim()
-  if (!trimmed.startsWith('{')) return null
-  try {
-    const parsed = JSON.parse(trimmed) as unknown
-    return isTraceRecord(parsed) ? parsed : null
-  } catch {
-    return null
-  }
-}
-
-function compactTraceSemanticValue(value: unknown, key = ''): unknown {
-  if (SENSITIVE_KEY_RE.test(key)) return '[redacted]'
-  if (Array.isArray(value)) return value.map(entry => compactTraceSemanticValue(entry))
-  if (!isTraceRecord(value)) {
-    return typeof value === 'string' ? redactSecretsInText(value) : value
-  }
-
-  if (value.type === 'image' && isTraceRecord(value.source)) {
-    const source = value.source
-    if (source.type === 'base64' && typeof source.data === 'string') {
-      const decoded = Buffer.from(source.data, 'base64')
-      return {
-        ...Object.fromEntries(
-          Object.entries(value)
-            .filter(([entryKey]) => entryKey !== 'source')
-            .map(([entryKey, entryValue]) => [entryKey, compactTraceSemanticValue(entryValue, entryKey)]),
-        ),
-        source: {
-          type: 'base64',
-          ...(typeof source.media_type === 'string' ? { media_type: source.media_type } : {}),
-          bytes: decoded.byteLength,
-          sha256: createHash('sha256').update(decoded).digest('hex'),
-        },
-      }
-    }
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([entryKey, entryValue]) => [
-      entryKey,
-      compactTraceSemanticValue(entryValue, entryKey),
-    ]),
-  )
+function parseTraceRequestBody(body: unknown): unknown {
+  // SDK requests arrive serialized. Bound the input parse separately from the
+  // smaller capture budget, which applies once image payloads can be elided.
+  if (typeof body !== 'string' || body.length > TRACE_REQUEST_PARSE_CHAR_LIMIT) return body
+  if (body.length > TRACE_CAPTURE_CHAR_LIMIT && !TRACE_INLINE_IMAGE_MARKER_RE.test(body)) return body
+  return parseJsonOrText(body)
 }
 
 function isTraceRecord(value: unknown): value is TraceJsonRecord {
@@ -715,6 +757,7 @@ class TraceCaptureService {
 
     const startedAt = input.startedAt ?? new Date().toISOString()
     const completedAt = input.completedAt
+    const requestBody = parseTraceRequestBody(input.request.body)
     const record: TraceCallRecord = {
       id: input.id ?? createTraceCallId(),
       sessionId: input.sessionId,
@@ -731,8 +774,10 @@ class TraceCaptureService {
         method: input.request.method ?? 'POST',
         url: sanitizeUrl(input.request.url ?? ''),
         headers: sanitizeHeaders(input.request.headers),
-        body: input.request.bodySnapshot ? boundedBodySnapshot(input.request.bodySnapshot) : createTraceBodySnapshot(input.request.body ?? null),
-        ...createRequestSemanticField(input.request.body, input.source),
+        body: input.request.bodySnapshot
+          ? boundedBodySnapshot(input.request.bodySnapshot)
+          : createTraceBodySnapshot(requestBody, { compactRequestImages: true }),
+        ...createRequestSemanticField(requestBody, input.source),
       },
       ...(input.response
         ? {
@@ -994,11 +1039,16 @@ class TraceCaptureService {
     if (!normalizedSessionId) return { sessionId: normalizedSessionId, deleted: false }
 
     const context = currentTraceScopeContext()
-    const { scope, target } = context
-    const pendingWrite = traceWriteQueues.get(`${scope}\0${normalizedSessionId}`)
+    const { target } = context
+    const filePath = getTraceFilePath(normalizedSessionId, context)
+    const pendingWrite = traceWriteQueues.get(filePath)
     if (pendingWrite) await pendingWrite.catch(() => {})
 
-    const filePath = getTraceFilePath(normalizedSessionId, context)
+    // Never delete a same-named file that is not a trace (the directory can be shared).
+    if (await fs.stat(filePath).then(() => true, () => false) && !await isTraceFile(filePath)) {
+      return { sessionId: normalizedSessionId, deleted: false }
+    }
+
     try {
       await fs.unlink(filePath)
       traceReadCache.delete(filePath)
@@ -1028,7 +1078,7 @@ class TraceCaptureService {
     const { target, storageDir } = context
     const settings = normalizeTraceCaptureSettings(
       await readManagedSettings(context.scope),
-      context.scope,
+      storageDir,
     )
     const all = options?.all === true
     const limit = all ? Number.POSITIVE_INFINITY : clampListLimit(options?.limit ?? 50)
@@ -1124,7 +1174,7 @@ class TraceCaptureService {
     const { storageDir } = context
     const settings = normalizeTraceCaptureSettings(
       await readManagedSettings(context.scope),
-      context.scope,
+      storageDir,
     )
     const files = (await listTraceFiles(storageDir))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -1503,6 +1553,7 @@ function getTraceIndex(target = currentTraceIndexTarget()): TraceIndex | null {
     const database = openTraceIndexDatabase({
       path: databasePath,
       scope: target.scope,
+      customStorage: target.customStorage,
     })
     const index = createTraceIndex(database)
     traceIndexStates.set(databasePath, { path: databasePath, database, index })
@@ -2898,18 +2949,10 @@ async function projectAppendedTraceEntry(
 
 async function appendTraceEntry(sessionId: string, entry: TraceFileEntry): Promise<void> {
   const normalizedSessionId = sanitizeTraceFileName(sessionId)
-  const scope = getClaudeConfigHomeDir()
-  const filePath = join(
-    scope,
-    'cc-haha',
-    'traces',
-    `${normalizedSessionId}.jsonl`,
-  )
-  const target: TraceIndexTarget = {
-    scope,
-    path: join(scope, 'cc-haha', 'db', 'trace-index-v1.sqlite'),
-  }
-  const queueKey = `${scope}\0${normalizedSessionId}`
+  const context = currentTraceScopeContext()
+  const filePath = getTraceFilePath(normalizedSessionId, context)
+  const { target } = context
+  const queueKey = filePath
   const previous = traceWriteQueues.get(queueKey) ?? Promise.resolve()
   const next = previous
     .catch(() => {})
@@ -2940,6 +2983,30 @@ type TraceFileSnapshot = {
   stat: Stats
 }
 
+// Every line this module writes is `{"type":"call"|"event",...}`.
+const TRACE_LINE_PREFIX = /^\{"type":"(?:call|event)"/
+
+/**
+ * Whether a `.jsonl` file is positively something other than a trace. Only a file whose head was
+ * read and does not look like a trace line is excluded; one that is empty or cannot be read (for
+ * example removed between listing and opening) stays a trace candidate so the normal read path
+ * decides what to do with it.
+ */
+async function isTraceFile(path: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    handle = await fs.open(path, 'r')
+    const head = Buffer.alloc(16)
+    const { bytesRead } = await handle.read(head, 0, head.length, 0)
+    if (bytesRead === 0) return true
+    return TRACE_LINE_PREFIX.test(head.toString('utf8', 0, bytesRead))
+  } catch {
+    return true
+  } finally {
+    await handle?.close().catch(() => {})
+  }
+}
+
 async function listTraceFiles(storageDir: string): Promise<TraceFileSnapshot[]> {
   let entries: string[] = []
   try {
@@ -2954,6 +3021,8 @@ async function listTraceFiles(storageDir: string): Promise<TraceFileSnapshot[]> 
     .map(async (name) => {
       const stat = await fs.stat(join(storageDir, name)).catch(() => null)
       if (!stat?.isFile()) return null
+      // A custom directory may be shared with other JSONL files (history.jsonl, ...).
+      if (!await isTraceFile(join(storageDir, name))) return null
       return {
         name,
         path: join(storageDir, name),
@@ -3386,19 +3455,19 @@ function getManagedSettingsPath(scope = getClaudeConfigHomeDir()): string {
 }
 
 function defaultTraceCaptureSettings(
-  scope = getClaudeConfigHomeDir(),
+  storageDir: string,
 ): TraceCaptureSettings {
   return {
     enabled: true,
-    storageDir: join(scope, 'cc-haha', 'traces'),
+    storageDir,
   }
 }
 
 function normalizeTraceCaptureSettings(
   settings: Record<string, unknown>,
-  scope = getClaudeConfigHomeDir(),
+  storageDir: string,
 ): TraceCaptureSettings {
-  const defaultSettings = defaultTraceCaptureSettings(scope)
+  const defaultSettings = defaultTraceCaptureSettings(storageDir)
   const traceCapture = settings[TRACE_SETTINGS_KEY]
   if (!traceCapture || typeof traceCapture !== 'object' || Array.isArray(traceCapture)) {
     return defaultSettings

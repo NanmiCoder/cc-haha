@@ -1,0 +1,44 @@
+# Generic example, never replace an existing site's configuration wholesale.
+# Add this zone inside nginx's http {} context once; choose a unique zone name.
+limit_req_zone $binary_remote_addr zone=cc_haha_directory:1m rate=5r/s;
+
+# Use a dedicated HTTPS virtual host, or add only these exact locations to an
+# existing HTTPS host after checking that they do not conflict with its routes.
+server {
+  listen 443 ssl;
+  server_name directory.example;
+  ssl_certificate /etc/letsencrypt/live/directory.example/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/directory.example/privkey.pem;
+
+  location = /health {
+    limit_req zone=cc_haha_directory burst=20 nodelay;
+    limit_req_status 429;
+    proxy_pass http://127.0.0.1:8788;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Cookie "";
+    proxy_set_header Authorization "";
+    proxy_read_timeout 10s;
+    access_log off;
+  }
+
+  location ^~ /v1/hosts/ {
+    limit_req zone=cc_haha_directory burst=20 nodelay;
+    limit_req_status 429;
+    client_max_body_size 4k;
+    client_body_timeout 5s;
+    limit_except GET PUT { deny all; }
+    proxy_pass http://127.0.0.1:8788;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Cookie "";
+    proxy_set_header Authorization "";
+    proxy_read_timeout 10s;
+    proxy_send_timeout 10s;
+    access_log off;
+  }
+}

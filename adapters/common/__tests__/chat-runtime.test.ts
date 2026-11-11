@@ -31,6 +31,7 @@ class FakeBridge {
   sessions = new Map<string, string>()
   handlers = new Map<string, (msg: ServerMessage) => void | Promise<void>>()
   sent: SentMessage[] = []
+  sentLeaseIds: Array<string | undefined> = []
   permissionResponses: Array<{ requestId: string; allowed: boolean; rule?: string }> = []
   stopped: string[] = []
   resets: string[] = []
@@ -69,9 +70,10 @@ class FakeBridge {
     return Promise.resolve(true)
   }
 
-  sendUserMessage(_chatId: string, content: string, attachments?: unknown[]): boolean {
+  sendUserMessage(_chatId: string, content: string, attachments?: unknown[], powerActivityLeaseId?: string): boolean {
     if (!this.sendResult) return false
     this.sent.push({ content, attachments })
+    this.sentLeaseIds.push(powerActivityLeaseId)
     return true
   }
 
@@ -87,11 +89,25 @@ class FakeBridge {
 }
 
 class FakeHttpClient {
+  acquiredLeases: string[] = []
+  releasedLeases: string[] = []
+  leaseSupported = true
+  acquireLeaseHook: (() => Promise<void>) | undefined
   sessions: SessionListItem[] = []
   createdSessions: string[] = []
   existingSessions = new Set<string>()
   projects: Array<{ projectName: string; realPath: string; branch?: string }> = []
   nextSessionId = 'session-1'
+
+  async acquirePowerActivityLease(leaseId: string): Promise<boolean> {
+    this.acquiredLeases.push(leaseId)
+    await this.acquireLeaseHook?.()
+    return this.leaseSupported
+  }
+
+  async releasePowerActivityLease(leaseId: string): Promise<void> {
+    this.releasedLeases.push(leaseId)
+  }
 
   async createSession(workDir: string): Promise<string> {
     this.createdSessions.push(workDir)
@@ -227,14 +243,65 @@ afterEach(() => {
 })
 
 describe('ImChatRuntime authorization', () => {
+  it.each(['reconnect', 'send', 'download', 'lease'])('allows redelivery of the same id after a failed %s attempt', async failure => {
+    const { runtime, bridge, httpClient, sessionStore, dedup } = createRuntime()
+    sessionStore.set(CHAT_ID, 'old-session', tmpDir)
+    httpClient.existingSessions.add('old-session')
+    let failing = true
+    bridge.isSessionOpen = () => false
+    bridge.waitForOpen = async () => !(failing && failure === 'reconnect')
+    httpClient.acquireLeaseHook = async () => {
+      if (failing && failure === 'lease') throw new Error('lease failed')
+    }
+    const loadAttachments = async () => {
+      if (failing && failure === 'download') throw new Error('download failed')
+      return []
+    }
+    bridge.sendResult = failure !== 'send'
+    const message = { dedupKey: 'retry-same-id', hasAttachments: true, loadAttachments }
+    try {
+      await inbound(runtime, 'retry me', message)
+      expect(bridge.sent).toHaveLength(0)
+      failing = false
+      bridge.sendResult = true
+      await inbound(runtime, 'retry me', message)
+      await inbound(runtime, 'retry me', message)
+      expect(bridge.sent.map(item => item.content)).toEqual(['retry me'])
+      expect(httpClient.acquiredLeases).toHaveLength(2)
+      expect(httpClient.releasedLeases).toHaveLength(failure === 'lease' ? 0 : 1)
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('suppresses concurrent redelivery while the first attempt is still pending', async () => {
+    const { runtime, bridge, httpClient, dedup } = createRuntime()
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    httpClient.acquireLeaseHook = () => pending
+    try {
+      const first = inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      await inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      expect(httpClient.acquiredLeases).toHaveLength(1)
+      release()
+      await first
+      await inbound(runtime, 'once', { dedupKey: 'concurrent' })
+      expect(bridge.sent.map(item => item.content)).toEqual(['once'])
+    } finally {
+      release()
+      dedup.destroy()
+    }
+  })
+
   it('refuses an unpaired sender and forwards nothing to the session', async () => {
     writeAdapterConfig({ wecom: { pairedUsers: [], allowedUsers: [] } })
-    const { runtime, notices, bridge } = createRuntime()
+    const { runtime, notices, bridge, httpClient } = createRuntime()
 
     await inbound(runtime, 'hello')
 
     expect(bridge.sent).toHaveLength(0)
     expect(notices[0]).toContain('未授权')
+    expect(httpClient.acquiredLeases).toEqual([])
   })
 
   it('pairs on a valid code and then forwards the next message', async () => {
@@ -265,7 +332,153 @@ describe('ImChatRuntime authorization', () => {
   })
 })
 
+describe('ImChatRuntime inbound power activity', () => {
+  async function waitFor(check: () => boolean): Promise<void> {
+    for (let attempts = 0; attempts < 100; attempts += 1) {
+      if (check()) return
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    throw new Error('Inbound fixture did not settle')
+  }
+
+  it('protects both a downloading message and a FIFO waiting message before handoff', async () => {
+    const { runtime, bridge, httpClient } = createRuntime()
+    let finishDownload!: (value: AttachmentRef[]) => void
+    let downloading = false
+    const first = inbound(runtime, 'first', {
+      hasAttachments: true,
+      loadAttachments: () => { downloading = true; return new Promise(resolve => { finishDownload = resolve }) },
+    })
+    await waitFor(() => downloading)
+    const second = inbound(runtime, 'second')
+    try {
+      await waitFor(() => httpClient.acquiredLeases.length === 2)
+      expect(httpClient.releasedLeases).toEqual([])
+      expect(bridge.sent).toEqual([])
+    } finally {
+      finishDownload([])
+      await Promise.all([first, second])
+    }
+    expect(bridge.sent.map(message => message.content)).toEqual(['first', 'second'])
+    expect(bridge.sentLeaseIds).toEqual(httpClient.acquiredLeases)
+    expect(new Set(bridge.sentLeaseIds).size).toBe(2)
+    expect(httpClient.releasedLeases).toEqual([])
+  })
+
+  it('preserves FIFO even if the second lease response arrives first', async () => {
+    const { runtime, bridge, httpClient } = createRuntime()
+    let releaseFirst!: () => void
+    let calls = 0
+    httpClient.acquireLeaseHook = async () => {
+      if (++calls === 1) await new Promise<void>(resolve => { releaseFirst = resolve })
+    }
+    const first = inbound(runtime, 'first')
+    const second = inbound(runtime, 'second')
+    await waitFor(() => calls === 2)
+    expect(bridge.sent).toEqual([])
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(bridge.sent.map(message => message.content)).toEqual(['first', 'second'])
+  })
+
+  it.each(['command', 'send failure', 'download failure'])('releases a lease on %s without a server handoff', async outcome => {
+    const { runtime, bridge, httpClient } = createRuntime()
+    if (outcome === 'send failure') bridge.sendResult = false
+    await inbound(runtime, outcome === 'command' ? '/help' : 'hello', outcome === 'download failure' ? {
+      hasAttachments: true, loadAttachments: async () => { throw new Error('fixture download failed') },
+    } : {})
+    expect(httpClient.acquiredLeases).toHaveLength(1)
+    expect(httpClient.releasedLeases).toEqual(httpClient.acquiredLeases)
+    expect(bridge.sent).toEqual([])
+  })
+
+  it('transfers the /clear lease through its WebSocket command', async () => {
+    const { runtime, bridge, httpClient } = createRuntime()
+    await inbound(runtime, 'hello')
+    await inbound(runtime, '/clear')
+    expect(bridge.sentLeaseIds).toEqual(httpClient.acquiredLeases)
+    expect(httpClient.releasedLeases).toEqual([])
+  })
+
+  it('keeps older 404 servers compatible without sending an unknown lease id', async () => {
+    const { runtime, bridge, httpClient } = createRuntime()
+    httpClient.leaseSupported = false
+    await inbound(runtime, 'hello')
+    expect(bridge.sent.map(message => message.content)).toEqual(['hello'])
+    expect(bridge.sentLeaseIds).toEqual([undefined])
+    expect(httpClient.releasedLeases).toEqual([])
+  })
+
+  it('refuses unprotected admission after a lease error without fetching attachments', async () => {
+    const { runtime, bridge, httpClient, notices } = createRuntime()
+    httpClient.acquireLeaseHook = async () => { throw new Error('activity lease unavailable') }
+    let downloaded = false
+    await inbound(runtime, 'hello', {
+      hasAttachments: true, loadAttachments: async () => { downloaded = true; return [] },
+    })
+    expect(downloaded).toBe(false)
+    expect(bridge.sent).toEqual([])
+    expect(httpClient.createdSessions).toEqual([])
+    expect(notices.join('\n')).toContain('activity lease unavailable')
+    expect(httpClient.releasedLeases).toEqual([])
+  })
+})
+
 describe('ImChatRuntime session lifecycle', () => {
+  it.each(['/status', '/stop', '/clear'])('retries the same %s message id after the connection recovers', async command => {
+    const { runtime, bridge, httpClient, sessionStore, notices, dedup } = createRuntime()
+    sessionStore.set(CHAT_ID, 'old-session', tmpDir)
+    httpClient.existingSessions.add('old-session')
+    let online = false
+    bridge.isSessionOpen = () => online
+    bridge.waitForOpen = async () => online
+    try {
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      expect(notices[0]).toContain('重试')
+      online = true
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      await inbound(runtime, command, { dedupKey: 'command-retry' })
+      expect(notices).toHaveLength(2)
+      if (command === '/stop') expect(bridge.stopped).toEqual([CHAT_ID])
+      if (command === '/clear') expect(bridge.sent.map(item => item.content)).toEqual(['/clear'])
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('retains dedup after /clear was sent even if the confirmation notice fails', async () => {
+    const { runtime, bridge, port, dedup } = createRuntime()
+    try {
+      await inbound(runtime, 'hello')
+      port.sendNotice = async () => { throw new Error('notice unavailable') }
+      await inbound(runtime, '/clear', { dedupKey: 'clear-once' })
+      await inbound(runtime, '/clear', { dedupKey: 'clear-once' })
+      expect(bridge.sent.map(item => item.content)).toEqual(['hello', '/clear'])
+    } finally {
+      dedup.destroy()
+    }
+  })
+
+  it('retries the same permission reply id after a rejected socket send', async () => {
+    const { runtime, bridge, dedup } = createRuntime()
+    try {
+      await runtime.handleServerMessage(CHAT_ID, {
+        type: 'permission_request', requestId: 'retry-permission', toolName: 'Bash', input: {},
+      })
+      const send = bridge.sendPermissionResponse.bind(bridge)
+      bridge.sendPermissionResponse = () => false
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      expect(bridge.permissionResponses).toHaveLength(0)
+      bridge.sendPermissionResponse = send
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      await inbound(runtime, '1', { dedupKey: 'permission-retry' })
+      expect(bridge.permissionResponses).toEqual([{ requestId: 'retry-permission', allowed: true, rule: undefined }])
+      expect(bridge.sent).toHaveLength(0)
+    } finally {
+      dedup.destroy()
+    }
+  })
+
   it.each(['/status', '/stop', '/clear'])('reports a retryable disconnect for %s without changing the binding', async (command) => {
     const { runtime, bridge, httpClient, sessionStore, notices } = createRuntime()
     sessionStore.set(CHAT_ID, 'old-session', path.join(tmpDir, 'original-project'))
@@ -422,6 +635,36 @@ describe('ImChatRuntime server stream', () => {
     expect(notices.join('\n')).toContain('req-1')
   })
 
+  it('asks once when the server re-announces the same request with a new auto-answer deadline', async () => {
+    const { runtime, notices } = createRuntime()
+    const request = { type: 'permission_request' as const, requestId: 'ask-1', toolName: 'AskUserQuestion', input: { questions: [] } }
+
+    await runtime.handleServerMessage(CHAT_ID, request)
+    await runtime.handleServerMessage(CHAT_ID, { ...request, autoAnswerDeadline: Date.now() + 60_000 })
+
+    expect(notices.filter(notice => notice.includes('ask-1'))).toHaveLength(1)
+  })
+
+  it('retries an undelivered approval after a reconnect snapshot without inflating pending count', async () => {
+    const { runtime, port, notices, dedup } = createRuntime()
+    const request = { type: 'permission_request', requestId: 'retry-prompt', toolName: 'Bash', input: {} }
+    const send = port.sendNotice
+    let failing = true
+    port.sendNotice = async (chatId, text) => {
+      if (failing) throw new Error('platform offline')
+      await send(chatId, text)
+    }
+    try {
+      await expect(runtime.handleServerMessage(CHAT_ID, request)).rejects.toThrow('platform offline')
+      await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
+      failing = false
+      await runtime.handleServerMessage(CHAT_ID, request)
+      await runtime.handleServerMessage(CHAT_ID, request)
+      expect(notices.filter(text => text.includes(request.requestId))).toHaveLength(1)
+      expect(runtime.getRuntimeState(CHAT_ID).pendingPermissionCount).toBe(1)
+    } finally { dedup.destroy() }
+  })
+
   it('routes a numeric reply to the single pending permission request', async () => {
     const { runtime, bridge } = createRuntime()
 
@@ -516,8 +759,12 @@ describe('ImChatRuntime server stream', () => {
       text: `![inside](${insidePath}) ![outside](/etc/hosts)`,
     })
     await runtime.handleServerMessage(CHAT_ID, { type: 'message_complete' })
-    // The upload is dispatched without blocking the stream.
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The upload is dispatched without blocking the stream. Wait for its
+    // observable result rather than depending on a 20 ms filesystem deadline.
+    const uploadDeadline = Date.now() + 2000
+    while (images.length === 0 && Date.now() < uploadDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
 
     expect(images).toEqual([{ mime: 'image/png', alt: 'inside' }])
   })

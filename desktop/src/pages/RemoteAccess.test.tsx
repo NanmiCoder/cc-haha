@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { RemoteAccessGate } from './RemoteAccess'
@@ -30,6 +30,89 @@ it('unmounts private content when focus detects revoked authentication', async (
   fireEvent.focus(window)
   await waitFor(() => expect(screen.queryByText('Private conversations')).not.toBeInTheDocument())
   expect(screen.getByText(/Open a new pairing QR/)).toBeInTheDocument()
+})
+it('recovers an unpaired screen when the native host refreshes its cookie and resumes', async () => {
+  history.replaceState(null, '', '/remote')
+  vi.mocked(remoteAccessApi.session).mockResolvedValueOnce({ authenticated: false }).mockResolvedValue({ authenticated: true })
+  const view = render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  await screen.findByText(/Open a new pairing QR/)
+  fireEvent(window, new Event('cc-haha:resume'))
+  await screen.findByText('Private conversations')
+  expect(remoteAccessApi.session).toHaveBeenCalledTimes(2)
+  expect(remoteAccessApi.pair).not.toHaveBeenCalled()
+  expect(remoteAccessApi.claim).not.toHaveBeenCalled()
+  view.unmount()
+  fireEvent(window, new Event('cc-haha:resume'))
+  expect(remoteAccessApi.session).toHaveBeenCalledTimes(2)
+})
+it('keeps the chat mounted through healthy or transient native resume checks and removes it after revocation', async () => {
+  vi.mocked(remoteAccessApi.session).mockResolvedValueOnce({ authenticated: true })
+    .mockResolvedValueOnce({ authenticated: true })
+    .mockRejectedValueOnce(new TypeError('Network offline'))
+    .mockResolvedValueOnce({ authenticated: false })
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  const chat = await screen.findByText('Private conversations')
+  await act(async () => { fireEvent(window, new Event('cc-haha:resume')) })
+  expect(screen.getByText('Private conversations')).toBe(chat)
+  await act(async () => { fireEvent(window, new Event('cc-haha:resume')) })
+  expect(screen.getByText('Private conversations')).toBe(chat)
+  fireEvent(window, new Event('cc-haha:resume'))
+  await screen.findByText(/Open a new pairing QR/)
+  expect(screen.queryByText('Private conversations')).not.toBeInTheDocument()
+})
+it('does not let an older initial auth result undo a native cookie refresh', async () => {
+  let finishInitial!: (result: { authenticated: boolean }) => void
+  vi.mocked(remoteAccessApi.session)
+    .mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve }))
+    .mockResolvedValue({ authenticated: true })
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  fireEvent(window, new Event('cc-haha:resume'))
+  await screen.findByText('Private conversations')
+  await act(async () => { finishInitial({ authenticated: false }) })
+  expect(screen.getByText('Private conversations')).toBeInTheDocument()
+})
+it('keeps the same chat while a fresh native check is pending after an older focus check returns false', async () => {
+  let finishFocus!: (result: { authenticated: boolean }) => void
+  let finishResume!: (result: { authenticated: boolean }) => void
+  vi.mocked(remoteAccessApi.session).mockResolvedValueOnce({ authenticated: true })
+    .mockImplementationOnce(() => new Promise(resolve => { finishFocus = resolve }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishResume = resolve }))
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  const chat = await screen.findByText('Private conversations')
+  fireEvent.focus(window)
+  fireEvent(window, new Event('cc-haha:resume'))
+  await act(async () => { finishFocus({ authenticated: false }) })
+  expect(screen.getByText('Private conversations')).toBe(chat)
+  await act(async () => { finishResume({ authenticated: true }) })
+  expect(screen.getByText('Private conversations')).toBe(chat)
+})
+it('ignores an older initial error while the refreshed native cookie check is pending', async () => {
+  let failInitial!: (error: Error) => void
+  let finishResume!: (result: { authenticated: boolean }) => void
+  vi.mocked(remoteAccessApi.session)
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { failInitial = reject }))
+    .mockImplementationOnce(() => new Promise(resolve => { finishResume = resolve }))
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  fireEvent(window, new Event('cc-haha:resume'))
+  await act(async () => { failInitial(new TypeError('Old cookie request failed')) })
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+  await act(async () => { finishResume({ authenticated: true }) })
+  expect(screen.getByText('Private conversations')).toBeInTheDocument()
+})
+it('offers retry if native resume supersedes the initial check but then fails', async () => {
+  let finishInitial!: (result: { authenticated: boolean }) => void
+  vi.mocked(remoteAccessApi.session)
+    .mockImplementationOnce(() => new Promise(resolve => { finishInitial = resolve }))
+    .mockRejectedValueOnce(new TypeError('Native resume temporarily offline'))
+    .mockResolvedValue({ authenticated: true })
+  render(<RemoteAccessGate><div>Private conversations</div></RemoteAccessGate>)
+  fireEvent(window, new Event('cc-haha:resume'))
+  const retry = await screen.findByRole('button', { name: 'Retry' })
+  await act(async () => { finishInitial({ authenticated: false }) })
+  expect(screen.getByRole('button', { name: 'Retry' })).toBe(retry)
+  fireEvent.click(retry)
+  await screen.findByText('Private conversations')
 })
 it('reuses a paired browser cookie when a camera opens an expired or fresh QR again', async () => {
   vi.mocked(remoteAccessApi.session).mockResolvedValue({ authenticated: true })

@@ -10,7 +10,6 @@ import { Bot, InlineKeyboard, type Context } from 'grammy'
 import * as path from 'node:path'
 import { WsBridge, type ServerMessage } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
-import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
 import {
   formatImStatus,
@@ -31,7 +30,7 @@ import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
 import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
 import { SessionSelectionController } from '../common/session-selection.js'
-import { syncImPermissionState } from '../common/permission-sync.js'
+import { deliverImPermissionPrompt, syncImPermissionState } from '../common/permission-sync.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { TelegramMediaService } from './media.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
@@ -57,7 +56,13 @@ const bridge = new WsBridge(config.serverUrl, 'tg')
 const streamDelivery = new TelegramStreamDelivery(bot.api)
 const dedup = new MessageDedup()
 const sessionStore = new SessionStore()
-const { httpClient, defaultWorkDir } = createAdapterClient(config, config.telegram)
+const { httpClient, defaultWorkDir, enqueue } = createAdapterClient(config, config.telegram)
+bot.use((ctx, next) => {
+  if (!ctx.from || ctx.chat?.type !== 'private' || !isAllowedUser('telegram', ctx.from.id)) return next()
+  const identity = ctx.callbackQuery?.id ? `callback:${ctx.callbackQuery.id}` : `message:${ctx.chat.id}:${ctx.message?.message_id}`
+  if (!dedup.tryRecord(`telegram:power:${identity}`)) return Promise.resolve()
+  return enqueue(String(ctx.chat.id), async () => { await next() })
+})
 const attachmentStore = new AttachmentStore()
 const media = new TelegramMediaService(bot, attachmentStore)
 
@@ -373,18 +378,15 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       break
 
     case 'permission_request': {
-      runtime.pendingPermissionCount += 1
-      runtime.state = 'permission_pending'
-      const pending = pendingPermissions.get(chatId) ?? new Set<string>()
-      pending.add(msg.requestId)
-      pendingPermissions.set(chatId, pending)
-      const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
-      const keyboard = new InlineKeyboard()
-        .text('✅ 允许', `permit:${msg.requestId}:yes`)
-        .text('♾️ 永久允许', `permit:${msg.requestId}:always`)
-        .row()
-        .text('❌ 拒绝', `permit:${msg.requestId}:no`)
-      await bot.api.sendMessage(numericChatId, text, { reply_markup: keyboard })
+      await deliverImPermissionPrompt(chatId, msg.requestId, runtime, pendingPermissions, async () => {
+        const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
+        const keyboard = new InlineKeyboard()
+          .text('✅ 允许', `permit:${msg.requestId}:yes`)
+          .text('♾️ 永久允许', `permit:${msg.requestId}:always`)
+          .row()
+          .text('❌ 拒绝', `permit:${msg.requestId}:no`)
+        await bot.api.sendMessage(numericChatId, text, { reply_markup: keyboard })
+      })
       break
     }
 
@@ -493,7 +495,7 @@ const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', u
 
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void adapterMigrationLifecycle.track((async () => {
+  return adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -511,7 +513,7 @@ registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async
 
 registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void adapterMigrationLifecycle.track((async () => {
+  return adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -541,6 +543,7 @@ async function routeUserMessage(
   ctx: Context,
   text: string,
   attachments: AttachmentRef[],
+  loadAttachments?: () => Promise<AttachmentRef[]>,
 ): Promise<void> {
   if (!ctx.from || ctx.chat?.type !== 'private') return
   const chatId = String(ctx.chat.id)
@@ -564,6 +567,7 @@ async function routeUserMessage(
     ctx.message?.photo || ctx.message?.document || ctx.message?.video || ctx.message?.audio || ctx.message?.voice,
   )
   await enqueue(chatId, async () => {
+    if (loadAttachments) attachments = await loadAttachments()
     const permissionDecision = !hasAttachments
       ? parsePermissionCommand(text, pendingPermissions.get(chatId))
       : null
@@ -675,17 +679,20 @@ bot.on(
   ['message:photo', 'message:document', 'message:video', 'message:audio', 'message:voice'],
   async (ctx) => {
     const caption = ctx.message.caption ?? ''
-    const { attachments, rejections } = await collectAttachmentsFromCtx(ctx)
-    for (const r of rejections) {
-      await ctx.reply(r).catch(() => {})
-    }
-    if (attachments.length === 0 && !caption.trim()) return
-    await routeUserMessage(ctx, caption, attachments)
+    await routeUserMessage(ctx, caption, [], async () => {
+      const { attachments, rejections } = await collectAttachmentsFromCtx(ctx)
+      for (const rejection of rejections) await ctx.reply(rejection).catch(() => {})
+      return attachments
+    })
   },
 )
 
 bot.on('callback_query:data', async (ctx) => {
   if (!ctx.from || ctx.chat?.type !== 'private') return
+  if (!isAllowedUser('telegram', ctx.from.id)) {
+    await ctx.answerCallbackQuery('未授权')
+    return
+  }
   if (!dedup.tryRecord(`telegram:callback:${ctx.callbackQuery.id}`)) return
   const data = ctx.callbackQuery.data
   await enqueue(String(ctx.chat.id), async () => {

@@ -41,11 +41,16 @@ type ProviderStore = {
   /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
   deepSeekAccountModels: ModelMapping
   hasLoadedProviders: boolean
+  /** Memory-only snapshot shared by the new-chat and active-chat pickers. */
+  builtInProviderAvailability: Record<string, boolean>
+  providerAvailabilityLoading: boolean
+  providerAvailabilityError: string | null
   presets: ProviderPreset[]
   isLoading: boolean
   error: string | null
 
   fetchProviders: () => Promise<void>
+  fetchProviderAvailability: () => Promise<void>
   createProvider: (input: CreateProviderInput) => Promise<SavedProvider>
   updateProvider: (id: string, input: UpdateProviderInput) => Promise<SavedProvider>
   deleteProvider: (id: string) => Promise<void>
@@ -185,6 +190,9 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   activeId: null,
   deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
   hasLoadedProviders: false,
+  builtInProviderAvailability: {},
+  providerAvailabilityLoading: false,
+  providerAvailabilityError: null,
   presets: BUNDLED_PROVIDER_PRESETS,
   isLoading: false,
   error: null,
@@ -193,13 +201,18 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const firstLoad = !get().hasLoadedProviders
-      const { providers, activeId, providerOrder, deepSeekAccountModels } = await providersApi.list()
+      const { providers, activeId, providerOrder, deepSeekAccountModels, builtInProviderAvailability } = await providersApi.list()
+      const snapshot = Object.fromEntries(BUILT_IN_PROVIDER_IDS.flatMap(id =>
+        typeof builtInProviderAvailability?.[id] === 'boolean' ? [[id, builtInProviderAvailability[id]]] : [],
+      ))
       set({
         providers,
         providerOrder: normalizeProviderOrder(providerOrder, providers),
         activeId,
         ...(deepSeekAccountModels && { deepSeekAccountModels }),
         hasLoadedProviders: true,
+        builtInProviderAvailability: { ...get().builtInProviderAvailability, ...snapshot },
+        providerAvailabilityError: null,
         isLoading: false,
       })
       if (firstLoad) {
@@ -213,6 +226,30 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     }
   },
 
+  fetchProviderAvailability: async () => {
+    if (get().providerAvailabilityLoading) return
+    const missing = BUILT_IN_PROVIDER_IDS.filter(id => typeof get().builtInProviderAvailability[id] !== 'boolean')
+    if (missing.length === 0) return
+    set({ providerAvailabilityLoading: true, providerAvailabilityError: null })
+    // Older servers omit the list snapshot. Keep their existing redacted API
+    // fallback shared and deduplicated; one slow account cannot hide another.
+    const results = await Promise.allSettled(missing.map(async id => {
+      const status = await providersApi.authStatus(id)
+      if (typeof status?.hasAuth !== 'boolean') throw new Error('Invalid provider availability response')
+      set(state => typeof state.builtInProviderAvailability[id] === 'boolean' ? {} : {
+        builtInProviderAvailability: { ...state.builtInProviderAvailability, [id]: status.hasAuth },
+      })
+    }))
+    const failure = results.find(result => result.status === 'rejected')
+    const unresolved = BUILT_IN_PROVIDER_IDS.some(id => typeof get().builtInProviderAvailability[id] !== 'boolean')
+    set({
+      providerAvailabilityLoading: false,
+      providerAvailabilityError: unresolved && failure?.status === 'rejected'
+        ? failure.reason instanceof Error ? failure.reason.message : String(failure.reason)
+        : null,
+    })
+  },
+
   createProvider: async (input) => {
     const { provider } = await providersApi.create(input)
     await get().fetchProviders()
@@ -220,12 +257,13 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   },
 
   updateProvider: async (id, input) => {
+    const previousMainModelId = get().providers.find((provider) => provider.id === id)?.models.main.trim()
     const { provider } = await providersApi.update(id, input)
     await get().fetchProviders()
     const activeId = get().activeId
     if (activeId === provider.id && input.models !== undefined) {
       const mainModelId = provider.models.main.trim()
-      if (mainModelId) {
+      if (mainModelId && previousMainModelId !== undefined && mainModelId !== previousMainModelId) {
         const settings = useSettingsStore.getState()
         await settings.setModel(mainModelId)
         await settings.fetchAll()

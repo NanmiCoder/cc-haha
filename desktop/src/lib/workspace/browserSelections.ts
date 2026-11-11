@@ -55,9 +55,11 @@ export function handleBrowserSelectionEvent(sessionId: string, browserTabId: str
     type: 'image' as const, name: selection.displayName, mimeType: 'image/png',
     data: payload.screenshot.dataUrl, note: selection.note, quote: payload.element.selector,
   }] : []
-  void useChatStore.getState().sendMessage(sessionId, selection.modelText, attachments, {
+  const store = useChatStore.getState()
+  const sent = store.sendMessage(sessionId, selection.modelText, attachments, {
     displayContent: selection.displayName, displayAttachments: attachments, hideDisplayContent: attachments.length > 0,
   })
+  if (!sent) store.queueComposerPrefill(sessionId, { text: selection.modelText, attachments, mode: 'append' })
 }
 
 export async function discardBrowserSelections(browserTabId: string): Promise<void> {
@@ -88,9 +90,10 @@ export async function sendBrowserSelections(sessionId: string, browserTabId: str
       const item = batch.items[index]!
       return data ? [{ type: 'image' as const, name: item.displayName, mimeType: 'image/png', data, note: item.note, quote: item.selector, selectionNumber: entry.number }] : []
     })
-    void useChatStore.getState().sendMessage(sessionId, batch.modelText, attachments, {
+    const sent = useChatStore.getState().sendMessage(sessionId, batch.modelText, attachments, {
       displayContent: t('browser.selection.batchMessage', { count: draft.items.length }), displayAttachments: attachments,
     })
+    if (!sent) return
     try {
       await workspaceBrowserHost.message(browserTabId, { v: 1, type: 'commit-selection-draft' })
     } finally {

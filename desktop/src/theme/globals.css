@@ -769,9 +769,11 @@
   /* Tab strip. Trough stays --cc-s0, so these two carry the shape. */
   --cc-tab-edge: #D7D5D1;
   --cc-tab-sep: #E6E4E1;
-  --cc-t1: #1F1E1C;
-  --cc-t2: #55524D;
-  --cc-t3: #6F6B65;
+  /* Reading tiers keep the warm neutral hue while leaving small descriptions
+     enough contrast on hover and raised control fills as well as the page. */
+  --cc-t1: #1A1917;
+  --cc-t2: #494640;
+  --cc-t3: #625E58;
 
   --cc-ac: #A24A2E;
   --cc-ac2: #8C3F26;
@@ -830,8 +832,8 @@
 
   --cc-bg-rgb: 255, 255, 255;
   --cc-s1-rgb: 241, 240, 238;
-  --cc-t1-rgb: 31, 30, 28;
-  --cc-t2-rgb: 85, 82, 77;
+  --cc-t1-rgb: 26, 25, 23;
+  --cc-t2-rgb: 73, 70, 64;
   --cc-bd2-rgb: 217, 215, 211;
   --cc-ac-rgb: 162, 74, 46;
   --cc-er-rgb: 196, 43, 60;
@@ -1107,9 +1109,11 @@
      that pure black is only 1.26:1 against it, so there is no room downward. */
   --cc-tab-edge: #353024;
   --cc-tab-sep: #2D281F;
-  --cc-t1: #EDE6D6;
-  --cc-t2: #A79B83;
-  --cc-t3: #918777;
+  /* Lift all reading tiers, including the small descriptions that previously
+     fell below 4.5:1 on the raised hover/dialog ground. */
+  --cc-t1: #F2EEE6;
+  --cc-t2: #C4BBA9;
+  --cc-t3: #AAA08E;
 
   --cc-ac: #D07B52;
   --cc-ac2: #DE8F66;
@@ -1168,8 +1172,8 @@
 
   --cc-bg-rgb: 32, 29, 23;
   --cc-s1-rgb: 43, 39, 31;
-  --cc-t1-rgb: 237, 230, 214;
-  --cc-t2-rgb: 167, 155, 131;
+  --cc-t1-rgb: 242, 238, 230;
+  --cc-t2-rgb: 196, 187, 169;
   --cc-bd2-rgb: 76, 68, 51;
   --cc-ac-rgb: 208, 123, 82;
   --cc-er-rgb: 224, 107, 82;
@@ -1560,6 +1564,10 @@
   --color-media-selection: #4C4433;
   --color-media-cursor: #D07B52;
   --color-media-danger: #E06B52;
+  --color-lightbox-scrim: rgba(0, 0, 0, 0.82);
+  --color-lightbox-control-bg: #FAFAFA;
+  --color-lightbox-control-fg: #242628;
+  --color-lightbox-control-hover: #E6E7E8;
 
   /* Find-in-page highlights. These paint over arbitrary page content, not
      over a brand-soft panel, so they get their own pair instead of borrowing
@@ -1679,34 +1687,56 @@ code, kbd, pre, samp, .font-mono {
   color: var(--color-selection-fg);
 }
 
-/* Desktop drag region */
+/* Desktop drag region
+
+   Chromium reports one rectangle for every box whose app-region is drag or
+   no-drag, in document order, and Electron lets the later rectangle win.
+   Nothing clips them: not overflow, not opacity, not inert, not
+   pointer-events. A control in a scrolled transcript or settings page, or in
+   a session panel kept mounted at opacity 0 behind Settings, still sits
+   under the 52px titlebar, and ContentRouter renders after TabBar — so a
+   page-wide no-drag on every button punched holes in the empty tab strip
+   wherever the content underneath happened to have one (electron/electron
+   #52063 reports the same on 42).
+
+   No-drag therefore exists only where it has a drag region to carve: on
+   controls inside one, and on overlays portalled above the whole window. */
 [data-desktop-drag-region] {
   app-region: drag;
   -webkit-app-region: drag;
 }
-button, input, textarea, select, a, [role="button"] {
+[data-desktop-drag-region] :is(button, input, textarea, select, a, [role="button"], [draggable="true"]),
+[data-desktop-drag-region] .tab-bar-interactive,
+[data-desktop-drag-region] .tab-bar-interactive * {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
-[draggable="true"] {
+/* A portalled menu, dialog or popover can open over the titlebar; it owns the
+   pixels it covers. Tooltips are click-through, so they keep none. Its own box
+   is the rectangle: from Electron 44 (Chromium 152) app-region inherits, and a
+   list scrolled inside the overlay would otherwise report its hidden rows. */
+body > :not(#root, [role="tooltip"]) {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
-.tab-bar-interactive,
-.tab-bar-interactive * {
-  app-region: no-drag;
-  -webkit-app-region: no-drag;
-}
-
-/* Scrolled-out tabs must not subtract native drag regions from the sidebar.
-   Reset every descendant, including buttons covered by the global rules.
-   The stationary sibling below supplies the visible no-drag rectangle. */
-.tab-strip-scroll .tab-bar-interactive,
-.tab-strip-scroll .tab-bar-interactive * {
+body > :not(#root, [role="tooltip"]) * {
   app-region: initial;
   -webkit-app-region: initial;
 }
-.tab-strip-hit-region {
+/* Scrolled-out tabs must not subtract native drag regions from the sidebar or
+   the strip beside them. Reset every descendant, including the buttons the
+   drag-region rule above covers, and let one box that does not scroll carry
+   the visible no-drag rectangle: a stationary sibling for the session strip,
+   whose scroller also spans the empty drag space, and the scroller itself for
+   a content-sized tab list. */
+.tab-strip-scroll .tab-bar-interactive,
+.tab-strip-scroll .tab-bar-interactive *,
+[data-desktop-drag-region] .tab-strip-viewport * {
+  app-region: initial;
+  -webkit-app-region: initial;
+}
+.tab-strip-hit-region,
+[data-desktop-drag-region] .tab-strip-viewport {
   app-region: no-drag;
   -webkit-app-region: no-drag;
 }
@@ -1856,6 +1886,19 @@ button, input, textarea, select, a, [role="button"] {
   float: left;
   height: 0;
   pointer-events: none;
+}
+
+/* Predicted next prompt (MentionComposer ghost widget). Placeholder color, and
+   click-through so a click still lands the caret in the empty line. */
+.composer-prompt-suggestion {
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  user-select: none;
+}
+
+.composer-prompt-suggestion-key {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 /* Inline @-mention pill (an atom node in the document). */
@@ -2455,6 +2498,11 @@ body.sidebar-resizing * {
 .animate-overlay-in-top { animation: overlay-in-from-top 150ms ease-out; }
 .animate-overlay-in-bottom { animation: overlay-in-from-bottom 150ms ease-out; }
 .animate-overlay-in-right { animation: overlay-in-from-right 200ms cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes mobile-drawer-enter {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+.animate-mobile-drawer { animation: mobile-drawer-enter 180ms cubic-bezier(0.22, 1, 0.36, 1); }
 /* A full-height sheet rising from the bottom edge (the phone's new task). */
 @keyframes sheet-rise {
   from { transform: translateY(100%); }
@@ -2463,6 +2511,7 @@ body.sidebar-resizing * {
 .animate-sheet-rise { animation: sheet-rise 280ms cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-mobile-drawer,
   .animate-sheet-rise,
   .animate-overlay-in,
   .animate-overlay-in-top,

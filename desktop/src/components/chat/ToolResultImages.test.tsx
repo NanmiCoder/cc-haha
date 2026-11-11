@@ -5,12 +5,13 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ToolResultImage } from '@/lib/toolResultContent'
+import type { GalleryImage } from '@/components/chat/conversationImageGallery'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { ToolResultImages } from './ToolResultImages'
 
 type GalleryProps = {
   open: boolean
-  images: Array<{ src: string; name: string; path?: string }>
+  images: GalleryImage[]
   activeIndex: number
   onClose: () => void
   onSelect: (index: number) => void
@@ -324,8 +325,8 @@ describe('ToolResultImages · lightbox', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open image 1 of 2' }))
 
       expect(lightbox.latest?.images).toEqual([
-        { src: 'blob:test-1', name, path: originalPath },
-        { src: 'blob:test-2', name, path: originalPath },
+        { src: 'blob:test-1', name, path: originalPath, inline: FIRST },
+        { src: 'blob:test-2', name, path: originalPath, inline: SECOND },
       ])
       expect(screen.getByRole('dialog', { name })).toBeInTheDocument()
     })
@@ -335,7 +336,7 @@ describe('ToolResultImages · lightbox', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Open image 1 of 1' }))
 
-      expect(lightbox.latest?.images).toEqual([{ src: 'blob:test-1', name: 'pic.png' }])
+      expect(lightbox.latest?.images).toEqual([{ src: 'blob:test-1', name: 'pic.png', inline: FIRST }])
       expect(lightbox.latest?.images[0]).not.toHaveProperty('path')
     })
 
@@ -344,7 +345,7 @@ describe('ToolResultImages · lightbox', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Open image 1 of 1' }))
 
-      expect(lightbox.latest?.images).toEqual([{ src: 'blob:test-1', name: 'Image 1 of 1' }])
+      expect(lightbox.latest?.images).toEqual([{ src: 'blob:test-1', name: 'Image 1 of 1', inline: FIRST }])
       expect(lightbox.latest?.images[0]).not.toHaveProperty('path')
     })
   })

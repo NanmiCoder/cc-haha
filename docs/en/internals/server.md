@@ -34,6 +34,20 @@ Response shape:
 
 `/health` is an always-public startup probe. A successful response does not prove that another endpoint is authenticated.
 
+## Startup order
+
+`Bun.serve` binds the port before local index startup begins:
+
+1. The port is bound; from here the operating system accepts TCP connections.
+2. In the same synchronous call, background index startup begins. The session projection opens SQLite and reads `source_files` before its first `await`; the full-text backfill follows later.
+3. `/health` is answered once that synchronous part returns to the event loop. It does not wait for discovery, projection, or backfill; the file watchers that follow open 25 project directories at a time and yield in between. REST requests that need the index await `localIndexCoordinator.start()` inside `fetch`.
+
+Before any of this, `startServer` logs `[Server] modules loaded <ms> ms after process start; binding <host>:<port>`. In the desktop sidecar, the time between `[claude-sidecar] starting server mode` and that line is module loading; whatever follows until `[Server] Claude Code API server running` is startup work.
+
+Binding first does not make `/health` answer sooner, because HTTP still waits for the synchronous part. What it changes is what the host can see: with the old order the port stayed unbound for the whole synchronous pass, which looked like a dead process. Now an open port with a silent `/health` reads as "alive but busy", and the desktop host words its timeout accordingly.
+
+Index rebuilds are resumable: every transcript commits its own transaction, so work already committed survives a restart. The first launch after a parser version bump (for example v12 → v13) re-projects every transcript, which scales with transcript volume. The first full sweep after startup logs `[local-index]` phase lines: `opening`, `opened`, `ready to reconcile`, `rebuilding <n> sources`, `discovery start`, `reprojected <n> sources (<checked>/<known> checked)` at most every 5 s, `discovery complete`, and `activity backfill start/complete`. Progress counts only files that were actually re-read. The periodic safety sweeps that follow stay silent unless they re-read files, and then log a single `discovery complete` line. The lines go to stdout, which the desktop host keeps in its diagnostics log and in the `Recent server logs` section of the startup-failure dialog.
+
 ## Startup options
 
 | Option | Environment variable | Default | Description |
@@ -56,6 +70,8 @@ cd ..
 bun run src/server/index.ts
 ```
 
+`bun run build` ends by exporting the phone app (`mobile/`) as a web app into `desktop/dist/m`, so run `bun install` in `mobile/` first. Phone and tablet browsers move to `/m/` once the desktop H5 entry has verified the token or finished remote pairing; the server answers reloads under `/m/*` with `dist/m/index.html`. Without a `dist/m` build, pages under `/m/*` redirect back to `/` and the entry keeps the desktop app's own phone layout.
+
 The server automatically finds `desktop/dist` in the repository. When starting from another directory, provide the absolute build path:
 
 ```bash
@@ -69,7 +85,7 @@ CLAUDE_H5_DIST_DIR=/absolute/path/to/desktop/dist \
 | `CLAUDE_H5_PUBLIC_BASE_URL` | Fixed public server URL |
 | `CLAUDE_H5_AUTO_PUBLIC_URL=1` | Try to derive a LAN URL while H5 access is enabled |
 
-Configure the H5 token and exact allowed browser origins in **Settings → H5 Access**. Treat the token like an API key and regenerate it to revoke existing browser access.
+Configure the H5 token and exact allowed browser origins in **Settings → Phone connection → Same Wi-Fi**. Treat the token like an API key and regenerate it to revoke existing browser access.
 
 ## Access control
 

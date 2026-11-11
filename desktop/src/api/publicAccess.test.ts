@@ -20,3 +20,9 @@ it('routes local device approval through authenticated local API', async () => {
   await publicAccessApi.approve('phone')
   expect(post).toHaveBeenCalledWith('/api/public-access/approve', { id: 'phone' })
 })
+it('bounds local device-list requests and lets the settings panel cancel superseded polls', async () => {
+  const get = vi.spyOn(api, 'get').mockResolvedValue({})
+  const controller = new AbortController()
+  await publicAccessApi.get(controller.signal)
+  expect(get).toHaveBeenCalledWith('/api/public-access', { timeout: 3000, signal: controller.signal })
+})

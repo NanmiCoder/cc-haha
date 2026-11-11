@@ -6,8 +6,8 @@ import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { makeWav } from '../../src/server/services/voice/sensevoice/__fixtures__/wav'
-import { WORKER_CONFIG_ENV, WORKER_TOKEN_ENV } from '../../src/server/services/voice/sensevoice/protocol'
+import { makeWav } from '../../src/server/services/voice/sherpa/__fixtures__/wav'
+import { WORKER_CONFIG_ENV, WORKER_TOKEN_ENV } from '../../src/server/services/voice/sherpa/protocol'
 
 const repoRoot = path.resolve(import.meta.dirname, '../..')
 const token = 'c'.repeat(64)
@@ -118,7 +118,7 @@ describe('compiled desktop voice worker routing', () => {
         env: {
           ...env,
           [WORKER_CONFIG_ENV]: JSON.stringify({
-            runtimeRoot, model: 'm', tokens: 't', vad: 'v', threads: 1,
+            runtimeRoot, model: { engine: 'sensevoice', model: 'm', tokens: 't' }, vad: 'v', threads: 1,
             maxAudioBytes: 4 * 1024 * 1024,
             vadThreshold: 0.5, minSilenceSeconds: 0.5, minSpeechSeconds: 0.25, segmentSeconds: 30,
           }),

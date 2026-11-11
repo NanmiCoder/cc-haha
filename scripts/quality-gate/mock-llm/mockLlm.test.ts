@@ -1,7 +1,19 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { isExpectedRoutingCliExit } from './agentModelRouting'
+import { forwardProvenanceRequest } from './leanSkillProvenance'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
-import { decideReply, UPSTREAM_ERROR_MESSAGE, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER, type MockRequest } from './scriptedModel'
+import {
+  decideReply,
+  GOOGLE_ADC_QUOTA_PROJECT_MESSAGE,
+  GOOGLE_ADC_QUOTA_PROJECT_TRIGGER,
+  KIMI_USAGE_LIMIT_MESSAGE,
+  KIMI_USAGE_LIMIT_TRIGGER,
+  UPSTREAM_ERROR_MESSAGE,
+  UPSTREAM_ERROR_TRIGGER,
+  UPSTREAM_REFUSAL_TRIGGER,
+  type MockRequest,
+} from './scriptedModel'
 import { startMockLlmServer, type MockLlmServer, type RecordedRequest } from './server'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 
@@ -13,6 +25,13 @@ function agentRequest(messages: MockRequest['messages']): MockRequest {
 }
 
 describe('scripted model', () => {
+  test('sends task ownership requests and exposes rejected assignment results', () => {
+    const messages: MockRequest['messages'] = [{ role: 'user', content: 'MOCK_TEAM_OWNER {"tool":"TaskUpdate","input":{"taskId":"1","owner":"patcher"}}' }]
+    const request = { ...agentRequest(messages), tools: [...AGENT_TOOLS, { name: 'TaskUpdate' }] }
+    expect(decideReply(request)).toMatchObject({ content: [{ type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', owner: 'patcher' } }] })
+    expect(decideReply({ ...request, messages: [...messages, { role: 'user', content: [{ type: 'tool_result', content: "No teammate named 'patcher'" }] }] }))
+      .toMatchObject({ content: [{ type: 'text', text: "Tool result: No teammate named 'patcher'" }] })
+  })
   test('answers side calls without tools with neutral text', () => {
     const reply = decideReply({ messages: [{ role: 'user', content: 'Create a file called a.txt containing the word X' }] })
     expect(reply).toEqual({ kind: 'message', content: [{ type: 'text', text: 'Mock title' }], stopReason: 'end_turn' })
@@ -119,19 +138,23 @@ describe('scripted model', () => {
     expect(failed).toMatchObject({ content: [{ type: 'text', text: 'The tool failed: Permission denied' }] })
   })
 
-  test('fails on the error trigger, and answers the next prompt merged into the same user message', () => {
-    expect(decideReply(agentRequest([{ role: 'user', content: `${UPSTREAM_ERROR_TRIGGER}: please fail` }]))).toEqual({
+  test.each([
+    [UPSTREAM_ERROR_TRIGGER, 400, 'invalid_request_error', UPSTREAM_ERROR_MESSAGE],
+    [KIMI_USAGE_LIMIT_TRIGGER, 403, 'permission_error', KIMI_USAGE_LIMIT_MESSAGE],
+    [GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, 403, 'permission_error', GOOGLE_ADC_QUOTA_PROJECT_MESSAGE],
+  ] as const)('fails on %s, and answers the next prompt merged into the same user message', (trigger, status, errorType, message) => {
+    expect(decideReply(agentRequest([{ role: 'user', content: `${trigger}: please fail` }]))).toEqual({
       kind: 'error',
-      status: 400,
-      errorType: 'invalid_request_error',
-      message: UPSTREAM_ERROR_MESSAGE,
+      status,
+      errorType,
+      message,
     })
 
     // After a failed turn the CLI merges the next prompt into the same user message.
     const recovered = decideReply(agentRequest([{
       role: 'user',
       content: [
-        { type: 'text', text: `${UPSTREAM_ERROR_TRIGGER}: please fail` },
+        { type: 'text', text: `${trigger}: please fail` },
         { type: 'text', text: 'Reply with one short sentence.' },
       ],
     }]))
@@ -298,11 +321,22 @@ describe('mock Anthropic endpoint', () => {
     }
   })
 
-  test('returns provider-shaped errors', async () => {
-    const response = await post({ ...agentRequest([{ role: 'user', content: UPSTREAM_ERROR_TRIGGER }]), stream: true })
-    expect(response.status).toBe(400)
-    expect(await response.json()).toEqual({ type: 'error', error: { type: 'invalid_request_error', message: UPSTREAM_ERROR_MESSAGE } })
+  test.each([
+    [UPSTREAM_ERROR_TRIGGER, 400, 'invalid_request_error', UPSTREAM_ERROR_MESSAGE],
+    [KIMI_USAGE_LIMIT_TRIGGER, 403, 'permission_error', KIMI_USAGE_LIMIT_MESSAGE],
+    [GOOGLE_ADC_QUOTA_PROJECT_TRIGGER, 403, 'permission_error', GOOGLE_ADC_QUOTA_PROJECT_MESSAGE],
+  ] as const)('returns the provider-shaped error for %s and accepts the next prompt', async (trigger, status, errorType, message) => {
+    const response = await post({ ...agentRequest([{ role: 'user', content: trigger }]), stream: true })
+    expect(response.status).toBe(status)
+    expect(await response.json()).toEqual({ type: 'error', error: { type: errorType, message } })
     expect(server!.requests[0]!.outcome).toBe('error')
+    const recovered = await post({ ...agentRequest([{ role: 'user', content: [
+      { type: 'text', text: trigger },
+      { type: 'text', text: 'Reply with one short sentence.' },
+    ] }]), stream: true })
+    expect(recovered.status).toBe(200)
+    expect(parseSse(await recovered.text())).toContainEqual(expect.objectContaining({ event: 'message_stop' }))
+    expect(server!.requests[1]!.outcome).toBe('completed')
   })
 
   test('streams an empty provider refusal without inventing Anthropic text', async () => {
@@ -323,6 +357,59 @@ describe('mock Anthropic endpoint', () => {
     const deadline = Date.now() + 2_000
     while (server!.requests[0]!.outcome === 'pending' && Date.now() < deadline) await Bun.sleep(20)
     expect(server!.requests[0]!.outcome).toBe('cancelled')
+  })
+})
+
+describe('lean provenance request gate', () => {
+  test('forwards to the upstream authority while preserving the request and response', async () => {
+    let gateCalls = 0
+    let upstreamCalls = 0
+    let gateHost = ''
+    const upstream = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        upstreamCalls++
+        return Response.json({
+          method: request.method,
+          path: new URL(request.url).pathname + new URL(request.url).search,
+          host: request.headers.get('host'),
+          contentType: request.headers.get('content-type'),
+          apiKey: request.headers.get('x-api-key'),
+          body: await request.text(),
+        }, { status: 201, headers: { 'x-mock-upstream': 'reached' } })
+      },
+    })
+    const gate = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        gateCalls++
+        // Fail a forwarding loop immediately instead of waiting for the CLI timeout.
+        if (gateCalls > 1) return new Response('recursive forwarding', { status: 508 })
+        const response = await forwardProvenanceRequest(`http://127.0.0.1:${upstream.port}`, request, await request.text())
+        gateHost = request.headers.get('host') ?? ''
+        return response
+      },
+    })
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'mock-api-key' },
+        body: '{"messages":[]}',
+        signal: AbortSignal.timeout(2000),
+      })
+      expect(response.status).toBe(201)
+      expect(response.headers.get('x-mock-upstream')).toBe('reached')
+      expect(await response.json()).toEqual({
+        method: 'POST', path: '/v1/messages?beta=true', host: `127.0.0.1:${upstream.port}`,
+        contentType: 'application/json', apiKey: 'mock-api-key', body: '{"messages":[]}',
+      })
+      expect(gateCalls).toBe(1)
+      expect(upstreamCalls).toBe(1)
+      expect(gateHost).toBe(`127.0.0.1:${gate.port}`)
+    } finally {
+      await gate.stop(true)
+      await upstream.stop(true)
+    }
   })
 })
 
@@ -377,5 +464,31 @@ describe('mock-LLM scenario catalog', () => {
       request([{ type: 'tool_result', content: 'new', is_error: true }]),
     ]
     expect(toolResultsSentUpstream(requests, 1)).toEqual([{ type: 'tool_result', content: 'new', is_error: true }])
+  })
+})
+
+describe('model-routing CLI shutdown', () => {
+  test('accepts the CLI SIGTERM handler exiting with 143 after the fixture stops a completed teammate', () => {
+    // The CLI handles SIGTERM with gracefulShutdown(143), so Bun can report
+    // a normal exit with no signal instead of an unhandled SIGTERM.
+    expect(isExpectedRoutingCliExit(143, null, true)).toBe(true)
+  })
+
+  test('still accepts normal completion and direct SIGTERM termination', () => {
+    expect(isExpectedRoutingCliExit(0, null, false)).toBe(true)
+    expect(isExpectedRoutingCliExit(0, null, true)).toBe(true)
+    expect(isExpectedRoutingCliExit(143, 'SIGTERM', true)).toBe(true)
+  })
+
+  test('rejects termination that the fixture did not request', () => {
+    expect(isExpectedRoutingCliExit(143, null, false)).toBe(false)
+    expect(isExpectedRoutingCliExit(143, 'SIGTERM', false)).toBe(false)
+  })
+
+  test('does not mask crashes, timeout kills, or other signals during cleanup', () => {
+    expect(isExpectedRoutingCliExit(1, null, true)).toBe(false)
+    expect(isExpectedRoutingCliExit(137, 'SIGKILL', true)).toBe(false)
+    expect(isExpectedRoutingCliExit(130, 'SIGINT', true)).toBe(false)
+    expect(isExpectedRoutingCliExit(143, 'SIGKILL', true)).toBe(false)
   })
 })

@@ -1,0 +1,15 @@
+diff --git a/build/fork/getStateFromPath-forks.js b/build/fork/getStateFromPath-forks.js
+index 207eecdf02c2a04ecf5933fadd93a4889ea10f3a..4db0c0b24ff86a7639af7659666058bb1225429a 100644
+--- a/build/fork/getStateFromPath-forks.js
++++ b/build/fork/getStateFromPath-forks.js
+@@ -211,7 +211,9 @@ function spreadParamsAcrossAllStates(state, params) {
+ function stripBaseUrl(path, baseUrl = process.env.EXPO_BASE_URL) {
+     if (process.env.NODE_ENV !== 'development') {
+         if (baseUrl) {
+-            return path.replace(/^\/+/g, '/').replace(new RegExp(`^\\/?${(0, _escapeStringRegexp.escapeStringRegexp)(baseUrl)}`, 'g'), '');
++            // cc-haha patch: strip the base only as a whole path segment, so a
++            // base of `/m` leaves `/member` and `/models` alone.
++            return path.replace(/^\/+/g, '/').replace(new RegExp(`^\\/?${(0, _escapeStringRegexp.escapeStringRegexp)(baseUrl)}(?=[/?#]|$)`, 'g'), '');
+         }
+     }
+     return path;

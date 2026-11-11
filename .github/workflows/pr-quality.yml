@@ -27,9 +27,12 @@ jobs:
       blocked: ${{ steps.policy.outputs.blocked }}
       blocking_reasons: ${{ steps.policy.outputs.blocking_reasons }}
       desktop_checks: ${{ steps.policy.outputs.desktop_checks }}
+      mobile_checks: ${{ steps.policy.outputs.mobile_checks }}
       server_checks: ${{ steps.policy.outputs.server_checks }}
       adapter_checks: ${{ steps.policy.outputs.adapter_checks }}
       desktop_native_checks: ${{ steps.policy.outputs.desktop_native_checks }}
+      mobile_android_checks: ${{ steps.policy.outputs.mobile_android_checks }}
+      remote_directory_checks: ${{ steps.policy.outputs.remote_directory_checks }}
       provider_contract_checks: ${{ steps.policy.outputs.provider_contract_checks }}
       chat_contract_checks: ${{ steps.policy.outputs.chat_contract_checks }}
       agent_flow_checks: ${{ steps.policy.outputs.agent_flow_checks }}
@@ -52,37 +55,39 @@ jobs:
 
       - name: Collect changed files
         env:
-          GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
+          : > changed-files.nul
           : > author.txt
           : > codeowners.txt
           if [ "$EVENT_NAME" = "pull_request" ]; then
-            gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed-files.txt
+            # The PR files API stops at 3000 paths. Checkout includes both commits.
+            git cat-file -e "${PR_BASE_SHA}^{commit}"
+            git cat-file -e "${PR_HEAD_SHA}^{commit}"
+            git diff --name-only -z "${PR_BASE_SHA}...${PR_HEAD_SHA}" > changed-files.nul
             jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" > labels.txt
             # A CODEOWNER's own PR needs no maintainer-approval label. Owners come
             # from the base branch, so a PR cannot add its author to the list.
             jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt
-            git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt 2>/dev/null || : > codeowners.txt
+            git show "${PR_BASE_SHA}:.github/CODEOWNERS" > codeowners.txt 2>/dev/null || : > codeowners.txt
           else
             # A push to main: scope the run to what the push brought in. A new branch
             # or a force push has no usable "before", so fall back to the last commit.
             if git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
-              git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER" > changed-files.txt
+              git diff --name-only -z "$PUSH_BEFORE" "$PUSH_AFTER" > changed-files.nul
             else
-              git diff --name-only "${PUSH_AFTER}~1" "$PUSH_AFTER" > changed-files.txt
+              git diff --name-only -z "${PUSH_AFTER}~1" "$PUSH_AFTER" > changed-files.nul
             fi
             : > labels.txt
           fi
 
       - name: Build deterministic scope plan
         id: policy
-        run: bun run scripts/pr/change-policy.ts --files changed-files.txt --labels-file labels.txt --author-file author.txt --codeowners-file codeowners.txt --plan-only
+        run: bun run scripts/pr/change-policy.ts --files0 changed-files.nul --labels-file labels.txt --author-file author.txt --codeowners-file codeowners.txt --plan-only
 
   policy-enforcement:
     name: policy-enforcement
@@ -128,11 +133,17 @@ jobs:
           fi
           echo "Change policy passed"
 
+  # Sharded for wall time, not selection: the shards together run every desktop
+  # check (shard 1 also lints, the last also builds). Unsharded it took ~8 minutes.
   desktop-checks:
     name: desktop-checks
     needs: scope-plan
     if: needs.scope-plan.outputs.desktop_checks == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,14 +161,50 @@ jobs:
       - name: Install adapter dependencies
         working-directory: adapters
         run: bun install --frozen-lockfile
+      # `bun run build` also exports the phone app (mobile/) into dist/m, and Expo needs Node 22.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: bun install --frozen-lockfile
       - name: Run desktop checks
-        run: bun run check:desktop
+        run: bun run check:desktop --shard=${{ matrix.shard }}/2
 
+  mobile-checks:
+    name: mobile-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.mobile_checks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: bun install --frozen-lockfile
+      - name: Run offline mobile checks
+        run: bun run check:mobile
+
+  # Sharded for wall time, not selection: every root test file runs in exactly one
+  # shard. One runner took ~9 minutes for ~770 per-file test processes.
   server-checks:
     name: server-checks
     needs: scope-plan
     if: needs.scope-plan.outputs.server_checks == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,7 +223,7 @@ jobs:
         working-directory: adapters
         run: bun install --frozen-lockfile
       - name: Run root runtime checks
-        run: bun run check:server
+        run: bun run check:server --shard=${{ matrix.shard }}/3
 
   provider-contract-checks:
     name: provider-contract-checks
@@ -254,6 +301,11 @@ jobs:
           bun-version-file: package.json
       - name: Install root dependencies
         run: bun install --frozen-lockfile
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          rg --version
       - name: Run the agent loop against a mock LLM and recorded traffic
         run: bun run check:agent-e2e
       - name: Upload agent e2e artifacts
@@ -309,8 +361,76 @@ jobs:
       - name: Install adapter dependencies
         working-directory: adapters
         run: bun install --frozen-lockfile
+      # The packaged app carries the phone H5 exported from mobile/; Expo needs Node 22.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: bun install --frozen-lockfile
+      - name: Cache Cloudflare connector build dependency
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/binaries/cloudflared-*
+          key: cloudflared-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/prepare-cloudflared.ts', 'desktop/scripts/cloudflared-licenses/*') }}
+      - name: Prepare bundled Cloudflare connector build dependency
+        working-directory: desktop
+        run: bun run prepare:cloudflared
+      - name: Setup native Computer Use Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Prepare native Computer Use dependencies
+        run: cargo +stable fetch --locked --manifest-path native/agent-desktop/Cargo.toml
       - name: Run desktop native checks
         run: bun run check:native
+
+  remote-directory-checks:
+    name: remote-directory-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.remote_directory_checks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify discovery protocol and local persistence
+        run: bun run check:remote-directory
+
+  android-checks:
+    name: android-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.mobile_android_checks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0'
+      - name: Install native mobile dependencies
+        run: bun install --cwd mobile --frozen-lockfile
+      - name: Run Android tests, lint, and APK build
+        run: bun run check:android
+      - name: Upload Android test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-haha-mobile-debug
+          path: legacy-mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
   macos-swift-checks:
     name: macos-swift-checks
@@ -364,9 +484,11 @@ jobs:
       - name: Run docs checks
         run: npm --prefix site ci && npm --prefix site run build && npm --prefix site run check
 
-  # Advisory: reported on the pull request, never a merge blocker. None of the agent
-  # projects this gate was modelled on block on coverage, and a 16-minute job that
-  # fails for reasons unrelated to the diff trains everyone to ignore the gate.
+  # Advisory: reported on the pull request as its own check, never a merge blocker.
+  # None of the agent projects this gate was modelled on block on coverage, and a
+  # job that fails for reasons unrelated to the diff trains everyone to ignore the
+  # gate. It is also kept out of pr-quality-gate's needs: it takes ~25 minutes, and
+  # the required status used to wait for a lane that never decided it.
   coverage-checks:
     name: coverage-checks
     needs: scope-plan
@@ -415,6 +537,7 @@ jobs:
       - scope-plan
       - policy-enforcement
       - desktop-checks
+      - mobile-checks
       - server-checks
       - provider-contract-checks
       - chat-contract-checks
@@ -422,10 +545,11 @@ jobs:
       - agent-e2e-checks
       - adapter-checks
       - desktop-native-checks
+      - android-checks
+      - remote-directory-checks
       - macos-swift-checks
       - persistence-checks
       - docs-checks
-      - coverage-checks
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -441,18 +565,6 @@ jobs:
               failures=$((failures + 1))
             else
               echo "$name: success"
-            fi
-          }
-
-          # Advisory lanes report their result without failing the gate.
-          advise_selected() {
-            local name="$1"
-            local expected="$2"
-            local result="$3"
-            if [ "$expected" = "true" ] && [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
-              echo "::warning::$name (advisory) ended with result: $result"
-            else
-              echo "$name (advisory): $result"
             fi
           }
 
@@ -473,6 +585,7 @@ jobs:
           require_success "scope-plan" "${{ needs.scope-plan.result }}"
           require_success "policy-enforcement" "${{ needs.policy-enforcement.result }}"
           require_selected "desktop-checks" "${{ needs.scope-plan.outputs.desktop_checks }}" "${{ needs.desktop-checks.result }}"
+          require_selected "mobile-checks" "${{ needs.scope-plan.outputs.mobile_checks }}" "${{ needs.mobile-checks.result }}"
           require_selected "server-checks" "${{ needs.scope-plan.outputs.server_checks }}" "${{ needs.server-checks.result }}"
           require_selected "provider-contract-checks" "${{ needs.scope-plan.outputs.provider_contract_checks }}" "${{ needs.provider-contract-checks.result }}"
           require_selected "chat-contract-checks" "${{ needs.scope-plan.outputs.chat_contract_checks }}" "${{ needs.chat-contract-checks.result }}"
@@ -480,10 +593,11 @@ jobs:
           require_selected "agent-e2e-checks" "${{ needs.scope-plan.outputs.agent_e2e_checks }}" "${{ needs.agent-e2e-checks.result }}"
           require_selected "adapter-checks" "${{ needs.scope-plan.outputs.adapter_checks }}" "${{ needs.adapter-checks.result }}"
           require_selected "desktop-native-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.desktop-native-checks.result }}"
+          require_selected "android-checks" "${{ needs.scope-plan.outputs.mobile_android_checks }}" "${{ needs.android-checks.result }}"
+          require_selected "remote-directory-checks" "${{ needs.scope-plan.outputs.remote_directory_checks }}" "${{ needs.remote-directory-checks.result }}"
           require_selected "macos-swift-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.macos-swift-checks.result }}"
           require_selected "persistence-checks" "${{ needs.scope-plan.outputs.persistence_checks }}" "${{ needs.persistence-checks.result }}"
           require_selected "docs-checks" "${{ needs.scope-plan.outputs.docs_checks }}" "${{ needs.docs-checks.result }}"
-          advise_selected "coverage-checks" "${{ needs.scope-plan.outputs.coverage_checks }}" "${{ needs.coverage-checks.result }}"
 
           if [ "$failures" -gt 0 ]; then
             exit 1

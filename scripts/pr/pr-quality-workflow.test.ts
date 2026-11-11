@@ -1,20 +1,62 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
+import { createSandboxedTestEnvironment } from './test-environment'
 
 type WorkflowJob = {
   if?: string
   'runs-on'?: string
   'continue-on-error'?: boolean
   needs?: string | string[]
-  steps?: Array<{ name?: string; run?: string; 'working-directory'?: string }>
+  strategy?: { 'fail-fast'?: boolean; matrix?: { shard?: number[] } }
+  steps?: Array<{
+    name?: string
+    run?: string
+    uses?: string
+    with?: Record<string, unknown>
+    'working-directory'?: string
+  }>
 }
 
 function workflowJobs(workflow: string) {
   return (parse(workflow) as { jobs: Record<string, WorkflowJob> }).jobs
 }
 
+/** A step runs `command`, possibly with arguments such as a CI shard. */
+function runsCommand(step: { run?: string }, command: string) {
+  return step.run === command || Boolean(step.run?.startsWith(`${command} `))
+}
+
 describe('PR quality workflow', () => {
+  test('checks the directory with local workerd in PR and nightly jobs', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    expect(jobs['remote-directory-checks'].needs).toBe('scope-plan')
+    expect(jobs['remote-directory-checks'].if).toBe("needs.scope-plan.outputs.remote_directory_checks == 'true'")
+    expect(jobs['remote-directory-checks'].steps?.some(step => step.run === 'bun run check:remote-directory')).toBe(true)
+    expect(jobs['pr-quality-gate'].needs).toContain('remote-directory-checks')
+    expect(workflow).toContain('require_selected "remote-directory-checks"')
+    const nightly = workflowJobs(readFileSync('.github/workflows/nightly-quality.yml', 'utf8'))
+    expect(nightly['remote-directory-checks'].if).toBeUndefined()
+    expect(nightly['remote-directory-checks'].steps?.some(step => step.run === 'bun run check:remote-directory')).toBe(true)
+  })
+
+  test('builds the Android client in a dedicated selected job and in the nightly sweep', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    expect(jobs['android-checks'].needs).toBe('scope-plan')
+    expect(jobs['android-checks'].if).toBe("needs.scope-plan.outputs.mobile_android_checks == 'true'")
+    expect(jobs['android-checks'].steps?.some(step => step.run === 'bun run check:android')).toBe(true)
+    expect(jobs['pr-quality-gate'].needs).toContain('android-checks')
+    expect(workflow).toContain('require_selected "android-checks"')
+    const nightly = workflowJobs(readFileSync('.github/workflows/nightly-quality.yml', 'utf8'))
+    expect(nightly['android-checks'].if).toBeUndefined()
+    expect(nightly['android-checks'].steps?.some(step => step.run === 'bun run check:android')).toBe(true)
+  })
+
   test('uses packageManager as the single pinned Bun version source', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
@@ -60,6 +102,7 @@ describe('PR quality workflow', () => {
     expect(installIndex).toBeLessThan(regressionIndex)
     for (const jobId of [
       'desktop-checks',
+      'mobile-checks',
       'server-checks',
       'provider-contract-checks',
       'chat-contract-checks',
@@ -84,7 +127,7 @@ describe('PR quality workflow', () => {
       ['desktop-native-checks', 'bun run check:native'],
     ]) {
       const steps = jobs[job].steps ?? []
-      const check = steps.findIndex(step => step.run === command)
+      const check = steps.findIndex(step => runsCommand(step, command))
       expect(check).toBeGreaterThanOrEqual(0)
       for (const workspace of ['desktop', 'adapters']) {
         const install = steps.findIndex(step =>
@@ -104,20 +147,102 @@ describe('PR quality workflow', () => {
     const runs = (jobs['scope-plan'].steps ?? []).map(step => step.run ?? '').join('\n')
 
     expect(runs).toContain(`jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt`)
-    expect(runs).toContain('git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt')
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    expect(workflow).toContain('PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}')
+    expect(workflow).toContain('PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}')
+    expect(runs).toContain('git show "${PR_BASE_SHA}:.github/CODEOWNERS" > codeowners.txt')
     expect(runs).toContain('--author-file author.txt --codeowners-file codeowners.txt')
     expect(runs).not.toMatch(/cat \.github\/CODEOWNERS|--codeowners-file \.github\/CODEOWNERS/)
   })
 
+  test('collects every PR path beyond 3000 files from immutable commits without an API lookup', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pr-complete-files-'))
+    try {
+      const bin = join(root, 'bin')
+      mkdirSync(bin)
+      writeFileSync(join(bin, 'gh'), '#!/bin/sh\necho "unexpected API lookup" >&2\nexit 99\n')
+      chmodSync(join(bin, 'gh'), 0o755)
+      const env = createSandboxedTestEnvironment(join(root, 'home'), {
+        PATH: `${bin}:${process.env.PATH ?? ''}`,
+        GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid',
+        EVENT_NAME: 'pull_request', REPOSITORY: 'fixture/repo', PR_NUMBER: '1',
+        GITHUB_EVENT_PATH: join(root, 'event.json'),
+      })
+      const git = (args: string[], input?: string) => {
+        const result = spawnSync('git', args, { cwd: root, env, input, encoding: 'utf8' })
+        expect(result.status, result.stderr).toBe(0)
+        return result.stdout.trim()
+      }
+      git(['init', '-b', 'main'])
+      mkdirSync(join(root, '.github'))
+      writeFileSync(join(root, '.github/CODEOWNERS'), '* @base-owner\n')
+      git(['add', '.github/CODEOWNERS'])
+      git(['commit', '-m', 'fixture base'])
+      const base = git(['rev-parse', 'HEAD'])
+      const blob = git(['hash-object', '-w', '--stdin'], '')
+      const paths = [
+        ...Array.from({ length: 3005 }, (_, index) => `native/vendor/fixture-${index}.rs`),
+        'src/late.ts', 'docs/中文.md', 'src/utils/quote"scope.ts',
+        'src/utils/tab\tscope.ts', 'src/utils/line\nscope.ts',
+      ]
+      git(['update-index', '--add', '-z', '--index-info'], paths.map(name => `100644 ${blob}\t${name}\0`).join(''))
+      writeFileSync(join(root, '.github/CODEOWNERS'), '* @head-owner\n')
+      git(['add', '.github/CODEOWNERS'])
+      const tree = git(['write-tree'])
+      const head = git(['commit-tree', tree, '-p', base], 'fixture head\n')
+      writeFileSync(join(root, 'event.json'), JSON.stringify({ pull_request: { labels: [{ name: 'fixture-label' }], user: { login: 'contributor' } } }))
+      const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+      const script = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Collect changed files')!.run!
+      const result = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: head }, encoding: 'utf8' })
+      expect(result.status, result.stderr).toBe(0)
+      const changed = readFileSync(join(root, 'changed-files.nul'), 'utf8').split('\0').filter(Boolean)
+      expect(new Set(changed)).toEqual(new Set(['.github/CODEOWNERS', ...paths]))
+      const plan = (jobs['scope-plan'].steps ?? []).find(step => step.name === 'Build deterministic scope plan')!.run!
+      expect(plan).toContain('--files0 changed-files.nul')
+      expect(readFileSync(join(root, 'codeowners.txt'), 'utf8')).toBe('* @base-owner\n')
+      expect(readFileSync(join(root, 'author.txt'), 'utf8')).toBe('contributor\n')
+      const missing = spawnSync('bash', ['-e', '-c', script], { cwd: root, env: { ...env, PR_BASE_SHA: base, PR_HEAD_SHA: '0'.repeat(40) }, encoding: 'utf8' })
+      expect(missing.status).not.toBe(0)
+      expect(missing.stderr).not.toContain('unexpected API lookup')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('installs adapter dependencies before desktop checks compile the sidecar bundle', () => {
     const steps = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))['desktop-checks'].steps ?? []
-    const check = steps.findIndex(step => step.run === 'bun run check:desktop')
+    const check = steps.findIndex(step => runsCommand(step, 'bun run check:desktop'))
     const install = steps.findIndex(step =>
       step['working-directory'] === 'adapters' && step.run === 'bun install --frozen-lockfile',
     )
     expect(check).toBeGreaterThanOrEqual(0)
     expect(install).toBeGreaterThanOrEqual(0)
     expect(install).toBeLessThan(check)
+  })
+
+  test('installs the phone app and Node 22 before any lane that builds desktop/dist', () => {
+    // desktop `bun run build` ends by exporting mobile/ into dist/m (the phone H5).
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    for (const [job, command] of [
+      ['desktop-checks', 'bun run check:desktop'],
+      ['desktop-native-checks', 'bun run check:native'],
+    ]) {
+      const steps = jobs[job].steps ?? []
+      const check = steps.findIndex(step => runsCommand(step, command))
+      const install = steps.findIndex(step =>
+        step['working-directory'] === 'mobile' && step.run === 'bun install --frozen-lockfile',
+      )
+      const node = steps.findIndex(step =>
+        step.uses?.startsWith('actions/setup-node@') && String(step.with?.['node-version']) === '22',
+      )
+      expect(check, job).toBeGreaterThanOrEqual(0)
+      expect(install, job).toBeGreaterThanOrEqual(0)
+      expect(install, job).toBeLessThan(check)
+      expect(node, job).toBeGreaterThanOrEqual(0)
+      expect(node, job).toBeLessThan(check)
+    }
   })
 
   test('requires macOS Swift checks alongside the selected Linux native packaging lane', () => {
@@ -170,6 +295,44 @@ describe('PR quality workflow', () => {
     expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
   })
 
+  test('mobile checks install frozen dependencies and run the isolated local entry point', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    const job = jobs['mobile-checks']!
+    const steps = job.steps ?? []
+    expect(job.if).toBe("needs.scope-plan.outputs.mobile_checks == 'true'")
+    expect(job['continue-on-error']).not.toBe(true)
+    const check = steps.findIndex(step => step.run === 'bun run check:mobile')
+    expect(check).toBeGreaterThanOrEqual(0)
+    const install = steps.findIndex(step => step['working-directory'] === 'mobile' && step.run === 'bun install --frozen-lockfile')
+    expect(install).toBeGreaterThanOrEqual(0)
+    expect(install).toBeLessThan(check)
+    expect(jobs['pr-quality-gate'].needs).toContain('mobile-checks')
+    expect(workflow).toContain('mobile_checks: ${{ steps.policy.outputs.mobile_checks }}')
+  })
+
+  test.each([
+    { selected: true, result: 'success', exit: 0 },
+    { selected: true, result: 'failure', exit: 1 },
+    { selected: true, result: 'skipped', exit: 1 },
+    { selected: false, result: 'skipped', exit: 0 },
+    { selected: false, result: 'success', exit: 1 },
+  ])('enforces the selected mobile result in the stable gate: %j', scenario => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const script = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
+      .replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
+        if (expression === 'needs.scope-plan.outputs.mobile_checks') return String(scenario.selected)
+        if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
+        if (expression === 'needs.mobile-checks.result') return scenario.result
+        if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
+        return 'skipped'
+      })
+    const result = Bun.spawnSync(['bash', '-c', script], {
+      env: { PATH: process.env.PATH ?? '' }, stdout: 'pipe', stderr: 'pipe',
+    })
+    expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
+  })
+
   test('keeps coverage artifacts observable in CI', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
 
@@ -218,25 +381,53 @@ describe('PR quality workflow', () => {
     expect(workflow).toContain('require_selected "chat-contract-checks"')
     expect(workflow).toContain('require_selected "agent-flow-checks"')
     expect(workflow).toContain('require_selected "agent-e2e-checks"')
-    // Coverage is reported, never blocking.
-    expect(workflow).toContain('advise_selected "coverage-checks"')
-    expect(workflow).not.toContain('require_selected "coverage-checks"')
+  })
+
+  test('keeps advisory coverage off the required gate so the gate never waits for it', () => {
+    // The coverage lane takes ~25 minutes and never decides a merge. While the gate
+    // listed it in `needs`, every PR waited for it before turning green.
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const gate = jobs['pr-quality-gate']!
+    const gateScript = gate.steps!.map(step => step.run ?? '').join('\n')
+
+    expect(gate.needs).not.toContain('coverage-checks')
+    expect(gateScript).not.toContain('coverage')
+    // Still selected and still reported on the PR as its own check.
+    expect(jobs['coverage-checks']!.needs).toBe('scope-plan')
+    expect(jobs['coverage-checks']!.steps?.some(step => step.run === 'bun run check:coverage')).toBe(true)
+  })
+
+  test('splits the long required lanes into shards that together run the whole check', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const gate = jobs['pr-quality-gate']!
+    for (const [job, command] of [
+      ['server-checks', 'bun run check:server'],
+      ['desktop-checks', 'bun run check:desktop'],
+    ] as const) {
+      const shards = jobs[job]!.strategy?.matrix?.shard ?? []
+      const total = shards.length
+      expect(total, job).toBeGreaterThan(1)
+      // Exactly 1..N: a missing shard number would silently skip that slice of tests.
+      expect(shards, job).toEqual(Array.from({ length: total }, (_, index) => index + 1))
+      // Every shard reports, so one failure does not hide another.
+      expect(jobs[job]!.strategy?.['fail-fast'], job).toBe(false)
+      const runs = (jobs[job]!.steps ?? []).filter(step => runsCommand(step, command))
+      expect(runs.map(step => step.run), job).toEqual([`${command} --shard=\${{ matrix.shard }}/${total}`])
+      // A matrix job's result is failure when any shard fails, so the gate stays strict.
+      expect(gate.needs, job).toContain(job)
+    }
   })
 
   test.each([
-    { coverage: 'failure', agentE2e: 'success', exit: 0 },
-    { coverage: 'success', agentE2e: 'success', exit: 0 },
-    { coverage: 'skipped', agentE2e: 'success', exit: 0 },
-    { coverage: 'success', agentE2e: 'failure', exit: 1 },
-    { coverage: 'success', agentE2e: 'skipped', exit: 1 },
-  ])('treats coverage as advisory and the mock-LLM agent lane as required: %j', scenario => {
+    { agentE2e: 'success', exit: 0 },
+    { agentE2e: 'failure', exit: 1 },
+    { agentE2e: 'skipped', exit: 1 },
+  ])('requires the selected mock-LLM agent lane: %j', scenario => {
     const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
     const gateScript = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
     const script = gateScript.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
-      if (expression === 'needs.scope-plan.outputs.coverage_checks') return 'true'
       if (expression === 'needs.scope-plan.outputs.agent_e2e_checks') return 'true'
       if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
-      if (expression === 'needs.coverage-checks.result') return scenario.coverage
       if (expression === 'needs.agent-e2e-checks.result') return scenario.agentE2e
       if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
       return 'skipped'
@@ -256,7 +447,7 @@ describe('PR quality workflow', () => {
     const enforce = (jobs['policy-enforcement'].steps ?? []).find((step) => step.name === 'Enforce change policy')!.run!
 
     expect(parsed.on.push?.branches).toEqual(['main'])
-    expect(collect).toContain('git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER"')
+    expect(collect).toContain('git diff --name-only -z "$PUSH_BEFORE" "$PUSH_AFTER"')
     // Pushes to main must not cancel one another: each merge gets its own verdict.
     expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}")
     // Label exceptions live on the pull request; main must not re-block on them.
@@ -269,6 +460,10 @@ describe('PR quality workflow', () => {
 
     expect(workflow).toContain('agent_e2e_checks: ${{ steps.policy.outputs.agent_e2e_checks }}')
     expect(steps.some((step) => step.run === 'bun run check:agent-e2e')).toBe(true)
+    const check = steps.findIndex(step => step.run === 'bun run check:agent-e2e')
+    const verifyRipgrep = steps.findIndex(step => /\brg --version\b/.test(step.run ?? ''))
+    expect(verifyRipgrep, 'agent E2E must verify its search executable').toBeGreaterThanOrEqual(0)
+    expect(verifyRipgrep).toBeLessThan(check)
     expect(workflow).toContain('path: artifacts/agent-e2e/')
     expect(steps.some((step) => String(step.run ?? '').includes('secrets'))).toBe(false)
   })
@@ -331,6 +526,7 @@ describe('full quality workflow', () => {
       'bun run check:chat-contract',
       'bun run check:adapters',
       'bun run check:desktop',
+      'bun run check:mobile',
       'bun run check:electron',
       'bun run check:persistence-upgrade',
       'bun run check:quarantine',
@@ -353,7 +549,7 @@ describe('full quality workflow', () => {
     for (const file of ['.github/workflows/pr-quality.yml', '.github/workflows/nightly-quality.yml']) {
       for (const [name, job] of Object.entries(workflowJobs(readFileSync(file, 'utf8')))) {
         const steps = job.steps ?? []
-        const check = steps.findIndex(step => /\bcheck:(server|coverage|native)\b/.test(step.run ?? ''))
+        const check = steps.findIndex(step => /\bcheck:(server|coverage|native|agent-e2e)\b/.test(step.run ?? ''))
         if (check < 0) continue
         const ripgrep = steps.findIndex(step => step.run?.includes('apt-get install') && /\bripgrep\b/.test(step.run))
         expect(ripgrep, `${file} ${name} must install ripgrep`).toBeGreaterThanOrEqual(0)
