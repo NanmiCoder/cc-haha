@@ -62,6 +62,8 @@ export function migratePreferences(raw: string | null): Preferences {
     typeof input === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input)
       ? input
       : fallback
+  // 壁纸功能已移除，旧版本保存的壁纸字段在下次读取时丢弃。
+  delete value.wallpaper
   return {
     ...value,
     version: 1,
