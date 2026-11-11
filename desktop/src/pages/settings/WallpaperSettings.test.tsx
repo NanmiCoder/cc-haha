@@ -20,6 +20,12 @@ vi.mock('@/lib/wallpaper', async (importOriginal) => {
 })
 
 import { DEFAULT_DESKTOP_WALLPAPER, useWallpaperStore } from '@/stores/wallpaperStore'
+import {
+  DEFAULT_DYNAMIC_WALLPAPER_PREFERENCES,
+  DEFAULT_DYNAMIC_WALLPAPER_STATUS,
+} from '@/lib/dynamicWallpaper'
+import { useDynamicWallpaperStore } from '@/stores/dynamicWallpaperStore'
+import type { DesktopDynamicWallpaperStatus } from '@/lib/desktopHost/types'
 import { WallpaperSettings } from './WallpaperSettings'
 
 const preferences = {} as DesktopUiPreferences
@@ -28,12 +34,52 @@ function wallpaper(patch: Partial<DesktopWallpaperPreferences> = {}): DesktopWal
   return { ...DEFAULT_DESKTOP_WALLPAPER, ...patch }
 }
 
+function dynamicStatus(
+  patch: Partial<DesktopDynamicWallpaperStatus['preferences']> = {},
+  unavailable: DesktopDynamicWallpaperStatus['unavailable'] = null,
+): DesktopDynamicWallpaperStatus {
+  return {
+    preferences: { ...DEFAULT_DYNAMIC_WALLPAPER_PREFERENCES, ...patch },
+    unavailable,
+  }
+}
+
+function installDynamicHost(
+  initial: DesktopDynamicWallpaperStatus = DEFAULT_DYNAMIC_WALLPAPER_STATUS,
+) {
+  const methods = {
+    get: vi.fn(),
+    update: vi.fn(),
+    pickVideo: vi.fn(),
+    pickWeb: vi.fn(),
+    clear: vi.fn(),
+    reload: vi.fn(),
+  }
+  vi.stubGlobal('desktopHost', {
+    capabilities: { dynamicWallpaper: true },
+    dynamicWallpaper: methods,
+  })
+  useDynamicWallpaperStore.setState({
+    status: initial,
+    loaded: true,
+    loading: false,
+    error: null,
+  })
+  return methods
+}
+
 describe('Wallpaper settings', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
     useWallpaperStore.setState({
       preferences: wallpaper(),
       objectUrl: null,
+      loading: false,
+      error: null,
+    })
+    useDynamicWallpaperStore.setState({
+      status: DEFAULT_DYNAMIC_WALLPAPER_STATUS,
+      loaded: false,
       loading: false,
       error: null,
     })
@@ -247,5 +293,109 @@ describe('Wallpaper settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
 
     await vi.waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Failed to clear wallpaper'))
+  })
+
+  it('offers the dynamic kinds only when the desktop host supports them', () => {
+    installDynamicHost()
+    render(<WallpaperSettings />)
+
+    expect(screen.getByRole('radiogroup', { name: 'Wallpaper type' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Video' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Web pack' })).toBeInTheDocument()
+  })
+
+  it('switches to the video kind through the dynamic host', async () => {
+    const methods = installDynamicHost()
+    methods.update.mockResolvedValue(dynamicStatus({ kind: 'video' }))
+    render(<WallpaperSettings />)
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Video' }))
+
+    await vi.waitFor(() => expect(methods.update).toHaveBeenCalledWith({ kind: 'video' }))
+    expect(await screen.findByText('Video source')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose video' })).toBeInTheDocument()
+    // An unselected source is not a broken one; only a disappeared file warns.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('picks a video with localized dialog labels', async () => {
+    const methods = installDynamicHost(dynamicStatus({ kind: 'video' }))
+    methods.pickVideo.mockResolvedValue({
+      canceled: false,
+      status: dynamicStatus({
+        kind: 'video',
+        enabled: true,
+        videoPath: '/clips/loop.mp4',
+        videoName: 'loop.mp4',
+      }),
+      error: null,
+    })
+    render(<WallpaperSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose video' }))
+
+    await vi.waitFor(() =>
+      expect(methods.pickVideo).toHaveBeenCalledWith({
+        dialogTitle: 'Choose video',
+        dialogFilterName: 'Video',
+      }),
+    )
+    expect(await screen.findByText('loop.mp4')).toBeInTheDocument()
+    expect(screen.getByTestId('wallpaper-dynamic-preview-media')).toHaveAttribute(
+      'src',
+      'cc-wallpaper://video/stream?rev=0',
+    )
+  })
+
+  it('routes the sliders to the dynamic source instead of the image API', async () => {
+    vi.useFakeTimers()
+    const methods = installDynamicHost(dynamicStatus({
+      kind: 'video',
+      enabled: true,
+      videoPath: '/clips/loop.mp4',
+      videoName: 'loop.mp4',
+    }))
+    methods.update.mockResolvedValue(dynamicStatus({ kind: 'video', enabled: true, zoom: 150 }))
+    render(<WallpaperSettings />)
+
+    fireEvent.change(screen.getByRole('slider', { name: 'Zoom' }), { target: { value: '150' } })
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(methods.update).toHaveBeenCalledWith({ zoom: 150, blur: 8, panelOpacity: 88 })
+    expect(api.updateWallpaperPreferences).not.toHaveBeenCalled()
+  })
+
+  it('explains a folder without index.html', async () => {
+    const methods = installDynamicHost(dynamicStatus({ kind: 'web' }))
+    methods.pickWeb.mockResolvedValue({
+      canceled: false,
+      status: dynamicStatus({ kind: 'web' }),
+      error: 'web-index-missing',
+    })
+    render(<WallpaperSettings />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose folder' }))
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'That folder does not contain an index.html.',
+      ),
+    )
+  })
+
+  it('warns when the selected source disappeared', () => {
+    installDynamicHost(
+      dynamicStatus(
+        { kind: 'video', enabled: true, videoPath: '/clips/loop.mp4', videoName: 'loop.mp4' },
+        'video-missing',
+      ),
+    )
+    render(<WallpaperSettings />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'The selected video is missing. Choose it again.',
+    )
+    expect(screen.queryByTestId('wallpaper-dynamic-preview')).not.toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Enable wallpaper' })).toBeDisabled()
   })
 })
