@@ -14,6 +14,7 @@ export type DesktopHostCapability =
   | 'appMode'
   | 'clipboard'
   | 'dialogs'
+  | 'dynamicWallpaper'
   | 'notifications'
   | 'previewWebview'
   | 'workspaceBrowser'
@@ -51,6 +52,58 @@ export type DialogSaveOptions = {
   title?: string
   defaultPath?: string
   filters?: DialogFileFilter[]
+}
+
+/**
+ * Dynamic wallpapers are local-only: the renderer names a source, and the
+ * Electron host reads it from disk. `image` keeps its existing server-backed
+ * preferences; `video` and `web` use the values below.
+ */
+export type DesktopWallpaperKind = 'image' | 'video' | 'web'
+
+export type DesktopDynamicWallpaperPreferences = {
+  kind: DesktopWallpaperKind
+  enabled: boolean
+  focusX: number
+  focusY: number
+  zoom: number
+  blur: number
+  panelOpacity: number
+  videoPath: string | null
+  videoName: string | null
+  webDir: string | null
+  webName: string | null
+  /** Bumped when the source changes so the renderer refetches it. */
+  revision: number
+  updatedAt: string | null
+}
+
+export type DesktopDynamicWallpaperUnavailable =
+  | 'video-missing'
+  | 'web-missing'
+  | null
+
+export type DesktopDynamicWallpaperStatus = {
+  preferences: DesktopDynamicWallpaperPreferences
+  /** Set when the selected source is no longer readable. */
+  unavailable: DesktopDynamicWallpaperUnavailable
+}
+
+export type DesktopDynamicWallpaperUpdate = Partial<Pick<
+  DesktopDynamicWallpaperPreferences,
+  'kind' | 'enabled' | 'focusX' | 'focusY' | 'zoom' | 'blur' | 'panelOpacity'
+>>
+
+export type DesktopDynamicWallpaperPickResult = {
+  canceled: boolean
+  status: DesktopDynamicWallpaperStatus
+  /** `web-index-missing` when the chosen folder has no index.html. */
+  error: 'web-index-missing' | null
+}
+
+export type DesktopDynamicWallpaperPickOptions = {
+  dialogTitle?: string
+  dialogFilterName?: string
 }
 
 /**
@@ -588,6 +641,14 @@ export type DesktopHost = {
       cancel(id: string): Promise<void>
       onProgress(handler: (status: MigrationStatus) => void): Promise<DesktopHostUnlisten>
     }
+  }
+  dynamicWallpaper: {
+    get(): Promise<DesktopDynamicWallpaperStatus>
+    update(patch: DesktopDynamicWallpaperUpdate): Promise<DesktopDynamicWallpaperStatus>
+    pickVideo(options?: DesktopDynamicWallpaperPickOptions): Promise<DesktopDynamicWallpaperPickResult>
+    pickWeb(options?: DesktopDynamicWallpaperPickOptions): Promise<DesktopDynamicWallpaperPickResult>
+    clear(): Promise<DesktopDynamicWallpaperStatus>
+    reload(): Promise<DesktopDynamicWallpaperStatus>
   }
   adapters: {
     restartSidecar(target?: 'wechat'): Promise<void>
