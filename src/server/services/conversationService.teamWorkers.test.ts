@@ -129,12 +129,15 @@ test('real independent CLI processes send their first request to the approved pr
   })
   try {
     process.env.CLAUDE_CLI_PATH = join(import.meta.dir, '__fixtures__', 'team-worker-cli.ts')
+    process.env.FIXTURE_LOAD_MANAGED_ENV = '1'
     process.env.CLAUDE_CODE_SUBAGENT_MODEL = 'wrong-inherited-model'
     process.env.CC_HAHA_TEAM_WORKER_OMIT_CLAUDE_MD = '1'
     const providers = new ProviderService()
     const models = { main: 'cheap', sonnet: 'cheap', opus: 'capable', haiku: 'cheap' }
     const pa = await providers.addProvider({ presetId: 'custom', name: 'A', baseUrl: a.url.toString(), apiKey: 'fake-a', models })
     const pb = await providers.addProvider({ presetId: 'custom', name: 'B', baseUrl: b.url.toString(), apiKey: 'fake-b', models })
+    await providers.activateProvider(pa.id)
+    await providers.updateManagedSettings({ env: { CLAUDE_CODE_SUBAGENT_MODEL: 'wrong-saved-model' } }, pa.id)
     for (const [id, provider, model] of [['worker-a', pa.id, 'cheap'], ['worker-b', pb.id, 'capable']]) {
       await service.startSession(id!, home, `ws://127.0.0.1:${bridge.port}/sdk/${id}?token=fixture-${id}`, { providerId: provider, model, teamWorker: { ...worker, agentDefinition: { ...worker.agentDefinition, omitClaudeMd: id === 'worker-a', agentType: 'fixture:researcher', source: 'plugin' } } })
       await service.requestControl(id!, { subtype: 'set_model', model }, 5000)
