@@ -511,8 +511,19 @@ export const sessionsApi = {
       cursor = older.page.nextCursor
     }
     pages.reverse()
+    const messages = pages.flatMap(page => page.messages)
+    const latestIndexById = new Map<string, number>()
+    messages.forEach((message, index) => {
+      if (typeof message.id === 'string' && message.id.trim()) latestIndexById.set(message.id, index)
+    })
     return {
-      messages: pages.flatMap(page => page.messages),
+      // Server projection deduplicates each slice separately. Replays spanning
+      // slices must also keep only the last record, in its original position,
+      // with its metadata intact. Missing/blank identities remain independent.
+      messages: messages.filter((message, index) => {
+        const latestIndex = latestIndexById.get(message.id)
+        return latestIndex === undefined || latestIndex === index
+      }),
       taskNotifications: pages.flatMap(page => page.taskNotifications ?? []),
       page: {
         ...newest.page,
