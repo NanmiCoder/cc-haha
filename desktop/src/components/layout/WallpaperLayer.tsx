@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { useTranslation } from '@/i18n'
 import {
   applyDynamicWallpaper,
   clearDynamicWallpaper,
@@ -25,6 +26,7 @@ function windowIsActive(): boolean {
  * for the two dynamic kinds.
  */
 export function WallpaperLayer() {
+  const t = useTranslation()
   const status = useDynamicWallpaperStore((state) => state.status)
   const imagePreferences = useWallpaperStore((state) => state.preferences)
   const objectUrl = useWallpaperStore((state) => state.objectUrl)
@@ -109,7 +111,7 @@ export function WallpaperLayer() {
           ref={frameRef}
           data-testid="wallpaper-web-pack"
           className="wallpaper-media"
-          title="Wallpaper"
+          title={t('settings.wallpaper.title')}
           src={webWallpaperUrl(preferences.revision)}
           sandbox="allow-scripts"
           tabIndex={-1}

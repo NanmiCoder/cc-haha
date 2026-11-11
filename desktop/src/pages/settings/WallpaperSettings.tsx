@@ -458,7 +458,7 @@ export function WallpaperSettings() {
                     data-testid="wallpaper-dynamic-preview-media"
                     aria-hidden="true"
                     tabIndex={-1}
-                    title="Wallpaper"
+                    title={t('settings.wallpaper.title')}
                     className="pointer-events-none absolute inset-0 h-full w-full border-0"
                     src={webWallpaperUrl(dynamicStatus.preferences.revision)}
                     sandbox="allow-scripts"

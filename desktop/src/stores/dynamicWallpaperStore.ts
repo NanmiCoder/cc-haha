@@ -29,7 +29,9 @@ function messageOf(error: unknown): string {
 }
 
 function supportsDynamicWallpaper(): boolean {
-  return getDesktopHost().capabilities.dynamicWallpaper === true
+  // Partial desktop bridges (older hosts, test doubles) may omit capabilities;
+  // treat that as unsupported instead of throwing during startup hydration.
+  return getDesktopHost().capabilities?.dynamicWallpaper === true
 }
 
 export const useDynamicWallpaperStore = create<DynamicWallpaperState>((set) => {
