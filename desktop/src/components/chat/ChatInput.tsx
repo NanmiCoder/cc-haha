@@ -312,6 +312,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
+  const gitInfoRequest = useRef(0)
   const workspaceReferences = useWorkspaceChatContextStore(
     (s) => activeTabId ? s.referencesBySession[activeTabId] ?? EMPTY_WORKSPACE_REFERENCES : EMPTY_WORKSPACE_REFERENCES,
   )
@@ -645,6 +646,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   ])
 
   const refreshGitInfo = useCallback(() => {
+    const request = ++gitInfoRequest.current
     if (!activeTabId) {
       setGitInfo(null)
       return
@@ -653,11 +655,17 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       setGitInfo(null)
       return
     }
-    sessionsApi.getGitInfo(activeTabId).then(setGitInfo).catch(() => setGitInfo(null))
-  }, [activeTabId, isMemberSession])
+    sessionsApi.getGitInfo(activeTabId).then(info => {
+      if (gitInfoRequest.current === request) setGitInfo(info)
+    }).catch(() => {
+      if (gitInfoRequest.current === request) setGitInfo(null)
+    })
+  }, [activeTabId, isMemberSession, activeSession?.workDir])
 
   useEffect(() => {
+    setGitInfo(null)
     refreshGitInfo()
+    return () => { gitInfoRequest.current++ }
   }, [refreshGitInfo])
 
   useEffect(() => {

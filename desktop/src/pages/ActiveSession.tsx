@@ -478,7 +478,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     return () => {
       cancelled = true
     }
-  }, [activeTabId, activeTabType])
+  }, [activeTabId, activeTabType, session?.workDir])
 
   useEffect(() => {
     if (
@@ -509,6 +509,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     chatState,
     sessionMessageCount,
     sessionSlashCommandCount,
+    session?.workDir,
   ])
 
   useEffect(() => {
