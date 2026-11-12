@@ -187,6 +187,19 @@ describe('AgentTool members staged for team review (#1856)', () => {
     expect(JSON.stringify(rendered)).toContain('Spawned successfully.')
     expect(JSON.stringify(rendered)).not.toContain('NOT started')
   })
+
+  test('missing optional staged metadata keeps recovery guidance without inventing a revision', () => {
+    const rendered = AgentTool.mapToolResultToToolResultBlockParam(
+      { ...staged, message: undefined, team_name: undefined, plan_id: undefined, revision: undefined } as never,
+      'toolu_staged_fallback',
+    )
+    const text = JSON.stringify(rendered)
+    expect(text).toContain(STAGING_MESSAGE)
+    expect(text).toContain('name: fix-touch')
+    expect(text).not.toContain('undefined')
+    expect(text).not.toContain('plan_id:')
+    expect(text).not.toContain('revision:')
+  })
 })
 
 describe('AgentTool nested lifecycle ownership', () => {

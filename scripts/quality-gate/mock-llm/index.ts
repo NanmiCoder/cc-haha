@@ -22,6 +22,7 @@ import { searchTransportBunOptions } from './searchTransportOptions'
 import { runLeanNotificationProvenanceScenario, runLeanProfileScenario } from './leanProfile'
 import { runAgentModelRoutingScenario } from './agentModelRouting'
 import { runAgentProviderRoutingScenario } from './agentProviderRouting'
+import { runTeamReviewScenario } from './teamReview'
 import { runProviderMediaScenario } from './providerMedia'
 import { runComputerUseRefreshScenario } from './computerUseRefresh'
 import { runComputerUseAgentDesktopScenario } from './computerUseAgentDesktop'
@@ -35,6 +36,7 @@ const PROVIDER_ROUTING_SCENARIO = 'mock-agent-provider-routing'
 const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 const COMPUTER_USE_SCENARIO = 'mock-computer-use-hot-enable'
 const AGENT_DESKTOP_SCENARIO = 'mock-computer-use-agent-desktop'
+const TEAM_REVIEW_SCENARIO = 'mock-team-review'
 
 function listArg(argv: string[], name: string) {
   const index = argv.indexOf(name)
@@ -52,6 +54,7 @@ async function main() {
     console.log(`  ${PROVIDER_MEDIA_SCENARIO.padEnd(32)} DeepSeek request size, image upload, tool pairing and cached file reuse`)
     console.log(`  ${COMPUTER_USE_SCENARIO.padEnd(32)} Existing CLI refreshes authorized Computer Use tools at the next turn`)
     console.log(`  ${AGENT_DESKTOP_SCENARIO.padEnd(32)} Native desktop ref actions, errors, interruption and cursor cleanup through the real CLI`)
+    console.log(`  ${TEAM_REVIEW_SCENARIO.padEnd(32)} Initial team and running-team additions wait for human review before workers start`)
     for (const scenario of MOCK_AGENT_SCENARIOS) console.log(`  ${scenario.id.padEnd(32)} ${scenario.title}`)
     return
   }
@@ -66,13 +69,18 @@ async function main() {
   const runProviderMedia = only.length === 0 || only.includes(PROVIDER_MEDIA_SCENARIO)
   const runComputerUse = only.length === 0 || only.includes(COMPUTER_USE_SCENARIO)
   const runAgentDesktop = only.length === 0 || only.includes(AGENT_DESKTOP_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop) {
+  const runTeamReview = only.length === 0 || only.includes(TEAM_REVIEW_SCENARIO)
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runTeamReview) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
   const rootDir = resolve(import.meta.dir, '../../..')
   const artifactDir = join(rootDir, 'artifacts', 'agent-e2e')
   mkdirSync(artifactDir, { recursive: true })
+  if (runTeamReview) {
+    await runTeamReviewScenario(rootDir, join(artifactDir, 'team-review'))
+    console.log(`[agent-e2e] PASS ${TEAM_REVIEW_SCENARIO}`)
+  }
   if (runAgentDesktop) {
     await runComputerUseAgentDesktopScenario(rootDir, join(artifactDir, 'computer-use-agent-desktop'))
     console.log(`[agent-e2e] PASS ${AGENT_DESKTOP_SCENARIO}`)
