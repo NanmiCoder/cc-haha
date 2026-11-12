@@ -46,7 +46,7 @@ cc-haha 自己不带模型，它只是那个替你干活的壳。装完之后第
 
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
 - **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
-- **七牛云 AI** · **OpenRouter** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
+- **七牛云 AI** · **OpenRouter** · **UberLLM** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
 - **LM Studio** · **Ollama** — 本地模型，见下一节。
 - **Custom** — 上面都没有，自己填。
 
@@ -63,6 +63,14 @@ OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kim
 - **模型 ID 带 `author/slug` 命名空间**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4-pro`。预设的四个槽位预填的都是 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑，别照抄别处的名字——模型一多，手写很容易拼错。
 - **Claude Code 只保证 Anthropic 第一方服务商的完全兼容。** 经 OpenRouter 调其他厂商的模型，工具调用、thinking 或参数形态可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
 - **要用 `/fast`**，模型槽位得固定写一个具体的 Opus ID（`~…-latest` 这类别名不会带上 fast 参数），并在「设置 JSON」的 `env` 里加 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`。想让 Claude Code 用自带的模型发现，同样在 `env` 里加 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
+
+### UberLLM
+
+UberLLM 是带 Anthropic Messages 接口的聚合平台，一个预付费密钥就能调 Claude、DeepSeek、GLM、Kimi、GPT 等多家模型。预设把接口地址填成 `https://api.uberllm.dev`，应用直连，Claude Code 会自己补上 `/v1/messages`，地址后面不要再加 `/v1`。
+
+- **模型 ID 是 `vendor/model` 格式**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4.1-flash`。四个槽位预填 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑。
+- **和 OpenRouter 一样**，经 Messages 接口调非 Anthropic 模型时，工具调用或 thinking 可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
+- 各模型价格见 https://uberllm.dev/models；剩余额度可用同一个密钥请求 `GET https://api.uberllm.dev/v1/balance`。
 
 ## 本地模型
 

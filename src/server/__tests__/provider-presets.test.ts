@@ -649,6 +649,76 @@ describe('provider presets API', () => {
     })
   })
 
+  /**
+   * UberLLM serves Anthropic Messages at its own root (and OpenAI chat at /v1),
+   * so like OpenRouter the preset stays a direct connection with no proxy, no
+   * per-model routing and no injected env.
+   */
+  describe('UberLLM preset', () => {
+    const uberllm = PROVIDER_PRESETS.find((preset) => preset.id === 'uberllm')!
+
+    test('publishes a direct Anthropic-native preset with API key signup', () => {
+      expect(uberllm).toBeDefined()
+      expect(uberllm.name).toBe('UberLLM')
+      expect(uberllm.baseUrl).toBe('https://api.uberllm.dev')
+      expect(uberllm.apiFormat).toBe('anthropic')
+      expect(uberllm.authStrategy).toBe('auth_token')
+      expect(uberllm.needsApiKey).toBe(true)
+      expect(uberllm.websiteUrl).toBe('https://uberllm.dev')
+      expect(uberllm.apiKeyUrl).toBe('https://uberllm.dev/signup')
+      expect(uberllm.deprecated).toBeUndefined()
+      // Claude Code appends /v1/messages itself; a /v1 base URL would double it.
+      expect(uberllm.baseUrl).not.toMatch(/\/v1$/)
+    })
+
+    test('stays out of the sponsor row and ships no proxy or routing rules', () => {
+      expect(uberllm.featured).toBeUndefined()
+      expect(uberllm.promoText).toBeUndefined()
+      expect(uberllm.modelApiFormats).toBeUndefined()
+      expect(uberllm.upstreamHeaders).toBeUndefined()
+      expect(uberllm.defaultEnv).toEqual({})
+      expect(providerNeedsProxy(uberllm.apiFormat, undefined)).toBe(false)
+    })
+
+    test('connects straight to UberLLM with the token and a cleared x-api-key', () => {
+      const env = buildProviderManagedEnv({
+        id: 'uberllm-test', presetId: uberllm.id, name: uberllm.name,
+        baseUrl: uberllm.baseUrl, apiFormat: uberllm.apiFormat,
+        authStrategy: uberllm.authStrategy, apiKey: 'ull-offline-fixture',
+        models: uberllm.defaultModels,
+      })
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://api.uberllm.dev')
+      expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe('ull-offline-fixture')
+      expect(env.ANTHROPIC_API_KEY).toBe('')
+      expect(env.ANTHROPIC_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('anthropic/claude-opus-5.5')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('anthropic/claude-haiku-5.5')
+      expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toMatchObject({
+        'anthropic/claude-sonnet-5.5': 1000000,
+        'anthropic/claude-opus-5.5': 1000000,
+        'anthropic/claude-haiku-5.5': 100000,
+      })
+      expect(env.API_TIMEOUT_MS).toBeUndefined()
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    })
+
+    test('publishes a context window for every model it offers as a default', () => {
+      for (const model of Object.values(uberllm.defaultModels)) {
+        expect(model).toContain('/')
+        expect(uberllm.modelContextWindows?.[model], model).toBeGreaterThan(0)
+      }
+    })
+
+    test('stays ordered before the local endpoints so the catalog layout is stable', () => {
+      const ids = PROVIDER_PRESETS.map((preset) => preset.id)
+      expect(ids.indexOf('uberllm')).toBeGreaterThan(-1)
+      expect(ids.indexOf('uberllm')).toBeLessThan(ids.indexOf('lmstudio'))
+      expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
+    })
+  })
+
   test('rejects an upstream header name that would break the upstream request', () => {
     const base = {
       id: 'probe', name: 'Probe', baseUrl: 'https://probe.test', apiFormat: 'anthropic',

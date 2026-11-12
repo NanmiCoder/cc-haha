@@ -1356,6 +1356,30 @@ describe('cc-switch candidate mapping', () => {
     })
   })
 
+  test('matches the UberLLM preset from any spelling of its root URL', async () => {
+    await writeFixtureDb([
+      { id: 'ull', sortIndex: 1, env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://api.uberllm.dev' }) },
+      { id: 'ull-trailing', sortIndex: 2, env: claudeEnv({ ANTHROPIC_BASE_URL: 'HTTPS://API.UBERLLM.DEV/' }) },
+      {
+        id: 'ull-token', sortIndex: 3,
+        meta: JSON.stringify({ apiFormat: 'anthropic', apiKeyField: 'ANTHROPIC_AUTH_TOKEN' }),
+        env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://api.uberllm.dev/', ANTHROPIC_API_KEY: '' }),
+      },
+    ])
+
+    const candidates = await scanCandidates()
+
+    for (const sourceId of ['claude:ull', 'claude:ull-trailing', 'claude:ull-token']) {
+      const candidate = candidateById(candidates, sourceId)
+      expect(candidate.presetId, sourceId).toBe('uberllm')
+      expect(candidate.importable, sourceId).toBe(true)
+    }
+    expect(candidateById(candidates, 'claude:ull-token')).toMatchObject({
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+    })
+  })
+
   test('carries range-checked context windows and boolean toggles into the provider input', async () => {
     await writeFixtureDb([{
       id: 'tuned',
