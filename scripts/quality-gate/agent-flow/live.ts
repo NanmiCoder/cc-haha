@@ -415,6 +415,8 @@ export type AgentFlowAgainstProviderOptions = {
   stepTimeoutMs: number
   /** Test-only process environment, scoped to the disposable sandbox. */
   envOverrides?: Record<string, string>
+  /** Offline scenarios can exclude host providers/proxies and guard synthetic state only. */
+  sandboxSource?: NodeJS.ProcessEnv
   scenarios: ReadonlyArray<{ id: string; title: string }>
   runners: Record<string, LiveScenarioRunner>
   /**
@@ -448,6 +450,7 @@ export async function executeAgentFlowAgainstProvider(
   const sandbox = createQualityGateSandbox({
     label: options.label,
     seedProviders: options.seedProviders,
+    source: options.sandboxSource,
     envOverrides: {
       CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1',
       // This lane stands in for a desktop user's machine, which has no CI flag. With
