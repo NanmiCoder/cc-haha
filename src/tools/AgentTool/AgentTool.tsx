@@ -176,6 +176,11 @@ type Output = z.input<OutputSchema>;
 // The 'teammate_spawned' status string is only included when ENABLE_AGENT_SWARMS is true
 type TeammateSpawnedOutput = {
   status: 'teammate_spawned' | 'teammate_staged';
+  // Set when a review-required team recorded the member in its draft plan
+  // instead of starting it (status 'teammate_staged').
+  plan_id?: string;
+  revision?: number;
+  message?: string;
   prompt: string;
   teammate_id: string;
   agent_id: string;
@@ -1380,6 +1385,25 @@ export const AgentTool = buildTool({
   mapToolResultToToolResultBlockParam(data, toolUseID) {
     // Multi-agent spawn result
     const internalData = data as InternalOutput;
+    // A review-required team records the member in its draft plan instead of
+    // starting it. The lead needs that guidance and the draft revision to submit
+    // the plan with TeamPlan; reaching the fallthrough below reported
+    // "Unexpected agent tool result status" and left the draft unsubmitted (#1856).
+    if (typeof internalData === 'object' && internalData !== null && 'status' in internalData && internalData.status === 'teammate_staged') {
+      const staged = internalData as TeammateSpawnedOutput;
+      const lines = [staged.message ?? 'Member recorded in the team draft, NOT started. Complete all members and tasks, then submit the whole plan with TeamPlan. Only human confirmation starts execution.', `name: ${staged.name}`];
+      if (staged.team_name) lines.push(`team_name: ${staged.team_name}`);
+      if (staged.plan_id) lines.push(`plan_id: ${staged.plan_id}`);
+      if (typeof staged.revision === 'number') lines.push(`revision: ${staged.revision} (use it as TeamPlan expected_revision)`);
+      return {
+        tool_use_id: toolUseID,
+        type: 'tool_result',
+        content: [{
+          type: 'text',
+          text: lines.join('\n')
+        }]
+      };
+    }
     if (typeof internalData === 'object' && internalData !== null && 'status' in internalData && internalData.status === 'teammate_spawned') {
       const spawnData = internalData as TeammateSpawnedOutput;
       return {
