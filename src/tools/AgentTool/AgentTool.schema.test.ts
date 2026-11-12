@@ -133,6 +133,75 @@ describe('AgentTool team spawn preflight', () => {
   })
 })
 
+describe('AgentTool members staged for team review (#1856)', () => {
+  const STAGING_MESSAGE =
+    'Member recorded in the team draft, NOT started. Complete all members and tasks, then submit the whole plan with TeamPlan. Only human confirmation starts execution.'
+  // The shape spawnTeammate returns when a review-required team records the
+  // member in its draft plan instead of starting it.
+  const staged = {
+    status: 'teammate_staged',
+    prompt: 'Fix the touch gesture arbitration bugs.',
+    staged: true,
+    plan_id: 'plan-follow-up',
+    revision: 3,
+    message: STAGING_MESSAGE,
+    teammate_id: '',
+    agent_id: '',
+    agent_type: 'general-purpose',
+    name: 'fix-touch',
+    team_name: 'inkbook',
+    model: 'deepseek-v4-flash',
+    tmux_session_name: '',
+    tmux_window_name: '',
+    tmux_pane_id: '',
+  }
+
+  test('hands the lead the staging guidance and draft revision instead of failing the call', () => {
+    const rendered = AgentTool.mapToolResultToToolResultBlockParam(
+      staged as never,
+      'toolu_staged_member',
+    )
+
+    expect(rendered).toEqual({
+      tool_use_id: 'toolu_staged_member',
+      type: 'tool_result',
+      content: [{
+        type: 'text',
+        text: [
+          STAGING_MESSAGE,
+          'name: fix-touch',
+          'team_name: inkbook',
+          'plan_id: plan-follow-up',
+          'revision: 3 (use it as TeamPlan expected_revision)',
+        ].join('\n'),
+      }],
+    })
+  })
+
+  test('still reports a started teammate as spawned', () => {
+    const rendered = AgentTool.mapToolResultToToolResultBlockParam(
+      { ...staged, status: 'teammate_spawned', staged: undefined, teammate_id: 'fix-touch@inkbook' } as never,
+      'toolu_spawned_member',
+    )
+
+    expect(JSON.stringify(rendered)).toContain('Spawned successfully.')
+    expect(JSON.stringify(rendered)).not.toContain('NOT started')
+  })
+
+  test('missing optional staged metadata keeps recovery guidance without inventing a revision', () => {
+    const rendered = AgentTool.mapToolResultToToolResultBlockParam(
+      { ...staged, message: undefined, team_name: undefined, plan_id: undefined, revision: undefined } as never,
+      'toolu_staged_fallback',
+    )
+    const text = JSON.stringify(rendered)
+    expect(text).toContain(STAGING_MESSAGE)
+    expect(text).toContain('name: fix-touch')
+    expect(text).not.toContain('undefined')
+    expect(text).not.toContain('plan_id:')
+    expect(text).not.toContain('revision:')
+  })
+})
+
 describe('AgentTool nested lifecycle ownership', () => {
   test('threads the immediate parent through registration, execution, and persistence', async () => {
     const appState = {
