@@ -16,28 +16,30 @@ import {
   type ClaudePlanUsageResult,
 } from '@/api/hahaOAuth'
 
-const WINDOWS: ReadonlyArray<{ key: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet'; label: TranslationKey }> = [
+const WINDOWS: ReadonlyArray<{ key: 'five_hour' | 'seven_day' | 'seven_day_oauth_apps' | 'seven_day_opus' | 'seven_day_sonnet'; label: TranslationKey }> = [
   { key: 'five_hour', label: 'settings.claudeOfficialLogin.usageFiveHour' },
   { key: 'seven_day', label: 'settings.claudeOfficialLogin.usageSevenDay' },
+  { key: 'seven_day_oauth_apps', label: 'settings.claudeOfficialLogin.usageSevenDayOauthApps' },
   { key: 'seven_day_opus', label: 'settings.claudeOfficialLogin.usageSevenDayOpus' },
   { key: 'seven_day_sonnet', label: 'settings.claudeOfficialLogin.usageSevenDaySonnet' },
 ]
 
 function formatTime(iso: string): string | null {
+  if (typeof iso !== 'string' || !iso.trim()) return null
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return null
   return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }
 
 function percent(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.max(0, Math.min(100, value))) : null
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : null
 }
 
 function toneFor(value: number) {
   return value >= 90 ? 'danger' : value >= 70 ? 'warning' : 'brand'
 }
 
-type Row = { id: string; label: string; used: number | null; resetsAt: string | null }
+type Row = { id: string; label: string; used: number | null; resetsAt: string | null; unlimited?: boolean }
 
 function rowsOf(usage: PlanUsage, t: ReturnType<typeof useTranslation>): Row[] {
   const rows: Row[] = []
@@ -47,7 +49,8 @@ function rowsOf(usage: PlanUsage, t: ReturnType<typeof useTranslation>): Row[] {
     rows.push({ id: window.key, label: t(window.label), used: percent(value.utilization), resetsAt: value.resets_at })
   }
   if (usage.extra_usage?.is_enabled) {
-    rows.push({ id: 'extra_usage', label: t('settings.claudeOfficialLogin.usageExtra'), used: percent(usage.extra_usage.utilization), resetsAt: null })
+    const unlimited = usage.extra_usage.monthly_limit === null
+    rows.push({ id: 'extra_usage', label: t('settings.claudeOfficialLogin.usageExtra'), used: unlimited ? null : percent(usage.extra_usage.utilization), resetsAt: null, unlimited })
   }
   return rows
 }
@@ -77,7 +80,7 @@ export function ClaudePlanUsage() {
   const updatedAt = result ? formatTime(result.fetchedAt) : null
   let body: ReactNode
   if (requestFailed) {
-    body = <p className="text-xs text-[var(--color-text-secondary)]">{t('settings.claudeOfficialLogin.usageUnavailable')}</p>
+    body = <p role="alert" className="text-xs text-[var(--color-text-secondary)]">{t('settings.claudeOfficialLogin.usageUnavailable')}</p>
   } else if (!result) {
     body = <p className="text-xs text-[var(--color-text-tertiary)]">{t('common.loading')}</p>
   } else if (!result.available) {
@@ -86,7 +89,7 @@ export function ClaudePlanUsage() {
       : result.status
         ? t('settings.claudeOfficialLogin.usageUnavailableStatus', { status: String(result.status) })
         : t('settings.claudeOfficialLogin.usageUnavailable')
-    body = <p className="text-xs text-[var(--color-text-secondary)]">{message}</p>
+    body = <p role="alert" className="text-xs text-[var(--color-text-secondary)]">{message}</p>
   } else {
     const rows = rowsOf(result.usage, t)
     body = rows.length === 0
@@ -95,14 +98,19 @@ export function ClaudePlanUsage() {
         <ul className="flex flex-col gap-2.5">
           {rows.map((row) => {
             const resets = row.resetsAt ? formatTime(row.resetsAt) : null
+            const values = [row.unlimited
+              ? t('settings.claudeOfficialLogin.usageUnlimited')
+              : row.used !== null
+                ? t('settings.claudeOfficialLogin.usageUsed', { percent: String(row.used) })
+                : t('settings.claudeOfficialLogin.usageUnavailableValue')]
+            if (resets) values.push(t('settings.claudeOfficialLogin.usageResetsAt', { time: resets }))
+            else if (row.id !== 'extra_usage') values.push(t('settings.claudeOfficialLogin.usageResetNotProvided'))
             return (
               <li key={row.id} data-testid={`claude-plan-usage-${row.id}`} className="flex flex-col gap-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
                   <span className="text-[var(--color-text-primary)]">{row.label}</span>
                   <span className="text-[var(--color-text-secondary)]">
-                    {row.used !== null && t('settings.claudeOfficialLogin.usageUsed', { percent: String(row.used) })}
-                    {row.used !== null && resets && ' · '}
-                    {resets && t('settings.claudeOfficialLogin.usageResetsAt', { time: resets })}
+                    {values.join(' · ')}
                   </span>
                 </div>
                 {row.used !== null && (

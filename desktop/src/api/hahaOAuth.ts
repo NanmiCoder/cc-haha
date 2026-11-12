@@ -20,6 +20,7 @@ export type ClaudePlanUsageWindow = {
 export type ClaudePlanUsage = {
   five_hour?: ClaudePlanUsageWindow | null
   seven_day?: ClaudePlanUsageWindow | null
+  seven_day_oauth_apps?: ClaudePlanUsageWindow | null
   seven_day_opus?: ClaudePlanUsageWindow | null
   seven_day_sonnet?: ClaudePlanUsageWindow | null
   extra_usage?: {

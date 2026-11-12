@@ -121,8 +121,8 @@ describe('ClaudeOfficialLogin', () => {
     render(<ClaudeOfficialLogin />)
 
     const section = await screen.findByRole('region', { name: 'Plan usage' })
-    expect(await within(section).findByText('30% used')).toBeInTheDocument()
-    expect(within(section).getByText('5% used')).toBeInTheDocument()
+    expect(await within(section).findByText(/30% used/)).toBeInTheDocument()
+    expect(within(section).getByText(/5% used/)).toBeInTheDocument()
     expect(planUsageMock).toHaveBeenCalledTimes(1)
   })
 

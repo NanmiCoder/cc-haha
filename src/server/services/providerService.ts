@@ -452,9 +452,9 @@ export class ProviderService {
    * Append several providers in one pass.
    *
    * Bulk imports (cc-switch) read the index once and write it once so a partial
-   * failure cannot leave half the batch behind. The persisted shape is
-   * addProvider's plus an optional `usageScript`, which index readers keep like
-   * any field they do not know, so no storage migration is involved.
+   * failure cannot leave half the batch behind. The index upgrade declares the
+   * optional import-only `usageScript`; old providers keep it absent, and index
+   * readers preserve its template fields through later edits.
    */
   async importProviders(inputs: ImportProviderInput[]): Promise<SavedProvider[]> {
     if (inputs.length === 0) return []

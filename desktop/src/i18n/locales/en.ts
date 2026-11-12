@@ -1,4 +1,9 @@
 export const en = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'Weekly OAuth apps limit',
+  'settings.claudeOfficialLogin.usageUnavailableValue': 'Usage unavailable',
+  'settings.claudeOfficialLogin.usageResetNotProvided': 'Reset time not provided',
+  'settings.claudeOfficialLogin.usageUnlimited': 'Unlimited',
+  'settings.providers.officialUsageNotIntegrated': 'Quota queries for this service are not integrated yet. Check usage on its official website.',
   'settings.adapters.wechatHealthStopped': "Message channel stopped",
   'settings.adapters.wechatHealthStarting': "Connecting message channel",
   'settings.adapters.wechatHealthOnline': "Message channel online",

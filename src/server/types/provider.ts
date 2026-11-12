@@ -18,6 +18,8 @@ export const PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION = 7
 export const PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION = 8
 export const PROVIDER_PROXY_CONFIG_SCHEMA_VERSION = 9
 export const PROVIDER_ENV_OWNER_SCHEMA_VERSION = 10
+// Optional import-only scripts keep old providers unchanged and preserve template fields.
+export const PROVIDER_USAGE_SCRIPT_SCHEMA_VERSION = 11
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,

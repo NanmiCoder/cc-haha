@@ -1,6 +1,11 @@
 import type { TranslationKey } from './en'
 
 export const jp: Record<TranslationKey, string> = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'OAuth アプリの週間上限',
+  'settings.claudeOfficialLogin.usageUnavailableValue': '使用量を取得できません',
+  'settings.claudeOfficialLogin.usageResetNotProvided': 'リセット時刻は未提供',
+  'settings.claudeOfficialLogin.usageUnlimited': '上限なし',
+  'settings.providers.officialUsageNotIntegrated': 'このサービスの使用量照会はまだ連携されていません。公式サイトで確認してください。',
   'settings.adapters.wechatHealthStopped': "メッセージ接続は停止中",
   'settings.adapters.wechatHealthStarting': "メッセージ接続中",
   'settings.adapters.wechatHealthOnline': "メッセージ接続はオンライン",

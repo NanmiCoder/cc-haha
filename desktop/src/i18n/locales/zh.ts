@@ -1,6 +1,11 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'OAuth 应用每周额度',
+  'settings.claudeOfficialLogin.usageUnavailableValue': '用量不可用',
+  'settings.claudeOfficialLogin.usageResetNotProvided': '未提供重置时间',
+  'settings.claudeOfficialLogin.usageUnlimited': '不限额',
+  'settings.providers.officialUsageNotIntegrated': '此服务的额度查询尚未接入，请前往其官方页面查看。',
   'settings.adapters.wechatHealthStopped': "消息通道已停止",
   'settings.adapters.wechatHealthStarting': "正在连接消息通道",
   'settings.adapters.wechatHealthOnline': "消息通道在线",

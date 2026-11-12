@@ -13,7 +13,7 @@ import { getDesktopHost } from '../../lib/desktopHost'
 import { OfficialLoginRiskDialog } from './OfficialLoginRiskDialog'
 import { ClaudePlanUsage } from './ClaudePlanUsage'
 
-export function ClaudeOfficialLogin() {
+export function ClaudeOfficialLogin({ usageOnly = false }: { usageOnly?: boolean } = {}) {
   const t = useTranslation()
   const [riskDialogOpen, setRiskDialogOpen] = useState(false)
   const {
@@ -65,6 +65,7 @@ export function ClaudeOfficialLogin() {
   }
 
   if (status.loggedIn) {
+    if (usageOnly) return <ClaudePlanUsage />
     const subTypeLabel = status.subscriptionType
       ? status.subscriptionType.toUpperCase()
       : t('settings.claudeOfficialLogin.subTypeUnknown')
@@ -85,6 +86,8 @@ export function ClaudeOfficialLogin() {
       </div>
     )
   }
+
+  if (usageOnly) return null
 
   return (
     <div className="flex flex-col gap-2">

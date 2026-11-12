@@ -54,6 +54,44 @@ describe('persistent storage upgrade migrations', () => {
     expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
   })
 
+  test.each([9, 10])('upgrades the pre-usage-script v%i index with a backup while preserving optional scripts and unknown fields', async (schemaVersion) => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const provider = {
+      id: 'old', presetId: 'custom', name: 'Old', apiKey: 'fake-key', baseUrl: 'https://example.test',
+      models: { main: 'fixture', haiku: '', sonnet: '', opus: '' },
+      futureOwnership: { preserve: true }, futureProvider: { keep: true },
+    }
+    const script = { enabled: true, code: 'fake stored script', accessToken: 'fake-usage-token', futureTemplate: { keep: true } }
+    const old = { schemaVersion, activeId: 'old', providers: [provider, { ...provider, id: 'scripted', usageScript: script }], futureRoot: true }
+    const managed = {
+      ...(schemaVersion === 10 ? { providerEnvOwner: 'scripted' } : {}),
+      env: { CLAUDE_CODE_SUBAGENT_MODEL: 'fixture-subagent', CUSTOM_ENV: 'keep' },
+      futureSetting: { keep: true },
+    }
+    await fs.writeFile(file, JSON.stringify(old))
+    await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify(managed))
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const upgraded = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(upgraded.schemaVersion).toBeGreaterThan(10)
+    expect(upgraded.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    expect(upgraded.providers[0]).not.toHaveProperty('usageScript')
+    expect(upgraded.providers[0].futureOwnership).toEqual(provider.futureOwnership)
+    expect(upgraded.providers[0].futureProvider).toEqual(provider.futureProvider)
+    expect(upgraded.providers[1].usageScript).toEqual(script)
+    expect(upgraded.futureRoot).toBe(true)
+    expect(JSON.parse(await fs.readFile(path.join(dir, 'settings.json'), 'utf8'))).toEqual({
+      ...managed,
+      providerEnvOwner: schemaVersion === 10 ? 'scripted' : 'old',
+    })
+    const backups = (await listFiles(dir)).filter(name => name.startsWith('providers.json.bak-before-migration-'))
+    expect(backups).toHaveLength(1)
+    expect(JSON.parse(await fs.readFile(path.join(dir, backups[0]!), 'utf8'))).toEqual(old)
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+  })
+
   test('upgrades v6 image settings to an explicit protocol and preserves unknown fields on later edits', async () => {
     const dir = path.join(tempDir, 'cc-haha')
     const file = path.join(dir, 'providers.json')

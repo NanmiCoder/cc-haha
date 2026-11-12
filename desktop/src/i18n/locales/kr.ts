@@ -1,6 +1,11 @@
 import type { TranslationKey } from './en'
 
 export const kr: Record<TranslationKey, string> = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'OAuth 앱 주간 한도',
+  'settings.claudeOfficialLogin.usageUnavailableValue': '사용량 확인 불가',
+  'settings.claudeOfficialLogin.usageResetNotProvided': '초기화 시간 미제공',
+  'settings.claudeOfficialLogin.usageUnlimited': '한도 없음',
+  'settings.providers.officialUsageNotIntegrated': '이 서비스의 사용량 조회는 아직 연동되지 않았습니다. 공식 웹사이트에서 확인하세요.',
   'settings.adapters.wechatHealthStopped': "메시지 연결 중지됨",
   'settings.adapters.wechatHealthStarting': "메시지 연결 중",
   'settings.adapters.wechatHealthOnline': "메시지 연결 온라인",

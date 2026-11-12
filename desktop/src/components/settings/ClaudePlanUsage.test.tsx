@@ -56,11 +56,11 @@ describe('ClaudePlanUsage', () => {
       .mockResolvedValueOnce({ available: true, fetchedAt: FETCHED_AT, usage: { five_hour: { utilization: 55, resets_at: null } } })
 
     render(<ClaudePlanUsage />)
-    expect(await screen.findByText('10% used')).toBeInTheDocument()
+    expect(await screen.findByText(/10% used/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
 
-    expect(await screen.findByText('55% used')).toBeInTheDocument()
+    expect(await screen.findByText(/55% used/)).toBeInTheDocument()
     expect(planUsageMock).toHaveBeenCalledTimes(2)
   })
 
@@ -95,5 +95,51 @@ describe('ClaudePlanUsage', () => {
     render(<ClaudePlanUsage />)
 
     await waitFor(() => expect(screen.getByText('Usage is unavailable right now.')).toBeInTheDocument())
+  })
+
+  it('shows the OAuth apps weekly limit even when it is the only reported quota', async () => {
+    planUsageMock.mockResolvedValue({ available: true, fetchedAt: FETCHED_AT, usage: {
+      seven_day_oauth_apps: { utilization: 63, resets_at: WEEKLY_RESET },
+    } })
+    render(<ClaudePlanUsage />)
+    const row = await screen.findByTestId('claude-plan-usage-seven_day_oauth_apps')
+    expect(row).toHaveTextContent('Weekly OAuth apps limit')
+    expect(row).toHaveTextContent(`63% used · Resets ${format(WEEKLY_RESET)}`)
+  })
+
+  it.each([
+    { utilization: null, resets_at: null },
+    { utilization: '42', resets_at: 'invalid-date' },
+    { utilization: -5, resets_at: '' },
+  ])('explains missing or invalid quota fields without inventing values: %j', async (window) => {
+    planUsageMock.mockResolvedValue({ available: true, fetchedAt: FETCHED_AT, usage: { five_hour: window } })
+    render(<ClaudePlanUsage />)
+    const row = await screen.findByTestId('claude-plan-usage-five_hour')
+    expect(row).toHaveTextContent('Usage unavailable')
+    expect(row).toHaveTextContent('Reset time not provided')
+    expect(within(row).queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('shows unlimited extra usage without fabricating a percentage or reset', async () => {
+    planUsageMock.mockResolvedValue({ available: true, fetchedAt: FETCHED_AT, usage: {
+      extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 1234, utilization: null },
+    } })
+    render(<ClaudePlanUsage />)
+    const row = await screen.findByTestId('claude-plan-usage-extra_usage')
+    expect(row).toHaveTextContent('Unlimited')
+    expect(within(row).queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(row).not.toHaveTextContent('Resets')
+  })
+
+  it('keeps a real zero utilization and explains an absent reset', async () => {
+    planUsageMock.mockResolvedValue({ available: true, fetchedAt: FETCHED_AT, usage: {
+      five_hour: { utilization: 0, resets_at: null },
+      extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+    } })
+    render(<ClaudePlanUsage />)
+    const row = await screen.findByTestId('claude-plan-usage-five_hour')
+    expect(row).toHaveTextContent('0% used · Reset time not provided')
+    expect(within(row).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.queryByTestId('claude-plan-usage-extra_usage')).not.toBeInTheDocument()
   })
 })
