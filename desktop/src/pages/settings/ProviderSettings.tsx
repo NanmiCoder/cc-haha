@@ -1579,6 +1579,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         const mergedEnv: Record<string, unknown> = {
           ...cleanedEnv,
           ...omitAuthEnv(selectedPreset.defaultEnv),
+          ...(writesManagedSettings && settings.providerEnvOwner === provider?.id && typeof existingEnv.CLAUDE_CODE_SUBAGENT_MODEL === 'string'
+            ? { CLAUDE_CODE_SUBAGENT_MODEL: existingEnv.CLAUDE_CODE_SUBAGENT_MODEL }
+            : {}),
           ...(autoCompactWindowEnv ? { [AUTO_COMPACT_WINDOW_ENV_KEY]: autoCompactWindowEnv } : {}),
           ...(Object.keys(modelContextWindows).length > 0
             ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
@@ -1604,6 +1607,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
         // (or whatever was last selected) and saving would write that back.
         delete merged.model
         delete merged.modelContext
+        delete merged.providerEnvOwner
         setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)), null, 2))
       }).catch(() => {
         if (!cancelled && !settingsJsonUserEditedRef.current) {
