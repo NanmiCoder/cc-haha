@@ -76,6 +76,16 @@ const desktopNativeExactPaths = new Set([
   'desktop/scripts/build-macos-arm64.sh',
   'desktop/scripts/build-windows-x64.ps1',
   'desktop/scripts/build-linux.sh',
+  'desktop/build/installer.nsh',
+  'desktop/build/check-install-processes.ps1',
+  'desktop/build/check-install-processes.nsh',
+  'desktop/build/recover-legacy-install-data.ps1',
+  'scripts/pr/prepare-windows-installer-tests.ts',
+  'scripts/pr/run-windows-installer-checks.ts',
+  'scripts/pr/windows-installer-process-check.test.ts',
+  'scripts/pr/windows-installer-recovery.test.ts',
+  'scripts/pr/windows-installer-native-fixtures.ts',
+  'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
 ])
 
 const desktopWebExactPaths = new Set([

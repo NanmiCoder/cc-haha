@@ -203,6 +203,24 @@ describe('evaluateChangePolicy', () => {
   })
 
   test.each([
+    'desktop/build/installer.nsh',
+    'desktop/build/check-install-processes.ps1',
+    'desktop/build/check-install-processes.nsh',
+    'desktop/build/recover-legacy-install-data.ps1',
+    'scripts/pr/prepare-windows-installer-tests.ts',
+    'scripts/pr/run-windows-installer-checks.ts',
+    'scripts/pr/windows-installer-process-check.test.ts',
+    'scripts/pr/windows-installer-recovery.test.ts',
+    'scripts/pr/windows-installer-native-fixtures.ts',
+    'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
+  ])('runs the native jobs for a standalone installer dependency or fixture: %s', file => {
+    const result = evaluateChangePolicy([file])
+    expect(result.checks.desktopNative).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test.each([
     'native/cu-helper/Sources/cu-helper/VirtualCursor.swift',
     'native/cu-helper/Tests/CuHelperTests/VirtualCursorResourceTests.swift',
     'native/cu-helper/Sources/cu-helper/Resources/LensSequence/frame_000.png',

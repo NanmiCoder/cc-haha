@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { renderInstallProcessHelperNsh } from '../../desktop/scripts/generate-install-process-helper-nsh'
+import { fallbackApiCases, readFallbackMacros, renderFallbackApiHarness } from './windows-installer-native-fixtures'
 
 function decodeFileWrites(nsh: string): string {
   return [...nsh.matchAll(/^\s*FileWrite \$0 "(.*)"$/gm)]
@@ -14,6 +15,51 @@ function decodeFileWrites(nsh: string): string {
 }
 
 describe('Windows installer process matching', () => {
+  test.skipIf(process.platform !== 'win32')('fails closed at the real NSIS fallback API boundaries and preserves its stack', () => {
+    const compiler = process.env.CC_HAHA_TEST_MAKENSIS
+    if (!compiler || !existsSync(compiler)) {
+      throw new Error('Run the prepared Windows installer lane with its locked NSIS compiler')
+    }
+    const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-api-'))
+    const env = createSandboxedTestEnvironment(path.join(root, 'home'))
+    const missingRoot = path.join(root, 'unreadable-or-missing-install')
+    expect(existsSync(missingRoot)).toBe(false)
+    const current = readFallbackMacros(readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n'))
+    const before = readFallbackMacros(readFileSync('scripts/pr/fixtures/installer-fallback-before-root-identity.nsh', 'utf8').replace(/\r\n/g, '\n'), true)
+    try {
+      for (const [version, macros] of [['before', before], ['current', current]] as const) {
+        const executable = path.join(root, `${version}.exe`)
+        const source = path.join(root, `${version}.nsi`)
+        const journal = path.join(root, `${version}.log`)
+        writeFileSync(source, renderFallbackApiHarness(macros, executable, journal, missingRoot))
+        const compile = spawnSync(compiler, ['/V2', source], { env, encoding: 'utf8', timeout: 30_000 })
+        expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
+        expect(compile.status, compile.stderr || compile.stdout).toBe(0)
+        const cases = version === 'before'
+          ? [{ name: 'root-open-error', expected: 1 }]
+          : fallbackApiCases
+        for (const fixture of cases) {
+          const run = spawnSync(executable, ['/S', `/CASE=${fixture.name}`], { env, timeout: 15_000, windowsHide: true })
+          expect(run.error, `${version}/${fixture.name}`).toBeUndefined()
+          expect(run.status, `${version}/${fixture.name}`).toBe(0)
+          const trace = readFileSync(journal, 'utf8')
+          expect(trace, `${version}/${fixture.name}`).toContain(`results=${fixture.expected},${fixture.expected},${fixture.expected};`)
+          expect(trace, `${version}/${fixture.name}`).toContain('handles=0;allocations=0;badClose=0;stack=stack-canary;zero=caller-zero;one=caller-one;seven=caller-seven;')
+          if (version === 'before') {
+            // The frozen original macro claims external ownership even when
+            // the installation root could not be established. The current
+            // macro must return 0 for this exact same native fixture.
+            expect(trace).toContain('other software outside the install directory')
+          } else if (fixture.expected === 0) {
+            expect(trace).toContain('Close them manually.')
+          }
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 120_000)
+
   test.skipIf(process.platform !== 'win32')('handles blocked helper writes and old-uninstaller results in native NSIS', () => {
     const compiler = process.env.CC_HAHA_TEST_MAKENSIS ?? path.join(
       process.env.LOCALAPPDATA ?? '', 'electron-builder', 'Cache', 'nsis',
@@ -248,11 +294,21 @@ SectionEnd
     mkdirSync(bundledDir, { recursive: true })
     const probeSource = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'ping.exe')
     const probes: ChildProcess[] = []
+    const stopProbe = (probe: ChildProcess) => new Promise<void>((resolve, reject) => {
+      if (!probe.pid || probe.exitCode !== null || probe.signalCode !== null) return resolve()
+      probe.once('exit', () => resolve())
+      probe.once('error', reject)
+      probe.kill()
+    })
     const startProbe = async (directory: string, imageName = 'OpenConsole.exe') => {
       const executable = path.join(directory, imageName)
       copyFileSync(probeSource, executable)
       const probe = spawn(executable, ['-t', '127.0.0.1'], { stdio: 'ignore', windowsHide: true })
       probes.push(probe)
+      await new Promise<void>((resolve, reject) => {
+        probe.once('spawn', () => resolve())
+        probe.once('error', reject)
+      })
       await new Promise(resolve => setTimeout(resolve, 500))
       expect(probe.exitCode).toBeNull()
       return probe.pid!
@@ -319,7 +375,7 @@ SectionEnd
       expect(withBundled).toContain(`OpenConsole.exe (PID ${bundledPid});`)
       expect(withBundled).not.toContain(`PID ${foreignPid})`)
       expect(withBundled).toContain('Close them manually.')
-      probes.pop()!.kill()
+      await stopProbe(probes.pop()!)
 
       // Names only this app uses still block wherever the process runs from.
       const sidecarPid = await startProbe(foreignDir, 'claude-sidecar.exe')
@@ -328,11 +384,7 @@ SectionEnd
       expect(withSidecar).toContain(`claude-sidecar.exe (PID ${sidecarPid});`)
       expect(withSidecar).not.toContain(`PID ${bundledPid})`)
     } finally {
-      await Promise.all(probes.map(probe => new Promise<void>((resolve) => {
-        if (probe.exitCode !== null || probe.signalCode !== null) return resolve()
-        probe.once('exit', () => resolve())
-        probe.kill()
-      })))
+      await Promise.all(probes.map(stopProbe))
       rmSync(root, { recursive: true, force: true })
     }
   }, 120_000)

@@ -306,9 +306,47 @@ FunctionEnd
 ; path or the install directory cannot be read), which stays fail-closed. The
 ; names only this app uses still block on the name alone. Keep the names in
 ; sync with the findstr list in CcHahaFindInstallProcess.
+; Clobbers R1, R6, R7 and R8; the caller saves them. Opening the actual file or
+; directory resolves aliases on both sides of the comparison. An existence
+; query cannot distinguish a missing directory from denied access.
+!macro CcHahaReadFinalProcessPath _PATH _RETURN
+  ; FILE_READ_ATTRIBUTES, share read|write|delete, OPEN_EXISTING, BACKUP_SEMANTICS
+  System::Call 'kernel32::CreateFileW(w "${_PATH}", i 0x80, i 7, p 0, i 3, i 0x02000000, p 0) p.R6'
+  StrCpy ${_RETURN} ""
+  ${If} $R6 <> -1
+    System::Call 'kernel32::GetFinalPathNameByHandleW(p R6, w .R7, i ${NSIS_MAX_STRLEN}, i 0) i.R8'
+    System::Call 'kernel32::CloseHandle(p R6)'
+    StrLen $R1 $R7
+    ${If} $R8 > 0
+    ${AndIf} $R8 < ${NSIS_MAX_STRLEN}
+    ${AndIf} $R8 = $R1
+      ; VOLUME_NAME_DOS returns an extended drive or UNC path. Do not accept an
+      ; unexpected namespace as proof that a process belongs to other software.
+      StrCpy $R1 $R7 8
+      ${If} $R1 == "\\?\UNC\"
+        StrCpy ${_RETURN} $R7
+      ${Else}
+        StrCpy $R1 $R7 4
+        ${If} $R1 == "\\?\"
+          StrCpy $R1 $R7 2 5
+          ${If} $R1 == ":\"
+            StrCpy ${_RETURN} $R7
+          ${Else}
+            StrCpy ${_RETURN} ""
+          ${EndIf}
+        ${Else}
+          StrCpy ${_RETURN} ""
+        ${EndIf}
+      ${EndIf}
+    ${Else}
+      StrCpy ${_RETURN} ""
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 !macro CcHahaAttributeFallbackMatches _FILE _RETURN
-  Push $0  ; install directory as the kernel resolves it, "" if it does not exist, "*" if unknown
-  Push $R1 ; install directory as given, long form, with a trailing backslash
+  Push $0  ; canonical installation directory, empty means unknown
+  Push $R1 ; scratch
   Push $R2 ; process snapshot
   Push $R3 ; PROCESSENTRY32W
   Push $R4 ; process id
@@ -318,108 +356,85 @@ FunctionEnd
   Push $R8 ; call results
   Push $R9 ; processes that block setup
   StrCpy $R9 ""
-  StrCpy $R1 "$INSTDIR"
-  System::Call 'kernel32::GetFullPathNameW(w R1, i ${NSIS_MAX_STRLEN}, w .R7, p 0) i.R8'
-  ${If} $R8 <> 0
-    StrCpy $R1 $R7
-  ${EndIf}
-  System::Call 'kernel32::GetLongPathNameW(w R1, w .R7, i ${NSIS_MAX_STRLEN}) i.R8'
-  ${If} $R8 <> 0
-    StrCpy $R1 $R7
-  ${EndIf}
-  StrCpy $R8 $R1 1 -1
-  ${If} $R8 != "\"
-    StrCpy $R1 "$R1\"
-  ${EndIf}
-
-  ; A process path is reported after junctions, directory symlinks and SUBST
-  ; drives are resolved, so the install directory is compared in that form too.
-  StrCpy $0 ""
-  ${If} ${FileExists} "$R1*.*"
-    StrCpy $0 "*"
-    ; FILE_READ_ATTRIBUTES, share read|write|delete, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS
-    System::Call 'kernel32::CreateFileW(w R1, i 0x80, i 7, p 0, i 3, i 0x02000000, p 0) i.R6'
-    ${If} $R6 <> -1
-      ; FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
-      System::Call 'kernel32::GetFinalPathNameByHandleW(i R6, w .R7, i ${NSIS_MAX_STRLEN}, i 0) i.R8'
-      System::Call 'kernel32::CloseHandle(i R6)'
-      ${If} $R8 <> 0
-      ${AndIf} $R8 < ${NSIS_MAX_STRLEN}
-        StrCpy $R8 $R7 8
-        ${If} $R8 == "\\?\UNC\"
-          StrCpy $0 $R7 "" 8
-          StrCpy $0 "\\$0"
-        ${Else}
-          StrCpy $0 $R7 "" 4
-        ${EndIf}
-        StrCpy $R8 $0 1 -1
-        ${If} $R8 != "\"
-          StrCpy $0 "$0\"
-        ${EndIf}
-      ${EndIf}
+  !insertmacro CcHahaReadFinalProcessPath "$INSTDIR" $0
+  ${If} $0 == ""
+    StrCpy $R9 " (the install directory could not be resolved);"
+  ${Else}
+    StrCpy $R8 $0 1 -1
+    ${If} $R8 != "\"
+      StrCpy $0 "$0\"
+    ${EndIf}
+    StrCpy $R8 $0 1 -1
+    ${If} $R8 != "\"
+      StrCpy $0 ""
+      StrCpy $R9 " (the install directory path is too long);"
     ${EndIf}
   ${EndIf}
 
   ; TH32CS_SNAPPROCESS
-  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) i.R2'
+  System::Call 'kernel32::CreateToolhelp32Snapshot(i 2, i 0) p.R2'
   ${If} $R2 = -1
     StrCpy $R9 " (the process list could not be read);"
   ${Else}
     System::Alloc 1024
     Pop $R3
-    ; dwSize of the 32-bit PROCESSENTRY32W this installer stub uses.
-    System::Call '*$R3(i 556)'
-    System::Call 'kernel32::Process32FirstW(i R2, p R3) i.R8'
-    ${If} $R8 = 0
-      StrCpy $R9 " (the process list could not be read);"
-    ${EndIf}
-    ${While} $R8 <> 0
-      System::Call '*$R3(i, i, i .R4, i, i, i, i, i, i, &w260 .R5)'
-      ${If} $R4 != $pid
-        ${If} $R5 == "${_FILE}"
-        ${OrIf} $R5 == "claude-sidecar-x86_64-pc-windows-msvc.exe"
-        ${OrIf} $R5 == "claude-sidecar-aarch64-pc-windows-msvc.exe"
-        ${OrIf} $R5 == "claude-sidecar.exe"
-          StrCpy $R9 "$R9 $R5 (PID $R4);"
-        ${ElseIf} $R5 == "OpenConsole.exe"
-        ${OrIf} $R5 == "winpty-agent.exe"
-        ${OrIf} $R5 == "rg.exe"
-          StrCpy $R7 ""
-          ; PROCESS_QUERY_LIMITED_INFORMATION
-          System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i R4) i.R6'
-          ${If} $R6 <> 0
-            System::Call 'kernel32::QueryFullProcessImageNameW(i R6, i 0, w .R7, *i ${NSIS_MAX_STRLEN}) i.R8'
-            ${If} $R8 = 0
-              StrCpy $R7 ""
+    ${If} $R3 = 0
+      StrCpy $R9 " (the process list buffer could not be allocated);"
+    ${Else}
+      ; dwSize of the 32-bit PROCESSENTRY32W this installer stub uses.
+      System::Call '*$R3(i 556)'
+      System::Call 'kernel32::Process32FirstW(p R2, p R3) i.R8'
+      ${If} $R8 = 0
+        StrCpy $R9 " (the process list could not be read);"
+      ${EndIf}
+      ${While} $R8 <> 0
+        System::Call '*$R3(i, i, i .R4, i, i, i, i, i, i, &w260 .R5)'
+        ${If} $R4 != $pid
+          ${If} $R5 == "${_FILE}"
+          ${OrIf} $R5 == "claude-sidecar-x86_64-pc-windows-msvc.exe"
+          ${OrIf} $R5 == "claude-sidecar-aarch64-pc-windows-msvc.exe"
+          ${OrIf} $R5 == "claude-sidecar.exe"
+            StrCpy $R9 "$R9 $R5 (PID $R4);"
+          ${ElseIf} $R5 == "OpenConsole.exe"
+          ${OrIf} $R5 == "winpty-agent.exe"
+          ${OrIf} $R5 == "rg.exe"
+            StrCpy $R7 ""
+            ; PROCESS_QUERY_LIMITED_INFORMATION
+            System::Call 'kernel32::OpenProcess(i 0x1000, i 0, i R4) p.R6'
+            ${If} $R6 <> 0
+              System::Call 'kernel32::QueryFullProcessImageNameW(p R6, i 0, w .R7, *i ${NSIS_MAX_STRLEN}) i.R8'
+              ${If} $R8 = 0
+                StrCpy $R7 ""
+              ${EndIf}
+              System::Call 'kernel32::CloseHandle(p R6)'
             ${EndIf}
-            System::Call 'kernel32::CloseHandle(i R6)'
-          ${EndIf}
-          ${If} $R7 == ""
-            StrCpy $R9 "$R9 $R5 (PID $R4, path unavailable);"
-          ${ElseIf} $0 == "*"
-            StrCpy $R9 "$R9 $R5 (PID $R4, install directory could not be resolved);"
-          ${Else}
-            System::Call 'kernel32::GetLongPathNameW(w R7, w .R6, i ${NSIS_MAX_STRLEN}) i.R8'
-            ${If} $R8 <> 0
-              StrCpy $R7 $R6
-            ${EndIf}
-            StrLen $R8 $R1
-            StrCpy $R8 $R7 $R8
-            StrLen $R6 $0
-            StrCpy $R6 $R7 $R6
-            ${If} $R8 == $R1
-              StrCpy $R9 "$R9 $R5 (PID $R4);"
-            ${ElseIf} $0 != ""
-            ${AndIf} $R6 == $0
-              StrCpy $R9 "$R9 $R5 (PID $R4);"
+            ${If} $R7 == ""
+              StrCpy $R9 "$R9 $R5 (PID $R4, path unavailable);"
+            ${ElseIf} $0 == ""
+              StrCpy $R9 "$R9 $R5 (PID $R4, install directory could not be resolved);"
+            ${Else}
+              !insertmacro CcHahaReadFinalProcessPath "$R7" $R7
+              StrLen $R6 $0
+              StrCpy $R6 $R7 $R6
+              ${If} $R7 == ""
+                StrCpy $R9 "$R9 $R5 (PID $R4, path identity unavailable);"
+              ${ElseIf} $R6 == $0
+                StrCpy $R9 "$R9 $R5 (PID $R4);"
+              ${EndIf}
             ${EndIf}
           ${EndIf}
         ${EndIf}
-      ${EndIf}
-      System::Call 'kernel32::Process32NextW(i R2, p R3) i.R8'
-    ${EndWhile}
-    System::Free $R3
-    System::Call 'kernel32::CloseHandle(i R2)'
+        ; Capture the API error before any plug-in cleanup can overwrite it.
+        System::Call 'kernel32::Process32NextW(p R2, p R3) i.R8 ?e'
+        Pop $R6
+        ${If} $R8 = 0
+        ${AndIf} $R6 <> 18 ; ERROR_NO_MORE_FILES is the only successful end
+          StrCpy $R9 "$R9 (the process list could not be completed);"
+        ${EndIf}
+      ${EndWhile}
+      System::Free $R3
+    ${EndIf}
+    System::Call 'kernel32::CloseHandle(p R2)'
   ${EndIf}
 
   ${If} $R9 == ""

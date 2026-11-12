@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
+import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
+import { runWindowsInstallerChecks } from './run-windows-installer-checks'
+import { createHash } from 'node:crypto'
 
 type WorkflowJob = {
   if?: string
@@ -16,6 +19,7 @@ type WorkflowJob = {
     name?: string
     run?: string
     uses?: string
+    if?: string
     with?: Record<string, unknown>
     'working-directory'?: string
   }>
@@ -84,6 +88,7 @@ describe('PR quality workflow', () => {
       'agent-e2e-checks',
       'adapter-checks',
       'desktop-native-checks',
+      'windows-installer-checks',
       'macos-swift-checks',
       'persistence-checks',
       'docs-checks',
@@ -219,23 +224,27 @@ describe('PR quality workflow', () => {
     }
   })
 
-  test('requires macOS Swift checks alongside the selected Linux native packaging lane', () => {
+  test('requires native Windows installer and macOS checks alongside Linux packaging', () => {
     const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
     const macos = jobs['macos-swift-checks']!
     const linux = jobs['desktop-native-checks']!
+    const windows = jobs['windows-installer-checks']!
     const gate = jobs['pr-quality-gate']!
     expect(macos['runs-on']).toBe('macos-latest')
     expect(linux['runs-on']).toBe('ubuntu-22.04')
-    for (const job of [macos, linux]) {
+    expect(windows['runs-on']).toBe('windows-latest')
+    for (const job of [macos, linux, windows]) {
       expect(job.needs).toBe('scope-plan')
       expect(job.if).toBe("needs.scope-plan.outputs.desktop_native_checks == 'true'")
       expect(job['continue-on-error']).not.toBe(true)
     }
     expect(macos.steps?.some(step => step.run === 'bun run check:swift')).toBe(true)
     expect(linux.steps?.some(step => step.run === 'bun run check:native')).toBe(true)
+    expect(windows.steps?.some(step => step.run === 'bun --no-env-file scripts/pr/run-windows-installer-checks.ts')).toBe(true)
     expect(gate.needs).toContain('macos-swift-checks')
     expect(gate.needs).toContain('desktop-native-checks')
+    expect(gate.needs).toContain('windows-installer-checks')
     expect(packageJson.scripts['check:swift']).toBe('bun run scripts/pr/run-swift-checks.ts')
     expect(packageJson.scripts['check:policy']).toContain('scripts/pr/run-swift-checks.test.ts')
     expect(packageJson.scripts['check:policy']).toContain('scripts/quality-gate/package-smoke/index.test.ts')
@@ -249,9 +258,12 @@ describe('PR quality workflow', () => {
     { selected: true, macos: 'failure', linux: 'success', exit: 1 },
     { selected: true, macos: 'skipped', linux: 'success', exit: 1 },
     { selected: true, macos: 'success', linux: 'failure', exit: 1 },
+    { selected: true, macos: 'success', linux: 'success', windows: 'failure', exit: 1 },
+    { selected: true, macos: 'success', linux: 'success', windows: 'skipped', exit: 1 },
     { selected: false, macos: 'skipped', linux: 'skipped', exit: 0 },
     { selected: false, macos: 'success', linux: 'skipped', exit: 1 },
-  ])('enforces both native results in the stable gate: %j', scenario => {
+    { selected: false, macos: 'skipped', linux: 'skipped', windows: 'success', exit: 1 },
+  ])('enforces all selected native results in the stable gate: %j', scenario => {
     const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
     const gateScript = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
     const script = gateScript.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
@@ -259,6 +271,7 @@ describe('PR quality workflow', () => {
       if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
       if (expression === 'needs.macos-swift-checks.result') return scenario.macos
       if (expression === 'needs.desktop-native-checks.result') return scenario.linux
+      if (expression === 'needs.windows-installer-checks.result') return scenario.windows ?? (scenario.selected ? 'success' : 'skipped')
       if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
       return 'skipped'
     })
@@ -539,6 +552,250 @@ describe('full quality workflow', () => {
 
     expect(runs.some((run) => run.includes('module-graph.test.ts'))).toBe(true)
     expect(runs.some((run) => run.includes('check:impact'))).toBe(true)
+  })
+})
+
+describe('Windows installer lane preparation and isolation', () => {
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-installer-lane-unit-'))
+    const sourceRoot = join(root, 'source')
+    const tempParent = join(root, 'system-temp')
+    const manifestFile = join(sourceRoot, 'artifacts/windows-installer/prepared.json')
+    mkdirSync(sourceRoot)
+    mkdirSync(tempParent)
+    const bytes = Buffer.from('locked installer fixture bytes')
+    const expected = {
+      tag: 'fixture', assetId: 1, fileName: 'fixture-setup.exe', url: 'https://example.invalid/locked-setup',
+      bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'),
+    }
+    const options = {
+      platform: 'win32' as const, sourceRoot, tempParent, manifestFile, fixture: expected,
+      acquireTools: async (_source: string, dependencyRoot: string) => {
+        const compiler = join(dependencyRoot, 'nsis/Bin/makensis.exe')
+        const templates = join(sourceRoot, 'desktop/node_modules/app-builder-lib/templates/nsis')
+        mkdirSync(join(dependencyRoot, 'nsis/Bin'), { recursive: true })
+        mkdirSync(join(templates, 'include'), { recursive: true })
+        writeFileSync(compiler, 'fixture compiler; never executed')
+        writeFileSync(join(templates, 'include/getProcessInfo.nsh'), '; fixture')
+        return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: createHash('sha256').update('fixture compiler; never executed').digest('hex') }
+      },
+      download: async (url: string, file: string) => {
+        expect(url).toBe(expected.url)
+        writeFileSync(file, bytes)
+      },
+      extract: async (_source: string, _installer: string, output: string) => {
+        const file = join(output, 'Uninstall fixture.exe')
+        writeFileSync(file, 'MZ fixture bytes; never executed')
+        return { status: 'extracted' as const, method: 'injected fixture extractor', diagnostics: [], file }
+      },
+    }
+    return { root, sourceRoot, tempParent, manifestFile, bytes, expected, options }
+  }
+
+  test('prepares pinned dependencies before offline tests and keeps evidence before cleanup', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const steps = jobs['windows-installer-checks'].steps ?? []
+    const prepare = steps.findIndex(step => step.run === 'bun --no-env-file scripts/pr/prepare-windows-installer-tests.ts')
+    const run = steps.findIndex(step => step.run === 'bun --no-env-file scripts/pr/run-windows-installer-checks.ts')
+    expect(prepare).toBeGreaterThan(-1)
+    expect(prepare).toBeLessThan(run)
+    for (const directory of [undefined, 'desktop']) {
+      const install = steps.findIndex(step => step['working-directory'] === directory && step.run === 'bun install --frozen-lockfile')
+      expect(install).toBeGreaterThan(-1)
+      expect(install).toBeLessThan(prepare)
+    }
+    const evidence = steps.findIndex(step => step.uses === 'actions/upload-artifact@v4' && step.with?.name === 'windows-installer-evidence')
+    const cleanup = steps.findIndex(step => step.run?.endsWith('--cleanup-prepared'))
+    expect(evidence).toBeGreaterThan(run)
+    expect(cleanup).toBeGreaterThan(evidence)
+    expect(steps[evidence].if).toBe('always()')
+    expect(steps[cleanup].if).toBe('always()')
+    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('windows-installer-smoke.ps1')
+    expect(historicalInstallerFixture).toMatchObject({
+      assetId: 730495182, bytes: 230611497,
+      sha256: 'dca6bb82f4d0fbee8d43c91912e4d50e7dcea69a7cb22c51cdd9cb265767c7e7',
+    })
+  })
+
+  test('verifies the whole fixture and records extraction without approving old-version compatibility', async () => {
+    const f = fixture()
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      expect(prepared.status).toBe('prepared')
+      expect(prepared.historicalInstaller).toMatchObject({ verified: true, bytes: f.bytes.length, sha256: f.expected.sha256 })
+      expect(prepared.extraction?.status).toBe('extracted')
+      expect(prepared.extraction?.sha256).toBe(createHash('sha256').update('MZ fixture bytes; never executed').digest('hex'))
+      expect(prepared.compatibilityEnabled).toBe(false)
+      expect(prepared.compatibilityProfile).toBe('not_proven')
+      expect(prepared.oldExit22BeforeMutation).toBe('not_run')
+      expect(prepared.removalEquivalence).toBe('not_run')
+      assertOutsideSourceGit(prepared.tempRoot, f.sourceRoot)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+      expect(existsSync(prepared.tempRoot)).toBe(false)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('streams a loopback fixture and rejects HTTP failure before creating a candidate', async () => {
+    const f = fixture()
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request =>
+      new URL(request.url).pathname === '/locked-setup' ? new Response(f.bytes) : new Response('fixture failure', { status: 503 }),
+    })
+    try {
+      const output = join(f.root, 'download.partial')
+      await downloadPinnedInstaller(`http://127.0.0.1:${server.port}/locked-setup`, output)
+      expect(await verifyInstallerFixture(output, f.expected)).toBe(f.expected.sha256)
+      const rejected = join(f.root, 'http-error.partial')
+      await expect(downloadPinnedInstaller(`http://127.0.0.1:${server.port}/unavailable`, rejected)).rejects.toThrow('HTTP 503')
+      expect(existsSync(rejected)).toBe(false)
+    } finally {
+      server.stop(true)
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test.each(['truncated', 'wrong-sha'] as const)('rejects %s historical asset bytes before extracting', async kind => {
+    const f = fixture()
+    let extracted = false
+    try {
+      await expect(prepareWindowsInstallerTests({
+        ...f.options,
+        download: async (_url, file) => writeFileSync(file, kind === 'truncated' ? f.bytes.subarray(0, 3) : Buffer.alloc(f.bytes.length, 0)),
+        extract: async (...args) => {
+          extracted = true
+          return f.options.extract(...args)
+        },
+      })).rejects.toThrow(kind === 'truncated' ? 'byte count' : 'SHA-256')
+      expect(extracted).toBe(false)
+      const report = JSON.parse(readFileSync(f.manifestFile, 'utf8'))
+      expect(report.status).toBe('failed')
+      expect(report.historicalInstaller).toBeUndefined()
+      cleanupPreparedWindowsInstallerTests(report, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('keeps a verified setup with not_proven extraction instead of executing it', async () => {
+    const f = fixture()
+    try {
+      const prepared = await prepareWindowsInstallerTests({ ...f.options,
+        extract: async () => ({ status: 'not_proven', method: 'unsupported fixture format', diagnostics: ['static extraction unavailable'] }),
+      })
+      expect(prepared.status).toBe('prepared')
+      expect(prepared.extraction?.status).toBe('not_proven')
+      expect(prepared.extraction?.file).toBeUndefined()
+      expect(await verifyInstallerFixture(prepared.historicalInstaller!.file, f.expected)).toBe(f.expected.sha256)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects source-root temporary directories before dependency acquisition', async () => {
+    const f = fixture()
+    let acquired = false
+    try {
+      const unsafeTemp = join(f.sourceRoot, 'temporary')
+      mkdirSync(unsafeTemp)
+      await expect(prepareWindowsInstallerTests({ ...f.options, tempParent: unsafeTemp,
+        acquireTools: async (...args) => { acquired = true; return f.options.acquireTools(...args) },
+      })).rejects.toThrow('outside source Git root')
+      expect(acquired).toBe(false)
+      expect(existsSync(f.manifestFile)).toBe(false)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('runs the real installer suites once with private state and propagates failure', async () => {
+    const f = fixture()
+    let sandbox = ''
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      const result = await runWindowsInstallerChecks({ platform: 'win32', sourceRoot: f.sourceRoot,
+        manifestFile: f.manifestFile, tempParent: f.tempParent,
+        run: async (command, options) => {
+          expect(command).toContain('--parallel=1')
+          expect(command).toContain('--max-concurrency=1')
+          expect(command).toContain('--no-orphans')
+          expect(command).toContain('./scripts/pr/windows-installer-process-check.test.ts')
+          expect(command).toContain('./scripts/pr/windows-installer-recovery.test.ts')
+          expect(options.cwd).toBe(realpathSync(f.sourceRoot))
+          expect(options.env.CC_HAHA_TEST_MAKENSIS).toBe(prepared.tools!.compiler)
+          expect(options.env.CC_HAHA_TEST_NSIS_TEMPLATES).toBe(prepared.tools!.templates)
+          for (const variable of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'GH_CONFIG_DIR', 'TEMP', 'TMP']) {
+            expect(options.env[variable]).not.toBe(process.env[variable])
+            assertOutsideSourceGit(options.env[variable], f.sourceRoot)
+          }
+          sandbox = options.env.HOME!
+          expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
+          return 7
+        },
+      })
+      expect(result).toEqual({ status: 'failed', exitCode: 7 })
+      expect(existsSync(sandbox)).toBe(false)
+      const report = JSON.parse(readFileSync(join(f.sourceRoot, 'artifacts/windows-installer/checks.json'), 'utf8'))
+      expect(report.exitCode).toBe(7)
+      expect(report.fullPackageUpgrade).toBe('not_run')
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not run or acquire Windows dependencies on a non-Windows host', async () => {
+    let ran = false
+    expect(await runWindowsInstallerChecks({ platform: 'darwin', manifestFile: '/missing-preparation-file', run: async () => { ran = true; return 0 } }))
+      .toEqual({ status: 'not_run', exitCode: 0 })
+    expect(ran).toBe(false)
+    await expect(prepareWindowsInstallerTests({ platform: 'darwin' })).rejects.toThrow('Windows-only')
+  })
+
+  test('rejects an extraction outside its private directory without executing the candidate', async () => {
+    const f = fixture()
+    try {
+      const external = join(f.root, 'uninstall-outside.exe')
+      writeFileSync(external, 'MZ outside candidate')
+      await expect(prepareWindowsInstallerTests({ ...f.options,
+        extract: async () => ({ status: 'extracted', method: 'fixture', diagnostics: [], file: external }),
+      })).rejects.toThrow('escaped its private fixture directory')
+      expect(readFileSync(external, 'utf8')).toBe('MZ outside candidate')
+      cleanupPreparedWindowsInstallerTests(JSON.parse(readFileSync(f.manifestFile, 'utf8')), f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects a changed prepared compiler before starting a native harness', async () => {
+    const f = fixture()
+    let ran = false
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      writeFileSync(prepared.tools!.compiler, 'changed compiler fixture')
+      await expect(runWindowsInstallerChecks({ platform: 'win32', sourceRoot: f.sourceRoot,
+        manifestFile: f.manifestFile, tempParent: f.tempParent,
+        run: async () => { ran = true; return 0 },
+      })).rejects.toThrow('compiler identity changed')
+      expect(ran).toBe(false)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('refuses to remove a prepared directory with changed ownership or parent', async () => {
+    const f = fixture()
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      expect(() => cleanupPreparedWindowsInstallerTests({ ...prepared, owner: 'wrong-owner' }, f)).toThrow('unowned')
+      expect(() => cleanupPreparedWindowsInstallerTests(prepared, { ...f, tempParent: f.root })).toThrow('unowned')
+      expect(existsSync(prepared.tempRoot)).toBe(true)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
   })
 })
 

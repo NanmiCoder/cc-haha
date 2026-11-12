@@ -381,6 +381,51 @@ jobs:
       - name: Run desktop native checks
         run: bun run check:native
 
+  windows-installer-checks:
+    name: windows-installer-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.desktop_native_checks == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      # This is dependency/fixture acquisition, not a test: both downloads are
+      # pinned and verified before the offline NSIS harness starts.
+      - name: Prepare pinned Windows installer dependencies
+        id: prepare
+        run: bun --no-env-file scripts/pr/prepare-windows-installer-tests.ts
+      - name: Run offline native installer regressions
+        run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts
+      - name: Upload Windows installer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-evidence
+          path: artifacts/windows-installer/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Preserve verified historical fixture for profile review
+        if: always() && steps.prepare.outputs.fixture_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-v078-fixture
+          path: ${{ steps.prepare.outputs.fixture_dir }}
+          if-no-files-found: error
+          retention-days: 2
+      - name: Clean Windows installer temporary directories
+        if: always()
+        run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts --cleanup-prepared
+
   macos-swift-checks:
     name: macos-swift-checks
     needs: scope-plan
@@ -494,6 +539,7 @@ jobs:
       - agent-e2e-checks
       - adapter-checks
       - desktop-native-checks
+      - windows-installer-checks
       - macos-swift-checks
       - persistence-checks
       - docs-checks
@@ -540,6 +586,7 @@ jobs:
           require_selected "agent-e2e-checks" "${{ needs.scope-plan.outputs.agent_e2e_checks }}" "${{ needs.agent-e2e-checks.result }}"
           require_selected "adapter-checks" "${{ needs.scope-plan.outputs.adapter_checks }}" "${{ needs.adapter-checks.result }}"
           require_selected "desktop-native-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.desktop-native-checks.result }}"
+          require_selected "windows-installer-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.windows-installer-checks.result }}"
           require_selected "macos-swift-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.macos-swift-checks.result }}"
           require_selected "persistence-checks" "${{ needs.scope-plan.outputs.persistence_checks }}" "${{ needs.persistence-checks.result }}"
           require_selected "docs-checks" "${{ needs.scope-plan.outputs.docs_checks }}" "${{ needs.docs-checks.result }}"
