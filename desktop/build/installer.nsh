@@ -6,6 +6,7 @@
 Var pid
 Var ccHahaProcessDiagnostic
 Var ccHahaProcessHelperWriteBlocked
+Var ccHahaFallbackOutput
 
 !ifndef BUILD_UNINSTALLER
 Var ccHahaRecoveryDone
@@ -455,6 +456,68 @@ FunctionEnd
   Pop $0
 !macroend
 
+!macro CcHahaFilterFallbackProcesses _FILE _CSV _RETURN _OUTPUT
+  nsExec::ExecToStack /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "${_CSV}"'
+  Pop ${_RETURN}
+  Pop ${_OUTPUT}
+!macroend
+
+!macro CcHahaVerifyFallbackRemainder _FILE _RETURN
+  Push $R1
+  Push $R2
+  Push $R3
+  StrCpy ${_RETURN} 0
+  StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the original tasklist matches could not all be verified; blocking setup. Close the matching processes manually."
+
+  ; Native attribution has already rejected every exact app/sidecar name and
+  ; every exact shared helper whose path is internal or unreadable. Remove only
+  ; those positively external shared names and our own PID from the original
+  ; CSV. A literal hit such as foorg.exe must remain protected even though the
+  ; native census does not classify that image as an exact shared-helper name.
+  ClearErrors
+  FileOpen $R1 "$PLUGINSDIR\cc-haha-fallback-allowed.txt" w
+  ${IfNot} ${Errors}
+    ClearErrors
+    FileWrite $R1 '^"OpenConsole[.]exe","$\r$\n^"winpty-agent[.]exe","$\r$\n^"rg[.]exe","$\r$\n^"[^"]*","$pid",$\r$\n'
+    StrCpy $R2 0
+    ${If} ${Errors}
+      StrCpy $R2 1
+    ${EndIf}
+    ClearErrors
+    FileClose $R1
+    ${If} ${Errors}
+      StrCpy $R2 1
+    ${EndIf}
+    ${If} $R2 == 0
+      Delete "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+      ${IfNot} ${FileExists} "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+        nsExec::Exec /TIMEOUT=30000 '"$CmdPath" /D /C ""$SYSDIR\findstr.exe" /V /R /I /G:"$PLUGINSDIR\cc-haha-fallback-allowed.txt" "$PLUGINSDIR\cc-haha-processes.csv" > "$PLUGINSDIR\cc-haha-fallback-unattributed.csv""'
+        Pop $R2
+        ; tasklist also contains System rows, so a successful exclusion leaves
+        ; output and returns 0. Any other result, including timeout/error or a
+        ; failed redirection, must not authorize continuing from a stale file.
+        ${If} $R2 == 0
+        ${AndIf} ${FileExists} "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
+          !insertmacro CcHahaFilterFallbackProcesses "${_FILE}" "$PLUGINSDIR\cc-haha-fallback-unattributed.csv" $R2 $R3
+          ${If} $R2 == 1
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; every original tasklist match is the installer itself or an exact shared helper verified outside the install directory, so setup continues."
+            StrCpy ${_RETURN} 1
+          ${ElseIf} $R2 == 0
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; these original tasklist matches have no verified external path:$\r$\n$R3$\r$\nClose them manually."
+          ${Else}
+            StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; residual process filtering failed (result: $R2); blocking setup."
+          ${EndIf}
+        ${Else}
+          StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; tasklist match verification failed (result: $R2); blocking setup."
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  Pop $R3
+  Pop $R2
+  Pop $R1
+!macroend
+
 !macro CcHahaFindInstallProcess _FILE _RETURN
   ${If} $IsPowerShellAvailable == 0
     nsExec::ExecToStack '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\check-install-processes.ps1" -InstallDir "$INSTDIR" -ProcessName "${_FILE}" -Action Find -InstallerPid "$pid" -InstallerParentPid "$1"'
@@ -487,11 +550,13 @@ FunctionEnd
       StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable and tasklist process enumeration failed (exit code ${_RETURN}); blocking setup."
       StrCpy ${_RETURN} 0
     ${Else}
-      nsExec::Exec /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "$PLUGINSDIR\cc-haha-processes.csv"'
-      Pop ${_RETURN}
+      !insertmacro CcHahaFilterFallbackProcesses "${_FILE}" "$PLUGINSDIR\cc-haha-processes.csv" ${_RETURN} $ccHahaFallbackOutput
       ${If} ${_RETURN} == 0
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path, possibly in another user's session. Close it manually."
         !insertmacro CcHahaAttributeFallbackMatches "${_FILE}" ${_RETURN}
+        ${If} ${_RETURN} == 1
+          !insertmacro CcHahaVerifyFallbackRemainder "${_FILE}" ${_RETURN}
+        ${EndIf}
       ${ElseIf} ${_RETURN} == 1
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; exact-image fallback found no main app, known sidecar, or bundled terminal/search helper. Differently named child processes cannot be attributed without path data."
       ${Else}

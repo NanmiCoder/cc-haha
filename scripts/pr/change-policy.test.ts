@@ -213,6 +213,7 @@ describe('evaluateChangePolicy', () => {
     'scripts/pr/windows-installer-recovery.test.ts',
     'scripts/pr/windows-installer-native-fixtures.ts',
     'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
+    'scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh',
   ])('runs the native jobs for a standalone installer dependency or fixture: %s', file => {
     const result = evaluateChangePolicy([file])
     expect(result.checks.desktopNative).toBe(true)

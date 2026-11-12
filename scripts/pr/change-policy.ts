@@ -86,6 +86,7 @@ const desktopNativeExactPaths = new Set([
   'scripts/pr/windows-installer-recovery.test.ts',
   'scripts/pr/windows-installer-native-fixtures.ts',
   'scripts/pr/fixtures/installer-fallback-before-root-identity.nsh',
+  'scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh',
 ])
 
 const desktopWebExactPaths = new Set([

@@ -1,11 +1,41 @@
 import { describe, expect, test } from 'bun:test'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { renderInstallProcessHelperNsh } from '../../desktop/scripts/generate-install-process-helper-nsh'
-import { fallbackApiCases, readFallbackMacros, renderFallbackApiHarness } from './windows-installer-native-fixtures'
+import { fallbackApiCases, frozenResidualMacrosSha256, readFallbackMacros, renderFallbackApiHarness, renderResidualFindApiHarness, renderResidualFindNativeHarness, residualFindApiCases } from './windows-installer-native-fixtures'
+
+function sha256(source: string | Buffer) {
+  return createHash('sha256').update(source).digest('hex')
+}
+
+function preserveResidualEvidence(name: string, evidence: Record<string, unknown>, files: Record<string, string> = {}) {
+  const directory = path.resolve('artifacts/windows-installer/residual-matches')
+  mkdirSync(directory, { recursive: true })
+  for (const [suffix, text] of Object.entries(files)) {
+    writeFileSync(path.join(directory, `${name}.${suffix}`), text)
+  }
+  writeFileSync(path.join(directory, `${name}.json`), `${JSON.stringify({
+    ...evidence,
+    recordedAtUtc: new Date().toISOString(),
+    platform: process.platform,
+    frozenSourceCommit: '3babd7615c2a4abf6408e5d50d3a2615ce429dce',
+    frozenResidualMacrosSha256,
+    releasedPeRun: false,
+    originalUserScenario: 'not_run',
+  }, null, 2)}\n`)
+}
+
+function residualRunFiles(journal: string) {
+  const files: Record<string, string> = {}
+  for (const [suffix, file] of [['log', journal], ['csv', `${journal}.csv`], ['residual.csv', `${journal}.residual.csv`]]) {
+    if (existsSync(file!)) files[suffix!] = readFileSync(file!, 'utf8')
+  }
+  return files
+}
 
 function decodeFileWrites(nsh: string): string {
   return [...nsh.matchAll(/^\s*FileWrite \$0 "(.*)"$/gm)]
@@ -15,6 +45,93 @@ function decodeFileWrites(nsh: string): string {
 }
 
 describe('Windows installer process matching', () => {
+  test('freezes the real 3bab whole-Find path and renders real findstr residual guards', () => {
+    const frozenSource = readFileSync('scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const before = readFallbackMacros(frozenSource, { includeFind: true, frozenResidual: true })
+    const current = readFallbackMacros(readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n'), { includeFind: true })
+    expect(sha256(before)).toBe(frozenResidualMacrosSha256)
+    expect(before.match(/^!macro /gm)).toHaveLength(3)
+    expect(fallbackApiCases).toHaveLength(30)
+    expect(() => readFallbackMacros(frozenSource.replace('so setup continues.', 'tampered'), { includeFind: true, frozenResidual: true })).toThrow('frozen 3bab')
+    for (const macros of [before, current]) {
+      const rendered = renderResidualFindApiHarness(macros, before, 'C:\\owned\\probe.exe', 'C:\\owned\\probe.log', 'C:\\owned\\missing')
+      expect(rendered.match(/!insertmacro CcHahaFindInstallProcess /g)).toHaveLength(3)
+      expect(rendered).toContain('!insertmacro FixtureOwnedTasklist')
+      expect(rendered).not.toContain('/D /C tasklist')
+      expect(rendered).toContain('nsExec::ExecToStack /TIMEOUT=30000 \'"$SYSDIR\\findstr.exe" /I /L')
+      expect(rendered).toContain('Pop $fixtureFilterReturn')
+      const native = renderResidualFindNativeHarness(macros, before, 'C:\\owned\\native.exe', 'C:\\owned\\native.log', 'C:\\owned\\install')
+      expect(native).toContain(macros)
+      expect(native).toContain('/D /C tasklist /FO CSV /NH')
+      expect(native).not.toContain('FixtureKernelCall')
+    }
+  })
+
+  test.skipIf(process.platform !== 'win32')('keeps every original findstr hit protected through the whole native Find macro', () => {
+    const compiler = process.env.CC_HAHA_TEST_MAKENSIS
+    if (!compiler || !existsSync(compiler)) throw new Error('Run the prepared Windows installer lane with its locked NSIS compiler')
+    const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-find-api-'))
+    const env = createSandboxedTestEnvironment(path.join(root, 'home'))
+    const installer = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const before = readFallbackMacros(readFileSync('scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh', 'utf8').replace(/\r\n/g, '\n'), { includeFind: true, frozenResidual: true })
+    const current = readFallbackMacros(installer, { includeFind: true })
+    try {
+      for (const [version, macros] of [['before', before], ['current', current]] as const) {
+        const executable = path.join(root, `${version}.exe`)
+        const source = path.join(root, `${version}.nsi`)
+        const journal = path.join(root, `${version}.log`)
+        const rendered = renderResidualFindApiHarness(macros, before, executable, journal, path.join(root, 'missing-install'))
+        writeFileSync(source, rendered)
+        const compileStartedAtUtc = new Date().toISOString()
+        const compile = spawnSync(compiler, ['/V2', source], { env, encoding: 'utf8', timeout: 30_000 })
+        preserveResidualEvidence(`api-${version}-compile`, {
+          mode: 'real-nsis-findstr-with-injected-kernel-results-and-owned-csv',
+          compileStartedAtUtc, compileFinishedAtUtc: new Date().toISOString(),
+          sourceSha256: sha256(rendered), macroSha256: sha256(macros),
+          productionSourceSha256: sha256(installer), status: compile.status, error: compile.error?.message,
+          executableSha256: existsSync(executable) ? sha256(readFileSync(executable)) : null,
+        }, { nsi: rendered, 'compile.log': `${compile.stdout ?? ''}${compile.stderr ?? ''}` })
+        expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
+        expect(compile.status, compile.stderr || compile.stdout).toBe(0)
+        for (const fixture of residualFindApiCases) {
+          for (const file of [journal, `${journal}.csv`, `${journal}.residual.csv`]) rmSync(file, { force: true })
+          const startedAtUtc = new Date().toISOString()
+          const run = spawnSync(executable, ['/S', `/CASE=${fixture.name}`], { env, timeout: 30_000, windowsHide: true })
+          const files = residualRunFiles(journal)
+          const trace = files.log ?? ''
+          const expected = version === 'before' ? 1 : fixture.expected
+          preserveResidualEvidence(`api-${version}-${fixture.name}`, {
+            mode: 'real-nsis-findstr-with-injected-kernel-results-and-owned-csv',
+            startedAtUtc, finishedAtUtc: new Date().toISOString(), case: fixture.name,
+            sourceSha256: sha256(rendered), macroSha256: sha256(macros),
+            expectedSafeResult: fixture.expected, expectedObservedResult: expected,
+            observedResults: trace.match(/results=([^;]+);/)?.[1] ?? null,
+            exitCode: run.status, error: run.error?.message,
+            processPathErrorActuallyObserved: false,
+            faultBoundary: fixture.name === 'verification-command-launch-error'
+              ? 'real Verify residual-command launch; fixture tasklist is intentionally unaffected'
+              : fixture.name === 'unattributed-foorg-no-path-proof'
+                ? 'OpenProcess would fail if requested; the exact-name census never requests foorg path'
+                : fixture.name === 'pattern-file-open-error' ? 'real Verify pattern FileOpen against an owned directory' : null,
+          }, files)
+          expect(run.error, `${version}/${fixture.name}`).toBeUndefined()
+          expect(run.status, `${version}/${fixture.name}`).toBe(0)
+          expect(trace, `${version}/${fixture.name}`).toContain(`results=${expected},${expected},${expected};`)
+          expect(trace).toContain('handles=0;allocations=0;badClose=0;')
+          expect(trace).toContain('stack=stack-canary;zero=caller-zero;one=caller-one;two=caller-two;three=caller-three;seven=caller-seven;')
+          expect(trace).toContain('originalFilter=0;')
+          expect(trace).toContain(fixture.image)
+          if (fixture.name === 'unattributed-foorg-no-path-proof') expect(trace).toContain('openCalls=0;')
+          if (version === 'current' && fixture.expected === 1) expect(trace).toContain('verified outside the install directory')
+          if (version === 'current' && fixture.name === 'verification-command-launch-error') expect(trace).toContain('tasklist match verification failed')
+          if (version === 'current' && fixture.name === 'pattern-file-open-error') expect(trace).toContain('could not all be verified')
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 180_000)
+
   test.skipIf(process.platform !== 'win32')('fails closed at the real NSIS fallback API boundaries and preserves its stack', () => {
     const compiler = process.env.CC_HAHA_TEST_MAKENSIS
     if (!compiler || !existsSync(compiler)) {
@@ -313,78 +430,103 @@ SectionEnd
       expect(probe.exitCode).toBeNull()
       return probe.pid!
     }
-    const executable = path.join(root, 'fallback.exe')
-    const journal = path.join(root, 'fallback.log')
-    const script = String.raw`
-Unicode true
-RequestExecutionLevel user
-SilentInstall silent
-Name "Isolated installer fallback regression"
-OutFile "${executable}"
-!addincludedir "${templates}\include"
-!define APP_GUID "cc-haha-nsis-test-no-user-state"
-!define UNINSTALL_APP_KEY "cc-haha-nsis-test-no-user-state"
-!define APP_FILENAME "isolated-test"
-!define PRODUCT_FILENAME "isolated-test"
-!define BUILD_RESOURCES_DIR "${path.resolve('desktop/build')}"
-!include "${path.resolve('desktop/build/installer.nsh')}"
-LoadLanguageFile "${'${NSISDIR}'}\Contrib\Language files\English.nlf"
-LangString uninstallFailed 1033 "Uninstall failed"
-Var IsPowerShellAvailable
-Var PowerShellPath
-Var CmdPath
-Var journalHandle
-Section
-  InitPluginsDir
-  StrCpy $IsPowerShellAvailable 1
-  StrCpy $CmdPath "$SYSDIR\cmd.exe"
-  StrCpy $INSTDIR "${installDir}"
-  ${'${GetProcessInfo}'} 0 $pid $1 $2 $3 $4
-  !insertmacro CcHahaFindInstallProcess "Claude Code Haha.exe" $R0
-  FileOpen $journalHandle "${journal}" w
-  FileWrite $journalHandle "result=$R0; $ccHahaProcessDiagnostic"
-  FileClose $journalHandle
-SectionEnd
-`
-    const source = path.join(root, 'fallback.nsi')
-    writeFileSync(source, script)
-    const check = () => {
-      const run = spawnSync(executable, ['/S'], { env, timeout: 60_000, windowsHide: true })
-      expect(run.error).toBeUndefined()
-      expect(run.status).toBe(0)
-      return readFileSync(journal, 'utf8')
+    const installer = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const before = readFallbackMacros(readFileSync('scripts/pr/fixtures/installer-fallback-before-residual-matches.nsh', 'utf8').replace(/\r\n/g, '\n'), { includeFind: true, frozenResidual: true })
+    const current = readFallbackMacros(installer, { includeFind: true })
+    const builds = [['before', before], ['current', current]].map(([version, macros]) => {
+      const executable = path.join(root, `fallback-${version}.exe`)
+      const source = path.join(root, `fallback-${version}.nsi`)
+      const journal = path.join(root, `fallback-${version}.log`)
+      const rendered = renderResidualFindNativeHarness(macros!, before, executable, journal, installDir)
+      return { version: version!, macros: macros!, executable, source, journal, rendered }
+    })
+    const check = (caseName: string, expectedSafe: number, expectedBefore = expectedSafe) => {
+      const traces: Record<string, string> = {}
+      for (const build of builds) {
+        for (const file of [build.journal, `${build.journal}.csv`, `${build.journal}.residual.csv`]) rmSync(file, { force: true })
+        const startedAtUtc = new Date().toISOString()
+        const run = spawnSync(build.executable, ['/S'], { env, timeout: 60_000, windowsHide: true })
+        const files = residualRunFiles(build.journal)
+        const trace = files.log ?? ''
+        const expected = build.version === 'before' ? expectedBefore : expectedSafe
+        preserveResidualEvidence(`native-${build.version}-${caseName}`, {
+          mode: 'real-nsis-tasklist-findstr-census-file-identity-and-owned-ping-processes',
+          startedAtUtc, finishedAtUtc: new Date().toISOString(), case: caseName,
+          sourceSha256: sha256(build.rendered), macroSha256: sha256(build.macros),
+          productionSourceSha256: sha256(installer), expectedSafeResult: expectedSafe,
+          expectedObservedResult: expected, observedResults: trace.match(/results=([^;]+);/)?.[1] ?? null,
+          ownedLiveProbePids: probes.filter(probe => probe.exitCode === null && probe.signalCode === null).map(probe => probe.pid),
+          exitCode: run.status, error: run.error?.message,
+        }, files)
+        expect(run.error, `${build.version}/${caseName}`).toBeUndefined()
+        expect(run.status, `${build.version}/${caseName}`).toBe(0)
+        expect(trace, `${build.version}/${caseName}`).toStartWith(`results=${expected};`)
+        expect(trace).toContain('originalFilter=0;')
+        expect(trace).toContain('stack=stack-canary;zero=caller-zero;one=caller-one;two=caller-two;three=caller-three;seven=caller-seven;')
+        traces[build.version] = trace
+      }
+      return traces
     }
     try {
-      const compile = spawnSync(compiler, ['/V2', source], { env, encoding: 'utf8', timeout: 15_000 })
-      expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
-      expect(compile.status, compile.stderr || compile.stdout).toBe(0)
-
-      const foreignPid = await startProbe(foreignDir)
-      const foreignOnly = check()
-      expect(foreignOnly).not.toContain(`PID ${foreignPid})`)
-      // A same-named process this user cannot inspect may exist on the machine
-      // running the test; it legitimately keeps setup blocked.
-      if (!foreignOnly.includes('path unavailable')) {
-        expect(foreignOnly).toStartWith('result=1; ')
-        expect(foreignOnly).toContain('other software outside the install directory')
+      for (const build of builds) {
+        writeFileSync(build.source, build.rendered)
+        const compileStartedAtUtc = new Date().toISOString()
+        const compile = spawnSync(compiler, ['/V2', build.source], { env, encoding: 'utf8', timeout: 15_000 })
+        preserveResidualEvidence(`native-${build.version}-compile`, {
+          mode: 'real-nsis-tasklist-findstr-census-file-identity-and-owned-ping-processes',
+          compileStartedAtUtc, compileFinishedAtUtc: new Date().toISOString(),
+          sourceSha256: sha256(build.rendered), macroSha256: sha256(build.macros),
+          productionSourceSha256: sha256(installer), ownedProbeSourceSha256: sha256(readFileSync(probeSource)),
+          status: compile.status, error: compile.error?.message,
+          executableSha256: existsSync(build.executable) ? sha256(readFileSync(build.executable)) : null,
+        }, { nsi: build.rendered, 'compile.log': `${compile.stdout ?? ''}${compile.stderr ?? ''}` })
+        expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
+        expect(compile.status, compile.stderr || compile.stdout).toBe(0)
       }
 
+      const foreignPid = await startProbe(foreignDir)
+      const foreignOnly = check('external-OpenConsole', 1)
+      expect(foreignOnly.before).toContain('other software outside the install directory')
+      expect(foreignOnly.current).toContain('verified outside the install directory')
+      expect(foreignOnly.current).not.toContain(`PID ${foreignPid})`)
+
       const bundledPid = await startProbe(bundledDir)
-      const withBundled = check()
-      expect(withBundled).toStartWith('result=0; ')
-      expect(withBundled).toContain(`OpenConsole.exe (PID ${bundledPid});`)
-      expect(withBundled).not.toContain(`PID ${foreignPid})`)
-      expect(withBundled).toContain('Close them manually.')
-      await stopProbe(probes.pop()!)
+      const withBundled = check('internal-OpenConsole-through-junction', 0)
+      expect(withBundled.current).toContain(`OpenConsole.exe (PID ${bundledPid});`)
+      expect(withBundled.current).not.toContain(`PID ${foreignPid})`)
+      expect(withBundled.current).toContain('Close them manually.')
+      await stopProbe(probes[1]!)
+      await stopProbe(probes[0]!)
+
+      const substringPid = await startProbe(bundledDir, 'foorg.exe')
+      const internalSubstring = check('internal-foorg-through-junction', 0, 1)
+      expect(internalSubstring.before).toContain('originalFilter=0;')
+      expect(internalSubstring.before).toContain('foorg.exe')
+      expect(internalSubstring.current).toContain('no verified external path')
+      expect(internalSubstring.current).toContain(`"foorg.exe","${substringPid}"`)
+      await stopProbe(probes[2]!)
+
+      const externalRgPid = await startProbe(foreignDir, 'rg.exe')
+      const externalRg = check('external-exact-rg', 1)
+      expect(externalRg.current).toContain('verified outside the install directory')
+      const mixedFoorgPid = await startProbe(bundledDir, 'foorg.exe')
+      const mixed = check('external-exact-rg-with-internal-foorg', 0, 1)
+      expect(mixed.before).toContain('other software outside the install directory')
+      expect(mixed.before).toContain('foorg.exe')
+      expect(mixed.current).toContain(`"foorg.exe","${mixedFoorgPid}"`)
+      expect(mixed.current).toContain('no verified external path')
+      expect(probes[3]!.pid).toBe(externalRgPid)
+      expect(probes[3]!.exitCode).toBeNull()
+      expect(probes[4]!.exitCode).toBeNull()
+      await stopProbe(probes[4]!)
+      await stopProbe(probes[3]!)
 
       // Names only this app uses still block wherever the process runs from.
       const sidecarPid = await startProbe(foreignDir, 'claude-sidecar.exe')
-      const withSidecar = check()
-      expect(withSidecar).toStartWith('result=0; ')
-      expect(withSidecar).toContain(`claude-sidecar.exe (PID ${sidecarPid});`)
-      expect(withSidecar).not.toContain(`PID ${bundledPid})`)
+      const withSidecar = check('external-unique-sidecar', 0)
+      expect(withSidecar.current).toContain(`claude-sidecar.exe (PID ${sidecarPid});`)
     } finally {
-      await Promise.all(probes.map(stopProbe))
+      for (const probe of probes) await stopProbe(probe)
       rmSync(root, { recursive: true, force: true })
     }
   }, 120_000)
@@ -409,7 +551,7 @@ SectionEnd
     expect(installerHook).toContain(
       'nsExec::Exec /TIMEOUT=30000 \'"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\\cc-haha-processes.csv"\'',
     )
-    expect(installerHook).toContain('nsExec::Exec /TIMEOUT=30000 \'"$SYSDIR\\findstr.exe" /I /L')
+    expect(installerHook).toContain('nsExec::ExecToStack /TIMEOUT=30000 \'"$SYSDIR\\findstr.exe" /I /L')
     expect(installerHook).toContain('tasklist process enumeration failed')
     expect(installerHook).toContain('fallback process filtering failed')
     expect(installerHook).toMatch(
@@ -424,9 +566,9 @@ SectionEnd
     expect(installerHook).toMatch(
       /tasklist \/FO CSV \/NH > [^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} != 0\n/,
     )
-    expect(installerHook).toMatch(
-      /findstr\.exe[^\n]*\n\s*Pop \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} == 0\n[^\n]*\n[^\n]*\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
-    )
+    const filter = installerHook.match(/!macro CcHahaFilterFallbackProcesses[^\n]*\n[\s\S]*?\n!macroend/)?.[0]
+    expect(filter).toMatch(/findstr\.exe[^\n]*\n\s*Pop \$\{_RETURN\}\n\s*Pop \$\{_OUTPUT\}\n/)
+    expect(installerHook).toMatch(/!insertmacro CcHahaFilterFallbackProcesses[^\n]*\n\s*\$\{If\} \$\{_RETURN\} == 0\n/)
     expect(installerHook).toContain('possibly in another user\'s session')
     expect(installerHook).toContain('claude-sidecar-x86_64-pc-windows-msvc.exe')
     expect(installerHook).toContain('claude-sidecar-aarch64-pc-windows-msvc.exe')
@@ -438,7 +580,7 @@ SectionEnd
     // A name hit is attributed by executable path before it blocks setup, and
     // the two name lists stay in sync (#1879).
     expect(installerHook).toMatch(
-      /\$\{If\} \$\{_RETURN\} == 0\n[^\n]*possibly in another user's session[^\n]*\n\s*!insertmacro CcHahaAttributeFallbackMatches "\$\{_FILE\}" \$\{_RETURN\}\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
+      /\$\{If\} \$\{_RETURN\} == 0\n[^\n]*possibly in another user's session[^\n]*\n\s*!insertmacro CcHahaAttributeFallbackMatches "\$\{_FILE\}" \$\{_RETURN\}\n\s*\$\{If\} \$\{_RETURN\} == 1\n\s*!insertmacro CcHahaVerifyFallbackRemainder "\$\{_FILE\}" \$\{_RETURN\}\n\s*\$\{EndIf\}\n\s*\$\{ElseIf\} \$\{_RETURN\} == 1\n/,
     )
     const attribution = installerHook.slice(
       installerHook.indexOf('!macro CcHahaAttributeFallbackMatches'),
