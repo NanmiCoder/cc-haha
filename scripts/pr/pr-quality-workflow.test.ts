@@ -434,6 +434,10 @@ describe('PR quality workflow', () => {
 
     expect(workflow).toContain('agent_e2e_checks: ${{ steps.policy.outputs.agent_e2e_checks }}')
     expect(steps.some((step) => step.run === 'bun run check:agent-e2e')).toBe(true)
+    const check = steps.findIndex(step => step.run === 'bun run check:agent-e2e')
+    const verifyRipgrep = steps.findIndex(step => /\brg --version\b/.test(step.run ?? ''))
+    expect(verifyRipgrep, 'agent E2E must verify its search executable').toBeGreaterThanOrEqual(0)
+    expect(verifyRipgrep).toBeLessThan(check)
     expect(workflow).toContain('path: artifacts/agent-e2e/')
     expect(steps.some((step) => String(step.run ?? '').includes('secrets'))).toBe(false)
   })
@@ -519,7 +523,7 @@ describe('full quality workflow', () => {
     for (const file of ['.github/workflows/pr-quality.yml', '.github/workflows/nightly-quality.yml']) {
       for (const [name, job] of Object.entries(workflowJobs(readFileSync(file, 'utf8')))) {
         const steps = job.steps ?? []
-        const check = steps.findIndex(step => /\bcheck:(server|coverage|native)\b/.test(step.run ?? ''))
+        const check = steps.findIndex(step => /\bcheck:(server|coverage|native|agent-e2e)\b/.test(step.run ?? ''))
         if (check < 0) continue
         const ripgrep = steps.findIndex(step => step.run?.includes('apt-get install') && /\bripgrep\b/.test(step.run))
         expect(ripgrep, `${file} ${name} must install ripgrep`).toBeGreaterThanOrEqual(0)

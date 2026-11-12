@@ -364,6 +364,79 @@ describe('voiceInputStore.cancelPrepare and removeAssets', () => {
 })
 
 describe('voiceInputStore.updatePreferences', () => {
+  it('refreshes an initial catalog if a preference save finishes before it', async () => {
+    const pending = deferred<VoiceCatalog>()
+    const previous = catalog({ phase: 'ready' })
+    const preferences = { ...previous.preferences, enabled: false }
+    api.catalog.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ...previous, preferences })
+    const loading = useVoiceInputStore.getState().loadCatalog()
+    api.updatePreferences.mockResolvedValueOnce({ preferences })
+    await useVoiceInputStore.getState().updatePreferences({ enabled: false })
+    pending.resolve(previous)
+    await loading
+    expect(useVoiceInputStore.getState().catalog?.preferences).toEqual(preferences)
+    expect(api.catalog).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores a failed obsolete catalog read after a successful preference save', async () => {
+    const previous = catalog({ phase: 'ready' })
+    useVoiceInputStore.setState({ catalog: previous })
+    const pending = deferred<VoiceCatalog>()
+    api.catalog.mockReturnValueOnce(pending.promise)
+    const loading = useVoiceInputStore.getState().loadCatalog({ force: true })
+    api.updatePreferences.mockResolvedValueOnce({ preferences: { ...previous.preferences, enabled: false } })
+    await useVoiceInputStore.getState().updatePreferences({ enabled: false })
+    pending.reject(new Error('obsolete read failed'))
+    await loading
+    expect(useVoiceInputStore.getState().error).toBeNull()
+    expect(useVoiceInputStore.getState().catalog?.preferences.enabled).toBe(false)
+  })
+
+  it('keeps confirmed preferences when an older catalog refresh finishes afterwards', async () => {
+    const previous = catalog({ phase: 'ready' })
+    useVoiceInputStore.setState({ catalog: previous })
+    const pending = deferred<VoiceCatalog>()
+    api.catalog.mockReturnValueOnce(pending.promise)
+    const loading = useVoiceInputStore.getState().loadCatalog({ force: true })
+    const preferences = { ...previous.preferences, enabled: false }
+    api.updatePreferences.mockResolvedValueOnce({ preferences })
+    await useVoiceInputStore.getState().updatePreferences({ enabled: false })
+    pending.resolve(previous)
+    await loading
+    expect(useVoiceInputStore.getState().catalog?.preferences).toEqual(preferences)
+  })
+
+  it('does not restore the old correction target from an earlier catalog request', async () => {
+    const previous = catalog({ phase: 'ready' })
+    useVoiceInputStore.setState({ catalog: previous })
+    const pending = deferred<VoiceCatalog>()
+    const correction = { defaultTarget: null, target: { providerId: 'new', providerName: 'New', modelId: 'new-model' } }
+    api.catalog.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ ...previous, correction })
+    const loading = useVoiceInputStore.getState().loadCatalog({ force: true })
+    const preferences = { ...previous.preferences, correctionEnabled: true }
+    api.updatePreferences.mockResolvedValueOnce({ preferences })
+    await useVoiceInputStore.getState().updatePreferences({ correctionEnabled: true })
+    pending.resolve(previous)
+    await loading
+    expect(useVoiceInputStore.getState().catalog?.correction).toEqual(correction)
+    expect(useVoiceInputStore.getState().catalog?.preferences).toEqual(preferences)
+  })
+
+  it('serializes preference writes and continues after an earlier write fails', async () => {
+    useVoiceInputStore.setState({ catalog: catalog({ phase: 'ready' }) })
+    const first = deferred<{ preferences: VoiceCatalog['preferences'] }>()
+    const preferences = { ...catalog({ phase: 'ready' }).preferences, language: 'zh' as const }
+    api.updatePreferences.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ preferences })
+    const failed = useVoiceInputStore.getState().updatePreferences({ enabled: false }).catch(error => error)
+    const succeeded = useVoiceInputStore.getState().updatePreferences({ language: 'zh' })
+    await flush()
+    expect(api.updatePreferences).toHaveBeenCalledTimes(1)
+    first.reject(new Error('offline'))
+    expect(await failed).toBeInstanceOf(Error)
+    await succeeded
+    expect(useVoiceInputStore.getState().catalog?.preferences).toEqual(preferences)
+  })
+
   it('merges the server-confirmed preferences into the catalog, leaving providers alone', async () => {
     api.catalog.mockResolvedValue(catalog({ phase: 'ready' }, { preferences: { enabled: false, providerId: ID, language: 'auto', downloadSource: 'auto', correctionEnabled: false, correctionProviderId: null, correctionModelId: null } }))
     await useVoiceInputStore.getState().loadCatalog()

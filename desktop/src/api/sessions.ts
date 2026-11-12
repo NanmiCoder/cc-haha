@@ -609,6 +609,11 @@ export const sessionsApi = {
 
   getGitInfo: getSessionGitInfo,
 
+  invalidateGitInfo(sessionId: string) {
+    // A cwd notification supersedes requests already reading the old checkout.
+    gitInfoRequests.delete(sessionId)
+  },
+
   getSlashCommands(sessionId: string) {
     return api.get<{ commands: SlashCommandOption[] }>(`/api/sessions/${sessionId}/slash-commands`)
   },

@@ -46,6 +46,8 @@ function replaceProvider(catalog: VoiceCatalog | null, status: VoiceProviderStat
 export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
   let catalogLoad: Promise<void> | null = null
   let catalogRefreshRequested = false
+  let preferencesRevision = 0
+  let preferenceUpdates = Promise.resolve()
 
   const applyStatus = (status: VoiceProviderStatus) => {
     set(state => ({ catalog: replaceProvider(state.catalog, status) }))
@@ -104,11 +106,17 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
         try {
           do {
             catalogRefreshRequested = false
+            const revision = preferencesRevision
             try {
               const catalog = await voiceApi.catalog()
               // Do not publish a superseded snapshot or restart its poll loops.
               if (catalogRefreshRequested) continue
-              set({ catalog, error: null })
+              set(state => ({
+                catalog: revision !== preferencesRevision && state.catalog
+                  ? { ...catalog, preferences: state.catalog.preferences, correction: state.catalog.correction }
+                  : catalog,
+                error: null,
+              }))
               // Resume progress display if the server is already downloading.
               for (const provider of catalog.providers) {
                 if (provider.preparation.phase === 'downloading' || provider.preparation.phase === 'verifying') {
@@ -116,7 +124,7 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
                 }
               }
             } catch (error) {
-              if (!catalogRefreshRequested) set({ error: String(error) })
+              if (!catalogRefreshRequested && revision === preferencesRevision) set({ error: String(error) })
             }
           } while (catalogRefreshRequested)
         } finally {
@@ -127,18 +135,26 @@ export const useVoiceInputStore = create<VoiceInputState>((set, get) => {
       return catalogLoad
     },
 
-    updatePreferences: async (patch) => {
-      const { preferences } = await voiceApi.updatePreferences(patch)
-      set(state => ({ catalog: state.catalog ? { ...state.catalog, preferences } : state.catalog }))
-      // The server resolves which model correction will use; a changed choice
-      // (or switching it on) has to be read back rather than guessed here.
-      if (!CORRECTION_FIELDS.some(field => field in patch)) return
-      try {
-        const { correction } = await voiceApi.catalog()
-        set(state => ({ catalog: state.catalog ? { ...state.catalog, correction } : state.catalog }))
-      } catch {
-        // Keep the previous resolution; the next catalog load corrects it.
-      }
+    updatePreferences: (patch) => {
+      // Each response contains all preferences. Serialize writes so an older
+      // save (or its correction lookup) cannot overwrite a later choice.
+      const updating = preferenceUpdates.then(async () => {
+        const { preferences } = await voiceApi.updatePreferences(patch)
+        preferencesRevision += 1
+        if (catalogLoad && !get().catalog) catalogRefreshRequested = true
+        set(state => ({ catalog: state.catalog ? { ...state.catalog, preferences } : state.catalog }))
+        // The server resolves which model correction will use; a changed choice
+        // (or switching it on) has to be read back rather than guessed here.
+        if (!CORRECTION_FIELDS.some(field => field in patch)) return
+        try {
+          const { correction } = await voiceApi.catalog()
+          set(state => ({ catalog: state.catalog ? { ...state.catalog, correction } : state.catalog }))
+        } catch {
+          // Keep the previous resolution; the next catalog load corrects it.
+        }
+      })
+      preferenceUpdates = updating.catch(() => {})
+      return updating
     },
 
     prepare: async (providerId) => {

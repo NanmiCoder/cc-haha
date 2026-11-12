@@ -157,9 +157,14 @@ export function modelRejectsManualThinking(model: string): boolean {
   )
 }
 
-/** Fable 5.1 binds replayed thinking to the preceding system, tools and history. */
+/**
+ * Fable 5.1 and 5.2 bind replayed thinking to the preceding system, tools and history.
+ * On 5.2 the prefix check applies to every account, so a request that replays a stale
+ * block without `prefix_mismatch_behavior` fails with a 400.
+ */
 export function modelUsesBoundThinking(model: string): boolean {
-  return getCanonicalName(model) === 'claude-fable-5-1'
+  const canonical = getCanonicalName(model)
+  return canonical === 'claude-fable-5-1' || canonical === 'claude-fable-5-2'
 }
 
 export function resolveModelThinkingEnabled(

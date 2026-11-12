@@ -1,6 +1,16 @@
 import { api } from './client'
 import type { AdapterFileConfig } from '../types/adapter'
 
+export type WechatRuntimeSnapshot = {
+  state: 'stopped' | 'starting' | 'online' | 'reconnecting' | 'auth_expired' | 'error' | 'stale'
+  serverReachable: boolean
+  updatedAt?: number
+  lastPollOkAt?: number
+  lastReceiveAt?: number
+  lastSendAt?: number
+  errorCode?: string
+}
+
 export type DingtalkRegistrationBegin = {
   deviceCode: string
   userCode?: string
@@ -69,6 +79,9 @@ export type SlackManifestInfo = {
 }
 
 export const adaptersApi = {
+  getWechatRuntime() {
+    return api.get<WechatRuntimeSnapshot>('/api/adapters/wechat/runtime', { timeout: 5_000 })
+  },
   getConfig() {
     return api.get<AdapterFileConfig>('/api/adapters')
   },

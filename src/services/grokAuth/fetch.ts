@@ -112,7 +112,7 @@ export function buildGrokFetch(
     })
     let upstream = await requestUpstream(headers)
     if (upstream.status === 401) {
-      const refreshed = await forceRefreshGrokTokens({ fetchOverride: inner })
+      const refreshed = await forceRefreshGrokTokens({ fetchOverride: inner }, tokens.accessToken)
       if (refreshed) {
         upstream = await requestUpstream(
           applyRequestIdentity(buildGrokIdentityHeaders(refreshed.accessToken)),

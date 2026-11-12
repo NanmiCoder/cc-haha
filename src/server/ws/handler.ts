@@ -265,6 +265,35 @@ const runtimeOverrides = new Map<string, RuntimeOverride>()
 // previous process. Keep the rejection until a valid selection or cleanup.
 const rejectedRuntimeConfigs = new Map<string, string>()
 const activeUserTurns = new Map<string, ActiveUserTurnState>()
+// Serialize admission only (metadata/startup/attachment materialization/socket
+// write), not the model turn. A following IM text must not replace an attachment
+// turn's ownership token before its payload reaches the CLI.
+const userAdmissionQueues = new Map<string, { cancelled: boolean; tail: Promise<void> }>()
+
+function cancelQueuedUserAdmissions(sessionId: string): void {
+  const queue = userAdmissionQueues.get(sessionId)
+  if (queue) queue.cancelled = true
+  userAdmissionQueues.delete(sessionId)
+}
+
+function enqueueUserAdmission(sessionId: string, run: () => Promise<void>): Promise<void> {
+  const previous = userAdmissionQueues.get(sessionId)
+  const queue = previous ?? { cancelled: false, tail: Promise.resolve() }
+  userAdmissionQueues.set(sessionId, queue)
+  // Start the first handler synchronously so Stop/runtime controls can observe
+  // its active-turn token even before the first asynchronous admission step.
+  const work = previous
+    ? previous.tail.then(() => queue.cancelled ? undefined : run())
+    : run()
+  const tail = work.catch(() => {})
+  queue.tail = tail
+  void tail.then(() => {
+    if (userAdmissionQueues.get(sessionId) === queue && queue.tail === tail) {
+      userAdmissionQueues.delete(sessionId)
+    }
+  })
+  return work
+}
 const activeCliRuns = new Set<string>()
 /**
  * CLI runs that delivered their root foreground `result` and are now only
@@ -870,6 +899,10 @@ export const handleWebSocket = {
 
     const msg: ServerMessage = { type: 'connected', sessionId }
     sendMessage(ws, msg)
+    const liveWorkDir = conversationService.getSessionWorkDir(sessionId)
+    if (liveWorkDir) {
+      sendMessage(ws, { type: 'system_notification', subtype: 'init', data: { cwd: liveWorkDir } })
+    }
     // The persisted transcript is authoritative for a custom title, while the
     // SQLite session-list projection can still be catching up after startup.
     // Replay the title to the connected renderer so the page header, tab, and
@@ -950,7 +983,12 @@ export const handleWebSocket = {
         case 'user_message': {
           const activeTurn: ActiveUserTurnState = { messageSent: false }
           const powerLeaseId = message.powerActivityLeaseId
-          migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
+          const clear = getDesktopSlashCommand(message.content)
+          // Clear is a cancellation control and must bypass a stalled admission.
+          const admission = clear?.commandName === 'clear' && !clear.args.trim()
+            ? handleUserMessage(ws, message, activeTurn)
+            : enqueueUserAdmission(ws.data.sessionId, () => handleUserMessage(ws, message, activeTurn))
+          migrationMaintenance.track(admission).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
               type: 'ws_user_message_failed',
@@ -1507,6 +1545,48 @@ export async function stopCollaborationRuntime(sessionId: string): Promise<void>
   })
 }
 
+/** Keep HTTP history rewrites in the same queue as startup and runtime changes. */
+export async function runSessionRewind<T>(
+  sessionId: string,
+  rewind: (stopRuntime: () => Promise<void>) => Promise<T>,
+): Promise<T> {
+  // A later message waiting behind an existing transition is not the turn the
+  // rewind interrupted. In particular, a second queued rewind must not cancel it.
+  const activeTurn = activeUserTurns.get(sessionId)
+  const turnToCancel = !runtimeTransitionPromises.has(sessionId) || activeTurn?.messageSent || activeTurn?.sendStarted
+    ? activeTurn
+    : undefined
+  let result!: T
+  let failure: { error: unknown } | undefined
+  await enqueueRuntimeTransition(sessionId, async () => {
+    try {
+      result = await rewind(async () => {
+        // The service calls this only after validating the selected target. An
+        // invalid rewind must not stop the user's current work.
+        if (turnToCancel) {
+          turnToCancel.cancelled = true
+          releaseUserTurnWithoutResult(sessionId, turnToCancel)
+        }
+        const pendingStartup = sessionStartupPromises.get(sessionId)
+        await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        if (pendingStartup) {
+          // Startup may have been waiting on metadata before a process existed.
+          // Drain it and stop again before the transcript can be replaced.
+          await pendingStartup.catch(() => undefined)
+          await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+        }
+        endReplacedCliRun(sessionId)
+      })
+    } catch (error) {
+      // A rejected history request belongs to its HTTP caller. It must not
+      // invalidate a later user turn waiting for this transition to settle.
+      failure = { error }
+    }
+  })
+  if (failure) throw failure.error
+  return result
+}
+
 /** Apply an idle worker's complete runtime without a renderer or a speculative CLI launch. */
 export async function applyCollaborationRuntime(sessionId: string, selection: SessionRuntimeSelection): Promise<void> {
   strictCollaborationRuntimeSessions.add(sessionId)
@@ -1534,6 +1614,7 @@ export async function applyCollaborationRuntime(sessionId: string, selection: Se
 }
 
 export function revokeSessionAdmissionsForMigration(): void {
+  for (const sessionId of userAdmissionQueues.keys()) cancelQueuedUserAdmissions(sessionId)
   for (const turn of activeUserTurns.values()) turn.cancelled = true
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
@@ -1846,6 +1927,7 @@ function applyDeferredRuntimeRestartAfterActiveTurn(
 async function handleDesktopClearCommand(
   ws: SessionConnection,
 ) {
+  cancelQueuedUserAdmissions(ws.data.sessionId)
   const turnToCancel = activeUserTurns.get(ws.data.sessionId)
   if (turnToCancel) turnToCancel.cancelled = true
   await enqueueRuntimeTransition(ws.data.sessionId, () =>
@@ -2710,6 +2792,7 @@ function handleStopGeneration(
   options: { reapBackgroundTasks?: boolean } = {},
 ) {
   const { sessionId } = ws.data
+  cancelQueuedUserAdmissions(sessionId)
   emitSessionTurnEvent({ type: 'stopped', sessionId })
   const stoppedTurn = activeUserTurns.get(sessionId)
   const agentTasks = [...(activeAgentTasks.get(sessionId)?.values() ?? [])]
@@ -3885,6 +3968,7 @@ function cleanupSessionRuntimeState(
   sessionId: string,
   options?: { preserveRetryableAgentStops?: boolean },
 ) {
+  cancelQueuedUserAdmissions(sessionId)
   mobileActivityClock.delete(sessionId)
   cancelSessionDisconnectWatcher(sessionId)
   startupDeferredDisconnectCleanups.delete(sessionId)
@@ -4611,7 +4695,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         cacheSessionInitMetadata(sessionId, cliMsg)
         const messages: ServerMessage[] = [
           // Send model info as a system notification, not a status change
-          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model } },
+          { type: 'system_notification', subtype: 'init', message: `Model: ${cliMsg.model || 'unknown'}`, data: { model: cliMsg.model, cwd: cliMsg.cwd } },
         ]
         // Send slash commands to frontend
         const cmds = sessionSlashCommands.get(sessionId)
@@ -5464,6 +5548,12 @@ function bindClientSessionOutput(
       // generation. Once that boundary settles, only its terminal result may
       // pass to every renderer. Task lifecycle must pass so Stop can close
       // Agents, and permission resolutions must pass so open prompts can close.
+      if (cliMsg?.type === 'system' && cliMsg.subtype === 'init') {
+        // A tool may finish changing cwd after Stop. Keep workspace metadata
+        // authoritative while the stopped generation's chat output stays fenced.
+        cacheSessionInitMetadata(sessionId, cliMsg)
+        sendMessage(ws, { type: 'system_notification', subtype: 'init', data: { cwd: cliMsg.cwd } })
+      }
       return
     }
     if (options?.shouldForward && !options.shouldForward(cliMsg)) {
@@ -6096,6 +6186,7 @@ export function getActiveSessionIds(): string[] {
 }
 
 export function __resetWebSocketHandlerStateForTests(): void {
+  for (const sessionId of userAdmissionQueues.keys()) cancelQueuedUserAdmissions(sessionId)
   mobileActivityClock.clear()
   strictCollaborationRuntimeSessions.clear()
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)

@@ -40,4 +40,11 @@ describe('permission helpers', () => {
     expect(formatPermissionDecisionStatus({ allowed: true, rule: 'always' })).toContain('永久允许')
     expect(formatPermissionDecisionStatus({ allowed: false })).toContain('拒绝')
   })
+  it('uses only numeric instructions for one pending request and explicit commands for multiple', () => {
+    expect(formatPermissionInstructions('req-1', { pendingCount: 1 })).toBe('回复 1 允许一次，2 永久允许，3 拒绝。')
+    const multiple = formatPermissionInstructions('req-2', { pendingCount: 2 })
+    expect(multiple).toContain('多个待审批请求')
+    expect(multiple).not.toContain('回复 1')
+    for (const action of ['allow', 'always', 'deny']) expect(multiple).toContain(`/${action} req-2`)
+  })
 })

@@ -15,7 +15,7 @@ import {
   type GrokTokenFetchOptions,
 } from '../../services/grokAuth/client.js'
 import type { GrokOAuthTokenResponse } from '../../services/grokAuth/types.js'
-import { logTokenRefreshFailure } from './oauthRefreshLog.js'
+import { coordinateOAuthRefresh, oauthFileAuthority, oauthTokenIdentity, saveRefreshedOAuthFile } from '../../services/oauth/refresh-coordinator.js'
 import {
   getNetworkProxyUrl,
   loadNetworkSettings,
@@ -194,11 +194,19 @@ export class HahaGrokOAuthService {
   }
 
   async ensureFreshTokens(): Promise<StoredGrokOAuthTokens | null> {
+    const filePath = this.getOAuthFilePath()
     const tokens = await this.loadTokens()
+    if (this.getOAuthFilePath() !== filePath) throw new Error("OAuth credential store changed during refresh; retry the request")
     if (!tokens) return null
     if (tokens.expiresAt === null || !isGrokTokenExpired(tokens.expiresAt)) return tokens
     if (!tokens.refreshToken) return null
-    try {
+    await coordinateOAuthRefresh('grok', oauthFileAuthority(filePath), tokens, async (assertOwnership) => {
+      const current = await this.loadTokens()
+      if (this.getOAuthFilePath() !== filePath) throw new Error("OAuth credential store changed during refresh; retry the request")
+      if (oauthTokenIdentity(current) !== oauthTokenIdentity(tokens)) {
+        if (current && (current.expiresAt === null || !isGrokTokenExpired(current.expiresAt))) return
+        throw new Error("OAuth credentials changed during refresh; retry the request")
+      }
       const response = await this.refreshFn(tokens.refreshToken, await this.getTokenFetchOptions())
       const normalized = withRefreshedGrokAccessToken({
         accessToken: tokens.accessToken,
@@ -216,12 +224,13 @@ export class HahaGrokOAuthService {
         email: normalized.email ?? null,
         clientId: normalized.clientId ?? null,
       }
-      await this.saveTokens(updated)
-      return updated
-    } catch (error) {
-      logTokenRefreshFailure('[HahaGrokOAuthService]', error)
-      return null
-    }
+      if (this.getOAuthFilePath() !== filePath) throw new Error("OAuth credential store changed during refresh; retry the request")
+      assertOwnership()
+      saveRefreshedOAuthFile(filePath, tokens, updated)
+    })
+    const updated = await this.loadTokens()
+    if (this.getOAuthFilePath() !== filePath) throw new Error("OAuth credential store changed during refresh; retry the request")
+    return updated
   }
 
   dispose(): void {

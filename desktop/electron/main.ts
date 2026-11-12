@@ -981,7 +981,7 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
+  registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
     window.webContents.setZoomFactor(normalizeZoomFactor(payload))

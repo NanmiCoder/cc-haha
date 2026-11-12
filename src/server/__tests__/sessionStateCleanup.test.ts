@@ -76,6 +76,7 @@ const CONTAINERS: Record<string, Classification> = {
   sessionTurnObservers: { kind: 'cleared' },
   taskNotificationPersistence: { kind: 'cleared' },
   terminalSessionChatStates: { kind: 'cleared' },
+  userAdmissionQueues: { kind: 'cleared' },
 
   activeSessions: {
     kind: 'not-session-state',

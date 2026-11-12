@@ -132,7 +132,7 @@ export function getDefaultFableModel(): ModelName {
   if (shouldUseThirdPartyAnthropicModelDefaults()) {
     return getDefaultOpusModel()
   }
-  return getModelStrings().fable5
+  return getModelStrings().fable52
 }
 
 // @[MODEL LAUNCH]: Update the default Opus model (3P providers may lag so keep defaults unchanged).
@@ -283,6 +283,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   // Order matters: check more specific versions first (4-5 before 4).
   // OpenRouter uses dotted 5.5 IDs; canonicalize only the internal identity,
   // leaving the namespaced outbound model ID untouched.
+  if (name.includes('claude-fable-5-2')) {
+    return 'claude-fable-5-2'
+  }
   if (name.includes('claude-fable-5-1')) {
     return 'claude-fable-5-1'
   }
@@ -452,6 +455,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     return openAIModelName
   }
   switch (model) {
+    case getModelStrings().fable52:
+      return 'Fable 5.2'
+    case getModelStrings().fable52 + '[1m]':
+      return 'Fable 5.2 (1M context)'
     case getModelStrings().fable51:
       return 'Fable 5.1'
     case getModelStrings().fable51 + '[1m]':
@@ -718,6 +725,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
 
+  if (canonical.includes('claude-fable-5-2')) {
+    return has1m ? 'Fable 5.2 (with 1M context)' : 'Fable 5.2'
+  }
   if (canonical.includes('claude-fable-5-1')) {
     return has1m ? 'Fable 5.1 (with 1M context)' : 'Fable 5.1'
   }
