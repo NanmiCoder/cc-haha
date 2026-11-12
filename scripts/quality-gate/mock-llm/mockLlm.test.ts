@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { isExpectedRoutingCliExit } from './agentModelRouting'
+import { stagedPlanIdentity } from './teamReview'
 import { forwardProvenanceRequest } from './leanSkillProvenance'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
@@ -19,6 +20,23 @@ import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 
 const AGENT_TOOLS = [{ name: 'Bash' }, { name: 'Write' }, { name: 'Read' }]
 const SYSTEM = [{ type: 'text', text: 'You are an agent.\n - Primary working directory: /tmp/work/project\n' }]
+
+describe('team review result boundary', () => {
+  const guidance = 'Member recorded in the team draft, NOT started. Only human confirmation starts execution.'
+
+  test('takes the submit identity from the actual model-facing tool result', () => {
+    expect(stagedPlanIdentity({ content: [{ type: 'text', text: `${guidance}\nplan_id: draft-id\nrevision: 3 (use it as TeamPlan expected_revision)` }] }))
+      .toEqual({ planId: 'draft-id', revision: 3 })
+  })
+
+  test('rejects the old mapper error instead of inventing a submit revision', () => {
+    expect(() => stagedPlanIdentity({ is_error: true, content: 'Unexpected agent tool result status: teammate_staged' }))
+      .toThrow('Unexpected agent tool result status: teammate_staged')
+    for (const text of [`${guidance}\nplan_id: draft-id`, `${guidance}\nplan_id: draft-id\nrevision: 0 (use it as TeamPlan expected_revision)`]) {
+      expect(() => stagedPlanIdentity({ content: text })).toThrow('Missing staged plan identity')
+    }
+  })
+})
 
 function agentRequest(messages: MockRequest['messages']): MockRequest {
   return { model: 'mock-model', system: SYSTEM, tools: AGENT_TOOLS, messages }
