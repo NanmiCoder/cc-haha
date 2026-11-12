@@ -10,8 +10,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
+import { resolveMcpHostProxy } from '../../services/mcp/hostProxy.js'
 import {
   UNREACHABLE_MCP_HOST,
+  isolateMcpFixtureCredentials,
   startRecordingProxy,
   startStreamableMcpServer,
   type McpFixture,
@@ -39,8 +41,11 @@ let fixture: McpFixture
 let proxy: RecordingProxy
 let serverCount = 0
 const createdServers: string[] = []
+const extraServers: ReturnType<typeof startServer>[] = []
+let restoreStorage: () => void
 
 beforeEach(async () => {
+  restoreStorage = isolateMcpFixtureCredentials()
   configDir = await mkdtemp(join(tmpdir(), 'cc-haha-mcp-network-proxy-'))
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = configDir
@@ -65,10 +70,12 @@ afterEach(async () => {
     await fetch(`http://127.0.0.1:${server.port}/api/mcp/${name}?scope=user`, { method: 'DELETE' }).catch(() => {})
   }
   server?.stop(true)
+  for (const extra of extraServers.splice(0)) extra.stop(true)
   server = undefined
   await stopServerRuntimeForShutdown({ waitForCli: false })
   await proxy.close()
   await fixture.stop()
+  restoreStorage()
   for (const key of PROXY_ENV_KEYS) {
     const value = originalProxyEnv[key]
     if (value === undefined) delete process.env[key]
@@ -128,5 +135,26 @@ describe('MCP checks run by the desktop server', () => {
 
     expect(result).toMatchObject({ status: 'connected' })
     expect(proxy.requests).toEqual([])
+  })
+
+  for (const newestFirst of [false, true]) test(`two live API listeners keep proxy routing when the ${newestFirst ? 'newest' : 'oldest'} stops`, async () => {
+    process.env.CC_HAHA_SYSTEM_PROXY_URL = proxy.url
+    const first = startServer(0, '127.0.0.1')
+    const second = startServer(0, '127.0.0.1')
+    const stopped = newestFirst ? second : first
+    server = newestFirst ? first : second
+    extraServers.push(stopped)
+    stopped.stop(true)
+    stopped.stop(true)
+    expect(await checkMcpServer(`http://${UNREACHABLE_MCP_HOST}/mcp`)).toMatchObject({ status: 'connected' })
+    expect(proxy.requests.some(request => request.startsWith('POST '))).toBe(true)
+  })
+
+  test('stopping the last API listener unregisters its host resolver', async () => {
+    process.env.CC_HAHA_SYSTEM_PROXY_URL = proxy.url
+    server = startServer(0, '127.0.0.1')
+    expect(await resolveMcpHostProxy(`http://${UNREACHABLE_MCP_HOST}/mcp`)).toBeDefined()
+    server.stop(true)
+    expect(await resolveMcpHostProxy(`http://${UNREACHABLE_MCP_HOST}/mcp`)).toBeUndefined()
   })
 })

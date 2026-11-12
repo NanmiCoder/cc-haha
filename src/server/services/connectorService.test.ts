@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ConnectorService, type ConnectorServiceDependencies } from './connectorService.js'
 import type { ConnectorAdapter } from '../../services/connectors/types.js'
+import { createRemoteConnectorBridge, type RemoteConnectorDependencies } from '../../services/connectors/remoteConnector.js'
+import { McpConnectionError, type McpConnectionErrorKind } from '../../services/mcp/connectionErrors.js'
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
 
 const definition = { id: 'feishu' as const, pluginId: 'feishu@test', packageName: 'fake', version: '1.0.0', homepage: 'https://example.test', credentialMode: 'shared' as const, platforms: [`${process.platform}-${process.arch}`] }
 async function settled(service: ConnectorService) {
@@ -187,6 +190,99 @@ test('runtime failure disables the plugin and does not expose secret-bearing ada
     expect(f.service.get('feishu')).toMatchObject({ enabled: false, runtime: 'error', status: 'error' })
     expect(JSON.stringify(f.service.get('feishu'))).not.toContain('secret-token')
     expect(f.calls.at(-2)).toBe('enabled:false')
+  } finally { f.cleanup() }
+})
+
+function failingRemoteBridge(upstream: unknown) {
+  const dependencies: RemoteConnectorDependencies = {
+    probe: async () => { throw upstream }, oauth: async () => {}, disconnect: async () => {},
+    loadOptions: () => ({}), saveOptions: () => {}, deleteOptions: () => {}, clearOAuth: () => {},
+  }
+  return createRemoteConnectorBridge({ id: 'feishu', pluginId: 'office-feishu@haha-connectors', version: '1.0.0', endpoint: 'https://fixture.invalid/mcp', transport: 'http', auth: { type: 'none' } }, dependencies)
+}
+
+test.each([
+  [Object.assign(new Error('network body fake-private-key'), { code: 'ECONNREFUSED' }), 'network'],
+  [new McpConnectionError('proxy'), 'proxy'],
+  [new DOMException('query fake-private-key', 'TimeoutError'), 'timeout'],
+  [Object.assign(new Error('Authorization: Bearer fake-private-key'), { code: 403 }), 'permission'],
+  [new Error('tool discovery body fake-private-key'), 'discovery'],
+] satisfies Array<[Error, McpConnectionErrorKind]>)('remote failure %# reaches the existing DTO and persisted error field as a distinct safe message', async (upstream, kind) => {
+  const remote = failingRemoteBridge(upstream)
+  const f = fixture({ check: async (_installation, signal) => remote.check(signal) })
+  f.deps.definitions = [{ ...definition, transport: 'mcp' }]
+  try {
+    f.service.action('feishu', 'prepare')
+    await settled(f.service)
+    f.service.action('feishu', 'check', { acknowledgeSharedCredentials: true })
+    await settled(f.service)
+    expect(f.service.get('feishu')).toMatchObject({ enabled: false, runtime: 'error', status: 'error', failedPhase: 'checking', error: new McpConnectionError(kind).message })
+    expect(f.calls).not.toContain('authenticate')
+    const persisted = readFileSync(join(f.deps.root, 'state.json'), 'utf8')
+    expect(persisted).not.toContain('fake-private-key')
+    expect(JSON.stringify(f.service.get('feishu'))).not.toContain('fake-private-key')
+    const record = JSON.parse(persisted).connectors.feishu
+    expect(record.error).toBe(new McpConnectionError(kind).message)
+    expect(record).not.toHaveProperty('errorKind')
+    expect(record).not.toHaveProperty('connectionError')
+  } finally { f.cleanup() }
+})
+
+test.each([new UnauthorizedError('fake-private-key'), Object.assign(new Error('query fake-private-key'), { code: 401 })])('remote authentication rejection %# remains needs-auth and displays a safe credential hint', async upstream => {
+  const remote = failingRemoteBridge(upstream)
+  const f = fixture({ check: async (_installation, signal) => remote.check(signal) })
+  f.deps.definitions = [{ ...definition, transport: 'mcp' }]
+  try {
+    f.service.action('feishu', 'prepare')
+    await settled(f.service)
+    f.service.action('feishu', 'check', { acknowledgeSharedCredentials: true })
+    await settled(f.service)
+    expect(f.service.get('feishu')).toMatchObject({ connection: 'needs-auth', status: 'needs-auth', runtime: 'missing', enabled: false, error: new McpConnectionError('authentication').message })
+    expect(f.service.get('feishu').failedPhase).toBeUndefined()
+    expect(f.calls).not.toContain('authenticate')
+    expect(JSON.stringify(f.service.get('feishu'))).not.toContain('fake-private-key')
+    expect(readFileSync(join(f.deps.root, 'state.json'), 'utf8')).not.toContain('fake-private-key')
+  } finally { f.cleanup() }
+})
+
+test('user cancellation takes priority over a classified remote failure', async () => {
+  let release: () => void = () => {}
+  let started: () => void = () => {}
+  const checking = new Promise<void>(resolve => { started = resolve })
+  const f = fixture({ check: async () => new Promise<never>((_resolve, reject) => {
+    release = () => reject(new McpConnectionError('network'))
+    started()
+  }) })
+  try {
+    f.service.action('feishu', 'prepare')
+    await settled(f.service)
+    f.service.action('feishu', 'check', { acknowledgeSharedCredentials: true })
+    await checking
+    f.service.action('feishu', 'cancel')
+    release()
+    await settled(f.service)
+    expect(f.service.get('feishu')).toMatchObject({ connection: 'needs-auth', runtime: 'missing', status: 'needs-auth', enabled: false })
+    expect(f.service.get('feishu').error).toBeUndefined()
+    expect(f.service.get('feishu').failedPhase).toBeUndefined()
+  } finally {
+    release()
+    f.cleanup()
+  }
+})
+
+test('a connector-state storage failure takes priority over classified remote errors', async () => {
+  const f = fixture({ check: async () => {
+    mkdirSync(join(f.deps.root, 'state.json.tmp'))
+    throw new McpConnectionError('network')
+  } })
+  try {
+    f.service.action('feishu', 'prepare')
+    await settled(f.service)
+    f.service.action('feishu', 'check', { acknowledgeSharedCredentials: true })
+    await settled(f.service)
+    expect(f.service.get('feishu')).toMatchObject({ enabled: false, runtime: 'error', status: 'error', failedPhase: 'persistence' })
+    expect(f.service.get('feishu').error).toContain('Could not save connector state')
+    expect(f.service.get('feishu').error).not.toContain('network connection failed')
   } finally { f.cleanup() }
 })
 test('local credential presence is configured, not remotely verified readiness', async () => {

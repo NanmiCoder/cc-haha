@@ -142,6 +142,12 @@ import { getAllMcpConfigs, isMcpServerDisabled, isMcpServerDisabledForExecution 
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 import { getMcpServerHeaders } from './headersHelper.js'
 import { resolveMcpHostProxy } from './hostProxy.js'
+import {
+  classifyMcpConnectionError,
+  McpConnectionError,
+  McpConnectionErrorContext,
+  setMcpConnectionError,
+} from './connectionErrors.js'
 import { SdkControlClientTransport } from './SdkControlTransport.js'
 import type {
   ConnectedMCPServer,
@@ -711,6 +717,7 @@ export function getServerCacheKey(
  * @returns A wrapped client (either connected or failed)
  */
 const connectionProjects = new WeakMap<object, string>()
+const remoteConnectionErrorContexts = new WeakMap<Client, McpConnectionErrorContext>()
 
 export function getMcpClientCacheKey(client: MCPServerConnection): string {
   const cwd = client.type === 'connected' ? connectionProjects.get(client.client) : undefined
@@ -733,6 +740,7 @@ const connectToServerMemoized = memoize(
     },
   ): Promise<MCPServerConnection> => {
     const connectStartTime = Date.now()
+    const connectionErrorContext = new McpConnectionErrorContext()
     const attempt: ConnectionAttempt = { key: getServerCacheKey(name, serverRef) }
     connectionAttempts.set(attempt.key, attempt)
     // The connected client's cleanup is registered only once the handshake and
@@ -766,6 +774,7 @@ const connectToServerMemoized = memoize(
         // A host such as the desktop server has no proxy variables and passes
         // its network setting instead; it applies to every request below.
         const hostProxyOptions = await resolveMcpHostProxy(serverRef.url)
+        const proxyRoute = (hostProxyOptions ?? getProxyFetchOptions()).proxy ? 'proxy' : 'network'
 
         // Use the auth provider with SSEClientTransport
         const transportOptions: SSEClientTransportOptions = {
@@ -775,7 +784,7 @@ const connectToServerMemoized = memoize(
           // SDK's handler calls auth() → tokens().
           fetch: wrapFetchWithTimeout(
             wrapFetchWithStepUpDetection(
-              createFetchWithInit(undefined, hostProxyOptions),
+              connectionErrorContext.wrapFetch(createFetchWithInit(undefined, hostProxyOptions), proxyRoute),
               authProvider,
             ),
           ),
@@ -803,7 +812,7 @@ const connectToServerMemoized = memoize(
 
             const proxyOptions = hostProxyOptions ?? getProxyFetchOptions()
             // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
-            return fetch(url, {
+            return connectionErrorContext.wrapFetch(fetch, proxyOptions.proxy ? 'proxy' : 'network')(url, {
               ...init,
               ...proxyOptions,
               headers: {
@@ -976,7 +985,7 @@ const connectToServerMemoized = memoize(
           // SDK's handler calls auth() → tokens().
           fetch: wrapFetchWithTimeout(
             wrapFetchWithStepUpDetection(
-              createFetchWithInit(undefined, hostProxyOptions),
+              connectionErrorContext.wrapFetch(createFetchWithInit(undefined, hostProxyOptions), proxyOptions.proxy ? 'proxy' : 'network'),
               authProvider,
             ),
           ),
@@ -1151,6 +1160,9 @@ const connectToServerMemoized = memoize(
           },
         },
       )
+      if (serverRef.type === 'http' || serverRef.type === 'sse') {
+        remoteConnectionErrorContexts.set(client, connectionErrorContext)
+      }
 
       // Add debug logging for client events if available
       if (serverRef.type === 'http') {
@@ -1234,10 +1246,12 @@ const connectToServerMemoized = memoize(
           // server under it would keep running with nobody left to stop it.
           void attempt.cancel?.()
           reject(
-            new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
-              `MCP server "${name}" connection timed out after ${getConnectionTimeoutMs()}ms`,
-              'MCP connection timeout',
-            ),
+            serverRef.type === 'http' || serverRef.type === 'sse'
+              ? new McpConnectionError('timeout')
+              : new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
+                  `MCP server "${name}" connection timed out after ${getConnectionTimeoutMs()}ms`,
+                  'MCP connection timeout',
+                ),
           )
         }, getConnectionTimeoutMs())
 
@@ -1820,12 +1834,18 @@ const connectToServerMemoized = memoize(
       if (inProcessServer) {
         inProcessServer.close().catch(() => {})
       }
-      return {
+      const failure: MCPServerConnection = {
         name,
         type: 'failed' as const,
         config: serverRef,
         error: errorMessage(error),
       }
+      if (serverRef.type === 'http' || serverRef.type === 'sse') {
+        const safeError = connectionErrorContext.classify(error)
+        failure.error = safeError.message
+        setMcpConnectionError(failure, safeError)
+      }
+      return failure
     } finally {
       unregisterStartupCancel()
     }
@@ -1979,8 +1999,8 @@ export function mcpToolInputToAutoClassifierInput(
     : toolName
 }
 
-export const fetchToolsForClient = memoizeWithLRU(
-  async (client: MCPServerConnection): Promise<Tool[]> => {
+const fetchToolsForClientUncached =
+  async (client: MCPServerConnection, strict = false): Promise<Tool[]> => {
     if (client.type !== 'connected') return []
 
     try {
@@ -1988,6 +2008,8 @@ export const fetchToolsForClient = memoizeWithLRU(
         return []
       }
 
+      const errorContext = remoteConnectionErrorContexts.get(client.client)
+      errorContext?.reset()
       const result = (await client.client.request(
         { method: 'tools/list' },
         ListToolsResultSchema,
@@ -2229,12 +2251,24 @@ export const fetchToolsForClient = memoizeWithLRU(
         .filter(isIncludedMcpTool)
     } catch (error) {
       logMCPError(client.name, `Failed to fetch tools: ${errorMessage(error)}`)
+      if (strict) {
+        throw remoteConnectionErrorContexts.get(client.client)?.classify(error) ?? classifyMcpConnectionError(error)
+      }
       return []
     }
-  },
+  }
+
+// Normal CLI discovery remains tolerant and cached. Explicit connector checks
+// use the same conversion/filtering with fresh discovery and classified errors.
+export const fetchToolsForClient = memoizeWithLRU(
+  (client: MCPServerConnection) => fetchToolsForClientUncached(client),
   getMcpClientCacheKey,
   MCP_FETCH_CACHE_SIZE,
 )
+
+export function fetchToolsForClientStrict(client: MCPServerConnection): Promise<Tool[]> {
+  return fetchToolsForClientUncached(client, true)
+}
 
 export const fetchResourcesForClient = memoizeWithLRU(
   async (client: MCPServerConnection): Promise<ServerResource[]> => {

@@ -306,6 +306,26 @@ describe('network settings', () => {
       .toBe('https://user:p%40ss@proxy.example.com:8443')
   })
 
+  it('bypasses a failed system bridge for loopback while remote requests still fail closed', () => {
+    process.env[SYSTEM_PROXY_ERROR_ENV] = 'fixture bridge unavailable'
+    const settings = normalizeNetworkSettings({})
+    for (const target of ['http://127.0.0.1:3000/mcp', 'http://localhost:3000/mcp', 'http://[::1]:3000/mcp']) {
+      expect(() => getNetworkProxyFetchOptions(settings, target)).not.toThrow()
+    }
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://remote.test/mcp')).toThrow('fixture bridge unavailable')
+  })
+
+  it('does not require a healthy bridge for explicitly bypassed targets', () => {
+    process.env[SYSTEM_PROXY_ERROR_ENV] = 'fixture bridge unavailable'
+    process.env.NO_PROXY = 'mcp.blocked.test:443,.internal.test'
+    const settings = normalizeNetworkSettings({})
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://mcp.blocked.test/mcp')).not.toThrow()
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://api.internal.test/mcp')).not.toThrow()
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://mcp.blocked.test:8443/mcp')).toThrow('fixture bridge unavailable')
+    process.env.NO_PROXY = '*'
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://remote.test/mcp')).not.toThrow()
+  })
+
   it('routes the MCP connections the server opens itself by the saved network setting', async () => {
     const saveProxy = (proxy: Record<string, string>) => fs.writeFile(
       path.join(tmpDir, 'settings.json'),
@@ -320,7 +340,7 @@ describe('network settings', () => {
       // A host decision of "direct" is still a decision: options without a proxy.
       const loopback = await resolveMcpHostProxy('http://127.0.0.1:3000/mcp')
       expect(loopback).toBeDefined()
-      expect(loopback?.proxy).toBeUndefined()
+      expect(loopback?.proxy).toBe(false)
 
       await saveProxy({ mode: 'manual', url: 'http://127.0.0.1:7890' })
       expect((await resolveMcpHostProxy('https://huggingface.co/mcp'))?.proxy).toBe('http://127.0.0.1:7890')
@@ -328,7 +348,7 @@ describe('network settings', () => {
       await saveProxy({ mode: 'direct', url: '' })
       const direct = await resolveMcpHostProxy('https://huggingface.co/mcp')
       expect(direct).toBeDefined()
-      expect(direct?.proxy).toBeUndefined()
+      expect(direct?.proxy).toBe(false)
     } finally {
       dispose()
     }

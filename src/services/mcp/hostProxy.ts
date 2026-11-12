@@ -1,9 +1,10 @@
 import type { getProxyFetchOptions } from '../../utils/proxy.js'
+import { McpConnectionError } from './connectionErrors.js'
 
-export type McpProxyFetchOptions = ReturnType<typeof getProxyFetchOptions>
+export type McpProxyFetchOptions = Omit<ReturnType<typeof getProxyFetchOptions>, 'proxy'> & { proxy?: string | false }
 export type McpHostProxyResolver = (targetUrl: string) => Promise<McpProxyFetchOptions>
 
-let hostProxyResolver: McpHostProxyResolver | undefined
+const hostProxyRegistrations: Array<{ resolver: McpHostProxyResolver }> = []
 
 /**
  * Lets a host process route the MCP connections it opens itself through its
@@ -13,13 +14,21 @@ let hostProxyResolver: McpHostProxyResolver | undefined
  * environment proxy. Returns a function that removes this resolver.
  */
 export function setMcpHostProxyResolver(resolver: McpHostProxyResolver): () => void {
-  hostProxyResolver = resolver
+  const registration = { resolver }
+  hostProxyRegistrations.push(registration)
   return () => {
-    if (hostProxyResolver === resolver) hostProxyResolver = undefined
+    const index = hostProxyRegistrations.indexOf(registration)
+    if (index !== -1) hostProxyRegistrations.splice(index, 1)
   }
 }
 
 /** The host's proxy options for an MCP endpoint, or undefined when no host registered one. */
 export async function resolveMcpHostProxy(targetUrl: string | URL): Promise<McpProxyFetchOptions | undefined> {
-  return hostProxyResolver?.(String(targetUrl))
+  const registration = hostProxyRegistrations.at(-1)
+  if (!registration) return undefined
+  try {
+    return await registration.resolver(String(targetUrl))
+  } catch {
+    throw new McpConnectionError('proxy')
+  }
 }

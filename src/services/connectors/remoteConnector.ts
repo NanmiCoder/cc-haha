@@ -1,4 +1,5 @@
-import { connectToServer, fetchToolsForClient, clearServerCache } from '../mcp/client.js'
+import { connectToServer, fetchToolsForClientStrict, clearServerCache } from '../mcp/client.js'
+import { classifyMcpConnectionError, getMcpConnectionError, McpConnectionError } from '../mcp/connectionErrors.js'
 import { performMCPOAuthFlow, clearServerTokensFromLocalStorage, clearMcpClientConfig } from '../mcp/auth.js'
 import type { McpHTTPServerConfig, McpSSEServerConfig, ScopedMcpServerConfig } from '../mcp/types.js'
 import { savePluginOptions, loadPluginOptions, deletePluginOptions, type PluginOptionSchema, type PluginOptionValues } from '../../utils/plugins/pluginOptionsStorage.js'
@@ -64,7 +65,10 @@ async function abortable<T>(work: Promise<T>, signal: AbortSignal, cancel: () =>
   signal.throwIfAborted()
   let listener: (() => void) | undefined
   const aborted = new Promise<never>((_resolve, reject) => {
-    listener = () => { void cancel().catch(() => {}); reject(new Error('Remote connector operation cancelled or timed out')) }
+    listener = () => {
+      void cancel().catch(() => {})
+      reject(signal.reason)
+    }
     signal.addEventListener('abort', listener, { once: true })
     if (signal.aborted) listener()
   })
@@ -77,8 +81,9 @@ const defaultDependencies: RemoteConnectorDependencies = {
     signal.throwIfAborted()
     const work = (async () => {
       const client = await connectToServer(name, config)
+      if (client.type === 'failed') throw getMcpConnectionError(client) ?? new McpConnectionError('discovery')
       if (client.type !== 'connected') return { status: client.type === 'needs-auth' ? 'needs-auth' as const : client.type === 'disabled' ? 'disabled' as const : 'failed' as const, toolCount: 0 }
-      const tools = await fetchToolsForClient(client)
+      const tools = await fetchToolsForClientStrict(client)
       return { status: 'connected' as const, toolCount: tools.length }
     })()
     return abortable(work, signal, () => clearServerCache(name, config))
@@ -130,10 +135,16 @@ export function createRemoteConnectorBridge(recipe: RemoteConnectorRecipe, depen
         await dependencies.disconnect(serverName, remote)
         signal.throwIfAborted()
         result = await dependencies.probe(serverName, remote, AbortSignal.any([signal, AbortSignal.timeout(30_000)]))
+        signal.throwIfAborted()
       }
-      catch { throw new Error('Remote connector connection or tool discovery failed') }
+      catch (error) {
+        signal.throwIfAborted()
+        const safeError = classifyMcpConnectionError(error)
+        if (safeError.kind === 'authentication') return { authenticated: false, verification: 'remote', toolCount: 0 }
+        throw safeError
+      }
       if (result.status === 'needs-auth') return { authenticated: false, verification: 'remote', toolCount: 0 }
-      if (result.status !== 'connected' || result.toolCount < 1) throw new Error('Unable to connect to the remote connector')
+      if (result.status !== 'connected' || result.toolCount < 1) throw new McpConnectionError('discovery')
       return { authenticated: true, verification: 'remote', toolCount: result.toolCount }
     },
     async authenticate(signal: AbortSignal, progress: (phase: string, authUrl?: string) => void): Promise<void> {
@@ -145,7 +156,10 @@ export function createRemoteConnectorBridge(recipe: RemoteConnectorRecipe, depen
         if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid remote connector authorization URL')
         progress('awaiting-authorization', url.toString())
       }, AbortSignal.any([signal, AbortSignal.timeout(300_000)])) }
-      catch { throw new Error('Remote connector authorization did not complete') }
+      catch (error) {
+        signal.throwIfAborted()
+        throw classifyMcpConnectionError(error, 'authentication')
+      }
       await dependencies.disconnect(serverName, remote)
     },
     async deactivate(): Promise<void> {

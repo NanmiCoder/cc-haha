@@ -415,6 +415,8 @@ export type AgentFlowAgainstProviderOptions = {
   stepTimeoutMs: number
   /** Test-only process environment, scoped to the disposable sandbox. */
   envOverrides?: Record<string, string>
+  /** Optional offline transport fixture, also loaded in the actual server. */
+  serverPreload?: string
   scenarios: ReadonlyArray<{ id: string; title: string }>
   runners: Record<string, LiveScenarioRunner>
   /**
@@ -458,7 +460,10 @@ export async function executeAgentFlowAgainstProvider(
     },
   })
 
-  const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {
+  const serverArgs = options.serverPreload
+    ? ['--no-env-file', '--preload', options.serverPreload, 'src/server/index.ts']
+    : ['run', 'src/server/index.ts']
+  const server = Bun.spawn(['bun', ...serverArgs, '--host', '127.0.0.1', '--port', String(port)], {
     cwd: rootDir,
     stdout: 'pipe',
     stderr: 'pipe',

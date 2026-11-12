@@ -9,6 +9,7 @@ import { setMcpHostProxyResolver } from './hostProxy.js'
 import type { ScopedMcpServerConfig } from './types.js'
 import {
   UNREACHABLE_MCP_HOST,
+  isolateMcpFixtureCredentials,
   startLegacySseMcpServer,
   startRecordingProxy,
   startStreamableMcpServer,
@@ -28,8 +29,10 @@ let fixture: McpFixture | undefined
 let proxy: RecordingProxy | undefined
 let disposeResolver: (() => void) | undefined
 let opened: { name: string, config: ScopedMcpServerConfig } | undefined
+let restoreStorage: () => void
 
 beforeEach(async () => {
+  restoreStorage = isolateMcpFixtureCredentials()
   root = await mkdtemp(join(tmpdir(), 'mcp-host-proxy-'))
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = root
@@ -48,6 +51,7 @@ afterEach(async () => {
   disposeResolver = undefined
   await proxy?.close()
   await fixture?.stop()
+  restoreStorage()
   proxy = undefined
   fixture = undefined
   for (const key of PROXY_ENV_KEYS) {
@@ -96,7 +100,7 @@ describe('MCP connections opened by a host process', () => {
 
     expect(await fetchToolsForClient(client)).toHaveLength(1)
     expect(proxy.requests).toContain(`GET http://${UNREACHABLE_MCP_HOST}/sse`)
-    expect(proxy.requests).toContain(`POST http://${UNREACHABLE_MCP_HOST}/messages`)
+    expect(proxy.requests.some(request => request.startsWith(`POST http://${UNREACHABLE_MCP_HOST}/messages?session=`))).toBe(true)
   })
 
   test('without a host resolver the environment proxy still applies', async () => {
