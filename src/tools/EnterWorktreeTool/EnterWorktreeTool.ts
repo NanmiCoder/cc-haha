@@ -81,15 +81,20 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
     }
 
     // Resolve to main repo root so worktree creation works from within a worktree
-    const mainRepoRoot = findCanonicalGitRoot(getCwd())
-    if (mainRepoRoot && mainRepoRoot !== getCwd()) {
+    const previousCwd = getCwd()
+    const mainRepoRoot = findCanonicalGitRoot(previousCwd)
+    if (mainRepoRoot && mainRepoRoot !== previousCwd) {
       process.chdir(mainRepoRoot)
       setCwd(mainRepoRoot)
     }
 
     const slug = input.name ?? getPlanSlug()
 
-    const worktreeSession = await createWorktreeForSession(getSessionId(), slug)
+    const worktreeSession = await createWorktreeForSession(getSessionId(), slug).catch(error => {
+      process.chdir(previousCwd)
+      setCwd(previousCwd)
+      throw error
+    })
 
     process.chdir(worktreeSession.worktreePath)
     setCwd(worktreeSession.worktreePath)

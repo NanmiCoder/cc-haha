@@ -35,6 +35,25 @@ describe('persistent storage upgrade migrations', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
+  test('upgrades v9 subagent env ownership with a backup and preserves unknown settings', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    await fs.mkdir(dir, { recursive: true })
+    const provider = { id: 'legacy', presetId: 'custom', name: 'Legacy', apiKey: 'fake', baseUrl: 'https://fixture.invalid',
+      models: { main: 'main', haiku: 'small', sonnet: 'medium', opus: 'large' } }
+    const legacy = { futureSetting: { keep: true }, env: { CLAUDE_CODE_SUBAGENT_MODEL: 'selected-subagent', CUSTOM_ENV: 'keep' } }
+    await fs.writeFile(path.join(dir, 'providers.json'), JSON.stringify({ schemaVersion: 9, activeId: 'legacy', providers: [provider] }))
+    await fs.writeFile(path.join(dir, 'settings.json'), JSON.stringify(legacy))
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const service = new ProviderService()
+    expect(await service.getManagedSettings()).toEqual({ ...legacy, providerEnvOwner: 'legacy' })
+    expect((await service.getProviderRuntimeEnv('legacy')).CLAUDE_CODE_SUBAGENT_MODEL).toBe('selected-subagent')
+    const backup = (await listFiles(dir)).find(name => name.startsWith('settings.json.bak-before-migration-'))
+    expect(backup).toBeDefined()
+    expect(JSON.parse(await fs.readFile(path.join(dir, backup!), 'utf8'))).toEqual(legacy)
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+  })
+
   test('upgrades v6 image settings to an explicit protocol and preserves unknown fields on later edits', async () => {
     const dir = path.join(tempDir, 'cc-haha')
     const file = path.join(dir, 'providers.json')
