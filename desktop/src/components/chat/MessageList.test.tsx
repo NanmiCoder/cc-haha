@@ -597,20 +597,20 @@ describe('MessageList nested tool calls', () => {
 
   it('preserves local Markdown image placement when a streamed reply becomes final', () => {
     const firstChunk = [
-      '文字A',
+      'Text A',
       '',
-      '![图A](01',
+      '![Image A](01',
     ].join('\n')
     const secondChunk = [
       '.png)',
       '',
-      '文字B',
+      'Text B',
       '',
-      '![图B](nested/02.png)',
+      '![Image B](nested/02.png)',
       '',
-      '文字C',
+      'Text C',
       '',
-      '![图C](03.png)',
+      '![Image C](03.png)',
       '',
       '裸路径仍需兜底：outputs/fallback.png',
       '',
@@ -639,7 +639,7 @@ describe('MessageList nested tool calls', () => {
     expect(prose).not.toBeNull()
 
     const inlineImages = Array.from(prose!.querySelectorAll('img'))
-    expect(inlineImages.map((image) => image.getAttribute('alt'))).toEqual(['图A', '图B', '图C'])
+    expect(inlineImages.map((image) => image.getAttribute('alt'))).toEqual(['Image A', 'Image B', 'Image C'])
     expect(inlineImages.map((image) => image.getAttribute('src'))).toEqual([
       'http://127.0.0.1:3456/preview-fs/active-tab/01.png',
       'http://127.0.0.1:3456/preview-fs/active-tab/nested/02.png',
@@ -647,11 +647,11 @@ describe('MessageList nested tool calls', () => {
     ])
 
     const orderedNodes = [
-      screen.getByText('文字A'),
+      screen.getByText('Text A'),
       inlineImages[0]!,
-      screen.getByText('文字B'),
+      screen.getByText('Text B'),
       inlineImages[1]!,
-      screen.getByText('文字C'),
+      screen.getByText('Text C'),
       inlineImages[2]!,
     ]
     for (let index = 0; index < orderedNodes.length - 1; index += 1) {
@@ -661,9 +661,9 @@ describe('MessageList nested tool calls', () => {
 
     const galleryImages = Array.from(assistant!.querySelectorAll('img')).filter((image) => !prose!.contains(image))
     expect(galleryImages.map((image) => image.getAttribute('alt'))).toEqual(['fallback.png'])
-    expect(assistant!.querySelectorAll('img[alt="图A"]')).toHaveLength(1)
-    expect(assistant!.querySelectorAll('img[alt="图B"]')).toHaveLength(1)
-    expect(assistant!.querySelectorAll('img[alt="图C"]')).toHaveLength(1)
+    expect(assistant!.querySelectorAll('img[alt="Image A"]')).toHaveLength(1)
+    expect(assistant!.querySelectorAll('img[alt="Image B"]')).toHaveLength(1)
+    expect(assistant!.querySelectorAll('img[alt="Image C"]')).toHaveLength(1)
     expect(assistant!.querySelector('img[alt="remote"], img[alt="loopback"]')).toBeNull()
   })
 
@@ -1073,7 +1073,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-huge',
               type: 'user_text',
-              content: '超长设计内容 '.repeat(24_000),
+              content: 'Very long design content '.repeat(24_000),
               timestamp: 1,
             },
             {
@@ -1808,7 +1808,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '上一轮回答到这里。',
+              content: 'The previous turn ended here.',
               timestamp: 1,
             },
             {
@@ -1816,13 +1816,13 @@ describe('MessageList nested tool calls', () => {
               type: 'goal_event',
               action: 'status',
               status: 'continuing',
-              message: 'Goal continuing: 还需要补充验证',
+              message: 'Goal continuing: Still needs more verification',
               timestamp: 2,
             },
             {
               id: 'assistant-2',
               type: 'assistant_text',
-              content: '后续轮次从这里开始。',
+              content: 'Later turns start here.',
               timestamp: 3,
             },
           ],
@@ -1834,7 +1834,7 @@ describe('MessageList nested tool calls', () => {
 
     expect(screen.getByTestId('goal-continuation-divider')).toBeTruthy()
     expect(screen.getByText('Goal continuing')).toBeTruthy()
-    expect(screen.getByText('还需要补充验证')).toBeTruthy()
+    expect(screen.getByText('Still needs more verification')).toBeTruthy()
     expect(screen.queryByText('Goal status')).toBeNull()
   })
 
@@ -1890,7 +1890,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('localizes non-agent background task duration units', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     useChatStore.setState({
       sessions: {
         [ACTIVE_TAB]: makeSessionState({
@@ -1924,7 +1924,7 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(screen.getByTestId('background-task-event-card').textContent).toContain('1 分 5 秒')
+    expect(screen.getByTestId('background-task-event-card').textContent).toContain('1m 5s')
   })
 
   it('leaves a completed background task to the activity panel, but keeps a failure', () => {
@@ -3021,19 +3021,19 @@ describe('MessageList nested tool calls', () => {
       sessions: {
         [ACTIVE_TAB]: makeSessionState({
           messages: [
-            { id: 'user-1', type: 'user_text', content: '看下 issue', timestamp: 1 },
+            { id: 'user-1', type: 'user_text', content: 'Look at the issue', timestamp: 1 },
             // Opens the turn with reasoning and then narrates, so this one is
             // flushed as a tool-less run — the case that used to get the bare
             // label with no reasoning shown at all.
-            { id: 'think-lone', type: 'thinking', content: '先加载浏览器技能再读 issue。', timestamp: 2 },
-            { id: 'reply-1', type: 'assistant_text', content: '我先加载浏览器技能。', timestamp: 3 },
-            { id: 'think-in-run', type: 'thinking', content: 'gh issue 失败了,改用 REST API。', timestamp: 4 },
+            { id: 'think-lone', type: 'thinking', content: 'Load the browser skill first, then read the issue.', timestamp: 2 },
+            { id: 'reply-1', type: 'assistant_text', content: 'Loading the browser skill first.', timestamp: 3 },
+            { id: 'think-in-run', type: 'thinking', content: 'gh issue failed, switching to the REST API.', timestamp: 4 },
             {
               id: 'tool-1',
               type: 'tool_use',
               toolName: 'Bash',
               toolUseId: 'bash-1',
-              input: { command: 'gh api', description: '取 issue 内容' },
+              input: { command: 'gh api', description: 'Fetch the issue content' },
               timestamp: 5,
             },
           ],
@@ -3051,8 +3051,8 @@ describe('MessageList nested tool calls', () => {
     // Whether a thought is followed by a tool call is a fact about the run, not
     // about the thought, so it must not change how the thought is drawn — the
     // lone one used to show its label and nothing else.
-    expect(screen.getByText('先加载浏览器技能再读 issue。')).toBeTruthy()
-    expect(screen.getByText('gh issue 失败了,改用 REST API。')).toBeTruthy()
+    expect(screen.getByText('Load the browser skill first, then read the issue.')).toBeTruthy()
+    expect(screen.getByText('gh issue failed, switching to the REST API.')).toBeTruthy()
 
     const [lone, inRun] = Array.from(
       container.querySelectorAll<HTMLElement>('[data-thinking-row="true"]'),
@@ -3473,7 +3473,7 @@ describe('MessageList nested tool calls', () => {
       {
         id: 'user-follow-up',
         type: 'user_text',
-        content: '顺便把刚才的问题也处理掉',
+        content: 'Also handle the earlier problem while you are at it',
         timestamp: 3,
       },
       {
@@ -3542,7 +3542,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '探索整体架构', subagent_type: 'Explore' },
+              input: { description: 'Explore the overall architecture', subagent_type: 'Explore' },
               timestamp: 1,
             },
             {
@@ -3566,7 +3566,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('shows completed agent output when no nested tool activity is available', () => {
-    const longResult = '探索完成。让我将结果整合写入计划文件。第二段补充内容用于验证 dialog 展示的是完整结果而不是截断摘要。'
+    const longResult = 'Exploration done. Let me write the results into the plan file. This second part checks that the dialog shows the full result rather than a truncated summary.'
 
     useChatStore.setState({
       sessions: {
@@ -3577,7 +3577,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '探索整体架构' },
+              input: { description: 'Explore the overall architecture' },
               timestamp: 1,
             },
             {
@@ -3611,7 +3611,7 @@ describe('MessageList nested tool calls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View result' }))
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText(/第二段补充内容用于验证 dialog 展示的是完整结果而不是截断摘要。/)).toBeTruthy()
+    expect(within(dialog).getByText(/This second part checks that the dialog shows the full result rather than a truncated summary\./)).toBeTruthy()
     expect(within(dialog).queryByText(/agentId:/)).toBeNull()
     expect(within(dialog).queryByText(/total_tokens/)).toBeNull()
     expect(screen.getByRole('button', { name: 'Close dialog' })).toBeTruthy()
@@ -3660,7 +3660,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '修复临时文件泄漏' },
+              input: { description: 'Fix the temp file leak' },
               timestamp: 1,
             },
             {
@@ -3685,7 +3685,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('shows completed background agent result from the terminal task notification', () => {
-    const resultText = '后台 agent 已经完成：定位到 parentToolUseId 丢失并补齐了 live 事件链。'
+    const resultText = 'The background agent finished: found the missing parentToolUseId and completed the live event chain.'
 
     useChatStore.setState({
       sessions: {
@@ -3696,7 +3696,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '排查 subagent UI' },
+              input: { description: 'Investigate the subagent UI' },
               timestamp: 1,
             },
             {
@@ -3714,7 +3714,7 @@ describe('MessageList nested tool calls', () => {
               taskId: 'agent-task-1',
               toolUseId: 'agent-1',
               status: 'completed',
-              summary: 'Agent "排查 subagent UI" completed',
+              summary: 'Agent "Investigate the subagent UI" completed',
               result: resultText,
             },
           },
@@ -3732,7 +3732,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('prefers the terminal task report over structured agent tool result JSON', () => {
-    const markdownReport = '## 审查安全风险\n\n- 最终报告应该按 Markdown 展示。'
+    const markdownReport = '## Review security risks\n\n- The final report should render as Markdown.'
 
     useChatStore.setState({
       sessions: {
@@ -3743,7 +3743,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '查看安全报告' },
+              input: { description: 'View the security report' },
               timestamp: 1,
             },
             {
@@ -3756,7 +3756,7 @@ describe('MessageList nested tool calls', () => {
                     file: 'git:v0.2.6..v0.2.7',
                     line: 0,
                     snippet: 'raw structured JSON should not be shown',
-                    context: '结构化检索结果不是给用户看的最终报告。',
+                    context: 'Structured search results are not the final report for the user.',
                   },
                 ],
               },
@@ -3769,7 +3769,7 @@ describe('MessageList nested tool calls', () => {
               taskId: 'agent-task-1',
               toolUseId: 'agent-1',
               status: 'completed',
-              summary: 'Agent "审查安全风险" completed',
+              summary: 'Agent "Review security risks" completed',
               result: markdownReport,
             },
           },
@@ -3780,14 +3780,14 @@ describe('MessageList nested tool calls', () => {
     render(<MessageList />)
 
     fireEvent.click(screen.getByRole('button', { name: /dispatched an agent/i }))
-    expect(screen.getByText(/最终报告应该按 Markdown 展示。/)).toBeTruthy()
+    expect(screen.getByText(/The final report should render as Markdown\./)).toBeTruthy()
     expect(screen.queryByText(/raw structured JSON should not be shown/)).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'View result' }))
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByRole('heading', { name: '审查安全风险' })).toBeTruthy()
-    expect(within(dialog).getByText('最终报告应该按 Markdown 展示。')).toBeTruthy()
+    expect(within(dialog).getByRole('heading', { name: 'Review security risks' })).toBeTruthy()
+    expect(within(dialog).getByText('The final report should render as Markdown.')).toBeTruthy()
     expect(within(dialog).queryByText(/raw structured JSON should not be shown/)).toBeNull()
   })
 
@@ -3801,7 +3801,7 @@ describe('MessageList nested tool calls', () => {
               type: 'tool_use',
               toolName: 'Agent',
               toolUseId: 'agent-1',
-              input: { description: '审查安全风险' },
+              input: { description: 'Review security risks' },
               timestamp: 1,
             },
             {
@@ -3817,7 +3817,7 @@ describe('MessageList nested tool calls', () => {
                         file: 'git:v0.2.6..v0.2.7',
                         line: 0,
                         snippet: 'v0.2.7 tag = a4c92ec7',
-                        context: '版本范围判断：release-notes/v0.2.7.md 明确相比 v0.2.6。',
+                        context: 'Version range: release-notes/v0.2.7.md explicitly compares against v0.2.6.',
                       },
                       {
                         risk: 'medium',
@@ -3825,7 +3825,7 @@ describe('MessageList nested tool calls', () => {
                           {
                             file: '/tmp/example/src/lib.rs',
                             line: 220,
-                            context: '中风险：服务默认监听 0.0.0.0。',
+                            context: 'Medium risk: the service listens on 0.0.0.0 by default.',
                           },
                         ],
                       },
@@ -3852,7 +3852,7 @@ describe('MessageList nested tool calls', () => {
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('git:v0.2.6..v0.2.7:0')).toBeTruthy()
     expect(within(dialog).getByText('/tmp/example/src/lib.rs:220')).toBeTruthy()
-    expect(within(dialog).getByText(/服务默认监听 0\.0\.0\.0/)).toBeTruthy()
+    expect(within(dialog).getByText(/the service listens on 0\.0\.0\.0/)).toBeTruthy()
     expect(within(dialog).queryByText(/\{"results"/)).toBeNull()
   })
 
@@ -3871,19 +3871,19 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '请帮我探索整体架构',
+              content: 'Please explore the overall architecture',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '先看 CLI 和服务端入口。',
+              content: 'First look at the CLI and server entry points.',
               timestamp: 2,
             },
             {
               id: 'assistant-2',
               type: 'assistant_text',
-              content: '再看 desktop 前后端边界。',
+              content: 'Then look at the desktop front/back boundary.',
               timestamp: 3,
             },
           ],
@@ -3896,7 +3896,7 @@ describe('MessageList nested tool calls', () => {
     expect(screen.getByRole('button', { name: 'Copy prompt' })).toBeTruthy()
 
     // One copy per turn, on the reply that closes it. The intermediate reply
-    // ("先看 CLI 和服务端入口。") carries no action bar at all — nobody copies a
+    // ("First look at the CLI and server entry points.") carries no action bar at all — nobody copies a
     // step, and reserving its 36px on every one outweighed the text itself.
     const replyCopies = screen.getAllByRole('button', { name: 'Copy reply' })
     expect(replyCopies).toHaveLength(1)
@@ -3904,11 +3904,11 @@ describe('MessageList nested tool calls', () => {
     fireEvent.click(replyCopies[0]!)
 
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith('再看 desktop 前后端边界。')
+      expect(writeText).toHaveBeenCalledWith('Then look at the desktop front/back boundary.')
     })
     // Still that reply alone, never the turn's replies glued together.
     expect(writeText).not.toHaveBeenCalledWith(
-      '先看 CLI 和服务端入口。\n再看 desktop 前后端边界。'
+      'First look at the CLI and server entry points.\nThen look at the desktop front/back boundary.'
     )
   })
 
@@ -3918,8 +3918,8 @@ describe('MessageList nested tool calls', () => {
         [ACTIVE_TAB]: makeSessionState({
           chatState: 'thinking',
           messages: [
-            { id: 'user-1', type: 'user_text', content: '接着改', timestamp: 1 },
-            { id: 'assistant-1', type: 'assistant_text', content: '先看调用点。', timestamp: 2 },
+            { id: 'user-1', type: 'user_text', content: 'Keep going', timestamp: 1 },
+            { id: 'assistant-1', type: 'assistant_text', content: 'Check the call sites first.', timestamp: 2 },
           ],
         }),
       },
@@ -3947,13 +3947,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '看一下操作条',
+              content: 'Look at the action bar',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '点完复制后焦点不应该留在按钮上。',
+              content: 'Focus should not stay on the button after copying.',
               timestamp: 2,
             },
           ],
@@ -4840,7 +4840,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '历史消息',
+              content: 'History message',
               timestamp: 1,
             },
           ],
@@ -4899,7 +4899,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '最新消息',
+              content: 'Latest message',
               timestamp: 1,
             },
           ],
@@ -5280,7 +5280,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '移动端长回复',
+              content: 'Long mobile reply',
               timestamp: 1,
             },
           ],
@@ -5363,7 +5363,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '移动端异步重排',
+              content: 'Mobile async reflow',
               timestamp: 1,
             },
           ],
@@ -5667,13 +5667,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '分析一下这段代码',
+              content: 'Analyze this code',
               timestamp: 1,
             },
             {
               id: 'thinking-1',
               type: 'thinking',
-              content: '正在阅读代码路径',
+              content: 'Reading the code path',
               timestamp: 2,
             },
           ],
@@ -5745,13 +5745,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '触发 Windows WebView2 细微重排',
+              content: 'Trigger a subtle Windows WebView2 reflow',
               timestamp: 1,
             },
             {
               id: 'thinking-1',
               type: 'thinking',
-              content: '正在分析一个静态问题',
+              content: 'Analyzing a static issue',
               timestamp: 2,
             },
           ],
@@ -5842,14 +5842,14 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '生成一个 todo app',
+              content: 'Build a todo app',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
               content: [
-                '已完成。',
+                'Done.',
                 '',
                 '```bash',
                 'cd /private/tmp/todo-app',
@@ -5926,14 +5926,14 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '复盘这个已完成会话',
+              content: 'Review this finished session',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
               content: [
-                '这个会话已经完成。',
+                'This session is finished.',
                 '',
                 '```tsx',
                 'export function TodoListView() {',
@@ -6453,7 +6453,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '历史消息',
+              content: 'History message',
               timestamp: 1,
             },
           ],
@@ -6519,13 +6519,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '历史消息',
+              content: 'History message',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '历史回复',
+              content: 'History reply',
               timestamp: 2,
             },
           ],
@@ -6564,7 +6564,7 @@ describe('MessageList nested tool calls', () => {
               {
                 id: 'user-2',
                 type: 'user_text',
-                content: '新的问题',
+                content: 'A new question',
                 timestamp: 3,
               },
             ],
@@ -6574,7 +6574,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('新的问题')).toBeTruthy()
+      expect(screen.getByText('A new question')).toBeTruthy()
     })
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(600)
@@ -6595,13 +6595,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '历史消息',
+              content: 'History message',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '历史回复',
+              content: 'History reply',
               timestamp: 2,
             },
           ],
@@ -6640,7 +6640,7 @@ describe('MessageList nested tool calls', () => {
               {
                 id: 'user-2',
                 type: 'user_text',
-                content: '刚发送的问题',
+                content: 'Just-sent question',
                 timestamp: 3,
               },
             ],
@@ -6650,7 +6650,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('刚发送的问题')).toBeTruthy()
+      expect(screen.getByText('Just-sent question')).toBeTruthy()
     })
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(scrollTop).toBe(600)
@@ -6669,7 +6669,7 @@ describe('MessageList nested tool calls', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByText('刚发送的问题')).toBeTruthy()
+      expect(screen.getByText('Just-sent question')).toBeTruthy()
     })
     expect(scrollTop).toBe(600)
   })
@@ -6686,13 +6686,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '请把这条 prompt 放在右侧',
+              content: 'Put this prompt on the right',
               timestamp: userTimestamp,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '这条回复应该停在左侧。',
+              content: 'This reply should stay on the left.',
               timestamp: assistantTimestamp,
             },
             // Keeps the first reply mid-turn, which now means it carries no
@@ -6708,7 +6708,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'assistant-2',
               type: 'assistant_text',
-              content: '这条收尾回复带操作条。',
+              content: 'This closing reply has an action bar.',
               timestamp: assistantTimestamp + 2_000,
             },
           ],
@@ -6718,9 +6718,9 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    const userShell = screen.getByText('请把这条 prompt 放在右侧').closest('[data-message-shell="user"]')
-    const assistantShell = screen.getByText('这条回复应该停在左侧。').closest('[data-message-shell="assistant"]')
-    const closingShell = screen.getByText('这条收尾回复带操作条。').closest('[data-message-shell="assistant"]')
+    const userShell = screen.getByText('Put this prompt on the right').closest('[data-message-shell="user"]')
+    const assistantShell = screen.getByText('This reply should stay on the left.').closest('[data-message-shell="assistant"]')
+    const closingShell = screen.getByText('This closing reply has an action bar.').closest('[data-message-shell="assistant"]')
     const userActions = screen.getByRole('button', { name: 'Copy prompt' }).closest('[data-message-actions]')
     const assistantActions = screen.getByRole('button', { name: 'Copy reply' }).closest('[data-message-actions]')
     const userTime = within(userActions as HTMLElement).getByText(formatMessageHoverTime(userTimestamp, 'en'))
@@ -6770,13 +6770,13 @@ describe('MessageList nested tool calls', () => {
 
     function turnMessages(): UIMessage[] {
       return [
-        { id: 'user-1', type: 'user_text', content: '先问一个问题', timestamp: T0 },
-        { id: 'assistant-1', type: 'assistant_text', content: '先答第一轮。', timestamp: T0 + 30_000 },
-        { id: 'user-2', type: 'user_text', content: '再问一个问题', timestamp: T0 + 2 * MINUTE },
+        { id: 'user-1', type: 'user_text', content: 'First question', timestamp: T0 },
+        { id: 'assistant-1', type: 'assistant_text', content: 'First turn answer.', timestamp: T0 + 30_000 },
+        { id: 'user-2', type: 'user_text', content: 'Second question', timestamp: T0 + 2 * MINUTE },
         {
           id: 'assistant-2',
           type: 'assistant_text',
-          content: '第二轮跑了很久才答完。',
+          content: 'The second turn took a long time to answer.',
           timestamp: T0 + 14 * MINUTE + 19_000,
         },
       ]
@@ -6797,12 +6797,12 @@ describe('MessageList nested tool calls', () => {
 
       render(<MessageList />)
 
-      const stamp = stampFor('第二轮跑了很久才答完。')
+      const stamp = stampFor('The second turn took a long time to answer.')
       expect(stamp?.textContent).toContain(formatMessageHoverTime(T0 + 14 * MINUTE + 19_000, 'en'))
       expect(stamp?.textContent).toContain('took 12m 19s')
       const footer = stamp?.closest('[data-message-actions]')
       expect(footer).toBe(
-        within(shellFor('第二轮跑了很久才答完。') as HTMLElement)
+        within(shellFor('The second turn took a long time to answer.') as HTMLElement)
           .getByRole('button', { name: 'Copy reply' })
           .closest('[data-message-actions]'),
       )
@@ -6816,7 +6816,7 @@ describe('MessageList nested tool calls', () => {
 
       render(<MessageList />)
 
-      expect(stampFor('先答第一轮。')?.textContent).toContain('took 30s')
+      expect(stampFor('First turn answer.')?.textContent).toContain('took 30s')
     })
 
     it('prints the completion time only once in the combined footer', () => {
@@ -6826,7 +6826,7 @@ describe('MessageList nested tool calls', () => {
 
       render(<MessageList />)
 
-      const closing = shellFor('第二轮跑了很久才答完。')
+      const closing = shellFor('The second turn took a long time to answer.')
       expect(closing?.querySelector('[data-turn-completion]')).not.toBeNull()
       expect(
         within(closing as HTMLElement).getAllByText(formatMessageHoverTime(T0 + 14 * MINUTE + 19_000, 'en')),
@@ -6838,8 +6838,8 @@ describe('MessageList nested tool calls', () => {
         sessions: {
           [ACTIVE_TAB]: makeSessionState({
             messages: [
-              { id: 'user-1', type: 'user_text', content: '接着改', timestamp: T0 },
-              { id: 'assistant-1', type: 'assistant_text', content: '接下来把两处调用点都接上：', timestamp: T0 + 10_000 },
+              { id: 'user-1', type: 'user_text', content: 'Keep going', timestamp: T0 },
+              { id: 'assistant-1', type: 'assistant_text', content: 'Next, wire up both call sites:', timestamp: T0 + 10_000 },
               {
                 id: 'tool-1',
                 type: 'tool_use',
@@ -6858,10 +6858,10 @@ describe('MessageList nested tool calls', () => {
       // Caught in a real session: the last reply of the turn was an aside
       // ("Now wire the duration at both call sites:") followed by edits, so a
       // stamp there rendered above the work it introduced.
-      expect(stampFor('接下来把两处调用点都接上：')).toBeNull()
-      expect(stampFor('接着改')).toBeNull()
+      expect(stampFor('Next, wire up both call sites:')).toBeNull()
+      expect(stampFor('Keep going')).toBeNull()
       // The prompt keeps its timestamp in the hover-gated bar.
-      const promptBar = shellFor('接着改')?.querySelector('[data-message-actions]')
+      const promptBar = shellFor('Keep going')?.querySelector('[data-message-actions]')
       expect(promptBar?.className).toContain('opacity-0')
       expect(within(promptBar as HTMLElement).getByText(formatMessageHoverTime(T0, 'en'))).toBeTruthy()
 
@@ -6869,7 +6869,7 @@ describe('MessageList nested tool calls', () => {
       // a deliberate trade for the 36px the bar reserved on every reply. The
       // turn is still locatable in time: the prompt above stamps its start and
       // the closing reply stamps its end.
-      expect(shellFor('接下来把两处调用点都接上：')?.querySelector('[data-message-actions]')).toBeNull()
+      expect(shellFor('Next, wire up both call sites:')?.querySelector('[data-message-actions]')).toBeNull()
     })
 
     it('leaves the running turn unstamped while keeping earlier turns stamped', () => {
@@ -6881,8 +6881,8 @@ describe('MessageList nested tool calls', () => {
 
       render(<MessageList />)
 
-      expect(stampFor('第二轮跑了很久才答完。')).toBeNull()
-      expect(stampFor('先答第一轮。')?.textContent).toContain(
+      expect(stampFor('The second turn took a long time to answer.')).toBeNull()
+      expect(stampFor('First turn answer.')?.textContent).toContain(
         formatMessageHoverTime(T0 + 30_000, 'en'),
       )
     })
@@ -6897,12 +6897,12 @@ describe('MessageList nested tool calls', () => {
               id: 'assistant-doc',
               type: 'assistant_text',
               content: [
-                '## 交付结果',
+                '## Delivery',
                 '',
-                '已完成以下内容：',
+                'Completed the following:',
                 '',
-                '- 添加任务',
-                '- 删除任务',
+                '- Add task',
+                '- Delete task',
                 '',
                 '```bash',
                 'npm run build',
@@ -6917,7 +6917,7 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    const assistantShell = screen.getByText('交付结果').closest('[data-message-shell="assistant"]')
+    const assistantShell = screen.getByText('Delivery').closest('[data-message-shell="assistant"]')
     expect(assistantShell?.getAttribute('data-layout')).toBe('document')
     expect(assistantShell?.className).toContain('w-full')
     expect(assistantShell?.className).not.toContain('ml-10')
@@ -6949,7 +6949,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '做一个页面',
+              content: 'Make a page',
               timestamp: 1,
             },
             {
@@ -7009,14 +7009,14 @@ describe('MessageList nested tool calls', () => {
               id: 'local-user-1',
               transcriptMessageId: 'transcript-user-1',
               type: 'user_text',
-              content: '从这里开始',
+              content: 'Start here',
               timestamp: 1,
             },
             {
               id: 'local-assistant-1',
               transcriptMessageId: 'transcript-assistant-1',
               type: 'assistant_text',
-              content: '这是完成的答复。',
+              content: 'This is the finished answer.',
               timestamp: 2,
             },
           ],
@@ -7067,14 +7067,14 @@ describe('MessageList nested tool calls', () => {
               id: 'local-user-1',
               transcriptMessageId: 'transcript-user-1',
               type: 'user_text',
-              content: '从这里开始',
+              content: 'Start here',
               timestamp: 1,
             },
             {
               id: 'local-assistant-1',
               transcriptMessageId: 'transcript-assistant-1',
               type: 'assistant_text',
-              content: '这是完成的答复。',
+              content: 'This is the finished answer.',
               timestamp: 2,
             },
           ],
@@ -7097,13 +7097,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '继续优化 workflow.py',
+              content: 'Keep optimizing workflow.py',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '两个文件均已优化完成，功能保持不变。',
+              content: 'Both files are optimized with behavior unchanged.',
               timestamp: 2,
             },
           ],
@@ -7113,7 +7113,7 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(await screen.findByText('两个文件均已优化完成，功能保持不变。')).toBeTruthy()
+    expect(await screen.findByText('Both files are optimized with behavior unchanged.')).toBeTruthy()
     await waitFor(() => {
       expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalled()
     })
@@ -7346,7 +7346,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '第一段',
+              content: 'Paragraph one',
               timestamp: 1,
             },
             {
@@ -7358,7 +7358,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-2',
               type: 'user_text',
-              content: '第二段',
+              content: 'Paragraph two',
               timestamp: 3,
             },
             {
@@ -7370,7 +7370,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-3',
               type: 'user_text',
-              content: '第三段',
+              content: 'Paragraph three',
               timestamp: 5,
             },
             {
@@ -7596,7 +7596,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '第一轮',
+              content: 'First turn',
               timestamp: 1,
             },
             {
@@ -7608,7 +7608,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-2',
               type: 'user_text',
-              content: '第二轮',
+              content: 'Second turn',
               timestamp: 3,
             },
             {
@@ -7687,7 +7687,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '第一轮',
+              content: 'First turn',
               timestamp: 1,
             },
             {
@@ -7761,7 +7761,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'local-user-temp-id',
               type: 'user_text',
-              content: '实时这一轮',
+              content: 'This live turn',
               timestamp: 1,
             },
             {
@@ -7825,13 +7825,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'local-user-1',
               type: 'user_text',
-              content: '在 /tmp 下创建项目',
+              content: 'Create a project under /tmp',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '完成。',
+              content: 'Done.',
               timestamp: 2,
             },
           ],
@@ -7941,7 +7941,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'local-user-temp-id',
               type: 'user_text',
-              content: '实时这一轮',
+              content: 'This live turn',
               timestamp: 1,
             },
             {
@@ -7967,7 +7967,7 @@ describe('MessageList nested tool calls', () => {
       expect(rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
         targetUserMessageId: 'transcript-user-1',
         userMessageIndex: 0,
-        expectedContent: '实时这一轮',
+        expectedContent: 'This live turn',
         mode: 'both',
       })
     })
@@ -7999,7 +7999,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '生成文件',
+              content: 'Generate files',
               timestamp: 1,
             },
             {
@@ -8042,13 +8042,13 @@ describe('MessageList nested tool calls', () => {
       {
         id: 'user-1',
         type: 'user_text',
-        content: '第一轮',
+        content: 'First turn',
         timestamp: 1,
       },
       {
         id: 'assistant-1',
         type: 'assistant_text',
-        content: '我正准备查看 test123.md',
+        content: 'About to look at test123.md',
         timestamp: 2,
       },
     ]
@@ -8144,7 +8144,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '第一轮',
+              content: 'First turn',
               timestamp: 1,
             },
             {
@@ -8216,7 +8216,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('confirms rewind and restores the complete prompt', async () => {
-    const prompt = '做一个页面'
+    const prompt = 'Make a page'
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
         {
@@ -8308,7 +8308,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-2',
               type: 'user_text',
-              content: '第二轮需求',
+              content: 'Second-turn request',
               timestamp: 3,
             },
             {
@@ -8395,7 +8395,7 @@ describe('MessageList nested tool calls', () => {
       sessions: {
         [ACTIVE_TAB]: makeSessionState({
           messages: [
-            { id: 'user-1', type: 'user_text', content: '做一个页面', timestamp: 1 },
+            { id: 'user-1', type: 'user_text', content: 'Make a page', timestamp: 1 },
             { id: 'assistant-1', type: 'assistant_text', content: 'first done', timestamp: 2 },
           ],
         }),
@@ -8425,7 +8425,7 @@ describe('MessageList nested tool calls', () => {
       expect(rewind).toHaveBeenCalledWith(ACTIVE_TAB, {
         targetUserMessageId: 'user-1',
         userMessageIndex: 0,
-        expectedContent: '做一个页面',
+        expectedContent: 'Make a page',
         mode: 'conversation',
       })
     })
@@ -8775,7 +8775,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '第一轮改文件',
+              content: 'First turn edits files',
               timestamp: 1,
             },
             {
@@ -8787,13 +8787,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-2',
               type: 'user_text',
-              content: '第二轮只解释',
+              content: 'Second turn only explains',
               timestamp: 3,
             },
             {
               id: 'assistant-2',
               type: 'assistant_text',
-              content: '我正准备查看 test123.md',
+              content: 'About to look at test123.md',
               timestamp: 4,
             },
           ],
@@ -8890,7 +8890,7 @@ describe('MessageList nested tool calls', () => {
         type: 'tool_use_complete',
         toolName: 'Write',
         toolUseId: 'write-1',
-        input: { file_path: generatedPath, content: '# 墨痕测绘' },
+        input: { file_path: generatedPath, content: '# Ink survey' },
       })
       store.handleServerMessage(ACTIVE_TAB, {
         type: 'tool_result',
@@ -8985,7 +8985,7 @@ describe('MessageList nested tool calls', () => {
       }))
 
       render(<MessageList sessionId={ACTIVE_TAB} />)
-      replyWith('CONVERTED 已把 `in/source.docx` 转成 `out/report.docx`')
+      replyWith('CONVERTED converted `in/source.docx` to `out/report.docx`')
 
       await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalled())
       const reply = screen.getByText('CONVERTED', { exact: false }).closest('[data-chat-render-item-key]') as HTMLElement
@@ -9069,13 +9069,13 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '在 /tmp 生成一张图',
+              content: 'Generate an image in /tmp',
               timestamp: 1,
             },
             {
               id: 'assistant-1',
               type: 'assistant_text',
-              content: '已生成，保存到 /tmp/result.png（1280×800）。',
+              content: 'Generated and saved to /tmp/result.png (1280×800).',
               timestamp: 2,
             },
           ],
@@ -9126,7 +9126,7 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('explains provider quota exhaustion in the active locale and preserves upstream detail', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     const raw = 'API Error: 429 Go usage limit exceeded · monthly'
     useChatStore.setState({
       sessions: {
@@ -9136,13 +9136,12 @@ describe('MessageList nested tool calls', () => {
       },
     })
     render(<MessageList />)
-    expect(screen.getByText('供应商额度或余额不足。请检查供应商的计费信息、等待额度恢复，或切换到其他供应商。')).toBeTruthy()
+    expect(screen.getByText('The provider’s quota or balance is exhausted. Check its billing, wait for the quota to reset, or switch providers.')).toBeTruthy()
     expect(screen.getByText(raw)).toBeTruthy()
-    expect(screen.queryByText(/请先登录/)).toBeNull()
   })
 
   it('renders business API errors in the active locale without raw English fallback', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     useChatStore.setState({
       sessions: {
         [ACTIVE_TAB]: makeSessionState({
@@ -9163,17 +9162,16 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(screen.getByText('错误:')).toBeTruthy()
+    expect(screen.getByText('Error:')).toBeTruthy()
     expect(
       screen.getByText(
-        '当前模型不支持图片。请继续使用文字，或切换到支持视觉的模型后重新发送图片。',
+        'This model does not support images. Continue with text, or switch to a vision-capable model and send the image again.',
       ),
     ).toBeTruthy()
-    expect(screen.queryByText(/This model does not support images/)).toBeNull()
   })
 
   it('blames the upstream provider for an interrupted stream and keeps the stream evidence', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     const raw =
       'API Error: Provider stream ended before completing the response. The upstream model provider closed the stream before the reply finished; this is not a context-limit error. (retried 10 times · 412 events · last content_block_delta · stop_reason none · message_stop missing · 1 block open · 263s)'
     useChatStore.setState({
@@ -9195,15 +9193,14 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(screen.getByText(/上游模型服务商在回复完成前断开了连接/)).toBeTruthy()
-    expect(screen.getByText(/不是上下文超限/)).toBeTruthy()
+    expect(screen.getByText(/upstream model provider closed the connection before the reply finished/)).toBeTruthy()
     // The evidence is what tells a mid-block cut from a dropped message_stop
     // when users send a screenshot; the translation alone would hide it.
     expect(screen.getByText(raw)).toBeTruthy()
   })
 
   it('explains why auto-compact stopped instead of showing the English CLI text (#1544)', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     const raw =
       'Auto-compact is thrashing: the context refilled to the limit within 3 turns of the previous compaction, 3 times in a row.'
     useChatStore.setState({
@@ -9225,14 +9222,13 @@ describe('MessageList nested tool calls', () => {
 
     render(<MessageList />)
 
-    expect(screen.getByText(/自动压缩已停止/)).toBeTruthy()
-    expect(screen.getByText(/精简 CLAUDE.md/)).toBeTruthy()
+    expect(screen.getByText(/Auto-compact stopped/)).toBeTruthy()
+    expect(screen.getByText(/shorten CLAUDE.md/)).toBeTruthy()
     expect(screen.queryByText(raw)).toBeNull()
   })
 
   it.each([
     ['en', /too large for your provider or relay/, /removed automatically/],
-    ['zh', /服务商或中转站允许的大小/, /自动移除/],
   ] as const)(
     'explains a request-too-large rejection as a provider limit and the recovery that follows (%s)',
     (locale, limit, recovery) => {
@@ -9262,8 +9258,8 @@ describe('MessageList nested tool calls', () => {
       // The old copy blamed the selected model and asked users to delete files
       // by hand, although the limit belongs to the provider and old media is
       // now dropped automatically.
-      expect(screen.queryByText(/selected model|当前模型/)).toBeNull()
-      expect(screen.queryByText(/Remove large files|移除大文件/)).toBeNull()
+      expect(screen.queryByText(/selected model/)).toBeNull()
+      expect(screen.queryByText(/Remove large files/)).toBeNull()
     },
   )
 

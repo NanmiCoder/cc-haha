@@ -21,7 +21,7 @@ const DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c/download'
 /** Keep diagnostics actionable without exposing signed URLs, keys or file paths. */
 export class WechatMediaDownloadError extends Error {
   constructor(readonly stage: 'download' | 'decrypt' | 'save', readonly detail: string) {
-    super(`附件${stage === 'download' ? '下载' : stage === 'decrypt' ? '解密' : '保存'}失败：${detail}`)
+    super(`Attachment ${stage === 'download' ? 'download' : stage === 'decrypt' ? 'decryption' : 'save'} failed: ${detail}`)
     this.name = 'WechatMediaDownloadError'
   }
 }
@@ -30,22 +30,22 @@ function downloadFailure(error: unknown, stage: 'download' | 'decrypt' | 'save')
   const message = error instanceof Error ? error.message : ''
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
   const status = /^WeChat media HTTP (\d{3})$/.exec(message)?.[1]
-  let detail = '处理异常，请查看桌面诊断后重发'
-  if (stage === 'decrypt') detail = '微信图片或文件的加密数据未能解码，请重发附件'
-  else if (stage === 'save') detail = code === 'ENOSPC' ? '电脑磁盘空间不足' : '电脑未能写入附件缓存，请检查目录权限和可用空间'
-  else if (message === 'Untrusted WeChat media URL') detail = '微信返回的媒体地址未通过校验'
-  else if (message === 'Invalid WeChat media URL' || message.includes('missing a download URL')) detail = '微信消息缺少有效媒体地址'
-  else if (message.includes('size limit')) detail = '附件超过大小上限'
-  else if (status) detail = `微信媒体服务返回 HTTP ${status}`
-  else if (error instanceof Error && error.name === 'TimeoutError') detail = '连接微信媒体服务超时'
-  else if (/CERT|TLS|SSL/.test(code)) detail = '微信媒体服务的安全连接失败'
-  else if (['ENOTFOUND', 'EAI_AGAIN', 'DNS_RESOLUTION_FAILED'].includes(code)) detail = '无法解析微信媒体服务器地址'
-  else if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ConnectionRefused', 'ConnectionClosed'].includes(code)) detail = '无法连接微信媒体服务，请检查电脑网络或代理'
+  let detail = 'Processing error; check desktop diagnostics and resend'
+  if (stage === 'decrypt') detail = 'Could not decode the encrypted WeChat image or file data; please resend the attachment'
+  else if (stage === 'save') detail = code === 'ENOSPC' ? 'Not enough disk space on the computer' : 'The computer could not write the attachment cache; check folder permissions and free space'
+  else if (message === 'Untrusted WeChat media URL') detail = 'The media URL returned by WeChat failed validation'
+  else if (message === 'Invalid WeChat media URL' || message.includes('missing a download URL')) detail = 'The WeChat message has no valid media URL'
+  else if (message.includes('size limit')) detail = 'Attachment exceeds the size limit'
+  else if (status) detail = `WeChat media service returned HTTP ${status}`
+  else if (error instanceof Error && error.name === 'TimeoutError') detail = 'Timed out connecting to the WeChat media service'
+  else if (/CERT|TLS|SSL/.test(code)) detail = 'Secure connection to the WeChat media service failed'
+  else if (['ENOTFOUND', 'EAI_AGAIN', 'DNS_RESOLUTION_FAILED'].includes(code)) detail = 'Could not resolve the WeChat media server address'
+  else if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ConnectionRefused', 'ConnectionClosed'].includes(code)) detail = 'Could not connect to the WeChat media service; check the computer\'s network or proxy'
   return new WechatMediaDownloadError(stage, detail)
 }
 
 export function wechatMediaFailureNotice(error: unknown): string {
-  return error instanceof WechatMediaDownloadError ? error.message : '附件处理失败，请检查大小限制后重发'
+  return error instanceof WechatMediaDownloadError ? error.message : 'Attachment processing failed; check the size limits and resend'
 }
 
 export function wechatMediaDownloadHost(candidate: WechatMediaCandidate): string {

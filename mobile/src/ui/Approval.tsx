@@ -20,7 +20,7 @@ const requestInput = (request: PermissionRequest) =>
     ? request.input
     : {}) as Record<string, unknown>
 
-/** @deprecated 计划改由 Approval 的全屏计划页呈现；保留导出直到聊天页移除引用。 */
+/** @deprecated Plans are now presented by the full-screen plan page in Approval; keep the export until the chat page drops the reference. */
 export function PlanPreview({ request }: { request: PermissionRequest }) {
   const colors = useColors()
   const input = requestInput(request)
@@ -43,8 +43,8 @@ export function PlanPreview({ request }: { request: PermissionRequest }) {
 }
 
 /**
- * “需要你决定”：普通工具审批、提问、计划三种底座。提交后保持“已提交”直到电脑回执；
- * 连接重建或服务端报错时恢复可操作，以便重试。
+ * "Needs your decision": three bases for regular tool approval, questions and plans. After submit stays "submitted" until the computer acknowledges; 
+ * on connection rebuild or server error it becomes actionable again so it can be retried.
  */
 export function Approval({
   request,
@@ -63,11 +63,11 @@ export function Approval({
   serverError?: ChatState['error']
   client?: ApiClient | null
   runtime?: RuntimeConfig
-  /** 多个审批排队时右上角显示“1 / 2”。 */
+  /** When several approvals are queued the top right shows "1 / 2". */
   position?: { index: number; total: number }
-  /** “停止整个任务”；由调用方弹确认。 */
+  /** "Stop the whole task"; the caller shows the confirmation. */
   onStop?(): void
-  /** 会话工作目录，命令审批显示“在 ~/…”；拿不到时不显示。 */
+  /** Session working directory; command approvals show "in ~/…"; hidden when unavailable. */
   workDir?: string
 }) {
   const input = requestInput(request)

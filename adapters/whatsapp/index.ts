@@ -145,13 +145,13 @@ async function sendWhatsAppText(jid: string, text: string): Promise<void> {
 }
 
 async function sendHelp(jid: string): Promise<void> {
-  await sendWhatsAppText(jid, `Claude Code WhatsApp 已就绪。\n\n${formatImHelp()}`)
+  await sendWhatsAppText(jid, `Claude Code WhatsApp is ready.\n\n${formatImHelp()}`)
 }
 
 async function handlePermissionDecision(chatId: string, decision: PermissionDecision): Promise<void> {
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(decision.requestId)) {
-    await sendWhatsAppText(chatId, `未找到待确认的权限请求：${decision.requestId}`)
+    await sendWhatsAppText(chatId, `No pending permission request found: ${decision.requestId}`)
     return
   }
 
@@ -163,7 +163,7 @@ async function handlePermissionDecision(chatId: string, decision: PermissionDeci
   }
   await sendWhatsAppText(
     chatId,
-    sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
+    sent ? `${formatPermissionDecisionStatus(decision)}.` : 'Failed to send permission response. Please check the session status.',
   )
 }
 
@@ -235,12 +235,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendWhatsAppText(chatId, '连接服务器超时，请重试。')
+      await sendWhatsAppText(chatId, 'Timed out connecting to the server. Please try again.')
       return false
     }
     return true
   } catch (err) {
-    await sendWhatsAppText(chatId, `无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendWhatsAppText(chatId, `Could not create session: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -252,7 +252,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
     if (projects.length === 0) {
       await sendWhatsAppText(
         chatId,
-        `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`,
+        `No recent projects found. Sending /new will use the default working directory: ${defaultWorkDir}\nYou can also send /new /path/to/project to pick a project.`,
       )
       return
     }
@@ -263,10 +263,10 @@ async function showProjectPicker(chatId: string): Promise<void> {
     pendingProjectSelection.set(chatId, true)
     await sendWhatsAppText(
       chatId,
-      `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`,
+      `Select a project (reply with its number):\n\n${lines.join('\n\n')}\n\nNext time you can send /new <number, name or absolute path> to create a session quickly`,
     )
   } catch (err) {
-    await sendWhatsAppText(chatId, `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendWhatsAppText(chatId, `Could not fetch project list: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -308,7 +308,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
       if (msg.state === 'thinking' && !thinkingNotices.has(chatId)) {
         thinkingNotices.add(chatId)
-        await sendWhatsAppText(chatId, '思考中...')
+        await sendWhatsAppText(chatId, 'Thinking...')
       }
       break
 
@@ -366,17 +366,17 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
         if (workDir) {
-          await sendWhatsAppText(chatId, '会话上下文已失效，正在自动重建...')
+          await sendWhatsAppText(chatId, 'Session context is no longer valid, rebuilding automatically...')
           clearTransientChatState(chatId)
           bridge.resetSession(chatId)
           sessionStore.delete(chatId)
           const ok = await createSessionForChat(chatId, workDir)
-          await sendWhatsAppText(chatId, ok ? '已重建会话，请重新发送消息。' : '重建会话失败，请发送 /new 手动新建。')
+          await sendWhatsAppText(chatId, ok ? 'Session rebuilt. Please resend your message.' : 'Failed to rebuild session. Send /new to create one manually.')
         } else {
-          await sendWhatsAppText(chatId, '会话上下文已失效，请发送 /new 新建会话。')
+          await sendWhatsAppText(chatId, 'Session context is no longer valid. Send /new to create a new session.')
         }
       } else {
-        await sendWhatsAppText(chatId, `错误: ${msg.message}`)
+        await sendWhatsAppText(chatId, `Error: ${msg.message}`)
       }
       break
 
@@ -409,24 +409,24 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
       if (project) {
         const ok = await createSessionForChat(chatId, project.realPath)
         if (ok) {
-          await sendWhatsAppText(chatId, `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
+          await sendWhatsAppText(chatId, `New session created: ${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
         }
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await sendWhatsAppText(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await sendWhatsAppText(chatId, `Multiple projects matched, please be more specific:\n\n${list}`)
         return
       }
-      await sendWhatsAppText(chatId, `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`)
+      await sendWhatsAppText(chatId, `No project matching "${query}" found. Send /projects to see the full list.`)
     } catch (err) {
-      await sendWhatsAppText(chatId, `错误: ${err instanceof Error ? err.message : String(err)}`)
+      await sendWhatsAppText(chatId, `Error: ${err instanceof Error ? err.message : String(err)}`)
     }
   } else {
     const workDir = defaultWorkDir
     if (workDir) {
       const ok = await createSessionForChat(chatId, workDir)
-      if (ok) await sendWhatsAppText(chatId, '已新建会话，可以开始对话了。')
+      if (ok) await sendWhatsAppText(chatId, 'New session created. You can start chatting now.')
     } else {
       await showProjectPicker(chatId)
     }
@@ -448,8 +448,8 @@ async function routeUserMessage(
     await sendWhatsAppText(
       chatId,
       success
-        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。'
-        : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
+        ? 'Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude.'
+        : 'Not authorized. Generate a pairing code in the Claude Code desktop app and send it to me.',
     )
     return
   }
@@ -477,7 +477,7 @@ async function routeUserMessage(
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendWhatsAppText(chatId, '已发送停止信号。')
+      await sendWhatsAppText(chatId, 'Stop signal sent.')
       return
     }
     if (command === '/status') {
@@ -493,7 +493,7 @@ async function routeUserMessage(
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) getRuntimeState(chatId).state = 'thinking'
-      await sendWhatsAppText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
+      await sendWhatsAppText(chatId, sent ? 'Cleared the current session context.' : 'Could not send /clear. Send /new first to reconnect the session.')
       return
     }
 
@@ -514,12 +514,12 @@ async function routeUserMessage(
 
     const ready = await ensureSession(chatId)
     if (!ready) return
-    const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effective = text || (attachments.length > 0 ? '(user sent an attachment)' : '')
     if (!effective && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
     if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
-      await sendWhatsAppText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendWhatsAppText(chatId, 'Failed to send message; the connection may be down. Send /new to start over.')
     }
   })
 }
@@ -556,7 +556,7 @@ async function collectAttachments(
     }
   } catch (err) {
     console.error('[WhatsApp] download media failed:', err instanceof Error ? err.message : err)
-    rejections.push('附件下载失败，请稍后重试。')
+    rejections.push('Attachment download failed, please try again later.')
   }
   return { attachments, rejections }
 }

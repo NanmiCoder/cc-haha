@@ -30,8 +30,8 @@ const tool = (id: string, toolName: string, input: unknown, extra: Partial<ChatI
   input,
   ...extra,
 })
-const user = (id: string, text = '问题'): ChatItem => ({ id, type: 'user', text })
-const assistant = (id: string, text = '回复'): ChatItem => ({ id, type: 'assistant', text })
+const user = (id: string, text = 'Question'): ChatItem => ({ id, type: 'user', text })
+const assistant = (id: string, text = 'Reply'): ChatItem => ({ id, type: 'assistant', text })
 
 const stamped = (item: ChatItem, at: string): ChatItem => ({ ...item, timestamp: at })
 const rowKinds = (rows: ReturnType<typeof buildChatRows>) => rows.map((row) => row.kind)
@@ -42,7 +42,7 @@ describe('step grouping', () => {
       [
         user('u1'),
         assistant('a1'),
-        { id: 't1', type: 'thinking', text: '想一想' },
+        { id: 't1', type: 'thinking', text: 'Think about it' },
         tool('r1', 'Read', { file_path: '/repo/a.ts' }),
         tool('b1', 'Bash', { command: 'bun test' }),
         assistant('a2'),
@@ -54,7 +54,7 @@ describe('step grouping', () => {
     const group = rows[2]
     expect(group.kind === 'steps' && group.steps.map((step) => step.id)).toEqual(['t1', 'r1', 'b1'])
     expect(group.key).toBe('steps:t1')
-    expect(group.kind === 'steps' && activityLabel(group.segments)).toBe('思考 · 已读 1 个文件 · 运行 1 条命令')
+    expect(group.kind === 'steps' && activityLabel(group.segments)).toBe('Thinking · Read 1 file · Ran 1 command')
   })
 
   test('a finished turn keeps the screenshots it read visible on its fold line', () => {
@@ -111,7 +111,7 @@ describe('activity summary', () => {
       tool('4', 'Bash', { command: 'ls' }),
       tool('5', 'Bash', { command: 'bun test' }),
     ])
-    expect(activityLabel(segments)).toBe('已读 3 个文件 · 运行 2 条命令')
+    expect(activityLabel(segments)).toBe('Read 3 files · Ran 2 commands')
     expect(segments.map((segment) => segment.icon)).toEqual(['file', 'terminal'])
   })
 
@@ -129,7 +129,7 @@ describe('activity summary', () => {
           tool('8', 'Edit', {}),
         ])
       )
-    ).toBe('已读 1 个文件 · 编辑 4 个文件 · 新建 1 个文件')
+    ).toBe('Read 1 file · Edited 4 files · Created 1 file')
   })
 
   test('groups search, web, sub-agents, todos and MCP tools under their own clauses', () => {
@@ -151,12 +151,12 @@ describe('activity summary', () => {
         ])
       )
     ).toBe(
-      '思考 · 搜索 2 次 · 查找文件 · 搜索网页 · 打开 1 个网页 · 派出 1 个子 Agent · 更新待办 · 调用 github 2 次 · 调用 SomeNewTool'
+      'Thinking · Searched 2 times · Found files · Searched the web · Opened 1 web page · Dispatched 1 subagent · Updated todos · Called github 2 times · Called SomeNewTool'
     )
   })
 
   test('thinking alone is still a one-line summary; several thoughts are counted', () => {
-    expect(activityLabel(summarizeActivity([{ id: 't', type: 'thinking', text: '' }]))).toBe('思考')
+    expect(activityLabel(summarizeActivity([{ id: 't', type: 'thinking', text: '' }]))).toBe('Thinking')
     expect(
       activityLabel(
         summarizeActivity([
@@ -165,7 +165,7 @@ describe('activity summary', () => {
           { id: 't2', type: 'thinking', text: '' },
         ])
       )
-    ).toBe('思考 2 次 · 已读 1 个文件')
+    ).toBe('Thought 2 times · Read 1 file')
   })
 })
 
@@ -198,49 +198,49 @@ describe('step group disclosure', () => {
 describe('group status tail', () => {
   test('approval outranks failure outranks background; finished groups say nothing', () => {
     expect(groupTail(['done', 'missing'])).toBeNull()
-    expect(groupTail(['done', 'background'])).toEqual({ text: '后台进行中', tone: 'run' })
-    expect(groupTail(['error', 'background'])).toEqual({ text: '失败', tone: 'err' })
-    expect(groupTail(['error', 'done', 'error'])).toEqual({ text: '2 项失败', tone: 'err' })
-    expect(groupTail(['error', 'waiting', 'background'])).toEqual({ text: '等你批准', tone: 'attn' })
+    expect(groupTail(['done', 'background'])).toEqual({ text: 'Running in background', tone: 'run' })
+    expect(groupTail(['error', 'background'])).toEqual({ text: 'Failed', tone: 'err' })
+    expect(groupTail(['error', 'done', 'error'])).toEqual({ text: '2 failed', tone: 'err' })
+    expect(groupTail(['error', 'waiting', 'background'])).toEqual({ text: 'Waiting for your approval', tone: 'attn' })
   })
 })
 
 describe('turn duration', () => {
   test('formats seconds, minutes and hours the way the board reads', () => {
     expect(formatTurnDuration(800)).toBe('')
-    expect(formatTurnDuration(1000)).toBe('1 秒')
-    expect(formatTurnDuration(45_900)).toBe('45 秒')
-    expect(formatTurnDuration(60_000)).toBe('1 分')
-    expect(formatTurnDuration(192_000)).toBe('3 分 12 秒')
-    expect(formatTurnDuration(3_600_000)).toBe('1 小时')
-    expect(formatTurnDuration(3_720_000 + 30_000)).toBe('1 小时 2 分')
+    expect(formatTurnDuration(1000)).toBe('1 sec')
+    expect(formatTurnDuration(45_900)).toBe('45 sec')
+    expect(formatTurnDuration(60_000)).toBe('1 min')
+    expect(formatTurnDuration(192_000)).toBe('3 min 12 sec')
+    expect(formatTurnDuration(3_600_000)).toBe('1 h')
+    expect(formatTurnDuration(3_720_000 + 30_000)).toBe('1 h 2 min')
     expect(formatTurnDuration(Number.NaN)).toBe('')
   })
 
   test('uses message times, falls back to the local clock, and never invents a number', () => {
     const u = stamped(user('u'), '2026-10-25T10:00:00.000Z')
     const last = stamped(assistant('a'), '2026-10-25T10:03:12.000Z')
-    expect(turnFoldLabel(u, [last])).toBe('用时 3 分 12 秒')
+    expect(turnFoldLabel(u, [last])).toBe('Took 3 min 12 sec')
     const start = Date.parse('2026-10-25T10:00:00.000Z')
-    expect(turnFoldLabel(user('u2'), [assistant('a2')], { startedAt: start, endedAt: start + 45_000 })).toBe('用时 45 秒')
-    expect(turnFoldLabel(user('u3'), [assistant('a3')])).toBe('处理过程')
-    expect(turnFoldLabel(u, [stamped(assistant('b'), '2026-10-25T10:00:00.400Z')])).toBe('处理过程')
+    expect(turnFoldLabel(user('u2'), [assistant('a2')], { startedAt: start, endedAt: start + 45_000 })).toBe('Took 45 sec')
+    expect(turnFoldLabel(user('u3'), [assistant('a3')])).toBe('Process')
+    expect(turnFoldLabel(u, [stamped(assistant('b'), '2026-10-25T10:00:00.400Z')])).toBe('Process')
   })
 })
 
 describe('turn folding', () => {
   const turn = (n: number, at = (s: number) => `2026-10-25T10:0${n}:${String(s).padStart(2, '0')}.000Z`): ChatItem[] => [
     stamped(user(`u${n}`), at(0)),
-    stamped(assistant(`pre${n}`, '先看一下'), at(2)),
+    stamped(assistant(`pre${n}`, 'Take a look first'), at(2)),
     stamped(tool(`r${n}`, 'Read', { file_path: '/a.ts' }, { result: 'ok' }), at(3)),
     stamped(tool(`b${n}`, 'Bash', { command: 'ls' }, { result: 'ok' }), at(4)),
-    stamped(assistant(`final${n}`, '完成了'), at(30)),
+    stamped(assistant(`final${n}`, 'Finished'), at(30)),
   ]
 
   test('a settled turn folds everything before the final reply into one timed row', () => {
     const rows = buildChatRows(turn(1), false)
     expect(rows.map((row) => row.key)).toEqual(['u1', 'turn:pre1', 'pre1', 'steps:r1', 'final1'])
-    expect(rows[1]).toMatchObject({ kind: 'turn', label: '用时 30 秒', hidden: 2 })
+    expect(rows[1]).toMatchObject({ kind: 'turn', label: 'Took 30 sec', hidden: 2 })
     expect(rows[2]).toMatchObject({ turn: 'turn:pre1' })
     expect(rows[3]).toMatchObject({ kind: 'steps', turn: 'turn:pre1', turnEnd: true })
     expect(rows[4]).not.toHaveProperty('turn')
@@ -267,7 +267,7 @@ describe('turn folding', () => {
 
   test('errors stay visible and a turn that ends on tools folds into just the row', () => {
     const rows = buildChatRows(
-      [user('u'), tool('r', 'Read', {}), { id: 'e', type: 'error', text: '出错了' }, tool('b', 'Bash', {})],
+      [user('u'), tool('r', 'Read', {}), { id: 'e', type: 'error', text: 'Something went wrong' }, tool('b', 'Bash', {})],
       false
     )
     const visible = visibleChatRows(rows, new Set())
@@ -277,12 +277,12 @@ describe('turn folding', () => {
   test('the latest turn takes its duration from the local clock when messages carry no time', () => {
     const items = [user('u'), tool('r', 'Read', {}), assistant('a')]
     const rows = buildChatRows(items, false, { clock: { startedAt: 1_000, endedAt: 1_000 + 192_000 } })
-    expect(rows.find((row) => row.kind === 'turn')).toMatchObject({ label: '用时 3 分 12 秒' })
+    expect(rows.find((row) => row.kind === 'turn')).toMatchObject({ label: 'Took 3 min 12 sec' })
     // The clock describes the latest turn only.
     const two = buildChatRows([user('u0'), tool('r0', 'Read', {}), assistant('a0'), ...items], false, {
       clock: { startedAt: 1_000, endedAt: 61_000 },
     })
-    expect(two.filter((row) => row.kind === 'turn').map((row) => row.kind === 'turn' && row.label)).toEqual(['处理过程', '用时 1 分'])
+    expect(two.filter((row) => row.kind === 'turn').map((row) => row.kind === 'turn' && row.label)).toEqual(['Process', 'Took 1 min'])
   })
 
   test('fold keys survive the turn finishing, so a user choice made while streaming is not lost', () => {
@@ -298,24 +298,24 @@ describe('step labels', () => {
     const workDir = '/Users/me/code/cc-haha'
     const label = (name: string, input: unknown) => describeStep(tool('x', name, input), workDir)
     expect(label('Read', { file_path: `${workDir}/src/app/connect.tsx` })).toEqual({
-      verb: '读取',
+      verb: 'Read',
       object: 'src/app/connect.tsx',
       mono: true,
     })
-    expect(label('Write', { file_path: '/elsewhere/a.md' })).toMatchObject({ verb: '写入', object: '/elsewhere/a.md' })
-    expect(label('Bash', { command: 'bun test src\n&& echo done' })).toMatchObject({ verb: '运行', object: 'bun test src' })
-    expect(label('Grep', { pattern: 'useTheme' })).toMatchObject({ verb: '搜索', object: 'useTheme', mono: true })
-    expect(label('Glob', { pattern: '**/*.tsx' })).toMatchObject({ verb: '查找', object: '**/*.tsx' })
-    expect(label('WebFetch', { url: 'https://example.com' })).toMatchObject({ verb: '打开', mono: true })
-    expect(label('WebSearch', { query: 'expo router' })).toMatchObject({ verb: '搜网页', object: 'expo router', mono: false })
-    expect(label('Task', { description: '做扫码页界面' })).toMatchObject({ verb: '子 Agent', object: '做扫码页界面', mono: false })
-    expect(label('Agent', { description: '跑测试' })).toMatchObject({ verb: '子 Agent', object: '跑测试' })
-    expect(label('TodoWrite', { todos: [{}, {}, {}] })).toMatchObject({ verb: '更新待办', object: '3 项' })
-    expect(label('mcp__github__create_issue', { title: 'x' })).toMatchObject({ verb: '调用', object: 'github · create_issue', mono: true })
-    expect(label('ExitPlanMode', { plan: '# 计划' })).toMatchObject({ verb: '提交计划', mono: false })
-    expect(label('AskUserQuestion', { questions: [{ question: '旧字段怎么处理？' }] })).toMatchObject({ verb: '提问', object: '旧字段怎么处理？' })
-    expect(label('SomeNewTool', { description: '做点事' })).toMatchObject({ verb: 'SomeNewTool', object: '做点事' })
-    expect(describeStep({ id: 't', type: 'thinking', text: '...' })).toEqual({ verb: '思考过程', mono: false })
+    expect(label('Write', { file_path: '/elsewhere/a.md' })).toMatchObject({ verb: 'Write', object: '/elsewhere/a.md' })
+    expect(label('Bash', { command: 'bun test src\n&& echo done' })).toMatchObject({ verb: 'Run', object: 'bun test src' })
+    expect(label('Grep', { pattern: 'useTheme' })).toMatchObject({ verb: 'Search', object: 'useTheme', mono: true })
+    expect(label('Glob', { pattern: '**/*.tsx' })).toMatchObject({ verb: 'Find', object: '**/*.tsx' })
+    expect(label('WebFetch', { url: 'https://example.com' })).toMatchObject({ verb: 'Open', mono: true })
+    expect(label('WebSearch', { query: 'expo router' })).toMatchObject({ verb: 'Web search', object: 'expo router', mono: false })
+    expect(label('Task', { description: 'Build the scan page UI' })).toMatchObject({ verb: 'Subagent', object: 'Build the scan page UI', mono: false })
+    expect(label('Agent', { description: 'Run tests' })).toMatchObject({ verb: 'Subagent', object: 'Run tests' })
+    expect(label('TodoWrite', { todos: [{}, {}, {}] })).toMatchObject({ verb: 'Updated todos', object: '3 items' })
+    expect(label('mcp__github__create_issue', { title: 'x' })).toMatchObject({ verb: 'Called', object: 'github · create_issue', mono: true })
+    expect(label('ExitPlanMode', { plan: '# plan' })).toMatchObject({ verb: 'Submit plan', mono: false })
+    expect(label('AskUserQuestion', { questions: [{ question: 'How should old fields be handled?' }] })).toMatchObject({ verb: 'Ask', object: 'How should old fields be handled?' })
+    expect(label('SomeNewTool', { description: 'Do something' })).toMatchObject({ verb: 'SomeNewTool', object: 'Do something' })
+    expect(describeStep({ id: 't', type: 'thinking', text: '...' })).toEqual({ verb: 'Thinking process', mono: false })
   })
 
   test('reads streaming partial JSON once it is complete and ignores it before', () => {
@@ -339,7 +339,7 @@ describe('edit statistics', () => {
     const after = 'a\nB\nc\nd\ne'
     expect(editCounts({ old_string: before, new_string: after })).toEqual({ added: 2, removed: 1 })
     expect(describeStep(tool('e', 'Edit', { file_path: '/x', old_string: before, new_string: after }))).toMatchObject({
-      verb: '编辑',
+      verb: 'Edit',
       added: 2,
       removed: 1,
     })
@@ -384,7 +384,7 @@ describe('edit statistics', () => {
         { old_string: 'c', new_string: 'd' },
       ],
     })
-    expect(lines.filter((line) => line.kind === 'hunk').map((line) => line.text)).toEqual(['第 1 处', '第 2 处'])
+    expect(lines.filter((line) => line.kind === 'hunk').map((line) => line.text)).toEqual(['Change 1', 'Change 2'])
   })
 })
 
@@ -411,8 +411,8 @@ describe('turn fold keeps substantial replies visible', () => {
   const say = (id: string, text: string) => ({ id, type: 'assistant', text }) as ChatItem
 
   test('a long summary that is followed by one more tool call stays outside the fold', () => {
-    const summary = '汇总如下：' + '这个函数返回新数组，不修改原数组。'.repeat(12)
-    const rows = buildChatRows([user, tool('t1'), say('a1', summary), tool('t2'), say('a2', '后台命令已完成。')], false)
+    const summary = 'Summary: ' + 'This function returns a new array and does not modify the original.'.repeat(12)
+    const rows = buildChatRows([user, tool('t1'), say('a1', summary), tool('t2'), say('a2', 'Background command finished.')], false)
     const visible = visibleChatRows(rows, new Set()).filter((row) => row.kind === 'message')
     expect(visible.map((row) => (row as { item: ChatItem }).item.id)).toEqual(['u', 'a1', 'a2'])
   })
@@ -420,18 +420,18 @@ describe('turn fold keeps substantial replies visible', () => {
   test('markdown tables and code blocks count as substantial even when short', () => {
     expect(isSubstantialReply(say('x', '| a | b |\n|---|---|\n| 1 | 2 |'))).toBe(true)
     expect(isSubstantialReply(say('x', '```ts\nlet a = 1\n```'))).toBe(true)
-    expect(isSubstantialReply(say('x', '接下来跑一遍相关测试。'))).toBe(false)
+    expect(isSubstantialReply(say('x', 'Next, run the related tests.'))).toBe(false)
   })
 
   test('short narration before the last tool call is still folded', () => {
-    const rows = buildChatRows([user, say('a0', '先看看文件。'), tool('t1'), say('a1', '完成。')], false)
+    const rows = buildChatRows([user, say('a0', 'Let me look at the file first.'), tool('t1'), say('a1', 'Done.')], false)
     const visible = visibleChatRows(rows, new Set()).filter((row) => row.kind === 'message')
     expect(visible.map((row) => (row as { item: ChatItem }).item.id)).toEqual(['u', 'a1'])
   })
 })
 
 describe('turn fold never hides the answer or a failure silently', () => {
-  const user = { id: 'u', type: 'user', text: '修一下' } as ChatItem
+  const user = { id: 'u', type: 'user', text: 'Fix it' } as ChatItem
   const tool = (id: string, patch: Partial<ChatItem> = {}) =>
     ({ id, type: 'tool', toolName: 'Bash', toolUseId: id, input: { command: 'bun test' }, result: 'ok', ...patch }) as ChatItem
   const say = (id: string, text: string) => ({ id, type: 'assistant', text }) as ChatItem
@@ -441,23 +441,23 @@ describe('turn fold never hides the answer or a failure silently', () => {
       .map((row) => (row as { item: ChatItem }).item.id)
 
   test('a short last reply followed by a closing tool call stays visible', () => {
-    expect(visibleIds([user, tool('t1'), say('a', '好了，已完成。'), tool('t2', { toolName: 'TodoWrite', input: { todos: [] } })])).toEqual([
+    expect(visibleIds([user, tool('t1'), say('a', 'OK, done.'), tool('t2', { toolName: 'TodoWrite', input: { todos: [] } })])).toEqual([
       'u',
       'a',
     ])
   })
 
   test('earlier short narration is still folded, only the last reply is kept', () => {
-    expect(visibleIds([user, say('a0', '先看看文件。'), tool('t1'), say('a1', '再跑一遍。'), tool('t2'), say('a2', '完成。'), tool('t3')])).toEqual([
+    expect(visibleIds([user, say('a0', 'Let me look at the file first.'), tool('t1'), say('a1', 'Run it again.'), tool('t2'), say('a2', 'Done.'), tool('t3')])).toEqual([
       'u',
       'a2',
     ])
   })
 
   test('failed tool calls are counted on the fold label', () => {
-    const items = [user, tool('t1', { isError: true }), tool('t2', { isError: true }), tool('t3'), say('a', '完成')]
+    const items = [user, tool('t1', { isError: true }), tool('t2', { isError: true }), tool('t3'), say('a', 'Done')]
     const label = (buildChatRows(items, false).find((row) => row.kind === 'turn') as { label: string }).label
-    expect(label).toBe('处理过程 · 2 步失败')
-    expect(turnFoldLabel(user, [tool('x')])).toBe('处理过程')
+    expect(label).toBe('Process · 2 steps failed')
+    expect(turnFoldLabel(user, [tool('x')])).toBe('Process')
   })
 })

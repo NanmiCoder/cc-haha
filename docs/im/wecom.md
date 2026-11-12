@@ -1,64 +1,64 @@
 ---
-title: 企业微信接入
-nav_title: 企业微信
-description: 在设置页扫码创建企业微信智能机器人，在单聊里驱动桌面端，回复流式更新同一条消息。
+title: WeCom Integration
+nav_title: WeCom
+description: Scan a QR code in Settings to create an Enterprise WeChat AI bot, then drive the Desktop app from a private chat with streaming replies.
 order: 6
 ---
 
-# 企业微信接入
+# WeCom Integration
 
-适合已经用企业微信办公的团队：在桌面端点一下扫码，用企业微信扫一扫就把智能机器人建出来，Bot ID 和 Secret 直接写进本机配置，不用打开管理后台。消息走官方的 WebSocket 长连接，本机不需要公网地址。
+For teams already on Enterprise WeChat. Select **Scan to Bind** in Settings, scan with the WeCom app, and the AI bot is created for you — its Bot ID and Secret land in local configuration without opening the admin console. Messages travel over the official WebSocket connection, so your machine needs no public address.
 
-限制：只处理单聊，不处理群聊；权限审批是文本命令，不是可点的卡片。
+Limits: private chats only, no group chats; permission approval is a text reply, not a card.
 
-## 扫码创建机器人
+## Create the bot by scanning
 
-1. 打开「设置」→「IM 接入」，切到「企业微信」Tab。
-2. 点「扫码绑定」，页面上会出现一张二维码。
-3. 用企业微信扫码，按提示确认创建智能机器人。
-4. 扫码成功后，Bot ID 和 Secret 会自动写入 `~/.claude/adapters.json`，适配器随即重启。
+1. Open **Settings → IM Adapters** and switch to the **WeCom** tab.
+2. Select **Scan to Bind**. A QR code appears.
+3. Scan it with Enterprise WeChat and confirm creating the AI bot.
+4. On success the Bot ID and Secret are written to `~/.claude/adapters.json` and the adapter restarts.
 
-二维码 5 分钟内有效，过期后点「重新扫码」再生成一张。绑定成功后按钮会变成「重新扫码」，旁边多一个「解除机器人绑定」。
+The code expires after five minutes; **Scan Again** issues a new one. Once bound, the button becomes **Scan Again** and an **Unbind bot account** button appears next to it.
 
-这一步只是让桌面端拿到机器人凭据，**不等于**放行你的同事——谁能用还得看下一步的配对。
+This step only gives the Desktop app the bot's credentials. It does **not** authorize your colleagues — that is what pairing below decides.
 
-## 配对
+## Pairing
 
-回到页面顶部的「配对管理」，点「生成配对码」，拿到一枚 6 位码。这一步立即生效，不需要再点保存。
+Back at the top of the page, under **Pairing**, select **Generate Code** to get a six-character code. This takes effect immediately; no **Save** is needed.
 
-在企业微信里私聊刚创建的机器人，把这枚码发过去。看到配对成功提示就可以开始对话。
+Send that code to the new bot in a private WeCom chat. Once pairing is confirmed, anything you type goes to Claude Code.
 
-配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。同一个用户 5 分钟内连续输错 5 次会被限流。
+A code is valid for 60 minutes, works once, and is invalidated the moment a new one is generated. Five failed attempts within five minutes trigger rate limiting.
 
-「允许的用户」可以留空。留空时只有完成配对的人能用。要直接放行已知同事，就填他们的企业微信 `userid`，多个用逗号分隔，填完点「保存」。
+**Allowed Users** can stay empty, in which case only paired accounts can use the bot. To allow known colleagues directly, enter their WeCom `userid` values separated by commas and select **Save**.
 
-## 支持的命令
+## Supported commands
 
-- `/help` 或 `帮助` — 列出当前可用命令
-- `/status` 或 `状态` — 当前项目、模型、运行状态
-- `/projects` 或 `项目列表` — 列出最近项目并切换
-- `/new` 或 `新会话` — 开一条新会话，可带项目编号、名称或绝对路径
-- `/clear` 或 `清空` — 清空上下文，保留项目绑定
-- `/stop` 或 `停止` — 停止本轮生成
-- 权限审批：回复 `1` 允许一次、`2` 永久允许、`3` 拒绝，也可以用 `/allow <id>`、`/always <id>`、`/deny <id>`
+- `/help` — list the available commands
+- `/status` — current project, model, and run state
+- `/projects` — list recent projects and switch
+- `/new` — start a fresh session, optionally with an index, name, or absolute path
+- `/clear` — clear the context, keep the project binding
+- `/stop` — stop the current turn
+- Permission approval: reply `1` to allow once, `2` to allow for the session, `3` to deny; `/allow <id>`, `/always <id>`, and `/deny <id>` work too
 
-## 消息表现
+## How messages look
 
-回复用企业微信的流式消息：同一条气泡随生成过程原地刷新，结束时定稿。单条流式消息有 20 KB 上限，超出的部分会作为后续消息继续发出，不会被截断。
+Replies use WeCom stream messages: one bubble refreshes in place as the answer is generated, then settles. A single stream message caps at 20 KB, so anything beyond that continues as follow-up messages rather than being truncated.
 
-收到的图片、文件会解密后落到 `~/.claude/im-downloads/wecom/`，作为附件随消息一起送进 Agent。语音消息由企业微信转写成文字后当作普通文本处理。Agent 输出里引用的本地图片（限当前会话工作目录内）会上传成图片消息单独发出。
+Inbound images and files are decrypted into `~/.claude/im-downloads/wecom/` and forwarded to the Agent as attachments. Voice notes arrive already transcribed by WeCom and are handled as plain text. Local images referenced in the Agent's output (restricted to the current session's working directory) are uploaded and sent as separate image messages.
 
-## Agent 能力与边界
+## Agent capability and boundaries
 
-企业微信不是一套独立的问答模型。普通消息进入的是当前项目的同一条 Claude Code Agent 会话，因此会延续多轮上下文，并能使用该会话已经加载的文件、终端、Git、Skills 和 MCP 工具。
+WeCom is not a separate question-and-answer model. Messages enter the same Claude Code Agent session as the current project, so they continue the multi-turn context and can use the files, terminal, Git, Skills, and MCP tools that session already has.
 
-这意味着配对成功的账号获得的是当前项目里的完整 Agent 能力，权限确认只是操作闸门，不是操作系统沙箱。不要把机器人交给不可信的人，也不要在聊天里安装未经本机审核的 Skill、Plugin 或 MCP。
+That means a paired account holds the full Agent capability of the current project. Permission confirmation is a gate on individual operations, not an OS sandbox. Do not hand the bot to people you do not trust, and do not install unreviewed Skills, plugins, or MCP servers from chat.
 
-Adapter 只接受已配对或在允许列表中的单聊账号；项目列表和名称匹配都限制在「允许访问的项目目录」内。
+The adapter accepts only paired or allow-listed private chats, and project listing and name matching stay inside **Allowed project directories**.
 
-## 本地开发启动
+## Running it locally
 
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Release builds start the adapter as a sidecar automatically. Manual startup is only needed when running from source:
 
 ```bash
 cd adapters
@@ -66,7 +66,7 @@ bun install
 bun run wecom
 ```
 
-可选的环境变量覆盖：
+Optional environment overrides:
 
 ```bash
 export WECOM_BOT_ID="xxx"
@@ -74,16 +74,16 @@ export WECOM_BOT_SECRET="xxx"
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-## 常见问题
+## Troubleshooting
 
-**二维码出不来**：扫码接口在 `work.weixin.qq.com`，确认本机能访问；代理环境下先确认这个域名没被拦截。
+**No QR code appears.** The scan endpoint lives on `work.weixin.qq.com`; confirm your machine can reach it, and that a proxy is not blocking that host.
 
-**扫码成功但机器人不回消息**：确认桌面端还开着，并且「企业微信」Tab 里显示了 Bot ID。凭据是扫码那一刻写进配置的，之后适配器会自动重启一次。
+**Scanned successfully but the bot stays silent.** Confirm the Desktop app is still running and that the **WeCom** tab shows a Bot ID. Credentials are written the moment the scan succeeds, and the adapter restarts on its own.
 
-**发消息提示未授权**：检查是否已生成配对码、码是否还在 60 分钟有效期内、发的是不是当前这一枚。
+**Messages report "unauthorized".** Check that a pairing code was generated, that it is still inside its 60-minute window, and that you sent the current one.
 
-**群里 @ 机器人没反应**：这是预期行为，当前只处理单聊。配对授权的是个人身份，在群里放行会把这份授权扩散给群里所有人。
+**Mentioning the bot in a group does nothing.** That is intended: only private chats are handled. Pairing authorizes one person, and answering in a group would extend that authorization to everyone in it.
 
-## 源码入口
+## Source entry points
 
-`adapters/wecom/index.ts`（运行时）、`adapters/wecom/qr-auth.ts`（扫码创建）、`adapters/wecom/extract-payload.ts`（入站消息解析），以及 `adapters/common/chat-runtime.ts` 这套跨平台会话循环。
+`adapters/wecom/index.ts` (runtime), `adapters/wecom/qr-auth.ts` (scan to create), `adapters/wecom/extract-payload.ts` (inbound parsing), plus the shared session loop in `adapters/common/chat-runtime.ts`.

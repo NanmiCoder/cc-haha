@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { highlight, languageFor, type Token, type TokenKind } from './highlight'
 
-/** 把一行压成 “kind:text” 列表，只保留非空白 token，方便断言。 */
+/** Flatten a line into a "kind:text" list, keeping only non-blank tokens, for easier assertions. */
 const kinds = (line: Token[] | undefined) =>
   (line ?? [])
     .filter((token) => token.text.trim())
@@ -30,15 +30,15 @@ describe('typescript', () => {
   const source = [
     "import type { Host } from './types'",
     '',
-    '/** 局域网凭据只放 SecureStore，不进 URL。 */',
+    '/** LAN credentials live only in SecureStore and never in URLs. */',
     'export type ConnectionState =',
     "  | 'connecting'",
     'export function originOf(host: Host) {',
     '  const url = new URL(host.url)',
-    "  if (url.search) throw new Error('地址里不能带参数')",
+    "  if (url.search) throw new Error('The address cannot contain query parameters')",
     '  return url.origin',
     '}',
-    '// 重连退避：1s → 2s → 4s，最多 30s',
+    '// Reconnect backoff: 1s → 2s → 4s, at most 30s',
     'export const backoff = (n: number) =>',
     '  Math.min(1000 * 2 ** n, 30_000)',
   ].join('\n')
@@ -56,12 +56,12 @@ describe('typescript', () => {
       "str:'./types'",
     ])
     expect(lines[1]).toEqual([])
-    expect(kinds(lines[2])).toEqual(['cm:/** 局域网凭据只放 SecureStore，不进 URL。 */'])
+    expect(kinds(lines[2])).toEqual(['cm:/** LAN credentials live only in SecureStore and never in URLs. */'])
     expect(kinds(lines[3])).toEqual(['kw:export', 'kw:type', 'ty:ConnectionState', 'plain:='])
     expect(kinds(lines[5]).slice(0, 3)).toEqual(['kw:export', 'kw:function', 'ty:originOf'])
     expect(of([lines[6]!], 'ty')).toEqual(['URL'])
-    expect(of([lines[7]!], 'str')).toEqual(["'地址里不能带参数'"])
-    expect(kinds(lines[10])).toEqual(['cm:// 重连退避：1s → 2s → 4s，最多 30s'])
+    expect(of([lines[7]!], 'str')).toEqual(["'The address cannot contain query parameters'"])
+    expect(kinds(lines[10])).toEqual(['cm:// Reconnect backoff: 1s → 2s → 4s, at most 30s'])
     expect(of([lines[11]!], 'ty')).toEqual(['number'])
     expect(of([lines[11]!], 'plain').join(' ')).toContain('backoff')
     expect(of([lines[12]!], 'str')).toEqual(['1000', '2', '30_000'])
@@ -111,15 +111,15 @@ describe('other languages', () => {
 
   test('python comments, decorators, triple quotes and declarations', () => {
     const lines = highlight(
-      '@cache\ndef load(path: str) -> None:\n    """多行\n    说明"""\n    return 42  # done',
+      '@cache\ndef load(path: str) -> None:\n    """Multiline\n    note"""\n    return 42  # done',
       'py'
     )
     expect(kinds(lines[0])).toEqual(['ty:@cache'])
     expect(kinds(lines[1]).slice(0, 2)).toEqual(['kw:def', 'ty:load'])
     expect(of([lines[1]!], 'ty')).toEqual(['load', 'str'])
     expect(of([lines[1]!], 'kw')).toEqual(['def', 'None'])
-    expect(kinds(lines[2])).toEqual(['str:"""多行'])
-    expect(kinds(lines[3])).toEqual(['str:说明"""'])
+    expect(kinds(lines[2])).toEqual(['str:"""Multiline'])
+    expect(kinds(lines[3])).toEqual(['str:note"""'])
     expect(kinds(lines[4])).toEqual(['kw:return', 'str:42', 'cm:# done'])
   })
 
@@ -152,16 +152,16 @@ describe('other languages', () => {
 
   test('markdown headings, lists, inline code, links and fences', () => {
     const lines = highlight(
-      '# 标题\n- 运行 `bun test`\n见 [文档](https://x.dev)\n```ts\nconst a = 1\n```\n> 引用',
+      '# Title\n- Run `bun test`\nSee [docs](https://x.dev)\n```ts\nconst a = 1\n```\n> Quote',
       'md'
     )
-    expect(kinds(lines[0])).toEqual(['kw:# 标题'])
-    expect(kinds(lines[1])).toEqual(['kw:-', 'plain:运行', 'str:`bun test`'])
+    expect(kinds(lines[0])).toEqual(['kw:# Title'])
+    expect(kinds(lines[1])).toEqual(['kw:-', 'plain:Run', 'str:`bun test`'])
     expect(of([lines[2]!], 'ty')).toEqual(['(https://x.dev)'])
     expect(kinds(lines[3])).toEqual(['cm:```ts'])
     expect(kinds(lines[4])).toEqual(['str:const a = 1'])
     expect(kinds(lines[5])).toEqual(['cm:```'])
-    expect(kinds(lines[6])).toEqual(['cm:> 引用'])
+    expect(kinds(lines[6])).toEqual(['cm:> Quote'])
   })
 
   test('plain text and CRLF keep one row per line', () => {

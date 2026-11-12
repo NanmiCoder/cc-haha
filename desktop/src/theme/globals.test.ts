@@ -45,7 +45,7 @@ function getCssBetween(startMarker: string, endMarker: string) {
 }
 
 /**
- * The six 「纸 · 墨 · 印」 palettes. Each block holds only raw `--cc-*` color
+ * The six "Paper · Ink · Seal" palettes. Each block holds only raw `--cc-*` color
  * values; the shared `:root` semantic layer turns those into the `--color-*`
  * tokens components consume, so the mapping is written once instead of copied
  * per theme.

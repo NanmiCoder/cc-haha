@@ -27,27 +27,27 @@ const OPTIONS: ShareOptions = { size: 'portrait', showIdentity: true, showModels
 const measure = (op: { text: string; size: number }) => op.text.length * op.size * 0.55
 
 const models = [
-  { label: 'DeepSeek V4 Flash', series: 1, amount: '142亿', share: '59%', cost: null },
-  { label: 'Claude Opus', series: 2, amount: '46亿', share: '19%', cost: '$412.80' },
+  { label: 'DeepSeek V4 Flash', series: 1, amount: '14.2B', share: '59%', cost: null },
+  { label: 'Claude Opus', series: 2, amount: '4.6B', share: '19%', cost: '$412.80' },
 ]
 
 const DATA: ShareImageData = {
   displayName: 'Ada Lovelace',
   linkText: 'github.com/NanmiCoder/cc-haha',
   dateLabel: '2026.10.17',
-  caption: '累计 Token',
+  caption: 'Total tokens',
   totalValue: '241',
-  totalUnit: '亿',
+  totalUnit: 'B',
   totalNote: '24.1B · 24,100,000,000',
-  summaryLine: '73 天 · 489 次会话',
+  summaryLine: '73 days · 489 sessions',
   models,
   daily: [[10, 5], [0, 0], [60, 20], [30, 10]],
   chartMax: 90,
-  gridLines: [{ value: 50, label: '50' }, { value: 100, label: '100 / 日' }],
-  peak: { index: 2, label: '单日峰值 80' },
-  monthTicks: [{ fraction: 0.5, label: '10月' }],
-  streak: { current: 3, longest: 6, currentLabel: '当前连续 3 天', longestLabel: '最长连续 6 天' },
-  footerNote: '缓存命中 93%',
+  gridLines: [{ value: 50, label: '50' }, { value: 100, label: '100 / day' }],
+  peak: { index: 2, label: 'Daily peak 80' },
+  monthTicks: [{ fraction: 0.5, label: 'Oct' }],
+  streak: { current: 3, longest: 6, currentLabel: 'Current streak 3 days', longestLabel: 'Longest streak 6 days' },
+  footerNote: 'Cache hits 93%',
 }
 
 const texts = (ops: DrawOp[]) => ops.filter((op): op is TextOp => op.kind === 'text').map((op) => op.text)
@@ -74,7 +74,7 @@ describe('buildShareLayout', () => {
   it('puts the unit right after the number and the project link in the footer', () => {
     const { ops } = buildShareLayout(DATA, THEME, OPTIONS, measure)
     const total = ops.find((op): op is TextOp => op.kind === 'text' && op.text === '241')!
-    const unit = ops.find((op): op is TextOp => op.kind === 'text' && op.text === '亿')!
+    const unit = ops.find((op): op is TextOp => op.kind === 'text' && op.text === 'B')!
     expect(unit.x).toBeGreaterThan(total.x + measure(total))
     expect(unit.y).toBe(total.y)
     expect(unit.fill).toBe(THEME.ac)
@@ -88,8 +88,8 @@ describe('buildShareLayout', () => {
     const fills = new Set(ops.filter((op) => op.kind === 'rect').map((op) => (op as { fill: string }).fill))
     expect(fills.has(THEME.series[0]!)).toBe(true)
     expect(fills.has(THEME.series[1]!)).toBe(true)
-    expect(texts(ops)).toContain('单日峰值 80')
-    expect(texts(ops)).toContain('100 / 日')
+    expect(texts(ops)).toContain('Daily peak 80')
+    expect(texts(ops)).toContain('100 / day')
   })
 
   it('stacks the columns in color-slot order, whoever is ahead, with a gap between segments', () => {
@@ -116,7 +116,7 @@ describe('buildShareLayout', () => {
     expect(out).not.toContain(DATA.linkText)
     expect(bare.ops.some((op) => op.kind === 'image' && op.source === 'avatar')).toBe(false)
     // The caption stands in for the identity block it no longer has.
-    expect(out).toContain('累计 Token')
+    expect(out).toContain('Total tokens')
   })
 
   it('shows cost only when asked, and never for an unpriced model', () => {
@@ -145,7 +145,7 @@ describe('buildShareImageData', () => {
     { id: 'a', label: 'A', series: 1, total: 900, fresh: 100, cached: 800, costUSD: 0, unpriced: true },
     { id: 'b', label: 'B', series: 2, total: 100, fresh: 100, cached: 0, costUSD: 2.5, unpriced: false },
   ]
-  const build = (locale: 'en' | 'zh') => buildShareImageData({
+  const build = (locale: 'en') => buildShareImageData({
     stats,
     models: ranked,
     daily: [
@@ -160,12 +160,10 @@ describe('buildShareImageData', () => {
     now: new Date('2026-10-17T12:00:00'),
   })
 
-  it('prints the total in the reader\'s units and names the other notation for Chinese readers only', () => {
-    const zh = build('zh')
-    expect([zh.totalValue, zh.totalUnit, zh.totalNote]).toEqual(['241', '亿', '24.1B · 24,100,000,000'])
+  it('prints the abbreviated total with the exact figure as its note', () => {
     const en = build('en')
     expect([en.totalValue, en.totalUnit, en.totalNote]).toEqual(['24.1', 'B', '24,100,000,000'])
-    expect(zh.dateLabel).toBe('2026.10.17')
+    expect(en.dateLabel).toBe('2026.10.17')
   })
 
   it('marks the peak, scales the axis to it and prices only priced models', () => {

@@ -5,8 +5,8 @@ import { Logo } from '../Logo'
 import { dark } from '../palette'
 
 /**
- * 通知引导页里的锁屏示意：纯装饰，读屏忽略。
- * 锁屏本身永远是深色（系统画的），所以取深色色板，不跟随 App 的明暗。
+ * Lock screen illustration on the notification onboarding page: purely decorative, ignored by screen readers.
+ * The lock screen itself is always dark (drawn by the system), so use the dark palette regardless of the app theme.
  */
 export function LockPreview({ hostName }: { hostName: string }) {
   const colors = useColors()
@@ -60,13 +60,13 @@ export function LockPreview({ hostName }: { hostName: string }) {
           <Text style={{ flex: 1, color: dark.ink, fontSize: 13, fontWeight: '600' }}>
             cc-haha
           </Text>
-          <Text style={{ color: dark.ink3, fontSize: 12 }}>现在</Text>
+          <Text style={{ color: dark.ink3, fontSize: 12 }}>Now</Text>
         </View>
         <Text
           numberOfLines={1}
           style={{ color: dark.ink, fontSize: 15, lineHeight: 20, fontWeight: '600' }}
         >
-          {hostName} 想运行命令
+          {hostName} Wants to run a command
         </Text>
         <Mono
           numberOfLines={1}
@@ -82,10 +82,10 @@ export function LockPreview({ hostName }: { hostName: string }) {
             numberOfLines={1}
             style={{ color: dark.ink, fontSize: 14, fontWeight: '600' }}
           >
-            给移动端加扫码配对
+            Add QR pairing to mobile
           </Text>
           <Text numberOfLines={1} style={{ color: dark.ink3, fontSize: 12 }}>
-            {hostName} · 还有 1 个任务在跑
+            {hostName} · 1 more task running
           </Text>
         </View>
         <Mono style={{ color: dark.run, fontSize: 15 }}>14:35</Mono>

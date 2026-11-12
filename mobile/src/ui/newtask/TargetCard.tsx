@@ -4,8 +4,8 @@ import { Icon, Mono, useColors } from '../kit'
 import { targetAccessibility, targetLine } from './whereModel'
 
 /**
- * 新任务顶部的单行“位置”卡：📁 项目名  ⎇ main · 新工作树 ›。
- * 点按打开位置页；分支和工作树都在那里改。
+ * Single-line "location" card at the top of new task: 📁 project name  ⎇ main · new worktree ›.
+ * Tap to open the location page; branch and worktree are changed there.
  */
 export function TargetCard({
   name,
@@ -17,9 +17,9 @@ export function TargetCard({
 }: {
   name: string
   branch?: string
-  /** 没有分支时代替分支显示（“读取中…”“无 Git 分支”）。 */
+  /** Shown instead of a branch when there is none ("Loading…", "No Git branch"). */
   status?: string
-  /** 新开工作树时在分支后面写“新工作树”。 */
+  /** When opening a new worktree write "new worktree" after the branch. */
   worktree?: boolean
   onPress(): void
   disabled?: boolean
@@ -30,7 +30,7 @@ export function TargetCard({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={targetAccessibility(line)}
-      accessibilityHint="选择项目目录、分支和工作树"
+      accessibilityHint="Choose project directory, branch and worktree"
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}

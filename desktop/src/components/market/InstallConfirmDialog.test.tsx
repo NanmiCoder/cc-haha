@@ -11,7 +11,7 @@ function makeSkill(overrides: Partial<NormalizedSkill> = {}): NormalizedSkill {
     id: 'skillhub:demo',
     source: 'skillhub',
     slug: 'demo',
-    name: '示例技能',
+    name: 'Example skill',
     summary: 'demo',
     author: { handle: 'alice' },
     stats: { downloads: 1 },
@@ -33,7 +33,7 @@ describe('InstallConfirmDialog', () => {
       <InstallConfirmDialog skill={makeSkill()} open installing={false} onConfirm={vi.fn()} onClose={vi.fn()} />,
     )
 
-    expect(screen.getByTestId('market-install-confirm')).toHaveTextContent('示例技能')
+    expect(screen.getByTestId('market-install-confirm')).toHaveTextContent('Example skill')
     expect(screen.getAllByText('SkillHub').length).toBeGreaterThan(0)
     expect(screen.getByText('v2.0.0')).toBeInTheDocument()
     expect(screen.getByTestId('security-badge-benign')).toBeInTheDocument()

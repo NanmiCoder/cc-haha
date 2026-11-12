@@ -63,35 +63,18 @@ function coerceDate(value: number | string | Date): Date | null {
   return Number.isFinite(date.getTime()) ? date : null
 }
 
-function localeToIntl(locale: Locale): string {
-  switch (locale) {
-    case 'zh': return 'zh-CN'
-    case 'zh-TW': return 'zh-TW'
-    case 'jp': return 'ja-JP'
-    case 'kr': return 'ko-KR'
-    default: return 'en-US'
-  }
-}
-
-// Locales whose dates use the 年/月/日 Han characters: Chinese (Simplified/Traditional)
-// and Japanese share identical glyphs. Korean uses 년/월/일, so it goes through Intl instead.
-function usesHanYmd(locale: Locale): boolean {
-  return locale === 'zh' || locale === 'zh-TW' || locale === 'jp'
+function localeToIntl(_locale: Locale): string {
+  return 'en-US'
 }
 
 function formatWeekdayTime(date: Date, locale: Locale): string {
   const intlLocale = localeToIntl(locale)
-  const han = usesHanYmd(locale)
-  const weekday = new Intl.DateTimeFormat(intlLocale, { weekday: han ? 'long' : 'short' }).format(date)
-  const time = formatClockTime(date, intlLocale)
-  return han ? `${weekday}${time}` : `${weekday} ${time}`
+  const weekday = new Intl.DateTimeFormat(intlLocale, { weekday: 'short' }).format(date)
+  return `${weekday} ${formatClockTime(date, intlLocale)}`
 }
 
 function formatMonthDayTime(date: Date, locale: Locale): string {
   const intlLocale = localeToIntl(locale)
-  if (usesHanYmd(locale)) {
-    return `${date.getMonth() + 1}月${date.getDate()}日 ${formatClockTime(date, intlLocale)}`
-  }
   const day = new Intl.DateTimeFormat(intlLocale, {
     month: 'short',
     day: 'numeric',
@@ -101,9 +84,6 @@ function formatMonthDayTime(date: Date, locale: Locale): string {
 
 function formatYearMonthDayTime(date: Date, locale: Locale): string {
   const intlLocale = localeToIntl(locale)
-  if (usesHanYmd(locale)) {
-    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${formatClockTime(date, intlLocale)}`
-  }
   const day = new Intl.DateTimeFormat(intlLocale, {
     year: 'numeric',
     month: 'short',

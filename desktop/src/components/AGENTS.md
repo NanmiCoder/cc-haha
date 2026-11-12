@@ -1,260 +1,260 @@
-# 桌面端组件规范
+# Desktop Component Guidelines
 
-本文提供可复用组件索引、放置规则及样式 / i18n / 无障碍 / 测试约定。按改动涉及的组件查阅对应小节，无需在每次编辑前重读全文。
+This document provides the reusable component index, placement rules, and styling / i18n / accessibility / testing conventions. Look up the section for the components your change touches; there's no need to reread the whole thing before every edit.
 
-规则优先级：根 `AGENTS.md` < `desktop/AGENTS.md` < 本文件。冲突时以本文件为准。
+Rule precedence: root `AGENTS.md` < `desktop/AGENTS.md` < this file. This file wins on conflicts.
 
-配套文档：[`desktop/docs/component-library-plan.md`](../../docs/component-library-plan.md) 记录审计证据与后续计划。
+Companion doc: [`desktop/docs/component-library-plan.md`](../../docs/component-library-plan.md) records audit evidence and follow-up plans.
 
 ---
 
-## 一、我要做 X，用什么
+## 1. I want to do X — what do I use?
 
-先查这张表，**不要重写一个**。
+Check this table first. **Don't write another one.**
 
-| 需求 | 用这个 | 位置 |
+| Need | Use this | Location |
 |---|---|---|
-| 带文字的按钮 | `Button` | `ui/Button.tsx` |
-| 只有图标的按钮 | `IconButton` | `ui/IconButton.tsx` |
-| 转圈加载 | `Spinner` | `ui/Spinner.tsx` |
-| 状态徽章 / 计数 | `Badge` | `ui/Badge.tsx` |
-| 状态圆点 | `StatusDot` | `ui/Badge.tsx` |
-| 复选框 | `Checkbox` | `ui/Checkbox.tsx` |
-| 开关 | `Switch` | `ui/Switch.tsx` |
-| 单行输入 | `Input` | `ui/Input.tsx` |
-| 多行输入 | `TextArea` | `ui/TextArea.tsx` |
-| 纯文本选项的下拉 | `SelectField` | `ui/SelectField.tsx` |
-| 带图标 / 描述的下拉 | `Dropdown` | `ui/Dropdown.tsx` |
-| 搜索框 | `SearchField` | `ui/SearchField.tsx` |
-| 分段切换 / 标签页 | `SegmentedControl` | `ui/SegmentedControl.tsx` |
-| 空态 | `EmptyState` | `ui/EmptyState.tsx` |
-| 错误态 | `ErrorState` | `ui/ErrorState.tsx` |
-| 加载态 | `LoadingState` | `ui/LoadingState.tsx` |
-| 骨架屏 | `Skeleton` / `SkeletonRows` / `SkeletonCards` | `ui/Skeleton.tsx` |
-| 进度条 | `Progress` | `ui/Progress.tsx` |
-| 卡片容器 | `Card` | `ui/Card.tsx` |
-| 对话框 | `Modal` | `ui/Modal.tsx` |
-| 对话框 + 一排按钮 | `ActionDialog` | `ui/ActionDialog.tsx` |
-| 确认 / 删除确认 | `ConfirmDialog` | `ui/ConfirmDialog.tsx` |
-| 移动端底部弹层 | `MobileBottomSheet` | `ui/MobileBottomSheet.tsx` |
-| 悬浮提示 | `Tooltip` | `ui/Tooltip.tsx` |
-| 复制按钮 | `CopyButton` | `ui/CopyButton.tsx` |
-| 目录选择 | `DirectoryPicker` | `composite/DirectoryPicker.tsx` |
-| 「用 X 打开」菜单 | `OpenWithMenu` | `composite/OpenWithMenu.tsx` |
-| 品牌标记 cc-haha | `BrandSeal` | `composite/BrandSeal.tsx` |
+| Button with text | `Button` | `ui/Button.tsx` |
+| Icon-only button | `IconButton` | `ui/IconButton.tsx` |
+| Loading spinner | `Spinner` | `ui/Spinner.tsx` |
+| Status badge / count | `Badge` | `ui/Badge.tsx` |
+| Status dot | `StatusDot` | `ui/Badge.tsx` |
+| Checkbox | `Checkbox` | `ui/Checkbox.tsx` |
+| Toggle switch | `Switch` | `ui/Switch.tsx` |
+| Single-line input | `Input` | `ui/Input.tsx` |
+| Multi-line input | `TextArea` | `ui/TextArea.tsx` |
+| Dropdown with plain-text options | `SelectField` | `ui/SelectField.tsx` |
+| Dropdown with icons / descriptions | `Dropdown` | `ui/Dropdown.tsx` |
+| Search box | `SearchField` | `ui/SearchField.tsx` |
+| Segmented control / tabs | `SegmentedControl` | `ui/SegmentedControl.tsx` |
+| Empty state | `EmptyState` | `ui/EmptyState.tsx` |
+| Error state | `ErrorState` | `ui/ErrorState.tsx` |
+| Loading state | `LoadingState` | `ui/LoadingState.tsx` |
+| Skeleton | `Skeleton` / `SkeletonRows` / `SkeletonCards` | `ui/Skeleton.tsx` |
+| Progress bar | `Progress` | `ui/Progress.tsx` |
+| Card container | `Card` | `ui/Card.tsx` |
+| Dialog | `Modal` | `ui/Modal.tsx` |
+| Dialog + a row of buttons | `ActionDialog` | `ui/ActionDialog.tsx` |
+| Confirm / delete confirmation | `ConfirmDialog` | `ui/ConfirmDialog.tsx` |
+| Mobile bottom sheet | `MobileBottomSheet` | `ui/MobileBottomSheet.tsx` |
+| Hover tooltip | `Tooltip` | `ui/Tooltip.tsx` |
+| Copy button | `CopyButton` | `ui/CopyButton.tsx` |
+| Directory picker | `DirectoryPicker` | `composite/DirectoryPicker.tsx` |
+| "Open with X" menu | `OpenWithMenu` | `composite/OpenWithMenu.tsx` |
+| cc-haha brand mark | `BrandSeal` | `composite/BrandSeal.tsx` |
 
-### 三个 hook
+### Three hooks
 
-| 需求 | 用这个 |
+| Need | Use this |
 |---|---|
-| 点外面 / Esc 关闭浮层 | `hooks/useDismissable.ts` |
-| 浮层贴着触发器定位（含翻转、夹取） | `hooks/useAnchoredPosition.ts` |
-| 向上展开的 `bottom-full` 浮层按上方剩余空间限高 | `hooks/useRoomAbove.ts` |
+| Close an overlay on outside click / Esc | `hooks/useDismissable.ts` |
+| Position an overlay against its trigger (with flipping and clamping) | `hooks/useAnchoredPosition.ts` |
+| Limit the height of an upward-opening `bottom-full` overlay to the space above | `hooks/useRoomAbove.ts` |
 
-**不要再手写 `document.addEventListener('mousedown', ...)`。** 触屏上 `mousedown` 不可靠，这是 H5 上「点外面菜单不关」的根因类别。`useDismissable` 默认用 `pointerdown`。
+**Don't hand-write `document.addEventListener('mousedown', ...)` anymore.** `mousedown` is unreliable on touch screens; this is the root-cause category behind "tapping outside doesn't close the menu" on H5. `useDismissable` uses `pointerdown` by default.
 
-浮层开在 `Modal` 里时传 `stopEscapePropagation: true`，否则一次 Esc 会把下拉和对话框一起关掉。
+When an overlay opens inside a `Modal`, pass `stopEscapePropagation: true`; otherwise a single Esc closes both the dropdown and the dialog.
 
-### 明确不做的
+### Explicitly not built
 
-`Table`（全库 0 个 `<table>`，表格数据都用 CSS Grid）、`Divider`（`divide-y` 够用）、`Avatar`（`market/SkillAvatar` 已有）、虚拟滚动库（会破坏「虚拟化项禁用 content-visibility」的不变量）。
-
----
-
-## 二、新组件放哪
-
-```
-components/ui/         无业务语义的原语。禁止 import stores/ 和 api/
-components/composite/  业务复合件。可 import stores/api，但必须 ≥2 个调用方
-components/<feature>/  功能目录。单调用方的组件一律放这里
-```
-
-决策树：
-
-1. **只有一个调用方？** → 放调用方所在的功能目录，不要放 `ui/` 或 `composite/`。
-   > `composite/contract.test.ts` 对每个文件断言 ≥2 个调用方，单调用方会红。
-2. **需要读 store 或调 API？** → `composite/`（且要有 ≥2 个调用方）。
-3. **纯 UI、无业务语义？** → `ui/`。
-   > `ui/contract.test.ts` 断言：不 import stores/api、不 import 其他功能目录、不含硬编码 hex、不用 `rounded-md` 之类的 Tailwind 圆角。
-
-`shared/` 和 `common/` 已删除，**不要重建**。它们的问题是名字没有约束力：两个目录同一个 commit 建的，划分标准从没写下来，一年后各自塞满了原语和业务件的混合物，35% 是单调用方的伪公共件。上面三条规则是唯一的区别，也是 CI 能检查的部分。
-
-**import 一律用 `@/` 别名**：`import { Button } from '@/components/ui/Button'`。
+`Table` (there are 0 `<table>` elements in the whole codebase; tabular data uses CSS Grid), `Divider` (`divide-y` is enough), `Avatar` (`market/SkillAvatar` already exists), virtual scrolling libraries (they would break the "virtualized items disable content-visibility" invariant).
 
 ---
 
-## 三、样式
+## 2. Where new components go
 
-### 3.1 颜色只能来自 token
+```
+components/ui/         Primitives with no business semantics. Must not import stores/ or api/
+components/composite/  Business composites. May import stores/api, but must have ≥2 callers
+components/<feature>/  Feature directories. Single-caller components always go here
+```
+
+Decision tree:
+
+1. **Only one caller?** → Put it in the caller's feature directory, not `ui/` or `composite/`.
+   > `composite/contract.test.ts` asserts ≥2 callers for each file; single-caller components fail it.
+2. **Needs to read a store or call an API?** → `composite/` (and it must have ≥2 callers).
+3. **Pure UI with no business semantics?** → `ui/`.
+   > `ui/contract.test.ts` asserts: no imports from stores/api, no imports from other feature directories, no hard-coded hex, no Tailwind radii such as `rounded-md`.
+
+`shared/` and `common/` have been deleted; **don't recreate them**. Their problem was that the names had no binding force: both directories were created in the same commit, the split criteria were never written down, and a year later each was stuffed with a mix of primitives and business components, 35% of them single-caller pseudo-shared components. The three rules above are the only distinction, and they're the part CI can check.
+
+**Always import via the `@/` alias**: `import { Button } from '@/components/ui/Button'`.
+
+---
+
+## 3. Styling
+
+### 3.1 Colors may only come from tokens
 
 ```tsx
-// 对
+// Right
 className="bg-[var(--color-surface)] text-[var(--color-text-primary)]"
-// 错：三个主题下长得一模一样
+// Wrong: looks identical in all three themes
 className="bg-[#FAF9F5] text-[#1B1C1A]"
 ```
 
-三个主题（`white` 默认 / `light` / `dark`）靠 `<html data-theme>` 切换，**不跟随操作系统**。新增 token 必须在三个主题块里都定义，`globals.test.ts` 会检查。
+The three themes (`white` default / `light` / `dark`) are switched via `<html data-theme>` and **don't follow the operating system**. New tokens must be defined in all three theme blocks; `globals.test.ts` checks this.
 
-`tokenUsage.test.ts` 扫描全部源码，断言每个 `var(--token)` 都能解析 —— 拼错的 token 不会报错，只会静默渲染成透明背景或 `currentColor` 边框。
+`tokenUsage.test.ts` scans all source and asserts that every `var(--token)` resolves — a misspelled token doesn't error, it just silently renders as a transparent background or a `currentColor` border.
 
-### 3.2 状态色成对使用
+### 3.2 Status colors are used in pairs
 
-语义色是成对的：`--color-<tone>-container` 是底色，`--color-on-<tone>-container` 是它上面的文字色。**不要拿 `--color-warning` 直接当 `--color-warning-container` 上的前景** —— light 主题下那样只有 2.66:1，远低于 AA 的 4.5。
+Semantic colors come in pairs: `--color-<tone>-container` is the background, and `--color-on-<tone>-container` is the text color on top of it. **Don't use `--color-warning` directly as the foreground on `--color-warning-container`** — in the light theme that gives only 2.66:1, far below AA's 4.5.
 
-`contrast.test.ts` 对三主题 × 六个 tone 计算实际对比度并断言 ≥4.5（dark 的 container 是半透明的，测试会先与 surface 合成再算）。
+`contrast.test.ts` computes actual contrast for three themes × six tones and asserts ≥4.5 (dark containers are semi-transparent, so the test composites them over the surface first).
 
-### 3.3 圆角
+### 3.3 Radii
 
-用 `rounded-[var(--radius-md)]`，不要用 `rounded-md`。二者同名不同值（Tailwind 的 `rounded-lg` 是 8px，`--radius-lg` 是 12px），混用是全库 21 种圆角的来源。
+Use `rounded-[var(--radius-md)]`, not `rounded-md`. They share names but not values (Tailwind's `rounded-lg` is 8px, `--radius-lg` is 12px); mixing them is where the codebase's 21 different radii came from.
 
-### 3.4 层级
+### 3.4 Layering
 
-z-index 只能来自 `globals.css` 的层级刻度：
+z-index may only come from the layer scale in `globals.css`:
 
 ```tsx
 className="z-[var(--z-dropdown)]"
 style={{ zIndex: 'var(--z-dialog)' }}
 ```
 
-顺序：`base 0 → raised → sticky → nav → scrim → drawer → dialog 60 → sheet 65 → dropdown 70 → popover 75 → tooltip 80 → toast 90`
+Order: `base 0 → raised → sticky → nav → scrim → drawer → dialog 60 → sheet 65 → dropdown 70 → popover 75 → tooltip 80 → toast 90`
 
-两条刻意的排序：**dropdown 高于 dialog**（模态对话框挡住了背景，所以打开的下拉必然属于最上层对话框 —— 这是 `DirectoryPicker` 当初被迫写 `zIndex: 9999` 的原因），**toast 高于 sheet**（否则在 sheet 里操作，结果反馈用户看不见）。
+Two deliberate orderings: **dropdown above dialog** (a modal dialog covers the background, so an open dropdown necessarily belongs to the topmost dialog — this is why `DirectoryPicker` was once forced to write `zIndex: 9999`), and **toast above sheet** (otherwise users can't see feedback from actions taken inside a sheet).
 
-`tokenUsage.test.ts` 拒绝任何裸 `zIndex: 9999` 或 `z-[10000]`。
+`tokenUsage.test.ts` rejects any bare `zIndex: 9999` or `z-[10000]`.
 
-### 3.5 `dark:` 变体
+### 3.5 The `dark:` variant
 
-可以用，它绑在 `[data-theme="dark"]` 上（见 `globals.css` 顶部的 `@custom-variant dark`）。**但优先用 token** —— `dark:` 只覆盖三个主题中的一个，white 和 light 会共用同一套值。
+You can use it; it's bound to `[data-theme="dark"]` (see `@custom-variant dark` at the top of `globals.css`). **But prefer tokens** — `dark:` only covers one of the three themes, so white and light share the same values.
 
-### 3.6 className 覆盖不保证生效
+### 3.6 className overrides aren't guaranteed to win
 
-组件不做 Tailwind 冲突消解（那需要 `tailwind-merge` 依赖，本项目不引 UI 依赖）。`<Button size="sm" className="px-3">` 里 `px-2` 和 `px-3` 谁赢取决于它们在生成样式表里的先后，不是 class 属性的顺序。
+Components don't resolve Tailwind conflicts (that would need the `tailwind-merge` dependency, and this project doesn't add UI dependencies). In `<Button size="sm" className="px-3">`, whether `px-2` or `px-3` wins depends on their order in the generated stylesheet, not the order in the class attribute.
 
-**如果你发现自己反复用 className 覆盖同一组工具类，那说明缺一个 variant，去加。**
+**If you find yourself repeatedly overriding the same set of utilities via className, a variant is missing — go add it.**
 
-### 3.7 遇到组件表达不了的样式怎么办
+### 3.7 What to do when a component can't express the style you need
 
-**不要用 className 硬压过去，也不要退回手写 `<button>`。** 正确顺序是：
+**Don't force it with className, and don't fall back to a hand-written `<button>`.** The correct order is:
 
-1. 先确认这不是"这处本就该定制"。列表项、树节点、标签页项、拖拽把手、OS 窗口按钮这些本来就不该塞进通用组件。
-2. 如果是通用需求（同样的形态在多处出现），**给组件加一个 variant/tone/size**，连同测试一起。
-3. 在当前任务范围内补齐需要的组件能力，并验证调用方、交互和主题效果。只有缺少必要的产品决定或超出授权范围时才请求确认；无法完成的部分说明具体 blocker。
+1. First confirm this isn't a case that "should be custom anyway". List items, tree nodes, tab items, drag handles, and OS window buttons shouldn't be crammed into generic components.
+2. If it's a generic need (the same shape appears in multiple places), **add a variant/tone/size to the component**, together with tests.
+3. Fill in the needed component capability within the current task's scope, and verify callers, interactions, and theme results. Only ask for confirmation when a necessary product decision is missing or it's outside the authorized scope; for anything you can't finish, state the specific blocker.
 
-`IconButton` 的 `secondary` tone、`2xs`–`2xl` 六档尺寸、`bordered`、`solid`、`hoverTone="danger"`、`pressed`、`surface="sidebar"`、`surface="terminal"`（墨色终端标题栏，纸主题下 `--color-text-tertiary` 在其上不可见），`Button` 的 `base`(h-8)、`inverse` 与 `tonal-outline`（陶土描边 hover 反色）变体，`Card` 的 `shadow`/`lift`/`container` 档与 rest 透传，`Badge` 的 `wrap`/`title`/rest 透传，`SearchField` 的 `clearLabel` 与 `xl`(44px) 档 —— 全部来自这个流程。多轮独立的替换工作各自撞到同一批缺口，然后一次补齐。
+`IconButton`'s `secondary` tone, six sizes `2xs`–`2xl`, `bordered`, `solid`, `hoverTone="danger"`, `pressed`, `surface="sidebar"`, `surface="terminal"` (ink terminal title bar, on which `--color-text-tertiary` is invisible in the paper theme); `Button`'s `base` (h-8), `inverse`, and `tonal-outline` (terracotta outline, inverted on hover) variants; `Card`'s `shadow`/`lift`/`container` levels and rest-prop passthrough; `Badge`'s `wrap`/`title`/rest passthrough; `SearchField`'s `clearLabel` and `xl` (44px) size — all came out of this process. Several independent rounds of replacement work each hit the same set of gaps, which were then filled in one go.
 
-几个存在理由值得记住：
+A few reasons worth remembering:
 
-> **`hoverTone="danger"`** — 删除类图标静止态就是红的，会被读成"当前处于错误状态"。静止用 `muted`，悬停才变红。
+> **`hoverTone="danger"`** — Delete-style icons that are red at rest read as "currently in an error state". Use `muted` at rest and only turn red on hover.
 >
-> **`surface="sidebar"`** — 侧边栏有自己的 hover token（`--color-sidebar-item-hover`），三个主题下都与 `--color-surface-hover` 不同。用 className 覆盖会变成两个 `hover:bg-[…]` 打架，谁赢取决于样式表顺序。
+> **`surface="sidebar"`** — The sidebar has its own hover token (`--color-sidebar-item-hover`), which differs from `--color-surface-hover` in all three themes. Overriding via className results in two `hover:bg-[…]` classes fighting, with the winner decided by stylesheet order.
 >
-> **`solid` vs `filled`** — `filled` 只是浅色着色，压在用户上传的图片上会糊掉。`solid` 是满强度填充 + 对比前景（走 `--color-on-error` 这类 token，**不要写 `text-white`** —— dark 主题的 `--color-error` 是浅红，白字读不出来）。
+> **`solid` vs `filled`** — `filled` is only a light tint and gets muddy on top of user-uploaded images. `solid` is a full-strength fill + contrasting foreground (via tokens like `--color-on-error`; **don't write `text-white`** — in the dark theme `--color-error` is light red, and white text is unreadable).
 >
-> **`2xl`(44px)** — 移动端主要触摸目标的平台下限。`ChatInput` 的输入栏按钮有测试钉死这个尺寸，缩到 40px 是回归。
+> **`2xl` (44px)** — The platform minimum for primary touch targets on mobile. `ChatInput`'s input bar buttons have tests pinning this size; shrinking to 40px is a regression.
 >
-> **`SearchField` 的 `clearLabel`** — 组件内部一度用 `` `Clear ${label}` `` 拼英文，导致任何已经翻译过清除按钮的调用方采用它反而是 i18n 退化。**组件库自己不许拼用户可见的英文。**
+> **`SearchField`'s `clearLabel`** — The component once built English internally with `` `Clear ${label}` ``, so any caller that had already translated its clear button regressed i18n by adopting it. **The component library itself must never build user-visible English.**
 
-### 3.8 「素 Porcelain」视觉约束
+### 3.8 "Plain Porcelain" visual constraints
 
-2026-10 的全量改版把界面收敛到一套可检查的约束，`src/theme/designSystem.test.ts` 逐条守住（违规会列出 文件:行）：
+The full redesign in 2026-10 converged the UI onto a checkable set of constraints, each guarded by `src/theme/designSystem.test.ts` (violations are listed as file:line):
 
-- **字号只用** 11 / 12 / 13 / 14 / 15 / 18 / 22 / 26（`text-xs`、`text-sm`、`text-lg` 可用；`text-base/xl/2xl…` 与小数字号不可用）。
-- **字重最高 semibold**：Inter 只自托管到 600，`font-bold` 会让浏览器合成糊掉的粗体；`font-mono` 不配 semibold（JetBrains Mono 只有 400）。
-- **中文不用斜体、不用宽字距大写标签**；摘要列表用「、」。
-- **图标只用 lucide**（`strokeWidth={1.75}`）；`IconButton` 的 `icon` 只接受元素，不再接受 Material 字符串。
-- **圆角只用 token**：`--radius-xs` 4 / `sm` 6 / `md` 8 / `lg` 12 / `xl` 16 / `3xl` 20 / `full`。
-- **状态色语义固定**：运行中＝info、等你确认＝warning、完成＝success、失败＝error；陶土色只给品牌、发送键与选中指示。
-- 设置页统一用 `components/settings/SettingsSection.tsx` 的骨架（PageHeader → Section → Group → Row）。
+- **Font sizes only** 11 / 12 / 13 / 14 / 15 / 18 / 22 / 26 (`text-xs`, `text-sm`, `text-lg` are allowed; `text-base/xl/2xl…` and fractional sizes are not).
+- **Maximum font weight is semibold**: Inter is only self-hosted up to 600, and `font-bold` makes the browser synthesize a blurry bold; `font-mono` is never paired with semibold (JetBrains Mono only has 400).
+- **No italics or wide-tracked uppercase labels for CJK text**; summary lists in CJK use 「、」 as the separator.
+- **Icons are lucide only** (`strokeWidth={1.75}`); `IconButton`'s `icon` only accepts elements, no longer Material strings.
+- **Radii only from tokens**: `--radius-xs` 4 / `sm` 6 / `md` 8 / `lg` 12 / `xl` 16 / `3xl` 20 / `full`.
+- **Status color semantics are fixed**: running = info, waiting for your confirmation = warning, done = success, failed = error; terracotta is only for the brand, the send button, and selection indicators.
+- Settings pages all use the skeleton from `components/settings/SettingsSection.tsx` (PageHeader → Section → Group → Row).
 
 ---
 
-## 四、桌面端硬约束
+## 4. Desktop hard constraints
 
-- **不引 UI 依赖。** 2026-07-25 刚回滚过 shadcn/ui。
-- **不用 `/N` alpha 修饰符做关键配色**（`bg-[var(--x)]/10`）。它会编译成 Safari 15 WebView 无法解析的颜色函数，`vite-config.test.ts` 对 `globals.css` 有整文件断言。需要浅底色就加实色 token（例如 `--color-brand-soft`）。
-- **不加 barrel `index.ts`。** 项目零先例，且会阻碍 tree-shaking。
-- **`content-visibility` 写进 CSS class，不要写内联 style** —— 内联会绕过针对触屏 H5 的关闭覆盖。
-- 同一份 bundle 服务 Electron 壳 / 桌面浏览器 / 手机 H5。触屏专属样式收敛在 `html[data-touch-h5]` 作用域下。
-- **会被浮层锚定的组件必须 `forwardRef`。** `Tooltip` 和 `Dropdown` 都会给 trigger 挂 ref；不转发 ref 的组件会让 tooltip 定位不到、下拉关闭后焦点丢失，且**只有一条 console 警告**，不会报错。
-
----
-
-## 五、i18n
-
-所有用户可见文案走 `useTranslation()`，包括 `aria-label` 和 `title`。
-
-组件库内部不写中文或英文字面量 —— 默认文案（如 `ConfirmDialog` 的按钮文字）由调用方传入。
+- **No UI dependencies.** shadcn/ui was just rolled back on 2026-07-25.
+- **Don't use `/N` alpha modifiers for key colors** (`bg-[var(--x)]/10`). They compile to a color function the Safari 15 WebView can't parse, and `vite-config.test.ts` has whole-file assertions on `globals.css`. For soft backgrounds, add a solid token (e.g. `--color-brand-soft`).
+- **No barrel `index.ts` files.** There's zero precedent in the project, and they hinder tree-shaking.
+- **Put `content-visibility` in a CSS class, not an inline style** — inline styles bypass the override that disables it for touch H5.
+- The same bundle serves the Electron shell / desktop browser / mobile H5. Touch-only styles are scoped under `html[data-touch-h5]`.
+- **Components that overlays anchor to must use `forwardRef`.** Both `Tooltip` and `Dropdown` attach a ref to the trigger; a component that doesn't forward refs leaves the tooltip unable to position and loses focus after the dropdown closes, with **only a console warning**, no error.
 
 ---
 
-## 六、无障碍基线
+## 5. i18n
 
-新组件必须满足：
+All user-visible text goes through `useTranslation()`, including `aria-label` and `title`.
 
-- **可聚焦元素有可见 focus ring**：`focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`
-- **图标按钮有名字**：用 `IconButton`，它的 `label` 是必填的
-- **输入控件有关联 label**：用 `useId()` 生成 id，**不要从 label 文本派生** —— 中文没有空格，两个中文 label 会撞 id，导致一个 `<label>` 指向另一个字段的输入框
-- **错误信息有 `role="alert"`，且被 `aria-describedby` 指向**
-- **浮层用正确的 role**：`role="listbox"` 里放 `role="option"`，不要放 `<button>`
-- **tooltip 用 `aria-describedby` 而非 `aria-label`** —— 后者会覆盖元素本身的名字，让图标按钮被读成它的提示文字而不是它的动作
-- **描述文字不要混进可访问名**：`<label>` 同时包着标题和描述时，用 `aria-labelledby` 精确指向标题那个 span
+The component library doesn't contain string literals in any language internally — default text (such as `ConfirmDialog`'s button labels) is passed in by the caller.
 
 ---
 
-## 七、测试
+## 6. Accessibility baseline
 
-新组件必须有对应的 `.test.tsx`。三个可复制的模板：
+New components must meet:
+
+- **Focusable elements have a visible focus ring**: `focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`
+- **Icon buttons have a name**: use `IconButton`, whose `label` is required
+- **Input controls have an associated label**: generate ids with `useId()`, **don't derive them from label text** — CJK text has no spaces, so two CJK labels can collide on id, leaving one `<label>` pointing at another field's input
+- **Error messages have `role="alert"` and are referenced by `aria-describedby`**
+- **Overlays use the correct role**: put `role="option"` inside `role="listbox"`, not `<button>`
+- **Tooltips use `aria-describedby`, not `aria-label`** — the latter overrides the element's own name, so an icon button is read as its tooltip text rather than its action
+- **Don't mix description text into the accessible name**: when a `<label>` wraps both a title and a description, use `aria-labelledby` to point precisely at the title span
+
+---
+
+## 7. Testing
+
+New components must have a matching `.test.tsx`. Three templates you can copy:
 
 ```tsx
-// 1. 无障碍契约
+// 1. Accessibility contract
 it('names the button for screen readers from label', () => {
   render(<IconButton icon={<span />} label="Open settings" />)
   expect(screen.getByRole('button', { name: 'Open settings' })).toBeInTheDocument()
 })
 
-// 2. props 矩阵
+// 2. Props matrix
 it.each(SIZES)('pins an explicit height for size=%s', (size) => {
   const { container } = render(<Button size={size}>Label</Button>)
   expect(container.firstElementChild?.className).toMatch(/\bh-\d/)
 })
 
-// 3. 回归锚点：注释写清楚原来坏在哪
+// 3. Regression anchor: the comment states exactly what used to break
 it('defaults to type="button" so it cannot submit a surrounding form', () => {
   render(<Button>Run</Button>)
   expect(screen.getByRole('button', { name: 'Run' })).toHaveAttribute('type', 'button')
 })
 ```
 
-**jsdom 的三个已知偏差**，别在这上面浪费时间：
+**Three known jsdom deviations** — don't waste time on these:
 
-- `fireEvent.click` 在 `disabled` 的 `<input>` 上**仍会**触发 change（连裸 input 都如此）。断言 `toBeDisabled()`，不要模拟点击。
-- 没有实现 `scrollIntoView`。源码里用可选调用 `?.scrollIntoView?.()`。
-- `getBoundingClientRect` 一律返回全 0。要测定位逻辑，用 **ref callback** 打桩 rect —— 它在 DOM 挂载时同步执行，早于测量用的 layout effect；写在渲染函数体里就晚了一帧。
+- `fireEvent.click` on a `disabled` `<input>` **still** fires change (even for a bare input). Assert `toBeDisabled()` instead of simulating a click.
+- `scrollIntoView` isn't implemented. Use an optional call `?.scrollIntoView?.()` in source.
+- `getBoundingClientRect` always returns all zeros. To test positioning logic, stub the rect with a **ref callback** — it runs synchronously on DOM mount, before the layout effect that measures; putting it in the render body is one frame too late.
 
-**测试用真实 DOM 元素做 trigger 会漏掉一整类 bug。** 浮层组件的测试里至少要有一例传**函数组件**（`<Button>` 而不是 `<button>`）—— ref 转发失败只在这种情况下暴露。
+**Tests that use real DOM elements as triggers miss a whole class of bugs.** Overlay component tests must include at least one case that passes a **function component** (`<Button>` rather than `<button>`) — ref forwarding failures only show up in that case.
 
-**单元测试测不到的，去开 gallery**：
+**For what unit tests can't catch, open the gallery**:
 
 ```bash
 cd desktop && bun run dev
 ```
 
-打开 `http://localhost:1420/gallery.html`。它渲染全部 `ui/` 组件，右上角切三个主题。颜色是否可读、浮层是否盖对、进场动画是否真的在动 —— 这些只有渲染出来才知道。新增组件请同步加进 `src/dev/ComponentGallery.tsx`。
+Open `http://localhost:1420/gallery.html`. It renders all `ui/` components, with a three-theme switcher in the top right. Whether colors are readable, overlays cover correctly, and entrance animations actually animate — you only know once it's rendered. Add new components to `src/dev/ComponentGallery.tsx` as well.
 
-> gallery 只在 dev 下可达，不进生产构建（vite 的 build input 只有 `index.html`）。
+> The gallery is only reachable in dev and isn't part of the production build (vite's build input is only `index.html`).
 
 ---
 
-## 八、验证与交付
+## 8. Verification and delivery
 
-迭代时运行相关组件测试；最终按根规则运行 `bun run check:impact` 选中的检查。`bun run check:desktop` 已包含 lint、完整 test 和 build，不必先重复跑一遍 lint / test。需要 PR-ready 或完整验证时使用 `bun run verify`；没有后续改动或未解决风险时，已通过的检查无需重跑。
+While iterating, run the relevant component tests; at the end, run the checks selected by `bun run check:impact` per the root rules. `bun run check:desktop` already includes lint, the full test suite, and build, so there's no need to run lint / test separately first. Use `bun run verify` when you need PR-ready or full verification; with no further changes or unresolved risks, checks that already passed don't need to be rerun.
 
-自查清单：
+Self-check list:
 
-- [ ] 没有新建与第一节表格重复的组件
-- [ ] 新组件放在正确目录（第二节决策树）
-- [ ] 颜色、圆角、层级都来自 token
-- [ ] 有 focus ring；图标按钮有名字；输入控件有 label
-- [ ] 有对应测试，且浮层组件测过函数组件 trigger
-- [ ] 视觉改动在 gallery 里三个主题都看过
+- [ ] No new component duplicates one in the section 1 table
+- [ ] The new component is in the correct directory (section 2 decision tree)
+- [ ] Colors, radii, and layering all come from tokens
+- [ ] Focus ring present; icon buttons have names; input controls have labels
+- [ ] Matching tests exist, and overlay components are tested with a function-component trigger
+- [ ] Visual changes were checked in the gallery in all three themes

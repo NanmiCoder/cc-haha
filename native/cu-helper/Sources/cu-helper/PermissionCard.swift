@@ -8,7 +8,7 @@
 //
 //    • One row per permission, each with a live "granted / needed" status that
 //      polls every second and flips to a green check the instant the grant lands.
-//    • A primary "授权 / Grant" button that triggers the real OS affordance:
+//    • A primary "Grant" button that triggers the real OS affordance:
 //        - Accessibility   → AXIsProcessTrustedWithOptions(prompt:true), which
 //          adds cu-helper to the Accessibility list AND surfaces the system
 //          "open System Settings" prompt.
@@ -176,15 +176,15 @@ private enum PermissionKind: CaseIterable {
 
     var title: String {
         switch self {
-        case .accessibility:   return "辅助功能（Accessibility）"
-        case .screenRecording: return "屏幕录制（Screen Recording）"
+        case .accessibility:   return "Accessibility"
+        case .screenRecording: return "Screen Recording"
         }
     }
 
     var detail: String {
         switch self {
-        case .accessibility:   return "让 Claude 操作 App 界面：点击、输入、滚动、拖拽。"
-        case .screenRecording: return "让 Claude 看到屏幕内容：截图后分析该点哪里。"
+        case .accessibility:   return "Lets Claude operate app interfaces: click, type, scroll and drag."
+        case .screenRecording: return "Lets Claude see the screen: take screenshots to decide where to click."
         }
     }
 
@@ -241,8 +241,8 @@ private enum PermissionKind: CaseIterable {
     /// Prompt shown on the draggable accessory window for this permission.
     var dragPrompt: String {
         switch self {
-        case .accessibility:   return "把下面这张卡片拖到上方列表，以允许「辅助功能」"
-        case .screenRecording: return "把下面这张卡片拖到上方列表，以允许「屏幕录制」"
+        case .accessibility:   return "Drag the card below into the list above to allow \"Accessibility\""
+        case .screenRecording: return "Drag the card below into the list above to allow \"Screen Recording\""
         }
     }
 
@@ -316,11 +316,11 @@ private final class PermissionCardController: NSObject, NSWindowDelegate {
         rows = PermissionKind.allCases.map { kind in
             PermissionRowView(kind: kind, helperURL: helperURL) { [weak self] in
                 guard let self else { return }
-                // Codex flow: clicking 授权 opens Settings, pops the draggable
+                // Codex flow: clicking Grant opens Settings, pops the draggable
                 // accessory for THIS permission, and TUCKS THE MAIN CARD AWAY so
                 // only the accessory remains for the user to drag into the list.
                 // The card pops back — updated — the moment the grant lands
-                // (see refresh()) or the user taps 取消 (see onCancel below).
+                // (see refresh()) or the user taps Cancel (see onCancel below).
                 self.dragAccessory?.show(for: kind)
                 self.hideMainCard()
                 self.scheduleImmediateRefresh()
@@ -349,10 +349,10 @@ private final class PermissionCardController: NSObject, NSWindowDelegate {
         ])
 
         // --- Title + subtitle (centered) -------------------------------------
-        let title = Self.label("开启电脑操控", size: 23, weight: .bold)
+        let title = Self.label("Enable computer control", size: 23, weight: .bold)
         title.alignment = .center
         let subtitle = Self.label(
-            "授权下面两项，Claude 才能在你的电脑上点击、输入和截图。\n你的真实鼠标不会被占用。",
+            "Grant the two items below so Claude can click, type and take screenshots on your computer.\nYour real mouse will not be taken over.",
             size: 13, weight: .regular, color: .secondaryLabelColor
         )
         subtitle.alignment = .center
@@ -432,7 +432,7 @@ private final class PermissionCardController: NSObject, NSWindowDelegate {
         // accessory so its render/position can be verified without a click. When
         // CU_HELPER_PREVIEW_GRANT_STEP is also set, additionally tuck the main
         // card away — i.e. reproduce the exact on-screen state right after the
-        // user clicks 授权 (only the accessory remains), for headless verification.
+        // user clicks Grant (only the accessory remains), for headless verification.
         if ProcessInfo.processInfo.environment["CU_HELPER_AUTOSHOW_ACCESSORY"] != nil {
             let tuckCard = ProcessInfo.processInfo.environment["CU_HELPER_PREVIEW_GRANT_STEP"] != nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -641,7 +641,7 @@ private final class PermissionCardController: NSObject, NSWindowDelegate {
 
     // MARK: Actions
 
-    // (No explicit "完成" button anymore — the card auto-closes once both
+    // (No explicit "Done" button anymore — the card auto-closes once both
     // permissions are granted, and the user can dismiss early via the close
     // button. See refresh().)
 
@@ -732,7 +732,7 @@ private final class PermissionCardController: NSObject, NSWindowDelegate {
 private final class PermissionRowView: NSView {
 
     let kind: PermissionKind
-    private let pill = PillButton(title: "授权")
+    private let pill = PillButton(title: "Grant")
     private let doneBadge = StatusBadge(compact: true)
     private let onAction: () -> Void
 
@@ -786,12 +786,12 @@ private final class PermissionRowView: NSView {
         textStack.alignment = .leading
         textStack.spacing = 3
 
-        // Trailing: the action pill while pending; a green "已授权" badge once
+        // Trailing: the action pill while pending; a green "Granted" badge once
         // granted. Exactly one is visible at a time (toggled in updateStatus).
         pill.target = self
         pill.action = #selector(onGrant)
         pill.setContentHuggingPriority(.required, for: .horizontal)
-        doneBadge.update(granted: true, text: "已授权")
+        doneBadge.update(granted: true, text: "Granted")
         doneBadge.isHidden = true
         doneBadge.setContentHuggingPriority(.required, for: .horizontal)
 
@@ -846,7 +846,7 @@ private final class PermissionRowView: NSView {
 
 // MARK: - PillButton
 
-/// A compact, fully-rounded action button — the solid-blue "授权" pill on each
+/// A compact, fully-rounded action button — the solid-blue "Grant" pill on each
 /// permission card. Custom-drawn (layer fill + attributed white title) because
 /// a stock `NSButton` bezel can't render a clean solid pill with white text.
 @MainActor
@@ -926,7 +926,7 @@ private final class DraggableHelperIconView: NSImageView, NSDraggingSource {
         // matches what appears in the Settings list.
         image = NSWorkspace.shared.icon(forFile: fileURL.path)
         imageScaling = .scaleProportionallyUpOrDown
-        toolTip = "把我拖进系统设置 ▸ 隐私与安全性 ▸ 辅助功能 / 屏幕录制 的列表里"
+        toolTip = "Drag me into the list under System Settings ▸ Privacy & Security ▸ Accessibility / Screen Recording"
         unregisterDraggedTypes()
     }
 
@@ -979,7 +979,7 @@ private final class DragAccessoryWindow: NSObject {
     private var promptLabel: NSTextField?
     private weak var arrowView: NSImageView?
     private(set) var currentKind: PermissionKind?
-    /// Invoked when the user backs out of a grant step via "取消" — lets the
+    /// Invoked when the user backs out of a grant step via "Cancel" — lets the
     /// controller bring the (currently hidden) main card back. Set by the owner.
     var onCancel: (() -> Void)?
 
@@ -1062,8 +1062,8 @@ private final class DragAccessoryWindow: NSObject {
         arrowView = arrow
 
         // The action line (set per-permission in show()): names the app + says
-        // "卡片" (drag the whole card), e.g. "把这张「cc-haha-computer-use」卡片拖到…".
-        let prompt = PermissionCardController.label("把下面这张卡片拖到上方列表", size: 13, weight: .medium)
+        // "card" (drag the whole card), e.g. "Drag this \"cc-haha-computer-use\" card to…".
+        let prompt = PermissionCardController.label("Drag the card below into the list above", size: 13, weight: .medium)
         prompt.lineBreakMode = .byWordWrapping
         prompt.maximumNumberOfLines = 2
         prompt.preferredMaxLayoutWidth = 420
@@ -1113,7 +1113,7 @@ private final class DragAccessoryWindow: NSObject {
         back.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.5).cgColor
         back.layer?.cornerRadius = 16
         back.translatesAutoresizingMaskIntoConstraints = false
-        back.toolTip = "返回"
+        back.toolTip = "Back"
         back.setContentHuggingPriority(.required, for: .horizontal)
         NSLayoutConstraint.activate([
             back.widthAnchor.constraint(equalToConstant: 32),
@@ -1268,7 +1268,7 @@ private final class DraggableCardView: NSView, NSDraggingSource {
         wantsLayer = true
         layer?.cornerRadius = CardStyle.panelRadius
         layer?.borderWidth = 1.5
-        toolTip = "把整张卡片拖到上方列表"
+        toolTip = "Drag the whole card into the list above"
         applyHover(false)
 
         // Test hook (env-gated, no effect in normal use): force the activated look

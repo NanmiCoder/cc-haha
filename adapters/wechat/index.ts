@@ -101,18 +101,18 @@ const mediaActions = new WechatMediaActions({
   allowed: (chatId) => isAllowedUser('wechat', chatId),
   notice: sendText,
   send: async (chatId, outgoing, signal, current) => {
-    if (!isAllowedUser('wechat', chatId)) throw new Error('用户授权已撤销')
+    if (!isAllowedUser('wechat', chatId)) throw new Error('User authorization was revoked')
     const record = delivery?.store.stageMedia({ chatId, metadata: { name: outgoing.fileName, kind: outgoing.kind, size: outgoing.buffer.length } })
     let sending = false
     try {
       await serializeOutbound(chatId, async () => {
         signal.throwIfAborted()
-        if (stopped || !current()) throw new Error('会话已变更或用户授权已撤销，媒体未发送')
+        if (stopped || !current()) throw new Error('Session changed or user authorization was revoked; media not sent')
         await sendWechatMedia({ ...outgoing, baseUrl, token: botToken, to: chatId, contextToken: contextTokens.get(chatId), signal,
           clientId: record?.clientId,
           beforeSend: () => {
-            if (stopped || !current()) throw new Error('会话已变更或用户授权已撤销，媒体未发送')
-            if (record && !delivery?.store.beginOutbound(record.replyId)) throw new Error('附件投递已取消')
+            if (stopped || !current()) throw new Error('Session changed or user authorization was revoked; media not sent')
+            if (record && !delivery?.store.beginOutbound(record.replyId)) throw new Error('Attachment delivery was cancelled')
             sending = true
           },
         })
@@ -180,7 +180,7 @@ async function deliverTextRecord(chatId: string, chunk: string, record?: Outboun
   }
   if (stopped || (!control && !isAllowedUser('wechat', chatId))) {
     if (record) delivery?.store.finishOutbound(record.replyId, 'cancelled')
-    throw new Error('用户授权已撤销，未发送回复')
+    throw new Error('User authorization was revoked; reply not sent')
   }
   if (record && !delivery?.store.beginOutbound(record.replyId)) return
   try {
@@ -303,7 +303,7 @@ function enqueueWechat(chatId: string, task: () => Promise<void>): Promise<void>
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[WeChat] Failed to handle message for ${redactChatId(chatId)}:`, err)
       try {
-        await sendText(chatId, `处理消息失败：${message}`)
+        await sendText(chatId, `Failed to process message: ${message}`)
       } catch (sendErr) {
         console.error(`[WeChat] Failed to report message handling error for ${redactChatId(chatId)}:`, sendErr)
       }
@@ -403,12 +403,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '连接服务器超时，请重试。')
+      await sendText(chatId, 'Timed out connecting to the server. Please try again.')
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `Could not create session: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -418,7 +418,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
   try {
     const projects = await httpClient.listRecentProjects()
     if (projects.length === 0) {
-      await sendText(chatId, `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+      await sendText(chatId, `No recent projects found. Sending /new will use the default working directory: ${defaultWorkDir}\nYou can also send /new /path/to/project to pick a project.`)
       return
     }
 
@@ -426,9 +426,9 @@ async function showProjectPicker(chatId: string): Promise<void> {
       `${i + 1}. ${p.projectName}${p.branch ? ` (${p.branch})` : ''}\n   ${p.realPath}`
     )
     pendingProjectSelection.set(chatId, true)
-    await sendText(chatId, `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+    await sendText(chatId, `Select a project (reply with its number):\n\n${lines.join('\n\n')}\n\nNext time you can send /new <number, name or absolute path> to create a session quickly`)
   } catch (err) {
-    await sendText(chatId, `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `Could not fetch project list: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -444,15 +444,15 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
       const { project, ambiguous } = await httpClient.matchProject(query)
       if (project) {
         const ok = await createSessionForChat(chatId, project.realPath)
-        if (ok) await sendText(chatId, `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
+        if (ok) await sendText(chatId, `New session created: ${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await sendText(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await sendText(chatId, `Multiple projects matched, please be more specific:\n\n${list}`)
         return
       }
-      await sendText(chatId, `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`)
+      await sendText(chatId, `No project matching "${query}" found. Send /projects to see the full list.`)
     } catch (err) {
       await sendText(chatId, err instanceof Error ? err.message : String(err))
     }
@@ -462,7 +462,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   const workDir = defaultWorkDir
   if (workDir) {
     const ok = await createSessionForChat(chatId, workDir)
-    if (ok) await sendText(chatId, '已新建会话，可以开始对话了。')
+    if (ok) await sendText(chatId, 'New session created. You can start chatting now.')
   } else {
     await showProjectPicker(chatId)
   }
@@ -569,7 +569,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       void adapterMigrationLifecycle.track(mediaActions.finish(chatId).catch(async (error) => {
         if (error instanceof Error && error.name === 'AbortError') return
         if (isAllowedUser('wechat', chatId) && sessionStore.get(chatId)?.sessionId === sessionId) {
-          await sendText(chatId, `媒体回复未完成，文字结果已保留：${error instanceof Error ? error.message : '未知错误'}`)
+          await sendText(chatId, `Media reply did not finish; the text result was kept: ${error instanceof Error ? error.message : 'Unknown error'}`)
         }
       })).catch((error) => console.warn('[WeChat] media reply failed:', error instanceof Error ? error.message : 'unknown'))
       break
@@ -582,7 +582,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       typingController.stop(chatId)
       await blockBuffers.get(chatId)?.complete()
       blockBuffers.delete(chatId)
-      await sendText(chatId, `错误: ${msg.message}`)
+      await sendText(chatId, `Error: ${msg.message}`)
       break
     case 'system_notification':
       if (msg.subtype === 'init' && msg.data && typeof msg.data === 'object') {
@@ -612,8 +612,8 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     await sendText(
       chatId,
       success
-        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。发送 /help 查看可用命令。'
-        : '未授权。请先在 Claude Code 桌面端完成微信扫码绑定，再生成 IM 配对码后发送给我。',
+        ? 'Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude. Send /help to see available commands.'
+        : 'Not authorized. First bind WeChat by QR scan in the Claude Code desktop app, then generate an IM pairing code and send it to me.',
       true,
     )
     return
@@ -628,7 +628,7 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
       return
     }
     bridge.sendStopGeneration(chatId)
-    await sendText(chatId, '已取消媒体处理并发送停止信号。已经送出的消息无法撤回。')
+    await sendText(chatId, 'Cancelled media processing and sent a stop signal. Messages already sent cannot be recalled.')
     return
   }
   if (!mediaCandidates.length && (text === '/voice off' || text === '/clear' || text === '清空' || text === '/new' || text.startsWith('/new ') || text === '新会话')) {
@@ -645,17 +645,17 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     if (delivery && !delivery.beginCurrent()) return
     const hasAttachments = mediaCandidates.length > 0
     if (!hasAttachments && (text === '/help' || text === '帮助')) {
-      await sendText(chatId, formatImHelp() + WECHAT_MEDIA_HELP + '\n/delivery — 查看未完成投递\n/retry <ID> — 核对后补发一条文字回复')
+      await sendText(chatId, formatImHelp() + WECHAT_MEDIA_HELP + '\n/delivery — Show unfinished deliveries\n/retry <ID> — Resend one text reply after checking')
       return
     }
     if (!hasAttachments && text === '/delivery') {
-      await sendText(chatId, delivery?.summary(chatId) ?? '投递记录在桌面运行的微信通道中启用。')
+      await sendText(chatId, delivery?.summary(chatId) ?? 'Delivery records are enabled in the WeChat channel run by the desktop app.')
       return
     }
     if (!hasAttachments && /^\/retry(?:\s|$)/.test(text)) {
-      if (!delivery) { await sendText(chatId, '当前未启用持久投递记录。'); return }
+      if (!delivery) { await sendText(chatId, 'Persistent delivery records are not enabled.'); return }
       const id = text.slice(6).trim()
-      if (!id) { await sendText(chatId, '先用 /delivery 查看记录，核对手机未收到后发送 /retry <ID>。'); return }
+      if (!id) { await sendText(chatId, 'First use /delivery to view records; after confirming your phone did not receive it, send /retry <ID>.'); return }
       const record = delivery.store.cloneTextForRetry(id, { chatId, contextToken: contextTokens.get(chatId) })
       await serializeOutbound(chatId, () => deliverTextRecord(chatId, record.text!, record))
       return
@@ -694,11 +694,11 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
       if (sent) delivery?.submittedToServer(chatId)
       else delivery?.failedCurrent()
       if (sent) getRuntimeState(chatId).state = 'thinking'
-      await sendText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
+      await sendText(chatId, sent ? 'Cleared the current session context.' : 'Could not send /clear. Send /new first to reconnect the session.')
       return
     }
     if (!hasAttachments && /^\/?[123]$/.test(text) && (pendingPermissions.get(chatId)?.size ?? 0) > 1) {
-      await sendText(chatId, '当前有多个待审批请求，无法确定这个数字对应哪一个。请使用对应审批消息中的 /allow、/always 或 /deny 加请求 ID。')
+      await sendText(chatId, 'Multiple approval requests are pending, so it is unclear which one this number refers to. Use /allow, /always or /deny with the request ID from the matching approval message.')
       return
     }
     const permissionDecision = !hasAttachments ? parsePermissionCommand(text, pendingPermissions.get(chatId)) : null
@@ -706,7 +706,7 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
       const { requestId, allowed, rule } = permissionDecision
       const pending = pendingPermissions.get(chatId)
       if (!pending?.has(requestId)) {
-        await sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+        await sendText(chatId, `No pending permission request found: ${requestId}`)
         return
       }
       const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
@@ -715,7 +715,7 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
         runtime.pendingPermissionCount = Math.max(0, runtime.pendingPermissionCount - 1)
         pending.delete(requestId)
       } else delivery?.failedCurrent()
-      await sendText(chatId, sent ? `${formatPermissionDecisionStatus(permissionDecision)}。` : '权限响应发送失败，请检查会话状态。')
+      await sendText(chatId, sent ? `${formatPermissionDecisionStatus(permissionDecision)}.` : 'Failed to send permission response. Please check the session status.')
       return
     }
     if (!hasAttachments && await sessionSelectionController.handleInput(chatId, text)) return
@@ -732,16 +732,16 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     }
     if (!isCurrentInput()) return
     if (stoppedTurnFor(chatId)?.awaitingEnd) {
-      await sendText(chatId, '上一轮仍在停止中，尚未确认结束。请稍后重发，或用 /new 开始新会话。')
+      await sendText(chatId, 'The previous turn is still stopping and has not confirmed it finished. Resend later, or use /new to start a new session.')
       return
     }
     const expectedSession = sessionStore.get(chatId)?.sessionId
     const { attachments, context } = await collectAttachments(chatId, mediaCandidates)
     if (!isCurrentInput() || sessionStore.get(chatId)?.sessionId !== expectedSession) return
-    const effectiveText = [text || (attachments.length > 0 ? '(用户发送了附件)' : ''), context].filter(Boolean).join('\n\n')
+    const effectiveText = [text || (attachments.length > 0 ? '(user sent an attachment)' : ''), context].filter(Boolean).join('\n\n')
     if (!effectiveText && attachments.length === 0) return
     if (stoppedTurnFor(chatId)?.awaitingEnd) {
-      await sendText(chatId, '上一轮仍在停止中，尚未确认结束。请稍后重发，或用 /new 开始新会话。')
+      await sendText(chatId, 'The previous turn is still stopping and has not confirmed it finished. Resend later, or use /new to start a new session.')
       return
     }
     typingController.start(chatId)
@@ -751,7 +751,7 @@ async function routeUserMessage(message: WechatMessage, awaitQueuedWork = false)
     if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
       delivery?.failedCurrent()
-      await sendText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendText(chatId, 'Failed to send message; the connection may be down. Send /new to start over.')
     }
   })
   if (awaitQueuedWork) await queued
@@ -763,7 +763,7 @@ async function collectAttachments(
   candidates: ReturnType<typeof collectWechatMediaCandidates>,
 ): Promise<{ attachments: AttachmentRef[]; context: string }> {
   if (candidates.length === 0) return { attachments: [], context: '' }
-  if (candidates.length > 5) throw new Error('每条消息最多处理 5 个附件，请分开发送')
+  if (candidates.length > 5) throw new Error('At most 5 attachments per message; please send them separately')
   const stored = sessionStore.get(chatId)
   const sessionId = stored?.sessionId ?? chatId
   const controller = new AbortController()
@@ -777,7 +777,7 @@ async function collectAttachments(
   try {
     for (const candidate of candidates) {
       controller.signal.throwIfAborted()
-      if (!isAllowedUser('wechat', chatId)) throw new Error('用户授权已撤销')
+      if (!isAllowedUser('wechat', chatId)) throw new Error('User authorization was revoked')
       let local
       try {
         local = await media.downloadCandidate(candidate, sessionId, { signal: controller.signal })
@@ -790,7 +790,7 @@ async function collectAttachments(
         continue
       }
       totalBytes += local.size
-      if (totalBytes > 30 * 1024 * 1024) throw new Error('单条消息附件总量超过 30 MiB，请分开发送')
+      if (totalBytes > 30 * 1024 * 1024) throw new Error('Total attachment size in one message exceeds 30 MiB; please send them separately')
       const check = checkAttachmentLimit(local.kind, local.size, local.mimeType)
       if (!check.ok) {
         await sendText(chatId, check.hint)
@@ -806,8 +806,8 @@ async function collectAttachments(
           type: 'file', name: local.name, path: local.path, mimeType: local.mimeType,
         })
         if (local.mimeType.startsWith('video/')) {
-          if (++videos > 1) { notes.push('本条消息只分析第一个视频，其余视频仅作为附件接收。'); continue }
-          await sendText(chatId, '正在提取视频采样画面和音轨，可发送 /stop 取消。')
+          if (++videos > 1) { notes.push('Only the first video in this message is analyzed; other videos are received as attachments only.'); continue }
+          await sendText(chatId, 'Extracting sampled video frames and audio track; send /stop to cancel.')
           controller.signal.throwIfAborted()
           try {
             const analysis = await mediaActions.analyzeVideo(chatId, local.path)
@@ -815,7 +815,7 @@ async function collectAttachments(
             notes.push(analysis.context)
           } catch (error) {
             controller.signal.throwIfAborted()
-            const hint = `视频已接收，但分析未完成：${error instanceof Error ? error.message : '未知错误'}。不能声称已理解视频。`
+            const hint = `Video received, but analysis did not finish: ${error instanceof Error ? error.message : 'Unknown error'}. Do not claim to have understood the video.`
             notes.push(hint)
             await sendText(chatId, hint)
           }
@@ -823,7 +823,7 @@ async function collectAttachments(
       }
     }
     if (failures > 0) {
-      await sendText(chatId, `${failures === candidates.length ? '已收到附件消息，但未能读取内容。' : `${failures} 个附件未能读取。`}\n${[...failureHints].join('\n')}\n请重发附件；授权搜索电脑图片目录不能解决这次传输失败。`)
+      await sendText(chatId, `${failures === candidates.length ? 'Received the attachment message, but could not read its content.' : `${failures} attachment(s) could not be read.`}\n${[...failureHints].join('\n')}\nPlease resend the attachment; authorizing search of the computer's image folder will not fix this transfer failure.`)
     }
     controller.signal.throwIfAborted()
     return { attachments, context: notes.join('\n\n') }

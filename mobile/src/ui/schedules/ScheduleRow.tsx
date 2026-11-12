@@ -5,7 +5,7 @@ import { Switch, useColors } from '../kit'
 import { Text } from '../Text'
 import { DotLine, ScheduleLine } from './parts'
 
-/** 定时任务列表一行：名称 · 计划与项目 · 最近运行；右侧开关。点行进入详情。 */
+/** A scheduled task list row: name · schedule and project · last run; toggle on the right. Tap the row for details. */
 export function ScheduleRow({
   task,
   run,
@@ -24,13 +24,13 @@ export function ScheduleRow({
   onToggle(value: boolean): void
 }) {
   const colors = useColors()
-  const name = task.name || '未命名任务'
+  const name = task.name || 'Untitled task'
   const line = latestRunLine(run, task, now)
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`打开 ${name}`}
+        accessibilityLabel={`Open ${name}`}
         onPress={onOpen}
         style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? 0.6 : 1 })}
       >
@@ -42,13 +42,13 @@ export function ScheduleRow({
         </Text>
         <ScheduleLine
           task={task}
-          extras={[task.execution?.kind === 'session' ? '已有会话' : projectLabel(task.folderPath), task.scheduleState === 'completed' ? '已完成' : enabled ? '' : '已暂停']}
+          extras={[task.execution?.kind === 'session' ? 'Existing session' : projectLabel(task.folderPath), task.scheduleState === 'completed' ? 'Done' : enabled ? '' : 'Paused']}
           color={enabled ? colors.ink2 : colors.ink3}
         />
         {enabled && <DotLine tone={line.tone} text={line.text} />}
       </Pressable>
       <Switch
-        label={`启用${name}`}
+        label={`Enable ${name}`}
         value={enabled}
         disabled={disabled}
         onValueChange={onToggle}

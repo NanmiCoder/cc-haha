@@ -779,7 +779,7 @@ describe('ModelSelector', () => {
       .getAllByRole('button', { name: /deepseek-v4-pro/i })
       .find((button) => button.textContent?.includes('Sonnet Model'))
     expect(configuredOption).toBeDefined()
-    // 「素」 menu selection: the hover fill at rest plus the terracotta check.
+    // "Su" spec menu selection: the hover fill at rest plus the terracotta check.
     expect(configuredOption).toHaveAttribute('aria-current', 'true')
     expect(configuredOption?.className).toContain('bg-[var(--color-surface-hover)]')
     expect(configuredOption?.querySelector('svg.lucide-check')).toHaveClass('text-[var(--color-brand)]')
@@ -1240,7 +1240,7 @@ describe('ModelSelector', () => {
       status: { loggedIn: true, expiresAt: null, email: null, accountId: null },
       fetchStatus: async () => {},
     })
-    useSettingsStore.setState({ locale: 'zh', effortLevel: 'high' })
+    useSettingsStore.setState({ locale: 'en', effortLevel: 'high' })
     useProviderStore.setState({ providers: [], activeId: OPENAI_OFFICIAL_PROVIDER_ID, hasLoadedProviders: true })
     useChatStore.setState({ setSessionRuntime } as Partial<ReturnType<typeof useChatStore.getState>>)
     useSessionRuntimeStore.getState().setSelection('fast-session', {
@@ -1248,8 +1248,8 @@ describe('ModelSelector', () => {
     })
 
     render(<ModelSelector runtimeKey="fast-session" />)
-    await clickByRole('推理强度: 高')
-    const fast = screen.getByRole('switch', { name: 'Fast 模式' })
+    await clickByRole('Effort: High')
+    const fast = screen.getByRole('switch', { name: 'Fast mode' })
     expect(fast).not.toBeChecked()
     expect(screen.getByText(/1.5/)).toBeInTheDocument()
     fireEvent.click(fast)
@@ -1257,13 +1257,13 @@ describe('ModelSelector', () => {
     expect(setSessionRuntime).toHaveBeenLastCalledWith('fast-session', {
       providerId: OPENAI_OFFICIAL_PROVIDER_ID, modelId: 'gpt-6-sol', effortLevel: 'high', openAIFastMode: true,
     })
-    fireEvent.keyDown(screen.getByRole('slider', { name: '推理强度' }), { key: 'ArrowLeft' })
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Effort' }), { key: 'ArrowLeft' })
     expect(useSessionRuntimeStore.getState().selections['fast-session']).toMatchObject({ effortLevel: 'medium', openAIFastMode: true })
     await clickByRole(/GPT-6-Sol/i)
     await clickByRole(/GPT-6-Luna/i)
     expect(useSessionRuntimeStore.getState().selections['fast-session']).toMatchObject({ modelId: 'gpt-6-luna', openAIFastMode: true })
-    await clickByRole('推理强度: 中 · Fast 模式')
-    fireEvent.click(screen.getByRole('switch', { name: 'Fast 模式' }))
+    await clickByRole('Effort: Medium · Fast mode')
+    fireEvent.click(screen.getByRole('switch', { name: 'Fast mode' }))
     expect(useSessionRuntimeStore.getState().selections['fast-session']).toMatchObject({ openAIFastMode: false })
     expect(setSessionRuntime).toHaveBeenLastCalledWith('fast-session', expect.objectContaining({ openAIFastMode: false }))
   })

@@ -59,7 +59,7 @@ export function createToolImageLoader(client: Pick<ApiClient, 'image'>): ToolIma
     load(image, variant) {
       const ready = this.peek(image, variant)
       if (ready) return Promise.resolve(ready)
-      if (!image.url) return Promise.reject(new Error('图片没有可用的地址'))
+      if (!image.url) return Promise.reject(new Error('The image has no usable address'))
       const url = image.url
       const key = `${variant}\n${url}`
       const running = pending.get(key)

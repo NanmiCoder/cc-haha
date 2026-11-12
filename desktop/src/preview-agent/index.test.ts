@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// 宿主两侧（主进程 pickerArmed、渲染进程 pickerActive）都把 picker-exited 当作
-// 「解除本次拾取授权」，并在其后丢弃 selection。这里跑的是真实注入脚本，用来锁住
-// 「确认时只发 selection、取消时才发 picker-exited」这条跨进程契约。
+// Both host sides (main-process pickerArmed, renderer pickerActive) treat picker-exited as
+// "revoke this pick's grant" and drop any selection after it. This runs the real injected script to lock
+// the cross-process contract: confirm sends only selection, and only cancel sends picker-exited.
 type PostedMessage = {
   v: number
   type: string
@@ -68,7 +68,7 @@ function finishNativeCapture(captureId?: number) {
 afterEach(() => { vi.useRealTimers() })
 
 beforeAll(async () => {
-  // IIFE 在 import 时立即执行，post 钩子必须先于它挂上（静态 import 会被提升，故用动态 import）
+  // The IIFE runs on import, so the post hook must be installed first (static imports are hoisted, hence a dynamic import)
   agentWindow.__DESKTOP_PREVIEW_POST__ = (raw: string) => { posted.push(JSON.parse(raw) as PostedMessage) }
   await import('./index')
 })
@@ -78,7 +78,7 @@ beforeEach(() => {
   for (const host of [...document.documentElement.querySelectorAll('div')]) {
     if (host.shadowRoot || host.dataset.previewSelectionAnnotationRoot) host.remove()
   }
-  sendFromHost('exit-picker')   // 复位上一个用例可能残留的 picker 态
+  sendFromHost('exit-picker')   // reset any picker state left by the previous case
   sendFromHost('clear-selection-draft')
   posted.length = 0
 })
@@ -179,7 +179,7 @@ describe('preview agent picker flow', () => {
     ;(window as unknown as { __PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__: () => void }).__PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__()
     expect(host.style.visibility).toBe('visible')
   })
-  it('confirm 发出 selection，且此前不发 picker-exited（否则宿主会丢弃选区）', () => {
+  it('confirm sends selection without a prior picker-exited (or the host would drop it)', () => {
     sendFromHost('enter-picker')
     pick(document.getElementById('t')!)
 
@@ -190,7 +190,7 @@ describe('preview agent picker flow', () => {
     expect(beforeSelection).not.toContain('picker-exited')
   })
 
-  it('confirm 带上编辑内容一起送出选区', () => {
+  it('confirm sends the selection together with the edits', () => {
     sendFromHost('enter-picker')
     pick(document.getElementById('t')!)
 
@@ -205,7 +205,7 @@ describe('preview agent picker flow', () => {
     expect(selection.payload?.change).toMatchObject({ text: { from: 'Old', to: 'New' } })
   })
 
-  it('cancel 发 picker-exited 解除宿主授权，且不发 selection', () => {
+  it('cancel sends picker-exited to revoke the host grant and no selection', () => {
     sendFromHost('enter-picker')
     pick(document.getElementById('t')!)
 
@@ -215,7 +215,7 @@ describe('preview agent picker flow', () => {
     expect(types()).not.toContain('selection')
   })
 
-  it('确认后 picker 停止工作，页面无法再自行送出第二个选区', () => {
+  it('stops the picker after confirm so the page cannot send a second selection', () => {
     sendFromHost('enter-picker')
     pick(document.getElementById('t')!)
     bubbleButton('confirm').click()
@@ -226,7 +226,7 @@ describe('preview agent picker flow', () => {
     expect(types()).not.toContain('selection')
   })
 
-  it('批量添加携带稳定编号，并能按 itemId 撤销页面上的实时预览', () => {
+  it('batch adds carry stable numbers and can undo the live page preview by itemId', () => {
     sendFromHost({ type: 'enter-picker', mode: 'batch', label: 3 })
     const target = document.getElementById('t')!
     pick(target)

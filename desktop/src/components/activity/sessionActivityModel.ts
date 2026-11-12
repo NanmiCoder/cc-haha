@@ -463,8 +463,8 @@ function projectMessagesToTaskScope(
 }
 
 /**
- * TaskUpdate 的 deleted 是删除动作而非状态，删除可能发生在创建它的那一轮之后，
- * 所以要跨轮次收集，避免已删任务留在历史统计里。
+ * A TaskUpdate `deleted` is an action, not a status, and may happen in a later turn than
+ * the one that created the task, so it is collected across turns to keep deleted tasks out of history stats.
  */
 function collectDeletedTaskIds(messages: UIMessage[]): Set<string> {
   const deletedTaskIds = new Set<string>()
@@ -822,7 +822,7 @@ function buildTaskRowsFromTaskTools(
 
     if (message.toolName === 'TaskCreate') {
       const toolResult = resultsByToolUseId.get(message.toolUseId)
-      // 被中断取消或被 TaskCreated hook 拦下的 TaskCreate 没有建出任务，不能按调用序号补一行
+      // A TaskCreate cancelled by an interrupt or blocked by a TaskCreated hook created no task, so no row is filled in by call order
       if (toolResult?.isError) continue
       const input = isRecordValue(message.input) ? message.input : {}
       const result = parseCreatedTaskResult(toolResult?.content)
@@ -841,7 +841,7 @@ function buildTaskRowsFromTaskTools(
       // isError=false, so only its positive result is authoritative.
       if (!isSuccessfulTaskUpdate(input, resultsByToolUseId.get(message.toolUseId))) continue
 
-      // deleted 不是一种任务状态：CLI 侧 TaskUpdateTool 会真的删掉任务文件
+      // deleted is not a task status: the CLI-side TaskUpdateTool really deletes the task file
       if (isDeletedStatus(input)) {
         rowsByTaskId.delete(taskId)
         confirmedStatuses.delete(taskId)
@@ -982,7 +982,7 @@ function buildTaskRowsFromMessages(
   const isSessionTaskRow = (row: ActivityRow) => row.taskId
     ? !deletedTaskIds.has(row.taskId)
     : true
-  // 任务列表要等 tool_result 到达后才异步刷新，这中间 liveTasks 里还留着已删的任务
+  // The task list refreshes asynchronously after tool_result arrives; until then liveTasks still holds deleted tasks
   const liveRows = liveTasks.map(buildTaskRow).filter(isSessionTaskRow)
   const taskTurnRows = splitMessagesIntoTurns(taskMessages)
     .map((turn) => {

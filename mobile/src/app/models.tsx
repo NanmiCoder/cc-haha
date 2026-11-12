@@ -28,7 +28,7 @@ import {
 import { errorText } from '../ui/theme'
 import type { RuntimeConfig } from '../core/types'
 
-/** 电脑设置 → 新任务默认：改电脑的默认服务商、模型和思考强度（设计稿 P2）。 */
+/** Computer settings → new task defaults: change the computer default provider, model and thinking effort (design P2). */
 export default function Models() {
   const { host: id } = useLocalSearchParams<{ host: string }>()
   const { host, client, error: connectionError } = useConnection(id)
@@ -85,10 +85,10 @@ export default function Models() {
       await client.put('/api/models/current', { modelId: config.modelId })
       if (config.effortLevel)
         await client.put('/api/effort', { level: config.effortLevel })
-      setStatus(`已保存 ${host?.name} 的默认模型。已有会话保持各自的运行配置。`)
+      setStatus(`Saved the default model for ${host?.name}. Existing sessions keep their own run configuration.`)
       setRevision((value) => value + 1)
     } catch (e) {
-      setError(`${errorText(e)}。已完成的设置可能已保存，请重新读取后确认。`)
+      setError(`${errorText(e)}. Settings already applied may have been saved; reload to confirm.`)
     } finally {
       setBusy(false)
     }
@@ -106,7 +106,7 @@ export default function Models() {
   )
   return (
     <ScreenView>
-      <NavBar floating title="新任务默认" subtitle={host?.name ?? '所选电脑'} />
+      <NavBar floating title="New task defaults" subtitle={host?.name ?? 'Selected computer'} />
       {client && currentConfig ? (
         <DefaultPicker
           key={JSON.stringify(currentConfig)}
@@ -188,8 +188,8 @@ function DefaultPicker({
         {banner}
         <ErrorCallout text={choice.error} onRetry={choice.reload} style={{ marginTop: 8 }} />
 
-        {/* 设计稿 P2：服务商头 22，其余分组头 20；行高 52 / 58，分隔线缩进 48。 */}
-        <SectionHeader title="服务商" style={{ paddingTop: 22 }} />
+        {/* Design P2: provider header 22, other group headers 20; row height 52 / 58, separator inset 48. */}
+        <SectionHeader title="Provider" style={{ paddingTop: 22 }} />
         <Group>
           {choice.loading ? (
             <View style={{ minHeight: 52, justifyContent: 'center' }}>
@@ -197,33 +197,33 @@ function DefaultPicker({
             </View>
           ) : (
             <SettingRow
-              title={provider.name || '供应商已不可用'}
+              title={provider.name || 'Provider no longer available'}
               value={provider.others}
               valueSize={14}
               titleGrow
               disabled={busy || !sources.length}
               onPress={() => setProviderOpen(true)}
-              label={`服务商：${provider.name || '已不可用'}${provider.others ? `，${provider.others}` : ''}`}
+              label={`Provider: ${provider.name || 'No longer available'}${provider.others ? `, ${provider.others}` : ''}`}
             />
           )}
         </Group>
 
-        <SectionHeader title="模型" style={{ paddingTop: 20 }} />
+        <SectionHeader title="Model" style={{ paddingTop: 20 }} />
         {choice.loading ? (
           <Loading />
         ) : !authReady ? (
           <Callout>
             {choice.source?.auth === 'missing'
-              ? '请先在电脑上登录或配置此供应商，再重新读取。'
+              ? 'Sign in or configure this provider on the computer first, then reload.'
               : choice.source?.auth === 'error'
-                ? '尚未确认此供应商的授权状态，请重新读取后再选模型。'
-                : '当前供应商已不可用，请重新选择。'}
+                ? 'Authorization status of this provider is not confirmed yet; reload before choosing a model.'
+                : 'The current provider is no longer available; please choose again.'}
           </Callout>
         ) : !choice.catalogReady && !choice.error ? (
           <Loading />
         ) : choice.models.length ? (
           <Group>
-            <View accessibilityRole="radiogroup" accessibilityLabel="模型">
+            <View accessibilityRole="radiogroup" accessibilityLabel="Model">
               {choice.models.map((model, index) => {
                 const row = modelRow(model, model.description)
                 const selected = model.id === choice.modelId
@@ -236,9 +236,9 @@ function DefaultPicker({
                       mono={row.mono}
                       selected={selected}
                       disabled={busy}
-                      label={[row.title, row.detail, selected ? '已选中' : '']
+                      label={[row.title, row.detail, selected ? 'Selected' : '']
                         .filter(Boolean)
-                        .join('，')}
+                        .join(', ')}
                       onPress={() => choice.selectModel(model.id)}
                     />
                   </Fragment>
@@ -247,17 +247,17 @@ function DefaultPicker({
             </View>
           </Group>
         ) : choice.catalogReady ? (
-          <Callout>这个供应商没有可用模型。</Callout>
+          <Callout>This provider has no available models.</Callout>
         ) : null}
 
-        <SectionHeader title="思考强度" style={{ paddingTop: 20 }} />
+        <SectionHeader title="Thinking effort" style={{ paddingTop: 20 }} />
         {!choice.model ? (
           <Text style={{ paddingHorizontal: 4, fontSize: 14, lineHeight: 20, color: colors.ink3 }}>
-            选好模型后可以调整。
+            Adjustable after choosing a model.
           </Text>
         ) : segments.length ? (
           <EffortTrack
-            label="思考强度"
+            label="Thinking effort"
             options={segments}
             value={at >= 0 ? (segments[at]?.value ?? '') : ''}
             disabled={busy}
@@ -267,11 +267,11 @@ function DefaultPicker({
           <Callout>{effortUnavailableReason(choice)}</Callout>
         )}
 
-        <Footnote style={{ paddingTop: 14 }}>只影响之后新建的任务，已经在跑的不变。</Footnote>
+        <Footnote style={{ paddingTop: 14 }}>Affects only tasks created afterwards; running ones are unchanged.</Footnote>
       </ScrollView>
       <BottomBar>
         <Button
-          title="保存"
+          title="Save"
           size="lg"
           busy={busy}
           disabled={!choice.selection}
@@ -280,7 +280,7 @@ function DefaultPicker({
           }}
         />
       </BottomBar>
-      <Sheet visible={providerOpen} onClose={() => setProviderOpen(false)} title="服务商">
+      <Sheet visible={providerOpen} onClose={() => setProviderOpen(false)} title="Provider">
         <Group>
           {sources.map((source, index) => (
             <Fragment key={source.id ?? 'claude-official'}>
@@ -290,9 +290,9 @@ function DefaultPicker({
                 selected={source.id === choice.providerId}
                 detail={
                   source.auth === 'missing'
-                    ? '尚未登录'
+                    ? 'Not signed in'
                     : source.auth === 'error'
-                      ? '授权状态待确认'
+                      ? 'Authorization status pending'
                       : undefined
                 }
                 disabled={busy}

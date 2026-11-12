@@ -1,21 +1,21 @@
 /**
- * Claude Code 桌面端合并 sidecar 入口。
+ * Merged sidecar entry point for the Claude Code desktop app.
  *
- * 历史上 server / cli / IM adapters 是各自独立的进程。每个 bun-compile
- * 二进制都要带一份 ~55MB 的 bun runtime，光这一项就重复占了 100MB+。
- * 把所有运行模式合并到同一个二进制里，runtime 只保留一份；调用方通过
- * 第一个 positional 参数选择模式：
+ * server / cli / IM adapters used to be separate processes. Each bun-compiled
+ * binary carried its own ~55MB bun runtime, duplicating 100MB+ on that alone.
+ * Merging every mode into one binary keeps a single runtime; callers pick the
+ * mode with the first positional argument:
  *
  *   claude-sidecar server   --app-root <path> --host 127.0.0.1 --port 12345
- *   claude-sidecar cli      --app-root <path> [其它 CLI 参数...]
+ *   claude-sidecar cli      --app-root <path> [other CLI args...]
  *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat]
  *                           [--dingtalk] [--whatsapp] [--wecom] [--qq] [--slack]
  *
- * 任何模式都必须先做 process.env / process.argv 设置，再 await 进入相应的
- * 子模块树。原因：src/server/index.ts、src/entrypoints/cli.tsx、以及
- * adapters/feishu/index.ts 等顶层都会立即读 process.argv / process.env，
- * 必须在它们求值前 splice 掉 --app-root、mode 和各 adapter 的 flag 这些
- * launcher-only 参数。
+ * Every mode must set up process.env / process.argv before awaiting its module
+ * tree. src/server/index.ts, src/entrypoints/cli.tsx, adapters/feishu/index.ts
+ * and others read process.argv / process.env at top level, so the launcher-only
+ * arguments (--app-root, the mode, adapter flags) must be spliced out before
+ * those modules evaluate.
  */
 
 import { parseLauncherArgs, resolveSidecarInvocation } from './launcherRouting'
@@ -68,7 +68,7 @@ const ADAPTERS: ReadonlyArray<{
     label: 'Feishu',
     missingCredentials: 'FEISHU_APP_ID / FEISHU_APP_SECRET missing',
     isConfigured: (config) => Boolean(config.feishu.appId && config.feishu.appSecret),
-    // 副作用 import：feishu/index.ts 顶层会自动 new WSClient + start()
+    // Side-effect import: feishu/index.ts creates a WSClient and calls start() at top level
     start: () => import('../../adapters/feishu/index.ts'),
   },
   {
@@ -158,9 +158,9 @@ if (mode === 'adapters') {
 }
 
 async function runAdapters(rawArgs: string[]): Promise<void> {
-  // adapters 模式的参数解析独立于 server/cli —— 这里只接受 ADAPTERS 里的
-  // flag 选择启用哪个适配器，再加可选的 --app-root（透传给
-  // adapters/common/config.ts 内的 process.env 读取）。
+  // Adapter-mode argument parsing is separate from server/cli: it only accepts
+  // flags from ADAPTERS to choose which adapters run, plus an optional --app-root
+  // (passed through to the process.env reads in adapters/common/config.ts).
   let appRoot: string | null = process.env.CLAUDE_APP_ROOT ?? null
   const enabled = new Set<string>()
   const knownFlags = new Set(ADAPTERS.map((adapter) => adapter.flag))
@@ -193,10 +193,10 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
 
   await import('../../preload.ts')
 
-  // 在 import adapter 之前先用同一份 loadConfig() 检查凭据。adapter 的
-  // top-level 代码里已经有 if (!cred) process.exit(1)，但那会把整个
-  // 进程拖死 —— 包括另一个本来正常的 adapter。这里提前 gate 一下，
-  // 缺凭据的 adapter 直接跳过、不 import。
+  // Check credentials with the same loadConfig() before importing an adapter.
+  // Adapter top-level code already does if (!cred) process.exit(1), but that
+  // kills the whole process, including any other adapter that was fine. Gating
+  // here skips an adapter with missing credentials without importing it.
   const { loadConfig } = await import('../../adapters/common/config.ts')
   const config = loadConfig()
 
@@ -232,5 +232,5 @@ async function runAdapters(rawArgs: string[]): Promise<void> {
     installAdapterMigrationControl({ token: process.env.CC_HAHA_LOCAL_ACCESS_TOKEN })
   }
 
-  // 每个 adapter 的 WebSocket / long-polling 持有 event loop，自然保持进程存活。
+  // Each adapter's WebSocket / long polling holds the event loop, keeping the process alive.
 }

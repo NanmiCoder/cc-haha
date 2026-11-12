@@ -184,7 +184,7 @@ describe('chat connection recovery with production transport callbacks', () => {
     })
     await flush()
     expect(h.channel.connection).toBe('reconnecting')
-    expect(h.feedback.connectionError).toBe('无法连接服务器，请检查地址与网络')
+    expect(h.feedback.connectionError).toBe('Cannot connect to the server; check the address and network')
     expect(h.feedback.businessError).toBe('')
     offline = false
     h.timers.advance(500)
@@ -228,13 +228,13 @@ describe('chat connection recovery with production transport callbacks', () => {
     const h = harness(async (url) =>
       url.endsWith('/summary')
         ? unavailable
-          ? response({ message: '摘要暂不可用' }, 503)
+          ? response({ message: 'Summary unavailable' }, 503)
           : response(summary)
         : response(history)
     )
     await h.ready()
     expect(h.feedback.summaries).toHaveLength(0)
-    expect(h.feedback.connectionError).toBe('摘要暂不可用')
+    expect(h.feedback.connectionError).toBe('Summary unavailable')
     unavailable = false
     h.channel.reconnect()
     await h.ready()
@@ -256,10 +256,10 @@ describe('chat connection recovery with production transport callbacks', () => {
     ).toBe(true)
     h.timers.advance(10000)
     expect(h.channel.state.configPending).toBe(false)
-    expect(h.feedback.businessError).toBe('电脑尚未确认配置，请重新选择后重试')
+    expect(h.feedback.businessError).toBe('The computer has not confirmed the configuration; please choose again and retry')
     h.channel.reconnect()
     await h.ready()
-    expect(h.feedback.businessError).toBe('电脑尚未确认配置，请重新选择后重试')
+    expect(h.feedback.businessError).toBe('The computer has not confirmed the configuration; please choose again and retry')
     expect(h.channel.state.error?.code).toBe('CONFIG_TIMEOUT')
   })
 
@@ -272,10 +272,10 @@ describe('chat connection recovery with production transport callbacks', () => {
     expect(
       h.channel.send({ type: 'user_message', content: 'Do not silently resend' })
     ).toBe(false)
-    expect(h.feedback.businessError).toBe('发送失败，消息没有自动重试')
+    expect(h.feedback.businessError).toBe('Send failed; the message was not retried automatically')
     h.timers.advance(500)
     await h.ready()
-    expect(h.feedback.businessError).toBe('发送失败，消息没有自动重试')
+    expect(h.feedback.businessError).toBe('Send failed; the message was not retried automatically')
     expect(h.channel.state.items).toEqual([])
   })
 

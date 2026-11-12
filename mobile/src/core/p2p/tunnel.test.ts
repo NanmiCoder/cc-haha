@@ -49,7 +49,7 @@ describe('tunnel over a data channel', () => {
     await expect(tunnel.fetch('https://desk.example.test/api/later', init())).rejects.toThrow('Direct connection closed')
   })
 
-  /** 答复头到了就要交给调用方；没交出来时快速失败，而不是让测试挂到超时。 */
+  /** Once response headers arrive they must be handed to the caller; if not handed over fail fast instead of letting the test hang until timeout. */
   const headed = <T,>(response: Promise<T>) =>
     Promise.race([
       response,

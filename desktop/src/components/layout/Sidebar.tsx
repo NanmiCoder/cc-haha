@@ -75,7 +75,7 @@ const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const isWindows = typeof navigator !== 'undefined' && /Win/.test(navigator.platform)
 const MOD_KEY = detectPlatform() === 'mac' ? '⌘' : 'Ctrl+'
-/** 「素」 kbd: mono 11, 18px tall, `--radius-xs`, hairline, paper fill, tertiary ink. */
+/** "Su" spec kbd: mono 11, 18px tall, `--radius-xs`, hairline, paper fill, tertiary ink. */
 const KBD_CLASS = 'pointer-events-none inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-1 font-mono text-[11px] leading-none text-[var(--color-text-tertiary)]'
 /** The selected row is a white card lifted off the sidebar ground. */
 const SIDEBAR_ROW_RAISED = 'bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
@@ -304,9 +304,9 @@ export function Sidebar({
     ))
   }, [hiddenProjectKeys, orderedProjectGroups])
   /**
-   * 任务视图和「整理侧边栏 → 按时间顺序」是同一个状态：铃铛亮 ⟺ 组织方式是
-   * `time`。这个选项本来就承诺按时间排，此前却仍旧按工作区分组，两个入口指向
-   * 一份持久化偏好比再引入一个平行开关更省事，也不会有两处互相说不通的状态。
+   * The task view and "Organize sidebar → chronological" are one state: bell lit ⟺ organization is
+   * `time`. That option always promised time order but still grouped by workspace; pointing both
+   * entries at one persisted preference is simpler than a parallel toggle and leaves no two states that disagree.
    */
   const isTaskView = projectOrganization === 'time'
   const showInitialLoading = isLoading && sessions.length === 0
@@ -330,11 +330,11 @@ export function Sidebar({
     for (const sessionId of runningChatSessionIds) ids.add(sessionId)
     return ids
   }, [runningChatSessionIds, tabs])
-  // 停在权限请求上的会话在 `runningSessionIds` 里也算「没结束」，但它不是在
-  // 干活而是在等人。两个视图都要把这两种状态分开显示。
-  // 判定看挂起的请求记录而不是 `chatState`：`status` / `session_state` 消息会在
-  // 卡片还开着的时候把 chatState 改掉，按它判定会在有卡的会话上熄灯。tab 栏与
-  // 这里共用同一个 `sessionNeedsAttention`，不要各写各的。
+  // A session stopped on a permission request is still "not finished" in `runningSessionIds`, but it
+  // is waiting for a person rather than working. Both views must show these two states apart.
+  // Decide from the pending request record, not `chatState`: `status` / `session_state` messages
+  // change chatState while the card is still open, which would turn the light off on a session with a card.
+  // The tab bar and this share one `sessionNeedsAttention`; do not write separate ones.
   const attentionSessionIds = useMemo(() => new Set(attentionSessionIdList), [attentionSessionIdList])
   // Row times ("10m ago") and the task view's day buckets read the clock. They
   // used to refresh as a side effect of re-rendering on every streamed token;
@@ -346,7 +346,7 @@ export function Sidebar({
   }, [])
   const taskGroups = useMemo(() => {
     if (!isTaskView) return []
-    // 隐藏的项目在任务视图里也要隐藏，否则两个视图对「有哪些会话」说法不一致。
+    // Hidden projects stay hidden in the task view too, or the two views disagree on which sessions exist.
     const visibleSessions = hiddenProjectKeys.size === 0
       ? filteredSessions
       : filteredSessions.filter((session) => !hiddenProjectKeys.has(getSessionProjectKey(session)))
@@ -356,7 +356,7 @@ export function Sidebar({
   }, [clockMinute, filteredSessions, hiddenProjectKeys, isTaskView, runningSessionIds])
   const workspaceLabelFor = useCallback(
     (session: SessionListItem) => getSessionWorkspaceLabel(session, resolveProjectDisplayName),
-    // 改过的项目名要跟着变；与 projectGroups 同一个 revision 依赖。
+    // Renamed projects must follow; same revision dependency as projectGroups.
     [projectDisplayNameRevision],
   )
   const pendingBatchDeleteSessions = useMemo(
@@ -588,8 +588,8 @@ export function Sidebar({
   }, [hiddenProjectKeys, persistSidebarProjectPreferences, pinnedProjectKeys, projectOrder, projectSortBy])
 
   /**
-   * 关掉任务视图要回到「上一次用的分组方式」，而不是硬回默认值：按项目排过的
-   * 人切一次任务视图再切回来，不该被悄悄改成近期项目。
+   * Leaving the task view returns to the last grouping used, not the default: someone who
+   * sorted by project and toggles the task view on and off should not be quietly switched to recent projects.
    */
   const lastGroupedOrganizationRef = useRef<SidebarProjectOrganization>('recentProject')
   useEffect(() => {
@@ -892,7 +892,7 @@ export function Sidebar({
     setLastSelectedSessionId(id)
   }, [filteredSessionIds, lastSelectedSessionId, selectSessions, toggleSessionSelected])
 
-  /** 两个视图共用一份「点会话行」的行为，避免任务视图漏掉批量模式这一支。 */
+  /** Both views share one "click a session row" behavior so the task view does not miss the batch-mode branch. */
   const handleSessionRowClick = useCallback((event: React.MouseEvent, session: SessionListItem) => {
     if (isBatchMode) {
       handleBatchSessionClick(event, session.id)
@@ -1095,10 +1095,10 @@ export function Sidebar({
             </span>
           </div>
           <div className={`flex items-center ${expanded ? 'gap-0.5' : 'flex-col gap-2'}`}>
-            {/* 折叠态下整个会话列表都不渲染，露一个切不动视图的铃铛只会让人点空。
-                跟 GitHub 链接同一套处理：宽度夹到零、退出 tab 顺序，并且 `aria-hidden`
-                ——`sidebar-copy--hidden` 只是 `max-width:0; opacity:0`，元素仍留在
-                无障碍树里，少了这一条读屏还会念出一个按不动的按钮。 */}
+            {/* When collapsed the session list is not rendered at all, so a bell that cannot switch
+                views would only invite dead clicks. Same handling as the GitHub link: width clamped
+                to zero, out of the tab order, and `aria-hidden`. `sidebar-copy--hidden` is only
+                `max-width:0; opacity:0`, so without this a screen reader still announces a dead button. */}
             <span
               className={`sidebar-copy ${expanded ? 'sidebar-copy--visible' : 'sidebar-copy--hidden'} inline-flex`}
               aria-hidden={!expanded}
@@ -2201,12 +2201,13 @@ function getVisibleProjectSessions(
   if (expanded || sessions.length <= PROJECT_GROUP_VISIBLE_COUNT) return sessions
 
   const visible = sessions.slice(0, PROJECT_GROUP_VISIBLE_COUNT)
-  // 折叠掉的行是要人自己去翻的。当前打开的会话不该被翻到看不见，正在等人的会话
-  // 更不该：手机上没有 tab 栏，汉堡按钮上的提示点指向的就是抽屉里这一行，
-  // 折叠起来等于信号在最后一步断了。它们按列表原有顺序排在前几行之后。
-  // 只管已经加载进列表的行：侧边栏每个项目只预取最近
-  // `SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT` 条，更早的会话在列表里根本没有行，
-  // 桌面上由 tab 栏兜底，手机上要展开历史后才看得到。
+  // Collapsed rows are for people to dig through. The open session should not be folded out of
+  // sight, and a session waiting for a person even less so: phones have no tab bar, and the dot on
+  // the hamburger button points at exactly this drawer row, so folding it breaks the signal at the
+  // last step. They follow the leading rows in the list's original order.
+  // This only covers rows already loaded: the sidebar prefetches only the latest
+  // `SIDEBAR_PROJECT_SESSION_PREVIEW_LIMIT` sessions per project, so older ones have no row;
+  // the tab bar covers them on desktop, and on phones they appear once history is expanded.
   const pinned = sessions
     .slice(PROJECT_GROUP_VISIBLE_COUNT)
     .filter((session) => session.id === activeSessionId || attentionSessionIds.has(session.id))
@@ -2284,8 +2285,8 @@ function SessionRowMeta({
       className="ml-auto flex h-5 flex-shrink-0 items-center justify-end gap-1 whitespace-nowrap text-[11px] font-normal tabular-nums text-[var(--color-text-tertiary)]"
       title={updatedLabel}
     >
-      {/* 等人比在跑更要紧：停在卡片上的会话按 chatState 也算「在跑」，但转圈会
-          让人以为可以不管它。等你确认时，状态文字顶替相对时间。 */}
+      {/* Waiting matters more than running: a session stopped on a card counts as "running" by
+          chatState, but a spinner suggests it can be left alone. While it waits for you, status text replaces the relative time. */}
       {needsAttention ? (
         <span className="flex min-w-0 items-center gap-1 font-medium text-[var(--color-on-warning-container)]">
           <SessionAttentionMark label={t('sidebar.sessionNeedsAttention')} />

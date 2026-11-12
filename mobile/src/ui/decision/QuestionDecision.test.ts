@@ -74,8 +74,8 @@ test('real question page steps through, goes back, takes a custom answer and sub
       visible: true, onClose: () => { closed++ },
       request: { requestId: 'request', toolName: 'AskUserQuestion' },
       input: { questions: [
-        { question: '颜色？', header: '颜色', options: [{ label: '蓝色' }, { label: '红色（推荐）', description: '更醒目' }] },
-        { question: '设备？', header: '设备', multiSelect: true, options: [{ label: 'iOS' }, { label: 'Android' }] },
+        { question: 'Color?', header: 'Color', options: [{ label: 'Blue' }, { label: 'Red (recommended)', description: 'More prominent' }] },
+        { question: 'Device?', header: 'Device', multiSelect: true, options: [{ label: 'iOS' }, { label: 'Android' }] },
       ] }, ready: true, sent: false,
       signalActivity: () => { activities++; return true },
       onInteract: () => { interactions++ },
@@ -91,67 +91,67 @@ test('real question page steps through, goes back, takes a custom answer and sub
     const press = (label) => { const node = find(label); assert.ok(!node.disabled, label + ' is disabled'); node.onPress() }
 
     // Question 1: single choice does not advance by itself.
-    assert.equal(has('上一题'), false)
-    assert.equal(find('下一题').disabled, true)
-    press('蓝色')
-    assert.equal(find('蓝色').accessibilityState.checked, true)
-    assert.equal(find('下一题').disabled, false)
-    assert.equal(has('设备？'), false)
-    press('红色，更醒目')
-    assert.equal(find('蓝色').accessibilityState.checked, false)
-    press('下一题')
+    assert.equal(has('Previous'), false)
+    assert.equal(find('Next question').disabled, true)
+    press('Blue')
+    assert.equal(find('Blue').accessibilityState.checked, true)
+    assert.equal(find('Next question').disabled, false)
+    assert.equal(has('Device?'), false)
+    press('Red, more prominent')
+    assert.equal(find('Blue').accessibilityState.checked, false)
+    press('Next question')
 
     // Question 2: multiple choice, last question submits.
-    assert.equal(has('上一题'), true)
-    assert.equal(find('提交').disabled, true)
+    assert.equal(has('Previous'), true)
+    assert.equal(find('Submit').disabled, true)
     press('iOS')
     press('Android')
     assert.equal(find('iOS').accessibilityState.checked, true)
-    press('上一题')
-    assert.equal(find('红色，更醒目').accessibilityState.checked, true, 'earlier answer is kept')
-    press('下一题')
+    press('Previous')
+    assert.equal(find('Red, more prominent').accessibilityState.checked, true, 'earlier answer is kept')
+    press('Next question')
     assert.equal(submissions, 0, 'nothing is submitted before the final step')
 
     // A custom answer replaces the choices, and clearing it makes submit unavailable again.
-    press('其他，我自己说')
-    find('自己写的回答 2').onChangeText('只要 iOS')
+    press('Other, I will say it myself')
+    find('Your own answer 2').onChangeText('Only iOS')
     assert.equal(find('iOS').accessibilityState.checked, false)
-    find('自己写的回答 2').onChangeText('')
-    assert.equal(find('提交').disabled, true)
-    find('自己写的回答 2').onChangeText('只要 iOS')
+    find('Your own answer 2').onChangeText('')
+    assert.equal(find('Submit').disabled, true)
+    find('Your own answer 2').onChangeText('Only iOS')
 
     props.ready = false
-    assert.equal(find('提交').disabled, true)
-    assert.equal(find('先讨论一下').disabled, true)
+    assert.equal(find('Submit').disabled, true)
+    assert.equal(find('Discuss first').disabled, true)
     props.ready = true
-    press('提交')
-    assert.deepEqual(submitted, { '颜色？': '红色（推荐）', '设备？': '只要 iOS' })
+    press('Submit')
+    assert.deepEqual(submitted, { 'Color?': 'Red (recommended)', 'Device?': 'Only iOS' })
     assert.equal(submissions, 1)
     assert.equal(closed, 1, 'page closes after a successful submit')
     assert.ok(activities > 0 && interactions === activities)
 
     // Once sent, the buttons give way to the submitted row.
     props.sent = true
-    assert.equal(has('提交'), false)
+    assert.equal(has('Submit'), false)
     assert.ok(render().some((n) => n.type === 'SubmittedRow'))
   `)
 })
 
 test('truncated Chinese and English details expand independently without choosing or submitting answers', () => {
   checkQuestionPage(`
-    const chinese = '这是一段需要完整阅读的中文选项说明。'.repeat(16) + '中文说明末尾。'
+    const chinese = 'This is a Chinese option description that needs to be read in full.'.repeat(16) + 'End of the Chinese description.'
     const english = 'Read the entire option before deciding; inspecting details must keep your answer unchanged. '.repeat(12) + 'End of English details.'
     let submissions = 0, closed = 0, activities = 0, interactions = 0, submitted
     const props = {
       visible: true, onClose: () => { closed++ },
       request: { requestId: 'details', toolName: 'AskUserQuestion' },
       input: { questions: [
-        { question: '单选？', options: [
-          { label: '中文', description: chinese }, { label: 'English', description: english },
-          { label: '短说明', description: '完整短说明' }, { label: '无说明' },
+        { question: 'Single choice?', options: [
+          { label: 'Chinese', description: chinese }, { label: 'English', description: english },
+          { label: 'Short description', description: 'Full short description' }, { label: 'No description' },
         ] },
-        { question: '多选？', multiSelect: true, options: [
-          { label: '中文', description: chinese }, { label: 'English', description: english },
+        { question: 'Multiple choice?', multiSelect: true, options: [
+          { label: 'Chinese', description: chinese }, { label: 'English', description: english },
         ] },
       ] },
       ready: true, sent: false,
@@ -175,80 +175,80 @@ test('truncated Chinese and English details expand independently without choosin
     }
     layout(chinese, 288, 36)
     layout(english, 324, 36)
-    layout('完整短说明', 18, 18)
+    layout('Full short description', 18, 18)
 
     // Before this fix, both descriptions were permanently clamped at two lines.
     assert.equal(description(chinese).props.numberOfLines, 2)
-    const expand = find('展开“中文”的详细说明')
+    const expand = find('Expand details of “Chinese”')
     assert.equal(expand.props.accessibilityState.expanded, false)
     assert.equal(expand.props['aria-expanded'], false, 'RN Web needs the explicit expanded state')
     assert.ok(!expand.ancestors.some((node) => ['radio', 'checkbox'].includes(node.props?.accessibilityRole)), 'details must not be nested inside a choice control')
-    assert.ok(!render().some((n) => n.props?.accessibilityLabel === '展开“短说明”的详细说明'))
-    assert.ok(!render().some((n) => n.props?.accessibilityLabel === '展开“无说明”的详细说明'))
-    press('展开“中文”的详细说明')
+    assert.ok(!render().some((n) => n.props?.accessibilityLabel === 'Expand details of “Short description”'))
+    assert.ok(!render().some((n) => n.props?.accessibilityLabel === 'Expand details of “No description”'))
+    press('Expand details of “Chinese”')
     assert.ok(!description(chinese).props.numberOfLines, 'expanded Chinese text has no line limit')
-    assert.equal(find('收起“中文”的详细说明').props.accessibilityState.expanded, true)
-    assert.equal(find('收起“中文”的详细说明').props['aria-expanded'], true)
-    assert.equal(choice('中文').accessibilityState.checked, false)
-    assert.equal(find('下一题').props.disabled, true)
+    assert.equal(find('Collapse details of “Chinese”').props.accessibilityState.expanded, true)
+    assert.equal(find('Collapse details of “Chinese”').props['aria-expanded'], true)
+    assert.equal(choice('Chinese').accessibilityState.checked, false)
+    assert.equal(find('Next question').props.disabled, true)
     assert.equal(activities, 1, 'inspection uses the existing human-activity signal')
     assert.equal(interactions, 1)
     assert.equal(description(english).props.numberOfLines, 2, 'each option expands separately')
-    press('展开“English”的详细说明')
+    press('Expand details of “English”')
     assert.ok(!description(english).props.numberOfLines)
     assert.equal(submissions, 0)
     assert.equal(closed, 0)
-    press('收起“中文”的详细说明')
+    press('Collapse details of “Chinese”')
     assert.equal(description(chinese).props.numberOfLines, 2)
-    assert.equal(find('展开“中文”的详细说明').props['aria-expanded'], false)
-    choice('中文').onPress()
-    press('展开“中文”的详细说明')
-    assert.equal(choice('中文').accessibilityState.checked, true, 'inspecting selected option preserves selection')
-    press('下一题')
+    assert.equal(find('Expand details of “Chinese”').props['aria-expanded'], false)
+    choice('Chinese').onPress()
+    press('Expand details of “Chinese”')
+    assert.equal(choice('Chinese').accessibilityState.checked, true, 'inspecting selected option preserves selection')
+    press('Next question')
     layout(chinese, 288, 36)
     layout(english, 324, 36)
     assert.equal(description(chinese).props.numberOfLines, 2, 'another question with the same labels starts collapsed')
-    choice('中文').onPress()
+    choice('Chinese').onPress()
     choice('English').onPress()
-    press('展开“中文”的详细说明')
-    assert.equal(choice('中文').accessibilityState.checked, true)
+    press('Expand details of “Chinese”')
+    assert.equal(choice('Chinese').accessibilityState.checked, true)
     assert.equal(choice('English').accessibilityState.checked, true)
     assert.equal(submissions, 0)
-    press('上一题')
-    assert.equal(choice('中文').accessibilityState.checked, true)
-    press('下一题')
-    press('其他，我自己说')
-    find('自己写的回答 2').props.onChangeText('自填答案')
-    assert.equal(choice('中文').accessibilityState.checked, false)
+    press('Previous')
+    assert.equal(choice('Chinese').accessibilityState.checked, true)
+    press('Next question')
+    press('Other, I will say it myself')
+    find('Your own answer 2').props.onChangeText('Custom answer')
+    assert.equal(choice('Chinese').accessibilityState.checked, false)
     assert.equal(choice('English').accessibilityState.checked, false)
-    const toggle = render().find((n) => n.props?.accessibilityLabel === '展开“English”的详细说明')
+    const toggle = render().find((n) => n.props?.accessibilityLabel === 'Expand details of “English”')
     toggle.props.onPress()
-    assert.equal(find('自己写的回答 2').props.value, '自填答案')
+    assert.equal(find('Your own answer 2').props.value, 'Custom answer')
     assert.equal(choice('English').accessibilityState.checked, false)
 
     // Offline and submitted choices stay locked; details remain readable.
     props.ready = false
     assert.equal(choice('English').disabled, true)
     const beforeOffline = activities
-    press('收起“English”的详细说明')
+    press('Collapse details of “English”')
     assert.equal(activities, beforeOffline)
     props.ready = true
-    press('提交')
-    assert.deepEqual(submitted, { '单选？': '中文', '多选？': '自填答案' })
+    press('Submit')
+    assert.deepEqual(submitted, { 'Single choice?': 'Chinese', 'Multiple choice?': 'Custom answer' })
     assert.equal(submissions, 1)
     props.sent = true
-    assert.equal(choice('中文').disabled, true)
-    press('展开“English”的详细说明')
+    assert.equal(choice('Chinese').disabled, true)
+    press('Expand details of “English”')
     assert.ok(!description(english).props.numberOfLines)
     assert.equal(submissions, 1)
 
     // The same short text can become truncated in a smaller viewport / larger font.
     props.sent = false
-    press('上一题')
-    layout('完整短说明', 72, 36, 90)
-    assert.ok(find('展开“短说明”的详细说明'))
-    layout('完整短说明', 18, 18, 600)
-    assert.ok(!render().some((n) => n.props?.accessibilityLabel === '展开“短说明”的详细说明'))
+    press('Previous')
+    layout('Full short description', 72, 36, 90)
+    assert.ok(find('Expand details of “Short description”'))
+    layout('Full short description', 18, 18, 600)
+    assert.ok(!render().some((n) => n.props?.accessibilityLabel === 'Expand details of “Short description”'))
     for (const node of render().filter((n) => n.props?.['aria-hidden'])) {
       assert.equal(node.props.accessible, false, 'measurement text is hidden from accessibility')
       assert.ok(node.ancestors.some((ancestor) => ancestor.props?.style?.overflow === 'hidden'), 'measurement text cannot extend collapsed scroll content')

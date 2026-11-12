@@ -27,7 +27,7 @@ it('preserves an existing document and reports the actual collision-safe path', 
 
 it('reserves concurrent same-title exports atomically, including colliding sanitized titles', async () => {
   const directory = await fixture()
-  const titles = ['Quarterly Report', 'Quarterly/Report', '中文', '日本語', '中文']
+  const titles = ['Quarterly Report', 'Quarterly/Report', '中文', 'Japanese', '中文']
   const paths = await Promise.all(titles.map((title, index) => saveWorkspaceBrowserPdf(
     new Uint8Array([index]),
     async () => path.join(directory, workspaceBrowserPdfFilename('https://example.test/', title)),

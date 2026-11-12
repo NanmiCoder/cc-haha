@@ -43,19 +43,19 @@ test('queued follow-ups wait until the turn and every pending decision are finis
 
 test('a failed turn or an unconfirmed send pauses the queue instead of sending on top of it', () => {
   expect(canFlushQueue({ ...idle, lastTurnFailed: true })).toBe(false)
-  expect(queuePauseReason({ ...idle, lastTurnFailed: true })).toBe('上一轮出错了，排队的消息先不发')
+  expect(queuePauseReason({ ...idle, lastTurnFailed: true })).toBe('The previous turn errored; queued messages are on hold')
   expect(canFlushQueue({ ...idle, deliveryUncertain: true })).toBe(false)
-  expect(queuePauseReason({ ...idle, deliveryUncertain: true })).toBe('上一条没确认送达，排队的消息先不发')
+  expect(queuePauseReason({ ...idle, deliveryUncertain: true })).toBe('Delivery of the previous message was not confirmed; queued messages are on hold')
   // While the failed turn is somehow still active, it is not a pause yet.
   expect(queuePauseReason({ ...idle, lastTurnFailed: true, turnActive: true })).toBe('')
 })
 
 test('stopping or leaving returns queued text to the draft in order instead of sending it', () => {
   expect(queueToDraft('', [])).toBe('')
-  expect(queueToDraft('还在写', [{ text: '先跑测试' }, { text: ' 再补文档 ' }])).toBe(
-    '先跑测试\n\n再补文档\n\n还在写'
+  expect(queueToDraft('Still writing', [{ text: 'Run tests first' }, { text: ' Then add docs ' }])).toBe(
+    'Run tests first\n\nThen add docs\n\nStill writing'
   )
-  expect(queueToDraft('  ', [{ text: '只有排队的' }])).toBe('只有排队的')
+  expect(queueToDraft('  ', [{ text: 'Queued only' }])).toBe('Queued only')
 })
 
 test('queued attachments come back ahead of the ones still in the composer', () => {
@@ -89,7 +89,7 @@ const queuedComposer = (): ComposerQueueState => ({
     team: true,
     message: { type: 'user_message', content: 'QA-queue-stop' },
   }],
-  draft: '还在写',
+  draft: 'Still writing',
   attachments: [],
   team: false,
 })
@@ -99,7 +99,7 @@ test('stop or withdraw saves the restored draft before leaving and reentering th
   const key = 'stop-regression:session'
   const restored = withdrawQueuedComposer(key, queuedComposer(), drafts)
   expect(restored.queue).toEqual([])
-  expect(restored.draft).toBe('QA-queue-stop\n\n还在写')
+  expect(restored.draft).toBe('QA-queue-stop\n\nStill writing')
   // A later blur/unmount has no queue left. The next screen still receives the restored draft.
   expect(withdrawQueuedComposer(key, restored, drafts)).toBe(restored)
   expect(drafts.get(key)).toBe(restored.draft)
@@ -114,10 +114,10 @@ test('withdrawing one message preserves the remaining queue and does not duplica
   initial.queue.push({ ...initial.queue[0]!, id: 'two', text: 'second', attachments: [], team: false })
   const first = withdrawQueuedComposer(key, initial, drafts, ['one'])
   expect(first.queue.map((item) => item.id)).toEqual(['two'])
-  expect(drafts.get(key)).toBe('QA-queue-stop\n\n还在写')
+  expect(drafts.get(key)).toBe('QA-queue-stop\n\nStill writing')
   const leaving = withdrawQueuedComposer(key, first, drafts)
   expect(leaving.queue).toEqual([])
-  expect(drafts.get(key)).toBe('second\n\nQA-queue-stop\n\n还在写')
+  expect(drafts.get(key)).toBe('second\n\nQA-queue-stop\n\nStill writing')
   expect(parkedComposer(key)?.attachments).toHaveLength(1)
   expect(withdrawQueuedComposer(key, leaving, drafts)).toBe(leaving)
   clearParkedComposer(key)
@@ -136,13 +136,13 @@ test('editing or clearing a restored composer before blur replaces its parked co
 })
 
 test('withdrawing queued skills restores selection chips and plain draft, not model instructions', () => {
-  const reference = { kind: 'skill' as const, id: 'review', name: 'review', displayName: '审查', description: '', modelText: 'Use the Skill tool with skill: "review" for this request.' }
+  const reference = { kind: 'skill' as const, id: 'review', name: 'review', displayName: 'Review', description: '', modelText: 'Use the Skill tool with skill: "review" for this request.' }
   const drafts = { set: () => {}, delete: () => {} }
   const next = withdrawQueuedComposer('skill-restore', {
-    queue: [{ id: 'q', text: '检查代码', attachments: [], team: false, references: [reference], message: { type: 'user_message', content: `${reference.modelText}\n\n检查代码` } }],
-    draft: '还有测试', attachments: [], team: false, references: [reference],
+    queue: [{ id: 'q', text: 'Check code', attachments: [], team: false, references: [reference], message: { type: 'user_message', content: `${reference.modelText}\n\nCheck code` } }],
+    draft: 'And tests', attachments: [], team: false, references: [reference],
   }, drafts)
-  expect(next.draft).toBe('检查代码\n\n还有测试')
+  expect(next.draft).toBe('Check code\n\nAnd tests')
   expect(next.references).toEqual([reference])
   expect(parkedComposer('skill-restore')?.references).toEqual([reference])
   clearParkedComposer('skill-restore')

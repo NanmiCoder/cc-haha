@@ -150,20 +150,6 @@ describe('SkillCard', () => {
     expect(screen.queryByText('任务规划')).not.toBeInTheDocument()
   })
 
-  it('reads a curated skill in Chinese with its Chinese summary and tags', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    const curated = makeSkill({
-      curated: true,
-      summary: '用文件持久化跟踪多步任务',
-      summaryEn: 'Track multi-step tasks in files',
-      tags: ['任务规划'],
-    })
-    render(<SkillCard skill={curated} onOpen={vi.fn()} />)
-
-    expect(screen.getByText('用文件持久化跟踪多步任务')).toBeInTheDocument()
-    expect(screen.getByText('任务规划')).toBeInTheDocument()
-  })
-
   it('explains the security status via tooltip', () => {
     render(<SkillCard skill={makeSkill({ securityStatus: 'unknown' })} onOpen={vi.fn()} />)
 

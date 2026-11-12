@@ -104,10 +104,6 @@ import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import { localFileUrl } from '../../lib/handlePreviewLink'
 import type { SessionTurnCheckpoint } from '../../api/sessions'
 import { en } from '../../i18n/locales/en'
-import { zh } from '../../i18n/locales/zh'
-import { zh as zhTW } from '../../i18n/locales/zh-TW'
-import { jp } from '../../i18n/locales/jp'
-import { kr } from '../../i18n/locales/kr'
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -322,14 +318,14 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
       'chat.turnChangesPartialCoverageConfirmBody',
       'chat.rewindSuccessPartialCoverage',
     ] as const
-    for (const [name, messages] of Object.entries({ en, zh, zhTW, jp, kr })) {
+    for (const [name, messages] of Object.entries({ en })) {
       for (const key of keys) {
         expect(messages[key], `${name}/${key} must interpolate {sources}`)
           .toContain('{sources}')
       }
     }
     // The post-undo message also has to say how much of the conversation went.
-    for (const [name, messages] of Object.entries({ en, zh, zhTW, jp, kr })) {
+    for (const [name, messages] of Object.entries({ en })) {
       expect(
         messages['chat.rewindSuccessPartialCoverage'],
         `${name} must interpolate {count}`,
@@ -704,7 +700,7 @@ describe('CurrentTurnChangeCard – collapse long file lists', () => {
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(5)
     // the show-more toggle is present (identity-mock key). The real key carries the
     // remaining count via '{count}'; with the placeholder-bearing real string this
-    // renders as "再显示 3 个文件" (8 - COLLAPSED_COUNT(5) = 3).
+    // renders as "Show 3 more files" (8 - COLLAPSED_COUNT(5) = 3).
     expect(screen.getByText('chat.turnChangesShowMore')).toBeInTheDocument()
     // …and it is the only toggle (no "show less" while collapsed)
     expect(screen.queryByText('chat.turnChangesShowLess')).not.toBeInTheDocument()

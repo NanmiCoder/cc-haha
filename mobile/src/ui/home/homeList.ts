@@ -10,9 +10,9 @@ import {
   type Project,
 } from './homeModel'
 
-/* 轻量首页的纯逻辑：状态筛选、「最近」挑选、按项目分组与自动展开、行的状态文案。 */
+/* Pure logic of the light home: status filter, Recent selection, grouping by project with auto-expansion, row status text. */
 
-/* ───────────── 状态筛选 ───────────── */
+/* ───────────── Status filter ───────────── */
 
 export type HomeFilter = 'all' | 'waiting' | 'running'
 
@@ -29,17 +29,17 @@ export function homeCounts(rows: readonly DashboardRow[]): HomeCounts {
   return { waiting, running }
 }
 
-/** 药丸只列有内容的项：全部永远在，「等你决定」「进行中」没有会话时不显示。 */
+/** Pills list only items with content: All is always there, "Waiting for your decision" and "In progress" hidden without sessions. */
 export function filterOptions(counts: HomeCounts) {
   const options: { value: HomeFilter; label: string; count?: number }[] = [
-    { value: 'all', label: '全部' },
+    { value: 'all', label: 'All' },
   ]
-  if (counts.waiting) options.push({ value: 'waiting', label: '等你决定', count: counts.waiting })
-  if (counts.running) options.push({ value: 'running', label: '进行中', count: counts.running })
+  if (counts.waiting) options.push({ value: 'waiting', label: 'Waiting for your decision', count: counts.waiting })
+  if (counts.running) options.push({ value: 'running', label: 'In progress', count: counts.running })
   return options
 }
 
-/** 所选筛选已经没有会话了（比如决定处理完）就回到「全部」，不留一个空列表。 */
+/** When the chosen filter no longer has sessions (e.g. decisions handled) go back to "All" instead of leaving an empty list. */
 export function resolveFilter(filter: HomeFilter, counts: HomeCounts): HomeFilter {
   if (filter === 'waiting' && !counts.waiting) return 'all'
   if (filter === 'running' && !counts.running) return 'all'
@@ -51,13 +51,13 @@ export function applyFilter(rows: readonly DashboardRow[], filter: HomeFilter) {
   return rows.filter((row) => row.activity?.activityState === filter)
 }
 
-/* ───────────── 最近 ───────────── */
+/* ───────────── Recent ───────────── */
 
 export const recentLimit = 5
 
 /**
- * 「最近」：按最近活动排好的行里取前几条；等你决定的会话不论多旧都留在里面，
- * 其余补到 limit 条。返回顺序与传入顺序一致。
+ * "Recent": take the first few of rows sorted by recent activity; sessions waiting for your decision stay in no matter how old, 
+ * and the rest fill up to limit. Return order matches input order.
  */
 export function recentRows(rows: readonly DashboardRow[], limit = recentLimit) {
   const picked = new Set<DashboardRow>()
@@ -69,14 +69,14 @@ export function recentRows(rows: readonly DashboardRow[], limit = recentLimit) {
   return rows.filter((row) => picked.has(row))
 }
 
-/* ───────────── 项目分组 ───────────── */
+/* ───────────── Project grouping ───────────── */
 
 export type ProjectGroup = Project & {
-  /** 项目下要列出的会话：已经在「最近」里出现的不再重复。 */
+  /** Sessions to list under a project: those already in Recent are not repeated. */
   rows: DashboardRow[]
-  /** 下面有会话可以展开；会话全都在「最近」里的项目没有，不能点开一个空列表。 */
+  /** Has sessions below to expand; projects whose sessions are all in Recent have none, so you cannot open an empty list. */
   expandable: boolean
-  /** 这个项目的会话总数（含已在「最近」里的）。 */
+  /** Total sessions in this project (including those already in Recent). */
   total: number
   waiting: number
   running: number
@@ -84,10 +84,10 @@ export type ProjectGroup = Project & {
 }
 
 /**
- * 按项目分组（行已按最近活动倒序，项目按最近有动静的排在前面）。
- * 默认只展开最近的那个项目，以及有等你决定 / 运行中会话的项目；
- * overrides 是用户手动点开或收起的结果，优先于默认。没有项目目录的会话不进项目段。
- * exclude 里的行（已经在「最近」里）不再列在项目下，但仍计入项目的总数和等你决定 / 运行中的提示。
+ * Group by project (rows already sorted by recent activity descending, projects with recent activity first).
+ * By default expand only the most recent project, plus projects with sessions waiting for your decision / running; 
+ * overrides is the result of the user manually expanding or collapsing, taking priority over defaults. Sessions without a project directory do not go into the projects section.
+ * exclude rows in it (already in Recent) are no longer listed under the project, but still count toward the project total and the waiting / running hints.
  */
 export function projectGroups(
   rows: readonly DashboardRow[],
@@ -117,21 +117,21 @@ export function projectGroups(
 }
 
 /**
- * 没有项目目录的会话进不了任何项目，不在「最近」里就哪儿都看不到（只能搜索）：
- * 单独列在项目段最后。
+ * Sessions without a project directory belong to no project, and outside Recent they would be invisible (search only): 
+ * list them separately at the end of the projects section.
  */
 export function looseRows(rows: readonly DashboardRow[], exclude: ReadonlySet<DashboardRow> = new Set()) {
   return rows.filter((row) => !projectOf(row.session) && !exclude.has(row))
 }
 
-/** 折叠着的项目头右侧的提示：有等你决定的先说，其次是运行中；都没有就不显示。 */
+/** Hint on the right of a collapsed project header: waiting for decisions first, then running; hidden if neither. */
 export function projectBadge(group: Pick<ProjectGroup, 'waiting' | 'running'>) {
-  if (group.waiting) return { text: `${group.waiting} 个等你决定`, tone: 'attn' as const }
-  if (group.running) return { text: `${group.running} 个运行中`, tone: 'run' as const }
+  if (group.waiting) return { text: `${group.waiting} waiting for your decision`, tone: 'attn' as const }
+  if (group.running) return { text: `${group.running} running`, tone: 'run' as const }
   return null
 }
 
-/* ───────────── 行状态 ───────────── */
+/* ───────────── Row status ───────────── */
 
 export type RowState = 'waiting' | 'running' | 'stalled' | Outcome
 
@@ -144,7 +144,7 @@ export function rowState(row: DashboardRow): RowState {
 
 export type LineTone = 'attn' | 'err' | 'ink3'
 
-/** 「最近」行的副行：项目名 · 状态 / 当前一步。运行中只写当前一步（等宽），没有就退回项目名。 */
+/** Subline of a Recent row: project name · status / current step. While running only the current step (monospace), falling back to the project name. */
 export function recentLine(
   row: DashboardRow,
   now: number
@@ -160,7 +160,7 @@ export function recentLine(
       }
     case 'running':
       return {
-        text: row.activity?.preview?.trim() || project || '正在处理',
+        text: row.activity?.preview?.trim() || project || 'Working',
         tone: 'ink3',
         mono: true,
       }
@@ -175,45 +175,45 @@ export function recentLine(
   }
 }
 
-/** 等你决定的短说法（项目下的会话行右侧放不下完整的动作）。 */
+/** Short form of waiting for your decision (the full action does not fit on the right of session rows under projects). */
 export function waitingShort(activity?: MobileActivity) {
   const kind = decisionKind(activity)
-  if (kind === 'question') return '在问你'
-  if (kind === 'plan' || kind === 'team') return '等你确认'
-  return '等你决定'
+  if (kind === 'question') return 'Asking you'
+  if (kind === 'plan' || kind === 'team') return 'Waiting for you'
+  return 'Waiting for your decision'
 }
 
-/** 项目下的会话行右侧：需要说话的状态用文字；运行中走秒、其余显示相对时间由组件负责，这里返回 null。 */
+/** Right side of session rows under projects: states needing attention use text; running ticks seconds and others show relative time handled by the component, so null here. */
 export function projectTrailing(row: DashboardRow): { text: string; tone: LineTone } | null {
   switch (rowState(row)) {
     case 'waiting':
       return { text: waitingShort(row.activity), tone: 'attn' }
     case 'stalled':
-      return { text: '没有进展', tone: 'attn' }
+      return { text: 'No progress', tone: 'attn' }
     case 'failed':
-      return { text: '出错停下', tone: 'err' }
+      return { text: 'Stopped with error', tone: 'err' }
     default:
       return null
   }
 }
 
-/** 读屏用的状态词。 */
+/** Status words for screen readers. */
 export function stateWords(state: RowState) {
   switch (state) {
     case 'waiting':
-      return '等你决定'
+      return 'Waiting for your decision'
     case 'running':
-      return '进行中'
+      return 'In progress'
     case 'stalled':
-      return '没有进展'
+      return 'No progress'
     case 'failed':
-      return '出错停下'
+      return 'Stopped with error'
     case 'stopped':
-      return '你停止了'
+      return 'You stopped'
     case 'review':
-      return '已完成，未查看'
+      return 'Done, unviewed'
     case 'done':
-      return '已完成'
+      return 'Done'
     default:
       return ''
   }

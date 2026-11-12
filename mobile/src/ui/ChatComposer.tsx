@@ -37,13 +37,13 @@ import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/Voi
 import { simulatedPhoneChrome } from './webChrome'
 import { subscribeWebKeyboard } from './webKeyboard'
 
-/** 网页预览里模拟 iPhone 的 Home 指示条高度，原生端和 H5 用真实安全区。 */
+/** Web preview simulates the iPhone home indicator height; native and H5 use the real safe area. */
 export function useBottomInset() {
   const insets = useSafeAreaInsets()
   return simulatedPhoneChrome ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 12)
 }
 
-/** 键盘弹起时输入框贴着键盘，不再留 Home 指示条的空隙。 */
+/** When the keyboard is up the input sits against it without leaving the home indicator gap. */
 function useKeyboardVisible() {
   const [visible, setVisible] = useState(false)
   useEffect(() => {
@@ -64,7 +64,7 @@ function useKeyboardVisible() {
   return visible
 }
 
-/** 小胶囊：视觉 32 高，点按区域 44 高。 */
+/** Small capsule: visual height 32, tap area 44. */
 function Pill({
   label,
   accessibilityLabel,
@@ -116,7 +116,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
   const remove = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`移除 ${attachment.name}`}
+      accessibilityLabel={`Remove ${attachment.name}`}
       hitSlop={10}
       onPress={onRemove}
       style={{
@@ -139,7 +139,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
   if (uri)
     return (
       <View style={{ width: 52, height: 52 }}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`预览 ${attachment.name}`} onPress={onPreview}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`Preview ${attachment.name}`} onPress={onPreview}>
           <Image
             source={{ uri }}
             style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
@@ -173,7 +173,7 @@ function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: Compo
   )
 }
 
-/** `/` 和 `@` 触发的悬浮候选卡：每行右侧是类型标签。 */
+/** `/` and the floating suggestion card triggered by `@`: each row has a type label on the right. */
 function CandidateCard({
   candidates,
   loading,
@@ -214,7 +214,7 @@ function CandidateCard({
               <Pressable
                 key={`${candidate.kind}:${candidate.name}`}
                 accessibilityRole="button"
-                accessibilityLabel={`使用 ${token}，${candidate.description}，${candidateTypeLabel(candidate)}`}
+                accessibilityLabel={`Use ${token}, ${candidate.description}, ${candidateTypeLabel(candidate)}`}
                 accessibilityState={{ selected: active }}
                 onPress={() => onChoose(candidate)}
                 style={({ pressed }) => ({
@@ -242,7 +242,7 @@ function CandidateCard({
             )
           })
         ) : (
-          <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>
+          <Text style={{ padding: 14, color: colors.ink3 }}>No matching skills or commands</Text>
         )}
       </ScrollView>
     </View>
@@ -250,8 +250,8 @@ function CandidateCard({
 }
 
 /**
- * 运行胶囊：盾牌 + 「模型 · 强度」+ ⌄，不加底色。权限档位不靠颜色区分：全权限换成带感叹号的盾牌，
- * 切过去时另有确认框。运行中锁住时文字变淡、带锁。
+ * Run capsule: shield + "model · effort" + ⌄, without background. Permission tiers are not distinguished by color: full access switches to a shield with an exclamation mark, 
+ * with a separate confirmation when switching to it. When locked while running the text fades and shows a lock.
  */
 function RunPill({ run, onPress }: { run: ChatComposerRun; onPress(): void }) {
   const colors = useColors()
@@ -295,9 +295,9 @@ function RunPill({ run, onPress }: { run: ChatComposerRun; onPress(): void }) {
 export type ChatComposerRun = RunCapsule
 
 /**
- * 新任务和追问共用的输入框：输入区在上，下面一行 ＋（带什么）…… 运行胶囊（怎么跑）+ 发送。
- * 已选的技能、团队、电脑和材料缩略图是输入区里的小胶囊。底部带一段向上渐隐，
- * 放在页面底部时内容可以在它下面滚动。
+ * Input shared by new task and follow-up: input area on top, below one row of + (bring) … run capsule (how to run) + send.
+ * Selected skills, team, computer and material thumbnails are small capsules in the input area. The bottom has an upward fade, 
+ * so content can scroll beneath it when placed at the bottom of the page.
  */
 export function ChatComposer({
   client,
@@ -345,7 +345,7 @@ export function ChatComposer({
   lean: boolean
   empty: boolean
   busy: boolean
-  /** 这一轮已结束、团队成员还在跑：没内容时这个键是停止。 */
+  /** This turn ended while team members are still running: with no content this key is stop. */
   background?: boolean
   queueing?: boolean
   disabled: boolean
@@ -353,14 +353,14 @@ export function ChatComposer({
   onOpenRun(): void
   /** Returns true when the page took the draft and is clearing it. */
   onSend(): boolean | void
-  /** 运行中且输入框是空的，发送位变成停止键。 */
+  /** While running with an empty input, the send slot becomes the stop key. */
   onStop?(): void
   onError(message: string): void
-  /** 输入框上方：通知、排队中的消息。 */
+  /** Above the input: notices and queued messages. */
   above?: ReactNode
-  /** 输入框上方的一行状态说明。 */
+  /** One line of status above the input. */
   caption?: ReactNode
-  /** 整块（含渐隐区）的高度，页面给内容留底边距用。 */
+  /** Height of the whole block (including fade), used by the page for content bottom padding. */
   onHeight?(height: number): void
 }) {
   const colors = useColors()
@@ -369,8 +369,8 @@ export function ChatComposer({
   const input = useRef<ComponentRef<typeof TextInput>>(null)
   const [bringOpen, setBringOpen] = useState(false)
   const [selection, setSelection] = useState({ start: draft.length, end: draft.length })
-  // 网页版只在输入框自己挪光标（插入候选、语音、底单）时才把光标交给输入框：
-  // 打字时每次都设光标，浏览器会打断拼音等输入法的组合输入。原生端照常受控。
+  // The web version only hands the caret to the input when the input moves it itself (inserting suggestions, voice, sheets): 
+  // setting the caret on every keystroke interrupts composition in IMEs such as pinyin. Native stays controlled as usual.
   const [caret, setCaret] = useState<{ start: number; end: number } | null>(null)
   const moveCaret = (position: number) => {
     const next = { start: position, end: position }
@@ -586,8 +586,8 @@ export function ChatComposer({
             {references.map((reference) => (
               <Pill
                 key={`${reference.kind}:${reference.id}`}
-                label={isComputerUseReference(reference) ? '操作电脑' : `@${reference.displayName || reference.name}`}
-                accessibilityLabel={isComputerUseReference(reference) ? '移除 操作电脑' : `移除技能 ${reference.displayName || reference.name}`}
+                label={isComputerUseReference(reference) ? 'Computer use' : `@${reference.displayName || reference.name}`}
+                accessibilityLabel={isComputerUseReference(reference) ? 'Remove computer use' : `Remove skill ${reference.displayName || reference.name}`}
                 onPress={() =>
                   onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))
                 }
@@ -596,8 +596,8 @@ export function ChatComposer({
             ))}
             {team ? (
               <Pill
-                label="团队"
-                accessibilityLabel="关闭这条消息的 Agent 团队"
+                label="Team"
+                accessibilityLabel="Turn off the agent team for this message"
                 onPress={() => onTeam(false)}
                 icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
               />
@@ -606,7 +606,7 @@ export function ChatComposer({
         ) : null}
         <TextInput
           ref={input}
-          accessibilityLabel={sessionId ? '消息' : '新任务内容'}
+          accessibilityLabel={sessionId ? 'Messages' : 'New task content'}
           value={draft}
           multiline
           editable={!disabled && !voice.live}
@@ -657,7 +657,7 @@ export function ChatComposer({
         {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="添加：技能、命令、材料"
+            accessibilityLabel="Add: skills, commands, materials"
             accessibilityState={{ expanded: bringOpen }}
             onPress={openBring}
             style={({ pressed }) => ({
@@ -689,7 +689,7 @@ export function ChatComposer({
             onPress={press}
             style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
           >
-            {/* 一直是墨色实心圆：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
+            {/* Always a solid ink circle: tapping with no content does nothing and it does not turn grey; it fades only when there is content that cannot be sent (disconnected, configuration pending). */}
             <View
               style={{
                 width: 36,

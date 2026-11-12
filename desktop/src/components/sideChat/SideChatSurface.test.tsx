@@ -31,5 +31,5 @@ it('does not display a child belonging to another parent', () => {
 it('explains the temporary lifetime in the empty conversation', () => {
   render(<SideChatSurface parentSessionId="parent" sideChatId="child" />)
   expect(screen.getByRole('heading')).toBeTruthy()
-  expect(screen.getByText(/temporary conversation|临时对话/)).toBeTruthy()
+  expect(screen.getByText(/temporary conversation/)).toBeTruthy()
 })

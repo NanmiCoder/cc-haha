@@ -10,13 +10,13 @@ import { errorText } from '../theme'
 import { ScanLine } from './motion'
 import { simulatedPhoneChrome } from '../webChrome'
 
-/** 扫码页固定用暗色取景：相机画面之上只有白色线条与文字。 */
+/** The scan page always uses a dark viewfinder: only white lines and text over the camera image. */
 const scannerBackground = '#121110'
 const frameSize = 240
 
 /**
- * 「首次打开 · 扫码」：全屏相机取景、扫描框、说明和底部白卡（相册 / 粘贴 / 手动）。
- * 只识别二维码；扫到的内容交给 onScanned，同一内容被拒后不会反复触发。
+ * "First open · scan": full-screen camera viewfinder, scan frame, instructions and a bottom white card (photos / paste / manual).
+ * Only recognizes QR codes; scanned content goes to onScanned, and the same content will not retrigger after being rejected.
  */
 export function Scanner({
   active,
@@ -28,11 +28,11 @@ export function Scanner({
   onPaste,
   onManual,
 }: {
-  /** 页面在前台且没有打开手动面板 / 批准页时才开相机。 */
+  /** Open the camera only when the page is in the foreground and the manual panel / approval page is not open. */
   active: boolean
-  /** 还没有任何电脑：左上角显示品牌，而不是关闭按钮。 */
+  /** No computer yet: show the brand at the top left instead of a close button. */
   firstRun: boolean
-  /** 粘贴、二维码内容或闪光灯的提示，只在这一处显示。 */
+  /** Hints for paste, QR content or flashlight are shown only here. */
   notice: string
   onNotice(text: string): void
   onClose(): void
@@ -93,7 +93,7 @@ export function Scanner({
       })
       if (current()) await readPhoto(result, current)
     } catch {
-      if (current()) onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+      if (current()) onNotice('Cannot recognize this image; choose another QR code screenshot or paste the pairing link.')
     } finally {
       if (!session.disposed && session.pending === request) {
         session.pending = 0
@@ -108,9 +108,9 @@ export function Scanner({
     if (!current()) return
     const values = [...new Set(codes.map((code) => code.data).filter(Boolean))]
     if (values.length === 0) {
-      onNotice('图片中没有识别到二维码，请选择清晰的二维码截图。')
+      onNotice('No QR code was detected in the image; choose a clear QR code screenshot.')
     } else if (values.length > 1) {
-      onNotice('图片中有多个二维码，请裁剪后只保留电脑的连接二维码。')
+      onNotice('The image has multiple QR codes; crop it to keep only the computer’s connection QR code.')
     } else {
       // Reuse the camera/paste parser and confirmation form. Importing a QR
       // never makes a network request or saves credentials by itself.
@@ -132,7 +132,7 @@ export function Scanner({
         session.revision++
         session.pending = 0
         setSelectingPhoto(false)
-        onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+        onNotice('Cannot recognize this image; choose another QR code screenshot or paste the pairing link.')
       }
       return
     }
@@ -147,7 +147,7 @@ export function Scanner({
       if ('code' in result) throw new Error('Image picker failed')
       await readPhoto(result, recoveredCurrent)
     } catch {
-      if (recoveredCurrent()) onNotice('无法识别这张图片，请重选二维码截图或粘贴配对链接。')
+      if (recoveredCurrent()) onNotice('Cannot recognize this image; choose another QR code screenshot or paste the pairing link.')
     } finally {
       if (!session.disposed && session.pending === request) {
         session.pending = 0
@@ -180,7 +180,7 @@ export function Scanner({
           {cameraError}
         </Text>
         <PillButton
-          title="重试相机"
+          title="Retry camera"
           onPress={() => {
             handled.current = null
             setCameraError('')
@@ -191,7 +191,7 @@ export function Scanner({
   else if (permission && !permission.granted)
     frame = (
       <PillButton
-        title={permission.canAskAgain === false ? '在系统设置中开启相机' : '允许使用相机'}
+        title={permission.canAskAgain === false ? 'Turn on the camera in system settings' : 'Allow camera'}
         onPress={() => {
           if (permission.canAskAgain === false) void Linking.openSettings()
           else
@@ -213,7 +213,7 @@ export function Scanner({
           }}
           onMountError={(event) => {
             setTorch(false)
-            setCameraError(`${event.message}。可以粘贴配对链接或手动输入地址。`)
+            setCameraError(`${event.message}. You can paste a pairing link or enter the address manually.`)
           }}
           onBarcodeScanned={({ data }) => {
             const session = scanSession.current
@@ -245,15 +245,15 @@ export function Scanner({
               </Text>
             </View>
           ) : (
-            <GlassButton icon="x" label="关闭扫码" onPress={leave(onClose)} />
+            <GlassButton icon="x" label="Close scanner" onPress={leave(onClose)} />
           )}
           <GlassButton
             icon="flashlight"
-            label={torch ? '关闭闪光灯' : '打开闪光灯'}
+            label={torch ? 'Turn off flashlight' : 'Turn on flashlight'}
             selected={torch && cameraOn}
             onPress={() => {
               if (cameraOn) setTorch((value) => !value)
-              else onNotice('开启相机后才可以使用闪光灯。')
+              else onNotice('The flashlight is available only after the camera is on.')
             }}
           />
         </View>
@@ -289,7 +289,7 @@ export function Scanner({
               textAlign: 'center',
             }}
           >
-            扫一下电脑上的二维码
+            Scan the QR code on your computer
           </Text>
           <Text
             style={{
@@ -299,7 +299,7 @@ export function Scanner({
               textAlign: 'center',
             }}
           >
-            {'在电脑的 cc-haha 里打开\n「设置 → 手机连接」，选择局域网或 Cloudflare 外出连接'}
+            {'In cc-haha on the computer open\nSettings → Mobile connection, and choose LAN or Cloudflare away connection'}
           </Text>
           {notice ? (
             <View
@@ -333,14 +333,14 @@ export function Scanner({
         >
           <CardRow
             icon="image"
-            title={selectingPhoto ? '正在识别图片…' : '从相册选择二维码'}
+            title={selectingPhoto ? 'Recognizing image…' : 'Choose QR code from photos'}
             disabled={selectingPhoto}
             onPress={() => void selectPhoto()}
           />
           <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 44 }} />
-          <CardRow icon="link" title="粘贴配对链接" onPress={leave(onPaste)} />
+          <CardRow icon="link" title="Paste pairing link" onPress={leave(onPaste)} />
           <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 44 }} />
-          <CardRow icon="pencil" title="手动输入地址" chevron onPress={leave(onManual)} />
+          <CardRow icon="pencil" title="Enter address manually" chevron onPress={leave(onManual)} />
           <Text
             style={{
               paddingTop: 6,
@@ -351,7 +351,7 @@ export function Scanner({
               color: colors.ink3,
             }}
           >
-            只连你自己电脑上的 cc-haha，用不着模型的 API Key。
+            Connects only to cc-haha on your own computer; no model API key needed.
           </Text>
         </View>
       </ScrollView>
@@ -381,7 +381,7 @@ function Corner({ corner }: { corner: 'tl' | 'tr' | 'bl' | 'br' }) {
   )
 }
 
-/** 取景画面上的 44 圆按钮（关闭 / 闪光灯）。闪光灯打开时反白。 */
+/** 44 round buttons over the viewfinder (close / flashlight). Inverted when the flashlight is on. */
 function GlassButton({
   icon,
   label,
@@ -415,7 +415,7 @@ function GlassButton({
   )
 }
 
-/** 扫描框位置上的白色胶囊（允许相机 / 去系统设置 / 重试相机）。 */
+/** White capsule at the scan frame position (allow camera / go to system settings / retry camera). */
 function PillButton({ title, onPress }: { title: string; onPress(): void }) {
   return (
     <Pressable

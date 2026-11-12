@@ -15,7 +15,7 @@ type Snapshot = {
   notifications: PermissionSnapshot | null
   camera: MediaPermission | null
   photos: MediaPermission | null
-  /** Android 三个通知渠道右侧的一句话；读不到的为空串。 */
+  /** Android One line on the right of each of the three notification channels; empty string when unreadable. */
   channels: Record<ChannelKind, string>
 }
 
@@ -46,9 +46,9 @@ async function readSnapshot(): Promise<Snapshot> {
 }
 
 /**
- * 读系统权限（通知、相机、照片）和 Android 通知渠道。页面重新获得焦点、或用户去系统设置
- * 改完回到 App 时都会重新读，所以设置页上的状态不会停在离开前的样子。读不到的项保持 null，
- * 页面不显示它的值。
+ * Read system permissions (notifications, camera, photos) and Android notification channels. Reread when the page regains focus or the user returns from system settings
+ * after changing them, so the status on the settings page never stays stale from before leaving. Unreadable items stay null, 
+ * and the page does not show their values.
  */
 export function useSystemPermissions() {
   const [snapshot, setSnapshot] = useState<Snapshot>({

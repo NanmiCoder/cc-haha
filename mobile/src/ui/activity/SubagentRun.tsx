@@ -43,7 +43,7 @@ const toggle = (set: ReadonlySet<string>, key: string) => {
   return next
 }
 
-/** 主 Agent 交给子 Agent（或队长交给成员）的任务往往有几十行：默认只显示前几行，点一下展开。 */
+/** Tasks given by the main agent to a subagent (or by the lead to a member) are often dozens of lines: show only the first few by default, tap to expand. */
 export function TaskPrompt({ text }: { text: string }) {
   const colors = useColors()
   const [open, setOpen] = useState(false)
@@ -61,7 +61,7 @@ export function TaskPrompt({ text }: { text: string }) {
           hitSlop={8}
           style={{ minHeight: 28, justifyContent: 'center' }}
         >
-          <Text style={{ fontSize: 13, color: colors.run }}>{open ? '收起' : '展开全部'}</Text>
+          <Text style={{ fontSize: 13, color: colors.run }}>{open ? 'Collapse' : 'Show all'}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -77,7 +77,7 @@ function LockIcon({ color }: { color: string }) {
   )
 }
 
-/** 底部固定的「只读」提示：这里看得到记录，但不能回复。 */
+/** Fixed "Read-only" note at the bottom: records are visible here, but you cannot reply. */
 export function ReadOnlyBar() {
   const colors = useColors()
   const insets = useSafeAreaInsets()
@@ -85,7 +85,7 @@ export function ReadOnlyBar() {
     <View style={{ paddingHorizontal: 12, paddingBottom: Math.max(insets.bottom, 12), paddingTop: 6 }}>
       <View
         accessibilityRole="text"
-        accessibilityLabel="只读，在这里不能回复"
+        accessibilityLabel="Read-only, cannot reply here"
         style={{
           height: 44,
           borderRadius: 22,
@@ -97,16 +97,16 @@ export function ReadOnlyBar() {
         }}
       >
         <LockIcon color={colors.ink3} />
-        <Text style={{ fontSize: 14, color: colors.ink3 }}>只读 · 在这里不能回复</Text>
+        <Text style={{ fontSize: 14, color: colors.ink3 }}>Read-only · cannot reply here</Text>
       </View>
     </View>
   )
 }
 
 /**
- * 子 Agent 全屏页：只读 transcript。顶栏是名称 + 状态 + 耗时，运行中右上有「停止」；
- * 内容和主对话同一种时间线（交给它的任务、聚合的工具行、当前一步、回复）。
- * 运行中每 2 秒刷新；底部固定「只读」提示。
+ * Subagent full-screen page: read-only transcript. The header is name + status + elapsed, with "Stop" at top right while running; 
+ * content uses the same timeline as the main conversation (task given to it, aggregated tool rows, current step, replies).
+ * Refreshes every 2 seconds while running; a fixed "Read-only" note at the bottom.
  */
 export function SubagentRun({
   hostId,
@@ -125,8 +125,8 @@ export function SubagentRun({
   const resource = useFocusedResource<Loaded>(
     useCallback(
       async (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
-        // 运行状态和耗时来自后台任务列表；列表读不到时只显示 transcript。
+        if (!client) throw new Error('Connecting to computer')
+        // Run state and elapsed time come from the background task list; when the list cannot be read only the transcript is shown.
         const [output, snapshot] = await Promise.all([
           loadSubagentRun(client, sessionId, toolUseId, taskId, signal),
           client
@@ -144,7 +144,7 @@ export function SubagentRun({
   )
   const header = subagentHeader(resource.value?.task, resource.value?.output ?? null)
   const live = header.status === 'running'
-  // 轮询间隔跟随运行状态：结束后停止刷新。
+  // Polling interval follows run state: refreshing stops after it ends.
   if (resource.value && live !== running) setRunning(live)
   const now = useNow(live)
   const view = subagentRunView(resource.value?.output ?? null, live)
@@ -174,7 +174,7 @@ export function SubagentRun({
     const id = resource.value?.task?.taskId ?? taskId
     if (!id) return
     if (!sendToSession(sessionId, { type: 'stop_background_task', taskId: id })) {
-      setStopError('连接已断开，请回到会话重新连接后再停止。')
+      setStopError('Connection lost; go back to the session and reconnect before stopping.')
       return
     }
     setStopError('')
@@ -182,8 +182,8 @@ export function SubagentRun({
     if (stopTimer.current) clearTimeout(stopTimer.current)
     stopTimer.current = setTimeout(() => {
       setStopping(false)
-      // 已经停下就不用报错。
-      if (liveRef.current) setStopError('电脑没有回应停止请求，稍后刷新看看状态。')
+      // No error needed if already stopped.
+      if (liveRef.current) setStopError('The computer did not respond to the stop request; refresh later to check the status.')
     }, STOP_TIMEOUT_MS)
     void resource.refresh()
   }
@@ -191,7 +191,7 @@ export function SubagentRun({
   const rows = visibleChatRows(view.rows, ui.open)
   const list = useRef<FlatList<ChatRow>>(null)
   const stick = useRef(true)
-  const status = stoppingNow ? '停止中' : agentStatusText(header.status)
+  const status = stoppingNow ? 'Stopping' : agentStatusText(header.status)
   const statusColor =
     header.status === 'running'
       ? colors.run
@@ -209,7 +209,7 @@ export function SubagentRun({
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
             {live ? <Spinner size={11} thickness={2.6} /> : null}
             <Text style={{ fontSize: 12, lineHeight: 16, fontWeight: '500', color: statusColor }}>{status}</Text>
-            <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>· 子 Agent</Text>
+            <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>· subagent</Text>
             {time ? <Mono style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>{`· ${time}`}</Mono> : null}
           </View>
         }
@@ -217,7 +217,7 @@ export function SubagentRun({
           live ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`停止 ${header.title}`}
+              accessibilityLabel={`Stop ${header.title}`}
               accessibilityState={{ disabled: stoppingNow, busy: stoppingNow }}
               disabled={stoppingNow}
               onPress={() => setConfirm(true)}
@@ -237,7 +237,7 @@ export function SubagentRun({
                 }}
               >
                 <View style={{ width: 12, height: 12, borderRadius: 2.4, backgroundColor: colors.err }} />
-                <Text style={{ fontSize: 15, fontWeight: '600', color: colors.err }}>{stoppingNow ? '停止中' : '停止'}</Text>
+                <Text style={{ fontSize: 15, fontWeight: '600', color: colors.err }}>{stoppingNow ? 'Stopping' : 'Stop'}</Text>
               </View>
             </Pressable>
           ) : undefined
@@ -263,11 +263,11 @@ export function SubagentRun({
             if (live && stick.current) list.current?.scrollToEnd({ animated: false })
           }}
           ListEmptyComponent={
-            <Footnote>{live ? '它还没有留下可看的内容，稍等一下。' : '没有可以显示的对话记录。'}</Footnote>
+            <Footnote>{live ? 'It has not left anything to view yet; wait a moment.' : 'No conversation records to show.'}</Footnote>
           }
           ListFooterComponent={
             <View style={{ gap: 8 }}>
-              {view.truncated ? <Footnote>记录较长，这里显示电脑返回的最近一段。</Footnote> : null}
+              {view.truncated ? <Footnote>The record is long; showing the most recent part returned by the computer.</Footnote> : null}
               {live && view.current ? <StatusCaption step={view.current} /> : null}
             </View>
           }
@@ -280,7 +280,7 @@ export function SubagentRun({
               />
             ) : row.kind === 'message' && row.item.id === view.prompt?.id ? (
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
-                <Text style={{ fontSize: 12, color: colors.ink3, paddingRight: 4 }}>主 Agent 交给它的任务</Text>
+                <Text style={{ fontSize: 12, color: colors.ink3, paddingRight: 4 }}>Task given by the main agent</Text>
                 <TaskPrompt text={row.item.text ?? ''} />
               </View>
             ) : row.kind === 'message' ? (
@@ -301,10 +301,10 @@ export function SubagentRun({
       <ReadOnlyBar />
       <ConfirmSheet
         visible={confirm}
-        title="停止这个子 Agent？"
+        title="Stop this subagent?"
         subject={header.title}
-        detail="已修改的文件会保留，尚未完成的输出可能不完整。"
-        confirmTitle="确认停止"
+        detail="Modified files are kept; unfinished output may be incomplete."
+        confirmTitle="Confirm stop"
         destructive
         onConfirm={stop}
         onClose={() => setConfirm(false)}

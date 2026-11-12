@@ -1,6 +1,6 @@
 /**
- * 计划正文的轻量 Markdown 解析：只认计划里常见的标题、段落、编号步骤、列表和代码块。
- * 渲染样式按设计稿：标题 23/30，段落 16/25，步骤编号等宽，路径等宽。
+ * Lightweight Markdown parsing of the plan body: only recognizes headings, paragraphs, numbered steps, lists and code blocks common in plans.
+ * Render styles per design: headings 23/30, paragraphs 16/25, step numbers monospace, paths monospace.
  */
 export type PlanItem = { marker: string; lines: string[] }
 export type PlanBlock =
@@ -12,9 +12,9 @@ export type PlanBlock =
   | { type: 'code'; text: string }
 export type PlanSpan = { text: string; code?: boolean; bold?: boolean }
 
-export const MISSING_PLAN_TEXT = '电脑未提供计划正文，请在电脑上核对后再批准。'
+export const MISSING_PLAN_TEXT = 'The computer did not provide the plan body; check on the computer before approving.'
 
-/** 计划正文只来自 plan / planContent；空串当作没有。 */
+/** The plan body comes only from plan / planContent; an empty string counts as absent. */
 export function planSource(input: Record<string, unknown>) {
   for (const value of [input.plan, input.planContent])
     if (typeof value === 'string' && value.trim()) return value
@@ -79,10 +79,10 @@ export function planBlocks(text: string): PlanBlock[] {
         lines: [(ordered ? ordered[2] : bullet![1]).trim()],
       }
       const previous = blocks.at(-1)
-      // 编号之间允许空行（松散列表），仍算同一组步骤。
+      // Blank lines between numbers are allowed (loose list) and still count as the same group of steps.
       if (previous?.type === type) previous.items.push(item)
       else blocks.push({ type, items: [item] } as PlanBlock)
-      // 缩进的续行、子列表归到这一步下面。
+      // Indented continuation lines and sublists belong under this step.
       while (index + 1 < lines.length) {
         const next = lines[index + 1]
         if (!next.trim()) {
@@ -105,7 +105,7 @@ export function planBlocks(text: string): PlanBlock[] {
   return blocks
 }
 
-/** 文件路径（含 / 和扩展名）按等宽显示，与 `code` 一致。 */
+/** File paths (with / and an extension) are shown in monospace, same as `code`. */
 const PATH = /((?:~|\.{1,2})?(?:[\w@.-]+\/)+[\w@.[\]-]+\.[A-Za-z0-9]+)/
 export function planSpans(text: string): PlanSpan[] {
   const spans: PlanSpan[] = []
@@ -133,7 +133,7 @@ const plain = (value: string) =>
     .replace(/\*\*([^*]*)\*\*/g, '$1')
     .trim()
 
-/** 底座卡片里的“计划前两行”：取前两条有内容的块，去掉 Markdown 记号。 */
+/** "First two lines of the plan" in the base card: take the first two blocks with content, stripping Markdown markers. */
 export function planExcerpt(text: string, count = 2) {
   const lines: string[] = []
   for (const block of planBlocks(text)) {

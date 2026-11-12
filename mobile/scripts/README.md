@@ -1,67 +1,67 @@
-# 移动端本地协议 Fixture
+# Mobile Local Protocol Fixture
 
-这是供 App 界面验收使用的**模拟服务**，不是 cc-haha 后端或中继服务器。所有会话、供应商、文件内容和回复只保存在进程内存中；重启即重置。它不读取 `~/.claude`，不持有真实凭据，不调用模型，不执行 shell，也不创建或修改电脑文件。
+This is a **mock server** for app UI acceptance testing, not the cc-haha backend or a relay server. All sessions, providers, file contents, and replies are kept only in process memory and reset on restart. It does not read `~/.claude`, holds no real credentials, calls no models, runs no shell, and does not create or modify files on the computer.
 
-## 启动和连接
+## Starting and connecting
 
-在仓库的 `mobile/` 目录运行：
+Run in the repository's `mobile/` directory:
 
 ```sh
 bun scripts/fixture-server.ts --port=3457
 ```
 
-在 App 的局域网添加主机界面填写：
+On the app's add-LAN-host screen, enter:
 
-| 字段 | 测试值 |
+| Field | Test value |
 | --- | --- |
-| 名称 | 本地 Fixture |
-| 地址 | `http://127.0.0.1:3457` |
+| Name | Local Fixture |
+| Address | `http://127.0.0.1:3457` |
 | Token | `mobile-fixture` |
 
-默认端口为 `3457`，可用 `--port=3458` 同时启动第二个独立实例以检查多主机隔离。`--port=0` 使用系统分配的空闲端口。启动日志会输出实际地址。
+The default port is `3457`; use `--port=3458` to start a second independent instance at the same time to check multi-host isolation. `--port=0` uses a free port assigned by the system. The startup log prints the actual address.
 
-服务固定绑定 `127.0.0.1`，没有配置其他监听地址的选项。可用于同机浏览器预览及能够访问宿主机回环地址的模拟器；实体手机上的 `127.0.0.1` 指手机自身，不能用这个地址连接电脑。此服务不模拟 HTTPS、公网配对或原生安全存储；这些需要对应的服务器测试与真机验收。
+The server is always bound to `127.0.0.1`, with no option to listen on other addresses. It works for browser previews on the same machine and for simulators that can reach the host's loopback address; on a physical phone `127.0.0.1` refers to the phone itself and cannot be used to reach the computer. This server does not emulate HTTPS, public pairing, or native secure storage; those need the corresponding server tests and on-device acceptance.
 
-浏览器 Origin 只接受 `localhost`、`127.0.0.1`、`[::1]`，支持本地 Expo web 页面的跨域预检。HTTP 使用 `Authorization: Bearer mobile-fixture`；WebSocket 同时接受该 header 或 `?token=mobile-fixture`。这个固定 token 只用于本地假数据。
+Browser Origins are only accepted from `localhost`, `127.0.0.1`, and `[::1]`, with CORS preflight support for local Expo web pages. HTTP uses `Authorization: Bearer mobile-fixture`; WebSocket accepts either that header or `?token=mobile-fixture`. This fixed token is only for local fake data.
 
-## 可以验收的路径
+## Paths you can test
 
-启动后有四个带 `Fixture` 标识的会话：普通聊天与历史、操作审批、回答问题、确认计划。后三个已有待处理请求，打开即可检查恢复后的决策界面。
+After startup there are four sessions labeled `Fixture`: normal chat and history, action approval, answering a question, and confirming a plan. The last three already have pending requests; open them to check the restored decision UI.
 
-| 操作 | 模拟行为 |
+| Action | Mock behavior |
 | --- | --- |
-| 任意普通消息 | 回显用户消息、思考块、Read 工具调用与结果、分段文本回复、用量与结束事件 |
-| `/approval` | Bash 操作审批；允许、拒绝和会话内记住允许均可演示，但不会执行命令 |
-| `/edit` | Edit 文件修改审批（只展示改动预览，不写文件）；勾选“自动接受文件编辑”时把会话权限模式切到 acceptEdits |
-| `/question` | 一个单选问题和一个多选问题；使用正式 `updatedInput.answers` 协议 |
-| `/plan` | 计划确认；可携带执行模型、思考强度与会话权限模式 |
-| `/slow` | 慢速分段输出，方便检查停止；停止后取消所有未发送的事件 |
-| `/error` | 明确标注的模拟失败，随后可以重新发送 |
-| `/retry` | 发出一次重试状态，再继续正常回复 |
-| `/steps` | 工具时间线样本：读取、搜索、编辑、后台子 Agent 和一条运行约 8 秒的命令，随后正常结束；子 Agent 留在后台直到停止 |
-| 修改模型 / 思考强度 | `set_runtime_config` 验证后返回 `runtime_config_applied`；修改保存在该会话 |
-| 新建 / 改名 / 删除会话 | 操作当前进程的内存列表 |
-| 加载更多历史 | 普通会话每页 6 条；写入新消息后旧游标返回 `409 HISTORY_PAGE_STALE` |
-| 查看工作区 | 展示内存中的文件树、文件和差异；这些路径不对应真实文件 |
-| 修改主机默认模型 / 设置 / 供应商 | 修改该 fixture 实例的内存配置；不改变已有会话运行配置 |
+| Any normal message | Echoes the user message, a thinking block, a Read tool call and result, a chunked text reply, usage, and end events |
+| `/approval` | Bash action approval; allow, deny, and remember-allow-for-session can all be demonstrated, but no command is run |
+| `/edit` | Edit file change approval (only shows a change preview, writes nothing); checking "Auto-accept file edits" switches the session permission mode to acceptEdits |
+| `/question` | One single-choice and one multiple-choice question, using the official `updatedInput.answers` protocol |
+| `/plan` | Plan confirmation; can carry the execution model, thinking effort, and session permission mode |
+| `/slow` | Slow chunked output for testing stop; stopping cancels all unsent events |
+| `/error` | A clearly labeled mock failure, after which you can resend |
+| `/retry` | Emits one retry status, then continues the normal reply |
+| `/steps` | Tool timeline sample: read, search, edit, a background sub-Agent, and a command that runs about 8 seconds, then ends normally; the sub-Agent stays in the background until stopped |
+| Change model / thinking effort | `set_runtime_config` is validated and returns `runtime_config_applied`; changes are saved on that session |
+| Create / rename / delete session | Operates on the current process's in-memory list |
+| Load more history | 6 items per page for normal sessions; after a new message is written, old cursors return `409 HISTORY_PAGE_STALE` |
+| View workspace | Shows an in-memory file tree, files, and diffs; these paths don't correspond to real files |
+| Change host default model / settings / providers | Modifies that fixture instance's in-memory configuration; does not change existing sessions' runtime configuration |
 
-普通聊天的历史包含同一 `tool_use` 记录中的文本与工具块，适合检查历史转换是否错误地丢失助手文本。重连时服务器重发待处理请求和 `permission_requests_snapshot`，收到 `sync_state` 后返回真实的当前内存运行状态。
+Normal chat history contains text and tool blocks in the same `tool_use` record, which is good for checking whether history conversion wrongly drops assistant text. On reconnect the server resends pending requests and `permission_requests_snapshot`, and after receiving `sync_state` returns the real current in-memory run state.
 
-需要主动触发断线重连时，在另一个终端执行：
+To trigger a disconnect and reconnect manually, run in another terminal:
 
 ```sh
 curl -X POST -H 'Authorization: Bearer mobile-fixture' \
   http://127.0.0.1:3457/__fixture/disconnect
 ```
 
-`GET /__fixture/status`（同样需要 token）提供内存会话数和连接数。`GET /health` 是公开的 fixture 声明，不返回真实用户数据。`Ctrl+C` 结束服务。
+`GET /__fixture/status` (also token-protected) reports in-memory session and connection counts. `GET /health` is a public fixture declaration and returns no real user data. `Ctrl+C` stops the server.
 
-## 自动自检
+## Automatic self-test
 
 ```sh
 bun scripts/fixture-server.ts --self-test
 ```
 
-自检使用随机回环端口并自动关闭服务，覆盖认证、分页与失效游标、运行配置确认、工具和文本流、三种决策、停止后的事件取消。它不需要先启动 fixture。
+The self-test uses a random loopback port and shuts the server down automatically, covering authentication, pagination and stale cursors, runtime config confirmation, tool and text streams, the three decision types, and event cancellation after stop. It doesn't require the fixture to be started first.
 
-该服务只覆盖移动端首版使用的协议子集，不模拟真实模型行为、附件传输落盘、后台任务执行、分支回退、持久化、Git 操作或公网授权。未实现的 HTTP 路径明确返回 `404`；停止后尚未结束的文本流不写回历史。通过 fixture 验收能证明界面与协议接线正常，不能替代真实桌面服务和 iOS / Android 真机测试。
+This server only covers the protocol subset used by the first mobile release and does not emulate real model behavior, attachment transfer to disk, background task execution, branch rollback, persistence, Git operations, or public authorization. Unimplemented HTTP paths explicitly return `404`; text streams not yet finished when stopped are not written back to history. Passing fixture acceptance proves the UI and protocol wiring work, but cannot replace testing against the real desktop server and on real iOS / Android devices.

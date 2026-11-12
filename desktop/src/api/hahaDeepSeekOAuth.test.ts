@@ -23,10 +23,10 @@ describe('hahaDeepSeekOAuthApi', () => {
     postMock.mockResolvedValue({ authorizeUrl: 'https://example.invalid/auth', state: 's' })
 
     await hahaDeepSeekOAuthApi.start()
-    await hahaDeepSeekOAuthApi.start('zh-TW')
+    await hahaDeepSeekOAuthApi.start('en')
 
     expect(postMock).toHaveBeenNthCalledWith(1, '/api/haha-deepseek-oauth/start', {})
-    expect(postMock).toHaveBeenNthCalledWith(2, '/api/haha-deepseek-oauth/start', { locale: 'zh-TW' })
+    expect(postMock).toHaveBeenNthCalledWith(2, '/api/haha-deepseek-oauth/start', { locale: 'en' })
   })
 
   it('reads the status and logs out on the same base path', async () => {

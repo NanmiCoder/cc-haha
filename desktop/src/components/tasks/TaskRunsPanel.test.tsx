@@ -23,7 +23,7 @@ describe('TaskRunsPanel', () => {
       startedAt: '2026-05-08T12:05:37.000Z',
       status: 'completed',
       prompt: 'Summarize recent commits',
-      output: '最近7天有3个commit，主要改动：\n\n**1. 2865d50 - UI无障碍改进**\n- 添加 theme-color meta 标签\n- 修复 select 标签问题',
+      output: '3 commits in the last 7 days, main changes:\n\n**1. 2865d50 - UI accessibility improvements**\n- Add theme-color meta tag\n- Fix select label issue',
       durationMs: 12000,
       sessionId: 'session-1',
     }
@@ -39,10 +39,10 @@ describe('TaskRunsPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Summary' })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Summary' }))
 
-    expect(screen.getByText('1. 2865d50 - UI无障碍改进')).toBeInTheDocument()
-    expect(container.querySelector('strong')).toHaveTextContent('1. 2865d50 - UI无障碍改进')
-    expect(screen.getByText('添加 theme-color meta 标签')).toBeInTheDocument()
-    expect(container.querySelector('li')).toHaveTextContent('添加 theme-color meta 标签')
+    expect(screen.getByText('1. 2865d50 - UI accessibility improvements')).toBeInTheDocument()
+    expect(container.querySelector('strong')).toHaveTextContent('1. 2865d50 - UI accessibility improvements')
+    expect(screen.getByText('Add theme-color meta tag')).toBeInTheDocument()
+    expect(container.querySelector('li')).toHaveTextContent('Add theme-color meta tag')
     expect(container.textContent).not.toContain('**1. 2865d50')
   })
 

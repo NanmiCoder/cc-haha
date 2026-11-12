@@ -42,7 +42,7 @@ describe('hahaDeepSeekOAuthStore', () => {
   })
 
   it('returns the authorization URL, passes the UI locale and does not poll before the browser opens', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     startMock.mockResolvedValue({
       authorizeUrl: 'https://platform.deepseek.com/oauth/authorize?state=ds-state',
       state: 'ds-state',
@@ -51,7 +51,7 @@ describe('hahaDeepSeekOAuthStore', () => {
     const result = await useHahaDeepSeekOAuthStore.getState().login()
 
     expect(result.authorizeUrl).toContain('state=ds-state')
-    expect(startMock).toHaveBeenCalledWith('zh')
+    expect(startMock).toHaveBeenCalledWith('en')
     expect(useHahaDeepSeekOAuthStore.getState().isPolling).toBe(false)
   })
 

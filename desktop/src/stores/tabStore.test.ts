@@ -139,12 +139,12 @@ describe('tabStore', () => {
 
   it('refreshes an existing tab title when opening the same session again', () => {
     useTabStore.getState().openTab('session-1', '```json {"title":')
-    useTabStore.getState().openTab('session-1', '使用bash写一个shell，随便写点什么东西')
+    useTabStore.getState().openTab('session-1', 'Write a shell script in bash, anything at all')
 
     expect(useTabStore.getState().tabs).toHaveLength(1)
     expect(useTabStore.getState().tabs[0]).toMatchObject({
       sessionId: 'session-1',
-      title: '使用bash写一个shell，随便写点什么东西',
+      title: 'Write a shell script in bash, anything at all',
       type: 'session',
     })
     expect(useTabStore.getState().activeTabId).toBe('session-1')

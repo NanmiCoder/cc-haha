@@ -2,18 +2,12 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { en } from './locales/en'
-import { zh } from './locales/zh'
-import { zh as zhTW } from './locales/zh-TW'
-import { jp } from './locales/jp'
-import { kr } from './locales/kr'
 
-const LOCALES: Record<string, Record<string, string>> = { en, zh, 'zh-TW': zhTW, jp, kr }
+const strings: Record<string, string> = en
 
-// The one word each language uses for the lean mode. Korean used 경량, 간소 and
-// 간소화 side by side and Japanese 軽量 and 簡易, so a user met three names for
-// one mode depending on which message they happened to read.
-const LEAN_WORD: Record<string, string> = { en: 'lean', zh: '精简', 'zh-TW': '精簡', jp: '軽量', kr: '경량' }
-const OTHER_NAMES: Record<string, string[]> = { jp: ['簡易'], kr: ['간소', '간략'] }
+// The one word used for the lean mode, so a user does not meet several names
+// for one mode depending on which message they happened to read.
+const LEAN_WORD = 'lean'
 
 const leanModeKeys = Object.keys(en).filter(key => key.startsWith('agentProfile.') || key.startsWith('settings.general.leanMode'))
 // Messages that name the mode (the rest describe tools or timing).
@@ -36,43 +30,32 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 }
 
 describe('lean mode copy', () => {
-  it.each([
-    ['en', ['web search', 'web fetch', 'sub-agents', 'task lists'], ['MCP', 'Agent Teams', 'plan mode']],
-    ['zh', ['联网搜索', '网页抓取', '子 Agent', '任务清单'], ['MCP', '智能体团队', '计划模式']],
-    ['zh-TW', ['網路搜尋', '網頁擷取', '子 Agent', '任務清單'], ['MCP', '智慧體團隊', '計劃模式']],
-    ['jp', ['Web検索', 'ページ取得', 'サブエージェント', 'タスクリスト'], ['MCP', 'エージェントチーム', 'プランモード']],
-    ['kr', ['웹 검색', '웹 페이지 가져오기', '하위 에이전트', '할 일 목록'], ['MCP', '에이전트 팀', '계획 모드']],
-  ])('%s describes the expanded tools and remaining limits', (locale, available, unavailable) => {
-    const strings = LOCALES[locale as string]!
-    for (const capability of available as string[]) {
+  it('describes the expanded tools and remaining limits', () => {
+    const available = ['web search', 'web fetch', 'sub-agents', 'task lists']
+    const unavailable = ['MCP', 'Agent Teams', 'plan mode']
+    for (const capability of available) {
       expect(strings['agentProfile.available']).toContain(capability)
       expect(strings['agentProfile.unavailable']).not.toContain(capability)
     }
-    for (const capability of unavailable as string[]) {
+    for (const capability of unavailable) {
       expect(strings['agentProfile.unavailable']).toContain(capability)
     }
   })
 
-  it.each(Object.keys(LOCALES))('%s names the mode with one word everywhere it is named', (locale) => {
-    const strings = LOCALES[locale]!
+  it('names the mode with one word everywhere it is named', () => {
     for (const key of NAMING_KEYS) {
-      expect(strings[key], `${locale} ${key}`).toBeTruthy()
-      expect(strings[key]!.toLowerCase(), `${locale} ${key}`).toContain(LEAN_WORD[locale]!)
+      expect(strings[key], key).toBeTruthy()
+      expect(strings[key]!.toLowerCase(), key).toContain(LEAN_WORD)
     }
-    for (const key of leanModeKeys) {
-      for (const other of OTHER_NAMES[locale] ?? []) {
-        expect(strings[key], `${locale} ${key}`).not.toContain(other)
-      }
-    }
+    for (const key of leanModeKeys) expect(strings[key], key).toBeTruthy()
   })
 
-  it.each(Object.keys(LOCALES))('%s short chip label is the name part of the full label', (locale) => {
-    const strings = LOCALES[locale]!
-    expect(strings['agentProfile.leanShort'], locale).toBeTruthy()
-    expect(strings['agentProfile.lean'], locale).toMatch(/ · /)
-    expect(strings['agentProfile.lean']!.startsWith(strings['agentProfile.leanShort']!), locale).toBe(true)
+  it('short chip label is the name part of the full label', () => {
+    expect(strings['agentProfile.leanShort']).toBeTruthy()
+    expect(strings['agentProfile.lean']).toMatch(/ · /)
+    expect(strings['agentProfile.lean']!.startsWith(strings['agentProfile.leanShort']!)).toBe(true)
     // Short enough to keep the toolbar's width for the project, branch and model.
-    expect(strings['agentProfile.leanShort']!.length, locale).toBeLessThanOrEqual(5)
+    expect(strings['agentProfile.leanShort']!.length).toBeLessThanOrEqual(5)
   })
 
   it('has no unused agentProfile strings', () => {

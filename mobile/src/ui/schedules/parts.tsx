@@ -20,7 +20,7 @@ export function useToneColor() {
             : colors.faint
 }
 
-/** “工作日 09:00 · 项目 · …”，时间用等宽；读不懂的 cron 原样等宽显示。 */
+/** "Weekdays 09:00 · project · …", with times in monospace; unparseable cron shown raw in monospace. */
 export function ScheduleLine({
   task,
   extras,
@@ -44,7 +44,7 @@ export function ScheduleLine({
   )
 }
 
-/** 带圆点的一行状态文字（定时任务的最近运行）。 */
+/** A status text row with a dot (recent run of a scheduled task). */
 export function DotLine({ tone, text }: { tone: Tone; text: string }) {
   const colors = useColors()
   const toneColor = useToneColor()
@@ -61,7 +61,7 @@ export function DotLine({ tone, text }: { tone: Tone; text: string }) {
   )
 }
 
-/** 分组表单的一行：左侧 64 宽标签，右侧内容。 */
+/** A grouped form row: 64-wide label on the left, content on the right. */
 export function FormRow({
   label,
   children,
@@ -79,7 +79,7 @@ export function FormRow({
   )
 }
 
-/** 可编辑的 HH:mm 时间胶囊：fill 底、等宽；不合法时变红。 */
+/** Editable HH:mm time capsule: fill background, monospace; turns red when invalid. */
 export function TimeField({
   value,
   onChangeText,
@@ -95,8 +95,8 @@ export function TimeField({
   const invalid = !isClockValid(value)
   return (
     <TextInput
-      accessibilityLabel="执行时间（HH:mm）"
-      accessibilityHint={invalid ? '请输入有效时间，例如 09:00' : undefined}
+      accessibilityLabel="Run time (HH:mm)"
+      accessibilityHint={invalid ? 'Please enter a valid time, e.g. 09:00' : undefined}
       value={value}
       onChangeText={onChangeText}
       editable={editable}
@@ -123,7 +123,7 @@ export function TimeField({
   )
 }
 
-/** 卡片底、红字的整行按钮（删除这个定时任务）。 */
+/** Full-width red-text button on a card background (Delete this scheduled task). */
 export function DangerRowButton({
   title,
   onPress,
@@ -160,7 +160,7 @@ export function DangerRowButton({
   )
 }
 
-/** 详情页按钮行：48 高、14 圆角；主按钮带 14 号实心播放图标。 */
+/** Detail page button row: 48 high, radius 14; the primary button has a size 14 solid play icon. */
 export function ActionButton({
   title,
   onPress,

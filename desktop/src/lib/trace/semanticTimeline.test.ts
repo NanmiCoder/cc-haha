@@ -10,9 +10,9 @@ const text = (value: string): NormalizedBlock => ({ type: 'text', text: value })
 
 describe('classifyUserContent', () => {
   it('keeps a plain typed message as user text', () => {
-    const result = classifyUserContent([text('安装这里面提到的选题skill')])
+    const result = classifyUserContent([text('install the topic skill mentioned in here')])
     expect(result.injections).toEqual([])
-    expect(result.userText).toBe('安装这里面提到的选题skill')
+    expect(result.userText).toBe('install the topic skill mentioned in here')
   })
 
   it('separates harness reminders from the text the person typed', () => {
@@ -20,10 +20,10 @@ describe('classifyUserContent', () => {
       text('<system-reminder>\n# Companion\n\nA small chonk named Quirky Spark…\n</system-reminder>'),
       text('<system-reminder>\nThe following skills are available for use with the Skill tool:\n- update-config\n</system-reminder>'),
       text('<system-reminder>\nAs you answer the user\'s questions…\n# claudeMd\nCodebase instructions\n</system-reminder>'),
-      text('https://mp.weixin.qq.com/s/abc 安装这里面提到的 skill'),
+      text('https://mp.weixin.qq.com/s/abc install the skill mentioned in here'),
     ])
 
-    expect(result.userText).toBe('https://mp.weixin.qq.com/s/abc 安装这里面提到的 skill')
+    expect(result.userText).toBe('https://mp.weixin.qq.com/s/abc install the skill mentioned in here')
     expect(result.injections).toHaveLength(3)
     expect(result.injections.every((entry) => entry.kind === 'system-reminder')).toBe(true)
     expect(result.injections[0]?.label).toBe('Companion')
@@ -50,10 +50,10 @@ describe('classifyUserContent', () => {
     // message, so this is the exact shape an interrupt-then-type produces.
     const result = classifyUserContent([
       { type: 'tool_result', toolUseId: 'call_1', content: "The user doesn't want to take this action right now." },
-      text('停下，先把 trace 面板的 bug 修了'),
+      text('stop, fix the trace panel bug first'),
     ])
     expect(result.injections).toEqual([])
-    expect(result.userText).toBe('停下，先把 trace 面板的 bug 修了')
+    expect(result.userText).toBe('stop, fix the trace panel bug first')
   })
 
   it('recognizes the other harness wrappers it knows by name', () => {
@@ -93,7 +93,7 @@ describe('splitRequestMessages', () => {
         role: 'user',
         content: [
           text('<system-reminder>\n# Companion\nwatcher\n</system-reminder>'),
-          text('装一下这个 skill'),
+          text('install this skill'),
         ],
       },
       { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }] },
@@ -104,7 +104,7 @@ describe('splitRequestMessages', () => {
     expect(result.injections[1]?.label).toBe('Companion')
 
     expect(result.conversation).toHaveLength(3)
-    expect(result.conversation[0]).toEqual({ role: 'user', content: [text('装一下这个 skill')] })
+    expect(result.conversation[0]).toEqual({ role: 'user', content: [text('install this skill')] })
     expect(result.conversation[1]?.role).toBe('assistant')
     expect(result.conversation[2]?.content[0]?.type).toBe('tool_result')
   })

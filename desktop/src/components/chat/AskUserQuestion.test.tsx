@@ -1110,8 +1110,8 @@ describe('AskUserQuestion', () => {
   describe('input the model got wrong', () => {
     // The exact shape from the report: text around an inline <path> became an object.
     const BROKEN_TEXT = {
-      path: '`（一次一个，不用 wildcard）。CLAUDE.md 禁止 wildcard 删多个文件。',
-      $text: '我会逐个执行 `rm ',
+      path: '` (one at a time, no wildcard). CLAUDE.md forbids deleting several files with a wildcard.',
+      $text: 'I will run `rm ',
     }
     const INVALID_INPUT_RESULT =
       '<tool_use_error>InputValidationError: AskUserQuestion failed due to the following issue:\n' +

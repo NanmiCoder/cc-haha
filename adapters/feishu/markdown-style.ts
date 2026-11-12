@@ -1,22 +1,22 @@
 /**
- * Feishu 卡片 Markdown 样式优化
+ * Markdown style optimization for Feishu cards
  *
- * 背景:
- * - 飞书卡片的 `tag: 'markdown'` 元素对 H1~H3 标题有已知渲染异常（字面量显示）。
- *   必须降级为 H4/H5 才能正常渲染。
- * - Schema 2.0 CardKit 支持完整的 markdown 但需要手动加 `<br>` 间距避免标题/表格/
- *   代码块贴得太紧。
- * - 卡片有表格数量上限（FEISHU_CARD_TABLE_LIMIT=3），超出会触发 230099/11310。
- * - 图片必须是飞书上传过的 `img_xxx` key，其它 URL 会触发 CardKit 错误 200570。
+ * Background:
+ * - Feishu card `tag: 'markdown'` elements have a known rendering bug with H1~H3 headings (shown literally).
+ *   They must be downgraded to H4/H5 to render correctly.
+ * - Schema 2.0 CardKit supports full markdown, but `<br>` spacing must be added manually so headings/tables/
+ *   code blocks are not squeezed together.
+ * - Cards have a table count limit (FEISHU_CARD_TABLE_LIMIT=3); exceeding it triggers 230099/11310.
+ * - Images must be Feishu-uploaded `img_xxx` keys; any other URL triggers CardKit error 200570.
  *
- * 实现参考: openclaw-lark/src/card/markdown-style.ts + card-error.ts
+ * Implementation reference: openclaw-lark/src/card/markdown-style.ts + card-error.ts
  */
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** 飞书卡片表格数量上限 —— 超出 3 张触发 230099/11310（openclaw 2026-03 实测） */
+/** Feishu card table limit —— more than 3 triggers 230099/11310 (measured by openclaw 2026-03) */
 export const FEISHU_CARD_TABLE_LIMIT = 3
 
 // ---------------------------------------------------------------------------
@@ -24,18 +24,18 @@ export const FEISHU_CARD_TABLE_LIMIT = 3
 // ---------------------------------------------------------------------------
 
 /**
- * 对将要放入 `tag: 'markdown'` 元素的 markdown 做安全预处理。
+ * Safely preprocess markdown destined for a `tag: 'markdown'` element.
  *
- * - 标题降级: 若原文包含 H1~H3，则 H2~H6 → H5，H1 → H4
- * - 代码块内容受保护，不会被降级
- * - Schema 2.0: 连续标题/表格/代码块前后加 `<br>` 间距
- * - 连续 3+ 空行压缩为 2
- * - 删除非 `img_*` 的 markdown 图片引用（防止 CardKit 200570）
- * - 任何内部错误都 fallback 到原文，不阻塞消息发送
+ * - Heading downgrade: if the source contains H1~H3, H2~H6 → H5, H1 → H4
+ * - Code block content is protected and not downgraded
+ * - Schema 2.0: add `<br>` spacing around consecutive headings/tables/code blocks
+ * - Collapse 3+ consecutive blank lines to 2
+ * - Remove markdown image references that are not `img_*` (prevents CardKit 200570)
+ * - Any internal error falls back to the original text so sending is never blocked
  *
- * @param text 原始 markdown
- * @param cardVersion 卡片 schema 版本。默认 2 (Schema 2.0 CardKit)，
- *   1 对应老 Schema 1.0 fallback 路径（已不推荐）。
+ * @param text original markdown
+ * @param cardVersion card schema version. Defaults to 2 (Schema 2.0 CardKit);
+ *   1 is the old Schema 1.0 fallback path (no longer recommended).
  */
 export function optimizeMarkdownForFeishu(text: string, cardVersion = 2): string {
   try {
@@ -48,61 +48,61 @@ export function optimizeMarkdownForFeishu(text: string, cardVersion = 2): string
 }
 
 function _optimizeMarkdownForFeishu(text: string, cardVersion: number): string {
-  // ── 1. 提取代码块，用占位符保护，处理后再还原 ─────────────────────
-  // 代码块内的 `#` / `|` 不能被标题降级或表格匹配误伤
+  // ── 1. Extract code blocks, protect with placeholders, restore afterwards ─────────────────────
+  // `#` / `|` inside code blocks must not be hit by heading downgrade or table matching
   const MARK = '___CB_'
   const codeBlocks: string[] = []
   let r = text.replace(/```[\s\S]*?```/g, (m) => {
     return `${MARK}${codeBlocks.push(m) - 1}___`
   })
 
-  // ── 2. 标题降级 ────────────────────────────────────────────────────
-  // 只有当原文档（不是保护后的 r）包含 H1~H3 时才执行降级
-  // 顺序: 先 H2~H6 → H5，再 H1 → H4
-  // 若先 H1→H4，`####` 会被后面的 `#{2,6}` 再次匹配成 H5
+  // ── 2. Heading downgrade ────────────────────────────────────────────────────
+  // Only downgrade when the original document (not the protected r) contains H1~H3
+  // Order: first H2~H6 → H5, then H1 → H4
+  // If H1→H4 ran first, `####` would be matched again by the later `#{2,6}` and become H5
   const hasH1toH3 = /^#{1,3} /m.test(text)
   if (hasH1toH3) {
     r = r.replace(/^#{2,6} (.+)$/gm, '##### $1') // H2~H6 → H5
     r = r.replace(/^# (.+)$/gm, '#### $1') // H1 → H4
   }
 
-  // ── 3. Schema 2.0 段落间距 ────────────────────────────────────────
+  // ── 3. Schema 2.0 paragraph spacing ────────────────────────────────────────
   if (cardVersion >= 2) {
-    // 3a. 连续标题之间加 <br>
+    // 3a. Add <br> between consecutive headings
     r = r.replace(/^(#{4,5} .+)\n{1,2}(#{4,5} )/gm, '$1\n<br>\n$2')
 
-    // 3b. 非表格行直接跟表格行 → 先补空行（保证后续规则生效）
+    // 3b. Non-table line directly followed by a table line → insert a blank line first (so later rules apply)
     r = r.replace(/^([^|\n].*)\n(\|.+\|)/gm, '$1\n\n$2')
 
-    // 3c. 表格前: 在空行之前插入 <br>（即 `\n\n|` → `\n<br>\n\n|`）
+    // 3c. Before a table: insert <br> before the blank line (i.e. `\n\n|` → `\n<br>\n\n|`)
     r = r.replace(/\n\n((?:\|.+\|[^\S\n]*\n?)+)/g, '\n\n<br>\n\n$1')
 
-    // 3d. 表格后: 在表格块末尾追加 <br>（跳过后接分隔线/标题/加粗/文末）
+    // 3d. After a table: append <br> at the end of the table block (skip when followed by a rule/heading/bold/end of text)
     r = r.replace(/((?:^\|.+\|[^\S\n]*\n?)+)/gm, (m, _table, offset) => {
       const after = r.slice(offset + m.length).replace(/^\n+/, '')
       if (!after || /^(---|#{4,5} |\*\*)/.test(after)) return m
       return m + '\n<br>\n'
     })
 
-    // 3e. 表格前是普通文本: 只保留 <br>，去掉多余空行
+    // 3e. Plain text before a table: keep only <br>, drop extra blank lines
     //     "text\n\n<br>\n\n|" → "text\n<br>\n|"
     r = r.replace(/^((?!#{4,5} )(?!\*\*).+)\n\n(<br>)\n\n(\|)/gm, '$1\n$2\n$3')
 
-    // 3f. 表格前是加粗行: <br> 紧贴加粗行，空行保留在后面
+    // 3f. Bold line before a table: <br> right after the bold line, blank line kept after it
     //     "**bold**\n\n<br>\n\n|" → "**bold**\n<br>\n\n|"
     r = r.replace(/^(\*\*.+)\n\n(<br>)\n\n(\|)/gm, '$1\n$2\n\n$3')
 
-    // 3g. 表格后是普通文本: 去掉多余空行
+    // 3g. Plain text after a table: drop extra blank lines
     //     "| row |\n\n<br>\ntext" → "| row |\n<br>\ntext"
     r = r.replace(/(\|[^\n]*\n)\n(<br>\n)((?!#{4,5} )(?!\*\*))/gm, '$1$2$3')
   }
 
-  // ── 4. 压缩多余空行（3 个以上连续换行 → 2 个）────────────────────
-  // 必须在还原代码块之前做，否则代码块内部的连续换行会被误伤
+  // ── 4. Collapse extra blank lines (3+ consecutive newlines → 2) ────────────────────
+  // Must run before restoring code blocks, otherwise consecutive newlines inside code blocks would be hit
   r = r.replace(/\n{3,}/g, '\n\n')
 
-  // ── 5. 还原代码块 ─────────────────────────────────────────────────
-  // Schema 2.0 时前后加 <br>，让代码块与周围段落拉开距离
+  // ── 5. Restore code blocks ─────────────────────────────────────────────────
+  // With Schema 2.0, add <br> before and after to separate code blocks from surrounding paragraphs
   codeBlocks.forEach((block, i) => {
     const replacement = cardVersion >= 2 ? `\n<br>\n${block}\n<br>\n` : block
     r = r.replace(`${MARK}${i}___`, replacement)
@@ -115,15 +115,15 @@ function _optimizeMarkdownForFeishu(text: string, cardVersion: number): string {
 // stripInvalidImageKeys
 // ---------------------------------------------------------------------------
 
-/** 匹配完整的 markdown 图片语法: `![alt](value)` */
+/** Matches full markdown image syntax: `![alt](value)` */
 const IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+)\)/g
 
 /**
- * 删除 value 不是飞书 image key (`img_xxx`) 的 markdown 图片引用。
- * 防止 CardKit 错误 200570（unknown image key）。
+ * Remove markdown image references whose value is not a Feishu image key (`img_xxx`).
+ * Prevents CardKit error 200570 (unknown image key).
  *
- * HTTP URL 和本地路径也会被删除 —— 上游（ImageResolver）负责把它们转成
- * `img_xxx`，此函数是 safety net。
+ * HTTP URLs and local paths are removed too —— upstream (ImageResolver) is responsible for converting them to
+ * `img_xxx`; this function is a safety net.
  */
 function stripInvalidImageKeys(text: string): string {
   if (!text.includes('![')) return text
@@ -144,13 +144,13 @@ export type MarkdownTableMatch = {
 }
 
 /**
- * 扫描正文里会被飞书卡片**实际渲染**的 markdown 表格位置。
+ * Scan the positions of markdown tables in the body that Feishu cards **actually render**.
  *
- * 代码块内的示例表格不会被飞书解析成卡片表格元素，因此要先排除。
- * 这份结果供 `sanitizeTextForCard` 判断是否需要降级多余的表格。
+ * Example tables inside code blocks are not parsed by Feishu as card table elements, so exclude them first.
+ * The result is used by `sanitizeTextForCard` to decide whether extra tables must be downgraded.
  */
 export function findMarkdownTablesOutsideCodeBlocks(text: string): MarkdownTableMatch[] {
-  // 先扫描代码块区间
+  // Scan code block ranges first
   const codeBlockRanges: Array<{ start: number; end: number }> = []
   const codeBlockRegex = /```[\s\S]*?```/g
   let cbMatch = codeBlockRegex.exec(text)
@@ -164,7 +164,7 @@ export function findMarkdownTablesOutsideCodeBlocks(text: string): MarkdownTable
   const isInsideCodeBlock = (idx: number): boolean =>
     codeBlockRanges.some((range) => idx >= range.start && idx < range.end)
 
-  // 扫描表格（header | sep | body...）
+  // Scan tables (header | sep | body...)
   const tableRegex = /\|.+\|[\r\n]+\|[-:| ]+\|[\s\S]*?(?=\n\n|\n(?!\|)|$)/g
   const matches: MarkdownTableMatch[] = []
   let tableMatch = tableRegex.exec(text)
@@ -182,9 +182,9 @@ export function findMarkdownTablesOutsideCodeBlocks(text: string): MarkdownTable
 }
 
 /**
- * 对正文里超出 `tableLimit` 张的 markdown 表格降级为代码块，防止触发
- * 230099/11310。前 `tableLimit` 张保持原样（卡片正常渲染），其余用
- * 反引号包裹（飞书会当成 code block 而不是表格）。
+ * Downgrade markdown tables beyond `tableLimit` in the body to code blocks to avoid
+ * 230099/11310. The first `tableLimit` tables stay as-is (the card renders them normally); the rest are
+ * wrapped in backticks (Feishu treats them as code blocks instead of tables).
  */
 export function sanitizeTextForCard(
   text: string,
@@ -201,7 +201,7 @@ function wrapTablesBeyondLimit(
   keepCount: number,
 ): string {
   if (matches.length <= keepCount) return text
-  // 从后往前替换，避免前面的替换导致后面的 offset 错乱
+  // Replace from back to front so earlier replacements don't shift later offsets
   let result = text
   for (let i = matches.length - 1; i >= keepCount; i--) {
     const { index, length, raw } = matches[i]!

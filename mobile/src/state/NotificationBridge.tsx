@@ -59,7 +59,7 @@ export function NotificationBridge() {
       Notifications.setNotificationCategoryAsync('cchahaTool', [
         {
           identifier: 'deny',
-          buttonTitle: '拒绝',
+          buttonTitle: 'Deny',
           options: {
             opensAppToForeground: true,
             isAuthenticationRequired: true,
@@ -67,7 +67,7 @@ export function NotificationBridge() {
         },
         {
           identifier: 'allow',
-          buttonTitle: '允许',
+          buttonTitle: 'Allow',
           options: {
             opensAppToForeground: true,
             isAuthenticationRequired: true,
@@ -77,14 +77,14 @@ export function NotificationBridge() {
       Notifications.setNotificationCategoryAsync('cchahaDecision', [
         {
           identifier: 'open',
-          buttonTitle: '查看并处理',
+          buttonTitle: 'View and handle',
           options: { opensAppToForeground: true },
         },
       ]),
       Notifications.setNotificationCategoryAsync('cchahaResult', [
         {
           identifier: 'open',
-          buttonTitle: '查看结果',
+          buttonTitle: 'View result',
           options: { opensAppToForeground: true },
         },
       ]),

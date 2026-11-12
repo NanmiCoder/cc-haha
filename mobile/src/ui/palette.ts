@@ -1,8 +1,8 @@
 import { Platform } from 'react-native'
 
 /**
- * 「值守」设计 token。颜色只表达状态：琥珀=等你、蓝=运行、绿=完成、红=出错；
- * 主按钮用墨色，品牌陶土色只出现在标识上。
+ * "On duty" design tokens. Colors only express state: amber = waiting for you, blue = running, green = done, red = error; 
+ * primary buttons use ink, and the brand terracotta appears only on the logo.
  */
 export const light = {
   bg: '#F4F3F0',
@@ -29,7 +29,7 @@ export const light = {
   okSoft: '#E7F3EB',
   err: '#C42B3C',
   errSoft: '#FBE9EC',
-  /** 红底上的文字：浅色用白字，深色的红更亮，换成深色字才够对比度。 */
+  /** Text on red backgrounds: white in light mode; in dark mode the red is brighter, so dark text is needed for enough contrast. */
   onErr: '#FFFFFF',
   add: '#2E7D4F',
   del: '#C42B3C',
@@ -104,7 +104,7 @@ export const dark: Palette = {
   cm: '#8F8B83',
 }
 
-/** 正文用系统字体（SF Pro / PingFang / Roboto）；等宽只用于命令、路径、计时。 */
+/** Body text uses the system font (SF Pro / PingFang / Roboto); monospace only for commands, paths and timers. */
 export const monoFont = Platform.select({
   ios: 'GeistMono',
   android: 'GeistMono',

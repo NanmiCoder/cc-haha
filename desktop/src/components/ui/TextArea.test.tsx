@@ -17,11 +17,11 @@ describe('TextArea', () => {
   it('gives two identically-worded labels distinct ids', () => {
     render(
       <>
-        <TextArea label="备注" />
-        <TextArea label="备注" />
+        <TextArea label="Notes" />
+        <TextArea label="Notes" />
       </>,
     )
-    const areas = screen.getAllByLabelText('备注')
+    const areas = screen.getAllByLabelText('Notes')
     expect(areas[0]!.id).not.toBe(areas[1]!.id)
   })
 

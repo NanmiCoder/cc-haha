@@ -17,34 +17,34 @@ test('status maps to the shared glyphs', () => {
 })
 
 test('title falls back to the task id', () => {
-  expect(taskTitle(task({ description: '  做扫码页界面 ' }))).toBe('做扫码页界面')
+  expect(taskTitle(task({ description: '  Build the scan page UI ' }))).toBe('Build the scan page UI')
   expect(taskTitle(task({ description: '' }))).toBe('task-1')
 })
 
 test('running agents show summary and elapsed; running commands show only elapsed', () => {
   const startedAt = new Date(now - 372000).toISOString()
   expect(
-    taskSubline(task({ taskType: 'local_agent', summary: '编辑 src/app/connect.tsx', startedAt }), now)
-  ).toEqual({ text: '编辑 src/app/connect.tsx · 6:12', mono: true, tone: 'muted' })
+    taskSubline(task({ taskType: 'local_agent', summary: 'Edit src/app/connect.tsx', startedAt }), now)
+  ).toEqual({ text: 'Edit src/app/connect.tsx · 6:12', mono: true, tone: 'muted' })
   expect(
     taskSubline(task({ taskType: 'local_bash', summary: 'listening', startedAt }), now)
   ).toEqual({ text: '6:12', mono: true, tone: 'muted' })
-  expect(taskSubline(task({ taskType: 'local_bash' }), now).text).toBe('正在执行')
+  expect(taskSubline(task({ taskType: 'local_bash' }), now).text).toBe('Running')
 })
 
 test('finished tasks never invent a duration', () => {
   const startedAt = new Date(now - 280000).toISOString()
   expect(
-    taskSubline(task({ status: 'completed', summary: '新增 8 个用例', startedAt }), now)
-  ).toEqual({ text: '完成 · 新增 8 个用例', mono: false, tone: 'muted' })
-  expect(taskSubline(task({ status: 'completed' }), now).text).toBe('完成')
+    taskSubline(task({ status: 'completed', summary: 'Added 8 test cases', startedAt }), now)
+  ).toEqual({ text: 'Done · Added 8 test cases', mono: false, tone: 'muted' })
+  expect(taskSubline(task({ status: 'completed' }), now).text).toBe('Done')
   expect(taskSubline(task({ status: 'stopped', startedAt }), now)).toEqual({
-    text: '已停止',
+    text: 'Stopped',
     mono: false,
     tone: 'muted',
   })
   expect(taskSubline(task({ status: 'failed', summary: 'exit 1' }), now)).toEqual({
-    text: '失败 · exit 1',
+    text: 'Failed · exit 1',
     mono: false,
     tone: 'err',
   })

@@ -13,8 +13,8 @@ const newRequestId = () =>
 const idle = () => () => {}
 
 /**
- * 会话的团队方案（逻辑见 core/teamPlanSync）。电脑推 `team_plan_updated` / `team_deleted`
- * （signal 变化）、连接恢复、回合起止时重新读取。
+ * The session's team plan (logic in core/teamPlanSync). Reread when the computer pushes `team_plan_updated` / `team_deleted`
+ * (signal changes), the connection recovers, or a turn starts or ends.
  */
 export function useTeamPlan({
   client,

@@ -34,6 +34,6 @@
   <key>LSMinimumSystemVersion</key>
   <string>14.4</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Claude 需要屏幕录制权限来截取屏幕，以便在你的电脑上执行操作。</string>
+  <string>Claude needs Screen Recording permission to capture the screen so it can perform actions on your computer.</string>
 </dict>
 </plist>

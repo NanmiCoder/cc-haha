@@ -31,12 +31,12 @@ export type ConnectionState =
   | 'connecting'
   | 'syncing'
   | 'ready'
-  /** 断线后带着已看到的帧号接回原来的流，不读历史。 */
+  /** After a disconnect reattach the original stream with the seen frame number, without reading history. */
   | 'resuming'
   | 'reconnecting'
   | 'offline'
   | 'pairing_required'
-/** 翻更早历史的结果：界面据此区分加载成功、到底、正在翻和暂时不可用。 */
+/** Result of paging back through history: the UI uses it to distinguish loaded, reached the start, paging and temporarily unavailable. */
 export type LoadOlderResult = 'loaded' | 'busy' | 'unavailable' | 'end'
 export type SocketLike = {
   readyState: number
@@ -55,7 +55,7 @@ export type TransportTimers = {
   set(callback: () => void, delay: number): unknown
   clear(handle: unknown): void
 }
-/** 这段会话上次读到的历史（含往前翻过的页）。进页面先显示它，再和电脑对齐。 */
+/** History last read for this session (including paged-back pages). Show it on page entry, then sync with the computer. */
 export type HistoryStore = {
   read(): HistoryPage | undefined
   write(page: HistoryPage): void
@@ -71,38 +71,38 @@ export type SessionTransportOptions = {
   onError(error: Error): void
   timers?: TransportTimers
   history?: HistoryStore
-  /** 和 `resume(hiddenAt)` 用同一个时钟；默认 Date.now。 */
+  /** Uses the same clock as `resume(hiddenAt)`; defaults to Date.now. */
   clock?: () => number
-  /** 连接没就绪时占住，让不急的请求先让路（见 foregroundGate）。 */
+  /** Hold it while the connection is not ready so non-urgent requests yield first (see foregroundGate). */
   gate?: { hold(): () => void }
-  /** 提供时启用可续传的流（见 resumableStream.ts）；每条新流调用一次。 */
+  /** When provided enables resumable streams (see resumableStream.ts); called once per new stream. */
   newStreamId?: () => string
 }
-/** 最新一页和已加载的历史之间隔着几页以内时补齐，超过就只留最新一页。 */
+/** Fill the gap when the latest page and the loaded history are within a few pages, otherwise keep only the latest page. */
 const BRIDGE_PAGES = 3
 /**
- * 同步阶段往回补页的总时长。补不上就先用最新一页进入就绪，更早的内容翻页时再取；
- * 否则一页大的历史就能把 20 秒的同步时限耗光，变成反复重连。
+ * Total time for backfilling pages during sync. If it cannot fill, become ready with the latest page and fetch earlier content when paging; 
+ * otherwise one large history page could use up the 20 second sync deadline and turn into repeated reconnects.
  */
 const SYNC_BRIDGE_BUDGET_MS = 8000
-/** 按游标记住的旧页：对账重试、重新同步时不再重复下载同一页。 */
+/** Old pages remembered by cursor: reconciliation retries and resyncs do not redownload the same page. */
 const OLDER_PAGE_MEMO = 16
-/** 从末尾往后读新增记录最多读几页；还没读到尾就改读最新一页。 */
+/** Maximum pages to read forward from the end; if the end is not reached, read the latest page instead. */
 const FOLLOW_PAGES = 3
-/** 新连接从创建到握手完成的时限（经公网隧道要过 TLS 和升级）。 */
+/** Deadline from creating a new connection to finishing the handshake (through the public tunnel it needs TLS and upgrade). */
 const SOCKET_OPEN_TIMEOUT_MS = 12000
-/** 握手完成后和电脑对齐（快照 + 历史）的时限。 */
+/** Deadline for syncing with the computer (snapshot + history) after the handshake. */
 const SYNC_TIMEOUT_MS = 15000
 const HEARTBEAT_MS = 15000
-/** 心跳计时器晚到这么多，说明进程被挂起过（iOS 后台），没等到 pong 不能算连接已死。 */
+/** A heartbeat timer this late means the process was suspended (iOS background), so a missing pong does not mean the connection is dead. */
 const HEARTBEAT_LATE_MS = 5000
-/** 回到前台时的探活时限：这段时间内等到这次探活的 pong，原连接就继续用。 */
+/** Probe deadline on return to foreground: if this probe's pong arrives within it, keep using the original connection. */
 export const RESUME_PROBE_TIMEOUT_MS = 2500
-/** 换路时新连接从创建到被电脑接上的时限；到点没接上就继续用旧连接。 */
+/** Deadline from creating a new connection to the computer attaching it when rerouting; if not attached in time keep using the old connection. */
 const MIGRATION_TIMEOUT_MS = SOCKET_OPEN_TIMEOUT_MS
-/** 两次鉴权探测的最短间隔：连着断几次时，不在慢隧道上反复问。 */
+/** Minimum interval between two auth probes: when disconnecting several times in a row, do not ask repeatedly over the slow tunnel. */
 const AUTH_PROBE_INTERVAL_MS = 30_000
-/** 电脑用它关掉被同一条流的新连接顶替的旧连接（见 resumableStreams.ts）。 */
+/** The computer uses it to close an old connection replaced by a new one on the same stream (see resumableStreams.ts). */
 const STREAM_SUPERSEDED = 4000
 
 const defaultTimers: TransportTimers = {
@@ -149,7 +149,7 @@ export class SessionTransport {
   #pendingBaseIds = new Set<string>()
   #turnBaseItems = new Map<string, ChatItem>()
   #preSubscribeHistory?: HistoryPage
-  /** 订阅前那次读取已经接在已加载的历史后面（往后读），不用再拼接。 */
+  /** The read before subscribing was already attached after the loaded history (reading forward), so no stitching is needed. */
   #preSubscribeJoined = false
   #hydrating = false
   #priorLiveIds = new Set<string>()
@@ -159,33 +159,33 @@ export class SessionTransport {
   #attemptStartedAt?: number
   #authProbing = false
   #releaseGate?: () => void
-  /** 当前的续传流。epoch 是电脑接上它时给的；synced 表示它已和电脑对齐过，可以续。 */
+  /** Current resume stream. epoch is given by the computer when it attaches; synced means it has synced with the computer and can resume. */
   #stream?: {
     id: string
     epoch?: string
     synced: boolean
     lastSeq: number
     ackedSeq: number
-    /** 续传接上后，补发到这一帧为止；之后才重发还没执行的命令。 */
+    /** After resume attaches, the replay runs up to this frame; only then resend unexecuted commands. */
     replayUntil?: number
   }
   #streamsUnsupported = false
   #outbox = new CommandOutbox()
-  /** 这次建连是接回原来的流。 */
+  /** This connect reattaches the original stream. */
   #resuming = false
-  /** 这个套接字请求了续传，还没收到 stream_attached。 */
+  /** This socket requested resume and has not received stream_attached yet. */
   #awaitingAttach = false
-  /** 正在换到更好的路上：新连接还没被电脑接上，旧连接照常收发。ack 是新连接请求续传时带的帧号。 */
+  /** Switching to a better path: the new connection is not attached by the computer yet, and the old one keeps sending and receiving. ack is the frame number sent when the new connection requested resume. */
   #migration?: { socket: SocketLike; ack: number; timer?: unknown }
-  /** 更好的路在没就绪时出现：就绪时用的若还是之前建的连接，就再换一次。 */
+  /** A better path appeared before ready: if the connection in use at ready time is still the earlier one, switch again. */
   #migrateWanted = false
-  /** 下一次对齐整页重读最新历史，不沿已加载的末尾往后读（用户点了「重新同步」）。 */
+  /** The next sync rereads the latest history page in full instead of reading forward from the loaded end (the user tapped Resync). */
   #fullResync = false
   #syncEpoch = 0
   #failures = 0
-  /** 这条连接上发出、还没等到 pong 的 ping。pong 按顺序回来。 */
+  /** Pings sent on this connection still waiting for pongs. Pongs come back in order. */
   #pingsInFlight = 0
-  /** 回前台探活还要等几个 pong：轮到它自己那一个才算数。 */
+  /** How many pongs the foreground probe still waits for: only its own counts. */
   #probePongs = 0
   #authProbedAt?: number
   #reconnectTimer?: unknown
@@ -215,19 +215,19 @@ export class SessionTransport {
     this.#connect(false)
   }
 
-  /** 完成真正对齐（读过历史）的次数；续传、换路接回不算。依赖会话内容的周边数据据此重读。 */
+  /** Number of real syncs (history read); resume and reroute do not count. Peripheral data depending on session content rereads based on it. */
   get syncEpoch() {
     return this.#syncEpoch
   }
 
-  /** 连着失败的建连次数，就绪后清零。从就绪掉线本身不算。 */
+  /** Consecutive failed connects, reset when ready. Dropping from ready itself does not count. */
   get failures() {
     return this.#failures
   }
 
   dispose() {
     if (this.#disposed) return
-    // 离开会话：告诉电脑不用再为这条流保留，会话连接照常结束。
+    // Leave the session: tell the computer it need not keep this stream, and end the session connection as usual.
     this.#endStream()
     this.#disposed = true
     this.#generation++
@@ -237,8 +237,8 @@ export class SessionTransport {
   }
 
   /**
-   * 用户点「重试」「重新同步」：换一条新流、整页重读最新历史，不续传——用户要的是和电脑
-   * 重新对齐，续传只会补发帧、不读历史。回到前台请用 `resume`。
+   * The user taps Retry or Resync: switch to a new stream and reread the latest history page in full without resuming — the user wants to resync with the computer,
+   * and resume only replays frames without reading history. On return to foreground use `resume`.
    */
   reconnect() {
     if (!this.#started || this.#disposed || this.#pairingRequired) return
@@ -252,8 +252,8 @@ export class SessionTransport {
   }
 
   /**
-   * 回到前台或网络变化时调用。连接看起来还开着就先探活，不拆掉还能用的连接；
-   * 正在建连的不打断；在等退避的立即重试。`hiddenAt` 是切到后台的时刻（同一时钟）。
+   * Called on return to foreground or network change. If the connection looks open, probe first without tearing down usable connections; 
+   * do not interrupt one being established; retry immediately if waiting on backoff. `hiddenAt` is the time it went to background (same clock).
    */
   resume(hiddenAt?: number) {
     if (!this.#started || this.#disposed || this.#pairingRequired) return
@@ -270,9 +270,9 @@ export class SessionTransport {
   }
 
   /**
-   * 有了更好的路（直连打通了）：带着已看到的帧号在新路上接回同一条流，不读历史、不重开会话。
-   * 先建后断：新连接被电脑接上之前，旧连接照常收发；新路失败就继续用旧的。
-   * 还没就绪时先记下，就绪后若用的还是之前建的连接再换（之后新建的连接本来就走新路）。
+   * A better path is available (direct established): reattach the same stream on the new path with the seen frame number, without reading history or reopening the session.
+   * Make before break: until the new connection is attached by the computer, the old one keeps sending and receiving; if the new path fails keep using the old one.
+   * If not ready yet, note it first and switch after ready if the connection in use is still the earlier one (connections created later already use the new path).
    */
   migrate() {
     if (!this.#started || this.#disposed || this.#pairingRequired || this.#streamsUnsupported) return
@@ -344,7 +344,7 @@ export class SessionTransport {
         this.#configTimer = this.#timers.set(() => {
           this.#pendingConfig = undefined
           const error = new ApiError(
-            '电脑尚未确认配置，请重新选择后重试',
+            'The computer has not confirmed the configuration; please choose again and retry',
             0,
             'CONFIG_TIMEOUT'
           )
@@ -379,11 +379,11 @@ export class SessionTransport {
   }
 
   /**
-   * 把一条消息立即送进正在运行的一轮（桌面端的「引导」）。
-   * 和 `send` 不同，这里允许 turnActive；但模型被决定卡住、配置还没确认、
-   * 上一条用户消息还没被电脑确认，或连接没就绪时不发。最后一条很关键：
-   * 服务端收到新消息会替换当前 activeTurn，若上一条还在写 SDK 之前，
-   * 它会被静默丢掉，客户端却只看到一条已发送的乐观消息。
+   * Send a message into the running turn immediately (desktop "steer").
+   * Unlike `send`, turnActive is allowed here; but do not send when the model is blocked on a decision, the configuration is not confirmed, 
+   * the previous user message is not confirmed by the computer, or the connection is not ready. The last one is crucial: 
+   * when the server receives a new message it replaces the current activeTurn, and if the previous one has not reached the SDK yet 
+   * it is silently dropped while the client only sees an optimistic sent message.
    */
   steer(message: ClientMessage): boolean {
     if (message.type !== 'user_message') return false
@@ -411,8 +411,8 @@ export class SessionTransport {
     const encoded = this.#encode(message)
     try {
       this.#socket.send(encoded.text)
-      // 先显示在消息流里；服务端回放同一段文字时会按 pending 匹配并确认，
-      // 不会出现两条一样的消息。
+      // Show it in the message stream first; when the server replays the same text it is matched against pending and confirmed, 
+      // so the same message never appears twice.
       this.#publish(
         appendPendingUserMessage(
           this.state,
@@ -428,10 +428,10 @@ export class SessionTransport {
   }
 
   /**
-   * 往更早翻历史。默认一次翻一页；`pages` 可以在一轮里连续翻多页，
-   * 让「加载更早的消息」一次给出更多内容。
-   * 返回结果让界面能区分「真的加载了」「没连上」「已经在翻」「到底了」，
-   * 不会出现点了没反应又没有任何提示的情况。
+   * Page back through history. One page at a time by default; `pages` can page several times in a row in one go, 
+   * so "Load earlier messages" yields more content at once.
+   * The result lets the UI distinguish "actually loaded", "not connected", "already paging" and "reached the start", 
+   * so tapping never does nothing without any feedback.
    */
   async loadOlder(pages = 1): Promise<LoadOlderResult> {
     if (this.#disposed || !this.#historyReady) return 'unavailable'
@@ -457,7 +457,7 @@ export class SessionTransport {
           return loaded ? 'loaded' : 'unavailable'
         if (older.page?.nextCursor === cursor)
           throw new ApiError(
-            '历史分页没有推进，请重新加载',
+            'History paging did not advance; please reload',
             409,
             'HISTORY_PAGE_STALE'
           )
@@ -490,13 +490,13 @@ export class SessionTransport {
       ) {
         this.#options.onError(
           new ApiError(
-            '会话历史已更新，正在重新加载',
+            'Session history was updated; reloading',
             409,
             'HISTORY_PAGE_STALE'
           )
         )
         await this.#reloadHistory(generation)
-        // 已经用最新一页恢复，不再让界面提示“没连上”。
+        // Already recovered with the latest page, so the UI no longer shows "not connected".
         return 'loaded'
       } else this.#report(error)
       return loaded ? 'loaded' : 'unavailable'
@@ -511,7 +511,7 @@ export class SessionTransport {
     const generation = this.#generation
     this.#cleanup()
     this.#attemptStartedAt = this.#now()
-    // 已和电脑对齐过的流：带着看到的帧号直接接回去，不读历史、不重开会话。
+    // A stream already synced with the computer: reattach directly with the seen frame number, without reading history or reopening the session.
     this.#resuming =
       !this.#streamsUnsupported && !!this.#stream?.epoch && this.#stream.synced
     if (this.#resuming) {
@@ -520,7 +520,7 @@ export class SessionTransport {
       this.#openSocket(generation)
       return
     }
-    // 没对齐完就断了的流续不上：换一条新流，从头对齐。
+    // A stream that dropped before finishing sync cannot resume: start a new stream and sync from scratch.
     if (this.#stream && (this.#stream.epoch || this.#stream.lastSeq)) {
       this.#stream = this.#freshStream()
       this.#outbox.clear()
@@ -539,7 +539,7 @@ export class SessionTransport {
     const controller = this.#requestController()
     try {
       // A completed read before subscription is the only trustworthy old-record boundary.
-      // 已加载过的历史只往后读新增的部分，不在慢隧道上整页重下；用户要求重新同步时整页读。
+      // Already loaded history only reads newly added parts forward instead of redownloading full pages over the slow tunnel; read the full page when the user asks to resync.
       const loaded = this.#fullResync ? undefined : this.historyPage
       const followed = loaded?.page?.tailCursor
         ? await this.#followFrom(loaded, controller.signal)
@@ -582,12 +582,12 @@ export class SessionTransport {
         }
       )
       this.#socket = socket
-      // 这条连接现在才建，走的就是眼下最好的路：之前记下的换路请求不用再做。
+      // This connection is created only now, so it already uses the best current path: the previously noted reroute request is no longer needed.
       this.#migrateWanted = false
       this.#bind(socket, generation)
       this.#syncTimer = this.#timers.set(() => {
         if (!this.#valid(generation) || this.connection === 'ready') return
-        this.#options.onError(new ApiError('连接电脑超时', 0, 'TIMEOUT'))
+        this.#options.onError(new ApiError('Connecting to the computer timed out', 0, 'TIMEOUT'))
         this.#disconnect()
       }, SOCKET_OPEN_TIMEOUT_MS)
     } catch (error) {
@@ -608,17 +608,17 @@ export class SessionTransport {
     )
   }
 
-  /** 把一条连接设为会话正在用的那条。 */
+  /** Set a connection as the one the session is using. */
   #bind(socket: SocketLike, generation: number) {
     socket.onopen = () => {
       if (!this.#valid(generation)) return
       this.#timers.clear(this.#syncTimer)
       this.#syncTimer = this.#timers.set(() => {
         if (!this.#valid(generation) || this.connection === 'ready') return
-        this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
+        this.#options.onError(new ApiError('Session sync timed out', 0, 'SYNC_TIMEOUT'))
         this.#disconnect()
       }, SYNC_TIMEOUT_MS)
-      // 接回原来的流：等电脑答复能不能续，再决定要不要重新对齐。补发迟迟收不完也由上面的时限兜底。
+      // Reattach the original stream: wait for the computer to answer whether it can resume, then decide whether to resync. A replay that takes too long is also backstopped by the deadline above.
       if (this.#resuming) return
       this.#setConnection('syncing')
       try {
@@ -634,7 +634,7 @@ export class SessionTransport {
     socket.onmessage = ({ data }) => this.#receive(generation, data)
     socket.onclose = ({ code }) => {
       if (!this.#valid(generation)) return
-      // 换路时电脑把流交给了新连接，用 4000 关掉旧的：等新连接答复，不当断线。
+      // While rerouting the computer handed the stream to the new connection and closed the old one with 4000: wait for the new connection's reply instead of treating it as a disconnect.
       if (code === STREAM_SUPERSEDED && this.#migration) return
       this.#disconnect()
       // Older gateways also use 1008 for restarts and rate limits. Only an
@@ -651,8 +651,8 @@ export class SessionTransport {
 
   #receive(generation: number, data: unknown) {
     if (!this.#valid(generation)) return
-    // 任何一帧都说明连接还活着：大消息在慢网上排在 pong 前面时，不能算心跳超时。
-    // 回前台的探活不在此列，它只认自己的 pong（见 #probe）。
+    // Any frame shows the connection is alive: when large messages queue ahead of the pong on a slow network, it must not count as a heartbeat timeout.
+    // The foreground probe is excluded; it only accepts its own pong (see #probe).
     this.#awaitingPong = false
     const frame = readStreamFrame(data)
     if (!frame) return
@@ -665,7 +665,7 @@ export class SessionTransport {
       return
     }
     if (this.#awaitingAttach) {
-      // 电脑没有先答复续传：它还不支持，这条连接照旧用。
+      // The computer did not answer resume first: it does not support it yet, so keep using this connection as before.
       this.#awaitingAttach = false
       this.#streamsUnsupported = true
       if (this.#resuming) {
@@ -676,7 +676,7 @@ export class SessionTransport {
     }
     const stream = this.#streamActive() ? this.#stream : undefined
     if (stream && frame.seq !== undefined) {
-      // 换路或补发时同一帧可能到两次。
+      // The same frame may arrive twice during reroute or replay.
       if (frame.seq <= stream.lastSeq) return
       stream.lastSeq = frame.seq
       if (!this.#migration && stream.lastSeq - stream.ackedSeq >= STREAM_ACK_EVERY)
@@ -696,14 +696,14 @@ export class SessionTransport {
       else this.#applyEvent(event)
       this.#maybeReady()
     }
-    // 认不出的帧也占一个帧号：补发是否收完按帧号算，不能因为它卡住。
+    // Unrecognized frames also take a frame number: replay completion is counted by frame number and must not get stuck on them.
     this.#finishReplay()
   }
 
   async #initialHistory(generation: number) {
     const controller = this.#requestController()
     try {
-      // 订阅之后再往后读一次，补上订阅前那次读取和订阅之间落盘的记录。
+      // Read forward once more after subscribing to fill in records written between the pre-subscribe read and the subscription.
       const pre = this.#preSubscribeHistory
       const followed = pre?.page?.tailCursor
         ? await this.#followFrom(pre, controller.signal)
@@ -809,7 +809,7 @@ export class SessionTransport {
       this.#socket?.readyState !== 1
     )
       return
-    // 续传接回时这些都还是上次对齐留下的：是否就绪由补发收完决定（见 #finishReplay）。
+    // On resume these are all still from the last sync: readiness is decided by the replay finishing (see #finishReplay).
     if (this.connection === 'ready' || this.connection === 'resuming') return
     this.#timers.clear(this.#syncTimer)
     this.#syncTimer = undefined
@@ -821,7 +821,7 @@ export class SessionTransport {
     this.#afterReady()
   }
 
-  /** 还在等电脑确认的用户消息改成「未确认送达」，让用户决定要不要重发。 */
+  /** User messages still waiting for computer confirmation become "delivery not confirmed", letting the user decide whether to resend. */
   #markUndelivered() {
     if (!this.state.items.some((item) => item.type === 'user' && item.pending)) return
     this.#publish({
@@ -832,13 +832,13 @@ export class SessionTransport {
           : item
       ),
       error: {
-        message: '上一条消息未确认送达，请检查电脑后再决定是否重发',
+        message: 'Delivery of the previous message was not confirmed; check the computer before deciding whether to resend',
         code: 'DELIVERY_UNCONFIRMED',
       },
     })
   }
 
-  /** 就绪之后：没就绪时出现的更好的路，现在换过去。 */
+  /** After ready: switch now to the better path that appeared before ready. */
   #afterReady() {
     if (!this.#migrateWanted) return
     this.#migrateWanted = false
@@ -868,9 +868,9 @@ export class SessionTransport {
       this.state.turnActive ||
       turnEpoch !== this.#turnEpoch
     try {
-      // 先接回已加载的历史再对账：这一轮超过一页（大图、读了很多文件）时，用户那条消息
-      // 不在最新一页里，只拿最新一页比永远对不上，界面会一直停在实时状态，直到下次重连整体替换。
-      // 能往后读就只读这一轮新增的记录。
+      // Reattach loaded history before reconciling: when this turn spans more than a page (large images, many file reads), the user message
+      // is not on the latest page, and comparing only the latest page would never match, leaving the UI in live state until the next reconnect replaces everything.
+      // When reading forward is possible, read only the records added in this turn.
       const loaded = this.historyPage
       const followed = loaded?.page?.tailCursor
         ? await this.#followFrom(loaded, controller.signal)
@@ -949,7 +949,7 @@ export class SessionTransport {
       )
       if (!this.#valid(generation) || historyEpoch !== this.#historyEpoch)
         return
-      // 会话被改写过，旧的游标链作废，只用最新一页。
+      // The session was rewritten, the old cursor chain is void; use only the latest page.
       this.#olderPages.clear()
       this.#setHistory(history)
       this.#publish({
@@ -992,14 +992,14 @@ export class SessionTransport {
   }
 
   /**
-   * 发一个 ping，限时内等到它的 pong 就说明连接还活着；否则立即重连，不等退避。
-   * 挂起期间压在缓冲里的旧帧、挂起前那个 ping 的 pong 一回来就会送到，它们只能说明
-   * 连接当时还通，所以这里只认这次 ping 的 pong（同一条连接上 pong 按顺序回来）。
+   * Send a ping; if its pong arrives in time the connection is alive, otherwise reconnect immediately without backoff.
+   * Old frames buffered during suspension and the pong for the ping before suspension arrive as soon as it resumes, but they only show
+   * the connection was alive back then, so only this ping's pong counts here (pongs come back in order on the same connection).
    */
   #probe() {
     if (this.#probeTimer !== undefined || this.#socket?.readyState !== 1) return
     const generation = this.#generation
-    // 挂起前发出的 ping 可能永远等不到 pong：交给这次探活判断，不让心跳误杀。
+    // A ping sent before suspension may never get a pong: leave it to this probe so the heartbeat does not kill it by mistake.
     this.#timers.clear(this.#heartbeatTimer)
     this.#heartbeatTimer = undefined
     this.#awaitingPong = false
@@ -1031,7 +1031,7 @@ export class SessionTransport {
 
   #disconnect(immediate = false) {
     if (this.#disposed || this.#pairingRequired) return
-    // 从就绪掉线不算失败；之后每次建连没成才算，连着两次就该告诉用户了。
+    // Dropping from ready does not count as a failure; only each failed connect afterwards counts, and two in a row should be told to the user.
     if (this.connection !== 'ready') this.#failures++
     this.#generation++
     this.#cleanup()
@@ -1052,13 +1052,13 @@ export class SessionTransport {
     this.#publish({ ...this.state, connected: false })
     this.#setConnection('pairing_required')
     this.#options.onError(
-      new ApiError('连接凭据已失效，请重新配对电脑', 401, 'PAIRING_REQUIRED')
+      new ApiError('Connection credentials are no longer valid; please pair the computer again', 401, 'PAIRING_REQUIRED')
     )
   }
 
   async #probeAuthorization() {
     // Native WebSocket handshake failures often hide HTTP 401 behind close 1006.
-    // 只问凭据是否还有效（几个字节），不为此在慢隧道上下载一整页历史；连着断时 30 秒问一次就够。
+    // Only ask whether the credential is still valid (a few bytes) instead of downloading a full history page over the slow tunnel; asking every 30 seconds while disconnecting is enough.
     if (this.#authProbing) return
     const now = this.#now()
     if (this.#authProbedAt !== undefined && now - this.#authProbedAt < AUTH_PROBE_INTERVAL_MS) return
@@ -1192,12 +1192,12 @@ export class SessionTransport {
     this.#options.history?.write(page)
   }
   /**
-   * 把重新读到的最新一页接到已加载的历史上。新增超过一页时往前补几页再接；
-   * 最新一页的开头已在已加载范围里却对不上，说明会话被改写，只用最新的。
+   * Attach the reread latest page to the loaded history. If more than a page was added, backfill a few pages first; 
+   * if the start of the latest page is within the loaded range but does not match, the session was rewritten, so use only the latest.
    */
   async #joinLatest(latest: HistoryPage, signal: AbortSignal, budgetMs?: number) {
     let page = latest
-    // 补页有自己的时限；超时只是少接几页，不算同步失败。
+    // Backfill has its own deadline; timing out just attaches fewer pages and does not count as a sync failure.
     const bridge = new AbortController()
     const stop = () => bridge.abort()
     signal.addEventListener('abort', stop, { once: true })
@@ -1228,8 +1228,8 @@ export class SessionTransport {
     }
   }
   /**
-   * 从 `base` 的末尾往后读新增的记录并接上。会话被改写（409）、游标不认识（旧电脑 400）
-   * 或几页内读不到尾时返回 undefined，由调用方改读最新一页。
+   * Read new records after the end of `base` and attach them. Session rewritten (409), unknown cursor (old computer 400)
+   * or no end reached within a few pages returns undefined, and the caller reads the latest page instead.
    */
   async #followFrom(base: HistoryPage, signal: AbortSignal) {
     let page = base
@@ -1248,8 +1248,8 @@ export class SessionTransport {
           return undefined
         throw error
       }
-      // 旧电脑不认 follow，把游标当普通的「更新的页」读，回一页空的、不带 tailCursor：
-      // 这不是「已读到末尾」，改读最新一页。
+      // Old computers do not recognize follow and read the cursor as an ordinary "newer page", returning an empty page without tailCursor: 
+      // this is not "reached the end", so read the latest page instead.
       if (!delta.page?.tailCursor) return undefined
       page = appendFollowPage(page, delta)
       if (delta.page?.tailComplete !== false) return page
@@ -1257,8 +1257,8 @@ export class SessionTransport {
     return undefined
   }
   /**
-   * 同一个游标对应的旧页内容不变（会话被改写时最新一页会给出新游标），
-   * 对账重试和补页可以直接复用，不必在慢网上再下一遍。
+   * Old page content for the same cursor does not change (when the session is rewritten the latest page gives a new cursor), 
+   * so reconciliation retries and backfill can reuse it directly without downloading again on a slow network.
    */
   async #olderPage(cursor: string, signal: AbortSignal) {
     const known = this.#olderPages.get(cursor)
@@ -1295,7 +1295,7 @@ export class SessionTransport {
   #freshStream() {
     return { id: this.#options.newStreamId!(), synced: false, lastSeq: 0, ackedSeq: 0 }
   }
-  /** 电脑接上了这条流（不是旧电脑、也不是还在等它答复）。 */
+  /** The computer attached this stream (not an old computer, and not still waiting for its reply). */
   #streamActive() {
     return !this.#streamsUnsupported && !!this.#stream?.epoch && !this.#awaitingAttach
   }
@@ -1303,21 +1303,21 @@ export class SessionTransport {
     return this.#streamActive() ? this.#outbox.encode(message) : { text: JSON.stringify(message) }
   }
   /**
-   * 当场没发出去的命令：撤回编号（界面已告诉用户它没发出、不会自动重试，续传后也不能悄悄补发），
-   * 再按断线处理。
+   * A command not sent on the spot: withdraw its number (the UI already told the user it was not sent and will not auto-retry, and it must not be silently resent after resume), 
+   * then handle as a disconnect.
    */
   #unsent(encoded: { cseq?: number }) {
     if (encoded.cseq !== undefined) this.#outbox.drop(encoded.cseq)
     this.#options.onError(
-      new ApiError('发送失败，消息没有自动重试', 0, 'SEND_FAILED')
+      new ApiError('Send failed; the message was not retried automatically', 0, 'SEND_FAILED')
     )
     this.#disconnect()
   }
-  /** 续传或换路接上后，补发还没收完：新命令不能抢在断线前没执行的命令前面。 */
+  /** After resume or reroute, the replay has not finished: new commands must not jump ahead of commands not executed before the disconnect. */
   #replaying() {
     return this.#stream?.replayUntil !== undefined
   }
-  /** 离开或重新对齐前告诉电脑这条流不用再留（套接字已断就让它自己过期）。 */
+  /** Before leaving or resyncing tell the computer this stream need not be kept (if the socket is already gone let it expire). */
   #endStream() {
     if (!this.#streamActive() || this.#socket?.readyState !== 1) return
     try {
@@ -1327,8 +1327,8 @@ export class SessionTransport {
     }
   }
   /**
-   * 能告诉电脑「已收到」的帧号。换路途中不超过新连接请求续传时带的帧号：否则电脑先按
-   * 旧连接上的确认裁掉缓冲，新连接接上时帧号就对不上（断档），只能从头对齐。
+   * The frame number that can be reported as "received". While rerouting it must not exceed the frame number sent when the new connection requested resume: otherwise the computer first trims the buffer by
+   * acks on the old connection, and when the new connection attaches the frame numbers do not line up (gap), forcing a full resync.
    */
   #ackable() {
     const stream = this.#stream!
@@ -1351,21 +1351,21 @@ export class SessionTransport {
       /* The heartbeat notices a dead socket. */
     }
   }
-  /** 电脑答复了续传请求。 */
+  /** The computer answered the resume request. */
   #attached(generation: number, attached: StreamAttached) {
     const stream = this.#stream
     if (!stream || !this.#awaitingAttach) return
     this.#awaitingAttach = false
     stream.epoch = attached.epoch
     if (!this.#resuming) {
-      // 新流：会话连接刚打开，照常对齐。
+      // New stream: the session connection just opened; sync as usual.
       stream.lastSeq = stream.ackedSeq = attached.next - 1
       return
     }
     this.#resuming = false
     if (!attached.resumed) {
-      // 电脑那边这条流已经不在了（过期、断档、电脑重启）。它不会为这个套接字打开会话、
-      // 随后用 4001 关掉它，所以不用发 stream_end：换新流从头对齐（关闭事件到时这条连接已作废）。
+      // The stream no longer exists on the computer (expired, gap, computer restarted). It will not open a session for this socket 
+      // and then closes it with 4001, so no stream_end is needed: start a new stream and sync from scratch (the connection is void by the time the close event arrives).
       stream.synced = false
       this.#connect(true)
       return
@@ -1373,10 +1373,10 @@ export class SessionTransport {
     this.#heartbeat(generation)
     this.#resumed(attached)
   }
-  /** 电脑接回了这条流（续传或换路）：记下从哪里补发，等补发收完再重发没执行的命令。 */
+  /** The computer reattached this stream (resume or reroute): record where the replay starts, and resend unexecuted commands once the replay is done. */
   #resumed(attached: StreamAttached) {
     const stream = this.#stream!
-    // 换路时旧连接可能已经收到比请求时更新的帧，补发里重复的按帧号丢掉。
+    // While rerouting the old connection may have received frames newer than at request time; duplicates in the replay are dropped by frame number.
     stream.lastSeq = Math.max(stream.lastSeq, attached.next - 1)
     stream.ackedSeq = attached.next - 1
     stream.replayUntil = attached.last
@@ -1384,9 +1384,9 @@ export class SessionTransport {
     this.#finishReplay()
   }
   /**
-   * 补发收完后，把断线前发出、电脑还没执行的命令按原编号、原顺序再发一次（电脑会去重），
-   * 之后才就绪、才放行新命令。补发里已经处理掉的决定（别的设备批了、超时了）不再发；
-   * 同一条重发过两次还没执行的，不再转圈，按「未确认送达」交给用户。
+   * After the replay finishes, resend commands sent before the disconnect that the computer has not executed, with original numbers in original order (the computer dedupes), 
+   * and only then become ready and let new commands through. Decisions already handled in the replay (approved on another device, timed out) are not resent; 
+   * one resent twice and still not executed stops spinning and goes to the user as "delivery not confirmed".
    */
   #finishReplay() {
     const stream = this.#stream
@@ -1419,7 +1419,7 @@ export class SessionTransport {
     }
     if (undelivered) {
       this.#markUndelivered()
-      // 乐观显示的「运行中」可能并不存在：请电脑报一次这段会话的真实状态。
+      // The optimistic "running" may not exist: ask the computer to report this session's real state once.
       try {
         this.#socket.send(JSON.stringify({ type: 'sync_state' }))
       } catch {
@@ -1435,7 +1435,7 @@ export class SessionTransport {
     this.#retries = 0
     this.#publish({ ...this.state, connected: true })
     this.#setConnection('ready')
-    // 断线时排好的对账跟着连接一起取消了：这一轮的实时内容还没换成已保存的记录，重新排一次。
+    // Reconciliation scheduled at disconnect was canceled with the connection: this turn's live content is not yet replaced by saved records, so schedule again.
     if (
       !this.state.turnActive &&
       this.state.items.some(
@@ -1446,7 +1446,7 @@ export class SessionTransport {
       this.#scheduleReconcile()
     this.#afterReady()
   }
-  /** 换到新路：新连接先被电脑接上，旧连接才让出来。返回 false 表示现在换不了。 */
+  /** Switch to a new path: the new connection is attached by the computer first, then the old one yields. Returns false if it cannot switch now. */
   #beginMigration() {
     const stream = this.#stream
     if (
@@ -1465,7 +1465,7 @@ export class SessionTransport {
     try {
       socket = this.#createSocket({ id: stream.id, resume: { epoch: stream.epoch, ack } })
     } catch {
-      // 新路这时建不起来：继续用旧连接，不再反复试。
+      // The new path cannot be built right now: keep using the old connection and stop retrying.
       return true
     }
     this.#migrateWanted = false
@@ -1474,7 +1474,7 @@ export class SessionTransport {
     const abandon = () => {
       if (this.#migration !== migration) return
       this.#dropMigration()
-      // 电脑已经把流交给了新连接（旧连接收到了 4000），新连接却没成：这才按断线处理。
+      // The computer already handed the stream to the new connection (old one got 4000) but the new one failed: only now handle as a disconnect.
       if (this.#socket?.readyState !== 1) this.#disconnect(true)
     }
     socket.onmessage = ({ data }) => {
@@ -1495,34 +1495,34 @@ export class SessionTransport {
     const socket = migration.socket
     stream.epoch = attached.epoch
     if (!attached.resumed) {
-      // 电脑那边这条流续不上了（缓冲溢出等）：和续传失败一样换新流从头对齐。
-      // 电脑不为这个套接字打开会话；旧连接上的流若还在，告诉电脑不用再留。
+      // The stream cannot continue on the computer (buffer overflow etc): like a failed resume, start a new stream and sync from scratch.
+      // The computer does not open a session for this socket; if the stream on the old connection is still there, tell the computer it need not be kept.
       retire(socket)
       this.#endStream()
       stream.synced = false
       this.#connect(true)
       return
     }
-    // 电脑已用 4000 关掉旧连接；旧路上还没送到的帧，新连接的补发里都有。
+    // The computer closed the old connection with 4000; frames not yet delivered on the old path are all in the new connection's replay.
     if (this.#socket) retire(this.#socket)
     this.#socket = socket
-    // 旧连接上的 ping 不会在新连接上回 pong；这次接上本身就是刚收到的一帧。
+    // Pings on the old connection will not get pongs on the new one; this attach itself is a freshly received frame.
     this.#pingsInFlight = 0
     this.#awaitingPong = false
     this.#bind(socket, generation)
-    // 这次接上是电脑刚刚的答复，足以说明连接是通的：回前台的探活不必再等旧路上的 pong，
-    // 心跳从新连接重新算（旧连接被顶替那一刻心跳可能正好停了）。
+    // This attach is the computer's fresh reply, which is enough to show the connection is alive: the foreground probe need not wait for a pong on the old path, 
+    // and the heartbeat restarts from the new connection (the heartbeat may have stopped right when the old connection was replaced).
     this.#timers.clear(this.#probeTimer)
     this.#timers.clear(this.#heartbeatTimer)
     this.#probeTimer = undefined
     this.#heartbeat(generation)
     this.#resumed(attached)
-    // 补发迟迟收不完时不能一直挡着新命令：和续传一样由同步时限兜底，重新接一次。
+    // When the replay takes too long it must not block new commands forever: like resume, the sync deadline is the backstop and reconnects once.
     if (!this.#replaying()) return
     this.#timers.clear(this.#syncTimer)
     this.#syncTimer = this.#timers.set(() => {
       if (!this.#valid(generation) || !this.#replaying()) return
-      this.#options.onError(new ApiError('会话同步超时', 0, 'SYNC_TIMEOUT'))
+      this.#options.onError(new ApiError('Session sync timed out', 0, 'SYNC_TIMEOUT'))
       this.#disconnect()
     }, SYNC_TIMEOUT_MS)
   }
@@ -1542,12 +1542,12 @@ export class SessionTransport {
   }
   #report(error: unknown) {
     this.#options.onError(
-      error instanceof Error ? error : new Error('会话同步失败')
+      error instanceof Error ? error : new Error('Session sync failed')
     )
   }
 }
 
-/** 不再用的连接：先摘掉回调（之后到的关闭事件不再触发断线处理），再关掉。 */
+/** A connection no longer used: detach callbacks first (later close events no longer trigger disconnect handling), then close it. */
 function retire(socket: SocketLike) {
   socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null
   try {

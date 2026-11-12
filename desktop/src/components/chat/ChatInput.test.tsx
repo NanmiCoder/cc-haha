@@ -1497,7 +1497,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput variant="hero" />)
 
     const panel = screen.getByTestId('chat-input-panel')
-    // The floating card (「素」): `--radius-xl` + the composer step of the
+    // The floating card ("Su" spec): `--radius-xl` + the composer step of the
     // shadow scale, the same shell EmptySession renders.
     expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'glass-panel--composer')
     expect(panel).not.toHaveClass('rounded-b-none')
@@ -3016,13 +3016,13 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput compact />)
 
     const mention = '@backend/src/conditions.py'
-    setComposerText(`${mention} 记一下这个文件讲了什么东西。`, mention.length)
+    setComposerText(`${mention} note what this file is about.`, mention.length)
 
     fireEvent.click(await screen.findByRole('option', { name: 'conditions.py' }))
 
     // The trigger text becomes an inline pill — no attachment chip is added.
     await waitFor(() => {
-      expect(getComposerText()).toBe('@conditions.py 记一下这个文件讲了什么东西。')
+      expect(getComposerText()).toBe('@conditions.py note what this file is about.')
     })
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@conditions.py')
     expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument()
@@ -3031,14 +3031,14 @@ describe('ChatInput file mentions', () => {
 
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
       type: 'user_message',
-      content: '@"/repo/backend/src/conditions.py" 记一下这个文件讲了什么东西。',
+      content: '@"/repo/backend/src/conditions.py" note what this file is about.',
       attachments: [],
     })
     const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
     expect(messages[messages.length - 1]).toMatchObject({
       type: 'user_text',
-      content: '@conditions.py 记一下这个文件讲了什么东西。',
-      modelContent: '@"/repo/backend/src/conditions.py" 记一下这个文件讲了什么东西。',
+      content: '@conditions.py note what this file is about.',
+      modelContent: '@"/repo/backend/src/conditions.py" note what this file is about.',
     })
     expect(getComposerText()).toBe('')
   })
@@ -3110,12 +3110,12 @@ describe('ChatInput file mentions', () => {
 
     render(<ChatInput compact />)
 
-    setComposerText('@backend 讲一下这个目录。', '@backend'.length)
+    setComposerText('@backend explain this directory.', '@backend'.length)
 
     fireEvent.click(await screen.findByRole('option', { name: /backend/i }))
 
     await waitFor(() => {
-      expect(getComposerText()).toBe('@backend/ 讲一下这个目录。')
+      expect(getComposerText()).toBe('@backend/ explain this directory.')
     })
     const pill = document.querySelector('.composer-mention')
     expect(pill).toHaveTextContent('@backend/')
@@ -3125,14 +3125,14 @@ describe('ChatInput file mentions', () => {
 
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
       type: 'user_message',
-      content: '@"/repo/backend" 讲一下这个目录。',
+      content: '@"/repo/backend" explain this directory.',
       attachments: [],
     })
     const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
     expect(messages[messages.length - 1]).toMatchObject({
       type: 'user_text',
-      content: '@backend/ 讲一下这个目录。',
-      modelContent: '@"/repo/backend" 讲一下这个目录。',
+      content: '@backend/ explain this directory.',
+      modelContent: '@"/repo/backend" explain this directory.',
     })
   })
 
@@ -3361,9 +3361,9 @@ describe('ChatInput file mentions', () => {
         items: [],
         types: ['text/plain', 'text/html'],
         getData: (type: string) => {
-          if (type === 'text/plain') return '第一行\r\n第二行\r\n\r\n第四行'
+          if (type === 'text/plain') return 'Line one\r\nLine two\r\n\r\nLine four'
           if (type === 'text/html') {
-            return '<div><span>第一行</span></div><div><span>第二行</span></div><div><br></div><div><span>第四行</span></div>'
+            return '<div><span>Line one</span></div><div><span>Line two</span></div><div><br></div><div><span>Line four</span></div>'
           }
           return ''
         },
@@ -3371,7 +3371,7 @@ describe('ChatInput file mentions', () => {
     })
 
     await waitFor(() => {
-      expect(getComposerText()).toBe('第一行\n第二行\n\n第四行')
+      expect(getComposerText()).toBe('Line one\nLine two\n\nLine four')
     })
   })
 
@@ -4259,7 +4259,7 @@ describe('ChatInput file mentions', () => {
       render(<ChatInput />)
       act(() => {
         useSettingsStore.setState({ nextPromptSuggestionsEnabled: true })
-        useChatStore.getState().handleServerMessage(sessionId, { type: 'prompt_suggestion', suggestion: '跑一下测试' })
+        useChatStore.getState().handleServerMessage(sessionId, { type: 'prompt_suggestion', suggestion: 'Run the tests' })
       })
       try {
         expect(ghost()).not.toBeNull()

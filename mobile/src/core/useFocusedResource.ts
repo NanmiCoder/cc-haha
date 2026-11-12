@@ -25,7 +25,7 @@ export function useFocusedResource<T>(
       }
     } catch (e) {
       if (request.isCurrent())
-        setError(e instanceof Error ? e.message : '读取失败，请重试')
+        setError(e instanceof Error ? e.message : 'Failed to load, please retry')
     } finally {
       if (request.isCurrent()) setLoading(false)
     }
@@ -70,7 +70,7 @@ export function useFocusedResource<T>(
       } catch (e) {
         if (request.isCurrent())
           setError(
-            e instanceof Error ? e.message : '操作未确认，请刷新后检查结果'
+            e instanceof Error ? e.message : 'Action not confirmed; refresh to check the result'
           )
       } finally {
         if (request.isCurrent()) {

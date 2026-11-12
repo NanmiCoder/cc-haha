@@ -1,86 +1,86 @@
 ---
-title: IM 接入
-nav_title: 总览
-description: 把飞书、Telegram、微信、钉钉、WhatsApp、企业微信、QQ 或 Slack 的私聊接到桌面端，用手机继续同一条会话。
+title: IM Integrations
+nav_title: Overview
+description: Bridge Feishu, Telegram, WeChat, DingTalk, WhatsApp, WeCom, QQ, or Slack private chats into the Desktop app and continue the same session from your phone.
 order: 0
 ---
 
-# IM 接入
+# IM Integrations
 
-桌面端跑着的会话，可以接到你手机上的 IM 里。绑定之后，在飞书、Telegram、微信、钉钉、WhatsApp、企业微信、QQ 或 Slack 的私聊里发一句话，就是在驱动本机的 Claude Code：出门前让它跑一个长任务，路上用手机看进度、批权限、换项目。
+A session running in the Desktop app can be reached from a private chat on your phone. Once bound, a message in Feishu, Telegram, WeChat, DingTalk, WhatsApp, WeCom, QQ, or Slack drives the Claude Code session on your own machine: start a long task before you leave, then follow the progress, approve permissions, and switch projects from the road.
 
-对话对象是你自己绑定的机器人或账号，消息只经过你本机的桌面端，没有中间服务器托管你的代码。
+The chat partner is a bot or account you bound yourself. Messages reach your local Desktop app; no intermediate service holds your code.
 
-![设置 → IM 接入：平台标签与 Slack 配置表单](../images/app/zh-CN/settings-im.webp)
+![Settings → IM Adapters: platform tabs and the Slack setup form (Chinese interface)](../images/app/en/settings-im.webp)
 
-## 接进来之后能做什么
+## What you get
 
-- **接着聊同一条会话**：手机上发的消息进的是本机的 Claude Code 会话，改文件、跑命令、读代码都在你电脑上真实发生。
-- **恢复旧会话**：发 `/sessions` 查看当前项目的历史，或 `/sessions <项目名或绝对路径>` 找到其他项目，再用 `/resume <编号>` 接着聊。桌面端创建的会话也能选。
-- **换项目**：发 `/projects` 列出最近用过的项目，回复编号或路径就切过去；`/new` 直接开一条新会话。
-- **批权限**：Claude 要写文件或执行高风险命令时，会把请求推到 IM 里。飞书和钉钉是可点的卡片，Telegram 是按钮，其余平台回复一条文本命令。
-- **看状态、叫停**：`/status` 看当前项目、模型和运行状态，`/stop` 中断正在跑的这一轮。
+- **The same session, continued.** Messages sent from your phone enter the Claude Code session on your computer, where file edits, commands, and reads really happen.
+- **Resume history.** `/sessions` lists history in the current project; `/sessions <project name or absolute path>` opens another project. Use `/resume <number>` to continue, including sessions created on Desktop.
+- **Project switching.** `/projects` lists recent projects and switches to the one you pick; `/new` starts a fresh session.
+- **Permission approval.** When Claude wants to write a file or run a risky command, the request is pushed to the chat. Feishu and DingTalk send interactive cards, Telegram sends buttons, and every other platform expects a text reply.
+- **Status and stop.** `/status` reports the current project, model, and run state; `/stop` interrupts the current turn.
 
-前提是桌面端一直开着。IM 侧只是遥控器，真正干活的是你的电脑。
+The Desktop app has to stay running. The chat side is only a remote control.
 
-## 选哪个平台
+## Choosing a platform
 
-八个平台的能力是同一套，差别在接入成本和审批体验。
+All eight expose the same capabilities. They differ in setup cost and approval experience.
 
-| 平台 | 怎么接 | 适合谁 | 已知限制 |
+| Platform | How you connect | Best for | Known limits |
 |---|---|---|---|
-| 飞书 | 在设置页扫码，直接创建机器人并写入凭据 | 国内团队，想要点按钮就能批权限 | 只处理单聊，不处理群聊；改机器人菜单要去开放平台发版本 |
-| Telegram | 找 `@BotFather` 要一个 Bot Token，粘进设置页 | 能连上 Telegram 的个人用户，接入最快 | 只处理私聊；国内网络下需要自己解决连通性 |
-| 微信 | 在设置页扫码登录机器人账号 | 只想用微信、不愿再装一个 App | 只处理私聊；权限审批只能回复文本命令 |
-| 钉钉 | 在设置页扫码授权，Client ID 和 Secret 自动写入 | 国内企业，钉钉是主力办公工具 | 只处理单聊；要卡片审批得额外配一个模板 ID |
-| WhatsApp | 用手机 WhatsApp 的「已关联设备」扫码 | 海外用户 | 走个人号的 Web 登录，不是官方 Cloud API；只处理个人私聊 |
-| 企业微信 | 在设置页扫码，直接创建智能机器人 | 用企业微信办公的团队 | 只处理单聊；权限审批只能回复文本命令 |
-| QQ | 在设置页扫码授权，AppID 和 AppSecret 自动写入 | 习惯用 QQ 的个人用户 | 只处理私聊，不处理群和频道；权限审批只能回复文本命令 |
-| Slack | 用预填好的应用清单创建 App，回填两枚 Token | 海外团队 | 只处理私信；没有扫码流程，要手动粘贴 Token |
+| Feishu | Scan a QR code in Settings; the bot is created and its credentials stored for you | Teams that want one-tap permission approval | Private (`p2p`) chats only; menu changes require publishing a new app version |
+| Telegram | Ask `@BotFather` for a Bot Token, paste it into Settings | Individuals who can reach Telegram; fastest setup | Private chats only |
+| WeChat | Scan a QR code in Settings to log in a bot account | People who only want WeChat | Private chats only; permission approval is text replies |
+| DingTalk | Scan a QR code in Settings; credentials are filled in for you | Organizations already on DingTalk | Private chats only; interactive approval cards need an extra template ID |
+| WhatsApp | Scan from **Linked devices** on your phone | Users outside mainland China | Personal linked-device login, not the official Cloud API; personal private chats only |
+| WeCom | Scan a QR code in Settings to create an AI bot | Organizations on Enterprise WeChat | Private chats only; permission approval is text replies |
+| QQ | Scan a QR code in Settings; credentials are filled in for you | Individuals on QQ | Private (C2C) chats only, no groups or guilds; text approval |
+| Slack | Create the app from a pre-filled manifest, paste two tokens | Teams on Slack | Direct messages only; no QR flow, tokens are pasted by hand |
 
-拿不定主意就先接 Telegram 或飞书，两者的权限审批体验最好。
+If you have no preference, start with Telegram or Feishu — their approval flows are the most comfortable.
 
-## 配对流程
+## Pairing flow
 
-所有平台的绑定都分两层：先让桌面端拿到平台凭据，再让你这个 IM 账号本人通过配对码获得授权。第二层所有平台都一样。
+Binding happens in two layers: first the Desktop app gets platform credentials, then your personal account is authorized with a pairing code. The second layer is identical everywhere.
 
-1. 打开「设置」→「IM 接入」。
-2. 在下方的平台 Tab 里完成绑定：飞书、微信、钉钉、WhatsApp、企业微信、QQ 扫码，Telegram 和 Slack 填凭据。
-3. 在「默认项目」里挑一个目录。
-4. 点「保存」。
-5. 回到顶部的「配对管理」，点「生成配对码」，拿到一枚 6 位码。
-6. 在对应 IM 里私聊你的机器人，把这 6 位码发过去。
-7. 看到配对成功提示后，直接发消息就是在跟 Claude Code 对话。
+1. Open **Settings → IM Adapters**.
+2. Bind one platform in its tab: Feishu, WeChat, DingTalk, WhatsApp, WeCom, and QQ use a QR code; Telegram and Slack take credentials.
+3. Pick a directory under **Default Project**.
+4. Select **Save**.
+5. Back at the top, in **Pairing**, select **Generate Code** to get a six-character code.
+6. Send that code to your bot in a private chat on the matching platform.
+7. Once pairing is confirmed, anything you type goes to Claude Code.
 
-配对码 60 分钟内有效，只能用一次，重新生成后旧码立刻作废。同一枚码是平台无关的，发到哪个平台就绑哪个平台的账号。同一个用户 5 分钟内连续输错 5 次会被限流。
+A code is valid for 60 minutes, works once, and is invalidated the moment a new one is generated. The code itself is platform-neutral — it binds whichever account sends it. Five failed attempts within five minutes trigger rate limiting.
 
-生成配对码和扫码绑定都会立即写入本机配置，不需要再点「保存」；App ID、Bot Token、「允许的用户」和「默认项目」这类手填内容才需要。
+Generating a code and QR binding are written to local configuration immediately. **Save** is only needed for typed values such as App ID, Bot Token, **Allowed Users**, and **Default Project**.
 
-配对成功的账号会出现在「已配对用户」列表里，点右侧的「解绑」即可撤销，被解绑的人要重新发一枚新码。
+Paired accounts appear under **Paired Users**, where **Unbind** revokes one of them. A revoked user needs a fresh code.
 
-## 默认项目决定它在哪干活
+## Default project decides where work happens
 
-「默认项目」是新建 IM 会话的工作目录。填了它，手机上发的第一句话就直接在这个目录下开会话；留空的话，机器人会先把最近用过的项目列出来让你选。
+**Default Project** is the working directory for new IM sessions. With it set, the first message from your phone opens a session in that directory. Left empty, the bot lists recent projects and asks you to choose.
 
-同一个 IM 聊天窗口后续的消息会复用同一条会话，桌面端重启后也能接回去。想换目录发 `/new`，想清空上下文但保留项目发 `/clear`。
+Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` changes the directory; `/clear` empties the context while keeping the project binding.
 
-## 在手机上找回旧会话
+## Find an old session from your phone
 
-发 `/sessions` 查看当前绑定项目的历史。如果还没有绑定会话，会先显示项目列表；已经绑定时，也可以发 `/sessions projects` 选择其他项目。发 `/sessions <项目名或绝对路径>` 可以直接查看指定项目，重名项目会列出来让你选。
+Send `/sessions` to list history for your current project. Without a session binding, it starts with a project picker. Use `/sessions projects` to choose a different project, or `/sessions <project name or absolute path>` to open one directly. Ambiguous names show a list to choose from.
 
-会话列表显示标题、更新时间、消息数和当前会话标记，每页 8 条。回复当前页的编号，或发 `/resume <编号>`，之后的消息就会继续那条旧会话。用 `/sessions next` 和 `/sessions prev` 翻页。列表包含同一项目下可访问的 worktree 会话，选中后仍在原工作目录继续。
+Each page shows eight sessions with their title, update time, message count, and a marker for the current session. Reply with a number shown on that page or send `/resume <number>` to continue the selected conversation. Use `/sessions next` and `/sessions prev` to turn pages. Accessible worktree sessions are grouped under their project and resume in their original working directory.
 
-查看列表不会打断当前会话；发 `/cancel` 退出选择，直接发普通聊天文字也会退出历史选择并继续当前对话。列表 15 分钟后过期，需要重新查询。会话正在生成或等待审批时，请先处理审批或 `/stop`，等停止后再切换。旧会话已删除、目录已移除或无法连接时，原来的绑定会保留。
+Browsing preserves the current binding. `/cancel` exits selection; ordinary chat text also leaves the history picker and continues your current conversation. Lists expire after 15 minutes. Finish pending approvals or send `/stop` and wait for the current turn to stop before switching. If a session was deleted, its directory is unavailable, or connecting fails, the original binding is retained.
 
-Telegram 还保留 `/resume` 的项目、会话按钮菜单；各平台都支持上面的文本命令。
+Telegram also keeps its `/resume` project and session button menu. The text commands above work on all platforms.
 
-## 允许访问的项目目录决定它能碰哪些项目
+## Allowed project directories decide which projects it can touch
 
-「默认项目」只决定新会话开在哪，**不是**访问边界。真正的边界是「允许访问的项目目录」：机器人只能列出、打开并在这些目录内的项目里开会话，`/projects`、`/sessions` 和按名字、绝对路径选项目都受它约束。
+**Default Project** only decides where new sessions start — it is **not** the access boundary. The real boundary is **Allowed project directories**: the bot can only list, open, and start sessions in projects inside those directories, which constrains `/projects`, `/sessions`, and picking a project by name or absolute path.
 
-留空就是默认值——你的主目录（如果「默认项目」是主目录之外的某个具体项目目录，也一并包含）。绝大多数人不需要动它。想收紧到某几个目录，就在设置里把它们加进列表。
+Leaving it empty means the default: your home directory (plus the default project, if it is outside home). Most people never need to change it. To narrow it to a few directories, add them to the list in Settings.
 
-配置写在 `~/.claude/adapters.json`，也可以按平台单独收紧：
+The configuration lives in `~/.claude/adapters.json`, and each platform can be narrowed on its own:
 
 ```json
 {
@@ -89,53 +89,51 @@ Telegram 还保留 `/resume` 的项目、会话按钮菜单；各平台都支持
 }
 ```
 
-平台级配置**替换**（不是叠加）全局配置：上面这份配置里 WhatsApp 只能碰 `~/work/sandbox`，其余平台是 `~/work` 和 `~/side`。桌面端设置界面改的是全局那一份，某个平台单独配过之后，界面上的改动就不会影响它了。
+A per-platform setting **replaces** (does not add to) the global one: in the config above, WhatsApp can only touch `~/work/sandbox`, while every other platform gets `~/work` and `~/side`. The Settings UI edits the global copy, so once a platform is configured separately, changes made there no longer affect it.
 
-独立运行 adapter（不走桌面端）时也可以用 `ADAPTER_ALLOWED_PROJECT_ROOTS` 环境变量，多个目录用路径分隔符隔开（macOS / Linux 是 `:`，Windows 是 `;`）。这个环境变量比配置文件里的两层都优先。
+Running an adapter standalone (without the Desktop app) also accepts the `ADAPTER_ALLOWED_PROJECT_ROOTS` environment variable, with directories separated by the platform path delimiter (`:` on macOS / Linux, `;` on Windows). This environment variable outranks both file layers.
 
-几条边界规则：
+A few boundary rules:
 
-- 目录必须是已存在的绝对路径（`~` 会展开）。写不存在的路径会被忽略并打日志；一个都解析不出来时回退到默认值，而不是把机器人锁死。
-- 默认值不会自动继承 `/` 或 `/Users` 这类目录。桌面端以 GUI 方式启动时 sidecar 的工作目录是 `/`，直接拿来当边界等于没有边界。
-- 「默认项目」如果落在允许范围之外，新会话会开在列表里第一个允许的目录，并打一条日志——这样 `/new` 不会因为两处配置不一致而失败。
+- A directory must be an existing absolute path (`~` is expanded). Paths that do not exist are ignored and logged; if none resolve, the default is used rather than locking the bot out.
+- The default never inherits roots such as `/` or `/Users`. When the Desktop app is launched as a GUI, the sidecar's working directory is `/`, and taking that as the boundary is the same as having none.
+- If **Default Project** falls outside the allowed set, a new session starts in the first allowed directory and a line is logged — so `/new` does not fail when the two settings disagree.
 
-配对仍然是第一道关：没配对的人根本发不了命令，这份目录列表是在此之上的第二道防线。注意主目录里也包含 `~/.claude`、`~/.ssh` 这些敏感目录，需要更强隔离就显式收紧到具体的项目目录。
+Pairing is still the first gate: an unpaired sender cannot issue commands at all, and this directory list is a second line of defense on top of it. Note that the home directory also contains sensitive paths like `~/.claude` and `~/.ssh`; for stronger isolation, narrow the list to specific project directories.
 
-## 通用命令
+## Common commands
 
-各平台的入口略有差异（飞书可以把命令配成机器人菜单），但这几条到处都能用：
+Entry points differ slightly per platform — Feishu can expose commands as a bot menu — but these work everywhere:
 
-- `/help` — 列出当前可用命令
-- `/status` — 当前项目、模型、运行状态
-- `/projects` — 列出最近项目并切换
-- `/new` — 开一条新会话，可带项目编号或路径
-- `/sessions [项目]` — 查看旧会话；`/sessions projects` 选择其他项目
-- `/resume <编号>` — 继续列表中的旧会话
-- `/cancel` — 退出选择，保留当前会话
-- `/clear` — 清空上下文，保留项目绑定
-- `/stop` — 停止本轮生成
+- `/help` — list available commands
+- `/status` — current project, model, and run state
+- `/projects` — list recent projects and switch
+- `/new` — start a new session, optionally with a project number or path
+- `/sessions [project]` — list old sessions; `/sessions projects` chooses another project
+- `/resume <number>` — continue a session from the list
+- `/cancel` — exit selection and keep the current session
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
 
-飞书、微信、钉钉、企业微信、QQ 和 Slack 还支持中文别名，例如 `帮助`、`状态`、`项目列表`、`新会话`、`清空`、`停止`。
+## Security
 
-## 安全须知
-
-::: warning 这是一把能改你电脑的遥控器
-配对成功的 IM 账号可以让 Claude 在你本机读写文件、执行命令。只把配对码发给你自己，别在群里贴，也别把机器人凭据提交进仓库。
+::: warning This is a remote control for your computer
+A paired account can make Claude read files, write files, and run commands on your machine. Send pairing codes only to yourself, never post one in a group, and never commit bot credentials.
 :::
 
-授权规则是「允许的用户」加已配对用户取并集，两者都为空时一律拒绝。扫码绑定只是让桌面端拿到账号凭据，不等于放行这个账号的所有联系人。
+Authorization is the union of **Allowed Users** and paired users. When both are empty, every sender is rejected. Binding a bot or a linked account does not authorize its contacts.
 
-平台凭据、配对状态和授权名单保存在 `~/.claude/adapters.json`，聊天窗口到会话的映射保存在 `~/.claude/adapter-sessions.json`。这两个文件都在本机，含有可直接操控你机器的凭据，不要外传。设置页读回配置时敏感字段会被打码。
+Platform credentials, pairing state, and allowlists live in `~/.claude/adapters.json`; chat-to-session mappings live in `~/.claude/adapter-sessions.json`. Both stay on your machine, both contain material that can drive it, and neither should be shared. Sensitive fields are masked when the settings page reads the configuration back. Both paths follow `CLAUDE_CONFIG_DIR` when a custom data directory is active.
 
-想在手机浏览器里获得完整界面而不只是聊天，看[H5 访问](../desktop/remote.md)。
+For a full mobile interface rather than a chat window, see [H5 access](../desktop/remote.md).
 
-## 分平台教程
+## Per-platform guides
 
-- [飞书](./feishu.md) — 扫码直接建机器人，卡片审批
-- [Telegram](./telegram.md) — BotFather 拿 Token，按钮审批
-- [微信](./wechat.md) — 扫码绑定账号，文本命令审批
-- [钉钉](./dingtalk.md) — 扫码授权，AI Card 流式输出
-- [WhatsApp](./whatsapp.md) — 个人号关联设备，文本命令审批
-- [企业微信](./wecom.md) — 扫码建智能机器人，流式消息
-- [QQ](./qq.md) — 扫码授权，私聊流式消息
-- [Slack](./slack.md) — 应用清单创建 App，Socket Mode 长连接
+- [Feishu](./feishu.md) — scan to create a bot, card approval
+- [Telegram](./telegram.md) — BotFather token, button approval
+- [WeChat](./wechat.md) — QR-bound account, text approval
+- [DingTalk](./dingtalk.md) — QR authorization, AI Card streaming
+- [WhatsApp](./whatsapp.md) — personal linked device, text approval
+- [WeCom](./wecom.md) — scan to create an AI bot, streaming replies
+- [QQ](./qq.md) — QR authorization, private-chat streaming
+- [Slack](./slack.md) — app manifest, Socket Mode connection

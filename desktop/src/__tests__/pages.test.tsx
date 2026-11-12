@@ -187,7 +187,7 @@ describe('Content-only pages render without errors', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('[data-composer-editor]')).toBeInTheDocument()
-    // The 「素」 new-session hero asks what to work on (with or without a project).
+    // The "Su" spec new-session hero asks what to work on (with or without a project).
     expect(container.innerHTML).toMatch(/What should we work on/)
     expect(container.innerHTML).toContain('Ask anything')
   })
@@ -212,7 +212,7 @@ describe('Content-only pages render without errors', () => {
       />,
     )
 
-    expect(html).toMatch(/aria-label="(Context usage not calculated|上下文用量待计算)"/)
+    expect(html).toMatch(/aria-label="Context usage not calculated"/)
     expect(html).toContain('--')
     expect(html).not.toContain('animate-spin')
   })

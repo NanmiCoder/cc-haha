@@ -55,7 +55,7 @@ function useReducedMotion() {
   return reduced
 }
 
-/* ───────────── 文本 ───────────── */
+/* ───────────── Text ───────────── */
 
 export function Mono({ style, ...props }: TextProps) {
   return (
@@ -83,9 +83,9 @@ export function InlineCode({ children }: { children: React.ReactNode }) {
   )
 }
 
-/* ───────────── 屏幕与导航 ───────────── */
+/* ───────────── Screens and navigation ───────────── */
 
-/** 顶部安全区 + 背景。开发用的网页预览额外模拟 54pt 状态栏高度（与设计稿一致）。 */
+/** Top safe area + background. The dev web preview additionally simulates a 54pt status bar height (matching the design). */
 export function ScreenView({
   children,
   background,
@@ -111,7 +111,7 @@ export function goBack() {
   else router.replace('/')
 }
 
-/** 44pt 导航栏：返回（可带文字）· 居中标题/副标题 · 右侧操作。 */
+/** 44pt Nav bar: back (optionally with text) · centered title/subtitle · actions on the right. */
 export function NavBar({
   title,
   subtitle,
@@ -134,8 +134,8 @@ export function NavBar({
   bordered?: boolean
   background?: string
   /**
-   * 浮动样式：返回和右侧是 44 圆形白底按钮，中间只有标题与副标题，没有底线和底色。
-   * `right` 里请放 {@link FloatingButton}。
+   * Floating style: back and the right side are 44 round white buttons, the middle only has title and subtitle, no bottom line or background.
+   * `right` put {@link FloatingButton} inside.
    */
   floating?: boolean
 }) {
@@ -148,7 +148,7 @@ export function NavBar({
           {back ? (
             <FloatingButton
               icon="chevron-left"
-              label={backLabel ? `返回${backLabel}` : '返回'}
+              label={backLabel ? `Back to ${backLabel}` : 'Back'}
               onPress={onBack ?? goBack}
             />
           ) : null}
@@ -203,7 +203,7 @@ export function NavBar({
         {back && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={backLabel ? `返回${backLabel}` : '返回'}
+            accessibilityLabel={backLabel ? `Back to ${backLabel}` : 'Back'}
             hitSlop={6}
             onPress={onBack ?? goBack}
             style={({ pressed }) => ({
@@ -256,13 +256,13 @@ export function NavBar({
   )
 }
 
-/** 浮动圆钮的投影与描边（NavBar 的 floating 样式、会话页的活动胶囊共用）。 */
+/** Shadow and outline of floating round buttons (shared by NavBar floating style and the session page activity capsule). */
 export const floatingShadow = (hair: string) =>
   `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
 
 /**
- * 44 圆形白底按钮，带轻阴影：浮动导航栏的返回和“…”。可带角标，或用 children 放自定义内容
- * （例如转圈）。`active` 表示它正在展开菜单，外圈画一道墨色描边。
+ * 44 Round white button with a light shadow: back and "…" of the floating nav bar. Can carry a badge, or custom content via children
+ * (e.g. a spinner). `active` means it is showing its menu, drawing an ink outline around it.
  */
 export function FloatingButton({
   icon,
@@ -276,7 +276,7 @@ export function FloatingButton({
   icon?: IconName
   label: string
   onPress?(): void
-  /** 右上角的小圆角标，数字或短文字；没有就不画。 */
+  /** Small rounded badge at the top right, a number or short text; not drawn when absent. */
   badge?: string | number
   active?: boolean
   disabled?: boolean
@@ -333,9 +333,9 @@ export type ActionMenuItem =
       key: string
       label: string
       icon?: IconName
-      /** 右侧的计数小胶囊（如“更改 3”）。 */
+      /** Count capsule on the right (e.g. "Changes 3"). */
       count?: number | string
-      /** 右侧自定义内容（如“2 项在跑”）；和 count 同时给时 trailing 优先。 */
+      /** Custom content on the right (e.g. "2 running"); trailing wins when given together with count. */
       trailing?: React.ReactNode
       destructive?: boolean
       disabled?: boolean
@@ -344,8 +344,8 @@ export type ActionMenuItem =
   | 'separator'
 
 /**
- * “…”会话菜单：白底圆角 16、268 宽，一行 48 高，图标在左（X2 画板）。
- * 和 {@link Menu} 的区别只在外观，锚点语义相同（相对整块屏幕）。
+ * "…" session menu: white background radius 16, 268 wide, 48 high rows, icons on the left (X2 artboard).
+ * Differs from {@link Menu} only in appearance; the anchor semantics are the same (relative to the whole screen).
  */
 export function ActionMenu({
   visible,
@@ -360,7 +360,7 @@ export function ActionMenu({
   items: ActionMenuItem[]
   anchor: { top: number; right?: number; left?: number }
   width?: number
-  /** 菜单顶部的小字区（路径、模型 · 上下文用量），下面有一条分隔线。 */
+  /** Small text area at the top of the menu (path, model · context usage), with a separator below. */
   header?: React.ReactNode
 }) {
   const colors = useColors()
@@ -368,7 +368,7 @@ export function ActionMenu({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="关闭菜单"
+        accessibilityLabel="Close menu"
         onPress={onClose}
         style={{ flex: 1, backgroundColor: colors.scrim }}
       />
@@ -506,7 +506,7 @@ export function LargeTitle({
   )
 }
 
-/** 底部材质栏：上发丝线，自动避让 Home 指示条。 */
+/** Bottom material bar: hairline on top, automatically avoids the home indicator. */
 export function BottomBar({
   children,
   style,
@@ -532,7 +532,7 @@ export function BottomBar({
   )
 }
 
-/* ───────────── 分组列表 ───────────── */
+/* ───────────── Grouped lists ───────────── */
 
 export function SectionHeader({
   title,
@@ -760,7 +760,7 @@ export function Footnote({
   )
 }
 
-/* ───────────── 按钮与控件 ───────────── */
+/* ───────────── Buttons and controls ───────────── */
 
 export type ButtonVariant =
   | 'primary'
@@ -982,7 +982,7 @@ export function Chip({
   )
 }
 
-/** iOS 尺寸开关 51×31。 */
+/** iOS Switch size 51×31. */
 export function Switch({
   value,
   onValueChange,
@@ -1209,7 +1209,7 @@ export function CheckMark({ selected, tone }: { selected: boolean; tone?: string
   )
 }
 
-/** 带说明的选项卡片（提问选项、回退范围等）。 */
+/** Option card with description (question options, rewind scope etc). */
 export function OptionCard({
   selected,
   title,
@@ -1236,7 +1236,7 @@ export function OptionCard({
   return (
     <Pressable
       accessibilityRole={multiple ? 'checkbox' : 'radio'}
-      accessibilityLabel={description ? `${title}，${description}` : title}
+      accessibilityLabel={description ? `${title}, ${description}` : title}
       accessibilityState={{ checked: selected, disabled }}
       aria-checked={selected}
       aria-disabled={disabled}
@@ -1292,7 +1292,7 @@ export function OptionCard({
   )
 }
 
-/** 琥珀提示块：用于“会覆盖文件”“需要先做什么”这类风险说明。 */
+/** Amber callout: for risk notes like "will overwrite files" or "needs something done first". */
 export function Callout({
   children,
   tone = 'attention',
@@ -1339,8 +1339,8 @@ export function Callout({
 }
 
 /**
- * 顶栏下方的一句短提示（几秒后由调用方清掉），用在点完按钮、界面上原本什么都不会变的时候。
- * 不挡触摸；读屏会念出来。
+ * A short hint below the header (cleared by the caller after a few seconds), used after tapping a button when nothing in the UI would otherwise change.
+ * Does not block touches; screen readers announce it.
  */
 export function Toast({ text, top }: { text: string; top: number }) {
   const colors = useColors()
@@ -1372,7 +1372,7 @@ export function Toast({ text, top }: { text: string; top: number }) {
   )
 }
 
-/** 行内错误：同一错误只在一处出现。 */
+/** Inline error: the same error appears in only one place. */
 export function InlineError({ text, style }: { text?: string; style?: StyleProp<ViewStyle> }) {
   if (!text) return null
   return (
@@ -1382,7 +1382,7 @@ export function InlineError({ text, style }: { text?: string; style?: StyleProp<
   )
 }
 
-/* ───────────── 状态标记 ───────────── */
+/* ───────────── Status markers ───────────── */
 
 export function Spinner({
   size = 16,
@@ -1438,7 +1438,7 @@ export function Spinner({
   )
 }
 
-/** 琥珀“等你”圆点，带缓慢呼吸光圈。 */
+/** Amber "waiting" dot with a slow breathing halo. */
 export function HaloDot({ size = 9, color }: { size?: number; color?: string }) {
   const colors = useColors()
   const reduced = useReducedMotion()
@@ -1489,7 +1489,7 @@ export type StatusKind =
   | 'idle'
   | 'offline'
 
-/** 会话状态标记：等你=琥珀呼吸点、运行=蓝色转圈、卡住=琥珀虚线圈、完成=绿勾、出错=红叹号、停止=灰方块。 */
+/** Session status markers: waiting = amber breathing dot, running = blue spinner, stuck = amber dashed ring, done = green check, error = red exclamation, stopped = grey square. */
 export function StatusGlyph({ status, size = 16 }: { status: StatusKind; size?: number }) {
   const colors = useColors()
   let glyph: React.ReactNode
@@ -1558,7 +1558,7 @@ export function Dot({ color, size = 7, ring }: { color: string; size?: number; r
   )
 }
 
-/* ───────────── 代码、差异与文件 ───────────── */
+/* ───────────── Code, diffs and files ───────────── */
 
 export function CodeBlock({
   children,
@@ -1625,7 +1625,7 @@ export function FileBadge({ status, size = 22 }: { status: FileStatus; size?: nu
   return (
     <View
       accessibilityLabel={
-        { M: '已修改', A: '新增', D: '已删除', R: '已重命名', '?': '未跟踪' }[status]
+        { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'Untracked' }[status]
       }
       style={{
         width: size,
@@ -1641,10 +1641,10 @@ export function FileBadge({ status, size = 22 }: { status: FileStatus; size?: nu
   )
 }
 
-/** 统一 diff 视图：旧/新行号两栏 + 增删底色；横向可滚，长行不折。 */
+/** Unified diff view: two columns of old/new line numbers + add/delete backgrounds; horizontally scrollable, long lines do not wrap. */
 const DIFF_LINE = 21
 const DIFF_FONT = 12.5
-/** GeistMono 字宽 0.6em；全角字符按 1em 估算，用来给虚拟化列表定宽。 */
+/** GeistMono Glyph width 0.6em; full-width characters estimated at 1em, used to size the virtualized list. */
 function diffTextWidth(text: string) {
   let width = 0
   for (let index = 0; index < text.length; index++)
@@ -1705,8 +1705,8 @@ function DiffRow({
 }
 
 /**
- * 统一 diff 视图：旧/新行号两栏 + 增删底色；横向可滚，长行不折。
- * virtualized 用于整页差异：按行虚拟化，几千行的新文件也不会一次全部挂载。
+ * Unified diff view: two columns of old/new line numbers + add/delete backgrounds; horizontally scrollable, long lines do not wrap.
+ * virtualized For full-page diffs: virtualized by line, so a new file with thousands of lines is not mounted all at once.
  */
 export function DiffView({
   lines,
@@ -1772,9 +1772,9 @@ export function DiffView({
   )
 }
 
-/* ───────────── 弹层 ───────────── */
+/* ───────────── Sheets ───────────── */
 
-/** 底部弹层：抓手、圆角 28、点遮罩关闭；内容超高时滚动。 */
+/** Bottom sheet: grabber, radius 28, tap backdrop to close; scrolls when content is too tall. */
 export function Sheet({
   visible,
   onClose,
@@ -1807,13 +1807,13 @@ export function Sheet({
       <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="关闭"
+          accessibilityLabel="Close"
           onPress={close}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
         />
         <View
           accessibilityViewIsModal
-          // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
+          // The backdrop is outside the panel so VoiceOver cannot reach it; the two-finger Z gesture closes via here.
           onAccessibilityEscape={close}
           style={{
             maxHeight: '92%',
@@ -1861,7 +1861,7 @@ export function Sheet({
   )
 }
 
-/** 文字按钮（弹层头部的“取消 / 完成”）。 */
+/** Text button ("Cancel / Done" in sheet headers). */
 export function TextButton({
   title,
   onPress,
@@ -1892,7 +1892,7 @@ export function TextButton({
   )
 }
 
-/** 全屏页面弹层（iOS pageSheet）：头部“取消 · 标题 · 操作”。 */
+/** Full-screen page sheet (iOS pageSheet): header "Cancel · Title · Action". */
 export function PageSheet({
   visible,
   onClose,
@@ -1925,7 +1925,7 @@ export function PageSheet({
         ]}
       >
         <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>
-          <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="取消" onPress={onClose} />}</View>
+          <View style={{ flex: 1, alignItems: 'flex-start' }}>{left ?? <TextButton title="Cancel" onPress={onClose} />}</View>
           <Text numberOfLines={1} style={[type.nav, { color: colors.ink }]}>
             {title}
           </Text>
@@ -1951,7 +1951,7 @@ export type MenuItem =
     }
   | 'separator'
 
-/** 弹出菜单（iOS UIMenu 样式）。anchor 是相对整块屏幕（含状态栏）的位置，各平台一致。 */
+/** Popup menu (iOS UIMenu style). anchor is the position relative to the whole screen (including the status bar), consistent across platforms. */
 export function Menu({
   visible,
   onClose,
@@ -1974,7 +1974,7 @@ export function Menu({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="关闭菜单"
+        accessibilityLabel="Close menu"
         onPress={onClose}
         style={{ flex: 1, backgroundColor: scrim ? 'rgba(20,19,17,0.12)' : 'transparent' }}
       />
@@ -2049,9 +2049,9 @@ export function Menu({
   )
 }
 
-/* ───────────── 输入与空状态 ───────────── */
+/* ───────────── Inputs and empty states ───────────── */
 
-/** 分组表单里的一行输入：左标签、右输入。 */
+/** One input row in a grouped form: label left, input right. */
 export function FieldRow({
   label,
   trailing,
@@ -2119,7 +2119,7 @@ export function SearchField({
       {value ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="清除搜索"
+          accessibilityLabel="Clear search"
           hitSlop={8}
           onPress={() => onChangeText('')}
           style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: colors.chevron, alignItems: 'center', justifyContent: 'center' }}
@@ -2164,7 +2164,7 @@ export function Loading() {
   return <ActivityIndicator style={{ padding: 30 }} color={colors.ink3} />
 }
 
-/** cc-haha 标识（陶土底 + 舷窗环），全应用唯一的品牌色出现处。 */
+/** cc-haha Logo (terracotta background + porthole ring), the only place in the app where the brand color appears. */
 export function BrandMark({ size = 22 }: { size?: number }) {
   const colors = useColors()
   return (

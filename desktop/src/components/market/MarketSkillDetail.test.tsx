@@ -73,7 +73,7 @@ function setStore(partial: Record<string, unknown>) {
     detailError: null,
     installingIds: new Set<string>(),
     installError: null,
-    categories: [{ key: 'agent', name: '智能体增强', nameEn: 'Agent boost', count: 30 }],
+    categories: [{ key: 'agent', name: 'Agent boost', nameEn: 'Agent boost', count: 30 }],
     backToList,
     refreshDetail,
     fetchFileContent: vi.fn(),
@@ -217,7 +217,7 @@ describe('MarketSkillDetail catalog redesign', () => {
     expect(within(chips).getByTestId('security-badge-flagged')).toBeInTheDocument()
     expect(within(chips).getByTestId('market-detail-featured')).toHaveTextContent('Featured')
     expect(chips).toHaveTextContent('Agent boost')
-    // Curated tags are Chinese; English readers do not get them.
+    // Curated tags are not shown (older catalogs carried them untranslated).
     expect(chips).not.toHaveTextContent('自我改进')
     expect(screen.getByTestId('slot-stats')).toHaveTextContent('Downloads=482.1k')
     expect(screen.getByTestId('slot-stats')).toHaveTextContent('Installs=18.5k')
@@ -226,16 +226,11 @@ describe('MarketSkillDetail catalog redesign', () => {
     expect(screen.getByTestId('detail-view')).toHaveAttribute('data-actions', 'hero')
   })
 
-  it('reads the summary in the reader\'s language', () => {
+  it('reads the English summary of a curated skill', () => {
     const curated = { curated: true, summary: '把失败与纠正记录到本地', summaryEn: 'Log failures and corrections' }
     setStore({ detail: makeDetail(curated) })
-    const { unmount } = render(<MarketSkillDetail onRequestInstall={vi.fn()} onRequestUninstall={vi.fn()} />)
-    expect(screen.getByTestId('slot-summary')).toHaveTextContent('Log failures and corrections')
-    unmount()
-
-    useSettingsStore.setState({ locale: 'zh' })
     render(<MarketSkillDetail onRequestInstall={vi.fn()} onRequestUninstall={vi.fn()} />)
-    expect(screen.getByTestId('slot-summary')).toHaveTextContent('把失败与纠正记录到本地')
+    expect(screen.getByTestId('slot-summary')).toHaveTextContent('Log failures and corrections')
   })
 
   it('marks the security tab of a flagged skill and lists every scanner with safe links only', () => {

@@ -1,80 +1,80 @@
 ---
-title: WhatsApp 接入
+title: WhatsApp Integration
 nav_title: WhatsApp
-description: 用手机 WhatsApp 的「已关联设备」扫码，把桌面端挂成一台已登录的 Web 设备。
+description: Scan from Linked devices on your phone to attach the Desktop app as a logged-in WhatsApp Web device.
 order: 5
 ---
 
-# WhatsApp 接入
+# WhatsApp Integration
 
-适合海外用户：不需要 Meta 开发者账号，扫一次码就能用自己的 WhatsApp 个人号远程驱动桌面端。代价是它走的是 WhatsApp Web 的关联设备登录，不是官方 Cloud API，所以没有官方 SLA、模板消息和群发能力；只处理个人私聊，不处理群组、频道和状态。权限审批靠回复文本。
+For users outside mainland China: no Meta developer account is required, and one QR scan lets your personal WhatsApp number drive the Desktop app. In exchange, this is a WhatsApp Web linked-device login rather than the official Cloud API — no official SLA, template messages, or broadcast capability. It handles personal private chats only, not groups, channels, or status. Permission approval is text replies.
 
-## 它不是「创建一个机器人」
+## This is not "creating a bot"
 
-这条链路的本质，是把桌面端挂成你 WhatsApp 账号下的一台已登录 Web 设备。因此不需要在 Meta for Developers 建 App，不需要 WhatsApp Business Account，也不需要 Phone Number ID、Access Token、Webhook 回调地址和消息模板审核。
+What the integration really does is attach the Desktop app as one more logged-in Web device on your WhatsApp account. So there is no Meta for Developers app, no WhatsApp Business Account, and no Phone Number ID, access token, webhook URL, or message template review.
 
-对面的人看到的对话对象，就是你扫码绑定的那个 WhatsApp 账号本身，不是一个另外创建的 bot。
+The person on the other side is talking to the WhatsApp account you bound, not to a separately created bot.
 
-如果之后要做客服、模板消息、官方 SLA 或规模化群发，那是另一套官方 Cloud API 方案，需要单独实现。参考[Linked Devices 帮助](https://faq.whatsapp.com/1317564962315842/)和[WhatsApp Cloud API 概览](https://developers.facebook.com/docs/whatsapp/cloud-api/overview)。
+For customer service, template messages, an official SLA, or broadcasting, you would need the official Cloud API instead, which is a separate implementation. See the [Linked Devices help page](https://faq.whatsapp.com/1317564962315842/) and the [WhatsApp Cloud API overview](https://developers.facebook.com/docs/whatsapp/cloud-api/overview).
 
-## 扫码绑定
+## Bind the account
 
-1. 打开「设置」→「IM 接入」，切到「WhatsApp」Tab。
-2. 点「扫码绑定」。
-3. 在手机 WhatsApp 里打开「设置」→「已关联设备」。
-4. 扫描桌面端显示的二维码。
-5. 等页面状态变成「WhatsApp 已绑定」。
+1. Open **Settings → IM Adapters** and select the **WhatsApp** tab.
+2. Select **Scan to Bind**.
+3. On your phone, open **WhatsApp → Settings → Linked devices**.
+4. Scan the QR code shown in Desktop.
+5. Wait for the status to read **WhatsApp is bound**.
 
-绑定成功后登录状态会保存到本机并自动重启 adapter，不需要再点「保存」。默认目录：
+The login state is saved locally and the adapter restarts on its own; no separate save is needed. The default directory is:
 
 ```text
 ~/.claude/whatsapp-auth/default
 ```
 
-这个目录等同于一份可直接收发消息的登录凭据，不要外传、不要提交进仓库。
+That directory is equivalent to a credential that can send and receive messages as you. Do not share it and do not commit it.
 
-## 授权具体用户
+## Authorize a sender
 
-扫码只是把账号挂上来，不等于放行所有联系人。
+Linked-device login attaches the account; it does not authorize your contacts.
 
-1. 回到页面顶部的「配对管理」，点「生成配对码」。
-2. 用需要授权的那个 WhatsApp 账号，私聊你刚绑定的账号，把这枚 6 位码发过去。
-3. 配对成功后这个 JID 会被记进本机授权名单。
+1. Back at the top of the page, under **Pairing**, select **Generate Code**.
+2. From the account you want to authorize, send the six-character code to the bound account in a private chat.
+3. Once pairing is confirmed, that JID is recorded in the local authorization list.
 
-也可以直接把已知 JID 填进「允许的用户」，格式是国家码加手机号，例如：
+Known JIDs can instead be entered in **Allowed Users** as a country code plus phone number:
 
 ```text
 15551234567@s.whatsapp.net
 ```
 
-配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated.
 
-## 支持的命令
+## Commands
 
-- `/start` 或 `/help` — 显示帮助和可用命令
-- `/projects` — 列出最近项目并切换
-- `/status` — 当前项目、模型和运行状态
-- `/new [项目]` — 开新会话或切换项目
-- `/clear` — 清空上下文，保留项目绑定
-- `/stop` — 停止本轮生成
+- `/start` or `/help` — show help and available commands
+- `/projects` — list recent projects and switch
+- `/status` — current project, model, and run state
+- `/new [project]` — start a new session or switch projects
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
 
-## 权限审批与消息表现
+## Approval and reply behavior
 
-WhatsApp 没有可点的按钮，权限请求按消息里的提示回复：
+WhatsApp has no tappable buttons, so a permission request is answered by replying as the message instructs:
 
-- `1` 或 `/allow <requestId>` — 允许这一次
-- `2` 或 `/always <requestId>` — 永久允许同类请求
-- `3` 或 `/deny <requestId>` — 拒绝
+- `1` or `/allow <requestId>` — allow once
+- `2` or `/always <requestId>` — persist the matching approval
+- `3` or `/deny <requestId>` — deny
 
-回复方式上，adapter 不靠反复编辑同一条消息做逐字流式：思考阶段发一条简短状态提示，完成后把正文按长度上限分片发送；Agent 输出里的 markdown 图片引用会被识别成图片消息发出。
+The adapter does not rely on repeatedly editing one message for token-level streaming: a short status message is sent while Claude thinks, completed text is split into platform-sized messages, and Markdown image output is recognized and sent as an image message.
 
-## 解除绑定
+## Unbind
 
-在 WhatsApp Tab 点「解除 WhatsApp 绑定」，会删掉本机保存的登录状态，之后要重新扫码。只想撤销某一个人，就在「已配对用户」列表里点那个人右侧的「解绑」，账号本身的关联不受影响。
+**Unbind WhatsApp account** removes the locally stored login state, after which you have to scan again. To revoke a single person instead, select **Unbind** next to their name under **Paired Users**; the account link itself is unaffected.
 
-## 本地开发启动
+## Development
 
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -82,7 +82,7 @@ bun install
 bun run whatsapp
 ```
 
-可选的环境变量覆盖：
+Optional overrides:
 
 ```bash
 export WHATSAPP_AUTH_DIR="$HOME/.claude/whatsapp-auth/default"
@@ -90,14 +90,14 @@ export WHATSAPP_ACCOUNT_JID="15551234567@s.whatsapp.net"
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-## 常见问题
+## Troubleshooting
 
-**adapter 启动时报没有绑定账号**：先在桌面端完成扫码，`bun run whatsapp` 本身不会弹二维码。
+**The adapter reports no bound account.** Complete QR binding in Desktop first; `bun run whatsapp` has no login UI of its own.
 
-**绑定后发消息提示未授权**：扫码绑的是账号，不是用户授权。还要生成配对码，并用要授权的那个 WhatsApp 私聊发过来。
+**Still unauthorized after binding.** Scanning binds the account, not the sender. Generate a pairing code and send it from the chat you want to authorize.
 
-**WhatsApp 提示已登出**：在设置页解除绑定后重新扫码。手机端在「已关联设备」里移除这台设备也会导致登出。
+**WhatsApp reports a logout.** Unbind in Settings and scan again. Removing the device under **Linked devices** on your phone also logs it out.
 
-## 源码入口
+## Source
 
-`adapters/whatsapp/` 下的 `index.ts`、`protocol.ts`、`session.ts`、`media.ts`，以及 `adapters/common/` 下的 `pairing.ts`、`session-store.ts`、`ws-bridge.ts`。
+`index.ts`, `protocol.ts`, `session.ts`, and `media.ts` under `adapters/whatsapp/`, plus `pairing.ts`, `session-store.ts`, and `ws-bridge.ts` under `adapters/common/`.

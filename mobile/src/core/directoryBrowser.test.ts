@@ -13,7 +13,7 @@ const response = (body: unknown, status = 200) => ({
 
 describe('computer directory browser', () => {
   test('keeps absolute computer paths intact and never requests files or search', () => {
-    for (const path of ['/Users/test/项目 & app', 'C:\\work\\project', '\\\\server\\share\\folder']) {
+    for (const path of ['/Users/test/Projects & app', 'C:\\work\\project', '\\\\server\\share\\folder']) {
       const url = new URL(directoryBrowseUrl(path), 'http://fixture')
       expect(url.searchParams.get('path')).toBe(path)
       expect([...url.searchParams.keys()]).toEqual(['path'])
@@ -59,7 +59,7 @@ describe('computer directory browser', () => {
     await controller.open('/fixture/project')
     await controller.open('/fixture/missing')
     expect(controller.state.listing?.currentPath).toBe('/fixture/project')
-    expect(controller.state.error).toContain('不存在')
+    expect(controller.state.error).toContain('no longer exists')
     failed = false
     await controller.retry()
     expect(paths).toEqual(['/fixture/project', '/fixture/missing', '/fixture/missing'])
@@ -82,6 +82,6 @@ describe('computer directory browser', () => {
 
   test('rejects malformed server listings instead of enabling a broken select action', async () => {
     await expect(loadDirectories(client(async () => response({ entries: [] })), undefined, new AbortController().signal))
-      .rejects.toThrow('无效的目录列表')
+      .rejects.toThrow('invalid directory listing')
   })
 })

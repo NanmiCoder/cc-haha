@@ -80,9 +80,9 @@ async function siteSourceFiles() {
     if (!entry.isFile() || !/\.(?:jsx?|css)$/.test(entry.name)) continue
 
     const directory = entry.parentPath || entry.path
-    // src/generated/ 里有一张「路径 → 图片尺寸」表，覆盖 docs/images 下的每张图。
-    // 那是给渲染器查尺寸用的，不代表页面引用了它们 —— 扫进来会把没人用的图
-    // （赞助、打赏之类）全拷进产物。
+    // src/generated/ holds a "path → image size" table covering every image under docs/images.
+    // It exists for the renderer to look up sizes and does not mean the pages reference them — scanning it would copy
+    // unused images (sponsors, donations and the like) into the output.
     if (path.relative(srcDir, directory).split(path.sep)[0] === 'generated') continue
 
     files.push(path.join(directory, entry.name))
@@ -125,28 +125,21 @@ function escapeHtml(value) {
 }
 
 /**
- * 每条路由的 HTML 骨架都写进自己的 title / description / canonical / hreflang。
- * 不执行 JS 的爬虫看到的就不再是 78 个一模一样的页面。
+ * Each route's HTML shell gets its own title / description / canonical.
+ * Crawlers that don't run JS no longer see 78 identical pages.
  */
 function shellForRoute(shell, meta) {
   if (!meta) return shell
 
   const origin = `https://${expectedCustomDomain}`
-  const isEnglish = meta.path === '/en' || meta.path.startsWith('/en/')
   const canonical = `${origin}${meta.path}`
-  const alternate = meta.alternate ? `${origin}${meta.alternate}` : null
 
   const head = [
     `<link rel="canonical" href="${escapeHtml(canonical)}">`,
-    `<link rel="alternate" hreflang="${isEnglish ? 'en' : 'zh-Hans'}" href="${escapeHtml(canonical)}">`,
-    alternate
-      ? `<link rel="alternate" hreflang="${isEnglish ? 'zh-Hans' : 'en'}" href="${escapeHtml(alternate)}">`
-      : '',
     `<meta property="og:url" content="${escapeHtml(canonical)}">`
-  ].filter(Boolean).join('\n    ')
+  ].join('\n    ')
 
   return shell
-    .replace(/<html lang="[^"]*"/, `<html lang="${isEnglish ? 'en' : 'zh-CN'}"`)
     .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(meta.title)}</title>`)
     .replace(
       /<meta name="description" content="[^"]*">/,
@@ -174,15 +167,9 @@ async function createRouteEntry(route, shell, meta) {
   await fs.writeFile(path.join(routeDirectory, 'index.html'), shellForRoute(shell, meta))
 }
 
-function alternateFor(record, records) {
-  const source = record.sourcePath.replace(/^docs\//, '')
-  const target = record.locale === 'en' ? source.replace(/^en\//, '') : `en/${source}`
-  return records.find((candidate) => candidate.sourcePath === `docs/${target}`)?.path || null
-}
-
 async function writeSitemap(records) {
   const origin = `https://${expectedCustomDomain}`
-  const urls = ['/', '/en', ...records.map((record) => record.path)]
+  const urls = ['/', ...records.map((record) => record.path)]
   const body = urls
     .map((url) => `  <url><loc>${origin}${url}</loc><changefreq>weekly</changefreq></url>`)
     .join('\n')
@@ -198,7 +185,7 @@ async function writeSitemap(records) {
   )
 }
 
-/** 2026-07 信息架构重组前的老路径，发一份骨架出去让前端接管重定向，别在 CDN 层就 404。 */
+/** Paths from before the 2026-07 information architecture reorganization. Ship a shell for each so the front end can redirect instead of a 404 at the CDN. */
 const legacyRoutes = [
   '/agent', '/agent/01-usage-guide', '/agent/02-implementation', '/agent/03-agent-framework',
   '/channel', '/channel/01-channel-system', '/channel/02-im-gateway-proposal',
@@ -233,19 +220,18 @@ async function main() {
 
   for (const record of records) {
     await createRouteEntry(record.path, shell, {
-      alternate: alternateFor(record, records),
       description: record.description,
       path: record.path,
       title: `${record.title} · cc-haha`
     })
   }
 
-  await createRouteEntry('/en', shell, {
-    alternate: '/',
-    description: 'Parallel sessions, Agent Teams, Computer Use, and any model you like. Pair your phone to approve and start tasks away from your desk.',
-    path: '/en',
-    title: 'cc-haha — Claude Code on your desktop and in your pocket'
-  })
+  // The docs used to be bilingual with English under /en. Old /en links get a bare shell
+  // so the front end can redirect them to the unprefixed page.
+  const localeRedirects = ['/en', ...records.map((record) => `/en${record.path}`)]
+  for (const redirect of localeRedirects) {
+    await createRouteEntry(redirect, shell, null)
+  }
 
   for (const legacy of legacyRoutes) {
     await createRouteEntry(legacy, shell, null)
@@ -254,7 +240,8 @@ async function main() {
 
   await writeSitemap(records)
   await fs.writeFile(path.join(distDir, '404.html'), shell)
-  console.log(`Prepared static output for ${records.length} documentation routes and ${legacyRoutes.length * 2} redirects.`)
+  const redirects = localeRedirects.length + legacyRoutes.length * 2
+  console.log(`Prepared static output for ${records.length} documentation routes and ${redirects} redirects.`)
 }
 
 await main()

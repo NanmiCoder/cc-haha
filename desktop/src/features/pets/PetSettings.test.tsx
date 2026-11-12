@@ -148,10 +148,10 @@ describe('PetSettings', () => {
     render(<PetSettings />)
 
     expect(await screen.findByRole('heading', { name: 'Built-in pets' })).toBeInTheDocument()
-    expect(screen.getByText('搭搭 Dada')).toBeInTheDocument()
-    expect(screen.getByText('弧弧 Huhu')).toBeInTheDocument()
-    expect(screen.getByText('补补 Bubu')).toBeInTheDocument()
-    expect(screen.getByText('回回 Huihui')).toBeInTheDocument()
+    expect(screen.getByText('Dada')).toBeInTheDocument()
+    expect(screen.getByText('Huhu')).toBeInTheDocument()
+    expect(screen.getByText('Bubu')).toBeInTheDocument()
+    expect(screen.getByText('Huihui')).toBeInTheDocument()
     expect(screen.getByText('Moon Cat')).toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('${CLAUDE_CONFIG_DIR:-~/.claude}/cc-haha/pets'))).toBeInTheDocument()
     expect(screen.getByText('1 custom pet folders were skipped because they are invalid.')).toBeInTheDocument()
@@ -518,23 +518,23 @@ describe('PetSettings', () => {
   })
 
   it('uses the active locale for native picker labels and image validation', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     createFromImageMock.mockResolvedValueOnce({ errorCode: 'invalid-image-dimensions' })
     render(<PetSettings />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '添加宠物' }))
-    fireEvent.click(screen.getByRole('button', { name: /用一张现成的图/ }))
-    fireEvent.change(screen.getByRole('textbox', { name: '宠物 ID' }), { target: { value: 'bad-image' } })
-    fireEvent.change(screen.getByRole('textbox', { name: '显示名称' }), { target: { value: 'Bad Image' } })
-    fireEvent.change(screen.getByRole('textbox', { name: '宠物描述' }), { target: { value: 'Needs repair.' } })
-    fireEvent.click(screen.getByRole('button', { name: '选图片，做宠物' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add pet' }))
+    fireEvent.click(screen.getByRole('button', { name: /Use a picture you already have/ }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Pet ID' }), { target: { value: 'bad-image' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Display name' }), { target: { value: 'Bad Image' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'Needs repair.' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pick a picture' }))
 
     await waitFor(() => expect(createFromImageMock).toHaveBeenCalledWith(expect.objectContaining({
-      dialogTitle: '选一张背景透明的宠物图片',
-      dialogFilterName: '宠物图片',
+      dialogTitle: 'Choose a pet image with a transparent background',
+      dialogFilterName: 'Pet image',
     })))
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '图片长宽都要在 32 到 4096 像素之间，总像素数不超过 16,777,216。',
+      'The image must be 32–4096 pixels per side and contain no more than 16,777,216 pixels.',
     )
   })
 })

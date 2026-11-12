@@ -17,6 +17,7 @@ import {
   type RowState,
 } from './homeList'
 import { Elapsed, TimeLabel, useNow } from './parts'
+import { plural } from '../../core/plural'
 
 const floatShadow = (hair: string) =>
   `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
@@ -32,7 +33,7 @@ const glyphOf: Record<RowState, StatusKind> = {
   unknown: 'idle',
 }
 
-const title = (row: DashboardRow) => row.session.title || '未命名任务'
+const title = (row: DashboardRow) => row.session.title || 'Untitled task'
 
 function useTone() {
   const colors = useColors()
@@ -46,9 +47,9 @@ function useTone() {
           : colors.ink3
 }
 
-/* ───────────── 顶部浮动按钮 ───────────── */
+/* ───────────── Top floating buttons ───────────── */
 
-/** 44pt 白色圆形浮动按钮。 */
+/** 44pt White round floating button. */
 export function FloatButton({
   label,
   onPress,
@@ -84,7 +85,7 @@ export function FloatButton({
   )
 }
 
-/* ───────────── 范围药丸 ───────────── */
+/* ───────────── Scope pills ───────────── */
 
 export function FilterPills<T extends string>({
   options,
@@ -100,7 +101,7 @@ export function FilterPills<T extends string>({
   return (
     <View
       accessibilityRole="radiogroup"
-      accessibilityLabel="按状态查看"
+      accessibilityLabel="View by status"
       style={{ flexDirection: 'row', gap: 4, marginHorizontal: -6 }}
     >
       {options.map((option) => {
@@ -144,12 +145,12 @@ export function FilterPills<T extends string>({
   )
 }
 
-/** 行首状态标记的固定列：16×24，与设计稿的 .lead 一致。 */
+/** Fixed column for the leading status marker: 16×24, matching .lead in the design. */
 function Lead({ children }: { children: ReactNode }) {
   return <View style={{ width: 16, height: 24, alignItems: 'center', justifyContent: 'center' }}>{children}</View>
 }
 
-/** 分组标题（设计稿：上 18、下 6；「项目」下 4，后面紧跟项目行）。 */
+/** Group title (design: 18 above, 6 below; 4 below "Projects", followed directly by project rows). */
 export function SectionTitle({ children, bottom = 6 }: { children: string; bottom?: number }) {
   const colors = useColors()
   return (
@@ -169,16 +170,16 @@ export function SectionTitle({ children, bottom = 6 }: { children: string; botto
   )
 }
 
-/* ───────────── 会话行 ───────────── */
+/* ───────────── Session rows ───────────── */
 
-/** 「最近」行：状态标记 · 标题 + 副行（项目 · 状态/当前一步）· 右侧时间或走秒。 */
+/** "Recent" row: status marker · title + subline (project · status/current step) · time or ticking seconds on the right. */
 export function RecentRow({
   row,
   background,
   onPress,
 }: {
   row: DashboardRow
-  /** 这个会话正在跑的后台任务数；未知时不显示。 */
+  /** Number of background tasks running in this session; hidden when unknown. */
   background?: number
   onPress?(): void
 }) {
@@ -215,7 +216,7 @@ export function RecentRow({
         <View style={{ alignItems: 'flex-end', gap: 2 }}>
           {row.activity?.startedAt ? <Elapsed since={row.activity.startedAt} /> : null}
           {background ? (
-            <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>后台 {background}</Text>
+            <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>background {background}</Text>
           ) : null}
         </View>
       ) : (
@@ -237,7 +238,7 @@ export function RecentRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[title(row), words, line.text].filter(Boolean).join('，')}
+      accessibilityLabel={[title(row), words, line.text].filter(Boolean).join(', ')}
       onPress={onPress}
       style={({ pressed }) => [base, pressed && { backgroundColor: colors.fill }]}
     >
@@ -246,7 +247,7 @@ export function RecentRow({
   )
 }
 
-/** 断开前的快照：等待和运行都无法确认，只如实说明；已结束的照常显示。 */
+/** Snapshot from before disconnecting: waiting and running cannot be confirmed, so just say so; finished ones show as usual. */
 export function OfflineRow({ row }: { row: DashboardRow }) {
   const colors = useColors()
   const state = row.activity?.activityState
@@ -271,16 +272,16 @@ export function OfflineRow({ row }: { row: DashboardRow }) {
           {title(row)}
         </Text>
         <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-          {state === 'waiting' ? pendingWhileOffline(row.activity) : '断开时在运行 · 状态未知'}
+          {state === 'waiting' ? pendingWhileOffline(row.activity) : 'Was running when disconnected · status unknown'}
         </Text>
       </View>
     </View>
   )
 }
 
-/* ───────────── 项目 ───────────── */
+/* ───────────── Projects ───────────── */
 
-/** 项目头：文件夹 + 项目名（点开/收起），折叠时右侧提示有人在等/在跑，最右是在此项目新任务。 */
+/** Project header: folder + project name (tap to expand/collapse); when collapsed the right side hints someone is waiting/running, and the far right starts a new task in this project. */
 export function ProjectHeader({
   group,
   canStart,
@@ -299,7 +300,7 @@ export function ProjectHeader({
     <View style={{ height: 48, flexDirection: 'row', alignItems: 'center', marginHorizontal: -16, paddingLeft: 16, paddingRight: 4 }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${group.name}，${group.total} 个任务${badge ? `，${badge.text}` : ''}`}
+        accessibilityLabel={`${group.name}, ${plural(group.total, 'task')}${badge ? `, ${badge.text}` : ''}`}
         accessibilityState={group.expandable ? { expanded: group.expanded } : undefined}
         disabled={!group.expandable}
         onPress={onToggle}
@@ -325,13 +326,13 @@ export function ProjectHeader({
           </Text>
         ) : (
           <Text style={{ marginLeft: 'auto', paddingRight: 2, fontSize: 13, color: colors.ink3 }}>
-            {`${group.total} 个任务`}
+            {plural(group.total, 'task')}
           </Text>
         )}
       </Pressable>
       <IconButton
         icon="compose"
-        label={`在 ${group.name} 新任务`}
+        label={`New task in ${group.name}`}
         color={colors.ink2}
         iconSize={20}
         strokeWidth={1.75}
@@ -342,7 +343,7 @@ export function ProjectHeader({
   )
 }
 
-/** 项目下缩进的会话行：只有标题，需要说话的状态在右侧用文字，运行中走秒，其余是相对时间。 */
+/** Indented session rows under a project: title only; states needing attention are text on the right, running ticks seconds, others show relative time. */
 export function ProjectSessionRow({
   row,
   onPress,
@@ -359,7 +360,7 @@ export function ProjectSessionRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[title(row), words].filter(Boolean).join('，')}
+      accessibilityLabel={[title(row), words].filter(Boolean).join(', ')}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 44,
@@ -373,7 +374,7 @@ export function ProjectSessionRow({
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
     >
-      {/* 状态图标和项目头的文件夹图标同一列，标题与项目名左对齐。 */}
+      {/* The status icon sits in the same column as the project header folder icon, with the title aligned to the project name. */}
       <View style={{ width: 22, alignItems: 'center' }}>
         {lit ? <StatusGlyph status={glyphOf[state]} /> : null}
       </View>
@@ -391,7 +392,7 @@ export function ProjectSessionRow({
   )
 }
 
-/** 项目下“显示更早的 N 个”。 */
+/** "Show N earlier" under a project. */
 export function MoreSessions({ count, onPress }: { count: number; onPress(): void }) {
   const colors = useColors()
   return (
@@ -406,14 +407,14 @@ export function MoreSessions({ count, onPress }: { count: number; onPress(): voi
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
     >
-      <Text style={{ fontSize: 14, color: colors.ink2 }}>显示更早的 {count} 个</Text>
+      <Text style={{ fontSize: 14, color: colors.ink2 }}>Show {count} earlier</Text>
     </Pressable>
   )
 }
 
-/* ───────────── 底部浮动输入框 ───────────── */
+/* ───────────── Bottom floating input ───────────── */
 
-/** 假输入框：点哪里都进入新任务页（真正的输入在那边），样子与会话页的输入框一致。 */
+/** Fake input: tapping anywhere goes to the new task page (the real input is there), looking the same as the session page input. */
 export function FloatingComposer({
   disabled,
   onPress,
@@ -436,7 +437,7 @@ export function FloatingComposer({
       />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="新任务，想让电脑做什么"
+        accessibilityLabel="New task, what should the computer do"
         accessibilityState={{ disabled }}
         disabled={disabled}
         onPress={onPress}
@@ -454,7 +455,7 @@ export function FloatingComposer({
         })}
       >
         <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 16, color: colors.ink3 }}>
-          想让电脑做什么…
+          What should the computer do…
         </Text>
         <View
           style={{

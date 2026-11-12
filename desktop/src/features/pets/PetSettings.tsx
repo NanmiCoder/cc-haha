@@ -16,8 +16,6 @@ import {
   type DesktopPetPreferences,
 } from '../../api/desktopUiPreferences'
 import actionSheetGuideEn from '../../assets/pets/action-sheet-guide.en.png'
-import actionSheetGuideZh from '../../assets/pets/action-sheet-guide.zh.png'
-import { useSettingsStore } from '../../stores/settingsStore'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -96,10 +94,7 @@ export function PetSettings() {
   const [walkthroughVisible, setWalkthroughVisible] = useState(false)
   const [promptCopied, setPromptCopied] = useState(false)
   const [guideExpanded, setGuideExpanded] = useState(false)
-  const locale = useSettingsStore((s) => s.locale)
-  const actionSheetGuide = locale === 'zh' || locale === 'zh-TW'
-    ? actionSheetGuideZh
-    : actionSheetGuideEn
+  const actionSheetGuide = actionSheetGuideEn
 
   const load = useCallback(async () => {
     setLoading(true)

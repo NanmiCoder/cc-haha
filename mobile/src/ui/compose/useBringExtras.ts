@@ -3,15 +3,15 @@ import type { ApiClient } from '../../core/client'
 import { normalizeConnectors } from '../../core/connectors'
 import { normalizeAgents, normalizeWorkflows, type BringExtrasData } from './bringModel'
 
-/** null 表示这一类拿不到（接口没放行、电脑不支持、网络错误）：对应的入口行直接不显示。 */
+/** null means this category is unavailable (endpoint not allowed, computer unsupported, network error): the corresponding entry row is simply hidden. */
 export type BringExtras = BringExtrasData
 const none: BringExtras = { agents: null, connectors: null, workflows: null }
 
 type Getter = Pick<ApiClient, 'get'>
 
 /**
- * 三类目录各自读一次，互不影响：一个失败只让它自己变成 null。
- * 每读完一类就通知一次，先到的先显示。
+ * The three directories are each read once independently: one failing only makes itself null.
+ * Notify after each one finishes reading, so whichever arrives first shows first.
  */
 export function loadBringExtras(
   client: Getter,
@@ -36,8 +36,8 @@ export function loadBringExtras(
 }
 
 /**
- * 连接器、Agent、工作流这三类的目录。服务端对远程手机只放行只读的列表，
- * 旧版电脑可能没有这些接口，所以每次打开底单都各自读一次，成功才显示，失败就当没有。
+ * Directories for connectors, agents and workflows. The server only allows read-only lists for remote phones, 
+ * and older desktop versions may lack these endpoints, so each is read every time the sheet opens, shown on success, treated as absent on failure.
  */
 export function useBringExtras(client: ApiClient | null, workDir: string | undefined, active: boolean) {
   const [extras, setExtras] = useState<BringExtras>(none)

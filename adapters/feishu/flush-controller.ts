@@ -1,17 +1,17 @@
 /**
- * 节流 + mutex + 冲突重刷的通用 flush 调度器
+ * Generic flush scheduler with throttling + mutex + conflict re-flush
  *
- * 这是个纯调度原语 —— 不含任何业务逻辑（发送卡片、构造 markdown 等）。
- * 实际 flush 工作由构造函数注入的 doFlush 回调负责。
+ * This is a pure scheduling primitive —— no business logic (sending cards, building markdown, etc.).
+ * The actual flush work is done by the doFlush callback injected via the constructor.
  *
- * 语义:
- *   - throttledUpdate(throttleMs) 被流式数据触发，按窗口节流
- *   - flush() 被 mutex 保护，相同时刻只有一个在跑
- *   - flush 进行中的新数据标记 needsReflush，API 结束后立即补刷
- *   - 长间隔（> 2000ms）后的第一次 flush 延迟 300ms 批量，避免抖动
- *   - complete() 后拒绝所有新 flush
+ * Semantics:
+ *   - throttledUpdate(throttleMs) is triggered by streaming data and throttled per window
+ *   - flush() is mutex-protected; only one runs at a time
+ *   - New data arriving during a flush marks needsReflush; a follow-up flush runs right after the API call
+ *   - The first flush after a long gap (> 2000ms) is delayed 300ms to batch, avoiding jitter
+ *   - After complete(), all new flushes are rejected
  *
- * 参考实现: openclaw-lark/src/card/flush-controller.ts
+ * Reference implementation: openclaw-lark/src/card/flush-controller.ts
  */
 
 // ---------------------------------------------------------------------------
@@ -19,13 +19,13 @@
 // ---------------------------------------------------------------------------
 
 export const THROTTLE = {
-  /** CardKit cardElement.content() 最小间隔 —— 官方为流式设计，可高频 */
+  /** Minimum interval for CardKit cardElement.content() —— designed for streaming, can be high-frequency */
   CARDKIT_MS: 100,
-  /** im.message.patch 最小间隔 —— 严格速率限制（230020） */
+  /** Minimum interval for im.message.patch —— strict rate limit (230020) */
   PATCH_MS: 1500,
-  /** 长间隔判定阈值。elapsed > 2000ms 触发批量模式 */
+  /** Long-gap threshold. elapsed > 2000ms triggers batch mode */
   LONG_GAP_THRESHOLD_MS: 2000,
-  /** 长间隔后第一帧的额外延迟，让文本积累更完整 */
+  /** Extra delay for the first frame after a long gap, so more text accumulates */
   BATCH_AFTER_GAP_MS: 300,
 } as const
 
@@ -44,12 +44,12 @@ export class FlushController {
 
   constructor(private readonly doFlush: () => Promise<void>) {}
 
-  /** 标记完成 —— 当前 flush 跑完后不再接受新的。 */
+  /** Mark complete —— no new flushes accepted after the current one finishes. */
   complete(): void {
     this.isCompleted = true
   }
 
-  /** 取消任何挂起的延迟 flush 计时器。 */
+  /** Cancel any pending delayed flush timer. */
   cancelPendingFlush(): void {
     if (this.pendingFlushTimer) {
       clearTimeout(this.pendingFlushTimer)
@@ -57,17 +57,17 @@ export class FlushController {
     }
   }
 
-  /** 等待当前正在跑的 flush 结束。没在跑则立即返回。 */
+  /** Wait for the currently running flush to finish. Returns immediately if none is running. */
   waitForFlush(): Promise<void> {
     if (!this.flushInProgress) return Promise.resolve()
     return new Promise<void>((resolve) => this.flushResolvers.push(resolve))
   }
 
   /**
-   * 标记卡片消息是否已发送成功，决定 flush 是否被放行。
+   * Mark whether the card message was sent successfully; decides whether flushes are allowed.
    *
-   * 首次变 true 时同步更新 lastUpdateTime，让第一次 throttledUpdate
-   * 看到一个小的 elapsed，匹配 openclaw 的 "card 创建完立即可刷" 行为。
+   * The first time it becomes true, lastUpdateTime is updated synchronously so the first throttledUpdate
+   * sees a small elapsed, matching openclaw's "flush right after card creation" behavior.
    */
   setCardMessageReady(ready: boolean): void {
     this._cardMessageReady = ready
@@ -79,9 +79,9 @@ export class FlushController {
   }
 
   /**
-   * 执行一次 flush（mutex 保护 + 冲突重刷）。
+   * Run one flush (mutex-protected + conflict re-flush).
    *
-   * 如果已有 flush 在跑，设置 needsReflush，当前 flush 结束后自动补一次。
+   * If a flush is already running, set needsReflush; another flush runs automatically after the current one.
    */
   async flush(): Promise<void> {
     if (!this.cardMessageReady() || this.flushInProgress || this.isCompleted) {
@@ -90,7 +90,7 @@ export class FlushController {
     }
     this.flushInProgress = true
     this.needsReflush = false
-    // 在 API 调用 **之前** 更新时间戳，防止并发调用者也进入 flush
+    // Update the timestamp **before** the API call so concurrent callers don't also enter flush
     this.lastUpdateTime = Date.now()
     try {
       await this.doFlush()
@@ -101,7 +101,7 @@ export class FlushController {
       this.flushResolvers = []
       for (const resolve of resolvers) resolve()
 
-      // 如果 API 调用期间有新事件进来，立即补一次 flush
+      // If new events arrived during the API call, flush again immediately
       if (this.needsReflush && !this.isCompleted && !this.pendingFlushTimer) {
         this.needsReflush = false
         this.pendingFlushTimer = setTimeout(() => {
@@ -113,10 +113,10 @@ export class FlushController {
   }
 
   /**
-   * 节流更新入口。
+   * Throttled update entry point.
    *
-   * @param throttleMs - 最小 flush 间隔。CardKit 传 THROTTLE.CARDKIT_MS，
-   *   Patch 降级路径传 THROTTLE.PATCH_MS。
+   * @param throttleMs - minimum flush interval. CardKit passes THROTTLE.CARDKIT_MS,
+   *   the Patch fallback path passes THROTTLE.PATCH_MS.
    */
   async throttledUpdate(throttleMs: number): Promise<void> {
     if (!this.cardMessageReady()) return
@@ -127,8 +127,8 @@ export class FlushController {
     if (elapsed >= throttleMs) {
       this.cancelPendingFlush()
       if (elapsed > THROTTLE.LONG_GAP_THRESHOLD_MS) {
-        // 长间隔批量模式：工具调用 / 推理回来后的第一帧延迟 300ms
-        // 让文本积累更完整，避免只显示一两个字
+        // Long-gap batch mode: delay the first frame after a tool call / reasoning by 300ms
+        // so more text accumulates instead of showing only a character or two
         this.lastUpdateTime = now
         this.pendingFlushTimer = setTimeout(() => {
           this.pendingFlushTimer = null
@@ -138,7 +138,7 @@ export class FlushController {
         await this.flush()
       }
     } else if (!this.pendingFlushTimer) {
-      // 在节流窗口内 —— 延迟到窗口结束再刷
+      // Within the throttle window —— delay until the window ends, then flush
       const delay = throttleMs - elapsed
       this.pendingFlushTimer = setTimeout(() => {
         this.pendingFlushTimer = null

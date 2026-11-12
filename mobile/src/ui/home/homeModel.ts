@@ -3,8 +3,9 @@ import type { DashboardFailure } from '../../core/dashboardSync'
 import type { ScheduledTask } from '../../core/operations'
 import type { Host, Session } from '../../core/types'
 import { nextRunAt } from '../../core/schedulesView'
+import { plural } from '../../core/plural'
 
-/* ───────────── 项目 ───────────── */
+/* ───────────── Projects ───────────── */
 
 export type Project = { key: string; name: string; dir: string }
 
@@ -12,14 +13,14 @@ function trimSlashes(path: string) {
   return path.replace(/[\\/]+$/, '')
 }
 
-/** 项目 = 仓库根（worktree 会话归到原仓库），没有时退回工作目录。 */
+/** Project = repo root (worktree sessions belong to the original repo), falling back to the working directory. */
 export function projectOf(session: Session): Project | null {
   const dir = trimSlashes(session.projectRoot || session.workDir || '')
   const name = dir.split(/[\\/]/).filter(Boolean).pop()
   return name ? { key: dir, name, dir } : null
 }
 
-/** 按最近活动排序的项目列表（行已按 modifiedAt 倒序）。 */
+/** Projects sorted by recent activity (rows already sorted by modifiedAt descending). */
 export function projectsOf(rows: DashboardRow[]): (Project & { count: number })[] {
   const projects = new Map<string, Project & { count: number }>()
   for (const row of rows) {
@@ -36,11 +37,11 @@ export function inProject(row: DashboardRow, key: string | null) {
   return key === null || projectOf(row.session)?.key === key
 }
 
-/* ───────────── 等你决定 ───────────── */
+/* ───────────── Waiting for your decision ───────────── */
 
 export type DecisionKind = 'approval' | 'question' | 'plan' | 'team' | 'other'
 
-/** 只有带 requestId 的普通工具审批才能在首页直接允许/拒绝（与锁屏通知同一规则）。 */
+/** Only regular tool approvals with a requestId can be allowed/denied directly on home (same rule as lock screen notifications). */
 export function decisionKind(activity?: MobileActivity): DecisionKind {
   if (activity?.decision === 'team_plan') return 'team'
   if (activity?.toolName === 'AskUserQuestion') return 'question'
@@ -57,39 +58,47 @@ export function decisionAction(activity?: MobileActivity) {
   const tool = activity?.toolName
   switch (decisionKind(activity)) {
     case 'question':
-      return '在问你'
+      return 'Asking you'
     case 'plan':
-      return '计划写好了，等你确认'
+      return 'Plan is ready, waiting for your confirmation'
     case 'team':
-      return activity?.preview?.trim() || '团队组好了，等你确认'
+      return activity?.preview?.trim() || 'Team is ready, awaiting your confirmation'
   }
-  if (!tool) return '需要你决定'
-  if (tool === 'Bash' || tool === 'PowerShell') return '想运行命令'
-  if (fileTools.has(tool)) return '想修改文件'
-  if (readTools.has(tool)) return '想读取文件'
-  if (tool === 'WebFetch') return '想访问网页'
-  if (tool === 'WebSearch') return '想搜索网页'
-  if (tool === 'ComputerUse') return '想操作电脑'
+  if (!tool) return 'Needs your decision'
+  if (tool === 'Bash' || tool === 'PowerShell') return 'Wants to run a command'
+  if (fileTools.has(tool)) return 'Wants to edit files'
+  if (readTools.has(tool)) return 'Wants to read files'
+  if (tool === 'WebFetch') return 'Wants to visit a web page'
+  if (tool === 'WebSearch') return 'Wants to search the web'
+  if (tool === 'ComputerUse') return 'Wants to use the computer'
   const mcp = /^mcp__(.+?)__(.+)$/.exec(tool)
-  return `想使用 ${mcp ? `${mcp[1]} · ${mcp[2]}` : tool}`
+  return `Wants to use ${mcp ? `${mcp[1]} · ${mcp[2]}` : tool}`
 }
 
-/** 离线时等待行的说明：不同的决定写不同的动词。 */
+/** Description for waiting rows while offline: different decisions use different verbs. */
 export function pendingWhileOffline(activity?: MobileActivity) {
   const kind = decisionKind(activity)
   const verb =
     kind === 'question'
-      ? '在等你回答'
+      ? 'Waiting for your answer'
       : kind === 'plan'
-        ? '在等你确认计划'
+        ? 'Waiting for you to confirm the plan'
         : kind === 'team'
-          ? '团队在等你确认'
-          : '在等你批准'
-  return `${verb} · 连上后才能处理`
+          ? 'Team waiting for your confirmation'
+          : 'Waiting for your approval'
+  return `${verb} · can be handled once connected`
 }
 
-/** 电脑在没有可展示内容时填的占位文案，首页不把它们当成命令或计划正文。 */
+/**
+ * Placeholder text the computer fills in when there is nothing to show; home does not treat them as command or plan bodies.
+ * Older desktop servers still send the Chinese wording, so both sets stay.
+ */
 const placeholders = new Set([
+  'Needs your decision',
+  'Waiting for your answer',
+  'Plan awaiting confirmation',
+  'Waiting for tool permission',
+  'Waiting for computer control permission',
   '需要你做决定',
   '等待你回答问题',
   '计划等待确认',
@@ -101,7 +110,7 @@ export function previewText(activity?: MobileActivity) {
   return text && !placeholders.has(text) ? text : ''
 }
 
-/** 审批卡里的等宽单行：命令前加提示符，其他工具原样显示。 */
+/** Monospace single line in the approval card: commands get a prompt prefix, other tools shown as is. */
 export function approvalPreview(activity?: MobileActivity) {
   const text = previewText(activity)
   if (!text) return ''
@@ -110,7 +119,7 @@ export function approvalPreview(activity?: MobileActivity) {
     : text
 }
 
-/** 计划正文的前两步与剩余步数；没有正文时返回 null（不编造计划）。 */
+/** First two steps of the plan body and remaining step count; null when there is no body (no plan made up). */
 export function planPreview(activity?: MobileActivity) {
   const lines = previewText(activity)
     .split('\n')
@@ -120,18 +129,18 @@ export function planPreview(activity?: MobileActivity) {
   return { lines: lines.slice(0, 2), more: Math.max(0, lines.length - 2) }
 }
 
-/* ───────────── 进行中 ───────────── */
+/* ───────────── In progress ───────────── */
 
 export function stalledLabel(activity: MobileActivity | undefined, now: number) {
   const since = activity?.lastProgressAt
-  if (typeof since !== 'number' || !Number.isFinite(since)) return '暂时没有进展'
+  if (typeof since !== 'number' || !Number.isFinite(since)) return 'No progress for now'
   const minutes = Math.floor((now - since) / 60000)
-  if (minutes < 1) return '暂时没有进展'
-  if (minutes < 60) return `${minutes} 分钟没有进展`
-  return `${Math.floor(minutes / 60)} 小时没有进展`
+  if (minutes < 1) return 'No progress for now'
+  if (minutes < 60) return `${minutes} min without progress`
+  return `${Math.floor(minutes / 60)} h without progress`
 }
 
-/* ───────────── 最近 ───────────── */
+/* ───────────── Recent ───────────── */
 
 export type Outcome = 'done' | 'review' | 'failed' | 'stopped' | 'unknown'
 
@@ -145,36 +154,36 @@ export function settledOutcome(activity?: MobileActivity): Outcome {
   return 'unknown'
 }
 
-/** 副行：完成写“项目 · 结局”，出错和停止把结局放前面（与设计稿一致）。 */
+/** Subline: done writes "project · outcome", errors and stops put the outcome first (matching the design). */
 export function outcomeLine(outcome: Outcome, project?: string | null) {
   const join = (...parts: (string | null | undefined)[]) =>
     parts.filter(Boolean).join(' · ')
   switch (outcome) {
     case 'failed':
-      return join('出错停下', project)
+      return join('Stopped with error', project)
     case 'stopped':
-      return join('你停止了', project)
+      return join('You stopped', project)
     case 'done':
-      return join(project, '已完成')
+      return join(project, 'Done')
     case 'review':
-      return join(project, '已完成', '未查看')
+      return join(project, 'Done', 'Unviewed')
     default:
       return project ?? ''
   }
 }
 
-/* ───────────── 搜索 ───────────── */
+/* ───────────── Search ───────────── */
 
 export function matchesQuery(row: DashboardRow, query: string) {
   const needle = query.trim().toLowerCase()
   if (!needle) return true
-  // 和旧版一样也匹配完整工作目录，路径里的子目录名也能搜到。
+  // Like the old version also match the full working directory, so subdirectory names in the path are searchable too.
   return `${row.session.title}\n${projectOf(row.session)?.name ?? ''}\n${row.session.workDir ?? ''}`
     .toLowerCase()
     .includes(needle)
 }
 
-/** 把文本按关键词切段，用于 mark 高亮；不区分大小写，保留原文。 */
+/** Split text by keywords for mark highlighting; case-insensitive, keeping the original text. */
 export function highlightParts(text: string, query: string) {
   const needle = query.trim().toLowerCase()
   if (!needle) return [{ text, match: false }]
@@ -192,7 +201,7 @@ export function highlightParts(text: string, query: string) {
   return parts.length ? parts : [{ text, match: false }]
 }
 
-/* ───────────── 这台电脑的连接状态 ───────────── */
+/* ───────────── Connection state of this computer ───────────── */
 
 export type HostLink = 'none' | 'connecting' | 'online' | DashboardFailure
 
@@ -211,7 +220,7 @@ export function hostLink(input: {
 }
 
 export function networkName(host: Pick<Host, 'auth'>) {
-  return host.auth === 'lan' ? '局域网' : '公网'
+  return host.auth === 'lan' ? 'LAN' : 'Public'
 }
 
 export function hostAddress(host: Pick<Host, 'auth' | 'url'>) {
@@ -219,7 +228,7 @@ export function hostAddress(host: Pick<Host, 'auth' | 'url'>) {
   try {
     address = new URL(host.url).host
   } catch {
-    /* 已保存的地址都校验过；这里只是展示兜底。 */
+    /* Saved addresses are all validated; this is only a display fallback. */
   }
   return `${networkName(host)} · ${address}`
 }
@@ -235,17 +244,17 @@ function sameDay(a: Date, b: Date) {
   )
 }
 
-/** “4 分钟前” / “2 小时前” / “10/21”，用于最后同步时间。 */
+/** "4 minutes ago" / "2 hours ago" / "10/21", for last sync time. */
 export function agoLabel(timestamp: number, now: number) {
   const minutes = Math.floor((now - timestamp) / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时前`
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${plural(minutes, 'minute')} ago`
+  if (minutes < 24 * 60) return `${plural(Math.floor(minutes / 60), 'hour')} ago`
   const date = new Date(timestamp)
   return `${date.getMonth() + 1}/${date.getDate()}`
 }
 
-/** “23:10” / “昨天 23:10” / “10/21 23:10”，用于最后在线时间。 */
+/** "23:10" / "Yesterday 23:10" / "10/21 23:10", for last online time. */
 export function clockLabel(timestamp: number, now: number) {
   const date = new Date(timestamp)
   const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -253,62 +262,62 @@ export function clockLabel(timestamp: number, now: number) {
   if (sameDay(date, today)) return time
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  if (sameDay(date, yesterday)) return `昨天 ${time}`
+  if (sameDay(date, yesterday)) return `Yesterday ${time}`
   return `${date.getMonth() + 1}/${date.getDate()} ${time}`
 }
 
 export type StatusTone = 'ok' | 'faint' | 'attn' | 'err'
 
-/** 大标题下的一行状态：圆点色调 + 文案。 */
+/** Status line under the large title: dot tone + text. */
 export function hostStatusLine(
   link: HostLink,
   host: Pick<Host, 'auth'> | null | undefined,
   lastSyncedAt: number | undefined,
   now: number
 ): { text: string; tone: StatusTone } {
-  const synced = lastSyncedAt ? ` · ${agoLabel(lastSyncedAt, now)}最后同步` : ''
+  const synced = lastSyncedAt ? ` · last synced ${agoLabel(lastSyncedAt, now)}` : ''
   switch (link) {
     case 'online':
-      return { text: `在线 · ${host ? networkName(host) : ''}`, tone: 'ok' }
+      return { text: `Online · ${host ? networkName(host) : ''}`, tone: 'ok' }
     case 'offline':
-      return { text: `离线${synced}`, tone: 'faint' }
+      return { text: `Offline${synced}`, tone: 'faint' }
     case 'unauthorized':
-      return { text: '授权已失效', tone: 'err' }
+      return { text: 'Authorization expired', tone: 'err' }
     case 'failed':
-      return { text: `同步失败${synced}`, tone: 'err' }
+      return { text: `Sync failed${synced}`, tone: 'err' }
     case 'slow':
-      return { text: '同步较慢 · 正在重试', tone: 'attn' }
+      return { text: 'Sync is slow · retrying', tone: 'attn' }
     case 'none':
-      return { text: '还没有连接电脑', tone: 'faint' }
+      return { text: 'No computer connected yet', tone: 'faint' }
     default:
-      return { text: '连接中…', tone: 'faint' }
+      return { text: 'Connecting…', tone: 'faint' }
   }
 }
 
-/** 单个状态词（在线 / 离线 / 授权已失效…），不带网络和同步时间。 */
+/** A single status word (online / offline / authorization expired…), without network or sync time. */
 export function hostStateName(link: HostLink): { text: string; tone: StatusTone } {
   switch (link) {
     case 'online':
-      return { text: '在线', tone: 'ok' }
+      return { text: 'Online', tone: 'ok' }
     case 'offline':
-      return { text: '离线', tone: 'faint' }
+      return { text: 'Offline', tone: 'faint' }
     case 'unauthorized':
-      return { text: '授权已失效', tone: 'err' }
+      return { text: 'Authorization expired', tone: 'err' }
     case 'failed':
-      return { text: '同步失败', tone: 'err' }
+      return { text: 'Sync failed', tone: 'err' }
     case 'slow':
-      return { text: '同步较慢', tone: 'attn' }
+      return { text: 'Sync is slow', tone: 'attn' }
     default:
-      return { text: '连接中', tone: 'faint' }
+      return { text: 'Connecting', tone: 'faint' }
   }
 }
 
-/** 离线卡与“新任务”：只有没有电脑或确实连不上时才拦住，快照不新鲜不算。 */
+/** Offline card and "New task": only block when there is no computer or it is truly unreachable; a stale snapshot does not count. */
 export function canStartTask(link: HostLink) {
   return !['none', 'offline', 'unauthorized'].includes(link)
 }
 
-/* ───────────── 其他电脑的连通检查 ───────────── */
+/* ───────────── Connectivity check of other computers ───────────── */
 
 export type HostCheck = {
   state: 'checking' | 'online' | 'offline' | 'unauthorized' | 'failed'
@@ -327,33 +336,33 @@ export function credentialHostCheck(message: string, issue: 'missing' | 'unavail
 export function hostCheckLine(host: Pick<Host, 'auth'>, check: HostCheck, now: number) {
   switch (check.state) {
     case 'checking':
-      return '正在检查连接…'
+      return 'Checking connection…'
     case 'unauthorized':
-      return '授权已失效 · 请重新连接'
+      return 'Authorization expired · please reconnect'
     case 'failed':
-      return check.message || '暂时无法读取连接凭据'
+      return check.message || 'Cannot read connection credentials right now'
     case 'offline':
       return check.lastOnlineAt
-        ? `离线 · ${clockLabel(check.lastOnlineAt, now)} 最后在线`
-        : '离线 · 暂时连不上'
+        ? `Offline · last online ${clockLabel(check.lastOnlineAt, now).replace(/^Yesterday/, 'yesterday')}`
+        : 'Offline · unreachable for now'
   }
-  if (host.auth === 'lan') return '局域网 · 在线'
-  if (check.expiresAt === undefined) return '公网 · 在线'
+  if (host.auth === 'lan') return 'LAN · online'
+  if (check.expiresAt === undefined) return 'Public · online'
   const days = Math.max(
     0,
     Math.ceil((check.expiresAt - (check.checkedAt ?? check.expiresAt)) / 86400000)
   )
-  return days < 1 ? '公网 · 授权不足 1 天' : `公网 · 授权还剩 ${days} 天`
+  return days < 1 ? 'Public · authorization expires in less than 1 day' : `Public · authorization expires in ${plural(days, 'day')}`
 }
 
 export function hostCheckBadge(check: HostCheck): { text: string; tone: 'attn' | 'ink3' } | null {
   if (check.state !== 'online') return null
-  if (check.waiting) return { text: `${check.waiting} 件等你`, tone: 'attn' }
-  if (check.running) return { text: `${check.running} 个进行中`, tone: 'ink3' }
+  if (check.waiting) return { text: `${check.waiting} waiting for you`, tone: 'attn' }
+  if (check.running) return { text: `${check.running} in progress`, tone: 'ink3' }
   return null
 }
 
-/* ───────────── 定时任务 ───────────── */
+/* ───────────── Scheduled tasks ───────────── */
 
 function parseField(field: string, min: number, max: number): Set<number> | null {
   const values = new Set<number>()
@@ -369,8 +378,8 @@ function parseField(field: string, min: number, max: number): Set<number> | null
 }
 
 /**
- * 只认“每天 / 工作日 / 指定星期 HH:mm”这类 `分 时 * * 星期` 表达式；
- * 其他写法返回 null，调用方不显示下次时间，避免猜错。
+ * Only recognizes `min hour * * weekday` expressions like "daily / weekdays / specific weekdays HH:mm"; 
+ * other forms return null and the caller hides the next time, to avoid guessing wrong.
  */
 export function nextCronRun(cron: string, now: Date): Date | null {
   const fields = cron.trim().split(/\s+/)
@@ -395,15 +404,15 @@ export function nextCronRun(cron: string, now: Date): Date | null {
   return null
 }
 
-const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-/** “3 个开启 · 下次 18:00”；有任何一个开启的任务算不出时间时只显示数量。 */
+/** "3 enabled · next 18:00"; when any enabled task's time cannot be computed only the count is shown. */
 export function scheduleSummary(tasks: ScheduledTask[], now: Date) {
   const enabled = tasks.filter((task) => task.enabled !== false && task.scheduleState !== 'completed')
-  if (!tasks.length) return '未设置'
-  if (!enabled.length) return tasks.every(task => task.scheduleState === 'completed') ? '全部完成' : '全部暂停'
+  if (!tasks.length) return 'Not set up'
+  if (!enabled.length) return tasks.every(task => task.scheduleState === 'completed') ? 'All done' : 'All paused'
   const runs = enabled.map((task) => task.schedule || task.nextRunAt !== undefined ? nextRunAt(task, now) : nextCronRun(task.cron, now))
-  if (runs.some((run) => !run)) return `${enabled.length} 个开启`
+  if (runs.some((run) => !run)) return `${enabled.length} enabled`
   const next = new Date(Math.min(...runs.map((run) => run!.getTime())))
   const time = `${pad(next.getHours())}:${pad(next.getMinutes())}`
   const tomorrow = new Date(now)
@@ -411,7 +420,7 @@ export function scheduleSummary(tasks: ScheduledTask[], now: Date) {
   const day = sameDay(next, now)
     ? ''
     : sameDay(next, tomorrow)
-      ? '明天 '
+      ? 'tomorrow '
       : `${weekdayNames[next.getDay()]} `
-  return `${enabled.length} 个开启 · 下次 ${day}${time}`
+  return `${enabled.length} enabled · next ${day}${time}`
 }

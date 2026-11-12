@@ -56,7 +56,7 @@ describe('Switch', () => {
     const { container: small } = render(<Switch checked onChange={() => {}} label="A" size="sm" />)
     const { container: medium } = render(<Switch checked onChange={() => {}} label="B" size="md" />)
 
-    // 「素」 sizes: 28×16 and 32×18, each thumb travelling exactly
+    // "Su" spec sizes: 28×16 and 32×18, each thumb travelling exactly
     // track width − thumb − both 2px insets, so it lands flush on the right.
     expect(small.querySelector('.h-4.w-7')).toBeInTheDocument()
     expect(small.querySelector('.h-3.w-3.peer-checked\\:translate-x-\\[14px\\]')).toBeInTheDocument()

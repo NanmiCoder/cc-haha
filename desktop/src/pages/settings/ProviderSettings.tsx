@@ -1953,7 +1953,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, initialPres
   }
   const modelsErrorText = modelsErrorCode ? t(providerModelsErrorKey(modelsErrorCode)) : null
   // The server keeps the upstream's own wording, which is the only thing that
-  // separates a 200-cloaked auth failure (智谱 answers `{"msg":"身份验证失败。"}`
+  // separates a 200-cloaked auth failure (Zhipu answers `{"msg":"身份验证失败。"}`, "authentication failed",
   // with HTTP 200, classified `not-supported`) from a provider that genuinely
   // publishes no model list. Display-only: nothing branches on this text.
   const modelsErrorUpstream = modelsErrorMessage && modelsErrorMessage !== modelsErrorText

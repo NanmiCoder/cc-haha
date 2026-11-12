@@ -34,14 +34,14 @@ export function checkAttachmentLimit(
       return {
         ok: false,
         reason: 'too_large',
-        hint: `📎 图片过大(${formatMb(size)} MB),请控制在 10 MB 以内`,
+        hint: `📎 Image too large (${formatMb(size)} MB); keep it under 10 MB`,
       }
     }
     if (mime && !IMAGE_MIME_WHITELIST.includes(mime as (typeof IMAGE_MIME_WHITELIST)[number])) {
       return {
         ok: false,
         reason: 'unsupported_mime',
-        hint: `📎 暂不支持此图片格式(${mime})`,
+        hint: `📎 Unsupported image format (${mime})`,
       }
     }
     return { ok: true }
@@ -51,7 +51,7 @@ export function checkAttachmentLimit(
     return {
       ok: false,
       reason: 'too_large',
-      hint: `📎 文件过大(${formatMb(size)} MB),请控制在 30 MB 以内`,
+      hint: `📎 File too large (${formatMb(size)} MB); keep it under 30 MB`,
     }
   }
   return { ok: true }

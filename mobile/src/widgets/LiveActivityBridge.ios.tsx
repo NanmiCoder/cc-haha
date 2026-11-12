@@ -80,7 +80,7 @@ export function LiveActivityBridge({
         .sync(null, async () => undefined, '')
         .catch((failure) => {
           onStatus?.(
-            failure instanceof Error ? failure.message : '无法结束锁屏活动'
+            failure instanceof Error ? failure.message : 'Cannot end lock screen activity'
           )
         })
       return
@@ -88,7 +88,7 @@ export function LiveActivityBridge({
     if (action === 'stale') {
       void controller.markStale().catch((failure) => {
         onStatus?.(
-          failure instanceof Error ? failure.message : '锁屏状态更新失败'
+          failure instanceof Error ? failure.message : 'Lock screen status update failed'
         )
       })
       return
@@ -120,7 +120,7 @@ export function LiveActivityBridge({
       host.id,
       preferences.notifications,
       preferences.quietHours,
-      // 这两项和 timeSensitive 都随登记上报给电脑，切换后需要重新登记。
+      // These two and timeSensitive are reported to the computer with the registration, so switching requires re-registering.
       preferences.liveActivity,
       preferences.liveActivityShowCommand,
       preferences.timeSensitive,
@@ -137,13 +137,13 @@ export function LiveActivityBridge({
           )
           if (!configured.platforms.ios) {
             onStatus?.(
-              '锁屏活动已在本机开启；电脑尚未配置 APNs，App 进入后台后不能远程更新。'
+              'Lock screen activity is enabled on this device; the computer has not configured APNs, so it cannot be updated remotely once the app is in the background.'
             )
             return undefined
           }
           const permission = await Notifications.getPermissionsAsync()
           if (!permission.granted) {
-            onStatus?.('锁屏活动仅在本机更新；允许系统通知后才能登记后台推送。')
+            onStatus?.('Lock screen activity updates only on this device; background push can be registered only after allowing system notifications.')
             return undefined
           }
           const deviceToken = await getDevicePushToken()
@@ -174,7 +174,7 @@ export function LiveActivityBridge({
           )
           if (!response.registered || !response.id) {
             onStatus?.(
-              '锁屏活动已在本机开启；电脑尚未配置 APNs，App 进入后台后不能远程更新。'
+              'Lock screen activity is enabled on this device; the computer has not configured APNs, so it cannot be updated remotely once the app is in the background.'
             )
             return undefined
           }
@@ -190,7 +190,7 @@ export function LiveActivityBridge({
       .catch((failure) => {
         if (cancellation.signal.aborted) return
         const message =
-          failure instanceof Error ? failure.message : '无法开启锁屏实时活动'
+          failure instanceof Error ? failure.message : 'Cannot turn on lock screen Live Activity'
         if (lastError.current !== message) {
           lastError.current = message
           onStatus?.(message)

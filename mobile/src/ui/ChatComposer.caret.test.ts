@@ -51,7 +51,7 @@ test('on the web the composer leaves the caret to the browser while typing and m
       client: { host: { id: 'phone-fixture' } }, sessionId: 'fixture-chat',
       draft: '', onDraft: value => { props.draft = value }, references: [], onReferences: () => {}, attachments: [], onAttachments: () => {},
       team: false, onTeam: () => {}, computer: { enabled: false }, lean: false, empty: false, busy: false, disabled: false,
-      run: { label: '测试模型', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
+      run: { label: 'Test model', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
     }
     globalThis.requestAnimationFrame = () => 0
     const flatten = node => {
@@ -73,47 +73,47 @@ test('on the web the composer leaves the caret to the browser while typing and m
     // Typing, including every composition update of an input method, never
     // hands the caret to the input.
     assert.equal(input().props.selection, undefined)
-    for (const value of ['n', 'ni', 'ni h', 'ni ha', 'ni hao', '你好']) {
+    for (const value of ['n', 'ni', 'ni h', 'ni ha', 'ni hao', 'Hello']) {
       type(value)
       assert.equal(input().props.selection, undefined, 'typing "' + value + '" must not move the caret')
     }
 
     // The composer moving the caret itself (dictated text) does hand it over,
     // as the same object across renders so the input applies it once.
-    voice.onDraft('你好，世界', 3)
+    voice.onDraft('Hello, world', 3)
     const moved = input().props.selection
     assert.deepEqual(moved, { start: 3, end: 3 })
     assert.equal(input().props.selection, moved)
-    assert.equal(props.draft, '你好，世界')
+    assert.equal(props.draft, 'Hello, world')
 
     // The browser reporting the caret, or the next keystroke, takes it back.
     input().props.onSelectionChange({ nativeEvent: { selection: { start: 3, end: 3 } } })
     assert.equal(input().props.selection, undefined)
-    voice.onDraft('你好，世界！', 6)
+    voice.onDraft('Hello, world!', 6)
     assert.deepEqual(input().props.selection, { start: 6, end: 6 })
-    type('你好，世界！h')
+    type('Hello, world!h')
     assert.equal(input().props.selection, undefined)
 
     // Picking a / candidate moves the caret behind the inserted command.
-    type('请执行 /')
+    type('Please run /')
     const card = render().find(node => node.type?.name === 'CandidateCard')
     assert.ok(card, 'typing / opens the candidate card')
-    card.props.onChoose({ name: 'review', description: '审查改动' })
-    assert.equal(props.draft, '请执行 /review ')
+    card.props.onChoose({ name: 'review', description: 'Review changes' })
+    assert.equal(props.draft, 'Please run /review ')
     const picked = input().props.selection
     assert.deepEqual(picked, { start: 12, end: 12 })
     assert.equal(input().props.selection, picked)
-    type('请执行 /review n')
+    type('Please run /review n')
     assert.equal(input().props.selection, undefined)
 
     // Applying the + sheet puts the caret at the end of its draft.
-    render().find(node => node.type === 'BringSheet').props.onApply({ draft: '整理一下', references: [] })
-    assert.equal(props.draft, '整理一下')
+    render().find(node => node.type === 'BringSheet').props.onApply({ draft: 'Tidy it up', references: [] })
+    assert.equal(props.draft, 'Tidy it up')
     assert.deepEqual(input().props.selection, { start: 4, end: 4 })
 
     // The native app keeps its controlled caret, tracked through typing.
     Platform.OS = 'ios'
-    type('你好，世界！ha')
+    type('Hello, world!ha')
     assert.deepEqual(input().props.selection, { start: 8, end: 8 })
   `
   try {

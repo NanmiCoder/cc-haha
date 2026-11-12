@@ -299,11 +299,11 @@ describe('capability pills in edit and resend', () => {
   const SKILL = 'Use the Skill tool with skill: "frontend-design" for this request.'
 
   it('restores the team switch and the skill pill, and sends both again', () => {
-    const modelContent = withAgentTeamRequest(`${SKILL} 做个落地页`)
-    const draft = createUserMessageEditDraft({ content: '@Frontend Design 做个落地页', modelContent })
+    const modelContent = withAgentTeamRequest(`${SKILL} build a landing page`)
+    const draft = createUserMessageEditDraft({ content: '@Frontend Design build a landing page', modelContent })
 
     expect(draft).toEqual({
-      text: '@frontend-design 做个落地页',
+      text: '@frontend-design build a landing page',
       attachments: [],
       sessionReferences: [],
       agentTeam: true,
@@ -313,15 +313,15 @@ describe('capability pills in edit and resend', () => {
       }],
     })
 
-    const payload = buildUserMessageResendPayload({ ...draft, text: '@frontend-design 做个官网' }, labels)
-    expect(payload?.content).toBe(withAgentTeamRequest(`${SKILL} 做个官网`))
-    expect(payload?.options.displayContent).toBe('@frontend-design 做个官网')
+    const payload = buildUserMessageResendPayload({ ...draft, text: '@frontend-design build a homepage' }, labels)
+    expect(payload?.content).toBe(withAgentTeamRequest(`${SKILL} build a homepage`))
+    expect(payload?.options.displayContent).toBe('@frontend-design build a homepage')
   })
 
   it('sends neither the team block nor the skill once the user removes them', () => {
-    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页`, modelContent: withAgentTeamRequest(`${SKILL} 做个落地页`) })
-    const payload = buildUserMessageResendPayload({ ...draft, text: '做个落地页', agentTeam: false }, labels)
-    expect(payload?.content).toBe('做个落地页')
+    const draft = createUserMessageEditDraft({ content: `${SKILL} build a landing page`, modelContent: withAgentTeamRequest(`${SKILL} build a landing page`) })
+    const payload = buildUserMessageResendPayload({ ...draft, text: 'build a landing page', agentTeam: false }, labels)
+    expect(payload?.content).toBe('build a landing page')
   })
 
   it('edits a pill under the name the composer showed and still sends its identity', () => {
@@ -329,33 +329,33 @@ describe('capability pills in edit and resend', () => {
       { kind: 'skill', id: 'frontend-design', name: 'frontend-design', displayName: 'Frontend Design', description: '', source: 'skills', modelText: SKILL },
     ])
     try {
-      const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
-      expect(draft.text).toBe('@Frontend Design 做个落地页')
-      expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} 做个落地页`)
+      const draft = createUserMessageEditDraft({ content: `${SKILL} build a landing page` })
+      expect(draft.text).toBe('@Frontend Design build a landing page')
+      expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} build a landing page`)
     } finally {
       useCapabilityCatalogStore.setState({ entries: {} })
     }
   })
 
   it('keeps a reloaded skill message editable without the English instruction', () => {
-    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
-    expect(draft.text).toBe('@frontend-design 做个落地页')
+    const draft = createUserMessageEditDraft({ content: `${SKILL} build a landing page` })
+    expect(draft.text).toBe('@frontend-design build a landing page')
     expect(draft.agentTeam).toBeUndefined()
-    expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} 做个落地页`)
+    expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} build a landing page`)
   })
 
   it('tells a pill from literal text that spells the same token, in both directions', () => {
     // The user typed "@frontend-design" by hand, then picked the real pill.
-    const draft = createUserMessageEditDraft({ content: `写 @frontend-design 文档，然后 ${SKILL} 做页面` })
-    expect(draft.text).toBe('写 @frontend-design 文档，然后 @frontend-design 做页面')
+    const draft = createUserMessageEditDraft({ content: `write @frontend-design docs, then ${SKILL} build the page` })
+    expect(draft.text).toBe('write @frontend-design docs, then @frontend-design build the page')
     expect(draft.mentions).toEqual([expect.objectContaining({ id: 'frontend-design', tokenOrdinal: 1 })])
     expect(buildUserMessageResendPayload(draft, labels)?.content)
-      .toBe(`写 @frontend-design 文档，然后 ${SKILL} 做页面`)
+      .toBe(`write @frontend-design docs, then ${SKILL} build the page`)
   })
 
   it('sends the model text of the pill the editor kept, wherever the user moved it', () => {
-    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
-    const moved = { ...draft, text: '做个落地页 @frontend-design', mentions: [{ ...draft.mentions![0]!, tokenOrdinal: 0 }] }
-    expect(buildUserMessageResendPayload(moved, labels)?.content).toBe(`做个落地页 ${SKILL}`)
+    const draft = createUserMessageEditDraft({ content: `${SKILL} build a landing page` })
+    const moved = { ...draft, text: 'build a landing page @frontend-design', mentions: [{ ...draft.mentions![0]!, tokenOrdinal: 0 }] }
+    expect(buildUserMessageResendPayload(moved, labels)?.content).toBe(`build a landing page ${SKILL}`)
   })
 })

@@ -9,10 +9,10 @@ import { runSheetReasons, teamNote } from './runLogic'
 import { useTeamsSetting } from './useTeamsSetting'
 
 /**
- * 「＋」里「运行方式」那一组：Agent 团队和操作电脑都选择进下一条消息。
- * 操作电脑的全局授权只在首次启用时确认，与本条选择独立。
- * 和桌面端一致，这两个开关属于「这次带什么」，不放在模型和权限的底单里。
- * `visible` 为真时重新读取电脑上的团队设置和电脑授权状态。
+ * The "Run mode" group in "+": agent team and computer use are both selected into the next message.
+ * Global authorization for computer use is confirmed only on first enable, independent of this selection.
+ * Consistent with desktop, these two toggles belong to "what to bring this time" and are not in the model and permissions sheet.
+ * `visible` When true, reread team settings and computer authorization status from the computer.
  */
 export function RunToggles({
   visible,
@@ -34,13 +34,13 @@ export function RunToggles({
   computer: ComputerUse
   computerSelected: boolean
   onComputerSelected(value: boolean): void
-  /** 费用确认已经点过「使用团队」。状态在「＋」底单这一层，进二级页、搜索再返回不会重置。 */
+  /** The cost confirmation "Use team" was already tapped. State lives at the "+" sheet level, so entering subpages, searching and returning does not reset it. */
   accepted: boolean
   onAccept(): void
 }) {
   const colors = useColors()
   const [teamConsent, setTeamConsent] = useState(false)
-  // 每次打开都重读电脑上的设置，在渲染期间调整，避免 effect 里再 setState。
+  // Every open rereads settings from the computer, adjusted during render to avoid another setState in an effect.
   const [shown, setShown] = useState(visible)
   const [epoch, setEpoch] = useState(0)
   if (shown !== visible) {
@@ -66,27 +66,27 @@ export function RunToggles({
       <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
         <View style={{ minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 }}>
           <View style={{ flex: 1, gap: 2, paddingVertical: 8 }}>
-            <Text style={{ fontSize: 16, color: colors.ink }}>Agent 团队</Text>
+            <Text style={{ fontSize: 16, color: colors.ink }}>Agent Team</Text>
             <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{teamNote(reasons.team)}</Text>
           </View>
-          <Switch label="Agent 团队" value={team} disabled={!!reasons.team} onValueChange={toggleTeam} />
+          <Switch label="Agent Team" value={team} disabled={!!reasons.team} onValueChange={toggleTeam} />
         </View>
         <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
         <ComputerUseRow computer={computer} selected={computerSelected} onSelected={onComputerSelected} />
       </View>
-      <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
+      <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="Use agent team">
         <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>
-          队长会拆分任务并协调多个成员。每个成员会独立调用模型，可能增加用量和费用。
+          The lead splits the task and coordinates multiple members. Each member calls the model independently, which may increase usage and cost.
         </Text>
         <Button
-          title="使用团队"
+          title="Use team"
           onPress={() => {
             onAccept()
             setTeamConsent(false)
             onTeam(true)
           }}
         />
-        <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
+        <Button title="Cancel" variant="secondary" onPress={() => setTeamConsent(false)} />
       </Sheet>
       <ComputerUseConsent computer={computer} />
     </>

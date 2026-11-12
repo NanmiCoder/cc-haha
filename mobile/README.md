@@ -1,49 +1,49 @@
-# cc-haha 移动端
+# cc-haha Mobile
 
-React Native / Expo 58 / Expo Router 的 iOS、Android 客户端。按「cc-haha 移动端主题提案」重做界面和功能分工：手机负责收到提醒、做决定、派任务、查看结果和及时停止；模型执行、仓库和配置保留在电脑上。
+iOS and Android client built with React Native / Expo 58 / Expo Router. The UI and division of responsibilities were redone following the "cc-haha mobile theme proposal": the phone receives alerts, makes decisions, dispatches tasks, reviews results, and stops things in time; model execution, repositories, and configuration stay on the computer.
 
-## 页面与真实行为
+## Screens and actual behavior
 
-| 页面 | 行为与桌面端边界 |
+| Screen | Behavior and desktop boundary |
 | --- | --- |
-| 首页（浅色 / 深色） | 大标题是当前电脑，点开查看这台电脑（定时任务、后台活动、新任务默认模型）或切换电脑；常驻搜索与项目筛选；按“等你决定 / 进行中 / 最近”分组，工具审批可在首页直接允许或拒绝（经会话页重新校验后提交）；运行时间来自桌面任务时钟，一次网络抖动不判离线 |
-| 会话与审批 | 流式内容、历史分页、工具步骤时间线；运行中追加的消息在手机上排队，这一轮顺利结束后自动发送（出错或未确认送达时暂停，停止或离开会话时退回输入框）；允许 / 本会话同类不再询问 / 拒绝并说明；文件修改审批显示差异；审批只发送当前主机、会话和请求 ID |
-| 提问 | 单选、多选、自定义答案；桌面提供的 AI 代答倒计时与取消；问题和工具权限使用不同协议 |
-| 计划 | 查看完整计划，选择执行权限和当前会话模型；批准后执行，或反馈后继续规划 |
-| 新任务 | 目录、分支、工作树、Standard / Lean、权限与模型；等待 WebSocket 同步及运行配置确认后才发送首条任务 |
-| 输入与材料 | 图片、相机、文件、电脑已有技能引用、下一条消息的 Teams 设置；听写使用系统键盘；有明确材料大小限制，不静默丢弃 |
-| 改动 | 检查点文件差异、代码 / 对话 / 两者回退；可复制、编辑重发、分叉消息，使用服务器实际消息标识 |
-| 后台活动 | 真实后台任务及耗时；单项或全部停止；任务由电脑运行，不依赖手机保持前台 |
-| 定时任务 | 列表、详情、启停、立即运行、改执行时间与最近结果；按每天 / 工作日和电脑本地时刻新建；“下次运行”按手机时区推算，手机和电脑不在同一时区时可能不准；已有任务内容与高级配置在桌面修改 |
-| 你的电脑与扫码 | 多主机独立地址、凭据和草稿；局域网连接与 HTTPS 原生配对；移除前撤销推送登记 |
-| 设置 | 通知、勿扰、AI 代答、外观；电脑默认模型在首页“这台电脑”里；API Key、MCP、插件和系统权限留在桌面端 |
-| 工作区 | 文件树、文本和差异只读预览，原生保存或分享文件；下载经过带认证的固定主机连接与大小限制 |
-| 系统通知与 Live Activity | iOS 原生锁屏 / Dynamic Island，Android 通知；动作进入 App 后重新校验当前审批，过期内容不允许直接批准 |
+| Home (light / dark) | The large title is the current computer; tap it to view this computer (scheduled tasks, background activity, default model for new tasks) or switch computers. Always-visible search and project filter; grouped into "Needs your decision / In progress / Recent". Tool approvals can be allowed or denied directly from Home (submitted after re-validation through the session screen). Run times come from the desktop task clock, and a single network blip doesn't count as offline |
+| Sessions and approvals | Streaming content, paginated history, tool step timeline. Messages added while a run is in progress queue on the phone and are sent automatically once that turn ends successfully (paused on errors or unconfirmed delivery, returned to the input box when stopping or leaving the session). Allow / don't ask again for this kind in this session / deny with explanation. File change approvals show diffs. Approvals only send the current host, session, and request ID |
+| Questions | Single choice, multiple choice, custom answers; the desktop-provided AI auto-answer countdown and cancel. Questions and tool permissions use different protocols |
+| Plans | View the full plan, choose execution permissions and the current session model; approve to execute, or give feedback to keep planning |
+| New task | Directory, branch, worktree, Standard / Lean, permissions and model; the first task is only sent after WebSocket sync and runtime config confirmation |
+| Input and materials | Images, camera, files, references to skills already on the computer, Teams settings for the next message; dictation uses the system keyboard. Material size limits are explicit; nothing is silently dropped |
+| Changes | Checkpoint file diffs; roll back code / conversation / both; copy, edit and resend, or fork messages, using the server's actual message IDs |
+| Background activity | Real background tasks and durations; stop one or all. Tasks run on the computer and don't depend on the phone staying in the foreground |
+| Scheduled tasks | List, details, enable/disable, run now, change run time, latest results. Create new ones by daily / weekdays at the computer's local time. "Next run" is computed in the phone's time zone and may be inaccurate if the phone and computer are in different time zones. Existing task content and advanced configuration are edited on the desktop |
+| Your computers and QR scanning | Independent addresses, credentials, and drafts per host; LAN connections and native HTTPS pairing; push registrations are revoked before removal |
+| Settings | Notifications, Do Not Disturb, AI auto-answer, appearance. The computer's default model is under "This computer" on Home; API keys, MCP, plugins, and system permissions stay on the desktop |
+| Workspace | Read-only previews of the file tree, text, and diffs; save or share files natively. Downloads go through an authenticated, fixed-host connection with size limits |
+| System notifications and Live Activity | Native iOS Lock Screen / Dynamic Island, Android notifications. Actions re-validate the current approval after entering the app; stale content cannot be approved directly |
 
-外观是「值守」设计（`src/ui/palette.ts` + `src/ui/kit.tsx`）：系统字体，命令、路径和计时用 Geist Mono（许可位于 `assets/fonts/OFL.txt`）；颜色只表达状态——琥珀是等你决定、蓝是运行、绿是完成、红是出错，主按钮用墨色，品牌陶土色只出现在标识上。额外的加载、断线、权限未授权、空列表、失败和大字体状态属于运行时必须处理的情况，不能用设计稿样例数据替代。
+The appearance follows the "On Watch" design (`src/ui/palette.ts` + `src/ui/kit.tsx`): system font, with Geist Mono for commands, paths, and timers (license at `assets/fonts/OFL.txt`). Color only expresses state — amber means waiting on your decision, blue is running, green is done, red is an error; primary buttons use ink, and the brand terracotta only appears in the logo. Extra loading, disconnected, permission-not-granted, empty-list, failure, and large-text states are runtime cases that must be handled, and cannot be replaced with design-mockup sample data.
 
-## 运行与构建
+## Running and building
 
-正式 CI 签名、随 Release 发布 APK / TestFlight、独立版本号及失败重试，见 [移动端发布](RELEASING.md)。
+For production CI signing, publishing APK / TestFlight with each Release, independent version numbers, and failure retries, see [Mobile releases](RELEASING.md).
 
-以下命令在 `mobile/` 执行。需要 Bun、Node；iOS 需要 Xcode / CocoaPods，Android 需要 JDK / Android SDK。
+Run the following commands in `mobile/`. Requires Bun and Node; iOS needs Xcode / CocoaPods, Android needs a JDK / Android SDK.
 
 ```sh
 bun install --frozen-lockfile
 bun run ios
-# 或
+# or
 bun run android
 ```
 
-原生目录由 Expo 根据 `app.json`、`app.config.ts` 和配置插件生成，禁止手工维护生成的 `ios/`、`android/`。原生依赖或配置变化后需要重新构建。
+Native directories are generated by Expo from `app.json`, `app.config.ts`, and config plugins; never hand-maintain the generated `ios/` and `android/`. Rebuild after native dependency or configuration changes.
 
-Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。同一插件在 React 启动前给 `expo/fetch` 和 WebSocket 装上 `modules/cchaha-network`：系统解析结果全部落在 Cloudflare 网段的主机名（Quick Tunnel、用户自己的 Cloudflare 域名）会在解析结果和内置的 Cloudflare 入口地址间错峰竞速 TCP 连接，避开运营商临时丢弃的个别地址；其他主机名照常解析、不做探测。竞速逻辑的 JVM 单测：`./android/gradlew -p android :cchaha-network:testDebugUnitTest`。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
+Android must use a standalone build: `plugins/withPinnedWebSockets.js` disables automatic cross-address WebSocket redirects; Expo Go lacks this protection, and the code blocks it from connecting. The same plugin installs `modules/cchaha-network` on `expo/fetch` and WebSocket before React starts: hostnames whose system resolution results all fall within Cloudflare ranges (Quick Tunnel, the user's own Cloudflare domain) race staggered TCP connections between the resolved addresses and built-in Cloudflare edge addresses, avoiding individual addresses that carriers temporarily drop; other hostnames resolve normally with no probing. JVM unit tests for the racing logic: `./android/gradlew -p android :cchaha-network:testDebugUnitTest`. The web build `bun run web` is only for layout and protocol checks; credentials are kept only in page memory, you must reconnect after refreshing, and it cannot replace native acceptance testing.
 
-同一套界面也是手机浏览器的 H5：桌面 `bun run build` 调用 `bun run export:h5`，以 `EXPO_PUBLIC_CC_HAHA_H5=1` 导出到 `desktop/dist/m`，由桌面服务端托管在 `/m/`。H5 只连接托管它的电脑（`src/state/h5.ts`），沿用桌面 H5 入口验证过的令牌或远程设备 Cookie；扫码、多台电脑、推送和锁屏实时活动不进入 H5，文件改为浏览器下载。expo-router 在子路径下会把 `/member`、`/models` 误剥成 `/ember`、`/odels`，`patches/expo-router@58.0.25.patch` 修正了这一点；升级 expo-router 时用 `src/core/h5BasePath.test.ts` 确认是否还需要它。
+The same UI also serves as the H5 for phone browsers: desktop `bun run build` calls `bun run export:h5`, exporting with `EXPO_PUBLIC_CC_HAHA_H5=1` to `desktop/dist/m`, which the desktop server hosts at `/m/`. H5 only connects to the computer hosting it (`src/state/h5.ts`), reusing the token or remote-device cookie verified by the desktop H5 entry. QR scanning, multiple computers, push, and Lock Screen live activities are not part of H5, and files become browser downloads. Under a sub-path, expo-router mistakenly strips `/member` and `/models` to `/ember` and `/odels`; `patches/expo-router@58.0.25.patch` fixes this. When upgrading expo-router, use `src/core/h5BasePath.test.ts` to check whether it's still needed.
 
-Release 模拟器构建可运行 `bunx expo run:ios --configuration Release`。直接调用 `xcodebuild` 时应保留正常的模拟器代码签名；完全关闭签名会使 SecureStore / Keychain 不能保存连接凭据。模拟器 `.app` 不能作为手机 IPA 安装。
+For a Release simulator build, run `bunx expo run:ios --configuration Release`. When calling `xcodebuild` directly, keep normal simulator code signing; disabling signing entirely prevents SecureStore / Keychain from saving connection credentials. A simulator `.app` cannot be installed on a phone as an IPA.
 
-Android 本地测试包：
+Android local test package:
 
 ```sh
 bunx expo prebuild --platform android --no-install
@@ -53,41 +53,41 @@ bunx expo prebuild --platform android --no-install
   --max-workers=4
 ```
 
-上述 JVM 参数已用于本地成功构建，避免新增原生模块使默认 512 MiB Metaspace 不足。仅应用界面或业务逻辑改动、原生依赖与配置不变时，可直接增量执行 Gradle，无须再次 prebuild。本地 release 默认仍使用测试 keystore。正式商店签名、商店提交、EAS 发布与生产凭据不是本地构建的一部分。
+The JVM arguments above have been used for successful local builds and prevent new native modules from exhausting the default 512 MiB Metaspace. When only UI or business logic changes and native dependencies and configuration are unchanged, you can run Gradle incrementally without another prebuild. Local release builds still use the test keystore by default. Production store signing, store submission, EAS publishing, and production credentials are not part of the local build.
 
-## 连接电脑
+## Connecting to a computer
 
-局域网：电脑启用「手机连接」，手机扫描连接二维码，或输入电脑可达的 `http://局域网IP:端口` 和访问令牌。实体手机的 `127.0.0.1` 指向手机自身；同机 iOS 模拟器可访问 Mac 的回环地址。
+LAN: enable "Phone connection" on the computer, then scan the connection QR code with the phone, or enter the computer's reachable `http://LAN-IP:port` and access token. On a physical phone, `127.0.0.1` points to the phone itself; an iOS simulator on the same machine can reach the Mac's loopback address.
 
-外网：在桌面「设置 → 手机连接 → 外出连接」选择 **Cloudflare 快速连接**，开启连接后用手机扫码，再在电脑上批准。无需额外安装组网 App、注册账号或购买域名。桌面使用已打包的连接程序，连接过程遵循「设置 → 通用 → 网络代理」。手机网络仍需能够访问公网地址。
+Internet: on the desktop, go to "Settings → Phone connection → Away connection", choose **Cloudflare quick connect**, turn on the connection, scan with the phone, then approve on the computer. No extra networking app, account, or domain purchase is needed. The desktop uses a bundled connector, and the connection follows "Settings → General → Network proxy". The phone's network still needs to be able to reach the public address.
 
-快速连接使用临时的 `https://随机名称.trycloudflare.com` 地址，重新建立隧道后地址会变，需要重新扫码。希望重启后仍使用同一地址时，可选择 **固定域名**：在 Cloudflare 创建隧道，将 Published application 的 Service URL 指向桌面显示的**独立受限网关**（默认 `http://127.0.0.1:17463`），填写固定 HTTPS 地址和 Tunnel Token 后开启连接。不要映射桌面主服务端口。
+Quick connect uses a temporary `https://random-name.trycloudflare.com` address; the address changes when the tunnel is re-established, and you need to scan again. If you want the same address after restarting, choose **Fixed domain**: create a tunnel in Cloudflare, point the Published application's Service URL at the **separate restricted gateway** shown by the desktop (default `http://127.0.0.1:17463`), fill in the fixed HTTPS address and Tunnel Token, then turn on the connection. Do not map the desktop's main server port.
 
-电脑会确认公网地址确实到达当前网关后再显示二维码。用蜂窝网络扫描 / 粘贴 `https://host/remote#pair=一次性码`，随后在电脑批准手机。旧远程配置不会自动启动，需要重新开启 Cloudflare 并配对。快速与固定连接的完整步骤、网络代理和故障定位见 [手机远程连接说明](../docs/desktop/remote.md)。Quick Tunnel 适合临时使用，不保证持续可用；国内运营商和蜂窝网络需要实际验证。
+The computer confirms that the public address actually reaches the current gateway before showing the QR code. Scan / paste `https://host/remote#pair=one-time-code` over cellular, then approve the phone on the computer. Old remote configurations don't start automatically; you need to re-enable Cloudflare and pair again. For full quick and fixed connection steps, network proxy, and troubleshooting, see the [phone remote connection guide](../docs/desktop/remote.md). Quick Tunnel is suitable for temporary use and is not guaranteed to stay available; carriers and cellular networks in mainland China need to be verified in practice.
 
-后端必须包含本次原生配对协议：`pair` 带 `clientType: native`；`claim` 返回 `native_` Bearer 凭据、设备 ID 和真实期限。后续请求及 WebSocket 在固定 origin 上发送凭据，拒绝公开 HTTP、重定向和 URL 查询 token。浏览器继续使用独立 Cookie 配对流程；电脑撤销授权后手机必须重新配对。
+The backend must include this native pairing protocol: `pair` carries `clientType: native`; `claim` returns a `native_` Bearer credential, device ID, and real expiry. Subsequent requests and the WebSocket send the credential on a fixed origin, rejecting public HTTP, redirects, and URL query tokens. Browsers keep using the separate cookie pairing flow; after the computer revokes authorization, the phone must pair again.
 
-每台电脑独立保存元数据（AsyncStorage）与连接凭据（SecureStore）。手机设置有版本迁移；不能读取的未来版本不会被覆盖。远程 HTTPS 地址保持不变时，临时断线或网关重启后使用原凭据重连并同步历史和运行状态，结果不确定的消息不自动重发；确认凭据失效才要求重新配对。远程设备凭据有效 30 天，当前不自动续期。电脑休眠或退出时 App 不能代替电脑执行任务，也不提供远程唤醒；桌面启动后恢复远程入口仍需用户主动开启对应选项。快速连接重建后要重新扫码；固定域名恢复后可继续使用已保存的连接。
+Each computer stores its own metadata (AsyncStorage) and connection credentials (SecureStore). Phone settings have version migrations; unreadable future versions are not overwritten. When the remote HTTPS address stays the same, after a temporary disconnect or gateway restart the app reconnects with the existing credential and syncs history and run state; messages with uncertain outcomes are not resent automatically, and re-pairing is only required once the credential is confirmed invalid. Remote device credentials are valid for 30 days and are not currently renewed automatically. When the computer sleeps or exits, the app cannot run tasks in its place and does not offer remote wake; after the desktop starts, restoring the remote entry still requires the user to enable the corresponding option. After quick connect is rebuilt you need to scan again; with a fixed domain, the saved connection keeps working once it's back.
 
-移除电脑只取决于手机本身：先请电脑撤销已登记的通知和 Live Activity（只试一次，最多等 3 秒），再清理手机上的连接和凭据。电脑休眠、换了地址、拒绝凭据或没有回应，都不会拦住移除；没送达的登记留在电脑上，最长 30 天后失效；远程连接的手机在桌面撤销授权时也会一并清掉。电脑会话不会被删除。
+Removing a computer depends only on the phone: it first asks the computer to revoke registered notifications and Live Activities (one attempt only, waiting at most 3 seconds), then clears the connection and credentials on the phone. The computer sleeping, changing address, rejecting the credential, or not responding never blocks removal; undelivered registrations stay on the computer and expire after at most 30 days, and remotely connected phones are also cleared when the desktop revokes authorization. Computer sessions are not deleted.
 
-## 定时任务
+## Scheduled tasks
 
-从电脑页面进入「定时任务」可直接创建和修改计划，与桌面共用 `schedule`（单次或 Cron、明确时区）和 `execution`（新建或已有会话）契约。支持每天、工作日、指定星期、每月、分钟/小时间隔和自定义五段 Cron。
+From the computer screen, open "Scheduled tasks" to create and edit schedules directly, sharing the `schedule` (one-off or Cron, explicit time zone) and `execution` (new or existing session) contracts with the desktop. Supports daily, weekdays, specific weekdays, monthly, minute/hour intervals, and custom five-field Cron.
 
-常用场景可点「30 分钟后」「明早 9 点」「工作日 9 点」，名称留空时由执行内容生成；项目默认显示最近使用的目录，可在创建前更换。模型、已有会话、工作树和通知在「执行设置」中展开。已有会话沿用其模型、目录与权限；新建会话使用表单显示的模型和目录无人值守执行。电脑需要保持运行。
+For common cases, tap "In 30 minutes", "Tomorrow 9 AM", or "Weekdays 9 AM"; if the name is left blank it's generated from the task content. The project defaults to the most recently used directory and can be changed before creation. Model, existing session, worktree, and notifications expand under "Execution settings". An existing session keeps its model, directory, and permissions; a new session runs unattended with the model and directory shown in the form. The computer needs to stay running.
 
-旧任务直接打开再保存不会改变电脑本地时区、重复规则或调度起点；修改时带修订号，其他设备已修改时需要重新读取。单次任务及其时区会在列表中显示，下次执行时间优先使用电脑返回的结果。
+Opening and re-saving an old task doesn't change the computer's local time zone, repeat rule, or schedule origin; edits carry a revision number, and if another device has modified it, you need to reload. One-off tasks and their time zones are shown in the list, and the next run time prefers the result returned by the computer.
 
-## 通知配置
+## Notification configuration
 
-详见 [PUSH_NOTIFICATIONS.md](PUSH_NOTIFICATIONS.md)。前台本地提醒、系统通知授权和后台远程推送是不同路径。没有 APNs / FCM 配置时，设置页会明确提示，不能据此声称后台远程投递成功。
+See [PUSH_NOTIFICATIONS.md](PUSH_NOTIFICATIONS.md). Foreground local alerts, system notification authorization, and background remote push are different paths. Without an APNs / FCM configuration, the settings screen says so explicitly, and you cannot claim background remote delivery succeeded based on it.
 
-- iOS：构建包含通知与 ActivityKit entitlement，桌面端显式配置 APNs 密钥、Team ID、Key ID、topic 及环境。私钥不进入手机或仓库。
-- Android：构建前设置 `CC_HAHA_GOOGLE_SERVICES_FILE=/绝对路径/google-services.json`，文件必须含 `app.cchaha.mobile` 的 Firebase 客户端；重新 prebuild / 构建。桌面另需 FCM 服务账户。这两个 JSON 用途不同，不能互相代替。参见 [Expo 官方配置说明](https://docs.expo.dev/push-notifications/fcm-credentials/)。
-- 服务端登记按设备权限、偏好、勿扰时段与期限校验；令牌加密保存。推送不携带模型密钥。通知按钮会重新验证审批，AskUserQuestion 和计划不能被普通「允许」动作替代。
+- iOS: the build includes notification and ActivityKit entitlements; the desktop explicitly configures the APNs key, Team ID, Key ID, topic, and environment. The private key never goes onto the phone or into the repository.
+- Android: before building, set `CC_HAHA_GOOGLE_SERVICES_FILE=/absolute/path/google-services.json`; the file must contain a Firebase client for `app.cchaha.mobile`. Re-run prebuild / build. The desktop additionally needs an FCM service account. These two JSON files serve different purposes and cannot replace each other. See [Expo's official setup guide](https://docs.expo.dev/push-notifications/fcm-credentials/).
+- Server-side registration is validated against device permissions, preferences, quiet hours, and expiry; tokens are stored encrypted. Pushes don't carry model keys. Notification buttons re-validate approvals, and AskUserQuestion and plans cannot be replaced by a plain "Allow" action.
 
-## 验证
+## Verification
 
 ```sh
 bun run typecheck
@@ -98,20 +98,20 @@ bun test scripts/design-fixture.test.ts
 bun run export
 ```
 
-测试使用假凭据、内存、临时 HOME 和回环服务，不读写开发者真实 `~/.claude`、Keychain 或模型。根目录的 `bun run verify` 和 `bun run check:persistence-upgrade` 覆盖服务器及持久化边界。静态 export 只产生 JavaScript 与资源，不是 APK / IPA。
+Tests use fake credentials, memory, a temporary HOME, and loopback services, and never read or write the developer's real `~/.claude`, Keychain, or models. The root `bun run verify` and `bun run check:persistence-upgrade` cover server and persistence boundaries. The static export only produces JavaScript and assets; it is not an APK / IPA.
 
-设计验收服务：
+Design acceptance server:
 
 ```sh
 bun scripts/design-fixture.ts --port=3467 --second-port=3468
 ```
 
-同机模拟器连接 `http://127.0.0.1:3467` 或 `:3468`，测试 token 为 `mobile-fixture`。六条设计会话支持审批、问答、计划、材料、差异、回退、后台停止、定时任务和主机隔离。数据只在内存中，**没有模型、命令执行或真实文件修改**。测试专用场景切换见 `scripts/design-fixture.ts`，这些接口不进入生产服务器。
+A simulator on the same machine connects to `http://127.0.0.1:3467` or `:3468`; the test token is `mobile-fixture`. Six design sessions support approvals, Q&A, plans, materials, diffs, rollback, background stop, scheduled tasks, and host isolation. Data lives only in memory — **no models, command execution, or real file changes**. Test-only scenario switching is in `scripts/design-fixture.ts`; those endpoints are not part of the production server.
 
-真实模型验证须另获维护者授权，在独立桌面配置和临时工作区运行。UI Fixture、真实协议、打包构建、模拟器触屏及远程推送投递应分别记录证据，任何一种都不能替代其他验证。
+Real-model verification requires separate maintainer authorization and runs with an isolated desktop configuration and a temporary workspace. UI fixtures, real protocol, packaged builds, simulator touch input, and remote push delivery should each be recorded with their own evidence; none of them can replace the others.
 
-2026-10-24 的验证记录：移动端单元与协议测试 261 项通过，typecheck / lint 通过；根目录 `bun run verify` 的 8 个选中检查通过，5 个检查按影响范围跳过。iOS、Android Release 包及独立 iPhone 开发签名包已构建并校验，Android 已安装到专用模拟器，实际相机扫码能够解析桌面连接凭据。
+Verification record from 2026-10-24: 261 mobile unit and protocol tests passed, typecheck / lint passed; in the root `bun run verify`, the 8 selected checks passed and 5 were skipped by impact scope. iOS and Android Release packages and a standalone iPhone development-signed package were built and verified; Android was installed on a dedicated emulator, and real camera scanning parsed the desktop connection credentials.
 
-真实模型验证使用两份独立桌面配置和 `/tmp` 工作区，由 iOS App 驱动 DeepSeek Flash 多轮编写、修改和执行票据 API / CLI 与日志聚合 CLI。独立黑盒检查最终分别通过 37 项、18 项及 13 项；日志 CLI 首轮发现的服务名排序错误已由真实模型修复并复测。实际文件下载、系统保存、重新附加和模型读取的内容哈希一致。Sandbox APNs 已经 Apple 实投到 iOS 模拟器，通知点击进入对应会话和待审批请求。
+Real-model verification used two isolated desktop configurations and `/tmp` workspaces, with the iOS app driving DeepSeek Flash through multiple turns of writing, modifying, and running a ticketing API / CLI and a log aggregation CLI. Independent black-box checks finally passed 37, 18, and 13 items respectively; a service-name sort bug found in the log CLI's first round was fixed by the real model and re-tested. Content hashes matched across actual file download, system save, re-attachment, and model reads. Sandbox APNs was delivered by Apple to the iOS simulator, and tapping the notification opened the corresponding session and pending approval request.
 
-以上记录不表示全部原生验收完成：最终 Android 包的新任务模型请求、单个「完成」按钮保存思考强度、最终后台活动页输出与停止操作仍需继续验收；Live Activity 锁屏外观尚无充分视觉证据。Android FCM 缺少客户端及服务端配置，尚未实投；最新 iPhone 包的真机验收由用户另行完成。
+This record does not mean all native acceptance is complete: the new-task model request in the final Android package, saving thinking effort with a single "Done" button, and the final background activity screen output and stop action still need acceptance; Live Activity Lock Screen appearance does not yet have sufficient visual evidence. Android FCM lacks client and server configuration and has not been delivered for real; on-device acceptance of the latest iPhone package is being done separately by the user.

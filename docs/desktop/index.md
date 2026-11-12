@@ -1,46 +1,46 @@
 ---
-title: 桌面端功能总览
-nav_title: 功能总览
-description: 一屏看懂桌面端有哪些能力，以及每个功能该翻哪一篇。
+title: Desktop feature map
+nav_title: Feature map
+description: Everything the desktop app can do, on one screen, with a link to each page.
 order: 0
 ---
 
-# 桌面端功能总览
+# Desktop feature map
 
-桌面端把「和 Claude 说话」和「看它到底改了什么」放进同一个窗口：左边是项目和历史会话，中间是对话，右边随时能拉出文件、Diff 和网页预览。
+The desktop app puts "talking to Claude" and "seeing what it actually changed" in the same window: projects and history on the left, the conversation in the middle, files, diffs, and a browser preview one click away on the right.
 
-这一篇是地图，不是说明书。每个功能只写一句话，想细看点进去。还没装好或还没连上模型，先去[开始使用](../start/index.md)。
+This page is a map, not a manual. One line per feature — click through for the details. If you haven't installed it or connected a model yet, start with [Get started](../start/index.md).
 
-想按任务动手练习，从[实战案例](../cases/index.md)选一条路径。
+To learn by doing, choose a task from the [practical guides](../cases/index.md).
 
-## 先认识三块地方
+## Three places to know
 
-- **左侧边栏**：品牌印章下面是「新建会话」「定时任务」「技能市场」，再往下是搜索条和你的项目、历史会话，最底部是「设置」。边界可以拖动改宽窄。
-- **标签栏**：多个会话并排，像浏览器一样切换。右侧四个按钮分别是活动面板、打开项目、打开终端、显示/隐藏工作区。
-- **输入框工具栏**：从左到右是附件、权限模式、运行位置、上下文用量环、模型与推理强度，最后是运行按钮。
+- **Sidebar** — under the brand seal: New session, Scheduled, Skills Market. Below that, the search bar and your projects and past sessions. Settings sits at the bottom. Drag the edge to resize it.
+- **Tab bar** — sessions side by side, switched like browser tabs. The four buttons on the right are Activity, Open project, Open terminal, and Show/hide workspace.
+- **Composer toolbar** — left to right: attachments, permission mode, launch location, context usage ring, model and effort, and the run button.
 
-## 每天都会用到
+## What you'll use daily
 
-- [会话、权限与审阅](./sessions.md) — 怎么开一条会话、工具调用卡怎么看、权限弹窗点哪个、改错了怎么撤销。
-- [工作区](./workspace.md) — 右侧那块面板：已更改文件、Diff 评审、行级评论、独立工作树、内置浏览器。
-- [设置速查](./settings.md) — 16 个分栏一栏一段，包括主题、语言、代理、终端、MCP、Token 用量。
+- [Sessions, permissions, and review](./sessions.md) — starting a session, reading tool cards, answering permission prompts, undoing a turn that went wrong.
+- [Workspace](./workspace.md) — the right-hand panel: changed files, diff review, line comments, isolated worktrees, built-in browser.
+- [Settings reference](./settings.md) — all 16 tabs, one paragraph each: themes, languages, proxy, terminal, MCP, token usage.
 
-## 让它替你干更多活
+## Getting more work out of it
 
-- [子 Agent 与任务拆分](./agents.md) — 什么时候该派 Agent，内置 Agent 有哪些，怎么捏一个自己的。
-- [技能与技能市场](./skills.md) — 技能是什么、和 Agent 有什么区别、从市场装技能前要看什么。
-- [定时任务](./schedule.md) — 让 Claude 每天早上自动跑一遍代码审查。
-- [Computer Use](./computer-use.md) — 在 macOS 上不占用真实鼠标和键盘，替你操作别的应用。
+- [Subagents](./agents.md) — when to delegate, which agents ship built in, how to write your own.
+- [Skills and the Skills Market](./skills.md) — what a skill is, how it differs from an agent, what to check before installing one.
+- [Scheduled tasks](./schedule.md) — have Claude review yesterday's commits every morning.
+- [Computer Use](./computer-use.md) — control other apps on macOS without taking over your physical mouse or keyboard.
 
-## 换个设备继续
+## Continuing somewhere else
 
-- [手机 H5 与 IM 接力](./remote.md) — 扫码在手机浏览器里继续同一条会话，或者从微信、飞书、Telegram 直接对话。
-- [IM 接入](../im/index.md) — 五个平台各自的详细配置步骤。
+- [Phone (H5) and IM](./remote.md) — scan a QR code to continue the same session in your phone's browser, or chat from WeChat, Feishu, or Telegram.
+- [IM integrations](../im/index.md) — full setup steps for each of the five platforms.
 
-## 让它顺眼一点
+## Making it yours
 
-- [桌面宠物](./pets.md) — 一只悬浮在桌面上的小机器人，用动作告诉你任务跑到哪了。默认关闭。
+- [Desktop pet](./pets.md) — a little robot that floats on your desktop and shows you how the current task is going. Off by default.
 
-## 想知道它是怎么实现的
+## Curious how it works inside
 
-上面几篇讲的是「怎么用」。想看架构、想改代码，从[架构总览](../internals/index.md)进，桌面端自己的进程边界在[桌面端架构](../internals/desktop.md)。
+The pages above cover usage. For architecture and source, start at the [architecture overview](../internals/index.md); the desktop process boundaries are in [Desktop Architecture](../internals/desktop.md).

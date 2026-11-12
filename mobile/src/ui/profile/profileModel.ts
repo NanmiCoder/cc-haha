@@ -6,10 +6,10 @@ export function tokenAmount(value: number) {
 }
 
 export function tokenParts(value: number) {
-  const steps = [{ size: 1e12, unit: '万亿' }, { size: 1e8, unit: '亿' }, { size: 1e4, unit: '万' }]
-  // Promote values rounded onto the next unit, just as the desktop does.
-  const step = steps.find((item) => value >= item.size || (item.size > 1e4 && Math.round(value / (item.size / 1e4)) >= 1e4))
-  if (!step) return { amount: Math.round(value).toLocaleString('zh-CN'), unit: '' }
+  const steps = [{ size: 1e12, unit: 'T' }, { size: 1e9, unit: 'B' }, { size: 1e6, unit: 'M' }, { size: 1e3, unit: 'K' }]
+  // Promote values that round onto the next unit ("999.95K" reads as "1M").
+  const step = steps.find((item) => value >= item.size || (item.size > 1e3 && Math.round(value / (item.size / 1e3)) >= 1e3))
+  if (!step) return { amount: Math.round(value).toLocaleString('en-US'), unit: '' }
   const scaled = value / step.size
   return { amount: String(scaled >= 100 ? Math.round(scaled) : Math.round(scaled * 10) / 10), unit: step.unit }
 }
@@ -52,7 +52,7 @@ export function profileModel(stats: ProfileStats, today = new Date()) {
     total, models, modelTotal, days, recent, peak,
     recentTotal: recent.reduce((sum, day) => sum + day.tokens, 0),
     cacheRate: modelTotal ? `${Math.round(cached / modelTotal * 100)}%` : '—',
-    longestTask: minutes == null ? '—' : minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`,
+    longestTask: minutes == null ? '—' : minutes < 60 ? `${minutes} Minutes` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`,
   }
 }
 

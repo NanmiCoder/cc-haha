@@ -13,19 +13,19 @@ import {
 export const floatShadow = (hair: string) =>
   `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
 
-/* ───────────── 分段 ───────────── */
+/* ───────────── Segments ───────────── */
 
-/** 「已修改 | 所有文件」：圆角胶囊分段，选中项是白色浮起的一段。 */
+/** "Modified | All files": rounded capsule segments, with the selected one a white raised segment. */
 export function FilesTabs({ value, onChange }: { value: FilesTab; onChange(value: FilesTab): void }) {
   const colors = useColors()
   const options: { value: FilesTab; label: string }[] = [
-    { value: 'changed', label: '已修改' },
-    { value: 'all', label: '所有文件' },
+    { value: 'changed', label: 'Modified' },
+    { value: 'all', label: 'All files' },
   ]
   return (
     <View
       accessibilityRole="tablist"
-      accessibilityLabel="文件范围"
+      accessibilityLabel="File scope"
       style={{
         height: 44,
         marginHorizontal: 16,
@@ -68,9 +68,9 @@ export function FilesTabs({ value, onChange }: { value: FilesTab; onChange(value
   )
 }
 
-/* ───────────── 已修改 ───────────── */
+/* ───────────── Modified ───────────── */
 
-/** M 灰底、A 绿底、D 红底，R / ? 与 M、A 同色；差异还没读到时留空位。 */
+/** M grey background, A green background, D red background, R / ? same colors as M and A; blank slot while the diff is not loaded yet. */
 function ChangeBadge({ status }: { status?: BadgeStatus }) {
   const colors = useColors()
   if (!status) return <View style={{ width: 22, height: 22, marginLeft: 4 }} />
@@ -105,14 +105,14 @@ export function FileGlyph({ path, color }: { path: string; color: string }) {
   )
 }
 
-/** 已修改的一行：文件名（等宽）+ 目录小字 · +N −N · 状态角标。 */
+/** A modified row: file name (monospace) + small directory text · +N −N · status badge. */
 export function ChangedFileRow({ row, onPress }: { row: ChangedRow; onPress(): void }) {
   const colors = useColors()
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={changedRowLabel(row)}
-      accessibilityHint="查看差异"
+      accessibilityHint="View diff"
       onPress={onPress}
       style={({ pressed }) => ({
         height: 60,
@@ -144,7 +144,7 @@ export function ChangedFileRow({ row, onPress }: { row: ChangedRow; onPress(): v
   )
 }
 
-/** 行底的发丝线，从文件图标之后开始。 */
+/** Hairline at the row bottom, starting after the file icon. */
 export function Hairline({ inset = 56 }: { inset?: number }) {
   const colors = useColors()
   return (
@@ -155,7 +155,7 @@ export function Hairline({ inset = 56 }: { inset?: number }) {
   )
 }
 
-/** 列表顶部的文字入口，如「查看全部改动与回退 ›」。 */
+/** Text entry at the top of the list, like "View all changes and rewind ›". */
 export function LinkRow({ title, onPress }: { title: string; onPress(): void }) {
   const colors = useColors()
   return (
@@ -178,11 +178,11 @@ export function LinkRow({ title, onPress }: { title: string; onPress(): void }) 
   )
 }
 
-/* ───────────── 所有文件 ───────────── */
+/* ───────────── All files ───────────── */
 
 const indent = 20
 
-/** 目录树的一行：展开箭头 · 文件夹 / 文件图标 · 名字；说明行（读取中、出错、空文件夹）缩进到名字处。 */
+/** A directory tree row: expand chevron · folder / file icon · name; note rows (loading, error, empty folder) indent to the name. */
 export function TreeFileRow({
   item,
   onToggle,
@@ -215,7 +215,7 @@ export function TreeFileRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${entry.name}，${directory ? '文件夹' : isImagePath(entry.name) ? '图片' : '文件'}`}
+      accessibilityLabel={`${entry.name}, ${directory ? 'Folder' : isImagePath(entry.name) ? 'Image' : 'File'}`}
       accessibilityState={directory ? { expanded: item.open } : undefined}
       onPress={() => (directory ? onToggle(entry.path) : onOpenFile(entry.path))}
       style={({ pressed }) => ({
@@ -248,13 +248,13 @@ export function TreeFileRow({
   )
 }
 
-/** 搜索结果：文件名 + 所在目录。 */
+/** Search results: file name + containing directory. */
 export function SearchResultRow({ row, onPress }: { row: SearchRow; onPress(): void }) {
   const colors = useColors()
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${row.path}，文件`}
+      accessibilityLabel={`${row.path}, file`}
       onPress={onPress}
       style={({ pressed }) => ({
         height: 56,
@@ -281,7 +281,7 @@ export function SearchResultRow({ row, onPress }: { row: SearchRow; onPress(): v
   )
 }
 
-/* ───────────── 底部搜索框 ───────────── */
+/* ───────────── Bottom search box ───────────── */
 
 export function FilesSearchBar({
   value,
@@ -313,10 +313,10 @@ export function FilesSearchBar({
     >
       <Icon name="search" size={20} color={colors.ink3} strokeWidth={2} />
       <TextInput
-        accessibilityLabel="搜索文件"
+        accessibilityLabel="Search files"
         value={value}
         onChangeText={onChangeText}
-        placeholder="搜索文件"
+        placeholder="Search files"
         placeholderTextColor={colors.ink3}
         autoCapitalize="none"
         autoCorrect={false}
@@ -326,7 +326,7 @@ export function FilesSearchBar({
       {value ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="清除搜索"
+          accessibilityLabel="Clear search"
           hitSlop={8}
           onPress={() => onChangeText('')}
           style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center' }}

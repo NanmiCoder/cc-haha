@@ -4,20 +4,21 @@ import type { ApiClient } from '../core/client'
 import type { Checkpoint } from '../core/operations'
 import { changesCardLabel } from '../core/changesView'
 import { DiffStat, Icon, useColors } from './kit'
+import { plural } from '../core/plural'
 
 /**
- * 一轮结束后的「变更卡」：一行 `3 个文件 +18 −4 ›`，点开进文件页的「已修改」。
- * 传了 onUndo 时右侧多一个「撤销」文字按钮，走调用方现有的回退入口。
- * 总数来自这一轮检查点，没有可恢复的文件检查点时不显示。
+ * "Changes card" after a turn ends: one row `3 files +18 −4 ›`, tapping opens the Modified tab of the files page.
+ * When onUndo is passed an "Undo" text button appears on the right, using the caller's existing rewind entry.
+ * The total comes from this turn's checkpoint; hidden when there is no recoverable file checkpoint.
  */
 export function SessionChangesCard({
   checkpoint,
   onOpen,
   onUndo,
 }: {
-  /** 旧版逐文件读差异用，一行卡不再需要；保留是为了不破坏现有调用。 */
+  /** Used by the old per-file diff reading; the one-row card no longer needs it, kept to avoid breaking existing calls. */
   client?: ApiClient | null
-  /** 同上。 */
+  /** Same as above. */
   sessionId?: string
   checkpoint?: Checkpoint
   onOpen(): void
@@ -41,7 +42,7 @@ export function SessionChangesCard({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={changesCardLabel(files, insertions, deletions)}
-        accessibilityHint="查看更改的文件"
+        accessibilityHint="View changed files"
         onPress={onOpen}
         style={({ pressed }) => ({
           flex: 1,
@@ -56,7 +57,7 @@ export function SessionChangesCard({
         })}
       >
         <Icon name="file" size={20} color={colors.ink2} />
-        <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>{files} 个文件</Text>
+        <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>{plural(files, 'file')}</Text>
         <DiffStat added={insertions} removed={deletions} />
         <View style={{ marginLeft: 'auto' }}>
           <Icon name="chevron-right" size={16} color={colors.ink3} strokeWidth={2.2} />
@@ -65,7 +66,7 @@ export function SessionChangesCard({
       {onUndo ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="撤销这一轮的更改"
+          accessibilityLabel="Undo this turn’s changes"
           onPress={onUndo}
           style={({ pressed }) => ({
             minWidth: 56,
@@ -77,7 +78,7 @@ export function SessionChangesCard({
             opacity: pressed ? 0.5 : 1,
           })}
         >
-          <Text style={{ fontSize: 15, fontWeight: '500', color: colors.ink2 }}>撤销</Text>
+          <Text style={{ fontSize: 15, fontWeight: '500', color: colors.ink2 }}>Undo</Text>
         </Pressable>
       ) : null}
     </View>

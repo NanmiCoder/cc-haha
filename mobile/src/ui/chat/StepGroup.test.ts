@@ -32,7 +32,7 @@ test('live tool groups show every step inline and keep the reader disclosure cho
       onToggleStep: () => {},
       onToggleOpen: (key, live) => { ui = toggleGroupOpen(ui, key, live) },
     }))
-    const disclosure = nodes => nodes.find(node => node.type === 'Pressable' && ['收起步骤', '展开步骤'].includes(node.props.accessibilityHint))
+    const disclosure = nodes => nodes.find(node => node.type === 'Pressable' && ['Collapse steps', 'Expand steps'].includes(node.props.accessibilityHint))
     const labels = nodes => nodes.filter(node => node.type === 'Pressable').map(node => node.props.accessibilityLabel)
     event({ type: 'content_start', blockType: 'tool_use', toolName: 'Read', toolUseId: 'read-1' })
     event({ type: 'tool_use_complete', toolName: 'Read', toolUseId: 'read-1', input: { file_path: '/repo/src/app.ts' } })
@@ -44,9 +44,9 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     // Previously the group was closed, and its currently running step was
     // removed even after opening it. Both must remain in the live timeline.
     assert.equal(disclosure(nodes).props.accessibilityState.expanded, true, 'a live group must open without a tap')
-    assert.ok(labels(nodes).includes('读取 src/app.ts'), 'earlier steps stay visible while the next tool starts')
-    assert.ok(labels(nodes).includes('思考过程'))
-    assert.ok(labels(nodes).includes('运行 bun test'), 'show the executing step in place')
+    assert.ok(labels(nodes).includes('Read src/app.ts'), 'earlier steps stay visible while the next tool starts')
+    assert.ok(labels(nodes).includes('Thinking process'))
+    assert.ok(labels(nodes).includes('Run bun test'), 'show the executing step in place')
     const firstKey = group().key
     event({ type: 'tool_result', toolUseId: 'bash-1', content: 'passed', isError: false })
     assert.equal(disclosure(render()).props.accessibilityState.expanded, true, 'gaps between tools must not fold the live run')
@@ -58,7 +58,7 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     assert.equal(disclosure(render()).props.accessibilityState.expanded, false, 'new steps preserve a manual collapse')
     disclosure(render()).props.onPress()
     assert.equal(disclosure(render()).props.accessibilityState.expanded, true)
-    assert.ok(labels(render()).includes('读取 src/check.ts'))
+    assert.ok(labels(render()).includes('Read src/check.ts'))
     event({ type: 'status', state: 'idle' })
     assert.equal(disclosure(render()).props.accessibilityState.expanded, true, 'manual expansion survives the turn finishing')
     ui = { expanded: new Set(), open: new Set(), closed: new Set() }
@@ -67,7 +67,7 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     assert.equal(disclosure(render()).props.accessibilityState.expanded, true, 'history remains expandable')
     ui = { expanded: new Set(), open: new Set(), closed: new Set() }
     const onlyCurrent = { ...group(), key: 'steps:current', live: true, steps: [{ id: 'current', type: 'tool', toolName: 'Bash', toolUseId: 'current', pending: true, input: { command: 'bun lint' } }] }
-    assert.ok(labels(render(onlyCurrent)).includes('运行 bun lint'), 'the first unfinished tool must not vanish')
+    assert.ok(labels(render(onlyCurrent)).includes('Run bun lint'), 'the first unfinished tool must not vanish')
 
     // A screenshot the agent read: under its step while open, under the summary once folded.
     state = createChatState('screenshot')
@@ -81,8 +81,8 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     let open = render()
     assert.equal(strips(open).length, 1, 'the live group shows the image under its step')
     assert.deepEqual(strips(open)[0].props.images, [{ image: { mimeType: 'image/png', url: '/api/sessions/s/tool-images/read-shot/0', width: 1920, height: 1139 }, name: 'shot-final.png' }])
-    const order = open.filter(node => node.type === 'ToolImageStrip' || /^(读取|运行)/.test(node.props?.accessibilityLabel ?? ''))
-    assert.deepEqual(order.map(node => node.type === 'ToolImageStrip' ? 'strip' : node.props.accessibilityLabel.split(' ')[0]), ['读取', 'strip', '运行'])
+    const order = open.filter(node => node.type === 'ToolImageStrip' || /^(Read|Run)/.test(node.props?.accessibilityLabel ?? ''))
+    assert.deepEqual(order.map(node => node.type === 'ToolImageStrip' ? 'strip' : node.props.accessibilityLabel.split(' ')[0]), ['Read', 'strip', 'Run'])
     event({ type: 'tool_result', toolUseId: 'after-shot', content: 'ok', isError: false })
     event({ type: 'status', state: 'idle' })
     const folded = render()

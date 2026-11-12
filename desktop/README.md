@@ -1,15 +1,15 @@
 # Claude Code Haha Desktop
 
-基于 Tauri 2 + React 的桌面客户端。
+Desktop client built on Tauri 2 + React.
 
-## 开发
+## Development
 
 ```bash
 bun install
 bun run tauri dev
 ```
 
-## 构建
+## Build
 
 ```bash
 # macOS (Apple Silicon)
@@ -19,11 +19,11 @@ bun run tauri dev
 .\scripts\build-windows-x64.ps1
 ```
 
-构建产物位于 `build-artifacts/` 目录，文件名会显式包含平台、架构和包类型。
+Build output goes to the `build-artifacts/` directory; file names explicitly include platform, architecture, and package type.
 
-## 常见问题
+## FAQ
 
-### macOS 提示"已损坏，无法打开"
+### macOS says the app "is damaged and can't be opened"
 
 ```bash
 xattr -cr /Applications/Claude\ Code\ Haha.app

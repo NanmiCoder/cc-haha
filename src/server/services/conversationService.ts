@@ -97,10 +97,10 @@ export const MAX_CAPTURED_SDK_TOTAL_BYTES = 512 * 1024
 const MAX_CAPTURED_SDK_DIAGNOSTIC_TEXT_BYTES = 4 * 1024
 const CONTROL_READY_POLL_MS = 50
 /**
- * 记住多少条已处理的 SDK 消息 uuid，用来挡掉 CLI 重连时的重放。
- * CLI 侧重放缓冲是 DEFAULT_MAX_BUFFER_SIZE = 1000 条
- * （src/cli/transports/WebSocketTransport.ts），这里留一倍余量，
- * 保证整个缓冲区被重放时每一条都还认得出来。
+ * How many processed SDK message uuids to remember, to block replays when the CLI reconnects.
+ * The CLI-side replay buffer is DEFAULT_MAX_BUFFER_SIZE = 1000 messages
+ * (src/cli/transports/WebSocketTransport.ts); we keep double that as headroom
+ * so every message is still recognized when the whole buffer is replayed.
  */
 const MAX_SEEN_SDK_MESSAGE_UUIDS = 2_000
 const AUTO_MEMORY_DIRNAME = 'memory'
@@ -313,8 +313,8 @@ type SessionProcess = {
   stderrLines: string[]
   outputDrain: Promise<void>
   /**
-   * UUID 的 SDK 消息一旦处理过就记在这里，用于挡掉 CLI 重连时的整轮重放。
-   * 详见 handleSdkPayload 里的说明。插入顺序即淘汰顺序（Set 保序）。
+   * UUIDs of SDK messages are recorded here once processed, to block whole-turn replays when the CLI reconnects.
+   * See the notes in handleSdkPayload. Insertion order is eviction order (Set preserves order).
    */
   seenSdkMessageUuids: Set<string>
   sdkMessages: any[]
@@ -815,15 +815,15 @@ export class ConversationService {
       `[ConversationService] Starting CLI for ${sessionId}, cwd: ${cliCwd} (process.cwd()=${process.cwd()}, CALLER_DIR will be pinned to workDir)`,
     )
 
-    // IMPORTANT (Bug#5): 必须覆盖子进程继承的 CALLER_DIR / PWD。
-    // preload.ts 顶层读 process.env.CALLER_DIR 并调用 process.chdir(CALLER_DIR)。
-    // 在 bundled 桌面端里，server sidecar 被 Tauri 从 cwd=/ 启动，claude-sidecar.ts
-    // 在 server/cli 模式入口把 CALLER_DIR 默认设成 process.cwd()（即 '/'），
-    // 随后这个 env 被完整继承到 Bun.spawn 的 CLI 子进程；即使这里显式传了
-    // cwd: workDir，CLI 子进程里 preload.ts 还是会 chdir('/')，结果把
-    // STATE.cwd / "Primary working directory" 打回根目录，IM 会话里 AI 感知的
-    // 工作目录就变成 `/`。把 CALLER_DIR / PWD 显式覆盖成 workDir，preload.ts
-    // chdir 后落到正确目录。
+    // IMPORTANT (Bug#5): must override CALLER_DIR / PWD inherited by the child process.
+    // preload.ts reads process.env.CALLER_DIR at top level and calls process.chdir(CALLER_DIR).
+    // In the bundled desktop app, the server sidecar is started by Tauri with cwd=/, and claude-sidecar.ts
+    // defaults CALLER_DIR to process.cwd() (i.e. '/') at the server/cli mode entry;
+    // this env is then fully inherited by the Bun.spawn CLI child process. Even though we pass
+    // cwd: workDir explicitly here, preload.ts in the CLI child still does chdir('/'), which sends
+    // STATE.cwd / "Primary working directory" back to the root, so the AI in IM sessions perceives
+    // the working directory as `/`. Overriding CALLER_DIR / PWD with workDir explicitly makes preload.ts
+    // land in the correct directory after chdir.
     //
     const networkSettings = await loadNetworkSettings()
     const networkRuntimeMetadata = {
@@ -1693,27 +1693,27 @@ export class ConversationService {
   }
 
   /**
-   * CLI 的 WebSocketTransport 在每次重连成功后会把它的整个发送缓冲区重放一遍，
-   * 并且明确假定「The server deduplicates by UUID」
-   * （src/cli/transports/WebSocketTransport.ts:204）。这个契约以前没有实现：
-   * 笔记本睡眠导致连接断开后（该 transport 有专门的睡眠检测，会无限重置重连预算），
-   * CLI 重连时会把最多 1000 条**早已完成**的消息重新推上来，server 原样转发给前端，
-   * 前端便把一整轮结束很久的对话当成实时输出重新渲染一遍 —— 表现为满屏「已思考」。
+   * The CLI's WebSocketTransport replays its entire send buffer after every successful reconnect,
+   * and explicitly assumes "The server deduplicates by UUID"
+   * (src/cli/transports/WebSocketTransport.ts:204). This contract used to be unimplemented:
+   * after a laptop sleep drops the connection (the transport has dedicated sleep detection that resets the reconnect budget indefinitely),
+   * the CLI re-pushes up to 1000 **long-completed** messages on reconnect, the server forwards them unchanged to the frontend,
+   * and the frontend re-renders a turn that finished long ago as live output —— showing a screen full of "Thought".
    *
-   * 只有带 uuid 的消息才会进入 CLI 的重放缓冲（同文件 write()），所以这里也只按
-   * uuid 判重；没有 uuid 的消息（如 control_request）本就不会被重放，照常处理。
+   * Only messages with a uuid enter the CLI's replay buffer (write() in the same file), so here we also
+   * dedupe by uuid only; messages without a uuid (e.g. control_request) are never replayed and are handled normally.
    */
   private isReplayedSdkMessage(session: SessionProcess, msg: any): boolean {
     const uuid = typeof msg?.uuid === 'string' ? msg.uuid : ''
     if (!uuid) return false
 
-    // 会话对象并非只有 startSession 一条构造路径，缺字段时按空集合起步而不是抛错。
+    // Session objects are not only built via startSession; start from an empty set when the field is missing instead of throwing.
     const seen = session.seenSdkMessageUuids ?? new Set<string>()
     session.seenSdkMessageUuids = seen
     if (seen.has(uuid)) return true
 
     if (seen.size >= MAX_SEEN_SDK_MESSAGE_UUIDS) {
-      // Set 保持插入顺序，最早进来的就是最该淘汰的。
+      // Set keeps insertion order, so the earliest entry is the first to evict.
       const oldest = seen.values().next().value
       if (oldest !== undefined) seen.delete(oldest)
     }
@@ -2473,7 +2473,7 @@ export class ConversationService {
       ),
       cleanEnv,
     )
-    // The overall-duration cap has to scale with the user's "请求超时" or raising
+    // The overall-duration cap has to scale with the user's "Request timeout" or raising
     // that setting can never extend a long response — the cap is a wall-clock
     // budget that no chunk resets, so a slow local model that legitimately
     // thinks past it is killed mid-stream (#1307). The floor keeps the existing
@@ -2520,9 +2520,9 @@ export class ConversationService {
       // The 240s idle timer above is reset by every SSE event, so an upstream
       // that trickles content deltas (e.g. a huge tool_use input_json_delta)
       // just under 240s apart keeps it alive forever and the request hangs with
-      // no completion (#766: "卡住" with slowly growing tokens). This independent
+      // no completion (#766: "stuck" with slowly growing tokens). This independent
       // cap frees such a stream after a fixed duration regardless of trickle.
-      // It tracks the user's "请求超时" (never below MIN_STREAM_MAX_DURATION_MS)
+      // It tracks the user's "Request timeout" (never below MIN_STREAM_MAX_DURATION_MS)
       // so that raising the timeout also extends legitimately long responses,
       // and a provider preset's own CLAUDE_STREAM_MAX_DURATION_MS still wins
       // via the explicitProviderEnv spread below (#1307).
@@ -2533,7 +2533,7 @@ export class ConversationService {
       // response cap above still bounds a stream that trickles forever. The
       // upstream emits tool JSON one complete key/value at a time, so writing a
       // long `content` string is silent until that value is finished: the
-      // budget follows the user's "请求超时" instead of a fixed 120s (#1536).
+      // budget follows the user's "Request timeout" instead of a fixed 120s (#1536).
       CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS:
         cleanEnv.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS ||
         String(resolveStreamToolInputDurationMs(networkEnv.API_TIMEOUT_MS)),
@@ -2542,7 +2542,7 @@ export class ConversationService {
       // knob for slow prefill — it kills healthy local/3P models that take
       // minutes to emit their first token (#826). Tie this to the user's
       // request-timeout setting (API_TIMEOUT_MS, from networkEnv) so raising
-      // "请求超时" actually extends how long we wait for the first token. The
+      // "Request timeout" actually extends how long we wait for the first token. The
       // CLI switches to the shorter idle budget once tokens start flowing.
       CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS:
         cleanEnv.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS || networkEnv.API_TIMEOUT_MS,
@@ -2605,11 +2605,11 @@ export class ConversationService {
       ...(explicitProviderEnv
         ? { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' }
         : {}),
-      // "官方" 模式 (cc-haha/settings.json 没 provider env) 下,把 CLI 标记为
-      // managed-OAuth,让它忽略外部 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
-      // 残留、只走用户 /login 的 OAuth token。自定义 provider 模式绝不能设,
-      // 否则 CLI 会忽略 provider 的 AUTH_TOKEN、错误地走 OAuth 打到第三方
-      // endpoint。详见 src/utils/auth.ts isManagedOAuthContext()。
+      // In "official" mode (no provider env in cc-haha/settings.json), mark the CLI as
+      // managed-OAuth so it ignores leftover external ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
+      // and only uses the user's /login OAuth token. Never set this in custom provider mode,
+      // otherwise the CLI ignores the provider's AUTH_TOKEN and wrongly sends OAuth to the third-party
+      // endpoint. See src/utils/auth.ts isManagedOAuthContext().
       ...(explicitProviderEnv ?? {}),
       ...(
         isOpenAIOfficialProviderId(options?.providerId) &&
@@ -2642,11 +2642,11 @@ export class ConversationService {
   }
 
   /**
-   * 官方模式下构造 CLI 子进程的 auth env:
-   * - CLAUDE_CODE_ENTRYPOINT=claude-desktop 让 CLI 忽略外部残留 ANTHROPIC_* env
-   * - 如果 haha 自管的 oauth.json 里有可用 token,注入 CLAUDE_CODE_OAUTH_TOKEN
-   *   让 CLI 直接拿 env 里的 token,不碰 Keychain,绕开 macOS ACL 静默拒绝
-   *   (这是 DMG 安装 .app 后 403 "Request not allowed" 的唯一根治方案)
+   * Build the auth env for the CLI child process in official mode:
+   * - CLAUDE_CODE_ENTRYPOINT=claude-desktop makes the CLI ignore leftover external ANTHROPIC_* env
+   * - If haha's self-managed oauth.json has a usable token, inject CLAUDE_CODE_OAUTH_TOKEN
+   *   so the CLI takes the token from env without touching Keychain, bypassing the silent macOS ACL denial
+   *   (this is the only real fix for 403 "Request not allowed" after installing the .app from a DMG)
    */
   private async buildOfficialOAuthEnv(): Promise<Record<string, string>> {
     const env: Record<string, string> = {
@@ -2798,13 +2798,13 @@ export class ConversationService {
   }
 
   /**
-   * 只有当用户处于"官方"模式(没有激活任何自定义 provider)时,才把 CLI 标记为
-   * managed-OAuth。激活自定义 provider 时 settings.json 里有 ANTHROPIC_AUTH_TOKEN;
-   * 这种情况下 CLI 必须按 token 路径走第三方 endpoint,不能被 managed 规则
-   * 强制切 OAuth。
+   * Only mark the CLI as managed-OAuth when the user is in "official" mode (no custom provider active).
+   * When a custom provider is active, settings.json has ANTHROPIC_AUTH_TOKEN;
+   * in that case the CLI must use the token path to the third-party endpoint and must not be forced
+   * onto OAuth by the managed rule.
    *
-   * 默认 (读不到 settings.json) 按"官方"处理 — 即使用户从未用过 cc-haha
-   * provider 管理,也希望官方 OAuth 能正常工作。
+   * Default (settings.json unreadable) is treated as "official" — even users who never used cc-haha
+   * provider management expect official OAuth to work.
    */
   private shouldMarkManagedOAuth(providerId?: string | null): boolean {
     if (providerId === null) {

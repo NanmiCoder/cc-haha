@@ -34,7 +34,7 @@ export type NewSessionStarterProps = {
 }
 
 /**
- * What sits under the composer on a blank session (「素」, su-12): a row of
+ * What sits under the composer on a blank session ("Su" spec, su-12): a row of
  * starter prompts and the last few sessions in the same project, so picking
  * up yesterday's thread is one click from the place a new one starts.
  */
@@ -150,5 +150,5 @@ function formatRelativeTime(dateStr: string, t: Translate): string {
   if (hr < 24) return t('session.timeHours', { n: hr })
   const day = Math.floor(hr / 24)
   if (day < 30) return t('session.timeDays', { n: day })
-  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric' }).format(date)
+  return new Intl.DateTimeFormat('en-US', { month: 'numeric', day: 'numeric' }).format(date)
 }

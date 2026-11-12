@@ -100,7 +100,7 @@ describe('provider presets API', () => {
       needsApiKey: true,
       defaultModels: { main: 'claude-opus-5-5', haiku: 'claude-sonnet-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' },
     })
-    expect(sponsors[0].promoText).toContain('注册即送 1 美元全模型通用额度')
+    expect(sponsors[0].promoText).toContain('receive US$1 of credit usable on any model')
     const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'aruhub')!
     expect(buildProviderManagedEnv({
       id: 'aruhub-test', presetId: preset.id, name: preset.name,
@@ -515,7 +515,7 @@ describe('provider presets API', () => {
 
     test('links API key signup to the referral page with concise setup guidance', () => {
       expect(opencodeGo.apiKeyUrl).toBe('https://opencode.ai/go?ref=3RK0WVVCGD')
-      expect(opencodeGo.promoText).toBe('订阅后填入 API Key，即可获取并选择模型。')
+      expect(opencodeGo.promoText).toBe('After subscribing, enter your API Key to fetch and choose models.')
     })
 
     test('is selectable and declares an OpenAI format so requests reach the proxy', () => {

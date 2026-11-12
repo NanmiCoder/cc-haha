@@ -1,5 +1,5 @@
 /* ============================================================================
-   文档阅读体验：侧边栏 · 正文 · 目录
+   Docs reading experience: sidebar · body · table of contents
    ========================================================================== */
 
 .doc-layout {
@@ -12,7 +12,7 @@
   padding: 0 var(--sp-6) var(--sp-24);
 }
 
-/* ── 侧边栏 ─────────────────────────────────────────────────── */
+/* ── Sidebar ─────────────────────────────────────────────────── */
 
 .doc-nav {
   position: sticky;
@@ -67,7 +67,7 @@
   font-weight: 500;
 }
 
-/* ── 正文列 ─────────────────────────────────────────────────── */
+/* ── Body column ─────────────────────────────────────────────────── */
 
 .doc-main {
   min-width: 0;
@@ -92,7 +92,7 @@
   color: var(--border-control);
 }
 
-/* ── Markdown 正文 ──────────────────────────────────────────── */
+/* ── Markdown body ──────────────────────────────────────────── */
 
 .prose {
   color: var(--text);
@@ -193,7 +193,7 @@
   margin: var(--sp-2) 0;
 }
 
-/* 标题锚点 */
+/* Heading anchors */
 .doc-anchor {
   margin-left: var(--sp-2);
   color: var(--border-strong);
@@ -211,7 +211,7 @@
   opacity: 1;
 }
 
-/* 行内代码 */
+/* Inline code */
 .prose :not(pre) > code {
   padding: 0.15em 0.4em;
   border: 1px solid var(--code-border);
@@ -222,7 +222,7 @@
   word-break: break-word;
 }
 
-/* 代码块 */
+/* Code blocks */
 .prose pre {
   position: relative;
   margin: var(--sp-6) 0;
@@ -258,7 +258,7 @@
   pointer-events: none;
 }
 
-/* 语法高亮（highlight.js 类名 → 桌面端代码色板）*/
+/* Syntax highlighting (highlight.js classes → desktop app code palette) */
 .hljs-comment,
 .hljs-quote {
   color: var(--c-comment);
@@ -310,7 +310,7 @@
   font-weight: 600;
 }
 
-/* 表格 */
+/* Tables */
 .doc-table-wrap {
   margin: var(--sp-6) 0;
   border: 1px solid var(--border);
@@ -344,9 +344,9 @@
   border-bottom: 0;
 }
 
-/* 图片。默认满宽 + height:auto，配合渲染器写进标签的 width/height 属性，
-   浏览器在图片下载完之前就能按比例留位，懒加载不再让正文跳动。
-   （`width: auto` 会让未加载的图塌成 0，占位就失效了。） */
+/* Images. Full width + height:auto by default; combined with the width/height attributes the renderer writes,
+   the browser reserves proportional space before the image loads, so lazy loading no longer shifts the text.
+   (`width: auto` collapses unloaded images to 0 and breaks the placeholder.) */
 .prose img {
   width: 100%;
   height: auto;
@@ -356,8 +356,8 @@
   box-shadow: var(--shadow-sm);
 }
 
-/* 竖图满宽会铺满近两屏。哪些算竖图由构建期算好的宽高比决定（渲染器打
-   data-tall），不靠文件名匹配 —— wechat02 / dingding02 这类并不叫 h5-*。 */
+/* Tall images at full width fill nearly two screens. Which images are tall is decided by the aspect ratio computed at build time (the renderer sets
+   data-tall), not by file name matching — images like wechat02 / dingding02 are not named h5-*. */
 .prose img[data-tall='true'] {
   width: auto;
   max-width: 100%;
@@ -365,7 +365,7 @@
   margin-inline: auto;
 }
 
-/* 提示块 */
+/* Callouts */
 .doc-callout {
   margin: var(--sp-6) 0;
   padding: var(--sp-4) var(--sp-5);
@@ -449,7 +449,7 @@
   margin: 0 auto;
 }
 
-/* ── 上一页 / 下一页 ────────────────────────────────────────── */
+/* ── Previous / next page ────────────────────────────────────────── */
 
 .doc-pager {
   display: grid;
@@ -496,7 +496,7 @@
   font-size: var(--fs-xs);
 }
 
-/* ── 右侧目录 ───────────────────────────────────────────────── */
+/* ── Right-hand table of contents ───────────────────────────────────────────────── */
 
 .doc-toc {
   position: sticky;
@@ -549,7 +549,7 @@
   color: var(--brand);
 }
 
-/* ── 移动端：抽屉式导航 ────────────────────────────────────── */
+/* ── Mobile: drawer navigation ────────────────────────────────────── */
 
 .doc-mobilebar {
   display: none;
@@ -627,9 +627,9 @@
     background: var(--bg);
     box-shadow: var(--shadow-lg);
     transform: translateX(-102%);
-    /* 收起来的抽屉只是被推出屏幕，仍然可以 Tab 进去 —— 39 个链接会变成
-       39 个看不见的焦点停靠点。visibility 把它整体移出焦点序列和无障碍树，
-       延迟到滑出动画结束再生效。 */
+    /* A closed drawer is only pushed off screen and can still be tabbed into — 39 links become
+       39 invisible focus stops. visibility removes it from the focus order and the accessibility tree,
+       delayed until the slide-out animation finishes. */
     visibility: hidden;
     transition: transform var(--t-base) var(--ease), visibility 0s linear var(--t-base);
   }
@@ -648,8 +648,8 @@
     background: var(--scrim);
   }
 
-  /* 抽屉展开时锁住背景滚动：遮罩挡得住点击，挡不住滑动，
-     不锁的话手指划在遮罩上会把底下的正文滚走。 */
+  /* Lock background scrolling while the drawer is open: the scrim blocks taps but not swipes,
+     so without the lock a finger dragging on the scrim scrolls the content underneath. */
   html:has(.doc-nav[data-open='true']) {
     overflow: hidden;
   }

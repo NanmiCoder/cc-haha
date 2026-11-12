@@ -62,7 +62,7 @@ function Items({ items, ordered }: { items: PlanItem[]; ordered: boolean }) {
   )
 }
 
-/** 计划正文：标题 23/30，段落 16/25 ink2，步骤编号等宽 ink3，路径等宽。 */
+/** Plan body: title 23/30, paragraphs 16/25 ink2, step numbers monospace ink3, paths monospace. */
 export function PlanDocument({ text }: { text: string }) {
   const colors = useColors()
   return (

@@ -1,7 +1,7 @@
 /**
- * Enterprise WeChat (企业微信) AI-bot QR provisioning.
+ * Enterprise WeChat (WeCom) AI-bot QR provisioning.
  *
- * The 企业微信 console exposes a scan-to-create flow for 智能机器人: a GET
+ * The WeCom console exposes a scan-to-create flow for AI bots: a GET
  * returns a short code plus an authorization URL, the admin scans it in the
  * WeCom app, and a second GET hands back the bot's `botid` / `secret`. Those
  * two values are everything the WebSocket runtime needs, so binding never
@@ -109,7 +109,7 @@ export async function startWecomQrLogin(
       verificationUrl: existing.verificationUrl,
       expiresAt: existing.startedAt + QR_TTL_MS,
       pollIntervalMs: WECOM_POLL_INTERVAL_MS,
-      message: '二维码已就绪，请使用企业微信扫描。',
+      message: 'QR code is ready; scan it with WeCom.',
     }
   }
 
@@ -132,7 +132,7 @@ export async function startWecomQrLogin(
     verificationUrl,
     expiresAt: startedAt + QR_TTL_MS,
     pollIntervalMs: WECOM_POLL_INTERVAL_MS,
-    message: '使用企业微信扫描二维码，创建并授权智能机器人。',
+    message: 'Scan the QR code with WeCom to create and authorize the AI bot.',
   }
 }
 
@@ -146,7 +146,7 @@ export async function pollWecomQrLogin(
     return {
       connected: false,
       status: 'not_started',
-      message: '当前没有进行中的企业微信绑定，请重新生成二维码。',
+      message: 'No WeCom binding in progress. Please generate a new QR code.',
     }
   }
 
@@ -163,7 +163,7 @@ export async function pollWecomQrLogin(
       return {
         connected: false,
         status: 'failed',
-        message: '企业微信返回的机器人凭据不完整，请重新扫码。',
+        message: 'WeCom returned incomplete bot credentials. Please scan again.',
       }
     }
     activeLogins.delete(opts.sessionKey)
@@ -172,15 +172,15 @@ export async function pollWecomQrLogin(
 
   if (status === 'expired' || status === 'timeout') {
     activeLogins.delete(opts.sessionKey)
-    return { connected: false, status: 'expired', message: '二维码已过期，请重新生成。' }
+    return { connected: false, status: 'expired', message: 'QR code expired. Please generate a new one.' }
   }
 
   if (status === 'fail' || status === 'failed' || status === 'error') {
     activeLogins.delete(opts.sessionKey)
-    return { connected: false, status: 'failed', message: '企业微信授权失败，请重新扫码。' }
+    return { connected: false, status: 'failed', message: 'WeCom authorization failed. Please scan again.' }
   }
 
-  return { connected: false, status: 'waiting', message: '等待企业微信扫码确认...' }
+  return { connected: false, status: 'waiting', message: 'Waiting for WeCom scan confirmation...' }
 }
 
 /** Drop an in-flight attempt (user cancelled or rebound). */

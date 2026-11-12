@@ -56,8 +56,6 @@ html:has(.wander-page) { scroll-padding-top: 0; }
 .wander-header__actions { display: flex; gap: 28px; align-items: center; }
 .wander-doc-link, .wander-github-link { display: flex; align-items: center; gap: 6px; }
 .wander-github-link { min-height: 44px; }
-.wander-locale { display: inline-flex; align-items: center; justify-content: center; min-width: 52px; min-height: 42px; padding: 9px 12px; border: 1px solid var(--wander-line); border-radius: 30px; background: #ffffff8c; backdrop-filter: blur(12px); font-size: 12px; font-weight: 600; letter-spacing: .02em; transition: background .2s, transform .2s; }
-.wander-locale:hover { background: #fff; transform: translateY(-1px); }
 .wander-menu, .wander-nav__mobile-docs { display: none; }
 .wander-hero { min-height: max(850px, 100svh); padding-bottom: 110px; isolation: isolate; background: #f3efe2; }
 .ambient-scene { position: absolute; inset: 0; overflow: hidden; }
@@ -280,7 +278,6 @@ html:has(.wander-page) { scroll-padding-top: 0; }
   .wander-header { padding: 24px 18px 12px; gap: 5px; }
   .wander-wordmark { font-size: 28px; }
   .wander-header__actions { gap: 4px; }
-  .wander-locale { min-width: 42px; min-height: 40px; padding: 8px 7px; font-size: 11px; }
   .wander-menu { display: flex; width: 36px; height: 44px; }
   .wander-menu svg { width: 20px; }
   .wander-nav { display: none; position: absolute; top: 87px; left: 20px; right: 20px; transform: none; border: 2px solid white; border-radius: 23px; background: #faf9f2f5; backdrop-filter: blur(24px); padding: 15px; box-shadow: 0 10px 40px #332a1a16; }

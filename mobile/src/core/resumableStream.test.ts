@@ -200,24 +200,24 @@ describe('phone and computer agree on the stream protocol', () => {
 })
 
 /**
- * 手机传输层接在电脑真实的续传层上，帧由测试逐条放行：慢链路上补发还在路上、
- * 两条路交错到达、旧连接被顶替这些时序都能精确摆出来。
+ * The phone transport is attached to the computer's real resume layer, with frames released one by one by the test: replays still in flight on a slow link, 
+ * two paths arriving interleaved, and an old connection being replaced can all be laid out precisely.
  */
 type Wire = SocketLike & {
   url: string
   physical: ServerSocket
-  /** 电脑发来、还没送到手机的帧；`close` 是电脑主动关掉这条连接。 */
+  /** Frames sent by the computer that have not reached the phone yet; `close` means the computer actively closed this connection. */
   queue: (string | { close: number })[]
   sent: string[]
-  /** 发出去的帧到不了电脑（链路已经死了，本地还不知道）。 */
+  /** Frames sent cannot reach the computer (the link is dead but the local side does not know yet). */
   lost: boolean
-  /** send 当场抛错。 */
+  /** send throws immediately. */
   broken: boolean
   pump(count?: number): void
   open(): void
-  /** 没连上电脑就失败了。 */
+  /** Failed before connecting to the computer. */
   fail(): void
-  /** 网络断了：电脑看到关闭，手机收到 1006。 */
+  /** Network dropped: the computer sees a close and the phone receives 1006. */
   die(): void
 }
 function world(options: { manualOpen?: (index: number) => boolean } = {}) {
@@ -348,7 +348,7 @@ function world(options: { manualOpen?: (index: number) => boolean } = {}) {
     emit,
     reads: () => reads,
     verifies: () => verifies,
-    /** 打开会话并完成第一次对齐。 */
+    /** Open the session and finish the first sync. */
     async ready() {
       transport.start()
       await flush()
@@ -356,7 +356,7 @@ function world(options: { manualOpen?: (index: number) => boolean } = {}) {
       await flush()
       expect(transport.connection).toBe('ready')
     },
-    /** 让最新的那条连接把收到的帧都处理完。 */
+    /** Let the newest connection process all frames it has received. */
     async drain(wire = wires.at(-1)!) {
       for (let i = 0; i < 4; i++) {
         wire.pump()
@@ -374,7 +374,7 @@ describe('resuming against the real server layer', () => {
     await w.ready()
     w.wires[0]!.broken = true
     expect(w.transport.send({ type: 'user_message', content: 'deploy to prod' })).toBe(false)
-    expect(w.errors).toContain('发送失败，消息没有自动重试')
+    expect(w.errors).toContain('Send failed; the message was not retried automatically')
     w.timers.advance(500)
     await flush()
     await w.drain()

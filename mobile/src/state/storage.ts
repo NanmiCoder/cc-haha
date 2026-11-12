@@ -35,9 +35,9 @@ export function migrateRegistry(raw: string | null): Registry {
   if (!raw) return empty()
   const value = JSON.parse(raw)
   if (value.version !== undefined && value.version !== 0 && value.version !== 1)
-    throw new Error('主机列表来自更新的 App 版本，请先升级')
+    throw new Error('Host list is from a newer app version; please upgrade first')
   if (!Array.isArray(value.hosts))
-    throw new Error('主机列表无法读取，原始数据已保留')
+    throw new Error('Host list cannot be read; raw data kept')
   const ids = new Set<string>()
   const hosts: Host[] = value.hosts.map((item: Record<string, unknown>) => {
     if (
@@ -49,7 +49,7 @@ export function migrateRegistry(raw: string | null): Registry {
       typeof item.url !== 'string' ||
       !['lan', 'remote'].includes(String(item.auth))
     )
-      throw new Error('主机列表格式无效，原始数据已保留')
+      throw new Error('Invalid host list format; raw data kept')
     ids.add(item.id)
     const auth = item.auth as Host['auth']
     return {
@@ -94,12 +94,12 @@ export class HostRepository {
   add(host: Host, credential: string, signal?: AbortSignal) {
     return this.transaction(async () => {
       const checkCancelled = () => {
-        if (signal?.aborted) throw new Error('连接已取消')
+        if (signal?.aborted) throw new Error('Connection canceled')
       }
       checkCancelled()
       const registry = migrateRegistry(await this.metadata.getItem(key))
       if (registry.hosts.some((item) => item.id === host.id))
-        throw new Error('主机标识已存在')
+        throw new Error('Host ID already exists')
       const next = migrateRegistry(
         JSON.stringify({
           version: 1,
@@ -127,7 +127,7 @@ export class HostRepository {
     return this.transaction(async () => {
       const next = migrateRegistry(await this.metadata.getItem(key))
       if (!next.hosts.some((host) => host.id === id))
-        throw new Error('主机不存在')
+        throw new Error('Host does not exist')
       next.selectedId = id
       await this.metadata.setItem(key, JSON.stringify(next))
       return next
@@ -142,8 +142,8 @@ export class HostRepository {
     return this.transaction(async () => {
       const current = migrateRegistry(await this.metadata.getItem(key))
       const host = current.hosts.find((item) => item.id === id)
-      if (!host) throw new Error('主机不存在')
-      if (host.auth !== 'remote') throw new Error('只有远程连接的电脑会更换地址')
+      if (!host) throw new Error('Host does not exist')
+      if (host.auth !== 'remote') throw new Error('Only remotely connected computers change address')
       const origin = normalizeHostUrl(url, 'remote')
       if (origin === host.url) return null
       const next: Registry = {
@@ -182,10 +182,10 @@ export class HostRepository {
 
 const locatorsKey = 'cc-haha.host-locators'
 /**
- * 远程电脑的局域网线索（端口 + IPv4，见 core/hostRelocator.ts），按电脑 id 存：
- * `{ version: 1, hosts: { [id]: { port, addresses, updatedAt } } }`。
- * 随时能向电脑重新要，所以没有、损坏或来自更新版本都当作空，不报错；
- * 单条格式不对只丢那一条。
+ * LAN hints for remote computers (port + IPv4, see core/hostRelocator.ts), stored by computer id: 
+ * `{ version: 1, hosts: { [id]: { port, addresses, updatedAt } } }`.
+ * they can be re-requested from the computer anytime, so missing, corrupt or newer-version data is treated as empty without errors; 
+ * a single malformed entry only drops that entry.
  */
 export function parseHostLocators(raw: string | null): Map<string, LocatorRecord> {
   const records = new Map<string, LocatorRecord>()

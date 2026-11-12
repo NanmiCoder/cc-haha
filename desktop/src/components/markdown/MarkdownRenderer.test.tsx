@@ -21,7 +21,7 @@ import { CODE_LINK_CLASS } from '../../lib/markdownAutolink'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 beforeEach(() => {
-  useSettingsStore.setState({ locale: 'zh' })
+  useSettingsStore.setState({ locale: 'en' })
 })
 
 function visibleMathText(container: HTMLElement): string {
@@ -123,7 +123,7 @@ describe('MarkdownRenderer', () => {
     render(<MarkdownRenderer content={'```mermaid\ngraph TB\nA-->B'} streaming />)
 
     expect(screen.getByTestId('mermaid-streaming-placeholder')).toHaveTextContent(
-      '正在生成图表…',
+      'Generating diagram…',
     )
     expect(screen.queryByTestId('mermaid-renderer')).not.toBeInTheDocument()
     expect(screen.queryByTestId('code-viewer')).not.toBeInTheDocument()
@@ -184,7 +184,7 @@ describe('MarkdownRenderer', () => {
   it('renders bracket-delimited inline and display formulas', () => {
     const { container } = render(
       <MarkdownRenderer
-        content={'圆面积是 \\(A = \\pi r^2\\)。\n\n\\[\nE = mc^2\n\\]'}
+        content={'The area of a circle is \\(A = \\pi r^2\\).\n\n\\[\nE = mc^2\n\\]'}
       />,
     )
 
@@ -199,7 +199,7 @@ describe('MarkdownRenderer', () => {
     const { container } = render(
       <MarkdownRenderer
         content={[
-          '矩阵和分段函数：',
+          'Matrices and piecewise functions:',
           '',
           '$$',
           '\\begin{bmatrix}1 & 2 \\\\ 3 & 4\\end{bmatrix}',
@@ -345,7 +345,7 @@ describe('MarkdownRenderer', () => {
     const { container } = render(
       <MarkdownRenderer
         content={[
-          '开始构建完整的 Web Linux 桌面环境。',
+          'Start building a full Web Linux desktop environment.',
           '<function=Write>',
           '<parameter=content>',
           '<!DOCTYPE html>',
@@ -364,7 +364,7 @@ describe('MarkdownRenderer', () => {
 
     expect(container.querySelector('style')).not.toBeInTheDocument()
     expect(container).not.toHaveTextContent('overflow: hidden')
-    expect(screen.getByText(/开始构建完整的 Web Linux 桌面环境/)).toBeInTheDocument()
+    expect(screen.getByText(/Start building a full Web Linux desktop environment/)).toBeInTheDocument()
   })
 
   it('strips inline style attributes from assistant markdown html', () => {
@@ -422,7 +422,7 @@ describe('MarkdownRenderer', () => {
         expect(execCommand).toHaveBeenCalledWith('copy')
       })
       expect(writeText).toHaveBeenCalledWith('npm run verify')
-      expect(screen.getByRole('button', { name: '已复制' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument()
     } finally {
       Object.defineProperty(document, 'execCommand', {
         configurable: true,
@@ -654,7 +654,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
   })
 
   it('still autolinks schemeless www hosts through the built-in tokenizer', () => {
-    const { container } = render(<MarkdownRenderer content={'裸域名 www.example.com 呢'} />)
+    const { container } = render(<MarkdownRenderer content={'bare domain www.example.com here'} />)
     expect(anchorsOf(container)).toEqual([
       { href: 'http://www.example.com', text: 'www.example.com' },
     ])
@@ -662,7 +662,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
 
   it('does not nest a link when the markdown label is itself a URL', () => {
     const { container } = render(
-      <MarkdownRenderer content={'见 [http://localhost:3000](http://localhost:3000/real)'} />,
+      <MarkdownRenderer content={'see [http://localhost:3000](http://localhost:3000/real)'} />,
     )
     expect(anchorsOf(container)).toEqual([
       { href: 'http://localhost:3000/real', text: 'http://localhost:3000' },
@@ -671,7 +671,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
 
   it('leaves URLs inside a fenced code block alone', () => {
     const { container } = render(
-      <MarkdownRenderer content={'```log\n[INFO] 代理地址: http://127.0.0.1:15721\n```'} />,
+      <MarkdownRenderer content={'```log\n[INFO] proxy address: http://127.0.0.1:15721\n```'} />,
     )
     expect(container.querySelectorAll('a')).toHaveLength(0)
     expect(screen.getByTestId('code-viewer')).toBeInTheDocument()
@@ -679,7 +679,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
 
   it('links inline code that is nothing but a URL, keeping the code chip', () => {
     const { container } = render(
-      <MarkdownRenderer content={'访问 `http://localhost:3000` 就能看到'} />,
+      <MarkdownRenderer content={'visit `http://localhost:3000` to see it'} />,
     )
     const anchor = container.querySelector('a')
     expect(anchor?.getAttribute('href')).toBe('http://localhost:3000')
@@ -689,14 +689,14 @@ describe('MarkdownRenderer bare-URL autolink', () => {
 
   it('leaves inline code that is a command as plain code', () => {
     const { container } = render(
-      <MarkdownRenderer content={'跑 `curl http://localhost:3000` 试试'} />,
+      <MarkdownRenderer content={'try `curl http://localhost:3000`'} />,
     )
     expect(container.querySelectorAll('a')).toHaveLength(0)
     expect(container.querySelector('code')?.textContent).toBe('curl http://localhost:3000')
   })
 
   it('escapes markup inside a non-URL code span', () => {
-    const { container } = render(<MarkdownRenderer content={'用 `<script>x</script>` 试试'} />)
+    const { container } = render(<MarkdownRenderer content={'try `<script>x</script>`'} />)
     expect(container.querySelectorAll('script')).toHaveLength(0)
     expect(container.querySelector('code')?.textContent).toBe('<script>x</script>')
   })
@@ -705,7 +705,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
   // color alone cannot mark a link — the resting underline is load-bearing here,
   // not decoration.
   it('gives links a resting underline so they read as clickable', () => {
-    const { container } = render(<MarkdownRenderer content={'看 http://localhost:3000'} />)
+    const { container } = render(<MarkdownRenderer content={'see http://localhost:3000'} />)
     const root = container.firstChild as HTMLDivElement
     expect(root.className).toContain('prose-a:underline')
     expect(root.className).toContain('prose-a:decoration-[var(--color-text-accent)]')
@@ -715,7 +715,7 @@ describe('MarkdownRenderer bare-URL autolink', () => {
   // The prose variant spells the class out so Tailwind can see it; this ties that
   // literal back to the constant the renderer actually emits.
   it('styles the code-link class the renderer emits', () => {
-    const { container } = render(<MarkdownRenderer content={'看 `http://localhost:3000`'} />)
+    const { container } = render(<MarkdownRenderer content={'see `http://localhost:3000`'} />)
     const root = container.firstChild as HTMLDivElement
     expect(root.className).toContain(`[&_a.${CODE_LINK_CLASS}]:no-underline`)
     expect(container.querySelector('a')?.className).toContain(CODE_LINK_CLASS)

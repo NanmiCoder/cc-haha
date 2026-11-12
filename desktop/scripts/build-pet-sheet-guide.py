@@ -44,18 +44,6 @@ FONT_CANDIDATES = (
 )
 
 # (row label, frame count, what to draw)
-ROWS_ZH = [
-    ("待机", 6, "站着不动，轻微呼吸起伏"),
-    ("向右跑", 8, "完整跑步循环，必须朝右（朝左由程序镜像生成）"),
-    ("挥手", 4, "抬手打招呼"),
-    ("跳跃", 5, "下蹲 → 起跳 → 落地"),
-    ("失败", 8, "沮丧、垂头、叹气"),
-    ("等待", 6, "东张西望、原地踱步"),
-    ("工作", 6, "低头忙碌，敲键盘或摆弄东西"),
-    ("视线 上半圈", 8, "头朝正上方开始，顺时针每格转 22.5°"),
-    ("视线 下半圈", 8, "接着从正下方继续，转回接近正上方"),
-]
-
 ROWS_EN = [
     ("Idle", 6, "Standing still with a gentle breathing bob"),
     ("Run right", 8, "Full run cycle, must face right (left is mirrored for you)"),
@@ -67,21 +55,6 @@ ROWS_EN = [
     ("Look upper half", 8, "Start facing straight up, turn 22.5° clockwise per cell"),
     ("Look lower half", 8, "Continue from straight down back toward straight up"),
 ]
-
-TEXT_ZH = {
-    "title": "宠物动作表 · 8 列 × 9 行",
-    "subtitle": "每格 192 × 208 像素，整张 1536 × 1872。透明背景 PNG。尺寸不用完全一样，比例接近即可，导入时会自动缩放对齐。",
-    "column_hint": "← 同一行内从左到右是连续的动作帧 →",
-    "footer": [
-        "· 必须透明背景：白底或彩底会变成桌面上的一个方块。",
-        "· 角色在每格里居中，脚底大约落在格子偏下位置，四周留一点空隙。",
-        "· 九行必须是同一个角色、同一种画风、同一个体型，只有动作变化。",
-        "· 最后两行懒得画就重复待机第一帧：宠物只是不会跟着鼠标转头，其他动作照常。",
-    ],
-    "unused": "留空",
-    "safe": "角色画在这里",
-    "frames": "{count} 帧",
-}
 
 TEXT_EN = {
     "title": "Pet action sheet - 8 columns x 9 rows",
@@ -283,7 +256,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    render(ROWS_ZH, TEXT_ZH, args.out_dir / "action-sheet-guide.zh.png")
     render(ROWS_EN, TEXT_EN, args.out_dir / "action-sheet-guide.en.png")
 
 

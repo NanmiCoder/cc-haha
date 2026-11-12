@@ -1,198 +1,198 @@
-# Computer Use ↔ Codex Parity 评审结论（2026-07-27）
+# Computer Use ↔ Codex parity review findings (2026-07-27)
 
-五个独立评审员 + 三轮交叉验证的结论汇总。取证以**明文为主**：Codex 活体 MCP `tools/list`、`@oai/sky` 的 JS/`.d.ts` 明文、以及二进制符号面。
+Summary of findings from five independent reviewers plus three rounds of cross-validation. Evidence is **mainly plaintext**: Codex's live MCP `tools/list`, the plaintext JS/`.d.ts` of `@oai/sky`, and the binary symbol surface.
 
-> **取证方法论（后来者必读）**
-> `strings` 对 Swift 二进制是**单向**证据：**命中 = 有效正证据；未命中 = 零证据，不能反证**。
-> 原因是 Swift small-string 优化把 ≤15 字节的**字符串插值片段**内联进 String 结构体，不进 `__cstring`。
-> 但**不能用字节数预测**"该不该找到"——`get_app_state`(13B) 作为独立 token 照样可见，因为 `__cstring` 还收
-> ObjC selector / C 字面量 / Codable CodingKeys / 反射字段名，这些不走 small-string 优化。
+> **Evidence methodology (required reading for whoever comes next)**
+> `strings` is **one-directional** evidence for Swift binaries: **a hit = valid positive evidence; a miss = zero evidence, it cannot disprove anything**.
+> The reason is that Swift's small-string optimization inlines **string interpolation fragments** of ≤15 bytes into the String struct, so they never reach `__cstring`.
+> But you **cannot predict from byte count** whether something "should be found" — `get_app_state` (13B) is still visible as a standalone token, because `__cstring` also holds
+> ObjC selectors / C literals / Codable CodingKeys / reflected field names, which do not go through small-string optimization.
 >
-> **最好的取证路径不是二进制**，是这里的明文：
+> **The best evidence path is not the binary**; it is the plaintext here:
 > `/Applications/ChatGPT.app/Contents/Resources/cua_node/lib/node_modules/@oai/sky/dist/project/cua/sky_js/src/`
-> —— `targets/mac/*.js`（policy / telemetry / errors / window_result / native-pipe）、`types/window/*.d.ts`、`client.d.ts`。
-> 策略文档双份：`plugins/computer-use/skills/computer-use/SKILL.md` 与 `.codex-plugin/computer-use-node-repl.md`。
+> — `targets/mac/*.js` (policy / telemetry / errors / window_result / native-pipe), `types/window/*.d.ts`, `client.d.ts`.
+> The policy document exists twice: `plugins/computer-use/skills/computer-use/SKILL.md` and `.codex-plugin/computer-use-node-repl.md`.
 
 ---
 
-## 1. 结论
+## 1. Conclusion
 
-| 层面 | 完成度 |
+| Layer | Completion |
 |---|---|
-| **操控内核**（Codex 的 `ComputerUseMCPServer`） | **85–90%** |
-| **Codex CU 整体产品** | **45–55%** |
+| **Control core** (Codex's `ComputerUseMCPServer`) | **85–90%** |
+| **Codex CU as a whole product** | **45–55%** |
 
-Codex 的 client 二进制 multiplex **至少 4 个** MCP server：`ComputerUseMCPServer` / `EventStreamMCPServer` /
-`ComputerHistoryMCPServer` / `MessagesMCPServer`。我们实现了第 1 个。
+The Codex client binary multiplexes **at least 4** MCP servers: `ComputerUseMCPServer` / `EventStreamMCPServer` /
+`ComputerHistoryMCPServer` / `MessagesMCPServer`. We implemented the first.
 
-**回合内的操控行为与 Codex 零差距**（双方都是零隐式快照 + 每动作活体重解析）。
-全部差距集中在跨回合轴、以及内核之外的产品面。
+**Within a turn, control behavior has zero gap with Codex** (both use zero implicit snapshots + live re-resolution on every action).
+All gaps are on the cross-turn axis and in the product surface outside the core.
 
 ---
 
-## 2. 归档中被证伪的表述（改归档时照这里改）
+## 2. Statements in the archive that were disproven (fix the archive per this table)
 
-| 归档说法 | 实际 | 证据 |
+| Archive claim | Reality | Evidence |
 |---|---|---|
-| §2.1 变更工具返回体 = 重跑一次 `get_app_state` | **错**。Codex 8 个动作全返回 `Promise<void>`，文档写"做完动作再取状态"。**我方固定回执是对的** | `client.d.ts`；`sky-window-api.md:12-24`；回执串在 svc strings 逐字命中；`window_result.js` 只被 `get_app_state.js` 引用 |
-| §2.2 Codex 9 个原生工具，`select_text` 是第 10 个补的 | **错**。Codex 原生就是 10 个，`select_text` 排第 6 | 活体 `tools/list` |
-| §2.4 `element_index` Codex 发 string（内容是数字） | 类型确是 string，但**取值是裸整数** | `Element index to click`；node_repl `element_index: 42` |
-| §5.3 Record & Replay 是"第三个" server，共 3 个 | **至少 4 个**（漏 `ComputerHistoryMCPServer`、`MessagesMCPServer`）。"恰好 4 个"不可证伪 | mangled 类名 |
-| §5.3 per-app 指令"字段有了内容要自己喂" | **过时**。v1 就有 Safari/Finder/Electron 三份真内容 + 分类器 + 单测，投递格式与 Codex 逐字一致 | `AppGuidance.swift`；`window_result.js` |
-| §5.3 / §6 elicitation 是"隐藏前置，没查过 SDK 支不支持" | **已解除**。SDK 1.29.0 双向全支持，零升级成本 | `sdk/dist/esm/server/index.js:351,394`；`types.js:335-345`（`{}`→`{form:{}}`） |
-| §6 "Codex 用 XPC 我们用 socket" | **半对**。Codex 同一服务同时接受 XPC（Swift 面）和**帧长前缀 socket**（JS 面），后者与我们同类。严重度降级 | `nm -u` XPC 符号；`native-pipe.d.ts` |
-| §4 判决一 读树必须置前 | 与我方代码里的新判决**正面冲突**，见下方 §5 未决项 | `AXTree.swift:230-241` |
-| §1.2 glide 阻塞点击 500ms | **已修**（现为有界 0.1s，且仅目标 frontmost 时付） | `OverlayPolicy.swift:36-52` |
-| §1.2 `screenshotFiltering` 谎报安全模型 | **已成死代码**（darwin 不走 legacy 面，win32 拿不到 `'native'`） | `common.ts:59-81`；`mcpServer.ts:307-313` |
-| §1.2 无 UI-settle，命令一到就拍 | **至今成立**，见 §4 | `Capture.swift:434-452` |
+| §2.1 Mutating tools return = rerun `get_app_state` once | **Wrong**. All 8 Codex actions return `Promise<void>`; the docs say "fetch state after acting". **Our fixed receipt is correct** | `client.d.ts`; `sky-window-api.md:12-24`; the receipt string hits verbatim in svc strings; `window_result.js` is only referenced by `get_app_state.js` |
+| §2.2 Codex has 9 native tools; `select_text` is a 10th we added | **Wrong**. Codex natively has 10; `select_text` is 6th | live `tools/list` |
+| §2.4 Codex sends `element_index` as a string (containing a number) | The type is indeed string, but **the value is a bare integer** | `Element index to click`; node_repl `element_index: 42` |
+| §5.3 Record & Replay is the "third" server, 3 in total | **At least 4** (missed `ComputerHistoryMCPServer`, `MessagesMCPServer`). "Exactly 4" cannot be falsified | mangled class names |
+| §5.3 per-app instructions "the field exists; we must feed content ourselves" | **Outdated**. v1 already has three real entries for Safari/Finder/Electron + a classifier + unit tests, with delivery format matching Codex verbatim | `AppGuidance.swift`; `window_result.js` |
+| §5.3 / §6 elicitation is a "hidden prerequisite; never checked whether the SDK supports it" | **Resolved**. SDK 1.29.0 supports it fully in both directions, zero upgrade cost | `sdk/dist/esm/server/index.js:351,394`; `types.js:335-345` (`{}`→`{form:{}}`) |
+| §6 "Codex uses XPC, we use a socket" | **Half right**. The same Codex service accepts both XPC (Swift side) and a **length-prefixed socket** (JS side); the latter is the same kind as ours. Severity downgraded | `nm -u` XPC symbols; `native-pipe.d.ts` |
+| §4 Verdict one: reading the tree requires bringing to front | **Directly conflicts** with the new verdict in our code; see the open item in §5 below | `AXTree.swift:230-241` |
+| §1.2 glide blocks clicks for 500ms | **Fixed** (now bounded at 0.1s, and only paid when the target is frontmost) | `OverlayPolicy.swift:36-52` |
+| §1.2 `screenshotFiltering` misrepresents the security model | **Now dead code** (darwin does not use the legacy surface, win32 never gets `'native'`) | `common.ts:59-81`; `mcpServer.ts:307-313` |
+| §1.2 No UI settle; captures the moment a command arrives | **Still true**, see §4 | `Capture.swift:434-452` |
 
 ---
 
-## 3. 一处必须记住的我方优势（别被"优化"掉）
+## 3. One advantage of ours that must be remembered (don't "optimize" it away)
 
-**零隐式快照能安全成立，靠的是每次动作都做活体重解析，而不是缓存 AX 引用。**
+**Zero implicit snapshots are safe only because every action does live re-resolution, not because AX references are cached.**
 
-`AXTree.refetch(pid:index:)`（`AXTree.swift:453`）从**活体 root 重走一遍 path**，绝不复用快照时的 `AXUIElement`，
-并校验语义指纹。配合 `guardStaleness`（`CommandRouter.swift:1369`，6 个动作入口全调）的四层前置守卫，
-**失败模式是"带可执行提示的硬报错"，不是"静默点错"**。
+`AXTree.refetch(pid:index:)` (`AXTree.swift:453`) **re-walks the path from the live root**, never reusing the `AXUIElement` from snapshot time,
+and verifies a semantic fingerprint. Together with the four-layer precondition guard in `guardStaleness` (`CommandRouter.swift:1369`, called by all 6 action entry points),
+**the failure mode is "a hard error with an actionable hint", not "a silent wrong click"**.
 
-指纹比直觉严得多（`ElementFingerprint.swift`）：
-- 指纹 = `{role, subrole, identifier, title, valueKind}`，**`title` 原值参与比对**，只有 `value` 降级成"种类"
-- 路径每一跳存**该层全部兄弟的指纹数组**，重解析要求整个数组逐个相等
-- `SnapshotPathStep.init?` 要求被选中的指纹**在兄弟中唯一**，否则定位器**在快照时就建不出来** —— 歧义情形不留到动作时
+The fingerprint is much stricter than intuition suggests (`ElementFingerprint.swift`):
+- fingerprint = `{role, subrole, identifier, title, valueKind}`; **the raw `title` is compared**, only `value` is reduced to a "kind"
+- each hop of the path stores **the fingerprint array of all siblings at that level**, and re-resolution requires the whole array to match element by element
+- `SnapshotPathStep.init?` requires the selected fingerprint to be **unique among its siblings**, otherwise the locator **cannot even be built at snapshot time** — ambiguous cases are never deferred to action time
 
-⇒ 任何"把 `refetch` 换成缓存 AX ref 以提速"的改动都会摧毁这条保证。
+⇒ Any change that "replaces `refetch` with cached AX refs for speed" destroys this guarantee.
 
-另外 `sessions[pid]` **只由 `get_app_state` 写**（`AXTree.swift:217`），所以**模型手里的树与 daemon 的快照永远是同一帧**，
-这是构造性保证——"拿着 3 个动作前的树去点、而 diff 只报相对上次查询的变化"这种错配**结构上不可能发生**。
+Also, `sessions[pid]` is **written only by `get_app_state`** (`AXTree.swift:217`), so **the tree in the model's hands and the daemon's snapshot are always the same frame**.
+This is a guarantee by construction — the mismatch of "clicking with a tree from 3 actions ago while the diff only reports changes since the last query" is **structurally impossible**.
 
 ---
 
-## 4. 缺口（按是否阻塞核心操控分组）
+## 4. Gaps (grouped by whether they block core control)
 
-### 阻塞核心操控（2 条）
+### Blocking core control (2 items)
 
-1. **无 post-action UI settle**。Codex 有 `needsUISettleBeforeSkyshot`（动作后等 ~1s，有 loading indicator 时更久
-   —— ⚠️ 具体时长来自 node-repl 文档的转述，**未被独立证实**；机制本身由符号名坐实）。
+1. **No post-action UI settle**. Codex has `needsUISettleBeforeSkyshot` (waits ~1s after an action, longer when there is a loading indicator
+   — ⚠️ the exact duration comes from a paraphrase in the node-repl docs and is **not independently confirmed**; the mechanism itself is confirmed by the symbol name).
 
-   > **两位评审员对这一项的严重度判定不同，此处不抹平：**
-   > 一方列为"阻塞核心操控"；另一方判**中**而非高，理由是——正因为我们和 Codex 一样不自动重拍，
-   > 模型的 `get_app_state` 是一次独立 MCP 往返，天然隔着几百毫秒到数秒的模型延迟，**顺带**提供了大量 settle 时间，
-   > 所以不像归档 §1.2 描述的 v0 那么致命。但那是**附带效果不是保证**，覆盖不了"模型恰好在动画/加载中途发问"。
-   > 反过来说：Codex 同样用固定回执，却**仍然**保留了 `needsUISettleBeforeSkyshot` —— 说明 OpenAI 不认为模型往返足够。
+   > **Two reviewers rated the severity of this item differently; that is not smoothed over here:**
+   > one listed it as "blocking core control"; the other rated it **medium** rather than high, reasoning that precisely because we, like Codex, do not re-snapshot automatically,
+   > the model's `get_app_state` is a separate MCP round trip, naturally separated by hundreds of milliseconds to seconds of model latency, which **incidentally** provides plenty of settle time,
+   > so it is not as fatal as the v0 described in archive §1.2. But that is **a side effect, not a guarantee**, and it does not cover "the model happens to ask mid-animation/mid-load".
+   > Conversely: Codex also uses a fixed receipt yet **still** keeps `needsUISettleBeforeSkyshot` — which shows OpenAI does not consider the model round trip sufficient.
 
-   我方 `get_app_state` 路径零 settle：`settleUntilNonShell` 是**读树前的 AX warm-up**（且对已证明未变的进程直接跳过），
-   `Capture.windowShot` 前无任何等待。
-   ⚠️ 与下面这条是**同一件事放错了层**，应一次改完：
-   `AXAction.swift` 每次成功动作后 `Thread.sleep(0.15)`（全文件 11 处），而 `AXAction`/`CommandRouter` 都是 `@MainActor`
-   —— 违反本仓库自己的 AX 线程红线；且其注释理由（"下一次由 router 自动重拍的 get_app_state 会反映变化"）
-   **已被证伪**（router 不重拍了），现在是纯死成本 + 卡光标动画。
-   → 正解：删动作后的 `Thread.sleep`，把等待搬到 `get_app_state` 截图之前，做成自适应，用 `Task.sleep`。
+   Our `get_app_state` path has zero settle: `settleUntilNonShell` is an **AX warm-up before reading the tree** (and is skipped outright for processes already proven unchanged),
+   and there is no wait at all before `Capture.windowShot`.
+   ⚠️ This and the following are **the same thing in the wrong layer** and should be fixed together:
+   `AXAction.swift` does `Thread.sleep(0.15)` after every successful action (11 places in the file), while `AXAction`/`CommandRouter` are both `@MainActor`
+   — violating this repo's own AX threading red line; and the reason in its comment ("the next get_app_state, re-snapshotted automatically by the router, will reflect the change")
+   **has been disproven** (the router no longer re-snapshots), so it is now pure dead cost + stalls the cursor animation.
+   → Correct fix: delete the post-action `Thread.sleep`, move the wait before the `get_app_state` screenshot, make it adaptive, and use `Task.sleep`.
 
-2. **`permissionsPending` 无重轮询**。Codex 是一等错误码 `-10014` 配「Do not end your turn yet, just call this tool again.」；
-   我方返回终止性错误 + fire-and-forget 弹卡片 ⇒ **用户点完授权那一刻，模型这一回合已经放弃**。改一句 prose 即可。
+2. **`permissionsPending` has no re-polling**. Codex has a first-class error code `-10014` with "Do not end your turn yet, just call this tool again.";
+   we return a terminal error + fire-and-forget the card ⇒ **the moment the user finishes granting permission, the model has already given up on this turn**. Changing one sentence of prose fixes it.
 
-### 跨回合（唯一比 Codex 差的轴）
+### Cross-turn (the only axis where we are worse than Codex)
 
-3. **无 TurnEnded 协议**。Codex 有 kill switch：「Computer Use is unavailable because the current turn ended.」
-   我方 diff epoch 只认 (proven 进程身份, key window ID)，**不认回合、不认用户手动操作**。
-   必然踩中的场景：模型查树 → 回合结束 → **用户自己操作 5 分钟**（同窗口同进程）→ 新回合再查 → epoch 仍复用 →
-   模型收到相对 5 分钟前那一帧的 diff，而**那个基线的全文它已经不在上下文里了**。
-   ⇒ 损害是「**diff 基线模型看不见**」+「无越回合防护」，**不是**「会点错」（点错被 §3 的守卫挡住）。
-   **廉价缓解（先做这个）**：Codex 在 node-repl 文档里教模型自我管理——
+3. **No TurnEnded protocol**. Codex has a kill switch: "Computer Use is unavailable because the current turn ended."
+   Our diff epoch only recognizes (proven process identity, key window ID); **it recognizes neither turns nor the user's manual actions**.
+   A scenario that will certainly happen: the model reads the tree → the turn ends → **the user works manually for 5 minutes** (same window, same process) → a new turn reads again → the epoch is still reused →
+   the model receives a diff against the frame from 5 minutes ago, and **the full text of that baseline is no longer in its context**.
+   ⇒ The damage is "**the model cannot see the diff baseline**" + "no cross-turn protection", **not** "it will click the wrong thing" (wrong clicks are blocked by the guards in §3).
+   **Cheap mitigation (do this first)**: Codex teaches the model to self-manage in the node-repl docs —
    *"If you disregard the text from a previous call to get_app_state… get the full tree next time you inspect AX text."*
-   我方 `disableDiff` 的描述里没有任何"何时该传 true"的提示。**补一行 prose 覆盖最常见症状**，成本远低于跨三层协议。
+   Our `disableDiff` description has no hint at all about "when to pass true". **Adding one line of prose covers the most common symptom**, at far lower cost than a three-layer protocol.
 
-### 产品面（不阻塞操控）
+### Product surface (does not block control)
 
-| 项 | Codex | 我方 |
+| Item | Codex | Ours |
 |---|---|---|
-| 确认策略四档 | **两个表面各一份完整 prose**（SKILL.md + node-repl.md） | **0/4**。9 道 gate 全在管"谁能被操控"，没有一道管"这个动作多危险"——点「删除账号」和点「刷新」等价 |
-| 结构化 `risk` | `high\|low`，**按 app 判定**（输入只有 bundleID + urlDomain），只影响弹窗措辞与 persist 档位 | 无 risk 维度；只有 always 档没有 session-only |
-| 遥测 | 两层：Swift 4 个 `time_*` + JS 4 个 Statsig 事件 | 0/8，只有 `error_kind` |
-| node_repl 脚本面 | 模型写 JS **一次调用批量执行多动作** | 一动作一次 MCP round-trip（token/延迟量级差异） |
-| Guardian | 11 个类（锁屏/密码框识别/自动解锁/URL 黑名单/SSRF） | 1/11（只有物理输入让位） |
-| Skysight 记忆 | event stream → 10min/6h LLM 摘要 + sticky-taint 注入边界 | 0 |
-| 截图传输 | `file://` URL | base64 内联（+33%） |
-| 光标 raster | 45 帧 PNG | 加载器齐、0 帧、走 procedural（**刻意**，45 帧是 OpenAI 版权素材） |
+| Four-tier confirmation policy | **A full prose copy on each of two surfaces** (SKILL.md + node-repl.md) | **0/4**. All 9 gates govern "who can be controlled"; none governs "how dangerous this action is" — clicking "Delete account" equals clicking "Refresh" |
+| Structured `risk` | `high\|low`, **decided per app** (inputs are only bundleID + urlDomain), only affects prompt wording and persistence tier | No risk dimension; only an "always" tier, no session-only |
+| Telemetry | Two layers: 4 Swift `time_*` + 4 JS Statsig events | 0/8, only `error_kind` |
+| node_repl script surface | The model writes JS that **batches several actions in one call** | One MCP round trip per action (order-of-magnitude token/latency difference) |
+| Guardian | 11 classes (lock screen / password field detection / auto-unlock / URL blocklist / SSRF) | 1/11 (only yielding to physical input) |
+| Skysight memory | event stream → 10min/6h LLM summaries + sticky-taint injection boundary | 0 |
+| Screenshot transport | `file://` URL | base64 inline (+33%) |
+| Cursor raster | 45 PNG frames | Loader in place, 0 frames, procedural (**deliberate**; the 45 frames are OpenAI copyrighted assets) |
 
-> **确认策略四档可以纯 prose 落地** —— Codex 自己就是这么做的，四档判定 100% 由模型读 prose 完成，零代码支撑。
-> 那个结构化 `risk` 撑不起四档，也不是为四档设计的。加结构化风险引擎属超出 Codex 的自选加固。
+> **The four-tier confirmation policy can be implemented purely in prose** — Codex itself does exactly that; the four-tier decision is made 100% by the model reading prose, with zero code support.
+> The structured `risk` cannot carry four tiers and was not designed for them. Adding a structured risk engine would be optional hardening beyond Codex.
 
-### 性能
+### Performance
 
-**批量读 API 零使用**。Codex 导入 `AXUIElementCopyMultipleAttributeValues` / `CopyAttributeValues` / `GetAttributeValueCount`；
-我方全部属性读经单一漏斗 `rawAttribute()`（`AXTree.swift:1832`），**一属性一次跨进程 IPC**，
-实测 **22–35 次/元素**，满树（cap 1500）单次 `get_app_state` 可达 **3–5 万次 AX 调用**。
-好消息：漏斗单一，改造面收敛在一个函数。
-
----
-
-## 5. 唯一「判错则整套架构归零」的未决假设
-
-`AXTree.swift:230-241` 断言「Codex 读树**不**置前，`enableEnhancedAX` 才是真触发器」，据此删除了 `running.activate(...)`。
-这与归档 §4 判决一的真机实测（VS Code 后台 19 个壳元素 → 置前 225 个）**正面冲突**。
-
-若后台确实读不到全树，则 `get_app_state` 返回的是空壳树，模型按 index 点什么都点不到 —— **整个语义循环的前提不成立**。
-
-**验证成本极低**：用安装版 `.app` 对同一个 Electron 应用前台/后台各跑一次 `get_app_state`，比较 `elementCount`。
-见 `computer-use-native-manual-qa.md` §2.1–2.2。**这条应排在所有其他工作之前。**
-
-（旁证但不足以定论：Codex 有 `activate*` 选择器并监听 `NSWorkspaceDidActivateApplicationNotification`，
-但也可能只服务它自己的授权窗口——**未证实**。）
+**Zero use of batch read APIs**. Codex imports `AXUIElementCopyMultipleAttributeValues` / `CopyAttributeValues` / `GetAttributeValueCount`;
+all our attribute reads go through a single funnel `rawAttribute()` (`AXTree.swift:1832`), **one cross-process IPC per attribute**,
+measured at **22–35 per element**; a full tree (cap 1500) can reach **30–50 thousand AX calls** in a single `get_app_state`.
+Good news: there is a single funnel, so the change is confined to one function.
 
 ---
 
-## 6. Parity 缺陷（修法明确）
+## 5. The one open assumption that "zeroes the whole architecture if wrong"
 
-| # | 问题 | 修法 |
+`AXTree.swift:230-241` asserts "Codex does **not** bring to front to read the tree; `enableEnhancedAX` is the real trigger", and on that basis removed `running.activate(...)`.
+This **directly conflicts** with the on-device measurement behind archive §4 verdict one (VS Code in background: 19 shell elements → brought to front: 225).
+
+If the full tree really cannot be read in the background, `get_app_state` returns an empty shell tree and the model cannot hit anything by index — **the premise of the whole semantic loop fails**.
+
+**Verification cost is tiny**: with the installed `.app`, run `get_app_state` once with the same Electron app in front and once in the background, and compare `elementCount`.
+See `computer-use-native-manual-qa.md` §2.1–2.2. **This should come before all other work.**
+
+(Circumstantial but inconclusive: Codex has `activate*` selectors and listens to `NSWorkspaceDidActivateApplicationNotification`,
+but that may only serve its own authorization window — **unconfirmed**.)
+
+---
+
+## 6. Parity defects (fixes are clear)
+
+| # | Problem | Fix |
 |---|---|---|
-| 1 | `select_text` 参数名：Codex MCP 面是 **`selection`**，我方是 `selection_type`。缺 `additionalProperties:false` ⇒ 模型按 Codex 契约传 `selection` 被静默吞 → 回落默认 `"text"` → **选中文本而非放光标，零报错** | 官方名改 `selection`，`selection_type` 留作别名（有 Codex JS 门面背书），走现成的 `rejectAliasConflict`。现有三处测试一字不用改 |
-| 2 | **10 个 schema 全缺 `additionalProperties:false`**（Codex 10/10 都有）—— 这是 #1 的**放大机制**，也是下一个同类问题的温床 | 全部补上；补前确认每个别名都已在 `properties` 里声明 |
-| 3 | **10 个工具全缺 `annotations`**。Codex：`list_apps`/`get_app_state` = `readOnlyHint:true`+`idempotentHint:true`；其余 8 个四个 hint 全 false；`openWorldHint` 全 false | 照抄 |
-| 4 | **4 个模型可见字段跳过 `sanitize`**：`Help:` / `Description:` / `ID:` / `Window:"…"` 头行。其中 `labelFieldText` **算了 `sanitize()` 却没用**（只拿去比对链接前缀，输出用原串）。后果：app 把 AXDescription 设成含 `\n\t` 的串即可**伪造带假 handle 的树行**（缩进是唯一结构信号），且这 4 个字段也无 160 截断 | 恢复调用。注意：这不是"要不要向 Codex 看齐"的问题——`AXTree.swift:34` 与 `:1694` 是**我方自己声明的格式契约**，加固=恢复自洽 |
-| 5 | app 专属指令**未按 app 去重**，每次 `get_app_state` 重发。而 `AppGuidance.swift:15-17` 的 Swift 注释**已承诺**"TS 在该 app 首次注入" | 按 bundleId 去重（Codex 两个门面都这么做） |
-| 6 | `tools.ts` 把 `disableDiff` 描述成 "a cumulative diff against the previous snapshot" —— **语义矛盾**（cumulative 的基准是 initial 不是 previous），且 Swift 只实现了 previous-diff | 改措辞。**注意**：previous-diff 就是 Codex 文档化的默认行为，我方实现是对的，**不需要**去实现 cumulative |
-| 7 | 拒绝文案代入值：Codex 代入 `bundleIdentifier`，我方代入模型输入的名字。另 Codex 有第二档"组织策略"拒绝 | 低优先 |
-| 8 | 边界比 Codex 严：`click_count`≤3、`pages`≤10、坐标 `minimum:0`（Codex 无上限） | 会拒绝 Codex 会接受的调用，按需放宽 |
+| 1 | `select_text` parameter name: the Codex MCP surface uses **`selection`**, ours uses `selection_type`. With no `additionalProperties:false` ⇒ a model passing `selection` per the Codex contract has it silently swallowed → falls back to default `"text"` → **selects text instead of placing the caret, with zero errors** | Make `selection` the official name and keep `selection_type` as an alias (backed by the Codex JS facade), via the existing `rejectAliasConflict`. The three existing tests need no changes |
+| 2 | **All 10 schemas lack `additionalProperties:false`** (Codex has it on 10/10) — this is the **amplifier** of #1 and a breeding ground for the next such issue | Add it everywhere; first confirm every alias is declared in `properties` |
+| 3 | **All 10 tools lack `annotations`**. Codex: `list_apps`/`get_app_state` = `readOnlyHint:true`+`idempotentHint:true`; the other 8 have all four hints false; `openWorldHint` false everywhere | Copy as is |
+| 4 | **4 model-visible fields skip `sanitize`**: `Help:` / `Description:` / `ID:` / the `Window:"…"` header line. `labelFieldText` **computes `sanitize()` but does not use it** (only uses it to compare link prefixes; the output uses the raw string). Consequence: an app can set AXDescription to a string containing `\n\t` and **forge tree lines with fake handles** (indentation is the only structural signal), and these 4 fields also lack the 160 truncation | Restore the calls. Note: this is not about "whether to match Codex" — `AXTree.swift:34` and `:1694` are **our own declared format contract**; hardening = restoring consistency |
+| 5 | App-specific instructions are **not de-duplicated per app** and are resent on every `get_app_state`. Yet the Swift comment in `AppGuidance.swift:15-17` **already promises** "TS injects on the app's first occurrence" | De-duplicate by bundleId (both Codex facades do this) |
+| 6 | `tools.ts` describes `disableDiff` as "a cumulative diff against the previous snapshot" — **semantically contradictory** (a cumulative diff's baseline is the initial one, not the previous one), and Swift only implements previous-diff | Fix the wording. **Note**: previous-diff is Codex's documented default; our implementation is correct and **does not need** cumulative |
+| 7 | Value substituted into the refusal text: Codex substitutes `bundleIdentifier`, we substitute the name the model passed. Codex also has a second "organization policy" refusal tier | Low priority |
+| 8 | Bounds stricter than Codex: `click_count`≤3, `pages`≤10, coordinates `minimum:0` (Codex has no cap) | Rejects calls Codex would accept; relax as needed |
 
 ---
 
-## 7. 刻意偏离（保留，但必须记档而非默默留着）
+## 7. Deliberate deviations (kept, but must be documented rather than silently left in)
 
-**`element_index` 用不透明句柄 `g<epoch>:<id>`（如 `g17:4`），Codex 用裸整数。**
+**`element_index` uses an opaque handle `g<epoch>:<id>` (e.g. `g17:4`); Codex uses a bare integer.**
 
-- **保留理由**：陈旧整数会**静默**指向"现在占据那个位置"的别的元素；我方 epoch 前缀让它**显式报错**。失败方式从静默出错变成硬报错。
-- **代价**：① 模型先验是裸整数，需完全照抄；② 与按 Codex 格式训练的第三方 agent、以及 Codex 真实 trace 回放**互不兼容**；③ 每次 `get_app_state` 多几百 token。
-- **必须收敛的文档矛盾**：`01-architecture.md` §2.4 说"格式必须逐字对齐"，而 `02-swift-helper.md` §2.3 说"模型看到的就是这个字符串不是裸 index"。两处自相矛盾。
+- **Why kept**: a stale integer **silently** points at whatever other element "now occupies that position"; our epoch prefix makes it **an explicit error**. The failure mode goes from silently wrong to a hard error.
+- **Cost**: ① the model's prior is a bare integer, so it must copy the handle exactly; ② **incompatible** with third-party agents trained on the Codex format and with replaying real Codex traces; ③ a few hundred more tokens per `get_app_state`.
+- **Documentation contradiction that must be resolved**: `01-architecture.md` §2.4 says "the format must match verbatim", while `02-swift-helper.md` §2.3 says "the model sees this string, not a bare index". The two contradict each other.
 
-同类：`<app_state>` 包裹标签 JS 面确证 Codex 没有、MCP 面不可证伪，判定**无害**，但应停止把它当 parity 证据
-（`toolCalls.test.ts` 那条用例名断言的是我们自己的发明）。
-
----
-
-## 8. 已验证无问题（别重复开单）
-
-- 10 个工具名与顺序 **10/10 逐字一致**
-- 变更回执 `Action completed. Call \`get_app_state\` to fetch the updated UI state.` **逐字一致**
-- 拒绝文案模板 `Computer Use is not allowed to use the app '<app>' for safety reasons.` **逐字一致**
-- `app` 在 9 个定向工具上**必填、无 frontmost 兜底** —— 与 Codex 一致
-- `defersLockAcquire === "list_apps"` —— 与 Codex「9 个定向工具包 policy，只有 `list_apps` 不包」吻合
-- `l`/`r`/`m` 与 `u`/`d`/`l`/`r` 别名**是 Codex 本来就有的**（`MouseButton.d.ts` / `Direction.d.ts` 穷尽联合类型）
-- skyshot 树行语法：缩进/role/traits/字段序/focus 尾行/`_NS:` 过滤/frame 不入文本 —— 全部实现
-- `Removed element IDs: ` 与 `with ~ and + representing…summarized by ID range.` —— 与 Codex **一字不差**
-- 注入梯度保留合成事件兜底**正当**：Codex 四个二进制 `CGEventPost`/`CGWarp`/`IOHIDPostEvent` 全 0（唯一 CGEvent 符号是只读的 `_CGEventGetFlags`），
-  但 Codex 自带功能开关 `computerUseAlwaysSimulateClick`（"Prefer simulating physical clicks over Accessibilty actions."）
-  ⇒ OpenAI 自己也承认存在 AX 不够用的场景。且**坐标兜底是 CEF 类应用的唯一通路（判决二），不可删**，仿射变换已实装
-- 命门判决**零违反**：无"找不到目标兜底 frontmost"（TS/Swift 双层 fail-closed）；`activate` 删除彻底
-  （全仓唯一 `runtime.activate` 在 `ForegroundLease.swift:317` 的 `.restore` 分支，作用是**把用户原前台还回去**，方向相反）
-- warm-up 轮询代码**地基已换**：理由改成"`enableEnhancedAX` 后 Chromium 异步挂树"，有终止条件、封顶 1.2s、每进程一次，成本有界
-- `get_app_state` **会**后台拉起未运行 app（`activate: false`），与 Codex 一致 —— 那句 "must never launch anything" 是 `resolveTarget` 的注释
-- `get_app_state` 前置强制**我们有**，在 Swift 侧（三种寻址模式各有 fail-closed 拒绝路径），与 Codex `noActiveSession: -10011` 形态对等
+Similarly: the JS surface confirms Codex has no `<app_state>` wrapper tag, and on the MCP surface it cannot be falsified; judged **harmless**, but stop treating it as parity evidence
+(the test case name in `toolCalls.test.ts` asserts our own invention).
 
 ---
 
-## 9. 残留风险（不在本次评审范围，但记一笔）
+## 8. Verified as fine (don't reopen)
 
-`Injection.swift:262-289` 的 frontmost 兜底只服务 legacy `key`/`hold_key`/`type`/`paste_clipboard`，
-语义面（darwin）不可达，但**这四条命令仍挂在 daemon socket 上**。属安全面。
+- The 10 tool names and order match **10/10 verbatim**
+- Mutation receipt `Action completed. Call \`get_app_state\` to fetch the updated UI state.` **matches verbatim**
+- Refusal template `Computer Use is not allowed to use the app '<app>' for safety reasons.` **matches verbatim**
+- `app` is **required, with no frontmost fallback** on the 9 targeted tools — same as Codex
+- `defersLockAcquire === "list_apps"` — consistent with Codex "the 9 targeted tools are wrapped in policy; only `list_apps` is not"
+- The `l`/`r`/`m` and `u`/`d`/`l`/`r` aliases **already exist in Codex** (exhaustive union types in `MouseButton.d.ts` / `Direction.d.ts`)
+- skyshot tree-line syntax: indentation / role / traits / field order / focus trailer / `_NS:` filter / frame not in text — all implemented
+- `Removed element IDs: ` and `with ~ and + representing…summarized by ID range.` — **word-for-word** identical to Codex
+- Keeping a synthesized-event fallback in the injection ladder is **justified**: `CGEventPost`/`CGWarp`/`IOHIDPostEvent` are 0 across all four Codex binaries (the only CGEvent symbol is the read-only `_CGEventGetFlags`),
+  but Codex ships its own feature flag `computerUseAlwaysSimulateClick` ("Prefer simulating physical clicks over Accessibilty actions.")
+  ⇒ OpenAI itself acknowledges cases where AX is not enough. And **the coordinate fallback is the only path for CEF-class apps (verdict two) and must not be removed**; the affine transform is implemented
+- **Zero violations** of the crux verdicts: no "target not found, fall back to frontmost" (fail-closed in both TS and Swift); `activate` is removed completely
+  (the only `runtime.activate` in the repo is in the `.restore` branch at `ForegroundLease.swift:317`, which **gives the user's original frontmost app back** — the opposite direction)
+- The warm-up polling code **has a new foundation**: the reason is now "Chromium attaches the tree asynchronously after `enableEnhancedAX`", with a termination condition, a 1.2s cap, once per process — bounded cost
+- `get_app_state` **does** launch a non-running app in the background (`activate: false`), same as Codex — the sentence "must never launch anything" is a comment on `resolveTarget`
+- **We do have** a `get_app_state` precondition, on the Swift side (each of the three addressing modes has a fail-closed refusal path), equivalent in shape to Codex `noActiveSession: -10011`
+
+---
+
+## 9. Residual risk (outside this review's scope, but noted)
+
+The frontmost fallback at `Injection.swift:262-289` only serves the legacy `key`/`hold_key`/`type`/`paste_clipboard`;
+it is unreachable from the semantic surface (darwin), but **these four commands are still exposed on the daemon socket**. This is a security concern.

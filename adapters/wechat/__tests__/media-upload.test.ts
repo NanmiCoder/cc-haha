@@ -104,7 +104,7 @@ describe('WeChat media upload and delivery', () => {
 
   it('rejects oversized images and already cancelled jobs before network access', async () => {
     globalThis.fetch = (() => { throw new Error('network must not run') }) as typeof fetch
-    await expect(sendWechatMedia({ ...base, kind: 'image', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) })).rejects.toThrow('图片过大')
+    await expect(sendWechatMedia({ ...base, kind: 'image', buffer: Buffer.alloc(10 * 1024 * 1024 + 1) })).rejects.toThrow('Image too large')
     await expect(sendWechatMedia({ ...base, kind: 'file', signal: AbortSignal.abort() })).rejects.toHaveProperty('name', 'AbortError')
   })
 })

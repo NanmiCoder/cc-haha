@@ -1,7 +1,7 @@
 import { cx } from '@/lib/cx'
 
 /**
- * The cc-haha mark — the double C of "Claude Code" with one stroke of 朱 on it.
+ * The cc-haha mark — the double C of "Claude Code" with one vermilion stroke on it.
  *
  * Geometry is a vector rebuild of the original `app-icon.png`, measured off the
  * bitmap pixel by pixel (arc centers, radii, stroke widths and opening angles

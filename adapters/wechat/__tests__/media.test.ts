@@ -45,11 +45,11 @@ describe('WeChat media downloads', () => {
   it('distinguishes address validation, decryption and local saving failures', async () => {
     const store = new AttachmentStore({ root: temp })
     const service = new WechatMediaService(store)
-    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', url: 'https://unknown.invalid/secret' }, 's')).rejects.toThrow('媒体地址未通过校验')
+    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', url: 'https://unknown.invalid/secret' }, 's')).rejects.toThrow('failed validation')
     globalThis.fetch = (async () => new Response('fixture')) as typeof fetch
-    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', aesKey: 'invalid-key', encryptQueryParam: 'fixture' }, 's')).rejects.toThrow('解密失败')
+    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', aesKey: 'invalid-key', encryptQueryParam: 'fixture' }, 's')).rejects.toThrow('decryption failed')
     store.write = async () => { throw Object.assign(new Error('private path'), { code: 'ENOSPC' }) }
-    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', encryptQueryParam: 'fixture' }, 's')).rejects.toThrow('磁盘空间不足')
+    await expect(service.downloadCandidate({ kind: 'image', name: 'image.jpg', encryptQueryParam: 'fixture' }, 's')).rejects.toThrow('Not enough disk space')
     expect(wechatMediaFailureNotice(new Error('secret'))).not.toContain('secret')
   })
 
@@ -73,7 +73,7 @@ describe('WeChat media downloads', () => {
   it('rejects claimed oversized files before downloading or writing', async () => {
     globalThis.fetch = (() => { throw new Error('must not download') }) as typeof fetch
     const service = new WechatMediaService(new AttachmentStore({ root: temp }))
-    await expect(service.downloadCandidate({ kind: 'file', name: 'huge.bin', declaredBytes: 31 * 1024 * 1024 }, 's')).rejects.toThrow('文件过大')
+    await expect(service.downloadCandidate({ kind: 'file', name: 'huge.bin', declaredBytes: 31 * 1024 * 1024 }, 's')).rejects.toThrow('File too large')
     expect(await fs.readdir(temp)).toEqual([])
   })
 

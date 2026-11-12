@@ -77,7 +77,7 @@ export class ChatRecovery {
       )
         return
       this.#summaryError =
-        error instanceof Error ? error.message : '会话摘要加载失败，请重试'
+        error instanceof Error ? error.message : 'Failed to load session summary, please retry'
       this.#publish()
     } finally {
       if (this.#summaryRequest === request) this.#summaryRequest = undefined

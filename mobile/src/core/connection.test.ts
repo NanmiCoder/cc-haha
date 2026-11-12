@@ -153,13 +153,13 @@ describe('desktop connection contracts', () => {
     })
     expect(() =>
       buildSocketOptions(remote, 'native-token', 'session-id', 'web')
-    ).toThrow('原生 App')
+    ).toThrow('native app')
     expect(() => buildSocketOptions(lan, '', 'session-id', 'native')).toThrow(
-      '凭据'
+      'credential'
     )
     expect(() =>
       buildSocketOptions(lan, 'fake-token', '../other', 'native')
-    ).toThrow('标识')
+    ).toThrow('ID')
   })
 
   test('an H5 page without a token lets the browser cookie or loopback authenticate the socket', () => {
@@ -171,6 +171,6 @@ describe('desktop connection contracts', () => {
       url: 'ws://192.168.1.12:3456/ws/session-id?media=ref',
     })
     // Native clients still have nothing else to authenticate with.
-    expect(() => buildSocketOptions(remote, '', 'session-id', 'native')).toThrow('凭据')
+    expect(() => buildSocketOptions(remote, '', 'session-id', 'native')).toThrow('credential')
   })
 })

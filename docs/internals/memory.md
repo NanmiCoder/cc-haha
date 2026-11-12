@@ -1,204 +1,204 @@
 ---
-title: 记忆系统使用指南
-nav_title: 记忆系统使用
-description: 四种记忆类型、触发保存的方式、存储位置与日常管理办法。
+title: Memory System Usage Guide
+nav_title: Memory Usage
+description: The four memory types, how saving is triggered, where memories live, and how to manage them.
 order: 9
 ---
 
-# 记忆系统使用指南
+# Memory System Usage Guide
 
-让 Claude Code 跨会话记住你是谁、你偏好什么、项目正在发生什么。
+Let Claude Code remember who you are, what you prefer, and what's happening in your project across sessions.
 
-![记忆系统概览](./images/01-memory-overview.png)
+![Memory System Overview](./images/01-memory-overview.png)
 
-## 什么是记忆系统？
+## What Is the Memory System?
 
-Claude Code 的记忆系统是一套**基于文件的持久化知识库**，让 Claude 能够跨越多次对话，持续积累对你和你的项目的理解。
+Claude Code's memory system is a **file-based persistent knowledge store** that allows Claude to continuously build understanding of you and your project across multiple conversations.
 
-核心理念：**只记住无法从代码中推断出来的东西。**
+Core principle: **Only remember things that cannot be inferred from the code itself.**
 
-| 记住 | 不记住 |
-|------|--------|
-| 你是数据科学家，关注日志系统 | 代码架构、文件结构 |
-| "不要 mock 数据库" | Git 历史、谁改了什么 |
-| 周四后冻结非关键合并 | 已有的 CLAUDE.md 内容 |
-| Bug 跟踪在 Linear 的 INGEST 项目 | 调试方案（修复已在代码里） |
+| Remembered | Not Remembered |
+|------------|----------------|
+| You're a data scientist focused on logging systems | Code architecture, file structure |
+| "Don't mock the database" | Git history, who changed what |
+| Non-critical merges frozen after Thursday | Existing CLAUDE.md content |
+| Bug tracking is in Linear's INGEST project | Debugging solutions (fixes are already in the code) |
 
-## 四种记忆类型
+## Four Memory Types
 
-![四种记忆类型](./images/02-memory-types.png)
+![Four Memory Types](./images/02-memory-types.png)
 
-Claude Code 将记忆严格分为四类：
+Claude Code strictly categorizes memories into four types:
 
-### 1. User（用户画像）
+### User (User Profile)
 
-记录你的角色、目标、技能水平和偏好，帮助 Claude 调整协作方式。
-
-```
-用户说：我写了十年 Go，但这是第一次碰这个仓库的 React 部分
-Claude 保存：深厚 Go 经验，React 新手 — 用后端类比解释前端概念
-```
-
-### 2. Feedback（行为反馈）
-
-你对 Claude 工作方式的纠正或肯定。这类记忆让 Claude 不会犯同样的错。
+Records your role, goals, skill level, and preferences to help Claude tailor its collaboration approach.
 
 ```
-用户说：别在回复末尾总结你做了什么，我能看 diff
-Claude 保存：用户要求简洁回复，不要尾部摘要
+User says: I've written Go for ten years, but this is my first time touching the React part of this repo
+Claude saves: Deep Go experience, React newcomer — explain frontend concepts using backend analogies
 ```
 
-**重要**：不只记录纠正，也记录肯定。如果 Claude 做了一个非显而易见的选择而你认可了，也会被记住。
+### Feedback (Behavioral Feedback)
 
-### 3. Project（项目动态）
-
-无法从代码或 Git 历史中推导出的项目上下文：谁在做什么、为什么、截止日期。
+Your corrections or affirmations about how Claude works. These memories prevent Claude from repeating the same mistakes.
 
 ```
-用户说：我们周四后冻结所有非关键合并，移动团队要切发布分支
-Claude 保存：2026-03-05 起合并冻结，标记该日期后的非关键 PR 工作
+User says: Don't summarize what you did at the end of your reply, I can see the diff
+Claude saves: User prefers concise replies, no trailing summaries
 ```
 
-**注意**：Claude 会将相对日期（"周四"）转换为绝对日期（"2026-03-05"），确保记忆不会过时失效。
+**Important**: Not only corrections are recorded -- affirmations are too. If Claude makes a non-obvious choice and you approve, that gets remembered as well.
 
-### 4. Reference（外部引用）
+### Project (Project Context)
 
-指向外部系统中信息的指针：仪表板、工单系统、Slack 频道。
+Project context that cannot be derived from the code or Git history: who's doing what, why, and deadlines.
 
 ```
-用户说：oncall 看的是 grafana.internal/d/api-latency 这个面板
-Claude 保存：grafana.internal/d/api-latency 是 oncall 延迟仪表板 — 编辑请求路径代码时检查
+User says: We're freezing all non-critical merges after Thursday, the mobile team needs to cut a release branch
+Claude saves: Merge freeze starting 2026-03-05, flag non-critical PR work after this date
 ```
 
-## 如何触发记忆保存
+**Note**: Claude converts relative dates ("Thursday") to absolute dates ("2026-03-05") to ensure memories don't become ambiguous over time.
 
-![记忆触发流程](./images/03-memory-trigger.png)
+### Reference (External References)
 
-### 方式一：自动提取（最常用）
+Pointers to information in external systems: dashboards, issue trackers, Slack channels.
 
-这是最主要的方式。**你不需要做任何事情**，Claude 会在每次对话结束时自动分析对话内容，提取值得记住的信息。
+```
+User says: On-call monitors the grafana.internal/d/api-latency dashboard
+Claude saves: grafana.internal/d/api-latency is the on-call latency dashboard — check when editing request path code
+```
 
-工作流程：
-1. 你和 Claude 正常对话
-2. Claude 完成回复（没有工具调用时）
-3. 后台启动一个**记忆提取子 Agent**
-4. 子 Agent 分析最近的对话内容
-5. 识别出值得保存的记忆
-6. 写入记忆文件 + 更新 MEMORY.md 索引
+## How to Trigger Memory Saving
 
-终端会显示通知：
+![Memory Trigger Flow](./images/03-memory-trigger.png)
+
+### Method 1: Automatic Extraction (Most Common)
+
+This is the primary method. **You don't need to do anything** -- Claude automatically analyzes conversation content at the end of each conversation turn and extracts information worth remembering.
+
+Workflow:
+1. You have a normal conversation with Claude
+2. Claude finishes its response (no tool calls pending)
+3. A **memory extraction subagent** starts in the background
+4. The subagent analyzes the recent conversation content
+5. It identifies memories worth saving
+6. Writes memory files + updates the MEMORY.md index
+
+The terminal will display a notification:
 ```
 Memory updated in ~/.claude/projects/.../memory/feedback_testing.md · /memory to edit
 ```
 
-### 方式二：显式要求
+### Method 2: Explicit Request
 
-直接告诉 Claude "记住这个"：
+Directly tell Claude to "remember this":
 
 ```
-用户：记住，这个项目部署前必须运行 bun test
-Claude：[立即保存为 feedback 类型记忆]
+User: Remember, this project must run bun test before deploying
+Claude: [Immediately saves as a feedback-type memory]
 ```
 
-### 方式三：/memory 命令
+### Method 3: /memory Command
 
-在终端输入 `/memory` 命令，会打开一个文件选择器，让你在编辑器中直接编辑记忆文件。
+Type `/memory` in the terminal to open a file picker that lets you edit memory files directly in your editor.
 
 ```
 > /memory
 ```
 
-这会列出所有可编辑的记忆文件（CLAUDE.md、CLAUDE.local.md、auto-memory 等），选择后用你的 `$EDITOR` 或 `$VISUAL` 打开。
+This lists all editable memory files (CLAUDE.md, CLAUDE.local.md, auto-memory, etc.) and opens the selected file with your `$EDITOR` or `$VISUAL`.
 
-### 方式四：/remember 命令
+### Method 4: /remember Command
 
-输入 `/remember` 触发记忆审查技能，它会：
-- 审查所有自动记忆条目
-- 提议将合适的条目提升到 CLAUDE.md 或 CLAUDE.local.md
-- 检测重复、过时和冲突的记忆
-- **不会直接修改**，所有变更需要你批准
+Type `/remember` to trigger the memory review skill, which will:
+- Review all automatic memory entries
+- Propose promoting suitable entries to CLAUDE.md or CLAUDE.local.md
+- Detect duplicate, outdated, and conflicting memories
+- **Does not modify anything directly** -- all changes require your approval
 
-## 记忆存储在哪里？
+## Where Are Memories Stored?
 
-### 目录结构
+### Directory Structure
 
 ```
 ~/.claude/
 └── projects/
-    └── {项目路径哈希}/
-        └── memory/                    ← 自动记忆目录
-            ├── MEMORY.md              ← 索引文件（始终加载到上下文）
-            ├── user_role.md           ← 用户画像记忆
-            ├── feedback_testing.md    ← 行为反馈记忆
-            ├── project_freeze.md      ← 项目动态记忆
-            ├── reference_linear.md    ← 外部引用记忆
-            └── team/                  ← 团队共享记忆（如启用）
+    └── {project-path-hash}/
+        └── memory/                    <- Auto-memory directory
+            ├── MEMORY.md              <- Index file (always loaded into context)
+            ├── user_role.md           <- User profile memory
+            ├── feedback_testing.md    <- Behavioral feedback memory
+            ├── project_freeze.md      <- Project context memory
+            ├── reference_linear.md    <- External reference memory
+            └── team/                  <- Team shared memory (if enabled)
                 ├── MEMORY.md
                 └── ...
 ```
 
-### 记忆文件格式
+### Memory File Format
 
-每个记忆文件使用 YAML frontmatter + Markdown 内容：
+Each memory file uses YAML frontmatter + Markdown content:
 
 ```markdown
 ---
-name: 测试策略偏好
-description: 集成测试必须使用真实数据库，不要 mock
+name: Testing strategy preference
+description: Integration tests must use a real database, no mocking
 type: feedback
 ---
 
-集成测试必须使用真实数据库，不要 mock。
+Integration tests must use a real database, no mocking.
 
-**Why:** 上季度 mock 测试通过但生产环境迁移失败，mock/生产差异掩盖了问题。
+**Why:** Last quarter, mocked tests passed but production migrations failed — mock/production divergence masked the issues.
 
-**How to apply:** 编写或审查测试时，确保数据库操作使用真实连接。
+**How to apply:** When writing or reviewing tests, ensure database operations use real connections.
 ```
 
-### MEMORY.md 索引文件
+### MEMORY.md Index File
 
-MEMORY.md 是索引而不是内容。它**始终加载到上下文**中，每行一个条目：
+MEMORY.md is an index, not content. It is **always loaded into context**, with one entry per line:
 
 ```markdown
-- [用户角色](user_role.md) — 数据科学家，关注可观测性/日志
-- [测试策略](feedback_testing.md) — 集成测试用真实数据库，不 mock
-- [合并冻结](project_freeze.md) — 2026-03-05 起冻结非关键合并
-- [Bug 追踪](reference_linear.md) — 流水线 bug 在 Linear INGEST 项目
+- [User role](user_role.md) — Data scientist, focused on observability/logging
+- [Testing strategy](feedback_testing.md) — Integration tests use real DB, no mocking
+- [Merge freeze](project_freeze.md) — Non-critical merges frozen starting 2026-03-05
+- [Bug tracking](reference_linear.md) — Pipeline bugs tracked in Linear INGEST project
 ```
 
-**限制**：最多 200 行或 25KB，超出会被截断。
+**Limit**: Maximum 200 lines or 25KB; content beyond this is truncated.
 
-## 如何管理记忆
+## How to Manage Memories
 
-### 让 Claude 遗忘
-
-```
-用户：忘记关于合并冻结的记忆
-Claude：[找到并删除相关记忆文件和索引条目]
-```
-
-### 让 Claude 忽略记忆
+### Ask Claude to Forget
 
 ```
-用户：忽略记忆，从零开始
-Claude：[本次对话中不使用任何记忆内容]
+User: Forget the memory about the merge freeze
+Claude: [Finds and deletes the relevant memory file and index entry]
 ```
 
-### 手动编辑
+### Ask Claude to Ignore Memories
 
-直接编辑 `~/.claude/projects/{hash}/memory/` 下的文件，或使用 `/memory` 命令。
+```
+User: Ignore memories, start from scratch
+Claude: [Does not use any memory content in this conversation]
+```
 
-### 禁用自动记忆
+### Manual Editing
 
-| 方法 | 做法 |
-|------|------|
-| 环境变量 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
-| 设置文件 | `settings.json` 中 `"autoMemoryEnabled": false` |
-| 精简模式 | `--bare` 启动 / `CLAUDE_CODE_SIMPLE=1` |
+Directly edit files under `~/.claude/projects/{hash}/memory/`, or use the `/memory` command.
 
-### 自定义记忆目录
+### Disable Automatic Memory
 
-在 `~/.claude/settings.json` 中设置：
+| Method | How |
+|--------|-----|
+| Environment variable | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
+| Settings file | Set `"autoMemoryEnabled": false` in `settings.json` |
+| Bare mode | Start with `--bare` / `CLAUDE_CODE_SIMPLE=1` |
+
+### Custom Memory Directory
+
+Set in `~/.claude/settings.json`:
 
 ```json
 {
@@ -206,61 +206,61 @@ Claude：[本次对话中不使用任何记忆内容]
 }
 ```
 
-支持 `~/` 展开。出于安全考虑，项目级 `.claude/settings.json` **不允许**设置此项。
+Supports `~/` expansion. For security reasons, the project-level `.claude/settings.json` is **not allowed** to set this option.
 
-## 记忆的生命周期
+## Memory Lifecycle
 
-![记忆生命周期](./images/04-memory-lifecycle.png)
+![Memory Lifecycle](./images/04-memory-lifecycle.png)
 
 ```
-对话中学到新信息
-      ↓
- 自动提取 / 显式保存
-      ↓
-  写入记忆文件 + 索引
-      ↓
- 下次对话加载 MEMORY.md
-      ↓
-  智能选择相关记忆（Sonnet）
-      ↓
-   注入到对话上下文
-      ↓
-  记忆变旧？验证后再使用
-      ↓
-  过时？更新或删除
-      ↓
- （24h + 5个会话后）
-      ↓
-  AutoDream 后台整合记忆
+New information learned during conversation
+      |
+ Auto-extraction / Explicit save
+      |
+  Write memory file + index
+      |
+ Next conversation loads MEMORY.md
+      |
+  Intelligent selection of relevant memories (Sonnet)
+      |
+   Inject into conversation context
+      |
+  Memory getting old? Verify before using
+      |
+  Outdated? Update or delete
+      |
+ (After 24h + 5 sessions)
+      |
+  AutoDream consolidates memories in background
 ```
 
-### AutoDream —— "做梦"整理记忆
+### AutoDream -- "Dreaming" to Organize Memories
 
-Claude Code 有一个隐藏的 **AutoDream** 功能，类比人类睡眠时大脑整理记忆的过程。当满足以下条件时，Claude 会在后台静默启动一个"做梦"子 Agent：
+Claude Code has a hidden **AutoDream** feature, analogous to how the human brain organizes memories during sleep. When the following conditions are met, Claude silently launches a "dreaming" subagent in the background:
 
-- 距上次整合 **>= 24 小时**
-- 期间积累了 **>= 5 个会话**
+- At least **>= 24 hours** since the last consolidation
+- At least **>= 5 sessions** accumulated in the interim
 
-做梦过程分四阶段：定向 → 收集 → 整合 → 修剪。底部状态栏会显示 **"dreaming"**，你可以按 `Shift+Down` 查看进度，按 `x` 终止。
+The dreaming process has four phases: Orient -> Gather -> Consolidate -> Prune. The bottom status bar shows **"dreaming"**, and you can press `Shift+Down` to view progress or `x` to terminate.
 
-详细技术分析见 [AutoDream 记忆整合](./autodream.md)。
+For a detailed technical analysis, see [AutoDream Memory Consolidation](./autodream.md).
 
-### 新鲜度管理
+### Freshness Management
 
-- **今天/昨天的记忆**：直接使用
-- **超过 1 天的记忆**：附带陈旧警告，提醒 Claude 验证后再引用
-- **引用文件路径/函数名的记忆**：使用前先 grep 确认还存在
+- **Today's/yesterday's memories**: Used directly
+- **Memories older than 1 day**: Accompanied by a stale warning, reminding Claude to verify before citing
+- **Memories referencing file paths/function names**: Confirmed via grep before use to ensure they still exist
 
-## 快速参考
+## Quick Reference
 
-| 操作 | 方法 |
-|------|------|
-| 让 Claude 记住 | "记住：这个项目用 bun 不用 npm" |
-| 让 Claude 忘记 | "忘记关于 XXX 的记忆" |
-| 编辑记忆 | `/memory` 命令 |
-| 审查和整理 | `/remember` 命令 |
-| 忽略记忆 | "忽略记忆" / "不要用记忆" |
-| 禁用自动记忆 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
-| 禁用 AutoDream | `settings.json` 中 `"autoDreamEnabled": false` |
-| 手动整合记忆 | `/dream` 命令 |
-| 查看记忆目录 | `~/.claude/projects/{hash}/memory/` |
+| Action | Method |
+|--------|--------|
+| Ask Claude to remember | "Remember: this project uses bun, not npm" |
+| Ask Claude to forget | "Forget the memory about XXX" |
+| Edit memories | `/memory` command |
+| Review and organize | `/remember` command |
+| Ignore memories | "Ignore memories" / "Don't use memories" |
+| Disable auto-memory | `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
+| Disable AutoDream | Set `"autoDreamEnabled": false` in `settings.json` |
+| Manually consolidate memories | `/dream` command |
+| View memory directory | `~/.claude/projects/{hash}/memory/` |

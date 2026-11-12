@@ -16,7 +16,7 @@ export function summarizeWorkspaceStatus(
       if (!Array.isArray(status.changedFiles))
         return {
           kind: 'error',
-          message: '电脑未返回完整的工作区状态，请刷新重试。',
+          message: 'The computer did not return complete workspace status; refresh and retry.',
         }
       return { kind: status.changedFiles.length ? 'changes' : 'clean' }
     case 'not_git_repo':
@@ -26,12 +26,12 @@ export function summarizeWorkspaceStatus(
     case 'error':
       return {
         kind: 'error',
-        message: status.error || '无法读取工作区状态，请刷新重试。',
+        message: status.error || 'Cannot read workspace status; refresh and retry.',
       }
     default:
       return {
         kind: 'error',
-        message: '电脑返回了无法识别的工作区状态，请刷新重试。',
+        message: 'The computer returned unrecognized workspace status; refresh and retry.',
       }
   }
 }

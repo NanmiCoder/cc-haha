@@ -1,58 +1,58 @@
 ---
-title: cc-haha 是什么
-nav_title: 这是什么
-description: 跑在你自己电脑上的 AI 编程工作台：模型自己接，改动你审阅。
+title: What cc-haha is
+nav_title: What it is
+description: An AI coding workbench that runs on your own machine. You pick the model; you approve every change.
 order: 0
 ---
 
-# cc-haha 是什么
+# What cc-haha is
 
-它是一个装在你电脑上的应用。你把一个项目文件夹交给它，用大白话说出你想要什么，它去读代码、改文件、跑命令——每一处改动都摆在你眼前，等你点头才算数。
+It's an app on your computer. You hand it a project folder, describe what you want in plain language, and it goes off to read the code, edit files, and run commands — with every change laid out in front of you, waiting for your approval.
 
-![真实项目中的发布说明会话：工具调用、回复与完整会话列表](../images/app/zh-CN/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../images/app/en/session-main.webp)
 
-上图是一条真实会话：左边是项目和历史，中间是对话，Claude 读完文件后直接改，改了什么就在下面逐行标出来。
+That's a real session. Projects and history on the left, the conversation in the middle, and when Claude edits a file the diff appears right underneath, line by line.
 
-## 和 Claude Code CLI 是什么关系
+## How this relates to the Claude Code CLI
 
-Claude Code 是 Anthropic 出的命令行编程 Agent，跑在终端里。cc-haha 的内核就是从 Claude Code 源码修复而来的一份 CLI（仓库里叫 `claude-haha`），桌面端是包在它外面的图形界面。
+Claude Code is Anthropic's command-line coding agent. The engine inside cc-haha is a CLI built from repaired Claude Code sources (it's called `claude-haha` in this repo), and the desktop app is the graphical shell wrapped around it.
 
-对你来说，这意味着两件事：
+Two practical consequences:
 
-- **不用先装 Claude Code。** CLI 内核已经打进安装包，装完应用就能用，不需要 Node.js、npm 或任何全局命令。
-- **终端里能干的，这里都能干。** 权限审批、子 Agent、Skills、MCP、记忆，都是同一套东西，只是从滚动的终端输出变成了看得懂的界面。
+- **You don't install Claude Code first.** The CLI engine ships inside the installer. No Node.js, no npm, no global commands.
+- **Nothing is missing.** Permission prompts, subagents, Skills, MCP, memory — it's the same machinery, just shown as an interface instead of scrolling terminal output.
 
-想直接用终端的人也没被落下，源码里的 CLI 一直在，见 [命令行](../cli/index.md)。
+If you'd rather stay in the terminal, the CLI is still there: see [Command line](../cli/index.md).
 
-## 它能帮你做什么
+## What it does for you
 
-**写代码。** 描述一个目标——加个功能、修个 bug、换套配色——它自己找文件、读上下文、动手改，改完告诉你动了哪几个文件。
+**Writes code.** Describe a goal — add a feature, fix a bug, restyle a page — and it finds the files, reads the surrounding context, makes the edits, and tells you which files it touched.
 
-**审改动。** 每次编辑都带一份内联 diff，右侧工作区还会把这一轮改过的文件列成清单，能逐个点开左右对照。不满意就打回去重改。
+**Shows its work.** Every edit comes with an inline diff, and the workspace panel on the right collects everything changed this turn into a list you can open file by file. Don't like it? Send it back.
 
-**派 Agent。** 大任务可以拆给子 Agent 并行跑，你在活动面板里看它们各自的进度。也可以在设置里给不同 Agent 配不同的模型、工具和系统提示词。
+**Delegates.** Big tasks can be split across subagents running in parallel, with their progress visible in the activity panel. You can also give each agent its own model, tools, and system prompt.
 
-**定时跑。** 每天早上整理一次日志、每周跑一遍依赖检查——把任务设成定时的，到点它自己开工，跑完留一份记录。
+**Runs on a schedule.** Tidy up logs every morning, audit dependencies every week — set a job on a schedule and it clocks in on its own, leaving a record of each run.
 
-**手机上继续。** 装上 Android 或 iPhone 版的 cc-haha App，在桌面端「手机连接」里扫码配对，离开电脑也能审批命令、回答提问、派新任务；不想装 App 就用手机浏览器扫码连接。也可以把飞书、Telegram、微信这些聊天软件接上，在对话框里指挥它干活。详见 [手机 App 与远程连接](../desktop/remote.md)。
+**Follows you to your phone.** Install the cc-haha app on Android or iPhone and pair it by scanning the QR code under **Phone connection** in the desktop app. Away from your computer, you can approve commands, answer questions, and start new tasks; without the app, scan the code with your phone's browser instead. Or connect Telegram, Feishu, or WeChat and drive it from a chat window. See [Mobile app and remote connection](../desktop/remote.md).
 
-## 三条底线
+## Three commitments
 
-**本地优先。** 会话、设置、记忆、技能都存在你自己的机器上（默认在 `~/.claude` 下）。没有账号体系，没有云端同步，不上传你的代码。唯一的对外流量是你自己配的模型服务。
+**Local first.** Sessions, settings, memory, and skills live on your machine (under `~/.claude` by default). No accounts, no cloud sync, no uploading your code. The only outbound traffic goes to the model service you configured yourself.
 
-**模型自选。** 不绑定任何一家。Claude、ChatGPT、Grok 的官方账号可以直接登录；DeepSeek、Kimi、智谱 GLM 这些第三方 API 有现成预设；LM Studio、Ollama 跑的本地模型也接得上，一分钱不花。
+**Your choice of model.** Nothing is locked to one vendor. Sign in with a Claude, ChatGPT, or Grok account; use a built-in preset for DeepSeek, Kimi, or Zhipu GLM; or point it at a local model running in LM Studio or Ollama and pay nothing at all.
 
-**改动你说了算。** 默认是「询问权限」模式：写文件、跑命令之前都会停下来问你一句。你可以放宽到自动接受编辑，也可以收紧到只让它做规划不许碰文件——五档权限，随时切换。
+**You approve the changes.** The default is "Ask permissions" — it stops and asks before writing a file or running a risky command. Loosen it to auto-accept edits, or tighten it so it can only plan and never touch a file. Five levels, switchable any time.
 
-## 从这里开始
+## Start here
 
-按顺序走，大约二十分钟能跑通第一条会话：
+Work through these in order; about twenty minutes gets you to a working first session.
 
-1. [下载与安装](./install.md) — 三个平台的安装包，以及系统拦下来时怎么办。
-2. [连接模型服务](./models.md) — 官方账号、第三方 API、本地模型，三种接法挑一种。
-3. [跑通第一条会话](./first-session.md) — 选目录、选权限、说目标、看它干活、审改动。
-4. [桌面端功能地图](../desktop/index.md) — 跑通之后，看看还有哪些能力可以用上。
+1. [Download and install](./install.md) — installers for all three platforms, and what to do when the OS blocks them.
+2. [Connect a model](./models.md) — official accounts, third-party APIs, or local models. Pick one.
+3. [Run your first session](./first-session.md) — pick a folder, set permissions, state a goal, watch it work, review the diff.
+4. [Desktop feature map](../desktop/index.md) — once it's running, see what else is in the box.
 
-想带着具体目标练习，接着看[实战案例](../cases/index.md)：从读懂陌生项目到修 Bug、预览页面、定时审查和手机接力。
+For a goal you can practice end to end, continue with the [practical guides](../cases/index.md): explore an unfamiliar project, fix a bug, preview a page, schedule a review, and continue on your phone.
 
-中途卡住了，去 [装不上 / 打不开 / 连不上](./troubleshooting.md) 按症状找。
+Stuck along the way? [Won't install, won't open, won't connect](./troubleshooting.md) is organized by symptom.

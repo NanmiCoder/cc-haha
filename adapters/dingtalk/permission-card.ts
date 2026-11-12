@@ -18,20 +18,20 @@ export function buildDingTalkPermissionCardParams(
   const denyValue = { action: 'permit', requestId, allowed: false }
 
   return {
-    title: 'Claude Code 需要权限确认',
+    title: 'Claude Code needs permission',
     toolName,
     requestId,
     inputPreview: truncateInput(input, 600),
-    allowText: '允许一次',
-    alwaysText: '永久允许',
-    denyText: '拒绝',
+    allowText: 'Allow once',
+    alwaysText: 'Always allow',
+    denyText: 'Deny',
     allowValue: JSON.stringify(allowValue),
     alwaysValue: JSON.stringify(alwaysValue),
     denyValue: JSON.stringify(denyValue),
     permissionActions: JSON.stringify([
-      { text: '允许一次', value: allowValue },
-      { text: '永久允许', value: alwaysValue },
-      { text: '拒绝', value: denyValue },
+      { text: 'Allow once', value: allowValue },
+      { text: 'Always allow', value: alwaysValue },
+      { text: 'Deny', value: denyValue },
     ]),
     sys_full_json_obj: JSON.stringify({
       order: ['title', 'toolName', 'inputPreview'],

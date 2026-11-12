@@ -160,9 +160,9 @@ for (const origin of ['https://workstation-fixture.trycloudflare.com', 'https://
 test('explicit HTTP still requires an access token and bare HTTPS still requires device pairing', async () => {
   const client = () => { throw new Error('must not contact') }
   for (const value of ['http://100.101.102.103:17463', 'http://workstation-fixture.trycloudflare.com']) {
-    await expect(connectHost({ ...input(), value }, { client })).rejects.toThrow('访问令牌')
+    await expect(connectHost({ ...input(), value }, { client })).rejects.toThrow('access token')
   }
-  await expect(connectHost({ ...input(), value: 'https://workstation-fixture.trycloudflare.com' }, { client })).rejects.toThrow('完整配对链接')
+  await expect(connectHost({ ...input(), value: 'https://workstation-fixture.trycloudflare.com' }, { client })).rejects.toThrow('full pairing link')
 })
 
 test.each([
@@ -210,7 +210,7 @@ test('cancelling while waiting prevents another claim and prevents saving', asyn
         ),
       }
     )
-  ).rejects.toThrow('取消')
+  ).rejects.toThrow('canceled')
   expect(requests).toHaveLength(2)
 })
 
@@ -220,9 +220,9 @@ test('bare public origins and browser remote pairing never contact a host', asyn
   }
   await expect(
     connectHost({ ...input(), value: 'https://fixture.invalid' }, { client })
-  ).rejects.toThrow('完整配对链接')
+  ).rejects.toThrow('full pairing link')
   await expect(
     connectHost({ ...input(), platform: 'web' }, { client })
-  ).rejects.toThrow('原生 App')
+  ).rejects.toThrow('native app')
   expect(pairingMessage(new Error('offline'))).toBe('offline')
 })

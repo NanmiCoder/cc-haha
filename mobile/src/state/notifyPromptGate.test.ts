@@ -21,7 +21,7 @@ const ready: NotifyGateInput = {
 
 describe('classifyPermission', () => {
   test('Android reports denied before the first ask: still undetermined while it can ask again', () => {
-    // OnePlus 9 / Android 14 实测：清数据后 status 是 denied、canAskAgain 是 true。
+    // OnePlus 9 / Android 14 Observed: after clearing data status is denied and canAskAgain is true.
     expect(classifyPermission({ granted: false, status: 'denied', canAskAgain: true })).toBe(
       'undetermined'
     )
@@ -73,7 +73,7 @@ describe('decideNotifyPrompt', () => {
   test('marks prompted without a screen when the system already answered', () => {
     expect(decideNotifyPrompt({ ...ready, permission: 'granted' })).toBe('markPrompted')
     expect(decideNotifyPrompt({ ...ready, permission: 'denied' })).toBe('markPrompted')
-    // 这类用户不需要停在首页，也不受所在页面影响。
+    // Such users need not stay on home and are unaffected by the current page.
     expect(
       decideNotifyPrompt({ ...ready, permission: 'denied', onHome: false })
     ).toBe('markPrompted')

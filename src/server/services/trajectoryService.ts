@@ -1,5 +1,5 @@
 /**
- * Trajectory (轨迹) read model: bounded pages of projected transcript rows,
+ * Trajectory read model: bounded pages of projected transcript rows,
  * live appends, per-row detail by byte locator, and prompt snapshot rows from
  * the `prompt-snapshots.jsonl` sidecar.
  *

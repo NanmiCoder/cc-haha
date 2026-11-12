@@ -1,8 +1,8 @@
 /**
  * Tests for ConversationService and WebSocket chat integration
  *
- * ConversationService 管理 CLI 子进程的生命周期。
- * WebSocket 集成测试验证消息从客户端经过服务端到达 CLI 的完整流转。
+ * ConversationService manages the lifecycle of the CLI subprocess.
+ * WebSocket integration tests verify the full message flow from client through server to CLI.
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, spyOn } from 'bun:test'

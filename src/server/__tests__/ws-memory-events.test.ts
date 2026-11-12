@@ -326,9 +326,9 @@ describe('WebSocket compact events', () => {
   })
 
   it('forwards CLI permission-mode broadcasts instead of dropping them as thinking', () => {
-    // CLI 在退出 plan 模式后恢复权限时会广播一条 status:null + permissionMode
-    // 的事件。它必须被翻译成 permission_mode_changed，而不是被 null→thinking
-    // 兜底吞掉 —— 这正是桌面端选择器卡在"计划模式"的根因。
+    // When the CLI restores permissions after leaving plan mode it broadcasts a status:null + permissionMode
+    // event. It must be translated to permission_mode_changed rather than swallowed by the null→thinking
+    // fallback —— exactly the root cause of the desktop picker getting stuck on "plan mode".
     expect(translateCliMessage({
       type: 'system',
       subtype: 'status',
@@ -347,7 +347,7 @@ describe('WebSocket compact events', () => {
       { type: 'permission_mode_changed', mode: 'auto' },
     ])
 
-    // 普通 thinking（无 permissionMode）仍走原路径，不受影响。
+    // Ordinary thinking (no permissionMode) still takes the original path, unaffected.
     expect(translateCliMessage({
       type: 'system',
       subtype: 'status',
@@ -441,7 +441,7 @@ describe('WebSocket API retry events', () => {
   })
 
   it('forwards CLI streaming_fallback messages with a recognized cause', () => {
-    // 形状对齐 QueryEngine 的 SDK 输出：{type:'system', subtype:'streaming_fallback', cause, ...}
+    // Shape aligned with QueryEngine's SDK output: {type:'system', subtype:'streaming_fallback', cause, ...}
     expect(translateCliMessage({
       type: 'system',
       subtype: 'streaming_fallback',
@@ -462,7 +462,7 @@ describe('WebSocket API retry events', () => {
   })
 
   it('normalizes unrecognized streaming_fallback causes to unknown instead of dropping the event', () => {
-    // 新 CLI + 旧枚举：提示本身比成因重要，不能丢消息。
+    // New CLI + old enum: the hint itself matters more than its cause; the message must not be dropped.
     expect(translateCliMessage({
       type: 'system',
       subtype: 'streaming_fallback',

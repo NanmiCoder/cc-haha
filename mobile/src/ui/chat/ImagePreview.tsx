@@ -41,11 +41,11 @@ export function ImagePreview({ images, initialIndex, onClose }: ImagePreviewProp
           )}
         </View>
         <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={zoom === 1 ? '放大图片' : '适应屏幕'} onPress={() => setZoom((value) => value === 1 ? 2 : 1)} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 16 }}>
-            <Text style={{ fontSize: 14, color: colors.ink }}>{zoom === 1 ? '放大' : '适应屏幕'}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={zoom === 1 ? 'Zoom in image' : 'Fit to screen'} onPress={() => setZoom((value) => value === 1 ? 2 : 1)} style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 16 }}>
+            <Text style={{ fontSize: 14, color: colors.ink }}>{zoom === 1 ? 'Zoom in' : 'Fit to screen'}</Text>
           </Pressable>
         </View>
-        <ImagePreviewNavigation index={index} count={images.length} onSelect={select} hint="放大后可滚动查看细节" />
+        <ImagePreviewNavigation index={index} count={images.length} onSelect={select} hint="Scroll to view details after zooming in" />
       </View>
     </Modal>
   )

@@ -96,23 +96,6 @@
 .docs-site .site-nav a:hover,
 .docs-site .site-nav a[aria-current='page'] { background: var(--surface-muted); color: var(--text); }
 .docs-site .header-tools { border-left-color: var(--border); }
-.docs-site .header-locale {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 46px;
-  min-height: 38px;
-  margin-right: 5px;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  transition: background .2s, border-color .2s;
-}
-.docs-site .header-locale:hover { border-color: var(--brand-border); background: var(--brand-soft); }
 .docs-site .header-tools .icon-btn { color: var(--text-2); }
 .docs-site .header-tools .icon-btn:hover { background: var(--surface-muted); color: var(--text); }
 .docs-site .header-download { background: var(--ink); color: var(--on-ink); }
@@ -406,7 +389,6 @@
   .docs-site .brand { gap: 7px; font-size: 23px; }
   .docs-site .brand img { width: 25px; height: 25px; }
   .docs-site .header-tools .icon-btn { width: 38px; height: 38px; }
-  .docs-site .header-locale { min-width: 42px; min-height: 38px; margin-right: 2px; padding-inline: 7px; font-size: 11px; }
   .docs-site .doc-layout { padding: 16px 13px 58px; }
   .docs-site .doc-main { padding: 19px 19px 35px; border-radius: 23px; }
   .docs-site .doc-cover { height: 133px; margin: 15px 0 19px; padding: 15px; border-radius: 16px; background-position: 60% 66%; }

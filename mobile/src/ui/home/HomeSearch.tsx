@@ -7,10 +7,11 @@ import type { DashboardRow } from '../../core/dashboard'
 import { inProject, matchesQuery, type Project } from './homeModel'
 import { RowGroup } from './parts'
 import { MoreRow, SearchRow } from './SessionRows'
+import { plural } from '../../core/plural'
 
 const page = 30
 
-/** 搜索态：取消 · 项目筛选 chips · “在…中找到 N 个任务”。只过滤列表，不改首页任何计数。 */
+/** Search state: cancel · project filter chips · "Found N tasks in …". Only filters the list without changing any home counts. */
 export function HomeSearch({
   rows,
   projects,
@@ -53,22 +54,22 @@ export function HomeSearch({
                 setQuery(value)
                 setShown(page)
               }}
-              placeholder="搜索任务或项目"
+              placeholder="Search tasks or projects"
               autoFocus
             />
           </View>
-          <TextButton title="取消" color={colors.ink} onPress={onCancel} />
+          <TextButton title="Cancel" color={colors.ink} onPress={onCancel} />
         </View>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          // ScrollView 默认可收缩：下面结果很多时 Yoga 会按比例把这一行压扁，chip 被裁掉一截。
+          // ScrollView Shrinkable by default: with many results below Yoga squeezes this row proportionally and the chips get clipped.
           style={{ flexGrow: 0, flexShrink: 0, marginTop: 12 }}
           contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
         >
           <FilterChip
-            label="全部项目"
+            label="All projects"
             selected={project === null}
             onPress={() => {
               setProject(null)
@@ -99,7 +100,7 @@ export function HomeSearch({
                 accessibilityLiveRegion="polite"
                 style={{ paddingVertical: 8, paddingHorizontal: 4, fontSize: 13, lineHeight: 18, color: colors.ink3 }}
               >
-                在{scope ? ` ${scope} ` : '全部项目'}中找到 {results.length} 个任务
+                Found {plural(results.length, 'task')} in {scope || 'all projects'}
               </Text>
               <RowGroup>
                 {visible.map((row) => (
@@ -116,9 +117,9 @@ export function HomeSearch({
           ) : (
             <EmptyState
               icon="search"
-              title="没有找到任务"
+              title="No tasks found"
               detail={
-                scope ? `${scope} 里没有匹配的任务，换个关键词或看看全部项目。` : '换个标题或项目名称试试。'
+                scope ? `${scope} has no matching tasks; try another keyword or look at all projects.` : 'Try another title or project name.'
               }
             />
           )}
@@ -128,7 +129,7 @@ export function HomeSearch({
   )
 }
 
-/** 设计稿的筛选 chip：34 高、圆角 17（kit Chip 是 36 高的通用尺寸）。 */
+/** Filter chip from the design: 34 high, radius 17 (kit Chip is the generic 36 high size). */
 function FilterChip({
   label,
   selected,

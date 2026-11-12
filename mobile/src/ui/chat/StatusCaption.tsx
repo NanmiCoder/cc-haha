@@ -8,9 +8,9 @@ import { captionParts } from './captionModel'
 import type { StepLabel } from './steps'
 
 /**
- * 每秒刷新的本轮时长与输出速度，只重绘这一小段文字，不牵动整页。
- * `tokens` 是本轮累计输出 token（`core/streamRate.ts` 的 `turnOutputTokens`），
- * 速度由这里每秒取一个采样、按最近几秒算出，停顿或采样不足时整段速率不显示。
+ * This turn's duration and output speed refreshed every second, redrawing only this small text without touching the whole page.
+ * `tokens` is the cumulative output tokens this turn (`turnOutputTokens` in `core/streamRate.ts`), 
+ * and speed is sampled here once per second and computed over the last few seconds; during pauses or with too few samples the rate segment is hidden.
  */
 function LiveMeta({
   since,
@@ -56,8 +56,8 @@ function LiveMeta({
 }
 
 /**
- * 输入框上方唯一的运行提示：一行 13px 灰字，不是按钮也不是卡片。
- * 命令很长时截断中间那段，计时永远完整。等批准时整行变琥珀，不显示计时。
+ * The single run hint above the input: one line of 13px grey text, neither a button nor a card.
+ * When the command is long the middle is truncated and the timer is always complete. While waiting for approval the whole row turns amber and the timer is hidden.
  */
 export function StatusCaption({
   step,
@@ -70,7 +70,7 @@ export function StatusCaption({
   waiting?: boolean
   compacting?: boolean
   startedAt?: number
-  /** 本轮已输出的 token 数（估算或真实）；不传、为 0、等批准或整理上下文时不显示这一段。 */
+  /** Tokens output this turn (estimated or real); hidden when omitted, 0, waiting for approval or compacting context. */
   tokens?: number
 }) {
   const colors = useColors()
@@ -82,11 +82,11 @@ export function StatusCaption({
   const timed = startedAt !== undefined && !attention
   const label = [
     text,
-    timed ? `已运行 ${elapsedLabel(startedAt)}` : '',
-    liveTokens !== undefined ? `已输出约 ${formatTokenCount(liveTokens)} tokens` : '',
+    timed ? `Running for ${elapsedLabel(startedAt)}` : '',
+    liveTokens !== undefined ? `Output about ${formatTokenCount(liveTokens)} tokens` : '',
   ]
     .filter(Boolean)
-    .join('，')
+    .join(', ')
   return (
     <View
       accessibilityRole="text"

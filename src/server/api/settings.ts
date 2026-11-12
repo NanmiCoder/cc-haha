@@ -1,14 +1,14 @@
 /**
  * Settings REST API
  *
- * GET  /api/settings            — 获取合并后的设置
- * GET  /api/settings/user       — 获取用户设置
- * GET  /api/settings/project    — 获取项目设置
- * PUT  /api/settings/user       — 更新用户设置
- * PUT  /api/settings/project    — 更新项目设置
- * POST /api/settings/session-cleanup — 按指定保留天数清理会话记录（可 dryRun 预览）
- * GET  /api/permissions/mode    — 获取权限模式
- * PUT  /api/permissions/mode    — 设置权限模式
+ * GET  /api/settings            — get merged settings
+ * GET  /api/settings/user       — get user settings
+ * GET  /api/settings/project    — get project settings
+ * PUT  /api/settings/user       — update user settings
+ * PUT  /api/settings/project    — update project settings
+ * POST /api/settings/session-cleanup — clean up session records by retention days (dryRun preview supported)
+ * GET  /api/permissions/mode    — get permission mode
+ * PUT  /api/permissions/mode    — set permission mode
  */
 
 import { SettingsService } from '../services/settingsService.js'

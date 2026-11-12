@@ -648,7 +648,7 @@ test('remote phones read the connector and workflow lists only', () => {
     ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
     ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
     ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
-    // 路由器会忽略单项 Agent 名字后面多出来的段，放行它们等于绕过对手机的裁剪。
+    // The router ignores extra segments after a single Agent name; allowing them would bypass the phone's trimming.
     ['/api/agents/reviewer/override', 'GET'], ['/api/agents/reviewer/zzz', 'GET'], ['/api/agents/reviewer', 'DELETE'],
   ]) expect(allowed(path!, method!)).toBe(false)
 })
@@ -663,7 +663,7 @@ test('remote phones can review a submitted team plan but not drive its members',
   for (const [path, method] of [
     ['/api/teams/taskboard/plan', 'POST'], ['/api/teams/taskboard/plan', 'PUT'], ['/api/teams/taskboard/plan', 'DELETE'],
     ['/api/teams/taskboard/plan/approve', 'PATCH'], ['/api/teams/taskboard/plan/launch', 'POST'],
-    // 路由器只看第 5 段动作名，多出来的段会被当成同一个动作，不能借此绕过。
+    // The router only looks at the 5th segment's action name; extra segments are treated as the same action and must not bypass this.
     ['/api/teams/taskboard/plan/approve/extra', 'POST'],
     ['/api/teams/taskboard', 'DELETE'], ['/api/teams/taskboard/members/m1/messages', 'POST'],
   ]) expect(allowed(path!, method!)).toBe(false)

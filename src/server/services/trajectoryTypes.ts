@@ -1,5 +1,5 @@
 /**
- * Wire contract for the per-session trajectory (轨迹) view.
+ * Wire contract for the per-session trajectory view.
  *
  * The desktop mirrors these types in `desktop/src/types/trajectory.ts`; keep
  * the two in sync. Rows are a compact projection of the transcript JSONL plus

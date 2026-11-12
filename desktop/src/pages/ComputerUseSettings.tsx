@@ -291,7 +291,7 @@ export function ComputerUseSettings() {
 
 type Translate = ReturnType<typeof useTranslation>
 
-/** macOS OS-permission status row (辅助功能 / 屏幕录制): a status dot
+/** macOS OS-permission status row (Accessibility / Screen Recording): a status dot
  *  (granted=success, needed=warning, failed=danger, checking=info) + label +
  *  state badge, built to live inside a divide-y group card. Colors ride the
  *  semantic token pairs so they follow [data-theme] (stock emerald/amber shades
@@ -485,7 +485,7 @@ function NativeComputerUse({
       {header}
       {configErrorNotice}
 
-      {/* ─── 控制 (Control) ─── */}
+      {/* ─── Control ─── */}
       <SettingsSection title={t('settings.computerUse.sectionControl')}>
         {/* One group card for the OS permissions required by the master
             toggle in the page header. */}

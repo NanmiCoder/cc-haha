@@ -20,5 +20,5 @@ export function formatRelativeTime(dateStr: string, t: Translate, now = Date.now
   if (hr < 24) return t('session.timeHours', { n: hr })
   const day = Math.floor(hr / 24)
   if (day < 30) return t('session.timeDays', { n: day })
-  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric' }).format(date)
+  return new Intl.DateTimeFormat('en-US', { month: 'numeric', day: 'numeric' }).format(date)
 }

@@ -215,7 +215,7 @@ describe('formatImHelp', () => {
     expect(text).toContain('/clear')
     expect(text).toContain('/stop')
     expect(text).toContain('/help')
-    expect(text).toContain('项目列表')
+    expect(text).toContain('Show recent projects')
     expect(text).toContain('/allow <id>')
   })
 })
@@ -238,17 +238,17 @@ describe('formatImStatus', () => {
       },
     })
 
-    expect(text).toContain('项目: claude-code-haha (main)')
-    expect(text).toContain('会话: abc12345…')
-    expect(text).toContain('模型: claude-sonnet')
-    expect(text).toContain('状态: 执行工具中 (Running tests)')
-    expect(text).toContain('审批: 1 个待确认')
-    expect(text).toContain('任务: 总计 4 · 进行中 2 · 待处理 1 · 已完成 1')
+    expect(text).toContain('Project: claude-code-haha (main)')
+    expect(text).toContain('Session: abc12345…')
+    expect(text).toContain('Model: claude-sonnet')
+    expect(text).toContain('State: Running tools (Running tests)')
+    expect(text).toContain('Approvals: 1 pending')
+    expect(text).toContain('Tasks: Total 4 · In progress 2 · Pending 1 · Completed 1')
   })
 
   it('returns a friendly empty-session message when nothing is active', () => {
     const text = formatImStatus(null)
-    expect(text).toContain('当前没有活动会话')
+    expect(text).toContain('No active session')
     expect(text).toContain('/new')
     expect(text).toContain('/projects')
   })

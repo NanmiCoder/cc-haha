@@ -1,6 +1,6 @@
 /**
  * Class recipes shared by the composer's popovers (model, effort, permission
- * mode, the + menu, slash commands, @ references) — the 「素」 menu pattern in
+ * mode, the + menu, slash commands, @ references) — the "Su" spec menu pattern in
  * one place, so the six surfaces cannot drift into six slightly different
  * menus again.
  */

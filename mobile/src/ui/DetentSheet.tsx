@@ -22,15 +22,15 @@ export type DetentSheetProps = PropsWithChildren<{
   title?: string
   left?: ReactNode
   right?: ReactNode
-  /** 标题栏下、列表上方固定的内容（搜索框、分段控件）。 */
+  /** Content fixed below the title bar and above the list (search box, segmented control). */
   header?: ReactNode
-  /** 贴底固定的主按钮栏。 */
+  /** Primary button bar fixed to the bottom. */
   footer?: ReactNode
-  /** 受控档位；不传时由抓手手势自己切换。 */
+  /** Controlled detent; when omitted the grabber gesture switches it. */
   detent?: Detent
   onDetentChange?(detent: Detent): void
   initialDetent?: Detent
-  /** false 时只有半高一档（向上拖没有效果）。 */
+  /** false only has the half detent (dragging up has no effect). */
   allowFull?: boolean
   scroll?: boolean
   dismissable?: boolean
@@ -38,23 +38,23 @@ export type DetentSheetProps = PropsWithChildren<{
 }>
 
 /**
- * 可定档的底单：半高（约 62%）与全高（约 94%）两档。
- * 抓手和标题栏可以拖：向上拖展开，向下拖回半高或关闭；点遮罩关闭；
- * 搜索框聚焦时由调用方把 detent 设为 'full'。内容区自己滚动，不参与手势。
+ * A sheet with detents: half (about 62%) and full (about 94%).
+ * The grabber and title bar are draggable: drag up to expand, down to go back to half or close; tap backdrop to close; 
+ * when the search box is focused the caller sets detent to 'full'. The content area scrolls itself and does not join the gesture.
  */
 export function DetentSheet(props: DetentSheetProps) {
   const colors = useColors()
   const { height: windowHeight } = useWindowDimensions()
-  // 键盘弹出时 KeyboardViewport 会缩小内容区，这里量到的就是真正可用的高度。
+  // When the keyboard opens KeyboardViewport shrinks the content area, so what is measured here is the truly available height.
   const [viewportHeight, setViewportHeight] = useState(windowHeight)
-  // 关闭后子树被卸载，onLayout 不会再把键盘态的小高度改回来；下次打开会先矮后长。
-  // 收起时恢复成窗口高度，重新打开的首帧就是对的。
+  // After closing the subtree unmounts, and onLayout will not restore the small keyboard-state height; the next open would start short then grow.
+  // Restore to the window height when collapsed, so the first frame on reopen is correct.
   const [wasVisible, setWasVisible] = useState(props.visible)
   if (props.visible !== wasVisible) {
     setWasVisible(props.visible)
     if (!props.visible) setViewportHeight(windowHeight)
   }
-  // 收起状态下窗口尺寸变了（旋转/分屏）也要跟上。
+  // Keep up when the window size changes while collapsed (rotation/split screen).
   if (!props.visible && viewportHeight !== windowHeight) setViewportHeight(windowHeight)
   const close = () => {
     if (props.dismissable !== false) props.onClose()
@@ -64,7 +64,7 @@ export function DetentSheet(props: DetentSheetProps) {
       <KeyboardViewport style={{ flex: 1 }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="关闭"
+          accessibilityLabel="Close"
           onPress={close}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
         />
@@ -75,7 +75,7 @@ export function DetentSheet(props: DetentSheetProps) {
             setViewportHeight((previous) => (previous === next ? previous : next))
           }}
         >
-          {/* Modal 关闭时子树被卸载，所以每次打开都从 initialDetent 开始。 */}
+          {/* Modal The subtree unmounts on close, so each open starts from initialDetent. */}
           <Panel {...props} onClose={close} viewportHeight={viewportHeight} />
         </View>
       </KeyboardViewport>
@@ -91,7 +91,7 @@ type GestureProps = {
   choose(next: Detent): void
 }
 
-/** 抓手手势：实例只创建一次，最新的档位和回调通过 sync() 更新，拖动中不会换掉响应器。 */
+/** Grabber gesture: the instance is created only once, and the latest detent and callbacks are updated via sync(), so the responder is not swapped mid-drag. */
 class DetentGesture {
   private props: GestureProps = { level: 'half', available: 0, allowFull: true, close() {}, choose() {} }
   readonly responder = PanResponder.create({
@@ -176,7 +176,7 @@ function Panel({
   return (
     <Animated.View
       accessibilityViewIsModal
-      // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
+      // The backdrop is outside the panel so VoiceOver cannot reach it; the two-finger Z gesture closes via here.
       onAccessibilityEscape={onClose}
       style={{
         height,

@@ -9,7 +9,7 @@ import { dateTimeInZone, parseCron } from '../../../src/shared/taskSchedule'
 
 export type DailySchedule = { hour: number; minute: number; weekdays: boolean }
 
-/** 运行记录摘要：summaryOnly 列表不带 taskName/output/error，详情接口才带。 */
+/** Run record summary: the summaryOnly list has no taskName/output/error; only the detail endpoint does. */
 export type RunSummary = Pick<TaskRun, 'id' | 'taskId' | 'startedAt' | 'status'> &
   Partial<
     Pick<
@@ -36,7 +36,7 @@ export function parseDailyCron(cron: string): DailySchedule | null {
   return { hour, minute, weekdays: match[3] === '1-5' }
 }
 
-/** 每周固定几天：m h * * d[,d…]，d 为 0–7（0 和 7 都是周日）。 */
+/** Fixed days of the week: m h * * d[,d…], d is 0–7 (both 0 and 7 are Sunday). */
 export type WeeklySchedule = { hour: number; minute: number; days: number[] }
 export function parseWeeklyCron(cron: string): WeeklySchedule | null {
   const match = /^(\d{1,2}) (\d{1,2}) \* \* ([0-7](?:,[0-7])*)$/.exec(cron.trim())
@@ -49,13 +49,21 @@ export function parseWeeklyCron(cron: string): WeeklySchedule | null {
   )
   return { hour, minute, days }
 }
-const weekdayDigits = ['日', '一', '二', '三', '四', '五', '六']
+const weekdayDigits = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const weekdayFull = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th, 21st. */
+export const ordinal = (day: number) => {
+  const teen = day % 100 >= 11 && day % 100 <= 13
+  const suffix = teen ? 'th' : ['th', 'st', 'nd', 'rd'][day % 10] ?? 'th'
+  return `${day}${suffix}`
+}
 
 const pad = (value: number) => String(value).padStart(2, '0')
 export const clockLabel = (date: Date) =>
   `${pad(date.getHours())}:${pad(date.getMinutes())}`
 
-/** 与 operations.dailyCron 同一规则：H:mm 或 HH:mm，0–23 时、0–59 分。 */
+/** Same rule as operations.dailyCron: H:mm or HH:mm, hours 0–23, minutes 0–59. */
 export function isClockValid(time: string) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
   return !!match && Number(match[1]) <= 23 && Number(match[2]) <= 59
@@ -67,24 +75,26 @@ export function scheduleParts(cron: string) {
   if (!parsed) {
     const weekly = parseWeeklyCron(cron)
     if (weekly) return {
-          repeat: `每周${weekly.days.map((day) => weekdayDigits[day]).join('、')}`,
+          repeat: weekly.days.length === 1
+            ? `Every ${weekdayFull[weekly.days[0]!]}`
+            : `Every ${weekly.days.map((day) => weekdayDigits[day]).join(', ')}`,
           time: `${pad(weekly.hour)}:${pad(weekly.minute)}`,
         }
     const parsed = parseCron(cron)
-    if (parsed.frequency === 'monthly') return { repeat: `每月 ${parsed.monthDay} 号`, time: parsed.time }
-    if (parsed.frequency === 'everyNMinutes') return { repeat: `每 ${parsed.minuteInterval} 分钟`, time: '' }
-    if (parsed.frequency === 'everyNHours') return { repeat: `每 ${parsed.hourInterval} 小时`, time: parsed.minuteOffset ? `第 ${parsed.minuteOffset} 分钟` : '整点' }
+    if (parsed.frequency === 'monthly') return { repeat: `Monthly on the ${ordinal(parsed.monthDay)}`, time: parsed.time }
+    if (parsed.frequency === 'everyNMinutes') return { repeat: `Every ${parsed.minuteInterval} minutes`, time: '' }
+    if (parsed.frequency === 'everyNHours') return { repeat: `Every ${parsed.hourInterval} hours`, time: parsed.minuteOffset ? `at minute ${parsed.minuteOffset}` : 'on the hour' }
     return null
   }
   return {
-    repeat: parsed.weekdays ? '工作日' : '每天',
+    repeat: parsed.weekdays ? 'Weekdays' : 'Daily',
     time: `${pad(parsed.hour)}:${pad(parsed.minute)}`,
   }
 }
 
 const isWorkday = (date: Date) => date.getDay() >= 1 && date.getDay() <= 5
 
-/** 下一次触发时间（手机本地时区）；算不出时返回 null。 */
+/** Next trigger time (phone local time zone); returns null if it cannot be computed. */
 export function nextRunAt(cron: string | ScheduledTask, now = new Date()): Date | null {
   if (typeof cron !== 'string') {
     if (cron.enabled === false || cron.scheduleState === 'completed') return null
@@ -117,7 +127,7 @@ export function nextRunAt(cron: string | ScheduledTask, now = new Date()): Date 
 
 const dayStart = (date: Date) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-/** 相差的自然日：0 今天，-1 昨天，1 明天。按日历日算，不受夏令时影响。 */
+/** Difference in calendar days: 0 today, -1 yesterday, 1 tomorrow. Counted by calendar day, unaffected by DST. */
 function dayOffset(date: Date, now: Date) {
   return Math.round((dayStart(date) - dayStart(now)) / 86400000)
 }
@@ -127,28 +137,28 @@ function toDate(value: Date | string | number) {
   return Number.isFinite(date.getTime()) ? date : null
 }
 
-/** 今天 09:00 · 昨天 23:30 · 明天 09:00 · 10/23 23:30（跨年带年份）。 */
+/** Today 09:00 · Yesterday 23:30 · Tomorrow 09:00 · 10/23 23:30 (with year across years). */
 export function dayTimeLabel(value: Date | string | number, now = new Date()) {
   const date = toDate(value)
   if (!date) return ''
   const offset = dayOffset(date, now)
   const time = clockLabel(date)
-  if (offset === 0) return `今天 ${time}`
-  if (offset === -1) return `昨天 ${time}`
-  if (offset === 1) return `明天 ${time}`
+  if (offset === 0) return `Today ${time}`
+  if (offset === -1) return `Yesterday ${time}`
+  if (offset === 1) return `Tomorrow ${time}`
   const day = `${date.getMonth() + 1}/${date.getDate()}`
   return date.getFullYear() === now.getFullYear()
     ? `${day} ${time}`
     : `${date.getFullYear()}/${day} ${time}`
 }
 
-const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-/** 只说哪一天（时间已经在计划里写了）：今天 / 今晚 / 明天 / 周一 / 10/27。 */
+/** Only say which day (the time is already in the schedule): today / tonight / tomorrow / Mon / 10/27. */
 export function nextDayLabel(value: Date, now = new Date()) {
   const offset = dayOffset(value, now)
-  if (offset === 0) return value.getHours() >= 18 ? '今晚' : '今天'
-  if (offset === 1) return '明天'
+  if (offset === 0) return value.getHours() >= 18 ? 'Tonight' : 'Today'
+  if (offset === 1) return 'Tomorrow'
   if (offset > 1 && offset < 7) return weekdayNames[value.getDay()]!
   return `${value.getMonth() + 1}/${value.getDate()}`
 }
@@ -160,34 +170,37 @@ export function taskNextRunLabel(task: ScheduledTask, next: Date, now = new Date
   const today = dateTimeInZone(now.toISOString(), task.schedule.timeZone)
   const offset = (Date.parse(wall.slice(0, 10)) - Date.parse(today.slice(0, 10))) / 86400000
   const date = new Date(`${wall}:00Z`)
-  const day = offset === 0 ? (date.getUTCHours() >= 18 ? '今晚' : '今天') : offset === 1 ? '明天'
+  const day = offset === 0 ? (date.getUTCHours() >= 18 ? 'Tonight' : 'Today') : offset === 1 ? 'Tomorrow'
     : offset > 1 && offset < 7 ? weekdayNames[date.getUTCDay()] : `${date.getUTCMonth() + 1}/${date.getUTCDate()}`
   return `${day} ${wall.slice(11)}`
 }
 
-/** 列表里每个任务的“最近运行”一行。 */
+/** Lowercases a leading relative day so it reads mid-sentence ("Done today 09:00"). */
+const inline = (label: string) => label.replace(/^(Today|Yesterday|Tomorrow|Tonight)\b/, (day) => day.toLowerCase())
+
+/** The "Last run" line for each task in the list. */
 export function latestRunLine(
   run: RunSummary | undefined,
   cron: string | ScheduledTask,
   now = new Date()
 ): { tone: Tone; text: string } {
-  if (!run) return { tone: 'none', text: '还没有执行记录' }
-  const at = dayTimeLabel(run.startedAt, now)
+  if (!run) return { tone: 'none', text: 'No runs yet' }
+  const at = inline(dayTimeLabel(run.startedAt, now))
   if (run.status === 'failed')
-    return { tone: 'err', text: `${at} 失败 · 点开看结果` }
+    return { tone: 'err', text: `Failed ${at} · tap to see the result` }
   if (run.status === 'timeout')
-    return { tone: 'err', text: `${at} 超时 · 点开看结果` }
+    return { tone: 'err', text: `Timed out ${at} · tap to see the result` }
   if (run.status === 'running')
-    return { tone: 'run', text: `${at} 开始 · 正在执行` }
+    return { tone: 'run', text: `Started ${at} · running` }
   const next = nextRunAt(cron, now)
   return {
     tone: 'ok',
-    text: next ? `${at} 完成 · 下次${typeof cron === 'string' ? `${nextDayLabel(next, now)} ${clockLabel(next)}` : taskNextRunLabel(cron, next, now)}` : `${at} 完成`,
+    text: next ? `Done ${at} · Next ${inline(typeof cron === 'string' ? `${nextDayLabel(next, now)} ${clockLabel(next)}` : taskNextRunLabel(cron, next, now))}` : `Done ${at}`,
   }
 }
 
 export function taskScheduleParts(task: Pick<ScheduledTask, 'cron' | 'schedule'>) {
-  if (task.schedule?.kind === 'once') return { repeat: '仅一次', time: dateTimeInZone(task.schedule.runAt, task.schedule.timeZone).replace('T', ' ') }
+  if (task.schedule?.kind === 'once') return { repeat: 'Once only', time: dateTimeInZone(task.schedule.runAt, task.schedule.timeZone).replace('T', ' ') }
   return scheduleParts(task.schedule?.expression ?? task.cron)
 }
 
@@ -197,22 +210,22 @@ const firstLine = (text?: string) =>
     .map((line) => line.trim())
     .find(Boolean)
 
-/** 详情页“最近运行”的结果一行：有电脑给的预览就带上，没有就只说状态。 */
+/** The result line for "Last run" on the detail page: include the computer preview if any, otherwise just the status. */
 export function runResultLine(run: RunSummary): { tone: Tone; text: string } {
-  if (run.status === 'running') return { tone: 'run', text: '正在执行' }
+  if (run.status === 'running') return { tone: 'run', text: 'Running' }
   if (run.status === 'completed') {
     const preview = firstLine(run.outputPreview ?? run.output)
-    return { tone: 'ok', text: preview ? `完成 · ${preview}` : '完成' }
+    return { tone: 'ok', text: preview ? `Done · ${preview}` : 'Done' }
   }
-  const label = run.status === 'timeout' ? '超时' : '失败'
+  const label = run.status === 'timeout' ? 'Timed out' : 'Failed'
   const preview = firstLine(run.errorPreview ?? run.error)
   return {
     tone: run.status === 'timeout' ? 'attn' : 'err',
-    text: preview ? `${label} · ${preview}` : `${label} · 点开看结果`,
+    text: preview ? `${label} · ${preview}` : `${label} · tap to see the result`,
   }
 }
 
-/** 运行时长：结束的用 durationMs（或起止时间），运行中的算到现在。 */
+/** Run duration: finished ones use durationMs (or start/end time), running ones count up to now. */
 export function runDuration(run: RunSummary, now = Date.now()) {
   if (typeof run.durationMs === 'number' && Number.isFinite(run.durationMs))
     return formatDuration(run.durationMs / 1000)
@@ -227,10 +240,10 @@ export function runDuration(run: RunSummary, now = Date.now()) {
   return Number.isFinite(end) ? formatDuration((end - start) / 1000) : ''
 }
 
-/** 项目名 = 目录最后一段；没指定目录时电脑在用户主目录执行。 */
+/** Project name = last segment of the directory; with no directory the computer runs in the user home. */
 export function projectLabel(folderPath?: string) {
   const name = folderPath?.split(/[\\/]/).filter(Boolean).pop()
-  return name || '电脑默认目录'
+  return name || 'Computer default directory'
 }
 
 export function newestFirst<T extends { startedAt: string }>(runs: T[]) {
@@ -239,7 +252,7 @@ export function newestFirst<T extends { startedAt: string }>(runs: T[]) {
   )
 }
 
-/** 每个任务最近的一次运行（summaryOnly 记录也适用）。 */
+/** Most recent run of each task (summaryOnly records also work). */
 export function latestByTask<T extends { taskId: string; startedAt: string }>(runs: T[]) {
   const result = new Map<string, T>()
   for (const run of runs) {

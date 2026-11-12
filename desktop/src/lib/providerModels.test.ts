@@ -28,13 +28,13 @@ describe('groupProviderModels', () => {
       [
         { id: 'no-owner' },
         { id: 'blank-owner', ownedBy: '   ' },
-        { id: 'owned', ownedBy: 'xai' },
+        { id: 'owned', ownedBy: 'anthropic' },
       ],
-      '其他',
+      'Other',
     )
 
-    expect(groups.map((group) => group.group)).toEqual(['xai', '其他'])
-    expect(groups.find((group) => group.group === '其他')?.models.map((m) => m.id))
+    expect(groups.map((group) => group.group)).toEqual(['anthropic', 'Other'])
+    expect(groups.find((group) => group.group === 'Other')?.models.map((m) => m.id))
       .toEqual(['no-owner', 'blank-owner'])
   })
 

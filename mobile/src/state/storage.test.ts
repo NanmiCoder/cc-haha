@@ -13,13 +13,13 @@ const registryKey = 'cc-haha.hosts'
 const credentialKey = (id: string) => `cc-haha.host.${id}`
 const hostA: Host = {
   id: 'host-a',
-  name: '电脑 A',
+  name: 'computer A',
   url: 'http://192.168.1.10:3456',
   auth: 'lan',
 }
 const hostB: Host = {
   id: 'host-b',
-  name: '电脑 B',
+  name: 'computer B',
   url: 'https://b.fixture.invalid',
   auth: 'remote',
 }
@@ -211,13 +211,13 @@ describe('host registry migration', () => {
     })
     const { repository, metadata, secrets } = setup(raw)
     secrets.values.set(credentialKey(hostA.id), tokenA)
-    expect(() => migrateRegistry(raw)).toThrow('更新的 App 版本')
-    await expect(repository.load()).rejects.toThrow('更新的 App 版本')
+    expect(() => migrateRegistry(raw)).toThrow('newer app version')
+    await expect(repository.load()).rejects.toThrow('newer app version')
     await expect(repository.add(hostB, tokenB)).rejects.toThrow(
-      '更新的 App 版本'
+      'newer app version'
     )
-    await expect(repository.select(hostA.id)).rejects.toThrow('更新的 App 版本')
-    await expect(repository.remove(hostA.id)).rejects.toThrow('更新的 App 版本')
+    await expect(repository.select(hostA.id)).rejects.toThrow('newer app version')
+    await expect(repository.remove(hostA.id)).rejects.toThrow('newer app version')
     expect(metadata.values.get(registryKey)).toBe(raw)
     expect(
       metadata.calls.filter((call) => call.operation !== 'getItem')
@@ -322,8 +322,8 @@ describe('host repository isolation and transactions', () => {
     const before = metadata.values.get(registryKey)
     secrets.calls.length = 0
     await expect(
-      repository.add({ ...hostA, name: '重复主机' }, 'replacement-token')
-    ).rejects.toThrow('主机标识已存在')
+      repository.add({ ...hostA, name: 'duplicate host' }, 'replacement-token')
+    ).rejects.toThrow('Host ID already exists')
     expect(metadata.values.get(registryKey)).toBe(before)
     expect(secrets.calls).toEqual([])
     expect(await repository.credential(hostA.id)).toBe(tokenA)
@@ -554,8 +554,8 @@ describe('a remote computer moving to a new public address', () => {
     expect(await repository.updateUrl(hostB.id, hostB.url)).toBeNull()
     for (const url of ['http://plain.example', 'https://x.example/remote', 'https://x.example/?a=1', 'https://u:p@x.example'])
       await expect(repository.updateUrl(hostB.id, url)).rejects.toThrow()
-    await expect(repository.updateUrl(hostA.id, newUrl)).rejects.toThrow('只有远程连接')
-    await expect(repository.updateUrl('missing', newUrl)).rejects.toThrow('主机不存在')
+    await expect(repository.updateUrl(hostA.id, newUrl)).rejects.toThrow('Only remotely connected computers')
+    await expect(repository.updateUrl('missing', newUrl)).rejects.toThrow('Host does not exist')
     expect(metadata.calls.filter((call) => call.operation === 'setItem')).toEqual([])
     expect(metadata.values.get(registryKey)).toBe(raw)
     // The queue stays usable after the refusals.
@@ -569,7 +569,7 @@ describe('a remote computer moving to a new public address', () => {
     const removed = repository.remove(hostB.id)
     const moved = repository.updateUrl(hostB.id, newUrl)
     await removed
-    await expect(moved).rejects.toThrow('主机不存在')
+    await expect(moved).rejects.toThrow('Host does not exist')
     expect(persisted(metadata).hosts).toEqual([hostA])
   })
 })

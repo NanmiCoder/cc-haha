@@ -37,7 +37,7 @@ test('lock screen displays only real sessions and picks waiting approvals ahead 
   )
   expect(value).toMatchObject({
     title: 'Real task',
-    label: '想运行命令',
+    label: 'Wants to run a command',
     detail: '$ bun test',
     activeCount: 2,
     status: 'waiting',
@@ -156,25 +156,25 @@ test('waiting labels and the single action follow the decision type', () => {
       true,
       100
     )!
-  expect(waiting('AskUserQuestion', '旧字段怎么处理？')).toMatchObject({
-    label: '在问你',
-    detail: '旧字段怎么处理？',
-    actionLabel: '去回答',
+  expect(waiting('AskUserQuestion', 'How should old fields be handled?')).toMatchObject({
+    label: 'Asking you',
+    detail: 'How should old fields be handled?',
+    actionLabel: 'Answer',
   })
-  expect(waiting('ExitPlanMode', '计划等待确认')).toMatchObject({
-    label: '计划等你确认',
-    detail: '打开 App 看完整计划',
-    actionLabel: '看完整计划',
+  expect(waiting('ExitPlanMode', 'Plan awaiting confirmation')).toMatchObject({
+    label: 'Plan awaiting your confirmation',
+    detail: 'Open the app to see the full plan',
+    actionLabel: 'See full plan',
   })
   // Non-Bash previews are generic server placeholders; they are not repeated.
-  expect(waiting('Edit', '等待工具权限确认')).toMatchObject({
-    label: '想修改文件',
-    detail: '打开 App 查看详情',
+  expect(waiting('Edit', 'Waiting for tool permission')).toMatchObject({
+    label: 'Wants to edit files',
+    detail: 'Open the app for details',
   })
   expect(waiting('Edit').allowUrl).toBeDefined()
-  expect(waiting('ComputerUse').actionLabel).toBe('打开处理')
-  const team = taskActivityData(host, sessions, [{ id: 'one', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认' }], true, 100)!
-  expect(team).toMatchObject({ status: 'waiting', detail: '团队组好了，等你确认', actionLabel: '查看并配置' })
+  expect(waiting('ComputerUse').actionLabel).toBe('Open to handle')
+  const team = taskActivityData(host, sessions, [{ id: 'one', activityState: 'waiting', decision: 'team_plan', preview: 'Team is ready, awaiting your confirmation' }], true, 100)!
+  expect(team).toMatchObject({ status: 'waiting', detail: 'Team is ready, awaiting your confirmation', actionLabel: 'View and configure' })
   expect(team.allowUrl).toBeUndefined()
 })
 
@@ -191,7 +191,7 @@ test('running work exposes the real start time for a live timer and never a fake
   )!
   expect(running).toMatchObject({ status: 'running', startedAt: 5_000, activeCount: 2, detail: '' })
   expect(running.label).toBeUndefined()
-  expect(JSON.stringify(running)).not.toContain('步')
+  expect(JSON.stringify(running)).not.toContain('steps')
   expect(
     taskActivityData(host, sessions, [{ id: 'one', activityState: 'running', startedAt: NaN }], true, 100)
       ?.startedAt
@@ -219,13 +219,13 @@ test('finished outcomes report success with real duration, errors plainly, and n
         detail: '',
         status: 'completed',
         activeCount: 1,
-        summary: '完成 · 用时 18:02',
+        summary: 'Done · took 18:02',
         openUrl: activityUrl('host-a', 'one'),
       },
       dismissAt: 1_083_000 + FINISHED_ACTIVITY_MS,
     },
     {
-      props: expect.objectContaining({ sessionId: 'two', status: 'failed', summary: '出错停下' }),
+      props: expect.objectContaining({ sessionId: 'two', status: 'failed', summary: 'Stopped with error' }),
       dismissAt: 2_000_000 + FINISHED_ACTIVITY_MS,
     },
   ])
@@ -244,7 +244,7 @@ test('finished outcomes report success with real duration, errors plainly, and n
       [{ id: 'one', activityState: 'review', terminalOutcome: 'completed', completedAt: 50 }],
       100
     )[0].props.summary
-  ).toBe('完成')
+  ).toBe('Done')
 })
 
 const bashWaiting = {
@@ -273,24 +273,24 @@ test('decisions mode produces an activity only for waiting work', () => {
   const options = { mode: 'decisions' as const }
   const running = [{ id: 'two', activityState: 'running' as const, startedAt: 1 }]
   expect(taskActivityData(host, sessions, running, true, 100, options)).toBeNull()
-  // running 模式下同样的数据会产生活动，证明上面的 null 来自 mode。
+  // running in mode the same data produces an activity, proving the null above comes from mode.
   expect(taskActivityData(host, sessions, running, true, 100)).not.toBeNull()
-  // 等待的任务排在运行任务前面，仍然显示，并带上整体计数。
+  // Waiting tasks rank ahead of running tasks, still shown, with the overall count.
   expect(
     taskActivityData(host, sessions, [...running, bashWaiting], true, 100, options)
   ).toMatchObject({ status: 'waiting', sessionId: 'one', activeCount: 2 })
-  // 通知里关掉审批（或处于免打扰）时，decisions 模式什么也不显示。
+  // When approvals are off in notifications (or in Do Not Disturb), decisions mode shows nothing.
   expect(taskActivityData(host, sessions, [...running, bashWaiting], false, 100, options)).toBeNull()
 })
 
 test('hiding the command removes command text from waiting and running props', () => {
   const options = { showCommand: false }
   const waiting = taskActivityData(host, sessions, [bashWaiting], true, 100, options)!
-  expect(waiting).toMatchObject({ label: '想运行命令', detail: '打开 App 查看命令' })
+  expect(waiting).toMatchObject({ label: 'Wants to run a command', detail: 'Open the app to view the command' })
   expect(JSON.stringify(waiting)).not.toContain('rm -rf')
   expect(JSON.stringify(waiting)).not.toContain('secret')
   expect(JSON.stringify(waiting)).not.toContain('$ ')
-  // 允许/拒绝仍可用：隐藏的只是命令文本。
+  // Allow/deny still work: only the command text is hidden.
   expect(waiting.allowUrl).toBeDefined()
 
   const running = taskActivityData(
@@ -304,19 +304,19 @@ test('hiding the command removes command text from waiting and running props', (
   expect(running.detail).toBe('')
   expect(JSON.stringify(running)).not.toContain('secret')
 
-  // 连接失效后的 stale 版本沿用已经脱敏的内容。
+  // The stale version after the connection is lost reuses the already redacted content.
   expect(JSON.stringify(staleActivityProps(waiting))).not.toContain('rm -rf')
-  // 提问不是命令，仍显示题目。
+  // Questions are not commands, so the question is still shown.
   expect(
     taskActivityData(
       host,
       sessions,
-      [{ id: 'one', activityState: 'waiting', requestId: 'r', toolName: 'AskUserQuestion', preview: '旧字段怎么处理？' }],
+      [{ id: 'one', activityState: 'waiting', requestId: 'r', toolName: 'AskUserQuestion', preview: 'How should old fields be handled?' }],
       true,
       100,
       options
     )?.detail
-  ).toBe('旧字段怎么处理？')
+  ).toBe('How should old fields be handled?')
 })
 
 test('finished activity props never carry command text regardless of the setting', () => {

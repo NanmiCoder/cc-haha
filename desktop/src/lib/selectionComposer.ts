@@ -34,26 +34,43 @@ export type SelectionBatchMessage = {
   }>
 }
 
-export const VISUAL_SELECTION_PROMPT_FOOTER = '请优先依据截图里的编号标注定位元素，selector 只作为辅助线索。'
-export const VISUAL_SELECTION_BATCH_PROMPT_HEADER = '请一次性处理以下批量标注的本地前端修改。每张截图中的蓝色编号与下方元素编号一一对应。'
+export const VISUAL_SELECTION_PROMPT_HEADER = 'Edit the local frontend according to the blue annotation numbered 1 in the screenshot.'
+export const VISUAL_SELECTION_PROMPT_FOOTER = 'Locate elements by the numbered annotations in the screenshots first; use the selector only as a secondary hint.'
+export const VISUAL_SELECTION_BATCH_PROMPT_HEADER = 'Apply the following batch of annotated local frontend edits in one pass. The blue number in each screenshot matches the element number below.'
+export const VISUAL_SELECTION_TARGET_LABEL = 'Target element: '
+export const VISUAL_SELECTION_SELECTOR_LABEL = 'Selector: '
+export const VISUAL_SELECTION_NOTE_LABEL = 'User note:'
+
+export function visualSelectionStartMarker(number: number): string {
+  return `[Element ${number}]`
+}
+
+export function visualSelectionEndMarker(number: number): string {
+  return `[End of element ${number}]`
+}
 
 /**
- * 选中元素的「引用」由随附的圈选标注截图承载（截图里已把元素圈出来）。
- * 这里只产出用户的修改意见 + 具体改动（人话），**不再**把 selector / DOM 定位 /
- * computedStyles / 页面 URL 等写进输入框 —— 那些 DOM 噪音交互体验差，且图片已是引用。
- * 无描述、无改动时返回空串（让图片单独作为引用进输入框）。
+ * The selected element is referenced by the attached annotated screenshot
+ * (the element is already circled there). This only produces the user's
+ * request plus the concrete changes in plain words; selector / DOM path /
+ * computed styles / page URL are **not** written into the composer, since that
+ * DOM noise reads badly and the image already is the reference. Returns an
+ * empty string when there is no description and no change, so the image goes
+ * into the composer on its own.
  */
 export function buildSelectionComposerText(p: SelectionPayload): string {
   const c = p.change
   const lines: string[] = []
   if (c?.description) lines.push(c.description)
-  if (c?.text) lines.push(`- 文本：「${c.text.from}」→「${c.text.to}」`)
-  if (c?.color) lines.push(`- 文字颜色：${c.color.from} → ${c.color.to}`)
-  if (c?.background) lines.push(`- 背景：${c.background.from} → ${c.background.to}`)
-  if (c?.opacity) lines.push(`- 不透明度：${c.opacity.from} → ${c.opacity.to}`)
-  if (c?.fontFamily) lines.push(`- 字体：${c.fontFamily.from} → ${c.fontFamily.to}`)
+  if (c?.text) lines.push(`- Text: "${c.text.from}" → "${c.text.to}"`)
+  if (c?.color) lines.push(`- Text color: ${c.color.from} → ${c.color.to}`)
+  if (c?.background) lines.push(`- Background: ${c.background.from} → ${c.background.to}`)
+  if (c?.opacity) lines.push(`- Opacity: ${c.opacity.from} → ${c.opacity.to}`)
+  if (c?.fontFamily) lines.push(`- Font: ${c.fontFamily.from} → ${c.fontFamily.to}`)
   return lines.join('\n')
 }
+
+const NO_NOTE_LINE = 'The user gave no extra note; infer the change from the selected element in the screenshot only.'
 
 export function formatElementLabel(element: ElementMetadata): string {
   const tag = element.tag || 'element'
@@ -64,20 +81,20 @@ export function buildSelectionDirectMessage(p: SelectionPayload): SelectionDirec
   const displayName = formatElementLabel(p.element)
   const note = buildSelectionComposerText(p)
   const lines = [
-    '请根据截图中编号 1 的蓝色标注修改本地前端。',
-    `目标元素：${displayName}`,
-    `Selector：${p.element.selector}`,
+    VISUAL_SELECTION_PROMPT_HEADER,
+    `${VISUAL_SELECTION_TARGET_LABEL}${displayName}`,
+    `${VISUAL_SELECTION_SELECTOR_LABEL}${p.element.selector}`,
   ]
 
-  if (p.element.nthPath) lines.push(`DOM 路径：${p.element.nthPath}`)
-  if (p.sourceHint) lines.push(`页面标题：${p.sourceHint}`)
-  if (p.pageUrl) lines.push(`页面 URL：${p.pageUrl}`)
-  if (p.element.text) lines.push(`当前文本：${p.element.text}`)
+  if (p.element.nthPath) lines.push(`DOM path: ${p.element.nthPath}`)
+  if (p.sourceHint) lines.push(`Page title: ${p.sourceHint}`)
+  if (p.pageUrl) lines.push(`Page URL: ${p.pageUrl}`)
+  if (p.element.text) lines.push(`Current text: ${p.element.text}`)
   if (note) {
-    lines.push('用户注释：')
+    lines.push(VISUAL_SELECTION_NOTE_LABEL)
     lines.push(note)
   } else {
-    lines.push('用户没有提供额外注释；请只依据截图中的选中元素理解修改目标。')
+    lines.push(NO_NOTE_LINE)
   }
   lines.push(VISUAL_SELECTION_PROMPT_FOOTER)
 
@@ -104,20 +121,20 @@ export function buildSelectionBatchMessage(entries: SelectionBatchItem[]): Selec
   entries.forEach((entry, index) => {
     const item = items[index]!
     const payload = entry.payload
-    lines.push('', `[元素 ${entry.number}]`)
-    lines.push(`目标元素：${item.displayName}`)
-    lines.push(`Selector：${item.selector}`)
-    if (payload.element.nthPath) lines.push(`DOM 路径：${payload.element.nthPath}`)
-    if (payload.sourceHint) lines.push(`页面标题：${payload.sourceHint}`)
-    if (payload.pageUrl) lines.push(`页面 URL：${payload.pageUrl}`)
-    if (payload.element.text) lines.push(`当前文本：${payload.element.text}`)
+    lines.push('', visualSelectionStartMarker(entry.number))
+    lines.push(`${VISUAL_SELECTION_TARGET_LABEL}${item.displayName}`)
+    lines.push(`${VISUAL_SELECTION_SELECTOR_LABEL}${item.selector}`)
+    if (payload.element.nthPath) lines.push(`DOM path: ${payload.element.nthPath}`)
+    if (payload.sourceHint) lines.push(`Page title: ${payload.sourceHint}`)
+    if (payload.pageUrl) lines.push(`Page URL: ${payload.pageUrl}`)
+    if (payload.element.text) lines.push(`Current text: ${payload.element.text}`)
     if (item.note) {
-      lines.push('用户注释：')
+      lines.push(VISUAL_SELECTION_NOTE_LABEL)
       lines.push(item.note)
     } else {
-      lines.push('用户没有提供额外注释；请只依据截图中的选中元素理解修改目标。')
+      lines.push(NO_NOTE_LINE)
     }
-    lines.push(`[元素 ${entry.number} 结束]`)
+    lines.push(visualSelectionEndMarker(entry.number))
   })
 
   lines.push('', VISUAL_SELECTION_PROMPT_FOOTER)

@@ -1,37 +1,37 @@
-# Computer Use 原生重构 —— 真机验证清单
+# Computer Use native rewrite — on-device verification checklist
 
-> 这份清单只列**自动化测不到、必须真人在真机上做**的项。
-> 已自动化的部分（3000+ 单测、185 个 Swift 测试、平台路由、失败关闭、签名契约）见提交说明，不重复。
+> This checklist covers only items that **automation cannot test and a real person must do on real hardware**.
+> The automated parts (3000+ unit tests, 185 Swift tests, platform routing, fail-closed behavior, signing contract) are described in the commit notes and not repeated here.
 >
-> 前置：`bash native/cu-helper/build.sh` 能出 `.app`；或走 `cd desktop && bun run build:sidecars`。
+> Prerequisite: `bash native/cu-helper/build.sh` produces an `.app`; or run `cd desktop && bun run build:sidecars`.
 
 ---
 
-## 0. 准备（每次重装都要重做一遍）
+## 0. Preparation (redo after every reinstall)
 
-1. 构建 helper：
+1. Build the helper:
    ```bash
    bash native/cu-helper/build.sh
    ```
-   记下最后一行 `built: <路径>`。
+   Note the last line, `built: <path>`.
 
-2. **必须用安装版 `.app` 测授权**。re-sign 过的 debug 二进制是新的 cdhash，TCC 不认它继承任何授权 —— "我明明授权了却还是没权限" 十有八九是这个。
+2. **Test authorization with the installed `.app`.** A re-signed debug binary has a new cdhash and TCC does not let it inherit any authorization — "I granted it but still have no permission" is almost always this.
 
-3. daemon 必须用 LaunchServices 起，不要裸 exec（hardened runtime 的 release `.app` 裸 exec 会被 SIGKILL）：
+3. Launch the daemon through LaunchServices, not a bare exec (a hardened-runtime release `.app` is SIGKILLed when exec'd bare):
    ```bash
-   open -n "<built 路径>"
+   open -n "<built path>"
    ```
 
-4. 确认签名身份没有轮换（轮换会让老用户重新授权一遍）：
+4. Confirm the signing identity has not rotated (rotation forces existing users to re-authorize):
    ```bash
-   codesign -dv --verbose=4 "<built 路径>" 2>&1 | grep -E "Identifier|Authority"
+   codesign -dv --verbose=4 "<built path>" 2>&1 | grep -E "Identifier|Authority"
    cat native/cu-helper/.build/.cu-helper.signid
    ```
-   `Identifier` 必须是 `dev.cchaha.cu-helper`。
+   `Identifier` must be `dev.cchaha.cu-helper`.
 
-5. **三者同证书 —— 打包版最容易踩的坑，先查这个再查别的。**
+5. **All three on the same certificate — the most common trap in packaged builds; check this before anything else.**
 
-   helper 的客户端核验（`ClientAttestation.swift`）要求调用链能被密码学地认定为本应用：**host、sidecar、helper 必须签在同一张证书上**（同 team、同 leaf），且 sidecar 的 identifier 必须精确等于 `com.claude-code-haha.desktop.sidecar`。任何一环对不上，helper 对**所有**命令返回 `unauthorized_client`，表现是设置页权限一直"检测中…"、授权卡片点了没反应。
+   The helper's client attestation (`ClientAttestation.swift`) requires the call chain to be cryptographically identifiable as this app: **host, sidecar and helper must be signed with the same certificate** (same team, same leaf), and the sidecar's identifier must be exactly `com.claude-code-haha.desktop.sidecar`. If any link does not match, the helper returns `unauthorized_client` for **every** command; the symptom is the settings page permissions stuck on "Checking…" and the authorization card not responding to clicks.
 
    ```bash
    APP="desktop/build-artifacts/macos-arm64/Claude Code Haha.app"
@@ -41,143 +41,143 @@
    done
    ```
 
-   期望：三个 `TeamIdentifier` 完全相同，且 identifier 分别是
-   `com.claude-code-haha.desktop` / `com.claude-code-haha.desktop.sidecar` / `dev.cchaha.cu-helper`。
+   Expected: all three `TeamIdentifier` values identical, with identifiers
+   `com.claude-code-haha.desktop` / `com.claude-code-haha.desktop.sidecar` / `dev.cchaha.cu-helper` respectively.
 
-   ad-hoc 构建（`SIGN_BUILD=0`，或机器上没有签名证书）**没有证书可言，Computer Use 在其上必然不可用** —— 这不是 bug，是 attestation 的固有前提。要测 Computer Use 就必须用签名构建（默认即是）。
+   Ad-hoc builds (`SIGN_BUILD=0`, or no signing certificate on the machine) **have no certificate at all, so Computer Use can never work on them** — this is not a bug, it is an inherent precondition of attestation. To test Computer Use you must use a signed build (the default).
 
 ---
 
-## 1. TCC 授权（双主体，两条独立）
+## 1. TCC authorization (two subjects, independent)
 
-> **只有两项：辅助功能 + 屏幕录制。「输入监控」永远不该出现在任何提示里。**
-> 历史事故：物理输入监控最初用 listen-only event tap 实现，它需要第三个 TCC 权限（输入监控），
-> 而授权卡片从未请求过它 → 新装机上 `ForegroundLease.acquire` 对每个动作抛
-> `focus_isolation_unavailable`，整个 Computer Use 不可用，且虚拟光标永不出现（光标动画在
-> lease 之后才跑）。现已改为读 HID 系统计数器
-> （`CGEventSource.counterForEventType(.hidSystemState, …)`）：零权限、不可失效、
-> `postToPid` 注入实测不污染计数器。若真机上动作再次全部报
-> `focus_isolation_unavailable`，说明有人把 tap 加了回来——按本节头两行回退。
+> **Only two permissions: Accessibility + Screen Recording. "Input Monitoring" must never appear in any prompt.**
+> Past incident: physical input monitoring was originally implemented with a listen-only event tap, which needs a third TCC permission (Input Monitoring),
+> and the authorization card never requested it → on fresh installs `ForegroundLease.acquire` threw
+> `focus_isolation_unavailable` for every action, Computer Use was unusable, and the virtual cursor never appeared (the cursor animation runs
+> after the lease). It now reads the HID system counter instead
+> (`CGEventSource.counterForEventType(.hidSystemState, …)`): zero permissions, cannot fail, and
+> `postToPid` injection was measured not to touch the counter. If on a real device every action again reports
+> `focus_isolation_unavailable`, someone has added the tap back — roll back per the first two lines of this section.
 
-| # | 步骤 | 期望 |
+| # | Step | Expected |
 |---|---|---|
-| 1.1 | 首次运行 helper，弹出原生授权卡片 | 卡片出现，**不需要用户敲任何 shell 命令** |
-| 1.2 | 点卡片上的「打开辅助功能」 | 直接跳到 System Settings ▸ 隐私与安全性 ▸ 辅助功能 |
-| 1.3 | 把 helper 从卡片**拖进**辅助功能列表 | 拖拽落点有效，条目出现并可勾选 |
-| 1.4 | 勾选后回到卡片 | 卡片上的状态**实时翻绿**（不需要重启 app） |
-| 1.5 | 同样流程走一遍屏幕录制 | 同上 |
-| 1.6 | 重新构建 helper 后再看权限 | 两项授权**依然在**（稳定签名身份跨 rebuild 存活）。若掉了，看 §0.4 |
+| 1.1 | Run the helper for the first time; the native authorization card pops up | The card appears; **the user never has to type a shell command** |
+| 1.2 | Click **Open Accessibility** on the card | Goes straight to System Settings ▸ Privacy & Security ▸ Accessibility |
+| 1.3 | **Drag** the helper from the card into the Accessibility list | The drop target accepts it; the entry appears and can be toggled on |
+| 1.4 | Toggle it on and return to the card | The card status **turns green live** (no app restart needed) |
+| 1.5 | Repeat the same flow for Screen Recording | Same as above |
+| 1.6 | Rebuild the helper and check permissions again | Both authorizations **are still there** (stable signing identity survives rebuilds). If they are lost, see §0.4 |
 
-> ⚠️ 屏幕录制的主体是**路径上最外层的 .app**，辅助功能的主体是**进程自身**。会出现"辅助功能授给了 helper、屏幕录制记在宿主名下"的错位——**排障时分开看，别当成一个开关**。
+> ⚠️ The Screen Recording subject is **the outermost .app on the path**; the Accessibility subject is **the process itself**. You can end up with "Accessibility granted to the helper, Screen Recording recorded under the host's name" — **when troubleshooting, look at them separately; they are not one switch**.
 
 ---
 
-## 2. 命门复验（改任何感知层代码前都要重跑）
+## 2. Re-verify the crux (rerun before changing any perception-layer code)
 
-| # | 靶子 | 步骤 | 期望 |
+| # | Target | Step | Expected |
 |---|---|---|---|
-| 2.1 | VS Code | **后台**（不置前）读一次 AX 树 | 能读到**完整树**（几百个元素），不是十几个壳元素。<br>后台 `enableEnhancedAX` 应当已生效 |
-| 2.2 | VS Code | 置前再读一次 | 元素数量与 2.1 同量级 |
-| 2.3 | 网易云音乐（CEF116） | 读网页区 AX 树 | 恒为 0 —— **这是预期**。用它验证**坐标兜底路径**可用：按坐标点击能命中 |
-| 2.4 | 任意 App | 观察操作全程 | 真鼠标**全程不动**，虚拟光标平滑滑到目标 |
+| 2.1 | VS Code | Read the AX tree once **in the background** (not frontmost) | Reads the **full tree** (hundreds of elements), not a dozen shell elements.<br>Background `enableEnhancedAX` should already be in effect |
+| 2.2 | VS Code | Bring it to front and read again | Element count of the same order of magnitude as 2.1 |
+| 2.3 | NetEase Cloud Music (CEF116) | Read the AX tree of the web area | Always 0 — **this is expected**. Use it to verify the **coordinate fallback path** works: clicking by coordinates hits the target |
+| 2.4 | Any app | Watch the entire operation | The real mouse **never moves**; the virtual cursor glides smoothly to the target |
 
-> ❗ 若发现任何"找不到目标就兜底到 frontmost"的行为，那是 bug —— 它会变成操作宿主自己。
+> ❗ Any behavior of "target not found, so fall back to frontmost" is a bug — it ends up operating the host itself.
 
 ---
 
-## 2.5 CEF/Electron 注入契约（改注入层前必读）
+## 2.5 CEF/Electron injection contract (read before changing the injection layer)
 
-网易云音乐、VS Code、Slack、Discord 这类 Chromium/CEF 应用**按事件声明的窗口做路由**。裸 `CGEvent` 的 `windowNumber` 是 0，这类应用会把它**静默丢弃**——动作返回成功、界面毫无变化。这是本项目栽过最久的一个坑（三轮误判：先怀疑权限、再怀疑坐标、再怀疑 AX 树）。
+Chromium/CEF apps such as NetEase Cloud Music, VS Code, Slack and Discord **route by the window the event declares**. A bare `CGEvent` has a `windowNumber` of 0 and these apps **silently drop it** — the action returns success and the UI does not change. This was the longest-running trap in the project (three rounds of misdiagnosis: first permissions, then coordinates, then the AX tree).
 
-**点击必须带窗口身份**（`WindowTargetedEvent.swift`）：
-1. `NSEvent.mouseEvent(...windowNumber: 目标窗口ID...)` 再取 `.cgEvent` —— CGEvent 没有公开 API 设窗口号，这是唯一途径
-2. field 91/92 = 窗口 ID
-3. `CGEventSetWindowLocation(cg, 窗口内坐标)` —— 私有 SPI，dlsym；坐标 = 全局点 − 窗口原点，**左上原点不翻转**
+**Clicks must carry window identity** (`WindowTargetedEvent.swift`):
+1. `NSEvent.mouseEvent(...windowNumber: targetWindowID...)` then take `.cgEvent` — CGEvent has no public API to set the window number; this is the only route
+2. fields 91/92 = window ID
+3. `CGEventSetWindowLocation(cg, windowLocalPoint)` — private SPI via dlsym; coordinates = global point − window origin, **top-left origin, not flipped**
 
-**目标在后台时还要切前台并等沉降**（`focusSettleMs = 800`）。`SLPSSetFrontProcessWithOptions` 是**真的前台切换**（不是只给 key focus），切换后**首击会被当成激活点击吞掉**——等 250ms 全失败、等 800ms 全成功。
+**When the target is in the background, also bring it to front and wait for it to settle** (`focusSettleMs = 800`). `SLPSSetFrontProcessWithOptions` is a **real frontmost switch** (not just key focus), and after the switch **the first click is swallowed as an activation click** — waiting 250ms fails every time, waiting 800ms succeeds every time.
 
-**键盘不需要这一套**：裸 `postToPid` 即可，完全后台可用、不动指针、不切前台。
+**The keyboard needs none of this**: a bare `postToPid` works, fully in the background, without moving the pointer or switching the frontmost app.
 
-| # | 步骤 | 期望 |
+| # | Step | Expected |
 |---|---|---|
-| 2.5.1 | 目标 App **在前台**，点击一个文本框并输入 | 光标出现、字进去了 |
-| 2.5.2 | 目标 App **切到后台**（前台放别的 App），重复上一步 | 同样成功；目标会被带到前台，这是预期 |
-| 2.5.3 | 目标**完全后台**时只发键盘（不点击） | 字进去了，**目标不被带到前台、指针不动** |
-| 2.5.4 | 全程观察真实鼠标指针 | **从不移动** |
+| 2.5.1 | With the target app **in front**, click a text field and type | The caret appears and the text goes in |
+| 2.5.2 | Move the target app **to the background** (another app in front) and repeat | Also succeeds; the target is brought to front, which is expected |
+| 2.5.3 | With the target **fully in the background**, send keyboard input only (no click) | The text goes in, **the target is not brought to front and the pointer does not move** |
+| 2.5.4 | Watch the real mouse pointer throughout | **Never moves** |
 
-任何一项失败，先查事件有没有窗口身份，别去查权限/坐标/AX 树。
+If any item fails, check first whether the event carries window identity; don't go looking at permissions / coordinates / the AX tree.
 
-**判定纪律**：只认截图前后对比，不认 API 返回值——"返回成功但什么都没发生"正是这个 bug 的形状。多人/多 agent 同时在一个 App 上做注入实验会互相污染出假阳性，用唯一标记串隔离。
+**Judgment discipline**: trust only before/after screenshots, never API return values — "returned success but nothing happened" is exactly the shape of this bug. Several people or agents running injection experiments on the same app at once contaminate each other into false positives; isolate with unique marker strings.
 
 ---
 
-## 3. 跨 App 语义操控闭环
+## 3. Cross-app semantic control loop
 
-| # | 步骤 | 期望 |
+| # | Step | Expected |
 |---|---|---|
-| 3.1 | `get_app_state` 一个 App | 返回**带 element handle 的 AX 树** + **该窗口截图**（不是整屏） |
-| 3.2 | 树里的 handle 形如 `g17:4` | 不是裸数字。裸数字应当被拒绝 |
-| 3.3 | VS Code 按 handle 点一个面板开关 | `Value` 0→1；再点回来复原 |
-| 3.4 | TextEdit 里 `set_value` 写入文本 | 文本落入字段，返回 before/after |
-| 3.5 | TextEdit 里 `select_text` 选一段 | 用独立 AppleScript 读 `AXSelectedText` 校验**逐字一致**：<br>`osascript -e 'tell app "System Events" to tell process "TextEdit" to get value of attribute "AXSelectedText" of ...'` |
-| 3.6 | `select_text` 用 `selection_type=cursor_after` | 光标折叠成 length 0 |
-| 3.7 | 变更动作的返回体 | 是固定回执 `Action completed. Call \`get_app_state\`…`，**不带截图**（零隐式快照） |
-| 3.8 | 换一个进程再用旧 handle | 报 not found —— 这是**预期**，不是 bug |
+| 3.1 | `get_app_state` for an app | Returns **an AX tree with element handles** + **a screenshot of that window** (not the full screen) |
+| 3.2 | Handles in the tree look like `g17:4` | Not bare numbers. Bare numbers should be rejected |
+| 3.3 | In VS Code, click a panel toggle by handle | `Value` 0→1; click again to restore |
+| 3.4 | In TextEdit, write text with `set_value` | The text lands in the field; before/after is returned |
+| 3.5 | In TextEdit, select a range with `select_text` | Verify with a separate AppleScript reading `AXSelectedText` that it **matches exactly**:<br>`osascript -e 'tell app "System Events" to tell process "TextEdit" to get value of attribute "AXSelectedText" of ...'` |
+| 3.6 | `select_text` with `selection_type=cursor_after` | The selection collapses to length 0 |
+| 3.7 | Return body of a mutating action | The fixed receipt `Action completed. Call \`get_app_state\`…`, **with no screenshot** (zero implicit snapshots) |
+| 3.8 | Use an old handle against a different process | Reports not found — this is **expected**, not a bug |
 
 ---
 
-## 4. 视觉层
+## 4. Visual layer
 
-| # | 步骤 | 期望 |
+| # | Step | Expected |
 |---|---|---|
-| 4.1 | 操控某个 App 时看它的窗口 | 窗口外缘一圈**柔和光晕**，亮度不刺眼 |
-| 4.2 | 拖动被控窗口 | 光晕**跟随窗口移动** |
-| 4.3 | 隐藏/最小化被控窗口 | 光晕**随之消失** |
-| 4.4 | 截图里检查 overlay | 虚拟光标和光晕**不出现在截图里**，也**不吃鼠标事件** |
-| 4.5 | **多屏后台操作**：目标 App 单独放一块屏，自己在另一块屏上工作（前台是别的 App），让 agent 操作目标 | 虚拟光标与光晕**照常出现在目标那块屏上**——可见性判据是「目标窗口在动作点是否露出」，不是「目标是否前台」 |
-| 4.6 | 把目标窗口用其他窗口**完全盖住**，再让 agent 操作 | 光标/光晕**不出现**（盖在别人窗口上会误导指向）；动作本身照常执行 |
-| 4.7 | agent 操作目标时，把本体切到**原生全屏**（或切到别的桌面 Space），让 agent 继续读状态、点击、输入 | 目标**始终不被激活**，屏幕不会被拽回目标所在的 Space，键盘鼠标仍归你；状态里提示目标在别的 Space、截图可能是旧画面；坐标点击、输入、元素动作照常生效 |
-| 4.8 | agent 操作目标时，把目标窗口**最小化**，你留在同一桌面，让 agent 继续 | 下次读状态时窗口在后台恢复，**不激活、不抢前台**，之后的点击和输入照常生效 |
-| 4.9 | agent 操作目标时，把目标 App **隐藏**（⌘H），你留在同一桌面，让 agent 继续 | 读状态时目标**保持隐藏**；agent 的下一个动作只把它在后台显示出来（不抢前台）并提示重读，重读后照常操作 |
-| 4.10 | 你停在本体**原生全屏**里，同时把目标最小化或隐藏，让 agent 继续 | 目标不被激活，屏幕不被切走；窗口回到你看不见的桌面后，动作被**明确拒绝**并说明原因（不会显示"已完成"）；你切到那个桌面后恢复正常 |
+| 4.1 | Watch the window of an app being controlled | A **soft glow** around the outer edge of the window, not harshly bright |
+| 4.2 | Drag the controlled window | The glow **follows the window** |
+| 4.3 | Hide/minimize the controlled window | The glow **disappears with it** |
+| 4.4 | Inspect the overlay in screenshots | The virtual cursor and glow **do not appear in screenshots** and **do not consume mouse events** |
+| 4.5 | **Multi-display background operation**: put the target app on its own display, work on another display yourself (another app frontmost), and let the agent operate the target | The virtual cursor and glow **still appear on the target's display** — visibility is decided by "is the target window exposed at the action point", not "is the target frontmost" |
+| 4.6 | **Fully cover** the target window with other windows, then let the agent operate it | Cursor/glow **do not appear** (drawing over someone else's window would point misleadingly); the action itself still executes |
+| 4.7 | While the agent operates the target, switch the host to **native full screen** (or to another desktop Space) and let the agent keep reading state, clicking and typing | The target is **never activated**, the screen is not dragged back to the target's Space, and keyboard and mouse stay yours; the state notes that the target is on another Space and the screenshot may be stale; coordinate clicks, typing and element actions still take effect |
+| 4.8 | While the agent operates the target, **minimize** the target window, stay on the same desktop, and let the agent continue | On the next state read the window is restored in the background, **without activating or taking the foreground**; subsequent clicks and typing still take effect |
+| 4.9 | While the agent operates the target, **hide** the target app (⌘H), stay on the same desktop, and let the agent continue | The target **stays hidden** when state is read; the agent's next action only shows it in the background (without taking the foreground) and asks for a re-read, after which operation continues normally |
+| 4.10 | Stay in the host's **native full screen** while the target is minimized or hidden, and let the agent continue | The target is not activated and the screen is not switched away; once the window is back on a desktop you cannot see, actions are **explicitly rejected** with a reason (never "completed"); things return to normal once you switch to that desktop |
 
 ---
 
-## 5. 安全边界（真机确认，测试已覆盖逻辑）
+## 5. Safety boundaries (confirm on a real device; logic is covered by tests)
 
-| # | 步骤 | 期望 |
+| # | Step | Expected |
 |---|---|---|
-| 5.1 | 让 agent 操控 **cc-haha 自己** | 拒绝：`Computer Use is not allowed to use the app '…' for safety reasons.` |
-| 5.2 | 操控 Terminal / iTerm / Chrome | 同样拒绝 |
-| 5.3 | 未开 systemKeyCombos 时按 `cmd+q` | 拒绝，提示 `Enable system key combinations in Computer Use settings, then retry.` |
-| 5.4 | 开了之后再按 | 放行 |
-| 5.5 | 人手动碰鼠标/键盘 | helper 让位，不与真人抢 |
+| 5.1 | Ask the agent to control **cc-haha itself** | Refused: `Computer Use is not allowed to use the app '…' for safety reasons.` |
+| 5.2 | Control Terminal / iTerm / Chrome | Also refused |
+| 5.3 | Press `cmd+q` with systemKeyCombos off | Refused with `Enable system key combinations in Computer Use settings, then retry.` |
+| 5.4 | Press it again after turning it on | Allowed |
+| 5.5 | A human touches the mouse/keyboard | The helper yields and does not fight the human |
 
 ---
 
-## 6. 自动化 smoke（可选，但建议跑一次）
+## 6. Automated smoke (optional, but run it once)
 
 ```bash
 bun run check:computer-use-live-smoke
 ```
 
-靶子是 TextEdit，走完整 daemon NDJSON 链路，断言：
-- AX 无变化时返回 `There has been no change in the accessibility tree for Window: "` 这条**精确前缀**
-- **物理指针未被移动**
-- held input 未被污染
+The target is TextEdit; it runs the full daemon NDJSON chain and asserts:
+- when the AX tree has not changed, the response has the **exact prefix** `There has been no change in the accessibility tree for Window: "`
+- **the physical pointer was not moved**
+- held input was not contaminated
 
-它会拿 Computer Use 会话锁，**跑完确认锁已释放**。
+It takes the Computer Use session lock; **confirm the lock is released afterwards**.
 
 ---
 
-## 7. 打包形态
+## 7. Packaged form
 
 ```bash
-bun run check:native      # 含 swift test + build:sidecars + 打包 + smoke
+bun run check:native      # includes swift test + build:sidecars + packaging + smoke
 ```
 
-打完包后确认：
+After packaging, confirm:
 ```bash
 codesign -dv --verbose=4 "<app>/Contents/Resources/**/cc-haha-computer-use.app" 2>&1 | grep Identifier
 ```
-必须仍是 `dev.cchaha.cu-helper` —— 如果变了，说明 electron-builder 重签了它，用户的两项授权会全掉。
+It must still be `dev.cchaha.cu-helper` — if it changed, electron-builder re-signed it and users will lose both authorizations.

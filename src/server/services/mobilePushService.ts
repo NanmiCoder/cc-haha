@@ -123,7 +123,7 @@ export class MobilePushService {
     if (row.provider !== 'expo') return
     if (error === undefined) { this.expoError = undefined; return }
     const detail = error instanceof Error ? /^Expo push rejected delivery \((.+)\)$/.exec(error.message)?.[1] : undefined
-    this.expoError = detail ? `Expo 推送服务拒绝了发送（${detail}）` : '电脑连不上 Expo 推送服务（exp.host）'
+    this.expoError = detail ? `Expo push service rejected the send (${detail})` : 'The computer cannot reach the Expo push service (exp.host)'
   }
   private configured(row: Pick<PushInput, 'platform' | 'provider'>) { return row.provider === 'desktop' ? !!this.deps.pull && this.deps.transport.configured(row.platform, 'desktop') : this.deps.transport.configured(row.platform, row.provider) }
   private load() {
@@ -202,14 +202,14 @@ export class MobilePushService {
       // The test exists to show a banner. Android's "completed" channel is created at
       // default importance (sound, never a heads-up), so it uses the decisions channel,
       // the same one the phone's local test uses.
-      const payload = alertPayload(row, { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。', category: 'cchahaResult', channel: androidChannel(row.delivery, 'decision'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
+      const payload = alertPayload(row, { title: 'Test notification · cc-haha', body: 'Computer push works: this was sent from your computer to your phone.', category: 'cchahaResult', channel: androidChannel(row.delivery, 'decision'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'test' } })
       try {
         const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', ...(row.provider ? { provider: row.provider } : {}), token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
         this.recordExpo(row)
         if (result === 'invalidToken') { this.stored!.registrations = this.stored!.registrations.filter(item => item !== row); this.previous.delete(row.id); this.persist(); failed = true }
       } catch (error) { this.recordExpo(row, error); failed = true }
     }
-    return failed ? { status: 'failed', error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。' } : { status: 'sent' }
+    return failed ? { status: 'failed', error: 'System push delivery failed. Check the computer\'s APNs / FCM configuration and network.' } : { status: 'sent' }
   }
   /**
    * The computer's public address changed (a Quick Tunnel restarted). Paired
@@ -224,8 +224,8 @@ export class MobilePushService {
     for (const row of rows) {
       const mac = sign(row.owner.slice('remote:'.length))
       if (!mac) continue
-      const name = row.hostName?.trim() || '电脑'
-      const payload = alertPayload(row, { title: '电脑地址已更新 · cc-haha', body: `${name}重新建立了外出连接，打开 App 会自动换到新地址。`, category: 'cchahaResult', channel: androidChannel(row.delivery, 'completed'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'hostUrl', url, mac } })
+      const name = row.hostName?.trim() || 'Computer'
+      const payload = alertPayload(row, { title: 'Computer address updated · cc-haha', body: `${name} re-established its remote connection; opening the app switches to the new address automatically.`, category: 'cchahaResult', channel: androidChannel(row.delivery, 'completed'), timeSensitive: false, data: { hostId: row.hostId, eventType: 'hostUrl', url, mac } })
       try {
         const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', ...(row.provider ? { provider: row.provider } : {}), token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
         this.recordExpo(row)
@@ -323,12 +323,12 @@ export class MobilePushService {
           if (generation !== this.generation) return
           if (latest ? this.signature(latest) !== signature : activity.activityState !== 'idle' || hasSuccessfulCompletion(activity)) { this.retries.delete(retryKey); continue }
           if (!this.active(registration) || !this.stored!.registrations.includes(registration)) continue
-          const title = summary?.title?.slice(0, 100) || 'cc-haha 会话'
+          const title = summary?.title?.slice(0, 100) || 'cc-haha session'
           const data = { hostId: registration.hostId, sessionId: activity.id, ...(activity.requestId ? { requestId: activity.requestId } : {}), eventType: event ?? activity.activityState }
           const tool = activity.activityState === 'waiting' && activity.requestId && activity.toolName && registration.preferences.decisions && !inQuietHours(registration, this.now()) && !(typeof activity.autoAnswerDeadline === 'number' && activity.autoAnswerDeadline <= this.now()) && !['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'].includes(activity.toolName)
-          // 隐私开关也管锁屏上的普通通知：只有 Bash 的 preview 是命令原文，其他工具的 preview 本来就是通用占位。
+          // The privacy switch also covers ordinary lock-screen notifications: only Bash previews are raw commands; other tools' previews are generic placeholders anyway.
           const hideCommand = registration.delivery?.showCommand === false && activity.toolName === 'Bash'
-          const body = event === 'decision' ? hideCommand ? '打开 App 查看命令' : activity.preview || '需要你做决定' : event === 'error' ? activity.stalled ? '超过 5 分钟没有进展，请打开查看' : '任务遇到错误，请打开查看' : '任务已完成'
+          const body = event === 'decision' ? hideCommand ? 'Open the app to view the command' : activity.preview || 'Needs your decision' : event === 'error' ? activity.stalled ? 'No progress for over 5 minutes; open to check' : 'The task hit an error; open to check' : 'Task completed'
           let payload: Record<string, unknown>
           if (registration.kind === 'liveActivity') {
             const base = `cchaha:///chat/${encodeURIComponent(activity.id)}?host=${encodeURIComponent(registration.hostId)}`
@@ -341,9 +341,9 @@ export class MobilePushService {
             const unknownEnd = terminal && !completed && activity.activityState !== 'failed'
             const timestamp = Math.floor(this.now() / 1000)
             const detail = registration.delivery?.showCommand === false
-              ? activity.activityState === 'waiting' ? activity.toolName === 'Bash' ? '打开 App 查看命令' : '需要你做决定' : activity.activityState === 'running' ? '' : '本次运行已结束'
-              : activity.preview ?? (activity.activityState === 'running' ? '正在运行' : '本次运行已结束')
-            payload = { aps: { timestamp, event: ended ? 'end' : 'update', 'stale-date': unknownEnd ? timestamp - 1 : timestamp + 90, ...(ended ? { 'dismissal-date': timestamp + (unknownEnd || decisionsOnly ? 0 : 60) } : {}), 'content-state': { name: 'CCHahaTaskActivity', props: JSON.stringify({ hostId: registration.hostId, hostName: registration.hostName ?? '电脑', sessionId: activity.id, title, detail: detail, status: completed ? 'completed' : unknownEnd ? 'running' : activity.activityState, ...(unknownEnd ? { connectionState: 'stale' } : {}), activeCount: current.filter(row => row.activityState === 'running' || row.activityState === 'waiting').length, requestId: activity.requestId, openUrl: base + request, ...(tool ? { allowUrl: `${base}${request}&notificationAction=allow`, denyUrl: `${base}${request}&notificationAction=deny` } : {}) }) } } }
+              ? activity.activityState === 'waiting' ? activity.toolName === 'Bash' ? 'Open the app to view the command' : 'Needs your decision' : activity.activityState === 'running' ? '' : 'This run has ended'
+              : activity.preview ?? (activity.activityState === 'running' ? 'Running' : 'This run has ended')
+            payload = { aps: { timestamp, event: ended ? 'end' : 'update', 'stale-date': unknownEnd ? timestamp - 1 : timestamp + 90, ...(ended ? { 'dismissal-date': timestamp + (unknownEnd || decisionsOnly ? 0 : 60) } : {}), 'content-state': { name: 'CCHahaTaskActivity', props: JSON.stringify({ hostId: registration.hostId, hostName: registration.hostName ?? 'Computer', sessionId: activity.id, title, detail: detail, status: completed ? 'completed' : unknownEnd ? 'running' : activity.activityState, ...(unknownEnd ? { connectionState: 'stale' } : {}), activeCount: current.filter(row => row.activityState === 'running' || row.activityState === 'waiting').length, requestId: activity.requestId, openUrl: base + request, ...(tool ? { allowUrl: `${base}${request}&notificationAction=allow`, denyUrl: `${base}${request}&notificationAction=deny` } : {}) }) } } }
           } else payload = alertPayload(registration, { title, body, category: tool ? 'cchahaTool' : event === 'decision' ? 'cchahaDecision' : 'cchahaResult', channel: androidChannel(registration.delivery, event === 'decision' || event === 'completed' || event === 'error' ? event : 'completed'), timeSensitive: event === 'decision' && registration.delivery?.timeSensitive === true, data })
           try {
             const result = await this.deps.transport.send({ platform: registration.platform, kind: registration.kind, ...(registration.provider ? { provider: registration.provider } : {}), token: this.decrypt(registration.encryptedToken), payload } satisfies PushDelivery)
@@ -355,12 +355,12 @@ export class MobilePushService {
             if (result === 'invalidToken' || registration.kind === 'liveActivity' && (['idle', 'review', 'failed'].includes(activity.activityState) || registration.delivery?.liveActivity === 'decisions' && activity.activityState === 'running')) { this.stored!.registrations = this.stored!.registrations.filter(row => row !== registration); this.previous.delete(registration.id); this.persist(); break }
           } catch (error) {
             this.retries.set(retryKey, { signature, event: event ?? 'activity', activity, attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 5000 * 2 ** (retry?.attempts ?? 0) })
-            this.lastError = '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。'
+            this.lastError = 'System push delivery failed. Check the computer\'s APNs / FCM configuration and network.'
             if (generation === this.generation) this.recordExpo(registration, error)
           }
         }
       }
-    } catch { this.lastError = '系统推送存储不可用，请检查电脑上的推送配置。' }
+    } catch { this.lastError = 'System push storage is unavailable. Check the push configuration on the computer.' }
     finally { state.ticking = false; state.finish?.(); state.finish = undefined; state.done = undefined }
   }
 }

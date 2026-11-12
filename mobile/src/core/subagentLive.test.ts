@@ -26,8 +26,8 @@ const toolResult = (id: string, isError = false) =>
 const apply = (events: ServerEvent[]) =>
   events.reduce<ReturnType<typeof reduceSubagents>>((live, event) => reduceSubagents(live, event), undefined)
 
-describe('agent_run_event 累积子 Agent 实时步骤', () => {
-  test('工具调用进入步骤，结果把它标成完成', () => {
+describe('agent_run_event Accumulate live subagent steps', () => {
+  test('Tool calls become steps, and results mark them done', () => {
     const live = apply([toolUse('a'), toolResult('a'), toolUse('b', 'Bash', { command: 'bun test' })])
     expect(live?.[runKey('agent-1')]?.steps).toEqual([
       { toolUseId: 'a', toolName: 'Read', input: { file_path: '/repo/a.ts' }, done: true, isError: false },
@@ -35,13 +35,13 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
     ])
   })
 
-  test('失败的结果带上 isError，未知 id 的结果被忽略', () => {
+  test('Failed results carry isError; results with unknown ids are ignored', () => {
     const live = apply([toolUse('a'), toolResult('a', true)])
     expect(live?.[runKey('agent-1')]?.steps[0]).toMatchObject({ done: true, isError: true })
     expect(reduceSubagents(live, toolResult('missing'))).toBe(live)
   })
 
-  test('只留最近几步，不会无限增长', () => {
+  test('Keep only the last few steps, never growing without bound', () => {
     const events = Array.from({ length: MAX_SUBAGENT_STEPS + 5 }, (_, index) => toolUse(`t${index}`))
     const steps = apply(events)?.[runKey('agent-1')]?.steps ?? []
     expect(steps).toHaveLength(MAX_SUBAGENT_STEPS)
@@ -49,7 +49,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
     expect(steps[0]?.toolUseId).toBe('t5')
   })
 
-  test('同一个工具调用重复到达只更新、不重复记步', () => {
+  test('Repeated arrival of the same tool call only updates, without adding a step', () => {
     const live = apply([toolUse('a', 'Read', undefined), toolUse('a')])
     const entry = live?.[runKey('agent-1')]
     expect(entry?.steps).toHaveLength(1)
@@ -57,7 +57,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
     expect(entry?.reads).toEqual(['/repo/a.ts'])
   })
 
-  test('读过的文件按路径去重计数，其他工具不算', () => {
+  test('Files read are counted deduped by path; other tools do not count', () => {
     const live = apply([
       toolUse('a'),
       toolUse('b', 'Read', { file_path: '/repo/a.ts' }),
@@ -67,7 +67,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
     expect(live?.[runKey('agent-1')]?.reads).toEqual(['/repo/a.ts', '/repo/c.ts'])
   })
 
-  test('运行结束（status idle / error）把未完成步骤收口并标记 finished', () => {
+  test('Run end (status idle / error) closes unfinished steps and marks finished', () => {
     const live = apply([toolUse('a'), run({ type: 'status', state: 'idle' })])
     expect(live?.[runKey('agent-1')]).toMatchObject({ finished: true, steps: [{ done: true }] })
     const again = reduceSubagents(live, run({ type: 'status', state: 'idle' }))
@@ -76,7 +76,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
     expect(errored?.[runKey('agent-1')]?.finished).toBe(true)
   })
 
-  test('文字流、思考等不带步骤的事件保持同一个对象', () => {
+  test('Events without steps such as text stream and thinking keep the same object', () => {
     const live = apply([toolUse('a')])
     for (const event of [
       run({ type: 'content_delta', text: 'hi' }),
@@ -87,7 +87,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
       expect(reduceSubagents(live, event)).toBe(live)
   })
 
-  test('不同 run 各记各的', () => {
+  test('Different runs are recorded separately', () => {
     const live = apply([toolUse('a'), run({ type: 'tool_use_complete', toolName: 'Read', toolUseId: 'z', input: {} }, 'agent-2')])
     expect(Object.keys(live ?? {}).sort()).toEqual([runKey('agent-1'), runKey('agent-2')])
   })
@@ -95,14 +95,14 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
   const spawn = (i: number) =>
     run({ type: 'tool_use_complete', toolName: 'Read', toolUseId: `t${i}`, input: {} }, `agent-${i}`)
 
-  test('只保留最近的若干个子 Agent，丢最久没动静的', () => {
+  test('Keep only the most recent subagents, dropping the one idle longest', () => {
     const live = apply(Array.from({ length: MAX_SUBAGENT_ENTRIES + 4 }, (_, i) => spawn(i)))!
     expect(Object.keys(live)).toHaveLength(MAX_SUBAGENT_ENTRIES)
     expect(live[runKey(`agent-${MAX_SUBAGENT_ENTRIES + 3}`)]).toBeDefined()
     expect(live[runKey('agent-0')]).toBeUndefined()
   })
 
-  test('一直在更新的子 Agent 即使最早出现也不会被挤掉', () => {
+  test('A subagent that keeps updating is not evicted even if it appeared first', () => {
     const live = apply([
       ...Array.from({ length: MAX_SUBAGENT_ENTRIES }, (_, i) => spawn(i)),
       run({ type: 'tool_use_complete', toolName: 'Bash', toolUseId: 'late', input: {} }, 'agent-0'),
@@ -113,7 +113,7 @@ describe('agent_run_event 累积子 Agent 实时步骤', () => {
   })
 })
 
-describe('带 parentToolUseId 的工具事件（后台子 Agent 的 agent_tool_activity）', () => {
+describe('Tool events with parentToolUseId (agent_tool_activity of background subagents)', () => {
   const child = (id: string, parent?: string): ServerEvent => ({
     type: 'tool_use_complete',
     toolName: 'Read',
@@ -122,7 +122,7 @@ describe('带 parentToolUseId 的工具事件（后台子 Agent 的 agent_tool_a
     ...(parent ? { parentToolUseId: parent } : {}),
   })
 
-  test('按父级 Agent 工具调用记在 tool 通道，主 Agent 自己的工具不记', () => {
+  test('are recorded in the tool channel by the parent Agent tool call; the main agent’s own tools are not recorded', () => {
     const live = apply([child('a', 'agent-tool'), child('b'), {
       type: 'tool_result',
       toolUseId: 'agent-tool:a',
@@ -135,19 +135,19 @@ describe('带 parentToolUseId 的工具事件（后台子 Agent 的 agent_tool_a
   })
 })
 
-describe('task_progress 通知', () => {
+describe('task_progress notification', () => {
   const progress = (taskId: string, toolUses: unknown): ServerEvent => ({
     type: 'system_notification',
     subtype: 'task_progress',
     data: { task_id: taskId, usage: { tool_uses: toolUses, total_tokens: 10 } },
   })
-  test('记录电脑给出的工具调用总数，相同数值不触发更新', () => {
+  test('Record the total tool call count given by the computer; the same value does not trigger an update', () => {
     const live = apply([progress('t1', 8)])
     expect(live?.[taskKey('t1')]?.toolUses).toBe(8)
     expect(reduceSubagents(live, progress('t1', 8))).toBe(live)
     expect(reduceSubagents(live, progress('t1', 9))?.[taskKey('t1')]?.toolUses).toBe(9)
   })
-  test('没有数字、没有 task_id 的通知忽略；终态通知标记 finished', () => {
+  test('Notifications without a number or task_id are ignored; terminal notifications are marked finished', () => {
     expect(reduceSubagents(undefined, progress('t1', 'many'))).toBeUndefined()
     expect(reduceSubagents(undefined, { type: 'system_notification', subtype: 'task_progress', data: {} })).toBeUndefined()
     const live = apply([progress('t1', 3), { type: 'system_notification', subtype: 'task_notification', data: { task_id: 't1', status: 'completed' } }])
@@ -155,8 +155,8 @@ describe('task_progress 通知', () => {
   })
 })
 
-describe('liveFor 合并三条通道', () => {
-  test('步骤优先 run 通道，其次 tool 通道；计数来自 task 通道', () => {
+describe('liveFor Merge three channels', () => {
+  test('Steps prefer the run channel, then the tool channel; counts come from the task channel', () => {
     const live = apply([
       toolUse('r1'),
       { type: 'tool_use_complete', toolName: 'Read', toolUseId: 'p:x', input: { file_path: '/x' }, parentToolUseId: 'parent' },
@@ -169,24 +169,24 @@ describe('liveFor 合并三条通道', () => {
     const viaTool = liveFor(live, { taskId: 'other', toolUseId: 'parent' })
     expect(viaTool?.steps.map((step) => step.toolUseId)).toEqual(['p:x'])
   })
-  test('完全没有数据时返回 null', () => {
+  test('Return when there is no data at all null', () => {
     expect(liveFor(undefined, { taskId: 'a' })).toBeNull()
     expect(liveFor({}, { taskId: 'a', toolUseId: 'b' })).toBeNull()
   })
 })
 
-describe('chatReducer 接入', () => {
-  test('agent_run_event 进入 state.subagents，主对话流不变', () => {
+describe('chatReducer Integration', () => {
+  test('agent_run_event goes into state.subagents, the main conversation stream is unchanged', () => {
     const state = createChatState('s')
     const next = chatReducer(state, toolUse('a'))
     expect(next.items).toBe(state.items)
     expect(next.subagents?.[runKey('agent-1')]?.steps).toHaveLength(1)
   })
-  test('没有可记录内容时状态对象保持不变', () => {
+  test('The state object stays the same when there is nothing to record', () => {
     const state = createChatState('s')
     expect(chatReducer(state, run({ type: 'content_delta', text: 'x' }))).toBe(state)
   })
-  test('带 parentToolUseId 的工具事件仍进入主列表，同时记入子 Agent 轨迹', () => {
+  test('Tool events with parentToolUseId still go into the main list and are also recorded in the subagent trajectory', () => {
     const state = createChatState('s')
     const next = chatReducer(state, {
       type: 'tool_use_complete',

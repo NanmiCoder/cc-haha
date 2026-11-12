@@ -310,7 +310,7 @@ export function getRelativeSettingsFilePathForSource(
   }
 }
 
-/** 独立校验并发字段，避免无关的旧配置错误解除已保存的上限。 */
+/** Validate the concurrency field independently, so unrelated legacy config errors don't lift a saved limit. */
 export function getMaxConcurrentSubagentsUncached(): number | null {
   const path = getSettingsFilePathForSource('userSettings')!
   try {

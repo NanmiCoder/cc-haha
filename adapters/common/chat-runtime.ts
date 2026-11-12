@@ -121,7 +121,7 @@ export type ImChatRuntimeOptions = {
   flushCharThreshold?: number
 }
 
-const HELP_ALIASES = new Set(['/help', '帮助'])
+const HELP_ALIASES = new Set(['/help', '帮助']) // Chinese aliases match commands typed in Chinese
 const STATUS_ALIASES = new Set(['/status', '状态'])
 const PROJECTS_ALIASES = new Set(['/projects', '项目列表'])
 const NEW_ALIASES = new Set(['/new', '新会话'])
@@ -227,7 +227,7 @@ export class ImChatRuntime {
           this.port.setBusy?.(chatId, false)
           const detail = err instanceof Error ? err.message : String(err)
           console.error(`${this.port.logPrefix} Failed to handle message for ${chatId}:`, err)
-          await this.notifySafely(chatId, `处理消息失败：${detail}`)
+          await this.notifySafely(chatId, `Failed to process message: ${detail}`)
         },
       )
     } finally {
@@ -241,8 +241,8 @@ export class ImChatRuntime {
     await this.notifySafely(
       chatId,
       paired
-        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话，发送 /help 查看可用命令。'
-        : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
+        ? 'Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude, or send /help to see available commands.'
+        : 'Not authorized. Generate a pairing code in the Claude Code desktop app and send it to me.',
     )
   }
 
@@ -285,7 +285,7 @@ export class ImChatRuntime {
     const attachments = message.attachments
       ?? (message.loadAttachments ? await message.loadAttachments() : [])
 
-    const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effective = text || (attachments.length > 0 ? '(user sent an attachment)' : '')
     if (!effective && attachments.length === 0) return false
 
     this.port.setBusy?.(chatId, true)
@@ -302,7 +302,7 @@ export class ImChatRuntime {
     if (!sent) {
       this.port.setBusy?.(chatId, false)
       this.getRuntimeState(chatId).state = 'idle'
-      await this.port.sendNotice(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await this.port.sendNotice(chatId, 'Failed to send message; the connection may be down. Send /new to start over.')
     }
     return sent
   }
@@ -338,7 +338,7 @@ export class ImChatRuntime {
         return result.status !== 'unavailable'
       }
       const sent = this.bridge.sendStopGeneration(chatId)
-      await this.notifySafely(chatId, sent ? '已发送停止信号。' : '停止信号发送失败，请检查会话状态。')
+      await this.notifySafely(chatId, sent ? 'Stop signal sent.' : 'Failed to send stop signal. Please check the session status.')
       return sent
     }
     if (CLEAR_ALIASES.has(text)) {
@@ -353,7 +353,7 @@ export class ImChatRuntime {
       if (sent) this.getRuntimeState(chatId).state = 'thinking'
       await this.notifySafely(
         chatId,
-        sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。',
+        sent ? 'Cleared the current session context.' : 'Could not send /clear. Send /new first to reconnect the session.',
       )
       return sent
     }
@@ -366,7 +366,7 @@ export class ImChatRuntime {
   ): Promise<boolean> {
     const pending = this.pendingPermissions.get(chatId)
     if (!pending?.has(decision.requestId)) {
-      await this.port.sendNotice(chatId, `未找到待确认的权限请求：${decision.requestId}`)
+      await this.port.sendNotice(chatId, `No pending permission request found: ${decision.requestId}`)
       return true
     }
     const sent = this.bridge.sendPermissionResponse(
@@ -382,7 +382,7 @@ export class ImChatRuntime {
     }
     await this.notifySafely(
       chatId,
-      sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
+      sent ? `${formatPermissionDecisionStatus(decision)}.` : 'Failed to send permission response. Please check the session status.',
     )
     return sent
   }
@@ -489,21 +489,21 @@ export class ImChatRuntime {
       const stored = this.sessionStore.get(chatId)
       const workDir = stored?.workDir || this.defaultWorkDir
       if (workDir) {
-        await this.port.sendNotice(chatId, '会话上下文已失效，正在自动重建...')
+        await this.port.sendNotice(chatId, 'Session context is no longer valid, rebuilding automatically...')
         this.clearTransientChatState(chatId)
         this.bridge.resetSession(chatId)
         this.sessionStore.delete(chatId)
         const ok = await this.createSessionForChat(chatId, workDir)
         await this.port.sendNotice(
           chatId,
-          ok ? '已重建会话，请重新发送消息。' : '重建会话失败，请发送 /new 手动新建。',
+          ok ? 'Session rebuilt. Please resend your message.' : 'Failed to rebuild session. Send /new to create one manually.',
         )
         return
       }
-      await this.port.sendNotice(chatId, '会话上下文已失效，请发送 /new 新建会话。')
+      await this.port.sendNotice(chatId, 'Session context is no longer valid. Send /new to create a new session.')
       return
     }
-    await this.port.sendNotice(chatId, `错误: ${msg.message}`)
+    await this.port.sendNotice(chatId, `Error: ${msg.message}`)
   }
 
   private async dispatchOutboundImage(chatId: string, pending: PendingUpload): Promise<void> {
@@ -569,14 +569,14 @@ export class ImChatRuntime {
       this.bridge.onServerMessage(chatId, (msg) => this.handleServerMessage(chatId, msg))
       const opened = await this.bridge.waitForOpen(chatId)
       if (!opened) {
-        await this.port.sendNotice(chatId, '连接服务器超时，请重试。')
+        await this.port.sendNotice(chatId, 'Timed out connecting to the server. Please try again.')
         return false
       }
       return true
     } catch (err) {
       await this.port.sendNotice(
         chatId,
-        `无法创建会话: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not create session: ${err instanceof Error ? err.message : String(err)}`,
       )
       return false
     }
@@ -589,7 +589,7 @@ export class ImChatRuntime {
       if (projects.length === 0) {
         await this.port.sendNotice(
           chatId,
-          `没有找到最近的项目。发送 /new 会使用默认工作目录：${this.defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`,
+          `No recent projects found. Sending /new will use the default working directory: ${this.defaultWorkDir}\nYou can also send /new /path/to/project to pick a project.`,
         )
         return
       }
@@ -599,12 +599,12 @@ export class ImChatRuntime {
       this.pendingProjectSelection.add(chatId)
       await this.port.sendNotice(
         chatId,
-        `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`,
+        `Select a project (reply with its number):\n\n${lines.join('\n\n')}\n\nNext time you can send /new <number, name or absolute path> to create a session quickly`,
       )
     } catch (err) {
       await this.port.sendNotice(
         chatId,
-        `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not fetch project list: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
   }
@@ -619,7 +619,7 @@ export class ImChatRuntime {
     if (!query) {
       if (this.defaultWorkDir) {
         const ok = await this.createSessionForChat(chatId, this.defaultWorkDir)
-        if (ok) await this.port.sendNotice(chatId, '已新建会话，可以开始对话了。')
+        if (ok) await this.port.sendNotice(chatId, 'New session created. You can start chatting now.')
       } else {
         await this.showProjectPicker(chatId)
       }
@@ -633,19 +633,19 @@ export class ImChatRuntime {
         if (ok) {
           await this.port.sendNotice(
             chatId,
-            `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`,
+            `New session created: ${project.projectName}${project.branch ? ` (${project.branch})` : ''}`,
           )
         }
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await this.port.sendNotice(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await this.port.sendNotice(chatId, `Multiple projects matched, please be more specific:\n\n${list}`)
         return
       }
       await this.port.sendNotice(
         chatId,
-        `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`,
+        `No project matching "${query}" found. Send /projects to see the full list.`,
       )
     } catch (err) {
       await this.port.sendNotice(chatId, err instanceof Error ? err.message : String(err))

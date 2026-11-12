@@ -60,12 +60,12 @@ test('the recording surface gives measured audio its own wide trace and freezes 
     const sample = () => [...timers.values()].filter(timer => timer.ms === 80).forEach(timer => timer.callback())
     const bars = () => nodes.filter(({ node }) => node.props.testID === 'voice-wave-bar').map(({ node }) => node)
     render()
-    assert.equal(button('转写后发送').props.disabled, true)
+    assert.equal(button('Send after transcribing').props.disabled, true)
     assert.equal(timers.size, 0, 'starting must not pretend to hear the microphone')
 
     voice = { ...voice, phase: 'recording' }
     render()
-    const trace = nodes.find(({ node }) => node.props.accessibilityLabel === '麦克风音量').node
+    const trace = nodes.find(({ node }) => node.props.accessibilityLabel === 'Microphone level').node
     assert.ok(trace.props.style.height >= 64, 'audio needs more than the former 32pt toolbar strip')
     assert.notEqual(byId('voice-recording-panel').props.style.flexDirection, 'row')
     trace.props.onLayout({ nativeEvent: { layout: { width: 300 } } })
@@ -84,7 +84,7 @@ test('the recording surface gives measured audio its own wide trace and freezes 
     now = 49000
     for (const timer of timers.values()) if (timer.ms === 250) timer.callback()
     render()
-    assert.ok(nodes.some(({ node }) => node.props.children === '剩余 0:12'))
+    assert.ok(nodes.some(({ node }) => node.props.children === 'remaining 0:12'))
     const heights = bars().map(bar => bar.props.style.height)
     const readsBefore = reads
     voice = { ...voice, phase: 'transcribing' }
@@ -92,12 +92,12 @@ test('the recording surface gives measured audio its own wide trace and freezes 
     sample(); render()
     assert.equal(reads, readsBefore, 'recognition must release the level polling timer')
     assert.deepEqual(bars().map(bar => bar.props.style.height), heights, 'recognition keeps the actual recorded trace')
-    assert.ok(nodes.some(({ node }) => node.props.children === '正在转成文字…'))
-    assert.equal(button('停止录音并转成文字').props.disabled, true)
-    assert.equal(button('取消语音输入').props.disabled, undefined)
+    assert.ok(nodes.some(({ node }) => node.props.children === 'Transcribing…'))
+    assert.equal(button('Stop recording and transcribe').props.disabled, true)
+    assert.equal(button('Cancel voice input').props.disabled, undefined)
     voice = { ...voice, sendRequested: true }
     render()
-    assert.equal(button('转写后发送').props.disabled, true)
+    assert.equal(button('Send after transcribing').props.disabled, true)
     assert.equal(timers.size, 0)
     for (const slot of slots.values()) slot?.cleanup?.()
   `

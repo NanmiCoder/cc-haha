@@ -5,11 +5,11 @@ import { Text } from '../Text'
 import { Callout, Icon, Mono, useColors, type IconName } from '../kit'
 
 /**
- * 电脑设置的一行：图标 · 标题 · 右侧的值 · 箭头（设计稿 P1 / P2）。
- * kit 的 ListRow 会让长值把标题压窄，这里反过来，两种布局：
- * - 默认：标题不被压缩，值占剩余宽度、右对齐，超长只截断值（模型名、定时任务摘要）。
- * - 有副行或 titleGrow：标题（和副行）占剩余宽度、副行最多两行，值不收缩、不截断（“等 5 分钟”）。
- * 没有 onPress 就是只读行（不画箭头）。
+ * A computer settings row: icon · title · value on the right · chevron (design P1 / P2).
+ * kit ListRow lets long values squeeze the title; here it is the reverse, with two layouts: 
+ * - Default: the title is not compressed, the value takes the remaining width right-aligned, and overflow truncates only the value (model name, scheduled task summary).
+ * - With a subline or titleGrow: the title (and subline) take the remaining width, the subline at most two lines, and the value neither shrinks nor truncates ("in 5 minutes").
+ * Without onPress it is a read-only row (no chevron).
  */
 export function SettingRow({
   icon,
@@ -27,16 +27,16 @@ export function SettingRow({
   label,
 }: {
   icon?: IconName
-  /** 共用图标表里没有的图标（Glyph / GaugeGlyph），优先于 icon。 */
+  /** Icons not in the shared icon table (Glyph / GaugeGlyph), taking priority over icon. */
   glyph?: ReactNode
   title: string
   subtitle?: string
   value?: ReactNode
-  /** 值用等宽字（地址）。 */
+  /** Value uses monospace (address). */
   mono?: boolean
-  /** 值的字号，默认 15（等宽 14）。 */
+  /** Value font size, default 15 (monospace 14). */
   valueSize?: number
-  /** 标题占剩余宽度（值不收缩），没有副行时也用，例如服务商名可能很长。 */
+  /** Title takes the remaining width (value does not shrink), also used without a subline, e.g. provider names may be long. */
   titleGrow?: boolean
   onPress?(): void
   disabled?: boolean
@@ -100,7 +100,7 @@ export function SettingRow({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={
-        label ?? [title, typeof value === 'string' ? value : ''].filter(Boolean).join('，')
+        label ?? [title, typeof value === 'string' ? value : ''].filter(Boolean).join(', ')
       }
       accessibilityState={{ disabled }}
       disabled={disabled}
@@ -116,7 +116,7 @@ export function SettingRow({
   )
 }
 
-/** P2 模型单选行：22pt 单选圈 · 名称 16/21 + 等宽 id 12/16 · 最小高 58，圈内 8pt 白点。 */
+/** P2 Model radio row: 22pt radio ring · name 16/21 + monospace id 12/16 · min height 58, 8pt white dot inside the ring. */
 export function ModelOption({
   title,
   detail,
@@ -192,7 +192,7 @@ export function ModelOption({
   )
 }
 
-/** 出错提示：重新读取收在提示里，不再单独浮在页面中间。 */
+/** Error hint: reload lives inside the hint instead of floating separately in the middle of the page. */
 export function ErrorCallout({
   text,
   onRetry,
@@ -218,7 +218,7 @@ export function ErrorCallout({
             style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? 0.5 : 1 })}
           >
             <Text style={{ fontSize: 13, lineHeight: 19, fontWeight: '600', color: colors.err }}>
-              重新读取
+              Reload
             </Text>
           </Pressable>
         ) : null}
@@ -227,7 +227,7 @@ export function ErrorCallout({
   )
 }
 
-/** 思考强度图标（Lucide gauge）：共用图标表里没有。 */
+/** Thinking effort icon (Lucide gauge): not in the shared icon table. */
 export function GaugeGlyph({ color, size = 20 }: { color: string; size?: number }) {
   return (
     <Svg

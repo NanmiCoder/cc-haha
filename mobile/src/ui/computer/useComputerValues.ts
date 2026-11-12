@@ -31,15 +31,15 @@ export type ComputerValues = {
 const empty: ComputerValues = { errors: {} }
 
 /**
- * 一台电脑的设置概况，每次页面聚焦时重新读取（模型页、定时任务页改完回来能看到新值）。
- * 按电脑 id 存放：切到另一台电脑后不会把上一台的值显示出来；每项独立读，一项失败不影响其他。
+ * Overview of one computer's settings, reread every time the page gains focus (new values show after returning from the model or scheduled task pages).
+ * Stored by computer id: switching to another computer does not show the previous one's values; each item reads independently, so one failing does not affect others.
  *
- * 读取：GET /api/models/current、/api/effort、/api/permissions/mode、/api/settings/user、
- * /api/scheduled-tasks，以及各进行中会话的 background-tasks。
+ * Reads: GET /api/models/current, /api/effort, /api/permissions/mode, /api/settings/user, 
+ * /api/scheduled-tasks, and background-tasks of each running session.
  */
 export function useComputerValues(client: ApiClient | null) {
   const { snapshot } = useDashboard()
-  // 快照放进 ref：首页每次刷新不重新触发读取。
+  // The snapshot goes into a ref: home refreshes do not retrigger reads.
   const snapshotRef = useRef(snapshot)
   useEffect(() => {
     snapshotRef.current = snapshot
@@ -116,13 +116,13 @@ export function useComputerValues(client: ApiClient | null) {
             total: sessions.length,
           })
         })(),
-        (summary) => ({ activity: summary ?? '暂时读不到' })
+        (summary) => ({ activity: summary ?? 'Cannot read right now' })
       )
       return () => controller.abort()
     }, [client])
   )
 
-  /** 本页写成功后直接更新本地值，不等下次聚焦重读。 */
+  /** After a successful write on this page update the local value directly without waiting for the next focus reread. */
   const patch = useCallback(
     (next: Partial<Omit<ComputerValues, 'errors'>>) =>
       setState((current) =>

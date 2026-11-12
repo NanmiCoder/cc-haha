@@ -562,9 +562,9 @@ describe('file view state', () => {
     store().setFileView(SESSION, 'a.xlsx', { scrollTop: 30, scrollLeft: 2 })
     store().setFileZoom(SESSION, 'a.xlsx', 1.25)
 
-    store().setFileSheet(SESSION, 'a.xlsx', '结果')
+    store().setFileSheet(SESSION, 'a.xlsx', 'Result')
 
-    expect(store().fileViewByKey[workspaceFileKey(SESSION, 'a.xlsx')]).toEqual({ scrollTop: 30, scrollLeft: 2, zoom: 1.25, sheet: '结果' })
+    expect(store().fileViewByKey[workspaceFileKey(SESSION, 'a.xlsx')]).toEqual({ scrollTop: 30, scrollLeft: 2, zoom: 1.25, sheet: 'Result' })
   })
 
   it('starts a view at the origin when the first thing recorded is a worksheet', () => {

@@ -72,7 +72,7 @@ test('push test endpoint is POST-only, owner-scoped, strictly validated and neve
   expect(JSON.parse(okText)).toEqual({ status: 'sent' })
   expect(okText).not.toContain(body.token)
   expect(sent).toHaveLength(1)
-  expect((sent[0]!.payload.aps as { alert: { title: string } }).alert.title).toBe('测试通知 · cc-haha')
+  expect((sent[0]!.payload.aps as { alert: { title: string } }).alert.title).toBe('Test notification · cc-haha')
   // DELETE on the literal id "test" still means an id-scoped unregister, not the test route.
   expect((await call('DELETE', { token: body.token }, { remoteDeviceId: 'verified-a' })).status).toBe(404)
 })
@@ -94,6 +94,6 @@ test('pull endpoint is POST-only, strictly validated and answers only the owner 
   expect((await call('POST', { token }, { remoteDeviceId: 'verified-b' })).status).toBe(404)
   expect(await (await push.sendTest(token, undefined, { remoteDeviceId: 'verified-a' }))).toEqual({ status: 'sent' })
   const pulled = await (await call('POST', { token }, { remoteDeviceId: 'verified-a' })).json() as { notifications: { id: string; title: string }[] }
-  expect(pulled.notifications).toMatchObject([{ title: '测试通知 · cc-haha' }])
+  expect(pulled.notifications).toMatchObject([{ title: 'Test notification · cc-haha' }])
   expect(await (await call('POST', { token, ack: pulled.notifications[0]!.id }, { remoteDeviceId: 'verified-a' })).json()).toEqual({ notifications: [] })
 })

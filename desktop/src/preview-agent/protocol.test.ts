@@ -5,7 +5,7 @@ describe('preview-agent protocol', () => {
   it('bounds and localizes native browser control configuration', () => {
     const config = {
       v: 1, type: 'browser-controls', zoomFactor: 0.8, appZoom: 1,
-      copy: { zoom: '缩放', zoomOut: '缩小', zoomIn: '放大', zoomReset: '恢复' },
+      copy: { zoom: 'Zoom', zoomOut: 'Zoom out', zoomIn: 'Zoom in', zoomReset: 'Reset' },
       colors: { background: 'white', foreground: 'black', muted: 'gray', border: 'gray', hover: 'white', focus: 'blue', shadow: 'none' },
     }
     expect(parseHostMessage(JSON.stringify(config))).toMatchObject({ type: 'browser-controls', copy: config.copy, zoomFactor: 0.8 })

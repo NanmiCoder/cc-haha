@@ -248,7 +248,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   )
   const expandable = hasEditPreview || hasWritePreview || hasShellCommand || hasTodoList || hasResultDetails || hasAgentInputDetails || Boolean(isPending && partialInput)
   // A shell call the model described names itself by that description: it
-  // already leads with the action ("运行 validators 单测"), so a verb in front of
+  // already leads with the action ("Run validators unit tests"), so a verb in front of
   // it only stutters, and the pipeline it stands for truncates into noise. The
   // command moves to the tooltip and the terminal block's `$` line.
   const shellDescription = isShellTool(toolName) && typeof obj.description === 'string' ? obj.description.trim() : ''
@@ -1504,7 +1504,7 @@ function formatCharCount(
 }
 
 function formatCount(count: number): string {
-  return new Intl.NumberFormat().format(count)
+  return new Intl.NumberFormat('en-US').format(count)
 }
 
 function renderWriterPreview(

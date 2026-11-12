@@ -210,9 +210,9 @@ describe('Telegram command controller helpers', () => {
       modifiedAt: 'not-a-date',
       messageCount: 3,
     })).toEqual({
-      label: '会话 abcdef12',
+      label: 'Session abcdef12',
       value: 'abcdef123456789',
-      description: 'not-a-date · 3 条消息 · /repo',
+      description: 'not-a-date · 3 messages · /repo',
       meta: { workDir: '/repo' },
     })
 
@@ -276,7 +276,7 @@ describe('Telegram command controller helpers', () => {
     await handlers.get('new')!(denied.ctx)
 
     expect(action).not.toHaveBeenCalled()
-    expect(denied.replies[0]).toContain('未授权')
+    expect(denied.replies[0]).toContain('Not authorized')
   })
 
   it('only resolves pending permission callbacks from authorized users', () => {
@@ -348,12 +348,12 @@ describe('Telegram command controller helpers', () => {
     expect(deps.httpClient.activateOfficialProvider).toHaveBeenCalled()
     expect(deps.httpClient.setCurrentModel).toHaveBeenCalledWith('claude-opus-4-8')
     expect(runtimeModels).toEqual(['claude-opus-4-8'])
-    expect(allowed.replies[0]).toContain('Claude 官方')
+    expect(allowed.replies[0]).toContain('Claude official')
 
     const denied = createCommandContext({ userId: 999 })
     deps.isAllowedUser.mockImplementation(() => false)
     await controller.handleProviderCommand(denied.ctx)
-    expect(denied.replies[0]).toContain('未授权')
+    expect(denied.replies[0]).toContain('Not authorized')
   })
 
   it('supports direct custom provider and model commands', async () => {
@@ -387,23 +387,23 @@ describe('Telegram command controller helpers', () => {
     })
 
     await controller.handleProviderCommand(createCommandContext().ctx)
-    expect(sent.at(-1)?.text).toContain('无法获取 Provider 列表')
+    expect(sent.at(-1)?.text).toContain('Could not fetch provider list')
 
     const providerCtx = createCommandContext({ match: 'broken' })
     await controller.handleProviderCommand(providerCtx.ctx)
-    expect(providerCtx.replies[0]).toContain('Provider 切换失败')
+    expect(providerCtx.replies[0]).toContain('Provider switch failed')
 
     await controller.handleModelCommand(createCommandContext().ctx)
-    expect(sent.at(-1)?.text).toContain('没有可用模型')
+    expect(sent.at(-1)?.text).toContain('No models available')
 
     await controller.handleModelCommand(createCommandContext({ match: 'broken-model' }).ctx)
-    expect(sent.at(-1)?.text).toContain('模型切换失败')
+    expect(sent.at(-1)?.text).toContain('Model switch failed')
 
     await controller.handleSkillsCommand(createCommandContext().ctx)
-    expect(sent.at(-1)?.text).toContain('请先发送 /new')
+    expect(sent.at(-1)?.text).toContain('Send /new')
 
     await controller.handleResumeCommand(createCommandContext().ctx)
-    expect(sent.at(-1)?.text).toContain('没有找到最近项目')
+    expect(sent.at(-1)?.text).toContain('No recent projects found')
   })
 
   it('covers command fallback branches for help, paging, and list errors', async () => {
@@ -420,7 +420,7 @@ describe('Telegram command controller helpers', () => {
       action: 'page',
       index: 0,
     })
-    expect(sent.at(-1)?.text).toContain('选择模型')
+    expect(sent.at(-1)?.text).toContain('Select a model')
 
     const noInvocable = createController({
       httpClient: {
@@ -439,7 +439,7 @@ describe('Telegram command controller helpers', () => {
       },
     })
     await noInvocable.controller.handleSkillsCommand(createCommandContext().ctx)
-    expect(noInvocable.sent.at(-1)?.text).toContain('没有可用 Skills')
+    expect(noInvocable.sent.at(-1)?.text).toContain('No Skills available')
 
     const listFailures = createController({
       httpClient: {
@@ -452,9 +452,9 @@ describe('Telegram command controller helpers', () => {
     await listFailures.controller.handleModelCommand(createCommandContext().ctx)
     await listFailures.controller.handleSkillsCommand(createCommandContext().ctx)
     await listFailures.controller.handleResumeCommand(createCommandContext().ctx)
-    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('无法获取模型列表')
-    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('无法获取 Skills')
-    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('无法获取项目列表')
+    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('Could not fetch model list')
+    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('Could not fetch Skills')
+    expect(listFailures.sent.map((message) => message.text).join('\n')).toContain('Could not fetch project list')
   })
 
   it('uses paginated callback state for provider selection', async () => {
@@ -462,7 +462,7 @@ describe('Telegram command controller helpers', () => {
     const command = createCommandContext()
     await controller.handleProviderCommand(command.ctx)
 
-    expect(sent[0].text).toContain('选择 Provider')
+    expect(sent[0].text).toContain('Select a provider')
     expect((sent[0].options as any).reply_markup.inline_keyboard[1][0].callback_data)
       .toBe('tgsel:provider:pick:1')
 
@@ -483,7 +483,7 @@ describe('Telegram command controller helpers', () => {
     const { controller, deps, sent, runtimeModels } = createController()
     await controller.handleModelCommand(createCommandContext().ctx)
 
-    expect(sent[0].text).toContain('选择模型（Anthropic）')
+    expect(sent[0].text).toContain('Select a model (Anthropic)')
     const callback = createCommandContext()
     await controller.handleSelectionCallback(callback.ctx, {
       kind: 'model',
@@ -493,7 +493,7 @@ describe('Telegram command controller helpers', () => {
 
     expect(deps.httpClient.setCurrentModel).toHaveBeenCalledWith('claude-sonnet-4-5')
     expect(runtimeModels).toEqual(['claude-sonnet-4-5'])
-    expect(callback.edits[0]).toContain('已切换模型')
+    expect(callback.edits[0]).toContain('Model switched')
   })
 
   it('lists invocable skills and sends the selected skill into the active agent session', async () => {
@@ -501,7 +501,7 @@ describe('Telegram command controller helpers', () => {
     await controller.handleSkillsCommand(createCommandContext().ctx)
 
     expect(deps.httpClient.listSkills).toHaveBeenCalledWith('/work/repo')
-    expect(sent[0].text).toContain('当前项目可用 Skills')
+    expect(sent[0].text).toContain('Skills available for the current project')
 
     const callback = createCommandContext()
     await controller.handleSelectionCallback(callback.ctx, {
@@ -511,7 +511,7 @@ describe('Telegram command controller helpers', () => {
     })
     expect(deps.ensureExistingSession).toHaveBeenCalledWith('42')
     expect(sentUserMessages).toEqual([{ chatId: '42', content: '/skill-a' }])
-    expect(callback.edits[0]).toContain('已调用 Skill：Skill A')
+    expect(callback.edits[0]).toContain('Skill invoked: Skill A')
   })
 
   it('does not claim a selected skill ran when the agent session is unavailable', async () => {
@@ -519,7 +519,7 @@ describe('Telegram command controller helpers', () => {
       ensureExistingSession: mock(async () => ({ status: 'missing' })),
     })
     await unavailable.controller.handleSkillsCommand(createCommandContext().ctx)
-    expect(unavailable.sent.at(-1)?.text).toContain('当前项目可用 Skills')
+    expect(unavailable.sent.at(-1)?.text).toContain('Skills available for the current project')
 
     const callback = createCommandContext()
     await unavailable.controller.handleSelectionCallback(callback.ctx, {
@@ -529,7 +529,7 @@ describe('Telegram command controller helpers', () => {
     })
 
     expect(unavailable.sentUserMessages).toEqual([])
-    expect(callback.edits[0]).toContain('会话已失效')
+    expect(callback.edits[0]).toContain('Session is no longer valid')
   })
 
   it('keeps skill listing on the original project after a temporary reconnect failure', async () => {
@@ -539,7 +539,7 @@ describe('Telegram command controller helpers', () => {
     const { controller, deps, sent } = createController({ ensureExistingSession: restore })
 
     await controller.handleSkillsCommand(createCommandContext().ctx)
-    expect(sent.at(-1)?.text).toContain('已保留会话和工作目录')
+    expect(sent.at(-1)?.text).toContain('session and working directory are preserved')
     expect(sent.at(-1)?.text).not.toContain('/new')
     expect(deps.httpClient.listSkills).not.toHaveBeenCalled()
     expect(deps.setStoredSession).not.toHaveBeenCalled()
@@ -559,7 +559,7 @@ describe('Telegram command controller helpers', () => {
 
     const failed = createCommandContext()
     await controller.handleSelectionCallback(failed.ctx, { kind: 'skill', action: 'pick', index: 0 })
-    expect(sent.at(-1)?.text).toContain('已保留会话和工作目录')
+    expect(sent.at(-1)?.text).toContain('session and working directory are preserved')
     expect(sent.at(-1)?.text).not.toContain('/new')
     expect(failed.edits).toEqual([])
     expect(sentUserMessages).toEqual([])
@@ -569,7 +569,7 @@ describe('Telegram command controller helpers', () => {
     const retry = createCommandContext()
     await controller.handleSelectionCallback(retry.ctx, { kind: 'skill', action: 'pick', index: 0 })
     expect(sentUserMessages).toEqual([{ chatId: '42', content: '/skill-a' }])
-    expect(retry.edits[0]).toContain('已调用 Skill')
+    expect(retry.edits[0]).toContain('Skill invoked')
   })
 
   it('reports a disconnected bridge instead of dropping a selected skill', async () => {
@@ -585,14 +585,14 @@ describe('Telegram command controller helpers', () => {
       index: 0,
     })
 
-    expect(callback.edits[0]).toContain('发送失败')
+    expect(callback.edits[0]).toContain('Failed to send')
   })
 
   it('resumes a historical project session through two callbacks', async () => {
     const { controller, deps, sent, bridgeEvents } = createController()
     await controller.handleResumeCommand(createCommandContext().ctx)
 
-    expect(sent[0].text).toContain('选择要恢复的项目')
+    expect(sent[0].text).toContain('Select a project to resume')
     const projectCallback = createCommandContext()
     await controller.handleSelectionCallback(projectCallback.ctx, {
       kind: 'resume_project',
@@ -604,7 +604,7 @@ describe('Telegram command controller helpers', () => {
       limit: 100,
       offset: 0,
     })
-    expect(projectCallback.edits[0]).toContain('选择要恢复的会话')
+    expect(projectCallback.edits[0]).toContain('Select a session to resume')
 
     const sessionCallback = createCommandContext()
     await controller.handleSelectionCallback(sessionCallback.ctx, {
@@ -617,7 +617,7 @@ describe('Telegram command controller helpers', () => {
     expect(bridgeEvents.indexOf('store:42:session-123456789:/work/repo'))
       .toBeGreaterThan(bridgeEvents.indexOf('connect:42:session-123456789'))
     expect(deps.httpClient.sessionExists).toHaveBeenCalledWith('session-123456789')
-    expect(sessionCallback.edits[0]).toContain('已恢复会话')
+    expect(sessionCallback.edits[0]).toContain('Session resumed')
   })
 
   it('keeps the current binding when a selected historical session has been deleted', async () => {
@@ -632,7 +632,7 @@ describe('Telegram command controller helpers', () => {
       kind: 'resume_session', action: 'pick', index: 0,
     })
     expect(bridgeEvents).toEqual([])
-    expect(callback.edits[0]).toContain('不存在')
+    expect(callback.edits[0]).toContain('no longer exists')
   })
 
   it('loads every history page and restores a worktree through the project resume menu', async () => {
@@ -675,7 +675,7 @@ describe('Telegram command controller helpers', () => {
     })
     expect(deps.setStoredSession).toHaveBeenCalledWith('42', 'session-104', '/work/repo-feature')
     expect(deps.connectBridgeSession).toHaveBeenCalledWith('42', 'session-104')
-    expect(callback.edits[0]).toContain('已恢复会话')
+    expect(callback.edits[0]).toContain('Session resumed')
   })
 
   it('refuses to switch an active turn or permission request from the resume menu', async () => {
@@ -703,7 +703,7 @@ describe('Telegram command controller helpers', () => {
     await controller.handleSelectionCallback(callback.ctx, {
       kind: 'resume_project', action: 'pick', index: 0,
     })
-    expect(callback.answers[0]).toContain('选择已过期')
+    expect(callback.answers[0]).toContain('Selection expired')
     expect(deps.httpClient.listSessions).not.toHaveBeenCalled()
   })
 
@@ -730,7 +730,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 0,
     })
-    expect(denied.answers[0]).toBe('未授权')
+    expect(denied.answers[0]).toBe('Not authorized')
 
     const { controller, deps, bridgeEvents } = createController({
       waitForBridgeOpen: mock(async () => false),
@@ -741,7 +741,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 0,
     })
-    expect(stale.answers[0]).toContain('选择已过期')
+    expect(stale.answers[0]).toContain('Selection expired')
 
     await controller.handleModelCommand(createCommandContext().ctx)
     const noop = createCommandContext()
@@ -758,7 +758,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 99,
     })
-    expect(missing.answers[0]).toContain('选项不存在')
+    expect(missing.answers[0]).toContain('Option not found')
 
     await controller.handleResumeCommand(createCommandContext().ctx)
     await controller.handleSelectionCallback(createCommandContext().ctx, {
@@ -776,7 +776,7 @@ describe('Telegram command controller helpers', () => {
     expect(deps.deleteStoredSession).not.toHaveBeenCalled()
     expect(deps.setStoredSession).not.toHaveBeenCalled()
     expect(bridgeEvents).toContain('connect:42:active')
-    expect(timeout.edits[0]).toContain('超时')
+    expect(timeout.edits[0]).toContain('Timed out')
   })
 
   it('handles selection callback failures for provider, model, and session lists', async () => {
@@ -789,7 +789,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 1,
     })
-    expect(providerPick.edits[0]).toContain('Provider 切换失败')
+    expect(providerPick.edits[0]).toContain('Provider switch failed')
 
     const model = createController()
     await model.controller.handleModelCommand(createCommandContext().ctx)
@@ -800,7 +800,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 0,
     })
-    expect(modelPick.edits[0]).toContain('模型切换失败')
+    expect(modelPick.edits[0]).toContain('Model switch failed')
 
     const sessions = createController({
       httpClient: {
@@ -815,7 +815,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 0,
     })
-    expect(projectPick.edits[0]).toContain('没有可恢复会话')
+    expect(projectPick.edits[0]).toContain('No resumable sessions')
 
     const sessionFailure = createController({
       httpClient: {
@@ -830,7 +830,7 @@ describe('Telegram command controller helpers', () => {
       action: 'pick',
       index: 0,
     })
-    expect(failedProjectPick.edits[0]).toContain('无法获取会话列表')
+    expect(failedProjectPick.edits[0]).toContain('Could not fetch session list')
   })
 
   it('creates a controller from runtime dependencies', async () => {
@@ -900,7 +900,7 @@ describe('Telegram command controller helpers', () => {
     expect(events).toContain('message:42:connected')
     expect(events).toContain('permit:42:req-1:true:')
     expect(events).toContain('decrement:42')
-    expect(permissionCtx.edits[0]).toContain('已允许')
+    expect(permissionCtx.edits[0]).toContain('Allowed')
 
     await controller.handleSkillsCommand(createCommandContext().ctx)
     await controller.handleSelectionCallback(createCommandContext().ctx, {
@@ -922,7 +922,7 @@ describe('Telegram command controller helpers', () => {
       requestId: 'unauthorized',
       allowed: true,
     }, new Map([['42', new Set(['unauthorized'])]]), () => {})).resolves.toBe('unauthorized')
-    expect(unauthorizedCtx.answers).toContain('未授权')
+    expect(unauthorizedCtx.answers).toContain('Not authorized')
 
     allowPermissionUser = true
     const expiredCtx = createCommandContext()
@@ -930,7 +930,7 @@ describe('Telegram command controller helpers', () => {
       requestId: 'expired',
       allowed: true,
     }, new Map(), () => {})).resolves.toBe('not_pending')
-    expect(expiredCtx.answers).toContain('权限请求已失效')
+    expect(expiredCtx.answers).toContain('Permission request has expired')
 
     sendPermissionSucceeds = false
     const failedCtx = createCommandContext()
@@ -938,6 +938,6 @@ describe('Telegram command controller helpers', () => {
       requestId: 'send-failed',
       allowed: false,
     }, new Map([['42', new Set(['send-failed'])]]), () => {})).resolves.toBe('send_failed')
-    expect(failedCtx.answers).toContain('权限响应发送失败')
+    expect(failedCtx.answers).toContain('Failed to send permission response')
   })
 })

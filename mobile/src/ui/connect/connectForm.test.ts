@@ -24,9 +24,9 @@ describe('manual connect mode', () => {
     expect(needsToken('remote', link)).toBe(false)
     expect(shouldMaskAddress(link)).toBe(true)
     expect(connectionBlocker('remote', link)).toBe('')
-    expect(formFootnote('remote', link)).toContain('快速连接或固定域名')
-    expect(formFootnote('remote', link)).toContain('再在电脑上批准')
-    expect(formFootnote('remote', link)).toContain('重建后，请重新扫码')
+    expect(formFootnote('remote', link)).toContain('quick connect or fixed domain')
+    expect(formFootnote('remote', link)).toContain('then approve on the computer')
+    expect(formFootnote('remote', link)).toContain('quick connect is rebuilt, scan again')
     expect(formFootnote('remote', link)).not.toContain('Tailscale')
   })
   test('a pasted #pair= link switches to public and a LAN QR switches back', () => {
@@ -52,7 +52,7 @@ describe('manual connect mode', () => {
       name: '192.168.1.10',
       mode: 'lan',
     })
-    expect(() => receivedConnection('not a link')).toThrow('完整的连接地址')
+    expect(() => receivedConnection('not a link')).toThrow('full connection address')
   })
 })
 
@@ -72,14 +72,14 @@ describe('manual connect fields', () => {
 
   test('footnote, placeholder and primary action follow the scenario', () => {
     expect(formFootnote('lan', '')).toBe(
-      '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
+      'The phone and computer must be on the same network. The token is in Settings → Mobile connection on the computer.'
     )
-    expect(formFootnote('lan', lanQr)).toContain('二维码已包含局域网凭据')
-    expect(formFootnote('remote', pairLink)).toContain('再在电脑上批准')
+    expect(formFootnote('lan', lanQr)).toContain('The QR code already contains LAN credentials')
+    expect(formFootnote('remote', pairLink)).toContain('then approve on the computer')
     expect(addressPlaceholder('lan')).toBe('http://192.168.1.10:3456')
     expect(addressPlaceholder('remote')).toBe('https://xxxx.trycloudflare.com/remote#pair=…')
-    expect(primaryTitle('lan')).toBe('连接')
-    expect(primaryTitle('remote')).toBe('请求电脑授权')
+    expect(primaryTitle('lan')).toBe('Connection')
+    expect(primaryTitle('remote')).toBe('Request computer authorization')
   })
 
   test('an explicit HTTP hostname uses the token form and a non-blocking connection notice', () => {
@@ -87,17 +87,17 @@ describe('manual connect fields', () => {
     expect(receivedConnection(address).mode).toBe('lan')
     expect(connectionBlocker('lan', address)).toBe('')
     expect(needsToken('lan', address)).toBe(true)
-    expect(formFootnote('lan', address)).toContain('HTTP 连接未加密')
-    expect(formFootnote('lan', address)).toContain('手机需要能访问这个地址')
-    expect(formFootnote('lan', `${address}?h5Token=fixture-only`)).toContain('二维码已包含')
-    expect(formFootnote('remote', pairLink)).not.toContain('HTTP 连接未加密')
+    expect(formFootnote('lan', address)).toContain('HTTP connections are not encrypted')
+    expect(formFootnote('lan', address)).toContain('The phone needs to reach this address')
+    expect(formFootnote('lan', `${address}?h5Token=fixture-only`)).toContain('The QR code already contains')
+    expect(formFootnote('remote', pairLink)).not.toContain('HTTP connections are not encrypted')
   })
 
   test('a mode that contradicts the address is explained before any request', () => {
     expect(connectionBlocker('remote', 'http://192.168.1.10:3456')).toContain(
-      '这是局域网地址'
+      'This is a LAN address'
     )
-    expect(connectionBlocker('lan', pairLink)).toContain('这是远程配对链接')
+    expect(connectionBlocker('lan', pairLink)).toContain('This is a remote pairing link')
     expect(connectionBlocker('lan', 'http://192.168.1.10:3456')).toBe('')
     expect(connectionBlocker('remote', pairLink)).toBe('')
     // Unparseable input is left to connectHost so its own message is shown once.
@@ -105,8 +105,8 @@ describe('manual connect fields', () => {
   })
 
   test('the approval page shows the public domain', () => {
-    expect(remoteBadge(pairLink)).toBe('远程 · cc.example.com')
-    expect(remoteBadge('')).toBe('远程连接')
+    expect(remoteBadge(pairLink)).toBe('Remote · cc.example.com')
+    expect(remoteBadge('')).toBe('Remote connection')
   })
 })
 

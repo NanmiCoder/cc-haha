@@ -1,6 +1,6 @@
 /**
- * Android 通知渠道 id。电脑推送按事件类型选渠道：登记时带 `delivery.channels = 'split'`
- * 的新版本手机用下面三个，旧版本仍用单一的 legacy 渠道。
+ * Android Notification channel ids. Computer push picks the channel by event type: newer phones registering with `delivery.channels = 'split'`
+ * use the three below, while older versions still use the single legacy channel.
  */
 export const LEGACY_CHANNEL_ID = 'cc-haha'
 export const CHANNEL_IDS = {
@@ -11,8 +11,8 @@ export const CHANNEL_IDS = {
 export type ChannelKind = keyof typeof CHANNEL_IDS
 
 /**
- * App 自己发的本机通知（电脑推送没通时的兜底）也要落在对应渠道里，
- * 否则设置页「声音和震动」改了也管不到它们。只有安卓有渠道，iOS 返回 null。
+ * App Local notifications we send ourselves (fallback when computer push fails) must also land in the right channel, 
+ * otherwise changes in Settings "Sounds & vibration" cannot affect them. Only Android has channels; iOS returns null.
  */
 export function channelTriggerFor(
   platform: string,

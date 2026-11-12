@@ -21,8 +21,8 @@ import {
 export type { DashboardFailure, DashboardSnapshot } from '../core/dashboardSync'
 const Context = createContext<{
   /**
-   * 这台电脑最后一份成功的快照。出错或过期时仍保留（只在内存里），
-   * 用 fresh / failure 判断它是否还能代表电脑当前的状态。
+   * The last successful snapshot of this computer. Kept on error or expiry (memory only), 
+   * with fresh / failure deciding whether it still represents the computer's current state.
    */
   snapshot: DashboardSnapshot | null
   loading: boolean
@@ -31,7 +31,7 @@ const Context = createContext<{
   failure: DashboardFailure | null
   refresh(): void
   /**
-   * 聊天页聚焦期间调用：只轮询运行状态，不再反复拉整份会话列表。返回释放函数。
+   * Called while the chat page is focused: poll only run state instead of repeatedly fetching the full session list. Returns a release function.
    */
   holdActivityScope(): () => void
 }>({

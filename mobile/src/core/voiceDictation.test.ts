@@ -11,7 +11,7 @@ function deferred<T>() {
 }
 
 function setup() {
-  let draft: VoiceDraft = { key: 'host:chat', text: '已有草稿', revision: 0, selection: { start: 2, end: 2 }, blocked: false, canSend: true }
+  let draft: VoiceDraft = { key: 'host:chat', text: 'Existing draft', revision: 0, selection: { start: 9, end: 9 }, blocked: false, canSend: true }
   const catalog = {
     supported: true,
     preferences: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
@@ -27,7 +27,7 @@ function setup() {
   let stopCalls = 0
   let cancelCalls = 0
   let transcribeCalls = 0
-  let transcript = '语音内容'
+  let transcript = 'voice content'
   let duration = 0.5
   let bytes = new Uint8Array(16_044)
   let error: unknown
@@ -63,7 +63,7 @@ function setup() {
     edit(text: string, revision = draft.revision + 1) { draft = { ...draft, text, revision } },
     block() { draft = { ...draft, blocked: true, canSend: false } },
     unblock() { draft = { ...draft, blocked: false, canSend: true } },
-    navigate() { draft = { ...draft, key: 'host:other', text: '另一个会话', revision: 0 } },
+    navigate() { draft = { ...draft, key: 'host:other', text: 'Another session', revision: 0 } },
     permission() { permission = deferred<VoiceRecording>(); return permission },
     recognition() { recognition = deferred(); return recognition },
     catalogWait() { catalogWait = deferred<VoiceCatalog>(); return catalogWait },
@@ -80,8 +80,8 @@ describe('mobile dictation lifecycle', () => {
     expect(f.voice.state()).toMatchObject({ phase: 'recording', startedAt: 12345, limitSeconds: 120 })
     expect(f.voice.getLevel()).toBe(0.6)
     await f.voice.stop(true)
-    expect(f.writes).toEqual([{ text: '已有语音内容草稿', cursor: 6 }])
-    expect(f.sends).toEqual(['已有语音内容草稿'])
+    expect(f.writes).toEqual([{ text: 'Existing voice content draft', cursor: 23 }])
+    expect(f.sends).toEqual(['Existing voice content draft'])
     expect(f.voice.state().phase).toBe('idle')
   })
 
@@ -151,10 +151,10 @@ describe('mobile dictation lifecycle', () => {
     await Promise.resolve()
     await f.voice.stop(true)
     expect(f.voice.state().sendRequested).toBe(true)
-    result.resolve({ text: '好了', audioSeconds: 0.5, inferenceSeconds: 0.1 })
+    result.resolve({ text: 'done', audioSeconds: 0.5, inferenceSeconds: 0.1 })
     await finishing
     expect(f.state().transcribeCalls).toBe(1)
-    expect(f.sends).toEqual(['已有好了草稿'])
+    expect(f.sends).toEqual(['Existing done draft'])
   })
 
   test('draft revisions including type-and-delete retain text for explicit insertion', async () => {
@@ -163,15 +163,15 @@ describe('mobile dictation lifecycle', () => {
     await f.voice.start()
     const finishing = f.voice.stop(true)
     await Promise.resolve()
-    f.edit('已有草稿X')
-    f.edit('已有草稿')
-    result.resolve({ text: '新文字', audioSeconds: 0.5, inferenceSeconds: 0.1 })
+    f.edit('Existing draftX')
+    f.edit('Existing draft')
+    result.resolve({ text: 'new-text', audioSeconds: 0.5, inferenceSeconds: 0.1 })
     await finishing
     expect(f.writes).toEqual([])
     expect(f.sends).toEqual([])
-    expect(f.voice.state().pendingText).toBe('新文字')
+    expect(f.voice.state().pendingText).toBe('new-text')
     f.voice.insertPending()
-    expect(f.writes).toEqual([{ text: '已有新文字草稿', cursor: 5 }])
+    expect(f.writes).toEqual([{ text: 'Existing new-text draft', cursor: 18 }])
     expect(f.voice.state().pendingText).toBeNull()
   })
 
@@ -182,13 +182,13 @@ describe('mobile dictation lifecycle', () => {
     const finishing = f.voice.stop(true)
     await Promise.resolve()
     f.block()
-    result.resolve({ text: '保留', audioSeconds: 0.5, inferenceSeconds: 0.1 })
+    result.resolve({ text: 'keep', audioSeconds: 0.5, inferenceSeconds: 0.1 })
     await finishing
     f.voice.insertPending()
     expect(f.writes).toEqual([])
     f.unblock()
     f.voice.insertPending()
-    expect(f.writes[0]?.text).toBe('已有保留草稿')
+    expect(f.writes[0]?.text).toBe('Existing keep draft')
     expect(f.sends).toEqual([])
   })
 
@@ -201,7 +201,7 @@ describe('mobile dictation lifecycle', () => {
       await Promise.resolve()
       if (navigation) f.navigate()
       f.voice.abandon()
-      result.resolve({ text: '不能写入', audioSeconds: 0.5, inferenceSeconds: 0.1 })
+      result.resolve({ text: 'Cannot write', audioSeconds: 0.5, inferenceSeconds: 0.1 })
       await finishing
       expect(f.state().lastSignal?.aborted).toBe(true)
       expect(f.writes).toEqual([])
@@ -247,7 +247,7 @@ describe('mobile dictation lifecycle', () => {
   })
 })
 
-test('voice text insertion replaces a selection and joins Latin words without adding CJK spaces', () => {
+test('voice text insertion replaces a selection and joins words with single spaces', () => {
   expect(insertVoiceText('HelloWorld', { start: 5, end: 5 }, ' new\n words ')).toEqual({ text: 'Hello new words World', cursor: 16 })
-  expect(insertVoiceText('替换这段文字', { start: 2, end: 4 }, '识别')).toEqual({ text: '替换识别文字', cursor: 4 })
+  expect(insertVoiceText('Replace this text', { start: 8, end: 12 }, 'recognized')).toEqual({ text: 'Replace recognized text', cursor: 18 })
 })

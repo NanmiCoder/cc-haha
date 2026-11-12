@@ -1,15 +1,15 @@
 /**
  * Agents REST API
  *
- * GET    /api/agents        — 获取 Agent 列表
- * GET    /api/agents/:name  — 获取 Agent 详情
- * POST   /api/agents        — 创建 Agent
- * POST   /api/agents/reload — 重载当前 CLI 会话中的 Agent 定义
- * PUT    /api/agents/:name  — 更新 Agent
- * DELETE /api/agents/:name  — 删除 Agent
+ * GET    /api/agents        — get the Agent list
+ * GET    /api/agents/:name  — get Agent details
+ * POST   /api/agents        — create an Agent
+ * POST   /api/agents/reload — reload Agent definitions in the current CLI session
+ * PUT    /api/agents/:name  — update an Agent
+ * DELETE /api/agents/:name  — delete an Agent
  *
- * GET    /api/tasks         — 获取后台任务列表
- * GET    /api/tasks/:id     — 获取任务详情
+ * GET    /api/tasks         — get the background task list
+ * GET    /api/tasks/:id     — get task details
  */
 
 import * as path from 'node:path'

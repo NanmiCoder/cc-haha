@@ -4,8 +4,8 @@ import { Text } from '../Text'
 import { Icon, Mono, useColors } from '../kit'
 
 /**
- * 分组列表里的单选行：标题（可等宽）+ 副行，右侧可带说明文字和蓝色勾。
- * 项目、分支、模型、权限模式共用，尺寸按设计稿：有副行时最小高 56，否则 48。
+ * Radio row in a grouped list: title (optionally monospace) + subline, with optional description text and a blue check on the right.
+ * Shared by project, branch, model and permission mode, sized per design: min height 56 with a subline, otherwise 48.
  */
 export function ChoiceRow({
   title,
@@ -48,7 +48,7 @@ export function ChoiceRow({
       accessibilityRole="button"
       accessibilityLabel={
         accessibilityLabel ??
-        [title, detail, trailingText].filter(Boolean).join('，')
+        [title, detail, trailingText].filter(Boolean).join(', ')
       }
       accessibilityState={{ selected: Boolean(selected), disabled }}
       disabled={disabled || !onPress}

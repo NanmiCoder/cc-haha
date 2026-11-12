@@ -14,8 +14,8 @@ const imports = "import assert from 'node:assert/strict'\nimport { pathToFileURL
 export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
   {
     id: 'invoice',
-    title: '修复发票金额与零值选项',
-    prompt: '修复这个小型订单项目的 calculateInvoice。quantity=0 必须保留，显式 discountRate=0 不能回退到账户默认折扣。每行金额、折扣均四舍五入到分后再汇总，返回金额必须保留正确的数值精度。价格要求有限非负数，数量要求非负整数，折扣要求 0 到 1 的有限数；非法输入抛 RangeError。保留 API 和已有测试，增加回归测试并运行 npm test。不要安装依赖或联网。',
+    title: 'Fix invoice totals and zero-value options',
+    prompt: 'Fix calculateInvoice in this small order project. quantity=0 must be kept, and an explicit discountRate=0 must not fall back to the account default discount. Round each line amount and discount to the cent before summing, and the returned amount must keep correct numeric precision. Prices must be finite non-negative numbers, quantities non-negative integers, and discounts finite numbers from 0 to 1; throw RangeError on invalid input. Keep the API and existing tests, add regression tests and run npm test. Do not install dependencies or access the network.',
     files: {
       'package.json': packageFile,
       'CLAUDE.md': instructions,
@@ -51,8 +51,8 @@ console.log('ACCEPTED invoice: zero values, cents, defaults, full discount, vali
   },
   {
     id: 'notes-export',
-    title: '跨文件实现笔记筛选与导出',
-    prompt: '给现有笔记导出器增加两个参数：--tag <name> 按标签精确筛选（标签匹配不区分大小写），--format json|markdown（默认 markdown）。选择函数 selectNotes(notes, {tag}={}) 不改变输入，按 id 的数字升序排序；JSON 输出为选中笔记数组，Markdown 保持现有格式并在末尾恰好一个换行，空集输出空字符串。CLI 必须读取传入 JSON 文件，未知参数或缺值/不支持的 format 返回非零且 stderr 清楚说明错误。保留现有 API 和测试，新增回归测试并运行 npm test。不要安装依赖或联网。',
+    title: 'Implement note filtering and export across files',
+    prompt: 'Add two options to the existing note exporter: --tag <name> filters by exact tag (tag matching is case-insensitive), and --format json|markdown (default markdown). The selector selectNotes(notes, {tag}={}) must not mutate its input and sorts by numeric id ascending; JSON output is the array of selected notes, Markdown keeps the existing format with exactly one trailing newline, and an empty set outputs an empty string. The CLI must read the given JSON file; unknown options, missing values or unsupported formats exit non-zero with a clear error on stderr. Keep the existing API and tests, add regression tests and run npm test. Do not install dependencies or access the network.',
     files: {
       'package.json': packageFile,
       'CLAUDE.md': instructions,
@@ -108,8 +108,8 @@ console.log('ACCEPTED notes-export: filtering, ordering, immutability, both form
   },
   {
     id: 'parallel-import',
-    title: '独立模块修复与子代理协作',
-    prompt: '修复数据导入器的两个独立模块：parseCsv(text) 要支持带引号的逗号、双引号转义、CRLF/LF 行尾、字段内换行，空输入返回 []，末尾换行不产生空记录，未闭合引号抛 SyntaxError。inDateRange(value,start,end) 按 UTC 日历日期比较，范围两端都包含，start/end 为合法 YYYY-MM-DD；value 为有效 ISO 时间戳；非法日期或倒置区间抛 RangeError。保留 API 与已有测试，分别增加回归测试，最后运行完整 npm test。如果有 Agent 工具，把这两个模块交给两个子代理独立处理并整合结果；如果没有就自行处理。若有任务清单工具，请用它跟踪这三个步骤。不要安装依赖或联网。',
+    title: 'Independent module fixes with sub-agent collaboration',
+    prompt: 'Fix two independent modules of the data importer: parseCsv(text) must support quoted commas, escaped double quotes, CRLF/LF line endings and newlines inside fields; empty input returns [], a trailing newline produces no empty record, and an unclosed quote throws SyntaxError. inDateRange(value,start,end) compares by UTC calendar date, inclusive on both ends; start/end are valid YYYY-MM-DD and value is a valid ISO timestamp; invalid dates or an inverted range throw RangeError. Keep the API and existing tests, add regression tests for each, and finally run the full npm test. If an Agent tool is available, hand the two modules to two sub-agents to handle independently and integrate the results; otherwise do it yourself. If a task list tool is available, use it to track these three steps. Do not install dependencies or access the network.',
     files: {
       'package.json': packageFile,
       'CLAUDE.md': instructions,
@@ -157,9 +157,9 @@ console.log('ACCEPTED parallel-import: CSV quoting/newlines/errors and inclusive
 /** A separate live capability smoke, excluded from the three coding comparisons. */
 export const WEB_BENCHMARK_FIXTURE: BenchmarkFixture = {
   id: 'web-docs',
-  title: '原生搜索与官方文档抓取',
+  title: 'Native search and official docs fetch',
   kind: 'web',
-  prompt: '请实际调用 WebSearch 搜索 DeepSeek 官方 API 文档中 API 基址及 OpenAI SDK 兼容性说明，再实际调用 WebFetch 读取 https://api-docs.deepseek.com/ 交叉核对。在当前目录 sources.md 用中文写两条确认的事实，每条附上官方来源链接；写明工具成功或失败，不要凭记忆补造结果。只访问 DeepSeek 官方资料，不安装依赖或修改其他文件。',
+  prompt: 'Actually call WebSearch to find the API base URL and the OpenAI SDK compatibility notes in the official DeepSeek API docs, then actually call WebFetch to read https://api-docs.deepseek.com/ and cross-check. In sources.md in the current directory, write two confirmed facts in English, each with its official source link; state whether each tool succeeded or failed, and do not invent results from memory. Only access official DeepSeek material, and do not install dependencies or modify other files.',
   files: { 'CLAUDE.md': 'This is a disposable documentation research workspace. Write only sources.md. Use official DeepSeek sources and report any failed tools honestly.\n' },
   acceptance: imports + `import { readFileSync } from 'node:fs'
 const text = readFileSync(join(root,'sources.md'),'utf8')

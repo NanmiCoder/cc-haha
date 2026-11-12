@@ -7,7 +7,7 @@ export function createPicker(deps: PickerDeps) {
   let current: Element | null = null
   let hovered: Element | null = null
 
-  // Shadow DOM 浮层宿主：避免被页面 CSS 影响、抗 CSP 内联限制
+  // Shadow DOM overlay host: isolated from page CSS and resistant to CSP inline restrictions
   const host = document.createElement('div')
   host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647'
   const shadow = host.attachShadow({ mode: 'open' })

@@ -105,7 +105,7 @@ export function remainingQuestionTime(
   }
 }
 
-/** 每道题的提交值：自己写的内容优先覆盖已选项，多选用 “, ” 连接。 */
+/** Submit value of each question: user-written content overrides selected options, and multi-select joins with ", ". */
 export function questionAnswerValues(
   questions: Question[],
   answers: Record<string, string[]>,
@@ -127,8 +127,8 @@ export type QuestionClock =
   | { state: 'expired' }
 
 /**
- * AI 代答胶囊。只在服务端宣布过代答（deadline 为数字或 null）时出现；
- * 本机已发出接手信号就显示“你已接手”；倒计时以首次看到的剩余时间为满环。
+ * AI Auto-answer capsule. Only appears when the server has announced auto-answer (deadline is a number or null); 
+ * once this device has sent the take-over signal show "You took over"; the countdown uses the first seen remaining time as a full ring.
  */
 export function questionClock(
   deadline: number | null | undefined,
@@ -160,8 +160,8 @@ export type DecisionResponse = {
 }
 
 /**
- * 组装 permission_response。拒绝只带 denyMessage（所有工具都能附说明）；
- * 允许时按工具带答案、计划执行方式或会话规则（rule:'always'，由电脑套用 CLI 的放行建议）。
+ * Build permission_response. Deny only carries denyMessage (any tool can attach a note); 
+ * allow carries the answer, plan execution mode or session rule per tool (rule:'always', where the computer applies the CLI allow suggestion).
  */
 export function decisionResponse(options: {
   requestId: string

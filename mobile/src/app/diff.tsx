@@ -44,8 +44,8 @@ type Source = 'turn' | 'workspace'
 type Loaded = { path: string; diff?: string; problem?: string; error?: string }
 
 /**
- * 文件差异。source=turn 时比较检查点（target 为这一轮的用户消息 id），
- * source=workspace 时比较工作区里没提交的改动。左右切换只改 path 参数。
+ * File diff. With source=turn compare against the checkpoint (target is this turn's user message id), 
+ * source=workspace compare uncommitted workspace changes. Left/right switching only changes the path param.
  */
 export default function Diff() {
   const params = useLocalSearchParams<{
@@ -78,7 +78,7 @@ function fromTurn(response: { state: string; diff?: string; error?: string }, pa
   const reason = translateReason(response.error)
   return {
     path,
-    problem: `这个检查点暂时无法比较此文件。${reason ? `\n${reason}` : ''}`,
+    problem: `This checkpoint cannot compare this file right now.${reason ? `\n${reason}` : ''}`,
   }
 }
 
@@ -114,7 +114,7 @@ function DiffPage({
   })
   const [copied, setCopied] = useState(false)
 
-  // 用于左右切换的文件列表：检查点的文件，或工作区的改动文件。
+  // File list for left/right switching: checkpoint files, or changed files in the workspace.
   useFocusEffect(
     useCallback(() => {
       if (!client) return
@@ -135,13 +135,13 @@ function DiffPage({
               if (!signal.aborted)
                 setFiles(Array.isArray(status.changedFiles) ? status.changedFiles.map((file) => file.path) : [])
             })
-      // 列表取不到只影响左右切换，差异本身照常显示。
+      // If the list cannot be loaded only left/right switching is affected; the diff itself still shows.
       request.catch(() => {})
       return () => controller.abort()
     }, [client, id, key, root, source, target])
   )
 
-  // 当前文件的差异。
+  // Diff of the current file.
   useFocusEffect(
     useCallback(() => {
       if (!client || !path) return
@@ -216,7 +216,7 @@ function DiffPage({
   else if (!lines.length)
     body = (
       <Callout tone="info" style={{ margin: 16 }}>
-        没有可显示的文本差异
+        No text diff to show
       </Callout>
     )
   else
@@ -233,7 +233,7 @@ function DiffPage({
 
   return (
     <ReaderScreen
-      title={name || '文件差异'}
+      title={name || 'File diff'}
       subtitle={
         dir || stats ? (
           <SubtitleLine>
@@ -246,7 +246,7 @@ function DiffPage({
       right={
         <IconButton
           icon={copied ? 'check' : 'copy'}
-          label={copied ? '已复制差异' : '复制差异'}
+          label={copied ? 'Diff copied' : 'Copy diff'}
           iconSize={20}
           strokeWidth={copied ? 2.4 : 1.75}
           color={copied ? colors.ok : colors.ink2}
@@ -264,18 +264,18 @@ function DiffPage({
             justifyContent: 'space-between',
           }}
         >
-          <StepButton icon="chevron-left" label="上一个文件" target={previous} onPress={go} />
+          <StepButton icon="chevron-left" label="Previous file" target={previous} onPress={go} />
           <View style={{ height: 44, flexDirection: 'row', alignItems: 'center' }}>
             {files && position >= 0 ? (
               <Text style={{ fontSize: 14, color: colors.ink2 }}>
                 <Mono style={{ fontSize: 14, color: colors.ink2 }}>
                   {position + 1} / {files.length}
                 </Mono>
-                {' 个文件'}
+                {' files'}
               </Text>
             ) : null}
           </View>
-          <StepButton icon="chevron-right" label="下一个文件" target={next} onPress={go} />
+          <StepButton icon="chevron-right" label="Next file" target={next} onPress={go} />
         </BottomBar>
       }
     >
@@ -284,7 +284,7 @@ function DiffPage({
   )
 }
 
-/** 工具栏的左右箭头：到头时变成浅灰并禁用（不再额外降透明度）。 */
+/** Toolbar left/right arrows: at the end they turn light grey and disabled (no extra opacity reduction). */
 function StepButton({
   icon,
   label,

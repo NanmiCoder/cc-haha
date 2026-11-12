@@ -5,8 +5,8 @@ type Sender = (message: ClientMessage) => boolean
 const senders = new Map<string, Sender>()
 
 /**
- * 会话页把它的 WebSocket 发送函数登记在这里，其他页面（如子 Agent 全屏页）
- * 不必再开一条连接就能发「停止后台任务」。返回注销函数；同一会话后登记的覆盖先登记的。
+ * The session page registers its WebSocket send function here so other pages (like the full-screen subagent page)
+ * can send "stop background task" without opening another connection. Returns an unregister function; a later registration for the same session overrides an earlier one.
  */
 export function registerSessionSender(sessionId: string, send: Sender) {
   senders.set(sessionId, send)
@@ -15,7 +15,7 @@ export function registerSessionSender(sessionId: string, send: Sender) {
   }
 }
 
-/** 没有登记或连接没就绪时返回 false。 */
+/** Returns false when not registered or the connection is not ready. */
 export function sendToSession(sessionId: string, message: ClientMessage) {
   return senders.get(sessionId)?.(message) ?? false
 }

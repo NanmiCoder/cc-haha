@@ -77,7 +77,7 @@ describe('real mobile composition', () => {
     ).toThrow()
   })
   test('enforces the real remote frame limit using UTF-8 bytes before a socket send', () => {
-    const message = buildComposerMessage('中'.repeat(360_000), [], false)
+    const message = buildComposerMessage('Medium'.repeat(360_000), [], false)
     expect(() => validateMessageSize(message, 'remote')).toThrow('1 MB')
     expect(() => validateMessageSize(message, 'lan')).not.toThrow()
   })
@@ -183,7 +183,7 @@ describe('composer materials copy', () => {
   })
   test('the footnote states the same limits the validator enforces', () => {
     expect(materialsFootnote()).toBe(
-      '图片会压缩到长边 1280，单个文件不超过 6 MB。这条消息在局域网下最多 8 MB，公网 1 MB。'
+      'Images are compressed to a long edge of 1280, each file up to 6 MB. This message can be up to 8 MB on LAN, 1 MB over public network.'
     )
     const big = { type: 'user_message' as const, content: 'x'.repeat(MESSAGE_LIMIT_BYTES.remote) }
     expect(() => validateMessageSize(big, 'remote')).toThrow('1 MB')
@@ -191,9 +191,9 @@ describe('composer materials copy', () => {
   })
   test('detects the skill a draft starts with, matching withSkill output', () => {
     const skill = { name: 'review', description: '', kind: 'skill' as const }
-    expect(draftSkill(withSkill('改完看一遍', skill))).toBe('review')
+    expect(draftSkill(withSkill('Review after editing', skill))).toBe('review')
     expect(draftSkill(withSkill('', skill))).toBe('review')
-    expect(draftSkill('先 /review 一下')).toBeNull()
+    expect(draftSkill('Run /review first')).toBeNull()
     expect(draftSkill('/')).toBeNull()
   })
 })

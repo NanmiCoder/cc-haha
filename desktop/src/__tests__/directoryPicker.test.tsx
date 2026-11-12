@@ -68,7 +68,7 @@ const PROJECTS: RecentProject[] = [
 
 function openPicker(onChange = vi.fn()) {
   const utils = render(<DirectoryPicker value="" onChange={onChange} />)
-  fireEvent.click(screen.getByText('选择项目...'))
+  fireEvent.click(screen.getByText('Select a project...'))
   return { ...utils, onChange }
 }
 
@@ -88,12 +88,12 @@ describe('DirectoryPicker project list', () => {
     vi.mocked(desktopUiPreferencesApi.updateProjectDisplayName).mockReset()
     vi.mocked(desktopUiPreferencesApi.updateProjectDisplayName)
       .mockImplementation(async (projectKey, displayName) => ({ ok: true, projectKey, displayName }))
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
   })
 
   it('names the auxiliary folder picker from its supplied placeholder', () => {
-    render(<DirectoryPicker value="" onChange={vi.fn()} variant="workbar" placeholder="添加文件夹" />)
-    expect(screen.getByRole('button', { name: '添加文件夹' })).toHaveAttribute('title', '添加文件夹')
+    render(<DirectoryPicker value="" onChange={vi.fn()} variant="workbar" placeholder="Add folder" />)
+    expect(screen.getByRole('button', { name: 'Add folder' })).toHaveAttribute('title', 'Add folder')
   })
 
   it('loads the full project list with a deep scan', async () => {
@@ -107,7 +107,7 @@ describe('DirectoryPicker project list', () => {
 
   it('filters projects by fuzzy query and restores them when cleared', async () => {
     openPicker()
-    const search = await screen.findByPlaceholderText('搜索项目…')
+    const search = await screen.findByPlaceholderText('Search projects…')
     fireEvent.change(search, { target: { value: 'haha' } })
 
     expect(screen.getByText('NanmiCoder/cc-haha')).toBeInTheDocument()
@@ -120,14 +120,14 @@ describe('DirectoryPicker project list', () => {
 
   it('shows an empty-filter state instead of an empty list', async () => {
     openPicker()
-    const search = await screen.findByPlaceholderText('搜索项目…')
+    const search = await screen.findByPlaceholderText('Search projects…')
     fireEvent.change(search, { target: { value: 'zzzzz-nothing' } })
-    expect(screen.getByText('没有匹配的项目')).toBeInTheDocument()
+    expect(screen.getByText('No matching projects')).toBeInTheDocument()
   })
 
   it('selects the keyboard-highlighted project on Enter', async () => {
     const { onChange } = openPicker()
-    const search = await screen.findByPlaceholderText('搜索项目…')
+    const search = await screen.findByPlaceholderText('Search projects…')
 
     fireEvent.keyDown(search, { key: 'ArrowDown' })
     fireEvent.keyDown(search, { key: 'Enter' })
@@ -155,25 +155,25 @@ describe('DirectoryPicker project list', () => {
     )
 
     // No repo context → the pill opens straight on the directory view.
-    fireEvent.click(screen.getByRole('button', { name: /选择项目/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Select a project/ }))
     await screen.findByText('NanmiCoder/MediaCrawler')
 
-    fireEvent.click(screen.getByText('新建项目'))
+    fireEvent.click(screen.getByText('New project'))
 
-    const dialog = await screen.findByRole('dialog', { name: '创建项目' })
+    const dialog = await screen.findByRole('dialog', { name: 'Create project' })
 
     // Pick the source folder through the modal's own picker.
-    fireEvent.click(within(dialog).getByText('选择项目...'))
+    fireEvent.click(within(dialog).getByText('Select a project...'))
     const folderRow = await screen.findByRole('option', { name: /cc-haha/ })
     fireEvent.click(folderRow)
 
     // The name defaults to the folder basename; rename it.
-    const nameInput = within(dialog).getByLabelText(/项目名称/) as HTMLInputElement
+    const nameInput = within(dialog).getByLabelText(/Project name/) as HTMLInputElement
     await waitFor(() => expect(nameInput.value).toBe('claude-code-haha'))
     fireEvent.change(nameInput, { target: { value: '我的项目' } })
 
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: '创建项目' })).not.toBeDisabled())
-    fireEvent.click(within(dialog).getByRole('button', { name: '创建项目' }))
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Create project' })).not.toBeDisabled())
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create project' }))
 
     await waitFor(() => {
       expect(desktopUiPreferencesApi.updateProjectDisplayName)
@@ -184,7 +184,7 @@ describe('DirectoryPicker project list', () => {
       expect(onWorkDirChange).toHaveBeenCalledWith('/Users/nanmi/workspace/myself_code/claude-code-haha')
     })
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: '创建项目' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog', { name: 'Create project' })).not.toBeInTheDocument()
     })
   })
 })

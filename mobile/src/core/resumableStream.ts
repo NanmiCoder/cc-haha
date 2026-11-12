@@ -1,19 +1,19 @@
 import type { ClientMessage } from './types'
 
 /**
- * 可续传的会话流（服务端见 src/server/ws/resumableStreams.ts）。
+ * Resumable session stream (server side in src/server/ws/resumableStreams.ts).
  *
- * 手机一切后台、一换网络，套接字就断。打开续传后，电脑把这条流的每一帧编号并留着，
- * 手机带着「看到第几帧」重新接上，电脑只补发没看到的部分，同一个会话连接继续用：
- * 不重读历史、不重新打开会话。手机发出的命令也带编号，断线后重发的那条只执行一次。
+ * Whenever the phone goes to background or switches network the socket drops. With resume on, the computer numbers and keeps every frame of the stream, 
+ * the phone reconnects with "seen up to frame N", the computer replays only the unseen part, and the same session connection continues: 
+ * no history reread and no reopening the session. Commands from the phone are numbered too, so one resent after a disconnect executes only once.
  */
 
-/** 收到这么多帧还没确认，就不等下一次心跳，提前确认一次，让电脑放掉缓存。 */
+/** after this many unacknowledged frames, acknowledge early without waiting for the next heartbeat so the computer can release its buffer. */
 export const STREAM_ACK_EVERY = 500
 
 type RandomSource = { getRandomValues<T extends Uint8Array>(array: T): T }
 
-/** 128 位随机数，编成服务端接受的 22 位 base64url。 */
+/** 128 bit random value, encoded as the 22-char base64url the server accepts. */
 export function newStreamId(source: RandomSource): string {
   const bytes = source.getRandomValues(new Uint8Array(16))
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
@@ -32,7 +32,7 @@ export function newStreamId(source: RandomSource): string {
   return id
 }
 
-/** 在会话套接字地址上带上流编号；续传时再带上已看到的帧号和电脑这次运行的标识。 */
+/** Add the stream number to the session socket URL; on resume also add the seen frame number and this computer run's identifier. */
 export function streamSocketUrl(
   url: string,
   stream: { id: string; resume?: { epoch: string; ack: number } }
@@ -51,11 +51,11 @@ export type StreamAttached = {
   epoch: string
   resumed: boolean
   reason?: string
-  /** 电脑已执行到的手机命令编号。 */
+  /** Phone command number executed so far by the computer. */
   cack: number
-  /** 这次接上后第一帧的编号。 */
+  /** Number of the first frame after this connect. */
   next: number
-  /** 接上时电脑最新的帧号：看到它，补发就结束了。 */
+  /** The computer's latest frame number at connect time: once seen, the replay is over. */
   last: number
 }
 export type StreamFrame =
@@ -66,7 +66,7 @@ export type StreamFrame =
 const integer = (value: unknown) =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 
-/** 解析一帧：先认出流的控制帧，其余照常交给事件解析，并带出帧号。 */
+/** Parse a frame: recognize stream control frames first, hand the rest to event parsing as usual, carrying the frame number. */
 export function readStreamFrame(data: unknown): StreamFrame | null {
   let value: unknown = data
   if (typeof data === 'string') {
@@ -106,19 +106,19 @@ export function readStreamFrame(data: unknown): StreamFrame | null {
 }
 
 /**
- * 同一条命令续传后最多重发几次。电脑每次都因为这条命令断开（例如超过大小上限的 1009）时，
- * 不能一直「接上、重发、断开」地转下去；超过就放弃，按「未确认送达」交给用户决定。
+ * Maximum resends of the same command after resume. When the computer disconnects every time because of this command (e.g. 1009 over the size limit), 
+ * it must not loop forever "connect, resend, disconnect"; beyond this give up and hand it to the user as "delivery not confirmed".
  */
 export const MAX_COMMAND_RESENDS = 2
 
-/** 发出去、电脑还没确认执行的命令。 */
+/** Commands sent but not yet confirmed as executed by the computer. */
 export class CommandOutbox {
   #next = 0
   #pending: { cseq: number; message: ClientMessage; resends: number }[] = []
 
   /**
-   * 给命令编号并记下，返回编号和要发出的文本（编号必须在最前面，服务端按前缀识别）。
-   * 当场没发出去的要用 `drop` 撤掉：界面已经告诉用户它没发出、不会自动重试。
+   * Number and record the command, returning the number and the text to send (the number must come first; the server recognizes the prefix).
+   * Ones not sent on the spot must be withdrawn with `drop`: the UI already told the user it was not sent and will not auto-retry.
    */
   encode(message: ClientMessage) {
     const cseq = ++this.#next
@@ -126,12 +126,12 @@ export class CommandOutbox {
     return { cseq, text: JSON.stringify({ cseq, ...message }) }
   }
 
-  /** 电脑按顺序执行命令：确认了这一条，之前的也都执行过了。 */
+  /** The computer executes commands in order: confirming this one means earlier ones were executed too. */
   acknowledge(cseq: number) {
     this.#pending = this.#pending.filter((item) => item.cseq > cseq)
   }
 
-  /** 续传接上后还没执行的命令（原编号重发，电脑会去重）。 */
+  /** Commands not yet executed after resume (resent with the original number; the computer dedupes). */
   unacknowledged(cack: number) {
     this.acknowledge(cack)
     return this.#pending.map((item) => ({
@@ -140,13 +140,13 @@ export class CommandOutbox {
     }))
   }
 
-  /** 记下又重发了一次。 */
+  /** Record one more resend. */
   resent(cseq: number) {
     const item = this.#pending.find((value) => value.cseq === cseq)
     if (item) item.resends++
   }
 
-  /** 不再需要的命令（例如补发里那个决定已经处理掉了）。编号留空，电脑只要求后来的更大。 */
+  /** Commands no longer needed (e.g. the decision in a replay was already handled). The number is left as a gap; the computer only requires later ones to be larger. */
   drop(cseq: number) {
     this.#pending = this.#pending.filter((item) => item.cseq !== cseq)
   }

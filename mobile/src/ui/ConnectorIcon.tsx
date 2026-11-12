@@ -3,7 +3,7 @@ import { Glyph } from './compose/glyphs'
 import { connectorIconSources } from './connectorIconSources'
 import { useColors } from './kit'
 
-/** 连接器的 logo（桌面端同一套，构建期转成 PNG 随应用发布）；没有对应图标时画一个插头。 */
+/** Connector logos (same set as desktop, converted to PNG at build time and shipped with the app); draws a plug when there is no matching icon. */
 export function ConnectorIcon({ id, size = 30 }: { id?: string; size?: number }) {
   const colors = useColors()
   const source = id ? connectorIconSources[id] : undefined

@@ -1,10 +1,10 @@
 /**
  * Real LLM Integration Test
  *
- * 真实调用 MiniMax API，验证完整的 WebSocket 对话流：
+ * Calls the MiniMax API for real to verify the full WebSocket conversation flow:
  * Server → CLI subprocess → MiniMax API → streaming response → WebSocket → client
  *
- * 使用 .env 中的 MiniMax 配置。
+ * Uses the MiniMax config in .env.
  */
 
 const SERVER_PORT = 19876

@@ -140,7 +140,7 @@ describe('electron desktop host', () => {
 
   it('synchronizes locale preferences through narrow app IPC boundaries', async () => {
     const invoke = vi.fn()
-      .mockResolvedValueOnce('jp')
+      .mockResolvedValueOnce('en')
       .mockResolvedValueOnce(['zh-Hant-TW', 'en-US'])
       .mockResolvedValueOnce(undefined)
     const subscribe = vi.fn().mockResolvedValue(() => {})
@@ -149,9 +149,9 @@ describe('electron desktop host', () => {
       subscribe,
     })
 
-    await expect(host.app.getLocalePreference()).resolves.toBe('jp')
+    await expect(host.app.getLocalePreference()).resolves.toBe('en')
     await expect(host.app.getPreferredSystemLanguages()).resolves.toEqual(['zh-Hant-TW', 'en-US'])
-    await host.app.setLocalePreference('kr')
+    await host.app.setLocalePreference('en')
     const handler = vi.fn()
     await host.app.onLocaleChanged(handler)
 
@@ -168,7 +168,7 @@ describe('electron desktop host', () => {
     expect(invoke).toHaveBeenNthCalledWith(
       3,
       ELECTRON_IPC_CHANNELS.appSetLocalePreference,
-      'kr',
+      'en',
     )
     expect(subscribe).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.appLocaleChanged, handler)
   })

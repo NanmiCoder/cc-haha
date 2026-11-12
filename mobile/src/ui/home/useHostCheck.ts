@@ -7,12 +7,12 @@ import type { Host } from '../../core/types'
 import { errorText } from '../theme'
 import { credentialHostCheck, type HostCheck } from './homeModel'
 
-/** 本次打开 App 期间每台电脑最后一次连通的时间，只在内存里。 */
+/** The last time each computer was reachable during this app session, memory only. */
 const lastOnline = new Map<string, number>()
 
 /**
- * 每台电脑的连通检查：聚焦时立即检查，之后每 20 秒、回到前台时再查。
- * 公网连接额外读取授权到期时间；在线时读取正在跑和等你的任务数。
+ * Connectivity check per computer: check immediately on focus, then every 20 seconds and on returning to foreground.
+ * Public connections additionally read authorization expiry; when online read the counts of running and waiting tasks.
  */
 export function useHostCheck(host: Host, refresh = 0): HostCheck {
   const { client, error, credentialIssue } = useConnection(host.id)
@@ -38,7 +38,7 @@ export function useHostCheck(host: Host, refresh = 0): HostCheck {
               timeoutMs: 6000,
             })
             if (!result.authenticated)
-              throw new ApiError('授权已失效，请重新配对', 401)
+              throw new ApiError('Authorization expired; please pair again', 401)
             expiresAt = result.expiresAt
           } else
             await client!.verify({ signal: controller.signal, timeoutMs: 6000 })

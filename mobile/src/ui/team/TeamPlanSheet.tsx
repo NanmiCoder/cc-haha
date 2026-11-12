@@ -25,7 +25,7 @@ import type { TeamPlanController } from './useTeamPlan'
 
 type Provider = { id: string; name: string }
 
-/** 来源名只用于显示；读不到时退回 id，不影响审批。 */
+/** The source name is display only; falls back to the id when unavailable, without affecting approval. */
 function useProviderNames(client: ApiClient | null) {
   const [providers, setProviders] = useState<Provider[]>([])
   useEffect(() => {
@@ -55,7 +55,7 @@ function SectionTitle({ title, count, right }: { title: string; count?: number; 
   )
 }
 
-/** 卡片里的一行设置：左边名称，右边当前值（可带一行小字）和箭头。 */
+/** A settings row in the card: name on the left, current value (optionally with a small line) and chevron on the right. */
 function SettingRow({
   label,
   value,
@@ -76,7 +76,7 @@ function SettingRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${label}：${[value, detail].filter(Boolean).join('，')}`}
+      accessibilityLabel={`${label}: ${[value, detail].filter(Boolean).join(', ')}`}
       accessibilityState={{ disabled: inactive }}
       disabled={inactive}
       onPress={onPress}
@@ -169,7 +169,7 @@ function MemberCard({
         </View>
         <Hair />
         <SettingRow
-          label="模型"
+          label="Model"
           value={member.runtime.modelId}
           detail={teamRuntimeSource(member.runtime, providers)}
           disabled={locked || !client}
@@ -182,7 +182,7 @@ function MemberCard({
           disabled={locked}
           onApply={(value) => onRuntime(teamRuntime(value))}
           trigger={({ open, disabled, label }) => (
-            <SettingRow label="思考强度" value={label} disabled={disabled} onPress={open} />
+            <SettingRow label="Thinking effort" value={label} disabled={disabled} onPress={open} />
           )}
         />
         <Hair />
@@ -195,7 +195,7 @@ function MemberCard({
         <Hair />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`职责说明，${briefOpen ? '收起' : '展开'}`}
+          accessibilityLabel={`Responsibilities, ${briefOpen ? 'Collapse' : 'Expand'}`}
           accessibilityState={{ expanded: briefOpen }}
           onPress={() => setBriefOpen((value) => !value)}
           style={({ pressed }) => ({
@@ -206,7 +206,7 @@ function MemberCard({
             backgroundColor: pressed ? colors.fill : 'transparent',
           })}
         >
-          <Text style={{ flex: 1, fontSize: 14, color: colors.ink3 }}>职责说明</Text>
+          <Text style={{ flex: 1, fontSize: 14, color: colors.ink3 }}>Responsibilities</Text>
           <Icon name={briefOpen ? 'chevron-up' : 'chevron-down'} size={15} color={colors.chevron} strokeWidth={2.2} />
         </Pressable>
         {briefOpen ? (
@@ -218,9 +218,9 @@ function MemberCard({
       {suggestionDiffers(member) ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 }}>
           <Text numberOfLines={1} style={{ flex: 1, fontSize: 13, color: colors.ink3 }}>
-            建议：{teamRuntimeLabel(member.suggestedRuntime!, providers)}
+            Suggested: {teamRuntimeLabel(member.suggestedRuntime!, providers)}
           </Text>
-          <TextButton title="恢复" disabled={locked} onPress={() => onRuntime(member.suggestedRuntime!)} />
+          <TextButton title="Restore" disabled={locked} onPress={() => onRuntime(member.suggestedRuntime!)} />
         </View>
       ) : null}
     </View>
@@ -240,14 +240,14 @@ function TaskList({
 }) {
   const colors = useColors()
   if (!tasks.length)
-    return <Text style={{ paddingHorizontal: 4, fontSize: 14, color: colors.ink3 }}>尚未分配任务</Text>
+    return <Text style={{ paddingHorizontal: 4, fontSize: 14, color: colors.ink3 }}>No tasks assigned yet</Text>
   return (
     <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
       {tasks.map((task, index) => {
         const owner = members.find((member) => member.id === task.ownerId)
         const dependencies = task.dependencies
           .map((id) => tasks.find((row) => row.id === id)?.subject ?? id)
-          .join('、')
+          .join(', ')
         return (
           <View key={task.id}>
             {index > 0 ? <Hair inset={0} /> : null}
@@ -263,13 +263,13 @@ function TaskList({
               ) : null}
               {dependencies ? (
                 <Text numberOfLines={2} style={{ marginLeft: 28, fontSize: 12.5, lineHeight: 18, color: colors.ink3 }}>
-                  前置任务：{dependencies}
+                  Prerequisites: {dependencies}
                 </Text>
               ) : null}
             </View>
             <SettingRow
-              label="负责人"
-              value={owner?.name ?? '未分配'}
+              label="Owner"
+              value={owner?.name ?? 'Unassigned'}
               danger={!owner}
               disabled={locked}
               onPress={() => onOwner(task)}
@@ -282,9 +282,9 @@ function TaskList({
 }
 
 /**
- * 队长提交的团队方案，从底部弹出逐个确认。每项改动直接保存到电脑（和桌面端一样只能改
- * 模型、Agent 预设和任务负责人；成员名写在其他成员的任务书里，改名会让它们找不到彼此，
- * 所以不在这里改）。由页面持有开关，入口卡片重挂载不会把它关掉或重复弹出。
+ * Team plan submitted by the lead, popped up from the bottom to confirm item by item. Each change saves directly to the computer (like desktop only
+ * model, agent preset and task owner can be changed; member names are written in other members' briefs, and renaming would make them unable to find each other, 
+ * so they are not changed here). The page owns the toggle, so remounting the entry card neither closes it nor pops it twice.
  */
 export function TeamPlanSheet({
   visible,
@@ -301,7 +301,7 @@ export function TeamPlanSheet({
   team: TeamPlanController
   client: ApiClient | null
   ready: boolean
-  /** 队长当前的模型（会话正在用的）；拿不到时用方案里记录的。 */
+  /** The lead's current model (in use by the session); falls back to the one recorded in the plan. */
   leaderRuntime?: TeamPlanRuntime
 }) {
   const colors = useColors()
@@ -318,7 +318,7 @@ export function TeamPlanSheet({
   const review = teamPlanReview(plan)
   const locked = !ready || team.pending !== null
   const leader = leaderRuntime ?? plan.leaderRuntime
-  // 给运行中的团队追加成员：已经在跑的成员不受这次确认或取消的影响。
+  // Adding members to a running team: members already running are unaffected by this approval or cancellation.
   const addition = !!plan.parentPlanId
   const agents = Object.entries(plan.agentCatalog ?? {})
 
@@ -326,13 +326,13 @@ export function TeamPlanSheet({
     void team.edit({ members: [{ id: member.id, runtime }] })
   const cancel = () =>
     Alert.alert(
-      addition ? '不追加这些成员？' : '取消这个团队？',
+      addition ? 'Not add these members?' : 'Cancel this team?',
       addition
-        ? '已经在跑的成员不受影响，队长会收到通知。'
-        : '成员还没有启动，取消后队长会收到通知，可以重新规划。',
+        ? 'Members already running are unaffected; the lead will be notified.'
+        : 'Members have not started yet; after canceling the lead is notified and can replan.',
       [
-        { text: '再想想', style: 'cancel' },
-        { text: addition ? '不追加' : '取消团队', style: 'destructive', onPress: () => void team.act('cancel') },
+        { text: 'Think again', style: 'cancel' },
+        { text: addition ? 'Do not add' : 'Cancel team', style: 'destructive', onPress: () => void team.act('cancel') },
       ]
     )
 
@@ -340,8 +340,8 @@ export function TeamPlanSheet({
     <View style={{ gap: 10 }}>
       {feedbackOpen ? (
         <NoteInput
-          accessibilityLabel="调整意见"
-          placeholder="告诉队长要怎么调整分工"
+          accessibilityLabel="Feedback"
+          placeholder="Tell the lead how to adjust the division of work"
           autoFocus
           minHeight={72}
           value={feedback}
@@ -352,7 +352,7 @@ export function TeamPlanSheet({
       <InlineError text={team.error} />
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <Button
-          title={feedbackOpen ? '退回给队长' : '退回调整'}
+          title={feedbackOpen ? 'Send back to the lead' : 'Send back for changes'}
           variant="secondary"
           size="lg"
           style={{ flex: 1 }}
@@ -364,7 +364,7 @@ export function TeamPlanSheet({
           }}
         />
         <Button
-          title="确认并启动"
+          title="Approve and launch"
           size="lg"
           style={{ flex: 1.4 }}
           disabled={locked || !!review.blocker}
@@ -372,7 +372,7 @@ export function TeamPlanSheet({
           onPress={() => void team.act('approve')}
         />
       </View>
-      <QuietButton title={addition ? '不追加这些成员' : '取消团队'} disabled={locked} onPress={cancel} />
+      <QuietButton title={addition ? 'Do not add these members' : 'Cancel team'} disabled={locked} onPress={cancel} />
     </View>
   )
 
@@ -380,8 +380,8 @@ export function TeamPlanSheet({
     <DetentSheet
       visible={visible}
       onClose={onClose}
-      title={addition ? '追加成员' : 'Agent 团队'}
-      left={<TextButton title="稍后" onPress={onClose} />}
+      title={addition ? 'Add members' : 'Agent Team'}
+      left={<TextButton title="Later" onPress={onClose} />}
       initialDetent="full"
       footer={footer}
     >
@@ -389,18 +389,18 @@ export function TeamPlanSheet({
         <Mono numberOfLines={1} style={{ fontSize: 13, color: colors.ink3 }}>{plan.teamName}</Mono>
         <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>
           {addition
-            ? '团队已经在跑，确认后这些成员才会加入。改动只对这次生效，每个成员单独计费。'
-            : '确认每个成员的模型和分工后再启动。改动只对这次团队生效，每个成员单独计费。'}
+            ? 'The team is already running; these members join only after approval. Changes apply only this time, and each member is billed separately.'
+            : 'Confirm each member’s model and role before launching. Changes apply only to this team, and each member is billed separately.'}
         </Text>
       </View>
       {review.blocker ? <Callout>{review.blocker}</Callout> : null}
 
       <SectionTitle
-        title="成员"
+        title="Members"
         count={plan.members.length}
         right={
           plan.members.length > 1 ? (
-            <TextButton title="统一模型" disabled={locked || !client} onPress={() => setPicker({ kind: 'all' })} />
+            <TextButton title="Same model for all" disabled={locked || !client} onPress={() => setPicker({ kind: 'all' })} />
           ) : null
         }
       />
@@ -419,10 +419,10 @@ export function TeamPlanSheet({
         />
       ))}
       <Text style={{ paddingHorizontal: 4, fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
-        队长：{teamRuntimeLabel(leader, providers)}
+        Lead: {teamRuntimeLabel(leader, providers)}
       </Text>
 
-      <SectionTitle title="任务分配" count={plan.tasks.length} />
+      <SectionTitle title="Task assignment" count={plan.tasks.length} />
       <TaskList
         tasks={plan.tasks}
         members={plan.members}
@@ -433,7 +433,7 @@ export function TeamPlanSheet({
       <RuntimeSheet
         visible={picker?.kind === 'model' || picker?.kind === 'all'}
         onClose={() => setPicker(null)}
-        title={picker?.kind === 'model' ? `${picker.member.name} 的模型` : '所有成员的模型'}
+        title={picker?.kind === 'model' ? `${picker.member.name} ’s model` : 'Model for all members'}
         client={client}
         initial={
           picker?.kind === 'model'
@@ -452,7 +452,7 @@ export function TeamPlanSheet({
       <Sheet
         visible={picker?.kind === 'agent'}
         onClose={() => setPicker(null)}
-        title="Agent 预设"
+        title="Agent Preset"
       >
         <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
           {agents.map(([agentType, snapshot], index) => (
@@ -474,10 +474,10 @@ export function TeamPlanSheet({
           ))}
         </View>
         <Text style={{ paddingHorizontal: 4, fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
-          换预设后，没手动改过模型的成员会改用该预设建议的模型。
+          After changing the preset, members whose model was not changed manually switch to the model suggested by the preset.
         </Text>
       </Sheet>
-      <Sheet visible={picker?.kind === 'owner'} onClose={() => setPicker(null)} title="负责人">
+      <Sheet visible={picker?.kind === 'owner'} onClose={() => setPicker(null)} title="Owner">
         {picker?.kind === 'owner' ? (
           <Text numberOfLines={2} style={{ paddingHorizontal: 4, fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
             {picker.task.subject}

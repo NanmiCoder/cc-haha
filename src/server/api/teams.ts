@@ -1,14 +1,14 @@
 /**
  * Teams REST API
  *
- * GET    /api/teams                                — 列出所有团队
- * GET    /api/teams/session/:id/workbench           — 获取主会话的实时或归档工作台
- * GET    /api/teams/:name                          — 获取团队详情
- * GET    /api/teams/:name/workbench                — 获取协作工作台只读快照
- * GET    /api/teams/:name/members/:id/transcript   — 获取成员 transcript
- * POST   /api/teams/:name/members/:id/messages     — 给成员发送消息（以 / 开头的是在成员自己的 CLI 里执行的命令）
- * PATCH  /api/teams/:name/members/:id/runtime      — 切换运行中成员的模型
- * DELETE /api/teams/:name                          — 删除团队
+ * GET    /api/teams                                — list all teams
+ * GET    /api/teams/session/:id/workbench           — get the main session's live or archived workbench
+ * GET    /api/teams/:name                          — get team details
+ * GET    /api/teams/:name/workbench                — get a read-only snapshot of the collaboration workbench
+ * GET    /api/teams/:name/members/:id/transcript   — get a member transcript
+ * POST   /api/teams/:name/members/:id/messages     — send a message to a member (messages starting with / run as commands in the member's own CLI)
+ * PATCH  /api/teams/:name/members/:id/runtime      — switch the model of a running member
+ * DELETE /api/teams/:name                          — delete a team
  */
 
 import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } from '../services/teamPlanService.js'

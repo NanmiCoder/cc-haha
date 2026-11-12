@@ -1,126 +1,120 @@
 ---
-title: 微信接入
-nav_title: 微信
-description: 在设置页扫码登录微信机器人账号，再用配对码授权具体微信用户。
+title: WeChat Integration
+nav_title: WeChat
+description: Scan a QR code in Settings to log in a WeChat bot account, then authorize individual users with a pairing code.
 order: 3
 ---
 
-# 微信接入
+# WeChat Integration
 
-适合只想用微信、不愿意再装一个 App 的人：整个接入就是扫一次码，不需要去任何开放平台申请。代价是权限审批只能靠回复文本命令，没有可点的按钮；而且只处理私聊，不面向群聊设计。
+For people who only want to use WeChat: the whole setup is one QR scan, with no developer platform to register on. The trade-off is that permission approval is text replies rather than tappable buttons, and only private chats are supported.
 
-除文本外，微信这条链路还支持语音转出的文字、图片、文件和视频附件，也可以把当前项目的产物回传到微信。
+Besides text, this path accepts transcribed voice content, images, files, and videos, and can return artifacts from the current project to WeChat.
 
-## 扫码绑定机器人账号
+## Bind the bot account
 
-1. 打开「设置」→「IM 接入」，切到「微信」Tab。
-2. 点「扫码绑定」。
-3. 用微信扫描页面上的二维码，并在手机上确认登录。
-4. 等页面状态变成「微信已绑定」。
+1. Open **Settings → IM Adapters** and select the **WeChat** tab.
+2. Select **Scan to Bind**.
+3. Scan the QR code with WeChat and confirm the login on your phone.
+4. Wait for the status to read **WeChat is bound**.
 
-![未绑定时的扫码入口](../images/im/wechat/wechat01.png)
+Credentials are written to local configuration and the adapter restarts on its own; no separate save is needed. The tab then offers **Rescan** and **Unbind WeChat account**.
 
-绑定成功后凭据会自动写入本机配置并重启 adapter，不需要再点「保存」。这时 Tab 里会出现「重新扫码」和「解除微信绑定」两个按钮。
+Binding the bot account is not the same as allowing every WeChat contact. Who may use it is decided in the next step.
 
-绑定状态与消息通道状态分别显示。连接详情会显示在线、重连中、认证失效或状态已过期，以及最近接收、发送时间；绑定成功本身不代表消息通道在线。点击「重新连接」会复用凭据，只重启微信通道；只有需要重新认证时才重新扫码。
+## Authorize a user
 
-![绑定成功后的状态](../images/im/wechat/wechat03.png)
+1. Back at the top of the page, under **Pairing**, select **Generate Code**.
+2. Send the six-character code to the bound bot in WeChat.
+3. Once pairing is confirmed, you can send messages directly.
 
-扫码绑定的是机器人账号本身，不等于放行所有微信联系人。谁能用，还要看下一步。
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated.
 
-## 授权具体用户
+Known WeChat user IDs can instead be entered in **Allowed Users**, separated by commas. That suits a fixed allowlist but is less convenient than pairing.
 
-1. 回到页面顶部的「配对管理」，点「生成配对码」。
-2. 在微信里把这枚 6 位码发给刚绑定的机器人。
-3. 看到配对成功提示后就能直接发消息。
+## Projects and sessions
 
-![在微信里发送配对码并开始对话](../images/im/wechat/wechat02.jpg)
+With **Default Project** set, the first accepted message opens a session in that directory. Without it, the bot lists recent projects; reply with a number, project name, or absolute path.
 
-配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。
+Later messages in the same chat reuse that session, and the mapping survives a Desktop restart. `/new` picks another project; `/clear` empties the context while keeping the project binding.
 
-也可以把已知的微信用户 ID 直接填进「允许的用户」，多个用逗号分隔。这适合固定白名单，但不如配对码直观。
+## Commands
 
-## 选项目并开始对话
+WeChat has no configurable menu, so the chat box is the only entry point. After pairing, the bot suggests `/help`.
 
-配了「默认项目」的话，第一条消息就直接在那个目录下开会话。没配的话，机器人会先列出最近用过的项目，回复编号、项目名或绝对路径即可。
+- `/help` — show available commands
+- `/status` — project, branch, model, run state, and task summary
+- `/projects` — list recent projects again
+- `/new` — clear the current binding and choose a project
+- `/new <number, project name, or absolute path>` — start directly in that project
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
+- `/send <project path>` — return an image, video, or file; quote paths containing spaces
+- `/transcode <project video path>` — convert to a compatible MP4 and return it, up to 120 seconds
+- `/voice on`, `/voice off` — toggle audio-file replies; preferences persist for the bound account and user across restarts
+- `/voice list`, `/voice select <number|auto>` — list installed voices and choose one or restore automatic selection
+- `/speak <text>` — synthesize the supplied text as a WAV file on Windows
+- `/delivery` — inspect pending, failed, and uncertain deliveries
+- `/retry <reply ID>` — explicitly resend a recorded text reply after checking it was not received
 
-之后同一个聊天窗口的消息会复用同一条会话，桌面端重启也能接回去。发 `/new` 重新选项目，发 `/clear` 清空上下文但保留项目绑定。
+## Returning images, files, and videos
 
-## 支持的命令
+For example, `/send reports/result.pdf` reads the file from the active session's project and sends it as a WeChat attachment. Files are limited to 30 MiB and images to 10 MiB. Files outside the active project, missing paths, directories, and links escaping the project are rejected.
 
-微信没有可配置的菜单，命令入口就是聊天框。配对成功后机器人会提示发 `/help`。
+Local Markdown images in assistant replies are returned automatically. Other deliverables require explicit `file:` download links, for example `[Report](file:///C:/project/report.pdf)`. Ordinary source citations and web links are not uploaded. Automatic delivery is limited to five items and 30 MiB per reply; use `/send` for additional files.
 
-- `/help` 或 `帮助` — 显示可用命令
-- `/status` 或 `状态` — 当前项目、分支、模型、运行状态和任务摘要
-- `/projects` 或 `项目列表` — 重新列出最近项目
-- `/new` 或 `新会话` — 清空当前绑定并重新选择项目
-- `/new <编号、项目名或绝对路径>` — 直接在指定项目下开新会话
-- `/clear` 或 `清空` — 清空上下文，保留项目绑定
-- `/stop` 或 `停止` — 停止本轮生成
-- `/send <项目内路径>` — 把图片、视频或普通文件回传到微信，路径有空格时可以加引号
-- `/transcode <项目内视频路径>` — 转成兼容的 MP4 后回传，限 120 秒以内
-- `/voice on`、`/voice off` — 开关后续答案的音频文件回复，按当前绑定账号和用户保存，重启后继续生效
-- `/voice list`、`/voice select <编号|auto>` — 列出系统音色，选择音色或恢复自动选择
-- `/speak <文字>` — 把指定文字合成为 WAV 音频文件（Windows）
-- `/delivery` — 查看待处理、失败和结果待核对的消息
-- `/retry <回复 ID>` — 核对手机未收到后，补发一条已记录的文字回复
+Recognized MP4 files use video messages; other formats are sent as files. This version does not automatically transcode. Failed uploads or sends are not automatically repeated because delivery may be uncertain. Check whether WeChat received the attachment before retrying with `/send`.
 
-## 图片、文件与视频回传
+For a compatible format, explicitly send `/transcode videos/example.avi`. Local FFmpeg converts it to H.264/AAC MP4, checks duration and audio preservation, and rejects truncated results. Input and output are limited to 30 MiB; input duration is limited to 120 seconds.
 
-例如发送 `/send reports/result.pdf`，机器人会从当前会话的项目目录读取文件，上传后以微信附件发回。文件最大 30 MiB，图片最大 10 MiB。只允许当前项目内的文件；不存在的路径、目录和指向项目外的链接会被拒绝。
+## Video analysis
 
-助手回复中的本地 Markdown 图片会自动回传；文件需用明确的 `file:` 下载链接，例如 `[报告](file:///C:/project/report.pdf)`。普通代码引用和网页链接不会自动上传。每轮最多自动回传 5 项、合计 30 MiB；更多产物可用 `/send` 单独获取。
+An incoming video is downloaded as an attachment and sampled into at most 12 timestamped frames. Its audio track, if present, is transcribed using the desktop's prepared speech recognizer. Visual analysis requires an image-capable model. If speech recognition is unavailable, the reply explicitly describes the visual-only coverage; sampled analysis does not inspect every frame.
 
-已识别的 MP4 视频会以视频消息发送，其他格式按文件发送。本版本不会自动转码。上传或发送失败不会自动重发，以免产生重复附件；先在微信核对是否收到，再决定是否使用 `/send` 重试。
+Analysis is limited to 30 MiB, 120 seconds, and one video per message. Longer clips or missing dependencies keep the original attachment and produce an explanation instead of silently truncating the analysis. Each message accepts up to five attachments totaling 30 MiB.
 
-需要兼容格式时，显式发送 `/transcode videos/example.avi`。程序使用本机 FFmpeg 转成 H.264/AAC MP4，并检查时长和音轨是否保留；输入与输出均限制 30 MiB，输入最长 120 秒。转码失败会说明原因，不会把截断的视频当作成功产物。
+Install or provide executable `ffmpeg` and `ffprobe` on PATH, or set `WECHAT_FFMPEG_PATH` and `WECHAT_FFPROBE_PATH` to their full paths in the environment used to start cc-haha. The app does not download them automatically. Prepare the recognizer through desktop voice settings.
 
-## 视频分析
+## Audio replies
 
-发来的视频会下载为附件，再提取最多 12 张带时间标记的采样画面；有音轨时，使用桌面已准备好的语音识别模型转写。画面分析需要当前会话的模型支持图片。没有语音识别模型时会明确说明只使用画面；采样分析不等于逐帧检查整段视频。
+After `/voice on`, completed answers also produce audio files. `/speak Hello, this is a voice test` tests synthesis directly. This implementation uses installed Windows speech components and requires no additional cloud speech API key. Chinese uses a Windows Chinese voice; other text uses System.Speech. Missing speech components or PowerShell produce an actionable error.
 
-视频分析上限为 30 MiB、120 秒，每条消息分析一个视频。超过时长或缺少工具时保留附件并提示无法分析，不会悄悄截断后宣称分析完成。每条消息最多 5 个附件、合计 30 MiB。
+The result is a downloadable WAV file, **not a native WeChat voice bubble**. Synthesis accepts up to 2,000 characters and 10 MiB; code blocks are not spoken. Ask for a shorter summary before synthesizing a long answer. Text replies remain available if synthesis fails. This local synthesis implementation currently supports Windows only.
 
-本机需要可执行的 `ffmpeg` 和 `ffprobe`。可以加入 PATH，或在启动 cc-haha 的环境中设置 `WECHAT_FFMPEG_PATH`、`WECHAT_FFPROBE_PATH` 为各自的完整路径。程序不会自动下载这些工具。语音识别模型在桌面语音设置中准备。
+`/stop` cancels media processing and the current generation; messages already sent cannot be recalled.
 
-## 音频回复
+## Connection state and restart recovery
 
-发送 `/voice on` 后，后续完整文字答案还会合成为音频文件；也可发送 `/speak 你好，这是语音测试` 单独测试。当前使用 Windows 已安装的语音组件，不需要新增云端语音 API Key；中文使用系统中文语音，其他文字使用 System.Speech。缺少系统语音组件或 PowerShell 时会提示原因。
+Account binding and channel health are shown separately. Connection details show online, reconnecting, expired authentication, or stale status, together with recent receive/send times. Binding alone does not prove connectivity. Reconnect reuses saved credentials and restarts only WeChat; scan again only when authentication must be renewed.
 
-这是可下载的 WAV 文件，**不是微信原生语音气泡**。最多合成 2000 字、10 MiB；代码块不会朗读。超长答案需要先让助手生成较短摘要，合成失败时保留文字结果。其他操作系统暂不支持该本地合成方式。
+The receive cursor and authorized pending messages are saved together. Unstarted messages can resume after restart. Submitted tasks without a confirmed result are not automatically rerun: inspect the desktop conversation first. Unauthorized message bodies and pairing codes are not stored as recoverable tasks.
 
-`/stop` 会取消正在进行的媒体处理和本轮生成；已经发出的微信消息无法撤回。
+Text chunks and attachment delivery states are recorded. A timeout may mean the phone already received the message, so no blind resend occurs. Use `/delivery` to inspect records, then `/retry <reply ID>` for a missing text reply without rerunning AI. Media processing and uploads cannot yet resume across restarts; use `/send` or start processing again.
 
-## 断线、重启与补发
+Successful records normally expire after 24 hours; failed or uncertain records expire after seven days. Active work is not evicted to make space. When journaling fails, the receive cursor does not advance and connection health reports a failure. Recovery does not guarantee exactly-once delivery or execution.
 
-接收游标与待处理消息会一起保存。重启后可恢复尚未开始处理的授权消息；已经提交但没有确认结果的任务不会自动重跑，先在桌面查看执行结果。未配对消息的正文和配对码不会作为待恢复任务保存。
+## Approval and reply behavior
 
-文字回复分片和附件投递状态也会记录。发送超时可能代表手机已收到，所以不会盲目重发。发送 `/delivery` 查看记录；确认某条文字未收到后，用 `/retry <回复 ID>` 补发，不会重新调用 AI。附件处理与上传尚不能跨重启续传，需要重新 `/send` 或重新发起处理。
+A permission request arrives as text. With one pending request, the footer only shows numeric choices: `1` to allow once, `2` to always allow, and `3` to deny. Long ID commands are not repeated.
 
-成功记录通常保留 24 小时，失败或结果未知记录最多保留 7 天。活动任务不会为腾出容量而被删除；记录无法保存时停止接收推进，并显示连接异常。恢复能力不保证消息或任务恰好执行一次。
+With multiple pending requests, the prompt shows commands containing the request ID; numeric replies do not approve any request. Use one of the commands from the relevant prompt:
 
-## 权限审批与消息表现
+- `/allow <requestId>` — allow once
+- `/always <requestId>` — persist the matching approval
+- `/deny <requestId>` — deny
 
-Claude 请求敏感权限时，微信里会收到审批消息。只有一个待审批请求时，底部只显示数字选项：回复 `1` 允许一次、`2` 永久允许、`3` 拒绝，不再重复长 ID 命令。
+Messages are received through long polling and long replies are split into platform-sized messages. A typing indicator is shown while Claude thinks or runs tools. Images enter model input inline; other files are downloaded to a local temporary path. Oversized attachments are reported back in the chat.
 
-同时有多个待审批请求时，提示会显示带请求 ID 的命令，数字回复不会直接批准任何请求。按对应消息回复其中一条：
+## Unbind
 
-- `/allow <requestId>` — 允许这一次
-- `/always <requestId>` — 永久允许同类请求
-- `/deny <requestId>` — 拒绝
+Two levels:
 
-回复走长轮询接收，正文按微信的长度上限分片发送，思考和工具执行期间会尽量显示「正在输入」。图片会以内联图片进入模型输入，其他文件会以本机临时路径传给会话，超出大小限制时机器人会在微信里提示。
+- **Unbind WeChat account** clears the bot credentials and this platform's authorization lists. Binding again means scanning again.
+- **Unbind** next to a name under **Paired Users** revokes only that person. They need a fresh pairing code afterwards.
 
-## 解除绑定
+## Development
 
-两种粒度：
-
-- 「解除微信绑定」清掉整个机器人账号凭据和这个平台的授权名单，之后要重新扫码。
-- 在「已配对用户」列表里点某个用户右侧的「解绑」，只撤销那一个人，其他人不受影响。被解绑的人要重新发一枚新配对码。
-
-## 本地开发启动
-
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -128,7 +122,7 @@ bun install
 bun run wechat
 ```
 
-可选的环境变量覆盖：
+Optional overrides:
 
 ```bash
 export WECHAT_ACCOUNT_ID="..."
@@ -138,20 +132,20 @@ export WECHAT_USER_ID="..."
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-正常使用桌面端不需要手动设置这些，扫码绑定会写好本机配置。
+Normal Desktop use needs none of these; QR binding writes the local configuration.
 
-## 常见问题
+## Troubleshooting
 
-**扫码成功后发消息仍提示未授权**：这是正常流程。扫码只写入机器人账号凭据，具体用户还要发配对码，或被写进「允许的用户」。
+**Still unauthorized after a successful scan.** That is the expected flow. Scanning only stores bot credentials; the individual user still has to send a pairing code or appear in **Allowed Users**.
 
-**二维码提示过期**：重新点「扫码绑定」生成新的，微信的扫码登录状态只在短时间内有效。
+**The QR code expired.** Select **Scan to Bind** again. WeChat login QR codes are short-lived.
 
-**adapter 启动时报缺少微信账号**：`WECHAT_ACCOUNT_ID`/`WECHAT_BOT_TOKEN` 和 `~/.claude/adapters.json` 里的对应字段都没生效，先在设置页完成扫码绑定。
+**The adapter reports a missing WeChat account.** Neither the environment variables nor `wechat.accountId` / `wechat.botToken` in `~/.claude/adapters.json` took effect. Complete QR binding in Settings first.
 
-**收不到回复**：依次确认桌面端在运行、Tab 里显示「微信已绑定」、当前用户已配对或在「允许的用户」里、`~/.claude/adapters.json` 能正常写入；源码运行时还要确认 `ADAPTER_SERVER_URL` 指向正在跑的桌面服务。
+**No replies.** Confirm Desktop is running, the tab reads **WeChat is bound**, the sender is paired or allowlisted, and `~/.claude/adapters.json` is writable. When running from source, also confirm `ADAPTER_SERVER_URL` points at the running Desktop server.
 
-**重启后会话没接回来**：检查 `~/.claude/adapter-sessions.json` 能否正常写入，以及桌面端里那条会话是否还在。
+**Session not restored after a restart.** Verify that `~/.claude/adapter-sessions.json` is writable and that the session still exists in Desktop.
 
-## 源码入口
+## Source
 
-`adapters/wechat/` 下的 `index.ts`、`protocol.ts`、`media.ts`，以及 `adapters/common/` 下的 `pairing.ts`、`session-store.ts`、`ws-bridge.ts`、`http-client.ts`。
+`index.ts`, `protocol.ts`, and `media.ts` under `adapters/wechat/`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.

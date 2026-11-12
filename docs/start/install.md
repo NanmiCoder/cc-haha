@@ -1,102 +1,102 @@
 ---
-title: 下载与安装
-nav_title: 下载与安装
-description: macOS、Windows、Linux 三个平台的安装包，以及系统拦截时的处理办法。
+title: Download and install
+nav_title: Install
+description: Installers for macOS, Windows, and Linux, plus what to do when the OS blocks them.
 order: 1
 ---
 
-# 下载与安装
+# Download and install
 
-装完就能用，不需要另外安装 Node.js、Python 或 Claude Code——CLI 内核和文件搜索用的 ripgrep 都已经打进安装包里了。
+Install and go. You don't need Node.js, Python, or Claude Code — the CLI engine and the ripgrep binary used for file search are both bundled inside the installer.
 
-产品名称统一为 **cc-haha**。现有安装包、已安装的应用和系统进程可能仍显示旧名称 `Claude Code Haha`；下面的文件名和命令按实际发布包保留。
+The product is now called **cc-haha**. Existing packages, installed apps, and system processes may still use the legacy name `Claude Code Haha`; filenames and commands below match those published packages.
 
-## 挑对安装包
+## Pick the right package
 
-所有安装包都在 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest)，按系统和 CPU 架构选一个：
+Everything lives on [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest). Choose by operating system and CPU architecture:
 
-| 你的系统 | 下载 |
+| Your system | Download |
 |---|---|
-| macOS，Apple 芯片（M 系列） | `Claude-Code-Haha-<版本>-macOS-Apple-Silicon.dmg` |
-| macOS，Intel 芯片 | `Claude-Code-Haha-<版本>-macOS-Intel.dmg` |
-| Windows x64 | `Claude-Code-Haha-<版本>-Windows-x64-Setup.exe` |
-| Windows ARM64 | `Claude-Code-Haha-<版本>-Windows-arm64-Setup.exe` |
-| Linux x64 | `Claude-Code-Haha-<版本>-Linux-x64.AppImage`、`.deb` 或 `.rpm` |
-| Linux ARM64 | `Claude-Code-Haha-<版本>-Linux-arm64.AppImage`、`.deb` 或 `.rpm` |
+| macOS, Apple Silicon (M series) | `Claude-Code-Haha-<version>-macOS-Apple-Silicon.dmg` |
+| macOS, Intel | `Claude-Code-Haha-<version>-macOS-Intel.dmg` |
+| Windows x64 | `Claude-Code-Haha-<version>-Windows-x64-Setup.exe` |
+| Windows ARM64 | `Claude-Code-Haha-<version>-Windows-arm64-Setup.exe` |
+| Linux x64 | `Claude-Code-Haha-<version>-Linux-x64.AppImage`, `.deb` or `.rpm` |
+| Linux ARM64 | `Claude-Code-Haha-<version>-Linux-arm64.AppImage`, `.deb` or `.rpm` |
 
-不确定自己是哪种架构：macOS 看「关于本机」里的芯片型号，Windows 看「设置 → 系统 → 系统信息」里的系统类型。别只凭机器牌子猜。
+Not sure which architecture you have? On macOS check the chip listed in "About This Mac"; on Windows check the system type under Settings → System → About. Don't guess from the brand of the machine.
 
-名字以 `-update.zip` 结尾的文件和 `latest*.yml` 是应用自动更新用的，不用手动下载。v0.7.6 及更早的版本用的是 `mac-arm64`、`win-x64`、`linux-x86_64` 这类旧文件名。
+Files ending in `-update.zip` and the `latest*.yml` files are used by the app's own updater. You don't need to download them. v0.7.6 and earlier used older names such as `mac-arm64`, `win-x64` and `linux-x86_64`.
 
 ## macOS
 
-1. 双击 DMG。
-2. 把 cc-haha 拖进「应用程序」。
-3. 从「应用程序」打开。
+1. Open the DMG.
+2. Drag cc-haha into Applications.
+3. Launch it from Applications.
 
-### 如果提示「已损坏，无法打开」
+### If macOS says the app is damaged
 
-这不是文件坏了。macOS 会给从网上下载的安装包打一个隔离标记（quarantine），遇到没有 Apple 签名的应用就直接拒绝启动，报错文案偏偏写成「已损坏」。Releases 里的正式版本都经过签名和公证，不会有这一步；如果你拿到的是未签名的开发构建，用下面两种办法之一放行。
+Nothing is actually damaged. macOS quarantines anything downloaded from the web and refuses to launch it without an Apple signature — but it words the error as "damaged", which is thoroughly misleading. Releases are signed and notarized and skip this entirely; if you have an unsigned development build, use one of the two routes below.
 
-**办法一：用构建附带的脚本**
+**Option 1: the script that ships with the build**
 
-未签名的开发构建会附带 `install-macos-unsigned.sh`。把它和 DMG 放在**同一个文件夹**（比如「下载」），然后在终端里跑：
+Unsigned development builds include `install-macos-unsigned.sh`. Put it in **the same folder as the DMG** (Downloads, for example), then run:
 
 ```bash
 cd ~/Downloads
 bash install-macos-unsigned.sh
 ```
 
-脚本会自动挑对架构的 DMG、挂载、把应用装进 `/Applications`、清掉隔离标记再打开。已有的旧版本会先移到废纸篓，不会直接覆盖。
+The script picks the DMG matching your architecture, mounts it, installs the app into `/Applications`, strips the quarantine attribute, and launches it. Any existing install is moved to the Trash first rather than overwritten in place.
 
-**办法二：手动清隔离标记**
+**Option 2: clear the quarantine flag yourself**
 
-已经把应用拖进「应用程序」了，就直接执行：
+If the app is already in Applications:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"
 ```
 
-只对你确认来自本仓库 Release 的安装包这么做。来路不明的应用不要绕过 Gatekeeper。
+Only do this for packages you have confirmed came from this repository's Releases. Never bypass Gatekeeper for software of unknown origin.
 
 ## Windows
 
-1. 先把正在运行的旧版本完全退出，包括系统托盘里的图标。
-2. 双击 `.exe` 安装。
-3. **不要**右键选「以管理员身份运行」——安装器是给当前用户装的，用管理员身份反而会让数据目录对不上。
+1. Fully quit any running copy of the old version, including the system tray icon.
+2. Double-click the `.exe`.
+3. **Don't** right-click and choose "Run as administrator" — the installer is per-user, and running it elevated puts your data directory in the wrong place.
 
-未签名的安装包会触发 SmartScreen 蓝屏提示。确认文件确实来自本仓库 Release 后，点「更多信息」→「仍要运行」。
+Unsigned packages trigger a SmartScreen warning. Once you've confirmed the file came from this repository's Releases, click "More info" → "Run anyway".
 
-覆盖升级时安装器会检查旧安装目录里的用户数据。如果它提示「程序仍在运行」，退出主窗口和托盘图标，等几秒让后台的 sidecar、终端和 IM adapter 退干净，再重新运行安装器。别先手动删掉旧安装目录。
+When upgrading in place, the installer inspects user data in the old install directory. If it reports that the program is still running, quit the main window and the tray icon, give the background sidecar, terminal, and IM adapter processes a few seconds to exit, then run the installer again. Don't delete the old install directory by hand first.
 
 ## Linux
 
-**AppImage**（免安装，下载即用）：
+**AppImage** (no installation, just run it):
 
 ```bash
-chmod +x Claude-Code-Haha-<版本>-Linux-x64.AppImage
-./Claude-Code-Haha-<版本>-Linux-x64.AppImage
+chmod +x Claude-Code-Haha-<version>-Linux-x64.AppImage
+./Claude-Code-Haha-<version>-Linux-x64.AppImage
 ```
 
-启动失败并提示 FUSE 相关错误时，装一下运行库：Ubuntu 22.04 及更早用 `sudo apt install libfuse2`，24.04 及以后用 `libfuse2t64`。
+If it fails with a FUSE-related error, install the runtime: `sudo apt install libfuse2` on Ubuntu 22.04 and earlier, `libfuse2t64` on 24.04 and later.
 
-**deb**（Ubuntu、Debian 等，装进系统菜单）：
+**deb** (Ubuntu, Debian and similar; installs into your application menu):
 
 ```bash
-sudo apt install ./Claude-Code-Haha-<版本>-Linux-x64.deb
+sudo apt install ./Claude-Code-Haha-<version>-Linux-x64.deb
 ```
 
-**rpm**（Fedora、openSUSE 等）：
+**rpm** (Fedora, openSUSE and similar):
 
 ```bash
-sudo dnf install ./Claude-Code-Haha-<版本>-Linux-x64.rpm
+sudo dnf install ./Claude-Code-Haha-<version>-Linux-x64.rpm
 ```
 
-ARM64 机器换成对应的 `Linux-arm64` 文件。
+On ARM64 machines, use the corresponding `Linux-arm64` file.
 
-## 从源码跑
+## Running from source
 
-想改代码、调试内核，或者只想在终端里用 CLI，可以从源码起：
+If you want to modify the code, debug the engine, or just use the CLI in a terminal:
 
 ```bash
 git clone https://github.com/NanmiCoder/cc-haha.git
@@ -106,28 +106,28 @@ cp .env.example .env
 ./bin/claude-haha
 ```
 
-需要 [Bun](https://bun.sh) 和 Git。这条路只跑 CLI，桌面端的构建方式和本地服务参数见 [命令行](../cli/index.md)。
+Requires [Bun](https://bun.sh) and Git. This runs the CLI only; for building the desktop app and configuring the local server, see [Command line](../cli/index.md).
 
-## 升级
+## Updating
 
-**应用内更新（推荐）。** 打开「设置 → 关于 → 应用更新」，点「检查更新」。它会比对当前版本和 GitHub Releases 上的最新版本，有新版就下载，下载完提示「安装并重启」。
+**In-app updates (recommended).** Open Settings → About → App Updates and click "Check now". It compares your installed version against the latest GitHub Release, downloads the new build, and offers "Install and restart".
 
-更新前先把正在跑的会话停掉，未提交的代码存好。
+Before updating, stop any running sessions and save uncommitted work.
 
-下载卡住不动，多半是网络到不了 GitHub。同一个面板里有「高级更新代理」，可以切成系统代理或填一个本地 HTTP 代理地址（例如 `http://127.0.0.1:7890`）。这个代理只管应用自己的更新下载，不影响模型请求。
+If the download stalls, you probably can't reach GitHub. The same panel has an "Advanced update proxy" setting where you can switch to the system proxy or enter a local HTTP proxy address (`http://127.0.0.1:7890`, for instance). This proxy only affects the app's own update downloads — it has no effect on model requests.
 
-**手动换包。** 从 Releases 下新版安装包，按上面各平台的步骤重装一遍即可。会话、服务商配置、技能、Agent、记忆都存在 `~/.claude` 下，不在应用目录里，覆盖安装不会动它们。
+**Manual replacement.** Download the new installer from Releases and repeat the steps for your platform. Sessions, provider configuration, skills, agents, and memory live under `~/.claude`, not in the application directory, so installing over the top doesn't touch them.
 
 :::warning
-安装器的数据保护不等于备份。真正重要的东西请自己另存一份。
+The installer's data protection is not a backup. Keep your own copy of anything you can't afford to lose.
 :::
 
 ## Code signing policy
 
-Windows 安装包的签名范围、人工审批、责任角色和验证方法见 [Code signing policy](./code-signing.md)。在 SignPath Foundation 接入完成前，Windows Release 仍会明确标注为未签名；软件联网和本地数据处理方式见[隐私与联网说明](./privacy.md)。
+See the [Code signing policy](./code-signing.md) for the Windows signing scope, manual approval, responsible roles, and verification steps. Until SignPath Foundation onboarding is complete, Windows releases remain explicitly identified as unsigned. See [Privacy and network access](./privacy.md) for network and local-data behavior.
 
-## 装完之后
+## Next
 
-去 [连接模型服务](./models.md)。没接模型之前，应用能打开，但发不出任何一条消息。
+Go to [Connect a model](./models.md). Until a model is connected, the app opens but can't send a single message.
 
-装不上或者打不开，看 [装不上 / 打不开 / 连不上](./troubleshooting.md)。
+If it won't install or won't open, see [Won't install, won't open, won't connect](./troubleshooting.md).

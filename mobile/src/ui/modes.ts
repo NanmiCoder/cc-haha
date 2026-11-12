@@ -1,56 +1,56 @@
 import type { PermissionMode } from '../core/types'
 
-/** 全应用统一的权限模式名称：输入框、新任务、计划执行、设置都用这一套。 */
+/** App-wide permission mode names: the input, new task, plan execution and settings all use this set. */
 export const modes: {
   id: PermissionMode
   title: string
   description: string
 }[] = [
-  { id: 'default', title: '询问', description: '需要权限的操作先问你' },
+  { id: 'default', title: 'Ask', description: 'Asks you before actions that need permission' },
   {
     id: 'acceptEdits',
-    title: '自动接受编辑',
-    description: '改文件不再问你，其他操作照常确认',
+    title: 'Auto-accept edits',
+    description: 'File edits no longer ask you; other actions are confirmed as usual',
   },
-  { id: 'auto', title: '自动', description: '按电脑上的自动审批规则处理' },
-  { id: 'plan', title: '计划', description: '先讨论和出计划，你批准后再执行' },
+  { id: 'auto', title: 'Auto', description: 'Handled by the auto approval rules on the computer' },
+  { id: 'plan', title: 'plan', description: 'Discuss and plan first, run after you approve' },
   {
     id: 'bypassPermissions',
-    title: '全权限',
-    description: '跳过所有工具审批，只在你信任的项目里用',
+    title: 'Full access',
+    description: 'Skips all tool approvals; use only in projects you trust',
   },
 ]
 
-const extraModeNames: Record<string, string> = { dontAsk: '不询问' }
+const extraModeNames: Record<string, string> = { dontAsk: 'Don’t ask' }
 
 export const modeName = (id?: string) =>
   modes.find((mode) => mode.id === id)?.title ??
-  (id ? (extraModeNames[id] ?? id) : '询问')
+  (id ? (extraModeNames[id] ?? id) : 'Ask')
 
-/** 批准计划时可选的执行方式（不含“计划”本身）。 */
+/** Execution modes available when approving a plan (excluding "plan" itself). */
 export const planExecutionModes = modes.filter((mode) =>
   ['default', 'acceptEdits', 'bypassPermissions'].includes(mode.id)
 )
 
 const effortNames: Record<string, string> = {
-  none: '关闭',
-  minimal: '最低',
-  low: '低',
-  medium: '中',
-  high: '高',
-  xhigh: '超高',
-  max: '最高',
+  none: 'Close',
+  minimal: 'Minimum',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Max',
+  max: 'Highest',
 }
 
-/** 思考强度统一中文名；未知值原样显示，未设置显示“默认”。 */
+/** Unified names for thinking effort; unknown values shown as is, unset shows "Default". */
 export const effortName = (effort?: string | null) =>
-  effort ? (effortNames[effort] ?? effort) : '默认'
+  effort ? (effortNames[effort] ?? effort) : 'Default'
 
-/** Standard / Lean 两种运行档位的用户可见名称。 */
+/** Standard / Lean User-visible names of the two run tiers. */
 export const profileName = (profile?: string | null) =>
-  profile === 'lean' ? '轻量' : '完整工具'
+  profile === 'lean' ? 'Light' : 'Full tools'
 
 export const profileDescription = (profile?: string | null) =>
   profile === 'lean'
-    ? '精简工具环境，不支持计划模式和团队'
-    : '完整工具、计划与团队能力'
+    ? 'Lean tool environment; no plan mode or teams'
+    : 'Full tools, plan and team capabilities'

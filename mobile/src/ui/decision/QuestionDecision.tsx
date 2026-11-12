@@ -19,8 +19,8 @@ import { backQuestionStep, primaryQuestionStep, questionPageModel, questionPromp
 import { simulatedPhoneChrome } from '../webChrome'
 
 /**
- * AI 代答倒计时。只在服务端宣布过代答（autoAnswerDeadline 为数字或 null）时才有值；
- * 本机发出过“我在回答”信号后变成“你已接手”。入口行和分步页共用同一份。
+ * AI Auto-answer countdown. Only has a value when the server has announced auto-answer (autoAnswerDeadline is a number or null); 
+ * after this device sends the "I am answering" signal it becomes "You took over". The entry row and step page share the same value.
  */
 export function useQuestionClock(request: PermissionRequest) {
   const deadline = request.autoAnswerDeadline
@@ -34,12 +34,12 @@ export function useQuestionClock(request: PermissionRequest) {
   }, [deadline])
   return {
     clock: questionClock(deadline, now, interacted, baseline),
-    /** 本机已发出接手信号。 */
+    /** This device has sent the take-over signal. */
     interact: () => setInteracted(true),
   }
 }
 
-/** 输入框位置的一行入口：“有 N 个问题等你回答 ›”，点按打开分步页。 */
+/** One-line entry at the input position: "N questions waiting for your answer ›", tap to open the step page. */
 export function QuestionPrompt({
   count,
   onOpen,
@@ -56,8 +56,8 @@ export function QuestionPrompt({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={sent ? `${label}，已提交` : label}
-      accessibilityHint="打开回答页"
+      accessibilityLabel={sent ? `${label}, submitted` : label}
+      accessibilityHint="Open answer page"
       disabled={sent}
       onPress={onOpen}
       style={({ pressed }) => ({
@@ -74,10 +74,10 @@ export function QuestionPrompt({
     >
       {sent ? <Spinner size={16} /> : <HaloDot size={9} />}
       <Text numberOfLines={1} style={{ flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink }}>
-        {sent ? '已提交，正在等待电脑确认。' : label}
+        {sent ? 'Submitted, waiting for the computer to confirm.' : label}
       </Text>
       {!sent && clock?.state === 'counting' ? (
-        <Text style={{ fontSize: 13, color: colors.attn }}>{clock.label} 后 AI 代答</Text>
+        <Text style={{ fontSize: 13, color: colors.attn }}>{clock.label} until AI answers</Text>
       ) : null}
       {sent ? null : <Icon name="chevron-right" size={16} color={colors.ink3} strokeWidth={2.2} />}
     </Pressable>
@@ -142,7 +142,7 @@ function OptionRow({
     >
       <Pressable
         accessibilityRole={multiple ? 'checkbox' : 'radio'}
-        accessibilityLabel={option.description ? `${display.label}，${option.description}` : display.label}
+        accessibilityLabel={option.description ? `${display.label}, ${option.description}` : display.label}
         accessibilityState={{ checked: selected, disabled }}
         aria-checked={selected}
         disabled={disabled}
@@ -177,7 +177,7 @@ function OptionRow({
                   overflow: 'hidden',
                 }}
               >
-                推荐
+                Recommended
               </Text>
             ) : null}
           </View>
@@ -210,7 +210,7 @@ function OptionRow({
       {truncated || expanded ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${expanded ? '收起' : '展开'}“${display.label}”的详细说明`}
+          accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} details of “${display.label}”`}
           accessibilityState={{ expanded }}
           aria-expanded={expanded}
           onPress={() => {
@@ -229,7 +229,7 @@ function OptionRow({
           })}
         >
           <Text style={{ fontSize: 13, fontWeight: '500', color: colors.run }}>
-            {expanded ? '收起详情' : '展开详情'}
+            {expanded ? 'Collapse details' : 'Expand details'}
           </Text>
           <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.run} />
         </Pressable>
@@ -240,25 +240,25 @@ function OptionRow({
 
 export type QuestionPageProps = {
   visible: boolean
-  /** 收起分步页（作答进度保留，再点入口行接着答）。 */
+  /** Collapse the step page (answer progress is kept; tap the entry row again to continue). */
   onClose(): void
   request: PermissionRequest
   input: Record<string, unknown>
   ready: boolean
   sent: boolean
-  /** 发出 ask_user_question_activity；返回是否已发出。 */
+  /** Send ask_user_question_activity; returns whether it was sent. */
   signalActivity(): boolean
   submit(answers: Record<string, string>): boolean
   discuss(note: string): boolean
-  /** AI 代答倒计时；不传就不显示。 */
+  /** AI Auto-answer countdown; not shown when omitted. */
   clock?: QuestionClock | null
-  /** 本机已发出接手信号（配合 useQuestionClock 的 interact）。 */
+  /** This device has sent the take-over signal (paired with interact from useQuestionClock). */
   onInteract?(): void
 }
 
 /**
- * AskUserQuestion 的全高分步页：一题一屏，大行选项，底部固定“上一题 / 下一题（最后一题是提交）”，
- * 左下“先讨论一下”按现有协议拒绝并附说明。作答状态留在组件里，请让它一直挂着、只切 visible。
+ * AskUserQuestion full-height step page: one question per screen, large option rows, with a fixed bottom "Previous / Next (Submit on the last question)", 
+ * and "Discuss first" at the bottom left denies with a note per the existing protocol. Answer state lives in the component, so keep it mounted and only toggle visible.
  */
 export function QuestionPage({
   visible,
@@ -320,12 +320,12 @@ export function QuestionPage({
         style={[{ flex: 1, backgroundColor: colors.bg }, simulatedPhoneChrome && { paddingTop: 54 }]}
       >
         <KeyboardViewport style={{ flex: 1 }}>
-          <View accessibilityViewIsModal role="dialog" aria-label="回答提问" style={{ flex: 1 }}>
+          <View accessibilityViewIsModal role="dialog" aria-label="Answer questions" style={{ flex: 1 }}>
             <View style={{ height: 48, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 }}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="收起"
-                accessibilityHint="稍后再答，进度保留"
+                accessibilityLabel="Collapse"
+                accessibilityHint="Answer later, progress kept"
                 onPress={onClose}
                 style={({ pressed }) => ({
                   width: 44,
@@ -342,7 +342,7 @@ export function QuestionPage({
                 numberOfLines={1}
                 style={{ flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '600', color: colors.ink }}
               >
-                回答提问
+                Answer questions
                 {model.position ? (
                   <Text style={{ color: colors.ink3, fontWeight: '500' }}> · {model.position}</Text>
                 ) : null}
@@ -351,7 +351,7 @@ export function QuestionPage({
             </View>
             <View
               accessibilityRole="progressbar"
-              accessibilityLabel="回答进度"
+              accessibilityLabel="Answer progress"
               accessibilityValue={{ min: 1, max: Math.max(1, model.total), now: model.index + 1 }}
               style={{
                 marginHorizontal: 16,
@@ -400,7 +400,7 @@ export function QuestionPage({
                   ) : null}
                   <View
                     role={model.multiple ? 'group' : 'radiogroup'}
-                    aria-label="选项"
+                    aria-label="Options"
                     style={{ gap: 10, paddingTop: 20 }}
                   >
                     {current.options.map((option) => (
@@ -430,10 +430,10 @@ export function QuestionPage({
                       >
                         <Mark multiple={model.multiple} selected={model.customActive} />
                         <TextInput
-                          accessibilityLabel={`自己写的回答 ${model.index + 1}`}
+                          accessibilityLabel={`Your own answer ${model.index + 1}`}
                           autoFocus
                           multiline
-                          placeholder="写下你的回答"
+                          placeholder="Write your answer"
                           placeholderTextColor={colors.ink3}
                           value={customText}
                           editable={!locked}
@@ -459,7 +459,7 @@ export function QuestionPage({
                     ) : (
                       <Pressable
                         accessibilityRole={model.multiple ? 'checkbox' : 'radio'}
-                        accessibilityLabel="其他，我自己说"
+                        accessibilityLabel="Other, I will say it myself"
                         accessibilityState={{ checked: false, disabled: locked }}
                         disabled={locked}
                         onPress={() => {
@@ -478,14 +478,14 @@ export function QuestionPage({
                         })}
                       >
                         <Mark multiple={model.multiple} selected={false} />
-                        <Text style={{ fontSize: 16, color: colors.ink3 }}>其他，我自己说…</Text>
+                        <Text style={{ fontSize: 16, color: colors.ink3 }}>Other, I will say it myself…</Text>
                       </Pressable>
                     )}
                   </View>
                 </>
               ) : (
                 <Text style={{ fontSize: 16, lineHeight: 24, color: colors.ink2 }}>
-                  电脑没有提供可以回答的问题，请在电脑上处理。
+                  The computer did not provide any answerable questions; please handle it on the computer.
                 </Text>
               )}
             </ScrollView>
@@ -505,7 +505,7 @@ export function QuestionPage({
                   {model.canBack ? (
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel="上一题"
+                      accessibilityLabel="Previous"
                       onPress={back}
                       style={({ pressed }) => ({
                         flex: 1,
@@ -517,7 +517,7 @@ export function QuestionPage({
                         opacity: pressed ? 0.7 : 1,
                       })}
                     >
-                      <Text style={{ fontSize: 16, fontWeight: '600', color: colors.ink }}>上一题</Text>
+                      <Text style={{ fontSize: 16, fontWeight: '600', color: colors.ink }}>Previous</Text>
                     </Pressable>
                   ) : null}
                   <Pressable
@@ -551,7 +551,7 @@ export function QuestionPage({
               <View style={{ minHeight: 56, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="先讨论一下"
+                  accessibilityLabel="Discuss first"
                   accessibilityState={{ disabled: !model.discussEnabled }}
                   disabled={!model.discussEnabled}
                   onPress={() => {
@@ -565,7 +565,7 @@ export function QuestionPage({
                     opacity: !model.discussEnabled ? 0.4 : pressed ? 0.6 : 1,
                   })}
                 >
-                  <Text style={{ fontSize: 15, color: colors.ink2 }}>先讨论一下</Text>
+                  <Text style={{ fontSize: 15, color: colors.ink2 }}>Discuss first</Text>
                 </Pressable>
               </View>
             </View>
@@ -574,11 +574,11 @@ export function QuestionPage({
         <Sheet
           visible={discussOpen}
           onClose={() => setDiscussOpen(false)}
-          title="先讨论一下"
-          left={<TextButton title="取消" onPress={() => setDiscussOpen(false)} />}
+          title="Discuss first"
+          left={<TextButton title="Cancel" onPress={() => setDiscussOpen(false)} />}
           footer={
             <Button
-              title="发送说明"
+              title="Send note"
               size="lg"
               disabled={!ready || sent || !note.trim()}
               onPress={() => {
@@ -591,11 +591,11 @@ export function QuestionPage({
           }
         >
           <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>
-            说明会发给电脑上的任务，这一轮提问先不作答。
+            The note is sent to the task on the computer, and this round of questions is left unanswered.
           </Text>
           <NoteInput
-            accessibilityLabel="告诉它还需要澄清什么"
-            placeholder="告诉它还需要澄清什么"
+            accessibilityLabel="Tell it what still needs clarifying"
+            placeholder="Tell it what still needs clarifying"
             autoFocus
             value={note}
             onChangeText={setNote}
@@ -609,8 +609,8 @@ export function QuestionPage({
 }
 
 /**
- * 入口行 + 分步页的现成组合（Approval 里直接用）。需要把入口放进输入框位置时，
- * 单独用 {@link QuestionPrompt} 和 {@link QuestionPage}，时钟用 {@link useQuestionClock}。
+ * Ready-made combo of entry row + step page (used directly in Approval). When the entry needs to go at the input position, 
+ * use {@link QuestionPrompt} and {@link QuestionPage} separately, with {@link useQuestionClock} for the clock.
  */
 export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onClose' | 'clock' | 'onInteract'>) {
   const [open, setOpen] = useState(false)

@@ -96,7 +96,7 @@ function find(predicate, node = tree) {
   else { if (predicate(node)) return node; if (node.props?.children !== undefined) return find(predicate, node.props.children) }
 }
 const photo = () => {
-  const button = find(n => n.props?.title === '从相册选择二维码')
+  const button = find(n => n.props?.title === 'Choose QR code from photos')
   assert.ok(button, 'the scanner must offer photo QR selection')
   return button
 }
@@ -136,7 +136,7 @@ assert.equal(camera(), undefined)
 
 photo().props.onPress(); finishPick(picked); await tick()
 finishDecode([]); await tick()
-assert.match(notice, /没有识别到二维码/)
+assert.match(notice, /No QR code detected/)
 assert.equal(received.length, 3)
 assert.ok(find(n => n.type === 'ScrollView'), 'short screens can scroll to photo actions and feedback')
 const feedback = find(n => n.props?.accessibilityRole === 'alert')
@@ -145,15 +145,15 @@ assert.notEqual(feedback.props.style?.position, 'absolute', 'feedback must reser
 
 photo().props.onPress(); finishPick(picked); await tick()
 finishDecode([{ type: 'qr', data: lan }, { type: 'qr', data: remote }]); await tick()
-assert.match(notice, /多个二维码/)
+assert.match(notice, /Multiple QR codes/)
 assert.equal(received.length, 3, 'ambiguous photo must not pick a computer automatically')
 
 photo().props.onPress(); failPick(new Error('picker unavailable')); await tick()
-assert.match(notice, /无法识别这张图片/)
+assert.match(notice, /Cannot recognize this image/)
 
 photo().props.onPress(); finishPick(picked); await tick()
 failDecode(new Error('native failure with private data')); await tick()
-assert.match(notice, /无法识别这张图片/)
+assert.match(notice, /Cannot recognize this image/)
 assert.ok(!notice.includes('private data'), 'native errors must not expose image details')
 
 photo().props.onPress(); finishPick(picked); await tick()
@@ -166,7 +166,7 @@ photo().props.onPress()
 pendingFailure = true
 for (const callback of appListeners) callback('active')
 await tick()
-assert.match(notice, /无法识别这张图片/)
+assert.match(notice, /Cannot recognize this image/)
 assert.ok(!notice.includes('private image URI'))
 assert.ok(camera(), 'recovery read failure releases the pending photo operation')
 photo().props.onPress()

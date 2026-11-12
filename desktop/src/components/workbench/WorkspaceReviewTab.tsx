@@ -331,7 +331,7 @@ export function WorkspaceReviewTab({
    * Selecting a file used to filter every other section out of the panel, which
    * turned "take me to this file" into "hide the rest of the review" — the diff
    * above and below the selection is most of what a review is for. Spec §4.3
-   * asks for 单文件定位: locate it, keep it mounted next to its neighbours.
+   * asks for single-file focus: locate it, keep it mounted next to its neighbours.
    */
   const visibleFiles = useMemo(() => {
     const query = filter.trim().toLowerCase()

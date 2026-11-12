@@ -32,7 +32,7 @@ test('a running composer keeps the model disabled and muted without a separate l
       draft: '', onDraft: () => {}, references: [], onReferences: () => {},
       attachments: [], onAttachments: () => {}, team: false, onTeam: () => {},
       computer: { enabled: false }, lean: false, empty: false, busy: true, disabled: false,
-      run: { label: '测试模型 · 高', risk: 'normal', locked: true },
+      run: { label: 'Test model · High', risk: 'normal', locked: true },
       onOpenRun: () => {}, onSend: () => {}, onStop: () => {}, onError: () => {},
     }
     const flatten = node => {
@@ -46,20 +46,20 @@ test('a running composer keeps the model disabled and muted without a separate l
       props.run.locked = true
       props.busy = true
       let nodes = flatten(ChatComposer(props))
-      assert.equal(nodes.some(node => node.type === 'Text' && node.props.children === '运行中不能换模型'), false, os + ': no separate hint should occupy toolbar space')
-      const model = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('运行方式：'))
+      assert.equal(nodes.some(node => node.type === 'Text' && node.props.children === 'Cannot change model while running'), false, os + ': no separate hint should occupy toolbar space')
+      const model = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Run mode: '))
       assert.ok(model)
       assert.equal(model.props.disabled, true)
       assert.equal(model.props.accessibilityState.disabled, true)
       assert.equal(model.props['aria-disabled'], true)
-      assert.ok(model.props.accessibilityLabel.includes('运行中不可改'))
+      assert.ok(model.props.accessibilityLabel.includes('Cannot change while running'))
       assert.equal(nodes.find(node => node.type === 'Text' && node.props.children === props.run.label).props.style.color, colors.ink3)
       assert.ok(nodes.some(node => node.type === 'Glyph' && node.props.name === 'lock'))
-      assert.equal(nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '停止').props.disabled, false)
+      assert.equal(nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Stop').props.disabled, false)
       props.run.locked = false
       props.busy = false
       nodes = flatten(ChatComposer(props))
-      const unlocked = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('运行方式：'))
+      const unlocked = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel.startsWith('Run mode: '))
       assert.equal(unlocked.props.disabled, false)
       assert.equal(unlocked.props.accessibilityState.disabled, false)
       assert.equal(nodes.find(node => node.type === 'Text' && node.props.children === props.run.label).props.style.color, colors.ink)

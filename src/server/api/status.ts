@@ -1,10 +1,10 @@
 /**
  * Status REST API
  *
- * GET /api/status              — 健康检查
- * GET /api/status/diagnostics  — 系统诊断信息
- * GET /api/status/usage        — Token 用量（当前会话累计）
- * GET /api/status/user         — 用户信息
+ * GET /api/status              — health check
+ * GET /api/status/diagnostics  — system diagnostics
+ * GET /api/status/usage        — token usage (accumulated for the current session)
+ * GET /api/status/user         — user info
  */
 
 import * as os from 'os'
@@ -12,24 +12,24 @@ import * as path from 'path'
 import * as fs from 'fs/promises'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
-// 服务器启动时间（用于计算 uptime）
+// Server start time (for computing uptime)
 const startedAt = Date.now()
 
-// 会话级别的 token 用量累计（进程生命周期内）
+// Session-level token usage accumulated (for the process lifetime)
 const usage = {
   totalInputTokens: 0,
   totalOutputTokens: 0,
   totalCost: 0,
 }
 
-/** 供外部累加 token 用量 */
+/** Lets external callers accumulate token usage */
 export function addUsage(input: number, output: number, cost: number) {
   usage.totalInputTokens += input
   usage.totalOutputTokens += output
   usage.totalCost += cost
 }
 
-/** 重置用量（测试用） */
+/** Reset usage (for tests) */
 export function resetUsage() {
   usage.totalInputTokens = 0
   usage.totalOutputTokens = 0
@@ -121,13 +121,13 @@ function getConfigDir(): string {
 }
 
 function getVersion(): string {
-  // 从 package.json 的 version 字段读取；回退到环境变量或 unknown
+  // Read from package.json's version field; fall back to an environment variable or unknown
   return process.env.APP_VERSION || '999.0.0-local'
 }
 
 /**
- * 扫描 configDir 下的 projects 目录，返回已知的项目路径列表。
- * 如果目录不存在，返回空数组。
+ * Scan the projects directory under configDir and return the list of known project paths.
+ * Returns an empty array if the directory does not exist.
  */
 async function discoverProjects(configDir: string): Promise<string[]> {
   const projectsDir = path.join(configDir, 'projects')

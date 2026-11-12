@@ -5,7 +5,7 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypa
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type ReasoningEffortLevel = EffortLevel
 /**
- * The six 「纸 · 墨 · 印」 palettes, in the order the appearance picker shows
+ * The six "Paper · Ink · Seal" palettes, in the order the appearance picker shows
  * them: four paper grounds, then two ink ones. Each name matches a
  * `[data-theme]` block in theme/globals.css.
  *
@@ -153,7 +153,7 @@ export type ModelInfo = {
   supportedReasoningEfforts?: ReasoningEffortLevel[]
 }
 
-/** 缺省或 null 表示不限；配置上限时必须使用正安全整数。 */
+/** Missing or null means unlimited; a configured limit must be a positive safe integer. */
 export function isMaxConcurrentSubagents(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
 }
@@ -168,7 +168,7 @@ export type UserSettings = {
   nextPromptSuggestionsEnabled?: boolean
   leanModeEnabled?: boolean
   agentTeamsEnabled?: boolean
-  /** 同一会话的普通前台/后台 SubAgent 并发上限，缺省或 null 表示不限。 */
+  /** Concurrency limit for ordinary foreground/background SubAgents in one session; missing or null means unlimited. */
   maxConcurrentSubagents?: number | null
   autoDreamEnabled?: boolean
   autoQuestion?: import('../../../src/shared/autoQuestionSettings').AutoQuestionSettings

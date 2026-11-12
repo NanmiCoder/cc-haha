@@ -17,11 +17,11 @@ export default function Profile() {
     <ScreenView background={colors.card}>
       <NavBar
         floating
-        title="个人主页"
-        right={isH5 ? undefined : <FloatingButton icon="laptop" label="切换电脑" onPress={() => router.push('/hosts')} />}
+        title="Profile"
+        right={isH5 ? undefined : <FloatingButton icon="laptop" label="Switch computer" onPress={() => router.push('/hosts')} />}
       />
       {!host ? (
-        <EmptyState icon="laptop" title="连接电脑后查看个人主页" detail="头像、昵称和使用记录来自你连接的电脑。" action={<Button title="连接电脑" onPress={() => router.push('/connect')} />} />
+        <EmptyState icon="laptop" title="Connect a computer to view your profile" detail="Avatar, nickname and usage records come from your connected computer." action={<Button title="Connect computer" onPress={() => router.push('/connect')} />} />
       ) : !client ? (
         error ? <InlineError text={error} /> : <Loading />
       ) : (
@@ -42,8 +42,8 @@ function ProfileBody({ client, hostName }: { client: ApiClient; hostName: string
         <>
           <ProfileContent overview={value} onRetry={() => void resource.refresh()} />
           <View style={{ borderTopWidth: 1, borderTopColor: colors.hair, paddingTop: 16, marginTop: 26, gap: 6 }}>
-            <Text style={{ color: colors.ink3, fontSize: 11, lineHeight: 17 }}>来自 {hostName} · 包含缓存读取</Text>
-            {value.profile ? <Text style={{ color: colors.ink3, fontSize: 11, lineHeight: 17 }}>头像和昵称在电脑端「个人主页」中编辑。</Text> : null}
+            <Text style={{ color: colors.ink3, fontSize: 11, lineHeight: 17 }}>From {hostName} · includes cache reads</Text>
+            {value.profile ? <Text style={{ color: colors.ink3, fontSize: 11, lineHeight: 17 }}>Edit avatar and nickname in Profile on the desktop app.</Text> : null}
           </View>
         </>
       ) : <InlineError text={resource.error} />}

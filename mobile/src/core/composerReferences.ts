@@ -10,9 +10,9 @@ export type ComposerReference = {
   displayName: string
   description: string
   modelText: string
-  /** 插件自带的 MCP 服务：有它的插件对用户来说是「连接器」。 */
+  /** MCP server bundled with a plugin: plugins that have one are "connectors" to the user. */
   mcpServerNames?: string[]
-  /** 技能所属的插件 id 或来源（电脑给什么就是什么）。 */
+  /** Plugin id or source the skill belongs to (whatever the computer gives). */
   source?: string
 }
 export type ComposerCandidate = SkillCommand & { reference?: ComposerReference }
@@ -26,7 +26,7 @@ export function composerTrigger(text: string, start: number, end = start): Compo
   return { start: start - match[2].length - 1, end: start, kind: match[1] as '/' | '@', query: match[2] }
 }
 
-/** `/` 列出命令和技能，`@` 只列出能引用的技能；关键词匹配名称、说明和显示名。 */
+/** `/` List commands and skills; `@` lists only referenceable skills; keywords match name, description and display name. */
 export function filterComposerCandidates(candidates: ComposerCandidate[], trigger: ComposerTrigger | null): ComposerCandidate[] {
   if (!trigger) return []
   const query = trigger.query.toLocaleLowerCase()
@@ -36,10 +36,10 @@ export function filterComposerCandidates(candidates: ComposerCandidate[], trigge
   )
 }
 
-/** 候选行右侧的类型标签。 */
+/** Type label on the right of a suggestion row. */
 export function candidateTypeLabel(candidate: ComposerCandidate): string {
-  if (candidate.reference) return candidate.reference.kind === 'plugin' ? '插件' : '技能'
-  return candidate.kind === 'skill' ? '技能' : candidate.kind === 'agent' ? 'Agent' : candidate.kind === 'plugin' ? '插件' : '命令'
+  if (candidate.reference) return candidate.reference.kind === 'plugin' ? 'Plugin' : 'Skills'
+  return candidate.kind === 'skill' ? 'Skills' : candidate.kind === 'agent' ? 'Agent' : candidate.kind === 'plugin' ? 'Plugin' : 'Commands'
 }
 
 export function insertComposerCandidate(text: string, trigger: ComposerTrigger | null, candidate: ComposerCandidate) {
@@ -86,7 +86,7 @@ export async function loadComposerCandidates(client: ApiClient, context: {
   for (const command of commands.commands.filter(isCommandVisible)) {
     if (!candidates.some((candidate) => candidate.name === command.name)) candidates.push(command)
   }
-  for (const command of [{ name: 'model', description: '选择这次任务的模型' }, { name: 'permissions', description: '选择权限模式' }]) {
+  for (const command of [{ name: 'model', description: 'Choose the model for this task' }, { name: 'permissions', description: 'Choose permission mode' }]) {
     if (!candidates.some((candidate) => candidate.name === command.name)) candidates.push({ ...command, kind: 'command' })
   }
   return candidates

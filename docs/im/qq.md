@@ -1,64 +1,64 @@
 ---
-title: QQ 接入
+title: QQ Integration
 nav_title: QQ
-description: 在设置页扫码授权 QQ 机器人，在 QQ 私聊里驱动桌面端，回复走 QQ 的流式消息。
+description: Scan a QR code in Settings to authorize a QQ bot, then drive the Desktop app from a private chat with streaming replies.
 order: 7
 ---
 
-# QQ 接入
+# QQ Integration
 
-适合个人用户：在桌面端点一下扫码，用手机 QQ 扫一扫完成授权，AppID 和 AppSecret 直接写进本机配置，不用去 QQ 开放平台手动创建应用。消息走官方 WebSocket 网关，本机不需要公网地址。
+For individuals on QQ. Select **Scan to Bind** in Settings, scan with the QQ mobile app, and the AppID and AppSecret land in local configuration — no manual app creation on the QQ Open Platform. Messages travel over the official WebSocket gateway, so your machine needs no public address.
 
-限制：只处理私聊（C2C），不处理群聊和频道；权限审批是文本命令。
+Limits: private (C2C) chats only, no groups or guilds; permission approval is a text reply.
 
-## 扫码授权机器人
+## Authorize the bot by scanning
 
-1. 打开「设置」→「IM 接入」，切到「QQ」Tab。
-2. 点「扫码绑定」，页面上会出现一张二维码。
-3. 用手机 QQ 扫码，按提示确认授权。
-4. 授权成功后，AppID 和 AppSecret 会自动写入 `~/.claude/adapters.json`，适配器随即重启。
+1. Open **Settings → IM Adapters** and switch to the **QQ** tab.
+2. Select **Scan to Bind**. A QR code appears.
+3. Scan it with the QQ mobile app and confirm the authorization.
+4. On success the AppID and AppSecret are written to `~/.claude/adapters.json` and the adapter restarts.
 
-二维码过期时会自动换一张，页面上的图片会跟着刷新。绑定成功后按钮变成「重新扫码」，旁边多一个「解除机器人绑定」。
+The code rotates on its own when it expires, and the image on screen refreshes with it. Once bound, the button becomes **Scan Again** and an **Unbind bot account** button appears next to it.
 
-这一步只是让桌面端拿到机器人凭据，**不等于**放行所有人——谁能用还得看下一步的配对。
+This step only gives the Desktop app the bot's credentials. It does **not** authorize anyone — that is what pairing below decides.
 
-## 配对
+## Pairing
 
-回到页面顶部的「配对管理」，点「生成配对码」，拿到一枚 6 位码。这一步立即生效，不需要再点保存。
+Back at the top of the page, under **Pairing**, select **Generate Code** to get a six-character code. This takes effect immediately; no **Save** is needed.
 
-在 QQ 里私聊刚授权的机器人，把这枚码发过去。看到配对成功提示就可以开始对话。
+Send that code to the newly authorized bot in a private QQ chat. Once pairing is confirmed, anything you type goes to Claude Code.
 
-配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。同一个用户 5 分钟内连续输错 5 次会被限流。
+A code is valid for 60 minutes, works once, and is invalidated the moment a new one is generated. Five failed attempts within five minutes trigger rate limiting.
 
-「允许的用户」可以留空。留空时只有完成配对的人能用。要直接放行已知账号，就填 QQ 用户 `openid`，多个用逗号分隔，填完点「保存」。QQ 的 `openid` 是每个机器人独立的一串标识，不是 QQ 号。
+**Allowed Users** can stay empty, in which case only paired accounts can use the bot. To allow known accounts directly, enter their QQ `openid` values separated by commas. A QQ `openid` is a per-bot identifier, not a QQ number.
 
-## 支持的命令
+## Supported commands
 
-- `/help` 或 `帮助` — 列出当前可用命令
-- `/status` 或 `状态` — 当前项目、模型、运行状态
-- `/projects` 或 `项目列表` — 列出最近项目并切换
-- `/new` 或 `新会话` — 开一条新会话，可带项目编号、名称或绝对路径
-- `/clear` 或 `清空` — 清空上下文，保留项目绑定
-- `/stop` 或 `停止` — 停止本轮生成
-- 权限审批：回复 `1` 允许一次、`2` 永久允许、`3` 拒绝，也可以用 `/allow <id>`、`/always <id>`、`/deny <id>`
+- `/help` — list the available commands
+- `/status` — current project, model, and run state
+- `/projects` — list recent projects and switch
+- `/new` — start a fresh session, optionally with an index, name, or absolute path
+- `/clear` — clear the context, keep the project binding
+- `/stop` — stop the current turn
+- Permission approval: reply `1` to allow once, `2` to allow for the session, `3` to deny; `/allow <id>`, `/always <id>`, and `/deny <id>` work too
 
-## 消息表现
+## How messages look
 
-回复用 QQ 的流式消息（`stream_messages`）：同一条消息随生成过程刷新，结束时定稿。这个接口只对私聊开放；万一某轮拿不到可用的回复锚点，会自动退回成普通分片消息，不会丢内容。
+Replies use QQ stream messages (`stream_messages`): one message refreshes as the answer is generated, then settles. That API is private-chat only; if a turn has no usable reply anchor, the adapter falls back to ordinary chunked messages instead of dropping content.
 
-思考和执行工具期间会发输入状态提示。收到的图片、文件会下载到 `~/.claude/im-downloads/qq/` 并作为附件送进 Agent；语音消息用 QQ 自带的转写文本，不下载音频。Agent 输出里引用的本地图片（限当前会话工作目录内）会上传成图片消息单独发出。
+A typing indicator is sent while Claude is thinking or running tools. Inbound images and files are downloaded into `~/.claude/im-downloads/qq/` and forwarded as attachments; voice notes use QQ's own transcript rather than downloading the audio. Local images referenced in the Agent's output (restricted to the current session's working directory) are uploaded and sent as separate image messages.
 
-## Agent 能力与边界
+## Agent capability and boundaries
 
-QQ 不是一套独立的问答模型。普通消息进入的是当前项目的同一条 Claude Code Agent 会话，因此会延续多轮上下文，并能使用该会话已经加载的文件、终端、Git、Skills 和 MCP 工具。
+QQ is not a separate question-and-answer model. Messages enter the same Claude Code Agent session as the current project, so they continue the multi-turn context and can use the files, terminal, Git, Skills, and MCP tools that session already has.
 
-这意味着配对成功的账号获得的是当前项目里的完整 Agent 能力，权限确认只是操作闸门，不是操作系统沙箱。不要把机器人交给不可信的人，也不要在聊天里安装未经本机审核的 Skill、Plugin 或 MCP。
+That means a paired account holds the full Agent capability of the current project. Permission confirmation is a gate on individual operations, not an OS sandbox. Do not hand the bot to people you do not trust, and do not install unreviewed Skills, plugins, or MCP servers from chat.
 
-Adapter 只接受已配对或在允许列表中的私聊账号；项目列表和名称匹配都限制在「允许访问的项目目录」内。
+The adapter accepts only paired or allow-listed private chats, and project listing and name matching stay inside **Allowed project directories**.
 
-## 本地开发启动
+## Running it locally
 
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Release builds start the adapter as a sidecar automatically. Manual startup is only needed when running from source:
 
 ```bash
 cd adapters
@@ -66,7 +66,7 @@ bun install
 bun run qq
 ```
 
-可选的环境变量覆盖：
+Optional environment overrides:
 
 ```bash
 export QQ_APP_ID="xxx"
@@ -74,16 +74,16 @@ export QQ_APP_SECRET="xxx"
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-## 常见问题
+## Troubleshooting
 
-**二维码一直转不出来**：扫码走的是 QQ 开放平台的接口，确认本机网络能访问；20 秒拿不到二维码会报超时，点一下重试。
+**The QR code never appears.** Scanning goes through the QQ Open Platform; confirm your machine can reach it. The request times out after 20 seconds, so try again.
 
-**扫码成功但机器人不回消息**：确认桌面端还开着，并且「QQ」Tab 里显示了 AppID。凭据是扫码那一刻写进配置的，之后适配器会自动重启一次。
+**Scanned successfully but the bot stays silent.** Confirm the Desktop app is still running and that the **QQ** tab shows an AppID. Credentials are written the moment the scan succeeds, and the adapter restarts on its own.
 
-**发消息提示未授权**：检查是否已生成配对码、码是否还在 60 分钟有效期内、发的是不是当前这一枚。
+**Messages report "unauthorized".** Check that a pairing code was generated, that it is still inside its 60-minute window, and that you sent the current one.
 
-**群里 @ 机器人没反应**：这是预期行为，当前只处理私聊。配对授权的是个人身份，在群里放行会把这份授权扩散给群里所有人。
+**Mentioning the bot in a group does nothing.** That is intended: only private chats are handled. Pairing authorizes one person, and answering in a group would extend that authorization to everyone in it.
 
-## 源码入口
+## Source entry points
 
-`adapters/qq/index.ts`（运行时）、`adapters/qq/qr-auth.ts`（扫码授权）、`adapters/qq/extract-payload.ts`（入站消息解析），以及 `adapters/common/chat-runtime.ts` 这套跨平台会话循环。
+`adapters/qq/index.ts` (runtime), `adapters/qq/qr-auth.ts` (scan authorization), `adapters/qq/extract-payload.ts` (inbound parsing), plus the shared session loop in `adapters/common/chat-runtime.ts`.

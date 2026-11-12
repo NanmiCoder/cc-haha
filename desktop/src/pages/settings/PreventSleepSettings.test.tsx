@@ -30,7 +30,7 @@ describe('General settings prevent sleep', () => {
           countdown: null, lastAction: null, notice: null,
         }) } }
     usePowerSettingsStore.setState({ preventSleepWhileRunning: false, saving: false, error: false })
-    useSettingsStore.setState({ locale: 'zh', fetchOutputStyles: async () => {}, fetchAppMode: async () => {} })
+    useSettingsStore.setState({ locale: 'en', fetchOutputStyles: async () => {}, fetchAppMode: async () => {} })
     useOpenTargetStore.setState({ ensureTargets: async () => {} })
   })
   afterEach(() => {
@@ -42,7 +42,7 @@ describe('General settings prevent sleep', () => {
 
   it('exposes the default-off switch on the actual General page and persists on/off', async () => {
     render(<GeneralSettings />)
-    const toggle = screen.getByRole('switch', { name: '运行任务时防止系统休眠' })
+    const toggle = screen.getByRole('switch', { name: 'Prevent system sleep while running tasks' })
     expect(toggle).not.toBeChecked()
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toBeChecked())
@@ -56,9 +56,9 @@ describe('General settings prevent sleep', () => {
   it('keeps the previous choice and displays an actionable error after a rejected save', async () => {
     setEnabled.mockRejectedValueOnce(new Error('fixture native failure'))
     render(<GeneralSettings />)
-    const toggle = screen.getByRole('switch', { name: '运行任务时防止系统休眠' })
+    const toggle = screen.getByRole('switch', { name: 'Prevent system sleep while running tasks' })
     fireEvent.click(toggle)
-    expect(await screen.findByRole('alert')).toHaveTextContent('保存防休眠设置失败，请重试。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save the prevent-sleep setting. Please try again.')
     expect(toggle).not.toBeChecked()
     expect(toggle).not.toBeDisabled()
   })
@@ -66,6 +66,6 @@ describe('General settings prevent sleep', () => {
   it('hides the native setting in browser and H5 runtimes', async () => {
     Reflect.deleteProperty(window, 'desktopHost')
     await act(async () => { render(<GeneralSettings />) })
-    expect(screen.queryByRole('switch', { name: '运行任务时防止系统休眠' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Prevent system sleep while running tasks' })).not.toBeInTheDocument()
   })
 })

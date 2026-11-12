@@ -1,77 +1,77 @@
-# 贡献指南
+# Contributing Guide
 
-提交 PR 前请先确认改动影响面，再运行对应的确定性检查。外部贡献者不需要提供真实模型账号或额度。
+Before opening a PR, identify what your change affects and run the matching deterministic checks. External contributors do not need a real model account or quota.
 
-## 1. 按影响面运行本地检查
+## 1. Run local checks based on impact
 
 ```bash
 bun run check:impact
 ```
 
-`check:impact` 会列出这次改动选中的检查。普通任务运行这些检查；准备声明 PR-ready 或需要完整验证时，直接运行统一入口，不必先单独重复执行其全部检查：
+`check:impact` lists the checks selected for this change. For ordinary tasks, run those checks; when you're ready to declare the PR ready or need full verification, run the unified entry point directly, without first repeating all of its checks individually:
 
 ```bash
 bun run verify
 ```
 
-`bun run verify` 会按改动路径执行被选中的 policy、产品、契约、持久化和 coverage lane，但不会调用真实模型。小范围贡献无需在本机重复所有无关模块；GitHub PR gate 会再次执行并严格核对 selected / skipped 状态。
+`bun run verify` runs the policy, product, contract, persistence, and coverage lanes selected by the changed paths, but never calls a real model. Small contributions don't need to rerun every unrelated module locally; the GitHub PR gate runs again and strictly checks the selected / skipped status.
 
-修复期间重跑受影响的窄检查，交付时补齐最终 diff 的验证证据；没有后续改动或未解决风险时，已通过的检查无需重跑。
+While fixing, rerun the narrow affected checks; at handoff, provide verification evidence for the final diff. If there are no further changes or unresolved risks, checks that already passed don't need to be rerun.
 
-`git push` 不再自动运行本地质量门禁。需要质量检查时请手动运行 `bun run quality:push` 或 `bun run verify`；完整覆盖率仍以 `bun run verify` 为准。
+`git push` no longer runs the local quality gate automatically. When you need quality checks, run `bun run quality:push` or `bun run verify` manually; `bun run verify` remains the source of truth for full coverage.
 
-只改了某个模块时可以用窄命令快速迭代：
+When you've only changed one module, use a narrow command to iterate quickly:
 
-| 改动范围 | 快速验证 |
+| Change scope | Quick check |
 | --- | --- |
-| CLI / Server / 工具 | `bun run check:server` |
-| 桌面端 | `bun run check:desktop` |
+| CLI / Server / tools | `bun run check:server` |
+| Desktop | `bun run check:desktop` |
 | IM Adapter | `bun run check:adapters` |
-| 桌面 Electron / 原生打包 | `bun run check:native` |
+| Desktop Electron / native packaging | `bun run check:native` |
 | Provider / runtime / proxy | `bun run check:provider-contract` |
-| 桌面聊天 / WebSocket / 会话 | `bun run check:chat-contract` |
-| 持久化格式与迁移 | `bun run check:persistence-upgrade` |
-| 文档 | `bun run check:docs` |
+| Desktop chat / WebSocket / sessions | `bun run check:chat-contract` |
+| Persistence formats and migrations | `bun run check:persistence-upgrade` |
+| Docs | `bun run check:docs` |
 
-门禁失败时，查看最新质量报告和对应 lane 日志定位问题：
+When a gate fails, check the latest quality report and the matching lane log:
 
 ```
 artifacts/quality-runs/<timestamp>/report.md
 artifacts/quality-runs/<timestamp>/logs/<lane>.log
 ```
 
-## 2. 用户可见或跨进程桌面改动需要手工测试
+## 2. User-visible or cross-process desktop changes need manual testing
 
-改动涉及用户可见 UI、跨 WebSocket/进程流程、Electron host 或 native/packaging 时，除了自动门禁外，还应在真机上验证相关流程。纯样式、纯工具或已有组件单元测试能够完整证明的改动，不要求重复无关流程：
+When a change touches user-visible UI, cross-WebSocket/cross-process flows, the Electron host, or native/packaging, verify the affected flows on a real machine in addition to the automated gates. Pure styling, pure tooling, or changes fully proven by existing component unit tests don't require repeating unrelated flows:
 
-- 优先使用 `bun run check:desktop-ui-smoke` 的隔离 mock runtime 验证真实桌面 UI
-- 需要手动启动服务和桌面端时，复用 `scripts/quality-gate/sandbox.ts` 的临时配置和测试环境，避免服务读写真实 `~/.claude`；临时浏览器操作使用 `ego-browser` skill
-- 验证改动涉及的交互流程：页面渲染、按钮/表单行为、弹窗、快捷键、多窗口等
-- 必要时打本地 macOS 包 `desktop/scripts/build-macos-arm64.sh` 做完整验证
+- Prefer `bun run check:desktop-ui-smoke` with its isolated mock runtime to verify the real desktop UI
+- When you need to start the server and desktop app manually, reuse the temporary config and test environment from `scripts/quality-gate/sandbox.ts` so the server doesn't read or write your real `~/.claude`; use the `ego-browser` skill for ad-hoc browser work
+- Verify the interaction flows the change touches: page rendering, button/form behavior, dialogs, keyboard shortcuts, multiple windows, etc.
+- When needed, build a local macOS package with `desktop/scripts/build-macos-arm64.sh` for full verification
 
-## 3. PR 必须附上影响范围和测试说明
+## 3. PRs must include impact and testing notes
 
-每个 PR 的描述里必须包含：
+Every PR description must include:
 
-- **影响范围**：改了哪些模块（desktop / server / adapter / native / docs / provider / agent-loop）
-- **测试说明**：跑了哪些测试、覆盖率情况、手工测试了哪些流程（用户可见或跨进程桌面改动需有真机记录）
-- **剩余风险**：已知未覆盖的边界或需要后续跟进的点
+- **Impact**: which modules changed (desktop / server / adapter / native / docs / provider / agent-loop)
+- **Testing**: which tests you ran, coverage status, and which flows you tested manually (user-visible or cross-process desktop changes need a real-device record)
+- **Remaining risk**: known uncovered edge cases or points that need follow-up
 
-provider/runtime、agent-loop、文件编辑、权限、session 等核心路径必须先通过离线 mock/fixture/contract 测试。真实模型验证只由拥有可信 secrets 和额度的维护者在高风险合并或发版前运行：
+Core paths such as provider/runtime, agent-loop, file editing, permissions, and sessions must first pass offline mock/fixture/contract tests. Real-model verification is run only by maintainers with trusted secrets and quota, before high-risk merges or releases:
 
 ```bash
 bun run quality:providers
 bun run quality:smoke --provider-model <provider:model>
 ```
 
-来自 fork 的 PR 不会获得仓库 secrets，也不应被要求运行真实模型。贡献者只需在 PR 中明确写 `live model: not run (untrusted fork / no provider)`；这不是确定性 PR gate 的失败理由。
+PRs from forks don't receive repository secrets and should not be asked to run real models. Contributors only need to state `live model: not run (untrusted fork / no provider)` in the PR; this is not a reason for the deterministic PR gate to fail.
 
-## 贡献的许可边界
+## Licensing boundaries for contributions
 
-贡献前请阅读 [LICENSE](LICENSE) 和[许可说明](LICENSING.md)。提交新贡献时，请明确同意将你有权授权的新增部分按当前的 cc-haha Community Source License 1.0 提供；如果你希望使用其他许可，请在 PR 中明确说明，由维护者在合入前确认。此说明不追溯变更既有 MIT 贡献，也不转移版权或授予维护者无限制重新许可权。
+Before contributing, read the [LICENSE](LICENSE) and the [licensing notes](LICENSING.md). When submitting a new contribution, please explicitly agree to provide the new portions you have the right to license under the current cc-haha Community Source License 1.0. If you want to use a different license, state so clearly in the PR, and a maintainer will confirm before merging. This note does not retroactively change existing MIT contributions, nor does it transfer copyright or grant maintainers unrestricted relicensing rights.
 
-引入或修改第三方代码时，保留原许可及版权通知，并说明来源。不要把已有第三方许可改成项目当前许可。
+When introducing or modifying third-party code, keep the original license and copyright notices and state the source. Do not change existing third-party licenses to the project's current license.
 
-## 更多
+## More
 
-完整质量门禁和覆盖率说明见 [贡献指南](docs/internals/contributing.md)；`AGENTS.md` 仅保留 Agent 的高信号入口与路由。
+See the [contributing guide](docs/internals/contributing.md) for the full quality gates and coverage notes; `AGENTS.md` only keeps high-signal entry points and routing for Agents.

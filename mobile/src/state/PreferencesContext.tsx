@@ -40,7 +40,7 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
         ready,
         error,
         update: async (patch) => {
-          if (!ready || error) throw new Error(error || '手机设置尚未读取完成')
+          if (!ready || error) throw new Error(error || 'Phone settings have not finished loading')
           setPreferences(await repository.update(patch))
         },
       }}

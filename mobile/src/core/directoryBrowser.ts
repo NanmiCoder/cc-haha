@@ -28,18 +28,18 @@ export async function loadDirectories(
     !result || typeof result.currentPath !== 'string' || !result.currentPath ||
     typeof result.parentPath !== 'string' || !Array.isArray(result.entries) ||
     result.entries.some(entry => !entry || typeof entry.name !== 'string' || typeof entry.path !== 'string')
-  ) throw new Error('电脑返回了无效的目录列表，请重试。')
+  ) throw new Error('The computer returned an invalid directory listing; please retry.')
   return { ...result, entries: result.entries.filter(entry => entry.isDirectory === true) }
 }
 
 export function directoryError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 403) return '电脑暂未允许浏览这个目录。请返回上一级或选择其他项目；旧版电脑端请先更新。'
-    if (error.status === 404) return '这个目录已不存在，请选择其他目录。'
-    if (error.status === 400) return '这个位置不是目录，请重新选择。'
-    if (error.status === 500) return '电脑无法读取这个目录，请检查目录权限后重试。'
+    if (error.status === 403) return 'The computer does not allow browsing this directory yet. Go up a level or choose another project; update older desktop versions first.'
+    if (error.status === 404) return 'This directory no longer exists; please choose another one.'
+    if (error.status === 400) return 'This location is not a directory; please choose again.'
+    if (error.status === 500) return 'The computer cannot read this directory; check directory permissions and retry.'
   }
-  return error instanceof Error ? error.message : '目录读取失败，请重试。'
+  return error instanceof Error ? error.message : 'Failed to read directory, please retry.'
 }
 
 /** Only the latest navigation may replace the last successful directory. */

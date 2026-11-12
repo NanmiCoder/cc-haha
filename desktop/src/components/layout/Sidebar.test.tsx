@@ -309,8 +309,8 @@ function makeChatSessionState(overrides: Partial<PerSessionState> = {}): PerSess
   }
 }
 
-// 一条挂起的授权请求，形状与 store 里的一致：`pendingPermission` 是最新一条的镜像，
-// `pendingPermissions` 是全集。
+// One pending permission request, shaped like the store's: `pendingPermission` mirrors the latest,
+// `pendingPermissions` holds them all.
 const openRequest: Partial<PerSessionState> = {
   pendingPermission: { requestId: 'r1', toolName: 'Bash', toolUseId: 'tu-1', input: {} },
   pendingPermissions: { r1: { requestId: 'r1', toolName: 'Bash', toolUseId: 'tu-1', input: {} } },
@@ -1133,7 +1133,7 @@ describe('Sidebar', () => {
   })
 
   it('exposes the full session title as a row tooltip when the label is truncated', () => {
-    const longTitle = '这是一个非常非常长的会话标题，用来验证侧边栏截断后仍然可以通过气泡查看完整内容'
+    const longTitle = 'This is a very very long session title used to check that the sidebar truncates it and the tooltip still shows it in full'
     useSessionStore.setState({
       sessions: [
         makeSession('session-long-title', longTitle, '/workspace/alpha', '2026-05-15T10:00:00.000Z'),
@@ -2633,7 +2633,7 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('sidebar-settings-dock')).toHaveClass('absolute', 'bottom-0')
   })
 
-  // 「素」: refresh and batch-manage are list maintenance, not peers of search.
+  // "Su" spec: refresh and batch-manage are list maintenance, not peers of search.
   // They moved from beside the search box into the projects header, where the
   // other list actions already sit, and must stay reachable there.
   it('keeps refresh and batch-manage in the projects header instead of beside search', () => {
@@ -3147,9 +3147,9 @@ describe('Sidebar', () => {
 
   describe('task view', () => {
     /**
-     * 相对当天算，不用假时钟：`buildSidebarTaskGroups` 读 `Date.now()`，而
-     * `waitFor` 跟 fake timers 相处不好。固定到本地 09:00 也让「测试凌晨跑」
-     * 不会把「今天」滑成「昨天」。
+     * Relative to today without fake timers: `buildSidebarTaskGroups` reads `Date.now()`, and
+     * `waitFor` does not get along with fake timers. Pinning to local 09:00 also keeps a test run
+     * after midnight from sliding "Today" into "Yesterday".
      */
     function daysAgoIso(days: number): string {
       const date = new Date()
@@ -3206,7 +3206,7 @@ describe('Sidebar', () => {
 
       await act(async () => { toggleBell() })
 
-      // 标题和所属目录必须在同一行里：这正是分组视图找不到任务时缺的那条信息。
+      // Title and folder must share a row: that is exactly what the grouped view lacks when a task is hard to find.
       const todayRow = screen.getByRole('button', { name: /Today Session/ })
       expect(within(todayRow).getByText('Thunderbird glasses')).toBeInTheDocument()
 
@@ -3219,8 +3219,8 @@ describe('Sidebar', () => {
       useSessionStore.setState({
         sessions: [
           ...useSessionStore.getState().sessions,
-          // 同一个时间桶里的第二条：跑起来的那条离开后，这条必须还留在原位，
-          // 否则「搬走了」和「整段没了」两种实现都能让测试变绿。
+          // The second row in the same time bucket: once the running one leaves, this must stay put,
+          // or both "moved away" and "whole section gone" implementations would pass.
           makeSession('week-2', 'Other Week Session', '/workspace/beta', daysAgoIso(5)),
         ],
       })
@@ -3247,21 +3247,21 @@ describe('Sidebar', () => {
       useSessionStore.setState({
         sessions: [
           ...useSessionStore.getState().sessions,
-          // 同桶的第二条：跑起来的那条离开后这条要留在原位，否则「挪走了」和
-          // 「整段没了」两种实现都能让断言变绿。
+          // Second row in the same bucket: it must stay put after the running one leaves, or both "moved"
+          // and "whole section gone" implementations would pass.
           makeSession('yesterday-2', 'Other Yesterday Session', '/workspace/beta', daysAgoIso(1)),
         ],
       })
       render(<Sidebar />)
 
-      // 先跑起来，再切视图 —— 另一条用例是反过来的顺序，两条都要覆盖：
-      // taskGroups 的 memo 对 isTaskView 做了短路，只测「先切后跑」的话，
-      // 一个在切换时读不到当前运行集合的实现照样能过。
+      // Start running first, then switch views; the other case uses the reverse order and both are needed:
+      // the taskGroups memo short-circuits on isTaskView, so testing only "switch then run" would let
+      // an implementation that misses the running set on switch pass.
       act(() => {
         useTabStore.getState().openTab('yesterday-1', 'Yesterday Session')
         useTabStore.getState().updateTabStatus('yesterday-1', 'running')
       })
-      // `^` 是必需的：`Other Yesterday Session` 也会匹配没锚定的模式。
+      // `^` is required: `Other Yesterday Session` would also match an unanchored pattern.
       const projectRow = screen.getByRole('button', { name: /^Yesterday Session/ })
       expect(within(projectRow).getByLabelText('Session running')).toBeInTheDocument()
 
@@ -3271,7 +3271,7 @@ describe('Sidebar', () => {
       const taskRow = within(runningGroup).getByRole('button', { name: /^Yesterday Session/ })
       const spinner = within(taskRow).getByLabelText('Session running')
       expect(spinner).toBeInTheDocument()
-      // 分组视图那边转的是同一个 spinner，不是另画一个静止图标。
+      // The grouped view spins the same spinner, not a separate static icon.
       expect(spinner.querySelector('svg')).toHaveClass('animate-spin')
 
       const yesterdayGroup = screen.getByTestId('sidebar-task-group-yesterday')
@@ -3283,8 +3283,8 @@ describe('Sidebar', () => {
       seedSessions()
       useChatStore.setState({
         sessions: {
-          // chatState 故意不是 'permission_pending'：`status` 消息会在卡片还开着时
-          // 把它改成别的，只看 chatState 的实现在这里会熄灯。
+          // chatState is deliberately not 'permission_pending': `status` messages change it while the card
+          // is still open, so an implementation that only reads chatState would turn the light off here.
           'today-1': makeChatSessionState({ chatState: 'tool_executing', ...openRequest }),
         },
       } as Partial<ReturnType<typeof useChatStore.getState>>)
@@ -3317,7 +3317,7 @@ describe('Sidebar', () => {
 
     it('marks a waiting session in the project view too, in place of the running spinner', () => {
       seedSessions()
-      // 没有为它开 tab：侧边栏要能标出没有 tab 的会话，tab 栏那边看不到它。
+      // No tab is open for it: the sidebar must mark sessions without a tab, which the tab bar cannot see.
       useChatStore.setState({
         sessions: {
           'today-1': makeChatSessionState({ chatState: 'tool_executing', ...openRequest }),
@@ -3331,7 +3331,7 @@ describe('Sidebar', () => {
       expect(within(waitingRow).getByLabelText('Waiting for your approval')).toBeInTheDocument()
       expect(within(waitingRow).queryByLabelText('Session running')).not.toBeInTheDocument()
 
-      // 只是在跑、没有在等的会话仍然转圈。
+      // A session that is only running, not waiting, still spins.
       const busyRow = screen.getByRole('button', { name: /^Yesterday Session/ })
       expect(within(busyRow).getByLabelText('Session running')).toBeInTheDocument()
       expect(within(busyRow).queryByLabelText('Waiting for your approval')).not.toBeInTheDocument()
@@ -3349,7 +3349,7 @@ describe('Sidebar', () => {
       expect(within(screen.getByRole('button', { name: /Today Session/ })).getByLabelText('Waiting for your approval'))
         .toBeInTheDocument()
 
-      // 往返：授权被处理后标志要撤掉，会话还在跑，所以回到转圈。
+      // Round trip: once the permission is handled the mark goes away; the session still runs, so it spins again.
       act(() => {
         useChatStore.setState({
           sessions: {
@@ -3390,7 +3390,7 @@ describe('Sidebar', () => {
 
       await act(async () => { toggleBell() })
 
-      // 回到「按项目」，而不是悄悄把用户的选择重置成默认的 recentProject。
+      // Back to "By project" rather than quietly resetting the user's choice to the default recentProject.
       expect(screen.queryByTestId('sidebar-task-list')).not.toBeInTheDocument()
       await waitFor(() => {
         expect(desktopUiPreferencesApiMock.updateSidebarPreferences).toHaveBeenLastCalledWith(
@@ -3430,8 +3430,8 @@ describe('Sidebar', () => {
 
       render(<Sidebar />)
 
-      // 折叠态不渲染会话列表，能聚焦或被读出来但切不动视图的铃铛只会让人点空。
-      // `sidebar-copy--hidden` 只夹宽度和透明度，所以两条都得自己钉住。
+      // Collapsed, the session list is not rendered, so a focusable or announced bell that cannot switch views
+      // only invites dead clicks. `sidebar-copy--hidden` only clamps width and opacity, so both must be pinned here.
       expect(screen.getByTestId('sidebar-task-view-toggle')).toHaveAttribute('tabindex', '-1')
       expect(screen.queryByRole('button', { name: 'Task view' })).not.toBeInTheDocument()
     })

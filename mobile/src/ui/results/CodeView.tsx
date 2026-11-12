@@ -5,7 +5,7 @@ import { highlight, type CodeLanguage, type Token, type TokenKind } from './high
 
 const LINE = 21
 const FONT = 12.5
-/** GeistMono 的字宽是 0.6em；中日韩等全角字符按 1em 估算。 */
+/** GeistMono glyph width is 0.6em; full-width characters such as CJK are estimated at 1em. */
 const NARROW = FONT * 0.6
 const WIDE = FONT
 const MAX_WIDTH = 12000
@@ -18,7 +18,7 @@ function columnsWidth(tokens: Token[]) {
   return width
 }
 
-/** 只读代码视图：行号 + 轻量高亮；按行虚拟化，长行整体横向滚动。 */
+/** Read-only code view: line numbers + light highlighting; virtualized by line, long lines scroll horizontally as a whole. */
 export function CodeView({ content, language }: { content: string; language: CodeLanguage }) {
   const colors = useColors()
   const { width: screenWidth, fontScale } = useWindowDimensions()
@@ -27,7 +27,7 @@ export function CodeView({ content, language }: { content: string; language: Cod
   const rowHeight = Math.ceil(LINE * fontScale)
   const lines = useMemo(() => {
     const result = highlight(content.replace(/\t/g, '    '), language)
-    // 文件末尾的换行不算新的一行。
+    // A trailing newline at the end of the file does not count as a new line.
     if (result.length > 1 && !result[result.length - 1]!.length) result.pop()
     return result
   }, [content, language])

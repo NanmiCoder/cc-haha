@@ -1,8 +1,8 @@
 import Svg, { Line, Path, Rect } from 'react-native-svg'
 
 /**
- * icons.tsx 里还没有的几个 Lucide 线性图标（24 网格）。
- * 只在输入框和两张底单里用，所以放在这里，不去动共用图标表。
+ * icons.tsx A few Lucide line icons (24 grid) not in
+ * Only used in the input and the two sheets, so they live here instead of touching the shared icon table.
  */
 type Name = 'plug' | 'bot' | 'workflow' | 'lock' | 'monitor' | 'shield-alert'
 

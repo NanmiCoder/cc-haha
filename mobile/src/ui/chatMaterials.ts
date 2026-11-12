@@ -24,14 +24,14 @@ export async function pickChatMaterial(
     return Promise.all(
       result.assets.map(async (asset) => {
         if ((asset.size ?? 0) > FILE_MAX_BYTES)
-          throw new Error(`文件超过 ${formatBytes(FILE_MAX_BYTES)}，请拆分后发送。`)
-        // web 端的 uri 是 blob: 地址，内容在 base64（data URL）里。
+          throw new Error(`File exceeds ${formatBytes(FILE_MAX_BYTES)}; please split it before sending.`)
+        // web the uri is a blob: address, with content in base64 (data URL).
         const base64 =
           Platform.OS === 'web'
             ? (asset.base64 ?? asset.uri)
             : await new File(asset.uri).base64()
         if (Platform.OS === 'web' && !base64.startsWith('data:'))
-          throw new Error('浏览器未提供文件内容，请重新选择。')
+          throw new Error('The browser did not provide file content; please choose again.')
         return attachmentFromBase64({
           name: asset.name,
           mimeType: asset.mimeType ?? 'application/octet-stream',
@@ -45,7 +45,7 @@ export async function pickChatMaterial(
     const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted)
       throw new Error(
-        '相机权限未开启。可以选择相册，或到系统设置允许 cc-haha 使用相机。'
+        'Camera permission is off. You can choose from the photo library, or allow cc-haha to use the camera in system settings.'
       )
   }
   const result =
@@ -58,7 +58,7 @@ export async function pickChatMaterial(
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsMultipleSelection: true,
-          // 一次最多选 10 张；可以分多次继续添加。
+          // Up to 10 at a time; you can keep adding in several rounds.
           selectionLimit: 10,
           quality: 1,
           exif: false,
@@ -81,7 +81,7 @@ export async function pickChatMaterial(
           base64: true,
         })
         return attachmentFromBase64({
-          name: `${(asset.fileName ?? '照片').replace(/\.[^.]+$/, '')}.jpg`,
+          name: `${(asset.fileName ?? 'Photos').replace(/\.[^.]+$/, '')}.jpg`,
           mimeType: 'image/jpeg',
           base64: result.base64 ?? '',
           uri: result.uri,

@@ -196,14 +196,12 @@ const policyExactPaths = new Set([
   '.github/pull_request_template.md',
   'AGENTS.md',
   'CONTRIBUTING.md',
-  'docs/en/internals/contributing.md',
   'docs/internals/contributing.md',
   'package.json',
 ])
 
 const docsExactPaths = new Set([
   'README.md',
-  'README.en.md',
   'package.json',
   'package-lock.json',
   '.github/workflows/deploy-docs.yml',

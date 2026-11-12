@@ -187,22 +187,22 @@ application themes. Remote service names/descriptions/requirements/task
 examples are translated through the existing five-language mechanism. Brand
 asset provenance is recorded in desktop/public/connectors/SOURCES.md.
 
-## 2026-09-14：服务与工具目录
+## 2026-09-14: Service and tool catalog
 
-当前内置 55 项：22 个国内服务、24 个全球服务，以及 9 个技能工具包（其中 4 个在插件目录展示，5 个在技能目录展示）。此前增补的服务按供应商和工作流归类，不把同一家数据平台的多个子接口重复计为多家服务。
+There are currently 55 built-in entries: 22 China-market services, 24 global services, and 9 skill toolkits (4 shown in the plugin catalog, 5 in the skill catalog). Previously added services are grouped by vendor and workflow; multiple sub-APIs of the same data platform are not counted as separate services.
 
-目录是随应用发布的只读定义：
+The catalog is a read-only definition shipped with the app:
 
-- `catalog.ts`：汇总及原三家 CLI。
-- `remoteCatalog.ts`、`domesticCatalog.ts`、`globalCatalog.ts`：服务展示与执行配方，仍只有一份 endpoint/auth 来源。
-- `skillCatalog.ts`、`skillBundles.lock.json`：工具介绍、公开仓库固定 commit、许可及逐文件 SHA-256。HyperFrames 使用完整 v0.4.0 五技能包；Remotion 使用其官方 MIT 许可的 Codex 插件技能树，均由本应用的 Claude 插件桥接加载。
-- `desktop/public/connectors/`：本地图标及来源记录。
+- `catalog.ts`: aggregation and the original three CLIs.
+- `remoteCatalog.ts`, `domesticCatalog.ts`, `globalCatalog.ts`: service presentation and execution recipes, still with a single source of endpoint/auth.
+- `skillCatalog.ts`, `skillBundles.lock.json`: tool descriptions, pinned commits of public repositories, licenses, and per-file SHA-256. HyperFrames uses the full v0.4.0 five-skill bundle; Remotion uses its official MIT-licensed Codex plugin skill tree; both are loaded through this app's Claude plugin bridge.
+- `desktop/public/connectors/`: local icons and provenance records.
 
-添加后的状态继续由 `<Claude 配置目录>/connectors/state.json` 管理，插件注册与启用沿用现有插件设置；密钥沿用敏感配置存储，OAuth 沿用现有 OAuth 存储。目录扩展和 UI 筛选不写用户状态，也没有向共享 settings.json 增加全局 schema 字段。此轮没有更改持久化形状。
+State after adding continues to be managed by `<Claude config dir>/connectors/state.json`; plugin registration and enablement reuse the existing plugin settings; keys reuse the sensitive config store, and OAuth reuses the existing OAuth store. Catalog expansion and UI filtering don't write user state, and no global schema fields were added to the shared settings.json. This round did not change the persistence shape.
 
-工具插件安装只下载锁文件列出的技能、参考资料、脚本和许可证，暂存校验后发布；不会在安装阶段执行脚本、安装 Node、下载浏览器或调用模型。原始安装和插件缓存中的文件都需通过完整性检查，才显示“技能已加载”；此状态不表示渲染器和业务服务已验证。重启后需重新验证加载状态，停用/移除会刷新现有会话的插件能力。
+Tool plugin installation only downloads the skills, references, scripts, and licenses listed in the lock file, staging and verifying them before publishing; it never runs scripts, installs Node, downloads browsers, or calls models during installation. Files in both the original install and the plugin cache must pass integrity checks before "Skill loaded" is shown; this status does not mean the renderer and business services have been verified. Load status must be re-verified after restart, and disabling/removing refreshes plugin capabilities for existing sessions.
 
-因此 Skill、MCP、CLI 都可作为插件组成部分，但不是互相等价的协议，也不是任意 Codex 插件都能直接复用。依赖 OpenAI 托管 Apps、专属工具或未公开授权方式的产品，不会以空壳 Skill 冒充已接入。
+So Skills, MCP, and CLIs can all be plugin components, but they are not equivalent protocols, and not every Codex plugin can be reused directly. Products that depend on OpenAI-hosted Apps, proprietary tools, or undisclosed authorization methods are not passed off as integrated via an empty Skill.
 
 ## Installation acceptance — 2026-09-14
 

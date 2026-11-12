@@ -16,19 +16,20 @@ import {
   type TeamWorkbenchSessionTimeline,
 } from '../ui/activity/activityData'
 import { taskTitle } from '../ui/activity/taskLabels'
+import { plural } from './plural'
 
-/* ───────────── 数据 ───────────── */
+/* ───────────── Data ───────────── */
 
 export type ActivityData = {
-  /** 会话任务清单。 */
+  /** Session task list. */
   tasks: TaskInfo[]
-  /** 没有团队（404）时为 null。 */
+  /** null when there is no team (404). */
   team: TeamWorkbenchSessionTimeline | null
   background: BackgroundTask[]
-  /** 至少有一次读取结束（成功或失败）。 */
+  /** At least one read has finished (success or failure). */
   loaded: boolean
   error: string
-  /** 已发出停止请求、还没看到结束的任务。 */
+  /** Tasks with a stop request sent whose end has not been seen yet. */
   stopping: Record<string, true>
   stopError: string
 }
@@ -43,13 +44,13 @@ export const emptyActivityData: ActivityData = {
   stopError: '',
 }
 
-/* ───────────── 派生 ───────────── */
+/* ───────────── Derived ───────────── */
 
 export type PlanTask = {
   id: string
   title: string
   state: 'done' | 'active' | 'waiting' | 'todo'
-  /** 进行中的任务：正在做什么（activeForm）。 */
+  /** In-progress task: what it is doing (activeForm). */
   detail?: string
   owner?: string
 }
@@ -65,11 +66,11 @@ export type SubagentRow = {
   task: BackgroundTask
   title: string
   status: BackgroundTask['status']
-  /** 开始时间（毫秒）；电脑没给就没有。 */
+  /** Start time (ms); absent if the computer did not provide it. */
   startedAt?: number
-  /** “已读取 5 个文件” / “8 次工具调用”；没有数据就不显示。 */
+  /** "Read 5 files" / "8 tool calls"; not shown without data. */
   stats?: string
-  /** 最近两步，只在有实时数据时才有。 */
+  /** Last two steps, only present with live data. */
   steps: StepLine[]
   stopping: boolean
 }
@@ -83,27 +84,27 @@ export type CommandRow = {
   stopping: boolean
 }
 export type TeamTask = {
-  /** 列表内唯一：队长自己的清单和团队看板各有一套编号。 */
+  /** Unique within the list: the lead's own list and the team board each have their own numbering. */
   key: string
-  /** 团队看板的编号（#3），依赖说明里引用的就是它；队长自己的清单没有。 */
+  /** Team board number (#3), referenced in dependency descriptions; the lead's own list has none. */
   ref?: string
   title: string
   state: PlanTask['state']
   detail?: string
-  /** 还没完成的前置任务编号。 */
+  /** Numbers of unfinished prerequisite tasks. */
   waitingOn: string[]
 }
 export type TeamRow = {
   id: string
   name: string
-  /** 头像里的两个字母；队长是「队」。 */
+  /** Two letters in the avatar; the lead is "L". */
   mark: string
   lead: boolean
   model?: string
   state: string
   detail?: string
   tone: 'run' | 'wait' | 'idle' | 'err'
-  /** 每个成员是一个 Agent，自己认领、自己推进的任务挂在自己名下。 */
+  /** Each member is an agent; tasks it claims and drives itself hang under its name. */
   tasks: TeamTask[]
 }
 export type TeamModel = {
@@ -111,7 +112,7 @@ export type TeamModel = {
   incarnationId?: string
   leadSessionId?: string
   members: TeamRow[]
-  /** 团队看板里还没有人认领的任务。 */
+  /** Tasks on the team board not yet claimed by anyone. */
   unassigned: TeamTask[]
   progress: { done: number; total: number }
   summary: string
@@ -119,7 +120,7 @@ export type TeamModel = {
 export type ActivityProgress = {
   done: number
   total: number
-  /** 进行中任务的 activeForm / 标题，用于一句话概括。 */
+  /** activeForm / title of the in-progress task, used for a one-line summary. */
   active?: string
 }
 export type SessionActivityModel = {
@@ -128,13 +129,13 @@ export type SessionActivityModel = {
   subagents: SubagentRow[]
   team: TeamModel | null
   commands: CommandRow[]
-  /** 仅 running 的子 Agent + 后台命令。胶囊角标和底单标题共用这个数。 */
+  /** Only running subagents + background commands. The capsule badge and sheet title share this number. */
   runningCount: number
-  /** 有待审批时 attention，其余 run。 */
+  /** attention when approvals are pending, otherwise run. */
   tone: 'run' | 'attention'
-  /** 胶囊是否应该出现。 */
+  /** Whether the capsule should show. */
   capsuleVisible: boolean
-  /** 胶囊里是否转圈。 */
+  /** Whether the capsule spins. */
   active: boolean
 }
 
@@ -147,8 +148,8 @@ export function planTasks(tasks: readonly TaskInfo[]): PlanTask[] {
       id: task.id,
       title: task.subject,
       state:
-        state === '已完成' ? 'done' : state === '进行中' ? 'active' : state === '等待依赖' ? 'waiting' : 'todo',
-      ...(state === '进行中' && textOf(task.activeForm) ? { detail: textOf(task.activeForm) } : {}),
+        state === 'Done' ? 'done' : state === 'In progress' ? 'active' : state === 'Waiting on dependencies' ? 'waiting' : 'todo',
+      ...(state === 'In progress' && textOf(task.activeForm) ? { detail: textOf(task.activeForm) } : {}),
       ...(textOf(task.owner) ? { owner: textOf(task.owner) } : {}),
     }
   })
@@ -182,24 +183,24 @@ const parseStart = (value?: string) => {
   return Number.isFinite(ms) ? ms : undefined
 }
 
-/** 子 Agent 卡的第二行：运行中优先说读了几个文件，结束后说调用了几次工具。 */
+/** Second line of a subagent card: while running prefer how many files were read; after finishing, how many tool calls. */
 export function subagentStats(
   status: BackgroundTask['status'],
   live: { reads: number; toolUses?: number } | null
 ): string | undefined {
   if (!live) return undefined
   if (status === 'running') {
-    if (live.reads > 0) return `已读取 ${live.reads} 个文件`
-    if (live.toolUses) return `${live.toolUses} 次工具调用`
+    if (live.reads > 0) return `Read ${plural(live.reads, 'file')}`
+    if (live.toolUses) return `${live.toolUses} tool calls`
     return undefined
   }
-  if (live.toolUses) return `${live.toolUses} 次工具调用`
-  if (live.reads > 0) return `已读取 ${live.reads} 个文件`
+  if (live.toolUses) return `${live.toolUses} tool calls`
+  if (live.reads > 0) return `Read ${plural(live.reads, 'file')}`
   return undefined
 }
 
 const statusRank: Record<BackgroundTask['status'], number> = { running: 0, failed: 1, stopped: 2, completed: 3 }
-/** 运行中的排前面，同一状态保持电脑给出的先后顺序。 */
+/** Running ones first; the same state keeps the order given by the computer. */
 function byStatus<T extends { status: BackgroundTask['status'] }>(rows: T[]) {
   return rows
     .map((row, index) => ({ row, index }))
@@ -258,8 +259,8 @@ export function commandRows(
 }
 
 /**
- * 头像里的两个字母：backend-dev → BD，reviewer → RE。同一个团队里不能撞：
- * 已被占用时换成首字母加后面的某个字母（researcher 先拿到 RE，reviewer 就是 RV）。
+ * Two letters in the avatar: backend-dev → BD, reviewer → RE. Must not collide within a team: 
+ * if taken, use the first letter plus a later letter (researcher gets RE first, so reviewer is RV).
  */
 export function memberMark(name: string, taken: ReadonlySet<string> = new Set()) {
   const words = name.split(/[-_\s@.]+/).filter(Boolean)
@@ -271,31 +272,31 @@ export function memberMark(name: string, taken: ReadonlySet<string> = new Set())
   return candidates.find((mark) => !taken.has(mark)) ?? (candidates[0] || '?')
 }
 
-/** `list` 里的任务，依赖在 `all` 里判断：成员的前置任务常常是别人的。 */
+/** `list` tasks in it, with dependencies resolved against `all`: a member's prerequisites often belong to others. */
 function teamTasks(list: readonly TaskInfo[], all: readonly TaskInfo[], numbered: boolean): TeamTask[] {
   const open = (id: string) => all.some((other) => other.id === id && other.status !== 'completed')
   return list.map((task) => {
     const state = taskState(task, [...all])
-    const detail = state === '进行中' ? textOf(task.activeForm) : undefined
+    const detail = state === 'In progress' ? textOf(task.activeForm) : undefined
     return {
       key: `${numbered ? 'team' : 'own'}:${task.id}`,
       ...(numbered ? { ref: task.id } : {}),
       title: task.subject,
-      state: state === '已完成' ? 'done' : state === '进行中' ? 'active' : state === '等待依赖' ? 'waiting' : 'todo',
+      state: state === 'Done' ? 'done' : state === 'In progress' ? 'active' : state === 'Waiting on dependencies' ? 'waiting' : 'todo',
       ...(detail ? { detail } : {}),
-      waitingOn: state === '等待依赖' ? task.blockedBy.filter(open) : [],
+      waitingOn: state === 'Waiting on dependencies' ? task.blockedBy.filter(open) : [],
     }
   })
 }
 
 /**
- * 团队只在“活着”时出现；归档、已删除的团队不属于运行中。任务按负责人挂到成员下面，
- * 队长名下是会话自己的清单（`ownTasks`）加上它认领的看板任务。
+ * A team appears only while "alive"; archived or deleted teams are not running. Tasks hang under members by owner, 
+ * and under the lead is the session's own list (`ownTasks`) plus the board tasks it claimed.
  */
 export function teamModel(
   timeline: TeamWorkbenchSessionTimeline | null,
   ownTasks: readonly TaskInfo[] = [],
-  /** 成员页：团队收尾归档后仍要能看成员和它的记录。 */
+  /** Member page: members and their records must still be viewable after the team wraps up and is archived. */
   options: { ended?: boolean } = {}
 ): TeamModel | null {
   const snapshot = latestTeam(timeline)
@@ -311,12 +312,12 @@ export function teamModel(
     const owned = memberTasks(member, board)
     for (const task of owned) claimed.add(task.id)
     const current = owned.find((task) => task.status === 'in_progress')
-    const blocked = owned.find((task) => taskState(task, board) === '等待依赖')
-    const waiting = !current && !!blocked && state === '空闲'
-    const label = waiting ? '等待依赖' : state
+    const blocked = owned.find((task) => taskState(task, board) === 'Waiting on dependencies')
+    const waiting = !current && !!blocked && state === 'Idle'
+    const label = waiting ? 'Waiting on dependencies' : state
     const detail = current ? (textOf(current.activeForm) ?? current.subject) : undefined
-    const name = lead ? '队长' : member.name || member.agentId
-    const mark = lead ? '队' : memberMark(name, marks)
+    const name = lead ? 'Lead' : member.name || member.agentId
+    const mark = lead ? 'L' : memberMark(name, marks)
     marks.add(mark)
     return {
       id: member.agentId,
@@ -327,11 +328,11 @@ export function teamModel(
       state: label,
       detail,
       tone:
-        label === '工作中'
+        label === 'Working'
           ? 'run'
-          : label === '等待依赖' || label === '等待重试'
+          : label === 'Waiting on dependencies' || label === 'Waiting to retry'
             ? 'wait'
-            : label === '遇到错误'
+            : label === 'Error'
               ? 'err'
               : 'idle',
       tasks: [...(lead ? teamTasks(ownTasks, ownTasks, false) : []), ...teamTasks(owned, board, true)],
@@ -347,17 +348,17 @@ export function teamModel(
     members: rows,
     unassigned: teamTasks(board.filter((task) => !claimed.has(task.id)), board, true),
     progress,
-    summary: [snapshot.team.name, progress.total ? `${progress.done}/${progress.total} 完成` : `${rows.length} 人`].join(' · '),
+    summary: [snapshot.team.name, progress.total ? `${progress.done}/${progress.total} done` : plural(rows.length, 'member')].join(' · '),
   }
 }
 
 /**
- * 停止会暂停整组但不结束方案：方案还写着「运行中」，成员却可能都已停下或退出，
- * 这时再给「停止」就没有意义（同桌面 areTeamMembersAllStopped）。没有名单可判断时为 false。
+ * Stopping pauses the whole group but does not end the plan: the plan still says "running" while members may all have stopped or exited, 
+ * so offering "Stop" then is meaningless (same as desktop areTeamMembersAllStopped). false when there is no roster to judge.
  */
 export function teamMembersAllStopped(team: Pick<TeamModel, 'members'> | null | undefined) {
   const members = team?.members.filter((row) => !row.lead) ?? []
-  return members.length > 0 && members.every((row) => row.state === '已停止' || row.state === '已退出')
+  return members.length > 0 && members.every((row) => row.state === 'Stopped' || row.state === 'Exited')
 }
 
 export function capsuleVisible(input: {
@@ -368,7 +369,7 @@ export function capsuleVisible(input: {
   const { runningCount, progress, turnActive } = input
   if (runningCount > 0) return true
   if (progress.total === 0) return false
-  // 清单全部完成且这一轮已经结束：运行相关的界面全部消失。
+  // List all done and this turn ended: all run-related UI disappears.
   return turnActive || progress.done < progress.total
 }
 
@@ -383,7 +384,7 @@ export function deriveActivity(
 ): SessionActivityModel {
   const team = teamModel(data.team, data.tasks)
   const board = latestTeam(data.team)?.tasks ?? []
-  // 团队在跑时看团队看板的进度，任务都挂在成员名下；否则会话自己的清单优先。
+  // While the team runs, progress follows the team board and tasks hang under members; otherwise the session's own list comes first.
   const source = team && board.length ? board : data.tasks.length ? data.tasks : board
   const listed = planTasks(source)
   const tasks = team ? [] : listed
@@ -408,31 +409,31 @@ export function deriveActivity(
   }
 }
 
-/** 分组标题右侧的一句话。 */
+/** One-liner on the right of the group title. */
 export function sectionSummaries(model: SessionActivityModel) {
   const count = (rows: { status: BackgroundTask['status'] }[], finishedLabel: string) => {
     const running = rows.filter((row) => row.status === 'running').length
     const finished = rows.length - running
-    return [running ? `${running} 运行中` : '', finished ? `${finished} ${finishedLabel}` : '']
+    return [running ? `${running} running` : '', finished ? `${finished} ${finishedLabel}` : '']
       .filter(Boolean)
       .join(' · ')
   }
   const inProgress = model.tasks.filter((task) => task.state === 'active').length
   return {
-    tasks: [`${model.progress.done}/${model.progress.total} 完成`, inProgress ? `${inProgress} 进行中` : '']
+    tasks: [`${model.progress.done}/${model.progress.total} done`, inProgress ? `${inProgress} in progress` : '']
       .filter(Boolean)
       .join(' · '),
-    subagents: count(model.subagents, '已完成'),
+    subagents: count(model.subagents, 'done'),
     team: model.team?.summary ?? '',
-    commands: count(model.commands, '已结束'),
+    commands: count(model.commands, 'ended'),
   }
 }
 
-/* ───────────── 读取与轮询 ───────────── */
+/* ───────────── Reading and polling ───────────── */
 
 export type ActivityFetchResult = {
   tasks?: TaskInfo[]
-  /** undefined = 这次没读；null = 没有团队。 */
+  /** undefined = not read this time; null = no team. */
   team?: TeamWorkbenchSessionTimeline | null
   background?: BackgroundTask[]
   errors: string[]
@@ -442,9 +443,9 @@ export type ActivityFetcher = (
   options: { team: boolean }
 ) => Promise<ActivityFetchResult>
 
-const reason = (error: unknown) => (error instanceof Error ? error.message : '读取失败')
+const reason = (error: unknown) => (error instanceof Error ? error.message : 'Failed to load')
 
-/** 一处拉取三份数据；某一份失败不影响其余，旧数据保留。 */
+/** Fetch three datasets in one place; one failing does not affect the others, and old data is kept. */
 export function createActivityFetcher(client: ApiClient, sessionId: string): ActivityFetcher {
   return async (signal, options) => {
     const [tasks, team, background] = await Promise.allSettled([
@@ -455,33 +456,33 @@ export function createActivityFetcher(client: ApiClient, sessionId: string): Act
     const errors: string[] = []
     const result: ActivityFetchResult = { errors }
     if (tasks.status === 'fulfilled') result.tasks = tasks.value
-    else errors.push(`任务：${reason(tasks.reason)}`)
+    else errors.push(`Tasks: ${reason(tasks.reason)}`)
     if (team.status === 'fulfilled') {
       if (team.value !== undefined) result.team = team.value
-    } else errors.push(`团队：${reason(team.reason)}`)
+    } else errors.push(`Team: ${reason(team.reason)}`)
     if (background.status === 'fulfilled') result.background = background.value.tasks ?? []
-    else errors.push(`后台：${reason(background.reason)}`)
+    else errors.push(`Background: ${reason(background.reason)}`)
     return result
   }
 }
 
 export const ACTIVE_POLL_MS = 3500
-/** 没有团队时隔这么久才再问一次，避免每轮都吃一个 404。 */
+/** When there is no team, wait this long before asking again to avoid a 404 every round. */
 export const TEAM_RECHECK_MS = 15_000
 export const STOP_TIMEOUT_MS = 15_000
 
 export type PollInput = {
   enabled: boolean
-  /** 页面在前台且当前屏幕有焦点。 */
+  /** Page in foreground and the current screen has focus. */
   visible: boolean
   turnActive: boolean
   backgroundIds: number
   running: number
   teamActive: boolean
-  /** 团队方案已确认、成员还没全部就位。 */
+  /** Team plan approved but members not all in place yet. */
   teamLaunching?: boolean
 }
-/** 下一次轮询的间隔；null = 不轮询（空闲、页面不可见或未启用）。 */
+/** Interval to the next poll; null = no polling (idle, page hidden or disabled). */
 export function pollDelay(input: PollInput): number | null {
   if (!input.enabled || !input.visible) return null
   return input.turnActive || input.backgroundIds > 0 || input.running > 0 || input.teamActive || input.teamLaunching
@@ -493,11 +494,11 @@ export type ActivityConfig = {
   enabled: boolean
   visible: boolean
   turnActive: boolean
-  /** 当前活动后台任务 id 的指纹；变化就立刻重读。 */
+  /** Fingerprint of currently active background task IDs; reread immediately on change. */
   backgroundKey: string
-  /** 团队方案的 `planId:state`；变化（比如刚确认）就立刻连团队一起重读。 */
+  /** `planId:state` of the team plan; on change (e.g. just approved) reread together with the team immediately. */
   teamPlanKey?: string
-  /** 团队正在启动：每次都读团队，成员就位能马上显示。 */
+  /** Team launching: read the team every time so members show as soon as they are in place. */
   teamLaunching?: boolean
 }
 export type ActivityTimers = {
@@ -506,7 +507,7 @@ export type ActivityTimers = {
 }
 export type ActivityStoreDeps = {
   fetch: ActivityFetcher
-  /** 通过会话 WebSocket 发给电脑；没发出去返回 false。 */
+  /** Sent to the computer via the session WebSocket; returns false if not sent. */
   send(message: ClientMessage): boolean
   timers?: ActivityTimers
   now?(): number
@@ -518,8 +519,8 @@ const defaultTimers: ActivityTimers = {
 }
 
 /**
- * 三份活动数据的唯一来源：只在运行/有后台任务时按间隔读，页面不可见或空闲时停下；
- * 配置变化（开始运行、后台任务增减、回到前台）立即补读一次，重叠的读取合并成一次。
+ * The single source of the three activity datasets: read at intervals only while running/with background tasks, stop when the page is hidden or idle; 
+ * config changes (starting to run, background tasks changing, returning to foreground) trigger an immediate read, and overlapping reads merge into one.
  */
 export class ActivityStore {
   #data: ActivityData = emptyActivityData
@@ -537,7 +538,7 @@ export class ActivityStore {
 
   #send?: (message: ClientMessage) => boolean
 
-  /** 页面传入的发送函数，优先于构造时的默认发送函数。 */
+  /** Send function passed by the page, taking priority over the default from construction. */
   setSender(send: ((message: ClientMessage) => boolean) | undefined) {
     this.#send = send
   }
@@ -563,7 +564,7 @@ export class ActivityStore {
   configure(next: ActivityConfig) {
     const previous = this.#config
     this.#config = next
-    // 方案状态变了（比如刚确认）：下一次读取连团队一起读，哪怕这会儿页面不可见。
+    // Plan state changed (e.g. just approved): the next read includes the team, even if the page is hidden right now.
     if ((previous.teamPlanKey ?? '') !== (next.teamPlanKey ?? '')) this.#forceTeam = true
     if (!next.enabled) {
       this.#halt()
@@ -585,7 +586,7 @@ export class ActivityStore {
     else this.#schedule()
   }
 
-  /** 立即读一次。用户手动刷新时 forceTeam 也重新探测团队。 */
+  /** Read once immediately. On manual refresh forceTeam also re-probes the team. */
   async refresh(options: { forceTeam?: boolean } = {}) {
     if (!this.#config.enabled) return
     if (options.forceTeam) this.#forceTeam = true
@@ -610,7 +611,7 @@ export class ActivityStore {
     } catch (error) {
       if (!controller.signal.aborted) this.#set({ loaded: true, error: reason(error) })
     } finally {
-      // 被 halt 掉的旧请求不能动新请求的状态。
+      // Old requests that were halted must not touch the new request's state.
       if (this.#controller === controller) {
         this.#inFlight = false
         this.#controller = undefined
@@ -628,7 +629,7 @@ export class ActivityStore {
     const background = result.background ?? this.#data.background
     if (result.team === null) this.#teamAbsentAt = this.#now()
     else if (result.team) this.#teamAbsentAt = undefined
-    // 已经不在运行的任务不再算“停止中”。
+    // Tasks no longer running no longer count as "stopping".
     const running = new Set(background.filter((task) => task.status === 'running').map((task) => task.taskId))
     const stopping = { ...this.#data.stopping }
     for (const id of Object.keys(stopping))
@@ -641,9 +642,9 @@ export class ActivityStore {
       team: result.team === undefined ? this.#data.team : result.team,
       background,
       loaded: true,
-      error: result.errors.join('；'),
+      error: result.errors.join('; '),
       stopping,
-      // 提示只在还有任务在跑时有意义。
+      // The message only matters while tasks are still running.
       stopError: running.size ? this.#data.stopError : '',
     })
   }
@@ -694,12 +695,12 @@ export class ActivityStore {
     this.#listeners.clear()
   }
 
-  /** 发出单项停止；没发出去时返回 false 并写明原因。 */
+  /** Send a single stop; returns false with the reason when not sent. */
   stopTask(taskId: string) {
     return this.#stop([taskId])
   }
 
-  /** 停止所有仍在运行的子 Agent 和后台命令。 */
+  /** Stop all subagents and background commands still running. */
   stopAll() {
     const ids = this.#data.background
       .filter((task) => task.status === 'running' && !task.stopping)
@@ -717,7 +718,7 @@ export class ActivityStore {
     const sent: string[] = []
     for (const id of targets) if ((this.#send ?? this.deps.send)({ type: 'stop_background_task', taskId: id })) sent.push(id)
     if (sent.length < targets.length) {
-      this.#set({ stopError: '连接已断开，请重新连接后再停止。' })
+      this.#set({ stopError: 'Connection lost; reconnect before stopping.' })
       if (!sent.length) return false
     }
     this.#set({
@@ -733,7 +734,7 @@ export class ActivityStore {
           if (!this.#data.stopping[id]) return
           const stopping = { ...this.#data.stopping }
           delete stopping[id]
-          this.#set({ stopping, stopError: '电脑没有回应停止请求，刷新后看看任务状态。' })
+          this.#set({ stopping, stopError: 'The computer did not respond to the stop request; refresh to check the task status.' })
         }, STOP_TIMEOUT_MS)
       )
     }

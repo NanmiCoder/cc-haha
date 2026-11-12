@@ -1,7 +1,7 @@
 /**
- * Adapter 配置加载
+ * Adapter config loading
  *
- * 优先级：环境变量 > ~/.claude/adapters.json > 默认值
+ * Priority: environment variables > ~/.claude/adapters.json > defaults
  */
 
 import * as fs from 'node:fs'
@@ -73,8 +73,8 @@ export type WhatsAppConfig = {
   allowedProjectRoots: string[]
 }
 
-/** Enterprise WeChat (企业微信) AI bot — QR-provisioned botId/secret over the
- *  官方 WebSocket 长连接 (`@wecom/aibot-node-sdk`). */
+/** Enterprise WeChat (WeCom) AI bot — QR-provisioned botId/secret over the
+ *  official WebSocket long connection (`@wecom/aibot-node-sdk`). */
 export type WecomConfig = {
   botId: string
   secret: string

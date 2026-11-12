@@ -129,15 +129,15 @@ describe('MarkdownRenderer file references', () => {
     ['<D:/cchaha/cchaha d/记忆.md>', { path: 'D:/cchaha/cchaha d/记忆.md' }],
   ])('preserves explicit local Markdown destination %s through sanitization', (href, expected) => {
     const onLinkClick = vi.fn().mockReturnValue(true)
-    const container = renderMarkdown(`[打开文件](${href})`, { onLinkClick })
+    const container = renderMarkdown(`[Open file](${href})`, { onLinkClick })
     container.querySelector<HTMLAnchorElement>('a')!.click()
     expect(onLinkClick).toHaveBeenCalledWith(expected)
   })
 
   it('does not show explicit local file links as actionable without a handler', () => {
-    const container = renderMarkdown('[打开文件](file:///tmp/report.html)', { onLinkClick: null })
+    const container = renderMarkdown('[Open file](file:///tmp/report.html)', { onLinkClick: null })
     expect(container.querySelector('a')).toBeNull()
-    expect(container.textContent?.trim()).toBe('打开文件')
+    expect(container.textContent?.trim()).toBe('Open file')
   })
 
   it('keeps unsafe schemes out of the file click route', () => {

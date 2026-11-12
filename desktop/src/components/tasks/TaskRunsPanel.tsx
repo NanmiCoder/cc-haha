@@ -286,7 +286,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
 
                     {/* Time — mono, so timestamps line up down the column */}
                     <span className="font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
-                      {new Date(run.startedAt).toLocaleString()}
+                      {new Date(run.startedAt).toLocaleString('en-US')}
                     </span>
 
                     {/* Duration */}

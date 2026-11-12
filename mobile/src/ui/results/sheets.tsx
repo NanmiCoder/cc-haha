@@ -22,8 +22,9 @@ import {
   rewindRisks,
   turnNumber,
 } from '../../core/changesView'
+import { plural } from '../../core/plural'
 
-/** 换一轮：最新的在上，每行“第 N 轮 · N 个文件”+ 增删，当前轮打勾。 */
+/** Switch turn: newest on top, each row "Turn N · N files" + line stats, with the current turn checked. */
 export function TurnSheet({
   visible,
   onClose,
@@ -39,18 +40,18 @@ export function TurnSheet({
 }) {
   const colors = useColors()
   return (
-    <Sheet visible={visible} onClose={onClose} title="换一轮">
+    <Sheet visible={visible} onClose={onClose} title="Switch turn">
       <Group>
         {checkpointsNewestFirst(checkpoints).map((item, index) => {
           const id = item.target.targetUserMessageId
           const selected = id === selectedId
-          const title = `第 ${turnNumber(item)} 轮 · ${item.code.filesChanged.length} 个文件`
+          const title = `Turn ${turnNumber(item)} · ${plural(item.code.filesChanged.length, 'file')}`
           return (
             <View key={id}>
               {index ? <Separator /> : null}
               <ListRow
                 title={title}
-                accessibilityLabel={`${title}${selected ? '，当前' : ''}`}
+                accessibilityLabel={`${title}${selected ? ', current' : ''}`}
                 onPress={() => onSelect(id)}
                 trailing={
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -71,7 +72,7 @@ export function TurnSheet({
   )
 }
 
-/** 回退确认：范围三选一（数字来自 dryRun）、风险说明、取消 / 回退。 */
+/** Rewind confirmation: choose one of three scopes (numbers from dryRun), risk notes, cancel / rewind. */
 export function RewindSheet({
   preview,
   mode,
@@ -90,7 +91,7 @@ export function RewindSheet({
   onConfirm(): void
 }) {
   const colors = useColors()
-  // 关闭动画期间 preview 已清空，沿用上一次的内容，避免弹层内容先消失。
+  // During the close animation preview is already cleared, so keep the last content to avoid the sheet content vanishing first.
   const [last, setLast] = useState(preview)
   if (preview && preview !== last) setLast(preview)
   const shown = preview ?? last
@@ -104,7 +105,7 @@ export function RewindSheet({
       footer={
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <Button
-            title="取消"
+            title="Cancel"
             variant="secondary"
             size="lg"
             disabled={busy}
@@ -112,7 +113,7 @@ export function RewindSheet({
             style={{ flex: 1 }}
           />
           <Button
-            title="回退"
+            title="Rewind"
             variant="destructive"
             size="lg"
             busy={busy}
@@ -126,13 +127,13 @@ export function RewindSheet({
         <>
           <View style={{ gap: 4, paddingHorizontal: 4 }}>
             <Text accessibilityRole="header" style={[type.title, { color: colors.ink }]}>
-              回到第 {turnNumber(shown)} 轮开始之前
+              Back to before turn {turnNumber(shown)} started
             </Text>
             <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
-              会先停下当前的运行。
+              The current run will be stopped first.
             </Text>
           </View>
-          <View accessibilityRole="radiogroup" accessibilityLabel="回退范围" style={{ gap: 8 }}>
+          <View accessibilityRole="radiogroup" accessibilityLabel="Rewind scope" style={{ gap: 8 }}>
             {choices.map((choice) => (
               <OptionCard
                 key={choice.mode}

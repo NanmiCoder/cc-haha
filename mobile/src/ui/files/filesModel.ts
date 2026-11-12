@@ -1,26 +1,27 @@
 import { splitPath, type BadgeStatus } from '../../core/changesView'
+import { plural } from '../../core/plural'
 
-/* 文件页（会话「…」菜单 → 文件）的纯逻辑：已修改列表、目录树展开、搜索。 */
+/* Pure logic of the files page (session "…" menu → Files): modified list, directory tree expansion, search. */
 
 export type FilesTab = 'changed' | 'all'
 
-/** 路由参数 tab：只有 `all` 进「所有文件」，其余（含缺省）进「已修改」。 */
+/** Route param tab: only `all` goes to "All files", everything else (including absent) goes to "Modified". */
 export const parseFilesTab = (value?: string): FilesTab => (value === 'all' ? 'all' : 'changed')
 
-/* ───────────── 已修改 ───────────── */
+/* ───────────── Modified ───────────── */
 
 export type ChangedRow = {
   path: string
   name: string
-  /** 目录部分，保留结尾斜杠；根目录下的文件为空串。 */
+  /** Directory part, keeping the trailing slash; empty string for files at the root. */
   dir: string
-  /** 差异还没读到时为空，不先猜成「已修改」。 */
+  /** Empty while the diff is not loaded yet, rather than guessing "modified". */
   badge?: BadgeStatus
   added?: number
   removed?: number
 }
 
-/** 检查点只给路径；M/A/D 和增删行数来自逐文件差异，读到多少用多少。 */
+/** Checkpoints only give paths; M/A/D and line counts come from per-file diffs, using whatever has been read. */
 export function changedRows(
   paths: readonly string[],
   summary: (path: string) => { badge: BadgeStatus; added: number; removed: number } | undefined
@@ -32,7 +33,7 @@ export function changedRows(
   })
 }
 
-/** 空格分隔的每个词都出现在路径里（不分大小写）才算匹配；空查询匹配全部。 */
+/** Matches only when every space-separated word appears in the path (case-insensitive); an empty query matches everything. */
 export function matchesFile(path: string, query: string) {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (!terms.length) return true
@@ -43,36 +44,36 @@ export function matchesFile(path: string, query: string) {
 export const filterChanged = (rows: readonly ChangedRow[], query: string) =>
   rows.filter((row) => matchesFile(row.path, query))
 
-/** 行的读屏文案：文件名、状态、增删。 */
+/** Screen reader text for the row: file name, status, additions/deletions. */
 export function changedRowLabel(row: ChangedRow) {
   const status = row.badge
-    ? { M: '已修改', A: '新增', D: '已删除', R: '已重命名', '?': '未跟踪' }[row.badge]
+    ? { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', '?': 'untracked' }[row.badge]
     : ''
-  const stats = [row.added ? `增加 ${row.added} 行` : '', row.removed ? `删除 ${row.removed} 行` : '']
+  const stats = [row.added ? `${plural(row.added, 'line')} added` : '', row.removed ? `${plural(row.removed, 'line')} deleted` : '']
     .filter(Boolean)
-    .join('，')
-  return [row.path, status, stats].filter(Boolean).join('，')
+    .join(', ')
+  return [row.path, status, stats].filter(Boolean).join(', ')
 }
 
-/* ───────────── 所有文件 ───────────── */
+/* ───────────── All files ───────────── */
 
 export type DirEntry = { name: string; path: string; isDirectory: boolean }
 
-/** 一个目录的读取结果：读取中、读到了（可能是空目录）、或出错。 */
+/** Result of reading a directory: loading, loaded (possibly empty), or error. */
 export type DirState = 'loading' | { entries: DirEntry[] } | { error: string }
 
-/** 把 `/workspace/tree` 的响应归一成 DirState；state 不是 ok 一律当错误。 */
+/** Normalize the `/workspace/tree` response into DirState; any state other than ok counts as an error. */
 export function dirState(response: {
   state?: string
   entries?: DirEntry[]
   error?: string
 }): DirState {
   if (response.state !== 'ok' || !Array.isArray(response.entries))
-    return { error: response.error || '目录无法读取' }
+    return { error: response.error || 'Directory cannot be read' }
   return { entries: response.entries }
 }
 
-/** 文件夹在前，各自按名字排（不分大小写、数字按数值）。 */
+/** Folders first, each sorted by name (case-insensitive, numbers by value). */
 export function sortEntries(entries: readonly DirEntry[]) {
   return [...entries].sort(
     (a, b) =>
@@ -89,13 +90,13 @@ export type TreeItem =
       depth: number
       text: string
       tone: 'ink3' | 'err'
-      /** 出错行点一下重试读取的目录。 */
+      /** Directory to retry reading when tapping an error row. */
       retry?: string
     }
 
 /**
- * 把已读到的目录按展开状态摊成一列：展开的文件夹后面紧跟它的内容，
- * 读取中 / 出错 / 空文件夹各占一行说明，缩进随层级加深。
+ * Flatten read directories into a list by expansion state: an expanded folder is followed by its contents, 
+ * with loading / error / empty folder each taking a note row, indent deepening with level.
  */
 export function treeItems(
   dirs: Readonly<Record<string, DirState>>,
@@ -106,7 +107,7 @@ export function treeItems(
   const walk = (path: string, depth: number) => {
     const state = dirs[path]
     if (!state || state === 'loading') {
-      items.push({ kind: 'note', key: `${path}\u0000loading`, depth, text: '读取中…', tone: 'ink3' })
+      items.push({ kind: 'note', key: `${path}\u0000loading`, depth, text: 'Loading…', tone: 'ink3' })
       return
     }
     if ('error' in state) {
@@ -114,14 +115,14 @@ export function treeItems(
         kind: 'note',
         key: `${path}\u0000error`,
         depth,
-        text: `${state.error}，点按重试`,
+        text: `${state.error}, tap to retry`,
         tone: 'err',
         retry: path,
       })
       return
     }
     if (!state.entries.length) {
-      items.push({ kind: 'note', key: `${path}\u0000empty`, depth, text: '空文件夹', tone: 'ink3' })
+      items.push({ kind: 'note', key: `${path}\u0000empty`, depth, text: 'Empty folder', tone: 'ink3' })
       return
     }
     for (const entry of sortEntries(state.entries)) {
@@ -134,16 +135,16 @@ export function treeItems(
   return items
 }
 
-/* ───────────── 搜索结果 ───────────── */
+/* ───────────── Search results ───────────── */
 
 export type SearchRow = { path: string; name: string; dir: string }
 
-/** 服务端搜索只返回文件；整理成文件名 + 目录。 */
+/** Server search only returns files; organize into file name + directory. */
 export function searchRows(entries: readonly DirEntry[]): SearchRow[] {
   return entries
     .filter((entry) => !entry.isDirectory)
     .map((entry) => ({ path: entry.path, ...splitPath(entry.path) }))
 }
 
-/** 搜索请求前先去掉首尾空白；空查询不发请求。 */
+/** Trim leading and trailing whitespace before searching; empty queries send no request. */
 export const searchQuery = (value: string) => value.trim()

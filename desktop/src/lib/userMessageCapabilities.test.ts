@@ -17,11 +17,11 @@ describe('parseUserMessageSegments', () => {
   })
 
   it('turns skill and plugin sentences into pills where the user placed them', () => {
-    expect(parseUserMessageSegments(`${SKILL} 做个落地页，用 ${PLUGIN} 查路线`)).toEqual([
+    expect(parseUserMessageSegments(`${SKILL} build a landing page, use ${PLUGIN} to find a route`)).toEqual([
       { type: 'skill', id: 'frontend-design', label: 'frontend-design', modelText: SKILL },
-      { type: 'text', text: ' 做个落地页，用 ' },
+      { type: 'text', text: ' build a landing page, use ' },
       { type: 'plugin', id: 'amap@official', label: 'amap', modelText: PLUGIN },
-      { type: 'text', text: ' 查路线' },
+      { type: 'text', text: ' to find a route' },
     ])
   })
 
@@ -38,9 +38,9 @@ describe('parseUserMessageSegments', () => {
   })
 
   it('marks a leading slash command and the CLI skill breadcrumb', () => {
-    expect(parseUserMessageSegments('/commit 只提交 docs')).toEqual([
+    expect(parseUserMessageSegments('/commit only commit docs')).toEqual([
       { type: 'command', name: '/commit' },
-      { type: 'text', text: ' 只提交 docs' },
+      { type: 'text', text: ' only commit docs' },
     ])
     expect(parseUserMessageSegments('/plugin:review')).toEqual([{ type: 'command', name: '/plugin:review' }])
     expect(parseUserMessageSegments('Skill(frontend-design)')).toEqual([
@@ -55,13 +55,13 @@ describe('parseUserMessageSegments', () => {
   })
 
   it('keeps desktop history rendering compatible with native prompts across shared-parser calls', () => {
-    const id = 'project:审查-"quoted"'
+    const id = 'project:review-"quoted"'
     const invocation = `Use the Skill tool with skill: ${JSON.stringify(id)} for this request.`
     const malformed = 'Use the Skill tool with skill: "bad\\q" for this request.'
-    const prompt = `${invocation}\n\n${malformed}\n检查结果`
+    const prompt = `${invocation}\n\n${malformed}\ncheck the result`
     const expected = [
-      { type: 'skill', id, label: '审查-"quoted"', modelText: invocation },
-      { type: 'text', text: `\n\n${malformed}\n检查结果` },
+      { type: 'skill', id, label: 'review-"quoted"', modelText: invocation },
+      { type: 'text', text: `\n\n${malformed}\ncheck the result` },
     ]
     // Native history and the desktop detection pass share the reader after
     // extraction; either may leave a global regexp cursor behind.

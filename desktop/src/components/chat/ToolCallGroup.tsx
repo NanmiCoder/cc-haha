@@ -1111,7 +1111,7 @@ function getAgentStatusTone(status: AgentStatus): Tone {
 
 /**
  * One line per recent child call under a collapsed agent row: verb, target and
- * state, in the interface language — `读取 · example.ts · 完成`.
+ * state, in the interface language — `Read · example.ts · Done`.
  */
 function formatRecentToolUseSummary(
   toolCall: ToolCall,

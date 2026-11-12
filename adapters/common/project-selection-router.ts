@@ -106,21 +106,21 @@ export function formatAmbiguousProjectSelection(projects: RecentProject[]): stri
   const choices = projects
     .map((project, index) => `${index + 1}. **${project.projectName}** — ${project.realPath}`)
     .join('\n')
-  return `匹配到多个项目，请发送 /new <更完整名称或路径> 选择：\n\n${choices}`
+  return `Multiple projects matched; send /new <more complete name or path> to choose:\n\n${choices}`
 }
 
 export function formatProjectSelectionOutcome(outcome: ProjectSelectionOutcome): string | null {
   switch (outcome.kind) {
     case 'created':
       return outcome.project
-        ? `✅ 已新建会话：**${outcome.project.projectName}**${outcome.project.branch ? ` (${outcome.project.branch})` : ''}`
-        : '✅ 已新建会话，可以开始对话了。'
+        ? `✅ New session created: **${outcome.project.projectName}**${outcome.project.branch ? ` (${outcome.project.branch})` : ''}`
+        : '✅ New session created. You can start chatting now.'
     case 'creation_failed':
       return null
     case 'ambiguous':
       return formatAmbiguousProjectSelection(outcome.projects)
     case 'not_found':
-      return `未找到匹配 "${outcome.query}" 的项目。发送 /projects 查看完整列表。`
+      return `No project matching "${outcome.query}" found. Send /projects to see the full list.`
     case 'error':
       return `❌ ${outcome.message}`
   }

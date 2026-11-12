@@ -84,7 +84,7 @@ export function describeTaskSchedule(task: Pick<CronTask, 'schedule' | 'cron'>, 
 }
 
 export function formatTaskDate(value: string | number, timeZone?: string): string {
-  try { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(value)) }
+  try { return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone }).format(new Date(value)) }
   catch { return String(value) }
 }
 

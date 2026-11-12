@@ -1,8 +1,8 @@
 // desktop/src/components/settings/ClaudeOfficialLogin.tsx
 //
-// 显示当前 Claude Official OAuth 登录状态,提供 Login / Logout 按钮。
-// 点击 Login 调 desktop host shell.open 打开浏览器走 OAuth flow;浏览器回 callback
-// 到 haha server 后,store 的 polling 自动刷新 UI 展示"已登录"。
+// Shows the current Claude Official OAuth login state with Login / Logout buttons.
+// Login calls the desktop host shell.open to run the OAuth flow in a browser; once the
+// browser calls back to the haha server, the store's polling refreshes the UI to "logged in".
 
 import { useEffect, useState } from 'react'
 import { CircleCheck } from 'lucide-react'

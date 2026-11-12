@@ -13,7 +13,7 @@ const DOT_TONES: Record<SourceStatusInfo['status'], Tone> = {
 function formatTime(ts?: number): string {
   if (!ts) return ''
   try {
-    return new Date(ts).toLocaleTimeString()
+    return new Date(ts).toLocaleTimeString('en-US')
   } catch {
     return ''
   }

@@ -12,7 +12,7 @@ beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'im-session-picke
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }) })
 
 function session(id: string, workDir: string, extra: Partial<SessionListItem> = {}): SessionListItem {
-  return { id, title: `历史 ${id}`, createdAt: '2026-08-01', modifiedAt: '2026-08-31', messageCount: 3, projectPath: 'encoded', workDir, workDirExists: true, ...extra }
+  return { id, title: `History ${id}`, createdAt: '2026-08-01', modifiedAt: '2026-08-31', messageCount: 3, projectPath: 'encoded', workDir, workDirExists: true, ...extra }
 }
 
 function project(name: string, realPath: string): RecentProject {
@@ -73,7 +73,7 @@ describe('IM history selection (#1286)', () => {
   it('lists current project history without touching its binding, then persists the selected original ID', async () => {
     const h = harness()
     await h.controller.handleInput('chat', '/sessions')
-    expect(h.notices.at(-1)).toContain('历史 old')
+    expect(h.notices.at(-1)).toContain('History old')
     expect(h.store.get('chat')?.sessionId).toBe('current')
     expect(h.resets).toEqual([])
     await h.controller.handleInput('chat', '/resume 1')
@@ -81,16 +81,16 @@ describe('IM history selection (#1286)', () => {
     expect(h.state.clears).toBe(1)
     expect(h.events).toEqual([{ type: 'status', marker: 'restored' }])
     expect(new SessionStore(path.join(tmp, 'sessions.json')).get('chat')?.sessionId).toBe('old')
-    expect(h.notices.at(-1)).toContain('可以继续发送消息')
+    expect(h.notices.at(-1)).toContain('You can keep sending messages')
   })
 
   it('starts with a project picker when no binding survives an upgrade', async () => {
     const h = harness()
     h.store.delete('chat')
     await h.controller.handleInput('chat', '/sessions')
-    expect(h.notices.at(-1)).toContain('历史会话所在的项目')
+    expect(h.notices.at(-1)).toContain('project containing the past session')
     await h.controller.handleInput('chat', '1')
-    expect(h.notices.at(-1)).toContain('历史 old')
+    expect(h.notices.at(-1)).toContain('History old')
     await h.controller.handleInput('chat', '1')
     expect(h.store.get('chat')?.sessionId).toBe('old')
   })
@@ -113,8 +113,8 @@ describe('IM history selection (#1286)', () => {
     h.store.set('chat', 'current', worktree)
     h.state.sessions.push(session('current', worktree, { projectRoot: tmp }))
     await h.controller.handleInput('chat', '会话列表')
-    expect(h.notices.at(-1)).toContain('历史 current（当前）')
-    expect(h.notices.at(-1)).toContain('历史 old')
+    expect(h.notices.at(-1)).toContain('History current (current)')
+    expect(h.notices.at(-1)).toContain('History old')
   })
 
   it('accepts an exact worktree directory as well as its logical project root', async () => {
@@ -131,9 +131,9 @@ describe('IM history selection (#1286)', () => {
     await h.controller.handleInput('chat', '/sessions')
     h.state.sessions.reverse()
     await h.controller.handleInput('chat', '/sessions next')
-    expect(h.notices.at(-1)).toContain('9. 历史 id-08')
+    expect(h.notices.at(-1)).toContain('9. History id-08')
     await h.controller.handleInput('chat', '/resume 1')
-    expect(h.notices.at(-1)).toContain('编号无效')
+    expect(h.notices.at(-1)).toContain('Invalid number')
     await h.controller.handleInput('chat', '/resume 9')
     expect(h.store.get('chat')?.sessionId).toBe('id-08')
   })
@@ -148,7 +148,7 @@ describe('IM history selection (#1286)', () => {
     await h.controller.handleInput('chat', '1')
     expect(h.store.get('chat')?.sessionId).toBe('second')
     await h.controller.handleInput('chat', '/sessions projects')
-    expect(h.notices.at(-1)).toContain('历史会话所在的项目')
+    expect(h.notices.at(-1)).toContain('project containing the past session')
   })
 
   for (const fault of ['exists', 'open', 'busy', 'preflightError', 'busyDuringPreflight'] as const) {
@@ -161,7 +161,7 @@ describe('IM history selection (#1286)', () => {
       expect(h.state.clears).toBe(0)
       expect(h.events).toEqual([])
       expect(h.connections).toEqual(fault === 'open' ? ['old', 'current'] : [])
-      expect(h.notices.at(-1)).not.toContain('已恢复会话')
+      expect(h.notices.at(-1)).not.toContain('Session resumed')
     })
   }
 
@@ -180,9 +180,9 @@ describe('IM history selection (#1286)', () => {
     await h.controller.handleInput('chat', '/sessions')
     expect(await h.controller.handleInput('other', '1')).toBe(false)
     expect(await h.controller.handleInput('chat', '/allow request')).toBe(false)
-    expect(await h.controller.handleInput('chat', '继续修复刚才的代码')).toBe(false)
+    expect(await h.controller.handleInput('chat', 'keep fixing the code from before')).toBe(false)
     await h.controller.handleInput('chat', '/resume 1')
-    expect(h.notices.at(-1)).toContain('不存在或已过期')
+    expect(h.notices.at(-1)).toContain('does not exist or has expired')
     expect(h.connections).toEqual([])
   })
 
@@ -191,10 +191,10 @@ describe('IM history selection (#1286)', () => {
     await h.controller.handleInput('chat', '/sessions')
     h.state.now += SESSION_SELECTION_TTL_MS
     expect(await h.controller.handleInput('chat', '1')).toBe(true)
-    expect(h.notices.at(-1)).toContain('已过期')
+    expect(h.notices.at(-1)).toContain('expired')
     await h.controller.handleInput('chat', '/sessions')
     await h.controller.handleInput('chat', '/cancel')
-    expect(h.notices.at(-1)).toContain('当前会话未改变')
+    expect(h.notices.at(-1)).toContain('current session is unchanged')
     expect(await h.controller.handleInput('chat', '1')).toBe(false)
     expect(h.connections).toEqual([])
   })
@@ -202,10 +202,10 @@ describe('IM history selection (#1286)', () => {
   it('reports missing projects, empty history, and HTTP errors without losing the active session', async () => {
     const h = harness()
     await h.controller.handleInput('chat', '/sessions unknown')
-    expect(h.notices.at(-1)).toContain('未找到项目')
+    expect(h.notices.at(-1)).toContain('not found')
     h.state.sessions = [session('gone', tmp, { workDirExists: false })]
     await h.controller.handleInput('chat', '/sessions')
-    expect(h.notices.at(-1)).toContain('没有可恢复会话')
+    expect(h.notices.at(-1)).toContain('no resumable sessions')
     h.state.fetchError = true
     await h.controller.handleInput('chat', '/sessions')
     expect(h.notices.at(-1)).toContain('offline')

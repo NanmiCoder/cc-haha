@@ -1,16 +1,16 @@
 import type { ServerEvent, SubagentLive, SubagentStep } from './types'
 
-/** 每个子 Agent 只留最近几步，列表只展示最后两步。 */
+/** Each subagent keeps only its last few steps; the list shows only the last two. */
 export const MAX_SUBAGENT_STEPS = 6
 export const MAX_SUBAGENT_READS = 60
-/** 同一会话里最多记这么多个子 Agent 轨迹，超出时丢最早的。 */
+/** Record at most this many subagent trajectories per session, dropping the earliest beyond it. */
 export const MAX_SUBAGENT_ENTRIES = 24
 
 /**
- * 同一个子 Agent 可能从三条通道各报一份：
- * run  = agent_run_event（runAgentId，通常等于后台任务的 taskId）；
- * tool = 带 parentToolUseId 的工具事件（父级 Agent 工具调用的 id）；
- * task = system_notification task_progress（taskId，只有计数）。
+ * The same subagent may be reported from each of three channels: 
+ * run  = agent_run_event(runAgentId, usually equal to the background task taskId); 
+ * tool = tool events with parentToolUseId (the id of the parent Agent tool call); 
+ * task = system_notification task_progress(taskId, counts only).
  */
 export const runKey = (runAgentId: string) => `run:${runAgentId}`
 export const toolKey = (toolUseId: string) => `tool:${toolUseId}`
@@ -34,7 +34,7 @@ function readPath(toolName: string, input: unknown) {
 }
 
 function put(live: Live | undefined, key: string, next: SubagentLive): Live {
-  // 最近更新的排在最后；超出上限时丢最久没动静的，仍在更新的不会被挤掉。
+  // Most recently updated goes last; beyond the cap drop the one idle longest, so ones still updating are not evicted.
   const { [key]: _previous, ...others } = live ?? {}
   const merged: Live = { ...others, [key]: next }
   const keys = Object.keys(merged)
@@ -86,8 +86,8 @@ function finishRun(live: Live | undefined, key: string) {
 }
 
 /**
- * 把子 Agent 相关的 WebSocket 事件累积成实时轨迹。
- * 没有可记录的内容时原样返回同一个对象，调用方可以用 === 判断有没有变化。
+ * Accumulate subagent-related WebSocket events into live trajectories.
+ * When there is nothing to record return the same object, so callers can use === to check for changes.
  */
 export function reduceSubagents(live: Live | undefined, event: ServerEvent): Live | undefined {
   switch (event.type) {
@@ -141,7 +141,7 @@ export function reduceSubagents(live: Live | undefined, event: ServerEvent): Liv
   }
 }
 
-/** 一个后台任务对应的实时数据：计数取 task 通道，最近步骤优先用 run 通道，其次 tool 通道。 */
+/** Live data for one background task: counts from the task channel, recent steps prefer the run channel, then the tool channel. */
 export function liveFor(
   live: Live | undefined,
   task: { taskId: string; toolUseId?: string }

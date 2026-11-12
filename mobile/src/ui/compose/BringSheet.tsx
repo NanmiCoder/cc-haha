@@ -37,12 +37,13 @@ import {
 } from './bringModel'
 import type { ComputerUse } from '../../core/useComputerUse'
 import { RunToggles } from './RunToggles'
+import { plural } from '../../core/plural'
 
 export type MaterialKind = 'photos' | 'camera' | 'file'
 const materials: { kind: MaterialKind; title: string; icon: IconName }[] = [
-  { kind: 'photos', title: '相册', icon: 'image' },
-  { kind: 'camera', title: '拍照', icon: 'camera' },
-  { kind: 'file', title: '文件', icon: 'file' },
+  { kind: 'photos', title: 'Photo library', icon: 'image' },
+  { kind: 'camera', title: 'Take photo', icon: 'camera' },
+  { kind: 'file', title: 'Files', icon: 'file' },
 ]
 
 function EntryIcon({ group, color }: { group: BringGroup; color: string }) {
@@ -99,8 +100,8 @@ function Divider({ inset }: { inset: number }) {
 }
 
 /**
- * 多选结果行：可以勾选。连接器带状态点；不能选的行（要授权、在电脑上连接…）
- * 只显示一个标签，点一下提示该去电脑上做什么，不做假按钮。
+ * Multi-select result row: can be checked. Connectors have a status dot; unselectable rows (needs authorization, connect on the computer…)
+ * show only a label, and tapping hints what to do on the computer, with no fake button.
  */
 function ResultRow({ hit, selected, onPress, onNotice }: {
   hit: BringHit
@@ -116,7 +117,7 @@ function ResultRow({ hit, selected, onPress, onNotice }: {
   return (
     <Pressable
       accessibilityRole={blocked ? 'button' : 'checkbox'}
-      accessibilityLabel={`${item.token}，${item.description}${blocked ? `，${item.unavailable}` : ''}`}
+      accessibilityLabel={`${item.token}, ${item.description}${blocked ? `, ${item.unavailable}` : ''}`}
       accessibilityHint={blocked ? item.notice : undefined}
       accessibilityState={blocked ? undefined : { checked: selected }}
       aria-checked={blocked ? undefined : selected}
@@ -132,7 +133,7 @@ function ResultRow({ hit, selected, onPress, onNotice }: {
       })}
     >
       {item.group === 'connector' ? (
-        // 连接器：左边是 logo，状态点压在 logo 右下角。
+        // Connector: logo on the left, with the status dot over the logo's bottom right corner.
         <View style={{ width: 30, height: 30 }}>
           <ConnectorIcon id={item.iconId} size={30} />
           {dotColor ? (
@@ -208,8 +209,8 @@ function ResultList({ hits, selected, onToggle, onNotice }: {
 const connectorSectionOrder: ConnectorSection[] = ['connected', 'attention', 'suggested']
 
 /**
- * 连接器二级页，按桌面分段：已连接、需要处理、推荐，最后是「浏览全部」展开其余。
- * 手机上不能授权也不能安装，所以没有按钮，只有说明。
+ * Connectors subpage, sectioned like desktop: connected, needs attention, recommended, and finally "Browse all" expanding the rest.
+ * The phone can neither authorize nor install, so there are no buttons, only descriptions.
  */
 function ConnectorPage({ hits, selected, onToggle, onNotice, browsing, onBrowse }: {
   hits: BringHit[]
@@ -244,7 +245,7 @@ function ConnectorPage({ hits, selected, onToggle, onNotice, browsing, onBrowse 
           <Card>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={browsing ? '收起全部连接器' : `浏览全部连接器，${rest.length} 个`}
+              accessibilityLabel={browsing ? 'Collapse all connectors' : `Browse all connectors, ${rest.length}`}
               accessibilityState={{ expanded: browsing }}
               onPress={() => onBrowse(!browsing)}
               style={({ pressed }) => ({
@@ -259,7 +260,7 @@ function ConnectorPage({ hits, selected, onToggle, onNotice, browsing, onBrowse 
             >
               <Glyph name="plug" size={16} color={colors.ink2} />
               <Text style={{ flex: 1, fontSize: 16, color: colors.ink }}>
-                {browsing ? '收起' : `浏览全部（${rest.length}）`}
+                {browsing ? 'Collapse' : `Browse all (${rest.length})`}
               </Text>
               <Icon name={browsing ? 'chevron-up' : 'chevron-down'} size={16} color={colors.chevron} strokeWidth={2.2} />
             </Pressable>
@@ -268,24 +269,24 @@ function ConnectorPage({ hits, selected, onToggle, onNotice, browsing, onBrowse 
       ) : null}
       {!hits.length ? (
         <Text style={{ paddingVertical: 24, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-          这台电脑上还没有可用的连接器
+          No connectors available on this computer yet
         </Text>
       ) : null}
     </View>
   )
 }
 
-/** 已选的小胶囊：点一下移除。 */
+/** Selected small capsule: tap to remove. */
 function SelectedChips({ selected, onRemove }: { selected: BringItem[]; onRemove(item: BringItem): void }) {
   const colors = useColors()
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <Text style={{ fontSize: 13, color: colors.ink3 }}>已选</Text>
+      <Text style={{ fontSize: 13, color: colors.ink3 }}>Selected</Text>
       {selected.map((item) => (
         <Pressable
           key={item.key}
           accessibilityRole="button"
-          accessibilityLabel={`移除 ${item.token}`}
+          accessibilityLabel={`Remove ${item.token}`}
           onPress={() => onRemove(item)}
           style={{ height: 44, justifyContent: 'center' }}
         >
@@ -344,12 +345,12 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
         <Icon name="search" size={18} color={colors.ink3} strokeWidth={2} />
         <TextInput
           ref={inputRef}
-          accessibilityLabel="搜索技能、命令、连接器、Agent"
+          accessibilityLabel="Search skills, commands, connectors, Agent"
           value={value}
           onChangeText={onChange}
           onFocus={onFocus}
           onBlur={onBlur}
-          placeholder="搜技能、命令、连接器、Agent"
+          placeholder="Search skills, commands, connectors, Agent"
           placeholderTextColor={colors.ink3}
           autoCapitalize="none"
           autoCorrect={false}
@@ -359,7 +360,7 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
         {value ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="清除搜索"
+            accessibilityLabel="Clear search"
             onPress={() => onChange('')}
             style={{ width: 44, height: 44, marginRight: -4, alignItems: 'center', justifyContent: 'center' }}
           >
@@ -372,11 +373,11 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
       {focused || value ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="取消搜索"
+          accessibilityLabel="Cancel search"
           onPress={onCancel}
           style={{ height: 44, paddingLeft: 10, paddingRight: 4, justifyContent: 'center' }}
         >
-          <Text style={{ fontSize: 16, color: colors.ink2 }}>取消</Text>
+          <Text style={{ fontSize: 16, color: colors.ink2 }}>Cancel</Text>
         </Pressable>
       ) : null}
     </View>
@@ -386,8 +387,8 @@ function SearchBar({ value, onChange, focused, onFocus, onBlur, onCancel, inputR
 type Page = 'root' | BringGroup
 
 /**
- * ＋ 带什么：半高是搜索、材料、最近用过和各类入口；点进入口或开始搜索就升到全高，
- * 结果可以多选，点「完成」一次带上。快速添加（最近用过右侧的 ＋）选一项就关。
+ * + Bring: half height shows search, materials, recently used and category entries; entering a category or starting a search rises to full height, 
+ * results can be multi-selected and brought in at once with Done. Quick add (the + right of Recently used) closes after one pick.
  */
 export function BringSheet({
   visible,
@@ -420,9 +421,9 @@ export function BringSheet({
   draft: string
   picking: MaterialKind | null
   onPick(kind: MaterialKind): void
-  /** 选好了：新的草稿文字和技能引用。 */
+  /** Picked: new draft text and skill references. */
   onApply(next: { draft: string; references: ComposerReference[] }): void
-  /** 「运行方式」一组：Agent 团队（只对下一条消息生效）和操作电脑。 */
+  /** The "Run mode" group: agent team (applies to the next message only) and computer use. */
   team: boolean
   onTeam(value: boolean): void
   computer: ComputerUse
@@ -444,7 +445,7 @@ export function BringSheet({
   if (shown !== visible) {
     setShown(visible)
     if (visible) {
-      // 每次打开都从头开始：半高、根页面、没有搜索词，输入框里已有的技能算已选。
+      // Every open starts fresh: half height, root page, no search term, and skills already in the input count as selected.
       const start = initialSelection(references)
       setDetent('half')
       setPage('root')
@@ -489,7 +490,7 @@ export function BringSheet({
     onApply({ draft: next.draft, references: next.references })
   }
   const toggle = (item: BringItem) => setSelected((value) => toggleBringItem(value, item))
-  // 手机上做不了的事（授权、连接）：在搜索框下面说一句，几秒后收起。
+  // Things the phone cannot do (authorize, connect): say one line under the search box, dismissed after a few seconds.
   useEffect(() => {
     if (!notice) return
     const timer = setTimeout(() => setNotice(''), 3200)
@@ -523,7 +524,7 @@ export function BringSheet({
         page !== 'root' ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="返回"
+            accessibilityLabel="Back"
             onPress={back}
             style={{ width: 44, height: 44, marginLeft: -12, alignItems: 'center', justifyContent: 'center' }}
           >
@@ -576,7 +577,7 @@ export function BringSheet({
           ))
         ) : (
           <Text style={{ paddingVertical: 24, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-            {loading ? '正在读取…' : '没有匹配的技能、命令或连接器'}
+            {loading ? 'Loading…' : 'No matching skills, commands or connectors'}
           </Text>
         )
       ) : page === 'connector' ? (
@@ -593,7 +594,7 @@ export function BringSheet({
           <ResultList hits={listHits} selected={selected} onToggle={toggle} onNotice={setNotice} />
         ) : (
           <Text style={{ paddingVertical: 24, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-            {page === 'agent' ? '这台电脑上还没有可用的 Agent' : page === 'workflow' ? '这台电脑上还没有工作流' : '这一类现在没有可用的内容'}
+            {page === 'agent' ? 'No available on this computer yet: Agent' : page === 'workflow' ? 'No workflows on this computer yet' : 'Nothing available in this category right now'}
           </Text>
         )
       ) : (
@@ -603,7 +604,7 @@ export function BringSheet({
               <Pressable
                 key={material.kind}
                 accessibilityRole="button"
-                accessibilityLabel={`从${material.title}添加`}
+                accessibilityLabel={`Add from ${material.title}`}
                 accessibilityState={{ disabled: !!picking, busy: picking === material.kind }}
                 disabled={!!picking}
                 onPress={() => onPick(material.kind)}
@@ -627,14 +628,14 @@ export function BringSheet({
           </View>
           {quick.length ? (
             <View>
-              <SectionTitle title="最近用过" />
+              <SectionTitle title="Recently used" />
               <Card>
                 {quick.map((item, index) => (
                   <View key={item.key}>
                     {index > 0 ? <Divider inset={14} /> : null}
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={`添加 ${item.token}，${item.description}`}
+                      accessibilityLabel={`Add ${item.token}, ${item.description}`}
                       onPress={() => finish(isBringSelected(selected, item) ? selected : [...selected, item], initial)}
                       style={({ pressed }) => ({
                         height: 48,
@@ -668,7 +669,7 @@ export function BringSheet({
                       {index > 0 ? <Divider inset={54} /> : null}
                       <Pressable
                         accessibilityRole="button"
-                        accessibilityLabel={`${entry.title}，${entry.count} 项`}
+                        accessibilityLabel={`${entry.title}, ${plural(entry.count, 'item')}`}
                         onPress={() => {
                           setPage(entry.group)
                           setDetent('full')
@@ -702,13 +703,13 @@ export function BringSheet({
             <Text style={{ padding: 8, fontSize: 14, color: colors.err }}>{error}</Text>
           ) : (
             <Text style={{ padding: 16, textAlign: 'center', fontSize: 14, color: colors.ink3 }}>
-              这台电脑上暂时没有可带的技能或命令
+              No skills or commands to bring on this computer yet
             </Text>
           )}
-          {/* 轻量档位不支持团队和操作电脑：和桌面一样整组不显示。 */}
+          {/* The light tier does not support teams or computer use: like desktop the whole group is hidden. */}
           {lean ? null : (
             <>
-              <SectionTitle title="运行方式" />
+              <SectionTitle title="Run mode" />
               <RunToggles
                 visible={visible}
                 client={client}

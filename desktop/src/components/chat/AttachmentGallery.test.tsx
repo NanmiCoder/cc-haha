@@ -300,15 +300,15 @@ describe('AttachmentGallery', () => {
           type: 'image',
           name: '<h1>',
           data: 'data:image/png;base64,AAAA',
-          note: '这个标题更轻一点',
+          note: 'Make this title lighter',
         }]}
       />,
     )
 
     expect(view.getByRole('button', { name: 'Open <h1>' })).toBeTruthy()
-    const noteChip = view.getByLabelText('Selection note: 这个标题更轻一点')
+    const noteChip = view.getByLabelText('Selection note: Make this title lighter')
     expect(noteChip.textContent).toContain('<h1>')
-    expect(noteChip.getAttribute('title')).toBe('这个标题更轻一点')
+    expect(noteChip.getAttribute('title')).toBe('Make this title lighter')
 
     // The note used to be a sibling span kept in the DOM and revealed by
     // `group-hover/selection:` classes. It is now the shared `Tooltip`, which
@@ -320,10 +320,10 @@ describe('AttachmentGallery', () => {
 
     const tooltip = view.getByRole('tooltip')
     expect(noteChip).toHaveAttribute('aria-describedby', tooltip.id)
-    // Was the literal '修改内容': the heading was hard-coded Chinese and so
+    // Was the literal 'Requested changes': the heading was hard-coded Chinese and so
     // rendered untranslated under every locale. This suite runs under `en`.
     expect(tooltip).toHaveTextContent('Requested changes')
-    expect(tooltip).toHaveTextContent('这个标题更轻一点')
+    expect(tooltip).toHaveTextContent('Make this title lighter')
 
     fireEvent.mouseLeave(noteChip)
     expect(view.queryByRole('tooltip')).toBeNull()
@@ -510,27 +510,6 @@ describe('AttachmentGallery', () => {
     expect(view.container.querySelector('[data-file-extension="PNG"]')).toBeInTheDocument()
   })
 
-  it('localizes diff sides and remove actions in Chinese', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    const view = render(
-      <AttachmentGallery
-        variant="composer"
-        onRemove={vi.fn()}
-        attachments={[{
-          id: 'diff-comment-zh',
-          type: 'file',
-          name: 'a.ts',
-          path: 'src/a.ts',
-          lineStart: 11,
-          diffSide: 'new',
-          note: '使用共享辅助函数',
-        }]}
-      />,
-    )
-
-    expect(view.getByTestId('diff-comment-card')).toHaveTextContent('src/a.ts · 新 L11')
-    expect(view.getByRole('button', { name: '移除 a.ts' })).toBeInTheDocument()
-  })
 })
 
 it.each(['composer', 'message'] as const)('labels a selected-text reference as text instead of a file in %s', (variant) => {

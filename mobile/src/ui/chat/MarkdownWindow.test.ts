@@ -3,9 +3,9 @@ import { expect, test } from 'bun:test'
 import { parseMarkdown } from './markdown'
 
 /**
- * 真实的 Markdown 组件和长按浮起的 MessageMenu：一条消息挂多少块、展开到哪为止、
- * 流式追加时结尾窗口的 key 是否稳定。安卓上每块都是占 Java 堆的原生视图，挂太多会 OOM 闪退。
- * 测试用的长文本经 stdin 交给子进程（脚本里读作 texts）：Linux 单个命令行参数上限 128KB。
+ * Real Markdown component and the long-press floating MessageMenu: how many blocks a message mounts, how far it can expand, 
+ * and whether end-window keys are stable during streaming. On Android each block is a native view on the Java heap, and mounting too many causes an OOM crash.
+ * Long test text is passed to the child process via stdin (read as texts in the script): Linux caps a single command-line argument at 128KB.
  */
 function run(body: string, texts: Record<string, string> = {}) {
   const script = `
@@ -40,7 +40,7 @@ function run(body: string, texts: Record<string, string> = {}) {
     const { MessageMenu } = require(${JSON.stringify(import.meta.resolve('./MessageMenu'))})
     const flat = node => [node?.props?.children].flat(Infinity).filter(child => child && typeof child === 'object')
     const textOf = node => typeof node === 'string' ? node : [node?.props?.children].flat(Infinity).map(textOf).join('')
-    /** 渲染一次 Markdown（同一个实例沿用 state），拆出已挂的块和中间的省略行。 */
+    /** Render Markdown once (the same instance keeps state), splitting out mounted blocks and the middle omission row. */
     function markdown(props) {
       cursor = 0
       const children = flat(Markdown(props))
@@ -70,14 +70,14 @@ function run(body: string, texts: Record<string, string> = {}) {
 }
 
 const article = [
-  ...Array.from({ length: 150 }, (_, index) => `第 ${index} 段正文。`),
-  ...Array.from({ length: 10 }, (_, list) => Array.from({ length: 6 }, (_, item) => `- 列表 ${list}-${item}`).join('\n')),
-  '| 模型 | 输入 | 输出 |\n| --- | --- | --- |\n' + Array.from({ length: 12 }, (_, row) => `| m${row} | 1 | 2 |`).join('\n'),
+  ...Array.from({ length: 150 }, (_, index) => `Paragraph ${index} body.`),
+  ...Array.from({ length: 10 }, (_, list) => Array.from({ length: 6 }, (_, item) => `- List ${list}-${item}`).join('\n')),
+  '| Model | Input | Output |\n| --- | --- | --- |\n' + Array.from({ length: 12 }, (_, row) => `| m${row} | 1 | 2 |`).join('\n'),
 ].join('\n\n')
-// 真实会话里出现过的形状：模型把 "<br>\n\n" 重复了约 3.2 万次。
-const degenerate = '实跑已启动。\n\n' + '<br>\n\n'.repeat(32000) + '结论在最后。'
+// A shape seen in a real session: the model repeated "<br>\n\n" about 32,000 times.
+const degenerate = 'Real run started.\n\n' + '<br>\n\n'.repeat(32000) + 'Conclusion at the end.'
 
-test('普通长回复整条渲染，没有折叠行', () => {
+test('Normal long replies render in full without a collapsed row', () => {
   const out = run(`
     fresh()
     const view = markdown({ text: texts.article })
@@ -88,7 +88,7 @@ test('普通长回复整条渲染，没有折叠行', () => {
   expect(out.gap).toBeNull()
 })
 
-test('超长回复只挂开头和结尾；展开三次后封顶，提示到电脑上看完整内容', () => {
+test('Very long replies mount only the beginning and end; capped after three expansions, with a hint to view the full content on the computer', () => {
   const out = run(`
     fresh()
     out.steps = []
@@ -99,16 +99,16 @@ test('超长回复只挂开头和结尾；展开三次后封顶，提示到电�
     }
   `, { degenerate })
   expect(out.steps.map((step: { count: number }) => step.count)).toEqual([2000, 3500, 5000, 6500, 6500])
-  expect(out.steps[0]).toEqual({ count: 2000, pressable: true, label: '… 中间还有 30002 段，点按展开' })
+  expect(out.steps[0]).toEqual({ count: 2000, pressable: true, label: '… 30002 more blocks in the middle, tap to expand' })
   expect(out.steps.at(-1)).toEqual({
     count: 6500,
     pressable: false,
-    label: '… 中间还有 25502 段，太长了，完整内容请在电脑上查看',
+    label: '… 25502 more blocks in the middle, too long; view the full content on the computer',
   })
 })
 
-test('流式追加一段时，结尾窗口里已有的块 key 不变、内容不变', () => {
-  const lines = (count: number) => Array.from({ length: count }, (_, index) => `第 ${index} 段`).join('\n\n')
+test('When streaming appends a block, keys and content of blocks already in the end window stay the same', () => {
+  const lines = (count: number) => Array.from({ length: count }, (_, index) => `Block ${index}`).join('\n\n')
   const out = run(`
     fresh()
     const before = markdown({ text: texts.before }).tail
@@ -120,10 +120,10 @@ test('流式追加一段时，结尾窗口里已有的块 key 不变、内容不
   `, { before: lines(2600), after: lines(2601) })
   expect(out.shared).toHaveLength(499)
   expect(out.changed).toEqual([])
-  expect(out.added).toEqual(['第 2600 段'])
+  expect(out.added).toEqual(['Block 2600'])
 })
 
-test('长按浮起的预览：普通长回复完整，超长回复受同样的上限且不能展开', () => {
+test('Long-press floating preview: normal long replies are complete, very long replies have the same cap and cannot expand', () => {
   const out = run(`
     const layout = { x: 16, y: 120, width: 380, height: 600 }
     function preview(text) {
@@ -143,5 +143,5 @@ test('长按浮起的预览：普通长回复完整，超长回复受同样的�
     out.huge = { count: huge.count, pressable: huge.gap.pressable, label: huge.gap.label }
   `, { article, degenerate })
   expect(out.normal).toEqual({ count: parseMarkdown(article).length, gap: null })
-  expect(out.huge).toEqual({ count: 2000, pressable: false, label: '… 中间还有 30002 段' })
+  expect(out.huge).toEqual({ count: 2000, pressable: false, label: '… 30002 more blocks in the middle' })
 })

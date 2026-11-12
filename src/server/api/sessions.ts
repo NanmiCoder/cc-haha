@@ -3,32 +3,32 @@ import { emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 /**
  * Session REST API Routes
  *
- * 提供会话的 CRUD 操作接口，数据来自 CLI 共享的 JSONL 文件。
+ * Provides session CRUD endpoints; data comes from the JSONL files shared with the CLI.
  *
  * Routes:
- *   GET    /api/sessions            — 列出会话
- *   GET    /api/sessions/project-history — 按逻辑项目分批浏览历史会话
- *   GET    /api/sessions/:id        — 获取会话详情
- *   GET    /api/sessions/:id/summary — 获取不含消息的会话元数据
- *   GET    /api/sessions/:id/messages — 获取会话消息
- *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — 获取 SubAgent 运行详情
- *   POST   /api/sessions/:id/subagents/by-tool/:toolUseId/messages — 继续与 SubAgent 对话
- *   GET    /api/sessions/:id/trace — 获取会话级模型调用 trace（body preview 裁剪后的列表视图）
- *   GET    /api/sessions/:id/trace/calls/:callId?at= — 获取单次调用的完整 trace 记录（at=字节范围，来自 near 的 locs）
- *   GET    /api/sessions/:id/trace/near?from=&to= — 按开始时间窗口（≤1 小时）查找调用，最旧在前，最多 50 条
- *   GET    /api/sessions/:id/trajectory?cursor=&after=&agentId= — 轨迹账本分页（尾页 / 更早页 / 实时追加）
- *   GET    /api/sessions/:id/trajectory/rows/:rowId?loc=&agentId= — 按字节定位读取单行的完整记录
- *   GET    /api/sessions/:id/trajectory/snapshots/:hash — 读取一份系统提示词 / 工具 / 用户上下文快照
- *   GET    /api/sessions/:id/turn-checkpoints — 获取按轮次保留的 checkpoint 预览
- *   GET    /api/sessions/:id/turn-checkpoints/diff — 获取绑定到指定 checkpoint 的 diff
- *   GET    /api/sessions/:id/review — 按显式来源获取 Git 审查状态
- *   GET    /api/sessions/:id/review/diff — 获取单个文件在该来源下的 diff
- *   POST   /api/sessions/:id/review/stage|unstage|stage-hunk|unstage-hunk|revert — 真实 Git 写操作
- *   POST   /api/sessions            — 创建新会话
- *   POST   /api/sessions/batch-delete — 批量删除会话
- *   DELETE /api/sessions/:id        — 删除会话
- *   PATCH  /api/sessions/:id        — 重命名会话
- *   PATCH  /api/sessions/:id/archive — 归档或恢复会话（保留全部内容）
+ *   GET    /api/sessions            — list sessions
+ *   GET    /api/sessions/project-history — browse past sessions in batches by logical project
+ *   GET    /api/sessions/:id        — get session details
+ *   GET    /api/sessions/:id/summary — get session metadata without messages
+ *   GET    /api/sessions/:id/messages — get session messages
+ *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — get SubAgent run details
+ *   POST   /api/sessions/:id/subagents/by-tool/:toolUseId/messages — continue the conversation with a SubAgent
+ *   GET    /api/sessions/:id/trace — get session-level model call trace (list view with trimmed body previews)
+ *   GET    /api/sessions/:id/trace/calls/:callId?at= — get the full trace record of a single call (at = byte range, from near's locs)
+ *   GET    /api/sessions/:id/trace/near?from=&to= — find calls by start-time window (≤1 hour), oldest first, at most 50
+ *   GET    /api/sessions/:id/trajectory?cursor=&after=&agentId= — trajectory ledger pagination (tail page / earlier page / live append)
+ *   GET    /api/sessions/:id/trajectory/rows/:rowId?loc=&agentId= — read the full record of one row by byte location
+ *   GET    /api/sessions/:id/trajectory/snapshots/:hash — read a system prompt / tools / user context snapshot
+ *   GET    /api/sessions/:id/turn-checkpoints — get per-turn checkpoint previews
+ *   GET    /api/sessions/:id/turn-checkpoints/diff — get the diff bound to a given checkpoint
+ *   GET    /api/sessions/:id/review — get Git review state for an explicit source
+ *   GET    /api/sessions/:id/review/diff — get a single file's diff for that source
+ *   POST   /api/sessions/:id/review/stage|unstage|stage-hunk|unstage-hunk|revert — real Git write operations
+ *   POST   /api/sessions            — create a new session
+ *   POST   /api/sessions/batch-delete — batch delete sessions
+ *   DELETE /api/sessions/:id        — delete a session
+ *   PATCH  /api/sessions/:id        — rename a session
+ *   PATCH  /api/sessions/:id/archive — archive or restore a session (keeps all content)
  */
 
 import * as path from 'node:path'

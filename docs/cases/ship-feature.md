@@ -1,42 +1,42 @@
 ---
-title: 实现功能并预览页面
-nav_title: 做网页功能
-description: 把一个网页需求拆成可验收的步骤，在工作区预览和逐行反馈。
+title: Build a feature and preview the page
+nav_title: Build a web feature
+description: Turn a web request into verifiable steps, preview the page, and give precise diff feedback.
 order: 3
 ---
 
-# 实现功能并预览页面
+# Build a feature and preview the page
 
-做界面时，“代码已写好”和“页面真的好用”是两次检查。这里以给已有列表增加搜索框为例，你可以把目标替换成自己的网页功能。
+“The code is written” and “the page works” are two separate checks. This example adds search to an existing list; replace it with your own web feature if you prefer.
 
-## 准备
+## Before you start
 
-- 找一个已经能在本机启动的 Web 项目，确认它的启动命令和本地地址。
-- 如果这次想大胆试验，先在输入框的**运行位置**选择[独立工作树](../desktop/workspace.md)。先记下原目录的未提交改动；工作树不会自动复制它们。
-- 保持**询问权限**，方便核对文件编辑和启动服务的命令。
+- Use a web project you can already run locally. Know its start command and local URL.
+- For an experiment, choose an [isolated worktree](../desktop/workspace.md) in the composer **run location**. Note uncommitted changes in your original folder; they are not copied into the worktree.
+- Keep **Ask permissions** so you can inspect file edits and server commands.
 
-## 操作
+## Steps
 
-1. 在项目会话里发出下面的需求。把列表名称、字段和启动命令改成自己的项目情况。
+1. Send the request in a project session. Replace the list, field, and commands with your project's details.
 
 ```text
-给 [任务列表页面] 增加一个搜索框。输入文字后，按 [标题] 不区分大小写过滤；清空输入后显示全部项目；无匹配时显示明确的空状态。
-先找现有列表组件和测试，说明你准备改哪些文件。实现时沿用项目现有样式和测试方式，不改无关页面。
-完成后运行相关测试，告诉我启动本地预览的命令、预期地址，以及你实际验证过什么。
+Add a search field to [the task list page]. Filter by [title] without case sensitivity as I type. Clearing the field shows every item again. Show a clear empty state when nothing matches.
+First find the existing list component and tests, then tell me which files you plan to change. Follow the project's existing styles and test conventions. Do not change unrelated pages.
+When finished, run relevant tests and tell me the local preview command, expected URL, and what you actually verified.
 ```
 
-2. 审阅权限请求与内联 Diff。若它提出安装依赖或大范围改造，先问原因，再决定是否继续。
-3. 按项目文档启动开发服务器；在右侧[工作区](../desktop/workspace.md)切到**浏览器**，填入本地地址，例如 `http://localhost:3000`。实际端口以终端输出为准。
-4. 在页面中试三种状态：原始列表、搜索有结果、搜索无结果。工作区浏览器的**截图**按钮可以把当前画面送回会话；**选择元素**可以把具体元素的位置和截图送回去。
-5. 若发现问题，在工作区文件 Diff 上点对应行写评论，或在会话里描述可复现的操作，让 Claude 只修这个问题。最后再走一遍三种状态并核对 `git diff`。
+2. Review permission prompts and inline diffs. If Claude proposes installing dependencies or a broad redesign, ask why before proceeding.
+3. Start the development server following the project's instructions. Switch the right [workspace](../desktop/workspace.md) to **Browser** and open the local URL, such as `http://localhost:3000`. Use the port printed by your server.
+4. Try three states: the original list, a query with results, and a query without results. The workspace browser's **Screenshot** button can send the current page back to the session; **Select element** can send a specific element's position and screenshot.
+5. If something fails, comment on the relevant diff line or send reproduction steps in the session. Ask Claude to fix that issue only. Repeat the three checks and inspect `git diff`.
 
-## 应看到什么
+## Expected result
 
-列表会随着输入更新；清空后恢复；无匹配时有空状态。相关测试通过，工作区显示预期文件的改动。
+The list updates as you type, resets when cleared, and shows an empty state for no matches. Relevant tests pass and the workspace shows the expected file changes.
 
-## 验收与常见卡点
+## Acceptance and common snags
 
-- 不只看截图：亲自输入、删除、快速改变关键词，确认交互有效。
-- 页面打不开时先看开发服务器是否仍在运行、地址和端口是否与终端输出一致。
-- 选择元素和截图用于把页面现状交给 Claude；涉及登录态的网页在截图或分享前先检查是否含私人信息。
-- 独立工作树里的改动要在清理前审阅并决定如何保留；不要把临时工作区当成备份。
+- Do not rely on a screenshot alone: type, erase, and rapidly change a query yourself.
+- If the page will not load, confirm the development server is still running and its address and port match the terminal output.
+- Screenshot and Select element send the page state to Claude. Check for personal data before capturing or sharing a signed-in page.
+- Review worktree changes and decide how to keep them before the temporary workspace is cleaned up; do not treat it as a backup.

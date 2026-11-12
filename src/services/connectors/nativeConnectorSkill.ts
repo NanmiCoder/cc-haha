@@ -1,9 +1,9 @@
 import type { ConnectorDefinition, ConnectorId, ConnectorInstallation } from './types.js'
 
 export const nativeConnectorRecipes: Record<ConnectorId, { name: string; help: string; task: string }> = {
-  feishu: { name: '飞书 / Feishu', help: 'calendar --help', task: 'Read the user’s calendar agenda with calendar +agenda. Discover document commands with docs --help.' },
-  dingtalk: { name: '钉钉 / DingTalk', help: 'calendar +agenda --help', task: 'For today’s agenda use calendar +agenda --format json. The account needs calendar access and any required organization approval. Discover other domains with --help before use.' },
-  wecom: { name: '企业微信 / WeCom', help: 'calendar schedules list --help', task: 'List calendar schedules with calendar schedules list --begin-time <start> --end-time <end>, using the requested time window and this version’s documented time format. Omitted dates default to the next 30 days, not today. This command already returns JSON; do not append an unsupported --format flag. Discover other domains with --help before use.' },
+  feishu: { name: 'Feishu', help: 'calendar --help', task: 'Read the user’s calendar agenda with calendar +agenda. Discover document commands with docs --help.' },
+  dingtalk: { name: 'DingTalk', help: 'calendar +agenda --help', task: 'For today’s agenda use calendar +agenda --format json. The account needs calendar access and any required organization approval. Discover other domains with --help before use.' },
+  wecom: { name: 'WeCom', help: 'calendar schedules list --help', task: 'List calendar schedules with calendar schedules list --begin-time <start> --end-time <end>, using the requested time window and this version’s documented time format. Omitted dates default to the next 30 days, not today. This command already returns JSON; do not append an unsupported --format flag. Discover other domains with --help before use.' },
 }
 
 function shellQuote(value: string) {

@@ -75,7 +75,7 @@ function projectBadge(path?: string, t?: ReturnType<typeof useTranslation>) {
 }
 
 function formatNumber(value: number | undefined) {
-  return new Intl.NumberFormat().format(value ?? 0)
+  return new Intl.NumberFormat('en-US').format(value ?? 0)
 }
 
 function formatDuration(seconds: number | undefined) {

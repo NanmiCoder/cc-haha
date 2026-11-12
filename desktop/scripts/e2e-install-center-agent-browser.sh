@@ -123,8 +123,8 @@ wait_for_path() {
 }
 
 AB="agent-browser --session ${SESSION_NAME}"
-TELEGRAM_PROMPT="请根据 https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/telegram 安装 Telegram 官方插件。如果 URL 对应官方 external_plugins，请直接识别 plugin id 并完成用户级安装，然后告诉我结果。"
-SKILL_PROMPT="请根据 https://www.aitmpl.com/component/skill/creative-design/ui-ux-pro-max 这个 skill 页面安装 ui-ux-pro-max。如果页面里有官方安装命令，请直接识别并执行，然后告诉我结果。"
+TELEGRAM_PROMPT="Install the official Telegram plugin from https://github.com/anthropics/claude-plugins-official/tree/main/external_plugins/telegram. If the URL points to official external_plugins, identify the plugin id directly, complete a user-level install, then tell me the result."
+SKILL_PROMPT="Install ui-ux-pro-max from the skill page https://www.aitmpl.com/component/skill/creative-design/ui-ux-pro-max. If the page has an official install command, identify and run it, then tell me the result."
 PLUGIN_DIR="${CONFIG_DIR}/plugins/cache/claude-plugins-official/telegram"
 SKILL_DIR="${CONFIG_DIR}/skills/ui-ux-pro-max"
 

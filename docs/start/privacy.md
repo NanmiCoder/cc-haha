@@ -1,41 +1,41 @@
 ---
-title: 隐私与联网说明
-nav_title: 隐私与联网
-description: cc-haha 在本机保存什么、何时访问网络，以及如何清理数据。
+title: Privacy and network access
+nav_title: Privacy
+description: What cc-haha stores locally, when it uses the network, and how to remove its data.
 order: 6
 ---
 
-# 隐私与联网说明
+# Privacy and network access
 
-cc-haha 是本地优先的开源开发工具，项目本身不运营用于接收会话内容的云端后端。应用并非完全离线：当你选择模型服务、MCP、IM 或更新功能时，相关数据会发送到你选择或配置的第三方服务。
+cc-haha is a local-first, open-source development tool. The project itself does not operate a cloud backend that receives session content. The application is not fully offline: when you choose a model provider, MCP server, messaging integration, or update feature, relevant data is sent to the third-party service you selected or configured.
 
-## 本地保存的数据
+## Data stored locally
 
-应用会在本机保存会话、工作区记录、服务商配置、技能、Agent、记忆、界面设置和日志。主要用户数据位于 `~/.claude`，部分桌面端状态由操作系统的应用数据目录管理。认证令牌和 API Key 会保存在本机，但在调用你选择的服务时会发送给对应服务完成认证。
+The application stores sessions, workspace records, provider configuration, skills, agents, memory, UI settings, and logs on your device. Primary user data lives under `~/.claude`; some desktop state is managed in the operating system's application-data directory. Authentication tokens and API keys are kept locally, but are sent to the selected service when needed to authenticate a request.
 
-## 何时访问网络
+## When the application uses the network
 
-根据你启用的功能，应用可能发送以下信息：
+Depending on the features you enable, the application may send the following information:
 
-- **模型与 OAuth 服务：** 你提交的提示词、附件、所选代码上下文、工具结果、模型参数和认证信息会发送给你选择的模型或账号服务商。
-- **MCP 与外部工具：** 配置的 MCP 服务器、搜索、图像生成及其他工具会收到完成相应操作所需的输入。
-- **IM 与远程访问：** 启用 Telegram、飞书、微信、钉钉、WhatsApp 或远程 H5 后，所选会话内容、消息和连接元数据会经过对应平台或你配置的中继服务。
-- **更新：** 应用会访问 GitHub Releases 检查版本并按你的操作下载安装包。
-- **网页链接：** 打开文档、登录页或其他网页时，浏览器会直接连接目标站点。
-- **上游运行时流量：** 随应用提供的上游 Agent 运行时可能根据服务商和配置请求诊断、分析或功能开关服务。可以设置 `DISABLE_TELEMETRY=1` 和 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`，减少或关闭非必要流量。
+- **Model and OAuth services:** Prompts, attachments, selected code context, tool results, model parameters, and authentication information are sent to the model or account provider you choose.
+- **MCP servers and external tools:** Configured MCP servers, search, image generation, and other tools receive the input required to perform the requested operation.
+- **Messaging and remote access:** If you enable Telegram, Feishu, WeChat, DingTalk, WhatsApp, or remote H5 access, selected session content, messages, and connection metadata pass through the relevant platform or a relay you configure.
+- **Updates:** The application contacts GitHub Releases to check versions and, when requested, download installers.
+- **Web links:** Opening documentation, login pages, or other links causes the browser to connect directly to the destination site.
+- **Upstream runtime traffic:** The bundled upstream agent runtime may contact diagnostic, analytics, or feature-flag services depending on the provider and configuration. Set `DISABLE_TELEMETRY=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` to reduce or disable nonessential traffic.
 
-每个第三方服务都按其自己的隐私政策处理收到的数据。使用前请检查对应服务商的条款，不要向未受信任的服务发送密钥、个人信息或私有代码。
+Each third-party service processes the data it receives under its own privacy policy. Review the provider's terms before use, and do not send secrets, personal information, or private code to a service you do not trust.
 
-## 项目维护者不会做的事
+## What the project maintainers do not do
 
-本项目维护者不会出售用户数据，也不会在应用中投放基于个人数据的广告。除非你主动在 Issue、讨论、日志或安全报告中提交，否则维护者不会收到你本机保存的会话和配置。
+The project maintainers do not sell user data or place advertising based on personal data in the application. The maintainers do not receive locally stored sessions or configuration unless you choose to include them in an issue, discussion, log, or security report.
 
-## 删除数据
+## Removing data
 
-卸载应用不会自动删除 `~/.claude` 中的会话与配置。需要彻底清理时，请先备份要保留的内容，再手动删除 `~/.claude` 以及操作系统应用数据目录中的 cc-haha 数据（已安装版本的目录可能仍使用旧名称 `Claude Code Haha`）。删除已发送给第三方服务的数据，需要按该服务商提供的流程操作。
+Uninstalling the application does not automatically delete sessions and configuration under `~/.claude`. To remove local data completely, first back up anything you want to keep, then manually delete `~/.claude` and the cc-haha data in your operating system's application-data directory (installed versions may still use the legacy directory name `Claude Code Haha`). To remove data already sent to a third-party service, follow that provider's process.
 
-## 联系方式
+## Contact
 
-隐私或安全问题可以通过 [GitHub 私密安全报告](https://github.com/NanmiCoder/cc-haha/security/advisories/new) 或 [relakkes@gmail.com](mailto:relakkes@gmail.com) 联系维护者。
+For privacy or security questions, contact the maintainer through a [private GitHub security advisory](https://github.com/NanmiCoder/cc-haha/security/advisories/new) or at [relakkes@gmail.com](mailto:relakkes@gmail.com).
 
-本说明最近更新于 2026 年 8 月 5 日。
+Last updated: August 5, 2026.

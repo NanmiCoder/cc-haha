@@ -77,7 +77,7 @@ test('redirects and oversized responses are never saved', async () => {
           headers: { location: 'https://other.invalid' },
         })
     )
-  ).rejects.toThrow('重定向')
+  ).rejects.toThrow('redirect')
   await expect(
     downloadWorkspaceFile(
       host,

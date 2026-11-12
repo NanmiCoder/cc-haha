@@ -126,8 +126,8 @@ describe('GeneralSettings output style', () => {
     expect(useSettingsStore.getState().outputStyle).toBe('Learning')
   })
 
-  it('localizes built-in output style descriptions in Chinese', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+  it('labels built-in and project output styles by source', async () => {
+    useSettingsStore.setState({ locale: 'en' })
     settingsApiMock.getOutputStyles.mockResolvedValueOnce({
       outputStyle: 'default',
       scope: 'localSettings',
@@ -156,12 +156,11 @@ describe('GeneralSettings output style', () => {
 
     render(<GeneralSettings />)
 
-    expect(await screen.findByText('Claude 会高效完成编码任务，并提供简洁回复')).toBeInTheDocument()
+    expect(await screen.findByText('Claude completes coding tasks efficiently and provides concise responses')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '选择输出风格' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select output style' }))
 
-    expect(screen.getByText('Claude 会暂停并请你编写小段代码进行实战练习 · 内置')).toBeInTheDocument()
-    expect(screen.getByText('Project custom voice · 项目风格')).toBeInTheDocument()
-    expect(screen.queryByText(/Claude completes coding tasks efficiently/)).not.toBeInTheDocument()
+    expect(screen.getByText('Claude pauses and asks you to write small pieces of code for hands-on practice · Built-in')).toBeInTheDocument()
+    expect(screen.getByText('Project custom voice · Project style')).toBeInTheDocument()
   })
 })

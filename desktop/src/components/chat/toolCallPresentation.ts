@@ -3,7 +3,7 @@ import type { TranslationKey } from '../../i18n'
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
 
 /**
- * The verb a timeline row leads with. A row reads "读取 MessageList.tsx", not
+ * The verb a timeline row leads with. A row reads "Read MessageList.tsx", not
  * "Read MessageList.tsx": the raw tool name is an implementation detail the
  * reader should not have to decode (`TodoWrite` least of all), so it moves to
  * the row's tooltip and the trajectory view. Tools with no verb here keep their
@@ -148,5 +148,5 @@ export function formatCountLabel(
   plural: TranslationKey,
   t: Translate,
 ): string {
-  return t(count === 1 ? singular : plural, { count: new Intl.NumberFormat().format(count) })
+  return t(count === 1 ? singular : plural, { count: new Intl.NumberFormat('en-US').format(count) })
 }

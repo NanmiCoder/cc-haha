@@ -18,10 +18,10 @@ export class WechatMediaPreferenceStore implements WechatMediaPreferences {
   private read(): Record<string, any> {
     try {
       const stat = fs.statSync(this.filePath)
-      if (stat.size > 1024 * 1024) throw new Error('语音偏好文件过大')
+      if (stat.size > 1024 * 1024) throw new Error('Voice preference file is too large')
       const data = JSON.parse(fs.readFileSync(this.filePath, 'utf8'))
-      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('语音偏好格式无效')
-      if (data.version !== undefined && data.version !== 0 && data.version !== 1) throw new Error('语音偏好版本不受支持')
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid voice preference format')
+      if (data.version !== undefined && data.version !== 0 && data.version !== 1) throw new Error('Unsupported voice preference version')
       return data
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, bindings: {} }
@@ -51,7 +51,7 @@ export class WechatMediaPreferenceStore implements WechatMediaPreferences {
       [chatId]: { ...(old && typeof old === 'object' ? old : {}), enabled: value.enabled, voiceId: value.voiceId },
     } } }
     const encoded = JSON.stringify(updated, null, 2)
-    if (Buffer.byteLength(encoded) > 1024 * 1024) throw new Error('语音偏好文件过大')
+    if (Buffer.byteLength(encoded) > 1024 * 1024) throw new Error('Voice preference file is too large')
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
     const temporary = `${this.filePath}.${randomUUID()}.tmp`
     try { fs.writeFileSync(temporary, encoded, { mode: 0o600, flag: 'wx' }); fs.renameSync(temporary, this.filePath) }

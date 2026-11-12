@@ -5,9 +5,6 @@ import { ALL_CONNECTORS } from '../../../src/services/connectors/catalog'
 import { Connectors } from './Connectors'
 import { useConnectorStore } from '@/stores/connectorStore'
 import { en } from '@/i18n/locales/en'
-import { zh } from '@/i18n/locales/zh'
-import { jp } from '@/i18n/locales/jp'
-import { kr } from '@/i18n/locales/kr'
 import type { ConnectorDto } from '@/types/connector'
 const mocks = vi.hoisted(() => ({ create: vi.fn(), draft: vi.fn(), open: vi.fn(), active: vi.fn(), external: vi.fn(), translations: null as Record<string, string> | null }))
 vi.mock('@/i18n', () => ({ useTranslation: () => (key: string) => mocks.translations?.[key] ?? key }))
@@ -199,27 +196,28 @@ it('renders a stable skeleton instead of empty catalog while loading', () => {
   expect(screen.queryByText('extensions.empty')).not.toBeInTheDocument()
 })
 
-it('switches remote catalog copy and draft examples with the UI language without leaking Chinese metadata', async () => {
-  const localized = { ...remote, id: 'amap', displayName: zh['connectors.amap.name'], description: zh['connectors.amap.description'], requirements: zh['connectors.amap.requirements'], example: zh['connectors.amap.example'], capabilities: [zh['connectors.amap.description']], status: 'ready' as const, connection: 'connected' as const }
+it('shows English catalog copy and draft examples without leaking Chinese remote metadata', async () => {
+  // The remote catalog ships Chinese metadata; the UI must render its own English copy instead.
+  const remoteZh = {
+    name: '高德地图',
+    description: '搜索地点、规划路线，查询天气与出行信息。',
+    requirements: '需要高德开放平台 Web 服务 API Key；地图服务按账号权限和配额提供。',
+    example: '帮我规划从杭州东站到西湖的公共交通路线。',
+  }
+  const localized = { ...remote, id: 'amap', displayName: remoteZh.name, description: remoteZh.description, requirements: remoteZh.requirements, example: remoteZh.example, capabilities: [remoteZh.description], status: 'ready' as const, connection: 'connected' as const }
   useConnectorStore.setState({ items: [localized] })
   mocks.translations = en
-  const view = render(<Connectors />)
+  render(<Connectors />)
   expect(screen.getByText(en['connectors.amap.description'])).toBeInTheDocument()
-  expect(screen.queryByText(zh['connectors.amap.description'])).not.toBeInTheDocument()
+  expect(screen.queryByText(remoteZh.description)).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: en['connectors.amap.name'] }))
   expect(screen.getByText(en['connectors.amap.requirements'])).toBeInTheDocument()
+  expect(screen.queryByText(remoteZh.requirements)).not.toBeInTheDocument()
   expect(screen.getByText(en['connectors.officialMcp'])).toBeInTheDocument()
   expect(screen.queryByText(en['connectors.capabilities'])).not.toBeInTheDocument()
-  mocks.translations = jp
-  view.rerender(<Connectors />)
-  expect(screen.getByText(jp['connectors.amap.requirements'])).toBeInTheDocument()
-  expect(screen.queryByText(en['connectors.amap.requirements'])).not.toBeInTheDocument()
-  mocks.translations = kr
-  view.rerender(<Connectors />)
-  expect(screen.getByText(kr['connectors.amap.requirements'])).toBeInTheDocument()
   mocks.create.mockResolvedValue('translated-draft')
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: kr['connectors.start'] })) })
-  expect(mocks.draft).toHaveBeenCalledWith('translated-draft', { input: kr['connectors.amap.example'], attachments: [] })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: en['connectors.start'] })) })
+  expect(mocks.draft).toHaveBeenCalledWith('translated-draft', { input: en['connectors.amap.example'], attachments: [] })
 })
 
 it.each(['ready', 'disabled', 'error'] as const)('rotates configured credentials from %s by authenticating rather than checking stale settings', (status) => {

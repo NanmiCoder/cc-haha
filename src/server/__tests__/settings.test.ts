@@ -214,7 +214,7 @@ function saveTestOpenAIOAuthTokens(tokens: OpenAIOAuthTokens) {
   clearOpenAIOAuthTokenCache()
 }
 
-/** 创建一个模拟 Request */
+/** Create a mock Request */
 function makeRequest(
   method: string,
   urlStr: string,
@@ -514,7 +514,7 @@ describe('Settings API', () => {
     expect(body).toEqual({ agentTeamsEnabled: true, leanModeEnabled: false, autoUpdateEnabled: true, maxConcurrentSubagents: null })
   })
 
-  it('读取旧设置为不限，并通过 API 保存数量和恢复不限', async () => {
+  it('reads old settings as unlimited, and saves a count and restores unlimited via the API', async () => {
     const settingsPath = path.join(tmpDir, 'settings.json')
     const legacy = { env: { KEEP_ME: 'unchanged' }, futureSetting: { keep: true } }
     const original = JSON.stringify(legacy)

@@ -498,7 +498,7 @@ describe('change list', () => {
 
   it('locates the picked file and keeps every other one mounted', async () => {
     // This case used to pin the opposite behaviour: picking a file filtered
-    // every other section out of the panel. Spec §4.3 asks for 单文件定位 —
+    // every other section out of the panel. Spec §4.3 asks for single-file focus —
     // locate it, do not hide the review around it. The neighbouring diff is
     // most of what makes a change readable.
     const { tabId, rerender } = await renderReview()

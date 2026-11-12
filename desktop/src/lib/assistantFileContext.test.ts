@@ -12,7 +12,7 @@ describe('resolveAssistantFileHref', () => {
   it('resolves only explicit directory declarations including Windows and spaces', () => {
     expect(resolveAssistantFileHref('public/audio/track.wav', '项目根目录是 `/external/my project/`：')).toBe('/external/my project/public/audio/track.wav')
     expect(resolveAssistantFileHref('out/movie.mp4', 'Project root: `D:\\work\\demo\\`')).toBe('D:/work/demo/out/movie.mp4')
-    expect(resolveAssistantFileHref('report.pdf', '参考 `/external/docs/`')).toBe('report.pdf')
+    expect(resolveAssistantFileHref('report.pdf', 'see `/external/docs/`')).toBe('report.pdf')
   })
 
   it('ignores declarations inside fences and preserves absolute paths and remote URLs', () => {

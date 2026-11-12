@@ -1,8 +1,8 @@
 /**
- * NotificationService — 定时任务完成后通过 IM 渠道推送通知
+ * NotificationService — push notifications via IM channels when scheduled tasks finish
  *
- * 直接调用 Telegram Bot API / 飞书 Open API（HTTP），不依赖 adapter sidecar
- * 或第三方 SDK，确保即使 adapter 进程未运行也能推送。
+ * Calls the Telegram Bot API / Feishu Open API (HTTP) directly, without depending on the adapter sidecar
+ * or third-party SDKs, so notifications work even when the adapter process is not running.
  */
 
 import { adapterService, type AdapterFileConfig } from './adapterService.js'

@@ -59,9 +59,9 @@ import { quietSummary } from '../ui/settings/settingsModel'
 
 type NotificationKey = 'decisions' | 'completed' | 'errors'
 const notificationRows: { key: NotificationKey; title: string; detail?: string }[] = [
-  { key: 'decisions', title: '要我做决定', detail: '审批、提问、计划' },
-  { key: 'completed', title: '任务完成' },
-  { key: 'errors', title: '出错或 5 分钟没进展' },
+  { key: 'decisions', title: 'Needs my decision', detail: 'Approvals, questions, plans' },
+  { key: 'completed', title: 'Task finished' },
+  { key: 'errors', title: 'Errors or no progress for 5 minutes' },
 ]
 
 const platform = Platform.OS === 'ios' ? 'ios' : 'android'
@@ -103,7 +103,7 @@ export default function Settings() {
   const note = deliveryNote(push, duty)
   const remind = remindFootnote(permissions.notifications)
 
-  /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
+  /** Request notification permission from the system; remember once requested and do not auto-show the onboarding again. */
   async function requestNotifications() {
     try {
       await requestNotificationStatus()
@@ -124,7 +124,7 @@ export default function Settings() {
       else if (kind === 'battery') requestBackgroundRunning()
       else if (kind === 'appSettings') await openAppSettings()
       else {
-        if (host && !client) throw new Error('电脑还没连上，稍后再试')
+        if (host && !client) throw new Error('The computer is not connected yet; try again later')
         const outcome = await runTestNotification({
           hostId: host?.id,
           // The test must reach the phone the same way the computer's real alerts do.
@@ -138,7 +138,7 @@ export default function Settings() {
         if (outcome.via === 'remote') retryPush()
       }
     } catch (e) {
-      setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))
+      setDeliveryError(kind === 'test' ? 'Test did not finish; check the computer connection and retry.' : errorText(e))
     } finally {
       setBusy(null)
     }
@@ -147,7 +147,7 @@ export default function Settings() {
   async function notify(key: NotificationKey, value: boolean) {
     setNotifyError('')
     try {
-      // 还能弹授权框就问一次；已经拒绝的由上面的卡片引导去系统设置，开关照常保存。
+      // Ask once if the system prompt can still show; if already denied the card above guides to system settings, and the toggle saves as usual.
       const permission = permissions.notifications
       if (
         value &&
@@ -187,12 +187,12 @@ export default function Settings() {
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         keyboardShouldPersistTaps="handled"
       >
-        <LargeTitle title="设置" style={{ paddingTop: 12, paddingBottom: 18 }} />
+        <LargeTitle title="Settings" style={{ paddingTop: 12, paddingBottom: 18 }} />
         <InlineError text={preferenceError} style={{ marginBottom: 8 }} />
 
         <ProfileEntry />
 
-        {/* 网页版收不到推送，也没有锁屏、系统权限：这些只在手机 App 里设置。 */}
+        {/* The web version gets no push, lock screen or system permissions: these are set only in the phone app. */}
         {isH5 ? null : (
           <>
             <DeliveryCard
@@ -203,7 +203,7 @@ export default function Settings() {
               onAction={(kind) => void runAction(kind)}
               onGuide={() => void open(aboutLinks.pushSetup)}
             />
-            <SectionHeader title="提醒我" />
+            <SectionHeader title="Notify me" />
             <Group>
               {notificationRows.map((item, index) => (
                 <ListRowWithSwitch
@@ -218,8 +218,8 @@ export default function Settings() {
               {Platform.OS === 'ios' && (
                 <ListRowWithSwitch
                   first={false}
-                  title="专注模式下也提醒审批"
-                  detail="标成时效性通知，不被专注模式拦下"
+                  title="Alert approvals even in Focus mode"
+                  detail="Mark as time-sensitive so Focus mode does not block it"
                   value={preferences.timeSensitive}
                   onChange={(value) =>
                     void update({ timeSensitive: value }).catch((e) => setNotifyError(errorText(e)))
@@ -228,8 +228,8 @@ export default function Settings() {
               )}
               <Separator />
               <ListRow
-                title="勿扰时段"
-                accessibilityLabel={`勿扰时段，${quietSummary(preferences.quietHours)}`}
+                title="Quiet hours"
+                accessibilityLabel={`Quiet hours, ${quietSummary(preferences.quietHours)}`}
                 value={<Value text={quietSummary(preferences.quietHours)} />}
                 trailing={<Chev />}
                 onPress={() => {
@@ -246,27 +246,27 @@ export default function Settings() {
 
             {Platform.OS === 'ios' ? (
               <>
-                <SectionHeader title="锁屏与灵动岛" />
+                <SectionHeader title="Lock screen and Dynamic Island" />
                 <Group>
                   <ListRow
-                    title="实时活动"
+                    title="Live Activities"
                     value={<Value text={liveActivityValue(preferences.liveActivity)} />}
                     trailing={<Chev />}
                     onPress={() => router.push('/live-activity')}
                   />
                 </Group>
-                <Footnote>锁屏上的允许和拒绝，都要先解锁才生效。</Footnote>
+                <Footnote>Allow and deny on the lock screen only take effect after unlocking.</Footnote>
               </>
             ) : (
               <>
-                <SectionHeader title="声音和震动" />
+                <SectionHeader title="Sounds & vibration" />
                 <Group>
                   {channelRows.map((row, index) => (
                     <View key={row.kind}>
                       {index > 0 && <Separator />}
                       <ListRow
                         title={row.title}
-                        accessibilityLabel={`${row.title}，${permissions.channels[row.kind] || '打开系统设置'}`}
+                        accessibilityLabel={`${row.title}, ${permissions.channels[row.kind] || 'Open system settings'}`}
                         value={
                           permissions.channels[row.kind] ? (
                             <Value text={permissions.channels[row.kind]} />
@@ -284,15 +284,15 @@ export default function Settings() {
           </>
         )}
 
-        <SectionHeader title="外观" />
+        <SectionHeader title="Appearance" />
         <Segmented
-          label="外观"
+          label="Appearance"
           style={{ padding: 3, gap: 0 }}
           value={appearance}
           options={[
-            { label: '浅色', value: 'light' },
-            { label: '深色', value: 'dark' },
-            { label: '跟随系统', value: 'system' },
+            { label: 'Light', value: 'light' },
+            { label: 'Dark', value: 'dark' },
+            { label: 'System', value: 'system' },
           ]}
           onChange={(value) => {
             setAppearanceError('')
@@ -303,31 +303,31 @@ export default function Settings() {
 
         {isH5 ? null : (
           <>
-            <SectionHeader title="系统权限" />
+            <SectionHeader title="System permissions" />
             <Group>
               <PermissionRow
                 icon="camera"
-                title="相机"
-                detail="扫码连接电脑"
+                title="Camera"
+                detail="Scan to connect a computer"
                 value={permissionLabel(permissions.camera)}
                 onPress={() => void openPermission(openAppSettings)}
               />
               <Separator inset={48} />
               <PermissionRow
                 icon="image"
-                title="照片"
-                detail="给电脑发截图和图片"
+                title="Photos"
+                detail="Send screenshots and images to the computer"
                 value={permissionLabel(permissions.photos)}
                 onPress={() => void openPermission(openAppSettings)}
               />
             </Group>
             <Footnote>
-              在系统设置中管理相机和照片权限。局域网连接需要允许本地网络访问。
+              Manage camera and photo permissions in system settings. LAN connections need local network access allowed.
             </Footnote>
           </>
         )}
 
-        <SectionHeader title="电脑" />
+        <SectionHeader title="computer" />
         <Group>
           {host && (
             <>
@@ -342,7 +342,7 @@ export default function Settings() {
                 }
                 subtitle={
                   <Text numberOfLines={1} style={[type.meta, { color: colors.ink3 }]}>
-                    新任务默认模型、AI 代答、定时任务
+                    New task default model, AI auto-answer, scheduled tasks
                   </Text>
                 }
                 minHeight={64}
@@ -370,7 +370,7 @@ export default function Settings() {
           )}
           {isH5 ? null : (
             <ListRow
-              title="你的电脑"
+              title="Your computers"
               value={<Value text={computersValue(registry.hosts.length)} />}
               trailing={<Chev />}
               onPress={() => router.push('/hosts')}
@@ -378,7 +378,7 @@ export default function Settings() {
           )}
         </Group>
 
-        <SectionHeader title="关于" />
+        <SectionHeader title="About" />
         <Group>
           <ListRow
             title={
@@ -408,11 +408,11 @@ export default function Settings() {
             }
           />
           <Separator />
-          <LinkRow title="使用指南" onPress={() => void open(aboutLinks.guide)} />
+          <LinkRow title="User guide" onPress={() => void open(aboutLinks.guide)} />
           <Separator />
-          <LinkRow title="反馈问题" onPress={() => void open(aboutLinks.issues)} />
+          <LinkRow title="Report an issue" onPress={() => void open(aboutLinks.issues)} />
           <Separator />
-          <LinkRow title="开源许可" onPress={() => void open(aboutLinks.license)} />
+          <LinkRow title="Open source licenses" onPress={() => void open(aboutLinks.license)} />
         </Group>
         <InlineError text={linkError} style={{ marginTop: 8 }} />
       </ScrollView>
@@ -473,7 +473,7 @@ function PermissionRow({
       subtitle={detail}
       value={value ? <Value text={value} /> : undefined}
       minHeight={58}
-      accessibilityLabel={value ? `${title}，${value}，打开系统设置` : `${title}，打开系统设置`}
+      accessibilityLabel={value ? `${title}, ${value}, open system settings` : `${title}, open system settings`}
       leading={<Icon name={icon} size={20} color={colors.ink2} strokeWidth={1.8} />}
       trailing={<Chev />}
       onPress={onPress}
@@ -486,14 +486,14 @@ function LinkRow({ title, onPress }: { title: string; onPress(): void }) {
   return (
     <ListRow
       title={title}
-      accessibilityLabel={`${title}，在浏览器中打开`}
+      accessibilityLabel={`${title}, open in browser`}
       trailing={<Icon name="external-link" size={15} color={colors.chevron} strokeWidth={2} />}
       onPress={onPress}
     />
   )
 }
 
-/** 设计稿的行尾取值：15pt 次要色，不收缩。 */
+/** Design trailing value: 15pt secondary color, no shrink. */
 function Value({ text }: { text: string }) {
   const colors = useColors()
   return (
@@ -503,7 +503,7 @@ function Value({ text }: { text: string }) {
   )
 }
 
-/** 设计稿的行尾箭头：16pt、2 粗。 */
+/** Design trailing chevron: 16pt, weight 2. */
 function Chev() {
   const colors = useColors()
   return <Icon name="chevron-right" size={16} color={colors.chevron} strokeWidth={2} />

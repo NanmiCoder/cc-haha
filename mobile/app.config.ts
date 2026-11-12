@@ -18,7 +18,7 @@ export function withGoogleServicesFile(
     services = JSON.parse(readFileSync(path, 'utf8'))
   } catch {
     throw new Error(
-      'CC_HAHA_GOOGLE_SERVICES_FILE 必须指向可读取的 Firebase Android 客户端 JSON'
+      'CC_HAHA_GOOGLE_SERVICES_FILE must point to a readable Firebase Android client JSON'
     )
   }
   if (
@@ -30,7 +30,7 @@ export function withGoogleServicesFile(
     )
   ) {
     throw new Error(
-      'Firebase 客户端必须包含与 android.package 一致的 Android 应用'
+      'Firebase client must include an Android app matching android.package'
     )
   }
   return { ...config, android: { ...config.android, googleServicesFile: path } }
@@ -47,7 +47,7 @@ export function withEasProject(
   const projectId = environment.EXPO_PROJECT_ID?.trim() || config.extra?.eas?.projectId
   const owner = environment.EXPO_OWNER?.trim() || config.owner
   if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
-    throw new Error('EXPO_PROJECT_ID 必须是 EAS 项目的 UUID')
+    throw new Error('EXPO_PROJECT_ID must be the EAS project UUID')
   }
   if (!projectId && !owner) return config
   return {

@@ -21,7 +21,7 @@ export type VideoCommandRunner = (
 /** No shell, network protocols or unbounded child output are needed for local video processing. */
 export const runVideoCommand: VideoCommandRunner = (executable, args, options) => new Promise((resolve, reject) => {
   if (options.signal?.aborted) {
-    reject(new Error('视频处理已取消。'))
+    reject(new Error('Video processing was cancelled.'))
     return
   }
   const child = spawn(executable, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -32,12 +32,12 @@ export const runVideoCommand: VideoCommandRunner = (executable, args, options) =
     failure ??= new Error(reason)
     child.kill('SIGKILL')
   }
-  const onAbort = () => stop('视频处理已取消。')
+  const onAbort = () => stop('Video processing was cancelled.')
   options.signal?.addEventListener('abort', onAbort, { once: true })
-  const timeout = setTimeout(() => stop('视频处理超时，请使用更短的视频。'), options.timeoutMs)
+  const timeout = setTimeout(() => stop('Video processing timed out; please use a shorter video.'), options.timeoutMs)
   const consume = (chunk: Buffer, save: boolean) => {
     outputBytes += chunk.length
-    if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) stop('视频工具输出超出限制。')
+    if (outputBytes > MAX_PROCESS_OUTPUT_BYTES) stop('Video tool output exceeded the limit.')
     else if (save) stdout.push(chunk)
   }
   child.stdout.on('data', chunk => consume(Buffer.from(chunk), true))
@@ -49,13 +49,13 @@ export const runVideoCommand: VideoCommandRunner = (executable, args, options) =
   child.once('error', error => {
     cleanup()
     reject((error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? new Error('视频分析需要 ffmpeg 和 ffprobe。请安装后加入 PATH，或配置 WECHAT_FFMPEG_PATH / WECHAT_FFPROBE_PATH。')
-      : new Error('无法启动本地视频处理工具。'))
+      ? new Error('Video analysis requires ffmpeg and ffprobe. Install them and add them to PATH, or configure WECHAT_FFMPEG_PATH / WECHAT_FFPROBE_PATH.')
+      : new Error('Could not start the local video processing tool.'))
   })
   child.once('close', code => {
     cleanup()
     if (failure) reject(failure)
-    else if (code !== 0) reject(new Error('视频工具无法处理此文件，请确认视频完整且格式受支持。'))
+    else if (code !== 0) reject(new Error('The video tool could not process this file; make sure the video is complete and in a supported format.'))
     else resolve(Buffer.concat(stdout).toString('utf8'))
   })
   // Abort can race with listener installation.
@@ -81,8 +81,8 @@ export type WechatVideoOptions = {
 
 /** Download/authorization happen at the adapter boundary, before calling this service. */
 export async function processWechatVideo(filePath: string, options: WechatVideoOptions = {}): Promise<WechatVideoResult> {
-  if (options.signal?.aborted) throw new Error('视频处理已取消。')
-  if (activeVideoJob) throw new Error('另一个视频正在分析，请稍后重试。')
+  if (options.signal?.aborted) throw new Error('Video processing was cancelled.')
+  if (activeVideoJob) throw new Error('Another video is being analyzed; please try again later.')
   activeVideoJob = true
   let jobDir: string | undefined
   let stageRoot: string | undefined
@@ -95,8 +95,8 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
   try {
     const source = await fs.realpath(filePath)
     const stat = await fs.stat(source)
-    if (!stat.isFile() || stat.size === 0) throw new Error('视频文件为空或不是普通文件。')
-    if (stat.size > WECHAT_VIDEO_MAX_BYTES) throw new Error('视频过大，请发送 30 MiB 以内的视频。')
+    if (!stat.isFile() || stat.size === 0) throw new Error('Video file is empty or not a regular file.')
+    if (stat.size > WECHAT_VIDEO_MAX_BYTES) throw new Error('Video is too large; please send a video under 30 MiB.')
     const run = options.run ?? runVideoCommand
     const ffprobe = options.ffprobePath || process.env.WECHAT_FFPROBE_PATH || 'ffprobe'
     const ffmpeg = options.ffmpegPath || process.env.WECHAT_FFMPEG_PATH || 'ffmpeg'
@@ -105,9 +105,9 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
     stageRoot = await fs.realpath(stageRoot)
     jobDir = await fs.mkdtemp(path.join(stageRoot, 'cc-haha-wechat-video-'))
     const execute = async (tool: string, args: string[], timeoutMs: number) => {
-      if (options.signal?.aborted) throw new Error('视频处理已取消。')
+      if (options.signal?.aborted) throw new Error('Video processing was cancelled.')
       const output = await run(tool, args, { signal: options.signal, timeoutMs })
-      if (options.signal?.aborted) throw new Error('视频处理已取消。')
+      if (options.signal?.aborted) throw new Error('Video processing was cancelled.')
       return output
     }
     const probe = await execute(ffprobe, [
@@ -116,16 +116,16 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
       'format=duration:stream=codec_type,width,height,duration', '-of', 'json', source,
     ], 15_000)
     let metadata: { streams?: Array<{ codec_type?: string; width?: number; height?: number; duration?: string }>; format?: { duration?: string } }
-    try { metadata = JSON.parse(probe) } catch { throw new Error('无法读取视频元数据。') }
-    if (!metadata || typeof metadata !== 'object' || !Array.isArray(metadata.streams)) throw new Error('无法读取视频元数据。')
+    try { metadata = JSON.parse(probe) } catch { throw new Error('Could not read video metadata.') }
+    if (!metadata || typeof metadata !== 'object' || !Array.isArray(metadata.streams)) throw new Error('Could not read video metadata.')
     const video = metadata.streams.find(stream => stream?.codec_type === 'video')
     if (!video || !Number.isInteger(video.width) || !Number.isInteger(video.height)
       || video.width! <= 0 || video.height! <= 0 || video.width! * video.height! > 16_777_216) {
-      throw new Error('未找到有效视频画面，或视频分辨率超出分析限制。')
+      throw new Error('No valid video frames found, or the video resolution exceeds the analysis limit.')
     }
     const durationMs = Math.ceil(Math.max(Number(metadata.format?.duration) || 0, Number(video.duration) || 0) * 1000)
-    if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error('无法确定视频时长。')
-    if (durationMs > WECHAT_VIDEO_MAX_DURATION_MS) throw new Error('视频超过 120 秒分析上限，请截取需要分析的片段后重发；原视频未被完整分析。')
+    if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error('Could not determine the video duration.')
+    if (durationMs > WECHAT_VIDEO_MAX_DURATION_MS) throw new Error('Video exceeds the 120-second analysis limit; trim the part you need analyzed and resend. The original video was not fully analyzed.')
     const frameCount = Math.min(12, Math.max(1, Math.ceil(durationMs / 10_000)))
     const frames: WechatVideoResult['frames'] = []
     const inputFlags = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-max_alloc', '134217728',
@@ -140,7 +140,7 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
       const frame = await fs.readFile(framePath)
       if (frame.length === 0 || frame.length > MAX_FRAME_BYTES || frame[0] !== 0xff || frame[1] !== 0xd8
         || frame[frame.length - 2] !== 0xff || frame[frame.length - 1] !== 0xd9) {
-        throw new Error('视频抽帧失败或输出超出限制。')
+        throw new Error('Video frame extraction failed or output exceeded the limit.')
       }
       frames.push({ path: framePath, timestampMs })
     }
@@ -153,7 +153,7 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
         '-threads', '1', '-f', 's16le', '-fs', String(MAX_AUDIO_BYTES), pcmPath], 30_000)
       const pcmStat = await fs.stat(pcmPath)
       if (!pcmStat.isFile() || pcmStat.size === 0 || pcmStat.size > 120 * 16000 * 2 || pcmStat.size % 2 !== 0) {
-        throw new Error('视频音轨提取失败或输出超出限制。')
+        throw new Error('Video audio extraction failed or output exceeded the limit.')
       }
       const pcm = await fs.readFile(pcmPath)
       // The desktop voice API accepts exactly a canonical 44-byte header.
@@ -177,7 +177,7 @@ export async function processWechatVideo(filePath: string, options: WechatVideoO
     }
     return {
       frames, audioPath, durationMs, cleanup,
-      coverageNote: `视频时长 ${(durationMs / 1000).toFixed(1)} 秒，均匀抽取 ${frameCount} 帧（附时间戳），未逐帧观看。${audioPath ? '已提取音轨，语音内容需另行转写后才能分析。' : '未检测到音轨。'}`,
+      coverageNote: `Video duration ${(durationMs / 1000).toFixed(1)} s; ${frameCount} frames sampled evenly (with timestamps), not watched frame by frame. ${audioPath ? 'Audio track extracted; speech content must be transcribed separately before it can be analyzed.' : 'No audio track detected.'}`,
     }
   } catch (error) {
     await cleanup()

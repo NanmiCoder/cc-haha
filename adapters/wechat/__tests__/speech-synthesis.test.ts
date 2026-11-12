@@ -53,7 +53,7 @@ describe('WeChat local speech synthesis', () => {
     expect(await fs.readdir(dir)).toEqual([])
     await expect(listWechatSpeechVoices({ ...windowsOptions, outputDir: dir, runner: async request => {
       await fs.writeFile(request.outputPath, '{"id":"invalid"}')
-    } })).rejects.toThrow('音色列表无效')
+    } })).rejects.toThrow('Invalid system voice list')
     expect(await fs.readdir(dir)).toEqual([])
   })
 
@@ -94,9 +94,9 @@ describe('WeChat local speech synthesis', () => {
   it('rejects empty/oversized text and unsupported hosts without starting a process', async () => {
     let called = false
     const runner = async () => { called = true }
-    await expect(synthesizeWechatSpeech('```js\nx()\n```', { platform: 'win32', runner })).rejects.toThrow('没有可朗读')
+    await expect(synthesizeWechatSpeech('```js\nx()\n```', { platform: 'win32', runner })).rejects.toThrow('No text to read aloud')
     await expect(synthesizeWechatSpeech('中'.repeat(2001), { platform: 'win32', runner })).rejects.toThrow('2000')
-    await expect(synthesizeWechatSpeech('Hello', { platform: 'linux', runner })).rejects.toThrow('仅支持 Windows')
+    await expect(synthesizeWechatSpeech('Hello', { platform: 'linux', runner })).rejects.toThrow('Windows-only')
     expect(called).toBe(false)
   })
 
@@ -129,7 +129,7 @@ describe('WeChat local speech synthesis', () => {
             await fs.truncate(input.outputPath, WECHAT_SPEECH_MAX_BYTES + 1)
           }
         },
-      })).rejects.toThrow(oversized ? '10 MiB' : '无效的 WAV')
+      })).rejects.toThrow(oversized ? '10 MiB' : 'invalid WAV')
       expect(await fs.readdir(dir)).toEqual([])
     }
   })
@@ -175,7 +175,7 @@ describe('WeChat local speech synthesis', () => {
     const promise = runWechatSpeechProcess({
       command: 'fixture.exe', args: [], input: '{}', outputPath: path.join(await tempDir(), 'reply.wav'), timeoutMs: 1000,
     }, (() => child) as unknown as typeof spawn)
-    await expect(promise).rejects.toThrow('未安装中文语音包')
+    await expect(promise).rejects.toThrow('No Chinese voice pack installed')
     await expect(promise).rejects.not.toThrow('private input')
   })
 
@@ -196,7 +196,7 @@ describe('WeChat local speech synthesis', () => {
         return child
       }) as unknown as typeof spawn)
       if (reason === 'abort') controller.abort()
-      await expect(promise).rejects.toThrow(reason === 'abort' ? '取消' : '超时')
+      await expect(promise).rejects.toThrow(reason === 'abort' ? 'cancelled' : 'timed out')
       expect(killed).toBe(true)
     })
   }

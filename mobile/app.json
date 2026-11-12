@@ -21,7 +21,7 @@
         "com.apple.developer.usernotifications.time-sensitive": true
       },
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "连接同一局域网中运行 cc-haha 的电脑。",
+        "NSLocalNetworkUsageDescription": "Connect to a computer running cc-haha on the same local network.",
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
@@ -49,7 +49,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "扫描 cc-haha 桌面端的连接二维码。",
+          "cameraPermission": "Scan the connection QR code from the cc-haha desktop app.",
           "recordAudioAndroid": false
         }
       ],
@@ -86,15 +86,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "选择图片和截图，作为任务材料发送到你连接的电脑。",
-          "cameraPermission": "拍摄照片，作为任务材料发送到你连接的电脑。",
-          "microphonePermission": "仅在你点击语音输入后录音，音频会发送到你连接的电脑进行转写。"
+          "photosPermission": "Choose images and screenshots to send as task materials to your connected computer.",
+          "cameraPermission": "Take photos to send as task materials to your connected computer.",
+          "microphonePermission": "Records only after you tap voice input; audio is sent to your connected computer for transcription."
         }
       ],
       [
         "react-native-audio-api",
         {
-          "iosMicrophonePermission": "仅在你点击语音输入后录音，音频会发送到你连接的电脑进行转写。",
+          "iosMicrophonePermission": "Records only after you tap voice input; audio is sent to your connected computer for transcription.",
           "iosBackgroundMode": false,
           "androidPermissions": [
             "android.permission.RECORD_AUDIO"

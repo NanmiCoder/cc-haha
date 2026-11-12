@@ -123,7 +123,7 @@ describe('desktop host contract', () => {
 
     await expect(browserHost.app.getPreferredSystemLanguages()).resolves.toEqual(['ja-JP', 'en-US'])
     await expect(browserHost.app.getLocalePreference()).resolves.toBeNull()
-    await expect(browserHost.app.setLocalePreference('jp')).resolves.toBeUndefined()
+    await expect(browserHost.app.setLocalePreference('en')).resolves.toBeUndefined()
     await expect(browserHost.app.onLocaleChanged(vi.fn())).resolves.toEqual(expect.any(Function))
 
     languages.mockRestore()

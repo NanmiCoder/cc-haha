@@ -3,18 +3,18 @@ import type { FetchAdapter } from './client'
 import { normalizeHostUrl } from './connection'
 
 /**
- * 远程电脑换了公网地址（Cloudflare 临时隧道一重启就换）时，手机怎么认出新地址：
- * 在同一局域网里直接问电脑，或者收电脑推来的通知。两条路上电脑都用这台手机的配对
- * 凭据签名，手机核对签名才信。凭据本身从不发出去：局域网里只带它哈希两次后的 ID。
+ * How the phone recognizes the new address when a remote computer changes its public address (a Cloudflare quick tunnel changes on every restart): 
+ * ask the computer directly on the same LAN, or receive a notification pushed by the computer. On both paths the computer signs with this phone's pairing
+ * credential, and the phone trusts it only after verifying the signature. The credential itself is never sent: on the LAN only the ID, hashed twice, is carried.
  *
- * 记号（与电脑端 src/server/publicAccess.ts 一致）：T = 凭据（native_…），
- * H = sha256hex(T)，ID = sha256hex(H)；签名 = HMAC-SHA256(键为 H 的 UTF-8 字节)，
- * 输出 base64url 不带补位。
+ * Notation (matching the desktop src/server/publicAccess.ts): T = credential (native_…), 
+ * H = sha256hex(T), ID = sha256hex(H); signature = HMAC-SHA256(key is the UTF-8 bytes of H), 
+ * Outputs base64url without padding.
  */
 
-/** 局域网里问一次地址最多等这么久：同一网络里的电脑几十毫秒就该回。 */
+/** Maximum wait for one LAN address query: a computer on the same network should reply within tens of milliseconds. */
 export const LOCATE_TIMEOUT_MS = 2500
-/** 电脑报来的局域网地址最多试这么多个。 */
+/** Try at most this many LAN addresses reported by the computer. */
 const MAX_ADDRESSES = 8
 
 const K = new Uint32Array([
@@ -30,8 +30,8 @@ const K = new Uint32Array([
 const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n))
 
 /**
- * SHA-256（FIPS 180-4）。只用来算几十字节的凭据哈希和签名，纯 JS 同步实现就够快，
- * 也不依赖原生模块（expo-crypto 只有异步摘要，没有 HMAC）。
+ * SHA-256(FIPS 180-4). Only used to compute hashes and signatures over a few dozen bytes of credential, so a pure JS synchronous implementation is fast enough, 
+ * and it does not depend on native modules (expo-crypto only has async digest, no HMAC).
  */
 export function sha256(message: Uint8Array): Uint8Array {
   const blocks = (message.length + 9 + 63) >> 6
@@ -107,7 +107,7 @@ export function base64Url(bytes: Uint8Array): string {
   return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** 局域网里报给电脑的设备 ID：电脑只存凭据的哈希，用它就能认出是哪台手机。 */
+/** Device ID reported to the computer on the LAN: the computer only stores the credential hash, which is enough to identify the phone. */
 export function locatorId(credential: string): string {
   return sha256Hex(sha256Hex(credential))
 }
@@ -123,7 +123,7 @@ function sameText(a: string, b: string) {
   return difference === 0
 }
 
-/** 只认 https 源（不带路径、参数、片段和账号）；签名再对，别的地址也不用。 */
+/** Only accept https origins (no path, query, fragment or account); even with a valid signature other addresses are not used. */
 export function trustedOrigin(value: unknown): string | null {
   if (typeof value !== 'string' || value.length > 2048) return null
   try {
@@ -133,7 +133,7 @@ export function trustedOrigin(value: unknown): string | null {
   }
 }
 
-/** 局域网问地址的答复 `{ url, mac }`：签名覆盖本次的随机数，旧答复不能重放。 */
+/** LAN address reply `{ url, mac }`: the signature covers this request's nonce so old replies cannot be replayed. */
 export function verifyLocate(credential: string, nonce: string, body: unknown): string | null {
   if (!credential || !body || typeof body !== 'object') return null
   const { url, mac } = body as { url?: unknown; mac?: unknown }
@@ -142,26 +142,26 @@ export function verifyLocate(credential: string, nonce: string, body: unknown): 
   return trustedOrigin(url)
 }
 
-/** 电脑推来的新地址（通知里的 `{ url, mac }`）。 */
+/** New address pushed by the computer (`{ url, mac }` in the notification). */
 export function verifyHostUrlPush(credential: string, data: { url: unknown; mac: unknown }): string | null {
   if (!credential || typeof data.url !== 'string' || typeof data.mac !== 'string') return null
   if (!sameText(data.mac, signature(credential, `cc-haha-host-url\n${data.url}`))) return null
   return trustedOrigin(data.url)
 }
 
-/** 电脑在局域网里的位置：服务端口和各网卡的 IPv4 地址。 */
+/** The computer's location on the LAN: service port and IPv4 addresses of each interface. */
 export type LocatorHints = { port: number; addresses: string[] }
 
 const OCTET = '(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)'
 const IPV4 = new RegExp(`^${OCTET}(\\.${OCTET}){3}$`)
-/** 能当目标的 IPv4：不要 0.x、本机回环（那是手机自己）和组播/保留段。 */
+/** IPv4 usable as a target: exclude 0.x, loopback (that is the phone itself) and multicast/reserved ranges. */
 function usableAddress(value: unknown): value is string {
   if (typeof value !== 'string' || !IPV4.test(value)) return false
   const first = Number(value.split('.')[0])
   return first !== 0 && first !== 127 && first < 224
 }
 
-/** `GET /api/public-access/locator` 的答复；格式不对返回 null，地址只留能用的 IPv4。 */
+/** `GET /api/public-access/locator` reply; returns null on bad format and keeps only usable IPv4 addresses. */
 export function parseLocatorHints(value: unknown): LocatorHints | null {
   if (!value || typeof value !== 'object') return null
   const { port, addresses } = value as { port?: unknown; addresses?: unknown }
@@ -171,8 +171,8 @@ export function parseLocatorHints(value: unknown): LocatorHints | null {
 }
 
 /**
- * 同时问电脑报过的每个局域网地址，返回第一个签名核对通过的公网地址；都不行就 null。
- * 走普通 HTTP，不带凭据、Authorization 和 Origin，只带 ID 和一次性随机数。
+ * Query every LAN address the computer reported at once and return the first public address whose signature verifies; null if none.
+ * Uses plain HTTP without credentials, Authorization or Origin, carrying only the ID and a one-time nonce.
  */
 export async function locate(options: {
   hints: LocatorHints

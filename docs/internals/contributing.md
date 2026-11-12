@@ -1,108 +1,108 @@
 ---
-title: 参与贡献与质量门禁
-nav_title: 参与贡献
-description: 本地安装、影响面检查、质量门禁、测试要求与 PR 提交流程。
+title: Contributing and Quality Gates
+nav_title: Contributing
+description: Local setup, impact checks, quality gates, testing requirements, and the PR workflow.
 order: 14
 ---
 
-# 参与贡献与质量门禁
+# Contributing and Quality Gates
 
-这份文档说明贡献代码前应该如何在本地安装、开发、测试和运行质量门禁。目标是让维护者和贡献者都能在提交 PR 前回答一个问题：这次改动有没有破坏核心 Coding Agent 工作流。
+This guide explains how to install, develop, test, and run the local quality gates before opening a PR. The goal is to help maintainers and contributors answer one question before review: did this change break the core Coding Agent workflow?
 
-## 环境准备
+## Setup
 
-项目根目录使用 Bun：
+Install root dependencies with Bun:
 
 ```bash
 bun install
 ```
 
-如果改动涉及 `desktop/`，也安装桌面端依赖：
+If your change touches `desktop/`, also install desktop dependencies:
 
 ```bash
 cd desktop
 bun install
 ```
 
-首次运行桌面开发版或 `check:native` 前，在 `desktop/` 运行一次 `bun run prepare:cloudflared`。它下载固定版本的官方连接程序、校验 SHA-256，并放入被 Git 忽略的本机缓存；普通用户的安装包已包含该程序。原生检查只验证和使用已有缓存，不会下载；跨平台构建可传 `--target-triple` 选择目标平台。
+Before your first desktop development run or `check:native`, run `bun run prepare:cloudflared` from `desktop/`. It downloads the pinned official connector, verifies SHA-256, and stages it in the Git-ignored local cache; distributed apps already include it. Native checks only validate and use that cache and do not download it. Cross-platform builds can select a target with `--target-triple`.
 
-下载会显示进度，单次最多 10 分钟，连续 60 秒没有进展会中止，临时网络错误最多尝试 3 次。构建命令使用终端的 `HTTPS_PROXY` / `https_proxy`，不会读取桌面应用内的代理设置；需要代理时，在同一终端设置，例如：
+Downloads show progress, allow up to 10 minutes per attempt, stop after 60 seconds without progress, and make at most 3 attempts for transient network failures. Build commands use the terminal's `HTTPS_PROXY` / `https_proxy`, not the desktop app's proxy settings. Set your HTTP proxy in the same terminal if needed, for example:
 
 ```bash
 HTTPS_PROXY=http://127.0.0.1:7890 bun run prepare:cloudflared
 ```
 
-请将示例地址改为自己的 HTTP 代理地址。如果当前网络无法下载，可以从报错中的官方地址下载对应版本和平台的文件，再用 `CC_HAHA_CLOUDFLARED_ARCHIVE=/绝对路径/下载文件 bun run prepare:cloudflared` 导入。离线导入仍会校验固定的 SHA-256，不接受其他版本或未校验的可执行文件。
+Replace the example with your proxy address. If this network cannot download the file, download the matching version and platform asset from the official URL in the error, then import it with `CC_HAHA_CLOUDFLARED_ARCHIVE=/absolute/path/to/asset bun run prepare:cloudflared`. Offline imports still require the pinned SHA-256; other versions and unverified executables are rejected.
 
-如果改动涉及 `adapters/`，或者要运行 `check:adapters` / `check:native`，安装 adapter 依赖：
+If your change touches `adapters/`, or if you run `check:adapters` / `check:native`, install adapter dependencies:
 
 ```bash
 cd adapters
 bun install
 ```
 
-不要提交本地运行产物，例如 `artifacts/quality-runs/`、`node_modules/`、`desktop/node_modules/`。
+Do not commit local artifacts such as `artifacts/quality-runs/`, `node_modules/`, or `desktop/node_modules/`.
 
-## 四层门禁分工
+## Gate Tiers
 
-| 层级 | 触发 | 运行内容 | 约束 |
+| Tier | Trigger | What runs | Constraint |
 | --- | --- | --- | --- |
-| 本地迭代 | 手动 | 最窄的相关测试；`bun run check:impact` 选中的命令 | 秒级反馈 |
-| PR（必过） | `pull_request`，以及合入 `main` 后的 `push` | impact 选中的确定性 lane，含 `check:agent-flow`、`check:agent-e2e`；覆盖率只报告不阻塞 | 无模型、无 provider、无 secret、fork 可跑 |
-| 全量 | 每天定时（北京时间 03:00）+ 维护者手动触发 | 全部确定性 lane（不做路径选择）+ 模块图健康度 + `check:desktop-ui-smoke` | 仍然无模型、无 secret |
-| Release | 维护者手动 `bun run quality:release`（**不是** `release-desktop.yml`） | PR + 全量层全部内容 + native/打包 smoke + 维护者授权的真实 provider baseline | 真实模型只在此层，且需显式授权 |
+| Local | manual | The narrowest relevant tests, then whatever `bun run check:impact` selects | seconds |
+| PR (required) | `pull_request`, and `push` to `main` after a merge | The deterministic lanes the impact report selects, including `check:agent-flow` and `check:agent-e2e`; coverage is reported, not blocking | no model, no provider, no secret, runs on an untrusted fork |
+| Full sweep | Daily (19:00 UTC) plus maintainer-triggered | Every deterministic lane with no path selection, plus module-graph health and `check:desktop-ui-smoke` | still no model, no secret |
+| Release | maintainer-run `bun run quality:release` (**not** `release-desktop.yml`) | Everything above, plus native/packaging smoke and maintainer-authorized live provider baselines | live models only here, only with explicit authorization |
 
-注意：`release-desktop.yml` 按设计**不跑任何质量门禁**——打 tag 不应被 `bun run verify` 阻塞，`scripts/pr/release-workflow.test.ts` 有守卫测试锁定这一点。因此发版前的质量证据来自「合并进来的那些 PR」+ 维护者手动跑的全量层 + `quality:release`。全量层每天跑一次（2026-10 维护者决定），频率写死在 `pr-quality-workflow.test.ts` 里，改频率需要维护者决定。
+Note: `release-desktop.yml` deliberately runs no quality gate — tagging must not be blocked by `bun run verify`, and `scripts/pr/release-workflow.test.ts` guards that decision. Release-time evidence therefore comes from the PRs that were merged, plus whatever full sweeps the maintainer ran, plus the manual `quality:release`. The full sweep runs once a day (maintainer decision, 2026-10); the frequency is pinned in `pr-quality-workflow.test.ts`, so changing it is a maintainer decision too.
 
-分层原则：**PR 只跑改动能影响到的范围**，因此它天然无法覆盖"没有 PR 碰过的检查"和"只有全套一起跑才暴露的问题"——这两个盲区交给每天的全量层；**真实模型/额度只出现在 Release 与维护者手动 smoke**，任何贡献者在没有 provider 的情况下都必须能跑通 PR 层的全部门禁。
+The split follows from what each tier can prove. A per-PR gate only ever covers what the diff reaches, so it is structurally blind to checks no recent PR selected and to failures that only appear when the whole suite runs together — the daily full sweep closes both. Live model quota is spent only at release time, so every contributor can pass the required gate with no provider at all.
 
-## 普通 PR 的影响面检查
+## Path-Aware PR Checks
 
-先让仓库按变更路径列出需要运行的检查：
+First ask the repository which deterministic checks match the changed paths:
 
 ```bash
 bun run check:impact
 ```
 
-选择是**依赖感知**的：除了改动文件自身的路径前缀，还会把「谁 import 了这些文件」纳入检查范围（`scripts/pr/module-graph.ts`）。这修掉了纯前缀路由的漏检，例如改 `src/shared/modelReasoning.ts` 会选中 `check:desktop`（`desktop/src/lib/runtimeSelection.ts` 直接 import 它），改 `desktop/src/lib/browserSafePort.ts` 会选中 `check:native`（`desktop/electron/services/sidecarManager.ts` import 它，而 `desktop/tsconfig.json` 并不编译 `desktop/electron/`）。报告的 `## Cross-surface impact` 会指名是哪个 importer 触发了额外检查。
+Selection is **import-aware**. Besides the changed paths themselves, the router adds every surface that imports a changed file (`scripts/pr/module-graph.ts`). This closes holes that prefix-only routing could not see: editing `src/shared/modelReasoning.ts` now selects `check:desktop` because `desktop/src/lib/runtimeSelection.ts` imports it, and editing `desktop/src/lib/browserSafePort.ts` now selects `check:native` because `desktop/electron/services/sidecarManager.ts` imports it while `desktop/tsconfig.json` does not compile `desktop/electron/`. The report's `## Cross-surface impact` section names the importer behind each extra check.
 
-依赖图只**放宽检查选择**，不影响 area 标签和任何 blocking 规则——改一个 hub 文件不会因此要求你为没碰过的文件补测试。图构建失败时会选中全部 surface 并打印告警，不会静默退回前缀路由。
+The graph only widens *check selection*. Areas, labels, and every blocking rule stay scoped to the actual diff, so editing a hub file never demands tests for files you did not touch. If the graph cannot be built, the run selects every surface and says so rather than silently reverting to prefix routing.
 
-## 无模型的端到端 Agent 门禁
+## Deterministic Agent Gate (no model required)
 
 ```bash
-bun run check:agent-flow       # 真实 server + 真实 WebSocket + mock CLI
-bun run check:agent-e2e        # 真实 server + 真实 CLI agent 循环 + mock LLM，再跑一遍录制回放
-bun run check:agent-replay     # 只跑录制回放
-bun run check:desktop-ui-smoke # 真实桌面 UI + 真实权限对话框 + mock CLI
+bun run check:agent-flow       # real server + real WebSocket + mock CLI
+bun run check:agent-e2e        # real server + real CLI agent loop + mock LLM, then recorded-traffic replay
+bun run check:agent-replay     # recorded-traffic replay only
+bun run check:desktop-ui-smoke # real desktop UI + real permission dialog + mock CLI
 ```
 
-三条通道都不需要 provider、凭据或公网。
+None of them needs a provider, credentials, or the public network.
 
-`check:agent-e2e` 只假一个模型：本机回环起一个 Anthropic 兼容端点（`scripts/quality-gate/mock-llm/`），通过桌面端「新增服务商」同一个 API 注册成 provider，真实 CLI 照常跑 agent 循环、真实工具改真实（临时）磁盘。脚本化模型对自然语言提示做出模型式的反应，所以它和 `check:agent-flow:live` 共用同一份场景（`agent-flow/liveScenarios.ts`）：mock 证明管线，live 证明真模型也落到同样结果。另有只有 mock 能确定性断言的场景——工具输出真的回传给了模型（nonce 核对）、拒绝授权以错误结果回到模型、停止生成真的掐断了上游连接、上游报错后会话还能继续。改 agent 循环、工具、权限、provider 接线时，新增行为优先在这里加场景，而不是只写单元测试。
+`check:agent-e2e` fakes only the model: a loopback Anthropic-compatible endpoint (`scripts/quality-gate/mock-llm/`) is registered as a provider through the same API as the desktop "add provider" form, and the real CLI runs its real agent loop with real tools on a real (throwaway) disk. The scripted model reacts to plain-language prompts the way a model would, so it shares one scenario catalog with `check:agent-flow:live` (`agent-flow/liveScenarios.ts`): the mock proves the plumbing, the live lane proves a real model lands on the same outcome. Mock-only scenarios assert what only the upstream side can see — the tool's output really went back to the model (nonce check), a denied permission reaches the model as an error result, stopping really closes the upstream connection, and the session recovers after an upstream error. When you change the agent loop, tools, permissions, or provider wiring, add a scenario here rather than only a unit test.
 
-手写的 mock 只能流出作者想象中的模型输出：用量固定、工具参数一次给全、没有 thinking、没有 OpenAI 格式。所以 `check:agent-e2e` 还会跑流量回放（`scripts/quality-gate/replay/`）：维护者用真实的 DeepSeek Flash 把场景跑一遍，把上游流量录制成 `cassettes/*.json` 提交进仓库；CI 用回放服务器把这些录制流量原样喂给真实 server 和真实 CLI，不联网、不需要凭据。录制下来的是真实形态：thinking 和签名、切成很多片的工具参数（Grep/Read/Edit/Bash）、一轮并行调用多个工具、工具失败后模型自行纠正、大段命令输出、子 Agent 自己的工具循环（含两个子 Agent 并行）、项目 MCP 服务器的工具、图片附件（用 DeepSeek Flash 的视觉版录制）、Agent Teams 从队长出方案、批准、两个成员先后干活到汇报和收尾的完整流程、长对话里的自动压缩和手动 `/compact`、用户停止时截断的流、中文对话，以及经过 server 代理转换的 OpenAI Chat 流（含 reasoning 和中断）。
+A hand-written mock can only stream what its author imagined a model sends: fixed usage, tool input in one piece, no thinking, no OpenAI format. So `check:agent-e2e` also runs a replay lane (`scripts/quality-gate/replay/`). A maintainer runs each scenario once against real DeepSeek Flash and commits the recorded upstream traffic as `cassettes/*.json`; CI serves it back to the real server and real CLI with no network and no credentials. What it replays is the real shape: thinking with signatures, tool input split across many fragments (Grep/Read/Edit/Bash), several tools called in one reply, failed tool calls the model recovers from, large command output, a subagent's own tool loop (also two subagents in parallel), a project MCP server's tool, an image attachment (recorded with DeepSeek Flash's vision variant), an agent team from the lead's plan through approval, two members working in turn, their reports, and shutdown, automatic compaction in a long conversation as well as `/compact`, a stream cut short by the user's stop, a Chinese conversation, and OpenAI Chat chunks through the server's proxy (with reasoning and an interrupt).
 
-- **匹配规则**：请求按队列依次对应录制流量。每个 agent 循环（主 agent、子 Agent、团队成员）按启动它的第一条用户消息各自成一个队列，严格比对模型、stream、最后一条消息的角色、用户输入文本，以及工具结果是否正好回应上一轮的工具调用（并行工具按完成顺序回传，只比对集合）；对不上就返回 400 `replay_mismatch`，并在 `artifacts/agent-e2e/replay/<format>/<id>.report.json` 写出字段级差异。标题这类不带工具的旁路请求尽量回放，录制流量里没有就给占位回复，不判失败。
-- **运行时差异**：临时工作目录、沙箱配置目录、项目目录名、会话 ID、日期和临时目录在录制流量里存成 `{{WORK_ROOT}}` 这类占位符，回放时换成本次运行的值；路径被切进多个分片也能正确还原。应用按时钟现生成、回复又必须原样引用的值（例如团队成员关停请求的 ID）存成 `{{V1}}` 这类学习位，回放时从第一个带它的请求里学到本次的值，再填进后面的回复。Agent Teams 的消息合并依赖时序，这个场景按录制时的模型延迟和流速回放，其余场景压缩回放节奏。
-- **漂移**：工具列表或 `max_tokens` 变了但流程仍能对上时，只写进 `drift.md` 提醒，不判失败。系统提示词和工具 schema 带操作系统、shell 和日期，录制机器和 CI 本来就不同，不参与比对。
-- **重录**：行为确实变了（例如改了 prompt 导致模型走了不同的工具路径），在本机运行 `bun run quality:record-cassettes -- --allow-live --only <id>`。它从桌面端已保存的 DeepSeek provider 读取 key，只放在录制代理的内存里，沙箱拿到的是假 key；录完会立刻回放一次自检，录制流量里出现 key、真实 home 路径或临时目录路径会直接拒收。录制需要真实额度，永远不进 CI。
+- **Matching**: requests take recorded interactions in order, per queue. Each agent loop (the main agent, a subagent, a teammate) is its own queue, keyed by the first user message that started it, matched strictly on model, stream mode, the last message's role, the user's text, and whether the tool results answer exactly the previous reply's tool calls (parallel tools return in completion order, so only the set is compared). A mismatch returns a 400 `replay_mismatch` and writes a field-level diff to `artifacts/agent-e2e/replay/<format>/<id>.report.json`. Tool-less side calls such as a session title are replayed when recorded and otherwise get a placeholder reply, without failing.
+- **Run-specific values**: the throwaway work dir, the sandbox config dir, the project's directory name, session ids, the date, and the temp dir are stored as placeholders such as `{{WORK_ROOT}}` and expanded for each run, also when a path was streamed across several fragments. Values the app mints from the clock that a reply must quote back verbatim (a teammate shutdown request id) are stored as learned slots such as `{{V1}}`: a replay learns this run's value from the first request that carries it and fills it into later replies. Message batching in an agent team depends on timing, so that scenario replays the recorded model latency and stream timing; the others replay at a compressed pace.
+- **Drift**: a changed tool list or `max_tokens` that still replays is noted in `drift.md`, not failed. The system prompt and tool schemas carry the OS, shell, and date, which differ between the recording machine and CI, so they are not compared.
+- **Re-recording**: when behaviour really changed (a prompt edit sends the model down a different tool path), run `bun run quality:record-cassettes -- --allow-live --only <id>` locally. It reads the key of the DeepSeek provider saved in the desktop app and keeps it in the recording proxy's memory; the sandbox gets a fake key. Each new cassette is replayed once as a self-check, and a recording containing the key, the real home path, or a temp-dir path is rejected. Recording spends real quota and never runs in CI.
 
-`check:agent-flow` 覆盖新建 Session → 选运行时 → 首轮流式 → 工具调用 → 权限批准/拒绝 → 工具失败 → API 错误 → 中断 → 断线重连权限重放 → 会话恢复。`check:desktop-ui-smoke` 在真实浏览器里点真实的 Allow 按钮，需要 `agent-browser` 与已安装的 desktop 依赖，缺失时会打印原因并跳过。
+ `check:agent-flow` covers session creation, runtime selection, first-turn streaming, tool execution, permission allow/deny, tool failure, API error, interrupt, reconnect permission replay, and session recovery. `check:desktop-ui-smoke` clicks the real Allow button in a real browser; it needs `agent-browser` and installed desktop dependencies and skips with a printed reason when either is missing.
 
-`agent-browser` 只属于这条已提交的 lane（在 Linux CI 上以 headless 方式运行）以及维护者手动执行的 `desktop/scripts/e2e-*-agent-browser.sh`。临时的浏览器操作（手动验证、截图、探索性 UI 检查）请走 `ego-browser` skill，不要因为仓库里出现 `agent-browser` 就把它当通用浏览器工具。
+`agent-browser` belongs to that committed lane (which runs headless on Linux CI) and to the maintainer-run `desktop/scripts/e2e-*-agent-browser.sh` scripts. For ad-hoc browser work (manual verification, screenshots, exploratory UI checks), use the `ego-browser` skill instead; do not treat `agent-browser` as a general-purpose browser tool just because it appears in the repository.
 
-所有会启动真实 server 的 quality-gate lane 都跑在沙箱配置目录里（`scripts/quality-gate/sandbox.ts`），并在结束时校验没有写过开发者真实的 `~/.claude`；写了就判定 lane 失败。
+Every quality-gate lane that boots the real server runs against a sandbox config dir (`scripts/quality-gate/sandbox.ts`) and fails if it wrote to the developer's real `~/.claude`.
 
-开发时运行 impact report 选中的窄命令即可。需要声明 PR-ready 或完整验证时，直接使用统一入口，无需先单独执行其全部 lane：
+Run the selected focused commands while developing. For PR-ready or full validation, use the unified entrypoint directly without first running all of its lanes separately:
 
 ```bash
 bun run verify
 ```
 
-`bun run verify` 等价于 `bun run quality:pr`，会按改动范围执行被选中的 policy、desktop、server、adapter、native、provider contract、chat contract、persistence、docs 和 coverage lane。它不调用真实大模型。小范围外部贡献者不需要在本机运行无关模块；GitHub CI 会再次执行精确的 path-aware gate。
+`bun run verify` is equivalent to `bun run quality:pr`. It runs the selected policy, desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes, without calling real models. Small external contributions do not need to run unrelated modules locally; GitHub CI runs the exact path-aware gate again.
 
-主质量报告会内嵌当前测试范围、结果矩阵、覆盖率摘要，并链接完整 coverage/JUnit/log artifact：
+The main quality report embeds the current test scope, result matrix, coverage summary, and links to the full coverage/JUnit/log artifacts:
 
 ```text
 artifacts/quality-runs/<timestamp>/report.md
@@ -113,148 +113,148 @@ artifacts/coverage/<timestamp>/coverage-report.md
 artifacts/coverage/<timestamp>/coverage-report.json
 ```
 
-PR 描述里请贴出你实际运行的命令和 summary。`quality:pr` / `quality:verify` 仍然保留给习惯显式质量命名的用户，但推荐文档和 AI prompt 都使用 `bun run verify`。
+Include the commands you ran and the report summary in your PR description. `quality:pr` / `quality:verify` remain available for contributors who prefer explicit quality command names, but docs and AI prompts should prefer `bun run verify`.
 
-覆盖率在 PR 上只报告、不阻塞合并：`coverage-checks` 作为独立 check 显示结果，不在 `pr-quality-gate` 的 `needs` 里，必过状态不等它跑完（它约 25 分钟）；它仍然执行四件事：按源码口径统计覆盖率、执行 baseline ratchet、报告 75-80%+ 的目标差距，并对新增/变更的可执行生产代码行执行 changed-line coverage。当前 baseline 记录在 `scripts/quality-gate/coverage-baseline.json`，CI 会优先对比 base branch 的 baseline，新增 PR 不允许覆盖率下降超过允许窗口。`coverage-baseline.json` 或 `coverage-thresholds.json` 变更必须由维护者加 `allow-coverage-baseline-change` 后才能合并。Quarantine 只用于维护者的 baseline/release 追踪，不得隐藏确定性的 provider/chat 契约测试；当前普通 PR gate 不依赖 quarantine 才能通过。
+Coverage is reported on pull requests but never blocks a merge: `coverage-checks` reports as its own check and is not in `pr-quality-gate`'s `needs`, so the required status does not wait for its ~25 minutes. It still does four things: measures source-only coverage, enforces the baseline ratchet, reports target gaps against 75-80%+ maintained-area goals, and enforces changed-line coverage for new or modified executable production lines. The current baseline lives in `scripts/quality-gate/coverage-baseline.json`, and CI compares against the base branch baseline when available. New PRs must not lower coverage beyond the allowed window. Changes to `coverage-baseline.json` or `coverage-thresholds.json` require the maintainer-only `allow-coverage-baseline-change` label. Quarantine is reserved for maintainer baseline/release tracking and must never hide deterministic provider/chat contract tests; the normal PR gate does not depend on quarantine to pass.
 
-## AI Coding Agent 修复循环
+## AI Coding Agent Fix Loop
 
-任务的完成标准是实现目标行为、运行当前 diff 必需的验证，并修复由本次改动造成的失败。任务范围内的本地编辑、隔离 fixture 检查和相关失败修复无需逐步请求批准；提交、推送、发布、仓库设置及真实模型额度仍遵循根 `AGENTS.md` 的授权边界。
+Completion means implementing the intended behavior, running the checks required for the current diff, and fixing failures caused by the change. Scoped local edits, isolated fixture checks, and related repairs do not need approval at each step. Commits, pushes, releases, repository settings, and live-model quota still follow the root `AGENTS.md` authorization boundaries.
 
-`bun run check:impact` 用于确定检查范围；普通任务运行选中的检查，需要 PR-ready/full validation 时直接使用 `bun run verify`，不必先单独重复执行其全部 lane。修复期间先重跑受影响的窄检查，交付时补齐最终 diff 的所需证据。没有后续改动或未解决风险时，不要反复运行已经通过的检查。无关的现有失败或环境阻塞应准确报告，而不是为了让结果变绿擅自扩大修改范围。
+Use `bun run check:impact` to determine the check scope. Run the selected checks for ordinary tasks; use `bun run verify` directly for PR-ready/full validation without first running all of its lanes separately. During repairs, rerun affected focused checks, then complete the evidence needed for the final diff. Do not repeat passing checks without subsequent edits or unresolved risks. Report unrelated existing failures or environment blockers instead of expanding the change merely to make everything green.
 
-需要诊断失败时，按失败类型查阅相应证据：
+When a check fails, consult the evidence for that failure:
 
-| 失败类型 | 证据与处理 |
+| Failure | Evidence and action |
 | --- | --- |
-| Lane 失败 | `artifacts/quality-runs/<timestamp>/report.md` 的 Summary / Result Matrix，以及 `logs/<lane>.log` |
-| Path-aware PR checks | 核对同区域测试、CLI core 和 coverage policy；维护者 override 需要明确决定 |
-| Coverage gate | `artifacts/coverage/<timestamp>/coverage-report.md` 或 `.json`；修复 `changedLines.failures` / `failures`，`targetGaps` 是技术债提示 |
-| 构建、类型、lint、文档或 native | 修复对应日志指出的本次变更问题，重跑受影响检查 |
+| Failed lane | Summary / Result Matrix in `artifacts/quality-runs/<timestamp>/report.md` and `logs/<lane>.log` |
+| Path-aware PR checks | Check same-area tests, CLI core, and coverage policy; maintainer overrides require an explicit decision |
+| Coverage gate | `artifacts/coverage/<timestamp>/coverage-report.md` or `.json`; address `changedLines.failures` / `failures`, while `targetGaps` signal technical debt |
+| Build, types, lint, docs, or native | Fix issues caused by the change identified in the relevant log and rerun affected checks |
 
-只有最终 diff 的 `bun run verify` 报告通过，才能声明 PR-ready/full validation。不要通过降低 coverage baseline/threshold 或改写测试预期掩盖失败。
+Claim PR-ready/full validation only after `bun run verify` passes for the final diff. Do not lower coverage baselines/thresholds or rewrite test expectations to hide failures.
 
-## 回归测试设计
+## Regression Test Design
 
-同区域测试文件是门禁的最低信号，测试还需要证明实际行为：
+A same-area test file is the gate's minimum signal; tests also need to prove behavior:
 
-- **驱动状态迁移。** 需要验证迁移时，通过 `handleServerMessage`、真实 store action 或用户事件产生状态，避免直接 `setState` 写出本应由迁移生成的结果。初始化 fixture 仍可直接设置状态。
-- **断言行为不变量。** 断言用户应看到哪个会话或模型的数据，而不是抄下当前屏幕的字符串；测试输入和预期应由预期行为契约支撑，不为掩盖失败而修改。
-- **覆盖丢弃与保留两个方向。** 验证去重、合并和过滤规则应丢弃及应保留的情况。消息去重尤其要拦住 replay、保留真实重复；透传上游 `uuid` / `toolUseId` 等身份，避免用文本猜测身份。
-- **跨边界测试连接点。** server、store、component 分别通过并不能证明消息真正驱动了 UI；通过真实入口验证有风险的连接，避免 mock 被测模块本身。
+- **Drive state transitions.** When testing a transition, produce the state through `handleServerMessage`, real store actions, or user events instead of directly assigning the expected result with `setState`. Direct state setup is still appropriate for fixture initialization.
+- **Assert behavioral invariants.** Check which session or model the displayed data belongs to, rather than copying today's screen text. Test inputs and expectations must follow the intended behavior contract; do not change them to hide failures.
+- **Cover both dropping and keeping.** Test what a deduplication, merging, or filtering rule should discard and retain. Message deduplication in particular must reject replays and preserve legitimate repeats; forward upstream identities such as `uuid` / `toolUseId` instead of guessing identity from text.
+- **Test the connections across boundaries.** Separate green server, store, and component tests do not prove that messages drive the UI. Exercise risky connections through real entry points and do not mock the module under test.
 
-覆盖率报告也有边界：`desktop/vitest.config.ts` 只采集 `src/**`，不包含 Electron main process。仓库现有 Bun coverage baseline 中分支总数为 0，`coverage.ts` 把 `0/0` 显示为 100%；这不代表测到了全部分支。查看当前配置和报告，不把历史覆盖率数字当作新改动的证明。
+Coverage reports have limits: `desktop/vitest.config.ts` collects only `src/**`, excluding the Electron main process. The repository's current Bun coverage baseline has zero branch records, and `coverage.ts` displays `0/0` as 100%; that does not prove all branches were exercised. Inspect current configuration and reports instead of using historical coverage figures as evidence for a new change.
 
-### 覆盖率参考
+### Coverage References
 
-外部参考口径：
+External reference points:
 
-- [Google Testing Blog](https://testing.googleblog.com/2020/08/code-coverage-best-practices.html)：60% acceptable、75% commendable、90% exemplary；changed/per-commit coverage 90% 是合理下限。
-- [Microsoft Visual Studio / Azure DevOps 文档](https://learn.microsoft.com/en-us/visualstudio/test/using-code-coverage-to-determine-how-much-code-is-being-tested)：团队通常以约 80% 为目标，典型项目要求可为 75%，生成代码可以放宽。
-- [ChromiumOS EC](https://chromium.googlesource.com/chromiumos/platform/ec/+/main/docs/code_coverage.md)：新增或变更行要求至少 80% 覆盖。
+- [Google Testing Blog](https://testing.googleblog.com/2020/08/code-coverage-best-practices.html): 60% acceptable, 75% commendable, 90% exemplary; 90% is a reasonable lower threshold for changed/per-commit coverage.
+- [Microsoft Visual Studio / Azure DevOps docs](https://learn.microsoft.com/en-us/visualstudio/test/using-code-coverage-to-determine-how-much-code-is-being-tested): teams typically target about 80%, typical project requirements can be 75%, and generated code may be relaxed.
+- [ChromiumOS EC](https://chromium.googlesource.com/chromiumos/platform/ec/+/main/docs/code_coverage.md): new or changed lines require at least 80% coverage.
 
-## 维护 Agent 指导
+## Maintaining Agent Instructions
 
-根 `AGENTS.md` 保留项目约束与入口，专项规则留在对应目录，解释和示例按需放到文档。共享指导应适用于贡献者使用的不同模型；能力升级后重新核对重复流程和宽泛停止条件，不能据此跳过现行安全或 CI 契约。这次整理参考了 Eric Provencher 的 [Rethinking skills and prompts for GPT-6 Astra](https://x.com/pvncher/status/2095991462416490862)（2026-09-04）。
+Keep project constraints and entry points in root `AGENTS.md`, specialized rules near the code, and explanations/examples in on-demand documentation. Shared guidance must work for contributors using different models. Revisit duplicated workflows and broad stopping conditions as capabilities change, while preserving current safety and CI contracts. This cleanup draws on Eric Provencher's [Rethinking skills and prompts for GPT-6 Astra](https://x.com/pvncher/status/2095991462416490862) (2026-09-04).
 
-仓库技能的描述只写适用任务和必要的区分信息，操作细节放正文或引用文件。多工作流技能用短入口路由；避免为了覆盖更多关键词而扩大触发范围。模型默认值、工具格式和压缩行为属于产品实现，更新相关文档前应先核对源码。
+Repository skill descriptions should identify the applicable task and necessary distinctions; put operational detail in the body or referenced files. Use a short router for multiple workflows and avoid broadening triggers just to match more keywords. Model defaults, tool formats, and compaction behavior describe product implementation, so check the source before updating those docs.
 
 ## Feature Quality Contract
 
-所有新功能、bugfix 和行为变化都必须带着可验证证据交付。这条规则同时约束人和 AI Coding Agent：
+Every feature, bugfix, and behavior change must ship with verifiable evidence. This rule applies to human authors and AI coding agents:
 
-- 先声明变更面：`desktop`、`server`、`adapter`、`native`、`docs`、`provider/runtime`、`agent-loop` 或 `release`。
-- 可执行 JS/TS 生产代码变更必须同 PR 带同区域测试；`scripts/pr/change-policy.ts` 分别检查 `desktop/src/`、`src/server/`、其余 `src/` 和 `adapters/` 四个区域，除非维护者显式加 `allow-missing-tests`。文案或 CSS 等非可执行文件不因这一规则单独要求新增测试，仍需完成 impact 选中的检查。
-- 纯逻辑写单元测试；server/API/provider/runtime 写 API 或 request-shape 测试；桌面 UI/store/API 写 Vitest/Testing Library；跨 UI、WebSocket、provider proxy、native sidecar、发布打包的用户流程要补 E2E 或桌面 UI smoke。
-- agent loop、工具调用、provider 路由、模型选择、文件编辑、权限、会话恢复、桌面聊天改动，PR 内必须有 mock/fixture 测试；live smoke 或 baseline 仅在确定性检查通过且维护者明确授权额度后运行。发现本机 provider 不代表获得授权，未运行时如实说明。
-- 覆盖率是功能的一部分。本项目按 Google/Microsoft 风格执行：生成物/构建产物不计入产品覆盖率，维护中的产品区域要逐步达到 75-80%+，新增或变更的可执行生产代码行必须满足 `coverage-thresholds.json` 里的 changed-line coverage 门槛。
-- 不要为了过门禁随便降低 `coverage-baseline.json` 或 `coverage-thresholds.json`；确实要改时必须有 `allow-coverage-baseline-change` 和原因。历史低覆盖区域是技术债，新 PR 至少要让触达区域更好。
-- PR 描述必须写清楚：改了哪些文件、补了哪些测试、coverage 报告路径、E2E/live 报告路径或 blocker、剩余风险。
+- Name the changed surface first: `desktop`, `server`, `adapter`, `native`, `docs`, `provider/runtime`, `agent-loop`, or `release`.
+- Executable JS/TS production changes must include same-area tests in the same PR. `scripts/pr/change-policy.ts` checks four areas separately: `desktop/src/`, `src/server/`, the rest of `src/`, and `adapters/`, unless a maintainer explicitly applies `allow-missing-tests`. Non-executable files such as prose or CSS do not independently require new tests under this rule; all impact-selected checks still apply.
+- Pure logic needs unit tests. Server/API/provider/runtime behavior needs API or request-shape tests. Desktop UI/store/API behavior needs Vitest or Testing Library coverage. Cross-boundary user flows through UI, WebSocket, provider proxying, native sidecars, or release packaging need E2E or desktop UI smoke.
+- Agent loop, tool execution, provider routing, model selection, file editing, permissions, session resume, and desktop chat changes need mock/fixture tests in PR. Run live smoke or baseline only after deterministic checks pass and a maintainer explicitly authorizes quota use. Finding a local provider is not authorization; report when live checks were not run.
+- Coverage is part of the feature. This project follows a Google/Microsoft-style policy: generated/build output is not counted as product coverage, maintained product areas should move toward 75-80%+, and new or changed executable production lines must pass the changed-line coverage threshold in `coverage-thresholds.json`.
+- Do not lower `coverage-baseline.json` or `coverage-thresholds.json` just to pass the gate; real baseline/threshold changes require `allow-coverage-baseline-change` and a reason. Legacy low-coverage areas are debt; new PRs must leave touched areas better than they found them.
+- The PR description must record changed files, tests added, coverage report path, E2E/live report path or blocker, and remaining risk.
 
-## 本机 Push 前提醒
+## Local Pre-Push Reminder
 
-push 不再自动运行本地质量门禁。需要质量检查时，请手动运行：
+push no longer runs a local quality gate. Run checks manually when needed:
 
 ```bash
 bun run quality:push
 ```
 
-`bun run quality:push` 复用 PR gate 的 impact/policy/路径检查，但默认跳过耗时的 coverage lane；完整覆盖率仍保留在 `bun run verify`、`bun run quality:pr` 和 CI。
+`bun run quality:push` reuses the PR gate impact, policy, and path-aware checks, but skips the expensive coverage lane by default; full coverage remains in `bun run verify`, `bun run quality:pr`, and CI.
 
-仍然可以安装本机 pre-push hook，但它只打印非阻塞提醒，不会卡住 `git push`：
+You can still install the local pre-push hook, but it only prints a non-blocking reminder and never blocks `git push`:
 
 ```bash
 bun run hooks:install
 ```
 
-拥有可信仓库环境和模型额度的维护者可以手动运行真实 provider smoke 和桌面 agent-browser smoke：
+Maintainers with a trusted repository environment and model quota can run real provider smoke and desktop agent-browser smoke manually:
 
 ```bash
 bun run quality:providers
 bun run quality:smoke -- --provider-model minimax:main:minimax-main
 ```
 
-需要完整 live baseline 时使用：
+To run the full live baseline, use:
 
 ```bash
 bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:minimax-main
 ```
 
-## PR CI 合并门禁
+## PR CI Merge Gate
 
-`.github/workflows/pr-quality.yml` 会在 PR `opened`、`synchronize`、`reopened`、`ready_for_review`、`labeled`、`unlabeled` 时触发，合入 `main` 后还会按这次 push 的改动范围再跑一次（标签类例外只在 PR 上判定，不会在 main 上重新阻塞）。`scope-plan` 不安装依赖，只负责稳定地产生影响面计划；`policy-enforcement` 独立安装锁定依赖并执行 policy，因此 policy 失败也不会吞掉产品测试结果。产品 job 只依赖 `scope-plan`，按路径选择 desktop、server、adapter、native、provider contract、chat contract、persistence、docs 和 coverage lane。最后的 `pr-quality-gate` 会严格核对每个 job：选中的必须 success，未选中的必须 skipped，cancelled 或缺失结果都不能误判为通过。server 和 desktop 两条最长的 lane 在 CI 里用 `--shard=<i>/<n>` 拆到多个 runner 并行，只为缩短墙钟时间：分片合起来恰好跑完整套检查（desktop 第一片顺带 lint、最后一片顺带 build），任一分片失败该 job 即失败；本地和每日全量不分片。
+`.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events, and again after each merge to `main`, scoped to what that push changed (label-based exceptions are judged on the PR only and never re-block `main`). `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success. The two longest lanes, server and desktop, are split across runners with `--shard=<i>/<n>` purely to cut wall time: the shards together run the whole check (the first desktop shard also lints, the last also builds), and any failing shard fails the job. Local runs and the daily full sweep are not sharded.
 
-`main` 的分支保护把 `pr-quality-gate` 设为 required status check，并且对管理员同样生效：红的 PR 谁都合不进去，所以发版也走 PR（见「发版步骤」）。CODEOWNER 自己提的 PR 不需要 `allow-cli-core-change` 标签，外部贡献者改 CLI 核心路径仍需维护者加标签。本机 hook 只做提醒，真正阻止低质量 merge 的是 PR gate。
+Branch protection on `main` requires the `pr-quality-gate` status check and applies to admins too: nobody can merge a red PR, so releases also go through a PR (see "Release steps"). A PR authored by a CODEOWNER needs no `allow-cli-core-change` label; an external contributor's CLI core change still needs the maintainer's label. The local hook only reminds; the PR gate is what blocks low-quality merges.
 
-### 门禁红了怎么办
+### When the gate is red
 
-门禁只有在「绿 = 可以合」时才有用，所以 `main` 必须一直是绿的：
+The gate is only useful while green means mergeable, so `main` has to stay green:
 
-- **你改了行为，测试红了**：门禁在正常工作。在同一个 PR 里更新测试，说明为什么旧断言不再成立。
-- **红的不是你的改动造成的**：先看 `main` 上最近一次 PR Quality（push）和全量是否也红。是的话单独开 PR 修，修不了就进 `scripts/quality-gate/quarantine.json`（写明负责人和到期日，`check:quarantine` 会在到期后报错），不要绕过门禁合并。
-- **偶发失败（flaky）**：`check:server` 会把失败的文件单独重跑一次，日志里标成 `FLAKY`（单独跑能过）或 `FAILED`（单独跑也挂），但两种情况门禁都是红的。`FLAKY` 说明是竞态，去修竞态本身（常见原因是断言了「最后一个请求」或依赖墙钟时间），不要给测试加长超时或放宽断言来掩盖。
-- **门禁本身要调整**：改 `scripts/pr/change-policy.ts`、workflow 和对应测试（`check:policy`），保持 `pr-quality-gate` 这个汇总检查名不变，分支保护就不用动。
+- **You changed behavior and a test went red**: the gate is working. Update the test in the same PR and say why the old assertion no longer holds.
+- **The failure is not from your change**: check whether the latest PR Quality (push) run and the full sweep on `main` are red too. If so, fix it in a separate PR, or quarantine it in `scripts/quality-gate/quarantine.json` with an owner and a review date (`check:quarantine` fails once it expires). Do not merge around the gate.
+- **Intermittent failure (flaky)**: `check:server` re-runs each failed file once, alone, and labels it `FLAKY` (passes alone) or `FAILED` (fails again); the gate is red either way. `FLAKY` means a race: fix the race itself (a common cause is asserting on "the last request" or on wall-clock time). Do not hide it with longer timeouts or looser assertions.
+- **The gate itself needs to change**: edit `scripts/pr/change-policy.ts`, the workflow, and their tests (`check:policy`). Keep the `pr-quality-gate` check name stable so branch protection does not need to change.
 
-## 按改动范围补充测试
+## Area-Specific Checks
 
-根据你改动的区域补充运行：
+Run the checks that match the files you changed:
 
 ```bash
-bun run check:server      # 服务端 API、WebSocket、provider、会话等测试
-bun run check:desktop     # 桌面端 lint、Vitest、生产构建
-bun run check:adapters    # IM adapter 测试
-bun run check:native      # 桌面 sidecar、Electron host 与 package-smoke 检查
-bun run check:provider-contract # Provider/runtime/proxy 的离线契约测试
-bun run check:chat-contract     # WebSocket、会话与桌面 chat store 契约测试
-bun run check:persistence-upgrade # 持久化迁移和旧 fixture 兼容性
-bun run check:docs        # 独立安装、构建并检查 site/ React 文档站
-bun run check:quarantine  # 维护者 baseline/release quarantine 审计
-bun run check:coverage    # root、desktop、adapters 覆盖率报告和 ratchet 门禁
+bun run check:server      # Server API, WebSocket, providers, sessions, and related tests
+bun run check:desktop     # Desktop lint, Vitest, and production build
+bun run check:adapters    # IM adapter tests
+bun run check:native      # Desktop sidecars, Electron host, and package-smoke checks
+bun run check:provider-contract # Offline provider/runtime/proxy contract tests
+bun run check:chat-contract     # WebSocket, session, and desktop chat-store contracts
+bun run check:persistence-upgrade # Persistence migrations and old-fixture compatibility
+bun run check:docs        # Isolated install, build, and validation for the site/ React docs
+bun run check:quarantine  # Maintainer baseline/release quarantine audit
+bun run check:coverage    # Root, desktop, and adapter coverage reports plus ratchet enforcement
 ```
 
-如果只改了很窄的文件，先跑对应的定向测试即可；只有在声明 PR-ready/full validation 时才需要本地再跑 `bun run verify`，托管 CI 仍会执行所有被选中的必需 lane。
+Focused tests are the normal development loop. Run `bun run verify` locally when claiming PR-ready/full validation; hosted CI still executes every selected required lane.
 
-可执行 JS/TS 生产代码改动必须带对应测试文件；同区域划分见上文 Feature Quality Contract 和 `scripts/pr/change-policy.ts`，缺失时会触发阻断。只有维护者确认不适合自动化测试时，才能使用 `allow-missing-tests`。覆盖率 baseline/threshold 变更同样需要维护者确认并加 `allow-coverage-baseline-change`。
+Executable JS/TS production changes must include matching tests. See the Feature Quality Contract above and `scripts/pr/change-policy.ts` for area boundaries; missing same-area tests block the change unless a maintainer applies `allow-missing-tests`. Coverage baseline/threshold changes are also blocked unless a maintainer applies `allow-coverage-baseline-change`.
 
-## 真实模型 Baseline
+## Live Model Baseline
 
-`quality:baseline` 用来跑真实 Coding Agent 任务：启动本地服务端、创建隔离 fixture、让模型通过聊天修代码、跑测试，并保存 transcript、diff、verification log 和报告。它还会对 provider 进行 live smoke：已保存或当前激活的 OpenAI-compatible provider 会验证连通性、proxy 转换和流式 proxy 结果；env-only provider smoke 只验证上游连通性和转换管线。
+`quality:baseline` runs real Coding Agent tasks: it starts the local server, creates isolated fixtures, asks a model through chat to fix code, runs tests, and saves transcripts, diffs, verification logs, and a report. It also runs provider live smoke: saved or active OpenAI-compatible providers validate connectivity, proxy conversion, and streaming proxy behavior; env-only provider smoke validates upstream connectivity and the transform pipeline.
 
-默认命令不会调用真实模型：
+The default baseline command does not call real models:
 
 ```bash
 bun run quality:baseline
 ```
 
-要真正跑模型，必须显式加 `--allow-live` 并选择本机 provider。
+To actually call models, pass `--allow-live` and choose a local provider.
 
-先列出本机可用 provider 和可复制参数：
+First list your local providers and copyable selectors:
 
 ```bash
 bun run quality:providers
 ```
 
-输出示例：
+Example output:
 
 ```text
 Saved providers:
@@ -264,19 +264,19 @@ Saved providers:
       --provider-model minimax:main:minimax-main
 ```
 
-复制输出里的参数运行 baseline：
+Copy one of the listed values:
 
 ```bash
 bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:minimax-main
 ```
 
-如果只需要跑 provider smoke 和桌面 agent-browser smoke，而不跑全部 baseline case，可以使用：
+To run only provider smoke plus desktop agent-browser smoke, use:
 
 ```bash
 bun run quality:smoke --provider-model minimax:main:minimax-main
 ```
 
-可以一次跑多个模型：
+You can run multiple models in one pass:
 
 ```bash
 bun run quality:gate --mode baseline --allow-live \
@@ -284,9 +284,9 @@ bun run quality:gate --mode baseline --allow-live \
   --provider-model minimax:main:minimax-main
 ```
 
-`provider` selector 来自桌面端「设置 → 服务商」里保存的本机配置。别人 clone 代码后不需要知道你的 provider UUID，也不需要使用你的供应商；他们可以在自己的桌面端添加 provider 后运行 `bun run quality:providers` 选择自己的模型。
+Provider selectors come from the providers saved in your local Desktop Settings > Providers page. Contributors do not need the maintainer's provider UUIDs or vendor accounts. They can add their own provider locally, run `bun run quality:providers`, and choose their own model.
 
-如果没有保存 provider，也可以用环境变量跑一条 unsaved provider smoke：
+If you do not have a saved provider, you can run one unsaved provider smoke with environment variables:
 
 ```bash
 QUALITY_GATE_PROVIDER_BASE_URL=https://example.com \
@@ -296,60 +296,60 @@ QUALITY_GATE_PROVIDER_API_FORMAT=openai_chat \
 bun run quality:gate --mode baseline --allow-live
 ```
 
-## 什么时候必须跑 Baseline
+## When To Run The Baseline
 
-以下改动在确定性 contract/E2E 通过后，建议由可信维护者补跑 live baseline：
+After deterministic contract/E2E checks pass, a trusted maintainer should run the live baseline for changes touching:
 
-- 桌面聊天、会话恢复、WebSocket、CLI bridge
-- provider/model/runtime 选择
-- 权限、工具调用、文件编辑、任务执行
-- agent-browser smoke、Computer Use、Skills、MCP
-- release 前或风险较大的跨模块重构
+- Desktop chat, session resume, WebSocket, or the CLI bridge
+- Provider, model, or runtime selection
+- Permissions, tool calls, file edits, and task execution
+- agent-browser smoke, Computer Use, Skills, or MCP
+- Release preparation or broad cross-module refactors
 
-来自 fork 的外部 PR 不会获得仓库 secrets，也不要求贡献者自费调用模型。请在 PR 里写明 `live model: not run (untrusted fork / no provider)`；高风险变更由维护者在合并或发版前补跑 live baseline。没有 live 证据不应让确定性 PR lane 产生随机失败。
+External PRs from forks do not receive repository secrets, and contributors are not expected to pay for model calls. Record `live model: not run (untrusted fork / no provider)` in the PR. A maintainer should add live evidence before merging or releasing high-risk changes; missing live evidence must not make deterministic PR lanes flaky.
 
-## Release 门禁
+## Release Gate
 
-发版前使用 release 模式：
+Before a release, run release mode:
 
 ```bash
 bun run quality:gate --mode release --allow-live --provider-model <selector>:main
 ```
 
-release 模式会组合 PR checks、baseline catalog、live baseline、native checks，并用当前平台 canonical release artifact 跑 `package-smoke --package-kind release`。发版报告同样写入 `artifacts/quality-runs/<timestamp>/`。`release-desktop.yml` 只负责构建与发布，不运行 `bun run verify`；发版前质量证据来自 PR 门禁及维护者显式运行的全量检查和 release gate。
+Release mode composes PR checks, baseline catalog validation, live baseline cases, provider smoke, native checks, and current-platform canonical release `package-smoke --package-kind release`. Reports are written to `artifacts/quality-runs/<timestamp>/`. `release-desktop.yml` builds and publishes artifacts without running `bun run verify`. Pre-release quality evidence comes from PR gates and explicitly run maintainer full checks and release gates.
 
-release 模式下 live lane 不允许静默跳过。缺少 provider、真实模型额度或外部账号时，门禁会失败，并要求在发版记录里明确 blocker。
+In release mode, live lanes are not allowed to be silently skipped. Missing providers, model quota, or external account access will fail the gate and must be recorded as a release blocker.
 
-## 发版与自动更新
+## Releases and Auto-Update
 
-桌面端版本号的唯一来源是 `desktop/package.json`。正式发布要求版本号、Git tag 和 `release-notes/vX.Y.Z.md` 三者严格一致。
+`desktop/package.json` is the single source of the desktop version number. A real release requires the version, the Git tag, and `release-notes/vX.Y.Z.md` to match exactly.
 
-应用内更新由 `electron-updater` 驱动，产物托管在 GitHub Releases：
+In-app updates are driven by `electron-updater`, with artifacts hosted on GitHub Releases:
 
-| 平台 | 安装/更新目标 | Metadata |
+| Platform | Install / update target | Metadata |
 |---|---|---|
-| macOS arm64 / x64 | `dmg` 首次安装，`zip` 供 Squirrel.Mac 更新 | `latest-mac.yml` |
+| macOS arm64 / x64 | `dmg` for first install, `zip` for Squirrel.Mac updates | `latest-mac.yml` |
 | Windows x64 / ARM64 | NSIS `.exe` | `latest.yml` |
-| Linux x64 | `.AppImage` 自动更新，`.deb`、`.rpm` 供手动安装 | `latest-linux.yml` |
-| Linux arm64 | `.AppImage` 自动更新，`.deb`、`.rpm` 供手动安装 | `latest-linux-arm64.yml` |
+| Linux x64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux.yml` |
+| Linux arm64 | `.AppImage` for updates, `.deb` and `.rpm` for manual install | `latest-linux-arm64.yml` |
 
-Release workflow 先在各平台 matrix 里生成 `latest*.yml`，把同名 metadata 临时改名为 `latest-<platform>.yml`，最后由 `scripts/release-update-metadata.ts` 合并回 electron-updater 期望的标准文件名。不要改成各 matrix job 直接发布 GitHub Release，否则 metadata 会互相覆盖。
+The release workflow generates `latest*.yml` inside each platform matrix job, renames colliding metadata to `latest-<platform>.yml`, and finally lets `scripts/release-update-metadata.ts` merge them back into the standard filenames electron-updater expects. Do not change this so each matrix job publishes the GitHub Release directly — the metadata files would overwrite each other.
 
-### 产物命名
+### Artifact names
 
-文件名面向下载的用户：`Claude-Code-Haha-<版本>-macOS-Apple-Silicon.dmg` / `-macOS-Intel.dmg`、`-Windows-x64-Setup.exe` / `-Windows-arm64-Setup.exe`、`-Linux-x64` / `-Linux-arm64` 加 `.AppImage`、`.deb`、`.rpm`。Mac 自动更新用的 zip 叫 `-macOS-arm64-update.zip` / `-macOS-x64-update.zip`。默认名写在 `desktop/package.json` 的 `mac`、`dmg`、`nsis`、`linux` 的 `artifactName` 里；dmg 的芯片名和 Linux 统一的 `x64` 由 release matrix 的 `builder_args` 逐行覆盖，因为 electron-builder 的 `${arch}` 在 Linux 上会按格式变成 `x86_64`、`amd64`、`aarch64`。这些覆盖值必须用单引号包住，否则 shell 会先展开 `${version}`。
+File names are written for the people downloading them: `Claude-Code-Haha-<version>-macOS-Apple-Silicon.dmg` / `-macOS-Intel.dmg`, `-Windows-x64-Setup.exe` / `-Windows-arm64-Setup.exe`, and `-Linux-x64` / `-Linux-arm64` with `.AppImage`, `.deb` and `.rpm`. The Mac auto-update zips are `-macOS-arm64-update.zip` / `-macOS-x64-update.zip`. Default names live in the `artifactName` of `mac`, `dmg`, `nsis` and `linux` in `desktop/package.json`; the DMG chip names and the uniform Linux `x64` are overridden per row in the release matrix `builder_args`, because electron-builder spells `${arch}` per Linux format (`x86_64`, `amd64`, `aarch64`). Those overrides must stay in single quotes, or the shell expands `${version}` first.
 
-改名时有三条硬约束，`scripts/pr/release-workflow.test.ts` 会按 electron-updater 的挑包逻辑逐一验证：
+Renames have three hard constraints, each checked by `scripts/pr/release-workflow.test.ts` against electron-updater's selection logic:
 
-- `latest.yml`、`latest-mac.yml`、`latest-linux.yml`、`latest-linux-arm64.yml` 是已安装客户端写死请求的文件名，不能改。
-- Mac zip 名里，Apple 芯片的必须含 `arm64`，Intel 的不能含 `arm64`；否则 Apple 芯片的机器会被「更新」成 Intel 版。
-- 两个 Windows 安装包共用一份 `latest.yml`，updater 按名字里的 `x64` / `arm64` 选包；少了这两个词，ARM 设备会装上 x64 版。
+- `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and `latest-linux-arm64.yml` are hard-coded by installed clients and cannot change.
+- The Apple Silicon zip name must contain `arm64` and the Intel one must not; otherwise Apple Silicon machines get "updated" to the Intel build.
+- Both Windows installers share one `latest.yml`, and the updater picks by the `x64` / `arm64` in the name; without them, ARM devices install the x64 build.
 
-`.blockmap` 只在构建机上生成给 package-smoke 检查，不再发布：应用从 v0.4.7 起关闭了差分下载，更早的客户端找不到 blockmap 会自动改为完整下载。Release 也不再附 `install-macos-unsigned.sh`，正式版本的 Mac 包总是签名并公证过的。
+`.blockmap` files are still generated on the runner for package-smoke but no longer published: the app has disabled differential downloads since v0.4.7, and older clients fall back to a full download when a blockmap is missing. Releases also no longer attach `install-macos-unsigned.sh`, since release Mac builds are always signed and notarized.
 
-### 签名 Secrets
+### Signing secrets
 
-macOS 的签名与公证依赖以下 GitHub Actions repository secrets：
+macOS signing and notarization depend on these GitHub Actions repository secrets:
 
 ```text
 MACOS_CERTIFICATE
@@ -359,19 +359,19 @@ APPLE_APP_SPECIFIC_PASSWORD
 APPLE_TEAM_ID
 ```
 
-`MACOS_CERTIFICATE` 是 Developer ID Application `.p12` 的 base64 内容。项目不发布 `.pkg`，不需要 Developer ID Installer 证书。
+`MACOS_CERTIFICATE` is the base64 content of a Developer ID Application `.p12`. The project does not ship a `.pkg`, so no Developer ID Installer certificate is needed.
 
-Windows 签名走 SignPath，审批通过前默认关闭：tag 推送、手动正式发布和手动草稿都会产出未签名的 Windows 安装包，自动更新照常可用，只是用户可能看到 SmartScreen 提示。开关是仓库变量 `WINDOWS_SIGNING_ENABLED`：
+Windows signing goes through SignPath and is off until approval lands: tag pushes, manual releases and manual drafts all produce unsigned Windows installers. Auto-update still works; users may just see a SmartScreen prompt. The switch is the `WINDOWS_SIGNING_ENABLED` repository variable:
 
-- 未设置或不为 `true`：Windows 不签名，preflight 只打一条 notice。
-- 设为 `true`：要求 `SIGNPATH_*` 变量和 `SIGNPATH_API_TOKEN` 齐全，非草稿发布缺配置时拒绝发布。
-- 手动运行 `Release Desktop` 时，`windows_signing` 输入可以临时改写：`auto` 跟随变量，`unsigned` 本次不签，`signed` 本次一定签（配置不全直接失败），用来在打开变量前先拿草稿试签。
+- Unset or anything but `true`: Windows is not signed, and the preflight only emits a notice.
+- `true`: the `SIGNPATH_*` variables and `SIGNPATH_API_TOKEN` are required, and a non-draft release with missing configuration is refused.
+- A manual `Release Desktop` run can override it with the `windows_signing` input: `auto` follows the variable, `unsigned` skips signing for that run, and `signed` forces it (failing if configuration is incomplete), so a draft can be trial-signed before the variable is turned on.
 
-打开签名前，先把 SignPath 后台的 installer artifact configuration 改成和 `.github/signpath/windows-installer.xml` 一致（匹配 `Claude-Code-Haha-*-Windows-*-Setup.exe`），再用草稿试签一次。只要还可能发布未签名的 Windows 包，就不要在 `desktop/package.json` 里加 `publisherName` 或 `verifyUpdateCodeSignature`：加了之后，用该配置构建的客户端会拒收之后所有未签名的更新，而且无法自愈。
+Before turning signing on, update the installer artifact configuration in SignPath to match `.github/signpath/windows-installer.xml` (`Claude-Code-Haha-*-Windows-*-Setup.exe`), then trial-sign a draft. As long as unsigned Windows releases remain possible, never add `publisherName` or `verifyUpdateCodeSignature` to `desktop/package.json`: clients built with either would reject every later unsigned update, with no way to recover in place.
 
-application artifact configuration 也须与 `.github/signpath/windows-application.xml` 同步：除主程序与 sidecar，还包含从源码构建的 `agent-desktop.exe`。签名开启时，工作流会送签、恢复并验证这三个可执行文件后再制作安装包。添加原生运行组件后，应先同步 SignPath 后台配置并进行草稿试签；仅签安装包不会给内部的运行组件补签。
+The application artifact configuration must also match `.github/signpath/windows-application.xml`: it includes the source-built `agent-desktop.exe` alongside the main application and sidecar. When signing is enabled, the workflow submits, restores, and verifies all three executables before building the installer. After adding the native runtime, synchronize the SignPath configuration and trial-sign a draft first; signing the installer does not sign its embedded runtime executables.
 
-### 发版前检查
+### Pre-release checks
 
 ```bash
 bun run scripts/release.ts <version> --dry
@@ -379,66 +379,66 @@ bun test scripts/pr/release-workflow.test.ts scripts/release-update-metadata.tes
 bun run check:policy
 ```
 
-正式执行 `bun run scripts/release.ts <version>` 前，先确认对应的 `release-notes/v<version>.md` 已经存在。
+Confirm `release-notes/v<version>.md` exists before running `bun run scripts/release.ts <version>` for real.
 
-### 发版步骤
+### Release steps
 
-`main` 受分支保护：`pr-quality-gate` 必须通过，管理员也不例外，所以发版不再直推 `main`，而是分两步：
+`main` is protected: `pr-quality-gate` must pass, for admins too, so a release no longer pushes `main` directly. It takes two steps:
 
-1. `bun run scripts/release.ts <version>` 在 `release/v<version>` 分支上提交版本号和 release notes，不打 tag。按脚本提示推送分支、开 PR，等 PR Quality 变绿后合并。
-2. 合并后运行 `bun run scripts/release.ts --tag <version>`。脚本会先确认 `origin/main` 上的桌面版本号就是 `<version>`、release notes 已经合入，再给合并后的提交打 tag，最后只推 tag：`git push origin v<version>`。
-3. tag 推送会触发 `Release Desktop`，这次运行直接完成构建和发布，手机端交付也接在它后面，不需要再手动运行 workflow。只有这次运行在发布之前失败时，才手动 `gh workflow run release-desktop.yml --ref v<version> -f draft=false` 重跑。Release 一旦发布，任何运行都会在 preflight 被拒绝，避免覆盖用户正在下载的安装包。
+1. `bun run scripts/release.ts <version>` commits the version bump and release notes on a `release/v<version>` branch, without a tag. Push the branch, open the PR as the script prints, and merge it once PR Quality is green.
+2. After the merge, run `bun run scripts/release.ts --tag <version>`. The script checks that `origin/main` carries desktop version `<version>` and its release notes, tags the merged commit, and you push only the tag: `git push origin v<version>`.
+3. The tag push triggers `Release Desktop`, and that run builds and publishes the release, with the mobile delivery chained after it. No manual workflow run is needed. Only if that run fails before publishing, re-run it with `gh workflow run release-desktop.yml --ref v<version> -f draft=false`. Once a release is published, every run is refused at the preflight, so nothing can overwrite installers users are downloading.
 
-### 验证一条真实更新链路
+### Verify one real update path
 
-每次发版至少验证一次从上一个正式版升上来的完整路径：
+Every release should be verified by upgrading from the previous stable build at least once:
 
-1. 安装 GitHub Release 里的上一个正式版。
-2. 推 tag，让 `Release Desktop` workflow 完整通过。
-3. 打开旧版本，等待启动后的自动检查，或在设置里手动检查更新。
-4. 确认提示新版本，下载完成后安装并重启。
-5. 重启后确认「关于」里的版本号正确，且服务商、会话、Skills、Agents、记忆、自定义宠物和自定义数据目录仍然可用。
-6. 确认历史附件上下文、子 Agent 详情和任务状态可以恢复；打开桌宠，验证悬浮窗口与当前会话导航。
+1. Install the previous stable release from GitHub Releases.
+2. Push the tag and let the `Release Desktop` workflow finish green.
+3. Open the old build and wait for the startup check, or check for updates manually in settings.
+4. Confirm the new version is offered, then install and restart.
+5. After restart, confirm the version in About, and that providers, sessions, skills, agents, memories, custom pets, and a custom data directory all still work.
+6. Confirm historical attachment context, subagent details, and task state restore correctly; open a pet window and check the overlay and current-session navigation.
 
-各平台的重点不同：macOS 要确认 release job 走的是签名产物且启动策略检查通过；Windows 要确认 `latest.yml` 和两个 `-Setup.exe` 都在 Release 资产里，未签名时的 SmartScreen 提示不代表 updater 失败；Linux 优先用 AppImage 验证自动更新，`.deb`、`.rpm` 只作手动安装包发布。
+Platforms differ in what matters: on macOS confirm the release job used the signed artifacts and the launch-policy check passed; on Windows confirm `latest.yml` and both `-Setup.exe` installers are in the release assets, and remember that a SmartScreen prompt on an unsigned build does not mean the updater failed; on Linux verify auto-update through the AppImage, since `.deb` and `.rpm` ship as manual installers only.
 
-## PR 提交流程
+## PR Workflow
 
-1. 新建普通产品分支，例如 `fix/session-reconnect` 或 `feat/provider-quality-gate`。
-2. 安装依赖并完成改动。
-3. 为行为变化补测试。
-4. 运行相关定向测试。
-5. 可选：运行 `bun run hooks:install`，让后续 push 显示非阻塞提醒。
-6. 如果要声明 PR-ready/full validation，运行 `bun run verify`。
-7. 高风险改动由可信维护者运行 live baseline；外部贡献者记录未运行原因即可。
-8. 在 PR 描述里写清楚用户影响、测试命令、覆盖率/质量报告 summary、已知风险。
+1. Create a product branch such as `fix/session-reconnect` or `feat/provider-quality-gate`.
+2. Install dependencies and make the change.
+3. Add tests for behavior changes.
+4. Run focused checks for the affected area.
+5. Optional: run `bun run hooks:install` to show a non-blocking reminder before later pushes.
+6. Run `bun run verify` if you are claiming PR-ready/full validation.
+7. A trusted maintainer runs the live baseline for high-risk changes; external contributors only record why it was not run.
+8. In the PR description, include user impact, verification commands, coverage/quality report summary, and known risks.
 
-## 常见问题
+## FAQ
 
-### 没有 provider 可以跑吗？
+### Can I run checks without a provider?
 
-可以。运行影响面检查和它选中的确定性命令：
+Yes. Run the impact report and its selected deterministic checks:
 
 ```bash
 bun run check:impact
 ```
 
-`bun run verify` 也不需要真实模型；只有 live baseline 需要。维护者可以先在桌面端 设置 → 服务商 添加自己的 provider，再运行：
+`bun run verify` also needs no real model. Only the live baseline does. Maintainers can add a provider in Desktop Settings > Providers, then run:
 
 ```bash
 bun run quality:providers
 ```
 
-### provider selector 冲突怎么办？
+### What if provider selectors conflict?
 
-如果两个 provider 名称生成了相同 selector，`quality:providers` 会退回输出 provider ID。直接复制它给出的 `--provider-model ...` 即可。
+If two provider names produce the same selector, `quality:providers` falls back to the provider ID. Copy the `--provider-model ...` value it prints.
 
-### 模型 ID 里带冒号怎么办？
+### What if a model ID contains a colon?
 
-优先使用角色选择，例如：
+Prefer role selectors:
 
 ```bash
 --provider-model custom:haiku:custom-haiku
 ```
 
-脚本会把 `haiku` 解析成本机 provider 配置里的真实模型 ID。
+The runner resolves `haiku` to the real model ID from your local provider configuration.

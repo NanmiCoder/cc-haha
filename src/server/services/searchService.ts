@@ -1,8 +1,8 @@
 /**
- * SearchService — 工作区文件搜索 & 会话历史搜索
+ * SearchService — workspace file search & session history search
  *
- * 工作区文件搜索优先使用 ripgrep；会话搜索优先使用本地 SQLite 投影，
- * 索引未就绪或不可用时自动回退到有界、流式的 ripgrep / 文件扫描。
+ * Workspace file search prefers ripgrep; session search prefers the local SQLite projection,
+ * automatically falling back to bounded, streaming ripgrep / file scanning when the index is not ready or unavailable.
  */
 
 import { spawn } from 'child_process'
@@ -259,10 +259,10 @@ export class SearchService {
     this.resolveRipgrepCommand = options.resolveRipgrepCommand ?? ripgrepCommand
   }
   // ---------------------------------------------------------------------------
-  // 工作区搜索
+  // Workspace search
   // ---------------------------------------------------------------------------
 
-  /** 使用 ripgrep 搜索工作目录 */
+  /** Search the working directory with ripgrep */
   async searchWorkspace(
     query: string,
     options?: {
@@ -279,13 +279,13 @@ export class SearchService {
     const cwd = options?.cwd || process.cwd()
     const maxResults = options?.maxResults || 200
 
-    // 尝试产品统一解析出的 rg，降级到 grep
+    // Try the product-resolved rg, fall back to grep
     if (this.hasRipgrep()) {
       try {
         return await this.searchWithRipgrep(query, cwd, maxResults, options)
       } catch (error) {
         if (isAbortError(error)) throw error
-        // rg 执行失败，降级到 grep
+        // rg failed, fall back to grep
       }
     }
 
@@ -303,7 +303,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // 会话历史搜索
+  // Session history search
   // ---------------------------------------------------------------------------
 
   /** Menu suggestions deliberately trust the disposable index, never opening canonical transcripts. */
@@ -839,7 +839,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // 会话搜索 — Phase A: 候选路径；Phase B: 选中路径的命中行号
+  // Session search — Phase A: candidate paths; Phase B: hit line numbers in selected paths
   // ---------------------------------------------------------------------------
 
   private async findSessionCandidateLines(
@@ -1047,7 +1047,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // 会话搜索 — Phase B: 解析命中行 → 清洗 → 提取片段
+  // Session search — Phase B: parse hit lines → clean → extract snippets
   // ---------------------------------------------------------------------------
 
   private async extractSessionMatches(
@@ -1180,7 +1180,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // ripgrep 搜索
+  // ripgrep search
   // ---------------------------------------------------------------------------
 
   private async searchWithRipgrep(
@@ -1198,7 +1198,7 @@ export class SearchService {
       args.push('--ignore-case')
     }
 
-    // 添加上下文行
+    // Add context lines
     args.push('-C', '4')
 
     if (options?.glob) {
@@ -1211,7 +1211,7 @@ export class SearchService {
     return this.parseRipgrepJson(output, maxResults)
   }
 
-  /** 解析 ripgrep JSON 输出 */
+  /** Parse ripgrep JSON output */
   private parseRipgrepJson(
     output: string,
     maxResults: number,
@@ -1219,7 +1219,7 @@ export class SearchService {
     const results: SearchResult[] = []
     const lines = output.split('\n').filter(Boolean)
 
-    // 收集上下文：key = `${file}:${matchLine}`
+    // Collect context: key = `${file}:${matchLine}`
     const contextMap = new Map<
       string,
       { file: string; line: number; text: string; context: string[] }
@@ -1243,7 +1243,7 @@ export class SearchService {
 
           contextMap.set(key, { file, line: lineNum, text, context: [] })
         } else if (obj.type === 'context') {
-          // 上下文行归属到最近的 match
+          // Context lines belong to the nearest match
           const data = obj.data as {
             path?: { text?: string }
             line_number?: number
@@ -1251,7 +1251,7 @@ export class SearchService {
           }
           const text = (data.lines?.text || '').replace(/\n$/, '')
 
-          // 附加到最后一个相同文件的 match
+          // Attach to the last match in the same file
           const file = data.path?.text || ''
           for (const [key, entry] of contextMap) {
             if (key.startsWith(file + ':')) {
@@ -1260,7 +1260,7 @@ export class SearchService {
           }
         }
       } catch {
-        // 跳过无法解析的行
+        // Skip unparseable lines
       }
     }
 
@@ -1278,7 +1278,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // grep 降级
+  // grep fallback
   // ---------------------------------------------------------------------------
 
   private async searchWithGrep(
@@ -1306,7 +1306,7 @@ export class SearchService {
     return this.parseGrepOutput(output, maxResults)
   }
 
-  /** 解析 grep 输出 (file:line:text) */
+  /** Parse grep output (file:line:text) */
   private parseGrepOutput(output: string, maxResults: number): SearchResult[] {
     const results: SearchResult[] = []
     const lines = output.split('\n').filter(Boolean)
@@ -1314,7 +1314,7 @@ export class SearchService {
     for (const line of lines) {
       if (results.length >= maxResults) break
 
-      // grep -n 输出格式: file:line:text
+      // grep -n output format: file:line:text
       const match = line.match(/^(.+?):(\d+):(.*)$/)
       if (match) {
         results.push({
@@ -1424,7 +1424,7 @@ export class SearchService {
   }
 
   // ---------------------------------------------------------------------------
-  // 工具方法
+  // Utility methods
   // ---------------------------------------------------------------------------
 
   private hasRipgrep(): boolean {
@@ -1471,7 +1471,7 @@ export class SearchService {
     )
   }
 
-  /** 运行外部命令，返回 stdout */
+  /** Run an external command and return stdout */
   private runCommand(
     cmd: string,
     args: string[],
@@ -1528,7 +1528,7 @@ export class SearchService {
             reject(new Error(`Command "${cmd}" returned no searchable output`))
             return
           }
-          // rg/grep 返回 1 表示无匹配，不视为错误
+          // rg/grep exit code 1 means no match, not an error
           if (code === 0 || code === 1) {
             resolve(output)
           } else {
@@ -1653,7 +1653,7 @@ export class SearchService {
     })
   }
 
-  /** 检测命令是否存在 */
+  /** Check whether a command exists */
   private commandExists(cmd: string): Promise<boolean> {
     const cached = this.commandAvailability.get(cmd)
     if (cached) return cached
@@ -1667,7 +1667,7 @@ export class SearchService {
     return lookupPromise
   }
 
-  /** 递归查找 .jsonl 文件 */
+  /** Recursively find .jsonl files */
   private async walkJsonlFiles(
     dir: string,
     signal?: AbortSignal,
@@ -1690,7 +1690,7 @@ export class SearchService {
     } catch (error) {
       throwIfAborted(signal)
       if (isAbortError(error)) throw error
-      // 跳过不可访问的目录
+      // Skip inaccessible directories
     }
 
     return results

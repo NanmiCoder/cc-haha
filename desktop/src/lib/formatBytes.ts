@@ -12,7 +12,7 @@ export function formatBytes(bytes: number): string {
 
   const maximumFractionDigits = value >= 10 || unitIndex === 0 ? 0 : 1
 
-  return `${new Intl.NumberFormat(undefined, {
+  return `${new Intl.NumberFormat('en-US', {
     maximumFractionDigits,
   }).format(value)} ${units[unitIndex]}`
 }

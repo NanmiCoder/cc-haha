@@ -9,7 +9,7 @@ type Shape =
   | ['polyline', string]
   | ['polygon', string]
 
-/** Lucide 线性图标（24 网格，圆角端点），与设计稿一致。 */
+/** Lucide Line icons (24 grid, round caps), matching the design. */
 const icons = {
   search: [['circle', 11, 11, 8], ['path', 'm21 21-4.3-4.3']],
   settings: [

@@ -27,7 +27,7 @@ function checkPreview(platform: 'web' | 'native') {
     }))
     mock.module(${JSON.stringify(import.meta.resolve('./imagePreviewStatus'))}, () => ({ useImagePreviewStatus: () => status }))
     const { ImagePreview } = require(${JSON.stringify(import.meta.resolve(platform === 'native' ? './ImagePreview.native' : './ImagePreview'))})
-    const images = [0, 1, 2].map(index => ({ id: 'image-' + index, name: '照片' + index, uri: 'file:///image-' + index + '.jpg', attachmentIndex: index }))
+    const images = [0, 1, 2].map(index => ({ id: 'image-' + index, name: 'Photos' + index, uri: 'file:///image-' + index + '.jpg', attachmentIndex: index }))
     const props = { images, initialIndex: 1, onClose: () => closed++ }
     const flatten = node => {
       if (Array.isArray(node)) return node.flatMap(flatten)
@@ -43,7 +43,7 @@ function checkPreview(platform: 'web' | 'native') {
       assert.equal(root.props.doubleTapToZoomEnabled, true)
       assert.equal(root.props.swipeToCloseEnabled, true)
       assert.equal(root.props.keyExtractor(root.props.images[1], 1), 'image-1')
-      assert.equal(root.props.HeaderComponent({ imageIndex: 1 }).props.image.name, '照片1')
+      assert.equal(root.props.HeaderComponent({ imageIndex: 1 }).props.image.name, 'Photos1')
       const originalKey = root.key
       root.props.onImageIndexChange(0)
       root = render()
@@ -74,7 +74,7 @@ function checkPreview(platform: 'web' | 'native') {
       assert.equal(nodes.find(node => node.type === 'Image').props.source.uri, images[1].uri)
       nodes.find(node => node.type === 'View' && node.props.onLayout).props.onLayout({ nativeEvent: { layout: { width: 393, height: 600 } } })
       nodes = flatten(render())
-      nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '放大图片').props.onPress()
+      nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Zoom in image').props.onPress()
       nodes = flatten(render())
       assert.equal(nodes.find(node => node.type === 'Image').props.style.width, 786)
       assert.equal(nodes.find(node => node.type === 'Image').props.style.height, 1200)

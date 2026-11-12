@@ -8,20 +8,20 @@ import {
 } from './planText'
 
 const fixturePlan =
-  '# 用相机扫桌面二维码完成配对\n\n1. 扫码页：识别二维码里的地址和访问令牌\n   `src/app/connect.tsx`\n2. 校验地址，拒绝带路径或账号密码的地址\n   `src/core/connection.ts`\n\n3. 补测试\n\n## 会改的文件\n\n- src/app/connect.tsx\n- src/core/client.ts\n\n```sh\nbun test\n```\n普通段落第一行\n第二行'
+  '# Pair by scanning the desktop QR code with the camera\n\n1. Scan page: read the address and access token from the QR code\n   `src/app/connect.tsx`\n2. Validate the address; reject addresses with a path or username/password\n   `src/core/connection.ts`\n\n3. Add tests\n\n## Files to change\n\n- src/app/connect.tsx\n- src/core/client.ts\n\n```sh\nbun test\n```\nFirst line of a normal paragraph\nSecond line'
 
 test('plans parse into title, numbered steps with continuations, sections, lists and code', () => {
   expect(planBlocks(fixturePlan)).toEqual([
-    { type: 'title', text: '用相机扫桌面二维码完成配对' },
+    { type: 'title', text: 'Pair by scanning the desktop QR code with the camera' },
     {
       type: 'ordered',
       items: [
-        { marker: '1', lines: ['扫码页：识别二维码里的地址和访问令牌', '`src/app/connect.tsx`'] },
-        { marker: '2', lines: ['校验地址，拒绝带路径或账号密码的地址', '`src/core/connection.ts`'] },
-        { marker: '3', lines: ['补测试'] },
+        { marker: '1', lines: ['Scan page: read the address and access token from the QR code', '`src/app/connect.tsx`'] },
+        { marker: '2', lines: ['Validate the address; reject addresses with a path or username/password', '`src/core/connection.ts`'] },
+        { marker: '3', lines: ['Add tests'] },
       ],
     },
-    { type: 'heading', text: '会改的文件' },
+    { type: 'heading', text: 'Files to change' },
     {
       type: 'bullets',
       items: [
@@ -30,41 +30,41 @@ test('plans parse into title, numbered steps with continuations, sections, lists
       ],
     },
     { type: 'code', text: 'bun test' },
-    { type: 'paragraph', text: '普通段落第一行\n第二行' },
+    { type: 'paragraph', text: 'First line of a normal paragraph\nSecond line' },
   ])
 })
 
 test('nested bullets stay under their step and rules are skipped', () => {
-  expect(planBlocks('1. 步骤\n   - 子项\n---\n正文')).toEqual([
-    { type: 'ordered', items: [{ marker: '1', lines: ['步骤', '· 子项'] }] },
-    { type: 'paragraph', text: '正文' },
+  expect(planBlocks('1. Step\n   - Sub-item\n---\nBody')).toEqual([
+    { type: 'ordered', items: [{ marker: '1', lines: ['Step', '· Sub-item'] }] },
+    { type: 'paragraph', text: 'Body' },
   ])
 })
 
 test('inline code, bold and bare file paths become monospace spans', () => {
-  expect(planSpans('补 `schedules.test.ts` 的 **交互** 测试')).toEqual([
-    { text: '补 ' },
+  expect(planSpans('Add `schedules.test.ts` for **interaction** tests')).toEqual([
+    { text: 'Add ' },
     { text: 'schedules.test.ts', code: true },
-    { text: ' 的 ' },
-    { text: '交互', bold: true },
-    { text: ' 测试' },
+    { text: ' for ' },
+    { text: 'interaction', bold: true },
+    { text: ' tests' },
   ])
-  expect(planSpans('改 src/app/schedule/[id].tsx 和 README')).toEqual([
-    { text: '改 ' },
+  expect(planSpans('Change src/app/schedule/[id].tsx and README')).toEqual([
+    { text: 'Change ' },
     { text: 'src/app/schedule/[id].tsx', code: true },
-    { text: ' 和 README' },
+    { text: ' and README' },
   ])
 })
 
 test('the compact card excerpt is the first two meaningful lines without markup', () => {
   expect(planExcerpt(fixturePlan)).toBe(
-    '用相机扫桌面二维码完成配对\n1. 扫码页：识别二维码里的地址和访问令牌'
+    'Pair by scanning the desktop QR code with the camera\n1. Scan page: read the address and access token from the QR code'
   )
-  expect(planExcerpt('```\ncode\n```\n**只有一行**')).toBe('只有一行')
+  expect(planExcerpt('```\ncode\n```\n**Only one line**')).toBe('Only one line')
 })
 
 test('plan text and file path come only from real input fields', () => {
-  expect(planSource({ plan: '  ', planContent: '# 计划' })).toBe('# 计划')
+  expect(planSource({ plan: '  ', planContent: '# plan' })).toBe('# plan')
   expect(planSource({ plan: 3 })).toBeNull()
   expect(planFilePath({ planFilePath: '/p.md' })).toBe('/p.md')
   expect(planFilePath({ filePath: '' })).toBeUndefined()

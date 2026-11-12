@@ -9,10 +9,10 @@ import {
 } from '../format.js'
 
 /**
- * Telegram Adapter 翻译逻辑测试
+ * Telegram adapter translation logic tests
  *
- * 由于 grammy Bot 需要实际 Token 才能初始化，
- * 这里测试的是不依赖 Bot 实例的核心翻译逻辑。
+ * Since a grammy Bot needs a real token to initialize,
+ * these tests cover the core translation logic that does not depend on a Bot instance.
  */
 
 describe('Telegram message formatting', () => {

@@ -7,7 +7,7 @@ import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/mi
  * laptop. Credentials come from Desktop Settings → IM, or from
  * SLACK_BOT_TOKEN (`xoxb-…`) and SLACK_APP_TOKEN (`xapp-…`).
  *
- * 启动：SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... bun run slack/index.ts
+ * Start: SLACK_BOT_TOKEN=xoxb-... SLACK_APP_TOKEN=xapp-... bun run slack/index.ts
  */
 
 import { WsBridge, type AttachmentRef } from '../common/ws-bridge.js'
@@ -235,7 +235,7 @@ async function collectAttachments(chatId: string, files: SlackFile[]): Promise<A
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === files.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === files.length ? 'Attachment download failed, please try again later.' : `${failures} attachment(s) failed to download and were skipped.`,
     )
   }
   return refs

@@ -302,11 +302,7 @@ it('keeps withdrawn installed packages out of the connector list', () => {
 })
 
 it.each([
-  ['zh', '操作电脑', '给这次任务用', '运行方式'],
-  ['zh-TW', '操作電腦', '給這次任務用', '執行方式'],
   ['en', 'Computer use', 'For this task', 'How it runs'],
-  ['jp', 'コンピューター操作', 'このタスクで使う', '実行方法'],
-  ['kr', '컴퓨터 조작', '이번 작업에 사용', '실행 방식'],
 ] as const)('localizes the menu groups and the computer-use entry in %s', (locale, label, useTitle, runTitle) => {
   const sections = buildCapabilitySections(buildInput({ t: (key, params) => translate(locale, key, params) }))
   expect(sections.slice(0, 2).map(section => section.title)).toEqual([useTitle, runTitle])
@@ -318,11 +314,11 @@ it.each([
 it('uses the localized catalog name and description of a connector', () => {
   const sections = buildCapabilitySections(buildInput({
     connectors: [connector('feishu', { displayName: 'feishu-cli', description: 'raw' })],
-    t: (key, params) => translate('zh', key, params),
+    t: (key, params) => translate('en', key, params),
   }))
   const suggestion = sections[0]!.items[1]!.children!.find(item => item.key === 'connector:feishu')!
-  expect(suggestion.label).toBe(translate('zh', 'connectors.feishu.name'))
-  expect(suggestion.description).toBe(translate('zh', 'connectors.feishu.description'))
+  expect(suggestion.label).toBe(translate('en', 'connectors.feishu.name'))
+  expect(suggestion.description).toBe(translate('en', 'connectors.feishu.description'))
 })
 
 it('shows each connector with its catalog logo and the plug as fallback', () => {

@@ -22,7 +22,7 @@ export function profileFixture(hostName: string, today = new Date()) {
   })
   const activeDays = dailyModelTokens.filter((day) => Object.keys(day.tokensByModel).length > 0).length
   return {
-    profile: { displayName: '程序员 · Fixture', subtitle: `${hostName} 的使用记录`, avatarDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAAiklEQVR4nL3VwQmAMAyF4azm1Rm8OIMDuJIDuIcXj95cwkKgaG3SlxCF/1b4DiFt6Ty2kEg529f5nQ2qEjpXQk1C4qipLFPP6RYpSibuSVY0BCqKFQrpM0aglAjhM/oRQvbIAIE9oG4crH0DZcsNlQsZALHlgyqXNgZKOSDxhfQp4pttItq/CEhwF6Z8OzgcLLeZAAAAAElFTkSuQmCC' },
+    profile: { displayName: 'Programmer · Fixture', subtitle: `${hostName} usage records`, avatarDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAAiklEQVR4nL3VwQmAMAyF4azm1Rm8OIMDuJIDuIcXj95cwkKgaG3SlxCF/1b4DiFt6Ty2kEg529f5nQ2qEjpXQk1C4qipLFPP6RYpSibuSVY0BCqKFQrpM0aglAjhM/oRQvbIAIE9oG4crH0DZcsNlQsZALHlgyqXNgZKOSDxhfQp4pttItq/CEhwF6Z8OzgcLLeZAAAAAElFTkSuQmCC' },
     stats: {
       totalSessions: 246, totalMessages: 4200, totalDays: 90, activeDays,
       streaks: { currentStreak: 5, longestStreak: 5, currentStreakStart: null, longestStreakStart: null, longestStreakEnd: null },

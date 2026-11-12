@@ -1,80 +1,77 @@
 ---
-name: Bug 反馈
-about: 提交桌面端或 CLI 的 Bug 报告
+name: Bug report
+about: Report a bug in the desktop app or CLI
 title: '[BUG] '
 labels: bug
 assignees: ''
 ---
 
-> **更快得到帮助**：如果你还不确定这是不是 Bug，或想先确认使用方法，建议先到用户交流群（企业微信，二维码见 README）里提问；确定为缺陷后，请完整填写以下信息，方便复现与定位。
+> **Get help faster**: If you're not sure whether this is a bug, or want to confirm how something works first, ask in the user group (WeCom; QR code in the README). Once you've confirmed it's a defect, fill in everything below so we can reproduce and locate it.
 
-## 提交前确认
-<!-- 请在提交 issue 前确认以下事项 -->
+## Before submitting
+<!-- Please confirm the following before opening an issue -->
 
-- [ ] 我已经阅读了 [README 常见问题](https://github.com/NanmiCoder/cc-haha#常见问题)
-- [ ] 我已经升级到最新版本后复现过这个问题
-- [ ] 我已经搜索过[现有 issues](https://github.com/NanmiCoder/cc-haha/issues)，确认没有重复问题
-- [ ] 我已经隐藏截图和日志中的 API Key、Token、Cookie 等敏感信息
-- [ ] 我已在分享前检查自动生成的诊断报告或诊断包，确认其中没有不应公开的私密元数据
+- [ ] I have read the [troubleshooting guide](https://github.com/NanmiCoder/cc-haha/blob/main/docs/start/troubleshooting.md)
+- [ ] I have reproduced this issue on the latest version
+- [ ] I have searched [existing issues](https://github.com/NanmiCoder/cc-haha/issues) and found no duplicate
+- [ ] I have hidden API keys, tokens, cookies, and other sensitive information in screenshots and logs
+- [ ] I have reviewed any auto-generated diagnostic report or bundle before sharing and confirmed it contains no private metadata that shouldn't be public
 
-## 问题描述
-<!-- 请用 1-3 句话说明实际发生了什么、你原本期望发生什么 -->
+## Description
+<!-- In 1-3 sentences, describe what actually happened and what you expected to happen -->
 
+## Environment
+<!-- For desktop issues, fill in the first 4 items first; for CLI issues, also add Bun / Node info -->
 
-## 运行环境
-<!-- 桌面端问题请优先填写前 4 项；CLI 问题再补充 Bun / Node 信息 -->
+- Usage: Desktop / CLI / Other:
+- Operating system: Windows / macOS / Linux:
+- OS version: e.g. Windows 11 23H2 / macOS 15.4:
+- Desktop version: e.g. v0.1.8 (see Settings -> About):
+- Install source: GitHub Release / local build from source / Other:
+- Bun version (CLI issues, `bun --version`):
+- Node version (CLI issues, `node --version`):
 
-- 使用方式: 桌面端 / CLI / 其他:
-- 操作系统: Windows / macOS / Linux:
-- 系统版本: 例如 Windows 11 23H2 / macOS 15.4:
-- 桌面端版本: 例如 v0.1.8（设置页 -> 关于 中可查看）:
-- 安装来源: GitHub Release / 源码本地构建 / 其他:
-- Bun 版本（CLI 问题填写，`bun --version`）:
-- Node 版本（CLI 问题填写，`node --version`）:
+## Provider / model configuration
+<!-- Please include configuration screenshots if possible; be sure to hide API keys, tokens, and other sensitive information -->
 
-## Provider / 模型配置
-<!-- 请尽量提供配置截图；务必隐藏 API Key、Token 等敏感信息 -->
-
-- API 提供商: 例如 Anthropic 官方 / OpenRouter / MiniMax / Kimi / Ollama:
+- API provider: e.g. Anthropic official / OpenRouter / MiniMax / Kimi / Ollama:
 - Base URL:
-- 使用的模型:
-- 相关配置截图:
+- Model used:
+- Related configuration screenshots:
 
-## 复现步骤
-<!-- 请写到别人可以照着操作复现；如果偶发，请说明大约出现频率 -->
+## Steps to reproduce
+<!-- Write them so someone else can follow along and reproduce; if it's intermittent, note roughly how often it happens -->
 
 1.
 2.
 3.
 
-是否稳定复现: 是 / 否 / 不确定
+Reproduces reliably: Yes / No / Not sure
 
-## 错误信息与日志
+## Error messages and logs
 <!--
-请粘贴完整错误信息。桌面端启动失败时，请复制错误弹窗中的 Recent server logs；
-如果是对话、配置或模型调用失败，请粘贴页面上的错误、终端输出或相关日志。
+Paste the full error message. If the desktop app fails to start, copy the Recent server logs from the error dialog;
+for conversation, configuration, or model call failures, paste the on-page error, terminal output, or related logs.
 -->
 
 ```shell
-在此粘贴错误信息和日志
+Paste error messages and logs here
 ```
 
-## 诊断信息（可选）
+## Diagnostics (optional)
 <!--
-桌面端可在「设置 -> 诊断」中复制 Event ID；复制的 Issue 报告是 Markdown，请粘贴到 Issue 正文中。导出的诊断包是文件，请作为附件上传。
-自动生成的报告和诊断包采用尽力脱敏；请在公开分享前自行检查其中的路径、主机名及其他私密元数据。
+In the desktop app you can copy Event IDs from Settings -> Diagnostics; the copied Issue report is Markdown, so paste it into the issue body. The exported diagnostic bundle is a file, so upload it as an attachment.
+Auto-generated reports and bundles are redacted on a best-effort basis; please check paths, hostnames, and other private metadata yourself before sharing publicly.
 -->
 
-- 相关 Event IDs:
-- 已粘贴到 Issue 正文的诊断报告: 是 / 否
-- 诊断包文件附件:
+- Related Event IDs:
+- Diagnostic report pasted into the issue body: Yes / No
+- Diagnostic bundle attachment:
 
-## 截图或录屏
-<!-- 请提供错误截图、配置截图或复现录屏；截图前请隐藏敏感信息 -->
+## Screenshots or screen recording
+<!-- Provide error screenshots, configuration screenshots, or a recording of the reproduction; hide sensitive information before capturing -->
 
-
-## 补充信息
-<!-- 最近是否升级过版本、换过 provider、改过配置，或是否有旧版本可以正常使用 -->
-
+## Additional information
+<!-- Did you recently upgrade, switch providers, or change configuration? Does an older version work correctly? -->
 
 ---

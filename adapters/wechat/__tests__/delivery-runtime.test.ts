@@ -75,7 +75,7 @@ describe('WeChat durable dispatch boundary', () => {
     await runtime.dispatch(message, async () => { runtime.submittedToServer('peer') })
     store.recoverInterrupted()
     expect(runtime.pending()).toHaveLength(0)
-    expect(runtime.summary('peer')).toContain('执行结果待核对 1')
+    expect(runtime.summary('peer')).toContain('1 awaiting result check')
   })
 
   it('persists unstarted work for recovery and does not complete a cancelled task later', async () => {

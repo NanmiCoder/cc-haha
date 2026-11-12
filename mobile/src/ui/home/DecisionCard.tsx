@@ -12,10 +12,11 @@ import {
   projectOf,
 } from './homeModel'
 import { useNow } from './parts'
+import { plural } from '../../core/plural'
 
 export type DecisionResponse = 'allow' | 'deny'
 
-/** “等你决定”里的一张卡：审批 / 提问 / 计划 / 团队方案 / 其他等待。 */
+/** A card under "Waiting for your decision": approval / question / plan / team plan / other waits. */
 export function DecisionCard({
   row,
   onOpen,
@@ -30,7 +31,7 @@ export function DecisionCard({
   const kind = decisionKind(activity)
   const project = projectOf(session)?.name
   const action = decisionAction(activity)
-  const title = session.title || '未命名任务'
+  const title = session.title || 'Untitled task'
   const question = kind === 'question' ? previewText(activity) : ''
   const plan = kind === 'plan' ? planPreview(activity) : null
   const command = kind === 'approval' ? approvalPreview(activity) : ''
@@ -38,7 +39,7 @@ export function DecisionCard({
     <Card>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${title}，${project ? `${project}，` : ''}${action}${question ? `：${question}` : ''}`}
+        accessibilityLabel={`${title}, ${project ? `${project}, ` : ''}${action}${question ? `: ${question}` : ''}`}
         onPress={onOpen}
         style={({ pressed }) => ({ gap: 3, opacity: pressed ? 0.6 : 1 })}
       >
@@ -102,7 +103,7 @@ export function DecisionCard({
           ))}
           {plan.more ? (
             <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink3 }}>
-              还有 {plan.more} 步
+              {plural(plan.more, 'more step')}
             </Text>
           ) : null}
         </View>
@@ -110,15 +111,15 @@ export function DecisionCard({
       {kind === 'approval' && activity?.requestId ? (
         <View style={{ marginLeft: 26, flexDirection: 'row', gap: 8 }}>
           <Button
-            title="拒绝"
+            title="Deny"
             variant="secondary"
-            accessibilityLabel={`拒绝：${title}`}
+            accessibilityLabel={`Deny: ${title}`}
             onPress={() => onRespond('deny', activity.requestId!)}
             style={{ flex: 1 }}
           />
           <Button
-            title="允许"
-            accessibilityLabel={`允许：${title}`}
+            title="Allow"
+            accessibilityLabel={`Allow: ${title}`}
             onPress={() => onRespond('allow', activity.requestId!)}
             style={{ flex: 1 }}
           />
@@ -130,13 +131,13 @@ export function DecisionCard({
               <AutoAnswerCountdown deadline={activity.autoAnswerDeadline} />
             ) : null}
           </View>
-          <Button title="回答" variant="secondary" accessibilityLabel={`回答：${title}`} onPress={onOpen} />
+          <Button title="Answer" variant="secondary" accessibilityLabel={`Answer: ${title}`} onPress={onOpen} />
         </View>
       ) : (
         <Button
           title={openTitle(kind)}
           variant="secondary"
-          accessibilityLabel={`${openTitle(kind)}：${title}`}
+          accessibilityLabel={`${openTitle(kind)}: ${title}`}
           onPress={onOpen}
           style={{ marginLeft: 26 }}
         />
@@ -146,9 +147,9 @@ export function DecisionCard({
 }
 
 const openTitle = (kind: ReturnType<typeof decisionKind>) =>
-  kind === 'plan' ? '看完整计划' : kind === 'team' ? '查看并配置' : '打开处理'
+  kind === 'plan' ? 'See full plan' : kind === 'team' ? 'View and configure' : 'Open to handle'
 
-/** 环形图标 + “m:ss 后 AI 按推荐作答”，每秒走。 */
+/** Ring icon + "AI answers with the recommended option in m:ss", ticking every second. */
 function AutoAnswerCountdown({ deadline }: { deadline: number }) {
   const colors = useColors()
   const now = useNow(1000)
@@ -156,7 +157,7 @@ function AutoAnswerCountdown({ deadline }: { deadline: number }) {
   return (
     <View
       accessibilityLabel={
-        seconds > 0 ? `${formatDuration(seconds)} 后 AI 按推荐作答` : 'AI 正在按推荐作答'
+        seconds > 0 ? `${formatDuration(seconds)} until AI answers with the recommended option` : 'AI Answering with the recommended option'
       }
       style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
     >
@@ -174,11 +175,11 @@ function AutoAnswerCountdown({ deadline }: { deadline: number }) {
         <>
           <Mono style={{ fontSize: 13, color: colors.ink3 }}>{formatDuration(seconds)}</Mono>
           <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, color: colors.ink3 }}>
-            后 AI 按推荐作答
+            until AI answers with the recommended option
           </Text>
         </>
       ) : (
-        <Text style={{ fontSize: 13, color: colors.ink3 }}>AI 正在按推荐作答</Text>
+        <Text style={{ fontSize: 13, color: colors.ink3 }}>AI Answering with the recommended option</Text>
       )}
     </View>
   )

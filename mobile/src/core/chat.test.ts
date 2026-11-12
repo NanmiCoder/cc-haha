@@ -230,7 +230,7 @@ describe('real WebSocket event state transitions', () => {
     ])
     expect(state.backgroundTaskIds).toEqual(['task-a', 'task-b'])
     expect(state).toMatchObject({ turnActive: false, status: 'idle' })
-    // 任务通知的说明文字不进主对话流，只有任务 id 的增减。
+    // Task notification descriptions do not enter the main conversation stream; only task id additions/removals.
     expect(state.items).toEqual([])
     for (const status of ['completed', 'failed', 'stopped', 'killed']) {
       const settled = chatReducer(state, {
@@ -266,7 +266,7 @@ describe('real WebSocket event state transitions', () => {
     expect(update({ sessionId: undefined })).toBeNull()
     const pending = run([update()!])
     expect(pending.teamPlanSignal).toBe('p1:2:review_pending')
-    // 同一版本重复推送不产生新状态，避免无谓地重读。
+    // Repeated pushes of the same version produce no new state, avoiding needless rereads.
     expect(chatReducer(pending, update()!)).toBe(pending)
     expect(chatReducer(pending, update({ revision: 3, state: 'launching' })!).teamPlanSignal).toBe('p1:3:launching')
     expect(chatReducer(pending, update({ sessionId: 'other', revision: 9 })!)).toBe(pending)
@@ -611,40 +611,40 @@ describe('paged transcript normalization', () => {
   })
 })
 
-describe('Agent 团队成员之间的消息', () => {
+describe('Agent Messages between team members', () => {
   // Shapes from a real DeepSeek Flash team run: the member's report reaches the
   // lead as an envelope; idle notices carry a JSON lifecycle body.
-  const report = '<teammate-message teammate_id="builder">\ntodo.py 写好了，add/list/done 都能用。\n</teammate-message>'
+  const report = '<teammate-message teammate_id="builder">\ntodo.py Done; add/list/done all work.\n</teammate-message>'
   const idle = '<teammate-message teammate_id="tester">\n{"type":"idle_notification","from":"tester","idleReason":"available","result":"Task complete"}\n</teammate-message>'
 
-  test('队长的主对话不把它当成用户发言：历史记录和实时回放都不出气泡', () => {
+  test('The lead’s main conversation does not treat it as user speech: no bubble in history or live replay', () => {
     const history = normalizeHistory([
-      entry('u1', 'user', '做一个待办'),
+      entry('u1', 'user', 'Build a todo app'),
       entry('t1', 'user', report),
       entry('t2', 'user', [{ type: 'text', text: idle }]),
-      entry('a1', 'assistant', [{ type: 'text', text: '两个成员都完成了。' }]),
+      entry('a1', 'assistant', [{ type: 'text', text: 'Both members are done.' }]),
     ])
     expect(history.map((item) => [item.type, item.text])).toEqual([
-      ['user', '做一个待办'],
-      ['assistant', '两个成员都完成了。'],
+      ['user', 'Build a todo app'],
+      ['assistant', 'Both members are done.'],
     ])
     const replayed = chatReducer(createChatState('session'), { type: 'user_message_replay', content: report })
     expect(replayed.items).toEqual([])
-    // 队长开始处理这条消息：这一轮照样算在跑。
+    // The lead starts handling this message: this turn still counts as running.
     expect(replayed.turnActive).toBe(true)
   })
 
-  test('成员页显示正文和发送者，生命周期通知不显示', () => {
-    const lead = '<teammate-message teammate_id="team-lead">\n#1 好了，开始 #2。\n</teammate-message>'
-    const items = normalizeHistory([entry('p', 'user', '你是 tester。'), entry('m1', 'user', lead), entry('m2', 'user', idle)], { teammates: 'show' })
+  test('The member page shows the body and sender; lifecycle notifications are hidden', () => {
+    const lead = '<teammate-message teammate_id="team-lead">\n#1 OK, starting #2.\n</teammate-message>'
+    const items = normalizeHistory([entry('p', 'user', 'You are tester.'), entry('m1', 'user', lead), entry('m2', 'user', idle)], { teammates: 'show' })
     expect(items.map((item) => [item.text, item.teammateFrom])).toEqual([
-      ['你是 tester。', undefined],
-      ['#1 好了，开始 #2。', 'team-lead'],
+      ['You are tester.', undefined],
+      ['#1 OK, starting #2.', 'team-lead'],
     ])
   })
 
-  test('普通消息里只是提到标签名，照常显示', () => {
-    const text = '解释一下 <teammate-message 这个标签是做什么的'
+  test('Merely mentioning the tag name in a normal message displays as usual', () => {
+    const text = 'Explain what the <teammate-message tag is for'
     expect(normalizeHistory([entry('u', 'user', text)])[0]?.text).toBe(text)
     expect(chatReducer(createChatState('session'), { type: 'user_message_replay', content: text }).items).toHaveLength(1)
   })

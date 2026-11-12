@@ -19,6 +19,7 @@ import {
 import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { Glyph } from './compose/glyphs'
+import { plural } from '../core/plural'
 
 function Inline({
   text,
@@ -47,9 +48,9 @@ function Inline({
 }
 
 /**
- * 表格：按容器的可用宽度分配列宽，整张表铺满一屏；列太多、压到可读下限还放不下时，
- * 才退回横向滑动。之前列宽只按内容估算，窄屏上表头底色和最后一列会在右侧留一截空白，
- * 看起来像被截断。
+ * Tables: distribute column widths by the container's available width so the whole table fills one screen; only when there are too many columns that do not fit even at the minimum readable width 
+ * fall back to horizontal scrolling. Previously column widths were estimated from content only, and on narrow screens the header background and last column left a gap on the right, 
+ * which looked truncated.
  */
 function MarkdownTable({
   header,
@@ -63,12 +64,12 @@ function MarkdownTable({
   const colors = useColors()
   const [available, setAvailable] = useState(0)
   const natural = useMemo(() => naturalColumnWidths(header, rows), [header, rows])
-  // ScrollView 的 1px 边框算在布局宽度里，内容只分到去掉边框后的宽度。
+  // ScrollView 1px border counts toward the layout width, so content only gets the width minus the border.
   const measured = available > 2
   const fitted = measured ? fitColumnWidths(natural, available - 2) : null
   const widths = fitted ?? natural
-  // 宽度还没量到（0）时先按自然列宽渲染；量到 1–2px 这种退化宽度时仍允许横滑，
-  // 否则内容会超宽又动不了。
+  // When width is not measured yet (0) render with natural column widths; when a degenerate width of 1–2px is measured still allow horizontal scrolling, 
+  // otherwise content would overflow and be stuck.
   const scroll = measured ? fitted === null : available > 0
   const cell = (text: string, column: number, head: boolean, last: boolean) => (
     <View
@@ -118,9 +119,9 @@ function MarkdownTable({
 }
 
 /**
- * 助手正文与计划内容共用的 Markdown 渲染（16/25，代码块用 CodeBlock）。
- * 超长内容只挂开头和结尾（见 windowMarkdown），中间点按后分批展开，最多展开到
- * MARKDOWN_EXPAND_LIMIT；expandable 为假时只提示省略。
+ * Markdown rendering shared by assistant body and plan content (16/25, code blocks use CodeBlock).
+ * Very long content mounts only the beginning and end (see windowMarkdown); tap the middle to expand in batches, up to
+ * MARKDOWN_EXPAND_LIMIT; when expandable is false only an omission hint is shown.
  */
 export function Markdown({
   text,
@@ -190,8 +191,8 @@ export function Markdown({
         return <Inline key={key} text={block.text} selectable={selectable} style={body} />
     }
   }
-  const omitted = `${shown.tail.length ? '中间' : '后面'}还有 ${shown.hidden} 段`
-  // 结尾窗口始终以最后一块收尾；按块在原文里的位置给 key，流式追加时窗口平移只换两头，不让整段重挂。
+  const omitted = `${plural(shown.hidden, 'more block')}${shown.tail.length ? ' in the middle' : ' after this'}`
+  // The end window always ends with the last block; keys come from the block position in the source, so when streaming appends only the edges shift and the whole thing is not remounted.
   const tailStart = blocks.length - shown.tail.length
   return (
     <View style={{ gap: 10 }}>
@@ -199,15 +200,15 @@ export function Markdown({
       {!shown.hidden ? null : expandable && head < ceiling ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${omitted}，点按展开`}
+          accessibilityLabel={`${omitted}, tap to expand`}
           onPress={() => setExtra((value) => value + limit.head)}
           style={{ alignSelf: 'flex-start', paddingVertical: 4 }}
         >
-          <Text style={{ fontSize: 14, lineHeight: 20, color: colors.run }}>{`… ${omitted}，点按展开`}</Text>
+          <Text style={{ fontSize: 14, lineHeight: 20, color: colors.run }}>{`… ${omitted}, tap to expand`}</Text>
         </Pressable>
       ) : (
         <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink3 }}>
-          {expandable ? `… ${omitted}，太长了，完整内容请在电脑上查看` : `… ${omitted}`}
+          {expandable ? `… ${omitted}, too long; view the full content on the computer` : `… ${omitted}`}
         </Text>
       )}
       {shown.tail.map((block, index) => render(block, `t${tailStart + index}`))}
@@ -218,8 +219,8 @@ export function Markdown({
 export type BubbleLayout = { x: number; y: number; width: number; height: number }
 
 /**
- * 原生端 Text 的 selectable 会抢走长按（系统复制菜单和本应用的消息菜单同时出现），
- * 所以原生端靠长按菜单里的“选择文字”选取；web 端直接可选中。
+ * On native, Text selectable steals the long press (the system copy menu and this app's message menu both appear), 
+ * so native selects via "Select text" in the long-press menu; on web it is directly selectable.
  */
 const inlineSelectable = Platform.OS === 'web'
 
@@ -235,7 +236,7 @@ function Attachments({ item }: { item: ChatItem }) {
           <Pressable
             key={index}
             accessibilityRole="button"
-            accessibilityLabel={`预览 ${attachment.name || '图片'}`}
+            accessibilityLabel={`Preview ${attachment.name || 'Image'}`}
             onPress={() => {
               Keyboard.dismiss()
               setPreview(attachmentImageSelection(item.attachments!, index))
@@ -264,7 +265,7 @@ function Attachments({ item }: { item: ChatItem }) {
           >
             <Icon name={attachment.type === 'image' ? 'image' : 'file'} size={18} color={colors.ink2} />
             <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: '500', color: colors.ink }}>
-              {attachment.name || (attachment.type === 'image' ? '图片' : '附件')}
+              {attachment.name || (attachment.type === 'image' ? 'Image' : 'Attachment')}
             </Text>
           </View>
         )
@@ -274,7 +275,7 @@ function Attachments({ item }: { item: ChatItem }) {
   )
 }
 
-/** 用户气泡与助手正文；长按时把气泡位置交给消息菜单，让它在原处浮起。 */
+/** User bubble and assistant body; on long press hand the bubble position to the message menu so it floats up in place. */
 export const Message = memo(function Message({
   item,
   onLongPress,
@@ -305,7 +306,7 @@ export const Message = memo(function Message({
     return (
       <View style={{ alignItems: 'flex-end', gap: 6 }}>
         <Pressable
-          accessibilityHint="你的消息。长按可复制、选择文字、编辑后重新发送或分叉"
+          accessibilityHint="Your message. Long-press to copy, select text, edit and resend, or fork"
           onLongPress={longPress}
           delayLongPress={400}
           style={{ maxWidth: 300 }}
@@ -316,19 +317,19 @@ export const Message = memo(function Message({
         </Pressable>
         {item.pending ? (
           <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.ink3 }}>
-            已发出，等待电脑处理
+            Sent, waiting for the computer to process
           </Text>
         ) : null}
         {item.delivery === 'uncertain' ? (
           <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.attn, textAlign: 'right' }}>
-            未确认送达，请核对会话后再决定是否重发。
+            Delivery not confirmed; check the session before deciding whether to resend.
           </Text>
         ) : null}
       </View>
     )
   return (
     <Pressable
-      accessibilityHint="长按可复制、选择文字或从这里分叉"
+      accessibilityHint="Long-press to copy, select text or fork from here"
       onLongPress={longPress}
       delayLongPress={400}
     >
@@ -340,7 +341,7 @@ export const Message = memo(function Message({
   )
 })
 
-/** 用户气泡本体：消息流和长按浮起的副本共用。 */
+/** User bubble itself: shared by the message stream and the floating long-press copy. */
 export function UserBubble({
   item,
   text,

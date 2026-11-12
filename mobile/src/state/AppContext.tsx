@@ -199,7 +199,7 @@ function H5AppProvider({ children }: React.PropsWithChildren) {
   }, [])
   const value = useMemo<AppContextValue>(() => {
     const unsupported = async () => {
-      throw new Error('网页版只连接打开它的这台电脑')
+      throw new Error('The web version only connects to the computer that opened it')
     }
     return {
       registry: state.registry,
@@ -263,7 +263,7 @@ export function useConnection(id?: string) {
           host,
           credential,
           issue: credential === null ? 'missing' : null,
-          message: credential === null ? '未找到这台电脑的连接凭据，请检查手机上的连接设置' : '',
+          message: credential === null ? 'No connection credentials found for this computer; check the connection settings on the phone' : '',
         })
       } catch {
         if (!current()) return
@@ -272,7 +272,7 @@ export function useConnection(id?: string) {
           host,
           credential: null,
           issue: 'unavailable',
-          message: '暂时无法读取连接凭据，请解锁手机后重试',
+          message: 'Cannot read connection credentials right now; unlock the phone and retry',
         })
         const delay = [1000, 3000, 10000][retries++]
         if (delay !== undefined) timer = setTimeout(() => void restore(), delay)

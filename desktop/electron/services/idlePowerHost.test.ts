@@ -46,7 +46,7 @@ async function fixture() {
     app,
     blocker: { start: vi.fn(() => 1), stop: vi.fn(() => true) },
     NotificationClass: FakeNotification,
-    locale: () => 'zh' as const,
+    locale: () => 'en' as const,
     monitor: { getSystemIdleTime: () => Math.floor(Date.now() / 1000) },
     screen: { getCursorScreenPoint: () => ({ x: 0, y: 0 }) },
     readActivity: vi.fn(async () => ({ ...snapshot })),
@@ -71,7 +71,7 @@ describe('native idle-power integration with mocked OS and notification boundary
     await advanceTime(6000)
     expect(f.options.blocker.start).toHaveBeenCalledWith('prevent-app-suspension')
     expect(f.notifications[0]!.options.body).toContain('30')
-    expect(f.notifications[0]!.options.body).toContain('关机')
+    expect(f.notifications[0]!.options.body).toContain('Shut down')
     f.notifications[0]!.emit('click')
     await advanceTime(31_000)
     expect(f.dispatch).not.toHaveBeenCalled()

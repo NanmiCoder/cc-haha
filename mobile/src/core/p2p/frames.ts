@@ -1,7 +1,7 @@
 /**
- * 直连数据通道上的帧（服务端见 src/server/p2p/protocol.ts，两边必须一致）。
- * 一帧是一条文本：JSON 头、换行、负载。`ctl` 走会话流和心跳，`bulk` 走 HTTP，
- * 大的历史页或图片不会挡住实时事件。
+ * Frames on the direct data channel (server side in src/server/p2p/protocol.ts; both must match).
+ * A frame is one text: JSON header, newline, payload. `ctl` carries the session stream and heartbeat, `bulk` carries HTTP, 
+ * so large history pages or images do not block live events.
  */
 export type P2PChannel = 'ctl' | 'bulk'
 export type Body = 'none' | 'text' | 'b64'
@@ -19,7 +19,7 @@ export type P2PHeader =
   | { t: 'wsm'; s: number; fin: boolean }
   | { t: 'wsc'; s: number; code: number; reason: string }
 
-/** 每帧负载上限（UTF-16 单元），远低于各平台 SCTP 消息上限。 */
+/** Per-frame payload limit (UTF-16 units), well below each platform SCTP message limit. */
 export const P2P_CHUNK = 16 * 1024
 
 export function encodeFrame(header: P2PHeader, payload = '') {
@@ -39,7 +39,7 @@ export function decodeFrame(text: unknown): { header: P2PHeader; payload: string
   }
 }
 
-/** 按长度切块，但不拆开代理对：数据通道发的是 UTF-8，半个代理对会变成乱码。 */
+/** Chunk by length without splitting surrogate pairs: the data channel sends UTF-8, and half a surrogate pair becomes garbage. */
 export function chunkText(text: string, size = P2P_CHUNK): string[] {
   if (!text) return ['']
   const chunks: string[] = []

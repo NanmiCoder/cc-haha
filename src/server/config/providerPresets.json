@@ -65,7 +65,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://open.bigmodel.cn",
     "apiKeyUrl": "https://www.bigmodel.cn/invite?icode=d41B2qi8Z5xNwTGLNPPF3OZLO2QH3C0EBTSr%2BArzMw4%3D",
-    "promoText": "智谱 GLM 为 cc-haha 用户准备了专属邀请福利，使用此链接注册后可领取新用户权益。",
+    "promoText": "Zhipu GLM offers an exclusive invite bonus for cc-haha users: sign up with this link to claim new-user benefits.",
     "authStrategy": "auth_token",
     "defaultEnv": {},
     "modelContextWindows": {
@@ -280,7 +280,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://aruhub.com",
     "apiKeyUrl": "https://aruhub.com/sign-up?aff=Z54g",
-    "promoText": "AruHub 为 cc-haha 用户提供专属福利：通过「获取 API Key」链接注册即送 1 美元全模型通用额度，不限模型。支持 GPT、Claude，按量付费，适合持续 AI Coding。",
+    "promoText": "AruHub offers an exclusive bonus for cc-haha users: sign up via the \"Get API Key\" link to receive US$1 of credit usable on any model. Supports GPT and Claude with pay-as-you-go pricing, suited to ongoing AI coding.",
     "featured": true,
     "isNew": true,
     "authStrategy": "api_key",
@@ -304,7 +304,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://modelflare.dev",
     "apiKeyUrl": "https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cchaha",
-    "promoText": "Modelflare 为 cc-haha 用户提供特惠：单笔充值 US$20 解锁 GPT 0.015 倍分组，US$50 解锁 Claude 0.03 倍分组。通过「获取 API Key」专属链接注册参与。",
+    "promoText": "Modelflare offers a special deal for cc-haha users: a single US$20 top-up unlocks the GPT 0.015x group, and US$50 unlocks the Claude 0.03x group. Sign up via the exclusive \"Get API Key\" link to take part.",
     "featured": true,
     "isNew": true,
     "authStrategy": "auth_token",
@@ -370,7 +370,7 @@
     "needsApiKey": true,
     "websiteUrl": "https://opencode.ai",
     "apiKeyUrl": "https://opencode.ai/go?ref=3RK0WVVCGD",
-    "promoText": "订阅后填入 API Key，即可获取并选择模型。",
+    "promoText": "After subscribing, enter your API Key to fetch and choose models.",
     "authStrategy": "api_key",
     "defaultEnv": {},
     "modelApiFormats": [
@@ -483,7 +483,7 @@
     },
     "needsApiKey": false,
     "websiteUrl": "https://usemagpie.ai",
-    "promoText": "Magpie 是一个本机网关，把它里面配好的服务商、订阅和路由组转给 cc-haha 用，不用填密钥。",
+    "promoText": "Magpie is a local gateway that passes the providers, subscriptions and routing groups configured in it to cc-haha, with no key to enter.",
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "magpie-cc-haha"
@@ -502,7 +502,7 @@
     },
     "needsApiKey": false,
     "websiteUrl": "https://lmstudio.ai/docs/integrations/claude-code",
-    "promoText": "LM Studio 使用 Anthropic 兼容协议，Base URL 填 http://localhost:1234，不要追加 /v1。Claude Code 的提示词、工具和 Skill 会占用较多上下文，请在本地模型设置里把 Context Window 调大，建议至少 200K。",
+    "promoText": "LM Studio uses the Anthropic-compatible protocol. Set the Base URL to http://localhost:1234 without appending /v1. Claude Code prompts, tools and Skills use a lot of context, so raise the Context Window in your local model settings; at least 200K is recommended.",
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "lmstudio"
@@ -521,7 +521,7 @@
     },
     "needsApiKey": false,
     "websiteUrl": "https://docs.ollama.com/integrations/claude-code",
-    "promoText": "Ollama 使用 Anthropic 兼容协议，Base URL 填 http://localhost:11434，不要追加 /v1。Claude Code 的提示词、工具和 Skill 会占用较多上下文，请在本地模型设置里把 Context Window 调大，建议至少 200K。",
+    "promoText": "Ollama uses the Anthropic-compatible protocol. Set the Base URL to http://localhost:11434 without appending /v1. Claude Code prompts, tools and Skills use a lot of context, so raise the Context Window in your local model settings; at least 200K is recommended.",
     "authStrategy": "auth_token_empty_api_key",
     "defaultEnv": {
       "ANTHROPIC_AUTH_TOKEN": "ollama"

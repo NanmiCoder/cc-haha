@@ -91,7 +91,7 @@ export const MAX_OPEN_WITH_ROWS = 6
  * The file manager is named, not interpolated.
  *
  * The server's label is a plain identifier ("Finder", "Explorer", "File Manager")
- * with no locale behind it, so `Reveal in {target}` produced "在 Explorer 中显示"
+ * with no locale behind it, so `Reveal in {target}` produced a localized "Show in Explorer"
  * — an English name inside a Chinese sentence, and not even the name Windows uses
  * for it. Same platform-keyed shape the sidebar settled on in #1236.
  */

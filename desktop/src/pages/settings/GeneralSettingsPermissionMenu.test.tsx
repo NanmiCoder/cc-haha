@@ -8,7 +8,7 @@ import { GeneralSettings } from './GeneralSettings'
 describe('General settings default permission menu', () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      locale: 'zh',
+      locale: 'en',
       permissionMode: 'default',
       fetchOutputStyles: async () => {},
       fetchAppMode: async () => {},
@@ -28,10 +28,10 @@ describe('General settings default permission menu', () => {
   it('opens the menu leftwards from the trigger at the end of the row', () => {
     render(<GeneralSettings />)
 
-    fireEvent.click(screen.getByRole('button', { name: '询问权限' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
 
     const menu = screen.getByRole('menu')
-    expect(within(menu).getByRole('menuitem', { name: /询问权限/ })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /Ask permissions/ })).toBeInTheDocument()
     expect(menu).toHaveClass('right-0')
     expect(menu).not.toHaveClass('left-0')
   })

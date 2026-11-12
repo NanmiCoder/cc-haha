@@ -16,16 +16,16 @@ import {
 
 describe('quiet hours', () => {
   test('summary reads off, a range, or all day when start equals end', () => {
-    expect(quietSummary({ enabled: false, start: '23:00', end: '08:00' })).toBe('未开启')
+    expect(quietSummary({ enabled: false, start: '23:00', end: '08:00' })).toBe('Off')
     expect(quietSummary({ enabled: true, start: '23:00', end: '08:00' })).toBe(
       '23:00 – 08:00'
     )
-    expect(quietSummary({ enabled: true, start: '09:00', end: '09:00' })).toBe('全天')
+    expect(quietSummary({ enabled: true, start: '09:00', end: '09:00' })).toBe('All day')
   })
 
   test('the all-day hint matches how notifications are actually muted', () => {
     const draft = { enabled: true, start: '09:00', end: '09:00' }
-    expect(quietHint(draft)).toBe('开始和结束相同，表示全天勿扰。')
+    expect(quietHint(draft)).toBe('Same start and end means quiet all day.')
     const preferences = migratePreferences(JSON.stringify({ quietHours: draft }))
     expect(isQuietTime(preferences, new Date(2026, 0, 1, 15, 0))).toBe(true)
     expect(quietHint({ ...draft, enabled: false })).toBe('')
@@ -34,10 +34,10 @@ describe('quiet hours', () => {
 
   test('Done validates both times before anything is written', () => {
     expect(validateQuietHours({ enabled: true, start: '7:00', end: '08:00' })).toEqual({
-      error: '时间请输入 HH:mm 格式',
+      error: 'Please enter time in HH:mm format',
     })
     expect(validateQuietHours({ enabled: false, start: '23:00', end: '24:00' })).toEqual({
-      error: '时间请输入 HH:mm 格式',
+      error: 'Please enter time in HH:mm format',
     })
     // The toggle travels with the times, so switching it alone never saves early.
     expect(validateQuietHours({ enabled: true, start: ' 22:30', end: '07:15 ' })).toEqual({
@@ -55,13 +55,13 @@ describe('quiet hours', () => {
 describe('push footnote', () => {
   test('each push state has one explanation', () => {
     expect(pushFootnote({ status: 'registered' }, 'MacBook Pro')).toBe(
-      'MacBook Pro 已配好推送，App 不在前台也能收到。'
+      'MacBook Pro Push is set up; you receive alerts even when the app is not in the foreground.'
     )
     expect(pushFootnote({ status: 'notConfigured' }, 'A')).toContain('APNs / FCM')
-    expect(pushFootnote({ status: 'permissionRequired' }, 'A')).toContain('系统设置')
-    expect(pushFootnote({ status: 'unsupported' }, 'A')).toContain('登记不了')
+    expect(pushFootnote({ status: 'permissionRequired' }, 'A')).toContain('system settings')
+    expect(pushFootnote({ status: 'unsupported' }, 'A')).toContain('cannot register')
     expect(pushFootnote({ status: 'error', error: 'offline' }, 'A')).toBe('offline')
-    expect(pushFootnote({ status: 'error' }, 'A')).toContain('没能登记')
+    expect(pushFootnote({ status: 'error' }, 'A')).toContain('Failed to register')
     expect(pushFootnote({ status: 'loading' }, 'A')).toBe('')
     expect(pushFootnote(undefined, undefined)).toBe('')
   })
@@ -70,14 +70,14 @@ describe('push footnote', () => {
 describe('AI auto answer', () => {
   test('choices and labels follow the desktop timeout options', () => {
     expect(autoAnswerMinutes.map(autoAnswerLabel)).toEqual([
-      '不代答',
-      '1 分',
-      '5 分',
-      '10 分',
-      '30 分',
+      'No auto-answer',
+      '1 min',
+      '5 min',
+      '10 min',
+      '30 min',
     ])
-    expect(autoAnswerValue({ enabled: true, timeoutMinutes: 5 })).toBe('等 5 分钟')
-    expect(autoAnswerValue({ enabled: false, timeoutMinutes: 10 })).toBe('不代答')
+    expect(autoAnswerValue({ enabled: true, timeoutMinutes: 5 })).toBe('Wait 5 minutes')
+    expect(autoAnswerValue({ enabled: false, timeoutMinutes: 10 })).toBe('No auto-answer')
     expect(selectedMinutes({ enabled: false, timeoutMinutes: 10 })).toBe(0)
     expect(selectedMinutes({ enabled: true, timeoutMinutes: 10 })).toBe(10)
   })
@@ -109,6 +109,6 @@ describe('AI auto answer', () => {
 
 test('desktop-only list excludes Computer Use now available from the composer', () => {
   expect(desktopOnly).toBe(
-    'MCP、技能与插件 · 服务商与 API Key · 官方账号登录 · IM 机器人 · 局域网和公网访问'
+    'MCP, skills and plugins · Providers and API keys · Official account sign-in · IM bots · LAN and public access'
   )
 })

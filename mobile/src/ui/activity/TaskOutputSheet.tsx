@@ -24,11 +24,11 @@ export function outputText(value: TaskOutput | null) {
       .map((item) => item.text || (item.result ? JSON.stringify(item.result) : ''))
       .filter(Boolean)
       .join('\n\n') ||
-    '暂时没有输出。'
+    'No output yet.'
   )
 }
 
-/** 任务输出弹层：标题“任务输出”，副标题是任务描述；运行中每 3 秒刷新。 */
+/** Task output sheet: title "Task output", subtitle is the task description; refreshes every 3 seconds while running. */
 export function TaskOutputSheet({
   task,
   client,
@@ -47,12 +47,12 @@ export function TaskOutputSheet({
       {task && (
         <View style={{ gap: 12 }}>
           <View style={{ alignItems: 'center', gap: 2, paddingTop: 6, paddingBottom: 4 }}>
-            <Text style={[type.nav, { color: colors.ink }]}>任务输出</Text>
+            <Text style={[type.nav, { color: colors.ink }]}>Task output</Text>
             <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>
               {taskTitle(task)}
             </Text>
           </View>
-          {/* key 让切换任务时旧请求随组件卸载一起取消。 */}
+          {/* key Cancel old requests along with component unmount when switching tasks. */}
           <OutputBody
             key={`${sessionId}:${task.taskId}`}
             client={client}
@@ -82,7 +82,7 @@ function OutputBody({
   const output = useFocusedResource(
     useCallback(
       (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
+        if (!client) throw new Error('Connecting to computer')
         return loadTaskOutput(
           client,
           sessionId,
@@ -115,12 +115,12 @@ function OutputBody({
       {truncated ? (
         <Callout tone="info">
           {value.kind === 'shell'
-            ? '日志较长，当前显示最后 64 KiB；运行中每 3 秒刷新。'
-            : '输出较长，当前显示电脑返回的片段。'}
+            ? 'Log is long; showing the last 64 KiB; refreshes every 3 seconds while running.'
+            : 'Output is long; showing the excerpt returned by the computer.'}
         </Callout>
       ) : null}
       <Button
-        title="刷新输出"
+        title="Refresh output"
         variant="secondary"
         icon="refresh-cw"
         onPress={() => void output.refresh()}

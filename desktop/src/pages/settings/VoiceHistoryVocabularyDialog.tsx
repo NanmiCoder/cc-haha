@@ -247,8 +247,8 @@ export function VoiceHistoryVocabularyDialog({ open, onClose, initialModel, defa
                 description={!source.available
                   ? t('voice.settings.vocabulary.history.sourceMissing', { days })
                   : source.id === 'claude-code'
-                    ? t('voice.settings.vocabulary.history.sessionsWithHaha', { days, count: source.sessions.toLocaleString() })
-                    : t('voice.settings.vocabulary.history.sessions', { days, count: source.sessions.toLocaleString() })}
+                    ? t('voice.settings.vocabulary.history.sessionsWithHaha', { days, count: source.sessions.toLocaleString('en-US') })
+                    : t('voice.settings.vocabulary.history.sessions', { days, count: source.sessions.toLocaleString('en-US') })}
                 disabled={!source.available}
                 checked={source.available && chosenSources.has(source.id)}
                 onChange={(event) => {

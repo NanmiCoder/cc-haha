@@ -60,7 +60,7 @@ export function SkillDetail({ embedded = false }: { embedded?: boolean }) {
     if (selectedSkill.marketMeta?.installedAt) {
       items.push({
         label: t('market.install.state.installed'),
-        value: new Date(selectedSkill.marketMeta.installedAt).toLocaleDateString(),
+        value: new Date(selectedSkill.marketMeta.installedAt).toLocaleDateString('en-US'),
       })
     }
     // SKILL.md frontmatter used to be flattened into this sidebar, where long

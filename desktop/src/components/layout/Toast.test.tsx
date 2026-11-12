@@ -28,7 +28,7 @@ describe('ToastContainer accessibility', () => {
   })
 
   it('announces warning and error messages assertively as alerts', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     useUIStore.setState({
       toasts: [
         { id: 'warning', type: 'warning', message: 'Check settings' },
@@ -41,7 +41,7 @@ describe('ToastContainer accessibility', () => {
     expect(screen.getByText('Check settings').closest('[role]')).toHaveAttribute('role', 'alert')
     expect(screen.getByText('Check settings').closest('[role]')).toHaveAttribute('aria-live', 'assertive')
     expect(screen.getByText('Save failed').closest('[role]')).toHaveAttribute('role', 'alert')
-    expect(screen.getAllByRole('button', { name: '关闭通知' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Dismiss notification' })).toHaveLength(2)
   })
 
   // The tone is carried by a leading glyph, not by colour alone on a rule:

@@ -1,7 +1,7 @@
 /**
- * 会话连接和电脑重新对齐的这段时间里，首页轮询、通知登记这类不急的请求先让一让：
- * 公网隧道又慢又窄，回到前台时它们会和聊天的历史、套接字一起挤在同一条链路上。
- * 让路有上限，连接一直对不齐（电脑睡着了）也不会把它们永久卡住。
+ * While the session connection is resyncing with the computer, non-urgent requests like home polling and notification registration yield: 
+ * The public tunnel is slow and narrow; on returning to foreground they would crowd the same link with chat history and sockets.
+ * Yielding is capped, so a connection that never resyncs (computer asleep) cannot block them forever.
  */
 export type GateTimers = {
   set(callback: () => void, delay: number): unknown
@@ -21,7 +21,7 @@ export class ForegroundGate {
     return this.#holds.size > 0
   }
 
-  /** 占住闸门，返回释放函数；重复释放无副作用。 */
+  /** Hold the gate and return a release function; releasing twice has no side effect. */
   hold(): () => void {
     const token = Symbol('hold')
     this.#holds.add(token)
@@ -33,7 +33,7 @@ export class ForegroundGate {
     }
   }
 
-  /** 没人占用时立即放行，否则等到释放或 `maxMs` 到点，以先到者为准。 */
+  /** Pass immediately when nobody holds it, otherwise wait until released or `maxMs` elapses, whichever comes first. */
   whenIdle(maxMs: number): Promise<void> {
     if (!this.#holds.size) return Promise.resolve()
     return new Promise((resolve) => {

@@ -56,9 +56,9 @@ describe('css custom property usage', () => {
     const unresolved: string[] = []
 
     for (const file of sourceFiles) {
-      // preview-agent 是注入到第三方页面的独立脚本：它的样式活在 Shadow DOM 里，
-      // 页面上不存在 globals.css，token 由那段样式自己定义自己消费。自洽性由
-      // preview-agent/editBubble.test.ts 用同等强度的检查守住。
+      // preview-agent is a standalone script injected into third-party pages: its styles live in a Shadow DOM
+      // with no globals.css, so its tokens are defined and consumed by that stylesheet itself. Its consistency
+      // is guarded by an equally strict check in preview-agent/editBubble.test.ts.
       if (file.includes('/preview-agent/')) continue
 
       const lines = readFileSync(file, 'utf8').split('\n')

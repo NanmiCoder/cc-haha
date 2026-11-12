@@ -6,9 +6,9 @@ import { modelDisplayName } from '../computer/computerModel'
 type Info = { hostId: string; model?: string; expiresAt?: number }
 
 /**
- * 电脑卡状态行里的两个附加信息：新任务默认用的模型名、公网配对的到期时间。
- * 每次首页聚焦时各读一次（从模型页改完回来能看到新值）；读不到就留空，卡片直接省掉那一段，不报错。
- * 读取：GET /api/models/current、公网时 GET /api/public-access/session。
+ * Two extra pieces of info in the computer card status line: the default model for new tasks and the public pairing expiry.
+ * Read each once every time home gains focus (new values show after returning from the model page); left empty when unavailable, and the card simply omits that segment without errors.
+ * Reads: GET /api/models/current, and GET /api/public-access/session when public.
  */
 export function useHostCardInfo(enabled: boolean) {
   const { client } = useConnection()

@@ -1,167 +1,167 @@
 ---
-title: 会话、权限与审阅
-nav_title: 会话与权限
-description: 一条会话从提问到审阅改动的全过程，以及权限弹窗该怎么点。
+title: Sessions, permissions, and review
+nav_title: Sessions
+description: A session from first question to reviewed diff, and which button to press when Claude asks.
 order: 1
 ---
 
-# 会话、权限与审阅
+# Sessions, permissions, and review
 
-一条会话就是你和 Claude 的一次完整合作：你提要求，它读文件、跑命令、改代码，每一步都留在对话里可以回看。这一篇讲会话界面上的每个东西是干什么的。
+A session is one complete collaboration: you describe what you want, Claude reads files, runs commands, and edits code, and every step stays in the conversation where you can go back and check it. This page explains what each part of the session screen does.
 
-## 开一条会话
+## Starting a session
 
-点侧边栏的「新建会话」，或按 `⌘N`（Windows / Linux 是 `Ctrl+N`）。空会话首屏只要求你做一件事：选一个项目目录。选完就能提问了，模型和权限沿用你在设置里的默认值。
+Click **New session** in the sidebar, or press `⌘N` (`Ctrl+N` on Windows and Linux). The empty session asks you for exactly one thing: a project directory. After that you can start typing — the model and permission mode come from your defaults in Settings.
 
-会话开出来是一个标签页，可以像浏览器一样开很多个并排跑。标签上有小圆点表示这条会话还在运行；关一个正在跑的标签会先问你是「保持运行」还是「停止并关闭」；「停止并关闭」会连这条会话里还在跑的后台任务一起停掉。
+Each session opens as a tab, and you can run many side by side. A dot on the tab means that session is still running; closing a running tab asks whether you want to **Keep running** or **Stop and close**, and **Stop and close** also stops the background tasks that session still has running.
 
-会话停在权限请求、提问或计划审批上等你处理时，标签上的小圆点会换成琥珀色的三角叹号，侧边栏里对应的会话行也一样。它会一直亮到你处理完为止，和系统通知开不开无关。标签多到滚出视野时，那一侧的滚动箭头上会出现一个琥珀色小点；标签栏右侧的数字按钮显示还有几个会话在等你，点一下跳到下一个。手机宽度下没有标签栏，汉堡按钮上的小点表示别的会话在等你，打开侧边栏找带三角的那一行。
+When a session is stopped on a permission request, a question or a plan review and needs you, the dot on its tab becomes an amber warning triangle, and so does its row in the sidebar. It stays until you have dealt with it, whether or not system notifications are on. When so many tabs are open that some scroll out of view, the scroll arrow on that side gets an amber dot, and the number button on the right of the tab bar shows how many other sessions are waiting; press it to jump to the next one. On a phone there is no tab bar: a dot on the menu button means another session is waiting, and its row in the sidebar carries the triangle.
 
-关掉标签不会删除会话，它还在侧边栏里。右键任意标签选「重新打开已关闭的标签」，可以按关闭顺序倒着找回本次打开应用后关掉的会话标签。标签容易越堆越多的话，到「设置 → 通用 → 标签页」设一个「最多保留的会话标签」（5、8、12 或 20 个）：之后每次打开新会话、以及把上限调低的那一刻，超出的标签会从最久没看过的开始自动关掉，正在运行、等你处理或输入框里有没发出去内容的标签不会被关。同一处还能关掉「启动时恢复上次打开的标签」，让应用每次都从空的标签栏开始。两项默认都保持原来的行为。
+Closing a tab never deletes the session; it stays in the sidebar. Right-click any tab and choose **Reopen Closed Tab** to bring back the session tabs closed since the app started, most recent first. If tabs keep piling up, set **Session tabs to keep** (5, 8, 12 or 20) under **Settings → General → Tabs**: whenever you open another session, and right when you lower the limit, the tabs over it close on their own, starting with the one you looked at least recently, while tabs that are running, waiting for you, or hold an unsent message are kept. The same section can turn off **Restore tabs on launch** so the app always starts with an empty tab bar. Both keep the old behavior by default.
 
-会话标题下面那行小字是元信息：项目路径、分支、模型。想换项目就新建一条会话，一条会话绑定一个目录。
+The small line under the session title is metadata: project path, branch, model. A session is bound to one directory — to work on a different project, start a new session.
 
-## 读懂对话流
+## Reading the conversation
 
-![真实项目中的发布说明会话：工具调用、回复与完整会话列表](../images/app/zh-CN/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../images/app/en/session-main.webp)
 
-Claude 干活时不是一句话回你，中间会插进来几种卡片：
+Claude doesn't just reply with a paragraph. Several kinds of card appear along the way:
 
-- **工具调用卡**：读文件、搜索、执行命令都会留一张卡。连续的同类操作会自动合并成一行，比如「读取了 6 个文件」「编辑了 3 个文件」，点开才展开细节。日常扫一眼就好，出问题时再展开看参数和输出。
-- **思考块**：模型在动手前的推理过程，标题写「思考中」，结束后变成「已思考」。默认折叠。
-- **文件编辑**：直接在对话里显示内联 diff，绿加红减，不用切到别处看。
-- **Claude 需要你的输入**：它拿不准时会反问，给几个选项按钮，也可以自己输入回答。
-- **图片**：回复里用 Markdown 图片语法引用的本地图片会直接显示，不限于项目目录内——绝对路径、`~/` 开头的路径、Windows 的 `C:\...` 和 `file:///...` 都可以（位于用户目录或临时目录下的图片）。Claude 用「读取」等工具看过的图片，也会以缩略图的形式出现在那条工具调用下面，不必展开。点开任意一张，可以缩放和拖动；桌面版的查看器右下角有「用系统程序打开」，用来打开原文件。在浏览器里访问（H5）时，按路径引用的本地图片暂时显示不出来，读取工具产生的缩略图不受影响。
+- **Tool cards** — reading files, searching, running commands. Consecutive operations of the same kind collapse into one line, like "Read 6 files" or "edited 3 files"; expand it to see the details. Skim them normally, open them when something goes wrong.
+- **Thinking blocks** — the reasoning before it acts, labelled **Thinking** while it runs and **Thought** once done. Collapsed by default.
+- **File edits** — shown as an inline diff right in the conversation, so you don't have to look anywhere else.
+- **Claude needs your input** — when it's genuinely unsure it asks, with buttons for the likely answers plus a free-text box.
+- **Images** — a local image a reply references with Markdown image syntax is shown right in the conversation, and it doesn't have to be inside the project: an absolute path, one starting with `~/`, a Windows `C:\...` path or a `file:///...` URL all work (for images under your home directory or the temporary directories). Pictures Claude looked at with a tool such as Read also appear as thumbnails under that tool call, without expanding it. Click any of them to zoom and drag; in the desktop app the viewer has **Open in system app** at the bottom right, which opens the original file. When you use the app from a browser (H5), pictures referenced by path don't load yet; the thumbnails of pictures Claude read with a tool are not affected.
 
-对话很长时，`⌘F` 打开页内查找，可以在当前对话里跳上一个 / 下一个匹配。`⌘K` 是全局搜索，跨所有历史会话找内容。
+In a long conversation, `⌘F` opens find-in-page and jumps between matches in the current session. `⌘K` is global search across every session you've ever had.
 
-## 权限弹窗：三个按钮怎么选
+## The permission prompt: which button?
 
-默认权限模式下，Claude 每次要改文件或跑高风险命令，都会停下来问你。弹窗里会先给出这次改动的预览，然后是三个按钮：
+In the default permission mode, Claude stops and asks before editing a file or running a risky command. The dialog previews the change, then offers three buttons:
 
-- **允许** — 只放行这一次。下次同样的操作还会再问。
-- **本次会话允许** — 这条会话里同类操作以后都不问了。关掉会话就失效。
-- **拒绝** — 不执行。Claude 会收到拒绝信号，换个做法继续。
+- **Allow** — just this once. The same operation will ask again next time.
+- **Allow for session** — stop asking for this kind of operation in this session. It resets when the session closes.
+- **Deny** — don't run it. Claude gets the refusal and tries another approach.
 
-拿不准就选「允许」，多问几次不亏。看不懂它要干什么时点「显示完整输入」，能看到原始参数。
+When in doubt, pick **Allow** — being asked a few extra times costs nothing. If you can't tell what it's about to do, click **Show full input** to see the raw arguments.
 
-### 五档权限模式
+### The five permission modes
 
-![输入框上的五档权限菜单](../images/app/zh-CN/permission-modes.webp)
+![The five permission modes in the composer (Chinese interface)](../images/app/en/permission-modes.webp)
 
-输入框工具栏上的权限按钮可以整体调松紧：
+The permission button in the composer toolbar sets the overall strictness:
 
-| 模式 | 它会做什么 |
+| Mode | What it does |
 |---|---|
-| 询问权限 | CLI 请求时确认文件编辑和高风险命令 |
-| 自动接受编辑 | Claude 无需询问即可写入磁盘 |
-| 自动模式 | Claude 会审查工具调用，并执行其认为安全的操作 |
-| 计划模式 | 仅架构和推理，不操作文件 |
-| 跳过权限 | 对 Shell 和文件系统的完整工具访问 |
+| Ask permissions | Confirm file edits and higher-risk commands when CLI asks |
+| Auto accept edits | Claude writes to disk without asking |
+| Auto mode | Claude reviews tool calls and runs actions it considers safe |
+| Plan mode | Architecture and reasoning only, no files |
+| Bypass permissions | Full tool access for shell and file system |
 
-「自动模式」和「跳过权限」第一次开启需要确认一次。计划模式下 Claude 只出方案不动文件，方案写完会弹出「准备开始编码？」，你可以批准或者让它继续改方案。
+**Auto mode** and **Bypass permissions** each require a one-time confirmation. In Plan mode Claude produces a plan without touching files; when it's done you get a "Ready to code?" prompt where you can approve the plan or send it back for changes.
 
-会话正在跑的时候权限模式是锁住的，等这一轮结束才能改。
+The permission mode is locked while a turn is running and unlocks when the turn finishes.
 
 :::warning
-「跳过权限」等于把 Shell 和整个文件系统交出去，只在你能随时恢复的隔离环境里用。
+**Bypass permissions** hands over your shell and your entire file system. Use it only in an isolated environment you can restore.
 :::
 
-## 改错了怎么撤
+## Undoing a turn
 
-Claude 每完成一轮并修改文件，对话里会出现一张「{n} 个文件已更改」的卡片，列出这一轮碰过的文件。卡片上有两个动作：
+After each turn that changes files, a card appears in the conversation reading "**{n} files changed**", listing every file that turn touched. It offers two actions:
 
-- **撤销当前轮次** — 回滚最近一次回复，并把这一轮改过的文件恢复回去。
-- **回滚到这一轮之前** — 对历史轮次用，把会话和文件一起退回那个检查点。
+- **Undo current turn** — roll back the latest reply and restore the files it changed.
+- **Roll back to before this turn** — for older turns: rewind both the conversation and the files to that checkpoint.
 
-点了会先弹确认框，里面可以选**代码和对话一起回滚**，还是**只回滚对话**（保留磁盘上的文件不动）。
+Both ask for confirmation first, where you choose between rolling back **code and conversation together** or **the conversation only** (leaving the files on disk untouched).
 
-纯对话轮次或失败后没有文件变化时，不会显示空的文件卡片；回复下方会出现一个轻量的「回滚对话」入口。它会把会话退回这一轮之前并回填原提示词，磁盘上的文件保持不变。
+For a text-only turn, or a failed turn that made no file changes, no empty file card is shown. A lightweight **Roll back conversation** action appears below the response instead. It rewinds the session to before that turn, refills the original prompt, and leaves files on disk untouched.
 
-检查点记录的是 Claude 通过编辑工具（Read/Edit/Write 那一类）改过的文件。**Shell 命令写出去的文件不在检查点里**：`npm install`、`rm`、重定向到文件的命令，撤销都还原不了。遇到这种轮次，卡片和确认框会点名是哪些工具没被记录，撤销照常可用，但只还原它列出的那些文件。需要兜底就用 git。
+Checkpoints capture the files Claude changed through its editing tools. **Files written by shell commands are not checkpointed** — `npm install`, `rm`, or a command redirecting into a file cannot be undone. On such a turn the card and the confirmation name the tools that went unrecorded; undo still works, but it only restores the files it lists. Use git for anything you need a guaranteed way back from.
 
-如果某一轮的文件检查点本身残缺（会话记录损坏、路径不安全等），代码就还原不了了，确认框里只剩「只回滚对话」——对话永远能退回去。
+When a turn's file checkpoint is itself incomplete (a damaged session log, an unsafe path), the code cannot be restored and the confirmation offers only **Roll back conversation only** — the conversation can always be rewound.
 
-### 编辑历史消息并重新运行
+### Editing a message and running it again
 
-想改一下某条提示词再跑一遍（比如回复被截断、需求没说清），把鼠标移到自己发过的消息上，点铅笔图标「编辑并重新发送」。消息会原地变成编辑框，原来的附件和引用以标签形式保留，可以删掉不要的；按 Enter 发送（跟随设置里的发送方式），Esc 取消。取消时会话不会有任何变化。
+To reword a prompt and run it again (a truncated reply, a request that missed a constraint), hover one of your own messages and click the pencil, **Edit and resend**. The message turns into an editor in place. Its attachments and references stay as chips you can remove. Enter sends (following your send-key setting) and Esc cancels. Cancelling leaves the session untouched.
 
-能编辑的消息和能回滚的轮次是同一批：已经完成的轮次，包括失败或中断的轮次。助手还在运行、有后台任务、子 Agent 或团队成员会话、侧边对话里不提供编辑。
+The messages you can edit are the same turns you can roll back: completed turns, including failed or interrupted ones. Editing is not offered while Claude is running, while background tasks run, in subagent or team-member sessions, or in a side chat.
 
-发送后会把会话回滚到这条消息之前，再发送修改后的内容，回滚方式和上面的撤销完全一样：
+Sending rewinds the session to before that message and then sends the edited text, using exactly the rollback described above:
 
-- 只是最近一轮、也没有可还原的文件改动时，直接回滚对话并发送，不再确认。
-- 编辑更早的消息时，确认框会说明这条消息之后有几轮对话会被删除。
-- 从这一轮开始有可还原的文件改动时，可以选「回滚代码和对话并发送」，或「仅回滚对话并发送」（磁盘上的文件保持现状）。文件检查点残缺时只剩后者。
+- For the latest turn with no restorable file changes, the conversation is rolled back and the edit sent without asking.
+- For an older message, the confirmation says how many later turns will be deleted.
+- When files changed from that turn on and can be restored, choose **Roll back code and conversation and send** or **Roll back conversation only and send** (files on disk stay as they are). With an incomplete file checkpoint, only the second is offered.
 
-如果回滚没成功，对话和文件都不会变，编辑框保留你写的内容。如果回滚成功但消息没能自动发出，修改后的内容会放回底部输入框，不会丢。
+If the rollback fails, neither the conversation nor the files change, and the editor keeps your text. If the rollback succeeds but the message cannot be sent automatically, your edited text goes back into the composer instead of being lost.
 
-编辑一条发生在上下文压缩之前的消息时，会话会退回到压缩之前，重新运行时用的是完整的原始上下文。
+Editing a message from before a context compaction rewinds past the compaction, so the rerun works from the full original context.
 
-## 活动面板：它现在在忙什么
+## The Activity panel
 
-标签栏右侧第一个按钮打开活动面板，里面按区块列出这条会话的所有并行工作：
+The first button on the right of the tab bar opens the Activity panel, which lists everything running in parallel for this session:
 
-- **任务** — Claude 自己维护的待办清单，顶部显示「任务进度 3/7」。
-- **SubAgent** — 它派出去的子 Agent，点进去能看子 Agent 完整的运行记录。
-- **后台任务** — 挂在后台跑的命令和工作流，可以单独停掉某一个。任务结束时 Claude 会收到通知并接着处理，它的回复照常出现在对话里。
-- **团队** — 用到 Agent Team 时，每个成员一行，可以点进去直接给某个成员发消息。
+- **Tasks** — the to-do list Claude maintains for itself, with "Task progress 3/7" at the top.
+- **SubAgents** — the agents it delegated to. Open one to read its full transcript.
+- **Background tasks** — commands and workflows running in the background; each can be stopped individually. When one finishes, Claude is notified and carries on, and its reply appears in the conversation as usual.
+- **Team** — when an Agent Team is in play, one row per member, and you can message a member directly.
 
-后台跑的子 Agent 的工具活动也会冒泡到这里，不用等它跑完才知道它在干什么。
+Tool activity from background subagents bubbles up here too, so you don't have to wait for one to finish to see what it's doing.
 
-团队成员遇到模型服务断流、限流、5xx 这类临时故障会自己重试，成员行显示「自动重试 2/5」，不用你或主控介入；重试用完，或者遇到需要你处理的错误（比如 API Key 失效、余额不足、订阅额度用完），成员行显示「出错」并通知主控。问题解决后给主控发一句「继续」就行：它会收到出错成员的清单，逐个唤醒它们从保存的对话接着干，不会重做已完成的部分。按停止按钮会让整组成员一起停下，主控也不会再自己处理成员发来的汇报，但进度不会丢：你下一次给主控发消息时，它会知道哪些成员停在了哪个任务上，再按你的意思决定要不要让它们继续；你也可以直接给某个成员发消息，它会从保存的对话接着干，显示「已停止」的成员也一样。切换模型或权限模式不会打断团队；重启应用后团队还在，给成员发消息即可继续。删除会话或执行 `/clear` 才会结束团队。
+Team members retry on their own when the model service drops a stream, rate-limits, or returns a 5xx; the member row shows "Auto-retry 2/5" and neither you nor the lead has to step in. When the retries run out, or the error needs you (an expired API key, an empty balance, a used-up subscription limit), the row shows "Error" and the lead is told. Once the problem is fixed, tell the lead to continue: it gets the list of members that stopped on an error and wakes each one, which picks up from its saved conversation without redoing finished work. The Stop button halts the whole team, and the lead stops acting on its members' reports, without losing progress: your next message to the lead tells it which members stopped on which tasks, and it decides from your words whether they carry on. You can also message a member directly; it picks up from its saved conversation, and the same goes for a member marked "Stopped". Switching the model or permission mode doesn't interrupt the team, and after an app restart the team is still there — message a member to continue. Deleting the session or running `/clear` ends the team.
 
-## 轨迹：每一步到底发生了什么
+## Trajectory: what actually happened, step by step
 
-会话标题右侧的「对话 / 轨迹」切到「轨迹」，同一条会话会换成一张逐行的流水表，输入框和草稿都还在。每一行是一件事，按发生顺序排列，左侧标出「第 N 轮」：
+Switch **Chat / Trajectory** next to the session title to **Trajectory** and the same session turns into a ledger, one line per event, with your composer and draft still in place. Lines run in order, with "Turn N" marked on the left:
 
-- **系统** — 发给模型的系统提示词。第一次是「初始系统提示词」；之后提示词或工具清单变了，会出现「系统提示词已更新」「工具已更新」。
-- **用户** — 你发的消息，包括运行中插入的消息。
-- **上下文** — Harness 自动注入的内容：技能列表、调用技能时载入的 SKILL.md、CLAUDE.md 与日期、待办提醒、记忆、Hook 输出、计划模式提醒、压缩摘要等。
-- **助手** — 每一次模型回复一行，右侧是这一次的输入 / 输出 token 和大致耗时；只调了工具没说话的显示「（仅工具调用）」。
-- **工具** — 一次工具调用一行，格式是「工具名 参数 → 结果」，失败的标红。
+- **System** — the system prompt sent to the model. The first one is "Initial system prompt"; after that, "System prompt updated" or "Tools updated" appears whenever the prompt or the tool catalog changes.
+- **User** — your messages, including ones queued while a turn was running.
+- **Context** — what the harness injected: the skill list, a SKILL.md loaded when a skill was invoked, CLAUDE.md and the date, todo reminders, memories, hook output, plan-mode reminders, compaction summaries, and so on.
+- **Assistant** — one line per model response, with that call's input / output tokens and approximate duration on the right. A response that only called tools shows "(tool calls only)".
+- **Tool** — one line per tool call, as "name arguments → result". Failed calls are red.
 
-顶部的小地图按「输入 / 模型 / 工具」三条泳道铺开整段已加载的轨迹，点任意位置跳到对应行；打开「按耗时显示」后，慢的调用会更宽。工具栏还能折叠所有轮次、隐藏工具调用、搜索。
+The minimap at the top lays the loaded trajectory out in three lanes — input, model, tools — and clicking anywhere jumps to that line. With **Size by duration** on, slow calls take up more width. The toolbar also folds every turn, hides tool calls, and searches.
 
-点任意一行，右侧打开详情：概述、预览、参数 / 结果、原始内容；系统行可以看完整系统提示词、工具清单，以及和上一版的差异。Agent 工具行可以「查看子代理轨迹」，进入子 Agent 自己的流水表。详情里的「在对话中定位」跳回对话里的那条消息；反过来，对话里每张工具卡片右上角悬停出现的按钮能直接跳进轨迹。
+Click any line to open its details on the right: overview, preview, input / result, and the raw record. A system line shows the full system prompt, the tool catalog, and a diff against the previous version. An Agent tool line offers **View subagent trajectory**, which opens the subagent's own ledger. **Locate in chat** jumps back to the message in the conversation; in the other direction, hovering a tool card in the chat shows a button that jumps straight into the trajectory.
 
-在「设置 → 通用」开启 Agent Trace 后，助手行还会多一个「原始请求」页，显示那次调用实际发出的请求和收到的响应，用来排查服务商报错。
+With Agent Trace enabled in **Settings → General**, assistant lines also get a **Raw request** tab showing the request that call actually sent and the response it got back — useful when a provider returns an error.
 
-## 输入框能干的事
+## What the composer can do
 
-![输入 `/` 弹出的斜杠命令面板](../images/app/zh-CN/composer-slash.webp)
+![The slash-command panel that opens when you type `/` (Chinese interface)](../images/app/en/composer-slash.webp)
 
-- **`/` 斜杠命令** — 输入 `/` 弹出命令面板。`/status` 看会话状态和用量、`/context` 看上下文占用、`/compact` 压缩上下文、`/review` 审查改动、`/commit` 提交、`/memory` 打开项目记忆、`/doctor` 打开诊断检查。
-- **`@` 引用文件或会话** — 输入 `@` 搜索文件和历史会话。文件以路径附到消息上；会话以可点击的引用附到消息上。
-- **附件** — 点 `+` 选文件，或者直接把文件拖进输入框、把截图粘贴进来。图片、PDF、目录都收。
-- **上下文用量环** — 那个小圆环显示当前上下文用掉多少，鼠标停上去能看到已用 / 剩余 / 窗口大小。快满了就 `/compact` 一下。
-- **模型与推理强度** — 随时换模型；推理强度有低、中、高、极高、最大五档，不支持的模型会自动忽略。
-- **运行位置** — 显示当前项目和分支。Git 项目可以在这里切分支，或者打开「独立工作树」，把这次试验隔离在主分支之外，详见[工作区](./workspace.md)。
+- **`/` slash commands** — type `/` for the command panel. `/status` for session state and usage, `/context` for context breakdown, `/compact` to compress, `/review` to review changes, `/commit`, `/memory` to open project memory, `/doctor` to open the diagnostics check.
+- **`@` file and session references** — type `@` to search files and past sessions. Files are attached as paths; sessions appear as clickable references.
+- **Attachments** — click `+`, drag files in, or paste a screenshot. Images, PDFs, and directories all work.
+- **Context usage ring** — the small ring shows how much of the context window is used; hover it for used, free, and window size. When it fills up, run `/compact`.
+- **Model and effort** — switch models at any time. Effort has five levels — low, medium, high, xhigh, max — and models that don't support a level ignore it.
+- **Location** — shows the current project and branch. In a Git project you can switch branches here, or turn on **Isolated worktree** to keep an experiment off your main branch. See [Workspace](./workspace.md).
 
-发送方式默认是 Enter 发送、Shift+Enter 换行，可以在 设置 → 通用 里改成 `Ctrl/Cmd+Enter` 发送。`⌘.` 停止当前生成。
+Enter sends and Shift+Enter inserts a newline by default; **Settings → General** can swap that to `Ctrl/Cmd+Enter`. `⌘.` stops the current generation.
 
-## 引用历史会话与分派工作
+## Referencing sessions and delegating work
 
-输入 `@`，搜索并选择之前的会话，再说明要参考什么，例如「参考 @登录方案 的结论，补充退出登录流程」。引用本身不复制整段历史，也不自动生成摘要。Claude 会按需读取所引用会话的一页内容，需要更多上下文时继续读取。点击消息中的会话引用可以打开原对话；引用不会向原对话发消息或让它继续运行。
+Type `@`, select a past session, and explain what to reuse: for example, “Use the conclusions from @Login design to add a sign-out flow.” A reference does not copy the full history or generate a summary. Claude reads a page of the referenced conversation when needed and can request more pages. Click a reference in a message to open its source. Referencing a session does not message it or restart its work.
 
-要并行推进工作，可以直接说：「创建两个独立会话，一个检查接口，一个检查测试；互通发现，完成后向这里汇报。」Claude 可以使用以下工具：
+To work in parallel, ask: “Create two independent sessions: one to review the API and one to review the tests. Share findings and report back here.” Claude can use these tools:
 
-| 工具 | 用途 |
+| Tool | Purpose |
 |---|---|
-| `ListSessions` | 查找已有会话 |
-| `ReadSession` | 分页读取会话内容 |
-| `CreateSession` | 新建独立会话并分派任务 |
-| `SendSessionMessage` | 向另一个会话发送消息 |
-| `WaitSessions` | 等待任务状态变化 |
+| `ListSessions` | Find existing sessions |
+| `ReadSession` | Read conversation content in pages |
+| `CreateSession` | Create an independent session and assign work |
+| `SendSessionMessage` | Send a message to another session |
+| `WaitSessions` | Wait for task status changes |
 
-新会话会出现在会话列表中，可以单独打开查看和继续交流。协作面板显示成员状态和消息，并提供打开成员会话的入口。消息「已排队」「已接收」「已读取」表示不同的送达阶段，不代表任务已经完成。
+New sessions appear in the session list and can be opened for direct follow-up. The collaboration panel shows members and messages, with links to each conversation. Queued, accepted, and consumed messages represent delivery stages, not successful task completion.
 
-每组协作最多同时运行 3 个工作会话，其余排队；主控会话不占这 3 个名额。手动向排队中的工作会话发送消息也遵守这一上限；名额已满时会提示稍后重试，原任务继续排队。Git 项目中的新工作会话使用独立 worktree；非 Git 目录使用指定目录，因此并行编辑同一文件时仍需协调。任务 prompt 应包含必要背景，新工作会话不会自动复制主控的全部历史。
+Each collaboration group runs up to three worker sessions at a time; additional workers wait in the queue. The coordinating session does not count toward those three slots. Manual messages to queued workers follow the same limit: when all slots are occupied, the app asks you to retry later and keeps the original assignment queued. New workers in Git projects use separate worktrees. Outside Git, they use the specified directory, so simultaneous edits to the same file still need coordination. Include necessary background in each task prompt: new workers do not automatically inherit the coordinator’s full history.
 
-协作面板的「停止整组」会取消尚未读取的消息和排队任务，并停止整组，并阻止排队消息或完成回报自动唤醒它们。要继续某个成员，打开它并发送新的用户消息；这不会同时恢复整组。普通停止按钮只停止当前会话。子会话仍按自己的权限处理操作，另一会话的消息不能代替你的授权。
+**Stop group** cancels unconsumed messages and queued assignments, stops the whole group, and prevents completion reports from waking it automatically. To continue a member, open its session and send a new user message; this does not resume the entire group. The ordinary Stop button stops only the current session. Each session still applies its own permissions, and a peer message cannot grant approval on your behalf.
 
-这项协作用于当前桌面端管理的本机会话，不会连接其他机器上的 Claude Code 或 Codex 会话。
+Collaboration is limited to local sessions managed by this desktop app. It does not connect to Claude Code or Codex sessions on other machines.
 
-## Fork 一条对话
+## Forking a conversation
 
-历史消息上有「Fork 一个新对话」。从这条消息分叉出一条新会话，之前的上下文都在，之后的走向重来。想换个思路试试但又不想丢掉现在这条线时用它。
+Every past message has **Fork a new conversation**. It branches a new session from that point: everything before it is kept, everything after is up for grabs. Use it when you want to try a different approach without losing the thread you already have.

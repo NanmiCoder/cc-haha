@@ -1,83 +1,83 @@
 ---
 title: Computer Use
 nav_title: Computer Use
-description: 在 macOS、Windows 和 Linux 上，让 Claude 读取界面并操作桌面应用。
+description: Let Claude read interfaces and operate desktop apps on macOS, Windows, and Linux.
 order: 7
 ---
 
 # Computer Use
 
-Computer Use 让 Claude 读取界面元素、截图、点击和输入，完成原生笔记、文件管理器、系统设置及第三方桌面软件里的任务。macOS、Windows 和 Linux 都使用原生运行组件，无需安装 Python 或配置虚拟环境。
+Computer Use lets Claude read interface elements, take screenshots, click, and type in native notes, file managers, system settings, and other desktop apps. macOS, Windows, and Linux use native runtime components; no Python installation or virtual environment is required.
 
-## 支持与后台操作
+## Support and background actions
 
-| 平台 | 环境要求 | 后台操作的边界 |
+| Platform | Requirements | Background action limits |
 |---|---|---|
-| macOS | macOS 14.4 或更新版本，辅助功能与屏幕录制权限 | 原生引擎把输入发给目标进程，不移动真实鼠标；可以在另一个应用里继续工作 |
-| Windows | Windows 10 1809 / Windows Server 2019 或更新版本，已登录用户的交互桌面 | 支持后台语义操作的控件可以读取、点击、设置值。控件自身可能改变焦点，物理输入会使用真实鼠标或键盘 |
-| Linux | 已登录用户的图形会话、AT-SPI 辅助功能服务；推荐 Ubuntu 24.04 或更新版本 | X11 和 Wayland 都能进行受支持的 AT-SPI 后台操作，物理输入、截图与窗口控制受桌面环境限制 |
+| macOS | macOS 14.4 or later, Accessibility and Screen Recording permissions | The native engine directs input to the target process without moving the physical pointer; you can keep working in another app |
+| Windows | Windows 10 1809 / Windows Server 2019 or later, in the signed-in user's interactive desktop | Controls that support background semantic actions can be read, clicked, and assigned values. Controls can change focus themselves. Physical input uses the real mouse or keyboard |
+| Linux | The signed-in user's graphical session and AT-SPI accessibility service; Ubuntu 24.04 or later is recommended | Supported AT-SPI actions work in the background on X11 and Wayland; physical input, capture, and window control depend on the desktop |
 
-**后台操作有条件。** 它不会为 Agent 创建独立的虚拟桌面。目标应用的内容仍会改变；切换窗口、打开系统界面、快捷键和剪贴板操作也可能影响你。请避免和 Agent 同时编辑同一个应用。
+**Background actions have limits.** They do not create an isolated virtual desktop for the agent. Target apps still change; window switching, shell UI, shortcuts, and clipboard operations can affect your work. Avoid editing the same app at the same time as the agent.
 
-Windows 的后台文字替换依赖控件提供可设置的值；模拟逐字输入需要前台执行。最小化窗口可能无法操作，需要先恢复。Linux 的普通应用物理鼠标操作只支持 X11；Wayland 上可以使用语义操作，部分键盘功能还取决于 Mutter RemoteDesktop 能力。Wayland 截图可能要求你确认系统弹窗，剪贴板需要 `wl-clipboard`；普通应用的物理指针和可视化虚拟光标不可用。
+Background text replacement on Windows requires a control with a writable value; simulated typing needs foreground input. Minimized windows may need to be restored first. Linux physical pointer actions for ordinary apps require X11. Wayland supports semantic actions, while some keyboard operations depend on Mutter RemoteDesktop capabilities. Wayland screenshots may require your response to a system consent dialog, and its clipboard needs `wl-clipboard`; ordinary-app physical pointer input and the visual agent cursor are unavailable.
 
-## 开启 Computer Use
+## Enable Computer Use
 
-打开「设置 → Computer Use」，先查看原生运行组件状态，再打开「启用」开关并阅读确认弹窗。
+Open **Settings → Computer Use**, check the native runtime status, then turn on **Enabled** and read the confirmation dialog.
 
-**确认一次后，Computer Use 可以操作这台电脑上的所有受支持应用，不再逐个请求应用授权。** macOS 系统权限、全局开关和目标有效性检查仍然生效。Windows 和 Linux 不会显示 macOS 的权限卡，也不需要「下载 Python」或「安装环境」。
+**One confirmation authorizes Computer Use for all supported apps on this computer; there is no separate approval for each app.** macOS system permissions, the global switch, and target-validity checks still apply. Windows and Linux do not show the macOS permission card or require **Download Python** or **Install Environment**.
 
-![macOS 设置示例：Computer Use 开关与系统权限](../images/app/zh-CN/settings-computer-use.webp)
+![macOS example: Computer Use switch and system permissions](../images/app/en/settings-computer-use.webp)
 
-上图为 macOS 示例。Windows 和 Linux 页面显示原生运行组件及对应平台的输入限制。
+The image shows macOS. Windows and Linux display the native runtime status and their platform's input limits.
 
-### macOS 系统权限
+### macOS system permissions
 
-原生权限卡会引导你为运行组件授予两项权限：
+The native permission card guides you through granting two permissions to the runtime component:
 
-| 权限 | 用途 |
+| Permission | Purpose |
 |---|---|
-| 辅助功能 | 读取应用界面，向目标应用发送操作 |
-| 屏幕录制 | 捕获目标窗口或屏幕 |
+| Accessibility | Read app interfaces and deliver actions to the target app |
+| Screen Recording | Capture the target window or screen |
 
-按权限卡提示完成系统设置，再点「重新检测」。可以通过「重新打开授权卡」再次检查；若授权后仍不生效，完全退出并重新打开 cc-haha，再重新检测。不要把页面上的检查失败当作已授权。
+Follow the card's system-settings instructions, then choose **Recheck Status**. Use **Reopen authorization card** to revisit it. If a new grant has not taken effect, fully quit and reopen cc-haha, then check again. A failed check does not mean permission was granted.
 
-### Windows 和 Linux 环境
+### Windows and Linux environments
 
-Windows 需要在当前已登录用户的桌面里运行。锁屏、UAC 安全桌面、服务的 Session 0 或另一位用户的桌面不属于可操作范围；提权应用也可能受系统权限边界限制。
+Windows must run in the signed-in user's interactive desktop. Locked screens, the UAC secure desktop, services in Session 0, and another user's desktop are outside the supported environment. Elevated apps may also be restricted by system permission boundaries.
 
-Linux 应从目标应用所在的图形会话启动 cc-haha。纯 TTY、缺少会话变量的 SSH、没有桌面总线的容器，或另一位用户的会话无法提供同样的应用访问能力。出现辅助功能总线不可用时，检查桌面会话及 AT-SPI 服务后重新检测。
+On Linux, launch cc-haha from the graphical session containing the target apps. A plain TTY, SSH without desktop session variables, a container without the session bus, or another user's session does not provide the same app access. If the accessibility bus is unavailable, check the graphical session and AT-SPI service, then recheck.
 
-## 开始使用
+## Start a task
 
-新建会话，用自然语言说明目标、应用和允许改动的范围，例如：
+Create a session and describe the goal, app, and permitted changes in plain language:
 
 ```text
-读取文件管理器当前窗口，告诉我有哪些文件，不要修改。
-在笔记应用中新建一条标题为「测试」的空白笔记。
-找到系统设置里的显示器页面，但不要修改任何选项。
+Read the file manager's current window and list its files. Do not change anything.
+Create an empty note titled "test" in the notes app.
+Find the display settings page, but do not change any options.
 ```
 
-在桌面聊天中输入 `/computer-use` 加上任务，或明确写「使用 Computer Use」，可以指定这轮使用原生桌面工具。工具不可用时，聊天会提示原因。
+In desktop chat, start a request with `/computer-use` or explicitly ask to use Computer Use to select the native desktop tools for that turn. If those tools are unavailable, the chat explains why.
 
-Agent 会先观察界面，再操作并重新读取结果。界面变化后需要重新观察，旧坐标或旧元素引用不一定仍然有效。没有暴露辅助功能控件的界面，后台语义操作可能无法完成；这时需要换一种入口，或明确使用会占用前台的物理操作。
+The agent observes the interface, acts, and reads the result. After a UI change, observe again: old coordinates or element references may no longer apply. Interfaces that expose no accessibility controls may not support background semantic actions; another entry point or explicitly allowed foreground input may be needed.
 
-同一时间只有一条产品会话能持有 Computer Use 控制锁。主 Agent 与子 Agent 可以协作并显示各自的光标，操作按队列执行，共享应用状态和剪贴板。虚拟光标用于显示操作位置。
+Only one product session can hold the Computer Use control lock at a time. A main agent and subagents can collaborate and display their own cursors. Operations run in a queue and share app state and the clipboard. The virtual cursor shows where the agent is acting.
 
-在 Windows 上，标有 `Agent` 的光标会在可绘制的操作开始时出现，按所在显示器的缩放比例绘制。回合中两次操作之间最多停留约 45 秒，回合结束或停止后收起。Wayland 上的语义操作通过工具结果反馈。
+On Windows, the cursor appears with an `Agent` label when an action can display it, at the scale of the monitor it is on. It stays visible for up to about 45 seconds between actions during a turn, then clears when the turn finishes or you stop it. On Wayland, tool results report the outcome of semantic actions.
 
-## 中断与排查
+## Stop and troubleshoot
 
-用会话的**停止按钮**中断任务；在 CLI 中使用 **Ctrl+C**。不要依赖在其他应用里按 Esc 就能全局停止。结束后可在设置中关闭 Computer Use；新会话将不再注入相关工具。
+Use the session's **Stop** button, or **Ctrl+C** in the CLI. Do not rely on pressing Esc in another app as a global stop shortcut. Turn Computer Use off in Settings when finished; new sessions will no longer receive its tools.
 
-| 页面或任务提示 | 处理方式 |
+| Message or symptom | What to do |
 |---|---|
-| 原生运行组件缺失 | 更新或重新安装完整应用，再重新检测；从源码运行时先构建原生组件，见[架构与构建](../internals/computer-use.md#构建与分发) |
-| Linux 辅助功能总线不可用 | 确认 cc-haha 和目标应用在同一图形用户会话，且 AT-SPI 服务可用；不要通过反复重启应用猜测权限状态 |
-| macOS 缺权限或检查失败 | 重新打开授权卡，按提示授权并重新检测；必要时完全退出后重开 |
-| Windows 后台输入被拒绝 | 使用支持的后台设置值操作，或允许任务使用前台物理输入；先恢复最小化窗口 |
-| Wayland 指针或窗口命令不支持 | 使用语义操作，或在需要物理鼠标时切换到 X11；不能靠重试补出系统能力 |
-| 操作结果未知 | 先读取最新界面确认结果，不要重复点击、输入或提交 |
-| 正在被其他会话使用 | 等待那条会话完成，或先停止它 |
+| Native runtime missing | Update or reinstall the complete app, then recheck. Source checkouts must build the native component first; see [architecture and builds](../internals/computer-use.md#build-and-distribution) |
+| Linux accessibility bus unavailable | Confirm cc-haha and the app share the same graphical user session and that AT-SPI is available; repeated restarts do not establish permission |
+| macOS permission missing or check failed | Reopen the authorization card, follow its instructions, and recheck; fully quit and reopen if needed |
+| Windows background typing refused | Use a supported background value-setting action, or allow foreground physical input; restore minimized windows first |
+| Wayland pointer or window command unsupported | Use semantic actions, or switch to X11 when physical mouse input is required; retries cannot add a missing platform capability |
+| Action result unknown | Read the current interface before deciding what happened; do not repeat clicks, typing, or submission blindly |
+| Another session is using Computer Use | Wait for that session to finish or stop it first |
 
-截图与界面文本可能包含敏感内容。开始前整理窗口，给任务写清范围；原生运行组件就绪并不保证每个应用、每个控件都能自动化。实现细节见[Computer Use 架构](../internals/computer-use.md)。
+Screenshots and interface text may contain sensitive information. Arrange your windows and define the task's boundaries before starting. A ready runtime does not guarantee automation of every app or control. See [Computer Use architecture](../internals/computer-use.md) for implementation details.

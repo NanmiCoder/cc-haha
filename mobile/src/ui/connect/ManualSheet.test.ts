@@ -53,8 +53,8 @@ test('scanner connection form retains native parent boundaries as fields and key
         assert.equal(surface.props.children[0].props.value, state.mode ?? 'lan')
         assert.equal(surface.props.children[0].props.disabled, state.busy ?? false)
         assert.deepEqual(surface.props.children[0].props.options, [
-          { label: '同一个局域网', value: 'lan' },
-          { label: '远程连接', value: 'remote' },
+          { label: 'Same LAN', value: 'lan' },
+          { label: 'Remote connection', value: 'remote' },
         ])
         if (keyboard) assert.equal(surface.props.style.minHeight, 0)
         rendered.push({ keyboard, busy: state.busy ?? false, mode: state.mode ?? 'lan' })

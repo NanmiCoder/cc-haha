@@ -58,7 +58,7 @@ function ModeRow({ id, title, description, selected, disabled, onPress }: {
   return (
     <Pressable
       accessibilityRole="radio"
-      accessibilityLabel={`${title}${id === 'auto' ? '，需同意' : danger ? '，有风险' : ''}，${disabled ?? description}`}
+      accessibilityLabel={`${title}${id === 'auto' ? ', requires consent' : danger ? ', risky' : ''}, ${disabled ?? description}`}
       accessibilityState={{ checked: selected, disabled: !!disabled }}
       aria-checked={selected}
       disabled={!!disabled}
@@ -91,8 +91,8 @@ function ModeRow({ id, title, description, selected, disabled, onPress }: {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           {danger ? <Glyph name="shield-alert" size={16} color={colors.err} strokeWidth={2} /> : null}
           <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '500', color: danger ? colors.err : colors.ink }}>{title}</Text>
-          {id === 'auto' ? <Tag text="需同意" tone="attn" /> : null}
-          {danger ? <Tag text="有风险" tone="err" /> : null}
+          {id === 'auto' ? <Tag text="Requires consent" tone="attn" /> : null}
+          {danger ? <Tag text="Risky" tone="err" /> : null}
         </View>
         <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{disabled ?? description}</Text>
       </View>
@@ -101,8 +101,8 @@ function ModeRow({ id, title, description, selected, disabled, onPress }: {
 }
 
 /**
- * 怎么跑：权限、模型、思考强度放在同一张底单里（Agent 团队和操作电脑在「＋」里，和桌面端一致）。
- * 受控组件——真正改会话设置的是页面传进来的回调，这里只负责呈现和转发。
+ * How to run: permissions, model and thinking effort live in one sheet (agent team and computer use are in "+", consistent with desktop).
+ * Controlled component — the callbacks passed by the page actually change session settings; this only renders and forwards.
  */
 export function RunSheet({
   visible,
@@ -127,22 +127,22 @@ export function RunSheet({
   runtime?: RuntimeConfig
   onRuntime(value: RuntimeConfig, model?: Model): void
   lean: boolean
-  /** 各项现在不能改的原因；有值就置灰并显示这段文字。 */
+  /** Reasons each item cannot be changed now; when set it is greyed out and shows this text. */
   disabled?: { mode?: string; runtime?: string }
-  /** 例如换模型会停掉后台任务。 */
+  /** e.g. changing the model stops background tasks. */
   warning?: string
   error?: string
-  /** 新任务页专有：运行档位（完整工具 / 轻量）。 */
+  /** New task page only: run tier (full tools / light). */
   profile?: RunProfile
-  /** 切到全权限时确认框里写明的目录。 */
+  /** The directory stated in the confirmation when switching to full access. */
   workDir?: string
 }) {
   const colors = useColors()
   const [modelOpen, setModelOpen] = useState(false)
-  // 每次打开都重读电脑上的来源和设置，丢掉上一次没保存的选择。
+  // Every open rereads sources and settings from the computer, dropping the last unsaved selection.
   const [shown, setShown] = useState(visible)
   const [epoch, setEpoch] = useState(0)
-  // 滑动中的思考强度只记在这里，关掉底单时才提交（见 effortToCommit）。
+  // Thinking effort while sliding is only recorded here and committed when the sheet closes (see effortToCommit).
   const [effortDraft, setEffortDraft] = useState<string>()
   if (shown !== visible) {
     setShown(visible)
@@ -157,7 +157,7 @@ export function RunSheet({
     if (next) onRuntime(next)
     onClose()
   }
-  // 确认框开着时这一轮可能已经开始：确认那一刻按最新状态判断，用最新的回调。
+  // While the confirmation is open a turn may have started: decide by the latest state at the moment of confirmation, using the latest callbacks.
   const latest = useRef({ blocked: reasons.mode, onMode })
   useEffect(() => {
     latest.current = { blocked: reasons.mode, onMode }
@@ -168,7 +168,7 @@ export function RunSheet({
     if (change !== 'confirm') return
     const copy = modeConfirmation(next === 'auto' ? 'auto' : 'bypassPermissions', workDir)
     Alert.alert(copy.title, copy.message, [
-      { text: '取消', style: 'cancel' },
+      { text: 'Cancel', style: 'cancel' },
       {
         text: copy.confirm,
         style: copy.destructive ? 'destructive' : 'default',
@@ -178,14 +178,14 @@ export function RunSheet({
       },
     ])
   }
-  // 这里只用它查当前供应商和模型的能力；不带强度，改强度时不会重读整个目录、让滑块闪成转圈。
+  // Here it is only used to look up capabilities of the current provider and model; without effort, so changing effort does not reread the whole catalog and flash the slider into a spinner.
   const choice = useRuntimeChoice({
     client,
     initial: runtime ? { providerId: runtime.providerId, modelId: runtime.modelId } : undefined,
     active: visible,
     epoch,
   })
-  // 模型已经选定：强度档位跟着它走，读不到模型列表时也给通用档位，不让用户先去重选模型。
+  // Model already chosen: effort tiers follow it, and generic tiers are given even when the model list cannot be read, without making the user reselect a model first.
   const current =
     runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
   const efforts = effortSegments({
@@ -201,12 +201,12 @@ export function RunSheet({
     <DetentSheet
       visible={visible}
       onClose={close}
-      title="运行方式"
+      title="Run mode"
       initialDetent="full"
-      footer={<Button title="完成" size="lg" onPress={close} />}
+      footer={<Button title="Done" size="lg" onPress={close} />}
     >
-      <Section title="权限">
-        <View accessibilityRole="radiogroup" accessibilityLabel="权限" style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
+      <Section title="Permissions">
+        <View accessibilityRole="radiogroup" accessibilityLabel="Permissions" style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
           {modes.map((item, index) => (
             <View key={item.id}>
               {index > 0 ? <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 48 }} /> : null}
@@ -224,10 +224,10 @@ export function RunSheet({
         {reasons.mode ? <Footnote>{reasons.mode}</Footnote> : null}
       </Section>
 
-      <Section title="模型">
+      <Section title="Model">
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`模型：${modelRowLabel({ source: choice.source?.name, model: choice.model?.name ?? runtime?.modelId })}`}
+          accessibilityLabel={`Model: ${modelRowLabel({ source: choice.source?.name, model: choice.model?.name ?? runtime?.modelId })}`}
           accessibilityState={{ disabled: !!reasons.runtime || !client }}
           disabled={!!reasons.runtime || !client}
           onPress={() => setModelOpen(true)}
@@ -252,10 +252,10 @@ export function RunSheet({
         {warning ? <Callout style={{ marginTop: 8 }}>{warning}</Callout> : null}
       </Section>
 
-      <Section title="思考强度">
+      <Section title="Thinking effort">
         {efforts.length ? (
           <EffortSlider
-            label="思考强度"
+            label="Thinking effort"
             disabled={!!reasons.runtime}
             options={efforts}
             value={effortDraft ?? effortValue ?? ''}
@@ -269,15 +269,15 @@ export function RunSheet({
           </View>
         ) : (
           <Footnote style={{ paddingTop: 0 }}>
-            {!runtime ? '先选定模型，再调思考强度。' : effortUnavailableReason(choice)}
+            {!runtime ? 'Choose a model first, then adjust thinking effort.' : effortUnavailableReason(choice)}
           </Footnote>
         )}
       </Section>
 
       {profile ? (
-        <Section title="运行档位">
+        <Section title="Run tier">
           <Segmented
-            label="运行档位"
+            label="Run tier"
             height={44}
             disabled={!!profile.disabled}
             options={[
@@ -301,7 +301,7 @@ export function RunSheet({
         warning={warning}
         onApply={(value, model) => {
           setModelOpen(false)
-          // 换了模型就以新模型的强度为准，之前滑的草稿作废。
+          // When the model changes the new model's effort wins and the previously slid draft is discarded.
           setEffortDraft(undefined)
           onRuntime(value, model)
         }}

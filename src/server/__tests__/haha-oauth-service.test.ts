@@ -1,5 +1,5 @@
 /**
- * Unit tests for HahaOAuthService — haha 自管 OAuth 的核心 service 层。
+ * Unit tests for HahaOAuthService — the core service layer for haha's self-managed OAuth.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'

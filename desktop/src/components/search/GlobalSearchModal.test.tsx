@@ -372,7 +372,7 @@ describe('GlobalSearchModal', () => {
       render(<GlobalSearchModal open onClose={() => {}} />)
       const input = screen.getByPlaceholderText(/search all chats/i)
       fireEvent.compositionStart(input)
-      fireEvent.change(input, { target: { value: '搜索' } })
+      fireEvent.change(input, { target: { value: 'Search' } })
 
       await act(async () => {
         vi.advanceTimersByTime(300)
@@ -386,7 +386,7 @@ describe('GlobalSearchModal', () => {
         await Promise.resolve()
       })
       expect(mockSearch).toHaveBeenCalledTimes(1)
-      expect(mockSearch.mock.calls[0]?.[0]).toBe('搜索')
+      expect(mockSearch.mock.calls[0]?.[0]).toBe('Search')
     } finally {
       vi.useRealTimers()
     }

@@ -1213,7 +1213,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   }
 
   return (
-    // The new-session page (「素」, su-12). On desktop the composer sits in the
+    // The new-session page ("Su" spec, su-12). On desktop the composer sits in the
     // flow between the hero (bottom-aligned) and the starter row (top-aligned),
     // which puts it just above the middle of the page. On a phone it stays
     // docked to the bottom edge, above the keyboard, and the project sits at

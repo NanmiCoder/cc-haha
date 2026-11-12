@@ -32,7 +32,7 @@ const LOCALE_STORAGE_KEY = 'cc-haha-locale'
 const ACTIVE_SETTINGS_TAB_STORAGE_KEY = 'cc-haha-active-settings-tab'
 // Schema 6 retired the standalone Trace page: its list tab, its per-session
 // tabs and its Settings rail entry. Per-session traces now live in the chat's
-// 轨迹 view, so a trace tab reopens as that session's chat tab.
+// Trajectory view, so a trace tab reopens as that session's chat tab.
 const LEGACY_TRACE_LIST_TAB_ID = '__traces__'
 const LEGACY_TRACE_TAB_PREFIX = '__trace__'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -43,7 +43,7 @@ const PERSISTED_SPECIAL_TAB_IDS: Record<(typeof PERSISTED_SPECIAL_TAB_TYPES)[num
   market: '__market__',
   connectors: '__connectors__',
 }
-const SUPPORTED_LOCALES = ['en', 'zh', 'zh-TW', 'jp', 'kr']
+const SUPPORTED_LOCALES = ['en']
 const WORKSPACE_PERSISTED_TAB_KINDS = ['file', 'browser', 'review', 'terminal']
 
 function readJson(storage: StorageLike, key: string): unknown {
@@ -195,9 +195,9 @@ function migrateSessionRuntime(storage: StorageLike, report: DesktopMigrationRep
 }
 
 /**
- * The 「纸 · 墨 · 印」 redesign replaced three theme keys with six.
+ * The "Paper · Ink · Seal" redesign replaced three theme keys with six.
  *
- * `light` was the warm workspace, labelled 经典暖色 in the picker, so it lands
+ * `light` was the warm workspace, labelled Warm Classic in the picker, so it lands
  * on `warm-classic` — the palette carrying the same name. Without this it
  * would fail the enum check and silently reset those users to the default,
  * which reads as "the app forgot my theme" rather than as a rename.

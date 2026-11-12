@@ -319,12 +319,7 @@ const updateCheckOptions: Validator = value => {
   return value.proxy === undefined || (typeof value.proxy === 'string' && value.proxy.trim().length > 0)
 }
 
-const localePreference: Validator = value =>
-  value === 'en'
-  || value === 'zh'
-  || value === 'zh-TW'
-  || value === 'jp'
-  || value === 'kr'
+const localePreference: Validator = value => value === 'en'
 
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,

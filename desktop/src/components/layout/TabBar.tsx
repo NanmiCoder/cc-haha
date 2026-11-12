@@ -246,7 +246,7 @@ export function TabBar() {
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
   // Whether a waiting tab is scrolled out of view on each side. The mark on the
-  // tab itself is no use to someone who cannot see the tab, and "tab 多了" is
+  // tab itself is no use to someone who cannot see the tab, and "too many tabs" is
   // exactly when that happens.
   const [attentionOffscreen, setAttentionOffscreen] = useState({ left: false, right: false })
   // `updateScrollState` is a stable callback with no dependencies, so it reads
@@ -612,7 +612,7 @@ export function TabBar() {
         active tab can be filled with `--color-surface` and read as a sheet
         lifted off the desk, continuous with the content below it. Painting the
         strip `--color-surface` instead collapses strip, active tab and content
-        into one flat plane, which is what #1123 reported as "粗犷".
+        into one flat plane, which is what #1123 reported as "crude".
 
         Deliberately *not* darkened into a Chrome-style trough: keeping it on
         the sidebar's exact ground is what stops the titlebar reading as a
@@ -694,7 +694,7 @@ export function TabBar() {
         16px rule rather than a full-height `border-l`, because a 52px line
         standing next to a row of 16px ones reads as a different kind of
         divider. `--color-border` is not an option for either — calibrated
-        against paper, it all but disappears on the trough (1.12:1 on 素白),
+        against paper, it all but disappears on the trough (1.12:1 on Pure White),
         which left the toolbar looking welded to the last tab.
       */}
       {/*
@@ -702,7 +702,7 @@ export function TabBar() {
         and, on Windows, the window controls — are the header's siblings in
         here, and they are transparent, so whichever element paints has to
         contain them. With the panel open the workspace's own tab strip sits in
-        this frame, and in 「素」 that strip is a trough like the session tabs:
+        this frame, and in the "Su" spec that strip is a trough like the session tabs:
         the sidebar's ground, with the active resource tab as the paper sheet
         that runs into the panel below. One ground for everything above it.
       */}

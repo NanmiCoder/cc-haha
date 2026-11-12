@@ -60,9 +60,9 @@ afterEach(() => {
 
 describe('AssistantMessage link routing', () => {
   it('opens a localhost link in the in-app browser on left-click', () => {
-    render(<AssistantMessage sessionId="s1" content={'打开 [预览](http://localhost:5173/)'} />)
+    render(<AssistantMessage sessionId="s1" content={'Open [Preview](http://localhost:5173/)'} />)
     // The clickable element is the rendered markdown anchor (the card title is a span).
-    fireEvent.click(screen.getByRole('link', { name: '预览' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Preview' }))
     expect(openBrowser).toHaveBeenCalledWith('s1', 'http://localhost:5173/')
   })
 
@@ -112,7 +112,7 @@ describe('AssistantMessage output-target cards', () => {
     render(
       <AssistantMessage
         sessionId="s1"
-        content={'本地服务运行在 http://localhost:5173/ 上'}
+        content={'Local server running at http://localhost:5173/'}
         isStreaming={false}
       />,
     )
@@ -125,10 +125,10 @@ describe('AssistantMessage output-target cards', () => {
       <AssistantMessage
         sessionId="s1"
         content={[
-          '日志前 50 行：',
+          'First 50 log lines:',
           '```log',
-          '[08:29:36][INFO] 代理服务已启动: 127.0.0.1:15721',
-          '[08:29:36][INFO] Claude Live 配置已接管，代理地址: http://127.0.0.1:15721',
+          '[08:29:36][INFO] proxy service started: 127.0.0.1:15721',
+          '[08:29:36][INFO] Claude Live config taken over, proxy address: http://127.0.0.1:15721',
           '```',
         ].join('\n')}
         isStreaming={false}
@@ -142,14 +142,14 @@ describe('AssistantMessage output-target cards', () => {
     render(
       <AssistantMessage
         sessionId="s1"
-        content={'见 [说明文档](docs/readme.md)'}
+        content={'see [Readme](docs/readme.md)'}
         isStreaming={false}
         turnChangedFiles={['docs/readme.md']}
         turnOutputEvidence={{ unlistedWrites: false }}
       />,
     )
     // Link text appears in both the bubble anchor and the card title; the badge is unique.
-    expect(screen.getByRole('link', { name: '说明文档' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Readme' })).toBeInTheDocument()
     expect(screen.getByText('assistantOutputs.kind.markdown')).toBeInTheDocument()
   })
 
@@ -157,7 +157,7 @@ describe('AssistantMessage output-target cards', () => {
     render(
       <AssistantMessage
         sessionId="s1"
-        content={'渲染结果见 outputs/foo/preview_frame.png'}
+        content={'Render output in outputs/foo/preview_frame.png'}
         isStreaming={false}
       />,
     )
@@ -216,7 +216,7 @@ describe('AssistantMessage output-target cards', () => {
     const { container } = render(
       <AssistantMessage
         sessionId="s1"
-        content={'生成的视频见 outputs/demo.mp4'}
+        content={'Generated video in outputs/demo.mp4'}
         isStreaming={false}
       />,
     )
@@ -236,7 +236,7 @@ describe('AssistantMessage output-target cards', () => {
     const { container } = render(
       <AssistantMessage
         sessionId="s1"
-        content={'旧图 /work/old.png、相对图 outputs/relative.png、旧视频 outputs/old.mp4'}
+        content={'old image /work/old.png, relative image outputs/relative.png, old video outputs/old.mp4'}
         isStreaming={false}
         turnChangedFiles={[]}
       />,
@@ -251,9 +251,9 @@ describe('AssistantMessage output-target cards', () => {
       <AssistantMessage
         sessionId="s1"
         content={[
-          '本地服务 http://localhost:5173/',
-          '见 [说明](docs/readme.md)',
-          '页面 [首页](out/index.html)',
+          'Local server http://localhost:5173/',
+          'see [Notes](docs/readme.md)',
+          'page [Home](out/index.html)',
         ].join('\n')}
         isStreaming={false}
         turnChangedFiles={['docs/readme.md', 'out/index.html']}
@@ -269,7 +269,7 @@ describe('AssistantMessage output-target cards', () => {
     render(
       <AssistantMessage
         sessionId="s1"
-        content={'本地服务运行在 http://localhost:5173/ 上'}
+        content={'Local server running at http://localhost:5173/'}
         isStreaming={true}
       />,
     )
@@ -280,7 +280,7 @@ describe('AssistantMessage output-target cards', () => {
     render(
       <AssistantMessage
         sessionId="s1"
-        content={'装一下 `npm install` 然后看 [anchor](#section)'}
+        content={'run `npm install`, then see [anchor](#section)'}
         isStreaming={false}
       />,
     )
@@ -291,7 +291,7 @@ describe('AssistantMessage output-target cards', () => {
   it('does NOT render cards when sessionId is absent', () => {
     render(
       <AssistantMessage
-        content={'本地服务运行在 http://localhost:5173/ 上'}
+        content={'Local server running at http://localhost:5173/'}
         isStreaming={false}
       />,
     )

@@ -1,149 +1,149 @@
 ---
-title: 连接模型服务
-nav_title: 连接模型
-description: 官方账号、第三方 API、本地模型，三种接法任选一种，十分钟内跑起来。
+title: Connect a model
+nav_title: Connect a model
+description: Official accounts, third-party APIs, or a local model — pick one and be running in ten minutes.
 order: 2
 ---
 
-# 连接模型服务
+# Connect a model
 
-cc-haha 自己不带模型，它只是那个替你干活的壳。装完之后第一件事，是给它接一个能思考的大脑。
+cc-haha ships without a model. It's the shell that does the work; you have to give it a brain first.
 
-点侧边栏最底部的「设置」，选左边第一栏「服务商」。接下来你有三条路：
+Click "Settings" at the bottom of the sidebar, then pick the first tab, "Providers". From there you have three routes:
 
-- **有官方账号** — Claude、ChatGPT、Grok、DeepSeek 四张内置卡，点一下走浏览器登录，不用填 API 密钥。
-- **有第三方 API 密钥** — DeepSeek、Kimi、智谱 GLM 这些都有现成预设，填个密钥就能用。
-- **想完全免费** — 本机跑 LM Studio 或 Ollama，模型在你自己的显卡上，一分钱不花，断网也能用。
+- **You have an official account** — Claude, ChatGPT, Grok, and DeepSeek each have a built-in card. One click opens a browser sign-in. No API key to type.
+- **You have a third-party API key** — DeepSeek, Kimi, Zhipu GLM and others come as presets. Paste the key and you're done.
+- **You want it free** — run LM Studio or Ollama on your own machine. The model runs on your GPU, costs nothing, and works offline.
 
-三条路可以同时配好，在服务商列表里随时切换。
+You can configure all three and switch between them in the provider list.
 
-## 官方账号登录
+## Sign in with an official account
 
-「设置 → 服务商」页面顶部有四张卡：
+Four cards sit at the top of Settings → Providers:
 
-| 卡片 | 需要什么 |
+| Card | What you need |
 |---|---|
-| **Claude 官方** | 一个 Claude.ai 账号（Pro / Max 订阅，或有额度的 API 账号） |
-| **ChatGPT 官方** | 一个 ChatGPT 账号，走 OpenAI OAuth |
-| **Grok 官方** | 一个 xAI 账号，走 Grok 官方 OAuth |
-| **DeepSeek 账号** | 一个 DeepSeek 开放平台账号，用账号余额计费，不需要 API 密钥 |
+| **Claude Official** | A Claude.ai account (Pro / Max subscription, or an API account with credit) |
+| **ChatGPT Official** | A ChatGPT account, via OpenAI OAuth |
+| **Grok Official** | An xAI account, via official Grok OAuth |
+| **DeepSeek Account** | A DeepSeek platform account, billed to the account balance; no API key |
 
-点卡片上的登录按钮（「登录 Claude 账号」/「登录 ChatGPT」/「登录 Grok」/「登录 DeepSeek」），系统浏览器会打开对应的授权页面。用同一个账号完成授权后，浏览器会自动跳回应用，卡片上显示「已登录」。
+Click the sign-in button on the card ("Sign in to Claude" / "Sign in with ChatGPT" / "Sign in with Grok" / "Sign in with DeepSeek"). Your system browser opens the provider's authorization page; complete it with the same account and the browser hands you back to the app, where the card now reads as signed in.
 
-三条注意事项：
+Three things to watch for:
 
-- 授权全程别关掉 cc-haha，回调要落回正在运行的应用。
-- 浏览器没自动打开，就点「复制授权链接」，自己粘到浏览器里。
-- 挂了代理或装了拦截类扩展时，授权页和本机回调都可能被挡住。授权失败先把它们关掉再试。
+- Leave cc-haha running for the whole flow — the callback has to land in the running app.
+- If the browser doesn't open by itself, click "Copy authorization link" and paste it in manually.
+- Proxies and blocking browser extensions can intercept either the authorization page or the local callback. Turn them off before retrying.
 
-登录之后能用哪些模型，取决于你的账号权限和订阅档位——文档里出现过某个模型名，不代表你的账号一定能调。
+Which models you get afterwards depends on your account tier and entitlements, not on the app. A model name appearing in documentation doesn't mean your account can call it.
 
-## 第三方 API 服务商
+## Third-party API providers
 
-有 API 密钥的话，这条路最省事：点「添加服务商」，在「预设」里选一个，接口地址和默认模型会自动填好，你只需要粘贴密钥。
+With an API key in hand, this is the fastest route. Click "Add Provider", pick something under "Preset", and the base URL and default models are filled in for you — all you supply is the key.
 
-内置预设（按弹窗里的排列）：
+The built-in presets, as they appear in the dialog:
 
-- **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
-- **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
-- **七牛云 AI** · **OpenRouter** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
-- **LM Studio** · **Ollama** — 本地模型，见下一节。
-- **Custom** — 上面都没有，自己填。
+- **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — major Chinese model vendors; the base URLs point at each one's Anthropic-compatible endpoint.
+- **XuanShu API** · **FennoAI** — routing services that give you access to official Claude models through their own gateways.
+- **Qiniu Cloud AI** · **OpenRouter** — aggregators: one key for DeepSeek, GLM, Kimi, Qwen, Claude, and more.
+- **LM Studio** · **Ollama** — local models; see the next section.
+- **Custom** — anything not listed above.
 
-FennoAI 和七牛云 AI 能用哪些模型取决于你买的套餐，所以这两个预设只填接口地址、不预填模型：粘好密钥后点「拉取模型」，从实时列表里挑一个即可。
+Which models FennoAI and Qiniu Cloud AI give you depends on the plan you bought, so those two presets fill in the base URL only and pin no models: paste your key, hit "Fetch models", and pick one from the live list.
 
-选中预设后，如果这家服务商有申请密钥的页面，密钥输入框下面会出现一颗「获取 API Key」按钮，点开就是注册/取密钥的地址。
+When a preset has a signup page for API keys, a "Get API Key" button appears under the key field.
 
 ### OpenRouter
 
-OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kimi 等多家厂商的模型。预设把接口地址填成 `https://openrouter.ai/api`：它在这条地址上提供 Anthropic 原生协议，应用直连、不经过本地代理，thinking、工具调用和提示词缓存都按原生语义走。和本地模型一样，这个地址后面不要再补 `/v1`。
+OpenRouter is an aggregator: one key reaches Claude, DeepSeek, GLM, Kimi and more. The preset fills in `https://openrouter.ai/api`, where OpenRouter serves an Anthropic-native protocol. The app connects directly instead of going through the local proxy, so thinking, tool use, and prompt caching keep their native semantics. As with the local models, don't append `/v1` to that address.
 
-三点需要留意：
+Three things to know:
 
-- **模型 ID 带 `author/slug` 命名空间**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4-pro`。预设的四个槽位预填的都是 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑，别照抄别处的名字——模型一多，手写很容易拼错。
-- **Claude Code 只保证 Anthropic 第一方服务商的完全兼容。** 经 OpenRouter 调其他厂商的模型，工具调用、thinking 或参数形态可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
-- **要用 `/fast`**，模型槽位得固定写一个具体的 Opus ID（`~…-latest` 这类别名不会带上 fast 参数），并在「设置 JSON」的 `env` 里加 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`。想让 Claude Code 用自带的模型发现，同样在 `env` 里加 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
+- **Model IDs carry an `author/slug` namespace**, e.g. `anthropic/claude-sonnet-5.5` or `deepseek/deepseek-v4-pro`. All four prefilled slots are Claude 5.5; for anything else, click "Fetch models" and pick from the live list instead of copying a name from elsewhere — with a catalogue this size, a hand-typed ID is easy to get wrong.
+- **Claude Code only guarantees full compatibility with Anthropic first-party providers.** Reaching another vendor's model through OpenRouter can hit differences in tool calling, thinking, or parameter shape. On a 400, check "Disable experimental beta headers" first, then try another model.
+- **To use `/fast`**, pin the slot to a specific Opus ID (`~…-latest` aliases don't carry the fast parameter) and add `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1` to `env` in "Settings JSON". To let Claude Code run its own model discovery, add `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` there too.
 
-## 本地模型
+## Local models
 
-想彻底不花钱、不联网，就在本机跑一个模型服务，让应用连过去。
+To spend nothing and stay offline, run a model server on your machine and point the app at it.
 
-**LM Studio**：在 LM Studio 里加载好模型并启动本地服务器，然后在「添加服务商」里选 `LM Studio` 预设，接口地址填 `http://localhost:1234`。
+**LM Studio**: load a model, start the local server, then choose the `LM Studio` preset in "Add Provider" with base URL `http://localhost:1234`.
 
-**Ollama**：`ollama serve` 起来之后，选 `Ollama` 预设，接口地址填 `http://localhost:11434`。
+**Ollama**: run `ollama serve`, choose the `Ollama` preset, and use base URL `http://localhost:11434`.
 
-连接时注意两点：
+Check two things when connecting:
 
-1. **接口地址后面不要加 `/v1`。** 这两家都提供 Anthropic 兼容协议，应用走的是那条路径，多加 `/v1` 会直接 404。
-2. **按模型实际支持的大小配置上下文窗口。** 200K 不是统一的最低门槛；窗口需要容纳系统提示词、工具定义、已加载的 Skills 和当前任务。较小窗口可能容纳不下这些内容，长任务也更容易触发压缩。服务端的实际窗口在 LM Studio 或 Ollama 自己的模型配置里设置，不要声明超出实际支持范围的数值。
+1. **Do not append `/v1` to the base URL.** Both of these expose an Anthropic-compatible protocol and the app uses that path. Adding `/v1` gives you a straight 404.
+2. **Configure the context window to match what the model actually supports.** 200K is not a universal minimum. The window needs to hold the system prompt, tool definitions, loaded Skills, and current task. A smaller window may not fit that content, and longer tasks trigger compaction more often. Set the server's actual window in LM Studio or Ollama's model settings; do not declare a value beyond what it supports.
 
-本地模型能否完成 Agent 工作流，取决于模型的工具调用能力、接口兼容性、配置和任务。如果出现只输出文字却不调用工具，应结合请求、响应和工具配置排查，不能仅凭模型参数量判断原因。
+Whether a local model can complete an agent workflow depends on its tool-calling ability, API compatibility, configuration, and task. If it outputs text without calling tools, inspect the requests, responses, and tool configuration rather than inferring the cause from model size alone.
 
 ## Magpie
 
-[Magpie](https://usemagpie.ai) 是一个本机网关：你在它里面配好的 API Key、订阅、本地模型和路由组，都从同一个地址转给各个 Agent。已经在用 Magpie 的话，不用再在这里重复填一遍。
+[Magpie](https://usemagpie.ai) is a local gateway: the API keys, subscriptions, local models and routing groups you set up in it are served to every agent from one address. If you already use Magpie, there is nothing to enter twice here.
 
-1. 打开 Magpie。模型配置页的「API Key」列表最上面会出现「Magpie 正在本机运行」，点「接入」。
-2. 选一个主模型，点「接入并设为默认」。不需要密钥，也不用填地址。
+1. Open Magpie. "Magpie is running on this computer" appears at the top of the API Key list in Model Settings; click "Connect".
+2. Pick a main model and click "Connect and make default". No key, no address.
 
-接入后，输入框的模型选择里会列出 Magpie 的全部模型，每个对话随时换。每个模型的上下文长度和最大输出都直接用 Magpie 给的值，压缩点和上下文百分比跟着模型走；Magpie 没给出上下文长度的模型（本地模型常见）先按 200K 计算，最好在 Magpie 里给它填上。默认在上下文快用满时压缩，想省用量可以在 Magpie 配置的「编辑」里改成「到 272K 时」。
+Once connected, the composer's model picker lists every Magpie model, and each conversation can switch at any time. Each model's context length and reply limit come straight from Magpie, so the compaction point and the context percentage follow the model. A model Magpie gives no context length for (common for local models) is counted as 200K; set its length in Magpie. Compaction happens when the context is nearly full by default; to save usage, choose "At 272K" under the Magpie configuration's "Edit".
 
-Magpie 没开时，这条配置会显示「没有运行」，发消息也会提示去打开 Magpie；它不会自动换到别的配置。在 Magpie 里改了端口，下次检测时自动跟上。
+While Magpie is closed, the configuration shows "Not running" and sending a message tells you to open Magpie; it never switches to another configuration on its own. If you change Magpie's port, the next check follows it.
 
-## 「添加服务商」弹窗逐个字段
+## The Add Provider dialog, field by field
 
-![添加服务商弹窗：预设、接口地址、认证变量、API 密钥、模型映射](../images/app/zh-CN/settings-provider-add.webp)
+![Add Provider dialog: preset, base URL, auth variable, API key, model mapping (Chinese interface)](../images/app/en/settings-provider-add.webp)
 
-**名称**（必填）— 显示在服务商列表里的名字。选了预设会自动填，可以改成你认得出的，比如「DeepSeek-工作号」。
+**Name** (required) — how this provider appears in the list. A preset fills it in; rename it to something you'll recognize, like "DeepSeek — work account".
 
-**备注** — 给自己看的一句话，比如"月底到期"。不影响任何请求。
+**Notes** — a line for yourself, e.g. "expires end of month". Doesn't affect any request.
 
-**接口地址**（必填）— 服务商的 API 根地址，不是它的官网地址。预设会自动填对。自己填的时候注意别把接口路径写重复了：如果地址里已经有 `/anthropic`，后面就不要再补 `/v1/messages`。
+**Base URL** (required) — the provider's API root, not its marketing site. Presets get this right. When entering it yourself, watch for duplicated path segments: if the URL already ends in `/anthropic`, don't also append `/v1/messages`.
 
-**认证变量** — 决定密钥以什么形式发出去，五个选项：
+**Auth Variable** — decides how your key is transmitted. Five options:
 
-| 选项 | 什么时候用 |
+| Option | When to use it |
 |---|---|
-| API Key (`ANTHROPIC_API_KEY`) | 直连 Anthropic 官方 API，发 `x-api-key` 头 |
-| Bearer Token (`ANTHROPIC_AUTH_TOKEN`) | 绝大多数第三方 Anthropic 兼容服务，发 `Authorization: Bearer` |
-| Bearer + 清空 API_KEY | OpenRouter、Ollama 这类，必须避免回退到 Anthropic 密钥 |
-| 两个变量写同一个 Token | Hugging Face Router 这类同时检查两个变量的服务 |
-| 两个变量写 dummy | 本地 vLLM 这类只需要占位认证值的服务 |
+| API Key (`ANTHROPIC_API_KEY`) | Direct Anthropic API access, sends an `x-api-key` header |
+| Bearer Token (`ANTHROPIC_AUTH_TOKEN`) | Nearly all third-party Anthropic-compatible services, sends `Authorization: Bearer` |
+| Bearer + Empty API_KEY | OpenRouter, Ollama and similar, which must not fall back to an Anthropic key |
+| Write token to both variables | Services like Hugging Face Router that check both |
+| Write dummy to both variables | Local vLLM-style services that only need placeholder auth |
 
-预设会自动选对。自己填的时候拿不准就先用 Bearer Token，401 了再换 API Key。
+Presets pick the right one. If you're guessing, start with Bearer Token and switch to API Key if you get a 401.
 
-**启用 Tool Search**（默认开）— 开着的时候，MCP 工具和一部分工具定义按需加载，能省下首轮很大一块 schema token。但它依赖模型支持 `tool_reference`。**如果接的是能力较弱的模型，或者服务商直接拒绝这种请求形态，把它关掉。**
+**Enable Tool Search** (on by default) — loads MCP tools and part of the tool definitions on demand, saving a large chunk of schema tokens on the first turn. It depends on the model supporting `tool_reference`. **Turn it off for weaker models, or for providers that reject this request shape.**
 
-**关闭实验性 Beta 头** — 给这个服务商设置 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`。有些第三方通道见到 beta 形态的 API 请求会直接报错，勾上它就不发这些头了。**报 400 或者"不支持的参数"时优先试这个。**
+**Disable experimental beta headers** — sets `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` for this provider. Some third-party gateways error out on beta-shaped API requests; checking this stops the headers being sent. **Try this first when you see a 400 or an "unsupported parameter" error.**
 
-**API 密钥**（必填，本地模型除外）— 从服务商控制台复制过来的密钥。粘贴时注意别带上前后的空格。密钥存在本机，不会上传到任何地方。
+**API Key** (required except for local models) — copied from the provider's console. Watch for leading or trailing whitespace when pasting. The key stays on your machine.
 
-**模型映射** — 四个槽位，填的是**模型 ID**，不是模型的中文名：
+**Model Mapping** — four slots, each taking a **model ID**, not a product name:
 
-- **主模型**（必填）— 日常对话用的模型，必须支持工具调用。
-- **Haiku 模型** — 留空则跟随主模型。这个槽位承担标题生成、文件摘要这类轻量活儿，映射到一个便宜的小模型能省不少钱。
-- **Sonnet 模型 / Opus 模型** — 留空则跟随主模型。用得上分档时再填。
+- **Main Model** (required) — the model used for conversation. It must support tool calling.
+- **Haiku Model** — leave blank to follow the main model. This slot handles lightweight work like title generation and file summaries; mapping it to a cheap small model saves real money.
+- **Sonnet Model / Opus Model** — leave blank to follow the main model. Fill these in only when you actually want tiering.
 
-每个槽位下面有个 `1M` 复选框，只有当这个模型确实支持一百万 token 上下文时才勾。
+Each slot has a `1M` checkbox. Tick it only if that model genuinely supports a one-million-token context window.
 
-**API 格式** — 这一项只在选了 `Custom` 预设、或者编辑已有服务商时才出现，三个选项：Anthropic Messages（原生）、OpenAI Chat Completions（代理转换）、OpenAI Responses API（代理转换）。后两种会由应用在本机起一个回环代理做协议转换，你不用自己部署任何东西。所有内置预设走的都是 Anthropic 原生，所以看不到这一项。
+**API Format** — this field only appears when you pick the `Custom` preset or edit an existing provider. Three options: Anthropic Messages (native), OpenAI Chat Completions (proxied), and OpenAI Responses API (proxied). The proxied formats are translated by a loopback proxy the app starts locally — you don't deploy anything. Every built-in preset uses Anthropic native, which is why the field is hidden for them.
 
-填完点「添加」。
+Click "Add" when you're done.
 
-## 保存之后
+## After saving
 
-回到服务商列表，对着刚加的这一条：
+Back in the provider list, on the entry you just created:
 
-1. 点「测试」。Anthropic 原生格式只测一步「① 连通」；OpenAI 格式会多测一步「② 代理转换」。两步都绿了才算通。
-2. 点「设为默认」，让新会话默认用它。
-3. 多个服务商可以拖动排序，顺序只影响列表显示。
+1. Click "Test". Anthropic-native providers run one step, "① Connectivity"; OpenAI formats add "② Proxy pipeline". Both must pass.
+2. Click "Set default" so new sessions use it.
+3. Multiple providers can be dragged to reorder. Order only affects how the list is displayed.
 
-然后新建一条会话，**在输入框右下角的模型选择器里挑具体模型**——那里列出的才是当前服务商真正能用的模型。旁边那颗按钮是推理强度，不确定就保持默认。
+Then start a new session and **pick the specific model from the model selector at the bottom right of the composer** — that list reflects what the active provider actually offers. The control next to it sets reasoning effort; leave it at the default if you're unsure.
 
 :::tip
-测试通过不等于万事大吉。它只证明接口通、认证对，不代表这个模型能撑住工具调用和长上下文。真正的验收是发一条会真的改文件的任务，看它有没有动手。
+A passing test isn't a guarantee. It proves the endpoint is reachable and the credentials work — not that the model can sustain tool calls and long context. The real check is asking for a task that edits a file, and seeing whether it actually does.
 :::
 
-连不上、401、模型列表是空的？去 [装不上 / 打不开 / 连不上](./troubleshooting.md) 的「模型连不通」一节。
+Getting a 401, a connection failure, or an empty model list? See the model section of [Won't install, won't open, won't connect](./troubleshooting.md).
 
-模型接好了，就可以 [跑通第一条会话](./first-session.md) 了。
+With a model connected, go [run your first session](./first-session.md).

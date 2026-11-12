@@ -10,7 +10,7 @@ import { useTeamStore } from '../stores/teamStore'
  * with the turn idle — background subagents or a running team. A team member's
  * or subagent's own session never offers Stop; its lead owns that.
  *
- * The composer and the 轨迹 toolbar both offer Stop. The rule lives here so the
+ * The composer and the Trajectory toolbar both offer Stop. The rule lives here so the
  * view that hides the composer cannot drift from the one it replaces.
  */
 export type SessionStopOffer = 'turn' | 'background' | null

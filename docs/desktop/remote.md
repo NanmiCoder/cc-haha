@@ -1,201 +1,203 @@
 ---
-title: 手机 App、H5 与 IM 接力
-nav_title: 手机与 IM
-description: 从手机连接入口用浏览器扫码接力，了解手机 App 发布状态与外出连接方法。
+title: Mobile App, H5, and IM
+nav_title: Phone and IM
+description: Open Phone connection to continue tasks in a browser, check mobile app availability, and set up access away from home.
 order: 9
 ---
 
-# 手机 App、H5 与 IM 接力
+# Mobile App, H5, and IM
 
-电脑上跑着的任务，想在手机上看进度、追加一句话，可以从桌面左侧 **手机连接** 进入，也可从 **设置 → 手机连接** 进入。可以安装 cc-haha 手机 App，也可以直接用手机浏览器扫码连接。
+A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**. You can install the cc-haha mobile app, or connect with your phone's browser.
 
-## cc-haha 手机 App 安装状态
+## cc-haha mobile app availability
 
-| 手机上的打开方式 | 当前状态 | 如何使用 |
+| How to open cc-haha on your phone | Availability | How to get started |
 |---|---|---|
-| cc-haha Android App | 已发布，正式签名 APK 随每个桌面端版本发布 | 在 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) 下载 `cc-haha-mobile-*.apk` 安装 |
-| cc-haha iPhone / iPad App | TestFlight 公开测试 | 先在 App Store 安装 TestFlight，再打开[公开链接](https://testflight.apple.com/join/Nd49JrWZ)加入 |
-| 手机浏览器（H5） | 现在可用 | 点击「先用浏览器连接」，按下方步骤开启连接并扫码 |
+| cc-haha Android app | Available; a signed APK ships with every desktop release | Download `cc-haha-mobile-*.apk` from [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) and install it |
+| cc-haha iPhone / iPad app | TestFlight public beta | Install TestFlight from the App Store, then open the [public link](https://testflight.apple.com/join/Nd49JrWZ) |
+| Phone browser (H5) | Available now | Select **Use phone browser**, then enable the connection and scan as described below |
 
-手机 App 需要配合桌面端 v0.7.6 或更新版本使用，界面目前只有中文。
+The mobile app works with desktop v0.7.6 or later.
 
-「先用浏览器连接」会切换到 **同一 Wi-Fi**，需要你阅读提示并主动开启连接。手机和电脑在同一个可信 Wi-Fi 时可以直接连接；外出、使用蜂窝网络或其他 Wi-Fi 时，使用下方的 **Cloudflare 外出连接**。两种方式都无需在手机上额外安装 VPN。
+**Use phone browser** selects **Same Wi-Fi**. You still need to read the notice and enable the connection yourself. Connect directly when your phone and computer share a trusted Wi-Fi network. Use **Cloudflare remote connection** below over cellular data or another Wi-Fi network. Neither method needs another VPN app on the phone.
 
-这些方式都需要电脑开着、cc-haha 正在运行且未休眠；外出连接开启期间，cc-haha 默认会阻止电脑自动休眠（见下文 **外出时保持电脑唤醒**）。任务始终在电脑上执行。Cloudflare 隧道负责外出时的网络通路，cc-haha 手机 App 和浏览器负责查看任务与处理审批。
+Keep the computer on, awake, and running cc-haha. While the remote connection is on, cc-haha keeps the computer from sleeping on its own by default (see **Keep this computer awake while away** below). Tasks always execute on the computer. Cloudflare Tunnel provides connectivity while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
 
-离开 App 后的审批、完成和出错提醒不需要在电脑上额外配置。iPhone 由 Expo 推送服务转发系统通知，电脑需要能访问 `exp.host`。Android 靠通知栏里常驻的「正在值守」直接连着电脑，不依赖 Google 服务；小米、华为、OPPO、vivo 等手机还要在 App 的「设置 → 通知」里点「允许后台运行」，并在系统设置里允许 cc-haha 自启动、在最近任务里锁定它。
+Approval, completion and error alerts after you leave the app need no setup on the computer. On iPhone, the Expo push service relays system notifications, so the computer must be able to reach `exp.host`. On Android, the persistent "On duty" notification keeps a direct connection to the computer without Google services; on Xiaomi, Huawei, OPPO, vivo and similar phones, also tap **Allow background running** under the app's **Settings → Notifications**, and allow cc-haha to auto-start and stay locked in recent apps in the system settings.
 
-想直接在微信、钉钉、WhatsApp、Telegram 或飞书里对话，可使用本页最后的 **IM 接入**。
+To chat from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, see **IM Adapters** at the end of this page.
 
-## H5 访问
+## H5 Access
 
-### 开启
+### Turning it on
 
-1. 点击桌面左侧 **手机连接**（也可从 **设置 → 手机连接** 进入）。
-2. 点击「先用浏览器连接」，或选择 **同一 Wi-Fi**。
-3. 打开「开启局域网连接」，读一遍风险提示后确认。
-4. 用手机相机扫码，在常用的 Safari、Chrome 或系统浏览器中打开；也可复制扫码链接到自己的设备。
+1. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**.
+2. Select **Use phone browser**, or choose **Same Wi-Fi**.
+3. Turn on **Enable local connection** and confirm after reading the warning.
+4. Scan the QR code with your phone camera and open it in your usual Safari, Chrome, or system browser. You can also copy the launch URL to your own device.
 
-如果旧配置缺少已保存的令牌，点「生成令牌」后再扫码。
+If an older configuration has no saved token, click **Generate token** to show a new QR code.
 
-扫出来的链接里带着服务器地址和令牌。用手机相机扫码后，在你常用的 Safari、Chrome 或系统浏览器中打开，首次验证成功会把连接信息保存在该浏览器的 localStorage 中，并移除地址栏中的令牌。之后再次扫码或打开收藏可直接连接；短暂断网不会删除配对，连接失败时可点击「重试」使用已保存的凭据。令牌被撤销或重新生成后，需要用新二维码更新。
+The scanned link carries the server address and token. Scan with your phone camera and open it in your usual Safari, Chrome, or system browser. Successful verification stores the connection in that browser's localStorage and removes the token from the address bar. Scanning again or opening a bookmark reconnects automatically. Temporary network failures do not forget pairing; choose **Retry** to use the saved credential. A revoked or regenerated token requires a fresh QR code.
 
-![手机浏览器里的会话页，和 cc-haha 手机 App 是同一套界面](../images/app/zh-CN/h5-session.webp)
+![A conversation in a phone browser: the same interface as the cc-haha phone app (Chinese only)](../images/app/en/h5-session.webp)
 
-### 令牌是访问凭据
+### The token is the credential
 
-拿到这条链接的人就能访问你桌面上暴露出来的能力。所以：
+Anyone holding that link can reach what your desktop exposes. So:
 
-- 不要把带令牌的链接贴进群聊、公开 Issue、日志截图或任何公开页面。
-- 只在可信网络里开。离开局域网后，使用下方的「Cloudflare 外出连接」，通过 HTTPS 和逐设备配对连接。
-- 怀疑泄露了就点「重新生成令牌」。旧二维码和旧令牌会立刻失效——只是关掉再打开 H5 不会换令牌。
+- Never paste a link containing the token into a group chat, a public issue, a log screenshot, or any public page.
+- Only enable it on networks you trust. Outside your LAN, use **Cloudflare remote connection** below for HTTPS and individual device pairing.
+- If you suspect a leak, click **Regenerate token**. The old QR code and old token stop working immediately. Turning H5 off and on again does *not* rotate the token.
 
-不用的时候关掉。关掉会立即拒绝远程访问，但令牌保留着，下次开还是同一个。
+Turn it off when you're not using it. That immediately rejects remote access while keeping the token, so the same one still works next time.
 
 :::warning
-H5 默认关闭，它也不是公开服务。开启前先确认你在自己信得过的网络里。
+H5 is off by default, and it isn't a public service. Confirm you're on a network you trust before enabling it.
 :::
 
-### 访问主机与固定端口
+### Access host and fixed port
 
-「访问主机 / IP」填电脑当前的局域网 IP，比如 `192.168.1.20`，端口用当前服务端口。换了 Wi-Fi 或插拔网线之后原 IP 可能失效，页面会提示你切到可用的那个。
+**Access host / IP** takes your computer's current LAN IP, e.g. `192.168.1.20`, on the current service port. After switching Wi-Fi or unplugging Ethernet the old IP may no longer be yours; the page notices and offers the working one.
 
-局域网 H5 也接受完整 URL，并需要配置「允许的来源」。这仍然是原有的 H5 令牌访问方式。要从其他网络连接手机 App 或浏览器，请使用下方的「Cloudflare 外出连接」，由桌面自动接到独立受限网关，不要直接映射桌面主服务端口。
+LAN H5 also accepts a full URL with the corresponding **Allowed origins** configuration. That remains the existing H5 token access mode. To connect the mobile app or browser from another network, use **Cloudflare remote connection** below and let the desktop connect its separate, restricted gateway instead of mapping the desktop's main service port.
 
-通常无需填写 IP 或端口；开启后直接扫码。需要手动配置时，展开下方的「高级连接设置」。其中的**固定端口**用于保持局域网地址稳定，或配合局域网防火墙和反向代理。端口要在 1024–65535 之间，改完重启应用才生效——页面会告诉你现在还跑在哪个端口上。它与下方远程入口的本机端口相互独立。
+Usually you can turn on the connection and scan without entering an IP or port. Open **Advanced connection settings** only when you need a manual override. A **fixed port** here keeps the LAN address stable or works with a LAN firewall or reverse proxy. The port must be between 1024 and 65535, and the change takes effect after a restart — the page tells you which port is currently live in the meantime. It is independent of the remote entry's local port below.
 
-### 手机锁屏不会打断任务
+### Locking your phone won't kill the task
 
-「断连保活」解决的是这个问题：手机锁屏、切后台或者短暂断网时，**正在执行的任务不会被停掉**，它会在后台跑完，重连就能看到结果。
+That's what **Disconnect grace** is for: when your phone locks, backgrounds the tab, or drops off the network briefly, **a running task is not stopped**. It finishes in the background and the result is waiting when you reconnect.
 
-只有当任务已经空闲、并且没有任何设备连着时，才会在保活时间到期后停掉对应进程。默认 30 秒，可配范围是 5 秒到 24 小时。出门远程操作可以调大一些，比如 600。
+Only when a task is idle *and* nothing is connected does the CLI process stop, after the grace period. The default is 30 seconds and the valid range is 5 seconds to 24 hours. Raise it — say to 600 — if you're operating remotely for a while.
 
-### 手机上能做什么
+### What works on a phone
 
-手机和平板浏览器里打开的，就是 cc-haha 手机 App 的同一套界面：首页按「最近」和项目列出任务；新任务、对话、工具审批、AI 提问、计划确认、Agent 团队（计划审批、成员进度和执行记录）、上下文用量、改动与文件预览、定时任务、后台活动和这台电脑的新任务默认设置，都和 App 一样。界面目前只有中文。
+A phone or tablet browser opens the same interface as the cc-haha phone app: home lists tasks under Recent and by project, and new tasks, conversations, tool approvals, questions, plan review, Agent Teams (plan review, member progress and run logs), context usage, changes and file preview, scheduled tasks, background activity and this computer's defaults for new tasks all work as in the app. The interface is currently Chinese only.
 
-和 App 相比，浏览器里没有推送通知、锁屏实时活动和系统权限设置，也不能添加或切换其他电脑：页面只连接打开它的这台电脑。文件预览里的「下载文件」会直接保存到手机，代替 App 的系统分享。语音输入需要 HTTPS，局域网 `http://` 地址下不可用，外出连接可以使用。用鼠标或触控板的电脑（包括带触摸屏的笔记本）在宽窗口里打开时，仍然是桌面版界面。
+Compared with the app, a browser has no push notifications, lock-screen live activities or system permission settings, and cannot add or switch to another computer: the page only connects to the computer that served it. **Download file** in the file preview saves the file to the phone instead of the app's share sheet. Voice input needs HTTPS, so it is unavailable on a LAN `http://` address but works over the remote connection. A computer driven by a mouse or trackpad, including a laptop with a touch screen, still gets the desktop interface in a wide window.
 
-供应商与 API Key、MCP、技能与插件、配置文件导入等管理仍在电脑上完成。桌面工作区、内嵌终端、原生「打开方式」、Computer Use 授权和桌面宠物不在 H5 里。终端暂未开放：它目前由 Electron 管理，远程终端需要单独支持连接恢复、设备授权和撤销，不能直接复用桌面 IPC。
+Providers and API keys, MCP, skills and plugins, and configuration import remain on the computer. The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5. Remote terminal execution is deferred: the current terminal is owned by Electron and requires a separate device-authorized transport with reconnect and revocation support.
 
-## Cloudflare 外出连接
+## Cloudflare remote connection
 
-离开家或办公室后，使用 **Cloudflare** 连接这台电脑。桌面端自动运行连接程序，手机 App 和浏览器都不需要另外安装 VPN。手机请求经过 Cloudflare，再到达 cc-haha 的独立受限网关；配对、访问授权和任务执行仍由你的电脑处理。
+Away from home or the office, use **Cloudflare** to connect to this computer. The desktop manages the connector automatically; neither the phone app nor the browser needs another VPN app. Requests pass through Cloudflare to cc-haha's separate, restricted gateway. Your computer still handles pairing, access authorization, and task execution.
 
-打开 **手机连接** 时默认显示 **外出连接 → 快速连接**。选择方式只会显示配置，连接默认关闭，需要你主动开启并确认访问说明。
+**Phone connection** opens on **Away from home → Quick connection**. Selecting a method only shows its settings. Access stays off until you enable it and confirm the notice.
 
-### 快速连接：无需账号或域名
+### Quick connection: no account or domain
 
-1. 打开桌面左侧 **手机连接**，保持 **外出连接 → 快速连接**。
-2. 点击 **开启连接**，首次开启时阅读并确认访问说明。
-3. 等待页面完成准备、连接和公网入口检查。显示 **连接已就绪** 后会自动给出配对二维码，无需复制命令或手动填写地址。
-4. 用手机相机或 cc-haha App 扫码。浏览器用户在常用的 Safari、Chrome 或系统浏览器中打开。
-5. 在电脑上核对并批准这部手机，配对后即可查看任务和处理审批。
+1. Open **Phone connection** in the desktop sidebar and keep **Away from home → Quick connection** selected.
+2. Click **Enable connection**. Read and confirm the access notice the first time.
+3. Wait for preparation, connection, and the public-entry check. When **Connection ready** appears, a pairing QR code is shown automatically. No terminal command or address entry is needed.
+4. Scan with your phone camera or the cc-haha app. Browser users should open the link in their usual Safari, Chrome, or system browser.
+5. Check and approve the phone on your computer. After pairing, view tasks and respond to approvals from the phone.
 
-快速连接会分配临时的 `https://随机名称.trycloudflare.com` 地址。**每次重新建立隧道，地址都会改变**；短暂断网后在同一条隧道内重连不等于重新配对，cc-haha 内部服务重启时也会沿用原隧道和地址。地址变了以后，已配对的手机这样找回电脑：
+Quick connection assigns a temporary `https://random-name.trycloudflare.com` address. **Each newly created tunnel gets a new address.** Reconnecting the same tunnel after a brief network interruption does not itself require pairing again, and the tunnel and its address also survive a restart of cc-haha's internal service. After the address changes, a paired phone finds the computer again like this:
 
-- 手机和电脑在同一个局域网时，App 连不上旧地址就会向电脑查询新地址，用配对凭据校验后自动换过去。电脑为此在外出连接端口的下一个端口上监听局域网，只回答这一个查询；Windows 防火墙可能会询问是否允许。
-- 开了通知的 iPhone 会收到一条「电脑地址已更新」的推送，点开或下次打开 App 时自动换到新地址。
-- 其他情况（例如人在外面、Android 手机）要等回到电脑旁边：连上同一个 Wi-Fi 后自动更新，或者重新扫码。
+- On the same local network, the app asks the computer for its new address when the old one stops answering, checks the answer against its pairing credential, and switches over. For this the computer listens on the LAN on the port after the remote-access port and answers only that lookup; Windows Firewall may ask whether to allow it.
+- An iPhone with notifications on receives a "computer address updated" push and switches over when you tap it or next open the app.
+- Otherwise (away from home, or on Android) it updates once the phone is back on the same Wi-Fi as the computer, or after a new scan.
 
-Cloudflare 将 Quick Tunnel 定位为临时开发与测试入口，不保证持续可用，详见 [Quick Tunnel 官方说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。需要重启后保持地址时，使用下方的固定域名方式。
+Cloudflare positions Quick Tunnels for temporary development and testing, without an uptime guarantee. See the [official Quick Tunnel guide](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/). Use the fixed-domain method below to retain the address across restarts.
 
-“连接已就绪”表示电脑已经验证公网入口可达，不能代替手机所在网络的验证。建议关闭手机 Wi-Fi、使用蜂窝网络扫码测试。
+**Connection ready** means the computer verified the public entry. Your phone's network still needs its own check: turn off Wi-Fi and scan over cellular data.
 
-### 固定域名：使用你创建的隧道
+### Fixed domain: use a tunnel you create
 
-此方式需要 Cloudflare 账号，以及已经添加到 Cloudflare 的自有域名。cc-haha 负责运行连接程序，你只需在 Cloudflare 创建隧道和配置域名。
+This method requires a Cloudflare account and a domain already added to Cloudflare. cc-haha runs the connector; you create the tunnel and its hostname route in Cloudflare.
 
-1. 在桌面 **手机连接 → 外出连接** 选择 **固定域名**。
-2. 点击 **打开 Cloudflare**，在 **Networking → Tunnels** 创建隧道。创建后页面会给出安装命令，复制其中任意一条即可。**不要在终端运行这些命令**：cc-haha 自带连接程序，执行 `cloudflared service install` 反而会在电脑上多装一个开机常驻的系统服务。
-3. 回到 cc-haha，把复制的命令粘贴到 **Tunnel Token**。页面会从命令里取出 Token，并显示识别到的隧道 ID，可以和 Cloudflare 页面上的 Tunnel ID 对照。点击 **开启连接**，状态变为 **等待 Cloudflare 路由**；此时 Cloudflare 页面的 Connection Status 会显示已连接，**Continue** 变为可点。
-4. 在 Cloudflare 点击 **Continue**，添加 **Published application**：选择你要使用的域名，例如 `phone.example.com`；**Service URL** 原样填写 cc-haha 页面显示的本机地址，默认是 `http://127.0.0.1:17463`，保留 `http://`，不要改成 `https://`，也不要加路径。
-5. 保存后 cc-haha 会自动识别这个域名并检查入口。检查通过后用手机扫码，并在电脑批准配对。
+1. In **Phone connection → Away from home**, choose **Fixed domain**.
+2. Click **Open Cloudflare**. Under **Networking → Tunnels**, create a tunnel. Cloudflare then shows install commands; copy any one of them. **Do not run these commands in a terminal**: cc-haha includes the connector, and `cloudflared service install` would add a system service that starts with the computer.
+3. Back in cc-haha, paste the copied command into **Tunnel Token**. The page takes the token out of the command and shows the tunnel ID it found, so you can compare it with the Tunnel ID in Cloudflare. Click **Enable connection**. The status changes to **Waiting for a Cloudflare route**, Cloudflare's Connection Status shows the tunnel as connected, and **Continue** becomes available.
+4. In Cloudflare, click **Continue** and add a **Published application**. Choose a hostname such as `phone.example.com`, and enter the local address shown in cc-haha as the **Service URL** exactly as shown, normally `http://127.0.0.1:17463`. Keep `http://`; do not change it to `https://` or add a path.
+5. Once it is saved, cc-haha picks up the hostname and checks the entry. When the check succeeds, scan with your phone and approve pairing on the computer.
 
-Cloudflare 的创建向导要先看到连接程序在线，才会进入选择域名这一步，所以要先在 cc-haha 开启连接，再回到 Cloudflare 配置路由。不需要在 cc-haha 填写域名：它以隧道路由里 Service URL 指向本机地址的那个域名为准。如果这条隧道还有其他路由、但没有一条转到本机地址，页面会提示检查 Service URL。完整配置步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/tunnel/get-started/)。
+Cloudflare's setup wizard moves on to the hostname step only after it sees the connector online, so enable the connection in cc-haha first and configure the route in Cloudflare afterwards. You don't enter the hostname in cc-haha: it uses the hostname whose route sends traffic to the local address. If the tunnel has other routes but none of them reach the local address, the page asks you to check the Service URL. See the [official Cloudflare setup guide](https://developers.cloudflare.com/tunnel/get-started/) for the full steps.
 
-cc-haha 只保存命令里的 Token，不会执行命令；Token 只保存在这台电脑上，设置页不会回显。再次编辑时留空表示保留已保存的 Token；需要替换时粘贴新的命令。如果离开了 Cloudflare 的创建页面，可以在隧道详情页点 **Add a replica** 重新复制命令。固定域名保持不变、手机授权仍有效时，桌面重启并恢复隧道后，手机可以使用已保存的连接重新访问。
+cc-haha saves only the token from the command and never runs the command. The token is saved only on this computer and is never returned to the settings field. Leave the field blank to keep a saved token, or paste a new command to replace it. If you have left Cloudflare's creation page, click **Add a replica** on the tunnel's page to copy a command again. With the hostname unchanged and the phone authorization still valid, the phone can reuse its saved connection after the desktop restarts and the tunnel resumes.
 
-### 网络代理与连接失败
+### Network proxy and connection failures
 
-Cloudflare 连接使用 **设置 → 通用 → 网络代理** 中保存的方式：直连、系统代理或手动代理。连接过程和公网入口检查遵循同一代理选择；修改代理后，关闭并重新开启外出连接。
+Cloudflare connections follow the saved mode in **Settings → General → Network proxy**: Direct, System proxy, or Manual proxy. Connection setup and the public-entry check use the same selection. After changing the proxy, turn the remote connection off and on again.
 
-- **直连**：不使用系统或继承的代理设置。
-- **系统代理**：按系统当前的代理或 PAC 规则选择路径。
-- **手动代理**：填写可用的 HTTP/HTTPS 代理地址，需要认证时使用包含有效认证信息的代理地址。
+- **Direct** bypasses system and inherited proxy settings.
+- **System proxy** follows the current OS proxy or PAC rules.
+- **Manual proxy** uses the HTTP/HTTPS proxy address you enter, including its authentication details when required.
 
-电脑上的代理只处理电脑到 Cloudflare 的连接，不会替手机开启 VPN。手机网络仍需要能够访问分配的公网域名。Cloudflare 在中国不同运营商和蜂窝网络中的表现需要实际验证。
+The computer's proxy handles its connection to Cloudflare; it does not enable a VPN on your phone. The phone network must still be able to reach the assigned public hostname. Test Cloudflare with the actual mobile carriers and networks you use in China.
 
-| 现象 | 检查什么 |
+| Symptom | What to check |
 |---|---|
-| 一直处于连接中或显示网络错误 | 电脑网络、保存的代理模式，以及系统代理或手动代理是否可用；修改后重新开启连接 |
-| 提示代理连接失败 | 代理地址、端口、认证信息及代理是否允许连接 Cloudflare；不要把模型服务商专用代理误当作全局代理 |
-| 提示 Cloudflare 拒绝了 Tunnel Token | Token 属于别的隧道、已被轮换，或隧道已删除；在隧道详情页点 **Add a replica** 复制新的命令重新粘贴 |
-| 一直显示等待 Cloudflare 路由 | 在 Cloudflare 这条隧道的 Routes 中添加 Published application，Service URL 与页面上的本机地址一致；也要确认粘贴的是同一条隧道的命令 |
-| 固定域名连接失败 | HTTPS 域名的 DNS 是否已生效，以及电脑网络和代理是否可用 |
-| 电脑显示就绪，手机仍打不开 | 用手机蜂窝网络测试该域名；确认电脑仍在运行、联网且未休眠 |
-| 快速连接重启后旧地址失效 | 回到桌面使用新二维码；希望长期保留地址时改用固定域名 |
-| 退到后台后没有系统通知 | 手机 App 的「设置 → 通知」是否显示「通知已就绪」；iPhone 确认电脑能访问 `exp.host`；Android 确认通知栏有「正在值守」，已允许后台运行和自启动。重新打开 App 会重新登记并重连 |
+| Connection keeps waiting or reports a network error | The computer's network, saved proxy mode, and proxy availability; restart the connection after changing settings |
+| Proxy connection failed | Proxy address, port, credentials, and whether it allows Cloudflare connections; provider-specific proxy settings are separate from the global network proxy |
+| Cloudflare rejected the Tunnel Token | The token belongs to another tunnel, was rotated, or the tunnel was deleted. Click **Add a replica** on the tunnel's page and paste the new command |
+| Stuck on Waiting for a Cloudflare route | Add a Published application in the tunnel's Routes whose Service URL matches the local address in cc-haha. Also check that you pasted the command for the same tunnel |
+| Fixed domain fails | Whether DNS for the HTTPS hostname has taken effect, and whether the computer's network and proxy work |
+| Computer says ready but phone cannot open the entry | Test the hostname on cellular data, and confirm the computer is running, online, and awake |
+| An old quick address stops working after restart | Scan the new code on the desktop, or use a fixed domain to keep a long-lived address |
+| No system notification while backgrounded | Check that the app's **Settings → Notifications** shows **Notifications ready**. On iPhone, the computer must reach `exp.host`; on Android, the "On duty" notification must be present and background running and auto-start allowed. Reopening the app registers and reconnects again |
 
-官方连接器数据面使用出站 `7844` 端口；受限网络或代理可能阻止它，HTTP/2 不代表数据面改用 `443`。详细说明见 [Cloudflare 连接排障](https://developers.cloudflare.com/tunnel/troubleshooting/)。
+The official connector's data connection uses outbound port `7844`. Restricted networks or proxies may block it. Choosing HTTP/2 does not change that data connection to port `443`. See [Cloudflare connection troubleshooting](https://developers.cloudflare.com/tunnel/troubleshooting/).
 
-### 直连与回到前台
+### Direct connections and coming back to the app
 
-手机 App 先经 Cloudflare 连上，随后在后台尝试和电脑建立 **直连**（P2P）：同一 Wi-Fi 下，或网络条件允许时（例如两端都有可用的 IPv6），请求和会话改走直连，通常比绕行 Cloudflare 快得多；建立不了就继续用 Cloudflare，不需要任何设置。聊天页的菜单会显示当前是「局域网直连」「直连」还是「经 Cloudflare」。
+The phone app connects through Cloudflare first, then tries to set up a **direct connection** (P2P) to the computer in the background. On the same Wi-Fi, or when the network allows it (for example when both ends have working IPv6), requests and sessions switch to the direct path, which is usually much faster than going around through Cloudflare. If no direct path works, the app simply stays on Cloudflare. There is nothing to configure. The chat menu shows whether the app is on a LAN direct connection, a direct connection, or Cloudflare.
 
-- 直连默认开启，可在 **手机连接 → 外出连接** 关闭 **允许手机直连（P2P）**。直连只对已配对的手机开放，授权和可用功能与经 Cloudflare 时完全相同。
-- 已配对的手机能看到这台电脑的局域网和公网 IP 地址。
-- 建立直连的信息经 Cloudflare 网关交换，cc-haha 不使用任何自建中转服务器；数据通道由 WebRTC（DTLS）加密。
-- 为了找到可用的公网路径，电脑和手机会向 Cloudflare（`stun.cloudflare.com`）、小米（`stun.miwifi.com`）和 Google（`stun.l.google.com`）的公共 STUN 服务器查询自己的公网地址。这些服务器能看到两端的公网 IP，但看不到任何会话内容。不希望这样，可以关闭直连。
-- 开关下方的状态行说明电脑这一端的直连准备情况：**直连已关闭** 表示开关已关闭或外出连接没有开启；**直连正在准备** 表示直连组件正在启动，它会随外出连接的开启或重连一起启动；**直连已就绪** 表示手机可以随时切换到直连；**直连启动失败** 表示电脑端的直连组件启动失败或意外退出，它会自动重试，连续失败多次后暂停，直到外出连接重新开启或重新连接时再试，这期间手机继续经 Cloudflare 使用。
-- 浏览器访问始终经过 Cloudflare。直连需要包含直连模块的新版手机 App，旧版 App 照常经 Cloudflare 使用。
+- Direct connections are on by default. Turn off **Allow direct phone connections (P2P)** under **Phone connection → Away from home** to disable them. Only paired phones can use them, with exactly the same authorization and features as through Cloudflare.
+- Paired phones can see this computer's LAN and public IP addresses.
+- The connection details are exchanged through the Cloudflare gateway; cc-haha runs no relay server of its own. The data channel is encrypted by WebRTC (DTLS).
+- To find a working public path, the computer and the phone ask the public STUN servers of Cloudflare (`stun.cloudflare.com`), Xiaomi (`stun.miwifi.com`), and Google (`stun.l.google.com`) for their own public addresses. These servers can see both ends' public IP addresses, but none of the session content. Turn direct connections off if you do not want that.
+- The status line under the switch shows how direct connections stand on the computer's side: **Direct connections are off** means the switch is off or remote connection is not turned on; **Preparing direct connections** means the direct-connection component is starting, which it does whenever the remote connection turns on or reconnects; **Direct connections are ready** means phones can switch to a direct connection at any time; **Direct connections could not start** means the computer's direct-connection component failed to start or stopped unexpectedly. It retries on its own and pauses after several failures in a row until the remote connection is turned on again or reconnects. Meanwhile phones keep working through Cloudflare.
+- Browsers always go through Cloudflare. Direct connections need a phone app version that includes the direct-connection module; older versions keep working through Cloudflare.
 
-App 切到后台、锁屏或换网络后再回来，会先确认原连接是否还在，还在就直接用；断了就接回原来的会话，只补收错过的内容，不重新加载整段历史，几秒内的短暂断开也不会弹出提示。电脑会为断开的手机保留最近的输出约 3 分钟，这期间会话不会被当作已关闭；超过时间再回来会重新同步，也只读取新增的部分。
+When you come back to the app after it was in the background, the phone was locked, or the network changed, it first checks whether the existing connection still works and keeps using it if so. If it dropped, the app picks the conversation up where it left off and receives only what it missed, without reloading the whole history, and a drop of a few seconds shows no warning. The computer keeps a disconnected phone's recent output for about 3 minutes, during which the session is not treated as closed; after that the app resyncs, again reading only what is new.
 
-### 配对、关闭与恢复
+### Pairing, turning off, and restoring
 
-二维码中的配对材料 5 分钟有效且只能使用一次；手机访问凭据默认有效 30 天。不要分享二维码。桌面可以单独撤销手机，或关闭连接立即断开远程访问；已经运行的任务会继续执行。
+A QR pairing secret is valid for five minutes and one use. Phone credentials are valid for 30 days by default. Do not share the code. Revoke an individual phone or turn off the connection to disconnect remote access immediately. Tasks that already started continue running.
 
-手机 App 把凭据保存在系统安全存储中，浏览器使用安全 Cookie。不同浏览器、无痕窗口和域名之间不会共享授权；若扫码器先打开内置浏览器，请先切换到常用浏览器再配对。授权到期或被撤销后需要重新配对，当前不会自动延长 30 天有效期。
+The phone app stores credentials in system secure storage; browsers use a secure cookie. Authorization is not shared across browsers, private windows, or domains. If a QR scanner opens its own embedded browser, switch to your usual browser before pairing. Expired or revoked authorization requires pairing again; the current implementation does not automatically extend the 30-day lifetime.
 
-**随桌面启动恢复连接** 默认关闭。开启后只恢复已确认的 Cloudflare 连接；快速模式重建后会产生新地址（手机怎样找回见上文），固定域名方式则沿用原地址。电脑必须保持开机、联网且未休眠。
+**Restore connection when the desktop starts** is off by default. It restores an approved Cloudflare connection. A new quick tunnel gets a new address (see above for how phones find it again); a fixed-domain tunnel keeps its address. Keep the computer powered on, online, and awake.
 
-**外出时保持电脑唤醒** 默认开启：外出连接开启或重连期间，电脑不会因闲置自动休眠，屏幕仍会按系统设置关闭。合上笔记本盖子、手动选择睡眠或关机仍会让手机连不上，耗电也会增加；不需要时可以关闭这个开关。
+**Keep this computer awake while away** is on by default: while the remote connection is on or reconnecting, the computer does not go to sleep from inactivity, and the display still turns off as usual. Closing a laptop lid, choosing Sleep, or shutting down still disconnects phones, and keeping the computer awake uses more battery. Turn the switch off if you do not need it.
 
-从旧远程配置升级后，连接不会自动启动。请主动选择 Cloudflare 方式、开启连接，并使用新二维码配对；局域网配置、电脑会话和用户数据会保留。
+After upgrading an old remote configuration, access will not start automatically. Choose a Cloudflare method, enable it, and pair using a new code. LAN settings, computer conversations, and user data are retained.
 
-手机配对和授权限制继续生效。流量经过 Cloudflare，HTTPS 保护传输，但不代表端到端加密。远程入口支持上述供应商与通用设置；会话内的文件和审查接口继续可用，桌面专用能力仍在电脑上操作。
+Phone pairing and access restrictions still apply. Traffic passes through Cloudflare; HTTPS protects transport but does not provide end-to-end encryption. The remote entry supports the provider and General settings described above, together with conversation files and review APIs. Desktop-only capabilities remain on the computer.
 
-## IM 接入
+## IM Adapters
 
-![设置 → IM 接入：平台标签与 Slack 配置表单](../images/app/zh-CN/settings-im.webp)
+![Settings → IM Adapters: platform tabs and the Slack setup form (Chinese interface)](../images/app/en/settings-im.webp)
 
-设置 → IM 接入 支持八个平台，接入方式各不相同。这里先列出常见接法，完整步骤见 [IM 接入总览](../im/index.md)：
+**Settings → IM Adapters** supports eight platforms, each connected differently. These are the common setup paths; see the [messaging guide](../im/index.md) for full steps:
 
-| 平台 | 怎么接 |
+| Platform | How to connect |
 |---|---|
-| 微信 | 在设置页生成二维码，用微信扫码绑定账号 |
-| 钉钉 | 扫码一键创建并授权机器人，也可以手动填 Client ID / Secret |
-| WhatsApp | 生成二维码，在 WhatsApp 的「已关联设备」里扫码 |
-| Telegram | 找 @BotFather 要一个 Bot Token 填进来 |
-| 飞书 | 填 App ID 和 App Secret；没有机器人的话可以用页面上的模板一键创建 |
-| 企业微信 | 在设置页扫码创建智能机器人 |
-| QQ | 扫码授权，回填 App ID 和 App Secret |
-| Slack | 用应用清单创建 App，再回填两枚 Token |
+| WeChat | Generate a QR code in settings and scan it with WeChat to bind the account |
+| DingTalk | Scan to create and authorize a bot in one step, or fill in Client ID / Secret manually |
+| WhatsApp | Generate a QR code and scan it under **Linked devices** in WhatsApp |
+| Telegram | Get a bot token from @BotFather and paste it in |
+| Feishu | Enter an App ID and App Secret; if you don't have a bot, the page can create one from a template |
+| WeCom | Scan in settings to create an intelligent bot |
+| QQ | Scan to authorize, then provide the App ID and App Secret |
+| Slack | Create an app from the supplied manifest, then enter two tokens |
 
-### 绑定账号 ≠ 允许对话
+### Binding an account is not the same as allowing a person
 
-这是最容易踩的一步：**扫码只绑定了账号能力，具体哪个人能和 Bot 对话是另一回事。**
+This is the step people miss: **scanning only binds the account's messaging capability. Who is allowed to talk to the bot is a separate question.**
 
-在「配对管理」里点「生成配对码」，然后用你自己的 IM 账号私聊 Bot 把这串码发过去，绑定才算完成。也可以在「允许的用户」里直接填用户 ID 列表。两者都为空时默认拒绝所有人——这是有意为之。
+Under **Pairing**, click **Generate pairing code**, then send that code to the bot in a direct message from your own IM account. That completes the binding. Alternatively, list user IDs under **Allowed users**.
 
-已配对的用户会列在下面，可以随时解绑，解绑后需要重新配对。
+When both are empty, everyone is denied — that's deliberate, not a bug.
 
-### 其他设置
+Paired users are listed below and can be unbound at any time; unbinding requires pairing again.
 
-- **默认项目** — 新 IM 会话用哪个工作目录。留空则用当前用户工作目录。它只是个起点，不限制机器人能访问哪些项目。
-- **允许访问的项目目录** — 机器人的访问边界，`/projects` 只会列出这些目录里的项目。留空则默认为你的主目录（外加主目录之外的「默认项目」）。
-- **流式卡片模式** — 实时更新消息内容，读起来更像在看它打字。
-- **权限请求** — 钉钉可以配互动卡片模板 ID，用卡片按钮授权；不配的话所有平台都用 `/allow`、`/always`、`/deny` 文本命令。
+### Other settings
 
-五个平台各自的申请流程、权限配置和排查步骤，见[IM 接入](../im/index.md)。
+- **Default project** — the working directory for new IM sessions. Left empty, it uses your current user working directory. It's only a starting point — it doesn't restrict which projects the bot can reach.
+- **Allowed project directories** — the boundary for the bot: `/projects` only lists projects inside these directories. Left empty, it defaults to your home directory (plus the default project, if it is outside home).
+- **Streaming card mode** — updates the message content live, so it reads more like watching it type.
+- **Permission requests** — DingTalk can use an interactive card template ID for button-based approval. Without it, every platform falls back to the `/allow`, `/always`, and `/deny` text commands.
+
+For each platform's application flow, permission configuration, and troubleshooting, see [IM integrations](../im/index.md).

@@ -1,8 +1,9 @@
 import type { DiffLine } from '../../core/operations'
+import { plural } from '../../core/plural'
 
 /**
- * 文件审批的预览改动。工具输入里只有旧/新文本，没有行号，所以 DiffLine 不带
- * before/after；视图用单栏空行号显示。
+ * Preview changes for file approvals. The tool input only has old/new text without line numbers, so DiffLine does not carry
+ * before/after; the view shows a single column with empty line numbers.
  */
 export type FileChange = {
   path: string
@@ -11,11 +12,11 @@ export type FileChange = {
   removed: number
 }
 
-/** Write 预览最多展示这么多行，其余折成“还有 N 行”。 */
+/** Write The preview shows at most this many lines; the rest fold into "N more lines". */
 export const WRITE_PREVIEW_LINES = 120
-/** Edit/MultiEdit 预览的总行数上限，避免一次渲染上千行。 */
+/** Edit/MultiEdit Total line cap for the preview, to avoid rendering thousands of lines at once. */
 export const EDIT_PREVIEW_LINES = 400
-/** 超过这个规模就不做逐行 LCS，直接按“全删 + 全加”展示。 */
+/** Beyond this size skip line-by-line LCS and show as "delete all + add all". */
 const LCS_CELL_LIMIT = 250_000
 
 const str = (value: unknown) => (typeof value === 'string' ? value : undefined)
@@ -27,7 +28,7 @@ export function splitLines(value: string) {
   return lines
 }
 
-/** 逐行比较：公共前后缀作上下文，中间部分做 LCS，规模太大时退回全删全加。 */
+/** Line-by-line comparison: common prefix and suffix as context, LCS on the middle, falling back to delete all + add all when too large. */
 export function lineDiff(before: string, after: string): DiffLine[] {
   const a = splitLines(before)
   const b = splitLines(after)
@@ -71,7 +72,7 @@ export function lineDiff(before: string, after: string): DiffLine[] {
         i++
         j++
       } else if (table[i + 1][j] >= table[i][j + 1]) {
-        // 平手时先删后加，和统一 diff 的习惯一致。
+        // On ties delete before add, matching unified diff convention.
         middle.push({ text: midA[i], kind: 'remove' })
         i++
       } else {
@@ -92,11 +93,11 @@ function limit(lines: DiffLine[], max: number): DiffLine[] {
   if (lines.length <= max) return lines
   return [
     ...lines.slice(0, max),
-    { text: `还有 ${lines.length - max} 行`, kind: 'meta' },
+    { text: plural(lines.length - max, 'more line'), kind: 'meta' },
   ]
 }
 
-/** Edit / MultiEdit / NotebookEdit / Write 的改动预览；输入不完整时返回 null。 */
+/** Edit / MultiEdit / NotebookEdit / Write change preview; returns null when the input is incomplete. */
 export function fileChange(
   toolName: string,
   input: Record<string, unknown>
@@ -111,7 +112,7 @@ export function fileChange(
       path,
       lines: limit(
         input.replace_all === true
-          ? [{ text: '@@ 替换文件里所有相同内容 @@', kind: 'hunk' }, ...lines]
+          ? [{ text: '@@ Replace all occurrences in the file @@', kind: 'hunk' }, ...lines]
           : lines,
         EDIT_PREVIEW_LINES
       ),
@@ -137,7 +138,7 @@ export function fileChange(
       lines: limit(
         edits.flatMap((edit, index): DiffLine[] => [
           {
-            text: `@@ 第 ${index + 1} 处${edit.all ? '（替换所有相同内容）' : ''} @@`,
+            text: `@@ Change ${index + 1}${edit.all ? ' (replace all occurrences)' : ''} @@`,
             kind: 'hunk',
           },
           ...edit.lines,
@@ -166,13 +167,13 @@ export function fileChange(
     if (mode === 'delete')
       return {
         path,
-        lines: [{ text: '@@ 删除这个单元格 @@', kind: 'hunk' }],
+        lines: [{ text: '@@ Delete this cell @@', kind: 'hunk' }],
         added: 0,
         removed: 0,
       }
     const source = str(input.new_source)
     if (source === undefined) return null
-    // 单元格原内容不在输入里，只展示新内容。
+    // The original cell content is not in the input; only the new content is shown.
     const lines = splitLines(source).map(
       (text): DiffLine => ({ text, kind: 'add' })
     )
@@ -181,7 +182,7 @@ export function fileChange(
       lines: limit(
         [
           {
-            text: mode === 'insert' ? '@@ 新增单元格 @@' : '@@ 替换单元格内容 @@',
+            text: mode === 'insert' ? '@@ New cell @@' : '@@ Replace cell content @@',
             kind: 'hunk',
           },
           ...lines,

@@ -3,50 +3,50 @@ import { agentStatusText, capsuleBadge, capsuleLabel, capsuleText, clock } from 
 
 const progress = (done: number, total: number) => ({ done, total })
 
-describe('胶囊文案', () => {
-  test('有清单：完成/总数；没有清单只有后台在跑：显示在跑的个数', () => {
+describe('Capsule text', () => {
+  test('With a list: done/total; without a list and only background running: show the running count', () => {
     expect(capsuleText({ progress: progress(1, 5), runningCount: 2 })).toBe('1/5')
     expect(capsuleText({ progress: progress(0, 0), runningCount: 2 })).toBe('2')
   })
-  test('角标只在“有清单且有东西在跑”时出现，避免同一个数出现两次', () => {
+  test('The badge only appears when “there is a list and something is running”, to avoid showing the same number twice', () => {
     expect(capsuleBadge({ progress: progress(1, 5), runningCount: 2 })).toBe(2)
     expect(capsuleBadge({ progress: progress(1, 5), runningCount: 0 })).toBeNull()
     expect(capsuleBadge({ progress: progress(0, 0), runningCount: 2 })).toBeNull()
   })
-  test('无障碍标签：状态、任务进度、后台个数；等批准时不报后台', () => {
+  test('Accessibility label: status, task progress, background count; background not announced while waiting for approval', () => {
     expect(capsuleLabel({ progress: progress(1, 5), runningCount: 2, tone: 'run', active: true })).toBe(
-      '运行中，任务 1/5，2 项后台在跑，点开看详情'
+      'Running, task 1/5, 2 running in background, tap for details'
     )
     expect(capsuleLabel({ progress: progress(1, 5), runningCount: 2, tone: 'attention', active: true })).toBe(
-      '等你批准，任务 1/5，点开看详情'
+      'Waiting for your approval, task 1/5, tap for details'
     )
     expect(capsuleLabel({ progress: progress(2, 5), runningCount: 0, tone: 'run', active: false })).toBe(
-      '任务，任务 2/5，点开看详情'
+      'Tasks, task 2/5, tap for details'
     )
   })
-  test('团队启动中：说「团队启动中」；同时有待批准时以批准为先', () => {
+  test('Team starting: say “Team starting”; when an approval is also pending, approval comes first', () => {
     expect(capsuleLabel({ progress: progress(0, 0), runningCount: 0, tone: 'run', active: false, launching: true })).toBe(
-      '团队启动中，点开看详情'
+      'Team starting, tap for details'
     )
     expect(capsuleLabel({ progress: progress(0, 0), runningCount: 0, tone: 'attention', active: false, launching: true })).toBe(
-      '等你批准，点开看详情'
+      'Waiting for your approval, tap for details'
     )
   })
 })
 
-describe('时间与状态', () => {
-  test('clock：分:秒、超过一小时带小时；没有开始时间为空；时钟回拨不出负数', () => {
+describe('Time and status', () => {
+  test('clock: min:sec, with hours over an hour; empty without a start time; never negative when the clock moves back', () => {
     expect(clock(0, 72_000)).toBe('1:12')
     expect(clock(0, 3_723_000)).toBe('1:02:03')
     expect(clock(undefined, 1)).toBe('')
     expect(clock(10_000, 0)).toBe('0:00')
   })
-  test('状态文字', () => {
+  test('Status text', () => {
     expect(['running', 'completed', 'failed', 'stopped'].map((s) => agentStatusText(s as 'running'))).toEqual([
-      '运行中',
-      '已完成',
-      '失败',
-      '已停止',
+      'Running',
+      'Done',
+      'Failed',
+      'Stopped',
     ])
   })
 })

@@ -7,7 +7,7 @@ import { listWechatSpeechVoices, synthesizeWechatSpeech, type WechatSpeechVoice 
 import { transcodeWechatVideo } from './video-transcode.js'
 import type { WechatMediaPreference, WechatMediaPreferences } from './media-preferences.js'
 
-export const WECHAT_MEDIA_HELP = '\n\n媒体命令：\n/send <项目内路径> — 回传图片、视频或文件（文件 30 MiB，图片 10 MiB）\n/transcode <项目内视频路径> — 转为兼容 MP4 后回传（120 秒以内）\n/voice on|off — 开关后续答案的音频文件回复\n/voice list — 列出系统音色\n/voice select <编号|auto> — 选择音色或恢复自动\n/speak <文字> — 合成为音频文件（Windows，最多 2000 字）\n/stop — 取消媒体任务和当前生成\n助手回复中的本地图片及 file: 下载链接会自动回传，普通代码引用不会。视频分析和转码需要 ffmpeg/ffprobe；音轨转写使用桌面语音识别配置。'
+export const WECHAT_MEDIA_HELP = '\n\nMedia commands:\n/send <path in project> — Send back an image, video or file (files 30 MiB, images 10 MiB)\n/transcode <video path in project> — Convert to compatible MP4 and send back (up to 120 seconds)\n/voice on|off — Turn audio-file replies for later answers on or off\n/voice list — List system voices\n/voice select <number|auto> — Choose a voice or restore automatic\n/speak <text> — Synthesize to an audio file (Windows, up to 2000 characters)\n/stop — Cancel media tasks and the current generation\nLocal images and file: download links in assistant replies are sent back automatically; ordinary code references are not. Video analysis and transcoding need ffmpeg/ffprobe; audio transcription uses the desktop speech recognition settings.'
 
 type Binding = { sessionId: string; workDir: string }
 type Dependencies = {
@@ -74,8 +74,8 @@ export class WechatMediaActions {
 
   private async run<T>(chatId: string, operation: (signal: AbortSignal, current: () => boolean, binding: Binding) => Promise<T>): Promise<T> {
     const binding = this.deps.session(chatId)
-    if (!binding || !this.deps.allowed(chatId)) throw new Error('请先配对并选择项目会话')
-    if (this.jobs.has(chatId)) throw new Error('已有媒体任务正在处理，请等待或发送 /stop')
+    if (!binding || !this.deps.allowed(chatId)) throw new Error('Pair first and select a project session')
+    if (this.jobs.has(chatId)) throw new Error('A media task is already in progress; wait or send /stop')
     const controller = new AbortController()
     this.jobs.set(chatId, controller)
     const current = () => !controller.signal.aborted && this.deps.allowed(chatId) && this.deps.session(chatId)?.sessionId === binding.sessionId
@@ -87,7 +87,7 @@ export class WechatMediaActions {
   }
 
   async command(chatId: string, text: string): Promise<boolean> {
-    if (!this.deps.allowed(chatId)) throw new Error('请先配对并选择项目会话')
+    if (!this.deps.allowed(chatId)) throw new Error('Pair first and select a project session')
     if (/^\/voice(?:\s|$)/.test(text)) {
       const mode = text.slice(6).trim()
       if (mode === 'list') {
@@ -95,28 +95,28 @@ export class WechatMediaActions {
           const voices = await (this.deps.listVoices ?? listWechatSpeechVoices)({ signal })
           if (!current()) return
           this.voiceLists.set(chatId, voices)
-          await this.deps.notice(chatId, voices.length ? `可用音色：\n${voices.map((voice, index) => `${index + 1}. ${voice.name} (${voice.language})`).join('\n')}\n发送 /voice select 编号 选择，或 /voice select auto 恢复自动。` : '未安装可用的 Windows 系统音色。')
+          await this.deps.notice(chatId, voices.length ? `Available voices:\n${voices.map((voice, index) => `${index + 1}. ${voice.name} (${voice.language})`).join('\n')}\nSend /voice select <number> to choose, or /voice select auto to restore automatic.` : 'No usable Windows system voices installed.')
         })
         return true
       }
       if (mode.startsWith('select ')) {
         const value = mode.slice(7).trim()
         const selected = /^\d+$/.test(value) ? this.voiceLists.get(chatId)?.[Number(value) - 1] : undefined
-        if (value !== 'auto' && !selected) { await this.deps.notice(chatId, '请先发送 /voice list，再选择列表中的音色编号。'); return true }
+        if (value !== 'auto' && !selected) { await this.deps.notice(chatId, 'Send /voice list first, then pick a voice number from the list.'); return true }
         this.savePreference(chatId, { ...this.preference(chatId), voiceId: selected?.id })
-        await this.deps.notice(chatId, selected ? `音色已设为 ${selected.name}。` : '已恢复自动选择音色。')
+        await this.deps.notice(chatId, selected ? `Voice set to ${selected.name}.` : 'Restored automatic voice selection.')
         return true
       }
       if (mode === 'on' || mode === 'off') {
         this.savePreference(chatId, { ...this.preference(chatId), enabled: mode === 'on' })
         if (mode === 'off') this.cancel(chatId)
-      } else { await this.deps.notice(chatId, '用法：/voice on|off、/voice list、/voice select <编号|auto>（音频文件回复，非原生语音气泡）'); return true }
-      await this.deps.notice(chatId, mode === 'on' ? `已开启音频文件回复；需要 Windows 可用语音引擎。${this.deps.preferences ? '偏好已保存，重启后继续生效。' : '本次运行有效，清空或切换会话后需重新开启。'}` : '已关闭音频文件回复。')
+      } else { await this.deps.notice(chatId, 'Usage: /voice on|off, /voice list, /voice select <number|auto> (audio file replies, not native voice bubbles)'); return true }
+      await this.deps.notice(chatId, mode === 'on' ? `Audio file replies enabled; requires an available Windows speech engine. ${this.deps.preferences ? 'Preference saved and kept after restart.' : 'Valid for this run only; enable again after clearing or switching sessions.'}` : 'Audio file replies disabled.')
       return true
     }
     const match = /^\/(send|speak|transcode)(?:\s+([\s\S]+))?$/.exec(text)
     if (!match) return false
-    if (!match[2]?.trim()) { await this.deps.notice(chatId, `用法：/${match[1]} ${match[1] === 'speak' ? '<要朗读的文字>' : '<项目内文件路径>'}`); return true }
+    if (!match[2]?.trim()) { await this.deps.notice(chatId, `Usage: /${match[1]} ${match[1] === 'speak' ? '<text to read aloud>' : '<file path in project>'}`); return true }
     await this.run(chatId, async (signal, current, binding) => {
       if (match[1] === 'speak') await this.speak(chatId, match[2]!, signal, current)
       else {
@@ -148,11 +148,11 @@ export class WechatMediaActions {
         try {
           const media = await loadWechatOutboundMedia(file, binding.workDir, signal)
           totalBytes += media.buffer.length
-          if (totalBytes > 30 * 1024 * 1024) throw new Error('本轮回传总量超过 30 MiB，请用 /send 分别获取')
+          if (totalBytes > 30 * 1024 * 1024) throw new Error('Total size sent back this turn exceeds 30 MiB; use /send to fetch files individually')
           if (current()) await this.deps.send(chatId, media, signal, current)
         } catch (error) {
           if (signal.aborted) throw error
-          if (current()) await this.deps.notice(chatId, `附件未完成发送（不会自动重发）：${error instanceof Error ? error.message : '未知错误'}。可在桌面核对结果后使用 /send。`)
+          if (current()) await this.deps.notice(chatId, `Attachment was not fully sent (will not be resent automatically): ${error instanceof Error ? error.message : 'Unknown error'}. Check the result on the desktop, then use /send.`)
         }
       }
       if (this.preference(chatId).enabled && current() && answer.trim()) await this.speak(chatId, answer, signal, current)
@@ -164,7 +164,7 @@ export class WechatMediaActions {
     try {
       // The only extra root accepted here is a freshly created, trusted TTS job.
       const media = await loadWechatOutboundMedia(result.path, path.dirname(result.path), signal)
-      if (media.buffer.length > 10 * 1024 * 1024) throw new Error('合成音频超过 10 MiB')
+      if (media.buffer.length > 10 * 1024 * 1024) throw new Error('Synthesized audio exceeds 10 MiB')
       if (current()) await this.deps.send(chatId, { ...media, kind: 'file', mimeType: result.mimeType, fileName: result.fileName }, signal, current)
     } finally {
       await result.cleanup()
@@ -179,26 +179,26 @@ export class WechatMediaActions {
         const attachments: AttachmentRef[] = []
         for (const frame of result.frames) {
           signal.throwIfAborted()
-          if (!current()) throw new Error('媒体任务已取消或会话已变更')
+          if (!current()) throw new Error('Media task was cancelled or the session changed')
           const image = await loadWechatOutboundMedia(frame.path, path.dirname(frame.path), signal)
           attachments.push({ type: 'image', name: `video-${frame.timestampMs}ms.jpg`, data: image.buffer.toString('base64'), mimeType: 'image/jpeg' })
         }
-        let context = `微信上传的原始视频已保存在本机：${JSON.stringify(filePath)}。用户随后说“这个视频”时应使用该附件，不要用仓库内的示例视频代替。\n`
-          + `本次视频处理使用的工具：ffmpeg=${JSON.stringify(process.env.WECHAT_FFMPEG_PATH || 'ffmpeg')}，ffprobe=${JSON.stringify(process.env.WECHAT_FFPROBE_PATH || 'ffprobe')}。配置的绝对路径可能不在终端 PATH 中。\n`
-          + '音轨和采样图的临时处理文件会清理；需要提取音频文件时，请从原视频生成到当前项目目录，并用 [下载音频](file:///绝对路径) 返回产物以触发微信回传。只输出普通电脑路径不会上传附件；路径含空格等字符时应使用正确编码的 file: URL。\n'
-          + `${result.coverageNote}\n画面采样时间：${result.frames.map(frame => `${(frame.timestampMs / 1000).toFixed(2)}s`).join(', ')}。请说明采样限制，不要声称逐帧看过整段视频。`
+        let context = `The original video uploaded via WeChat is saved locally: ${JSON.stringify(filePath)}. When the user later says "this video", use this attachment; do not substitute a sample video from the repository.\n`
+          + `Tools used for this video processing: ffmpeg=${JSON.stringify(process.env.WECHAT_FFMPEG_PATH || 'ffmpeg')}, ffprobe=${JSON.stringify(process.env.WECHAT_FFPROBE_PATH || 'ffprobe')}. Configured absolute paths may not be on the terminal PATH.\n`
+          + 'Temporary audio-track and sampled-frame files are cleaned up; if an audio file needs to be extracted, generate it from the original video into the current project directory and return the artifact as [Download audio](file:///absolute/path) to trigger sending it back via WeChat. Printing a plain computer path will not upload the attachment; paths containing spaces or similar characters must use a correctly encoded file: URL.\n'
+          + `${result.coverageNote}\nFrame sample times: ${result.frames.map(frame => `${(frame.timestampMs / 1000).toFixed(2)}s`).join(', ')}. Explain the sampling limitation; do not claim to have watched the whole video frame by frame.`
         if (result.audioPath) {
           try {
             const wav = await fs.readFile(result.audioPath)
             signal.throwIfAborted()
             const text = await this.deps.transcribe(wav, signal)
-            context += text.trim() ? `\n音轨转写（整段识别，无逐词时间戳）：\n${text.slice(0, 16000)}` : '\n音轨未识别到文字。'
+            context += text.trim() ? `\nAudio transcript (whole-track recognition, no per-word timestamps):\n${text.slice(0, 16000)}` : '\nNo speech recognized in the audio track.'
           } catch (error) {
             if (signal.aborted) throw error
-            context += `\n音轨未能转写，仅分析采样画面：${error instanceof Error ? error.message : '识别不可用'}`
+            context += `\nAudio track could not be transcribed; only sampled frames are analyzed: ${error instanceof Error ? error.message : 'recognition unavailable'}`
           }
-        } else context += '\n视频没有音轨。'
-        if (!current()) throw new Error('媒体任务已取消或会话已变更')
+        } else context += '\nThe video has no audio track.'
+        if (!current()) throw new Error('Media task was cancelled or the session changed')
         return { attachments, context }
       } finally {
         await result.cleanup()

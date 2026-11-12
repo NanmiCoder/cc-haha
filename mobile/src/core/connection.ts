@@ -40,18 +40,18 @@ export function normalizeHostUrl(input: string, auth: Host['auth']): string {
   try {
     url = new URL(input.trim())
   } catch {
-    throw new ConnectionError('请输入完整的 http:// 或 https:// 地址')
+    throw new ConnectionError('Please enter a full http:// or https:// address')
   }
   if (url.username || url.password)
-    throw new ConnectionError('地址不能包含用户名或密码')
+    throw new ConnectionError('Address cannot contain a username or password')
   if (!['http:', 'https:'].includes(url.protocol))
-    throw new ConnectionError('只支持 HTTP 或 HTTPS 连接')
+    throw new ConnectionError('Only HTTP or HTTPS connections are supported')
   // Explicit HTTP addresses use the access-token flow, including private DNS
   // names and VPN hosts. Device pairing still requires an HTTPS origin.
   if (url.protocol === 'http:' && auth === 'remote')
-    throw new ConnectionError('远程连接必须使用 HTTPS')
+    throw new ConnectionError('Remote connections must use HTTPS')
   if (url.pathname !== '/' || url.search || url.hash)
-    throw new ConnectionError('主机地址只能包含协议、主机名和端口')
+    throw new ConnectionError('Host address can only contain protocol, host name and port')
   return url.origin
 }
 
@@ -62,7 +62,7 @@ function secret(value: unknown): string | undefined {
     value.length > 4096 ||
     /\s|[\u0000-\u001f\u007f]/.test(value)
   )
-    throw new ConnectionError('连接凭据格式无效')
+    throw new ConnectionError('Invalid connection credential format')
   return value
 }
 
@@ -77,13 +77,13 @@ export type ParsedConnection = {
 export function parseConnectionInput(input: string): ParsedConnection {
   const raw = input.trim()
   if (!raw || raw.length > 16384)
-    throw new ConnectionError('连接地址为空或过长')
+    throw new ConnectionError('Connection address is empty or too long')
   if (raw.startsWith('{')) {
     let value: unknown
     try {
       value = JSON.parse(raw)
     } catch {
-      throw new ConnectionError('二维码内容不是有效 JSON')
+      throw new ConnectionError('QR code content is not a valid JSON')
     }
     if (
       !value ||
@@ -91,7 +91,7 @@ export function parseConnectionInput(input: string): ParsedConnection {
       !('serverUrl' in value) ||
       typeof value.serverUrl !== 'string'
     )
-      throw new ConnectionError('二维码缺少服务器地址')
+      throw new ConnectionError('QR code is missing the server address')
     return {
       url: normalizeHostUrl(value.serverUrl, 'lan'),
       auth: 'lan',
@@ -102,26 +102,26 @@ export function parseConnectionInput(input: string): ParsedConnection {
   try {
     url = new URL(raw)
   } catch {
-    throw new ConnectionError('请输入完整的连接地址')
+    throw new ConnectionError('Please enter the full connection address')
   }
   if (
     url.username ||
     url.password ||
     !['http:', 'https:'].includes(url.protocol)
   )
-    throw new ConnectionError('连接地址格式无效')
+    throw new ConnectionError('Invalid connection address format')
   const params = url.searchParams
   const fragment = new URLSearchParams(url.hash.slice(1))
   if (fragment.has('pair')) {
     if (url.search || (url.pathname !== '/' && url.pathname !== '/remote'))
-      throw new ConnectionError('远程配对地址格式无效')
+      throw new ConnectionError('Invalid remote pairing address format')
     const pairSecret = secret(fragment.get('pair'))
     if (
       !pairSecret ||
       fragment.getAll('pair').length !== 1 ||
       [...fragment.keys()].some((key) => key !== 'pair')
     )
-      throw new ConnectionError('配对码无效')
+      throw new ConnectionError('Invalid pairing code')
     return {
       url: normalizeHostUrl(url.origin, 'remote'),
       auth: 'remote',
@@ -135,7 +135,7 @@ export function parseConnectionInput(input: string): ParsedConnection {
       params.getAll('h5Token').length > 1 ||
       [...params.keys()].some((key) => !['serverUrl', 'h5Token'].includes(key))
     )
-      throw new ConnectionError('局域网二维码格式无效')
+      throw new ConnectionError('Invalid LAN QR code format')
     return {
       url: normalizeHostUrl(params.get('serverUrl') || url.origin, 'lan'),
       auth: 'lan',
@@ -173,11 +173,11 @@ export function buildSocketOptions(
   platform: 'native' | 'web'
 ): { url: string; headers?: Record<string, string> } {
   if (!sessionId || sessionId.length > 256 || /[\s/\\?#]/.test(sessionId))
-    throw new ConnectionError('会话标识无效')
+    throw new ConnectionError('Invalid session ID')
   const token = secret(credential)
   // A browser page served by the computer itself (H5) may have no token: its
   // device cookie or the loopback address authenticates the socket instead.
-  if (!token && platform !== 'web') throw new ConnectionError('缺少连接凭据')
+  if (!token && platform !== 'web') throw new ConnectionError('Missing connection credentials')
   const url = new URL(hostOrigin(host))
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = `/ws/${encodeURIComponent(sessionId)}`
@@ -185,7 +185,7 @@ export function buildSocketOptions(
   url.searchParams.set('media', 'ref')
   if (platform === 'web') {
     if (host.auth === 'remote' && token)
-      throw new ConnectionError('远程凭据需要原生 App，浏览器预览不支持此连接')
+      throw new ConnectionError('Remote credentials require the native app; browser preview does not support this connection')
     if (token) url.searchParams.set('token', token)
     return { url: url.toString() }
   }

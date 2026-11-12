@@ -81,7 +81,6 @@ describe('feature quality contract', () => {
     }
     const prePushHook = readFileSync('scripts/git-hooks/pre-push', 'utf8')
     const contributing = readFileSync('docs/internals/contributing.md', 'utf8')
-    const englishContributing = readFileSync('docs/en/internals/contributing.md', 'utf8')
     const rootContributing = readFileSync('CONTRIBUTING.md', 'utf8')
 
     expect(packageJson.scripts?.verify).toBe('bun run quality:pr')
@@ -100,15 +99,11 @@ describe('feature quality contract', () => {
     expect(prePushHook).not.toContain('quality:smoke')
     expect(contributing).toContain('bun run verify')
     expect(contributing).toContain('bun run quality:push')
-    expect(contributing).toContain('push 不再自动运行本地质量门禁')
-    expect(contributing).toContain('AI Coding Agent 修复循环')
-    expect(englishContributing).toContain('bun run verify')
-    expect(englishContributing).toContain('bun run quality:push')
-    expect(englishContributing).toContain('push no longer runs a local quality gate')
-    expect(englishContributing).toContain('AI Coding Agent Fix Loop')
+    expect(contributing).toContain('push no longer runs a local quality gate')
+    expect(contributing).toContain('AI Coding Agent Fix Loop')
     expect(rootContributing).toContain('bun run verify')
     expect(rootContributing).toContain('bun run quality:push')
-    expect(rootContributing).toContain('不再自动运行本地质量门禁')
+    expect(rootContributing).toContain('no longer runs the local quality gate automatically')
   })
 
   test('keeps desktop native CI aligned with Electron packaging', () => {

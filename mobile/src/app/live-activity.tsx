@@ -24,25 +24,25 @@ import { isH5 } from '../state/h5'
 const MODES: { value: LiveActivityMode; title: string; detail: string }[] = [
   {
     value: 'running',
-    title: '有任务在跑就显示',
-    detail: '运行中显示计时，等你时变成琥珀色',
+    title: 'Show when a task is running',
+    detail: 'Shows a timer while running and turns amber when waiting for you',
   },
   {
     value: 'decisions',
-    title: '只在等你决定时',
-    detail: '要审批、回答或确认计划时出现，处理完就收起',
+    title: 'Only when waiting for your decision',
+    detail: 'Appears when an approval, answer or plan confirmation is needed, and closes once handled',
   },
 ]
 
-/** 锁屏实时活动只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+/** Lock screen Live Activities are native app only; the web version connects only to the computer that opened it, so go straight home. */
 export default function LiveActivitySettingsRoute() {
   return isH5 ? <Redirect href="/" /> : <LiveActivitySettings />
 }
 
 /**
- * 锁屏与灵动岛：实时活动什么时候出现、是否露出命令。
- * 实时活动总开关在系统设置里，JS 读不到它的状态（expo-widgets 没有对应接口），
- * 所以这里只提供入口，不假装知道开没开。
+ * Lock screen and Dynamic Island: when Live Activities appear and whether commands are revealed.
+ * The Live Activities master switch is in System Settings and JS cannot read it (expo-widgets has no API for it), 
+ * so only an entry point is provided here, without pretending to know whether it is on.
  */
 function LiveActivitySettings() {
   const colors = useColors()
@@ -55,26 +55,26 @@ function LiveActivitySettings() {
   if (Platform.OS !== 'ios')
     return (
       <ScreenView>
-        <NavBar floating title="锁屏与灵动岛" />
+        <NavBar floating title="Lock screen and Dynamic Island" />
         <EmptyState
           icon="bell"
-          title="锁屏实时活动仅支持 iPhone"
-          detail="Android 通过系统通知提醒你，可在设置的「声音和震动」里调整。"
+          title="Lock screen Live Activities are only supported on iPhone"
+          detail="Android Alerts you via system notifications; adjust in Settings under “Sounds & vibration”."
         />
       </ScreenView>
     )
   return (
     <ScreenView>
-      <NavBar floating title="锁屏与灵动岛" />
+      <NavBar floating title="Lock screen and Dynamic Island" />
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
       >
         <LockScreenPreview showCommand={preferences.liveActivityShowCommand} />
 
-        <SectionHeader title="什么时候显示" />
+        <SectionHeader title="When to show" />
         <Group>
-          <View accessibilityRole="radiogroup" accessibilityLabel="实时活动什么时候显示">
+          <View accessibilityRole="radiogroup" accessibilityLabel="When Live Activities show">
             {MODES.map((mode, index) => {
               const selected = preferences.liveActivity === mode.value
               return (
@@ -113,7 +113,7 @@ function LiveActivitySettings() {
           </View>
         </Group>
 
-        <SectionHeader title="隐私" />
+        <SectionHeader title="Privacy" />
         <Group>
           <View
             style={{
@@ -126,13 +126,13 @@ function LiveActivitySettings() {
             }}
           >
             <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-              <Text style={{ fontSize: 16, lineHeight: 21, color: colors.ink }}>锁屏上显示命令</Text>
+              <Text style={{ fontSize: 16, lineHeight: 21, color: colors.ink }}>Show commands on lock screen</Text>
               <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-                关掉后只写「想运行命令」，不露出命令和路径
+                When off only shows “Wants to run a command” without revealing the command or paths
               </Text>
             </View>
             <Switch
-              label="锁屏上显示命令"
+              label="Show commands on lock screen"
               value={preferences.liveActivityShowCommand}
               onValueChange={(value) => save({ liveActivityShowCommand: value })}
             />
@@ -140,10 +140,10 @@ function LiveActivitySettings() {
         </Group>
         <InlineError text={error} style={{ marginTop: 12 }} />
 
-        <Footnote>想完全关掉实时活动，去系统设置 › cc-haha › 实时活动。</Footnote>
+        <Footnote>To turn off Live Activities completely, go to System Settings › cc-haha › Live Activities.</Footnote>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="打开系统设置"
+          accessibilityLabel="Open system settings"
           hitSlop={8}
           onPress={() => void Linking.openSettings().catch(() => {})}
           style={({ pressed }) => ({
@@ -154,10 +154,10 @@ function LiveActivitySettings() {
             opacity: pressed ? 0.5 : 1,
           })}
         >
-          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink2 }}>打开系统设置</Text>
+          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink2 }}>Open system settings</Text>
         </Pressable>
         <Footnote style={{ paddingTop: 12 }}>
-          电脑通过系统推送更新锁屏时同样遵守这两项设置；电脑端版本较旧时，只对手机在前台生成的内容生效。
+          The computer follows these two settings when updating the lock screen via system push; with an older desktop version they apply only to content generated while the phone is in the foreground.
         </Footnote>
       </ScrollView>
     </ScreenView>

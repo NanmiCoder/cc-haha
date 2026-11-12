@@ -5,8 +5,8 @@ import { useSessionStopOffer } from '../../hooks/useSessionStopOffer'
 import { useChatStore } from '../../stores/chatStore'
 
 /**
- * The composer's Stop, for while 轨迹 hides the composer. Watching the ledger is
- * exactly when someone spots a run going nowhere, so leaving for 对话 to stop it
+ * The composer's Stop, for while Trajectory hides the composer. Watching the ledger is
+ * exactly when someone spots a run going nowhere, so leaving for Chat to stop it
  * would cost the moment it is needed most.
  */
 export function TrajectoryStopButton({ sessionId }: { sessionId: string }) {

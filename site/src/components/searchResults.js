@@ -27,10 +27,9 @@ function excerpt(entry, terms) {
   return `${start > 0 ? '…' : ''}${body.slice(start, end).trim()}${end < body.length ? '…' : ''}`
 }
 
-export function searchEntries(index, locale, terms, limit = 12) {
+export function searchEntries(index, terms, limit = 12) {
   if (!index || terms.length === 0) return { results: [], total: 0 }
   const matches = index
-    .filter((entry) => entry.l === locale)
     .map((entry) => ({ entry, value: score(entry, terms) }))
     .filter((item) => item.value > 0)
     .sort((left, right) => right.value - left.value)

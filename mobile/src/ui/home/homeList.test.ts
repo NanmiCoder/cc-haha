@@ -52,9 +52,9 @@ test('filter pills only list states that have sessions and fall back to all when
   const counts = homeCounts(rows)
   expect(counts).toEqual({ waiting: 1, running: 2 })
   expect(filterOptions(counts)).toEqual([
-    { value: 'all', label: '全部' },
-    { value: 'waiting', label: '等你决定', count: 1 },
-    { value: 'running', label: '进行中', count: 2 },
+    { value: 'all', label: 'All' },
+    { value: 'waiting', label: 'Waiting for your decision', count: 1 },
+    { value: 'running', label: 'In progress', count: 2 },
   ])
   expect(filterOptions({ waiting: 0, running: 3 }).map((o) => o.value)).toEqual(['all', 'running'])
   expect(filterOptions({ waiting: 0, running: 0 }).map((o) => o.value)).toEqual(['all'])
@@ -103,20 +103,20 @@ test('only the latest project and projects with live sessions start expanded', (
   ])
   expect(groups.find((g) => g.name === 'beta')).toMatchObject({ waiting: 1, running: 0 })
   expect(groups.find((g) => g.name === 'beta')!.rows.map((r) => r.session.id)).toEqual(['2', '4'])
-  // 没有项目目录的会话不进项目段。
+  // Sessions without a project directory do not go into the projects section.
   expect(groups.flatMap((g) => g.rows).some((r) => r.session.id === '6')).toBe(false)
 })
 
-test('sessions already shown under 最近 are not repeated under their project', () => {
+test('sessions already shown under Recent are not repeated under their project', () => {
   const rows = [row('1', a, act('waiting')), row('2', a), row('3', a), row('4', b)]
   const recent = new Set([rows[0], rows[1]])
   const groups = projectGroups(rows, {}, recent)
   const alpha = groups.find((g) => g.name === 'alpha')!
   expect(alpha.rows.map((r) => r.session.id)).toEqual(['3'])
-  // 总数和「等你决定」提示仍然把已在最近里的会话算进去。
+  // Totals and the "waiting for your decision" hint still count sessions already in Recent.
   expect(alpha).toMatchObject({ total: 3, waiting: 1 })
   expect(groups.find((g) => g.name === 'beta')!.rows.map((r) => r.session.id)).toEqual(['4'])
-  // 全部会话都在最近里的项目仍然保留项目头。
+  // Projects whose sessions are all in Recent still keep the project header.
   const only = row('5', c)
   const all = projectGroups([only], {}, new Set([only]))
   expect(all.map((g) => [g.name, g.rows.length, g.total])).toEqual([['gamma', 0, 1]])
@@ -138,8 +138,8 @@ test('manual toggles beat the defaults in both directions', () => {
 })
 
 test('collapsed project headers call out waiting before running', () => {
-  expect(projectBadge({ waiting: 1, running: 2 })).toEqual({ text: '1 个等你决定', tone: 'attn' })
-  expect(projectBadge({ waiting: 0, running: 1 })).toEqual({ text: '1 个运行中', tone: 'run' })
+  expect(projectBadge({ waiting: 1, running: 2 })).toEqual({ text: '1 waiting for your decision', tone: 'attn' })
+  expect(projectBadge({ waiting: 0, running: 1 })).toEqual({ text: '1 running', tone: 'run' })
   expect(projectBadge({ waiting: 0, running: 0 })).toBeNull()
 })
 
@@ -158,45 +158,45 @@ test('recent sub-lines read project and state, and never invent a result', () =>
   const now = Date.parse('2026-10-24T12:00:00')
   expect(
     recentLine(row('1', a, act('waiting', { toolName: 'Bash', requestId: 'r' })), now)
-  ).toEqual({ text: 'alpha · 想运行命令', tone: 'attn', mono: false })
+  ).toEqual({ text: 'alpha · Wants to run a command', tone: 'attn', mono: false })
   expect(
-    recentLine(row('1', a, act('running', { preview: '  运行 bun test  ' })), now)
-  ).toEqual({ text: '运行 bun test', tone: 'ink3', mono: true })
+    recentLine(row('1', a, act('running', { preview: '  Run bun test  ' })), now)
+  ).toEqual({ text: 'Run bun test', tone: 'ink3', mono: true })
   expect(recentLine(row('1', a, act('running')), now).text).toBe('alpha')
-  expect(recentLine(row('1', null, act('running')), now).text).toBe('正在处理')
+  expect(recentLine(row('1', null, act('running')), now).text).toBe('Working')
   expect(
     recentLine(
       row('1', a, act('running', { stalled: true, lastProgressAt: now - 5 * 60000 })),
       now
     )
-  ).toEqual({ text: '5 分钟没有进展', tone: 'attn', mono: false })
+  ).toEqual({ text: '5 min without progress', tone: 'attn', mono: false })
   expect(recentLine(row('1', a, act('idle', { terminalOutcome: 'completed' })), now)).toEqual({
-    text: 'alpha · 已完成',
+    text: 'alpha · Done',
     tone: 'ink3',
     mono: false,
   })
   expect(recentLine(row('1', a, act('failed')), now)).toEqual({
-    text: '出错停下 · alpha',
+    text: 'Stopped with error · alpha',
     tone: 'err',
     mono: false,
   })
-  // 历史会话没有活动记录时只写项目名。
+  // History sessions without activity records only show the project name.
   expect(recentLine(row('1', a), now).text).toBe('alpha')
 })
 
 test('project rows only get a text status for states that need attention', () => {
-  expect(waitingShort(act('waiting', { toolName: 'AskUserQuestion' }))).toBe('在问你')
-  expect(waitingShort(act('waiting', { toolName: 'ExitPlanMode' }))).toBe('等你确认')
-  expect(waitingShort(act('waiting', { decision: 'team_plan', preview: '团队组好了，等你确认' }))).toBe('等你确认')
-  expect(waitingShort(act('waiting', { toolName: 'Bash', requestId: 'r' }))).toBe('等你决定')
-  expect(waitingShort(undefined)).toBe('等你决定')
+  expect(waitingShort(act('waiting', { toolName: 'AskUserQuestion' }))).toBe('Asking you')
+  expect(waitingShort(act('waiting', { toolName: 'ExitPlanMode' }))).toBe('Waiting for you')
+  expect(waitingShort(act('waiting', { decision: 'team_plan', preview: 'Team is ready, awaiting your confirmation' }))).toBe('Waiting for you')
+  expect(waitingShort(act('waiting', { toolName: 'Bash', requestId: 'r' }))).toBe('Waiting for your decision')
+  expect(waitingShort(undefined)).toBe('Waiting for your decision')
   expect(projectTrailing(row('1', a, act('waiting', { toolName: 'AskUserQuestion' })))).toEqual({
-    text: '在问你',
+    text: 'Asking you',
     tone: 'attn',
   })
-  expect(projectTrailing(row('1', a, act('failed')))).toEqual({ text: '出错停下', tone: 'err' })
+  expect(projectTrailing(row('1', a, act('failed')))).toEqual({ text: 'Stopped with error', tone: 'err' })
   expect(projectTrailing(row('1', a, act('running', { stalled: true })))).toEqual({
-    text: '没有进展',
+    text: 'No progress',
     tone: 'attn',
   })
   expect(projectTrailing(row('1', a, act('running')))).toBeNull()
@@ -204,12 +204,12 @@ test('project rows only get a text status for states that need attention', () =>
 })
 
 test('every visible state has words for screen readers except unknown history', () => {
-  expect(stateWords('waiting')).toBe('等你决定')
-  expect(stateWords('review')).toBe('已完成，未查看')
+  expect(stateWords('waiting')).toBe('Waiting for your decision')
+  expect(stateWords('review')).toBe('Done, unviewed')
   expect(stateWords('unknown')).toBe('')
 })
 
-test('a project whose sessions are all under 最近 is not expandable; loose sessions get their own list', () => {
+test('a project whose sessions are all under Recent is not expandable; loose sessions get their own list', () => {
   const only = row('5', c)
   const [group] = projectGroups([only], {}, new Set([only]))
   expect(group).toMatchObject({ expandable: false, total: 1 })

@@ -18,7 +18,7 @@ import {
   type RunSummary,
 } from './schedulesView'
 
-// 2026-10-23 是周五。全部用本地时间构造，测试不依赖运行机器的时区。
+// 2026-10-23 is a Friday. All built in local time, so tests do not depend on the machine time zone.
 const at = (day: number, hour: number, minute = 0, month = 9, year = 2026) =>
   new Date(year, month, day, hour, minute, 0, 0)
 const run = (patch: Partial<RunSummary>): RunSummary => ({
@@ -34,13 +34,13 @@ test('schedule captions cover desktop frequencies without changing their meaning
   expect(parseDailyCron('30 23 * * 1-5')).toEqual({ hour: 23, minute: 30, weekdays: true })
   for (const cron of ['0 10 * * 1', '*/15 * * * *', '0 9 1 * *', '60 9 * * *', '0 24 * * *', ''])
     expect(parseDailyCron(cron)).toBeNull()
-  expect(scheduleParts('5 9 * * 1-5')).toEqual({ repeat: '工作日', time: '09:05' })
-  expect(scheduleParts('0 18 * * 5')).toEqual({ repeat: '每周五', time: '18:00' })
-  expect(scheduleParts('0 10 * * 1,3,5')).toEqual({ repeat: '每周一、三、五', time: '10:00' })
-  expect(scheduleParts('0 10 * * 0,6')).toEqual({ repeat: '每周六、日', time: '10:00' })
-  expect(scheduleParts('*/15 * * * *')).toEqual({ repeat: '每 15 分钟', time: '' })
-  expect(scheduleParts('30 */4 * * *')).toEqual({ repeat: '每 4 小时', time: '第 30 分钟' })
-  expect(scheduleParts('0 9 28 * *')).toEqual({ repeat: '每月 28 号', time: '09:00' })
+  expect(scheduleParts('5 9 * * 1-5')).toEqual({ repeat: 'Weekdays', time: '09:05' })
+  expect(scheduleParts('0 18 * * 5')).toEqual({ repeat: 'Every Friday', time: '18:00' })
+  expect(scheduleParts('0 10 * * 1,3,5')).toEqual({ repeat: 'Every Mon, Wed, Fri', time: '10:00' })
+  expect(scheduleParts('0 10 * * 0,6')).toEqual({ repeat: 'Every Sat, Sun', time: '10:00' })
+  expect(scheduleParts('*/15 * * * *')).toEqual({ repeat: 'Every 15 minutes', time: '' })
+  expect(scheduleParts('30 */4 * * *')).toEqual({ repeat: 'Every 4 hours', time: 'at minute 30' })
+  expect(scheduleParts('0 9 28 * *')).toEqual({ repeat: 'Monthly on the 28th', time: '09:00' })
   expect(scheduleParts('0 9 1,15 * *')).toBeNull()
 })
 
@@ -66,60 +66,60 @@ test('next run rolls to tomorrow once today has passed, and skips weekends for w
 
 test('day/time labels say today, yesterday, tomorrow, otherwise M/D', () => {
   const now = at(23, 12)
-  expect(dayTimeLabel(at(23, 9), now)).toBe('今天 09:00')
-  expect(dayTimeLabel(at(22, 23, 30), now)).toBe('昨天 23:30')
-  expect(dayTimeLabel(at(24, 9), now)).toBe('明天 09:00')
+  expect(dayTimeLabel(at(23, 9), now)).toBe('Today 09:00')
+  expect(dayTimeLabel(at(22, 23, 30), now)).toBe('Yesterday 23:30')
+  expect(dayTimeLabel(at(24, 9), now)).toBe('Tomorrow 09:00')
   expect(dayTimeLabel(at(21, 23, 30), now)).toBe('10/21 23:30')
   expect(dayTimeLabel(at(1, 0, 5, 0), now)).toBe('1/1 00:05')
   expect(dayTimeLabel(at(31, 8, 0, 11, 2025), now)).toBe('2025/12/31 08:00')
-  expect(dayTimeLabel(at(22, 23, 59).toISOString(), at(23, 0, 1))).toBe('昨天 23:59')
+  expect(dayTimeLabel(at(22, 23, 59).toISOString(), at(23, 0, 1))).toBe('Yesterday 23:59')
   expect(dayTimeLabel('not a date', now)).toBe('')
 })
 
 test('next-day label only names the day', () => {
   const now = at(23, 12)
-  expect(nextDayLabel(at(23, 23, 30), now)).toBe('今晚')
-  expect(nextDayLabel(at(23, 14), now)).toBe('今天')
-  expect(nextDayLabel(at(24, 9), now)).toBe('明天')
-  expect(nextDayLabel(at(26, 9), now)).toBe('周一')
+  expect(nextDayLabel(at(23, 23, 30), now)).toBe('Tonight')
+  expect(nextDayLabel(at(23, 14), now)).toBe('Today')
+  expect(nextDayLabel(at(24, 9), now)).toBe('Tomorrow')
+  expect(nextDayLabel(at(26, 9), now)).toBe('Mon')
   expect(nextDayLabel(at(3, 9, 0, 10), now)).toBe('11/3')
 })
 
 test('latest run line covers never-run, success with next, failure and running', () => {
   const now = at(23, 12)
-  expect(latestRunLine(undefined, '0 9 * * *', now)).toEqual({ tone: 'none', text: '还没有执行记录' })
+  expect(latestRunLine(undefined, '0 9 * * *', now)).toEqual({ tone: 'none', text: 'No runs yet' })
   expect(latestRunLine(run({}), '0 9 * * *', now)).toEqual({
     tone: 'ok',
-    text: '今天 09:00 完成 · 下次明天 09:00',
+    text: 'Done today 09:00 · Next tomorrow 09:00',
   })
   expect(latestRunLine(run({}), '0 10 * * 1', now)).toEqual({
     tone: 'ok',
-    text: '今天 09:00 完成 · 下次周一 10:00',
+    text: 'Done today 09:00 · Next Mon 10:00',
   })
-  expect(latestRunLine(run({}), '*/15 * * * *', now)).toEqual({ tone: 'ok', text: '今天 09:00 完成' })
+  expect(latestRunLine(run({}), '*/15 * * * *', now)).toEqual({ tone: 'ok', text: 'Done today 09:00' })
   expect(
     latestRunLine(run({ status: 'failed', startedAt: at(22, 23, 30).toISOString() }), '30 23 * * *', now)
-  ).toEqual({ tone: 'err', text: '昨天 23:30 失败 · 点开看结果' })
+  ).toEqual({ tone: 'err', text: 'Failed yesterday 23:30 · tap to see the result' })
   expect(latestRunLine(run({ status: 'timeout' }), '0 9 * * *', now).tone).toBe('err')
   expect(latestRunLine(run({ status: 'running' }), '0 9 * * *', now)).toEqual({
     tone: 'run',
-    text: '今天 09:00 开始 · 正在执行',
+    text: 'Started today 09:00 · running',
   })
 })
 
 test('run result line uses real previews when the computer sends them', () => {
-  expect(runResultLine(run({}))).toEqual({ tone: 'ok', text: '完成' })
-  expect(runResultLine(run({ outputPreview: '\n  全部通过\n第二行' }))).toEqual({
+  expect(runResultLine(run({}))).toEqual({ tone: 'ok', text: 'Done' })
+  expect(runResultLine(run({ outputPreview: '\n  All passed\nsecond line' }))).toEqual({
     tone: 'ok',
-    text: '完成 · 全部通过',
+    text: 'Done · All passed',
   })
-  expect(runResultLine(run({ status: 'failed' }))).toEqual({ tone: 'err', text: '失败 · 点开看结果' })
-  expect(runResultLine(run({ status: 'failed', error: '2 个用例没过' }))).toEqual({
+  expect(runResultLine(run({ status: 'failed' }))).toEqual({ tone: 'err', text: 'Failed · tap to see the result' })
+  expect(runResultLine(run({ status: 'failed', error: '2 test cases failed' }))).toEqual({
     tone: 'err',
-    text: '失败 · 2 个用例没过',
+    text: 'Failed · 2 test cases failed',
   })
   expect(runResultLine(run({ status: 'timeout' })).tone).toBe('attn')
-  expect(runResultLine(run({ status: 'running' }))).toEqual({ tone: 'run', text: '正在执行' })
+  expect(runResultLine(run({ status: 'running' }))).toEqual({ tone: 'run', text: 'Running' })
 })
 
 test('run duration prefers durationMs, then timestamps, and counts running runs to now', () => {
@@ -136,8 +136,8 @@ test('run duration prefers durationMs, then timestamps, and counts running runs 
 test('project label falls back to the computer default directory', () => {
   expect(projectLabel('/Users/me/code/cc-haha/')).toBe('cc-haha')
   expect(projectLabel('C:\\work\\blog')).toBe('blog')
-  expect(projectLabel(undefined)).toBe('电脑默认目录')
-  expect(projectLabel('')).toBe('电脑默认目录')
+  expect(projectLabel(undefined)).toBe('Computer default directory')
+  expect(projectLabel('')).toBe('Computer default directory')
 })
 
 test('runs are shown newest first', () => {
@@ -168,7 +168,7 @@ test('time validation matches the cron builder exactly', () => {
 test('explicit plans display their own timezone and use server occurrences, including one-time completion', () => {
   const schedule = { kind: 'once' as const, runAt: '2035-10-27T01:00:00Z', timeZone: 'Asia/Shanghai' }
   const task = { id: 'once', prompt: 'check', cron: '', schedule, createdAt: 0 }
-  expect(taskScheduleParts(task)).toEqual({ repeat: '仅一次', time: '2035-10-27 09:00' })
+  expect(taskScheduleParts(task)).toEqual({ repeat: 'Once only', time: '2035-10-27 09:00' })
   const now = new Date('2035-10-26T00:00:00Z')
   expect(nextRunAt(task, now)).toEqual(new Date(schedule.runAt))
   expect(nextRunAt({ ...task, scheduleState: 'completed' }, now)).toBeNull()
@@ -177,8 +177,8 @@ test('explicit plans display their own timezone and use server occurrences, incl
   // An older computer without an occurrence must not be guessed using the phone's timezone.
   expect(nextRunAt({ ...task, schedule: undefined, cron: '0 9 * * *' }, now)).toBeNull()
   const boundary = new Date('2035-10-26T23:00:00Z')
-  expect(taskNextRunLabel(task, new Date(schedule.runAt), boundary)).toBe('今天 09:00')
-  expect(latestRunLine(run({}), task, boundary).text.endsWith('下次今天 09:00')).toBe(true)
+  expect(taskNextRunLabel(task, new Date(schedule.runAt), boundary)).toBe('Today 09:00')
+  expect(latestRunLine(run({}), task, boundary).text.endsWith('Next today 09:00')).toBe(true)
 })
 
 test('latest run per task keeps the newest start', () => {

@@ -62,7 +62,7 @@ const agentMessages: UIMessage[] = [
     type: 'tool_use',
     toolName: 'Agent',
     toolUseId: 'agent-tool-1',
-    input: { description: '审查代码结构' },
+    input: { description: 'Review code structure' },
     timestamp: 1000,
   },
   {
@@ -72,7 +72,7 @@ const agentMessages: UIMessage[] = [
     content: {
       status: 'completed',
       content: [
-        { type: 'text', text: '# 审查报告\n\n没有阻塞问题。' },
+        { type: 'text', text: '# Review report\n\nNo blocking issues.' },
         { type: 'text', text: 'agentId: child-1\n<usage>total_tokens: 42</usage>' },
       ],
     },
@@ -84,7 +84,7 @@ const agentMessages: UIMessage[] = [
     type: 'tool_use',
     toolName: 'Agent',
     toolUseId: 'agent-tool-2',
-    input: { description: '运行边界条件方案' },
+    input: { description: 'Run the edge-case plan' },
     timestamp: 3000,
   },
   {
@@ -122,7 +122,7 @@ describe('buildSessionActivityModel', () => {
         toolUseId: 'todo-1',
         input: {
           todos: [
-            { content: '审查现有实现', status: 'completed' },
+            { content: 'Review the existing implementation', status: 'completed' },
           ],
         },
         timestamp: 1000,
@@ -378,14 +378,14 @@ describe('buildSessionActivityModel', () => {
     expect(model.sections.subagents.rows).toEqual([
       expect.objectContaining({
         id: 'agent-tool-1',
-        label: '审查代码结构',
+        label: 'Review code structure',
         status: 'completed',
-        summary: '# 审查报告 没有阻塞问题。',
+        summary: '# Review report No blocking issues.',
         openable: true,
       }),
       expect.objectContaining({
         id: 'agent-tool-2',
-        label: '运行边界条件方案',
+        label: 'Run the edge-case plan',
         status: 'failed',
         summary: "Agent type 'general' not found",
         openable: true,
@@ -404,7 +404,7 @@ describe('buildSessionActivityModel', () => {
           toolName: 'Agent',
           toolUseId: 'team-agent-tool',
           input: {
-            description: '分析桌面端 UI 变更',
+            description: 'Analyze desktop UI changes',
             name: 'desktop-analyzer',
             team_name: 'v053-release-audit',
           },
@@ -423,7 +423,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'direct-agent-tool',
-          input: { description: '检查普通 SubAgent 路径' },
+          input: { description: 'Check the ordinary SubAgent path' },
           timestamp: 1002,
         },
         {
@@ -431,7 +431,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'blank-team-agent-tool',
-          input: { description: '检查空 Team 名路径', team_name: '   ' },
+          input: { description: 'Check the blank team-name path', team_name: '   ' },
           timestamp: 1003,
         },
         {
@@ -439,7 +439,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'unnamed-team-agent-tool',
-          input: { description: '检查未命名普通 SubAgent 路径', team_name: 'v053-release-audit' },
+          input: { description: 'Check the unnamed ordinary SubAgent path', team_name: 'v053-release-audit' },
           timestamp: 1004,
         },
       ],
@@ -450,9 +450,9 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.subagents.rows).toEqual([
-      expect.objectContaining({ id: 'direct-agent-tool', label: '检查普通 SubAgent 路径' }),
-      expect.objectContaining({ id: 'blank-team-agent-tool', label: '检查空 Team 名路径' }),
-      expect.objectContaining({ id: 'unnamed-team-agent-tool', label: '检查未命名普通 SubAgent 路径' }),
+      expect.objectContaining({ id: 'direct-agent-tool', label: 'Check the ordinary SubAgent path' }),
+      expect.objectContaining({ id: 'blank-team-agent-tool', label: 'Check the blank team-name path' }),
+      expect.objectContaining({ id: 'unnamed-team-agent-tool', label: 'Check the unnamed ordinary SubAgent path' }),
     ])
     expect(model.sections.team.rows).toEqual([
       expect.objectContaining({
@@ -474,7 +474,7 @@ describe('buildSessionActivityModel', () => {
       toolName: 'Agent',
       toolUseId: 'team-agent-tool',
       input: {
-        description: '分析桌面端 UI 变更',
+        description: 'Analyze desktop UI changes',
         name: 'desktop-analyzer',
         team_name: 'v053-release-audit',
       },
@@ -485,7 +485,7 @@ describe('buildSessionActivityModel', () => {
       type: 'tool_use',
       toolName: 'Agent',
       toolUseId: 'direct-agent-tool',
-      input: { description: '检查普通 SubAgent 路径' },
+      input: { description: 'Check the ordinary SubAgent path' },
       timestamp: 1001,
     }
     const buildMainModel = (messages: UIMessage[]) => buildMainSessionActivityModel({
@@ -519,7 +519,7 @@ describe('buildSessionActivityModel', () => {
     const withDirectSubagent = buildMainModel([teamLaunch, directLaunch])
     expect(getVisibleActivitySections(withDirectSubagent).map(section => section.id)).toEqual(['subagents'])
     expect(withDirectSubagent.sections.subagents.rows).toEqual([
-      expect.objectContaining({ id: 'direct-agent-tool', label: '检查普通 SubAgent 路径' }),
+      expect.objectContaining({ id: 'direct-agent-tool', label: 'Check the ordinary SubAgent path' }),
     ])
   })
 
@@ -537,24 +537,24 @@ describe('buildSessionActivityModel', () => {
       type: 'tool_use',
       toolName: 'Agent',
       toolUseId: 'streaming-agent-tool',
-      input: { description: '正在流式解析任务' },
+      input: { description: 'Streaming task parse' },
       timestamp: 1000,
       isPending: true,
-      partialInput: '{"description":"正在流式解析任务","name":',
+      partialInput: '{"description":"Streaming task parse","name":',
     }
 
     expect(hasVisibleSessionActivity(buildMainModel(partialAgent))).toBe(false)
 
     const completedDirectAgent = buildMainModel({
       ...partialAgent,
-      input: { description: '正在流式解析任务' },
+      input: { description: 'Streaming task parse' },
       isPending: false,
       partialInput: undefined,
     })
     expect(completedDirectAgent.sections.subagents.rows).toEqual([
       expect.objectContaining({
         id: 'streaming-agent-tool',
-        label: '正在流式解析任务',
+        label: 'Streaming task parse',
         status: 'running',
       }),
     ])
@@ -775,7 +775,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TeamCreate',
           toolUseId: 'team-create-tool',
-          input: { team_name: 'v053-release-audit', description: '并行审计' },
+          input: { team_name: 'v053-release-audit', description: 'Parallel audit' },
           timestamp: 1000,
         },
         {
@@ -791,7 +791,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'implicit-member-tool',
-          input: { description: '隐式团队成员', name: 'desktop-analyzer' },
+          input: { description: 'Implicit team member', name: 'desktop-analyzer' },
           timestamp: 1002,
         },
         {
@@ -799,7 +799,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'ordinary-in-team-tool',
-          input: { description: '团队中的普通 SubAgent' },
+          input: { description: 'Ordinary SubAgent in a team' },
           timestamp: 1003,
         },
         {
@@ -823,7 +823,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'implicit-member-after-failed-delete-tool',
-          input: { description: '删除失败后的团队成员', name: 'provider-analyzer' },
+          input: { description: 'Team member after a failed delete', name: 'provider-analyzer' },
           timestamp: 1006,
         },
         {
@@ -847,7 +847,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'ordinary-named-agent-tool',
-          input: { description: '团队结束后的普通 Agent', name: 'standalone-reviewer' },
+          input: { description: 'Ordinary Agent after the team ended', name: 'standalone-reviewer' },
           timestamp: 1009,
         },
       ],
@@ -858,8 +858,8 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.subagents.rows).toEqual([
-      expect.objectContaining({ id: 'ordinary-in-team-tool', label: '团队中的普通 SubAgent' }),
-      expect.objectContaining({ id: 'ordinary-named-agent-tool', label: '团队结束后的普通 Agent' }),
+      expect.objectContaining({ id: 'ordinary-in-team-tool', label: 'Ordinary SubAgent in a team' }),
+      expect.objectContaining({ id: 'ordinary-named-agent-tool', label: 'Ordinary Agent after the team ended' }),
     ])
     expect(model.sections.team.rows).toEqual([
       expect.objectContaining({
@@ -885,7 +885,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'implicit-member-tool',
-          input: { description: '隐式团队成员', name: 'desktop-analyzer' },
+          input: { description: 'Implicit team member', name: 'desktop-analyzer' },
           timestamp: 1000,
         },
         {
@@ -901,7 +901,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'ordinary-named-tool',
-          input: { description: '普通命名 Agent', name: 'standalone-reviewer' },
+          input: { description: 'Ordinary named Agent', name: 'standalone-reviewer' },
           timestamp: 1002,
         },
         {
@@ -920,7 +920,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.subagents.rows).toEqual([
-      expect.objectContaining({ id: 'ordinary-named-tool', label: '普通命名 Agent' }),
+      expect.objectContaining({ id: 'ordinary-named-tool', label: 'Ordinary named Agent' }),
     ])
     expect(model.sections.team.rows).toEqual([
       expect.objectContaining({
@@ -944,7 +944,7 @@ describe('buildSessionActivityModel', () => {
         input: {
           team_name: 'audit',
           name: 'desktop-analyzer',
-          description: '分析桌面端变更',
+          description: 'Analyze desktop changes',
         },
         timestamp: 1000,
       }],
@@ -1024,8 +1024,8 @@ describe('buildSessionActivityModel', () => {
         toolUseId: 'todo-1',
         input: {
           todos: [
-            { content: '审查现有实现', status: 'completed' },
-            { content: '补充边界测试', activeForm: '正在补充边界测试', status: 'in_progress' },
+            { content: 'Review the existing implementation', status: 'completed' },
+            { content: 'Add edge-case tests', activeForm: 'Adding edge-case tests', status: 'in_progress' },
           ],
         },
         timestamp: 1000,
@@ -1037,8 +1037,8 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '审查现有实现', status: 'completed' }),
-      expect.objectContaining({ label: '补充边界测试', description: '正在补充边界测试', status: 'in_progress' }),
+      expect.objectContaining({ label: 'Review the existing implementation', status: 'completed' }),
+      expect.objectContaining({ label: 'Add edge-case tests', description: 'Adding edge-case tests', status: 'in_progress' }),
     ])
     expect(model.badgeCount).toBe(1)
   })
@@ -1110,8 +1110,8 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
           input: {
-            subject: '审查现有订单汇总代码与测试',
-            description: '审查 src/orders.mjs 和 tests/check.mjs',
+            subject: 'Review the existing order summary code and tests',
+            description: 'Review src/orders.mjs and tests/check.mjs',
           },
           timestamp: 1000,
         },
@@ -1119,7 +1119,7 @@ describe('buildSessionActivityModel', () => {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 审查现有订单汇总代码与测试',
+          content: 'Task #1 created successfully: Review the existing order summary code and tests',
           isError: false,
           timestamp: 1001,
         },
@@ -1128,14 +1128,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-2',
-          input: { subject: '补充边界测试' },
+          input: { subject: 'Add edge-case tests' },
           timestamp: 1002,
         },
         {
           id: 'task-create-result-2',
           type: 'tool_result',
           toolUseId: 'task-create-call-2',
-          content: 'Task #2 created successfully: 补充边界测试',
+          content: 'Task #2 created successfully: Add edge-case tests',
           isError: false,
           timestamp: 1003,
         },
@@ -1153,7 +1153,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskUpdate',
           toolUseId: 'task-update-call-2',
-          input: { taskId: '2', status: 'in_progress', activeForm: '正在补充边界测试' },
+          input: { taskId: '2', status: 'in_progress', activeForm: 'Adding edge-case tests' },
           timestamp: 1006,
         },
         successfulTaskUpdateResult('task-update-call-2', '2', 1007),
@@ -1167,14 +1167,14 @@ describe('buildSessionActivityModel', () => {
     expect(model.sections.tasks.rows).toEqual([
       expect.objectContaining({
         id: '1',
-        label: '审查现有订单汇总代码与测试',
-        description: '审查 src/orders.mjs 和 tests/check.mjs',
+        label: 'Review the existing order summary code and tests',
+        description: 'Review src/orders.mjs and tests/check.mjs',
         status: 'completed',
       }),
       expect.objectContaining({
         id: '2',
-        label: '补充边界测试',
-        description: '正在补充边界测试',
+        label: 'Add edge-case tests',
+        description: 'Adding edge-case tests',
         status: 'in_progress',
       }),
     ])
@@ -1186,19 +1186,19 @@ describe('buildSessionActivityModel', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
       messages: [
-        ...['脚手架', '数据层', '3D 场景'].map((subject, index) => ({
+        ...['Scaffold', 'Data layer', '3D scene'].map((subject, index) => ({
           id: `task-create-${index}`,
           type: 'tool_use' as const,
           toolName: 'TaskCreate',
           toolUseId: `task-create-call-${index}`,
-          input: { subject, description: `完成${subject}` },
+          input: { subject, description: `Finish ${subject}` },
           timestamp: 1000 + index,
         })),
         {
           id: 'task-create-result-0',
           type: 'tool_result',
           toolUseId: 'task-create-call-0',
-          content: 'Task #1 created successfully: 脚手架',
+          content: 'Task #1 created successfully: Scaffold',
           isError: false,
           timestamp: 1010,
         },
@@ -1226,7 +1226,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '1', label: '脚手架', status: 'pending' }),
+      expect.objectContaining({ id: '1', label: 'Scaffold', status: 'pending' }),
     ])
   })
 
@@ -1239,14 +1239,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '完成当前任务' },
+          input: { subject: 'Finish the current task' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 完成当前任务',
+          content: 'Task #1 created successfully: Finish the current task',
           isError: false,
           timestamp: 1001,
         },
@@ -1260,7 +1260,7 @@ describe('buildSessionActivityModel', () => {
         },
         successfulTaskUpdateResult('task-update-call-1', '1', 1003),
       ],
-      tasks: [task({ id: '1', subject: '完成当前任务', status: 'in_progress' })],
+      tasks: [task({ id: '1', subject: 'Finish the current task', status: 'in_progress' })],
       completedAndDismissed: false,
       isForegroundTurnActive: true,
       backgroundTasks: [],
@@ -1282,14 +1282,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '重新执行验收' },
+          input: { subject: 'Rerun acceptance' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 重新执行验收',
+          content: 'Task #1 created successfully: Rerun acceptance',
           isError: false,
           timestamp: 1001,
         },
@@ -1298,14 +1298,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-2',
-          input: { subject: '等待后台完成' },
+          input: { subject: 'Wait for background completion' },
           timestamp: 1002,
         },
         {
           id: 'task-create-result-2',
           type: 'tool_result',
           toolUseId: 'task-create-call-2',
-          content: 'Task #2 created successfully: 等待后台完成',
+          content: 'Task #2 created successfully: Wait for background completion',
           isError: false,
           timestamp: 1003,
         },
@@ -1320,8 +1320,8 @@ describe('buildSessionActivityModel', () => {
         successfulTaskUpdateResult('task-update-call-1', '1', 1005),
       ],
       tasks: [
-        task({ id: '1', subject: '重新执行验收', status: 'completed' }),
-        task({ id: '2', subject: '等待后台完成', status: 'completed' }),
+        task({ id: '1', subject: 'Rerun acceptance', status: 'completed' }),
+        task({ id: '2', subject: 'Wait for background completion', status: 'completed' }),
       ],
       completedAndDismissed: false,
       isForegroundTurnActive: true,
@@ -1345,14 +1345,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'root-task-create-call',
-          input: { subject: '审查最近七天全部 Git 提交' },
+          input: { subject: 'Review all Git commits from the last seven days' },
           timestamp: 1000,
         },
         {
           id: 'root-task-create-result',
           type: 'tool_result',
           toolUseId: 'root-task-create-call',
-          content: 'Task #1 created successfully: 审查最近七天全部 Git 提交',
+          content: 'Task #1 created successfully: Review all Git commits from the last seven days',
           isError: false,
           timestamp: 1001,
         },
@@ -1361,7 +1361,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'Agent',
           toolUseId: 'agent-tool-call',
-          input: { description: '审查提交潜在回归' },
+          input: { description: 'Review commits for potential regressions' },
           timestamp: 1002,
         },
         {
@@ -1370,7 +1370,7 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TaskCreate',
           toolUseId: 'agent-tool-call/child-task-create-call',
           originalToolUseId: 'child-task-create-call',
-          input: { subject: '子代理内部检查' },
+          input: { subject: 'Sub-agent internal check' },
           parentToolUseId: 'agent-tool-call',
           timestamp: 1003,
         },
@@ -1379,14 +1379,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_result',
           toolUseId: 'agent-tool-call/child-task-create-call',
           originalToolUseId: 'child-task-create-call',
-          content: 'Task #1 created successfully: 子代理内部检查',
+          content: 'Task #1 created successfully: Sub-agent internal check',
           isError: false,
           parentToolUseId: 'agent-tool-call',
           timestamp: 1004,
         },
       ],
       tasks: [
-        task({ id: '1', subject: '审查最近七天全部 Git 提交' }),
+        task({ id: '1', subject: 'Review all Git commits from the last seven days' }),
       ],
       completedAndDismissed: false,
       backgroundTasks: [],
@@ -1396,7 +1396,7 @@ describe('buildSessionActivityModel', () => {
     expect(model.sections.tasks.rows).toEqual([
       expect.objectContaining({
         id: '1',
-        label: '审查最近七天全部 Git 提交',
+        label: 'Review all Git commits from the last seven days',
       }),
     ])
     expect(model.badgeCount).toBe(2)
@@ -1421,14 +1421,14 @@ describe('buildSessionActivityModel', () => {
           parentToolUseId: 'agent-tool-call',
         },
       ],
-      tasks: [task({ id: '1', subject: '主会话验收' })],
+      tasks: [task({ id: '1', subject: 'Main session acceptance' })],
       completedAndDismissed: false,
       backgroundTasks: [],
       agentNotifications: [],
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '1', label: '主会话验收' }),
+      expect.objectContaining({ id: '1', label: 'Main session acceptance' }),
     ])
     expect(model.badgeCount).toBe(1)
   })
@@ -1443,7 +1443,7 @@ describe('buildSessionActivityModel', () => {
         toolUseId: 'agent-tool-call/child-todo-call',
         originalToolUseId: 'child-todo-call',
         input: {
-          todos: [{ content: '子代理内部检查项', status: 'in_progress' }],
+          todos: [{ content: 'Sub-agent internal check item', status: 'in_progress' }],
         },
         parentToolUseId: 'agent-tool-call',
         timestamp: 1000,
@@ -1469,7 +1469,7 @@ describe('buildSessionActivityModel', () => {
         toolUseId: 'agent-tool-call/child-todo-call',
         originalToolUseId: 'child-todo-call',
         input: {
-          todos: [{ content: '子代理内部检查项', status: 'in_progress' }],
+          todos: [{ content: 'Sub-agent internal check item', status: 'in_progress' }],
         },
         parentToolUseId: 'agent-tool-call',
         timestamp: 1000,
@@ -1481,7 +1481,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '子代理内部检查项', status: 'in_progress' }),
+      expect.objectContaining({ label: 'Sub-agent internal check item', status: 'in_progress' }),
     ])
     expect(model.badgeCount).toBe(1)
   })
@@ -1497,7 +1497,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'team-agent/shared-task-create-call',
-          input: { subject: '其他成员的共享任务' },
+          input: { subject: 'Shared task of another member' },
           parentToolUseId: 'team-agent',
           timestamp: 1000,
         },
@@ -1505,7 +1505,7 @@ describe('buildSessionActivityModel', () => {
           id: 'shared-task-create-result',
           type: 'tool_result',
           toolUseId: 'team-agent/shared-task-create-call',
-          content: 'Task #9 created successfully: 其他成员的共享任务',
+          content: 'Task #9 created successfully: Shared task of another member',
           isError: false,
           parentToolUseId: 'team-agent',
           timestamp: 1001,
@@ -1529,24 +1529,24 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TodoWrite',
           toolUseId: 'team-agent/member-todo-call',
           input: {
-            todos: [{ content: '成员自己的检查项', status: 'in_progress' }],
+            todos: [{ content: 'Check item owned by the member', status: 'in_progress' }],
           },
           parentToolUseId: 'team-agent',
           timestamp: 1004,
         },
       ],
-      tasks: [task({ id: '1', subject: '分配给当前成员的任务' })],
+      tasks: [task({ id: '1', subject: 'Task assigned to the current member' })],
       completedAndDismissed: false,
       backgroundTasks: [],
       agentNotifications: [],
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '成员自己的检查项', status: 'in_progress' }),
-      expect.objectContaining({ id: '1', label: '分配给当前成员的任务', status: 'pending' }),
+      expect.objectContaining({ label: 'Check item owned by the member', status: 'in_progress' }),
+      expect.objectContaining({ id: '1', label: 'Task assigned to the current member', status: 'pending' }),
     ])
     expect(model.sections.tasks.rows).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: '其他成员的共享任务' }),
+      expect.objectContaining({ label: 'Shared task of another member' }),
     ]))
     expect(model.badgeCount).toBe(2)
   })
@@ -1827,14 +1827,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '补充活动面板回归测试' },
+          input: { subject: 'Add activity panel regression tests' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #2 created successfully: 补充活动面板回归测试',
+          content: 'Task #2 created successfully: Add activity panel regression tests',
           isError: false,
           timestamp: 1001,
         },
@@ -1859,7 +1859,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskUpdate',
           toolUseId: 'task-update-reopen-call',
-          input: { taskId: '2', status: 'in_progress', activeForm: '正在重新检查活动面板' },
+          input: { taskId: '2', status: 'in_progress', activeForm: 'Rechecking the activity panel' },
           timestamp: 1004,
         },
         {
@@ -1882,7 +1882,7 @@ describe('buildSessionActivityModel', () => {
     expect(model.sections.tasks.rows).toEqual([
       expect.objectContaining({
         id: '2',
-        label: '补充活动面板回归测试',
+        label: 'Add activity panel regression tests',
         status: 'completed',
       }),
     ])
@@ -1898,14 +1898,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '核对最终状态' },
+          input: { subject: 'Verify the final state' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 核对最终状态',
+          content: 'Task #1 created successfully: Verify the final state',
           isError: false,
           timestamp: 1001,
         },
@@ -1949,14 +1949,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '完成当前任务' },
+          input: { subject: 'Finish the current task' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 完成当前任务',
+          content: 'Task #1 created successfully: Finish the current task',
           isError: false,
           timestamp: 1001,
         },
@@ -1971,7 +1971,7 @@ describe('buildSessionActivityModel', () => {
         {
           id: 'queued-user-message',
           type: 'user_text',
-          content: '完成后继续检查下一项',
+          content: 'When done, check the next item',
           timestamp: 1003,
           optimisticQueued: true,
         },
@@ -1984,7 +1984,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '1', label: '完成当前任务', status: 'completed' }),
+      expect.objectContaining({ id: '1', label: 'Finish the current task', status: 'completed' }),
     ])
     expect(model.badgeCount).toBe(0)
   })
@@ -1998,14 +1998,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '保留完成状态' },
+          input: { subject: 'Keep the completed state' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 保留完成状态',
+          content: 'Task #1 created successfully: Keep the completed state',
           isError: false,
           timestamp: 1001,
         },
@@ -2049,14 +2049,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '写 README' },
+          input: { subject: 'Write README' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 写 README',
+          content: 'Task #1 created successfully: Write README',
           isError: false,
           timestamp: 1001,
         },
@@ -2065,14 +2065,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-2',
-          input: { subject: '给 summarize 加空数组保护' },
+          input: { subject: 'Guard summarize against empty arrays' },
           timestamp: 1002,
         },
         {
           id: 'task-create-result-2',
           type: 'tool_result',
           toolUseId: 'task-create-call-2',
-          content: 'Task #2 created successfully: 给 summarize 加空数组保护',
+          content: 'Task #2 created successfully: Guard summarize against empty arrays',
           isError: false,
           timestamp: 1003,
         },
@@ -2095,14 +2095,14 @@ describe('buildSessionActivityModel', () => {
         },
         successfulTaskUpdateResult('task-update-call-2', '1', 1007, 'deleted'),
       ],
-      tasks: [task({ id: '2', subject: '给 summarize 加空数组保护', status: 'completed' })],
+      tasks: [task({ id: '2', subject: 'Guard summarize against empty arrays', status: 'completed' })],
       completedAndDismissed: false,
       backgroundTasks: [],
       agentNotifications: [],
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '2', label: '给 summarize 加空数组保护', status: 'completed' }),
+      expect.objectContaining({ id: '2', label: 'Guard summarize against empty arrays', status: 'completed' }),
     ])
     expect(model.badgeCount).toBe(0)
   })
@@ -2116,14 +2116,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '保留仍然存在的任务' },
+          input: { subject: 'Keep the task that still exists' },
           timestamp: 1000,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 保留仍然存在的任务',
+          content: 'Task #1 created successfully: Keep the task that still exists',
           isError: false,
           timestamp: 1001,
         },
@@ -2151,7 +2151,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '1', label: '保留仍然存在的任务', status: 'pending' }),
+      expect.objectContaining({ id: '1', label: 'Keep the task that still exists', status: 'pending' }),
     ])
     expect(model.badgeCount).toBe(1)
   })
@@ -2163,7 +2163,7 @@ describe('buildSessionActivityModel', () => {
         {
           id: 'user-1',
           type: 'user_text',
-          content: '那条任务不用做了，删掉吧',
+          content: 'That task is not needed anymore, delete it',
           timestamp: 1000,
         },
         {
@@ -2190,20 +2190,20 @@ describe('buildSessionActivityModel', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
       messages: [
-        { id: 'user-1', type: 'user_text', content: '先做订单功能', timestamp: 1000 },
+        { id: 'user-1', type: 'user_text', content: 'Do the order feature first', timestamp: 1000 },
         {
           id: 'task-create-1',
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '实现订单汇总' },
+          input: { subject: 'Implement order summary' },
           timestamp: 1001,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 实现订单汇总',
+          content: 'Task #1 created successfully: Implement order summary',
           isError: false,
           timestamp: 1002,
         },
@@ -2212,14 +2212,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-2',
-          input: { subject: '写 README' },
+          input: { subject: 'Write README' },
           timestamp: 1003,
         },
         {
           id: 'task-create-result-2',
           type: 'tool_result',
           toolUseId: 'task-create-call-2',
-          content: 'Task #2 created successfully: 写 README',
+          content: 'Task #2 created successfully: Write README',
           isError: false,
           timestamp: 1004,
         },
@@ -2232,7 +2232,7 @@ describe('buildSessionActivityModel', () => {
           timestamp: 1005,
         },
         successfulTaskUpdateResult('task-update-call-1', '1', 1006),
-        { id: 'user-2', type: 'user_text', content: 'README 不写了，继续做活动面板', timestamp: 2000 },
+        { id: 'user-2', type: 'user_text', content: 'Skip the README, continue with the activity panel', timestamp: 2000 },
         {
           id: 'task-update-2',
           type: 'tool_use',
@@ -2247,14 +2247,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-3',
-          input: { subject: '实现活动面板' },
+          input: { subject: 'Implement the activity panel' },
           timestamp: 2003,
         },
         {
           id: 'task-create-result-3',
           type: 'tool_result',
           toolUseId: 'task-create-call-3',
-          content: 'Task #3 created successfully: 实现活动面板',
+          content: 'Task #3 created successfully: Implement the activity panel',
           isError: false,
           timestamp: 2004,
         },
@@ -2266,7 +2266,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '3', label: '实现活动面板', status: 'pending' }),
+      expect.objectContaining({ id: '3', label: 'Implement the activity panel', status: 'pending' }),
       expect.objectContaining({
         label: 'Earlier tasks',
         status: 'completed',
@@ -2294,22 +2294,22 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '补充边界测试' },
+          input: { subject: 'Add edge-case tests' },
           timestamp: 1002,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #2 created successfully: 补充边界测试',
+          content: 'Task #2 created successfully: Add edge-case tests',
           isError: false,
           timestamp: 1003,
         },
       ],
-      // tool_result 后才异步 refreshTasks，这一刻的列表还没剔掉已删任务
+      // refreshTasks runs asynchronously after tool_result, so the list still holds the deleted task at this point
       tasks: [
-        task({ id: '1', subject: '写 README', status: 'pending' }),
-        task({ id: '2', subject: '补充边界测试', status: 'pending' }),
+        task({ id: '1', subject: 'Write README', status: 'pending' }),
+        task({ id: '2', subject: 'Add edge-case tests', status: 'pending' }),
       ],
       completedAndDismissed: false,
       backgroundTasks: [],
@@ -2317,7 +2317,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '2', label: '补充边界测试', status: 'pending' }),
+      expect.objectContaining({ id: '2', label: 'Add edge-case tests', status: 'pending' }),
     ])
     expect(model.badgeCount).toBe(1)
   })
@@ -2332,7 +2332,7 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TodoWrite',
           toolUseId: 'todo-call-1',
           input: {
-            todos: [{ content: '继续验证桌面活动面板', status: 'in_progress' }],
+            todos: [{ content: 'Keep verifying the desktop activity panel', status: 'in_progress' }],
           },
           timestamp: 1000,
         },
@@ -2361,7 +2361,7 @@ describe('buildSessionActivityModel', () => {
 
     expect(model.sections.tasks.rows).toEqual([
       expect.objectContaining({
-        label: '继续验证桌面活动面板',
+        label: 'Keep verifying the desktop activity panel',
         status: 'in_progress',
       }),
     ])
@@ -2378,7 +2378,7 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TodoWrite',
           toolUseId: 'todo-call-1',
           input: {
-            todos: [{ content: '完成历史兼容验证', status: 'in_progress' }],
+            todos: [{ content: 'Finish history compatibility check', status: 'in_progress' }],
           },
           timestamp: 1000,
         },
@@ -2387,7 +2387,7 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskUpdate',
           toolUseId: 'task-update-call-1',
-          input: { taskId: '1', subject: '完成历史兼容验证', status: 'completed' },
+          input: { taskId: '1', subject: 'Finish history compatibility check', status: 'completed' },
           timestamp: 1000,
         },
         successfulTaskUpdateResult('task-update-call-1', '1', 1000),
@@ -2399,7 +2399,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ id: '1', label: '完成历史兼容验证', status: 'completed' }),
+      expect.objectContaining({ id: '1', label: 'Finish history compatibility check', status: 'completed' }),
     ])
     expect(model.badgeCount).toBe(0)
   })
@@ -2413,13 +2413,13 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TodoWrite',
           toolUseId: 'todo-1',
-          input: { todos: [{ content: '旧任务', status: 'in_progress' }] },
+          input: { todos: [{ content: 'Old task', status: 'in_progress' }] },
           timestamp: 1000,
         },
         {
           id: 'summary-1',
           type: 'task_summary',
-          tasks: [{ id: '1', subject: '最终验收', status: 'completed' }],
+          tasks: [{ id: '1', subject: 'Final acceptance', status: 'completed' }],
           timestamp: 2000,
         },
       ],
@@ -2430,7 +2430,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '最终验收', status: 'completed' }),
+      expect.objectContaining({ label: 'Final acceptance', status: 'completed' }),
     ])
     expect(model.badgeCount).toBe(0)
   })
@@ -2442,7 +2442,7 @@ describe('buildSessionActivityModel', () => {
         {
           id: 'user-1',
           type: 'user_text',
-          content: '先做订单功能',
+          content: 'Do the order feature first',
           timestamp: 1000,
         },
         {
@@ -2452,8 +2452,8 @@ describe('buildSessionActivityModel', () => {
           toolUseId: 'todo-1',
           input: {
             todos: [
-              { content: '实现', status: 'completed' },
-              { content: '验证', status: 'completed' },
+              { content: 'Implement', status: 'completed' },
+              { content: 'Verify', status: 'completed' },
             ],
           },
           timestamp: 1100,
@@ -2462,15 +2462,15 @@ describe('buildSessionActivityModel', () => {
           id: 'summary-1',
           type: 'task_summary',
           tasks: [
-            { id: '1', subject: '实现', status: 'completed' },
-            { id: '2', subject: '验证', status: 'completed' },
+            { id: '1', subject: 'Implement', status: 'completed' },
+            { id: '2', subject: 'Verify', status: 'completed' },
           ],
           timestamp: 1200,
         },
         {
           id: 'user-2',
           type: 'user_text',
-          content: '继续做活动面板',
+          content: 'Continue with the activity panel',
           timestamp: 2000,
         },
         {
@@ -2480,8 +2480,8 @@ describe('buildSessionActivityModel', () => {
           toolUseId: 'todo-2',
           input: {
             todos: [
-              { content: '实现', activeForm: '实现活动面板', status: 'in_progress' },
-              { content: '截图验证', status: 'pending' },
+              { content: 'Implement', activeForm: 'Implement the activity panel', status: 'in_progress' },
+              { content: 'Screenshot check', status: 'pending' },
             ],
           },
           timestamp: 2100,
@@ -2494,8 +2494,8 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '实现', description: '实现活动面板', status: 'in_progress' }),
-      expect.objectContaining({ label: '截图验证', status: 'pending' }),
+      expect.objectContaining({ label: 'Implement', description: 'Implement the activity panel', status: 'in_progress' }),
+      expect.objectContaining({ label: 'Screenshot check', status: 'pending' }),
       expect.objectContaining({
         id: expect.stringContaining('task-history-'),
         label: 'Earlier tasks',
@@ -2513,7 +2513,7 @@ describe('buildSessionActivityModel', () => {
         {
           id: 'user-1',
           type: 'user_text',
-          content: '执行第一轮任务',
+          content: 'Run the first round of tasks',
           timestamp: 1000,
         },
         {
@@ -2523,8 +2523,8 @@ describe('buildSessionActivityModel', () => {
           toolUseId: 'todo-1',
           input: {
             todos: [
-              { content: '已完成项', status: 'completed' },
-              { content: '被中断项', status: 'in_progress' },
+              { content: 'Completed item', status: 'completed' },
+              { content: 'Interrupted item', status: 'in_progress' },
             ],
           },
           timestamp: 1100,
@@ -2532,7 +2532,7 @@ describe('buildSessionActivityModel', () => {
         {
           id: 'user-2',
           type: 'user_text',
-          content: '中断后继续新任务',
+          content: 'Continue with new tasks after the interrupt',
           timestamp: 2000,
         },
         {
@@ -2541,7 +2541,7 @@ describe('buildSessionActivityModel', () => {
           toolName: 'TodoWrite',
           toolUseId: 'todo-2',
           input: {
-            todos: [{ content: '新轮次任务', status: 'completed' }],
+            todos: [{ content: 'New round task', status: 'completed' }],
           },
           timestamp: 2100,
         },
@@ -2553,7 +2553,7 @@ describe('buildSessionActivityModel', () => {
     })
 
     expect(model.sections.tasks.rows).toEqual([
-      expect.objectContaining({ label: '新轮次任务', status: 'completed' }),
+      expect.objectContaining({ label: 'New round task', status: 'completed' }),
       expect.objectContaining({
         label: 'Earlier tasks',
         status: 'stopped',
@@ -2567,20 +2567,20 @@ describe('buildSessionActivityModel', () => {
     const model = buildSessionActivityModel({
       sessionId: 'session-1',
       messages: [
-        { id: 'user-1', type: 'user_text', content: '执行任务后暂停', timestamp: 1000 },
+        { id: 'user-1', type: 'user_text', content: 'Pause after running the tasks', timestamp: 1000 },
         {
           id: 'task-create-1',
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-1',
-          input: { subject: '只读确认 README.md 存在' },
+          input: { subject: 'Read-only check that README.md exists' },
           timestamp: 1001,
         },
         {
           id: 'task-create-result-1',
           type: 'tool_result',
           toolUseId: 'task-create-call-1',
-          content: 'Task #1 created successfully: 只读确认 README.md 存在',
+          content: 'Task #1 created successfully: Read-only check that README.md exists',
           isError: false,
           timestamp: 1002,
         },
@@ -2589,14 +2589,14 @@ describe('buildSessionActivityModel', () => {
           type: 'tool_use',
           toolName: 'TaskCreate',
           toolUseId: 'task-create-call-2',
-          input: { subject: '等待后续指令' },
+          input: { subject: 'Wait for further instructions' },
           timestamp: 1003,
         },
         {
           id: 'task-create-result-2',
           type: 'tool_result',
           toolUseId: 'task-create-call-2',
-          content: 'Task #2 created successfully: 等待后续指令',
+          content: 'Task #2 created successfully: Wait for further instructions',
           isError: false,
           timestamp: 1004,
         },
@@ -2618,11 +2618,11 @@ describe('buildSessionActivityModel', () => {
           timestamp: 1007,
         },
         successfulTaskUpdateResult('task-update-call-2', '2', 1008),
-        { id: 'assistant-1', type: 'assistant_text', content: '已暂停，等待后续指令', timestamp: 1009 },
+        { id: 'assistant-1', type: 'assistant_text', content: 'Paused, waiting for further instructions', timestamp: 1009 },
       ],
       tasks: [
-        task({ id: '1', subject: '只读确认 README.md 存在', status: 'completed' }),
-        task({ id: '2', subject: '等待后续指令', status: 'in_progress' }),
+        task({ id: '1', subject: 'Read-only check that README.md exists', status: 'completed' }),
+        task({ id: '2', subject: 'Wait for further instructions', status: 'in_progress' }),
       ],
       completedAndDismissed: false,
       isForegroundTurnActive: false,

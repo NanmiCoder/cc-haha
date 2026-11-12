@@ -4,8 +4,8 @@ import type { WorkspaceBrowserMenuAction, WorkspaceBrowserMenuOptions } from '..
 import { buildWorkspaceBrowserMenuTemplate, WorkspaceBrowserMenuController, workspaceBrowserMenuPosition } from './workspaceBrowserMenu'
 
 const labels: WorkspaceBrowserMenuOptions['labels'] = {
-  find: '页面查找', print: '保存 PDF', zoom: '缩放', zoomIn: '放大', zoomOut: '缩小', zoomReset: '重置',
-  capture: '完整截图', pickElement: '选择元素', downloads: '下载', history: '历史', openExternal: '外部浏览器',
+  find: 'Find in page', print: 'Save as PDF', zoom: 'Zoom', zoomIn: 'Zoom in', zoomOut: 'Zoom out', zoomReset: 'Reset',
+  capture: 'Full screenshot', pickElement: 'Select element', downloads: 'Downloads', history: 'History', openExternal: 'External browser',
 }
 const options: WorkspaceBrowserMenuOptions = { x: 100, y: 44, labels, zoomFactor: 1, hasPage: true, canOpenExternal: true }
 
@@ -27,7 +27,7 @@ describe('workspace browser native menu', () => {
       select(template, item.id as WorkspaceBrowserMenuAction)
       expect(onSelect).toHaveBeenLastCalledWith(item.id)
     }
-    expect(template.find(item => item.id === 'zoom')).toMatchObject({ label: '缩放 · 120%', enabled: false })
+    expect(template.find(item => item.id === 'zoom')).toMatchObject({ label: 'Zoom · 120%', enabled: false })
   })
 
   it.each([

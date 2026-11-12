@@ -216,7 +216,7 @@ function harness(
     errors,
     verifies,
     historyCalls: () => historyCalls,
-    /** 模拟进程被挂起：墙钟往前走，计时器却没有按时触发。 */
+    /** Simulate a suspended process: wall clock advances but timers do not fire on time. */
     suspend: (ms: number) => {
       skew += ms
     },
@@ -1956,7 +1956,7 @@ describe('history cursor safety', () => {
     )
     await h.ready()
     expect(await h.transport.loadOlder(3)).toBe('loaded')
-    // 每次拿到的都是更早的一页：C（最早）→ B → A → 原本的 Z。
+    // Each fetch returns an earlier page: C (earliest) → B → A → the original Z.
     expect(h.transport.state.items.map((item) => item.text)).toEqual(['C', 'B', 'A', 'Z'])
     expect(h.transport.historyPage?.page?.nextCursor).toBeNull()
     expect(await h.transport.loadOlder(3)).toBe('end')
@@ -2066,7 +2066,7 @@ describe('history kept across refreshes', () => {
     expect(await h.transport.loadOlder()).toBe('loaded')
     expect(h.transport.send({ type: 'user_message', content: 'Three' })).toBe(true)
     finishTurn(socket, 'Three', 'Third')
-    // 电脑上重新读到的最新一页只从 Two 开始，版本和游标链都是新的。
+    // The latest page reread from the computer starts at Two, with a new version and cursor chain.
     latest = history([two, second, three, third], 'v2', 'fresh')
     h.timers.advance(100)
     await flush()
@@ -2081,7 +2081,7 @@ describe('history kept across refreshes', () => {
     let latest = history([two, second], 'v1', 'c1')
     const older: Record<string, HistoryPage> = {
       c1: history([entry('u0', 'user', 'Zero'), one, first], 'v1', 'c0'),
-      // 新链往前一页才碰到已加载的 Two。
+      // The new chain only reaches the loaded Two one page further back.
       f1: history([two, second], 'v2', 'f0'),
     }
     const h = harness(async (_id, cursor) => {
@@ -2097,7 +2097,7 @@ describe('history kept across refreshes', () => {
     await flush()
     expect(texts(h.transport)).toEqual(['Zero', 'One', 'First', 'Two', 'Second', 'Three', 'Third'])
     expect(requested).not.toContain('f0')
-    // 再往前翻仍沿用最早那条链，版本对得上。
+    // Paging further back still uses the earliest chain, and the version matches.
     expect(h.transport.historyPage?.page?.nextCursor).toBe('c0')
     older.c0 = history([entry('u-1', 'user', 'Start')], 'v1')
     expect(await h.transport.loadOlder()).toBe('loaded')
@@ -2106,7 +2106,7 @@ describe('history kept across refreshes', () => {
   })
 
   test('a turn larger than one page still reconciles when the newest page no longer holds the prompt', async () => {
-    // 一张大图或大量文件读取让这一轮超过一页：最新一页只剩回复，用户那条消息在更早一页。
+    // One large image or many file reads push this turn past a page: the latest page has only the reply, and the user message is on an earlier page.
     let latest = history([one, first], 'v1')
     const older: Record<string, HistoryPage> = {
       p1: history([two], 'v2', 'p0'),
@@ -2120,7 +2120,7 @@ describe('history kept across refreshes', () => {
     h.timers.advance(100)
     await flush()
     expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second'])
-    // 实时条目已经换成电脑上保存的记录，不用等下次重连才整体替换。
+    // Live entries are already replaced with records saved on the computer, without waiting for the next reconnect to replace everything.
     expect(h.transport.state.items.some((item) => item.id.startsWith('live:'))).toBe(false)
     h.transport.dispose()
   })
@@ -2134,7 +2134,7 @@ describe('history kept across refreshes', () => {
       latest,
       store
     )
-    // 还没连上电脑就先显示上次读到的内容。
+    // Show what was last read before connecting to the computer.
     expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second'])
     await h.ready()
     expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second', 'Three', 'Third'])
@@ -2237,7 +2237,7 @@ describe('slow links', () => {
       if (!cursor) return latest
       // The page holding a large result trickles in far slower than the sync budget.
       return new Promise<HistoryPage>((_resolve, reject) =>
-        options?.signal?.addEventListener('abort', () => reject(new ApiError('请求已取消', 0, 'ABORTED')), { once: true }))
+        options?.signal?.addEventListener('abort', () => reject(new ApiError('Request canceled', 0, 'ABORTED')), { once: true }))
     }, latest, store)
     await h.ready()
     expect(h.transport.connection).toBe('syncing')

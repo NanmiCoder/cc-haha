@@ -4,24 +4,24 @@ import { Button, InlineError, Sheet, Switch, useColors } from './kit'
 import { Text } from './Text'
 import { computerNote } from './compose/runLogic'
 
-/** 开启「操作电脑」前的确认单：授权覆盖这台电脑上的所有应用。 */
+/** Confirmation sheet before turning on "Computer use": the authorization covers all apps on this computer. */
 export function ComputerUseConsent({ computer }: { computer: ComputerUse }) {
   const colors = useColors()
   return (
-    <Sheet visible={computer.consentOpen} onClose={computer.cancelConsent} title="开启操作电脑">
+    <Sheet visible={computer.consentOpen} onClose={computer.cancelConsent} title="Turn on computer use">
       <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>
-        Agent 将能够查看这台电脑的屏幕内容，点击、输入、使用剪贴板和系统快捷键。授权覆盖所有应用，可能操作敏感内容或执行不可撤销的动作。
+        Agent will be able to view this computer’s screen, click, type, and use the clipboard and system shortcuts. The authorization covers all apps and may touch sensitive content or perform irreversible actions.
       </Text>
       <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>
-        请留意执行过程；你可以停止任务，或随时关闭操作电脑。macOS 还需要在电脑完成系统权限授权。
+        Keep an eye on execution; you can stop the task or turn off computer use anytime. macOS also requires system permission grants on the computer.
       </Text>
       <InlineError text={computer.error} />
       <Button
-        title={computer.busy ? '正在开启…' : '我了解并开启'}
+        title={computer.busy ? 'Turning on…' : 'I understand, turn on'}
         disabled={computer.busy}
         onPress={computer.confirmConsent}
       />
-      <Button title="取消" variant="secondary" disabled={computer.busy} onPress={computer.cancelConsent} />
+      <Button title="Cancel" variant="secondary" disabled={computer.busy} onPress={computer.cancelConsent} />
     </Sheet>
   )
 }
@@ -38,13 +38,13 @@ export function ComputerUseRow({ computer, selected, onSelected, reason }: {
     <View>
       <View style={{ minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14 }}>
         <View style={{ flex: 1, gap: 2, paddingVertical: 8 }}>
-          <Text style={{ fontSize: 16, color: colors.ink }}>操作电脑</Text>
+          <Text style={{ fontSize: 16, color: colors.ink }}>Computer use</Text>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-            {computer.enabled && !reason ? '只对这条消息生效，发送后收起；电脑操作授权仍有效。' : computerNote({ supported: computer.supported, reason })}
+            {computer.enabled && !reason ? 'Applies only to this message and closes after sending; computer use authorization stays valid.' : computerNote({ supported: computer.supported, reason })}
           </Text>
         </View>
         <Switch
-          label="操作电脑"
+          label="Computer use"
           value={selected}
           disabled={computer.supported !== true || computer.busy || !!reason}
           onValueChange={(value) => {
@@ -60,9 +60,9 @@ export function ComputerUseRow({ computer, selected, onSelected, reason }: {
       ) : null}
       {computer.needsPermission ? (
         <View style={{ gap: 8, paddingHorizontal: 14, paddingBottom: 12 }}>
-          <Text style={{ fontSize: 13, color: colors.ink2 }}>已开启，请在电脑完成屏幕录制和辅助功能授权。</Text>
+          <Text style={{ fontSize: 13, color: colors.ink2 }}>Enabled; please finish Screen Recording and Accessibility authorization on the computer.</Text>
           <Button
-            title={computer.busy ? '请在电脑完成授权…' : '在电脑上打开权限设置'}
+            title={computer.busy ? 'Please finish authorization on the computer…' : 'Open permission settings on the computer'}
             disabled={computer.busy}
             onPress={computer.openPermissionCard}
           />

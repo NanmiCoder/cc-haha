@@ -41,17 +41,17 @@ describe('MermaidRenderer Mermaid integration', () => {
       <MermaidRenderer
         code={[
           'flowchart TB',
-          '  A["企业建站"] --> B["主旨系统"]',
-          '  B --> C["Codex 初期"]',
+          '  A["Company website"] --> B["Theme system"]',
+          '  B --> C["Codex early stage"]',
         ].join('\n')}
       />,
     )
 
     const surface = await screen.findByTestId('mermaid-diagram-surface')
 
-    expect(surface).toHaveTextContent('企业建站')
-    expect(surface).toHaveTextContent('主旨系统')
-    expect(surface).toHaveTextContent('Codex 初期')
+    expect(surface).toHaveTextContent('Company website')
+    expect(surface).toHaveTextContent('Theme system')
+    expect(surface).toHaveTextContent('Codex early stage')
     expect(surface.querySelector('svg')).not.toHaveAttribute('width', '100%')
     expect(surface.querySelector('[data-edge="true"]')?.getAttribute('style')).toContain('vector-effect: non-scaling-stroke')
     expect(surface.innerHTML).not.toContain('<script')
@@ -63,8 +63,8 @@ describe('MermaidRenderer Mermaid integration', () => {
       <MermaidRenderer
         code={[
           'flowchart TD',
-          '  D1[/api/dcl] --> D2[直接调用 dclService]',
-          '  D2 --> R[返回结果]',
+          '  D1[/api/dcl] --> D2[Call dclService directly]',
+          '  D2 --> R[Return result]',
         ].join('\n')}
       />,
     )
@@ -72,7 +72,7 @@ describe('MermaidRenderer Mermaid integration', () => {
     const surface = await screen.findByTestId('mermaid-diagram-surface')
 
     expect(surface).toHaveTextContent('/api/dcl')
-    expect(surface).toHaveTextContent('直接调用 dclService')
+    expect(surface).toHaveTextContent('Call dclService directly')
     expect(screen.queryByText('Mermaid Error')).not.toBeInTheDocument()
   })
 
@@ -81,24 +81,24 @@ describe('MermaidRenderer Mermaid integration', () => {
       <MermaidRenderer
         code={[
           'flowchart LR',
-          '    A["客户端 / Web"] --> B{"是否已登录 / 有权限？"}',
+          '    A["Client / Web"] --> B{"Logged in / authorized?"}',
           '',
-          '    subgraph S["服务端 / API 子图"]',
-          '        B -- "是 / Yes" --> C[("用户数据库 / MySQL")]',
-          '        B -- "否 / No" --> D["登录 / OAuth"]',
+          '    subgraph S["Server / API subgraph"]',
+          '        B -- "Yes" --> C[("User database / MySQL")]',
+          '        B -- "No" --> D["Sign in / OAuth"]',
           '        D --> C',
           '    end',
           '',
-          '    C --> E["返回结果 / JSON"]',
+          '    C --> E["Return result / JSON"]',
         ].join('\n')}
       />,
     )
 
     const surface = await screen.findByTestId('mermaid-diagram-surface')
     const databaseNode = Array.from(surface.querySelectorAll('.node'))
-      .find((node) => node.textContent?.includes('用户数据库 / MySQL'))
+      .find((node) => node.textContent?.includes('User database / MySQL'))
 
-    expect(surface).toHaveTextContent('用户数据库 / MySQL')
+    expect(surface).toHaveTextContent('User database / MySQL')
     expect(databaseNode?.querySelector('path')).toBeInTheDocument()
     expect(screen.queryByText('Mermaid Error')).not.toBeInTheDocument()
   })
@@ -108,11 +108,11 @@ describe('MermaidRenderer Mermaid integration', () => {
       <MermaidRenderer
         code={[
           'graph LR',
-          '    subgraph "Yjs CRDT 核心"',
+          '    subgraph "Yjs CRDT core"',
           '        Y[Yjs Document]',
-          '        A[嵌入类型<br/>Text / Map / Array]',
-          '        I[插入操作<br/>{content, position, clock, clientID}]',
-          '        D[删除操作<br/>{position, length, clock, clientID}]',
+          '        A[Embedded types<br/>Text / Map / Array]',
+          '        I[Insert operation<br/>{content, position, clock, clientID}]',
+          '        D[Delete operation<br/>{position, length, clock, clientID}]',
           '        RM[Room Manager<br/>map[string]*Room]',
           '    end',
           '    I --> Y',
@@ -124,7 +124,7 @@ describe('MermaidRenderer Mermaid integration', () => {
 
     const surface = await screen.findByTestId('mermaid-diagram-surface')
 
-    expect(surface).toHaveTextContent('插入操作')
+    expect(surface).toHaveTextContent('Insert operation')
     expect(surface).toHaveTextContent('{content, position, clock, clientID}')
     expect(surface).toHaveTextContent('map[string]*Room')
     expect(screen.queryByText('Mermaid Error')).not.toBeInTheDocument()

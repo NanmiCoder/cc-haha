@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 
-/** 高亮当前正在读的小节。用 IntersectionObserver 跟踪标题的进出。 */
+/** Highlight the section being read. Tracks headings entering and leaving with IntersectionObserver. */
 function useActiveHeading(headings) {
   const [active, setActive] = useState(headings[0]?.id)
 
   useEffect(() => {
     if (headings.length === 0) return undefined
     setActive(headings[0].id)
-    // 没有 IntersectionObserver 就退化成「高亮第一节」，不能让整棵树炸掉。
+    // Without IntersectionObserver, fall back to highlighting the first section rather than crashing the tree.
     if (typeof IntersectionObserver === 'undefined') return undefined
 
     const seen = new Map()
@@ -31,20 +31,20 @@ function useActiveHeading(headings) {
   return active
 }
 
-export function DocToc({ headings, locale, onAnchorNavigate, progress = 0 }) {
+export function DocToc({ headings, onAnchorNavigate, progress = 0 }) {
   const active = useActiveHeading(headings)
   const scope = useRef(null)
 
-  // 长文的目录本身会溢出成滚动区。高亮项一旦滚出可视范围，目录就不再
-  // 指示"我读到哪了" —— internals 那批四十来条的页面读到一半就失去定位。
+  // On long pages the table of contents itself overflows into a scroll area. Once the highlighted item scrolls out of view
+  // the TOC stops showing "where am I" — the internals pages with forty-odd entries lose their place halfway down.
   useEffect(() => {
     if (!active) return
     const node = scope.current?.querySelector('[aria-current="true"]')
     const list = scope.current
     if (!node || !list || list.scrollHeight <= list.clientHeight) return
 
-    // 直接改容器的 scrollTop，不用 scrollIntoView —— 后者会向上遍历所有可
-    // 滚动祖先，有把整个页面也滚一下的风险，那会和用户自己的滚动打架。
+    // Set the container's scrollTop directly instead of scrollIntoView — the latter walks up every scrollable
+    // ancestor and risks scrolling the whole page too, fighting the user's own scrolling.
     const item = node.getBoundingClientRect()
     const box = list.getBoundingClientRect()
 
@@ -54,11 +54,11 @@ export function DocToc({ headings, locale, onAnchorNavigate, progress = 0 }) {
 
   if (headings.length < 2) return null
 
-  const title = locale === 'en' ? 'On this page' : '本页内容'
+  const title = 'On this page'
 
   return (
     <nav aria-label={title} className="doc-toc" ref={scope}>
-      <div className="doc-toc__reading"><span>{locale === 'en' ? 'READING PROGRESS' : '阅读进度'}</span><strong>{progress}<small>%</small></strong><div role="progressbar" aria-label={locale === 'en' ? 'Reading progress' : '阅读进度'} aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress}%` }} /></div></div>
+      <div className="doc-toc__reading"><span>READING PROGRESS</span><strong>{progress}<small>%</small></strong><div role="progressbar" aria-label="Reading progress" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress}%` }} /></div></div>
       <div className="doc-toc__title">{title}</div>
       <ul className="doc-toc__list">
         {headings.map((heading) => (

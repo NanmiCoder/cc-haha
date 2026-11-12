@@ -15,13 +15,13 @@ test('Edit keeps unchanged lines as context and shows removed before added', () 
     file_path: 'src/core/sessionTransport.ts',
     old_string: '  for (const m of batch) {\n    const key = m.localId\n    seen.add(key)',
     new_string:
-      '  for (const m of batch) {\n    // 重放带同一个 serverId\n    const key = m.serverId\n    seen.add(key)',
+      '  for (const m of batch) {\n    // Replay carries the same serverId\n    const key = m.serverId\n    seen.add(key)',
   })!
   expect(change.path).toBe('src/core/sessionTransport.ts')
   expect(kinds(change.lines)).toEqual([
     'c:  for (const m of batch) {',
     'r:    const key = m.localId',
-    'a:    // 重放带同一个 serverId',
+    'a:    // Replay carries the same serverId',
     'a:    const key = m.serverId',
     'c:    seen.add(key)',
   ])
@@ -53,7 +53,7 @@ test('very large edits fall back to remove-all + add-all without quadratic work'
   expect(lines.slice(600).every((line) => line.kind === 'add')).toBe(true)
   const change = fileChange('Edit', { file_path: 'x', old_string: before, new_string: after })!
   expect(change.lines).toHaveLength(EDIT_PREVIEW_LINES + 1)
-  expect(change.lines.at(-1)).toEqual({ text: '还有 800 行', kind: 'meta' })
+  expect(change.lines.at(-1)).toEqual({ text: '800 more lines', kind: 'meta' })
   expect(change.added).toBe(600)
   expect(change.removed).toBe(600)
 })
@@ -68,10 +68,10 @@ test('MultiEdit renders one hunk header per edit and totals every segment', () =
     ],
   })!
   expect(kinds(change.lines)).toEqual([
-    'h:@@ 第 1 处 @@',
+    'h:@@ Change 1 @@',
     'r:one',
     'a:uno',
-    'h:@@ 第 2 处（替换所有相同内容） @@',
+    'h:@@ Change 2 (replace all occurrences) @@',
     'r:two',
     'a:dos',
   ])
@@ -83,7 +83,7 @@ test('Write is all additions and truncates long files with the remaining count',
   const change = fileChange('Write', { file_path: 'new.ts', content })!
   expect(change.lines).toHaveLength(WRITE_PREVIEW_LINES + 1)
   expect(change.lines.slice(0, -1).every((line) => line.kind === 'add')).toBe(true)
-  expect(change.lines.at(-1)).toEqual({ text: '还有 5 行', kind: 'meta' })
+  expect(change.lines.at(-1)).toEqual({ text: '5 more lines', kind: 'meta' })
   expect([change.added, change.removed]).toEqual([WRITE_PREVIEW_LINES + 5, 0])
 })
 
@@ -94,10 +94,10 @@ test('NotebookEdit shows new cell content only and incomplete input yields no di
     edit_mode: 'insert',
   })!
   expect(change.path).toBe('a.ipynb')
-  expect(kinds(change.lines)).toEqual(['h:@@ 新增单元格 @@', 'a:print(1)'])
+  expect(kinds(change.lines)).toEqual(['h:@@ New cell @@', 'a:print(1)'])
   expect(
     kinds(fileChange('NotebookEdit', { notebook_path: 'a.ipynb', edit_mode: 'delete' })!.lines)
-  ).toEqual(['h:@@ 删除这个单元格 @@'])
+  ).toEqual(['h:@@ Delete this cell @@'])
   expect(fileChange('Edit', { file_path: 'a', old_string: 'x' })).toBeNull()
   expect(fileChange('MultiEdit', { file_path: 'a', edits: [] })).toBeNull()
   expect(fileChange('Write', { file_path: 'a' })).toBeNull()

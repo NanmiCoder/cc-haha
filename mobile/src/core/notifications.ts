@@ -6,39 +6,39 @@ const SIMPLE_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'])
 const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit'])
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
 
-/** 待决定事项的短标题（锁屏、灵动岛、通知共用一套口吻）。 */
+/** Short titles for pending decisions (lock screen, Dynamic Island and notifications share one tone). */
 export function decisionLabel(toolName?: string) {
-  if (!toolName) return '需要你决定'
-  if (toolName === 'Bash' || toolName === 'PowerShell') return '想运行命令'
-  if (toolName === 'AskUserQuestion') return '在问你'
-  if (toolName === 'ExitPlanMode') return '计划等你确认'
-  if (toolName === 'ComputerUse') return '想操作电脑'
-  if (FILE_EDIT_TOOLS.has(toolName)) return '想修改文件'
-  if (toolName === 'Write') return '想写入文件'
-  if (toolName === 'WebFetch' || toolName === 'WebSearch') return '想联网'
-  if (READ_TOOLS.has(toolName)) return '想读取文件'
-  return `想使用 ${toolName}`
+  if (!toolName) return 'Needs your decision'
+  if (toolName === 'Bash' || toolName === 'PowerShell') return 'Wants to run a command'
+  if (toolName === 'AskUserQuestion') return 'Asking you'
+  if (toolName === 'ExitPlanMode') return 'Plan awaiting your confirmation'
+  if (toolName === 'ComputerUse') return 'Wants to use the computer'
+  if (FILE_EDIT_TOOLS.has(toolName)) return 'Wants to edit files'
+  if (toolName === 'Write') return 'Wants to write a file'
+  if (toolName === 'WebFetch' || toolName === 'WebSearch') return 'Wants network access'
+  if (READ_TOOLS.has(toolName)) return 'Wants to read files'
+  return `Wants to use ${toolName}`
 }
 
 /**
- * 通知正文：“想运行 {命令}”“在问你：{问题}”“计划写好了，等你确认”。
- * 服务端只为 Bash 投影命令、为提问投影题目，其他工具的 preview 是通用占位，不拼进正文。
+ * Notification body: "Wants to run {command}", "Asking you: {question}", "Plan is ready, waiting for your confirmation".
+ * The server projects the command only for Bash and the question only for questions; other tools' previews are generic placeholders and are not appended to the body.
  */
 export function decisionText(toolName?: string, preview?: string) {
   const text = preview?.trim()
-  if (toolName === 'Bash') return text ? `想运行 ${text}` : '想运行命令'
+  if (toolName === 'Bash') return text ? `Wants to run ${text}` : 'Wants to run a command'
   if (toolName === 'AskUserQuestion')
-    return text ? `在问你：${text}` : '在问你一个问题'
-  if (toolName === 'ExitPlanMode') return '计划写好了，等你确认'
-  if (toolName === 'ComputerUse') return '想操作电脑，等你允许'
-  if (!toolName) return text || '需要你做决定'
-  return `${decisionLabel(toolName)}，等你确认`
+    return text ? `Asking you: ${text}` : 'Asking you a question'
+  if (toolName === 'ExitPlanMode') return 'Plan is ready, waiting for your confirmation'
+  if (toolName === 'ComputerUse') return 'Wants to use the computer, waiting for your permission'
+  if (!toolName) return text || 'Needs your decision'
+  return `${decisionLabel(toolName)}, waiting for your confirmation`
 }
 
 export const NOTIFICATION_COPY = {
-  stalled: '超过 5 分钟没有进展，打开看看',
-  failed: '出错停下了，打开查看原因',
-  completed: '完成了，打开查看结果',
+  stalled: 'No progress for over 5 minutes, open to check',
+  failed: 'Stopped with an error, open to see why',
+  completed: 'Finished, open to see the result',
 } as const
 
 export type NotificationEvent = {
@@ -72,7 +72,7 @@ export function notificationEvents(
           requestId: item.requestId,
           kind: 'decision',
           toolName: item.toolName,
-          // 「锁屏上显示命令」关掉后，本机兜底通知也不露出 Bash 命令原文。
+          // With "Show commands on lock screen" off, local fallback notifications also hide the raw Bash command.
           preview: decisionText(
             item.toolName,
             item.toolName === 'Bash' && !preferences.liveActivityShowCommand
@@ -182,7 +182,7 @@ export function notificationRequestTarget(
   return data ? notificationTarget(data, action, hostIds) : null
 }
 
-/** 电脑推来的新公网地址（`eventType: 'hostUrl'`），还没核对签名。 */
+/** New public address pushed by the computer (`eventType: 'hostUrl'`), signature not yet verified. */
 export type HostUrlUpdate = { hostId: string; url: string; mac: string }
 export function hostUrlUpdate(request: NotificationRequestData): HostUrlUpdate | null {
   const data = notificationRequestData(request)
@@ -228,7 +228,7 @@ export function notificationTarget(
   action: string,
   hostIds: Set<string>
 ): NotificationTarget | null {
-  // 地址更新只给 App 自己看，不是哪个会话的消息。
+  // Address updates are for the app itself, not a message for any session.
   if (data.eventType === 'hostUrl') return null
   if (
     typeof data.hostId !== 'string' ||

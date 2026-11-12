@@ -28,7 +28,7 @@ import type { TaskInfo, TeamMember, TeamWorkbenchSessionTimeline } from '../ui/a
 
 const info = (patch: Partial<TaskInfo>): TaskInfo => ({
   id: '1',
-  subject: '任务',
+  subject: 'Tasks',
   description: '',
   status: 'pending',
   blocks: [],
@@ -76,22 +76,22 @@ const data = (patch: Partial<Parameters<typeof deriveActivity>[0]> = {}) => ({
   ...patch,
 })
 
-describe('任务清单', () => {
+describe('Task list', () => {
   const tasks = [
-    info({ id: '1', subject: '读取现有配对流程', status: 'completed' }),
-    info({ id: '2', subject: '拆分扫码页与连接校验', status: 'in_progress', activeForm: '正在拆分扫码页' }),
-    info({ id: '3', subject: '改进手机 Composer' }),
-    info({ id: '4', subject: '回归验证', blockedBy: ['2'], owner: 'reviewer' }),
+    info({ id: '1', subject: 'Read the existing pairing flow', status: 'completed' }),
+    info({ id: '2', subject: 'Split the scan page and connection validation', status: 'in_progress', activeForm: 'Splitting the scan page' }),
+    info({ id: '3', subject: 'Improve mobile Composer' }),
+    info({ id: '4', subject: 'Regression check', blockedBy: ['2'], owner: 'reviewer' }),
   ]
-  test('四种状态：完成、进行中（带 activeForm）、待开始、等待依赖（带 owner）', () => {
+  test('Four states: done, in progress (with activeForm), not started, waiting on dependencies (with owner)', () => {
     expect(planTasks(tasks)).toEqual([
-      { id: '1', title: '读取现有配对流程', state: 'done' },
-      { id: '2', title: '拆分扫码页与连接校验', state: 'active', detail: '正在拆分扫码页' },
-      { id: '3', title: '改进手机 Composer', state: 'todo' },
-      { id: '4', title: '回归验证', state: 'waiting', owner: 'reviewer' },
+      { id: '1', title: 'Read the existing pairing flow', state: 'done' },
+      { id: '2', title: 'Split the scan page and connection validation', state: 'active', detail: 'Splitting the scan page' },
+      { id: '3', title: 'Improve mobile Composer', state: 'todo' },
+      { id: '4', title: 'Regression check', state: 'waiting', owner: 'reviewer' },
     ])
   })
-  test('依赖已完成就回到待开始；进行中没有 activeForm 就不编造说明', () => {
+  test('Once dependencies are done it returns to not started; in progress without activeForm does not make up a description', () => {
     const rows = planTasks([
       info({ id: '1', status: 'completed' }),
       info({ id: '2', blockedBy: ['1'] }),
@@ -100,20 +100,20 @@ describe('任务清单', () => {
     expect(rows[1]?.state).toBe('todo')
     expect(rows[2]).not.toHaveProperty('detail')
   })
-  test('进度：完成数/总数，active 取进行中任务的 activeForm，缺省用标题', () => {
-    expect(deriveActivity(data({ tasks })).progress).toEqual({ done: 1, total: 4, active: '正在拆分扫码页' })
-    const bare = [info({ status: 'in_progress', subject: '做事' })]
-    expect(deriveActivity(data({ tasks: bare })).progress.active).toBe('做事')
+  test('Progress: done/total; active uses the activeForm of the in-progress task, defaulting to the title', () => {
+    expect(deriveActivity(data({ tasks })).progress).toEqual({ done: 1, total: 4, active: 'Splitting the scan page' })
+    const bare = [info({ status: 'in_progress', subject: 'Working' })]
+    expect(deriveActivity(data({ tasks: bare })).progress.active).toBe('Working')
     expect(deriveActivity(data()).progress).toEqual({ done: 0, total: 0 })
   })
-  test('团队在跑时进度看团队看板，任务不再单列（挂到成员名下）', () => {
+  test('While the team runs, progress follows the team board and tasks are not listed separately (they hang under members)', () => {
     const team = timeline([member({})], [info({ id: 'x', status: 'completed' }), info({ id: 'y' })])
     expect(deriveActivity(data({ team })).progress).toMatchObject({ done: 1, total: 2 })
     const model = deriveActivity(data({ team, tasks }))
     expect(model.progress).toMatchObject({ done: 1, total: 2 })
     expect(model.tasks).toEqual([])
   })
-  test('团队已归档：回到会话自己的清单', () => {
+  test('Team archived: back to the session’s own list', () => {
     const archived = timeline([member({})], [info({ id: 'x' })], { source: 'archive' })
     const model = deriveActivity(data({ team: archived, tasks }))
     expect(model.progress.total).toBe(4)
@@ -122,7 +122,7 @@ describe('任务清单', () => {
   })
 })
 
-describe('子 Agent 与后台命令', () => {
+describe('Subagents and background commands', () => {
   const live: Record<string, SubagentLive> = {
     [runKey('a1')]: {
       reads: ['/a', '/b', '/c'],
@@ -134,33 +134,33 @@ describe('子 Agent 与后台命令', () => {
     },
     [taskKey('a1')]: { reads: [], steps: [], toolUses: 8 },
   }
-  test('运行中的子 Agent：读文件数、最近两步（相对路径）、当前一步未完成', () => {
+  test('Running subagent: files read, last two steps (relative paths), current step unfinished', () => {
     const [row] = subagentRows([agent({ startedAt: '2026-10-25T10:00:00.000Z' })], live, {}, '/repo')
-    expect(row).toMatchObject({ id: 'a1', title: 'explorer', status: 'running', stats: '已读取 3 个文件' })
+    expect(row).toMatchObject({ id: 'a1', title: 'explorer', status: 'running', stats: 'Read 3 files' })
     expect(row?.startedAt).toBe(Date.parse('2026-10-25T10:00:00.000Z'))
     expect(row?.steps).toEqual([
-      { verb: '读取', object: 'src/b.ts', mono: true, done: true, error: false },
-      { verb: '读取', object: 'src/c.ts', mono: true, done: false, error: false },
+      { verb: 'Read', object: 'src/b.ts', mono: true, done: true, error: false },
+      { verb: 'Read', object: 'src/c.ts', mono: true, done: false, error: false },
     ])
   })
-  test('没有实时数据时不显示步骤和统计，更不编造', () => {
+  test('Without live data do not show steps or stats, let alone make them up', () => {
     const [row] = subagentRows([agent()], undefined, {})
     expect(row?.steps).toEqual([])
     expect(row?.stats).toBeUndefined()
   })
-  test('已完成的卡显示工具调用次数，不显示最近步骤', () => {
+  test('Finished cards show the tool call count, not recent steps', () => {
     const [row] = subagentRows([agent({ status: 'completed' })], live, {})
-    expect(row).toMatchObject({ stats: '8 次工具调用', steps: [] })
+    expect(row).toMatchObject({ stats: '8 tool calls', steps: [] })
   })
-  test('统计文案：运行中优先文件数，其次次数；结束后优先次数', () => {
-    expect(subagentStats('running', { reads: 2, toolUses: 9 })).toBe('已读取 2 个文件')
-    expect(subagentStats('running', { reads: 0, toolUses: 9 })).toBe('9 次工具调用')
-    expect(subagentStats('completed', { reads: 2, toolUses: 9 })).toBe('9 次工具调用')
-    expect(subagentStats('completed', { reads: 2 })).toBe('已读取 2 个文件')
+  test('Stats text: while running prefer file count, then call count; after finishing prefer call count', () => {
+    expect(subagentStats('running', { reads: 2, toolUses: 9 })).toBe('Read 2 files')
+    expect(subagentStats('running', { reads: 0, toolUses: 9 })).toBe('9 tool calls')
+    expect(subagentStats('completed', { reads: 2, toolUses: 9 })).toBe('9 tool calls')
+    expect(subagentStats('completed', { reads: 2 })).toBe('Read 2 files')
     expect(subagentStats('running', { reads: 0 })).toBeUndefined()
     expect(subagentStats('running', null)).toBeUndefined()
   })
-  test('运行中的排在前面，同状态保持原顺序；子 Agent 和命令各自分组', () => {
+  test('Running ones first, same state keeps original order; subagents and commands grouped separately', () => {
     const rows = [
       agent({ taskId: 'done', status: 'completed' }),
       agent({ taskId: 'run1' }),
@@ -171,7 +171,7 @@ describe('子 Agent 与后台命令', () => {
     expect(subagentRows(rows, undefined, {}).map((row) => row.id)).toEqual(['run1', 'run2', 'done'])
     expect(commandRows(rows, {}).map((row) => row.id)).toEqual(['cmd-run', 'cmd-done'])
   })
-  test('命令行显示最后一行输出；停止中来自本地请求或电脑标记', () => {
+  test('Command rows show the last output line; stopping comes from a local request or a computer flag', () => {
     const [row] = commandRows([bg({ result: 'a\nFixture: sample 1 / 20 …\n\n' })], { t: true })
     expect(row).toMatchObject({ command: 'bun run bench', lastLine: 'Fixture: sample 1 / 20 …', stopping: true })
     expect(commandRows([bg({ stopping: true })], {})[0]?.stopping).toBe(true)
@@ -179,8 +179,8 @@ describe('子 Agent 与后台命令', () => {
   })
 })
 
-describe('runningCount 口径', () => {
-  test('只数 running 的子 Agent 和后台命令；完成、停止、失败和团队成员不算', () => {
+describe('runningCount Counting rule', () => {
+  test('Count only running subagents and background commands; done, stopped, failed and team members do not count', () => {
     const background = [
       agent({ taskId: 'a1' }),
       agent({ taskId: 'a2', status: 'completed' }),
@@ -191,51 +191,51 @@ describe('runningCount 口径', () => {
     const team = timeline([member({ activity: 'active' })])
     const model = deriveActivity(data({ background, team }))
     expect(model.runningCount).toBe(2)
-    // 胶囊角标和底单标题用的就是这一个数：分组摘要里的“运行中”加起来等于它。
+    // The capsule badge and sheet title use this one number: the "running" counts in the group summaries add up to it.
     const summaries = sectionSummaries(model)
-    const running = (text: string) => Number(/(\d+) 运行中/.exec(text)?.[1] ?? 0)
+    const running = (text: string) => Number(/(\d+) running/.exec(text)?.[1] ?? 0)
     expect(running(summaries.subagents) + running(summaries.commands)).toBe(model.runningCount)
   })
-  test('tone：有待审批时 attention，否则 run', () => {
+  test('tone: attention when an approval is pending, otherwise run', () => {
     expect(deriveActivity(data(), { pendingApprovals: 1 }).tone).toBe('attention')
     expect(deriveActivity(data(), { pendingApprovals: 0 }).tone).toBe('run')
     expect(deriveActivity(data()).tone).toBe('run')
   })
 })
 
-describe('胶囊可见性', () => {
+describe('Capsule visibility', () => {
   const progress = (done: number, total: number) => ({ done, total })
-  test('没有任务也没有在跑的东西：不出现', () => {
+  test('No tasks and nothing running: hidden', () => {
     expect(capsuleVisible({ runningCount: 0, progress: progress(0, 0), turnActive: true })).toBe(false)
     expect(deriveActivity(data(), { turnActive: true }).capsuleVisible).toBe(false)
   })
-  test('有后台在跑：出现，即使没有清单', () => {
+  test('Something running in background: shown, even without a list', () => {
     expect(capsuleVisible({ runningCount: 1, progress: progress(0, 0), turnActive: false })).toBe(true)
   })
-  test('清单全部完成且这一轮已结束：消失；这一轮还在跑或还有没做完的：出现', () => {
+  test('List all done and this turn ended: hidden; turn still running or unfinished items: shown', () => {
     expect(capsuleVisible({ runningCount: 0, progress: progress(3, 3), turnActive: false })).toBe(false)
     expect(capsuleVisible({ runningCount: 0, progress: progress(3, 3), turnActive: true })).toBe(true)
     expect(capsuleVisible({ runningCount: 0, progress: progress(2, 3), turnActive: false })).toBe(true)
   })
-  test('active：这一轮在跑或有东西在跑才转圈', () => {
+  test('active: spin only when this turn is running or something is running', () => {
     expect(deriveActivity(data({ tasks: [info({})] })).active).toBe(false)
     expect(deriveActivity(data({ tasks: [info({})] }), { turnActive: true }).active).toBe(true)
     expect(deriveActivity(data({ background: [bg({})] })).active).toBe(true)
   })
-  test('队长这一轮已结束、成员还在干活：胶囊照样出现并转圈', () => {
+  test('Lead turn ended while members are still working: the capsule still shows and spins', () => {
     const working = deriveActivity(data({ team: timeline([member({ activity: 'active' })]) }))
     expect(working).toMatchObject({ active: true, capsuleVisible: true, runningCount: 0 })
-    // 只有队长自己在跑不算：那是这段会话本身，由 turnActive 负责。
+    // Only the lead itself running does not count: that is the session itself, handled by turnActive.
     const leadOnly = deriveActivity(data({ team: timeline([member({ agentId: 'lead@team', name: 'team-lead', activity: 'active' })]) }))
     expect(leadOnly).toMatchObject({ active: false, capsuleVisible: false })
   })
 })
 
-describe('团队', () => {
-  test('队长、工作中、等待依赖、空闲各自的状态与说明', () => {
+describe('Team', () => {
+  test('State and description of lead, working, waiting on dependencies and idle', () => {
     const tasks = [
-      info({ id: '1', owner: 'builder', status: 'in_progress', subject: '改 connectHost', activeForm: '编辑 connectHost.ts' }),
-      info({ id: '2', owner: 'reviewer', blockedBy: ['1'], subject: '审查' }),
+      info({ id: '1', owner: 'builder', status: 'in_progress', subject: 'Edit connectHost', activeForm: 'Edit connectHost.ts' }),
+      info({ id: '2', owner: 'reviewer', blockedBy: ['1'], subject: 'Review' }),
     ]
     const team = teamModel(
       timeline(
@@ -249,23 +249,23 @@ describe('团队', () => {
       )
     )
     expect(team?.members.map((row) => [row.name, row.state, row.detail, row.tone])).toEqual([
-      ['队长', '工作中', undefined, 'run'],
-      ['builder', '工作中', '编辑 connectHost.ts', 'run'],
-      ['reviewer', '等待依赖', undefined, 'wait'],
-      ['qa', '空闲', undefined, 'idle'],
+      ['Lead', 'Working', undefined, 'run'],
+      ['builder', 'Working', 'Edit connectHost.ts', 'run'],
+      ['reviewer', 'Waiting on dependencies', undefined, 'wait'],
+      ['qa', 'Idle', undefined, 'idle'],
     ])
-    expect(team?.summary).toBe('team · 0/2 完成')
+    expect(team?.summary).toBe('team · 0/2 done')
   })
-  test('任务跟着负责人走：成员名下是它认领的看板任务，队长名下是会话自己的清单', () => {
+  test('Tasks follow their owner: under a member are the board tasks it claimed; under the lead is the session’s own list', () => {
     const board = [
-      info({ id: '1', owner: 'backend-dev', status: 'completed', subject: '设计数据模型' }),
-      info({ id: '2', owner: 'backend-dev@team', status: 'in_progress', subject: '实现 CRUD 接口', activeForm: '写路由' }),
-      info({ id: '3', owner: 'frontend-dev', status: 'completed', subject: '搭页面骨架' }),
-      info({ id: '4', owner: 'frontend-dev', blockedBy: ['2', '3'], subject: '接入接口' }),
-      info({ id: '5', subject: '补 README' }),
-      info({ id: '6', owner: 'someone-gone', subject: '旧成员的任务' }),
+      info({ id: '1', owner: 'backend-dev', status: 'completed', subject: 'Design the data model' }),
+      info({ id: '2', owner: 'backend-dev@team', status: 'in_progress', subject: 'Implement CRUD API', activeForm: 'Write routes' }),
+      info({ id: '3', owner: 'frontend-dev', status: 'completed', subject: 'Scaffold the page' }),
+      info({ id: '4', owner: 'frontend-dev', blockedBy: ['2', '3'], subject: 'Wire up the API' }),
+      info({ id: '5', subject: 'Add README' }),
+      info({ id: '6', owner: 'someone-gone', subject: 'Old member’s task' }),
     ]
-    const own = [info({ id: '1', subject: '拆分团队方案', status: 'completed' })]
+    const own = [info({ id: '1', subject: 'Split the team plan', status: 'completed' })]
     const team = teamModel(
       timeline(
         [
@@ -277,42 +277,42 @@ describe('团队', () => {
       ),
       own
     )!
-    // 队长排第一；名下是自己的清单（没有看板编号，免得和 #1 混淆）。
+    // Lead goes first; under it is its own list (no board numbers, to avoid confusion with #1).
     expect(team.members.map((row) => [row.name, row.mark, row.tasks.map((task) => task.ref ?? task.title)])).toEqual([
-      ['队长', '队', ['拆分团队方案']],
+      ['Lead', 'L', ['Split the team plan']],
       ['frontend-dev', 'FD', ['3', '4']],
       ['backend-dev', 'BD', ['1', '2']],
     ])
     const frontend = team.members[1]!
-    expect(frontend).toMatchObject({ model: 'deepseek-v4.1-flash', state: '等待依赖', tone: 'wait' })
-    // 只列还没完成的前置任务。
+    expect(frontend).toMatchObject({ model: 'deepseek-v4.1-flash', state: 'Waiting on dependencies', tone: 'wait' })
+    // List only unfinished prerequisite tasks.
     expect(frontend.tasks[1]).toMatchObject({ key: 'team:4', state: 'waiting', waitingOn: ['2'] })
-    expect(team.members[2]!.tasks[1]).toMatchObject({ state: 'active', detail: '写路由' })
+    expect(team.members[2]!.tasks[1]).toMatchObject({ state: 'active', detail: 'Write routes' })
     expect(team.unassigned.map((task) => task.ref)).toEqual(['5', '6'])
     expect(team.progress).toEqual({ done: 2, total: 6 })
-    expect(team.summary).toBe('team · 2/6 完成')
+    expect(team.summary).toBe('team · 2/6 done')
   })
-  test('成员头像取名字里前两个词的首字母，同队里不重复', () => {
+  test('Member avatars use the initials of the first two words of the name, unique within the team', () => {
     expect(['backend-dev', 'qa_reviewer', 'reviewer', 'team lead', 'x'].map((name) => memberMark(name))).toEqual(['BD', 'QR', 'RE', 'TL', 'X'])
     expect(memberMark('reviewer', new Set(['RE']))).toBe('RV')
     const team = teamModel(timeline([member({ agentId: 'r1', name: 'researcher' }), member({ agentId: 'r2', name: 'reviewer' })]))
     expect(team?.members.map((row) => row.mark)).toEqual(['RE', 'RV'])
   })
-  test('成员都已停止或退出才算整组停下；队长不算，没有名单不算', () => {
-    const team = (states: string[]) => ({ members: [{ lead: true, state: '工作中' }, ...states.map((state) => ({ lead: false, state }))] as never })
-    expect(teamMembersAllStopped(team(['已停止', '已退出']))).toBe(true)
-    expect(teamMembersAllStopped(team(['已停止', '空闲']))).toBe(false)
+  test('The group counts as stopped only when all members are stopped or exited; the lead does not count, and no roster does not count', () => {
+    const team = (states: string[]) => ({ members: [{ lead: true, state: 'Working' }, ...states.map((state) => ({ lead: false, state }))] as never })
+    expect(teamMembersAllStopped(team(['Stopped', 'Exited']))).toBe(true)
+    expect(teamMembersAllStopped(team(['Stopped', 'Idle']))).toBe(false)
     expect(teamMembersAllStopped(team([]))).toBe(false)
     expect(teamMembersAllStopped(null)).toBe(false)
   })
-  test('成员页：团队收尾归档后仍能找到成员（已退出）', () => {
+  test('Member page: members can still be found (exited) after the team wraps up and is archived', () => {
     const archived = timeline([member({ activity: 'active' })], [info({ id: '1', owner: 'builder', status: 'completed' })], { source: 'archive' }, '2026-10-30T09:59:12Z')
     expect(teamModel(archived)).toBeNull()
     const team = teamModel(archived, [], { ended: true })
-    expect(team?.members.map((row) => [row.name, row.state, row.tasks.map((task) => task.state)])).toEqual([['builder', '已退出', ['done']]])
+    expect(team?.members.map((row) => [row.name, row.state, row.tasks.map((task) => task.state)])).toEqual([['builder', 'Exited', ['done']]])
     expect(teamModel({ ...archived, snapshots: [] }, [], { ended: true })).toBeNull()
   })
-  test('归档、已删除、没有快照的团队不属于运行中', () => {
+  test('Archived, deleted and snapshot-less teams are not running', () => {
     expect(teamModel(null)).toBeNull()
     expect(teamModel(timeline([member({})], [], { source: 'archive' }))).toBeNull()
     expect(teamModel(timeline([member({})], [], {}, '2026-10-25T00:00:00Z'))).toBeNull()
@@ -320,8 +320,8 @@ describe('团队', () => {
   })
 })
 
-describe('分组摘要', () => {
-  test('任务、子 Agent、后台命令的一句话', () => {
+describe('Group summary', () => {
+  test('One-liner for tasks, subagents and background commands', () => {
     const model = deriveActivity(
       data({
         tasks: [info({ id: '1', status: 'completed' }), info({ id: '2', status: 'in_progress' }), info({ id: '3' })],
@@ -329,27 +329,27 @@ describe('分组摘要', () => {
       })
     )
     expect(sectionSummaries(model)).toMatchObject({
-      tasks: '1/3 完成 · 1 进行中',
-      subagents: '1 运行中 · 1 已完成',
-      commands: '1 运行中 · 1 已结束',
+      tasks: '1/3 done · 1 in progress',
+      subagents: '1 running · 1 done',
+      commands: '1 running · 1 ended',
     })
   })
 })
 
-describe('轮询条件', () => {
+describe('Polling conditions', () => {
   const base = { enabled: true, visible: true, turnActive: false, backgroundIds: 0, running: 0, teamActive: false }
-  test('空闲不轮询；运行、后台任务、团队工作中才轮询', () => {
+  test('No polling when idle; poll only while running, with background tasks, or team working', () => {
     expect(pollDelay(base)).toBeNull()
     expect(pollDelay({ ...base, turnActive: true })).toBe(ACTIVE_POLL_MS)
     expect(pollDelay({ ...base, backgroundIds: 2 })).toBe(ACTIVE_POLL_MS)
     expect(pollDelay({ ...base, running: 1 })).toBe(ACTIVE_POLL_MS)
     expect(pollDelay({ ...base, teamActive: true })).toBe(ACTIVE_POLL_MS)
   })
-  test('页面不可见或未启用时一律停', () => {
+  test('Always stop when the page is hidden or disabled', () => {
     expect(pollDelay({ ...base, turnActive: true, visible: false })).toBeNull()
     expect(pollDelay({ ...base, turnActive: true, enabled: false })).toBeNull()
   })
-  test('活跃间隔在 3 到 4 秒之间', () => {
+  test('Active interval between 3 and 4 seconds', () => {
     expect(ACTIVE_POLL_MS).toBeGreaterThanOrEqual(3000)
     expect(ACTIVE_POLL_MS).toBeLessThanOrEqual(4000)
   })
@@ -372,7 +372,7 @@ class FakeTimers {
   get pending() {
     return this.#timers.size
   }
-  /** 推进时间并执行到期的定时器；每次执行后让出微任务，让异步读取完成。 */
+  /** Advance time and run due timers; yield microtasks after each so async reads complete. */
   async advance(ms: number) {
     const end = this.now + ms
     for (;;) {
@@ -432,8 +432,8 @@ function harness(initial: Partial<ActivityFetchResult> = {}) {
   }
 }
 
-describe('ActivityStore 轮询', () => {
-  test('启用时读一次；空闲（没有运行、没有后台）读完就不再安排下一次', async () => {
+describe('ActivityStore Polling', () => {
+  test('Read once on enable; when idle (nothing running, no background) do not schedule another', async () => {
     const h = harness()
     h.store.configure(config())
     await settle()
@@ -444,7 +444,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.store.getSnapshot().loaded).toBe(true)
   })
 
-  test('运行中按间隔轮询，这一轮结束后停下', async () => {
+  test('Poll at intervals while running, stop after this turn ends', async () => {
     const h = harness()
     h.store.configure(config({ turnActive: true }))
     await settle()
@@ -452,13 +452,13 @@ describe('ActivityStore 轮询', () => {
     expect(h.calls).toHaveLength(4)
     h.store.configure(config({ turnActive: false }))
     await settle()
-    // 结束的那一刻补读一次拿最终状态，之后不再轮询。
+    // Read once more at the end to get the final state, then stop polling.
     const after = h.calls.length
     await h.timers.advance(60_000)
     expect(h.calls).toHaveLength(after)
   })
 
-  test('页面不可见时暂停并取消待发的轮询；回到前台立刻补读并恢复', async () => {
+  test('Pause and cancel pending polls when the page is hidden; read immediately and resume on returning to foreground', async () => {
     const h = harness()
     h.store.configure(config({ turnActive: true }))
     await settle()
@@ -474,7 +474,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.timers.pending).toBe(1)
   })
 
-  test('后台任务 id 增减立刻重读；有后台任务就持续轮询，清空后停', async () => {
+  test('Reread immediately when background task IDs change; keep polling while background tasks exist, stop when cleared', async () => {
     const h = harness({ background: [bg({})] })
     h.store.configure(config({ backgroundKey: 't' }))
     await settle()
@@ -487,7 +487,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.timers.pending).toBe(0)
   })
 
-  test('读取进行中又来配置变化：合并成一次补读，不并发', async () => {
+  test('Config change during a read: merge into one follow-up read, no concurrency', async () => {
     const h = harness()
     const release = h.hold()
     h.store.configure(config({ turnActive: true }))
@@ -500,7 +500,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.calls).toHaveLength(2)
   })
 
-  test('禁用后取消进行中的读取，晚到的结果不写入', async () => {
+  test('Cancel in-flight reads on disable; late results are not written', async () => {
     const h = harness({ tasks: [info({})] })
     const release = h.hold()
     h.store.configure(config({ turnActive: true }))
@@ -510,13 +510,13 @@ describe('ActivityStore 轮询', () => {
     await settle()
     expect(h.store.getSnapshot().loaded).toBe(false)
     expect(h.timers.pending).toBe(0)
-    // 之后重新启用不会被旧请求的收尾状态卡住。
+    // Re-enabling later is not stuck on the old request's wrap-up state.
     h.store.configure(config({ turnActive: true }))
     await settle()
     expect(h.store.getSnapshot().tasks).toHaveLength(1)
   })
 
-  test('没有团队（null）后隔一段时间才再探测；手动刷新立刻探测', async () => {
+  test('After no team (null) wait a while before probing again; manual refresh probes immediately', async () => {
     const h = harness()
     h.store.configure(config({ turnActive: true }))
     await settle()
@@ -530,7 +530,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.calls[before]?.team).toBe(true)
   })
 
-  test('团队方案状态一变（刚确认）就连团队一起重读，不等团队探测的间隔', async () => {
+  test('When the team plan state changes (just approved) reread together with the team without waiting for the team probe interval', async () => {
     const h = harness()
     h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:review_pending' }))
     await settle()
@@ -543,7 +543,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.calls.at(-1)?.team).toBe(true)
   })
 
-  test('团队启动中：队长空闲也按间隔轮询，每次都读团队；就位后照常', async () => {
+  test('Team launching: poll at intervals even with the lead idle, reading the team each time; normal once in place', async () => {
     const h = harness()
     h.store.configure(config({ teamPlanKey: 'p1:launching', teamLaunching: true }))
     await settle()
@@ -557,7 +557,7 @@ describe('ActivityStore 轮询', () => {
     expect(h.timers.pending).toBe(1)
   })
 
-  test('页面不可见时方案变了：回到前台的那次补读带上团队', async () => {
+  test('Plan changed while the page was hidden: the read on returning to foreground includes the team', async () => {
     const h = harness()
     h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:review_pending' }))
     await settle()
@@ -570,36 +570,36 @@ describe('ActivityStore 轮询', () => {
     expect(h.calls.at(-1)?.team).toBe(true)
   })
 
-  test('团队存在就每次都读；一部分失败时保留旧数据并报告', async () => {
-    const h = harness({ team: timeline([member({ activity: 'active' })]), tasks: [info({ subject: '旧任务' })] })
+  test('Read every time while the team exists; keep old data and report on partial failure', async () => {
+    const h = harness({ team: timeline([member({ activity: 'active' })]), tasks: [info({ subject: 'Old task' })] })
     h.store.configure(config())
     await settle()
-    expect(h.timers.pending).toBe(1) // 团队有人工作中，空闲也轮询
-    h.set({ errors: ['任务：断网'], tasks: undefined })
+    expect(h.timers.pending).toBe(1) // Someone in the team working: poll even when idle
+    h.set({ errors: ['Tasks: offline'], tasks: undefined })
     await h.timers.advance(ACTIVE_POLL_MS)
     expect(h.calls.every((call) => call.team)).toBe(true)
     const snapshot = h.store.getSnapshot()
-    expect(snapshot.tasks[0]?.subject).toBe('旧任务')
-    expect(snapshot.error).toBe('任务：断网')
+    expect(snapshot.tasks[0]?.subject).toBe('Old task')
+    expect(snapshot.error).toBe('Tasks: offline')
   })
 
-  test('整体读取失败：记录原因、标记 loaded，不抛出', async () => {
+  test('Whole read fails: record the reason, mark loaded, do not throw', async () => {
     const timers = new FakeTimers()
     const store = new ActivityStore({
       fetch: async () => {
-        throw new Error('电脑不可达')
+        throw new Error('Computer unreachable')
       },
       send: () => true,
       timers,
     })
     store.configure(config())
     await settle()
-    expect(store.getSnapshot()).toMatchObject({ loaded: true, error: '电脑不可达' })
+    expect(store.getSnapshot()).toMatchObject({ loaded: true, error: 'Computer unreachable' })
   })
 })
 
-describe('ActivityStore 重新启用', () => {
-  test('被取消的旧读取收尾时，不会把新读取当成已结束', async () => {
+describe('ActivityStore Re-enable', () => {
+  test('When a canceled old read wraps up it does not treat the new read as finished', async () => {
     const timers = new FakeTimers()
     const gates: (() => void)[] = []
     let calls = 0
@@ -615,12 +615,12 @@ describe('ActivityStore 重新启用', () => {
     store.configure(config({ turnActive: true }))
     await settle()
     store.configure(config({ enabled: false }))
-    store.configure(config({ turnActive: true })) // 第二次读取开始，旧的还没返回
+    store.configure(config({ turnActive: true })) // Second read starts before the old one returns
     await settle()
     expect(calls).toBe(2)
-    gates[0]!() // 旧读取收尾
+    gates[0]!() // Old read wraps up
     await settle()
-    store.configure(config({ turnActive: true, backgroundKey: 'x' })) // 新读取仍在进行：只能合并，不能并发
+    store.configure(config({ turnActive: true, backgroundKey: 'x' })) // New read still in progress: can only merge, not run concurrently
     await settle()
     expect(calls).toBe(2)
     gates[1]!()
@@ -629,7 +629,7 @@ describe('ActivityStore 重新启用', () => {
   })
 })
 
-describe('ActivityStore 停止', () => {
+describe('ActivityStore Stop', () => {
   const running = () => [agent({}), bg({ taskId: 'c1' }), bg({ taskId: 'c2', status: 'completed' })]
   async function ready() {
     const h = harness({ background: running() })
@@ -637,26 +637,26 @@ describe('ActivityStore 停止', () => {
     await settle()
     return h
   }
-  test('单项停止发出 stop_background_task，并标记停止中', async () => {
+  test('Single stop sends stop_background_task and marks it stopping', async () => {
     const h = await ready()
     expect(h.store.stopTask('c1')).toBe(true)
     expect(h.sent).toEqual([{ type: 'stop_background_task', taskId: 'c1' }])
     expect(h.store.getSnapshot().stopping).toEqual({ c1: true })
     expect(h.store.stopTask('c1')).toBe(true)
-    expect(h.sent).toHaveLength(1) // 重复点击不重复发
+    expect(h.sent).toHaveLength(1) // Repeated taps do not send twice
   })
-  test('全部停止只发给仍在运行的子 Agent 和命令', async () => {
+  test('Stop all only sends to subagents and commands still running', async () => {
     const h = await ready()
     h.store.stopAll()
     expect(h.sent.map((message) => (message as { taskId: string }).taskId).sort()).toEqual(['a1', 'c1'])
   })
-  test('已经不在运行的任务不能被停止', async () => {
+  test('Tasks no longer running cannot be stopped', async () => {
     const h = await ready()
     h.store.stopTask('c2')
     h.store.stopTask('ghost')
     expect(h.sent).toEqual([])
   })
-  test('连接没就绪：不标记停止中，给出明确提示', async () => {
+  test('Connection not ready: do not mark stopping, give a clear message', async () => {
     const timers = new FakeTimers()
     const store = new ActivityStore({
       fetch: async () => ({ errors: [], background: [bg({})] }),
@@ -667,9 +667,9 @@ describe('ActivityStore 停止', () => {
     await settle()
     expect(store.stopTask('t')).toBe(false)
     expect(store.getSnapshot().stopping).toEqual({})
-    expect(store.getSnapshot().stopError).toContain('连接已断开')
+    expect(store.getSnapshot().stopError).toContain('Connection lost')
   })
-  test('页面传入的发送函数优先于默认的', async () => {
+  test('The send function passed by the page takes priority over the default', async () => {
     const h = await ready()
     const own: ClientMessage[] = []
     h.store.setSender((message) => (own.push(message), true))
@@ -677,12 +677,12 @@ describe('ActivityStore 停止', () => {
     expect(own).toHaveLength(1)
     expect(h.sent).toHaveLength(0)
   })
-  test('电脑一直不回：超时后解除停止中并提示；任务如期结束则不提示', async () => {
+  test('Computer never replies: clear stopping and warn after timeout; no warning if the task ends as expected', async () => {
     const h = await ready()
     h.store.stopTask('c1')
     await h.timers.advance(STOP_TIMEOUT_MS)
     expect(h.store.getSnapshot().stopping).toEqual({})
-    expect(h.store.getSnapshot().stopError).toContain('没有回应')
+    expect(h.store.getSnapshot().stopError).toContain('did not respond')
 
     const ok = await ready()
     ok.store.stopTask('c1')
@@ -692,7 +692,7 @@ describe('ActivityStore 停止', () => {
     await ok.timers.advance(STOP_TIMEOUT_MS)
     expect(ok.store.getSnapshot().stopError).toBe('')
   })
-  test('任务全部停下后，停止失败的旧提示一并清掉', async () => {
+  test('Once all tasks stop, old stop-failure messages are cleared too', async () => {
     const h = await ready()
     h.store.stopTask('c1')
     await h.timers.advance(STOP_TIMEOUT_MS)
@@ -720,7 +720,7 @@ describe('createActivityFetcher', () => {
     '/api/tasks/lists/s%2F1': { body: { tasks: [info({ subject: 'x' })] } },
     '/api/sessions/s%2F1/background-tasks': { body: { tasks: [bg({})], historyComplete: true } },
   }
-  test('一处读三份：任务、团队（404 = 没有团队）、后台任务', async () => {
+  test('One place reads three things: tasks, team (404 = no team), background tasks', async () => {
     const { api, paths } = fixture(routes)
     const result = await createActivityFetcher(api, 's/1')(new AbortController().signal, { team: true })
     expect(result.tasks).toHaveLength(1)
@@ -729,18 +729,18 @@ describe('createActivityFetcher', () => {
     expect(result.errors).toEqual([])
     expect(paths).toHaveLength(3)
   })
-  test('不需要团队时不发团队请求', async () => {
+  test('Do not send team requests when the team is not needed', async () => {
     const { api, paths } = fixture(routes)
     const result = await createActivityFetcher(api, 's/1')(new AbortController().signal, { team: false })
     expect(result.team).toBeUndefined()
     expect(paths.some((path) => path.includes('/teams/'))).toBe(false)
   })
-  test('某一份失败：其余照常返回，失败原因进 errors', async () => {
+  test('One part fails: the rest return as usual, and the failure reason goes into errors', async () => {
     const { api } = fixture({ ...routes, '/api/tasks/lists/s%2F1': { status: 500, body: { error: 'boom' } } })
     const result = await createActivityFetcher(api, 's/1')(new AbortController().signal, { team: false })
     expect(result.tasks).toBeUndefined()
     expect(result.background).toHaveLength(1)
     expect(result.errors).toHaveLength(1)
-    expect(result.errors[0]).toStartWith('任务：')
+    expect(result.errors[0]).toStartWith('Tasks: ')
   })
 })

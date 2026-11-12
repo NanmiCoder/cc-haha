@@ -16,15 +16,11 @@ export type HeatmapDay = {
 }
 
 export const WEEK_COUNT = 52
-/** Columns a month name needs ("Sep", "10月") before the next label may start. */
+/** Columns a month name needs ("Sep") before the next label may start. */
 export const MONTH_LABEL_MIN_WEEKS = 3
 
 export const DATE_LOCALES: Record<Locale, string> = {
   en: 'en-US',
-  zh: 'zh-CN',
-  'zh-TW': 'zh-TW',
-  jp: 'ja-JP',
-  kr: 'ko-KR',
 }
 
 export function localDateKey(date: Date) {
@@ -59,7 +55,7 @@ export function formatDateLabel(dateKey: string, locale: Locale) {
   })
 }
 
-/** "10月3日周五" / "Fri, October 3": the day, named the way the locale says it. */
+/** "Fri, October 3": the day, named the way the locale says it. */
 export function formatDayHeading(dateKey: string, locale: Locale) {
   return parseLocalDate(dateKey).toLocaleDateString(DATE_LOCALES[locale], {
     month: 'long',

@@ -7,7 +7,7 @@ export type SessionRestoreResult =
   | { status: 'missing' }
   | { status: 'unavailable'; session: SessionEntry }
 
-export const SESSION_RECONNECT_NOTICE = '暂时无法连接原会话，已保留会话和工作目录，请稍后重试。'
+export const SESSION_RECONNECT_NOTICE = 'Cannot reach the original session right now. The session and working directory are preserved; please try again later.'
 
 type BridgeSessionOps = Pick<
   WsBridge,

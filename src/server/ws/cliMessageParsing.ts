@@ -182,7 +182,7 @@ const STREAMING_FALLBACK_CAUSES: ReadonlySet<StreamingFallbackCause> = new Set([
 ])
 
 export function toStreamingFallbackServerMessage(cliMsg: any): ServerMessage {
-  // 未识别的 cause 兜底为 unknown 而不是丢消息：提示本身比成因重要。
+  // Unrecognized causes fall back to unknown instead of dropping the message: the hint itself matters more than its cause.
   const cause: StreamingFallbackCause =
     typeof cliMsg.cause === 'string' && STREAMING_FALLBACK_CAUSES.has(cliMsg.cause as StreamingFallbackCause)
       ? (cliMsg.cause as StreamingFallbackCause)

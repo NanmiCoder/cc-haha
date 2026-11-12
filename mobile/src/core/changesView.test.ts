@@ -70,25 +70,25 @@ describe('turn selection', () => {
 
   test('time label shows HH:mm today, date otherwise, and marks the latest turn', () => {
     const now = new Date(2026, 9, 25, 15, 0)
-    expect(turnTimeLabel(new Date(2026, 9, 25, 14, 6).getTime(), true, now)).toBe('14:06 · 最新')
-    expect(turnTimeLabel(new Date(2026, 9, 24, 9, 30).getTime(), false, now)).toBe('10月24日 09:30')
-    expect(turnTimeLabel(undefined, true, now)).toBe('最新')
+    expect(turnTimeLabel(new Date(2026, 9, 25, 14, 6).getTime(), true, now)).toBe('14:06 · Latest')
+    expect(turnTimeLabel(new Date(2026, 9, 24, 9, 30).getTime(), false, now)).toBe('10/24 09:30')
+    expect(turnTimeLabel(undefined, true, now)).toBe('Latest')
     expect(turnTimeLabel(undefined, false, now)).toBe('')
   })
 
   test('prompt quote comes only from the exact target user record, flattened to one line', () => {
     const entries: HistoryEntry[] = [
-      { id: 'user-1', type: 'user', content: '重连之后\n同一条回复会出现两次', timestamp: '' },
-      { id: 'a-1', type: 'assistant', content: [{ type: 'text', text: '好的' }], timestamp: '' },
+      { id: 'user-1', type: 'user', content: 'After reconnecting\nthe same reply shows up twice', timestamp: '' },
+      { id: 'a-1', type: 'assistant', content: [{ type: 'text', text: 'OK' }], timestamp: '' },
       {
         id: 'user-2',
         type: 'user',
-        content: [{ type: 'text', text: '  第二轮  ' }],
+        content: [{ type: 'text', text: '  Second turn  ' }],
         timestamp: '',
       },
     ]
-    expect(checkpointPrompt(entries, 'user-1')).toBe('重连之后 同一条回复会出现两次')
-    expect(checkpointPrompt(entries, 'user-2')).toBe('第二轮')
+    expect(checkpointPrompt(entries, 'user-1')).toBe('After reconnecting the same reply shows up twice')
+    expect(checkpointPrompt(entries, 'user-2')).toBe('Second turn')
     expect(checkpointPrompt(entries, 'a-1')).toBeUndefined()
     expect(checkpointPrompt(entries, 'missing')).toBeUndefined()
   })
@@ -180,15 +180,15 @@ describe('diff presentation', () => {
     expect(workspaceBadge('renamed')).toBe('R')
     expect(workspaceBadge('untracked')).toBe('?')
     expect(workspaceBadge('anything')).toBe('M')
-    expect(workspaceStatusLabel('untracked')).toBe('未跟踪')
-    expect(workspaceStatusLabel('weird')).toBe('有改动')
+    expect(workspaceStatusLabel('untracked')).toBe('Untracked')
+    expect(workspaceStatusLabel('weird')).toBe('Changed')
   })
 
   test('workspace diff problems are explained', () => {
     expect(workspaceDiffProblem({ state: 'ok' })).toBeUndefined()
     expect(workspaceDiffProblem({ state: 'not_git_repo' })).toContain('Git')
     expect(workspaceDiffProblem({ state: 'error', error: 'boom' })).toBe('boom')
-    expect(workspaceDiffProblem({ state: 'error' })).toBe('暂时无法比较此文件。')
+    expect(workspaceDiffProblem({ state: 'error' })).toBe('Cannot compare this file right now.')
   })
 })
 
@@ -198,26 +198,26 @@ describe('rewind sheet', () => {
     expect(rewindChoices(preview)).toEqual([
       {
         mode: 'both',
-        title: '代码和对话一起',
-        description: '恢复 3 个文件，删掉之后的 6 条消息',
+        title: 'Code and conversation',
+        description: 'Restore 3 files, delete the 6 messages after',
         disabled: false,
       },
       {
         mode: 'code',
-        title: '只回退代码',
-        description: '恢复 3 个文件，聊天记录留着',
+        title: 'Rewind code only',
+        description: 'Restore 3 files, keep chat history',
         disabled: false,
       },
       {
         mode: 'conversation',
-        title: '只回退对话',
-        description: '删掉之后的 6 条消息，文件不动',
+        title: 'Rewind conversation only',
+        description: 'Delete the 6 messages after, files untouched',
         disabled: false,
       },
     ])
     expect(defaultRewindMode(preview)).toBe('both')
     expect(rewindRisks(preview, 'both')).toEqual([
-      '恢复代码会覆盖这 3 个文件在检查点之后的修改。你在电脑上也在改的话，先存好。',
+      'Restoring code overwrites changes to these 3 files after the checkpoint. If you are also editing on the computer, save first.',
     ])
     expect(rewindRisks(preview, 'conversation')).toEqual([])
   })
@@ -241,7 +241,7 @@ describe('rewind sheet', () => {
     ])
     expect(defaultRewindMode(preview)).toBe('conversation')
     expect(rewindRisks(preview, 'conversation')).toEqual([
-      '文件检查点不完整，只能回退对话。这些文件的历史记录不完整：a.ts',
+      'File checkpoint is incomplete; only the conversation can be rewound. History for these files is incomplete: a.ts',
     ])
   })
 
@@ -254,13 +254,13 @@ describe('rewind sheet', () => {
   test('unverified tool changes are surfaced for code rewinds', () => {
     const preview = checkpoint(1, { unverifiedChangeSources: ['Bash', 'mcp__fs'] })
     expect(rewindRisks(preview, 'code')[1]).toBe(
-      '这些工具的改动未被完整验证：Bash、mcp__fs。回退只恢复检查点中可恢复的文件，其他改动可能保留。'
+      'Changes by these tools were not fully verified: Bash, mcp__fs. Rewind only restores files recoverable from the checkpoint; other changes may remain.'
     )
   })
 
   test('known server reasons are translated, unknown kept', () => {
     expect(translateReason('Some changed files cannot be compared as UTF-8 text.')).toBe(
-      '有的文件不是 UTF-8 文本，无法比较。'
+      'Some files are not UTF-8 text and cannot be compared.'
     )
     expect(translateReason('custom')).toBe('custom')
     expect(translateReason(undefined)).toBeUndefined()
@@ -272,17 +272,17 @@ describe('file preview fallback', () => {
     expect(previewFallback({ state: 'ok', previewType: 'text', content: '' })).toBeNull()
     expect(previewFallback({ state: 'ok', previewType: 'image', dataUrl: 'data:' })).toBeNull()
     expect(previewFallback({ state: 'ok', previewType: 'pdf' })).toEqual({
-      title: '请在电脑上打开',
-      detail: '当前 App 支持文本、图片和代码差异预览；此文件格式尚未接入。',
+      title: 'Open on the computer',
+      detail: 'This app supports previewing text, images and code diffs; this file format is not supported yet.',
     })
-    expect(previewFallback({ state: 'binary' })?.detail).toBe('此文件暂不支持预览 (二进制文件)')
+    expect(previewFallback({ state: 'binary' })?.detail).toBe('This file cannot be previewed yet (binary file)')
     expect(previewFallback({ state: 'error', error: 'EACCES' })?.detail).toBe('EACCES')
   })
 })
 
 test('the changes card reads files first and only mentions non-zero line counts', () => {
-  expect(changesCardLabel(3, 18, 4)).toBe('3 个文件，新增 18 行，删除 4 行')
-  expect(changesCardLabel(1, 0, 2)).toBe('1 个文件，删除 2 行')
-  expect(changesCardLabel(2, 5, 0)).toBe('2 个文件，新增 5 行')
-  expect(changesCardLabel(2, 0, 0)).toBe('2 个文件')
+  expect(changesCardLabel(3, 18, 4)).toBe('3 files, 18 lines added, 4 lines deleted')
+  expect(changesCardLabel(1, 0, 2)).toBe('1 file, 2 lines deleted')
+  expect(changesCardLabel(2, 5, 0)).toBe('2 files, 5 lines added')
+  expect(changesCardLabel(2, 0, 0)).toBe('2 files')
 })

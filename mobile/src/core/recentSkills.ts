@@ -1,6 +1,6 @@
 import type { Storage } from '../state/storage'
 
-/** 「＋ 带什么」里「最近用过」的一条记录；只存标识和展示文案，真正的内容每次从电脑目录里取。 */
+/** A "Recently used" record in "+ Bring"; stores only the ID and display text, and the real content is fetched from the computer directory each time. */
 export type RecentKind = 'skill' | 'plugin' | 'command' | 'agent' | 'workflow'
 export type RecentItem = {
   key: string
@@ -15,7 +15,7 @@ export const recentKey = 'cc-haha.mobile.recent-skills'
 
 const kinds: RecentKind[] = ['skill', 'plugin', 'command', 'agent', 'workflow']
 
-/** 记一次使用：同一条去重后放到最前，按使用时间倒序，最多 RECENT_LIMIT 条。 */
+/** Record one use: dedupe the same item and move it to the front, sorted by use time descending, at most RECENT_LIMIT items. */
 export function recordRecent(
   list: RecentItem[],
   item: Omit<RecentItem, 'usedAt'>,
@@ -26,19 +26,19 @@ export function recordRecent(
     .slice(0, RECENT_LIMIT)
 }
 
-/** 一次记录多条（同一次「完成」选了几项）：保持传入顺序，先传的更靠前。 */
+/** Record several at once (several picked in one Done): keep the given order, earlier ones first. */
 export function recordRecents(
   list: RecentItem[],
   items: Omit<RecentItem, 'usedAt'>[],
   now: number
 ): RecentItem[] {
-  // 同一毫秒内的多条用递减的时间戳保持顺序。
+  // Multiple items in the same millisecond keep their order with decreasing timestamps.
   return [...items]
     .reverse()
     .reduce((next, item, index) => recordRecent(next, item, now + index), list)
 }
 
-/** 读取本地数据：坏数据一律当作没有，不让输入框因此打不开。 */
+/** Read local data: treat any bad data as absent so the input never fails to open because of it. */
 export function parseRecent(raw: string | null): RecentItem[] {
   if (!raw) return []
   let value: unknown
@@ -84,7 +84,7 @@ export function serializeRecent(list: RecentItem[]): string {
   return JSON.stringify({ version: 1, items: list.slice(0, RECENT_LIMIT) })
 }
 
-/** 写入串行化：连续两次记录不会互相覆盖。 */
+/** Serialize writes: two consecutive records never overwrite each other. */
 export class RecentSkillsRepository {
   private queue: Promise<unknown> = Promise.resolve()
   constructor(private storage: Storage) {}

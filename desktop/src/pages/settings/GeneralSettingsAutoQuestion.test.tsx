@@ -9,7 +9,7 @@ import { GeneralSettings } from './GeneralSettings'
 describe('General settings automatic answers', () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      locale: 'zh',
+      locale: 'en',
       autoQuestion: { enabled: false, timeoutMinutes: 5 },
       fetchOutputStyles: async () => {},
       fetchAppMode: async () => {},
@@ -28,9 +28,9 @@ describe('General settings automatic answers', () => {
   it('starts disabled and saves the enabled wait duration', async () => {
     render(<GeneralSettings />)
 
-    const toggle = screen.getByRole('switch', { name: '等待超时后自动选择答案' })
+    const toggle = screen.getByRole('switch', { name: 'Answer questions automatically after a timeout' })
     expect(toggle).not.toBeChecked()
-    expect(screen.queryByLabelText('等待时长')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Wait before answering')).not.toBeInTheDocument()
 
     fireEvent.click(toggle)
     await waitFor(() => expect(settingsApi.updateUser).toHaveBeenCalledWith({
@@ -38,7 +38,7 @@ describe('General settings automatic answers', () => {
     }))
     expect(toggle).toBeChecked()
 
-    fireEvent.change(screen.getByLabelText('等待时长'), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText('Wait before answering'), { target: { value: '10' } })
     await waitFor(() => expect(settingsApi.updateUser).toHaveBeenCalledWith({
       autoQuestion: { enabled: true, timeoutMinutes: 10 },
     }))

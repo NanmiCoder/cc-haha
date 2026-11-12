@@ -57,9 +57,9 @@ function parseHex(digits: string): Rgba | null {
 }
 
 /**
- * 解析 getComputedStyle 会回吐的颜色写法（rgb/rgba/hex/transparent），
- * 也接受用户手输的现代空格语法 `rgb(0 0 0 / 50%)`。认不出来时返回 null，
- * 调用方应保留用户原始输入而不是猜一个颜色。
+ * Parse the color forms getComputedStyle returns (rgb/rgba/hex/transparent), plus the modern
+ * space syntax users may type, `rgb(0 0 0 / 50%)`. Returns null when unrecognized; callers
+ * should keep the user's raw input instead of guessing a color.
  */
 export function parseCssColor(input: string): Rgba | null {
   const value = input.trim().toLowerCase()
@@ -88,13 +88,13 @@ export function parseCssColor(input: string): Rgba | null {
   return { r, g, b, a }
 }
 
-/** `<input type="color">` 只认 #rrggbb，alpha 在这里被丢弃。 */
+/** `<input type="color">` only accepts #rrggbb; alpha is dropped here. */
 export function toHexColor(color: Rgba): string {
   const channel = (value: number) => clampChannel(value).toString(16).padStart(2, '0')
   return `#${channel(color.r)}${channel(color.g)}${channel(color.b)}`
 }
 
-/** 回写页面与 diff 用的规范写法：全透明写 transparent，半透明写 rgba()，其余写 hex。 */
+/** Canonical form written back to the page and diff: transparent when fully clear, rgba() when translucent, hex otherwise. */
 export function formatCssColor(color: Rgba): string {
   const alpha = clampAlpha(color.a)
   if (alpha <= 0) return 'transparent'
@@ -102,7 +102,7 @@ export function formatCssColor(color: Rgba): string {
   return `rgba(${clampChannel(color.r)}, ${clampChannel(color.g)}, ${clampChannel(color.b)}, ${Number(alpha.toFixed(3))})`
 }
 
-/** 深色底上要用浅色前景 —— 用来决定色块边框/棋盘格的对比色。 */
+/** Dark backgrounds need a light foreground; used to pick the contrast color for swatch borders / checkerboards. */
 export function isDarkColor(color: Rgba): boolean {
   const luminance = (0.299 * color.r + 0.587 * color.g + 0.114 * color.b) / 255
   return luminance < 0.5

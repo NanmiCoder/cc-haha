@@ -34,7 +34,7 @@ export const MAX_AI_REQUEST_TIMEOUT_MS = Math.floor(2_147_483_647 / 1000) * 1000
 // Floor for the CLI's overall stream-duration cap (CLAUDE_STREAM_MAX_DURATION_MS).
 // That cap is what frees an endlessly-trickling provider stream (#766), but it is
 // a wall-clock budget that no incoming chunk resets. It must therefore never be
-// LOWER than the user's own "请求超时": a local model that legitimately spends
+// LOWER than the user's own "Request timeout": a local model that legitimately spends
 // longer than that thinking or generating would otherwise be killed mid-response
 // no matter how far the user raises the timeout (#1307). The floor keeps the
 // #766 protection intact when the user configures a very short first-byte budget.
@@ -49,7 +49,7 @@ export function resolveStreamMaxDurationMs(
 // Inactivity budget for one tool call's JSON arguments. The model emits them a
 // complete key/value at a time, so a long `content` string produces no event
 // until it is finished; a fixed 120s killed large file writes (#1536). It
-// follows the user's "请求超时" and never drops below the original 120s.
+// follows the user's "Request timeout" and never drops below the original 120s.
 export const MIN_STREAM_TOOL_INPUT_DURATION_MS = 120_000
 export function resolveStreamToolInputDurationMs(
   apiTimeoutMs: string | number | undefined,

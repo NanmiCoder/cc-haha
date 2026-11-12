@@ -1,4 +1,4 @@
-/** 浏览器里把下载好的文件交给系统保存：iOS Safari 13+ 与安卓浏览器都认 download 属性。 */
+/** In the browser hand the downloaded file to the system to save: iOS Safari 13+ and Android browsers both honor the download attribute. */
 export function saveInBrowser(bytes: Uint8Array, name: string, mimeType: string) {
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mimeType }))
   const link = document.createElement('a')
@@ -8,6 +8,6 @@ export function saveInBrowser(bytes: Uint8Array, name: string, mimeType: string)
   document.body.appendChild(link)
   link.click()
   link.remove()
-  // 下载开始后再释放；立刻释放会让部分浏览器拿不到内容。
+  // Release after the download starts; releasing immediately makes some browsers miss the content.
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }

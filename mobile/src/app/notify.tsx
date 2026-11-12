@@ -15,14 +15,14 @@ import { Text } from '../ui/Text'
 import { Button, Icon, ScreenView, goBack, useColors } from '../ui/kit'
 import { isH5 } from '../state/h5'
 
-/** 推送通知只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+/** Push notifications are native app only; the web version connects only to the computer that opened it, so go straight home. */
 export default function NotifyPrimeRoute() {
   return isH5 ? <Redirect href="/" /> : <NotifyPrime />
 }
 
 /**
- * 连上电脑后的「开启通知」引导页（Apple HIG 的授权前说明页）：
- * 只有一个「继续」，点了才弹系统授权框；允许或拒绝都回首页，拒绝不挡使用。
+ * The "Turn on notifications" onboarding page after connecting a computer (Apple HIG pre-permission page): 
+ * only a single Continue, which then shows the system prompt; allow or deny both go home, and denying does not block usage.
  */
 function NotifyPrime() {
   const colors = useColors()
@@ -33,9 +33,9 @@ function NotifyPrime() {
   const host =
     registry.hosts.find((item) => item.id === registry.selectedId) ??
     registry.hosts[0]
-  const hostName = host?.name ?? '电脑'
+  const hostName = host?.name ?? 'computer'
 
-  // 只能通过「继续」离开：吞掉安卓返回键（iOS 的手势在 Stack 选项里关了）。
+  // Can only leave via Continue: swallow the Android back key (iOS gesture is disabled in Stack options).
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== 'android') return
@@ -56,7 +56,7 @@ function NotifyPrime() {
       markPrompted: () => update({ notifyPrompted: true }),
       decided: emitPermissionDecided,
     })
-    // 引导页是压在首页上的，回到下面那层；万一没有（深链直达）就换成首页。
+    // The onboarding page sits on top of home, so go back to the layer below; if there is none (deep link) replace with home.
     goBack()
   }
 
@@ -73,7 +73,7 @@ function NotifyPrime() {
             numberOfLines={1}
             style={{ flexShrink: 1, color: colors.ok, fontSize: 14, fontWeight: '500' }}
           >
-            已连接 {hostName}
+            Connected {hostName}
           </Text>
         </View>
         <Text
@@ -87,7 +87,7 @@ function NotifyPrime() {
             letterSpacing: -0.3,
           }}
         >
-          要你拍板时，叫你一声
+          Get pinged when you need to decide
         </Text>
         <Text
           style={{
@@ -97,7 +97,7 @@ function NotifyPrime() {
             lineHeight: 23,
           }}
         >
-          命令要你批准、计划等你确认、任务做完或出错，都会推到锁屏。哪几类要提醒，之后在设置里随时改。
+          Commands needing your approval, plans awaiting confirmation, and tasks that finish or fail are all pushed to the lock screen. You can change which ones alert you anytime in Settings.
         </Text>
         <View style={{ marginTop: 26, marginBottom: 20 }}>
           <LockPreview hostName={hostName} />
@@ -119,9 +119,9 @@ function NotifyPrime() {
             textAlign: 'center',
           }}
         >
-          下一步会弹出系统的通知授权。
+          Next, the system will ask for notification permission.
         </Text>
-        <Button title="继续" size="lg" busy={busy} onPress={proceed} />
+        <Button title="Continue" size="lg" busy={busy} onPress={proceed} />
       </View>
     </ScreenView>
   )

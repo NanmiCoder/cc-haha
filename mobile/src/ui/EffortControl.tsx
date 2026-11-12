@@ -17,7 +17,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
   disabled?: boolean
   defaultScope?: boolean
   warning?: string
-  /** 换掉默认的「思考 · 高」小胶囊，例如放进设置列表的一行；选择弹层不变。 */
+  /** Replace the default "Thinking · High" capsule, e.g. as a row in a settings list; the picker sheet stays the same. */
   trigger?(control: { open(): void; disabled: boolean; label: string }): ReactNode
 }) {
   const colors = useColors()
@@ -36,7 +36,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
     <>
       {trigger ? trigger({ open: show, disabled: Boolean(unavailable), label: effortName(runtime?.effortLevel) }) : <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`思考强度：${effortName(runtime?.effortLevel)}`}
+        accessibilityLabel={`Thinking effort: ${effortName(runtime?.effortLevel)}`}
         accessibilityState={{ disabled: Boolean(unavailable), expanded: open }}
         disabled={unavailable}
         onPress={show}
@@ -47,10 +47,10 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
         })}
       >
         <Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>
-          思考 · {effortName(runtime?.effortLevel)}
+          Thinking · {effortName(runtime?.effortLevel)}
         </Text>
       </Pressable>}
-      <Sheet visible={open} onClose={() => setOpen(false)} title="思考强度">
+      <Sheet visible={open} onClose={() => setOpen(false)} title="Thinking effort">
         <InlineError text={choice.error} />
         {waiting ? <Loading /> : options.length && choice.source?.auth === 'ready' ? (
           <View>
@@ -62,7 +62,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
                 disabled={disabled}
                 onPress={() => {
                   if (!runtime || choice.source?.auth !== 'ready') return
-                  // 只换强度，模型 id 原样带回。
+                  // Change only the effort; the model id is passed back unchanged.
                   onApply({ ...runtime, effortLevel: value })
                   setOpen(false)
                 }}
@@ -73,7 +73,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
           <Callout>{reason}</Callout>
         )}
         {warning ? <Callout>{warning}</Callout> : null}
-        <TextButton title="重新读取" disabled={waiting || disabled} onPress={choice.reload} />
+        <TextButton title="Reload" disabled={waiting || disabled} onPress={choice.reload} />
       </Sheet>
     </>
   )

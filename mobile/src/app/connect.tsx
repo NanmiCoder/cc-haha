@@ -26,21 +26,21 @@ import {
 } from '../ui/connect/connectForm'
 import { isH5 } from '../state/h5'
 
-/** 连接其他电脑只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+/** Connecting other computers is native app only; the web version connects only to the computer that opened it, so go straight home. */
 export default function ConnectRoute() {
   return isH5 ? <Redirect href="/" /> : <Connect />
 }
 
 /**
- * 连接电脑：扫码页 → 手动连接面板 →（公网）等电脑批准页。
- * 凭据只有在真实验证 / 批准之后才写入 SecureStore。
+ * Connect a computer: scan page → manual connect panel → (public) wait-for-computer-approval page.
+ * Credentials are written to SecureStore only after real verification / approval.
  */
 function Connect() {
   const { add, registry } = useApp()
   const { dark } = useTheme()
   const params = useLocalSearchParams<{ mode?: string }>()
   const [stage, setStage] = useState<ConnectStage>(() => initialStage(params.mode))
-  // 欢迎页「手动输入地址」直达表单：收起表单就离开本页，不绕去扫码页（还没开过相机）。
+  // Welcome page "Enter address manually" goes straight to the form: closing the form leaves this page instead of detouring to the scan page (camera not opened yet).
   const [direct, setDirect] = useState(() => initialStage(params.mode) === 'form')
   const [mode, setMode] = useState<ConnectMode>('lan')
   const [name, setName] = useState(defaultHostName)
@@ -82,7 +82,7 @@ function Connect() {
     setDirect(false)
     setStage('scan')
   }
-  /** 表单面板自己的收起（下滑 / 点遮罩）。 */
+  /** The form panel own dismissal (swipe down / tap backdrop). */
   function dismissForm() {
     if (!direct) return closeForm()
     setStage('scan')
@@ -117,7 +117,7 @@ function Connect() {
   async function paste() {
     try {
       const value = await getStringAsync()
-      if (!value.trim()) throw new Error('剪贴板里没有连接链接，请先从电脑复制。')
+      if (!value.trim()) throw new Error('No connection link in the clipboard; copy it from the computer first.')
       receive(value.trim())
     } catch (e) {
       setNotice(errorText(e))
@@ -126,7 +126,7 @@ function Connect() {
   async function pasteToken() {
     try {
       const value = (await getStringAsync()).trim()
-      if (!value) throw new Error('剪贴板是空的，请先在电脑上复制访问令牌。')
+      if (!value) throw new Error('The clipboard is empty; copy the access token on the computer first.')
       setToken(value)
       setError('')
     } catch (e) {
@@ -167,7 +167,7 @@ function Connect() {
         { client: createApiClient }
       )
       if (controller.signal.aborted) return
-      setStatus('连接成功，正在安全保存…')
+      setStatus('Connected, saving securely…')
       if (waiting) setPairing({ badge, phase: 'saving' })
       await add(result.host, result.credential, controller.signal)
       if (!controller.signal.aborted && attempt.current === controller) {
@@ -198,7 +198,7 @@ function Connect() {
       ) : (
         <Scanner
           active={focused && stage === 'scan'}
-          // 全屏呈现不能下滑关闭：只要有页面可回，就给关闭按钮；直接打开（无处可回）才显示品牌。
+          // Full-screen presentation cannot be swiped down: show a close button whenever there is a page to go back to; show the brand only when opened directly (nowhere to go back).
           firstRun={registry.hosts.length === 0 && !router.canGoBack()}
           notice={notice}
           onNotice={setNotice}

@@ -1,36 +1,31 @@
 ---
-name: 新功能支持
-about: 提交新功能建议或能力增强需求
-title: '[功能] '
+name: Feature request
+about: Suggest a new feature or capability improvement
+title: '[Feature] '
 labels: enhancement
 assignees: ''
 ---
 
-## 提交前确认
-<!-- 请在提交前确认以下事项 -->
+## Before submitting
+<!-- Please confirm the following before submitting -->
 
-- [ ] 我已经阅读过[现有功能文档](https://cchaha.ai)，确认不是已有能力
-- [ ] 我已经搜索过[现有 issues](https://github.com/NanmiCoder/cc-haha/issues)，确认没有重复建议
-- [ ] 我已经隐藏截图和日志中的 API Key、Token、Cookie 等敏感信息
+- [ ] I have read the [existing feature documentation](https://cchaha.ai) and confirmed this isn't already supported
+- [ ] I have searched [existing issues](https://github.com/NanmiCoder/cc-haha/issues) and found no duplicate suggestion
+- [ ] I have hidden API keys, tokens, cookies, and other sensitive information in screenshots and logs
 
-## 你想要什么
-<!-- 用 1-3 句话描述你希望新增或增强的能力，越具体越好 -->
+## What you want
+<!-- In 1-3 sentences, describe the capability you'd like added or improved; the more specific, the better -->
 
+## Why you need it
+<!-- What problem does it solve and in which scenario? If it isn't built, how do you work around it today? -->
 
-## 为什么需要
-<!-- 它解决了你哪个场景下的什么问题；如果不做，你现在是怎么绕过去的 -->
+## Expected behavior
+<!-- How should it ideally work? A concrete example helps -->
 
+## Current state and limitations
+<!-- How do you do this today, and what are the limitations or pain points? -->
 
-## 期望行为
-<!-- 你理想中它应该怎么工作；方便的话给出一个具体例子 -->
-
-
-## 现状与限制
-<!-- 当前是怎么做的、有哪些限制或痛点 -->
-
-
-## 参考与补充
-<!-- 竞品 / 同类工具是怎么实现的、相关链接、截图或录屏 -->
-
+## References and extra context
+<!-- How do competitors / similar tools do it? Related links, screenshots, or recordings -->
 
 ---

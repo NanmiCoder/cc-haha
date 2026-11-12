@@ -37,17 +37,17 @@ function checkEntryPoint(entry: 'composer' | 'message') {
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('../ChatComposer'))})
     const { Message } = require(${JSON.stringify(import.meta.resolve('../Message'))})
     const attachments = [
-      { id: 'a', type: 'image', name: '照片一.jpg', uri: 'file:///first.jpg', data: 'Zmlyc3Q=', mimeType: 'image/jpeg', bytes: 5 },
-      { id: 'f', type: 'file', name: '材料.pdf', data: 'cGRm', mimeType: 'application/pdf', bytes: 3 },
-      { id: 'b', type: 'image', name: '照片二.jpg', uri: 'file:///second.jpg', data: 'c2Vjb25k', mimeType: 'image/jpeg', bytes: 6 },
+      { id: 'a', type: 'image', name: 'Photo one.jpg', uri: 'file:///first.jpg', data: 'Zmlyc3Q=', mimeType: 'image/jpeg', bytes: 5 },
+      { id: 'f', type: 'file', name: 'Materials.pdf', data: 'cGRm', mimeType: 'application/pdf', bytes: 3 },
+      { id: 'b', type: 'image', name: 'Photo two.jpg', uri: 'file:///second.jpg', data: 'c2Vjb25k', mimeType: 'image/jpeg', bytes: 6 },
     ]
     let removed
     const props = {
-      draft: '保留这段草稿', onDraft: () => assert.fail('preview must not edit draft'),
+      draft: 'Keep this draft', onDraft: () => assert.fail('preview must not edit draft'),
       attachments, onAttachments: value => { removed = value },
       references: [], onReferences: () => {}, team: false, onTeam: () => {}, computer: { enabled: false },
       lean: false, empty: false, busy: false, disabled: false,
-      run: { label: '测试模型', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
+      run: { label: 'Test model', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
     }
     const flatten = node => {
       if (Array.isArray(node)) return node.flatMap(flatten)
@@ -59,24 +59,24 @@ function checkEntryPoint(entry: 'composer' | 'message') {
       cursor = 0
       return flatten(${JSON.stringify(entry)} === 'composer'
         ? ChatComposer(props)
-        : Message({ item: { id: 'sent', type: 'user', text: '解释这些图片', attachments } }))
+        : Message({ item: { id: 'sent', type: 'user', text: 'Explain these images', attachments } }))
     }
     let nodes = render()
-    const second = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '预览 照片二.jpg')
+    const second = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Preview Photo two.jpg')
     assert.ok(second, 'every image needs a reachable preview action')
     second.props.onPress()
     nodes = render()
     const preview = nodes.find(node => node.type === 'ImagePreview')
     assert.ok(preview, 'tapping a thumbnail must open the gallery')
     assert.equal(preview.props.initialIndex, 1, 'mixed files must not shift the selected image')
-    assert.deepEqual(preview.props.images.map(image => image.name), ['照片一.jpg', '照片二.jpg'])
+    assert.deepEqual(preview.props.images.map(image => image.name), ['Photo one.jpg', 'Photo two.jpg'])
     assert.equal(dismissed, 1, 'preview should dismiss the keyboard')
     preview.props.onClose()
     nodes = render()
     assert.equal(nodes.some(node => node.type === 'ImagePreview'), false)
     if (${JSON.stringify(entry)} === 'composer') {
-      assert.equal(nodes.find(node => node.type === 'TextInput').props.value, '保留这段草稿')
-      nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '移除 照片二.jpg').props.onPress()
+      assert.equal(nodes.find(node => node.type === 'TextInput').props.value, 'Keep this draft')
+      nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Remove Photo two.jpg').props.onPress()
       assert.deepEqual(removed.map(item => item.id), ['a', 'f'])
       assert.equal(render().some(node => node.type === 'ImagePreview'), false, 'remove must not open a preview')
     }

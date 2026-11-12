@@ -1,42 +1,42 @@
-# 发布图与群文案要求
+# Poster and group message requirements
 
-使用最新 release markdown 的**中文原文**作为唯一内容依据。写给已经在使用 Claude Code Haha 的微信群用户，突出他们最能感受到的变化，避免把每条 commit 都挤进图里。
+Use the latest release markdown as the only content source. Write for WeChat group users who already use Claude Code Haha, highlighting the changes they will notice most, and avoid cramming every commit into the image.
 
-## 视觉方向：瑞士大字
+## Visual direction: Swiss bold type
 
-1080px 宽、适合手机纵向阅读的简体中文长图，2026-10 由维护者从四个方向中选定。三段色带建立阅读顺序：信号橙首屏（产品、超大版本号、本版重点）→ 纸色正文（其余功能、补充变化）→ 墨色收尾（修复、贡献者、安装提示、页尾）。全部文字和头像由脚本确定性绘制，按内容自然增长高度。
+A 1080px-wide long image for vertical phone reading, chosen by the maintainer from four directions in 2026-10. Three color bands set the reading order: signal-orange first screen (product, oversized version number, release highlight) → paper body (remaining features, additional changes) → ink closing (fixes, contributors, install notes, footer). All text and avatars are drawn deterministically by the script, and height grows naturally with content.
 
-| 角色 | 固定规范 |
+| Role | Fixed spec |
 | --- | --- |
-| 首屏底色 | 信号橙 `#FF5B23`，其上文字一律墨色 `#151515`（对比度 ≥ 4.5:1） |
-| 正文底色 / 补充面板 | 纸色 `#F1F0EB` / `#E3E1D9`；正文 `#3B3B38`，对比度均 ≥ 7:1 |
-| 正文区强调 | 深橙 `#A8340B`，只用于编号、区间和补充面板的小标签 |
-| 收尾底色 | 墨色 `#151515`；标题 `#F1F0EB`，正文 `#CFCCC4`（≥ 7:1），细线 `#3A3A38`；方块标记、安装提示框和页尾版本号用信号橙 |
-| 数字字体 | 版本号与编号用窄体黑：macOS Helvetica Neue Condensed Black，回退 Avenir Next Condensed Heavy、DejaVu Sans Condensed Bold、Arial Bold |
-| 中文字体 | 冬青黑体 W3/W6，回退华文黑体；Linux Noto Sans CJK（有 Black 时标题用 Black），Windows 微软雅黑。没有黑体字重时，仅 ≥ 60px 的标题加 1px 同色描边，小字号不描边（会糊字） |
-| 字号 | 版本号最大 400px（超宽时自动缩小，不低于 96px）；区块标题 64px、首项标题 64px、条目标题 44px（修复 40px）、主要正文 36px；补充面板与贡献说明 34px，安装说明 32px，标签 26–30px |
-| 网格 | 左右边距 64px；功能区左列 160px 放编号，正文列 792px；条目之间 2px 墨色线，修复之间 1px 暗线 |
+| First screen background | Signal orange `#FF5B23`; all text on it is ink `#151515` (contrast ≥ 4.5:1) |
+| Body background / extras panel | Paper `#F1F0EB` / `#E3E1D9`; body text `#3B3B38`, contrast ≥ 7:1 for both |
+| Body accent | Deep orange `#A8340B`, only for numbers, ranges, and small labels on the extras panel |
+| Closing background | Ink `#151515`; headings `#F1F0EB`, body `#CFCCC4` (≥ 7:1), rules `#3A3A38`; square markers, the install note frame, and the footer version number use signal orange |
+| Numeral font | Version number and item numbers use a condensed black: macOS Helvetica Neue Condensed Black, falling back to Avenir Next Condensed Heavy, DejaVu Sans Condensed Bold, Arial Bold |
+| Text font | Hiragino Sans GB W3/W6, falling back to STHeiti; on Linux Noto Sans CJK (Black for headings when available), on Windows Microsoft YaHei. When no black weight is available, add a 1px same-color stroke only to headings ≥ 60px; never stroke small text (it blurs) |
+| Font sizes | Version number up to 400px (scaled down automatically when too wide, never below 96px); section headings 64px, first-item title 64px, item titles 44px (fixes 40px), main body 36px; extras panel and contribution notes 34px, install note 32px, labels 26–30px |
+| Grid | 64px left and right margins; features section has a 160px left column for numbers and a 792px text column; 2px ink rules between items, 1px dark rules between fixes |
 
-**首屏：**左上产品名、右上「版本更新」，下方超大版本号（不带 v），粗线后是 `01 / 本版重点` 与第一项功能。首项必须在手机首屏读完。纯修复版首屏改为「本版为修复更新 · N 项修复」，随后直接进入墨色修复区。
+**First screen:** Product name top-left, "New release" top-right, the oversized version number below (without `v`), then a heavy rule followed by the `01` numeral with the "Highlight" label and the first feature. The first item must be fully readable on the phone's first screen. For a fixes-only release, the first screen instead says "Fix release · N fixes" ("1 fix" for a single fix) and goes straight into the ink fixes section.
 
-**正文区：**其余功能以「新增与改进」+ 右侧编号区间开头，每项左侧是深橙大编号。extras 用浅灰平面面板（无圆角、无阴影），标签、标题、正文三层。只有一项功能且无 extras 时不出现纸色段。
+**Body section:** Remaining features start with "New and improved" plus a number range on the right, each item with a large deep-orange number on the left. Extras use a flat light-gray panel (no rounded corners, no shadows) with three layers: label, title, body. With only one feature and no extras, there is no paper section.
 
-**收尾区：**「重点修复」逐项用橙色方块标记；有署名时「感谢社区贡献者」逐行排真实圆形头像、完整 ID 和贡献；安装提示为橙色细框，左侧标签右侧正文；页尾为产品名 + 橙色版本号，仓库地址放得下则右对齐，否则另起一行。
+**Closing section:** "Key fixes" lists each item with an orange square marker; when there are credits, "Thanks to community contributors" lists real circular avatars, full IDs, and contributions line by line; the install note is a thin orange frame with the "Install note" label on the left and text on the right; the footer is the product name + orange version number, with the repository URL right-aligned if it fits, otherwise on its own line.
 
-**正文换行：**段落末行短于栏宽 1/3 时，在行数不变的前提下收窄测量宽度重排，避免末行只剩一两个字；其他段落保持满栏宽。
+**Body wrapping:** When the last line of a paragraph is shorter than 1/3 of the column width, re-flow it at a narrower measure while keeping the same number of lines, to avoid a last line with only one or two characters; other paragraphs keep the full column width.
 
-**禁止：**渐变、阴影、圆角卡片、emoji、霓虹或紫蓝 AI 配色、虚构 UI 截图、假头像、为塞入条目缩小正文。信号橙只用于首屏底色和墨色区的小面积标记，不在纸色区上作文字色。
+**Forbidden:** gradients, shadows, rounded cards, emoji, neon or purple-blue "AI" palettes, fabricated UI screenshots, fake avatars, shrinking body text to fit more items. Signal orange is only for the first screen background and small markers in the ink section, never as a text color on the paper section.
 
-## 内容提炼
+## Content extraction
 
-一般选 2–4 项核心功能，大版本最多 6 项；一般最多 9 项用户能理解的修复，脚本硬上限为 12 项。没有的类别保持为空。每项标题尽量不超过 14 个汉字，说明用一句话讲清“现在能做什么”或“之前的问题如何改善”。最重要的功能排在第一项，不按 commit 顺序平均分配权重。
+Usually choose 2–4 core features, up to 6 for a major release; usually at most 9 user-understandable fixes, with a hard script limit of 12. Leave missing categories empty. Keep each title short (a few words), and use one sentence to explain "what you can do now" or "how the earlier problem improved". Put the most important feature first; don't weight items evenly by commit order.
 
-优先群友直接感受到的变化，避免开发者内部修复挤掉有用的用户功能。保留必要条件，例如“在设置中开启后”、超时选项、适用平台、临时性或签名状态。重要模型与供应商更新可合并为一个简短区块。未署名的修复不强行归给贡献者。
+Prioritize changes group members will feel directly, and don't let internal developer fixes crowd out useful user features. Keep necessary conditions, e.g. "after enabling it in Settings", timeout options, applicable platforms, temporary status, or signing status. Important model and provider updates can be merged into one short section. Don't attribute uncredited fixes to contributors.
 
-## 群文案
+## Group message
 
-用自然、简短的群聊语气，最多三句话；写出版本号和最重要的两项变化，最后引导看图。有本版署名贡献者时感谢代码贡献；没有时感谢反馈与支持。只有用户明确说这些贡献者是群成员时才称他们为“群友”。不要把图内清单再抄一遍，不使用 emoji，不虚构下载链接或给未核实的 GitHub ID 加 `@`。
+Use a natural, short group-chat tone, at most three sentences; include the version number and the two most important changes, and end by pointing to the image. If this release has credited contributors, thank them for their code contributions; otherwise thank people for feedback and support. Only call contributors "group members" if the user explicitly says they are in the group. Don't copy the image's list again, don't use emoji, and don't invent download links or `@` unverified GitHub IDs.
 
-## 出图检查
+## Output check
 
-打开 1080px 原图和 390px 宽的手机预览。检查首项是否出现在首屏、正文无需放大能否阅读、长英文与标点是否越界、标题和正文是否重叠、头像和 ID 是否一一对应、没有内容的类别是否隐藏。若图过长，优先减少次要信息，保持主要正文字号。改模板时以同一份 spec 比较前后效果，再验证纯功能、纯修复和长贡献说明等边界。
+Open the 1080px original and a 390px-wide phone preview. Check that the first item appears on the first screen, body text is readable without zooming, long English and punctuation don't overflow, headings and body don't overlap, avatars and IDs match one-to-one, and empty categories are hidden. If the image is too long, cut secondary information first and keep the main body font size. When changing the template, compare before and after with the same spec, then verify edge cases such as features-only, fixes-only, and long contribution notes.

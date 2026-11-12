@@ -5,29 +5,21 @@ import type { MarketCategory, NormalizedSkill } from '../../types/market'
 /**
  * Which copy of the curated catalog a reader sees.
  *
- * The catalog is edited in Simplified Chinese: summaries, tags and category
- * names. Chinese readers (zh and zh-TW) get those; everyone else gets the
- * upstream English summary and the category's English name, and no tags —
- * a row of Chinese chips under an English summary reads as noise, not
- * metadata. Live (non-curated) results carry the upstream's own text, which is
- * shown as it is in every locale.
+ * Curated entries carry an English summary and category name alongside the
+ * originals; those are shown. Curated tags are not, since they are not
+ * translated. Live (non-curated) results carry the upstream's own text, which
+ * is shown as it is.
  */
-export function isChineseLocale(locale: Locale): boolean {
-  return locale === 'zh' || locale === 'zh-TW'
-}
-
-export function skillSummary(skill: Pick<NormalizedSkill, 'summary' | 'summaryEn'>, locale: Locale): string {
-  if (isChineseLocale(locale)) return skill.summary
+export function skillSummary(skill: Pick<NormalizedSkill, 'summary' | 'summaryEn'>, _locale: Locale): string {
   return skill.summaryEn || skill.summary
 }
 
-export function visibleTags(skill: Pick<NormalizedSkill, 'tags' | 'curated'>, locale: Locale): string[] {
-  if (skill.curated && !isChineseLocale(locale)) return []
+export function visibleTags(skill: Pick<NormalizedSkill, 'tags' | 'curated'>, _locale: Locale): string[] {
+  if (skill.curated) return []
   return skill.tags
 }
 
-export function categoryLabel(category: Pick<MarketCategory, 'name' | 'nameEn'>, locale: Locale): string {
-  if (isChineseLocale(locale)) return category.name
+export function categoryLabel(category: Pick<MarketCategory, 'name' | 'nameEn'>, _locale: Locale): string {
   return category.nameEn || category.name
 }
 

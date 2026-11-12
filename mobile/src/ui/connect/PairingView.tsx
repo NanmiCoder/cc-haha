@@ -10,8 +10,8 @@ export type PairingState =
   | { badge: string; phase: 'failed'; error: string }
 
 /**
- * 「等电脑批准」整页：公网配对发出请求后显示，批准后自动保存并进入首页。
- * 被拒、超时、过期等失败用原有文案说明，并给出「重新扫码」。
+ * "Waiting for computer approval" full page: shown after a public pairing request is sent; on approval it saves automatically and enters home.
+ * Failures like rejected, timed out or expired are explained with the existing text, with "Scan again".
  */
 export function PairingView({
   state,
@@ -53,13 +53,13 @@ export function PairingView({
             accessibilityRole="header"
             style={{ fontSize: 24, lineHeight: 31, fontWeight: '600', color: colors.ink, textAlign: 'center' }}
           >
-            {failed ? '这次没有连上' : '去电脑上批准这台手机'}
+            {failed ? 'Did not connect this time' : 'Approve this phone on the computer'}
           </Text>
           {failed ? (
             <InlineError text={state.error} style={{ alignSelf: 'stretch' }} />
           ) : (
             <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink2, textAlign: 'center' }}>
-              电脑上的 cc-haha 会弹出确认。核对是这台手机，再点批准。
+              cc-haha on the computer will show a confirmation. Check that it is this phone, then tap Approve.
             </Text>
           )}
           <View
@@ -88,17 +88,17 @@ export function PairingView({
         }}
       >
         {failed ? (
-          <Button title="重新扫码" size="lg" icon="scan" onPress={onRescan} style={{ alignSelf: 'stretch' }} />
+          <Button title="Scan again" size="lg" icon="scan" onPress={onRescan} style={{ alignSelf: 'stretch' }} />
         ) : (
           <>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Spinner size={15} />
               <Text accessibilityLiveRegion="polite" style={{ fontSize: 14, color: colors.ink2 }}>
-                {state.phase === 'saving' ? '连接成功，正在安全保存…' : '批准后会自动连上'}
+                {state.phase === 'saving' ? 'Connected, saving securely…' : 'Connects automatically after approval'}
               </Text>
             </View>
             <Button
-              title="取消"
+              title="Cancel"
               variant="outline"
               size="lg"
               onPress={onCancel}

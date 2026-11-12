@@ -84,7 +84,7 @@ describe('bundled provider presets', () => {
   // Retiring a preset must not break providers already configured against it: the
   // bundle keeps the entry so the edit form can still resolve its presetId, while
   // the "add provider" chips are built from selectableProviderPresets.
-  it('keeps the retired 胜算云 preset resolvable but not selectable', () => {
+  it('keeps the retired Shengsuanyun preset resolvable but not selectable', () => {
     const shengsuanyun = BUNDLED_PROVIDER_PRESETS.find((preset) => preset.id === 'shengsuanyun')
 
     expect(shengsuanyun?.deprecated).toBe(true)
@@ -186,7 +186,7 @@ describe('bundled provider presets', () => {
       .not.toContain('apismart')
   })
 
-  it('keeps the retired 接口AI preset resolvable but not selectable', () => {
+  it('keeps the retired JiekouAI preset resolvable but not selectable', () => {
     const jiekouai = BUNDLED_PROVIDER_PRESETS.find((preset) => preset.id === 'jiekouai')
 
     expect(jiekouai?.deprecated).toBe(true)

@@ -85,7 +85,7 @@ export function projectMobileSessionActivity(
       id: review.sessionId,
       activityState: 'waiting',
       decision: 'team_plan',
-      preview: review.addition ? '要追加的成员等你确认' : '团队组好了，等你确认',
+      preview: review.addition ? 'New members awaiting your confirmation' : 'Team is ready, awaiting your confirmation',
       ...(current?.startedAt !== undefined ? { startedAt: current.startedAt } : {}),
       ...(current?.lastProgressAt !== undefined ? { lastProgressAt: current.lastProgressAt } : {}),
     })

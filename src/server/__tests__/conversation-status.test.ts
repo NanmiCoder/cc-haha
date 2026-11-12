@@ -314,7 +314,7 @@ describe('live session activity for the phone session list', () => {
     const body = await response.json() as { sessions: Array<{ id: string; completedAt?: number }> }
     expect(body.sessions).toContainEqual(expect.objectContaining({ id: failed, activityState: 'failed', terminalOutcome: 'failed', startedAt: expect.any(Number), lastProgressAt: expect.any(Number), stalled: false }))
     expect(body.sessions.find(session => session.id === failed)?.completedAt).toBeUndefined()
-    expect(body.sessions).toContainEqual(expect.objectContaining({ id: waiting, activityState: 'waiting', toolName: 'AskUserQuestion', requestId: 'q1', preview: '等待你回答问题', autoAnswerDeadline: 12345 }))
+    expect(body.sessions).toContainEqual(expect.objectContaining({ id: waiting, activityState: 'waiting', toolName: 'AskUserQuestion', requestId: 'q1', preview: 'Waiting for your answer', autoAnswerDeadline: 12345 }))
     expect(JSON.stringify(body)).not.toContain('NEVER_PROJECT')
     expect((await handleSessionsApi(new Request(url, { method: 'POST' }), url, ['api', 'sessions', 'mobile-status'])).status).toBe(405)
   })

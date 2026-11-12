@@ -8,24 +8,17 @@ function currentPath() {
   return window.location.pathname.replace(/\/+$/, '') || '/'
 }
 
-function NotFound({ pathname }) {
-  const isEnglish = pathname.startsWith('/en')
+function NotFound() {
   return (
     <main className="not-found">
       <p>404</p>
-      <h1>{isEnglish ? 'This page moved or never existed.' : '这个页面搬走了，或者从来没存在过。'}</h1>
+      <h1>This page moved or never existed.</h1>
       <p className="not-found__hint">
-        {isEnglish
-          ? 'The documentation was reorganised in July 2026. Try the two entry points below.'
-          : '文档在 2026 年 7 月重新分区过。从下面两个入口找找看。'}
+        The documentation was reorganised in July 2026. Try the two entry points below.
       </p>
       <div className="not-found__actions">
-        <a className="btn btn--primary" href={toSiteHref(isEnglish ? '/en/start' : '/start')}>
-          {isEnglish ? 'Get started' : '开始使用'}
-        </a>
-        <a className="btn btn--ghost" href={toSiteHref(isEnglish ? '/en/internals' : '/internals')}>
-          {isEnglish ? 'Internals' : '深入原理'}
-        </a>
+        <a className="btn btn--primary" href={toSiteHref('/start')}>Get started</a>
+        <a className="btn btn--ghost" href={toSiteHref('/internals')}>Internals</a>
       </div>
     </main>
   )
@@ -70,7 +63,7 @@ export default function App() {
     }
   }, [])
 
-  // 老路由一律换到新地址，别让重组把外部链接打死在 404 上。
+  // Send every old route to its new address so the reorganization (and the dropped /en prefix) doesn't break external links.
   useEffect(() => {
     const legacy = resolveLegacyRoute(path)
     if (!legacy) return
@@ -78,13 +71,13 @@ export default function App() {
     setPath(currentPath())
   }, [path])
 
-  if (path === '/' || path === '/en') {
-    return <HomePage locale={path === '/en' ? 'en' : 'zh'} />
+  if (path === '/') {
+    return <HomePage />
   }
 
   return (
     <Suspense fallback={<div className="page-loading" />}>
-      <DocPage pathname={path} onNotFound={(pathname) => <NotFound pathname={pathname} />} />
+      <DocPage pathname={path} onNotFound={() => <NotFound />} />
     </Suspense>
   )
 }

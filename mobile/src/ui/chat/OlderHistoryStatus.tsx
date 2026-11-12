@@ -3,8 +3,8 @@ import { Text } from '../Text'
 import { Spinner, useColors } from '../kit'
 
 /**
- * 消息流顶部的往前翻状态。平时离顶部一屏半就自动加载，滑到这里一般已经在转圈；
- * 只有没连上、加载失败或自动加载暂停时才需要点。各状态同高，切换时内容不跳。
+ * Paging-back state at the top of the message stream. Normally it auto-loads within a screen and a half of the top, so by scrolling here it is usually already spinning; 
+ * tapping is only needed when not connected, loading failed or auto-loading is paused. All states have the same height so content does not jump when switching.
  */
 export function OlderHistoryStatus({
   loading,
@@ -19,12 +19,12 @@ export function OlderHistoryStatus({
 }) {
   const colors = useColors()
   const label = loading
-    ? '正在加载更早的消息'
+    ? 'Loading earlier messages'
     : !ready
-      ? '连上电脑后继续加载'
+      ? 'Continues loading after connecting to the computer'
       : failed
-        ? '没加载出来，点按重试'
-        : '加载更早的消息'
+        ? 'Failed to load, tap to retry'
+        : 'Load earlier messages'
   const disabled = loading || !ready
   return (
     <Pressable

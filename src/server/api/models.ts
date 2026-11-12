@@ -1,12 +1,12 @@
 /**
  * Models REST API
  *
- * GET  /api/models          — 获取可用模型列表
- * GET  /api/models/catalog?provider=<id> — 内置 OAuth 供应商账号可选的模型目录
- * GET  /api/models/current  — 获取当前选中的模型
- * PUT  /api/models/current  — 切换模型
- * GET  /api/effort          — 获取 Effort 等级
- * PUT  /api/effort          — 设置 Effort 等级
+ * GET  /api/models          — get the available model list
+ * GET  /api/models/catalog?provider=<id> — model catalog selectable for built-in OAuth provider accounts
+ * GET  /api/models/current  — get the currently selected model
+ * PUT  /api/models/current  — switch model
+ * GET  /api/effort          — get effort level
+ * PUT  /api/effort          — set effort level
  */
 
 import { SettingsService } from '../services/settingsService.js'
@@ -280,7 +280,7 @@ export async function handleModelsApi(
     // ── /api/models/* ─────────────────────────────────────────────────
     switch (sub) {
       case undefined:
-        // GET /api/models — 优先从激活的 Provider 读取模型列表
+        // GET /api/models — read the model list from the active provider first
         if (req.method !== 'GET') throw methodNotAllowed(req.method)
         return await handleModelsList()
 

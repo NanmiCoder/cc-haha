@@ -41,13 +41,13 @@ test('rejects oversize or truncated conversion without leaving staging files', a
     if (args.includes('-show_entries')) return meta(++probes === 1 ? '10' : '2')
     await fs.writeFile(args.at(-1)!, 'truncated')
     return ''
-  } })).rejects.toThrow('完整时长')
+  } })).rejects.toThrow('full duration')
   expect(await fs.readdir(outputDir)).toEqual([])
 })
 
 test('rejects overlong input before conversion and propagates cancellation', async () => {
   const outputDir = await root()
-  await expect(transcodeWechatVideo(Buffer.from('input'), { outputDir, run: async () => meta('121') })).rejects.toThrow('120 秒')
+  await expect(transcodeWechatVideo(Buffer.from('input'), { outputDir, run: async () => meta('121') })).rejects.toThrow('120 seconds')
   const controller = new AbortController()
   await expect(transcodeWechatVideo(Buffer.from('input'), { outputDir, signal: controller.signal, run: async () => { controller.abort(); return meta() } })).rejects.toThrow()
   expect(await fs.readdir(outputDir)).toEqual([])

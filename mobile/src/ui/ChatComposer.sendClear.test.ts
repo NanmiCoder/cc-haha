@@ -69,7 +69,7 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
       client: { host: { id: 'phone-fixture' } }, sessionId: 'fixture-chat',
       draft: '', onDraft: value => { props.draft = value }, references: [], onReferences: () => {}, attachments: [], onAttachments: () => {},
       team: false, onTeam: () => {}, computer: { enabled: false }, lean: false, empty: false, busy: false, disabled: false,
-      run: { label: '测试模型', risk: 'normal' }, onOpenRun: () => {}, onError: () => {},
+      run: { label: 'Test model', risk: 'normal' }, onOpenRun: () => {}, onError: () => {},
     }
     // Like the page's own handler, the send sees the draft of the render it came from and
     // says whether it took it.
@@ -103,14 +103,14 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     }
     const runHeld = () => { hold = false; for (const effect of held.splice(0)) effect() }
     const input = () => render().find(node => node.type === 'TextInput')
-    const sendButton = () => render().find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '发送')
+    const sendButton = () => render().find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Send')
     // The native field reports a change, then where its caret went.
     const native = value => {
       input().props.onChangeText(value)
       input().props.onSelectionChange({ nativeEvent: { selection: { start: value.length, end: value.length } } })
     }
     const caret = (start, end = start) => input().props.onSelectionChange({ nativeEvent: { selection: { start, end } } })
-    const message = '把 mobile 的推送测试跑一遍，然后告诉我哪些用例失败了'
+    const message = 'Run the mobile push tests and tell me which cases failed'
 
     // 1. The last key lands while the finger is on the button: its change is reported,
     //    but the tap is handled by the render before it. The send waits for that render
@@ -126,7 +126,7 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     assert.equal(props.draft, '')
     caret(0)
 
-    //    The render of an earlier key ("…失") can still have its effects pending when the
+    //    The render of an earlier key ("…fail") can still have its effects pending when the
     //    last keys and the tap are handled. Those effects must not send without them.
     native(message.slice(0, -3))
     input().props.onChangeText(message.slice(0, -2))
@@ -144,30 +144,30 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     caret(0)
     sent.length = 0
 
-    // 2. The last keys ("好的") arrive after the send cleared the box: Android kept the
+    // 2. The last keys ("OK") arrive after the send cleared the box: Android kept the
     //    old text, appended them and reported both.
     native(message)
     sendButton().props.onPress()
     assert.deepEqual(sent, [message])
     assert.equal(props.draft, '')
-    input().props.onChangeText(message + '好')
-    assert.equal(props.draft, '好', 'the sent text must not come back; the late key stays')
-    input().props.onChangeText(message + '好的')
-    assert.equal(props.draft, '好的', 'every key typed on top of the sent text is kept, the sent text never returns')
+    input().props.onChangeText(message + 'OK')
+    assert.equal(props.draft, 'OK', 'the sent text must not come back; the late key stays')
+    input().props.onChangeText(message + 'OK')
+    assert.equal(props.draft, 'OK', 'every key typed on top of the sent text is kept, the sent text never returns')
     assert.deepEqual(input().props.selection, { start: 2, end: 2 })
     // Once the field shows the kept keys, typing is ordinary again.
-    native('好的，')
-    assert.equal(props.draft, '好的，')
+    native('OK, ')
+    assert.equal(props.draft, 'OK, ')
 
     //    Handled in the same batch as the tap, the key's handler still sees the render
     //    from before the send.
     native(message)
     const fieldAtTap = input()
     sendButton().props.onPress()
-    fieldAtTap.props.onChangeText(message + '好')
-    assert.equal(props.draft, '好')
+    fieldAtTap.props.onChangeText(message + 'OK')
+    assert.equal(props.draft, 'OK')
     assert.deepEqual(sent, [message, message])
-    native('好')
+    native('OK')
 
     // 3. The clear landed: the field moves its caret to the start. A new message that
     //    happens to begin with the sent one is the user's, untouched.
@@ -175,8 +175,8 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     native(message)
     sendButton().props.onPress()
     caret(0)
-    native(message + '，再跑一次')
-    assert.equal(props.draft, message + '，再跑一次')
+    native(message + ', run it again')
+    assert.equal(props.draft, message + ', run it again')
 
     // 4. A send that could not go out keeps the draft; typing on it is ordinary.
     native('')
@@ -184,8 +184,8 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     delivers = false
     sendButton().props.onPress()
     assert.equal(props.draft, message)
-    native(message + '！')
-    assert.equal(props.draft, message + '！')
+    native(message + '!')
+    assert.equal(props.draft, message + '!')
     delivers = true
 
     // 5. Sent with the keyboard down: no key can race the clear, nothing to undo later.
@@ -194,8 +194,8 @@ test('on Android the keyboard racing the send can neither drop a key nor put the
     focused = false
     sendButton().props.onPress()
     focused = true
-    native(message + '，再跑一次')
-    assert.equal(props.draft, message + '，再跑一次')
+    native(message + ', run it again')
+    assert.equal(props.draft, message + ', run it again')
   `
   try {
     execFileSync(process.execPath, ['--no-env-file', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })

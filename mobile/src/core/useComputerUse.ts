@@ -10,8 +10,8 @@ import {
 import { errorText } from '../ui/theme'
 
 /**
- * 「操作电脑」开关的状态与动作。它控制的是连着的这台电脑（所有会话共用），不是下一条消息。
- * 输入框的本条选择另存为 computer-use 技能引用；全局授权不会因发送或移除引用而关闭。
+ * State and actions of the "Computer use" toggle. It controls the connected computer (shared by all sessions), not the next message.
+ * The input's choice for this message is saved separately as a computer-use skill reference; global authorization is not turned off by sending or removing the reference.
  */
 export function useComputerUse(client: ApiClient | null) {
   const [status, setStatus] = useState<ComposerComputerUse | null>(null)
@@ -56,7 +56,7 @@ export function useComputerUse(client: ApiClient | null) {
     return () => controller.abort()
   }, [client, epoch])
 
-  /** 重新读取电脑上的状态（打开运行方式底单时调用）。 */
+  /** Reread the state on the computer (called when opening the run mode sheet). */
   const refresh = useCallback(() => setEpoch((value) => value + 1), [])
 
   async function apply(enabled: boolean) {
@@ -105,15 +105,15 @@ export function useComputerUse(client: ApiClient | null) {
   }
 
   return {
-    /** 全局授权状态，与本条消息的技能选择独立。 */
+    /** Global authorization state, independent of the skill selection of this message. */
     enabled: status?.enabled ?? false,
-    /** 这台电脑是否支持；还没读到时是 null。 */
+    /** Whether this computer supports it; null when not read yet. */
     supported: status ? status.supported : (null as boolean | null),
     busy,
     error,
-    /** 已开启，但还要在电脑上完成系统授权。 */
+    /** Enabled, but system authorization must still be completed on the computer. */
     needsPermission: permission,
-    /** 开启前的确认单是否打开。 */
+    /** Whether the confirmation sheet before enabling is open. */
     consentOpen: consent,
     refresh,
     /** Already-consented computers can be selected without another prompt. */
@@ -125,7 +125,7 @@ export function useComputerUse(client: ApiClient | null) {
         setConsent(true)
       }
     },
-    /** 打开开关要先经过确认；关闭立即生效。 */
+    /** Turning the toggle on requires confirmation first; turning it off takes effect immediately. */
     toggle(next: boolean) {
       if (next) setConsent(true)
       else void apply(false)

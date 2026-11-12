@@ -58,18 +58,18 @@ export function parsePermitCallbackData(data: string): PermissionDecision | null
 }
 
 export function formatPermissionInstructions(requestId: string, options: { pendingCount?: number } = {}): string {
-  const shortcuts = '回复 1 允许一次，2 永久允许，3 拒绝。'
+  const shortcuts = 'Reply 1 to allow once, 2 to always allow, 3 to deny.'
   if (options.pendingCount === 1) return shortcuts
   if (options.pendingCount !== undefined && options.pendingCount > 1) {
-    return `当前有多个待审批请求，请使用带请求 ID 的命令：\n/allow ${requestId}、/always ${requestId}、/deny ${requestId}。`
+    return `Multiple approval requests are pending; use a command with the request ID:\n/allow ${requestId}, /always ${requestId}, /deny ${requestId}.`
   }
   return [
     shortcuts,
-    `也可回复 /allow ${requestId}、/always ${requestId}、/deny ${requestId}。`,
+    `You can also reply /allow ${requestId}, /always ${requestId}, /deny ${requestId}.`,
   ].join('\n')
 }
 
 export function formatPermissionDecisionStatus(decision: Pick<PermissionDecision, 'allowed' | 'rule'>): string {
-  if (!decision.allowed) return '❌ 已拒绝'
-  return decision.rule === 'always' ? '♾️ 已永久允许' : '✅ 已允许'
+  if (!decision.allowed) return '❌ Denied'
+  return decision.rule === 'always' ? '♾️ Always allowed' : '✅ Allowed'
 }

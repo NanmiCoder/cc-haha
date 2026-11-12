@@ -1,9 +1,5 @@
 import type { PowerMonitor, PowerSaveBlocker, Screen, WebContents } from 'electron'
 import { en } from '../../src/i18n/locales/en'
-import { zh } from '../../src/i18n/locales/zh'
-import { zh as zhTW } from '../../src/i18n/locales/zh-TW'
-import { jp } from '../../src/i18n/locales/jp'
-import { kr } from '../../src/i18n/locales/kr'
 import type { Locale } from '../../src/i18n/locale'
 import type { IdlePowerAction, IdlePowerState } from '../../src/lib/idlePower'
 import { IdlePowerService, type PowerActivitySnapshot } from './idlePower'
@@ -11,7 +7,7 @@ import { detectPowerCapabilities, executePowerAction } from './idlePowerPlatform
 import { readIdlePowerPreferences, writeIdlePowerPreferences, type PowerPreferenceApp } from './idlePowerPersistence'
 import { sendDesktopNotification, type ElectronNotificationConstructor } from './notifications'
 
-const dictionaries: Record<Locale, Record<string, string>> = { en, zh, 'zh-TW': zhTW, jp, kr }
+const dictionaries: Record<Locale, Record<string, string>> = { en }
 export async function createIdlePowerHost(options: {
   app: PowerPreferenceApp
   blocker: Pick<PowerSaveBlocker, 'start' | 'stop'>

@@ -3,7 +3,7 @@ import { useApp } from '../state/AppContext'
 import { EmptyState, NavBar, ScreenView } from '../ui/kit'
 import { MemberRun } from '../ui/activity/MemberRun'
 
-/** /member?host&id&agent —— 团队里一个成员的任务和只读执行记录。 */
+/** /member?host&id&agent — A team member tasks and read-only execution log. */
 export default function Member() {
   const { host, id, agent } = useLocalSearchParams<{ host?: string; id?: string; agent?: string }>()
   const { registry } = useApp()
@@ -11,8 +11,8 @@ export default function Member() {
   if (!id || !agent)
     return (
       <ScreenView>
-        <NavBar title="团队成员" />
-        <EmptyState title="找不到这个成员" detail="团队可能已经结束，请回到会话重新打开。" />
+        <NavBar title="Team member" />
+        <EmptyState title="Cannot find this member" detail="The team may have ended; go back to the session and reopen it." />
       </ScreenView>
     )
   return <MemberRun key={`${hostId}:${id}:${agent}`} hostId={hostId} sessionId={id} agentId={agent} />

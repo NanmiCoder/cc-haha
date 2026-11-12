@@ -136,7 +136,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
       ),
     )
     : [], [changedFileEvidence, markdownImageSources, sessionId, text, workDir])
-  // `截图保存为1.png` may be `1.png` saved by a glued verb, or one CJK name; the
+  // `screenshot-saved-as1.png` (a CJK sentence glued to a name) may be `1.png` saved by a glued verb, or one CJK name; the
   // workspace listing settles which, as it does for the output cards.
   const relativeTargets = useDiskConfirmedTargets(sessionId, extractedRelativeTargets)
 

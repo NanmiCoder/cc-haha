@@ -27,7 +27,7 @@ test('mobile WAV uploads agree with the production voice handler and a determini
         const { VoiceService } = await import(${source('../../../src/server/services/voice/voiceService.ts')})
         const { VoiceProviderRegistry } = await import(${source('../../../src/server/services/voice/registry.ts')})
         const { FakeProvider, makeWav, memoryPreferencesStore } = await import(${source('../../../src/server/services/voice/__tests__/fakeProvider.ts')})
-        const provider = new FakeProvider({ id: 'fixture-local', text: '来自电脑的离线转写' })
+        const provider = new FakeProvider({ id: 'fixture-local', text: 'Offline transcription from the computer' })
         const preferences = memoryPreferencesStore({ providerId: provider.info.id })
         const service = new VoiceService({ registry: new VoiceProviderRegistry().register(provider), preferences })
         const host = { id: 'fixture', name: 'Computer', url: 'https://voice.fixture.invalid', auth: 'remote' }
@@ -46,7 +46,7 @@ test('mobile WAV uploads agree with the production voice handler and a determini
         provider.installed = true
         assert.equal((await loadVoiceCatalog(client)).providers[0].preparation.phase, 'ready')
         const transcript = await transcribeVoice(client, makeWav(0.5), { language: 'zh' })
-        assert.deepEqual(transcript, { text: '来自电脑的离线转写', audioSeconds: 0.5, inferenceSeconds: 0.25 })
+        assert.deepEqual(transcript, { text: 'Offline transcription from the computer', audioSeconds: 0.5, inferenceSeconds: 0.25 })
         assert.deepEqual(provider.transcribeCalls, [{ bytes: 16044, language: 'zh' }])
         await assert.rejects(transcribeVoice(client, new Uint8Array([1, 2])), error => error.status === 400 && error.code === 'voice/invalid-audio')
         assert.equal(provider.prepareCalls, 0)
@@ -68,7 +68,7 @@ test('mobile WAV uploads agree with the production voice handler and a determini
     if (result.status !== 0) throw new Error(`Isolated voice contract failed: ${report}\n${result.error?.message ?? ''}\n${result.stderr}`)
     expect(JSON.parse(report)).toEqual({
       ok: true,
-      transcript: { text: '来自电脑的离线转写', audioSeconds: 0.5, inferenceSeconds: 0.25 },
+      transcript: { text: 'Offline transcription from the computer', audioSeconds: 0.5, inferenceSeconds: 0.25 },
       prepareCalls: 0,
       unchangedPreferences: true,
     })

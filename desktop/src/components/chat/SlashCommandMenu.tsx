@@ -31,7 +31,7 @@ import { publicAssetPath } from '@/lib/publicAsset'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
 import { COMPOSER_KBD, COMPOSER_MENU_SECTION } from './composerMenuStyles'
 
-/** One menu row: icon, then the name over its description (the 「素」 menu item). */
+/** One menu row: icon, then the name over its description (the "Su" spec menu item). */
 const ROW = 'flex min-h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {

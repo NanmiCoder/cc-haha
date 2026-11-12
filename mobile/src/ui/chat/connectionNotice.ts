@@ -1,31 +1,31 @@
 import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../../core/sessionTransport'
 
-/** 断开这么久之后，导航栏副标题才改成连接状态；之前照常显示会话信息。 */
+/** Only after being disconnected this long does the nav bar subtitle switch to connection status; until then it shows session info as usual. */
 export const CONNECTION_LABEL_AFTER_MS = 3000
-/** 断开这么久之后，才弹出「正在重连」的提示条。 */
+/** Only after being disconnected this long does the "Reconnecting" banner pop up. */
 export const CONNECTION_BANNER_AFTER_MS = 10000
-/** 连着失败这么多次就不再等：多半是电脑睡了或网络不通，马上告诉用户。 */
+/** After this many consecutive failures stop waiting: most likely the computer is asleep or the network is down, so tell the user right away. */
 export const CONNECTION_BANNER_AFTER_FAILURES = 2
 
-/** 这些状态下的提示条说的是「断开了，正在自动重连」，并给出重试。 */
+/** In these states the banner says "Disconnected, reconnecting automatically" with a retry. */
 export function showsReconnectBanner(connection: ConnectionState) {
   return connection === 'resuming' || connection === 'reconnecting' || connection === 'offline'
 }
 
 export type ConnectionNotice = {
-  /** 副标题显示连接状态。 */
+  /** The subtitle shows connection status. */
   label: boolean
-  /** 显示连接提示条（重连中 / 读取失败）。 */
+  /** Show the connection banner (reconnecting / load failed). */
   banner: boolean
-  /** 过多久状态会变，需要重新判断。 */
+  /** how long until the state changes and must be re-evaluated. */
   recheckIn?: number
 }
 
 /**
- * 回到前台、切网这类短暂断线通常一两秒就自己恢复，这期间不打扰用户。
- * 配对失效要用户处理，立即提示；连着两次没连上也不再等满十秒；
- * 刚打开会话还没连上过，照常显示「正在连接」。
+ * Brief disconnects like returning to foreground or switching networks usually recover in a second or two, so do not disturb the user meanwhile.
+ * Expired pairing needs user action, so warn immediately; two consecutive failed connects also skip the full ten second wait; 
+ * a session just opened and never connected shows "Connecting" as usual.
  */
 export function connectionNotice({
   connection,
@@ -35,11 +35,11 @@ export function connectionNotice({
   failures = 0,
 }: {
   connection: ConnectionState
-  /** 这次离开 ready 的时刻（还没连上过时是打开会话的时刻）。 */
+  /** The time it last left ready (the session open time if never connected). */
   since: number
   now: number
   everReady: boolean
-  /** 连着失败的建连次数（见 SessionTransport.failures）。 */
+  /** Consecutive failed connects (see SessionTransport.failures). */
   failures?: number
 }): ConnectionNotice {
   if (connection === 'ready') return { label: false, banner: false }
@@ -58,7 +58,7 @@ export function connectionNotice({
   }
 }
 
-/** 记下这次离开 ready 的时刻，并在提示该出现时重新渲染。 */
+/** Record the time it left ready, and rerender when the banner should appear. */
 export function useConnectionNotice(
   connection: ConnectionState,
   failures = 0,
@@ -66,7 +66,7 @@ export function useConnectionNotice(
 ) {
   const ready = connection === 'ready'
   const [track, setTrack] = useState(() => ({ ready, since: now(), everReady: ready }))
-  // 状态变化当场记下时刻：等 effect 再记会先用旧时刻算一帧，把提示条闪出来。
+  // Record the time on the spot when the state changes: recording it in an effect would compute one frame with the old time and flash the banner.
   let current = track
   if (track.ready !== ready) {
     current = { ready, since: now(), everReady: track.everReady || ready }

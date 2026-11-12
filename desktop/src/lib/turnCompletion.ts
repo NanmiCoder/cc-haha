@@ -1,15 +1,15 @@
 import type { UIMessage } from '../types/chat'
 
 export type TurnCompletion = {
-  /** 这一轮最后一条消息的时间，也就是「这轮到此结束」的时刻。 */
+  /** Time of the turn's last message, i.e. when the turn ended. */
   completedAt: number
-  /** 用户提示词发出到该轮结束的耗时；起止时间不可信时缺省。 */
+  /** Time from the user prompt to the end of the turn; omitted when start or end is unreliable. */
   durationMs?: number
 }
 
 /**
- * 超过一天的「耗时」不是真实等待：历史里跨天的轮次多半是会话中断后
- * 又接上的，把 18 小时当成模型跑了 18 小时会误导人。
+ * A duration over a day is not a real wait: turns spanning days in history are usually
+ * sessions resumed after an interruption, and showing 18 hours as model run time misleads.
  */
 const MAX_PLAUSIBLE_TURN_MS = 24 * 60 * 60 * 1000
 
@@ -17,13 +17,13 @@ type OpenTurn = {
   startedAt: number
   completedAt: number
   lastAssistantTextId: string | null
-  /** 最后一条助手文本之后是否还有实质内容（有的话这轮不是以回复收尾的）。 */
+  /** Whether real content follows the last assistant text (if so, the turn did not end with a reply). */
   hasWorkAfterLastReply: boolean
 }
 
 function isTurnStart(message: UIMessage): boolean {
-  // pending 是队友会话的占位、optimisticQueued 是还没轮到发送的排队消息：
-  // 两者都还没开始跑，把它们当轮次起点会让上一轮被提前判定成「已完成」。
+  // pending is a teammate-session placeholder and optimisticQueued a queued message not yet sent:
+  // neither has started, so treating them as a turn start would mark the previous turn done too early.
   return (
     message.type === 'user_text' &&
     message.pending !== true &&
@@ -32,22 +32,22 @@ function isTurnStart(message: UIMessage): boolean {
 }
 
 /**
- * 这两种是挂在回合尾巴上的附加卡片，不是回合本身的进展：任务小结由下一次
- * 发送时补写，后台任务是脱离主回合跑的。它们跟在最终回复后面不妨碍这一轮
- * 已经答完。
+ * These are extra cards hanging off the end of a turn, not progress within it: the task
+ * summary is written on the next send, and background tasks run outside the main turn.
+ * Following the final reply, they do not stop the turn from counting as answered.
  */
 function isTrailingCard(message: UIMessage): boolean {
   return message.type === 'task_summary' || message.type === 'background_task'
 }
 
 /**
- * 算出每一轮的结束时刻，挂到该轮收尾的那条助手回复上。
+ * Compute each turn's end time and attach it to the assistant reply that closes the turn.
  *
- * 一轮 = 一条用户提示词到下一条用户提示词之间的全部消息。只有以助手回复收尾
- * 的轮次才算完成 —— 如果最后那条回复后面还跟着工具调用，说明助手说完话又接着
- * 干活了，「完成」两个字挂在半路上的一句过渡语下面既不对也很怪。
+ * A turn is every message from one user prompt to the next. Only turns that end with an
+ * assistant reply count as complete: if tool calls follow the last reply, the assistant
+ * kept working after speaking, and a "done" stamp under a mid-way transition line is wrong and odd.
  *
- * `turnActive` 为真时最后一轮不产出：它还在跑，此刻的「完成时间」是假的。
+ * When `turnActive` is true the last turn yields nothing: it is still running, so any "done time" now would be false.
  */
 export function buildTurnCompletionByMessageId(
   messages: UIMessage[],
@@ -70,7 +70,7 @@ export function buildTurnCompletionByMessageId(
       continue
     }
 
-    // 首条用户提示词之前的消息不属于任何一轮，没有起点也就没有耗时。
+    // Messages before the first user prompt belong to no turn; with no start there is no duration.
     if (!current) continue
     if (isTrailingCard(message)) continue
 

@@ -1,7 +1,8 @@
 import type { Host } from '../../core/types'
 import { hostStatusLine, networkName, type HostLink, type StatusTone } from './homeModel'
+import { plural } from '../../core/plural'
 
-/** 公网配对剩余天数不超过这个值，才在卡片上提醒（设计稿 B2「公网配对快到期」）。 */
+/** Only when remaining public pairing days are at most this value is the card reminded (design B2 "public pairing expiring soon"). */
 export const pairingWarnDays = 7
 
 const day = 86400000
@@ -9,30 +10,30 @@ const day = 86400000
 export type CardSegment = { text: string; tone?: 'attn' }
 
 export type ComputerCardView = {
-  /** 左侧方块：普通 / 离线变暗 / 授权失效（红底盾牌）。 */
+  /** Left square: normal / dimmed offline / auth expired (red shield). */
   tile: 'normal' | 'dim' | 'err'
-  /** 状态行最前面的标记：实心点、空心圈、小转圈。 */
+  /** Marker at the start of the status line: solid dot, hollow ring, small spinner. */
   lead: 'dot' | 'ring' | 'spinner'
   leadTone: StatusTone
-  /** 状态行文字；个别片段可以单独着色（配对提醒）。 */
+  /** Status line text; individual segments can be colored separately (pairing reminder). */
   text: CardSegment[]
-  /** 状态行整体文字色：平时灰，同步慢是琥珀，授权失效 / 同步失败是红。 */
+  /** Overall status line color: grey normally, amber when sync is slow, red when auth expired / sync failed. */
   textTone: 'ink3' | 'attn' | 'err'
-  /** 离线时电脑名也变灰。 */
+  /** The computer name also turns grey when offline. */
   dimName: boolean
-  /** 离线时展开的一句原因。 */
+  /** One-line reason expanded when offline. */
   detail?: string
-  /** 展开后的按钮，从左到右。 */
+  /** Buttons when expanded, left to right. */
   buttons: ('switch' | 'reconnect')[]
-  /** 右侧：箭头（进电脑设置）或「重新配对」胶囊。 */
+  /** Right side: chevron (to computer settings) or "Pair again" capsule. */
   trailing: 'chevron' | 'repair'
 }
 
-export const offlineDetail = '电脑可能睡着了，或者 cc-haha 没在运行。手机没法远程唤醒它。'
+export const offlineDetail = 'The computer may be asleep, or cc-haha is not running. The phone cannot wake it remotely.'
 
 /**
- * 公网配对的到期提醒。只有公网、读到了到期时间、且剩余不超过 7 天才返回文案；
- * 局域网没有到期，读不到到期时间时不编造。
+ * Expiry reminder for public pairing. Returns text only when public, the expiry was read, and at most 7 days remain; 
+ * LAN has no expiry, and nothing is made up when the expiry cannot be read.
  */
 export function pairingNote(
   host: Pick<Host, 'auth'>,
@@ -43,12 +44,12 @@ export function pairingNote(
     return null
   const days = Math.max(0, Math.ceil((expiresAt - now) / day))
   if (days > pairingWarnDays) return null
-  return days < 1 ? '配对不足 1 天' : `配对还剩 ${days} 天`
+  return days < 1 ? 'Pairing expires in less than 1 day' : `Pairing expires in ${plural(days, 'day')}`
 }
 
 /**
- * 首页电脑卡的展示状态（设计稿 B2）：连接状态 + 网络 + 默认模型 + 配对到期 → 文案、色调与可点的操作。
- * `model` 读不到就是 undefined，状态行里直接省掉这一段。
+ * Display state of the home computer card (design B2): connection state + network + default model + pairing expiry → text, tone and tappable actions.
+ * `model` undefined when unavailable, and the status line simply omits this segment.
  */
 export function computerCardView(input: {
   link: HostLink
@@ -70,10 +71,10 @@ export function computerCardView(input: {
   switch (link) {
     case 'online': {
       const note = pairingNote(host, input.expiresAt, now)
-      const head = `在线 · ${networkName(host)}`
+      const head = `Online · ${networkName(host)}`
       const text: CardSegment[] = note
-        ? [{ text: `${head} · ` }, { text: note, tone: 'attn' }]
-        : [{ text: input.model ? `${head} · 新任务用 ${input.model}` : head }]
+        ? [{ text: `${head} · ` }, { text: note.replace(/^Pairing/, 'pairing'), tone: 'attn' }]
+        : [{ text: input.model ? `${head} · new tasks use ${input.model}` : head }]
       return { ...base, leadTone: 'ok', text, textTone: 'ink3' }
     }
     case 'slow':
@@ -102,7 +103,7 @@ export function computerCardView(input: {
         ...base,
         tile: 'err',
         leadTone: 'err',
-        text: [{ text: '授权已失效 · 要重新扫码' }],
+        text: [{ text: 'Authorization expired · scan again' }],
         textTone: 'err',
         trailing: 'repair',
       }
@@ -119,8 +120,8 @@ export function computerCardView(input: {
   }
 }
 
-/** 读屏文案：电脑名 + 状态行 + 去向。 */
+/** Screen reader text: computer name + status line + destination. */
 export function computerCardLabel(name: string, view: ComputerCardView) {
   const status = view.text.map((part) => part.text).join('')
-  return `${name}，${status}，打开电脑设置`
+  return `${name}, ${status}, open computer settings`
 }

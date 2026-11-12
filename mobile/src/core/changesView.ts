@@ -6,8 +6,9 @@ import {
   type RewindMode,
 } from './operations'
 import type { HistoryEntry } from './types'
+import { plural } from './plural'
 
-/** 与 kit 的 FileBadge 一致：M 修改、A 新增、D 删除、R 重命名、? 未跟踪。 */
+/** Consistent with kit FileBadge: M modified, A added, D deleted, R renamed, ? untracked. */
 export type BadgeStatus = 'M' | 'A' | 'D' | 'R' | '?'
 
 export const turnNumber = (checkpoint: Checkpoint) =>
@@ -29,7 +30,7 @@ export function checkpointsNewestFirst(checkpoints: readonly Checkpoint[]) {
   )
 }
 
-/** 同一检查点的文件、统计都没变时，按文件缓存的差异仍然可用。 */
+/** When files and stats of the same checkpoint are unchanged, per-file cached diffs remain usable. */
 export const checkpointSignature = (checkpoint: Checkpoint) =>
   [
     checkpoint.target.targetUserMessageId,
@@ -38,7 +39,7 @@ export const checkpointSignature = (checkpoint: Checkpoint) =>
     checkpoint.code.filesChanged.join('\u0000'),
   ].join('|')
 
-/** `src/core/a.ts` → 名字 `a.ts`、目录 `src/core/`（目录保留结尾斜杠）。 */
+/** `src/core/a.ts` → Name `a.ts`, directory `src/core/` (directory keeps the trailing slash). */
 export function splitPath(path: string) {
   const normalized = path.replace(/\\/g, '/')
   const index = normalized.replace(/\/+$/, '').lastIndexOf('/')
@@ -46,7 +47,7 @@ export function splitPath(path: string) {
   return { name: normalized.slice(index + 1), dir: normalized.slice(0, index + 1) }
 }
 
-/** 文件预览副标题用的目录，不带结尾斜杠。 */
+/** Directory for the file preview subtitle, without trailing slash. */
 export const parentDir = (path: string) => splitPath(path).dir.replace(/\/$/, '')
 
 export function diffTotals(lines: readonly DiffLine[]) {
@@ -59,7 +60,7 @@ export function diffTotals(lines: readonly DiffLine[]) {
   return { added, removed }
 }
 
-/** 文件头（diff --git / --- / +++ / Index:）在页面标题里已有，只保留 hunk 起的内容。 */
+/** File headers (diff --git / --- / +++ / Index:) are already in the page title; keep only content from the hunk on. */
 export function visibleDiffLines(lines: readonly DiffLine[]) {
   const first = lines.findIndex((line) => line.kind === 'hunk')
   const body = first < 0 ? lines.filter((line) => line.kind !== 'meta') : lines.slice(first)
@@ -68,7 +69,7 @@ export function visibleDiffLines(lines: readonly DiffLine[]) {
   return body.slice(0, end)
 }
 
-/** 检查点只给文件列表；新增、删除、重命名从这份差异本身读出。 */
+/** The checkpoint only gives the file list; added, deleted and renamed are read from the diff itself. */
 export function diffBadge(diff: string | undefined): BadgeStatus {
   if (!diff) return 'M'
   if (/^rename (from|to) /m.test(diff)) return 'R'
@@ -98,17 +99,17 @@ export const workspaceBadge = (status: string): BadgeStatus =>
   workspaceBadges[status] ?? 'M'
 
 const workspaceLabels: Record<string, string> = {
-  modified: '已修改',
-  type_changed: '类型改变',
-  added: '新增',
-  copied: '复制',
-  deleted: '已删除',
-  renamed: '已重命名',
-  untracked: '未跟踪',
-  unknown: '有改动',
+  modified: 'Modified',
+  type_changed: 'Type changed',
+  added: 'Added',
+  copied: 'Copy',
+  deleted: 'Deleted',
+  renamed: 'Renamed',
+  untracked: 'Untracked',
+  unknown: 'Changed',
 }
 export const workspaceStatusLabel = (status: string) =>
-  workspaceLabels[status] ?? '有改动'
+  workspaceLabels[status] ?? 'Changed'
 
 export function formatBytes(size: number | undefined) {
   if (size === undefined || !Number.isFinite(size) || size < 0) return ''
@@ -118,7 +119,7 @@ export function formatBytes(size: number | undefined) {
   return `${mb >= 100 ? Math.round(mb) : mb.toFixed(1).replace(/\.0$/, '')} MB`
 }
 
-/** 面包屑：根（项目名）+ 每一级目录，每段都带可跳转的相对路径。 */
+/** Breadcrumbs: root (project name) + each directory level, each segment with a navigable relative path. */
 export function breadcrumbs(root: string, path: string) {
   const parts = path.split('/').filter(Boolean)
   return [
@@ -132,7 +133,7 @@ export function breadcrumbs(root: string, path: string) {
 
 const pad = (value: number) => String(value).padStart(2, '0')
 
-/** 今天只显示 HH:mm，更早带上日期；最新一轮加“最新”。 */
+/** Today shows only HH:mm, earlier adds the date; the latest turn adds "Latest". */
 export function turnTimeLabel(
   startedAt: number | undefined,
   latest: boolean,
@@ -147,14 +148,14 @@ export function turnTimeLabel(
       date.getMonth() === now.getMonth() &&
       date.getDate() === now.getDate()
     parts.push(
-      sameDay ? time : `${date.getMonth() + 1}月${date.getDate()}日 ${time}`
+      sameDay ? time : `${date.getMonth() + 1}/${date.getDate()} ${time}`
     )
   }
-  if (latest) parts.push('最新')
+  if (latest) parts.push('Latest')
   return parts.join(' · ')
 }
 
-/** 这一轮开头那条用户消息的文字，压成一行；没有文字（只有图片等）时返回 undefined。 */
+/** Text of the user message that starts this turn, collapsed into one line; returns undefined when there is no text (only images etc). */
 export function checkpointPrompt(
   entries: readonly HistoryEntry[],
   targetUserMessageId: string
@@ -171,16 +172,16 @@ export function checkpointPrompt(
 }
 
 const knownReasons: [RegExp, (match: RegExpExecArray) => string][] = [
-  [/^Some changed files cannot be compared as UTF-8 text\.?$/, () => '有的文件不是 UTF-8 文本，无法比较。'],
-  [/^No transcript file changes were recorded for this turn\.?$/, () => '这一轮没有记录到文件改动。'],
-  [/^No file checkpoints were recorded for this session\.?$/, () => '这个会话没有记录文件检查点。'],
-  [/^No file checkpoint is available for the selected message\.?$/, () => '这一轮没有可用的文件检查点。'],
-  [/^The checkpoint could not be prepared safely\.?$/, () => '检查点无法安全地准备好。'],
-  [/^Recorded file history is incomplete for: (.+)$/, (m) => `这些文件的历史记录不完整：${m[1]}`],
-  [/^Recorded restore points are incomplete for: (.+)$/, (m) => `这些文件的恢复点不完整：${m[1]}`],
+  [/^Some changed files cannot be compared as UTF-8 text\.?$/, () => 'Some files are not UTF-8 text and cannot be compared.'],
+  [/^No transcript file changes were recorded for this turn\.?$/, () => 'No file changes were recorded in this turn.'],
+  [/^No file checkpoints were recorded for this session\.?$/, () => 'This session has no file checkpoints recorded.'],
+  [/^No file checkpoint is available for the selected message\.?$/, () => 'No usable file checkpoint for this turn.'],
+  [/^The checkpoint could not be prepared safely\.?$/, () => 'The checkpoint could not be prepared safely.'],
+  [/^Recorded file history is incomplete for: (.+)$/, (m) => `History for these files is incomplete: ${m[1]}`],
+  [/^Recorded restore points are incomplete for: (.+)$/, (m) => `Restore points for these files are incomplete: ${m[1]}`],
 ]
 
-/** 电脑返回的检查点原因翻成中文；未知原因原样保留。 */
+/** Translate checkpoint reasons from the computer into readable text; unknown reasons are kept as is. */
 export function translateReason(reason: string | undefined) {
   const text = reason?.trim()
   if (!text) return undefined
@@ -202,14 +203,14 @@ const fileCount = (checkpoint: Checkpoint) => checkpoint.code.filesChanged.lengt
 const messageCount = (checkpoint: Checkpoint) =>
   checkpoint.conversation?.messagesRemoved ?? 0
 
-/** 回退范围三选一；没有可恢复文件时只留“只回退对话”，代码不可恢复时禁用前两项。 */
+/** Choose one of three rewind scopes; with no recoverable files only "Rewind conversation only" remains, and when code is unrecoverable the first two are disabled. */
 export function rewindChoices(preview: Checkpoint): RewindChoice[] {
   const files = fileCount(preview)
   const messages = messageCount(preview)
   const conversation: RewindChoice = {
     mode: 'conversation',
-    title: '只回退对话',
-    description: `删掉之后的 ${messages} 条消息，文件不动`,
+    title: 'Rewind conversation only',
+    description: `Delete the ${plural(messages, 'message')} after, files untouched`,
     disabled: false,
   }
   if (!files) return [conversation]
@@ -217,14 +218,14 @@ export function rewindChoices(preview: Checkpoint): RewindChoice[] {
   return [
     {
       mode: 'both',
-      title: '代码和对话一起',
-      description: `恢复 ${files} 个文件，删掉之后的 ${messages} 条消息`,
+      title: 'Code and conversation',
+      description: `Restore ${plural(files, 'file')}, delete the ${plural(messages, 'message')} after`,
       disabled,
     },
     {
       mode: 'code',
-      title: '只回退代码',
-      description: `恢复 ${files} 个文件，聊天记录留着`,
+      title: 'Rewind code only',
+      description: `Restore ${plural(files, 'file')}, keep chat history`,
       disabled,
     },
     conversation,
@@ -234,29 +235,29 @@ export function rewindChoices(preview: Checkpoint): RewindChoice[] {
 export const defaultRewindMode = (preview: Checkpoint): RewindMode =>
   fileCount(preview) && canRestoreCode(preview) ? 'both' : 'conversation'
 
-/** 所选范围下需要提前说清楚的风险。 */
+/** Risks under the chosen scope that must be stated upfront. */
 export function rewindRisks(preview: Checkpoint, mode: RewindMode) {
   const files = fileCount(preview)
   const risks: string[] = []
   if (!files) {
-    risks.push('这一轮没有可恢复的文件，只能回退对话。')
+    risks.push('No recoverable files in this turn; only the conversation can be rewound.')
     return risks
   }
   if (!canRestoreCode(preview)) {
     const reason = translateReason(preview.code.reason)
     risks.push(
-      `文件检查点不完整，只能回退对话。${reason ? reason : ''}`
+      `File checkpoint is incomplete; only the conversation can be rewound.${reason ? ` ${reason}` : ''}`
     )
     return risks
   }
   if (mode === 'conversation') return risks
   risks.push(
-    `恢复代码会覆盖这 ${files} 个文件在检查点之后的修改。你在电脑上也在改的话，先存好。`
+    `Restoring code overwrites changes to ${files === 1 ? 'this file' : `these ${files} files`} after the checkpoint. If you are also editing on the computer, save first.`
   )
   const sources = preview.unverifiedChangeSources ?? []
   if (sources.length)
     risks.push(
-      `这些工具的改动未被完整验证：${sources.join('、')}。回退只恢复检查点中可恢复的文件，其他改动可能保留。`
+      `Changes by these tools were not fully verified: ${sources.join(', ')}. Rewind only restores files recoverable from the checkpoint; other changes may remain.`
     )
   return risks
 }
@@ -267,7 +268,7 @@ export function isImagePath(path: string) {
   return extension ? imageExtensions.has(extension) : false
 }
 
-/** 上一个 / 下一个文件；到头不循环。 */
+/** Previous / next file; no wraparound at the ends. */
 export function stepPath(paths: readonly string[], current: string, delta: number) {
   const index = paths.indexOf(current)
   if (index < 0) return undefined
@@ -282,54 +283,54 @@ export type PreviewFile = {
   error?: string
 }
 
-/** 无法在手机上显示时的说明；能显示时返回 null。 */
+/** Explanation when it cannot be shown on the phone; returns null when it can. */
 export function previewFallback(file: PreviewFile) {
   if (file.state === 'ok') {
     if (file.previewType === 'image' && file.dataUrl) return null
     if (file.content !== undefined && file.previewType !== 'image') return null
     return {
-      title: '请在电脑上打开',
-      detail: '当前 App 支持文本、图片和代码差异预览；此文件格式尚未接入。',
+      title: 'Open on the computer',
+      detail: 'This app supports previewing text, images and code diffs; this file format is not supported yet.',
     }
   }
   const named: Record<string, string> = {
-    binary: '二进制文件',
-    too_large: '文件过大',
-    missing: '文件不存在',
+    binary: 'binary file',
+    too_large: 'file too large',
+    missing: 'file does not exist',
   }
   return {
-    title: '请在电脑上打开',
+    title: 'Open on the computer',
     detail:
       file.error ||
-      `此文件暂不支持预览 (${named[file.state] ?? file.state})`,
+      `This file cannot be previewed yet (${named[file.state] ?? file.state})`,
   }
 }
 
-/** 工作区差异读取失败时的说明。 */
+/** Explanation when reading the workspace diff fails. */
 export function workspaceDiffProblem(result: { state: string; error?: string }) {
   if (result.state === 'ok') return undefined
-  if (result.state === 'not_git_repo') return '这个工作区没有 Git 仓库，无法比较改动。'
-  if (result.state === 'missing') return '这个文件已经不在工作区里了。'
-  return result.error || '暂时无法比较此文件。'
+  if (result.state === 'not_git_repo') return 'This workspace has no Git repository, so changes cannot be compared.'
+  if (result.state === 'missing') return 'This file is no longer in the workspace.'
+  return result.error || 'Cannot compare this file right now.'
 }
 
 export const errorMessage = (error: unknown) =>
-  error instanceof Error && error.message ? error.message : '操作未完成，请重试'
+  error instanceof Error && error.message ? error.message : 'Action did not complete, please retry'
 
-/** 项目名：仓库名优先，否则用工作目录的最后一段。 */
+/** Project name: prefer the repo name, otherwise the last segment of the working directory. */
 export function projectName(status: { repoName?: string | null; workDir?: string } | null) {
   if (status?.repoName) return status.repoName
   const dir = status?.workDir?.replace(/[\\/]+$/, '')
   return dir ? (dir.split(/[\\/]/).pop() ?? '') : ''
 }
 
-/** 会话里变更卡的读屏文案：`3 个文件，新增 18 行，删除 4 行`；没有增删统计时只说文件数。 */
+/** Screen reader text for the in-session changes card: `3 files, 18 lines added, 4 lines deleted`; without add/delete stats only the file count. */
 export function changesCardLabel(files: number, insertions: number, deletions: number) {
   return [
-    `${files} 个文件`,
-    insertions ? `新增 ${insertions} 行` : '',
-    deletions ? `删除 ${deletions} 行` : '',
+    plural(files, 'file'),
+    insertions ? `${plural(insertions, 'line')} added` : '',
+    deletions ? `${plural(deletions, 'line')} deleted` : '',
   ]
     .filter(Boolean)
-    .join('，')
+    .join(', ')
 }

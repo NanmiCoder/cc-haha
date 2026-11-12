@@ -15,8 +15,8 @@ type SearchResponse = { state?: string; entries?: DirEntry[]; truncated?: boolea
 const root = (sessionId: string) => `/api/sessions/${encodeURIComponent(sessionId)}/workspace`
 
 /**
- * 工作区目录树：按需读取，展开哪个文件夹才读哪个，读过的留在内存里。
- * 根目录在 enabled 变为 true 时读一次；出错的目录点按重试。
+ * Workspace directory tree: read on demand, only the folder being expanded is read, and read ones stay in memory.
+ * The root is read once when enabled becomes true; tap an errored directory to retry.
  */
 export function useWorkspaceTree(client: ApiClient | null, sessionId: string, enabled: boolean) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({})
@@ -66,7 +66,7 @@ export function useWorkspaceTree(client: ApiClient | null, sessionId: string, en
   return { dirs, open, toggle, retry: load }
 }
 
-/** 项目内按文件名搜索（电脑端的 workspace/search，最多 200 条）；停手 250ms 才发请求。 */
+/** Search by file name within the project (desktop workspace/search, at most 200 results); the request is sent after 250ms idle. */
 export function useFileSearch(
   client: ApiClient | null,
   sessionId: string,
@@ -92,7 +92,7 @@ export function useFileSearch(
           setResult(
             response.state === 'ok' || Array.isArray(response.entries)
               ? { query, rows: searchRows(response.entries ?? []), truncated: response.truncated }
-              : { query, error: response.error || '暂时无法搜索' }
+              : { query, error: response.error || 'Search unavailable right now' }
           )
         })
         .catch((error) => {

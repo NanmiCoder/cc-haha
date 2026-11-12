@@ -195,15 +195,15 @@ describe('active sponsor providers', () => {
     expect(dialog.getByDisplayValue('https://agent.aruhub.com')).toBeInTheDocument()
     expect(dialog.getAllByDisplayValue('claude-opus-5-5')).toHaveLength(2)
     expect(dialog.getAllByDisplayValue('claude-sonnet-5-5')).toHaveLength(2)
-    const offer = dialog.getByRole('button', { name: /注册即送 1 美元全模型通用额度/ })
+    const offer = dialog.getByRole('button', { name: /receive US\$1 of credit usable on any model/ })
     fireEvent.click(offer)
     expect(open).toHaveBeenCalledWith('https://aruhub.com/sign-up?aff=Z54g')
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    fireEvent.click(dialog.getByRole('button', { name: /^Get API Key/ }))
     expect(open).toHaveBeenCalledTimes(2)
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-aruhub-key' } })
-    expect(dialog.getByText(/注册即送 1 美元全模型通用额度/)).toBeInTheDocument()
+    expect(dialog.getByText(/receive US\$1 of credit usable on any model/)).toBeInTheDocument()
     fireEvent.change(dialog.getByDisplayValue('https://agent.aruhub.com'), { target: { value: 'https://other.invalid' } })
-    expect(dialog.queryByText(/注册即送 1 美元全模型通用额度/)).not.toBeInTheDocument()
+    expect(dialog.queryByText(/receive US\$1 of credit usable on any model/)).not.toBeInTheDocument()
     fireEvent.change(dialog.getByDisplayValue('https://other.invalid'), { target: { value: 'https://agent.aruhub.com' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -267,7 +267,7 @@ describe('active sponsor providers', () => {
     expect(dialog.getByDisplayValue('claude-sonnet-5-5')).toBeInTheDocument()
     expect(dialog.getByDisplayValue('claude-haiku-5-5')).toBeInTheDocument()
     expect(dialog.getByRole('button', { name: 'Fetch models' })).toBeDisabled()
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    fireEvent.click(dialog.getByRole('button', { name: /^Get API Key/ }))
     expect(open).toHaveBeenCalledWith('https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cchaha')
 
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-modelflare-key' } })
@@ -466,15 +466,15 @@ describe('retired sponsor providers', () => {
   })
 
   it('labels the custom preset in the active locale and prefills that label as the name', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     render(<ProviderSettings />)
     await screen.findByTestId(`provider-${savedProviders[0]!.id}`)
 
-    fireEvent.click(screen.getByRole('button', { name: /添加模型/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
     const dialog = within(screen.getByRole('dialog'))
     expect(dialog.queryByRole('button', { name: 'Custom' })).not.toBeInTheDocument()
-    fireEvent.click(dialog.getByRole('button', { name: '自定义模型 API' }))
-    expect(dialog.getByLabelText(/配置名称/)).toHaveValue('自定义模型 API')
+    fireEvent.click(dialog.getByRole('button', { name: 'Custom API' }))
+    expect(dialog.getByLabelText(/Configuration name/)).toHaveValue('Custom API')
   })
 
   it.each(savedProviders)('edits and saves an existing $presetId provider without losing its connection', async (provider) => {
@@ -493,7 +493,7 @@ describe('retired sponsor providers', () => {
 
     const dialog = within(screen.getByRole('dialog'))
     expect(dialog.getByDisplayValue(provider.baseUrl)).toBeInTheDocument()
-    expect(dialog.queryByRole('button', { name: /Get API Key/ })).not.toBeInTheDocument()
+    expect(dialog.queryByRole('button', { name: /^Get API Key/ })).not.toBeInTheDocument()
     fireEvent.change(dialog.getByDisplayValue(provider.name), { target: { value: `${provider.name} edited` } })
     fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
 
@@ -814,7 +814,7 @@ describe('OpenCode Go provider', () => {
     expect(fetch).toBeDisabled()
     fireEvent.change(key, { target: { value: 'fake-opencode-key' } })
     expect(fetch).toBeEnabled()
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    fireEvent.click(dialog.getByRole('button', { name: /^Get API Key/ }))
     expect(open).toHaveBeenCalledWith('https://opencode.ai/go?ref=3RK0WVVCGD')
     expect(screen.queryByText(/CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1/)).not.toBeInTheDocument()
     fireEvent.focus(dialog.getByRole('button', { name: 'Disable experimental beta headers' }))
@@ -987,7 +987,7 @@ describe('OpenRouter provider', () => {
     const dialog = within(screen.getByRole('dialog'))
     fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
 
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    fireEvent.click(dialog.getByRole('button', { name: /^Get API Key/ }))
     expect(open).toHaveBeenCalledWith('https://openrouter.ai/settings/keys')
   })
 })

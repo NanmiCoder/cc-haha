@@ -1,5 +1,5 @@
 /**
- * Pure projection of transcript JSONL records into trajectory (轨迹) rows.
+ * Pure projection of transcript JSONL records into trajectory rows.
  *
  * Input is one page of records in file order with their byte ranges; output
  * is the compact ledger described in `trajectoryTypes.ts`. Nothing here does

@@ -1458,7 +1458,7 @@ describe('Electron pet window service', () => {
 
     const selection = controller.showContextMenu(
       petWindow as never,
-      '关闭宠物',
+      'Close pet',
       menuFactory as never,
     )
     clickClose?.()
@@ -1466,7 +1466,7 @@ describe('Electron pet window service', () => {
 
     await expect(selection).resolves.toBe(true)
     expect(menuFactory.buildFromTemplate).toHaveBeenCalledWith([{
-      label: '关闭宠物',
+      label: 'Close pet',
       click: expect.any(Function),
     }])
     expect(popup).toHaveBeenCalledWith({

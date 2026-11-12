@@ -43,8 +43,8 @@ const bunTarget = mapTargetTripleToBun(targetTriple)
 // Required native checks must never fetch executables from the public network.
 await assertPreparedCloudflared({ desktopRoot, targetTriple })
 
-// 编译前先扫一遍 src/ 把所有缺失的 ant-internal 模块在磁盘上 stub 出来。
-// 见 desktop/scripts/scan-missing-imports.ts。
+// Before compiling, scan src/ and stub every missing ant-internal module on disk.
+// See desktop/scripts/scan-missing-imports.ts.
 console.log('[build-sidecars] scanning for missing imports...')
 const scanProc = Bun.spawn(
   ['bun', 'run', path.join(desktopRoot, 'scripts/scan-missing-imports.ts')],
@@ -60,9 +60,9 @@ await stageRipgrepLicenses(binariesDir)
 await stageHostRipgrepForOfflineBuild()
 await buildNativeAgentDesktop({ repoRoot, binariesDir, targetTriple })
 
-// 单一合并 sidecar：server / cli 共享一份 bun runtime + 共享依赖代码。
-// 调用方（Electron sidecar manager / legacy Tauri host / conversationService）
-// 通过第一个 positional 参数选择 'server' 或 'cli' 模式，详见 desktop/sidecars/claude-sidecar.ts。
+// One merged sidecar: server / cli share one bun runtime and shared dependency code.
+// Callers (Electron sidecar manager / legacy Tauri host / conversationService)
+// pick 'server' or 'cli' mode with the first positional argument; see desktop/sidecars/claude-sidecar.ts.
 await compileExecutable({
   entrypoint: path.join(desktopRoot, 'sidecars/claude-sidecar.ts'),
   outfileBase: path.join(binariesDir, `claude-sidecar-${targetTriple}`),
@@ -208,16 +208,16 @@ async function compileExecutable({
   const result = await Bun.build({
     entrypoints: [entrypoint],
     features: ['TRANSCRIPT_CLASSIFIER'],
-    // minify whitespace + identifiers + dead-code 大概能省 5-15% 的二进制大小，
-    // 代价是 stack trace 里的函数名变成短名 —— 终端用户场景可接受。
+    // minify whitespace + identifiers + dead-code saves roughly 5-15% of binary size;
+    // the cost is short function names in stack traces, which is fine for end users.
     minify: { whitespace: true, identifiers: true, syntax: true },
     sourcemap: 'none',
     target: 'bun',
-    // 运行时可选 npm 包保持 external，避免将原生模块嵌入 sidecar。
-    // sharp 由 desktop/package.json 声明并随 Electron 应用分发；其他
-    // provider/telemetry 模块在未安装时由 try/catch 或 feature() gate 兜底。
+    // Optional runtime npm packages stay external so native modules are not embedded in the sidecar.
+    // sharp is declared in desktop/package.json and shipped with the Electron app; other
+    // provider/telemetry modules fall back to try/catch or a feature() gate when not installed.
     external: [
-      // OpenTelemetry exporters（开 OTEL_* env 时才加载）
+      // OpenTelemetry exporters (loaded only when OTEL_* env is set)
       '@opentelemetry/exporter-trace-otlp-grpc',
       '@opentelemetry/exporter-trace-otlp-http',
       '@opentelemetry/exporter-trace-otlp-proto',
@@ -228,14 +228,14 @@ async function compileExecutable({
       '@opentelemetry/exporter-metrics-otlp-http',
       '@opentelemetry/exporter-metrics-otlp-proto',
       '@opentelemetry/exporter-prometheus',
-      // 替代 LLM provider —— 默认不用，用户自装
+      // Alternative LLM providers: unused by default, installed by the user
       '@aws-sdk/client-bedrock',
       '@aws-sdk/client-sts',
       '@anthropic-ai/bedrock-sdk',
       '@anthropic-ai/foundry-sdk',
       '@anthropic-ai/vertex-sdk',
       '@azure/identity',
-      // ant-internal / 可选工具
+      // ant-internal / optional tools
       '@anthropic-ai/mcpb',
       'fflate',
       'sharp',

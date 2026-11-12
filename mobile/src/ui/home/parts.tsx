@@ -5,7 +5,7 @@ import { Dot, Mono, useColors } from '../kit'
 import { elapsedLabel } from '../../core/dashboard'
 import { highlightParts, type StatusTone } from './homeModel'
 
-/** 每 intervalMs 刷新一次的当前时间；只让需要走秒的小组件重绘。 */
+/** Current time refreshed every intervalMs; only small components that need ticking seconds rerender. */
 export function useNow(intervalMs: number, enabled = true) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -30,13 +30,13 @@ export function useToneColor() {
             : colors.faint
 }
 
-/** 状态圆点：离线是空心圈，其他是实心点。 */
+/** Status dot: hollow ring when offline, solid dot otherwise. */
 export function StatusDot({ tone, size = 7 }: { tone: StatusTone; size?: number }) {
   const color = useToneColor()(tone)
   return <Dot color={color} size={size} ring={tone === 'faint'} />
 }
 
-/** 不带呼吸光圈的“等你”点（搜索结果、离线快照里用，它们不是实时状态）。 */
+/** A "waiting" dot without the breathing halo (used in search results and offline snapshots, which are not live states). */
 export function PlainDot() {
   const colors = useColors()
   return (
@@ -46,7 +46,7 @@ export function PlainDot() {
   )
 }
 
-/** 卡片式列表容器：圆角 18，行间发丝线缩进到标题起点。 */
+/** Card-style list container: radius 18, hairlines between rows inset to where the title starts. */
 export function RowGroup({
   children,
   style,
@@ -67,7 +67,7 @@ export function RowGroup({
   )
 }
 
-/** 任务行：状态标记 · 标题/副行 · 右侧时间。 */
+/** Task row: status marker · title/subline · time on the right. */
 export function TaskRow({
   glyph,
   title,
@@ -139,7 +139,7 @@ export function TaskRow({
   )
 }
 
-/** 右侧普通时间（相对时间），可带“未查看”蓝点。 */
+/** Plain time on the right (relative), optionally with an "unviewed" blue dot. */
 export function TimeLabel({ text, unread }: { text: string; unread?: boolean }) {
   const colors = useColors()
   return (
@@ -150,7 +150,7 @@ export function TimeLabel({ text, unread }: { text: string; unread?: boolean }) 
   )
 }
 
-/** 从 startedAt 每秒走的时长（m:ss / h:mm:ss）。 */
+/** Duration ticking every second from startedAt (m:ss / h:mm:ss). */
 export function Elapsed({ since, style }: { since: number; style?: StyleProp<TextStyle> }) {
   const colors = useColors()
   const now = useNow(1000)
@@ -161,7 +161,7 @@ export function Elapsed({ since, style }: { since: number; style?: StyleProp<Tex
   )
 }
 
-/** 标题里的关键词高亮（mark 色底）。 */
+/** Keyword highlight in the title (mark background). */
 export function Highlight({ text, query }: { text: string; query: string }) {
   const colors = useColors()
   return (

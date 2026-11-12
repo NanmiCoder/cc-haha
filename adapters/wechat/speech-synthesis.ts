@@ -150,7 +150,7 @@ export function prepareWechatSpeechText(text: string): string {
 }
 
 function aborted(): Error {
-  const error = new Error('语音合成已取消。')
+  const error = new Error('Speech synthesis was cancelled.')
   error.name = 'AbortError'
   return error
 }
@@ -177,10 +177,10 @@ export function runWechatSpeechProcess(
       child.kill()
     }
     const onAbort = () => stop(aborted())
-    const timeout = setTimeout(() => stop(new Error('语音合成超时，请缩短回复后重试。')), request.timeoutMs)
+    const timeout = setTimeout(() => stop(new Error('Speech synthesis timed out; shorten the reply and try again.')), request.timeoutMs)
     const sizeCheck = setInterval(() => {
       void fs.stat(request.outputPath).then(stat => {
-        if (stat.size > WECHAT_SPEECH_MAX_BYTES) stop(new Error('生成的音频超过 10 MiB 限制。'))
+        if (stat.size > WECHAT_SPEECH_MAX_BYTES) stop(new Error('Generated audio exceeds the 10 MiB limit.'))
       }).catch(() => {})
     }, 250)
     const finish = (error?: Error) => {
@@ -192,26 +192,26 @@ export function runWechatSpeechProcess(
       if (error) reject(error)
       else resolve()
     }
-    child.on('error', () => finish(failure ?? new Error('无法启动 Windows 语音合成，请检查系统 PowerShell 和语音组件。')))
+    child.on('error', () => finish(failure ?? new Error('Could not start Windows speech synthesis; check the system PowerShell and speech components.')))
     child.stderr?.on('data', (chunk: Buffer) => {
       // Do not expose child diagnostics: some engines include the input text.
       outputBytes += chunk.length
       if (outputBytes <= 16 * 1024) diagnostic += chunk.toString('utf8')
-      if (outputBytes > 16 * 1024) stop(new Error('语音合成进程输出异常。'))
+      if (outputBytes > 16 * 1024) stop(new Error('Speech synthesis process produced abnormal output.'))
     })
     child.on('close', code => {
       const message = diagnostic.includes('CC_HAHA_SPEECH_ERROR:VOICE_NOT_FOUND')
-        ? '所选音色已不可用，请发送 /voice list 重新选择，或 /voice select auto 恢复自动。'
+        ? 'The selected voice is no longer available. Send /voice list to choose again, or /voice select auto to restore automatic.'
         : diagnostic.includes('CC_HAHA_SPEECH_ERROR:NO_CHINESE_VOICE')
-        ? '未安装中文语音包，请在 Windows 的语言和语音设置中安装中文语音后重试。'
+        ? 'No Chinese voice pack installed. Install a Chinese voice in Windows language and speech settings, then try again.'
         : diagnostic.includes('CC_HAHA_SPEECH_ERROR:NO_VOICE')
-          ? '未安装可用的 Windows 语音包，请在系统语言和语音设置中安装语音包。'
+          ? 'No usable Windows voice pack installed. Install one in the system language and speech settings.'
           : diagnostic.includes('CC_HAHA_SPEECH_ERROR:TOO_LARGE')
-            ? '生成的音频超过 10 MiB 限制。'
-            : 'Windows 语音合成失败，请检查系统语音组件或配置可用的 PowerShell 7。'
+            ? 'Generated audio exceeds the 10 MiB limit.'
+            : 'Windows speech synthesis failed. Check the system speech components or configure an available PowerShell 7.'
       finish(failure ?? (code === 0 ? undefined : new Error(message)))
     })
-    child.stdin?.on('error', () => stop(new Error('无法向语音合成进程传递文本。')))
+    child.stdin?.on('error', () => stop(new Error('Could not pass text to the speech synthesis process.')))
     request.signal?.addEventListener('abort', onAbort, { once: true })
     if (request.signal?.aborted) onAbort()
     child.stdin?.end(request.input, 'utf8')
@@ -221,12 +221,12 @@ export function runWechatSpeechProcess(
 export async function synthesizeWechatSpeech(text: string, options: WechatSpeechOptions = {}): Promise<WechatSpeechResult> {
   if (options.signal?.aborted) throw aborted()
   if ((options.platform ?? process.platform) !== 'win32') {
-    throw new Error('当前本地语音合成仅支持 Windows；文字回复仍可正常使用。')
+    throw new Error('Local speech synthesis is currently Windows-only; text replies still work normally.')
   }
   const cleaned = prepareWechatSpeechText(text)
-  if (!cleaned) throw new Error('没有可朗读的文字；代码块不会转换为语音。')
+  if (!cleaned) throw new Error('No text to read aloud; code blocks are not converted to speech.')
   if (Array.from(cleaned).length > WECHAT_SPEECH_MAX_CHARACTERS) {
-    throw new Error('语音回复最多支持 2000 字，请先生成较短的摘要。')
+    throw new Error('Voice replies support at most 2000 characters; generate a shorter summary first.')
   }
   const windowsPowerShell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   const useWinRt = Boolean(options.voiceId) || /[\u3400-\u9fff]/u.test(cleaned)
@@ -252,12 +252,12 @@ export async function synthesizeWechatSpeech(text: string, options: WechatSpeech
     const file = await fs.open(outputPath, 'r')
     try {
       const stat = await file.stat()
-      if (!stat.isFile() || stat.size < 44) throw new Error('语音合成未生成有效音频。')
-      if (stat.size > WECHAT_SPEECH_MAX_BYTES) throw new Error('生成的音频超过 10 MiB 限制。')
+      if (!stat.isFile() || stat.size < 44) throw new Error('Speech synthesis did not produce valid audio.')
+      if (stat.size > WECHAT_SPEECH_MAX_BYTES) throw new Error('Generated audio exceeds the 10 MiB limit.')
       const header = Buffer.alloc(12)
       await file.read(header, 0, header.length, 0)
       if (header.toString('ascii', 0, 4) !== 'RIFF' || header.toString('ascii', 8, 12) !== 'WAVE') {
-        throw new Error('语音合成返回了无效的 WAV 文件。')
+        throw new Error('Speech synthesis returned an invalid WAV file.')
       }
     } finally { await file.close() }
     return { path: outputPath, mimeType: 'audio/wav', fileName: 'reply.wav', cleanup }
@@ -269,7 +269,7 @@ export async function synthesizeWechatSpeech(text: string, options: WechatSpeech
 
 export async function listWechatSpeechVoices(options: WechatSpeechOptions = {}): Promise<WechatSpeechVoice[]> {
   if (options.signal?.aborted) throw aborted()
-  if ((options.platform ?? process.platform) !== 'win32') throw new Error('音色选择目前仅支持 Windows。')
+  if ((options.platform ?? process.platform) !== 'win32') throw new Error('Voice selection is currently Windows-only.')
   const parent = path.resolve(options.outputDir ?? os.tmpdir())
   await fs.mkdir(parent, { recursive: true })
   const directory = await fs.mkdtemp(path.join(parent, 'cc-haha-wechat-voices-'))
@@ -281,12 +281,12 @@ export async function listWechatSpeechVoices(options: WechatSpeechOptions = {}):
       input: JSON.stringify({ outputPath }), outputPath, signal: options.signal, timeoutMs: 15_000,
     })
     if (options.signal?.aborted) throw aborted()
-    if ((await fs.stat(outputPath)).size > 64 * 1024) throw new Error('系统音色列表超出限制。')
+    if ((await fs.stat(outputPath)).size > 64 * 1024) throw new Error('System voice list exceeds the limit.')
     const voices: unknown = JSON.parse(await fs.readFile(outputPath, 'utf8'))
     if (!Array.isArray(voices) || voices.length > 128 || voices.some(voice => !voice ||
       typeof voice.id !== 'string' || voice.id.length > 2048 || typeof voice.name !== 'string' ||
       voice.name.length > 200 || typeof voice.language !== 'string' || voice.language.length > 40)) {
-      throw new Error('系统音色列表无效。')
+      throw new Error('Invalid system voice list.')
     }
     return voices as WechatSpeechVoice[]
   } finally { await fs.rm(directory, { recursive: true, force: true }) }

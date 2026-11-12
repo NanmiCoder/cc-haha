@@ -3,7 +3,7 @@ import { useApp } from '../state/AppContext'
 import { EmptyState, NavBar, ScreenView } from '../ui/kit'
 import { SubagentRun } from '../ui/activity/SubagentRun'
 
-/** /subagent?host&id&taskId&toolUseId —— 一个子 Agent 的只读对话，运行中可停止。 */
+/** /subagent?host&id&taskId&toolUseId — Read-only conversation of a subagent; can be stopped while running. */
 export default function Subagent() {
   const { host, id, taskId, toolUseId } = useLocalSearchParams<{
     host?: string
@@ -16,8 +16,8 @@ export default function Subagent() {
   if (!id || !toolUseId)
     return (
       <ScreenView>
-        <NavBar title="子 Agent" />
-        <EmptyState title="找不到这个子 Agent" detail="它的记录可能已被清理，请回到会话重新打开。" />
+        <NavBar title="Subagent" />
+        <EmptyState title="Cannot find this subagent" detail="Its records may have been cleaned up; go back to the session and reopen it." />
       </ScreenView>
     )
   return <SubagentRun key={`${hostId}:${id}:${toolUseId}`} hostId={hostId} sessionId={id} taskId={taskId} toolUseId={toolUseId} />

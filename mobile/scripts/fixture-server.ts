@@ -37,7 +37,7 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const MODELS = [
   {
     id: 'fixture-sonnet',
-    name: 'Fixture Sonnet · 无真实模型',
+    name: 'Fixture Sonnet · No real model',
     description: 'Deterministic local fixture',
     context: '200k',
     supportedReasoningEfforts: ['low', 'medium', 'high'],
@@ -45,7 +45,7 @@ const MODELS = [
   },
   {
     id: 'fixture-opus',
-    name: 'Fixture Opus · 无真实模型',
+    name: 'Fixture Opus · No real model',
     description: 'Second fixture model',
     context: '200k',
     supportedReasoningEfforts: EFFORTS,
@@ -54,7 +54,7 @@ const MODELS = [
 ]
 const FILES: Record<string, string> = {
   'README.md':
-    '# cc-haha mobile fixture\n\n本目录不存在于磁盘。这是内存中的测试文件。\n',
+    '# cc-haha mobile fixture\n\nThis directory does not exist on disk. This is an in-memory test file.\n',
   'src/index.ts': 'export const message = "Hello from the mobile fixture"\n',
   'src/session.ts': 'export const sessionStatus = "ready"\n',
 }
@@ -146,7 +146,7 @@ export function startFixtureServer({
     scheduleState: task.enabled === false ? (task.scheduleState === 'completed' ? 'completed' : 'paused') : 'active',
   })
   const branches = new Set(['main', 'feat/qr-pair', 'fix/ws-replay'])
-  /** Agent 团队方案（每个会话至多一份），由 team / team-failed / team-interrupted 场景放入。 */
+  /** Agent Team plan (at most one per session), placed by the team / team-failed / team-interrupted scenarios. */
   const teamPlans = new Map<string, TeamPlanRecord>()
   function seedTeamPlan(sessionId: string, state: TeamPlanRecord['state']) {
     const runtime = (modelId: string, effortLevel?: string) => ({ providerId: activeId, modelId, ...(effortLevel ? { effortLevel } : {}) })
@@ -161,18 +161,18 @@ export function startFixtureServer({
       workDir: FIXTURE_ROOT,
       leaderRuntime: runtime(currentModel),
       agentCatalog: {
-        'general-purpose': { systemPrompt: '', description: '通用成员，能读写代码、跑命令' },
-        reviewer: { systemPrompt: '', description: '只读审查，指出问题不改代码' },
+        'general-purpose': { systemPrompt: '', description: 'General member, can read and write code and run commands' },
+        reviewer: { systemPrompt: '', description: 'Read-only review, points out issues without changing code' },
       },
       members: [
-        { id: 'backend', name: 'backend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: '独立实现 FastAPI + SQLite CRUD 与 pytest 测试', prompt: '你负责 FastAPI 后端。先读 CONTRACT.md，按约定实现 /api/tasks 的增删改查，写 pytest 覆盖排序与校验。完成后把接口说明发给 frontend-dev。', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
-        { id: 'frontend', name: 'frontend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: 'React + Vite 单页，列表、筛选和编辑表单', prompt: '你负责 React + Vite 前端。等 backend-dev 的接口说明，再实现任务列表、筛选和编辑表单。', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
-        { id: 'qa', name: 'qa-reviewer', agentType: 'reviewer', difficulty: 'low', reason: '端到端跑一遍，核对契约与边界输入', prompt: '前后端都完成后，启动两个服务做端到端检查，列出与 CONTRACT.md 不符的地方。', runtime: runtime(MODELS[1]!.id, 'high'), suggestedRuntime: runtime(currentModel) },
+        { id: 'backend', name: 'backend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: 'Independently implement FastAPI + SQLite CRUD with pytest tests', prompt: 'You own the FastAPI backend. Read CONTRACT.md first, implement CRUD for /api/tasks per the contract, and write pytest covering sorting and validation. When done, send the API notes to frontend-dev.', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
+        { id: 'frontend', name: 'frontend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: 'React + Vite Single page with list, filters and edit form', prompt: 'You own the React + Vite frontend. Wait for the API notes from backend-dev, then implement the task list, filters and edit form.', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
+        { id: 'qa', name: 'qa-reviewer', agentType: 'reviewer', difficulty: 'low', reason: 'Run end to end, check the contract and edge inputs', prompt: 'After both frontend and backend are done, start both services for an end-to-end check and list where they diverge from CONTRACT.md.', runtime: runtime(MODELS[1]!.id, 'high'), suggestedRuntime: runtime(currentModel) },
       ],
       tasks: [
-        { id: 't1', subject: '实现后端 API 与测试', description: 'FastAPI + SQLite，覆盖创建、更新、删除和排序。', ownerId: 'backend', dependencies: [] },
-        { id: 't2', subject: '实现前端页面', description: '任务列表、状态筛选、编辑表单。', ownerId: 'frontend', dependencies: ['t1'] },
-        { id: 't3', subject: '端到端验收', ownerId: 'qa', dependencies: ['t1', 't2'] },
+        { id: 't1', subject: 'Implement backend API and tests', description: 'FastAPI + SQLite, covering create, update, delete and sorting.', ownerId: 'backend', dependencies: [] },
+        { id: 't2', subject: 'Implement frontend page', description: 'Task list, status filter, edit form.', ownerId: 'frontend', dependencies: ['t1'] },
+        { id: 't3', subject: 'End-to-end acceptance', ownerId: 'qa', dependencies: ['t1', 't2'] },
       ],
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -191,7 +191,7 @@ export function startFixtureServer({
     {
       id: activeId,
       presetId: 'custom',
-      name: 'Fixture API · 无真实调用',
+      name: 'Fixture API · No real calls',
       apiKey: '',
       hasApiKey: true,
       baseUrl: 'https://fixture.invalid',
@@ -357,9 +357,9 @@ export function startFixtureServer({
       ['Glob', { pattern: 'src/core/connect*.ts' }, 'src/core/connectHost.ts'],
       ['Read', { file_path: file('src/core/connectHost.ts') }, 'export async function connectHost() {}'],
       ['Edit', { file_path: file('src/core/connectHost.ts'), old_string: 'save(credential)\nreturn host', new_string: 'await verify(address)\nsave(credential)\nreturn { host, verified: true }' }, 'Fixture edit applied in memory'],
-      ['Agent', { description: '做扫码页界面', run_in_background: true }, 'Fixture background agent started'],
+      ['Agent', { description: 'Build the scan page UI', run_in_background: true }, 'Fixture background agent started'],
     ]
-    const text = '先看现有的连接流程，再拆成扫码页和连接校验两块。界面交给一个子 Agent。'
+    const text = 'Look at the existing connect flow first, then split into the scan page and connection validation. The UI goes to a subagent.'
     emit(session, { type: 'content_start', blockType: 'text' })
     emit(session, { type: 'content_delta', text })
     append(session, 'assistant', [{ type: 'text', text }], session.runtime.modelId)
@@ -378,7 +378,7 @@ export function startFixtureServer({
           taskType: 'local_agent',
           description: String(input.description),
           status: 'running',
-          summary: '编辑 src/app/connect.tsx',
+          summary: 'Edit src/app/connect.tsx',
           startedAt: new Date().toISOString(),
         }
         session.tasks.push(task)
@@ -400,7 +400,7 @@ export function startFixtureServer({
       const output = 'bun test v1.3 (fixture)\n src/core/connectHost.test.ts:\n✓ verifies the address before saving\n\n 4 pass\n 0 fail'
       emit(session, { type: 'tool_result', toolUseId: bashId, content: output, isError: false })
       append(session, 'tool_result', [{ type: 'tool_result', tool_use_id: bashId, content: output, is_error: false }])
-      stream(session, '连接校验已经改成先验证地址再保存凭据，测试通过。扫码页界面还在后台做。')
+      stream(session, 'Connection validation now verifies the address before saving credentials; tests pass. The scan page UI is still in progress in the background.')
     })
   }
   function pendingDecision(
@@ -422,21 +422,21 @@ export function startFixtureServer({
         ? {
             questions: [
               {
-                question: '旧字段怎么处理？',
-                header: '迁移策略',
+                question: 'How should old fields be handled?',
+                header: 'Migration strategy',
                 multiSelect: false,
                 options: [
                   {
-                    label: '迁移时保留，读取时兼容（推荐）',
-                    description: '旧版桌面端还能打开同一份配置',
+                    label: 'Keep on migration, stay compatible on read (recommended)',
+                    description: 'Older desktop versions can still open the same config',
                   },
                   {
-                    label: '迁移后直接丢弃',
-                    description: '配置更干净，退回旧版会丢这些设置',
+                    label: 'Drop after migration',
+                    description: 'Cleaner config; downgrading loses these settings',
                   },
                   {
-                    label: '保留一个版本后再删',
-                    description: '下个版本再清理，需要记一条待办',
+                    label: 'Keep for one version, then delete',
+                    description: 'Clean up next version; needs a todo',
                   },
                 ],
               },
@@ -446,21 +446,21 @@ export function startFixtureServer({
           ? {
               questions: [
                 {
-                  question: 'Fixture：先检查哪一端？',
-                  header: '平台',
+                  question: 'Fixture: which side to check first?',
+                  header: 'Platform',
                   options: [
-                    { label: 'iOS', description: '测试 iPhone 交互' },
-                    { label: 'Android', description: '测试安卓交互' },
+                    { label: 'iOS', description: 'Test iPhone interactions' },
+                    { label: 'Android', description: 'Test Android interactions' },
                   ],
                   multiSelect: false,
                 },
                 {
-                  question: 'Fixture：检查哪些能力？',
-                  header: '能力',
+                  question: 'Fixture: which capabilities to check?',
+                  header: 'Capabilities',
                   options: [
-                    { label: '模型设置' },
-                    { label: '审批' },
-                    { label: '历史恢复' },
+                    { label: 'Model settings' },
+                    { label: 'Approvals' },
+                    { label: 'History restore' },
                   ],
                   multiSelect: true,
                 },
@@ -469,8 +469,8 @@ export function startFixtureServer({
           : kind === 'plan'
             ? {
                 plan: design
-                  ? '# 用相机扫桌面二维码完成配对\n\n1. 扫码页：识别二维码里的地址和访问令牌\n   `src/app/connect.tsx`\n2. 校验地址，拒绝带路径或账号密码的地址\n   `src/core/connection.ts`\n3. 公网链接走原生配对，等电脑批准，5 分钟超时\n   `src/core/client.ts`\n4. 补测试：二维码解析、超时与取消\n   `src/core/connection.test.ts`'
-                  : '# Fixture 实施计划\n\n1. 检查会话。\n2. 演示审批。\n3. 验证重连。\n\n不会修改任何真实文件。',
+                  ? '# Pair by scanning the desktop QR code with the camera\n\n1. Scan page: read the address and access token from the QR code\n   `src/app/connect.tsx`\n2. Validate the address; reject addresses with a path or username/password\n   `src/core/connection.ts`\n3. Public links use native pairing, wait for computer approval, 5 minute timeout\n   `src/core/client.ts`\n4. Add tests: QR parsing, timeout and cancel\n   `src/core/connection.test.ts`'
+                  : '# Fixture Implementation plan\n\n1. Check the session.\n2. Demo approval.\n3. Verify reconnect.\n\nNo real files will be modified.',
                 planFilePath: '/fixture/plans/mobile.md',
                 allowedPrompts: [
                   { tool: 'Bash', prompt: 'run fixture checks' },
@@ -483,20 +483,20 @@ export function startFixtureServer({
                   old_string:
                     '  const seen = this.delivered\n  for (const message of batch) {\n    const key = message.localId\n    if (seen.has(key)) continue\n    seen.add(key)\n    this.emit(message)\n  }',
                   new_string:
-                    '  const seen = this.delivered\n  for (const message of batch) {\n    // 重放的消息带同一个 serverId\n    const key = message.serverId\n      ?? message.localId\n    if (seen.has(key)) continue\n    seen.add(key)\n    this.emit(message)\n  }',
+                    '  const seen = this.delivered\n  for (const message of batch) {\n    // replayed messages carry the same serverId\n    const key = message.serverId\n      ?? message.localId\n    if (seen.has(key)) continue\n    seen.add(key)\n    this.emit(message)\n  }',
                 }
             : {
                 command: design
                   ? 'bun test src/core/sessionTransport.test.ts'
                   : 'echo "FIXTURE: no command is executed"',
-                description: '测试服务中的模拟命令，不执行 shell',
+                description: 'Simulated command in the test service, not executed shell',
               }
     if (kind === 'question' && multiple) {
       Object.assign(input, { questions: [
-        { header: 'A 平台', question: '这次先验证哪个平台？', multiSelect: false, options: [{ label: 'Android' }, { label: 'iOS' }] },
-        { header: 'B 范围', question: '需要覆盖哪些能力？', multiSelect: true, options: [{ label: 'Composer' }, { label: '目录与 Git' }, { label: '团队活动' }] },
-        { header: 'C 备注', question: '还有什么补充要求？', multiSelect: false, options: [{ label: '暂无' }, { label: '稍后补充' }] },
-        { header: 'D 顺序', question: '按什么顺序验证？', multiSelect: false, options: [{ label: '先输入后执行' }, { label: '先活动再输入' }] },
+        { header: 'A Platform', question: 'Which platform to verify first?', multiSelect: false, options: [{ label: 'Android' }, { label: 'iOS' }] },
+        { header: 'B Scope', question: 'Which capabilities need coverage?', multiSelect: true, options: [{ label: 'Composer' }, { label: 'Directories and Git' }, { label: 'Team activity' }] },
+        { header: 'C Notes', question: 'Any other requirements?', multiSelect: false, options: [{ label: 'None' }, { label: 'Add later' }] },
+        { header: 'D Order', question: 'In what order to verify?', multiSelect: false, options: [{ label: 'Input first, then execution' }, { label: 'Activity first, then input' }] },
       ] })
     }
     const toolUseId = crypto.randomUUID()
@@ -533,7 +533,7 @@ export function startFixtureServer({
           allowed: true,
         })
         const answer =
-          'Fixture：倒计时已结束，测试服务选择了第一项；没有调用 AI。'
+          'Fixture: countdown ended, the test service picked the first option; no AI was called.'
         append(session, 'tool_result', [
           {
             type: 'tool_result',
@@ -554,7 +554,7 @@ export function startFixtureServer({
       session,
       'tool_use',
       [
-        ...(!design ? [{ type: 'text', text: 'Fixture：需要你的回应。' }] : []),
+        ...(!design ? [{ type: 'text', text: 'Fixture: your response is needed.' }] : []),
         { type: 'tool_use', id: toolUseId, name: toolName, input },
       ],
       session.runtime.modelId
@@ -573,13 +573,13 @@ export function startFixtureServer({
   }
   function seed() {
     if (design) return seedDesign()
-    const chat = create('fixture-chat', 'Fixture · 普通聊天与历史')
+    const chat = create('fixture-chat', 'Fixture · Regular chat and history')
     for (let i = 1; i <= 4; i++) {
-      append(chat, 'user', `第 ${i} 条测试问题`)
+      append(chat, 'user', `Test question ${i}`)
       append(
         chat,
         'assistant',
-        [{ type: 'text', text: `Fixture 历史回复 ${i}，没有调用模型。` }],
+        [{ type: 'text', text: `Fixture History reply ${i}, no model called.` }],
         currentModel
       )
     }
@@ -587,7 +587,7 @@ export function startFixtureServer({
       chat,
       'tool_use',
       [
-        { type: 'text', text: '这是工具调用前的文本，应显示为助手内容。' },
+        { type: 'text', text: 'This is text before the tool call and should show as assistant content.' },
         {
           type: 'tool_use',
           id: 'seed-read',
@@ -606,23 +606,23 @@ export function startFixtureServer({
       },
     ])
     for (const [kind, label] of [
-      ['approval', '操作审批'],
-      ['question', '回答问题'],
-      ['plan', '确认计划'],
+      ['approval', 'Action approval'],
+      ['question', 'Answer question'],
+      ['plan', 'Confirm plan'],
     ] as const) {
       const session = create(`fixture-${kind}`, `Fixture · ${label}`, {
         permissionMode: kind === 'plan' ? 'plan' : 'default',
       })
-      append(session, 'user', `请演示${label}`)
+      append(session, 'user', `Please demo ${label}`)
       pendingDecision(session, kind, false)
     }
   }
   function seedDesign() {
-    const approval = create('fixture-approval', '修复 WebSocket 重连后消息重复')
+    const approval = create('fixture-approval', 'Fix duplicate messages after WebSocket reconnect')
     append(
       approval,
       'user',
-      '重连之后同一条回复会出现两次，帮我查原因并修掉，顺便补一个回归测试。'
+      'After reconnecting the same reply shows up twice. Find the cause, fix it, and add a regression test.'
     )
     append(
       approval,
@@ -630,37 +630,37 @@ export function startFixtureServer({
       [
         {
           type: 'text',
-          text: '原因找到了：重连时 CLI 会重放缓冲区里的消息，前端按临时 id 去重，重放的消息拿到新 id 就漏了过去。我改成按服务端的稳定 id 去重。\n\n接下来跑一遍相关测试，确认没有回归。',
+          text: 'Found the cause: on reconnect the CLI replays buffered messages, the frontend dedupes by temporary id, and replayed messages get new ids so they slip through. I switched to deduping by the stable server id.\n\nNext I will run the related tests to confirm there is no regression.',
         },
       ],
       currentModel
     )
     pendingDecision(approval, 'approval', false)
-    const question = create('fixture-question', '迁移设置存储到 v3')
-    append(question, 'user', '把设置存储迁移到 v3，保留兼容性。')
+    const question = create('fixture-question', 'Migrate settings storage to v3')
+    append(question, 'user', 'Migrate settings storage to v3 while keeping compatibility.')
     append(
       question,
       'assistant',
       [
         {
           type: 'text',
-          text: '迁移脚本写好了。旧版 settings.json 里有 3 个字段在 v3 已经不用了：\n\n`sidebarWidth`  `legacyTheme`  `pinnedTabs`',
+          text: 'Migration script is written. The old settings.json has 3 fields no longer used in v3: \n\n`sidebarWidth`  `legacyTheme`  `pinnedTabs`',
         },
       ],
       currentModel
     )
     pendingDecision(question, 'question', false)
-    const plan = create('fixture-plan', '给移动端加扫码配对', {
+    const plan = create('fixture-plan', 'Add QR pairing to mobile', {
       repository: { branch: 'feat/qr-pair' },
     })
-    append(plan, 'user', '给移动端加扫码配对。')
+    append(plan, 'user', 'Add QR pairing to mobile.')
     append(
       plan,
       'assistant',
       [
         {
           type: 'text',
-          text: '正在整理扫码页与连接校验，已分配两个子 Agent。',
+          text: 'Organizing the scan page and connection validation; two subagents assigned.',
         },
       ],
       currentModel
@@ -672,18 +672,18 @@ export function startFixtureServer({
         taskId: 'fixture-agent-ui',
         toolUseId: 'fixture-tool-ui',
         taskType: 'local_agent',
-        description: '扫码页界面',
+        description: 'Scan page UI',
         status: 'running',
-        summary: '编辑 src/app/connect.tsx',
+        summary: 'Edit src/app/connect.tsx',
         startedAt: new Date(Date.now() - 192000).toISOString(),
       },
       {
         taskId: 'fixture-agent-test',
         toolUseId: 'fixture-tool-test',
         taskType: 'local_agent',
-        description: '配对超时测试',
+        description: 'Pairing timeout tests',
         status: 'running',
-        summary: '运行 bun test src/core/connection…',
+        summary: 'Running bun test src/core/connection…',
         startedAt: new Date(Date.now() - 100000).toISOString(),
       },
       {
@@ -697,12 +697,12 @@ export function startFixtureServer({
         startedAt: new Date(Date.now() - 1102000).toISOString(),
       },
     ]
-    const bench = create('fixture-bench', '排查 Windows sidecar 内存占用')
-    append(bench, 'user', '排查 Windows sidecar 的内存占用。')
+    const bench = create('fixture-bench', 'Investigate Windows sidecar memory usage')
+    append(bench, 'user', 'Investigate Windows sidecar memory usage.')
     append(
       bench,
       'assistant',
-      [{ type: 'text', text: '正在比较重复请求后的内存曲线。' }],
+      [{ type: 'text', text: 'Comparing memory curves after repeated requests.' }],
       currentModel
     )
     bench.running = true
@@ -720,13 +720,13 @@ export function startFixtureServer({
     for (const [id, title, response] of [
       [
         'fixture-release',
-        '整理 v0.7.6 发版说明',
-        '发版说明已经整理好，包含新增能力、修复和兼容性说明。',
+        'Prepare v0.7.6 release notes',
+        'Release notes are ready, covering new features, fixes and compatibility notes.',
       ],
       [
         'fixture-settings',
-        '统一桌面设置页的分组',
-        '设置页分组已统一为通用、模型、工具和连接。',
+        'Unify desktop settings page groups',
+        'Settings groups are now General, Models, Tools and Connections.',
       ],
     ]) {
       const session = create(id!, title!)
@@ -750,10 +750,10 @@ export function startFixtureServer({
       session.terminalOutcome = 'completed'
     }
     for (const [index, [name, cron, enabled]] of [
-      ['每日依赖安全检查', '0 9 * * *', true],
-      ['清理已合并的分支', '0 10 * * 1', true],
-      ['整理昨天的新 issue', '30 8 * * 1-5', true],
-      ['周报：本周合并的 PR', '0 18 * * 5', false],
+      ['Daily dependency security check', '0 9 * * *', true],
+      ['Clean up merged branches', '0 10 * * 1', true],
+      ['Sort yesterday’s new issue', '30 8 * * 1-5', true],
+      ['Weekly report: merged this week PR', '0 18 * * 5', false],
     ].entries()) {
       const id = `fixture-schedule-${index + 1}`
       scheduledTasks.set(id, {
@@ -777,8 +777,8 @@ export function startFixtureServer({
           status: 'completed',
           output:
             index === 0
-              ? 'Fixture：发现 1 个高危依赖（设计验收样本）'
-              : 'Fixture：7 个新 issue（设计验收样本）',
+              ? 'Fixture: 1 high-severity dependency found (design review sample)'
+              : 'Fixture: 7 new issues (design review sample)',
           durationMs: 10000,
         })
     }
@@ -854,7 +854,7 @@ export function startFixtureServer({
   }
   function stopBackground(session: FixtureSession, task: BackgroundTask) {
     task.status = 'stopped'
-    task.summary = '测试服务已停止这项模拟活动'
+    task.summary = 'Test service stopped this simulated activity'
     emit(session, {
       type: 'system_notification',
       subtype: 'task_notification',
@@ -887,12 +887,12 @@ export function startFixtureServer({
             toolName: pending.toolName,
             preview:
               pending.toolName === 'AskUserQuestion'
-                ? '旧字段保留还是直接丢弃？'
+                ? 'Keep old fields or drop them?'
                 : typeof input.command === 'string'
                   ? input.command
                   : pending.toolName === 'ExitPlanMode'
-                    ? '计划等待确认'
-                    : '等待工具权限确认',
+                    ? 'Plan awaiting confirmation'
+                    : 'Waiting for tool permission',
             autoAnswerDeadline: pending.autoAnswerDeadline,
           }
         : {}),
@@ -1106,8 +1106,8 @@ export function startFixtureServer({
           request.toolName === 'AskUserQuestion'
             ? JSON.stringify(message.updatedInput?.answers ?? {})
             : message.allowed
-              ? 'Fixture 操作已允许；没有执行真实操作。'
-              : `Fixture 已收到反馈：${message.denyMessage || '拒绝此操作'}`
+              ? 'Fixture Action allowed; no real action was performed.'
+              : `Fixture: feedback received: ${message.denyMessage || 'Deny this action'}`
         append(session, 'tool_result', [
           {
             type: 'tool_result',
@@ -1125,8 +1125,8 @@ export function startFixtureServer({
         stream(
           session,
           request.toolName === 'ExitPlanMode' && !message.allowed
-            ? 'Fixture：将根据你的意见继续完善计划。'
-            : `Fixture：已收到回应。${answer}`
+            ? 'Fixture: will keep refining the plan based on your feedback.'
+            : `Fixture: response received. ${answer}`
         )
         return
       }
@@ -1168,7 +1168,7 @@ export function startFixtureServer({
                 }
               : {
                   type: 'text',
-                  text: `[文件: ${item.name ?? '附件'}]\n${Buffer.from(item.data!, 'base64').toString('utf8')}`,
+                  text: `[Files: ${item.name ?? 'Attachment'}]\n${Buffer.from(item.data!, 'base64').toString('utf8')}`,
                 }
           )
         append(session, 'user', materials.length ? blocks : message.content)
@@ -1177,7 +1177,7 @@ export function startFixtureServer({
           emit(session, {
             type: 'system_notification',
             subtype: 'fixture_followup',
-            message: 'Fixture：追加内容已接收，当前请求仍在处理中。',
+            message: 'Fixture: follow-up received, the current request is still in progress.',
           })
           return
         }
@@ -1190,35 +1190,35 @@ export function startFixtureServer({
         delete session.stalled
         emit(session, { type: 'status', state: 'thinking', verb: 'Fixture' })
         const prompt = message.content.toLowerCase()
-        if (/\/error|模拟错误/.test(prompt))
+        if (/\/error|simulate error/.test(prompt))
           return schedule(session, 200, () => {
             session.running = false
             session.terminalOutcome = 'failed'
             emit(session, {
               type: 'error',
               code: 'FIXTURE_ERROR',
-              message: '这是明确标注的模拟失败，可继续发新消息。',
+              message: 'This is a clearly labeled simulated failure; you can keep sending new messages.',
               retryable: true,
             })
             emit(session, { type: 'status', state: 'idle' })
           })
-        if (/\/question|回答问题|提问/.test(prompt))
+        if (/\/question|answer question|ask/.test(prompt))
           return schedule(session, 200, () =>
             pendingDecision(session, 'question')
           )
-        if (/\/plan|计划/.test(prompt))
+        if (/\/plan|plan/.test(prompt))
           return schedule(session, 200, () => pendingDecision(session, 'plan'))
-        if (/\/edit|改文件/.test(prompt))
+        if (/\/edit|edit file/.test(prompt))
           return schedule(session, 200, () => pendingDecision(session, 'edit'))
         if (/\/steps/.test(prompt)) return schedule(session, 200, () => toolSteps(session))
         if (
-          /\/approval|审批|批准/.test(prompt) &&
+          /\/approval|approval|approve/.test(prompt) &&
           !session.allowedTools.has('Bash')
         )
           return schedule(session, 200, () =>
             pendingDecision(session, 'approval')
           )
-        if (/\/retry|模拟重试/.test(prompt))
+        if (/\/retry|simulate retry/.test(prompt))
           emit(session, {
             type: 'api_retry',
             attempt: 1,
@@ -1229,7 +1229,7 @@ export function startFixtureServer({
         schedule(session, 180, () => {
           emit(session, {
             type: 'thinking',
-            text: '这是可见的 fixture 思考块。',
+            text: 'This is a visible fixture thinking block.',
             complete: true,
           })
           const toolUseId = crypto.randomUUID()
@@ -1273,8 +1273,8 @@ export function startFixtureServer({
           ])
           stream(
             session,
-            `Fixture：收到了「${message.content}」。这段回复通过真实 WebSocket 协议分段发送，没有调用模型或访问电脑文件。`,
-            /\/slow|慢速/.test(prompt) ? 700 : 100
+            `Fixture: received “${message.content}”. This reply was sent in parts over the real WebSocket protocol without calling a model or accessing computer files.`,
+            /\/slow|slow/.test(prompt) ? 700 : 100
           )
         })
         return
@@ -1363,7 +1363,7 @@ export function startFixtureServer({
         return json({
           supported: true,
           preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
-          providers: [{ info: { id: 'sensevoice-local', name: 'Fixture 本机语音', location: 'local', languages: ['auto', 'zh', 'en'] }, preparation: { phase: 'ready' } }],
+          providers: [{ info: { id: 'sensevoice-local', name: 'Fixture Local voice', location: 'local', languages: ['auto', 'zh', 'en'] }, preparation: { phase: 'ready' } }],
           limits: { maxAudioSeconds: 120, maxAudioBytes: 4 * 1024 * 1024 },
         })
       if (url.pathname === '/api/voice/transcribe' && request.method === 'POST') {
@@ -1371,7 +1371,7 @@ export function startFixtureServer({
           const wav = new Uint8Array(await request.arrayBuffer())
           const { audioSeconds } = validateVoiceWav(wav)
           await Bun.sleep(250)
-          return json({ text: '语音转写测试文字（本地 fixture）', audioSeconds, inferenceSeconds: 0 })
+          return json({ text: 'Voice transcription test text (local fixture)', audioSeconds, inferenceSeconds: 0 })
         } catch {
           return fail('Fixture expects mono PCM16 16 kHz WAV', 400, 'voice/invalid-audio')
         }
@@ -1412,11 +1412,11 @@ export function startFixtureServer({
       if (path === '/api/filesystem/browse' && method === 'GET') {
         const currentPath = url.searchParams.get('path') || '/fixture'
         const tree: Record<string, string[]> = {
-          '/fixture': ['cc-haha-demo', '中文项目', 'empty'],
+          '/fixture': ['cc-haha-demo', 'Sample project', 'empty'],
           [FIXTURE_ROOT]: ['src', 'mobile'],
           [`${FIXTURE_ROOT}/src`]: [],
           [`${FIXTURE_ROOT}/mobile`]: [],
-          '/fixture/中文项目': [],
+          '/fixture/Sample project': [],
           '/fixture/empty': [],
         }
         const children = tree[currentPath]
@@ -1429,33 +1429,33 @@ export function startFixtureServer({
       }
       if (path === '/api/skills/commands' && method === 'GET')
         return json({ commands: [
-          { name: 'compact', kind: 'command', description: '压缩上下文（fixture 命令）' },
-          { name: 'init', kind: 'command', description: '初始化项目说明（fixture 命令）' },
+          { name: 'compact', kind: 'command', description: 'Compact context (fixture command)' },
+          { name: 'init', kind: 'command', description: 'Initialize project notes (fixture command)' },
         ] })
       if (path === '/api/skills/mentions' && method === 'GET')
         return json({ skills: [
-          { kind: 'skill', id: 'review', name: 'review', displayName: '代码审查', description: '检查当前改动（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "review" for this request.' },
-          { kind: 'skill', id: 'explain', name: 'explain', displayName: '解释代码', description: '解释代码与调用关系（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "explain" for this request.' },
+          { kind: 'skill', id: 'review', name: 'review', displayName: 'Code review', description: 'Check current changes (local fixture)', source: 'fixture', modelText: 'Use the Skill tool with skill: "review" for this request.' },
+          { kind: 'skill', id: 'explain', name: 'explain', displayName: 'Explain code', description: 'Explain code and call relationships (local fixture)', source: 'fixture', modelText: 'Use the Skill tool with skill: "explain" for this request.' },
         ], plugins: [
-          { kind: 'plugin', id: 'github@haha-connectors', name: 'github', displayName: 'GitHub', description: '检索仓库代码、Issue 和 Pull Request（本地 fixture）', source: 'fixture', modelText: 'Use the GitHub connector for this request.', mcpServerNames: ['github'] },
+          { kind: 'plugin', id: 'github@haha-connectors', name: 'github', displayName: 'GitHub', description: 'Search repository code, issues and pull requests (local fixture)', source: 'fixture', modelText: 'Use the GitHub connector for this request.', mcpServerNames: ['github'] },
         ] })
       // Same shape the desktop sends a paired phone: no auth links, error text or local paths.
       if (path === '/api/connectors' && method === 'GET')
         return json({ items: [
-          { id: 'github', displayName: 'GitHub', description: '检索仓库代码、Issue 和 Pull Request。', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'github@haha-connectors', supported: true, installed: true, enabled: true, connection: 'connected', status: 'ready', accountLabel: 'fixture-user' },
-          { id: 'feishu', displayName: '飞书', description: '消息、日历与文档。', category: 'office', transport: 'cli', collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true, connection: 'needs-auth', status: 'needs-auth' },
-          { id: 'notion', displayName: 'Notion', description: '搜索工作区资料，整理页面与项目知识。', category: 'office', transport: 'mcp', collection: 'services', pluginId: 'notion@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
-          { id: 'context7', displayName: 'Context7', description: '查阅软件库的最新文档与用法示例。', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'context7@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
+          { id: 'github', displayName: 'GitHub', description: 'Search repository code, issues and pull requests.', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'github@haha-connectors', supported: true, installed: true, enabled: true, connection: 'connected', status: 'ready', accountLabel: 'fixture-user' },
+          { id: 'feishu', displayName: 'Feishu', description: 'Messages, calendar and docs.', category: 'office', transport: 'cli', collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true, connection: 'needs-auth', status: 'needs-auth' },
+          { id: 'notion', displayName: 'Notion', description: 'Search workspace content and organize page and project knowledge.', category: 'office', transport: 'mcp', collection: 'services', pluginId: 'notion@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
+          { id: 'context7', displayName: 'Context7', description: 'Look up the latest docs and usage examples for software libraries.', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'context7@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
         ] })
       if (path === '/api/agents' && method === 'GET')
         return json({ activeAgents: [
-          { agentType: 'code-reviewer', description: '按团队规范审查改动并给出修改建议（fixture）', modelDisplay: 'Fixture Sonnet', color: 'blue', source: 'userSettings', isActive: true },
-          { agentType: 'Explore', description: '只读地探索代码库并回答问题（fixture）', modelDisplay: 'Fixture Sonnet', source: 'built-in', isActive: true },
+          { agentType: 'code-reviewer', description: 'Review changes against team conventions and suggest fixes (fixture)', modelDisplay: 'Fixture Sonnet', color: 'blue', source: 'userSettings', isActive: true },
+          { agentType: 'Explore', description: 'Explore the codebase read-only and answer questions (fixture)', modelDisplay: 'Fixture Sonnet', source: 'built-in', isActive: true },
         ], allAgents: [] })
       if (path === '/api/workflows' && method === 'GET')
         return json({ workflows: [
-          { name: 'ship-release', description: '跑测试、写发布说明并打 tag（fixture）', source: 'user' },
-          { name: 'triage-issues', description: '整理新 Issue 并按优先级分类（fixture）', source: 'project' },
+          { name: 'ship-release', description: 'Run tests, write release notes and tag (fixture)', source: 'user' },
+          { name: 'triage-issues', description: 'Triage new issues and sort by priority (fixture)', source: 'project' },
         ] })
       if (path === '/api/computer-use/status' && method === 'GET')
         return json({ platform: 'darwin', supported: true, engine: 'macos-native', cuHelper: { available: true, supported: true }, permissions: { accessibility: true, screenRecording: true } })
@@ -1468,9 +1468,9 @@ export function startFixtureServer({
       }
       const taskListMatch = path.match(/^\/api\/tasks\/lists\/([^/]+)$/)
       const fixtureTasks = (id: string) => [
-        { id: '1', subject: 'Task 1 · 核对桌面交互', description: '沿着真实 API 验证输入与运行状态。', status: 'completed', owner: 'researcher', blocks: ['2'], blockedBy: [], taskListId: id },
-        { id: '2', subject: 'Task 2 · 改进手机 Composer', description: '共用输入区，加入技能候选。', status: 'in_progress', owner: 'builder', blocks: ['3'], blockedBy: ['1'], taskListId: id },
-        { id: '3', subject: 'Task 3 · 回归验证', description: '验证真机键盘、目录、模型与活动入口。', status: 'pending', owner: 'reviewer', blocks: [], blockedBy: ['2'], taskListId: id },
+        { id: '1', subject: 'Task 1 · Check desktop interactions', description: 'Verify input and run state along the real API.', status: 'completed', owner: 'researcher', blocks: ['2'], blockedBy: [], taskListId: id },
+        { id: '2', subject: 'Task 2 · Improve mobile Composer', description: 'Shared input area, add skill suggestions.', status: 'in_progress', owner: 'builder', blocks: ['3'], blockedBy: ['1'], taskListId: id },
+        { id: '3', subject: 'Task 3 · Regression check', description: 'Verify real-device keyboard, directories, models and activity entry.', status: 'pending', owner: 'reviewer', blocks: [], blockedBy: ['2'], taskListId: id },
       ]
       if (taskListMatch && method === 'GET') {
         const id = decodeURIComponent(taskListMatch[1]!)
@@ -1509,7 +1509,7 @@ export function startFixtureServer({
             return fail('Every task needs an assigned member', 400, 'TEAM_PLAN_CONFLICT')
           if (action === 'approve' && next.members.some((member) => !next.tasks.some((task) => task.ownerId === member.id)))
             return fail('Every member needs an assigned task', 400, 'TEAM_PLAN_CONFLICT')
-          // 和真实服务端一样：确认后先是 launching，成员就位后再变成 running。
+          // Same as the real server: launching after approval, then running once members are in place.
           next.state = action === 'approve' ? 'launching' : action === 'return' ? 'draft' : action === 'retry' ? 'review_pending' : 'cancelled'
           if (action === 'retry') delete next.launch
           if (typeof body.feedback === 'string') next.feedback = body.feedback
@@ -1536,12 +1536,12 @@ export function startFixtureServer({
           team: { name: 'mobile-qa', incarnationId: 'fixture-team-1', leadSessionId: id, leadAgentId: 'lead', createdAt: 1792886400000, members: [
             { agentId: 'researcher', name: 'researcher', agentType: 'research', status: 'completed', activity: 'idle', model: 'fixture-sonnet' },
             { agentId: 'builder', name: 'builder', agentType: 'developer', status: 'running', activity: 'active', model: 'fixture-sonnet' },
-            { agentId: 'reviewer', name: 'reviewer', agentType: 'reviewer', status: 'idle', activity: 'stopped', lastError: '测试用暂停状态', model: 'fixture-opus' },
-          ] }, tasks: fixtureTasks(id), messages: [{ id: 'message-1', from: 'lead', to: 'builder', text: '先复用已有目录 API，再验证手机输入。', timestamp: new Date().toISOString(), kind: 'direct' }],
+            { agentId: 'reviewer', name: 'reviewer', agentType: 'reviewer', status: 'idle', activity: 'stopped', lastError: 'Test pause state', model: 'fixture-opus' },
+          ] }, tasks: fixtureTasks(id), messages: [{ id: 'message-1', from: 'lead', to: 'builder', text: 'Reuse the existing directory API first, then verify mobile input.', timestamp: new Date().toISOString(), kind: 'direct' }],
         }] })
       }
       if (/^\/api\/teams\/mobile-qa\/members\/[^/]+\/transcript$/.test(path) && method === 'GET')
-        return json({ messages: [{ id: 'fixture-member-message', type: 'assistant', content: 'Fixture 执行记录：已核对桌面契约，正在实现手机输入区。', timestamp: new Date().toISOString() }], ownerAgentIds: [], taskNotifications: [], taskAnchors: [] })
+        return json({ messages: [{ id: 'fixture-member-message', type: 'assistant', content: 'Fixture Execution log: desktop contract checked, implementing the mobile input area.', timestamp: new Date().toISOString() }], ownerAgentIds: [], taskNotifications: [], taskAnchors: [] })
       if (path === '/api/providers/auth-status')
         return json({
           hasAuth: true,
@@ -1728,7 +1728,7 @@ export function startFixtureServer({
         if (action === 'run' && method === 'POST') {
           const session = create(
             crypto.randomUUID(),
-            task.name ?? 'Fixture 定时任务',
+            task.name ?? 'Fixture Scheduled task',
             { workDir: task.folderPath }
           )
           append(session, 'user', task.prompt)
@@ -1747,7 +1747,7 @@ export function startFixtureServer({
             run.status = 'completed'
             run.completedAt = new Date().toISOString()
             run.durationMs = 700
-            run.output = `Fixture：${run.taskName} 的内存演示已完成。没有运行命令或调用模型。`
+            run.output = `Fixture: in-memory demo of ${run.taskName} finished. No commands were run and no model was called.`
             append(
               session,
               'assistant',
@@ -1851,7 +1851,7 @@ export function startFixtureServer({
       if (path === '/api/sessions' && method === 'POST') {
         if (body.agentProfile === 'lean' && body.permissionMode === 'plan')
           return fail('Plan mode is unavailable in lean sessions')
-        const session = create(crypto.randomUUID(), 'Fixture · 新会话', body)
+        const session = create(crypto.randomUUID(), 'Fixture · New session', body)
         return json(
           { sessionId: session.summary.id, workDir: session.summary.workDir },
           201
@@ -1891,7 +1891,7 @@ export function startFixtureServer({
             worktree: null,
           })
         if (action === 'inspection' && method === 'GET') {
-          // 桌面端上报的实时上下文：手机的「上下文」底单读它；fixture 给一份固定的假数据。
+          // Live context reported by the desktop: the mobile Context sheet reads it; the fixture provides fixed fake data.
           const query = new URL(request.url).searchParams
           if (query.get('usageOnly') === '1')
             return json({
@@ -1910,9 +1910,9 @@ export function startFixtureServer({
               rawMaxTokens: 200000,
               model: session.runtime.modelId,
               categories: [
-                { name: '系统提示', tokens: 6200 },
-                { name: '消息', tokens: 61300 },
-                { name: '工具', tokens: 8900 },
+                { name: 'System prompt', tokens: 6200 },
+                { name: 'Messages', tokens: 61300 },
+                { name: 'Tools', tokens: 8900 },
               ],
             },
           })
@@ -1922,12 +1922,12 @@ export function startFixtureServer({
             commands: [
               {
                 name: 'review',
-                description: '检查当前改动（Fixture 演示）',
+                description: 'Check current changes (fixture demo)',
                 kind: 'skill',
               },
               {
                 name: 'explain',
-                description: '解释代码（Fixture 演示）',
+                description: 'Explain code (fixture demo)',
                 kind: 'command',
               },
             ],
@@ -1983,7 +1983,7 @@ export function startFixtureServer({
                     timestamp: task.startedAt,
                   },
                 ],
-                result: `Fixture：${task.description}\n${task.summary ?? ''}\n这是内存测试输出，没有运行子进程。`,
+                result: `Fixture: ${task.description}\n${task.summary ?? ''}\nThis is in-memory test output; no subprocess was run.`,
                 status: task.status,
                 truncated: false,
               })
@@ -2074,7 +2074,7 @@ export function startFixtureServer({
             crypto.randomUUID(),
             typeof body.title === 'string'
               ? body.title
-              : `${session.summary.title} · 分支`,
+              : `${session.summary.title} · Branch`,
             {
               workDir: session.summary.workDir,
               permissionMode: session.summary.permissionMode,
@@ -2352,7 +2352,7 @@ async function selfTest() {
       method: 'POST', headers: { ...headers, 'Content-Type': 'audio/wav' }, body: Uint8Array.from(voiceBytes).buffer,
     })
     assert.equal(voiceResponse.status, 200)
-    assert.deepEqual(await voiceResponse.json(), { text: '语音转写测试文字（本地 fixture）', audioSeconds: 0.5, inferenceSeconds: 0 })
+    assert.deepEqual(await voiceResponse.json(), { text: 'Voice transcription test text (local fixture)', audioSeconds: 0.5, inferenceSeconds: 0 })
     assert.equal((await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers, body: '{}' })).status, 400)
     assert.deepEqual(
       await (
@@ -2490,8 +2490,8 @@ async function selfTest() {
           ? {
               ...object(request.input),
               answers: {
-                'Fixture：先检查哪一端？': 'iOS',
-                'Fixture：检查哪些能力？': '模型设置, 审批',
+                'Fixture: which side to check first?': 'iOS',
+                'Fixture: which capabilities to check?': 'Model settings, approvals',
               },
             }
           : undefined

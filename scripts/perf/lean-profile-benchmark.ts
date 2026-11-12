@@ -308,16 +308,16 @@ export function writeReport(output: string, results: RunResult[], metadata: Reco
   const rows = results.map(run => `| ${run.title} | ${run.profile} | ${run.status} | ${(run.durationMs / 1000).toFixed(1)} | ${run.requests} | ${run.usage.inputTotal} | ${run.usage.inputCacheRead} | ${run.usage.output} | ${run.agentLoops} |`)
   const aggregate = totals.map(total => `| ${total.profile} | ${total.passed}/${total.runs} | ${(total.durationMs / 1000).toFixed(1)} | ${total.requests} | ${total.usage.inputTotal} | ${total.usage.inputUncached} | ${total.usage.inputCacheRead} | ${total.usage.output} |`)
   const report = [
-    '# DeepSeek Flash：精简模式真实任务比较', '',
-    `模型 deepseek-flash；所有主代理、子代理和辅助模型槽位一致；medium effort；每项任务每种模式一份全新 /tmp 项目和 HOME。`,
-    '真实 API usage 包含所有请求及子代理；输入总量 = 未缓存输入 + 缓存读取 + 缓存写入。首轮字节是固定前缀体积，不能当 token 或费用。',
-    '每次运行最多 40 次上游请求、28 个主循环 turn、300 秒；全实验最多 180 次请求、30 分钟。没有自动重试失败任务。',
-    '所有文件任务要求不联网；WebSearch/WebFetch 的 live 效果不包含在本组代码任务验收中。运行顺序轮换，缓存由服务商控制且未清空。样本较少，不是统计显著性结论。', '',
-    '| 任务 | 模式 | 验收 | 秒 | 请求 | 总输入 token | 缓存读取 | 输出 token | Agent 循环数 |',
+    '# DeepSeek Flash: lean mode real-task comparison', '',
+    `Model deepseek-flash; all main-agent, sub-agent and auxiliary model slots identical; medium effort; a fresh /tmp project and HOME per task per mode.`,
+    'Real API usage includes all requests and sub-agents; total input = uncached input + cache reads + cache writes. First-turn bytes are the fixed prefix size, not tokens or cost.',
+    'Each run is capped at 40 upstream requests, 28 main-loop turns and 300 seconds; the whole experiment at 180 requests and 30 minutes. Failed tasks are not retried automatically.',
+    'All file tasks forbid network access; live WebSearch/WebFetch behavior is not part of this code-task acceptance. Run order rotates; caching is provider-controlled and not cleared. The sample is small and not statistically significant.', '',
+    '| Task | Mode | Accepted | Seconds | Requests | Total input tokens | Cache reads | Output tokens | Agent loops |',
     '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |', ...rows, '',
-    '| 模式 | 通过/运行 | 总秒 | 请求 | 总输入 | 未缓存输入 | 缓存读取 | 输出 |',
+    '| Mode | Passed/Runs | Total seconds | Requests | Total input | Uncached input | Cache reads | Output |',
     '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |', ...aggregate, '',
-    '验收要求：CLI 正常结束、原测试保留、新增回归测试、项目测试通过、独立验收脚本通过。明细见 results.json 和各运行目录的 requests.json / result.json。', '',
+    'Acceptance: CLI exits normally, original tests kept, regression tests added, project tests pass, independent acceptance script passes. Details in results.json and each run directory\'s requests.json / result.json.', '',
   ].join('\n')
   writeFileSync(join(output, 'report.md'), report)
 }

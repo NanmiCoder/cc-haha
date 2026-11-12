@@ -3,21 +3,21 @@ import type { LiveActivityMode } from '../../state/preferences'
 import type { PushState } from './settingsModel'
 import type { PushIssue } from '../../state/PushRegistrationContext'
 
-/** 系统通知权限；null 表示还没读到。 */
+/** System notification permission; null means not read yet. */
 export type NotificationPermission = 'granted' | 'denied' | 'undetermined'
 export type PermissionSnapshot = {
   status: NotificationPermission
-  /** 系统是否还会弹出授权框；iOS 拒绝后恒为 false。 */
+  /** Whether the system will still show the permission prompt; always false on iOS after denial. */
   canAskAgain: boolean
 }
 
-/** 把 expo-notifications 的返回值收成三态：provisional 等已授予的情况也算 granted。 */
+/** Fold expo-notifications results into three states: granted-like cases such as provisional also count as granted. */
 export function readNotificationPermission(response: {
   granted: boolean
   status?: string
   canAskAgain?: boolean
 }): PermissionSnapshot {
-  // 与通知引导页共用同一个分类器：安卓没问过时报 denied 但 canAskAgain 仍为 true，那是「未询问」。
+  // Shares the classifier with the notification onboarding page: on Android not yet asked reports denied but canAskAgain is still true, which is "not asked".
   const status = classifyPermission({
     granted: response.granted,
     status: response.status ?? 'denied',
@@ -41,17 +41,17 @@ export type DeliveryRow = {
 export type DeliveryAction = {
   kind: 'request' | 'settings' | 'test' | 'retry' | 'battery' | 'appSettings'
   label: string
-  /** primary=墨色主按钮，secondary=灰底按钮，plain=无底文字按钮。 */
+  /** primary=ink primary button, secondary = grey button, plain = text button without background. */
   look: 'primary' | 'secondary' | 'plain'
 }
 export type Delivery = {
-  /** checking=还在读状态，ok=离开 App 也能收到，blocked=离开 App 收不到。 */
+  /** checking=still reading status, ok = alerts arrive after leaving the app, blocked = alerts do not arrive after leaving the app. */
   state: 'checking' | 'ok' | 'blocked'
   title: string
   subtitle: string
   rows: DeliveryRow[]
   actions: DeliveryAction[]
-  /** 电脑还没配推送时，卡片底部多一条指向配置说明的文字链。 */
+  /** When the computer has not set up push, an extra text link to the setup guide appears at the bottom of the card. */
   guide: boolean
 }
 
@@ -59,7 +59,7 @@ export type DeliveryInput = {
   platform: 'ios' | 'android'
   permission: PermissionSnapshot | null
   push: { status: PushState; error?: string; issue?: PushIssue } | undefined
-  /** 没有已连接的电脑时为 undefined。 */
+  /** undefined when no computer is connected. */
   hostName: string | undefined
   hasHost: boolean
   decisions: boolean
@@ -72,73 +72,73 @@ export type DeliveryInput = {
 }
 
 function systemRow(permission: PermissionSnapshot | null): DeliveryRow {
-  const base = { key: 'system', label: '系统通知' } as const
-  if (!permission) return { ...base, value: '检查中…', tone: 'off' }
-  if (permission.status === 'granted') return { ...base, value: '已允许', tone: 'ok' }
+  const base = { key: 'system', label: 'System notifications' } as const
+  if (!permission) return { ...base, value: 'Checking…', tone: 'off' }
+  if (permission.status === 'granted') return { ...base, value: 'Allowed', tone: 'ok' }
   if (permission.status === 'undetermined')
-    return { ...base, value: '还没开启', tone: 'warn' }
-  return { ...base, value: '已关闭', tone: 'bad' }
+    return { ...base, value: 'Not turned on yet', tone: 'warn' }
+  return { ...base, value: 'Off', tone: 'bad' }
 }
 
 function pushRow(input: DeliveryInput): DeliveryRow {
-  const base = { key: 'push', label: '电脑推送' } as const
-  if (!input.hasHost) return { ...base, value: '还没连接电脑', tone: 'off' }
-  const name = input.hostName ?? '这台电脑'
+  const base = { key: 'push', label: 'Computer push' } as const
+  if (!input.hasHost) return { ...base, value: 'No computer connected yet', tone: 'off' }
+  const name = input.hostName ?? 'This computer'
   if (input.push?.issue === 'deviceNotConfigured')
-    return { ...base, value: '当前版本暂不支持', tone: 'warn' }
+    return { ...base, value: 'Not supported in this version yet', tone: 'warn' }
   if (input.push?.issue === 'deviceUnavailable')
-    return { ...base, value: '手机推送服务暂不可用', tone: 'warn' }
+    return { ...base, value: 'Phone push service unavailable for now', tone: 'warn' }
   if (input.push?.issue === 'hostUnsupported')
-    return { ...base, value: '需更新电脑端', tone: 'warn' }
+    return { ...base, value: 'Desktop app needs update', tone: 'warn' }
   if (input.push?.issue === 'authorization')
-    return { ...base, value: '需重新连接电脑', tone: 'warn' }
+    return { ...base, value: 'Computer needs reconnecting', tone: 'warn' }
   if (input.push?.issue === 'storage')
-    return { ...base, value: '登记信息无法保存', tone: 'bad' }
+    return { ...base, value: 'Registration info cannot be saved', tone: 'bad' }
   if (input.push?.issue === 'relayFailing')
-    return { ...base, value: '最近一次发送失败', tone: 'bad' }
+    return { ...base, value: 'Last send failed', tone: 'bad' }
   switch (input.push?.status) {
     case 'registered':
       return {
         ...base,
-        value: `${name} 已开启`,
+        value: `Enabled on ${name}`,
         tone: 'ok',
       }
     case 'notConfigured':
-      return { ...base, value: `${name} 未设置`, tone: 'warn' }
+      return { ...base, value: `${name} Not set up`, tone: 'warn' }
     case 'permissionRequired':
-      return { ...base, value: '要先允许系统通知', tone: 'warn' }
+      return { ...base, value: 'Allow system notifications first', tone: 'warn' }
     case 'unsupported':
-      return { ...base, value: '这台设备暂不支持', tone: 'warn' }
+      return { ...base, value: 'Not supported on this device yet', tone: 'warn' }
     case 'error':
-      return { ...base, value: '连接失败', tone: 'bad' }
+      return { ...base, value: 'Connection failed', tone: 'bad' }
     default:
-      return { ...base, value: '检查中…', tone: 'off' }
+      return { ...base, value: 'Checking…', tone: 'off' }
   }
 }
 
-/** 安卓「后台连接」：常驻服务在跑、连上电脑、没被省电策略限制，三样都有才算稳。 */
+/** Android "background connection": stable only when the persistent service is running, connected to the computer, and not restricted by battery optimization. */
 export function backgroundRow(duty: DutyState | null): DeliveryRow {
-  const base = { key: 'background', label: '后台连接' } as const
-  if (!duty) return { ...base, value: '检查中…', tone: 'off' }
-  if (!duty.running) return { ...base, value: '未运行', tone: 'bad' }
-  if (!duty.connected) return { ...base, value: '正在连接电脑', tone: 'warn' }
+  const base = { key: 'background', label: 'Background connection' } as const
+  if (!duty) return { ...base, value: 'Checking…', tone: 'off' }
+  if (!duty.running) return { ...base, value: 'Not running', tone: 'bad' }
+  if (!duty.connected) return { ...base, value: 'Connecting to computer', tone: 'warn' }
   if (!duty.batteryOptimizationIgnored)
-    return { ...base, value: '已连接，受省电限制', tone: 'warn' }
-  return { ...base, value: '已连接', tone: 'ok' }
+    return { ...base, value: 'Connected, restricted by battery saver', tone: 'warn' }
+  return { ...base, value: 'Connected', tone: 'ok' }
 }
 
 /**
- * 锁屏实时活动只能按 App 自己知道的推断：系统通知没开、或「要我做决定」关着就不会有；
- * 系统设置里的「实时活动」总开关 JS 读不到，所以这里不声称它一定开着。
+ * Lock screen Live Activities can only be inferred from what the app knows: none when system notifications are off or "Needs my decision" is off; 
+ * JS cannot read the "Live Activities" master switch in system settings, so this does not claim it is definitely on.
  */
 export function liveActivityRow(input: DeliveryInput): DeliveryRow {
-  const base = { key: 'live', label: '锁屏实时活动' } as const
+  const base = { key: 'live', label: 'Lock screen Live Activities' } as const
   if (input.permission?.status !== 'granted')
-    return { ...base, value: '只在 App 打开时更新', tone: 'off' }
-  if (!input.decisions) return { ...base, value: '要我做决定已关闭', tone: 'off' }
+    return { ...base, value: 'Updates only while the app is open', tone: 'off' }
+  if (!input.decisions) return { ...base, value: '“Needs my decision” is off', tone: 'off' }
   return {
     ...base,
-    value: input.liveActivity === 'decisions' ? '只在等你决定时' : '已开启',
+    value: input.liveActivity === 'decisions' ? 'Only when waiting for your decision' : 'Enabled',
     tone: 'ok',
   }
 }
@@ -154,35 +154,35 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   const permission = input.permission
   const actions: DeliveryAction[] = []
   if (permission?.status === 'undetermined')
-    actions.push({ kind: 'request', label: '开启通知', look: 'primary' })
+    actions.push({ kind: 'request', label: 'Turn on notifications', look: 'primary' })
   else if (permission?.status === 'denied') {
     if (permission.canAskAgain)
-      actions.push({ kind: 'request', label: '开启通知', look: 'primary' })
+      actions.push({ kind: 'request', label: 'Turn on notifications', look: 'primary' })
     actions.push({
       kind: 'settings',
-      label: '打开系统设置',
+      label: 'Open system settings',
       look: permission.canAskAgain ? 'plain' : 'primary',
     })
   } else if (permission?.status === 'granted')
     actions.push({
       kind: 'test',
-      label: '测试通知',
+      label: 'Test notification',
       look: 'secondary',
     })
   const relayFailing = input.push?.status === 'registered' && input.push.issue === 'relayFailing'
   if (permission?.status === 'granted' && input.hasHost &&
     (input.push?.status === 'notConfigured' || relayFailing || (input.push?.status === 'error' &&
       input.push.issue !== 'authorization' && input.push.issue !== 'storage')))
-    actions.push({ kind: 'retry', label: '重新检查', look: 'plain' })
+    actions.push({ kind: 'retry', label: 'Check again', look: 'plain' })
   if (duty) {
     if (!duty.batteryOptimizationIgnored)
-      actions.push({ kind: 'battery', label: '允许后台运行', look: 'secondary' })
-    // 厂商的自启动、后台限制开关都在应用详情页或它旁边。
-    actions.push({ kind: 'appSettings', label: '应用设置', look: 'plain' })
+      actions.push({ kind: 'battery', label: 'Allow background running', look: 'secondary' })
+    // Vendor autostart and background restriction toggles are on the app details page or next to it.
+    actions.push({ kind: 'appSettings', label: 'App settings', look: 'plain' })
   }
 
   const guide = input.hasHost && input.push?.status === 'notConfigured'
-  // 系统通知没开时结论已定，不必等推送登记；已允许才要等登记结果。
+  // When system notifications are off the conclusion is settled without waiting for push registration; only when allowed do we wait for the registration result.
   const checking =
     !permission ||
     (permission.status === 'granted' &&
@@ -191,28 +191,28 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   if (checking)
     return {
       state: 'checking',
-      title: '正在检查通知',
-      subtitle: '正在获取系统权限和电脑推送状态。',
+      title: 'Checking notifications',
+      subtitle: 'Getting system permissions and computer push status.',
       rows,
       actions,
       guide,
     }
-  // 登记成功不等于收得到：电脑经 Expo 发送失败时，离开 App 后的提醒到不了手机。
+  // Successful registration does not guarantee delivery: when the computer fails to send via Expo, alerts after leaving the app will not reach the phone.
   if (permission?.status === 'granted' && relayFailing)
     return {
       state: 'blocked',
-      title: '推送发送失败',
-      subtitle: '电脑最近一次没能把提醒发出去，离开 App 后可能收不到。',
+      title: 'Push delivery failed',
+      subtitle: 'The computer failed to send the last alert; you may not receive alerts after leaving the app.',
       rows,
       actions,
       guide,
     }
-  // 安卓拉取模式下，离开 App 还能不能收到，取决于后台连接是否真的在跑。
+  // In Android pull mode, whether alerts arrive after leaving the app depends on whether the background connection is really running.
   if (permission?.status === 'granted' && input.push?.status === 'registered' && (!duty || duty.running))
     return {
       state: 'ok',
-      title: '通知已就绪',
-      subtitle: '离开 App 后也可接收电脑发来的提醒。',
+      title: 'Notifications ready',
+      subtitle: 'You can receive alerts from the computer even after leaving the app.',
       rows,
       actions,
       guide,
@@ -220,8 +220,8 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   if (permission?.status === 'granted' && duty && !duty.running)
     return {
       state: 'blocked',
-      title: '后台连接未运行',
-      subtitle: '离开 App 后暂时收不到提醒。请允许后台运行，或回到 App 重新连接。',
+      title: 'Background connection not running',
+      subtitle: 'You will not receive alerts after leaving the app for now. Allow background running, or return to the app to reconnect.',
       rows,
       actions,
       guide,
@@ -230,111 +230,111 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
     state: 'blocked',
     title:
       permission.status !== 'granted'
-        ? '通知未开启'
+        ? 'Notifications off'
         : !input.hasHost
-          ? '还未连接电脑'
+          ? 'No computer connected yet'
           : input.push?.issue === 'deviceNotConfigured'
-            ? '此版本暂不支持后台推送'
+            ? 'This version does not support background push yet'
           : input.push?.status === 'notConfigured'
-            ? '电脑推送未设置'
-            : '推送暂不可用',
+            ? 'Computer push not set up'
+            : 'Push unavailable for now',
     subtitle:
       permission.status !== 'granted'
-        ? '开启系统通知，才能在离开 App 后收到提醒。'
+        ? 'Turn on system notifications to receive alerts after leaving the app.'
         : !input.hasHost
-          ? '连接电脑后，可接收任务提醒。'
-          : '暂时只能在 App 内查看提醒。',
+          ? 'Connect a computer to receive task alerts.'
+          : 'For now alerts can only be viewed inside the app.',
     rows,
     actions,
     guide,
   }
 }
 
-/** 卡片下的补充说明：只有登记失败、设备不支持这两种需要多说一句。 */
+/** Extra note under the card: only registration failure and unsupported device need one more sentence. */
 export function deliveryNote(
   push: DeliveryInput['push'],
   duty?: DeliveryInput['duty']
 ) {
   if (push?.status === 'registered' && push.issue === 'relayFailing')
-    return `${push.error ?? '电脑发送推送失败'}。如果电脑要通过代理上网，请在电脑端「设置 → 通用」里配置网络代理，再点「测试通知」确认。`
+    return `${push.error ?? 'The computer failed to send push'}. If the computer reaches the internet through a proxy, configure a network proxy in Settings → General on the desktop app, then tap “Test notification” to confirm.`
   if (duty && push?.status === 'registered')
-    return '离开 App 后，靠通知栏里那条「正在值守」保持与电脑的连接。小米、华为、OPPO、vivo 等手机还要在应用设置里允许自启动，并在最近任务里锁定 cc-haha，否则可能被系统清理。'
+    return 'After leaving the app, the “On duty” entry in the notification shade keeps the connection to the computer. Xiaomi, Huawei, OPPO, vivo and similar phones also need autostart allowed in app settings and cc-haha locked in recent tasks, otherwise the system may kill it.'
   if (push?.issue === 'deviceNotConfigured')
-    return '此版本暂不支持后台推送，请在 App 内查看任务提醒。无需重复修改手机通知权限。'
+    return 'This version does not support background push yet; view task alerts inside the app. No need to change phone notification permission again.'
   if (push?.issue === 'deviceUnavailable')
-    return '手机暂时无法连接系统推送服务，请检查网络后重新检查。'
+    return 'The phone cannot reach the system push service right now; check the network and check again.'
   if (push?.issue === 'authorization')
-    return '电脑连接授权已失效，请在「你的电脑」中重新连接。'
+    return 'Computer connection authorization expired; reconnect in “Your computers”.'
   if (push?.issue === 'hostUnsupported')
-    return '这台电脑的版本不支持推送登记，请更新电脑端。'
+    return 'This computer’s version does not support push registration; please update the desktop app.'
   if (push?.issue === 'storage')
-    return '手机无法保存推送登记信息，请重启 App 后重新检查。'
+    return 'The phone cannot save push registration info; restart the app and check again.'
   if (push?.issue === 'unknown')
-    return '推送登记未完成，请重新检查。'
+    return 'Push registration did not finish; please check again.'
   if (push?.status === 'notConfigured')
-    return '这台电脑尚未启用推送服务。目前可在 App 内查看提醒，测试手机通知不能验证电脑推送。'
-  if (push?.status === 'error') return '无法连接电脑推送，请检查连接后重试。'
-  if (push?.status === 'unsupported') return '当前设备或安装版本暂不支持电脑推送。'
+    return 'This computer has not enabled push yet. For now alerts can be viewed inside the app, and testing phone notifications cannot verify computer push.'
+  if (push?.status === 'error') return 'Cannot reach computer push; check the connection and retry.'
+  if (push?.status === 'unsupported') return 'Computer push is not supported on this device or install version yet.'
   return ''
 }
 
-/** 「提醒我」下的脚注：系统通知没开时，开关只管 App 打开时的提醒。 */
+/** Footnote under "Notify me": when system notifications are off, the toggles only control alerts while the app is open. */
 export function remindFootnote(permission: PermissionSnapshot | null) {
   return permission && permission.status !== 'granted'
-    ? '系统通知关着时，这几项只决定 App 打开时要不要提醒你。'
+    ? 'With system notifications off, these only decide whether to alert you while the app is open.'
     : ''
 }
 
 export const TEST_NOTIFICATION_DELAY_SECONDS = 5
 
 /**
- * 本地测试通知：延迟几秒再发，留时间回到主屏幕。标记和电脑发来的测试推送一样
- * （`eventType: 'test'`），App 在前台时也弹横幅。
+ * Local test notification: sent after a few seconds' delay, leaving time to return to the home screen. Marked the same as test pushes from the computer
+ * (`eventType: 'test'`), so a banner shows even while the app is in the foreground.
  */
 export const testNotificationContent = {
-  title: '测试通知 · cc-haha',
-  body: '看到这条，说明这台手机的系统通知正常。',
+  title: 'Test notification · cc-haha',
+  body: 'If you see this, system notifications work on this phone.',
   data: { eventType: 'test' },
 }
 
-/** 电脑还不支持远程测试（旧版桌面没有接口）时退回本地通知，要说清它只测了系统横幅。 */
-const localTestInstruction = `请回到手机主屏幕，${TEST_NOTIFICATION_DELAY_SECONDS} 秒后查看通知。此次只测试手机通知，未验证电脑推送。`
-export const noPushTokenNote = `暂时无法测试电脑推送。${localTestInstruction}`
-export const testNotificationNote = `请升级电脑端后再测试推送。${localTestInstruction}`
-export const noHostTestNote = `还未连接电脑。${localTestInstruction}`
+/** When the computer does not support remote tests yet (older desktop without the endpoint) fall back to a local notification, stating clearly it only tested the system banner. */
+const localTestInstruction = `Go back to the phone home screen and check the notification in ${TEST_NOTIFICATION_DELAY_SECONDS} seconds. This only tests phone notifications; computer push was not verified.`
+export const noPushTokenNote = `Cannot test computer push right now. ${localTestInstruction}`
+export const testNotificationNote = `Please update the desktop app before testing push. ${localTestInstruction}`
+export const noHostTestNote = `No computer connected yet. ${localTestInstruction}`
 
-/** `POST /api/sessions/mobile-push/test` 的返回。 */
+/** `POST /api/sessions/mobile-push/test` response. */
 export type PushTestResult = {
   status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed'
   error?: string
 }
 
-/** 把电脑的测试结果翻成一句话；未知状态按失败处理，不假装成功。 */
+/** Turn the computer's test result into one sentence; unknown states count as failure without pretending success. */
 export function pushTestNote(result: PushTestResult): string {
   switch (result.status) {
     case 'sent':
-      return '电脑已发送测试通知，屏幕顶部应弹出横幅。'
+      return 'The computer sent a test notification; a banner should appear at the top of the screen.'
     case 'notConfigured':
-      return '电脑推送尚未设置，请查看「推送设置说明」。'
+      return 'Computer push is not set up yet; see “Push setup guide”.'
     case 'noRegistration':
-      return '电脑还未识别这台手机，请重新连接后再试。'
+      return 'The computer does not recognize this phone yet; reconnect and retry.'
     default:
-      return '测试通知发送失败，请检查电脑推送设置后重试。'
+      return 'Test notification failed to send; check the computer push settings and retry.'
   }
 }
 
 export type TestNotificationOutcome = {
-  /** remote=经电脑真实推送，local=只发了本地通知。 */
+  /** remote=through a real computer push; local = only a local notification was sent. */
   via: 'remote' | 'local'
   note: string
 }
 
-/** 旧版电脑没有测试接口时的三种回答：404 无路由、405 局域网方法不允许、403 公网白名单拒绝。 */
+/** Three answers when an older desktop has no test endpoint: 404 no route, 405 method not allowed on LAN, 403 rejected by the public allowlist. */
 const oldDesktopStatuses = [404, 405, 403]
 
 /**
- * 「发一条测试通知」：优先让电脑经 APNs / FCM 真发一条；旧版电脑没有这个接口时
- * 退回本地通知。其余错误（断网、凭据）原样抛出，不拿本地通知冒充成功。
+ * "Send a test notification": prefer having the computer really send one via APNs / FCM; when an older desktop has no such endpoint
+ * fall back to a local notification. Other errors (offline, credentials) are thrown as is, without passing off a local notification as success.
  */
 export async function runTestNotification(deps: {
   getToken(): Promise<string>
@@ -350,11 +350,11 @@ export async function runTestNotification(deps: {
   try {
     token = await deps.getToken()
   } catch (error) {
-    // 拿不到系统推送凭据（没配 FCM / APNs 的安装包、模拟器、断网）：电脑那条链路没法测，
-    // 只测本机横幅，并如实说明，不把原生层的英文报错甩给用户。
+    // No system push credential available (install without FCM / APNs configured, simulator, offline): the computer path cannot be tested, 
+    // so only test the local banner and say so truthfully, without throwing native English errors at the user.
     await deps.scheduleLocal()
     if ((error as { code?: string } | null)?.code === 'NOT_CONFIGURED')
-      return { via: 'local', note: `此版本暂不支持后台推送。${localTestInstruction}` }
+      return { via: 'local', note: `This version does not support background push yet. ${localTestInstruction}` }
     return { via: 'local', note: noPushTokenNote }
   }
   try {
@@ -368,7 +368,7 @@ export async function runTestNotification(deps: {
   }
 }
 
-/** expo-notifications 的 AndroidImportance 数值（NONE=2 … MAX=7，与系统自身的 0–5 不同）。 */
+/** expo-notifications AndroidImportance values (NONE=2 … MAX=7, different from the system's own 0–5). */
 export const ANDROID_IMPORTANCE = {
   NONE: 2,
   MIN: 3,
@@ -379,57 +379,57 @@ export const ANDROID_IMPORTANCE = {
 } as const
 
 /**
- * 「声音和震动」行右侧的一句话。用户在系统里改过的重要程度和声音都以系统为准：
- * 横幅 = 重要程度高（弹出）；静默 = 低或最低；已关闭 = 渠道被关掉。
- * 读不到渠道（还没创建、旧系统）返回空串，行上不显示值。
+ * One line on the right of the "Sounds & vibration" row. Importance and sound changed by the user in the system take precedence: 
+ * banner = high importance (pops up); silent = low or minimum; off = channel disabled.
+ * Returns an empty string when the channel cannot be read (not created yet, old system), and the row shows no value.
  */
 export function channelSummary(
   channel: { importance: number; sound: string | null } | null | undefined
 ): string {
   if (!channel) return ''
   const { importance } = channel
-  if (importance === ANDROID_IMPORTANCE.NONE) return '已关闭'
+  if (importance === ANDROID_IMPORTANCE.NONE) return 'Off'
   if (importance === ANDROID_IMPORTANCE.MIN || importance === ANDROID_IMPORTANCE.LOW)
-    return '静默'
+    return 'Silent'
   const loud = channel.sound !== null
-  if (importance >= ANDROID_IMPORTANCE.HIGH) return loud ? '横幅 · 有声音' : '横幅'
-  return loud ? '有声音' : '静默'
+  if (importance >= ANDROID_IMPORTANCE.HIGH) return loud ? 'Banner · with sound' : 'Banner'
+  return loud ? 'With sound' : 'Silent'
 }
 
-/** 渠道行的标题：与系统里看到的渠道名一致。 */
+/** Channel row title: matches the channel name seen in the system. */
 export const channelRows = [
-  { kind: 'decisions', title: '要我做决定' },
-  { kind: 'completed', title: '任务完成' },
-  { kind: 'errors', title: '出错或卡住' },
+  { kind: 'decisions', title: 'Needs my decision' },
+  { kind: 'completed', title: 'Task finished' },
+  { kind: 'errors', title: 'Error or stuck' },
 ] as const
 
-export const channelFootnote = '点选提醒类型，在系统设置中调整声音和震动。'
+export const channelFootnote = 'Tap an alert type to adjust sound and vibration in system settings.'
 
-/** 电脑组首行：英文名后补一个空格（MacBook Pro 的设置），中文名直接相连（书房电脑的设置）。 */
+/** First row of the computer group: "<name> settings". */
 export function computerSettingsTitle(name: string | undefined) {
   const trimmed = name?.trim()
-  if (!trimmed) return '这台电脑的设置'
-  return /[A-Za-z0-9]$/.test(trimmed) ? `${trimmed} 的设置` : `${trimmed}的设置`
+  if (!trimmed) return 'This computer’s settings'
+  return `${trimmed} settings`
 }
 
 export const liveActivityValue = (mode: LiveActivityMode) =>
-  mode === 'decisions' ? '只在等你决定时' : '运行中也显示'
+  mode === 'decisions' ? 'Only when waiting for your decision' : 'Also show while running'
 
-/** 相机、照片权限行右侧的值；还没读到时不显示。 */
+/** Value on the right of the camera and photo permission rows; hidden when not read yet. */
 export function permissionLabel(
   response: { status: string; accessPrivileges?: string } | null
 ) {
   if (!response) return ''
   if (response.status === 'granted')
-    return response.accessPrivileges === 'limited' ? '仅所选照片' : '已允许'
-  return response.status === 'undetermined' ? '未询问' : '未允许'
+    return response.accessPrivileges === 'limited' ? 'Selected photos only' : 'Allowed'
+  return response.status === 'undetermined' ? 'Not asked' : 'Not allowed'
 }
 
-export const computersValue = (count: number) => `${count} 台`
+export const computersValue = (count: number) => `${count} computers`
 
-/** 设置页关于区：「0.1.0 (12)」，构建号取原生包（读不到就只显示版本）。 */
+/** About section of settings: "0.1.0 (12)", with the build number from the native bundle (only the version when unavailable). */
 export function versionLabel(version: string | undefined, build?: string | null) {
-  if (!version) return '未知版本'
+  if (!version) return 'Unknown version'
   return build ? `${version} (${build})` : version
 }
 

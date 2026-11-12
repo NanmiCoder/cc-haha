@@ -6,12 +6,12 @@ const skill = (id: string) => `Use the Skill tool with skill: ${JSON.stringify(i
 
 test('recovers Teams, computer use, skills, plugins and a command from the durable prompt format', () => {
   const plugin = 'Use plugin "github@connectors" for this request.'
-  const prompt = buildComposerMessage(`${skill('computer-use')}\n\n${skill('owner:review')}\n\n${plugin}\n\n/check 看一下`, [], true).content
+  const prompt = buildComposerMessage(`${skill('computer-use')}\n\n${skill('owner:review')}\n\n${plugin}\n\n/check Take a look`, [], true).content
   expect(userMessageDisplay(prompt)).toEqual({
-    text: '看一下',
+    text: 'Take a look',
     capabilities: [
-      { kind: 'team', id: 'agent-team', label: 'Agent 团队' },
-      { kind: 'computer', id: 'computer-use', label: '操作电脑' },
+      { kind: 'team', id: 'agent-team', label: 'Agent Team' },
+      { kind: 'computer', id: 'computer-use', label: 'Computer use' },
       { kind: 'skill', id: 'owner:review', label: '@review' },
       { kind: 'plugin', id: 'github@connectors', label: '@github' },
       { kind: 'command', id: '/check', label: '/check' },
@@ -20,7 +20,7 @@ test('recovers Teams, computer use, skills, plugins and a command from the durab
 })
 
 test('does not consume paths, inline slash text, mentions, command arguments or Markdown code', () => {
-  for (const text of ['手写 @review /check', '/folder/file 原样保留', '```\n/check\n```']) {
+  for (const text of ['Handwritten @review /check', '/folder/file Keep as is', '```\n/check\n```']) {
     expect(userMessageDisplay(text)).toEqual({ text, capabilities: [] })
   }
   expect(userMessageDisplay('/review /argument').text).toBe('/argument')
@@ -41,8 +41,8 @@ test('deduplicates repeated references without merging different kinds and handl
       { kind: 'plugin', id: 'review', label: '@review' },
     ] })
   }
-  expect(userMessageDisplay('Skill(owner:computer-use) 点击播放').capabilities).toEqual([
-    { kind: 'computer', id: 'owner:computer-use', label: '操作电脑' },
+  expect(userMessageDisplay('Skill(owner:computer-use) Tap to play').capabilities).toEqual([
+    { kind: 'computer', id: 'owner:computer-use', label: 'Computer use' },
   ])
-  expect(userMessageDisplay('没有闭合的 <agent-team-request> 原文').text).toBe('没有闭合的 <agent-team-request> 原文')
+  expect(userMessageDisplay('Raw text with unclosed <agent-team-request>').text).toBe('Raw text with unclosed <agent-team-request>')
 })

@@ -1,89 +1,89 @@
 ---
-title: 技能与技能市场
-nav_title: 技能
-description: 技能是给 Claude 的一套现成做法，从市场装之前要看清楚什么。
+title: Skills and the Skills Market
+nav_title: Skills
+description: A skill is a ready-made procedure for Claude. What to check before installing one.
 order: 4
 ---
 
-# 技能与技能市场
+# Skills and the Skills Market
 
-技能是别人写好的一套做法，装上以后 Claude 遇到对应场景就会照着做。比如一个「PDF 处理」技能会告诉它用哪个库、按什么顺序拆页、遇到加密文件怎么办——不用你每次都重新交代一遍。
+A skill is a procedure someone else already worked out. Install it and Claude follows it whenever the matching situation comes up. A "PDF handling" skill, for instance, tells it which library to use, what order to split pages in, and what to do with an encrypted file — so you don't have to explain it every time.
 
-**和 Agent 的区别**：Agent 是一个会干活的分身，有自己的上下文和工具范围；技能是一段知识和流程，被 Agent 加载来用。派 Agent 是「找个人去办」，装技能是「给他一本手册」。
+**How it differs from an agent**: an agent is a worker with its own context and tool scope; a skill is knowledge and procedure that an agent loads. Delegating to an agent is hiring someone; installing a skill is handing them a manual.
 
-## 技能市场
+## The Skills Market
 
-![技能市场：分类、精选卡片和安全标记](../images/app/zh-CN/skill-market.webp)
+![The Skills Market: categories, curated cards and security badges](../images/app/en/skill-market.webp)
 
-点侧边栏的「技能·连接器」，再切到顶部的「技能」。
+Click **Skills · Connectors** in the sidebar, then switch to **Skills** at the top.
 
-ClawHub 和 SkillHub 上加起来有十几万个技能，大部分是重复的、搬运的或者早就没人维护了。所以市场首页不直接列出它们，而是一份**精选清单**：从两个来源里挑出来的近 400 个常用技能，分成智能体增强、搜索调研、开发编程、办公文档等 13 个分类，每个技能配一句中文简介和一两个标签，标了「精选」的是编辑推荐。清单随应用一起发布，打开就有，不用等网络。清单顶部会写更新日期，卡片上的下载量和星标是那天的数据。
+ClawHub and SkillHub hold well over a hundred thousand skills between them, and most are duplicates, copies or abandoned experiments. So the market home doesn't list them directly. It opens on a **curated catalogue** instead: about 400 popular skills picked from both sources, sorted into 13 categories such as Agent Boost, Search & Research, Development and Office & Docs. Skills marked **Featured** are editor's picks. The catalogue ships with the app, so it appears instantly without waiting on the network. Its update date is shown at the top; download and star counts on the cards are from that date.
 
-- **分类** — 点上方的分类按钮只看这一类，按钮上的数字是这一类有多少个技能。
-- **搜索** — 搜索框在精选清单里按名称、简介、标签和作者匹配。
-- **筛选** — 来源（ClawHub / SkillHub）、安全状态、安装状态。
+- **Categories** — click a category to see only that kind of skill. The number on each button is how many skills it holds.
+- **Search** — the search box matches names, summaries, tags and authors within the catalogue.
+- **Filters** — source (ClawHub / SkillHub), security status, and install status.
 
-界面语言是英文、日文或韩文时，卡片显示作者的原始简介，不显示中文标签。
+In an English, Japanese or Korean interface, cards show the author's original summary and hide the catalogue's Chinese tags.
 
-### 在全部市场中搜索
+### Search all markets
 
-精选清单里找不到想要的，就点搜索框下方的「在全部市场中搜索」，直接查 ClawHub 和 SkillHub 的全部技能，这时输入关键词后按 Enter 才会搜索。这种结果**没有经过精选**，页面会单独标出来，装之前更要仔细看。清空搜索框就回到精选清单。
+If the catalogue doesn't have what you need, click **Search all markets** under the search box to query every skill on ClawHub and SkillHub; in this mode a search runs when you press Enter. These results are **not curated**, and the page labels them that way — read them more carefully before installing. Clear the search box to return to the catalogue.
 
-### 安全标记怎么读
+### Reading the security badges
 
-每张卡片上有一个安全标记，它反映的是**来源方**的扫描结果，不是本应用的审计结论：
+Each card carries a security badge. It reports what the **source** scanned, not an audit by this app:
 
-| 标记 | 含义 |
+| Badge | Meaning |
 |---|---|
-| 已认证 | 发布者已认证，且通过来源方安全扫描 |
-| 扫描无风险 | 来源方安全扫描未发现风险 |
-| 未审计 | 来源方没提供安全审计数据 |
-| 存在风险 | 来源方扫描标记它有潜在风险 |
+| Verified | Publisher is verified and the skill passed the source's security scan |
+| Scanned safe | The source's security scan found no risks |
+| Not audited | The source provided no security audit data |
+| Flagged | The source's scan flagged potential risk |
 
-「未审计」不等于不安全，只是没人查过。「存在风险」的技能除非你自己看懂了它在干什么，否则别装。精选清单里只有少数几个广为推荐的技能带着「存在风险」标记，它们被标记的原因会在详情页写明。
+"Not audited" doesn't mean unsafe — it means nobody checked. "Flagged" means don't install it unless you've read the files and understand exactly what they do. The catalogue includes only a few flagged skills, all widely recommended, and the reason each one is flagged is written on its detail page.
 
-## 安装之前
+## Before you install
 
-技能会带来新的工具、脚本和外部依赖，装上以后 Claude 就可能去执行它们。这些技能来自社区第三方作者，「精选」只是推荐，不是安全担保。
+A skill can bring new tools, scripts, and external dependencies, and once installed Claude may run them. These skills come from third-party community authors; **Featured** is a recommendation, not a security guarantee.
 
-点开一个技能，详情页分几块：
+A skill's detail page has several parts:
 
-- **概览** — 顶部的「安装前请了解：这个技能会做什么」会列出它要执行的命令或脚本、注册的 Hook、读取的密钥、访问的网络地址和写入的文件。这是按规则从 `SKILL.md` 和文件列表里识别出来的，只能参考，不能代替你自己读一遍。右侧「何时触发」是作者写的使用场景。
-- **文件** — 逐个读 `SKILL.md` 和配套脚本。
-- **安全报告** — 来源方每个扫描器的结论和完整报告链接。标记为「存在风险」时，这个标签旁边会有一个提示点。
-- **更新日志** — 作者为最新版本写的说明（有的话）。
+- **Overview** — at the top, **Before installing: what this skill does** lists the commands or scripts it runs, hooks it registers, secrets it reads, network hosts it contacts and files it writes. It is detected by rules from `SKILL.md` and the file list, so treat it as a hint, not a substitute for reading the files. **When it triggers** on the right is the author's own list of situations.
+- **Files** — read `SKILL.md` and any accompanying scripts.
+- **Security report** — each of the source's scanners, with its verdict and a link to the full report. A flagged skill shows a dot next to this tab.
+- **Changelog** — the author's notes for the latest version, when there are any.
 
-详情、文件和安装都会重新向来源方读取最新版本，不会用清单里的旧数据。
+Detail, files and installation always re-read the latest version from the source rather than the catalogue's snapshot.
 
-建议：
+Recommended:
 
-1. 至少读一遍 `SKILL.md` 和配套脚本。
-2. 拿不准就让 Claude 先扫一遍——「帮我看看这个技能的文件里有没有可疑的东西」。
-3. 确认你真的需要它。装得多不等于更强，每个技能都会占上下文。
+1. Read `SKILL.md` and any accompanying scripts at least once.
+2. If you're unsure, have Claude look first — "check this skill's files for anything suspicious".
+3. Confirm you actually need it. More skills isn't more capability; every skill costs context.
 
-点「安装」会弹确认框，里面写清了安装位置、这个技能会获得的能力，以及「安装完成后，技能将在新会话中生效」。对「未审计」或「存在风险」的技能，要先勾选「我已查看 SKILL.md 与安全报告」才能确认安装。**已经开着的会话不会立刻拿到新技能**，需要新建一条。安装只是下载文件，不会执行技能里的任何脚本。
+**Install** opens a confirmation with the install location, what the skill will be able to do, and a reminder that it takes effect in new sessions. For a **Not audited** or **Flagged** skill you must first tick "I have read SKILL.md and the security report" before you can confirm. **Sessions already open won't pick it up** — start a new one. Installing only downloads files; it never runs the skill's scripts.
 
-卸载在同一个位置，会删掉本地对应目录下的文件。
+Uninstall lives in the same place and deletes the local files under that skill's directory.
 
-## 已安装的技能
+## Installed skills
 
-技能页右上角的「我的技能」，或者 设置 → 技能，都能看到本机所有可用技能，按来源分组：
+**My skills** at the top right of the Skills page, or **Settings → Skills**, lists everything available on this machine, grouped by source:
 
-- **用户** — 你装的，在 `~/.claude/skills/`。
-- **项目** — 跟着仓库来的。
-- **插件** — 某个插件打包带来的。
-- **内置** — 应用自带的。
+- **User** — installed by you, in `~/.claude/skills/`.
+- **Project** — shipped with the repo.
+- **Plugin** — bundled by a plugin.
+- **Built-in** — shipped with the app.
 
-每条会显示入口文件、文件数和预估 token 占用。点进去可以在「文档模式」和「代码模式」之间切换，直接读技能的正文和源码文件。
+Each entry shows its entry file, file count, and estimated token cost. Open one to switch between **doc mode** and **code mode** and read the skill's prose and source files directly.
 
-### `.agents/skills` 跨客户端约定
+### The `.agents/skills` convention
 
-除了 `~/.claude/skills/`，桌面端也会读 `~/.agents/skills/`。这是一个开放标准目录，Codex、Cursor、Gemini CLI 等客户端共享同一份技能——装一次，几个工具都能用。来自这个目录的技能在列表里会带一个 `.agents` 标记。
+Besides `~/.claude/skills/`, the desktop app also reads `~/.agents/skills/`. That's an open standard directory shared with Codex, Cursor, Gemini CLI, and other clients — install once, use it everywhere. Skills from that directory are tagged `.agents` in the list.
 
-项目里的 `.agents/skills/` 同理，随仓库分发，不是你自己装的。
+A project's own `.agents/skills/` works the same way: it ships with the repo rather than being something you installed.
 
 :::warning
-跨客户端目录意味着别的工具装的技能这里也会生效。定期扫一眼 设置 → 技能 的列表，确认里面没有你不认识的东西。
+A shared directory means skills another client installed also apply here. Scan **Settings → Skills** occasionally and make sure nothing on the list is a stranger.
 :::
 
-想了解技能的加载机制和文件格式，看[技能系统原理](../internals/skills.md)。
+For how skills are loaded and what the file format is, see [Skills internals](../internals/skills.md).

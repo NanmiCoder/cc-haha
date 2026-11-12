@@ -48,7 +48,7 @@ export function PlanPreviewCard({
 
   // `embedded` is the plan inside the approval card, which already supplies
   // the frame and the header — a second bordered card inside it was the
-  // card-in-card the 「素」 rules rule out. Standalone (a finished plan in the
+  // card-in-card the "Su" spec rules out. Standalone (a finished plan in the
   // transcript) it keeps its own card.
   return (
     <div

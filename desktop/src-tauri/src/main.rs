@@ -41,7 +41,7 @@ fn main() {
 /// Determine if we should start in portable mode.
 /// Returns the portable config directory path if yes, None for default mode.
 fn determine_startup_portable_dir() -> Option<PathBuf> {
-    // 1. 如果外部已经设置了 CLAUDE_CONFIG_DIR 环境变量，我们不应该覆盖它，直接返回 None 让 main 保持原样
+    // 1. If CLAUDE_CONFIG_DIR is already set externally, do not override it; return None so main leaves it as is
     if std::env::var("CLAUDE_CONFIG_DIR").is_ok() {
         return None;
     }
@@ -51,7 +51,7 @@ fn determine_startup_portable_dir() -> Option<PathBuf> {
     let mut default_portable = exe_dir.to_path_buf();
     default_portable.push("CLAUDE_CONFIG_DIR");
 
-    // 辅助函数：读取 app-mode.json 获取模式和自定义便携路径
+    // Helper: read app-mode.json for the mode and custom portable path
     fn get_mode_from_config(dir: &std::path::Path) -> Option<(String, Option<PathBuf>)> {
         let path = dir.join("app-mode.json");
         let data = std::fs::read_to_string(&path).ok()?;
@@ -68,7 +68,7 @@ fn determine_startup_portable_dir() -> Option<PathBuf> {
         Some((mode, portable_dir))
     }
 
-    // 2. 优先检查便携目录本地的配置文件（保证移动便携版到新电脑依然生效，并能正确处理切回默认模式）
+    // 2. Check the config file in the portable directory first (so a portable copy moved to a new machine keeps working and switching back to default mode is handled)
     if let Some((mode, portable_dir)) = get_mode_from_config(&default_portable) {
         if mode == "portable" {
             if dir_has_portable_data(&default_portable) {
@@ -76,11 +76,11 @@ fn determine_startup_portable_dir() -> Option<PathBuf> {
             }
             return Some(portable_dir.unwrap_or(default_portable.clone()));
         } else {
-            return None; // 明确设置了 default，直接使用系统默认
+            return None; // default set explicitly; use the system default
         }
     }
 
-    // 3. 检查系统全局配置
+    // 3. Check the system-wide config
     #[cfg(target_os = "windows")]
     let system_config: Option<PathBuf> = std::env::var("APPDATA").ok().map(PathBuf::from);
     #[cfg(target_os = "macos")]
@@ -98,18 +98,18 @@ fn determine_startup_portable_dir() -> Option<PathBuf> {
         });
 
     if let Some(ref sys_cfg) = system_config {
-        // 修复：必须使用 Tauri 默认的 bundle identifier
+        // Fix: must use the Tauri default bundle identifier
         let app_subdir = sys_cfg.join("com.claude-code-haha.desktop");
         if let Some((mode, portable_dir)) = get_mode_from_config(&app_subdir) {
             if mode == "portable" {
                 return Some(portable_dir.unwrap_or(default_portable.clone()));
             } else {
-                return None; // 明确设置了 default
+                return None; // default set explicitly
             }
         }
     }
 
-    // 4. 自动检测：如果默认便携目录中已经存在数据文件，则自动进入便携模式
+    // 4. Auto-detect: if the default portable directory already has data files, enter portable mode
     fn dir_has_portable_data(dir: &std::path::Path) -> bool {
         if !dir.is_dir() {
             return false;

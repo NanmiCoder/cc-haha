@@ -21,9 +21,9 @@ function run(responses: Record<string, unknown | Error>, workDir: string | undef
 }
 
 const real = {
-  '/api/agents': { availableTools: [], activeAgents: [{ agentType: 'reviewer', description: '审代码' }], allAgents: [] },
+  '/api/agents': { availableTools: [], activeAgents: [{ agentType: 'reviewer', description: 'Review code' }], allAgents: [] },
   '/api/connectors': { items: [{ id: 'github', displayName: 'GitHub', connection: 'connected', supported: true, installed: true }] },
-  '/api/workflows': { workflows: [{ name: 'ship', description: '发版' }] },
+  '/api/workflows': { workflows: [{ name: 'ship', description: 'Release' }] },
 }
 
 describe('loadBringExtras', () => {
@@ -31,9 +31,9 @@ describe('loadBringExtras', () => {
     const { paths, result, done } = run(real)
     await done
     expect(paths.sort()).toEqual(['/api/agents?cwd=%2Fwork%20dir', '/api/connectors', '/api/workflows?cwd=%2Fwork%20dir'])
-    expect(result.agents).toEqual([{ agentType: 'reviewer', description: '审代码' }])
+    expect(result.agents).toEqual([{ agentType: 'reviewer', description: 'Review code' }])
     expect(result.connectors?.[0]).toMatchObject({ id: 'github', connection: 'connected' })
-    expect(result.workflows).toEqual([{ name: 'ship', description: '发版' }])
+    expect(result.workflows).toEqual([{ name: 'ship', description: 'Release' }])
   })
 
   test('an endpoint that is missing, forbidden or failing only blanks its own part', async () => {
@@ -45,7 +45,7 @@ describe('loadBringExtras', () => {
     await done
     expect(result.agents).toBeNull()
     expect(result.connectors).toBeNull()
-    expect(result.workflows).toEqual([{ name: 'ship', description: '发版' }])
+    expect(result.workflows).toEqual([{ name: 'ship', description: 'Release' }])
   })
 
   test('an empty list is a success (the row shows with zero), not a failure', async () => {

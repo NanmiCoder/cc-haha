@@ -23,12 +23,12 @@ import { activeSessions } from './hostSessions'
 import { TaskRow } from './TaskRow'
 import { useNow } from './useNow'
 
-/** 整台电脑的后台活动：按会话分组、只读，点会话进入它的后台活动再停止。 */
+/** Background activity of the whole computer: grouped by session, read-only; tap a session to enter its background activity and stop there. */
 export function HostActivity({ hostId }: { hostId: string }) {
   const colors = useColors()
   const { client, host, error: connectionError } = useConnection(hostId)
   const { snapshot } = useDashboard()
-  // 快照放进 ref：首页每次刷新不重建轮询，下一次 3 秒轮询自然读到最新会话。
+  // The snapshot goes into a ref: home refreshes do not rebuild polling, and the next 3-second poll naturally reads the latest sessions.
   const current = snapshot?.hostId === hostId ? snapshot : null
   const snapshotRef = useRef(current)
   useEffect(() => {
@@ -37,22 +37,22 @@ export function HostActivity({ hostId }: { hostId: string }) {
   const resource = useFocusedResource(
     useCallback(
       async (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
+        if (!client) throw new Error('Connecting to computer')
         const sessions = await activeSessions(client, snapshotRef.current, signal)
         const groups = await loadHostBackgroundTasks(
           client,
           sessions.map((session) => session.id),
           signal
         )
-        // 一个会话都没读到时不能说“没有后台活动”，按读取失败处理；部分没读到要说明。
+        // When no session could be read do not say "no background activity"; treat it as a load failure; explain when some could not be read.
         if (sessions.length && !groups.length)
-          throw new Error('读不到后台活动，确认电脑连接正常后再试。')
+          throw new Error('Cannot read background activity; check the computer connection and retry.')
         const titles = new Map(sessions.map((session) => [session.id, session.title]))
         return {
           missing: sessions.length - groups.length,
           groups: groups
             .filter((group) => group.tasks.length > 0)
-            .map((group) => ({ ...group, title: titles.get(group.sessionId) ?? '未命名会话' })),
+            .map((group) => ({ ...group, title: titles.get(group.sessionId) ?? 'Untitled session' })),
         }
       },
       [client]
@@ -66,20 +66,20 @@ export function HostActivity({ hostId }: { hostId: string }) {
     router.push({ pathname: '/chat/[id]', params: { id: sessionId, host: hostId } })
   return (
     <ScreenView>
-      <NavBar title="后台活动" subtitle={host?.name} />
+      <NavBar title="Background activity" subtitle={host?.name} />
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}>
         <InlineError text={connectionError || resource.error} style={{ marginBottom: 8 }} />
         {missing > 0 ? (
           <Footnote style={{ paddingTop: 0, paddingBottom: 8 }}>
-            有 {missing} 个会话的后台活动这次没读到，稍后会自动重试。
+            Background activity of {missing} sessions could not be read this time; it will retry automatically.
           </Footnote>
         ) : null}
         {resource.loading ? (
           <Loading />
         ) : resource.error && !resource.value ? null : groups.length === 0 ? (
           <EmptyState
-            title="没有后台活动"
-            detail="子 Agent 和后台命令开始后会显示在这里。"
+            title="No background activity"
+            detail="Subagents and background commands show up here once they start."
           />
         ) : (
           <>
@@ -87,7 +87,7 @@ export function HostActivity({ hostId }: { hostId: string }) {
               <View key={group.sessionId}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`进入 ${group.title} 的后台活动`}
+                  accessibilityLabel={`Open background activity of ${group.title}`}
                   onPress={() => open(group.sessionId)}
                   style={({ pressed }) => ({
                     flexDirection: 'row',
@@ -115,7 +115,7 @@ export function HostActivity({ hostId }: { hostId: string }) {
                 </Group>
               </View>
             ))}
-            <Footnote style={{ paddingTop: 10 }}>进入会话后可以停止</Footnote>
+            <Footnote style={{ paddingTop: 10 }}>Can stop after entering the session</Footnote>
           </>
         )}
       </ScrollView>

@@ -33,10 +33,10 @@ import {
 import { useFileSearch, useWorkspaceTree } from '../ui/files/useWorkspaceFiles'
 
 /**
- * 文件底单：会话「…」菜单的「文件」「更改」都进这里。
- * 路由参数 id（会话）、host、tab=changed|all。
- * 它是一个透明的 modal 路由，自己画遮罩和圆角的白底，所以 iOS 和 Android 长得一样；
- * 在 _layout 里注册同样的 presentation 更稳（见下面的 options）。
+ * Files sheet: both Files and Changes in the session "…" menu land here.
+ * Route params id (session), host, tab=changed|all.
+ * It is a transparent modal route that draws its own backdrop and rounded white sheet, so iOS and Android look the same; 
+ * registering the same presentation in _layout is more reliable (see options below).
  */
 export default function Files() {
   const { id, host, tab } = useLocalSearchParams<{ id: string; host: string; tab?: string }>()
@@ -58,7 +58,7 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
   const [query, setQuery] = useState('')
   const needle = searchQuery(query)
 
-  /* 进出动画：遮罩淡入、白底从下滑上来；关闭时反过来，动画结束才真正返回。 */
+  /* Enter/exit animation: backdrop fades in, sheet slides up; reversed on close, and only actually goes back after the animation ends. */
   const [progress] = useState(() => new Animated.Value(0))
   const [closing, setClosing] = useState(false)
   useEffect(() => {
@@ -82,8 +82,8 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
       else router.replace('/')
     })
   }, [closing, progress])
-  // 只在这一页是当前页时接管返回键。页面压在 diff / file / changes 下面时它仍然挂载，
-  // 若一直监听，返回键会被它抢走：它自己滑出屏幕后留下一层看不见的透明页盖住聊天页。
+  // Take over the back key only while this is the current page. It stays mounted under diff / file / changes, 
+  // and if it always listened it would steal the back key: after sliding off screen it would leave an invisible transparent page covering chat.
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -94,7 +94,7 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
     }, [close])
   )
 
-  /* 已修改：最近一轮检查点 */
+  /* Modified: latest turn checkpoint */
   const key = sessionKey(hostId, id)
   const checkpoints = useFocusedResource(
     useCallback(
@@ -115,7 +115,7 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
   )
   const shownChanged = filterChanged(changed, needle)
 
-  /* 所有文件：目录树 + 项目内搜索 */
+  /* All files: directory tree + in-project search */
   const tree = useWorkspaceTree(client, id, tab === 'all')
   const items = useMemo(() => treeItems(tree.dirs, tree.open), [tree.dirs, tree.open])
   const search = useFileSearch(client, id, needle, tab === 'all')
@@ -146,12 +146,12 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
     } else if (!latest) {
       body = (
         <>
-          {/* 没有检查点也能看项目目录里没提交的改动，否则这一页进不了「项目文件」。 */}
-          <LinkRow title="查看项目当前未提交的改动" onPress={openWorkspace} />
+          {/* Uncommitted changes in the project directory are viewable even without checkpoints; otherwise this page could not reach "Project files". */}
+          <LinkRow title="View current uncommitted changes in the project" onPress={openWorkspace} />
           <EmptyState
             icon="file"
-            title="还没有改动记录"
-            detail="电脑会在会话运行后记录可用的文件检查点。"
+            title="No change records yet"
+            detail="The computer records available file checkpoints after the session runs."
           />
         </>
       )
@@ -159,19 +159,19 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
       body = (
         <>
           <InlineError text={pageError} style={{ margin: 16, marginBottom: 0 }} />
-          <LinkRow title="查看全部改动与回退" onPress={openChanges} />
+          <LinkRow title="View all changes and rewind" onPress={openChanges} />
           {changed.length ? (
             shownChanged.length ? (
               shownChanged.map((row) => (
                 <ChangedFileRow key={row.path} row={row} onPress={() => openDiff(row.path)} />
               ))
             ) : (
-              <EmptyState icon="search" title="没有匹配的文件" detail="只在这一轮更改的文件里找。" />
+              <EmptyState icon="search" title="No matching files" detail="Searches only files changed in this turn." />
             )
           ) : (
             <EmptyState
               icon="file"
-              title="这一轮没有更改的文件"
+              title="No files changed in this turn"
               detail={translateReason(latest.code.reason)}
             />
           )}
@@ -190,12 +190,12 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
         ))}
         {search.truncated ? (
           <Text style={{ padding: 16, fontSize: 13, color: colors.ink3 }}>
-            只显示前 200 个，换个更具体的词。
+            Showing only the first 200; try a more specific term.
           </Text>
         ) : null}
       </>
     ) : (
-      <EmptyState icon="search" title="没有匹配的文件" />
+      <EmptyState icon="search" title="No matching files" />
     )
   } else {
     body = connectionError ? (
@@ -231,7 +231,7 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
       />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="关闭文件"
+        accessibilityLabel="Close files"
         onPress={close}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, height: top + 24 }}
       />
@@ -270,12 +270,12 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
           />
           <View style={{ height: 64, alignItems: 'center', justifyContent: 'center', paddingTop: 6 }}>
             <Text accessibilityRole="header" style={{ fontSize: 17, fontWeight: '600', color: colors.ink }}>
-              文件
+              Files
             </Text>
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="关闭"
+            accessibilityLabel="Close"
             onPress={close}
             style={({ pressed }) => ({
               position: 'absolute',

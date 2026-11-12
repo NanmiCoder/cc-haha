@@ -40,25 +40,25 @@ import { usePendingSwitches } from './usePendingSwitches'
 
 const confirmCopy = {
   run: {
-    title: '现在执行这个任务？',
-    detail: '将在电脑上立即运行，可修改文件和执行命令。已有运行记录可从结果入口查看。',
-    action: '立即运行',
+    title: 'Run this task now?',
+    detail: 'It will run on the computer immediately and can modify files and run commands. Existing run records are available from the results entry.',
+    action: 'Run now',
   },
   delete: {
-    title: '删除这个定时任务？',
-    detail: '删除后不再触发后续执行。已经运行的任务与执行记录不会因此删除。',
-    action: '确认删除',
+    title: 'Delete this scheduled task?',
+    detail: 'After deletion later runs no longer trigger. Tasks already run and their records are not deleted.',
+    action: 'Confirm delete',
   },
 } as const
 
-/** 定时任务详情（ScheduleDetail 稿）：执行内容、现在跑一次、改执行时间、最近运行、删除。 */
+/** Scheduled task details (ScheduleDetail design): task content, run now, change run time, recent runs, delete. */
 export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
   const colors = useColors()
   const { client, error: connectionError } = useConnection(hostId)
   const resource = useFocusedResource(
     useCallback(
       async (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
+        if (!client) throw new Error('Connecting to computer')
         const { tasks } = await client.get<{ tasks: ScheduledTask[] }>('/api/scheduled-tasks', {
           signal,
         })
@@ -75,7 +75,7 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
     5000
   )
   const [confirm, setConfirm] = useState<'run' | 'delete' | null>(null)
-  // 关闭动画期间文案保持不变。
+  // Text stays unchanged during the close animation.
   const [copy, setCopy] = useState<'run' | 'delete'>('run')
   const ask = (action: 'run' | 'delete') => {
     setCopy(action)
@@ -84,7 +84,7 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
   const [editing, setEditing] = useState(false)
   const [editKey, setEditKey] = useState(0)
   const [result, setResult] = useState<TaskRun | null>(null)
-  // 删除成功后返回列表；返回动画期间继续显示原内容，不闪“已不在电脑上”。
+  // After successful deletion go back to the list; keep the original content during the back animation without flashing "no longer on the computer".
   const [leaving, setLeaving] = useState<ScheduledTask | null>(null)
   const task = resource.value?.task ?? leaving
   const runs = resource.value?.runs ?? []
@@ -98,30 +98,30 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
   if (resource.loading)
     return (
       <ScreenView>
-        <NavBar backLabel="定时任务" />
+        <NavBar backLabel="Scheduled task" />
         <Loading />
       </ScreenView>
     )
   if (!task)
     return (
       <ScreenView>
-        <NavBar backLabel="定时任务" />
+        <NavBar backLabel="Scheduled task" />
         <InlineError text={connectionError || resource.error} style={{ marginHorizontal: 16 }} />
         {resource.value ? (
           <EmptyState
             icon="clock"
-            title="这个定时任务已不在电脑上"
-            detail="可能已经在电脑上删除了。"
+            title="This scheduled task is no longer on the computer"
+            detail="It may have been deleted on the computer."
             action={
               <View style={{ alignItems: 'center' }}>
-                <Button title="返回定时任务" variant="secondary" onPress={goBack} />
+                <Button title="Back to scheduled tasks" variant="secondary" onPress={goBack} />
               </View>
             }
           />
         ) : null}
       </ScreenView>
     )
-  const name = task.name || '未命名任务'
+  const name = task.name || 'Untitled task'
   const enabled = switches.value(task.id, task.enabled !== false)
   const next = enabled ? nextRunAt(task, new Date(now)) : null
   const toggle = (value: boolean) => {
@@ -182,12 +182,12 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
         (value) => setResult(value.run)
       )
   }
-  // 弹层打开时错误显示在弹层里，页面不再重复。
+  // When a sheet is open errors show in the sheet and are not repeated on the page.
   const sheetOpen = !!confirm || editing
   const pageError = connectionError || (sheetOpen ? '' : resource.error)
   return (
     <ScreenView>
-      <NavBar backLabel="定时任务" />
+      <NavBar backLabel="Scheduled task" />
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 4, paddingBottom: 16 }}>
           <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
@@ -198,14 +198,14 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
               task={task}
               size={14}
               extras={[
-                task.execution?.kind === 'session' ? '已有会话' : projectLabel(task.folderPath),
-                task.scheduleState === 'completed' ? '已完成' : enabled ? (next ? `下次${taskNextRunLabel(task, next, new Date(now))}` : '') : '已暂停',
+                task.execution?.kind === 'session' ? 'Existing session' : projectLabel(task.folderPath),
+                task.scheduleState === 'completed' ? 'Done' : enabled ? (next ? `Next ${taskNextRunLabel(task, next, new Date(now))}` : '') : 'Paused',
               ]}
             />
           </View>
           <View style={{ marginTop: 2 }}>
             <Switch
-              label="启用"
+              label="Enabled"
               value={enabled}
               disabled={resource.busy || !client}
               onValueChange={toggle}
@@ -214,21 +214,21 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
         </View>
         <InlineError text={pageError} style={{ marginBottom: 12 }} />
         <Card style={{ borderRadius: 16, gap: 6 }}>
-          <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>执行内容</Text>
+          <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>Task content</Text>
           <Text selectable style={{ fontSize: 16, lineHeight: 24, color: colors.ink }}>
             {task.prompt}
           </Text>
         </Card>
         <View style={{ flexDirection: 'row', gap: 8, paddingTop: 12 }}>
           <ActionButton
-            title="现在跑一次"
+            title="Run now"
             primary
             play
             disabled={resource.busy || !client || latest?.status === 'running'}
             onPress={() => ask('run')}
           />
           <ActionButton
-            title="改执行时间"
+            title="Change run time"
             disabled={resource.busy || !client}
             onPress={() => {
               setEditKey((value) => value + 1)
@@ -236,7 +236,7 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
             }}
           />
         </View>
-        <SectionHeader title="最近运行" />
+        <SectionHeader title="Recent runs" />
         <Group>
           {runs.length ? (
             runs.map((run, index) => (
@@ -247,17 +247,17 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
             ))
           ) : (
             <View style={{ height: 56, justifyContent: 'center', paddingHorizontal: 14 }}>
-              <Text style={{ fontSize: 15, color: colors.ink3 }}>还没有执行记录</Text>
+              <Text style={{ fontSize: 15, color: colors.ink3 }}>No runs yet</Text>
             </View>
           )}
         </Group>
         <DangerRowButton
-          title="删除这个定时任务"
+          title="Delete this scheduled task"
           disabled={resource.busy || !client}
           onPress={() => ask('delete')}
           style={{ marginTop: 22 }}
         />
-        <Footnote>执行内容和高级配置在电脑上改。删除后不再触发，已有的运行记录会留着。</Footnote>
+        <Footnote>Edit task content and advanced settings on the computer. After deletion it no longer triggers; existing run records are kept.</Footnote>
       </ScrollView>
       <ConfirmSheet
         visible={!!confirm}

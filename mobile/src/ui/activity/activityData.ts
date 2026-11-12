@@ -64,18 +64,18 @@ export function taskProgress(tasks: TaskInfo[]) {
   return { completed: tasks.filter((task) => task.status === 'completed').length, total: tasks.length }
 }
 export function taskState(task: TaskInfo, tasks: TaskInfo[]) {
-  if (task.status === 'completed') return '已完成'
-  if (task.status === 'in_progress') return '进行中'
-  return task.blockedBy.some((id) => tasks.some((other) => other.id === id && other.status !== 'completed')) ? '等待依赖' : '待开始'
+  if (task.status === 'completed') return 'Done'
+  if (task.status === 'in_progress') return 'In progress'
+  return task.blockedBy.some((id) => tasks.some((other) => other.id === id && other.status !== 'completed')) ? 'Waiting on dependencies' : 'Not started'
 }
 export function memberState(member: TeamMember) {
-  if (member.status === 'completed' || member.activity === 'exited') return '已退出'
-  if (member.activity === 'active') return '工作中'
-  if (member.activity === 'stopped') return '已停止'
-  if (member.autoRetry) return '等待重试'
-  if (member.status === 'failed') return '遇到错误'
-  if (member.activity === 'idle') return '空闲'
-  return member.status === 'running' ? '工作中' : '空闲'
+  if (member.status === 'completed' || member.activity === 'exited') return 'Exited'
+  if (member.activity === 'active') return 'Working'
+  if (member.activity === 'stopped') return 'Stopped'
+  if (member.autoRetry) return 'Waiting to retry'
+  if (member.status === 'failed') return 'Error'
+  if (member.activity === 'idle') return 'Idle'
+  return member.status === 'running' ? 'Working' : 'Idle'
 }
 export function memberTasks(member: TeamMember, tasks: TaskInfo[]) {
   const aliases = [member.agentId, member.name, member.agentId.split('@')[0]]
@@ -98,7 +98,7 @@ export function teamMembers(timeline: TeamWorkbenchSessionTimeline) {
 }
 const LOCAL_COMMAND = /^\s*(?:<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>\s*)+$/
 
-/** 成员启动时 runtime 替它执行的本地命令（/model 及其输出）：不是它做的事，原样显示只是一堆标签。 */
+/** Local commands the runtime ran on the member's behalf at startup (/model and its output): not its own work, and shown raw they are just a pile of tags. */
 export function isLocalCommandEntry(entry: HistoryEntry) {
   if (entry.type !== 'user') return false
   const text =
@@ -110,7 +110,7 @@ export function isLocalCommandEntry(entry: HistoryEntry) {
   return LOCAL_COMMAND.test(text)
 }
 
-/** 一个成员最近的执行记录（原始条目，由页面和主对话走同一套归一化）。 */
+/** A member's recent execution records (raw entries, normalized by the same pipeline as the page and main conversation). */
 export async function loadMemberHistory(client: ApiClient, team: { name: string; incarnationId?: string; leadSessionId?: string }, agentId: string, signal: AbortSignal) {
   const params = new URLSearchParams()
   if (team.leadSessionId) params.set('leadSessionId', team.leadSessionId)
@@ -130,13 +130,13 @@ export function teamMessageText(message: TeamWorkbenchSnapshot['messages'][numbe
       if (typeof value.text === 'string') return value.text
       if (typeof value.message === 'string') return value.message
       const labels: Record<string, string> = {
-        idle_notification: '成员当前空闲',
-        shutdown_request: '请求成员结束工作',
-        shutdown_approved: '成员已结束工作',
-        shutdown_rejected: '成员仍需继续工作',
-        task_completed: '任务已完成',
+        idle_notification: 'Member is currently idle',
+        shutdown_request: 'Requested the member to stop working',
+        shutdown_approved: 'Member has finished working',
+        shutdown_rejected: 'Member still needs to keep working',
+        task_completed: 'Task completed',
       }
-      return typeof value.type === 'string' ? (labels[value.type] || '团队状态已更新') : '团队状态已更新'
+      return typeof value.type === 'string' ? (labels[value.type] || 'Team status updated') : 'Team status updated'
     }
   } catch { /* Ordinary human-readable communication. */ }
   return message.text

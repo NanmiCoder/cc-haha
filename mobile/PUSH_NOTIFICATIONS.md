@@ -1,28 +1,28 @@
-# 系统推送与实时活动
+# System Push and Live Activities
 
-手机前台连接和系统推送是两条独立链路。电脑定期读取真实运行状态：进入等待时提醒审批、问答或计划；收到新的持久化成功结果时提醒完成；从运行转为失败时提醒错误。停止、离线和未知状态不会当作成功，初次发现的历史成功只建立基线。成功投递后同一状态不会重复发送。暂时失败最多尝试 3 次（间隔 5 秒、10 秒），每次重新检查当前状态与设备授权；已失效的审批不会重放。运行中超过 5 分钟没有进展时，错误偏好可触发一次提醒，等待用户批准不算无进展。初次发现历史失败或空闲状态不会伪造新通知。
+The phone's foreground connection and system push are two independent paths. The computer periodically reads the real run state: when it enters a waiting state it alerts for approvals, questions, or plans; when it receives a new persisted success result it alerts for completion; when it goes from running to failed it alerts for errors. Stopped, offline, and unknown states are never treated as success, and historical successes found on first discovery only establish a baseline. After successful delivery, the same state isn't sent again. Temporary failures are retried at most 3 times (at 5-second and 10-second intervals), re-checking the current state and device authorization each time; expired approvals are not replayed. When a run makes no progress for more than 5 minutes, the errors preference can trigger one alert; waiting for user approval doesn't count as no progress. Historical failures or idle states found on first discovery never produce fake new notifications.
 
-## 三条投递通道
+## Three delivery channels
 
-普通用户的电脑没有发布者的 APNs / FCM 私钥，也不应该有。所以推送按手机登记时选的 `provider` 分三条路，手机根据 `GET` 返回的能力自己选：
+Ordinary users' computers don't have the publisher's APNs / FCM private keys, and shouldn't. So push takes one of three paths based on the `provider` chosen when the phone registers; the phone picks based on the capabilities returned by `GET`:
 
-| 通道 | `provider` | 谁持有凭据 | 适用 |
+| Channel | `provider` | Who holds credentials | Use |
 | --- | --- | --- | --- |
-| Expo 中转 | `expo` | Expo 推送服务（EAS 项目里上传的 APNs Key） | iOS（TestFlight / App Store），电脑零配置 |
-| 手机拉取 | `desktop` | 不需要凭据：手机的前台服务长轮询这台电脑 | Android，任何品牌，不依赖 Google 服务、不需要上架 |
-| 电脑直连 | 缺省 | 这台电脑自己的 APNs / FCM 环境变量 | 发布者自己的电脑；实时活动只走这条 |
+| Expo relay | `expo` | The Expo push service (APNs Key uploaded to the EAS project) | iOS (TestFlight / App Store), zero configuration on the computer |
+| Phone pull | `desktop` | No credentials needed: the phone's foreground service long-polls this computer | Android, any brand, no dependency on Google services, no store listing needed |
+| Direct from computer | default | This computer's own APNs / FCM environment variables | The publisher's own computer; Live Activities only use this path |
 
-选择规则（`mobile/src/state/pushProvider.ts`）：Android 有 `desktop` 就用 `desktop`；否则电脑自己配了该平台凭据就直连；iOS 再退到 `expo`。旧电脑不返回 `providers`，手机按原来的直连流程登记，不发送 `provider` 字段。
+Selection rules (`mobile/src/state/pushProvider.ts`): on Android, use `desktop` if available; otherwise, if the computer has credentials for that platform, connect directly; iOS then falls back to `expo`. Older computers don't return `providers`, so the phone registers via the original direct flow without sending the `provider` field.
 
-**Expo 中转的前提**（发布者一次性操作，不在仓库里）：在 expo.dev 的项目凭据里为 `com.yunce.cchaha.mobile` 配好 APNs Push Key（`bunx eas-cli credentials --platform ios`），并保持 Expo 的 Enhanced Push Security 关闭——开启后发送需要 Expo access token，而这个 token 不能放进分发给用户的电脑。关闭时，持有手机 Expo token 的人都能给这台手机发通知；token 只登记在已配对的电脑上，且加密保存。电脑把通知发往 `https://exp.host/--/api/v2/push/send`（走 cc-haha 网络设置里的代理），通知标题和正文会经过 Expo 和 Apple；不想让命令原文经过第三方的用户可以关掉「锁屏上显示命令」。Expo 只回执 `DeviceNotRegistered` 时电脑删除登记，其余错误按投递失败重试；最近一次 Expo 发送失败的原因通过 `GET` 的 `relayErrors.expo` 告诉手机，下一次发送成功后清除，手机设置页据此显示「推送发送失败」并提示配置网络代理。电脑的推送轮询分两条互不等待的通道：手机拉取只是入队，Expo / APNs / FCM 要等网络（连不上时每次最多 15 秒），所以中转卡住不会拖慢安卓的提醒。
+**Prerequisites for the Expo relay** (a one-time publisher task, not in the repository): configure the APNs Push Key for `com.yunce.cchaha.mobile` in the project credentials on expo.dev (`bunx eas-cli credentials --platform ios`), and keep Expo's Enhanced Push Security off — when on, sending requires an Expo access token, and that token cannot be put into computers distributed to users. With it off, anyone holding the phone's Expo token can send notifications to that phone; the token is only registered on paired computers and stored encrypted. The computer sends notifications to `https://exp.host/--/api/v2/push/send` (through the proxy in cc-haha's network settings); notification titles and bodies pass through Expo and Apple, so users who don't want raw commands to pass through third parties can turn off "Show commands on Lock Screen". The computer deletes the registration only when Expo returns `DeviceNotRegistered`; other errors are retried as delivery failures. The reason for the most recent Expo send failure is reported to the phone via `relayErrors.expo` in `GET` and cleared after the next successful send; the phone's settings screen uses it to show "Push delivery failed" and suggest configuring a network proxy. The computer's push polling uses two channels that don't wait on each other: phone pull only enqueues, while Expo / APNs / FCM wait on the network (up to 15 seconds each time when unreachable), so a stuck relay doesn't slow down Android alerts.
 
-**手机拉取**：Android 对每台电脑生成一个随机拉取 token（32 字节，存 SecureStore；一台电脑只知道自己的那个，移除电脑时删除）。App 每次登记成功后把这台电脑的地址、认证头和 token 单独交给本地模块 `mobile/modules/cchaha-duty` 的前台服务（类型 `specialUse`，通知栏常驻「正在值守」）；服务自己保存电脑列表，App 只增删单台电脑，所以启动时暂时连不上的电脑不会被挤出列表。服务对每台电脑循环 `POST /api/sessions/mobile-push/pull`，电脑最多挂起 25 秒，有通知立即返回；手机按 id 去重并在下一次请求里 `ack`，电脑删除已确认的条目，未确认的保留 10 分钟、每个 token 最多 32 条。耗电上，服务只在被唤醒（回复到达、重试到期、放弃半开连接）到下一次拉取发出之间持有唤醒锁，拉取挂在电脑上时靠电脑的回复唤醒手机。连接失败按 2 秒起倍增、最长 30 秒重试；一台电脑连续 5 分钟连不上（换了网络、电脑合盖）后改为每 5 分钟试一次，打开 App 或网络变化时立即重连。线程计时在 CPU 休眠时不走，所以服务另有一个约每分钟的系统闹钟（`setAndAllowWhileIdle`，Doze 下会被拉长）：只处理已到期的重试和超过 40 秒没有回音的半开连接，其余时候不持锁。配置用 Android Keystore 加密保存，开机和 App 更新后自动恢复。只有电脑本身的两种回答会让服务停止拉取这台电脑：401（配对凭据被拒）和 404 `NO_REGISTRATION`（电脑没有这台手机的登记），直到 App 重新登记；隧道、代理返回的 403/5xx 都按网络错误重试。国产 ROM 仍可能清理后台：设置页会引导「允许后台运行」（电池优化豁免）和到应用设置里打开自启动。
+**Phone pull**: Android generates a random pull token per computer (32 bytes, stored in SecureStore; each computer only knows its own, and it's deleted when the computer is removed). After each successful registration, the app hands this computer's address, auth headers, and token individually to the foreground service in the local module `mobile/modules/cchaha-duty` (type `specialUse`, with a persistent "On watch" notification); the service keeps its own computer list, and the app only adds or removes single computers, so computers temporarily unreachable at startup aren't pushed out of the list. The service loops `POST /api/sessions/mobile-push/pull` for each computer; the computer holds the request for up to 25 seconds and returns immediately when there's a notification. The phone de-duplicates by id and `ack`s in the next request; the computer deletes acknowledged entries, and keeps unacknowledged ones for 10 minutes, up to 32 per token. For battery, the service only holds a wake lock between being woken (reply arrives, retry is due, half-open connection abandoned) and sending the next pull; while a pull is held by the computer, the computer's reply wakes the phone. Connection failures retry with exponential backoff starting at 2 seconds, up to 30 seconds; once a computer has been unreachable for 5 consecutive minutes (network changed, lid closed), it switches to trying every 5 minutes, and reconnects immediately when the app opens or the network changes. Thread timers don't advance while the CPU sleeps, so the service also has a system alarm roughly every minute (`setAndAllowWhileIdle`, stretched under Doze): it only handles retries that are due and half-open connections with no response for over 40 seconds, and holds no lock otherwise. Configuration is stored encrypted with the Android Keystore and restored automatically after boot and app updates. Only two answers from the computer itself make the service stop pulling that computer: 401 (pairing credential rejected) and 404 `NO_REGISTRATION` (the computer has no registration for this phone), until the app registers again; 403/5xx returned by tunnels or proxies are retried as network errors. Chinese OEM ROMs may still kill background work: the settings screen guides users to "Allow background activity" (battery optimization exemption) and to enable auto-start in app settings.
 
-## 电脑配置
+## Computer configuration
 
-没有任何配置时，新版电脑通过 Expo 中转和手机拉取即可推送；`platforms` 只表示这台电脑自己的 APNs / FCM 凭据。旧版电脑没有凭据时接口返回 `notConfigured`，手机显示「电脑未配置系统推送」，不影响聊天、手动刷新和前台提醒。
+With no configuration at all, newer computers can push through the Expo relay and phone pull; `platforms` only describes this computer's own APNs / FCM credentials. When an older computer has no credentials, the API returns `notConfigured` and the phone shows "Computer has not configured system push", which doesn't affect chat, manual refresh, or foreground alerts.
 
-iOS 直连需要与已安装 App 的 bundle ID 和签名环境对应的 APNs 配置。仅从明确设置的环境变量读取；不会扫描钥匙串或开发者目录。
+Direct iOS delivery requires an APNs configuration matching the installed app's bundle ID and signing environment. It reads only from explicitly set environment variables; it never scans the keychain or developer directories.
 
 ```sh
 CC_HAHA_APNS_KEY_PATH=/absolute/path/AuthKey.p8
@@ -32,30 +32,30 @@ CC_HAHA_APNS_TOPIC=com.yunce.cchaha.mobile
 CC_HAHA_APNS_SANDBOX=false
 ```
 
-`SANDBOX=true` 用于开发 APNs 环境，Ad Hoc / TestFlight / 正式分发通常使用生产环境。应以实际签名 entitlement 为准，不能用手机型号判断。普通通知使用 bundle topic；实时活动自动使用 `.push-type.liveactivity` 后缀。实时活动需要用户允许、系统支持及具备正确 entitlement 的原生构建。
+`SANDBOX=true` is for the development APNs environment; Ad Hoc / TestFlight / production distribution usually uses production. Go by the actual signing entitlement, never by phone model. Ordinary notifications use the bundle topic; Live Activities automatically use the `.push-type.liveactivity` suffix. Live Activities require user permission, system support, and a native build with the correct entitlement.
 
-Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json`。当前支持显式 service-account ADC 文件；不自动读取 gcloud 用户登录或云机器元数据。手机必须配置属于同一 Firebase 项目的原生 FCM 文件并获得设备 token。通知 channel 默认为 `cc-haha`；登记带 `delivery.channels: 'split'` 时按事件使用 `cc-haha-decisions` / `cc-haha-completed` / `cc-haha-errors`。没有这部分配置不能宣称后台推送可用。
+Android uses `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json`. Currently explicit service-account ADC files are supported; gcloud user logins and cloud machine metadata are not read automatically. The phone must be configured with a native FCM file from the same Firebase project and obtain a device token. The notification channel defaults to `cc-haha`; when the registration carries `delivery.channels: 'split'`, `cc-haha-decisions` / `cc-haha-completed` / `cc-haha-errors` are used by event. Without this configuration you cannot claim background push works.
 
-电脑必须保持运行且可连接 Apple / Google。系统免打扰、设备网络、通知权限和系统节流仍会影响展示；接口的 `configured` 仅表明已配置文件，不能证明真机已收到。投递失败显示不含凭据的诊断，APNs / FCM 报废的 token 会移除。
+The computer must stay running and be able to reach Apple / Google. System Do Not Disturb, device network, notification permission, and system throttling still affect display; the API's `configured` only indicates config files exist and doesn't prove a real device received anything. Delivery failures show diagnostics without credentials, and tokens reported as invalid by APNs / FCM are removed.
 
-## 手机 API
+## Phone API
 
-所有请求复用当前主机的 LAN 或远程配对认证。不能在请求中提交 owner/device ID；远程设备归属来自服务端验证的配对凭据。
+All requests reuse the current host's LAN or remote pairing authentication. Owner/device IDs cannot be submitted in requests; remote device ownership comes from the pairing credential verified by the server.
 
-- `GET /api/sessions/mobile-push` → `{ platforms: { ios, android }, providers: { expo, desktop }, status: 'configured' | 'notConfigured', error?, relayErrors?: { expo } }`。`platforms` 是电脑直连凭据，`providers` 是无需凭据的通道；旧电脑没有 `providers`。不列出设备或 token。
-- `POST /api/sessions/mobile-push/pull`，body `{ token: pullToken, ack?: lastNotificationId }` → `{ notifications: [{ id, title, body, data, category, channelId }] }`；没有新通知时最多挂起 25 秒后返回空数组。只有已用 `provider: 'desktop'` 登记该 token 的调用者（LAN 为 token 归属，远程为已验证的配对设备）能读取，否则 404 `NO_REGISTRATION`。此路由不计入慢请求诊断。
-- `PUT /api/sessions/mobile-push` → `{ registered, status: 'registered' | 'notConfigured', id?, expiresAt? }`。
-- `DELETE /api/sessions/mobile-push`，body `{ token: ordinaryDevicePushToken, hostId }` → `{ removed: number }`，幂等删除本手机在此主机的普通通知和关联的实时活动。未配置 provider 时也能删除旧登记。
-- `DELETE /api/sessions/mobile-push/:id`，body `{ token }` 保留单项注销；不匹配返回 404。
-- `POST /api/sessions/mobile-push/test`，body `{ token: ordinaryDevicePushToken, hostId?: string }` → `{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed', error? }`。只匹配当前调用者（LAN 为该 token 的归属，远程为已验证的配对设备）自己的普通通知登记，不接受 owner/device ID；`hostId` 给出时只发该主机的登记。发送标题“测试通知 · cc-haha”、正文“电脑推送正常：这条是电脑发给你手机的。”，APNs category 为 `cchahaResult`，data 为 `{ hostId, eventType: 'test' }`（没有 sessionId）。这是用户主动测试，不受通知类别偏好和免打扰限制。测试是为了看到横幅：Android 在拆分渠道下使用高重要程度的 `cc-haha-decisions`（「任务完成」渠道是默认重要程度，只响铃不弹横幅），手机在 App 前台时也照常弹出测试通知（其余提醒在前台只进通知栏）。`notConfigured` 表示电脑没有该平台的 APNs / FCM 配置，`noRegistration` 表示没有匹配登记，`failed` 的 `error` 不含 token 或凭据。
+- `GET /api/sessions/mobile-push` → `{ platforms: { ios, android }, providers: { expo, desktop }, status: 'configured' | 'notConfigured', error?, relayErrors?: { expo } }`. `platforms` is the computer's direct credentials, `providers` is the credential-free channels; older computers have no `providers`. Devices and tokens are not listed.
+- `POST /api/sessions/mobile-push/pull`, body `{ token: pullToken, ack?: lastNotificationId }` → `{ notifications: [{ id, title, body, data, category, channelId }] }`; with no new notifications it holds for up to 25 seconds and then returns an empty array. Only a caller who registered that token with `provider: 'desktop'` (on LAN, the token owner; remotely, the verified paired device) can read it; otherwise 404 `NO_REGISTRATION`. This route is excluded from slow-request diagnostics.
+- `PUT /api/sessions/mobile-push` → `{ registered, status: 'registered' | 'notConfigured', id?, expiresAt? }`.
+- `DELETE /api/sessions/mobile-push`, body `{ token: ordinaryDevicePushToken, hostId }` → `{ removed: number }`, idempotently deletes this phone's ordinary notification and associated Live Activity registrations on this host. Old registrations can be deleted even with no provider configured.
+- `DELETE /api/sessions/mobile-push/:id`, body `{ token }` keeps single-item unregistration; returns 404 on mismatch.
+- `POST /api/sessions/mobile-push/test`, body `{ token: ordinaryDevicePushToken, hostId?: string }` → `{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed', error? }`. Only matches the current caller's own ordinary notification registration (on LAN, the owner of that token; remotely, the verified paired device), and doesn't accept owner/device IDs; when `hostId` is given, only that host's registration is sent. The title sent is "Test notification · cc-haha" and the body is "Computer push works: this was sent from your computer to your phone.", with APNs category `cchahaResult` and data `{ hostId, eventType: 'test' }` (no sessionId). This is a user-initiated test and is not subject to notification category preferences or Do Not Disturb. The test is meant to show a banner: with split channels, Android uses the high-importance `cc-haha-decisions` (the "Task completed" channel is default importance and only sounds without a banner), and the test notification is shown even when the app is in the foreground (other alerts only go to the notification shade while in the foreground). `notConfigured` means the computer has no APNs / FCM configuration for that platform, `noRegistration` means no matching registration, and `failed`'s `error` contains no token or credentials.
 
-普通注册 body：
+Ordinary registration body:
 
 ```ts
 {
   platform: 'ios' | 'android',
-  provider?: 'expo' | 'desktop',  // 缺省：电脑直连；只在电脑的 providers 列出时发送
-  token: nativeDevicePushToken,   // expo：ExponentPushToken[…]；desktop：手机的拉取 token（43+ 位 base64url，仅 Android）
+  provider?: 'expo' | 'desktop',  // default: direct from computer; only sent when listed in the computer's providers
+  token: nativeDevicePushToken,   // expo: ExponentPushToken[…]; desktop: the phone's pull token (43+ char base64url, Android only)
   hostId: phoneLocalHostId,
   hostName: optionalDisplayName,
   kind: 'notification',
@@ -65,33 +65,33 @@ Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.js
 }
 ```
 
-可选的 `delivery`（普通通知和实时活动登记都可携带，缺省即旧行为）：
+Optional `delivery` (both ordinary notification and Live Activity registrations may carry it; omitting it keeps the old behavior):
 
 ```ts
 delivery?: {
-  channels?: 'split',                       // Android：按事件拆分通知渠道
-  timeSensitive?: boolean,                  // iOS：决定类推送使用时间敏感级别
-  liveActivity?: 'running' | 'decisions',   // 实时活动远程更新范围
-  showCommand?: boolean                     // false：实时活动不携带原始命令 / 预览
+  channels?: 'split',                       // Android: split notification channels by event
+  timeSensitive?: boolean,                  // iOS: decision pushes use the time-sensitive level
+  liveActivity?: 'running' | 'decisions',   // scope of remote Live Activity updates
+  showCommand?: boolean                     // false: Live Activity doesn't carry the raw command / preview
 }
 ```
 
-- 各字段类型严格校验，未知字段被拒绝；随登记保存，再次注册会整体替换（不带 `delivery` 的注册会清除旧值）。旧数据没有该字段也能原样加载。
-- `channels: 'split'`：FCM `channel_id` 按事件选择，等待审批 / 问答 / 计划为 `cc-haha-decisions`，完成为 `cc-haha-completed`，失败和无进展为 `cc-haha-errors`；否则一律 `cc-haha`。手机需要自己创建这三个渠道。
-- `timeSensitive: true`：决定类推送的 aps 带 `"interruption-level": "time-sensitive"`，其他类型保持默认 `active`。
-- `liveActivity: 'decisions'`：只在等待决定时远程更新实时活动；运行中状态不发 `update`，而是对仅在运行的活动发送 `end` 并移除登记，避免远程推送把它重新唤起。缺省或 `'running'` 保持原样。
-- `showCommand: false`：实时活动 `detail` 不含原始命令 / 预览：等待中的 Bash 为“打开 App 查看命令”，其他等待为“需要你做决定”，运行中为空，结束为“本次运行已结束”。
+- Each field's type is strictly validated and unknown fields are rejected; it's saved with the registration, and re-registering replaces it entirely (a registration without `delivery` clears the old value). Old data without this field still loads as-is.
+- `channels: 'split'`: FCM `channel_id` is chosen by event — waiting for approval / question / plan is `cc-haha-decisions`, completion is `cc-haha-completed`, failure and no progress are `cc-haha-errors`; otherwise always `cc-haha`. The phone needs to create these three channels itself.
+- `timeSensitive: true`: aps for decision pushes carries `"interruption-level": "time-sensitive"`; other types keep the default `active`.
+- `liveActivity: 'decisions'`: the Live Activity is only updated remotely while waiting for a decision; the running state doesn't send `update`, but instead sends `end` to activities that are only running and removes the registration, so remote push doesn't bring them back up. Omitted or `'running'` keeps the original behavior.
+- `showCommand: false`: the Live Activity `detail` doesn't include the raw command / preview: a waiting Bash shows "Open the app to view the command", other waits show "Needs your decision", running is empty, and ended shows "This run has ended".
 
-`hostId` 仅用于返回手机后的主机导航，不能建立或改变授权。客户端需要安全保存注册 ID 及原 token，以便重启后、移除主机时或 token 轮换时撤销旧登记。因关闭通知权限等原因撤销时，离线注销不能表示成功，应保留待注销记录以重试；移除电脑是例外：连不上电脑也必须能移除，所以只尝试撤销一次（最多等 3 秒），失败不拦移除也不再重试——连接凭据随移除一起删除，没送达的登记留在电脑上等它过期或撤销配对。注册有效期为 30 天，不超过远程配对的实际期限；实时活动登记最多 8 小时。
+`hostId` is only used for host navigation after returning to the phone and cannot establish or change authorization. The client needs to securely store the registration ID and original token so it can revoke old registrations after restart, when removing a host, or when the token rotates. When revoking for reasons such as turning off notification permission, an offline unregistration cannot be reported as success, and a pending-unregistration record should be kept for retry. Removing a computer is the exception: it must be possible to remove a computer even when it's unreachable, so revocation is attempted only once (waiting at most 3 seconds), and failure neither blocks removal nor is retried — the connection credentials are deleted with the removal, and undelivered registrations stay on the computer until they expire or pairing is revoked. Registrations are valid for 30 days and never exceed the actual remote pairing lifetime; Live Activity registrations last at most 8 hours.
 
-Live Activity 只走电脑直连（Expo 中转不支持 ActivityKit 推送），登记不能带 `provider`。Live Activity 增加 `{ kind: 'liveActivity', sessionId, activityId, name: 'CCHahaTaskActivity', deviceToken: ordinaryDevicePushToken }`，`token` 使用 ActivityKit 的专用推送 token；`deviceToken` 只保存摘要，用于关联普通设备登记和整机注销。服务端发送 `aps.event=update/end`、`timestamp`、`stale-date`，以及 `content-state: { name, props: JSON.stringify(props) }`。持续运行或等待中的活动每 60 秒刷新一次，stale-date 延长到本次投递后 90 秒；电脑离线时不会继续伪造新鲜状态。真实会话结束后会发送 end 并移除登记。客户端仍应在本地结束活动时撤销注册。
+Live Activities only use direct delivery from the computer (the Expo relay doesn't support ActivityKit push), so their registration cannot carry `provider`. A Live Activity adds `{ kind: 'liveActivity', sessionId, activityId, name: 'CCHahaTaskActivity', deviceToken: ordinaryDevicePushToken }`, with `token` being ActivityKit's dedicated push token; only a digest of `deviceToken` is stored, used to link to the ordinary device registration and for whole-device unregistration. The server sends `aps.event=update/end`, `timestamp`, `stale-date`, and `content-state: { name, props: JSON.stringify(props) }`. Activities that are continuously running or waiting are refreshed every 60 seconds, with stale-date extended to 90 seconds after this delivery; while the computer is offline, no fresh state is faked. After the real session ends, end is sent and the registration is removed. The client should still revoke the registration when it ends the activity locally.
 
-普通通知 data 为 `{ hostId, sessionId, requestId?, eventType }`。APNs category 为 `cchahaTool`、`cchahaDecision` 或 `cchahaResult`。只有普通工具权限提供允许/拒绝动作（手机拉取通道由前台服务发出同样的两个按钮，点按后打开 App）；问答、计划和 Computer Use 必须打开 App 处理。动作到达 App 后必须再次核对原主机、原会话及仍待处理的 request ID；推送本身不批准权限。
+Ordinary notification data is `{ hostId, sessionId, requestId?, eventType }`. The APNs category is `cchahaTool`, `cchahaDecision`, or `cchahaResult`. Only ordinary tool permissions offer allow/deny actions (the phone pull channel's foreground service shows the same two buttons, which open the app when tapped); questions, plans, and Computer Use must be handled in the app. When an action reaches the app, it must re-check the original host, original session, and still-pending request ID; the push itself never approves permissions.
 
-## 持久化与撤销
+## Persistence and revocation
 
-配置目录的 `cc-haha/mobile-push.json` 保存 token 摘要、设备归属、偏好和 AES-GCM 密文；相邻 `.key` 文件为随机本地加密密钥。两者权限为 0600。未注册时不会创建文件。空 v0 数据迁移为 v1，未知扩展字段保留，未来 schema 拒绝写入。不要把这些文件加入 Git 或同步到公共存储。
+`cc-haha/mobile-push.json` in the config directory stores token digests, device ownership, preferences, and AES-GCM ciphertext; the adjacent `.key` file is a random local encryption key. Both have 0600 permissions. No file is created when nothing is registered. Empty v0 data migrates to v1, unknown extension fields are preserved, and future schemas refuse writes. Do not add these files to Git or sync them to public storage.
 
-撤销配对、配对到期后，服务端删除该远程设备的登记。远程入口暂时关闭（包括 cloudflared 重连时监听短暂停止）期间只暂停投递、保留登记，入口恢复后补发仍成立的状态；这样隧道每次重连都不会要求所有手机重新登记。迁移或关闭服务时停止轮询并等待在途工作，避免迁移过程中写回数据。
+After pairing is revoked or expires, the server deletes that remote device's registrations. While the remote entry is temporarily closed (including the brief listening stop during cloudflared reconnects), delivery is only paused and registrations are kept; once the entry is back, states that still hold are delivered. This way, every tunnel reconnect doesn't require all phones to re-register. When migrating or shutting down the service, polling stops and in-flight work is awaited, to avoid writing data back mid-migration.
 
-参考：[Apple APNs token authentication](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns)、[ActivityKit push updates](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)、[FCM HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api)。
+References: [Apple APNs token authentication](https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns), [ActivityKit push updates](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications), [FCM HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api).

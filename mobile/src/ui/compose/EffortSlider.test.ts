@@ -81,11 +81,11 @@ function runSliderCase(modulePath: string, exportName: string, body: string) {
     }))
     const Component = (await import(${JSON.stringify(modulePath)}))[${JSON.stringify(exportName)}]
     const options = [
-      { value: 'minimal', label: '最少' }, { value: 'low', label: '低' },
-      { value: 'medium', label: '中' }, { value: 'high', label: '高' }, { value: 'max', label: '最高' },
+      { value: 'minimal', label: 'Minimal' }, { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }, { value: 'max', label: 'Highest' },
     ]
     const changes = []
-    let props = { label: '思考强度', options, value: 'medium', disabled: false, onChange: value => changes.push(value) }
+    let props = { label: 'Thinking effort', options, value: 'medium', disabled: false, onChange: value => changes.push(value) }
     let tree
     const render = () => {
       for (let attempt = 0; attempt < 20; attempt++) {

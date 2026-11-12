@@ -75,9 +75,9 @@ export type HistoryPage = {
     scannedBytes: number
     omittedOversizedEntries: number
     contentTruncated?: boolean
-    /** 新电脑才给：从这一页末尾往后只读新增记录的游标。 */
+    /** Only newer computers provide it: a cursor to read only newly added records forward from the end of this page. */
     tailCursor?: string
-    /** false：这次往后读到了页上限，后面还有新增记录。 */
+    /** false: this forward read hit the page limit, and there are more new records after it. */
     tailComplete?: boolean
   }
 }
@@ -120,46 +120,46 @@ export type ChatItem = {
   pending?: boolean
   delivery?: 'pending' | 'confirmed' | 'uncertain'
   /**
-   * 本地已发出、还在等服务端回放的用户消息。回合可能先结束（pending 被清掉），
-   * 回放随后才到；保留这个标记才能对上原来那条，而不是再追加一个重复气泡。
+   * User messages sent locally and still waiting for the server replay. The turn may end first (pending cleared) 
+   * and the replay arrives afterwards; keeping this flag lets it match the original instead of appending a duplicate bubble.
    */
   awaitingReplay?: boolean
-  /** Agent 团队里发来这条消息的成员（只在成员页显示）。 */
+  /** Agent The team member who sent this message (only shown on the member page). */
   teammateFrom?: string
-  /** 工具结果里的图片（读取截图等）。 */
+  /** Images in tool results (read screenshots etc). */
   images?: ToolImage[]
 }
 /**
- * 工具结果里的一张图。电脑按引用给出地址，用到时才下载；
- * 不支持引用的旧版电脑仍会内联 base64，直接显示。
+ * One image in a tool result. The computer gives an address by reference, downloaded only when used; 
+ * older computers without reference support still inline base64, shown directly.
  */
 export type ToolImage = {
   mimeType: string
-  /** 电脑上的读取地址（/api/sessions/:id/tool-images/...）。 */
+  /** Read address on the computer (/api/sessions/:id/tool-images/...). */
   url?: string
-  /** 旧版电脑内联的 base64。 */
+  /** base64 inlined by older computers. */
   data?: string
   width?: number
   height?: number
 }
-/** 子 Agent 最近的一步工具调用（实时事件里能拿到的部分）。 */
+/** The latest tool call step of a subagent (the part available in live events). */
 export type SubagentStep = {
   toolUseId: string
   toolName: string
   input?: unknown
-  /** 已收到结果。 */
+  /** Result received. */
   done: boolean
   isError?: boolean
 }
 /**
- * 子 Agent 的实时轨迹，由 WebSocket 事件累积：`agent_run_event`、带 parentToolUseId 的
- * 工具事件、`task_progress` 通知。只留最近几步，条数有上限，不会无限增长。
+ * Live trajectory of a subagent, accumulated from WebSocket events: `agent_run_event`, tool events with parentToolUseId,
+ * and `task_progress` notifications. Keeps only the last few steps, with a cap on count, never growing without bound.
  */
 export type SubagentLive = {
   steps: SubagentStep[]
-  /** 读过的不同文件路径（有上限）。 */
+  /** Distinct file paths read (capped). */
   reads: string[]
-  /** 电脑在 task_progress 里给出的工具调用总数，权威值。 */
+  /** Total tool call count given by the computer in task_progress; the authoritative value. */
   toolUses?: number
   finished?: boolean
 }
@@ -179,14 +179,14 @@ export type ChatState = {
   permissions: PermissionRequest[]
   computerUsePermissions: ComputerUsePermissionRequest[]
   backgroundTaskIds: string[]
-  /** 子 Agent 实时轨迹，键见 core/subagentLive.ts；没有事件时不存在。 */
+  /** Live subagent trajectories, keyed as in core/subagentLive.ts; absent when there are no events. */
   subagents?: Record<string, SubagentLive>
   runtime?: RuntimeConfig
   permissionMode?: PermissionMode
   usage?: TokenUsage
   error?: { message: string; code: string; retryable?: boolean }
   title?: string
-  /** 电脑推来的团队方案变化（planId:revision:state）；变了就重新读取方案。 */
+  /** Team plan change pushed by the computer (planId:revision:state); reread the plan when it changes. */
   teamPlanSignal?: string
   nextId: number
   activeTextId?: string

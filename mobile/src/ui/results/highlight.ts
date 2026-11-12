@@ -1,7 +1,7 @@
 /**
- * 文件预览用的轻量语法高亮：只分四类 token（关键字 kw、字符串/数字 str、类型/声明名 ty、注释 cm），
- * 覆盖 ts/js/json/py/md/css/sh。目标是“看得清结构”，不是完整语法解析；
- * 跨行结构（块注释、模板字符串、三引号、代码块）会正确延续到后面的行。
+ * Lightweight syntax highlighting for file previews: only four token kinds (keyword kw, string/number str, type/declared name ty, comment cm), 
+ * covering ts/js/json/py/md/css/sh. The goal is "structure is readable", not a full parse; 
+ * Multiline constructs (block comments, template strings, triple quotes, code blocks) carry over correctly to later lines.
  */
 export type TokenKind = 'kw' | 'str' | 'ty' | 'cm' | 'plain'
 export type Token = { kind: TokenKind; text: string }
@@ -75,7 +75,7 @@ function match(pattern: RegExp, source: string, index: number) {
   return pattern.exec(source)?.[0]
 }
 
-/** 读到同一种引号（考虑反斜杠转义）为止；multiline 为 false 时遇到换行也结束。 */
+/** Read until the same quote (respecting backslash escapes); when multiline is false a newline also ends it. */
 function readQuoted(source: string, start: number, quote: string, multiline: boolean, escapes = true) {
   let index = start + quote.length
   while (index < source.length) {
@@ -142,7 +142,7 @@ function scanScript(source: string, out: Output) {
     }
     const word = /[A-Za-z_$]/.test(char) ? match(identifier, source, index) : undefined
     if (word) {
-      // `obj.type`、`x.function` 这类属性名不是关键字。
+      // `obj.type`, property names like `x.function` are not keywords.
       const property = previous === '.'
       if (!property && tsKeywords.has(word)) {
         out.push('kw', word)
@@ -360,7 +360,7 @@ function scanCss(source: string, out: Output) {
     if (word) {
       let after = index + word.length
       while (after < source.length && /[ \t]/.test(source[after]!)) after++
-      // `a:hover {` 是嵌套选择器，`color: red;` 才是属性：看冒号后先遇到 `{` 还是 `;`/`}`。
+      // `a:hover {` is a nested selector and `color: red;` is a property: check whether `{` or `;`/`}` comes first after the colon.
       const rest = /^[^{};\n]*([{};\n]|$)/.exec(source.slice(after, after + 256))?.[1]
       out.push(depth > 0 && source[after] === ':' && rest !== '{' ? 'ty' : 'plain', word)
       index += word.length
@@ -436,7 +436,7 @@ function scanMarkdown(source: string, out: Output) {
   })
 }
 
-/** 把 token 流按换行切成行；每行至少有一个 token（空行是空的 plain）。 */
+/** Split the token stream into lines by newline; each line has at least one token (empty lines are an empty plain). */
 function splitLines(tokens: Token[]) {
   const lines: Token[][] = [[]]
   for (const token of tokens) {

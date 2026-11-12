@@ -13,11 +13,11 @@ import { getDesktopHost } from '../lib/desktopHost'
 
 /**
  * Desktop host trigger: let the app process kill + respawn adapter sidecar,
- * 让 ~/.claude/adapters.json 里的最新凭据被新进程读到，建立飞书 / Telegram / 微信 / 钉钉 / WhatsApp
- * 的 WebSocket 连接。
+ * so the new process reads the latest credentials from ~/.claude/adapters.json and opens the
+ * Feishu / Telegram / WeChat / DingTalk / WhatsApp WebSocket connections.
  *
- * 在非桌面环境（纯浏览器调试 / 单元测试）这会安静跳过 —— 那种场景下
- * 本来也没有 sidecar 可重启。
+ * Outside the desktop (plain-browser debugging / unit tests) this quietly skips, since
+ * there is no sidecar to restart there.
  */
 async function notifyDesktopRestartAdapters(): Promise<string | null> {
   const host = getDesktopHost()
@@ -27,7 +27,7 @@ async function notifyDesktopRestartAdapters(): Promise<string | null> {
     await host.adapters.restartSidecar()
     return null
   } catch (err) {
-    // 不阻塞保存流程 —— 配置文件已经写入，下次启动 App 也会生效
+    // Do not block saving: the config file is already written and takes effect on next launch anyway
     if (typeof console !== 'undefined') {
       console.warn('[adapterStore] restart_adapters_sidecar failed:', err)
     }
@@ -152,10 +152,10 @@ export const useAdapterStore = create<AdapterStore>((set, get) => ({
     if (requestVersion === configRequestVersion) {
       set({ config, hasLoaded: true, error: null, restartWarning: null })
     }
-    // 配置文件已写入磁盘，让 Tauri 主进程 kill + respawn adapter sidecar，
-    // 触发各 IM adapter 用新凭据重连。pairing code / paired users
-    // 这种轻量更新也会触发重启 —— 这是个有意为之的简化：保证"任何配置变更
-    // 都立刻生效"，比起精细判断哪些字段值得重启更可靠。
+    // The config is on disk; have the host kill and respawn the adapter sidecar so each
+    // IM adapter reconnects with the new credentials. Light updates such as pairing codes /
+    // paired users also restart it. That is a deliberate simplification: "every config change
+    // takes effect at once" is more reliable than deciding which fields deserve a restart.
     const restartWarning = await notifyDesktopRestartAdapters()
     if (requestVersion === configRequestVersion) set({ restartWarning })
   },

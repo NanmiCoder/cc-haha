@@ -6,13 +6,13 @@ import { Text } from '../Text'
 import { Button, InlineError, useColors } from '../kit'
 import { Logo } from '../Logo'
 
-/** 第一次打开（还没有电脑）：品牌、一张示意图、三步说明和两个入口。 */
+/** First open (no computer yet): brand, an illustration, three steps and two entry points. */
 export function Welcome({
   error,
   onScan,
   onManual,
 }: {
-  /** 读取本地存储失败等需要告诉用户的错误。 */
+  /** Errors the user needs to know about, such as failures reading local storage. */
   error?: string
   onScan(): void
   onManual(): void
@@ -46,7 +46,7 @@ export function Welcome({
         cc-haha
       </Text>
       <Text style={{ marginTop: 8, fontSize: 16, lineHeight: 24, color: colors.ink2 }}>
-        电脑上的任务在跑，你在手机上看着、拍板。
+        Tasks run on your computer; you watch and decide from your phone.
       </Text>
 
       <SettingsSketch />
@@ -59,7 +59,7 @@ export function Welcome({
             {index > 0 ? <View style={{ height: 1, backgroundColor: colors.hair }} /> : null}
             <View
               accessible
-              accessibilityLabel={`第 ${index + 1} 步，${step.title}${step.hint ? `。${step.hint}` : ''}`}
+              accessibilityLabel={`Step ${index + 1}, ${step.title}${step.hint ? `. ${step.hint}` : ''}`}
               style={{
                 minHeight: 56,
                 flexDirection: 'row',
@@ -95,19 +95,19 @@ export function Welcome({
       </View>
 
       <View style={{ flex: 1, minHeight: 24 }} />
-      <Button title="扫码连接" icon="scan" size="lg" onPress={onScan} />
-      <Button title="手动输入地址" variant="plain" onPress={onManual} style={{ marginTop: 8 }} />
+      <Button title="Scan to connect" icon="scan" size="lg" onPress={onScan} />
+      <Button title="Enter address manually" variant="plain" onPress={onManual} style={{ marginTop: 8 }} />
     </ScrollView>
   )
 }
 
 const steps = [
-  { title: '在电脑上打开 cc-haha', hint: '' },
-  { title: '进入 设置 → 手机连接', hint: '同一个 Wi-Fi 用局域网；外出选择 Cloudflare 快速连接或固定域名' },
-  { title: '用手机扫页面上的二维码', hint: '' },
+  { title: 'Open on the computer cc-haha', hint: '' },
+  { title: 'Go to Settings → Mobile connection', hint: 'Use LAN on the same Wi-Fi; when away choose Cloudflare quick connect or fixed domain' },
+  { title: 'Scan the QR code on the page with your phone', hint: '' },
 ]
 
-/** 电脑「设置 → 手机连接」页的示意：侧栏 + 两段说明 + 二维码。只是装饰，读屏跳过。 */
+/** Illustration of the computer's Settings → Mobile connection page: sidebar + two descriptions + QR code. Decorative only; skipped by screen readers. */
 function SettingsSketch() {
   const colors = useColors()
   const side = (label: string, active?: boolean) => (
@@ -161,10 +161,10 @@ function SettingsSketch() {
             />
           ))}
         </View>
-        {side('通用')}
-        {side('模型配置')}
-        {side('手机连接', true)}
-        {side('IM 接入')}
+        {side('General')}
+        {side('Model configuration')}
+        {side('Mobile connection', true)}
+        {side('IM Integration')}
       </View>
       <View
         style={{
@@ -177,7 +177,7 @@ function SettingsSketch() {
         }}
       >
         <View style={{ flex: 1, gap: 6 }}>
-          <Text style={{ fontSize: 12, fontWeight: '600', color: colors.ink }}>局域网直连</Text>
+          <Text style={{ fontSize: 12, fontWeight: '600', color: colors.ink }}>LAN direct</Text>
           {bar(72)}
           {bar(54)}
           <Text style={{ fontSize: 12, fontWeight: '600', color: colors.ink, marginTop: 6 }}>
@@ -191,7 +191,7 @@ function SettingsSketch() {
   )
 }
 
-/** 21×21 的示意二维码（不可扫描）。 */
+/** 21×21 illustrative QR code (not scannable). */
 function QrSketch() {
   const colors = useColors()
   return (

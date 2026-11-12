@@ -1119,12 +1119,12 @@ describe('AgentManager', () => {
   })
 
   it('localizes load failures without exposing raw server errors', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     apiListMock.mockRejectedValue(new Error('HTTP 500: internal agent path leaked'))
 
     render(<AgentManager />)
 
-    expect(await screen.findByText('加载 Agent 失败')).toBeInTheDocument()
+    expect(await screen.findByText('Failed to load agents')).toBeInTheDocument()
     expect(screen.queryByText(/internal agent path leaked/)).not.toBeInTheDocument()
   })
 })

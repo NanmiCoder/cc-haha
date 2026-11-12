@@ -7,10 +7,6 @@ export type NativeMenuDestination = 'about' | 'settings'
 
 const COPY_IMAGE_LABEL: Record<Locale, string> = {
   en: 'Copy Image',
-  zh: '复制图片',
-  'zh-TW': '複製圖片',
-  jp: '画像をコピー',
-  kr: '이미지 복사',
 }
 
 type RendererContextMenuParams = {

@@ -2,7 +2,7 @@ import { View } from 'react-native'
 import { Button, InlineError, Sheet, useColors } from '../kit'
 import { Text } from '../Text'
 
-/** 二次确认弹层：标题 · 对象 · 说明 · 主操作 · 取消。忙时不能点遮罩关闭。 */
+/** Second confirmation sheet: title · target · description · primary action · cancel. Cannot tap backdrop to close while busy. */
 export function ConfirmSheet({
   visible,
   title,
@@ -49,7 +49,7 @@ export function ConfirmSheet({
           disabled={disabled}
           onPress={onConfirm}
         />
-        <Button title="取消" size="lg" variant="secondary" disabled={busy} onPress={onClose} />
+        <Button title="Cancel" size="lg" variant="secondary" disabled={busy} onPress={onClose} />
       </View>
     </Sheet>
   )

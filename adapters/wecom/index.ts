@@ -1,13 +1,13 @@
 import { registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
- * 企业微信 (Enterprise WeChat / WeCom) Adapter for Claude Code Desktop
+ * WeCom (Enterprise WeChat) Adapter for Claude Code Desktop
  *
- * Uses the official 智能机器人 WebSocket channel (`@wecom/aibot-node-sdk`), so
+ * Uses the official AI bot WebSocket channel (`@wecom/aibot-node-sdk`), so
  * no public callback URL is needed — the same shape as the Feishu adapter.
  * Credentials (`botId` / `secret`) come from the QR binding in Desktop
  * Settings → IM, or from WECOM_BOT_ID / WECOM_BOT_SECRET.
  *
- * 启动：WECOM_BOT_ID=xxx WECOM_BOT_SECRET=yyy bun run wecom/index.ts
+ * Start: WECOM_BOT_ID=xxx WECOM_BOT_SECRET=yyy bun run wecom/index.ts
  */
 
 import * as crypto from 'node:crypto'
@@ -36,7 +36,7 @@ const WECOM_TEXT_BYTE_LIMIT = 4_000
 
 const config = loadConfig()
 if (!config.wecom.botId || !config.wecom.secret) {
-  console.error('[WeCom] Missing WECOM_BOT_ID / WECOM_BOT_SECRET. Bind 企业微信 in Desktop Settings > IM.')
+  console.error('[WeCom] Missing WECOM_BOT_ID / WECOM_BOT_SECRET. Bind WeCom in Desktop Settings > IM.')
   process.exit(1)
 }
 
@@ -222,7 +222,7 @@ async function collectAttachments(
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === candidates.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === candidates.length ? 'Attachment download failed, please try again later.' : `${failures} attachment(s) failed to download and were skipped.`,
     )
   }
   return attachments

@@ -13,7 +13,7 @@ function fixture(profileStatus = 200, statsStatus = 200) {
     return {
       url, status, ok: status === 200, redirected: false,
       text: async () => JSON.stringify(status !== 200 ? { error: 'unavailable' } : profile ? {
-        profile: { displayName: 'Fixture', subtitle: '本地测试', avatarDataUrl: null },
+        profile: { displayName: 'Fixture', subtitle: 'Local test', avatarDataUrl: null },
       } : { stats: { totalSessions: 8 } }),
     }
   }
@@ -33,14 +33,14 @@ test('profile reads use the selected authenticated host and only the narrow prof
 test('an older host keeps usage available and explains the unavailable profile', async () => {
   const result = await loadProfileOverview(fixture(404).client)
   expect(result.profile).toBeNull()
-  expect(result.profileError).toContain('更新电脑端')
+  expect(result.profileError).toContain('update the desktop app')
   expect(result.stats?.totalSessions).toBe(8)
 })
 
 test('failed usage is not treated as zero and can be retried independently of identity', async () => {
   const failed = await loadProfileOverview(fixture(200, 500).client)
   expect(failed.stats).toBeNull()
-  expect(failed.statsError).toContain('读取失败')
+  expect(failed.statsError).toContain('Failed to load')
   expect(failed.profile?.displayName).toBe('Fixture')
   const recovered = await loadProfileOverview(fixture().client)
   expect(recovered.statsError).toBe('')
@@ -49,7 +49,7 @@ test('failed usage is not treated as zero and can be retried independently of id
 
 test('revoked pairing asks to reconnect and a cancelled route sends no request', async () => {
   const revoked = await loadProfileOverview(fixture(401, 401).client)
-  expect(revoked.statsError).toContain('重新连接')
+  expect(revoked.statsError).toContain('reconnect')
   const { client, calls } = fixture()
   const controller = new AbortController()
   controller.abort()

@@ -1,11 +1,11 @@
 import { CHANNEL_IDS, LEGACY_CHANNEL_ID } from './channelIds'
 
 /**
- * Android 渠道的创建清单。纯数据 + 注入的 API，不依赖原生模块，方便单测。
- * importance 数值与 expo-notifications 的 AndroidImportance 一致（DEFAULT=5、HIGH=6；
- * 注意 3 是 MIN、4 是 LOW，会变成无横幅的静默渠道——测试里对照了枚举定义文件）。
- * 渠道一旦创建，系统就固定了重要程度和声音，之后再调用只能改名字——所以这里的值
- * 不要随意改；要换行为只能新增渠道 id。
+ * Android Channel creation list. Pure data + injected API, no native module dependency, easy to unit test.
+ * importance Values match AndroidImportance in expo-notifications (DEFAULT=5, HIGH=6; 
+ * note 3 is MIN and 4 is LOW, which make silent channels without banners — the test checks against the enum definition file).
+ * Once a channel is created the system fixes its importance and sound, and later calls can only rename it — so these values
+ * must not be changed casually; to change behavior add a new channel id.
  */
 export const IMPORTANCE_DEFAULT = 5
 export const IMPORTANCE_HIGH = 6
@@ -18,29 +18,29 @@ export type ChannelSpec = {
   vibrationPattern?: number[]
 }
 
-/** 顺序固定：先三个分渠道，最后才是兼容旧版电脑的 legacy 渠道。 */
+/** Fixed order: the three split channels first, the legacy channel for older desktop versions last. */
 export const CHANNEL_SPECS: ChannelSpec[] = [
   {
     id: CHANNEL_IDS.decisions,
-    name: '要我做决定',
+    name: 'Needs my decision',
     importance: IMPORTANCE_HIGH,
     vibrationPattern: [0, 250, 250, 250],
   },
   {
     id: CHANNEL_IDS.completed,
-    name: '任务完成',
+    name: 'Task finished',
     importance: IMPORTANCE_DEFAULT,
   },
   {
     id: CHANNEL_IDS.errors,
-    name: '出错或卡住',
+    name: 'Error or stuck',
     importance: IMPORTANCE_HIGH,
     vibrationPattern: [0, 250, 250, 250],
   },
-  // 旧版电脑仍把推送发到这个渠道；登记时没带 channels: 'split' 就会走它。
+  // Older desktop versions still push to this channel; registrations without channels: 'split' use it.
   {
     id: LEGACY_CHANNEL_ID,
-    name: '任务与审批',
+    name: 'Tasks and approvals',
     importance: IMPORTANCE_HIGH,
   },
 ]
@@ -52,7 +52,7 @@ export type ChannelApi = {
   ): Promise<unknown>
 }
 
-/** 逐个创建，任何一个失败都向上抛，调用方据此决定能否声明 channels: 'split'。 */
+/** created one by one; any failure is thrown up so the caller decides whether it can declare channels: 'split'. */
 export async function createNotificationChannels(
   platform: string,
   api: ChannelApi

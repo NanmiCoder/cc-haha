@@ -24,12 +24,12 @@ import {
 } from './connectForm'
 import { useKeyboardShown } from './motion'
 
-/** 设计稿里面板顶边在 844 高屏幕的 214pt 处；其他屏幕按比例。 */
+/** In the design the panel top edge is at 214pt on an 844-high screen; other screens scale proportionally. */
 const sheetRatio = 630 / 844
-/** 抓手 15 + 头部 48 + 滚动区底部留白 8 + 按钮区上边距 12 + 按钮 50。 */
+/** Grabber 15 + header 48 + scroll area bottom padding 8 + button area top margin 12 + button 50. */
 const sheetChrome = 15 + 48 + 8 + 12 + 50
 
-/** 「手动连接」：局域网 / 公网两种方式，进度与错误都内联在面板里。 */
+/** "Manual connect": LAN / public methods, with progress and errors inline in the panel. */
 export function ManualSheet({
   visible,
   onClose,
@@ -65,7 +65,7 @@ export function ManualSheet({
   error: string
   onConnect(): void
   onCancel(): void
-  /** 公网配对出错（多半是链接过期）时给一个回到扫码的入口。 */
+  /** When public pairing fails (most likely an expired link) offer a way back to scanning. */
   onRescan(): void
 }) {
   const colors = useColors()
@@ -90,13 +90,13 @@ export function ManualSheet({
           accessibilityRole="header"
           style={{ fontSize: 20, lineHeight: 26, fontWeight: '600', color: colors.ink, paddingLeft: 4 }}
         >
-          手动连接
+          Manual connect
         </Text>
       }
       right={
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="关闭"
+          accessibilityLabel="Close"
           hitSlop={8}
           onPress={onClose}
           style={({ pressed }) => ({
@@ -115,7 +115,7 @@ export function ManualSheet({
       footer={
         <View style={{ gap: 8 }}>
           {busy ? (
-            <Button title="取消连接" variant="secondary" size="lg" onPress={onCancel} />
+            <Button title="Cancel connection" variant="secondary" size="lg" onPress={onCancel} />
           ) : (
             <Button
               title={primaryTitle(mode)}
@@ -124,7 +124,7 @@ export function ManualSheet({
               onPress={onConnect}
             />
           )}
-          {rescan && <Button title="重新扫码" variant="plain" onPress={onRescan} />}
+          {rescan && <Button title="Scan again" variant="plain" onPress={onRescan} />}
         </View>
       }
     >
@@ -136,28 +136,28 @@ export function ManualSheet({
         style={{ minHeight }}
       >
         <Segmented
-          label="连接方式"
+          label="Connection method"
           value={mode}
           disabled={busy}
           style={{ marginTop: 8 }}
           options={[
-            { label: '同一个局域网', value: 'lan' },
-            { label: '远程连接', value: 'remote' },
+            { label: 'Same LAN', value: 'lan' },
+            { label: 'Remote connection', value: 'remote' },
           ]}
           onChange={onModeChange}
         />
         <Group style={{ marginTop: 16 }}>
           <FieldRow
-            label="名字"
+            label="Name"
             value={name}
             onChangeText={onNameChange}
-            placeholder="我的电脑"
+            placeholder="My computer"
             editable={!busy}
             returnKeyType="next"
           />
           <Separator />
           <FieldRow
-            label="地址"
+            label="Address"
             mono
             value={address}
             onChangeText={onAddressChange}
@@ -174,10 +174,10 @@ export function ManualSheet({
             <>
               <Separator />
               <FieldRow
-                label="访问令牌"
+                label="Access token"
                 value={token}
                 onChangeText={onTokenChange}
-                placeholder="必填"
+                placeholder="Required"
                 editable={!busy}
                 autoComplete="off"
                 textContentType="none"
@@ -187,7 +187,7 @@ export function ManualSheet({
                 trailing={
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="粘贴访问令牌"
+                    accessibilityLabel="Paste access token"
                     disabled={busy}
                     onPress={onPasteToken}
                     style={({ pressed }) => ({
@@ -199,7 +199,7 @@ export function ManualSheet({
                       opacity: busy ? 0.45 : pressed ? 0.6 : 1,
                     })}
                   >
-                    <Text style={{ fontSize: 13, color: colors.ink }}>粘贴</Text>
+                    <Text style={{ fontSize: 13, color: colors.ink }}>Paste</Text>
                   </Pressable>
                 }
               />

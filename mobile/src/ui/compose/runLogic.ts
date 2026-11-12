@@ -1,6 +1,6 @@
 import { effortName } from '../modes'
 
-/* ───────────── 运行胶囊 ───────────── */
+/* ───────────── Run capsule ───────────── */
 
 export type RunRisk = 'normal' | 'attention' | 'danger'
 export type RunCapsule = {
@@ -10,7 +10,7 @@ export type RunCapsule = {
   locked?: boolean
 }
 
-/** 权限档位对应的提醒程度：全权限最危险，自动和不询问要留意，其余正常。 */
+/** Warning level for permission tiers: full access is most dangerous, auto and don't-ask need attention, others normal. */
 export function modeRisk(mode?: string): RunRisk {
   if (mode === 'bypassPermissions') return 'danger'
   if (mode === 'auto' || mode === 'dontAsk') return 'attention'
@@ -18,8 +18,8 @@ export function modeRisk(mode?: string): RunRisk {
 }
 
 /**
- * 点了某一档权限之后怎么办：点当前档不动；切到全权限或自动先确认（和桌面端一样，每次都问），
- * 其余直接生效。
+ * What happens after tapping a permission tier: tapping the current one does nothing; switching to full access or auto confirms first (like desktop, asking every time), 
+ * everything else takes effect directly.
  */
 export function modeChange(next: string, current?: string): 'none' | 'confirm' | 'apply' {
   if (next === (current ?? 'default')) return 'none'
@@ -27,35 +27,35 @@ export function modeChange(next: string, current?: string): 'none' | 'confirm' |
 }
 
 /**
- * 切换前的确认框文案，对齐桌面端「启用跳过权限？」「启用自动模式？」。
- * 显式切到自动本身就算同意，CLI 不依赖桌面端额外记下的 skipAutoPermissionPrompt。
+ * Confirmation text before switching, matching desktop "Enable skip permissions?" and "Enable auto mode?".
+ * Explicitly switching to auto itself counts as consent; the CLI does not rely on skipAutoPermissionPrompt recorded separately by desktop.
  */
 export function modeConfirmation(mode: 'bypassPermissions' | 'auto', workDir?: string) {
   if (mode === 'auto')
     return {
-      title: '启用自动模式？',
+      title: 'Enable auto mode?',
       message:
-        '自动模式会减少权限询问，但不能保证绝对安全。\n\n' +
-        '它会检查工具调用中的风险操作和提示词注入，执行认为安全的操作，阻止认为有风险的操作。请仅在隔离环境中使用。',
-      confirm: '启用自动模式',
+        'Auto mode reduces permission prompts but cannot guarantee complete safety.\n\n' +
+        'It checks tool calls for risky operations and prompt injection, runs operations it considers safe, and blocks ones it considers risky. Use only in isolated environments.',
+      confirm: 'Enable auto mode',
       destructive: false,
     }
   return {
-    title: '启用全权限？',
+    title: 'Enable full access?',
     message:
-      '这将授予对电脑的完全访问权限，之后不再逐项确认：\n' +
-      '· 读取、写入和删除任何文件\n' +
-      '· 执行任意 Shell 命令\n' +
-      '· 安装或移除软件包' +
-      (workDir ? `\n\n目录：${workDir}` : ''),
-    confirm: '启用全权限',
+      'This grants full access to the computer with no further per-item confirmation: \n' +
+      '· Read, write and delete any file\n' +
+      '· Run any shell command\n' +
+      '· Install or remove packages' +
+      (workDir ? `\n\nDirectory: ${workDir}` : ''),
+    confirm: 'Enable full access',
     destructive: true,
   }
 }
 
-/** 运行胶囊上的字：模型名，有思考强度时跟一个「 · 高」。 */
+/** Text on the run capsule: model name, followed by " · High" when there is a thinking effort. */
 export function runLabel(model?: string, effort?: string | null): string {
-  const name = model?.trim() || '电脑默认模型'
+  const name = model?.trim() || 'Computer default model'
   return effort ? `${name} · ${effortName(effort)}` : name
 }
 
@@ -74,13 +74,13 @@ export function runCapsule(input: {
   }
 }
 
-const riskNote: Record<RunRisk, string> = { normal: '', attention: '，需要留意', danger: '，有风险' }
+const riskNote: Record<RunRisk, string> = { normal: '', attention: ', needs attention', danger: ', risky' }
 
 export function runCapsuleA11y(run: Pick<RunCapsule, 'label' | 'risk' | 'locked'>): string {
-  return `运行方式：${run.label}${riskNote[run.risk]}${run.locked ? '，运行中不可改' : ''}`
+  return `Run mode: ${run.label}${riskNote[run.risk]}${run.locked ? ', cannot change while running' : ''}`
 }
 
-/* ───────────── 发送位 ───────────── */
+/* ───────────── Send slot ───────────── */
 
 export type SendSlot = {
   kind: 'send' | 'queue' | 'stop' | 'idle' | 'blocked'
@@ -89,64 +89,64 @@ export type SendSlot = {
 }
 
 /**
- * 输入框右下角那一个键：
- * 没有内容、正在运行（或队长空闲而团队成员还在跑）、页面给了停止 → 实心停止方块；
- * 有内容 → 向上箭头（运行中且允许排队时是「排队发送」）；其余是置灰的箭头。
+ * The key at the bottom right of the input: 
+ * no content, running (or the lead idle while team members still run), and the page provides stop → solid stop square; 
+ * with content → up arrow ("Queue to send" while running when queueing is allowed); otherwise a greyed arrow.
  */
 export function sendSlot(input: {
   hasContent: boolean
   busy: boolean
-  /** 这一轮已结束，但还有可停的后台工作（已确认的团队成员）；有内容时照常直接发送。 */
+  /** This turn ended but there is still stoppable background work (approved team members); with content send directly as usual. */
   background?: boolean
   queueing: boolean
   disabled: boolean
   picking: boolean
   canStop: boolean
-  /** 没有会话 id：这是新任务页，键上写「开始任务」。 */
+  /** No session id: this is the new task page, so the key says "Start task". */
   starting?: boolean
 }): SendSlot {
-  const idle = input.starting ? '开始任务' : '发送'
+  const idle = input.starting ? 'Start task' : 'Send'
   if (!input.hasContent) {
-    if ((input.busy || input.background) && input.canStop) return { kind: 'stop', enabled: true, label: '停止' }
+    if ((input.busy || input.background) && input.canStop) return { kind: 'stop', enabled: true, label: 'Stop' }
     return { kind: 'idle', enabled: false, label: idle }
   }
   if (input.disabled || input.picking) return { kind: 'blocked', enabled: false, label: idle }
   if (input.busy) {
     return input.queueing
-      ? { kind: 'queue', enabled: true, label: '排队发送' }
+      ? { kind: 'queue', enabled: true, label: 'Queue to send' }
       : { kind: 'blocked', enabled: false, label: idle }
   }
   return { kind: 'send', enabled: true, label: idle }
 }
 
-/** 输入框占位文字。 */
+/** Input placeholder text. */
 export function composerPlaceholder(input: { queueing: boolean; empty: boolean }): string {
-  return input.queueing ? '补充要求，这一轮结束后自动发送' : input.empty ? '说说你想做什么…' : '接着说…'
+  return input.queueing ? 'Add requirements; sends automatically after this turn ends' : input.empty ? 'Describe what you want to do…' : 'Continue…'
 }
 
-/** 草稿正好是 /model、/permissions（没有别的材料）时，改成打开「运行方式」。 */
+/** When the draft is exactly /model or /permissions (with no other materials), open "Run mode" instead. */
 export function runShortcut(draft: string, hasMaterial: boolean): 'run' | null {
   if (hasMaterial) return null
   const text = draft.trim()
   return text === '/model' || text === '/permissions' ? 'run' : null
 }
 
-/* ───────────── 运行方式底单 ───────────── */
+/* ───────────── Run mode sheet ───────────── */
 
 export type TeamsSetting = 'on' | 'off' | 'unknown' | 'error'
 
 export type RunSheetReasons = {
-  /** 权限单选整体不可用的原因。 */
+  /** Reason the permission choice is unavailable as a whole. */
   mode?: string
-  /** 「计划」这一档不可用的原因（轻量档位）。 */
+  /** Reason the "Plan" tier is unavailable (light tier). */
   plan?: string
-  /** 模型与思考强度不可用的原因。 */
+  /** Reason model and thinking effort are unavailable. */
   runtime?: string
-  /** 团队开关不可用的原因。 */
+  /** Reason the team toggle is unavailable. */
   team?: string
 }
 
-/** 各项置灰的原因：页面给出的优先，其次是轻量档位和电脑设置的限制。 */
+/** Reasons items are greyed out: those from the page first, then light tier and computer settings limits. */
 export function runSheetReasons(input: {
   lean: boolean
   teams: TeamsSetting
@@ -155,34 +155,34 @@ export function runSheetReasons(input: {
   const given = input.disabled ?? {}
   return {
     ...(given.mode ? { mode: given.mode } : {}),
-    ...(input.lean ? { plan: '轻量档位不支持计划模式' } : {}),
+    ...(input.lean ? { plan: 'The light tier does not support plan mode' } : {}),
     ...(given.runtime ? { runtime: given.runtime } : {}),
     ...(given.team
       ? { team: given.team }
       : input.lean
-        ? { team: '轻量档位不支持团队' }
+        ? { team: 'The light tier does not support teams' }
         : input.teams === 'off'
-          ? { team: '请先在电脑设置中启用团队' }
+          ? { team: 'Enable teams in the computer settings first' }
           : input.teams === 'error'
-            ? { team: '暂时读不到电脑上的团队设置' }
+            ? { team: 'Cannot read team settings from the computer right now' }
             : {}),
   }
 }
 
-/** 开关当前的说明文字：不可用时换成原因，否则是固定说明。 */
-export const teamNote = (reason?: string) => reason ?? '只对下一条消息生效'
+/** Current description of the toggle: the reason when unavailable, otherwise a fixed description. */
+export const teamNote = (reason?: string) => reason ?? 'Applies only to the next message'
 export function computerNote(input: { supported: boolean | null; reason?: string }) {
   if (input.reason) return input.reason
-  return input.supported === false ? '这台电脑暂不支持' : '允许 Agent 操作这台电脑的屏幕和应用'
+  return input.supported === false ? 'Not supported on this computer yet' : 'Allow the agent to operate this computer’s screen and apps'
 }
 
-/** 模型一行：`供应商 · 模型`，缺哪个就只显示另一个。 */
+/** Model row: `provider · model`, showing only the other when one is missing. */
 export function modelRowLabel(input: { source?: string; model?: string }): string {
   const parts = [input.source?.trim(), input.model?.trim()].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '电脑默认模型'
+  return parts.length ? parts.join(' · ') : 'Computer default model'
 }
 
-/** 思考强度三段（或模型实际支持的几段）：只在能设置、且来源可用时给出。 */
+/** Three thinking effort tiers (or the ones the model actually supports): given only when settable and the source is available. */
 export function effortSegments(input: {
   canSetEffort: boolean
   authReady: boolean
@@ -192,11 +192,11 @@ export function effortSegments(input: {
   return (input.efforts ?? []).map((value) => ({ value, label: effortName(value) }))
 }
 
-/* ───────────── 思考强度滑块 ───────────── */
+/* ───────────── Thinking effort slider ───────────── */
 
 /**
- * 关掉运行方式底单时要提交的配置：拖动过程中只改底单里的草稿，退出时变了才发一次，
- * 不让每一下滑动都去改电脑上的配置。底单里强度已不可改（这一轮开始了等）时丢掉草稿。
+ * Configuration to commit when closing the run mode sheet: dragging only changes the draft in the sheet, and it is sent once on exit only if changed, 
+ * so each slide does not change the computer configuration. When effort can no longer be changed in the sheet (turn started etc) the draft is discarded.
  */
 export function effortToCommit<T extends { effortLevel?: string }>(input: {
   runtime?: T
@@ -208,13 +208,13 @@ export function effortToCommit<T extends { effortLevel?: string }>(input: {
   return { ...runtime, effortLevel: draft }
 }
 
-/** 第 index 档圆点的横坐标：两端各留半个滑块宽，滑块停在档位上时圆心正好压住圆点。 */
+/** X coordinate of the dot for tier index: half a thumb width is reserved at each end, so the thumb center sits exactly on the dot when resting on a tier. */
 export function effortStopX(index: number, input: { width: number; count: number; thumb: number }): number {
   const span = Math.max(0, input.width - input.thumb)
   return input.thumb / 2 + (input.count > 1 ? (span * index) / (input.count - 1) : span / 2)
 }
 
-/** 手指在横坐标 x 时最近的档位，超出两端按两端算。 */
+/** Nearest tier for a finger at x; beyond the ends counts as the ends. */
 export function effortStopAt(x: number, input: { width: number; count: number; thumb: number }): number {
   if (input.count <= 1) return 0
   const span = Math.max(1, input.width - input.thumb)
@@ -222,7 +222,7 @@ export function effortStopAt(x: number, input: { width: number; count: number; t
   return Math.round(ratio * (input.count - 1))
 }
 
-/** 底单里新任务专有的「运行档位」分组。 */
+/** The new-task-only "Run tier" group in the sheet. */
 export type RunProfile = {
   value: 'standard' | 'lean'
   onChange(value: 'standard' | 'lean'): void
@@ -230,8 +230,8 @@ export type RunProfile = {
 }
 
 /**
- * 应用一次运行配置后，页面里记住的「已选模型」（带显示名和上下文窗口）该是什么：
- * 选了新模型就用新的；只改了思考强度（没带 model）且模型没变就保留；换了模型但没带 model 就清掉。
+ * After applying a run configuration, what the page should remember as the "selected model" (with display name and context window): 
+ * use the new one if a new model was chosen; keep it if only thinking effort changed (no model passed) and the model is unchanged; clear it if the model changed without passing model.
  */
 export function nextChosenModel<T extends { id: string }>(input: {
   picked?: T | null

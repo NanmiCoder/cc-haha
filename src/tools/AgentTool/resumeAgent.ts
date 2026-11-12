@@ -85,7 +85,7 @@ export async function resumeAgentBackground({
   /** Tool-authored follow-ups differ from direct human SDK/REPL input. */
   promptOrigin?: 'human' | 'coordinator'
 }): Promise<ResumeAgentResult> {
-  // 恢复已结束的普通 SubAgent 也会启动模型，必须与新建任务共用名额。
+  // Resuming a finished ordinary SubAgent also starts a model, so it must share slots with new tasks.
   const releaseSubagentSlot = reserveSubagentSlot()
   let slotTransferred = false
   using _subagentSlot = {

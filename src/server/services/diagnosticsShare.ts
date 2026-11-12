@@ -174,45 +174,45 @@ export function buildDiagnosticsIssueReport(input: DiagnosticsIssueReportInput):
     : []
   const providerLines = providers.length > 0
     ? providers.map(formatProviderLine)
-    : ['- 未配置 Provider']
+    : ['- No provider configured']
   const recentErrors = input.events
     .filter((event) => event.severity === 'error' || event.severity === 'warn')
     .slice(0, 50)
   const errorLines = recentErrors.length > 0
     ? recentErrors.map(formatErrorLine)
-    : ['- 未记录最近的警告或错误。']
+    : ['- No recent warnings or errors recorded.']
   const corruptionWarning = input.corruptLineCount > 0
-    ? `> 警告：检测到 ${input.corruptLineCount} 行损坏的诊断记录，以下信息可能不完整。`
-    : '> 未检测到损坏的诊断记录。'
+    ? `> Warning: detected ${input.corruptLineCount} corrupt diagnostic line(s); the information below may be incomplete.`
+    : '> No corrupt diagnostic records detected.'
 
   return [
     `<!-- Generated: ${sanitizeSharedString(input.generatedAt, 128).replace(/-->/g, '-- >')} -->`,
     '',
-    '## 问题描述',
-    '<!-- 请补充 -->',
+    '## Problem description',
+    '<!-- Please fill in -->',
     '',
-    '- 期望行为: <!-- 请补充 -->',
-    '- 出现频率: <!-- 请补充 -->',
+    '- Expected behavior: <!-- Please fill in -->',
+    '- Frequency: <!-- Please fill in -->',
     '',
-    '## 运行环境',
+    '## Environment',
     `- App: ${formatMetadata(input.appInfo.appVersion)}`,
     `- OS/Arch: ${formatMetadata(input.appInfo.platform)} / ${formatMetadata(input.appInfo.arch)}`,
     `- Bun/Node: ${formatMetadata(input.appInfo.bun)} / ${formatMetadata(input.appInfo.node)}`,
-    '- 安装来源: <!-- 请补充 -->',
+    '- Install source: <!-- Please fill in -->',
     '',
-    '## Provider / 模型',
+    '## Provider / Model',
     ...providerLines,
     '',
-    '## 诊断关联',
+    '## Diagnostic references',
     `- Event IDs: ${eventIds}`,
     `- Corrupt diagnostic lines: ${input.corruptLineCount}`,
     '',
     corruptionWarning,
     '',
-    '## 复现步骤',
-    '1. <!-- 请补充 -->',
+    '## Steps to reproduce',
+    '1. <!-- Please fill in -->',
     '',
-    '## 错误摘要',
+    '## Error summary',
     ...errorLines,
     '',
   ].join('\n')

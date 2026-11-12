@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { MarketCategory } from '../../types/market'
-import { categoryLabel, isChineseLocale, resolveCategory, skillSummary, visibleTags } from './catalogLocale'
+import { categoryLabel, resolveCategory, skillSummary, visibleTags } from './catalogLocale'
 import { formatCount, formatIsoDate, safeUrl } from './marketFormat'
 
 const CATEGORIES: MarketCategory[] = [
@@ -10,40 +10,28 @@ const CATEGORIES: MarketCategory[] = [
 ]
 
 describe('catalog locale', () => {
-  it('treats both Chinese scripts as Chinese readers', () => {
-    expect(isChineseLocale('zh')).toBe(true)
-    expect(isChineseLocale('zh-TW')).toBe(true)
-    expect(isChineseLocale('en')).toBe(false)
-    expect(isChineseLocale('jp')).toBe(false)
-    expect(isChineseLocale('kr')).toBe(false)
-  })
-
-  it('shows the edited zh summary to Chinese readers and the upstream one to everyone else', () => {
+  it('shows the upstream English summary, falling back to the original', () => {
     const skill = { summary: '用文件跟踪任务', summaryEn: 'Track tasks in files' }
-    expect(skillSummary(skill, 'zh-TW')).toBe('用文件跟踪任务')
     expect(skillSummary(skill, 'en')).toBe('Track tasks in files')
-    expect(skillSummary(skill, 'kr')).toBe('Track tasks in files')
-    // No English copy: the Chinese summary beats an empty card.
-    expect(skillSummary({ summary: '只有中文' }, 'jp')).toBe('只有中文')
+    // No English copy: the original summary beats an empty card.
+    expect(skillSummary({ summary: '只有中文' }, 'en')).toBe('只有中文')
   })
 
-  it('hides curated (Chinese) tags outside Chinese locales but keeps upstream tags', () => {
+  it('hides untranslated curated tags but keeps upstream tags', () => {
     expect(visibleTags({ tags: ['任务规划'], curated: true }, 'en')).toEqual([])
-    expect(visibleTags({ tags: ['任务规划'], curated: true }, 'zh')).toEqual(['任务规划'])
     expect(visibleTags({ tags: ['git'], curated: false }, 'en')).toEqual(['git'])
   })
 
-  it('labels categories by locale and falls back to the zh name', () => {
-    expect(categoryLabel(CATEGORIES[0]!, 'zh')).toBe('开发编程')
+  it('labels categories in English and falls back to the original name', () => {
     expect(categoryLabel(CATEGORIES[0]!, 'en')).toBe('Development')
     expect(categoryLabel(CATEGORIES[1]!, 'en')).toBe('办公文档')
   })
 
   it('resolves catalog keys only on curated skills and passes raw upstream strings through', () => {
     expect(resolveCategory({ category: 'dev', curated: true }, CATEGORIES, 'en')).toBe('Development')
-    expect(resolveCategory({ category: 'unknown-key', curated: true }, CATEGORIES, 'zh')).toBeUndefined()
+    expect(resolveCategory({ category: 'unknown-key', curated: true }, CATEGORIES, 'en')).toBeUndefined()
     expect(resolveCategory({ category: 'AI 工具', curated: false }, CATEGORIES, 'en')).toBe('AI 工具')
-    expect(resolveCategory({ curated: true }, CATEGORIES, 'zh')).toBeUndefined()
+    expect(resolveCategory({ curated: true }, CATEGORIES, 'en')).toBeUndefined()
   })
 })
 

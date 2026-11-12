@@ -11,11 +11,11 @@ const initialUpdateState = useUpdateStore.getState()
 
 async function renderAboutSettings() {
   render(<AboutSettings />)
-  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
+  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === 'Version 0.1.0')
 }
 
 beforeEach(async () => {
-  useSettingsStore.setState({ locale: 'zh', autoUpdateEnabled: true })
+  useSettingsStore.setState({ locale: 'en', autoUpdateEnabled: true })
   useUpdateStore.setState({
     status: 'idle',
     availableVersion: null,
@@ -40,14 +40,14 @@ afterEach(() => {
 
 it('shows automatic updates enabled by default with the scope of the setting', async () => {
   await renderAboutSettings()
-  expect(screen.getByRole('switch', { name: '自动更新' })).toBeChecked()
-  expect(screen.getByText('自动检查新版本并在后台下载；关闭后仍可手动检查与安装。')).toBeInTheDocument()
-  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
+  expect(screen.getByRole('switch', { name: 'Automatic updates' })).toBeChecked()
+  expect(screen.getByText('Automatically check for new versions and download updates in the background. Manual checks and installation remain available when turned off.')).toBeInTheDocument()
+  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === 'Version 0.1.0')
 })
 
 it('saves automatic updates off and back on through the settings API', async () => {
   await renderAboutSettings()
-  const toggle = screen.getByRole('switch', { name: '自动更新' })
+  const toggle = screen.getByRole('switch', { name: 'Automatic updates' })
   fireEvent.click(toggle)
   await waitFor(() => expect(toggle).not.toBeChecked())
   await waitFor(() => expect(toggle).toBeEnabled())
@@ -63,7 +63,7 @@ it('disables the switch until saving finishes', async () => {
   let finishSave: (result: { ok: true }) => void = () => {}
   vi.mocked(settingsApi.updateUser).mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve }))
   await renderAboutSettings()
-  const toggle = screen.getByRole('switch', { name: '自动更新' })
+  const toggle = screen.getByRole('switch', { name: 'Automatic updates' })
   fireEvent.click(toggle)
   expect(toggle).toBeDisabled()
   await waitFor(() => expect(settingsApi.updateUser).toHaveBeenCalledOnce())
@@ -75,9 +75,9 @@ it('disables the switch until saving finishes', async () => {
 it('surfaces a failed save and restores the previous automatic update setting', async () => {
   vi.mocked(settingsApi.updateUser).mockRejectedValueOnce(new Error('fixture save failed'))
   await renderAboutSettings()
-  const toggle = screen.getByRole('switch', { name: '自动更新' })
+  const toggle = screen.getByRole('switch', { name: 'Automatic updates' })
   fireEvent.click(toggle)
-  expect(await screen.findByRole('alert')).toHaveTextContent('自动更新设置保存失败：fixture save failed')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not save automatic update settings: fixture save failed')
   expect(toggle).toBeChecked()
   expect(toggle).toBeEnabled()
 })
@@ -86,35 +86,35 @@ it('keeps manual checking and installing available while automatic updates are o
   useSettingsStore.setState({ autoUpdateEnabled: false })
   useUpdateStore.setState({ status: 'downloaded', availableVersion: '0.2.0' })
   await renderAboutSettings()
-  expect(screen.getByRole('switch', { name: '自动更新' })).not.toBeChecked()
+  expect(screen.getByRole('switch', { name: 'Automatic updates' })).not.toBeChecked()
   expect(useUpdateStore.getState().initialize).not.toHaveBeenCalled()
-  const check = screen.getByRole('button', { name: '检查更新' })
-  const install = screen.getByRole('button', { name: '安装并重启' })
+  const check = screen.getByRole('button', { name: 'Check now' })
+  const install = screen.getByRole('button', { name: 'Install and restart' })
   expect(check).toBeEnabled()
   expect(install).toBeEnabled()
   fireEvent.click(check)
   fireEvent.click(install)
   expect(useUpdateStore.getState().checkForUpdates).toHaveBeenCalledOnce()
   expect(useUpdateStore.getState().installUpdate).toHaveBeenCalledOnce()
-  expect(screen.getByText('更新已下载。点击「安装并重启」后应用新版。')).toBeInTheDocument()
-  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
+  expect(screen.getByText('Update downloaded. Click “Install and restart” to apply it.')).toBeInTheDocument()
+  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === 'Version 0.1.0')
 })
 
 it('opens the group QR in a dialog instead of pushing it below the fold', async () => {
   await renderAboutSettings()
   // The version arrives from an async host call; let it settle so the assertion
   // is not racing a state update.
-  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === '版本 0.1.0')
+  await screen.findByText((_, node) => node?.tagName === 'SPAN' && node.textContent === 'Version 0.1.0')
 
-  const entry = screen.getByRole('button', { name: /加入 cc-haha 交流群/ })
-  expect(entry.compareDocumentPosition(screen.getByRole('button', { name: /反馈问题/ })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  const entry = screen.getByRole('button', { name: /Join the cc-haha group/ })
+  expect(entry.compareDocumentPosition(screen.getByRole('button', { name: /Report an Issue/ })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
   expect(entry).toHaveAttribute('aria-haspopup', 'dialog')
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
   fireEvent.click(entry)
 
-  const dialog = screen.getByRole('dialog', { name: '加入 cc-haha 交流群' })
-  const qr = screen.getByRole('img', { name: 'cc-haha 企业微信用户群二维码' })
+  const dialog = screen.getByRole('dialog', { name: 'Join the cc-haha group' })
+  const qr = screen.getByRole('img', { name: 'cc-haha WeCom user group QR code' })
   expect(dialog).toContainElement(qr)
   expect(qr).toHaveAttribute('src', expect.stringContaining('icons/wechat-group-qr.png'))
 

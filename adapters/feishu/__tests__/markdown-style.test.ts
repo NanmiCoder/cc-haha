@@ -1,13 +1,13 @@
 /**
- * markdown-style 单元测试
+ * markdown-style unit tests
  *
- * 覆盖:
- * - 标题降级 (H1~H3 workaround)
- * - 代码块保护
- * - 空行压缩
- * - Schema 2.0: 连续标题/表格/代码块 <br> 间距
+ * Covers:
+ * - Heading downgrade (H1~H3 workaround)
+ * - Code block protection
+ * - Blank line compression
+ * - Schema 2.0: <br> spacing for consecutive headings/tables/code blocks
  * - stripInvalidImageKeys
- * - sanitizeTextForCard (表格数限制)
+ * - sanitizeTextForCard (table count limit)
  * - findMarkdownTablesOutsideCodeBlocks
  */
 
@@ -19,15 +19,15 @@ import {
   FEISHU_CARD_TABLE_LIMIT,
 } from '../markdown-style.js'
 
-// 默认 cardVersion=2 的 shortcut
+// Shortcut for the default cardVersion=2
 const opt = (text: string, v?: number) => optimizeMarkdownForFeishu(text, v)
 
 // ---------------------------------------------------------------------------
-// 标题降级
+// Heading downgrade
 // ---------------------------------------------------------------------------
 
-describe('optimizeMarkdownForFeishu: 标题降级', () => {
-  it('H1 → H4 (cardVersion=1 简化检查)', () => {
+describe('optimizeMarkdownForFeishu: heading downgrade', () => {
+  it('H1 → H4 (cardVersion=1 simplified check)', () => {
     expect(opt('# Title', 1)).toBe('#### Title')
   })
 
@@ -39,33 +39,33 @@ describe('optimizeMarkdownForFeishu: 标题降级', () => {
     expect(opt('### Title', 1)).toBe('##### Title')
   })
 
-  it('混合 H1+H2+H3 全部降级 (cardVersion=1)', () => {
+  it('mixed H1+H2+H3 all downgraded (cardVersion=1)', () => {
     expect(opt('# H1\n## H2\n### H3', 1)).toBe('#### H1\n##### H2\n##### H3')
   })
 
-  it('纯 H4 文档不触发降级 (cardVersion=1)', () => {
-    // 触发条件: 原文必须有 H1~H3
+  it('pure H4 document does not trigger downgrade (cardVersion=1)', () => {
+    // Trigger condition: source must contain H1~H3
     expect(opt('#### Already H4', 1)).toBe('#### Already H4')
   })
 
-  it('同时存在 H1 和 H4: H1→H4, 原 H4 → H5 (cardVersion=1)', () => {
+  it('both H1 and H4 present: H1→H4, original H4 → H5 (cardVersion=1)', () => {
     expect(opt('# Top\n#### Sub', 1)).toBe('#### Top\n##### Sub')
   })
 
-  it('# 后必须有空格才算标题', () => {
+  it('# must be followed by a space to count as a heading', () => {
     expect(opt('#notaheading', 1)).toBe('#notaheading')
   })
 
-  it('顺序保证: # 降成 #### 后不会被 #{2,6} 再次吃成 #####', () => {
-    // openclaw-lark 源码里的关键注释：顺序不能颠倒
+  it('order guarantee: # downgraded to #### is not re-eaten by #{2,6} into #####', () => {
+    // Key comment from openclaw-lark source: the order must not be reversed
     expect(opt('# Top', 1)).toBe('#### Top')
   })
 
-  it('无标题文本原样返回', () => {
+  it('text without headings is returned as-is', () => {
     expect(opt('just plain text', 1)).toBe('just plain text')
   })
 
-  it('默认 cardVersion=2 下也能正确降级标题', () => {
+  it('also downgrades headings correctly with the default cardVersion=2', () => {
     const out = opt('# Title')
     expect(out).toContain('#### Title')
     expect(out).not.toMatch(/^# Title$/m)
@@ -73,106 +73,106 @@ describe('optimizeMarkdownForFeishu: 标题降级', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 代码块保护
+// Code block protection
 // ---------------------------------------------------------------------------
 
-describe('optimizeMarkdownForFeishu: 代码块保护', () => {
-  it('代码块内的 # 不被降级 (cardVersion=1)', () => {
+describe('optimizeMarkdownForFeishu: code block protection', () => {
+  it('# inside a code block is not downgraded (cardVersion=1)', () => {
     const input = '```\n# not a heading\n## also not\n```'
     expect(opt(input, 1)).toBe(input)
   })
 
-  it('外部 H1 降级，代码块内 # 保持 (cardVersion=1)', () => {
+  it('outer H1 downgraded, # inside code block kept (cardVersion=1)', () => {
     const input = '# Real heading\n\n```\n# inside code\n```'
     expect(opt(input, 1)).toBe('#### Real heading\n\n```\n# inside code\n```')
   })
 
-  it('语言标记的 fenced 代码块也受保护 (cardVersion=1)', () => {
+  it('fenced code blocks with a language tag are also protected (cardVersion=1)', () => {
     const input = '## Section\n\n```python\n# python comment\n### not a heading\n```'
     expect(opt(input, 1)).toBe('##### Section\n\n```python\n# python comment\n### not a heading\n```')
   })
 
-  it('多个代码块按顺序保护与还原 (cardVersion=1)', () => {
+  it('multiple code blocks protected and restored in order (cardVersion=1)', () => {
     const input = '# A\n```\n# b1\n```\n## C\n```\n### b2\n```'
     expect(opt(input, 1)).toBe('#### A\n```\n# b1\n```\n##### C\n```\n### b2\n```')
   })
 
-  it('默认 cardVersion=2 下代码块内 # 仍受保护（语义断言）', () => {
+  it('# inside code blocks is still protected with the default cardVersion=2 (semantic assertion)', () => {
     const out = opt('# Heading\n\n```\n# inside\n```')
-    expect(out).toContain('#### Heading') // 外部 H1 降级
-    expect(out).toContain('# inside') // 代码块内保留
-    expect(out).toContain('```') // fence 保留
+    expect(out).toContain('#### Heading') // outer H1 downgraded
+    expect(out).toContain('# inside') // kept inside the code block
+    expect(out).toContain('```') // fence kept
   })
 })
 
 // ---------------------------------------------------------------------------
-// 空行压缩
+// Blank line compression
 // ---------------------------------------------------------------------------
 
-describe('optimizeMarkdownForFeishu: 空行压缩', () => {
-  it('3 个换行 → 2 个 (cardVersion=1)', () => {
+describe('optimizeMarkdownForFeishu: blank line compression', () => {
+  it('3 newlines → 2 (cardVersion=1)', () => {
     expect(opt('line1\n\n\nline2', 1)).toBe('line1\n\nline2')
   })
 
-  it('5 个换行 → 2 个 (cardVersion=1)', () => {
+  it('5 newlines → 2 (cardVersion=1)', () => {
     expect(opt('line1\n\n\n\n\nline2', 1)).toBe('line1\n\nline2')
   })
 
-  it('2 个换行保留 (cardVersion=1)', () => {
+  it('2 newlines kept (cardVersion=1)', () => {
     expect(opt('line1\n\nline2', 1)).toBe('line1\n\nline2')
   })
 
-  it('代码块内部连续换行被保留 (cardVersion=1)', () => {
+  it('consecutive newlines inside code blocks are kept (cardVersion=1)', () => {
     const input = '# Title\n\n```\nline1\n\n\nline2\n```'
     expect(opt(input, 1)).toBe('#### Title\n\n```\nline1\n\n\nline2\n```')
   })
 })
 
 // ---------------------------------------------------------------------------
-// Schema 2.0: <br> 间距
+// Schema 2.0: <br> spacing
 // ---------------------------------------------------------------------------
 
-describe('optimizeMarkdownForFeishu: Schema 2.0 <br> 间距', () => {
-  it('cardVersion=2 默认在代码块前后加 <br>', () => {
+describe('optimizeMarkdownForFeishu: Schema 2.0 <br> spacing', () => {
+  it('cardVersion=2 adds <br> around code blocks by default', () => {
     const out = opt('text\n\n```\ncode\n```')
-    // 代码块前后应包裹 <br>
+    // Code blocks should be wrapped in <br>
     expect(out).toContain('<br>\n```')
     expect(out).toContain('```\n<br>')
   })
 
-  it('cardVersion=1 代码块前后不加 <br>', () => {
+  it('cardVersion=1 adds no <br> around code blocks', () => {
     const out = opt('text\n\n```\ncode\n```', 1)
     expect(out).not.toContain('<br>')
   })
 
-  it('cardVersion=2 连续标题之间加 <br>', () => {
+  it('cardVersion=2 adds <br> between consecutive headings', () => {
     const out = opt('# A\n# B')
-    // H1 降级为 H4，之间插入 <br>
+    // H1 downgraded to H4, <br> inserted between
     expect(out).toMatch(/#### A\n<br>\n#### B/)
   })
 
-  it('cardVersion=2 表格前后加 <br>', () => {
+  it('cardVersion=2 adds <br> around tables', () => {
     const input = 'text before\n\n| col1 | col2 |\n|------|------|\n| v1 | v2 |\n\ntext after'
     const out = opt(input)
-    // 表格前: <br> 紧贴文本行（规则 3e 压缩多余空行）
+    // Before the table: <br> right after the text line (rule 3e drops extra blank lines)
     expect(out).toMatch(/text before\n<br>\n\| col1/)
-    // 表格后: <br> 跟两个换行到下一段文本
+    // After the table: <br> followed by two newlines to the next paragraph
     expect(out).toMatch(/\| v1 \| v2 \|\n<br>\n\ntext after/)
   })
 
-  it('cardVersion=1 表格前后不加 <br>', () => {
+  it('cardVersion=1 adds no <br> around tables', () => {
     const input = 'text before\n\n| col1 | col2 |\n|------|------|\n| v1 | v2 |\n\ntext after'
     const out = opt(input, 1)
     expect(out).not.toContain('<br>')
   })
 
-  it('代码块内的 | 不被当表格处理 (Schema 2.0)', () => {
+  it('| inside a code block is not treated as a table (Schema 2.0)', () => {
     const input = '```\n| in code | not a table |\n|---|---|\n```'
     const out = opt(input)
-    // 代码块本体应完整保留
+    // Code block body should be kept intact
     expect(out).toContain('| in code | not a table |')
-    // 代码块外应该没有出现表格 br 标记（因为代码块内不算表格）
-    // 代码块本身会被 <br> 包裹（Schema 2.0）但不会在 | 周围单独加 <br>
+    // No table br markers outside the code block (content inside code blocks is not a table)
+    // The code block itself is wrapped in <br> (Schema 2.0) but no separate <br> around |
     expect(out).toMatch(/<br>\n```\n\| in code/)
   })
 })
@@ -182,32 +182,32 @@ describe('optimizeMarkdownForFeishu: Schema 2.0 <br> 间距', () => {
 // ---------------------------------------------------------------------------
 
 describe('optimizeMarkdownForFeishu: stripInvalidImageKeys', () => {
-  it('img_* 图片 key 保留', () => {
-    const out = opt('前缀 ![alt](img_abc123) 后缀')
+  it('img_* image keys are kept', () => {
+    const out = opt('prefix ![alt](img_abc123) suffix')
     expect(out).toContain('![alt](img_abc123)')
   })
 
-  it('http:// URL 图片被删除', () => {
-    const out = opt('前缀 ![alt](http://example.com/img.png) 后缀')
-    expect(out).toBe('前缀  后缀')
+  it('http:// URL images are removed', () => {
+    const out = opt('prefix ![alt](http://example.com/img.png) suffix')
+    expect(out).toBe('prefix  suffix')
   })
 
-  it('https:// URL 图片被删除', () => {
+  it('https:// URL images are removed', () => {
     const out = opt('![a](https://x.y/z.jpg)')
     expect(out).toBe('')
   })
 
-  it('本地路径被删除', () => {
+  it('local paths are removed', () => {
     const out = opt('![a](/Users/me/pic.png)')
     expect(out).toBe('')
   })
 
-  it('无图片文本原样', () => {
+  it('text without images is unchanged', () => {
     expect(opt('no images here', 1)).toBe('no images here')
   })
 
-  it('混合: img_ 保留，URL 删除', () => {
-    const out = opt('![keep](img_good) 和 ![drop](http://bad.com/x.png)')
+  it('mixed: img_ kept, URL removed', () => {
+    const out = opt('![keep](img_good) and ![drop](http://bad.com/x.png)')
     expect(out).toContain('![keep](img_good)')
     expect(out).not.toContain('bad.com')
     expect(out).not.toContain('![drop]')
@@ -219,27 +219,27 @@ describe('optimizeMarkdownForFeishu: stripInvalidImageKeys', () => {
 // ---------------------------------------------------------------------------
 
 describe('findMarkdownTablesOutsideCodeBlocks', () => {
-  it('识别单张表格', () => {
+  it('detects a single table', () => {
     const text = '| a | b |\n|---|---|\n| 1 | 2 |'
     const matches = findMarkdownTablesOutsideCodeBlocks(text)
     expect(matches.length).toBe(1)
     expect(matches[0]!.raw).toContain('| a | b |')
   })
 
-  it('识别多张表格', () => {
+  it('detects multiple tables', () => {
     const text =
       '| a | b |\n|---|---|\n| 1 | 2 |\n\ntext\n\n| x | y |\n|---|---|\n| 3 | 4 |'
     const matches = findMarkdownTablesOutsideCodeBlocks(text)
     expect(matches.length).toBe(2)
   })
 
-  it('代码块内的 | 不被算作表格', () => {
+  it('| inside a code block is not counted as a table', () => {
     const text = '```\n| in | code |\n|---|---|\n| 1 | 2 |\n```'
     const matches = findMarkdownTablesOutsideCodeBlocks(text)
     expect(matches.length).toBe(0)
   })
 
-  it('代码块 + 外部表格: 只识别外部的', () => {
+  it('code block + outer table: only the outer one is detected', () => {
     const text =
       '```\n| in | code |\n|---|---|\n| 1 | 2 |\n```\n\n| real | table |\n|---|---|\n| a | b |'
     const matches = findMarkdownTablesOutsideCodeBlocks(text)
@@ -247,7 +247,7 @@ describe('findMarkdownTablesOutsideCodeBlocks', () => {
     expect(matches[0]!.raw).toContain('real')
   })
 
-  it('无表格文本返回空数组', () => {
+  it('returns an empty array for text without tables', () => {
     expect(findMarkdownTablesOutsideCodeBlocks('just text').length).toBe(0)
   })
 })
@@ -256,35 +256,35 @@ describe('findMarkdownTablesOutsideCodeBlocks', () => {
 // sanitizeTextForCard
 // ---------------------------------------------------------------------------
 
-describe('sanitizeTextForCard: 表格数量限制', () => {
+describe('sanitizeTextForCard: table count limit', () => {
   function makeTable(label: string): string {
     return `| ${label} h1 | h2 |\n|---|---|\n| v1 | v2 |`
   }
 
-  it('表格数 ≤ 3 时原样返回', () => {
+  it('returned as-is when table count ≤ 3', () => {
     const text = [makeTable('A'), makeTable('B'), makeTable('C')].join('\n\n')
     expect(sanitizeTextForCard(text)).toBe(text)
   })
 
-  it('恰好 3 张表格原样返回', () => {
+  it('exactly 3 tables returned as-is', () => {
     const text = [makeTable('A'), makeTable('B'), makeTable('C')].join('\n\n')
     const matches = findMarkdownTablesOutsideCodeBlocks(text)
     expect(matches.length).toBe(3)
     expect(sanitizeTextForCard(text)).toBe(text)
   })
 
-  it('4 张表格: 前 3 张保留，第 4 张包裹成 code block', () => {
+  it('4 tables: first 3 kept, 4th wrapped as a code block', () => {
     const text = [makeTable('A'), makeTable('B'), makeTable('C'), makeTable('D')].join('\n\n')
     const out = sanitizeTextForCard(text)
-    // 前 3 张表格原样
+    // First 3 tables unchanged
     expect(out).toContain(makeTable('A'))
     expect(out).toContain(makeTable('B'))
     expect(out).toContain(makeTable('C'))
-    // 第 4 张被包裹
+    // 4th is wrapped
     expect(out).toContain('```\n' + makeTable('D') + '\n```')
   })
 
-  it('自定义 limit=1: 第 1 张保留，之后全部包裹', () => {
+  it('custom limit=1: first kept, all later ones wrapped', () => {
     const text = [makeTable('A'), makeTable('B'), makeTable('C')].join('\n\n')
     const out = sanitizeTextForCard(text, 1)
     expect(out).toContain(makeTable('A'))
@@ -292,34 +292,34 @@ describe('sanitizeTextForCard: 表格数量限制', () => {
     expect(out).toContain('```\n' + makeTable('C') + '\n```')
   })
 
-  it('limit=0: 全部包裹', () => {
+  it('limit=0: all wrapped', () => {
     const text = makeTable('Solo')
     const out = sanitizeTextForCard(text, 0)
     expect(out).toContain('```\n' + makeTable('Solo') + '\n```')
   })
 
-  it('无表格原样返回', () => {
+  it('returned as-is without tables', () => {
     expect(sanitizeTextForCard('no tables here')).toBe('no tables here')
   })
 
-  it('FEISHU_CARD_TABLE_LIMIT 默认值 = 3', () => {
+  it('FEISHU_CARD_TABLE_LIMIT default = 3', () => {
     expect(FEISHU_CARD_TABLE_LIMIT).toBe(3)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 边界与真实场景
+// Edge cases and real scenarios
 // ---------------------------------------------------------------------------
 
-describe('optimizeMarkdownForFeishu: 边界与真实场景', () => {
-  it('screenshot 里的 OpenCutSkill 项目结构报告', () => {
-    const input = `## OpenCutSkill 项目架构概览
+describe('optimizeMarkdownForFeishu: edge cases and real scenarios', () => {
+  it('OpenCutSkill project structure report from a screenshot', () => {
+    const input = `## OpenCutSkill architecture overview
 
-### 1. 项目定位
+### 1. Project positioning
 
-Screen Studio 视频自动剪辑工具。
+Automatic editing tool for Screen Studio videos.
 
-### 2. 模块结构
+### 2. Module structure
 
 \`\`\`
 opencutskill/
@@ -328,26 +328,26 @@ opencutskill/
 └── tests/
 \`\`\``
     const out = opt(input)
-    // 所有 H2~H3 应被降级为 H5
-    expect(out).toContain('##### OpenCutSkill 项目架构概览')
-    expect(out).toContain('##### 1. 项目定位')
-    expect(out).toContain('##### 2. 模块结构')
-    // 代码块内容原封不动
+    // All H2~H3 should be downgraded to H5
+    expect(out).toContain('##### OpenCutSkill architecture overview')
+    expect(out).toContain('##### 1. Project positioning')
+    expect(out).toContain('##### 2. Module structure')
+    // Code block content untouched
     expect(out).toContain('opencutskill/')
     expect(out).toContain('├── cli/')
-    // 原始 ## 字面量不残留
+    // No raw ## literals left
     expect(out).not.toMatch(/^## OpenCutSkill/m)
     expect(out).not.toMatch(/^### 1\./m)
-    // 代码块前后有 <br>（Schema 2.0 默认）
+    // <br> around code blocks (Schema 2.0 default)
     expect(out).toContain('<br>\n```')
     expect(out).toContain('```\n<br>')
   })
 
-  it('异常输入 fallback 到原文不抛错', () => {
+  it('abnormal input falls back to the original without throwing', () => {
     expect(() => opt('\u0000\uFFFF```unclosed')).not.toThrow()
   })
 
-  it('空字符串返回空字符串', () => {
+  it('empty string returns empty string', () => {
     expect(opt('')).toBe('')
   })
 })

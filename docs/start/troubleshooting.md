@@ -1,222 +1,222 @@
 ---
-title: 装不上 / 打不开 / 连不上
-nav_title: 排查问题
-description: 按症状查：安装失败、启动白屏、模型 401、会话卡住、端口冲突、手机连不上。
+title: Won't install, won't open, won't connect
+nav_title: Troubleshooting
+description: Organized by symptom — install failures, blank window, model 401s, stuck sessions, port conflicts, phone access.
 order: 4
 ---
 
-# 装不上 / 打不开 / 连不上
+# Won't install, won't open, won't connect
 
-按你看到的现象往下找。每条都是「现象 → 为什么 → 怎么办」。
+Find your symptom below. Each entry is "what you see → why → what to do".
 
-先确认一件事：你用的是 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) 上的最新正式版。旧版本上的问题很多已经修掉了。
+First, one check: make sure you're on the latest stable build from [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest). A lot of problems on older versions are already fixed.
 
-## 装不上
+## Won't install
 
-### macOS 提示「已损坏，无法打开」
+### macOS says the app is damaged and can't be opened
 
-**为什么** — 文件没坏。macOS 会给从网上下载的包打一个隔离标记，遇到没有 Apple 签名的应用就拒绝启动，而报错文案写成了「已损坏」，非常有误导性。
+**Why** — The file isn't damaged. macOS quarantines downloads and refuses to launch anything without an Apple signature, but words the error as "damaged", which sends everyone down the wrong path.
 
-**怎么办** — Releases 里的正式版本已经签名和公证，遇到这个提示多半是装了未签名的开发构建。把构建附带的 `install-macos-unsigned.sh` 放到和 DMG 同一个文件夹，执行 `bash install-macos-unsigned.sh`；或者应用已经在「应用程序」里的话，直接执行 `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`。完整说明见 [下载与安装](./install.md)。
+**What to do** — Releases are signed and notarized, so this usually means an unsigned development build. Put the `install-macos-unsigned.sh` that ships with the build in the same folder as the DMG, and run `bash install-macos-unsigned.sh`. Or, if the app is already in Applications, run `xattr -dr com.apple.quarantine "/Applications/Claude Code Haha.app"`. Full details in [Download and install](./install.md).
 
-### Windows 弹出 SmartScreen 蓝屏
+### Windows shows a SmartScreen warning
 
-**为什么** — 未签名的安装包会被 SmartScreen 拦一道。
+**Why** — Unsigned installers get flagged by SmartScreen.
 
-**怎么办** — 确认文件确实来自本仓库 Release，点「更多信息」→「仍要运行」。文件名或来源对不上就别绕过。
+**What to do** — Confirm the file came from this repository's Releases, then click "More info" → "Run anyway". If the filename or origin doesn't match, don't bypass it.
 
-### Windows 安装器说「程序仍在运行」
+### The Windows installer says the program is still running
 
-**为什么** — 旧版本的主进程、sidecar、内嵌终端或 IM adapter 还没退干净，安装器不敢覆盖。
+**Why** — The old version's main process, sidecar, embedded terminal, or IM adapter hasn't fully exited, so the installer won't overwrite it.
 
-**怎么办**
+**What to do**
 
-1. 退出主窗口，检查系统托盘里的图标也一并退出。
-2. 等几秒让后台进程结束。
-3. 还不行就去任务管理器里找 cc-haha 相关进程手动结束；已安装版本的进程可能仍显示旧名称 `Claude Code Haha`。
-4. 重新双击安装器。**不要**选「以管理员身份运行」，也**不要**先手动删掉旧安装目录里的数据。
+1. Quit the main window, and quit the tray icon too.
+2. Give background processes a few seconds to exit.
+3. Still stuck? End any remaining cc-haha processes in Task Manager; installed versions may still show the legacy name `Claude Code Haha`.
+4. Run the installer again. **Don't** use "Run as administrator", and **don't** manually delete data from the old install directory.
 
-### Linux AppImage 双击没反应
+### The Linux AppImage does nothing when I run it
 
-**为什么** — 多半是没给执行权限，或者系统缺 FUSE。
+**Why** — Usually a missing execute bit, or missing FUSE.
 
-**怎么办** — 先 `chmod +x <文件名>.AppImage`。仍报 FUSE 相关错误的话，Ubuntu 22.04 及更早装 `libfuse2`，24.04 及以后装 `libfuse2t64`。
+**What to do** — Run `chmod +x <name>.AppImage` first. If you still get a FUSE error, install `libfuse2` on Ubuntu 22.04 and earlier, or `libfuse2t64` on 24.04 and later.
 
-## 打不开
+## Won't open
 
-### 双击后什么都没发生
+### Nothing happens when I launch it
 
-**为什么** — 最常见的是下错了 CPU 架构：Apple 芯片的 Mac 装了 `macOS-Intel`，或者 ARM64 的 Windows 装了 `Windows-x64`。
+**Why** — Most often the wrong CPU architecture: `macOS-Intel` on Apple Silicon, or `Windows-x64` on ARM64 Windows.
 
-**怎么办** — 对照 [下载与安装](./install.md) 重新确认架构，下对的那个包重装。旧版进程还在跑的话也会互相打架，先全部退掉。
+**What to do** — Re-check your architecture against [Download and install](./install.md) and reinstall the right package. An old version still running in the background can also block startup, so quit everything first.
 
-### 窗口打开了，但一片白
+### The window opens but stays blank
 
-**为什么** — 界面资源没加载出来，通常是升级过程中断，或者显卡驱动异常导致渲染进程起不来。
+**Why** — The interface assets didn't load, usually after an interrupted upgrade or because a graphics driver issue prevented the renderer process from starting.
 
-**怎么办**
+**What to do**
 
-1. 完全退出应用（不是关窗口），重新打开。
-2. 还白就重装同一个版本的安装包覆盖一次。会话和配置存在 `~/.claude` 下，不在应用目录里，覆盖安装不会丢。
-3. 仍然白屏，说明卡在启动阶段。带上系统版本、CPU 架构、安装包文件名去 [GitHub Issues](https://github.com/NanmiCoder/cc-haha/issues) 提一条。
+1. Fully quit the app (not just close the window) and reopen it.
+2. Still blank? Reinstall the same version over the top. Sessions and configuration live under `~/.claude`, not in the application directory, so nothing is lost.
+3. Still blank after that, it's failing during startup. File an issue at [GitHub Issues](https://github.com/NanmiCoder/cc-haha/issues) with your OS version, CPU architecture, and installer filename.
 
 :::warning
-任何情况下都不要为了排错去删 `~/.claude`。你的会话、服务商配置、技能、Agent、记忆全在那里，删了找不回来。
+Never delete `~/.claude` while troubleshooting. Your sessions, provider configuration, skills, agents, and memory are all in there, and they don't come back.
 :::
 
-### 升级后会话列表空了
+### My session list is empty after updating
 
-**为什么** — 大概率不是数据没了。侧边栏的会话列表走的是本地 SQLite 索引，那只是一份可重建的派生数据，原始会话仍以 JSON / JSONL 文件存着。索引正在重建时列表会暂时是空的。
+**Why** — Almost certainly not data loss. The sidebar list is served by a local SQLite index, which is derived data that can be rebuilt; the original sessions are still stored as JSON / JSONL files. While the index rebuilds, the list looks empty.
 
-**怎么办** — 打开「设置 → 诊断 → 本地索引」，看它是不是正在构建，等它跑完。有降级来源或错误代码就点「重建本地索引」——这个操作只重建索引，不碰原始对话和设置。
+**What to do** — Open Settings → Diagnostics → Local index and check whether it's still building; let it finish. If there are degraded sources or an error code, click "Rebuild local index" — that only rebuilds the index and leaves conversations and settings untouched.
 
-## 模型 401 或连不通
+## Model 401s and connection failures
 
-### 提示 401 / 403 / API Key invalid
+### 401 / 403 / "API Key invalid"
 
-**为什么** — 认证方式和服务商对不上，或者密钥本身有问题。
+**Why** — The auth method doesn't match the provider, or the key itself is wrong.
 
-**怎么办** — 打开「设置 → 服务商」，编辑那条配置，按顺序核对：
+**What to do** — Open Settings → Providers, edit the entry, and check in order:
 
-1. **接口地址**是不是 API 根地址，而不是官网地址。
-2. **认证变量**选对没有。第三方 Anthropic 兼容服务基本都用 `Bearer Token (ANTHROPIC_AUTH_TOKEN)`，只有直连 Anthropic 官方才用 `API Key (ANTHROPIC_API_KEY)`。拿不准就两个都试一遍。
-3. **API 密钥**前后有没有粘进空格，或者已经过期、额度用完。
-4. 保存后点「测试」，通过再新建一条会话验证。
+1. Is **Base URL** the API root rather than the marketing site?
+2. Is **Auth Variable** correct? Third-party Anthropic-compatible services almost always want `Bearer Token (ANTHROPIC_AUTH_TOKEN)`; only direct Anthropic access uses `API Key (ANTHROPIC_API_KEY)`. If unsure, try both.
+3. Did the **API Key** pick up stray whitespace, or has it expired or run out of credit?
+4. Save, click "Test", and verify with a fresh session once it passes.
 
-不要为了改这些去手动编辑 `settings.json`，应用里改完会自动同步。
+Don't hand-edit `settings.json` for any of this — changes made in the app sync automatically.
 
-### 提示 404 或「模型不存在」
+### 404, or "model not found"
 
-**为什么** — 接口路径写重了，或者模型 ID 用了别的平台的别名。
+**Why** — A duplicated path segment in the URL, or a model ID borrowed from another platform.
 
-**怎么办** — 检查接口地址里的路径有没有重复（地址里已经有 `/anthropic` 就别再补 `/v1/messages`）。模型 ID 用服务商控制台里给的那个原样字符串，别用产品名。
+**What to do** — Check the base URL for repetition (if it already ends in `/anthropic`, don't append `/v1/messages`). Use the exact model ID string from the provider's console, not the product name.
 
-本地模型（LM Studio / Ollama）**接口地址后面不要加 `/v1`**，这是最常见的 404 来源。
+For local models (LM Studio / Ollama), **do not append `/v1` to the base URL** — that's the single most common source of 404s.
 
-### 报 400，或提示不支持某个参数
+### 400, or "unsupported parameter"
 
-**为什么** — 第三方通道拒绝了 beta 形态的 API 请求，或者模型不支持 `tool_reference`。
+**Why** — A third-party gateway is rejecting beta-shaped API requests, or the model doesn't support `tool_reference`.
 
-**怎么办** — 编辑这个服务商，勾上「关闭实验性 Beta 头」；还不行就把「启用 Tool Search」关掉。这两个开关就是为这类通道准备的。
+**What to do** — Edit the provider and check "Disable experimental beta headers". If that isn't enough, turn off "Enable Tool Search". Both switches exist for exactly these gateways.
 
-### 登录成功，但模型选择器里没有想要的模型
+### Signed in, but the model I want isn't in the selector
 
-**为什么** — 能看到哪些模型由你的账号权限、地区和套餐决定，不是应用决定的。
+**Why** — Which models you see is determined by your account entitlements, region, and plan — not by the app.
 
-**怎么办** — 先刷新服务商状态，重新打开模型选择器。仍然没有，以服务商官方控制台显示的可用模型为准。
+**What to do** — Refresh the provider status and reopen the model selector. If it's still missing, trust the provider's own console over anything else.
 
-### 一直输出文字，就是不动手改文件
+### It talks endlessly but never edits a file
 
-**为什么** — 这个模型的工具调用能力撑不住 Agent 工作流。小参数量的本地模型经常这样。
+**Why** — The model's tool-calling isn't strong enough to sustain an agent workflow. Small local models do this a lot.
 
-**怎么办** — 换一个明确支持 function calling 的模型试试。同时确认当前权限模式不是「计划模式」——计划模式本来就不允许它碰文件。
+**What to do** — Try a model with solid function-calling support. Also confirm you aren't in Plan mode, which forbids touching files by design.
 
-### 官方账号 OAuth 授权卡住
+### OAuth sign-in hangs
 
-**为什么** — 授权回调落不回正在运行的应用。
+**Why** — The authorization callback isn't reaching the running app.
 
-**怎么办** — 授权全程别关掉应用；让系统浏览器打开授权页，用同一个账号完成；把代理和拦截类浏览器扩展先关掉；系统时间不准也会让授权失败。浏览器没自动打开就点「复制授权链接」自己粘过去。
+**What to do** — Keep the app running through the whole flow; complete the authorization in your system browser with the same account; disable proxies and blocking extensions; and check that your system clock is correct, since a skewed clock breaks the handshake. If the browser never opens, click "Copy authorization link" and paste it manually.
 
-## 会话卡住
+## Sessions that hang
 
-### 一直转圈，不出结果
+### It spins forever without producing anything
 
-**为什么** — 可能是网络抖动，也可能是上游没有正常结束这次响应。
+**Why** — Could be a network hiccup, or an upstream that never properly closed the response.
 
-**怎么办** — 按顺序来，别一上来就重启：
+**What to do** — In this order; don't jump straight to restarting:
 
-1. 等十几秒，看是不是短暂波动。
-2. 点停止，或按 `Cmd/Ctrl + .`。
-3. 打开活动面板，看后台任务和子 Agent 的真实状态——主对话没动静不代表后台也停了。
-4. 切到别的会话再切回来，排除界面刷新问题。
-5. 以上都不行，完全退出应用重开。
-6. 去「设置 → 诊断」复制错误摘要。
+1. Wait ten or fifteen seconds in case it's transient.
+2. Click stop, or press `Cmd/Ctrl + .`.
+3. Open the activity panel and check the real state of background tasks and subagents — a quiet main conversation doesn't mean the background is idle.
+4. Switch to another session and back to rule out a stale view.
+5. If none of that helps, fully quit and reopen the app.
+6. Copy the error summary from Settings → Diagnostics.
 
-### 会话跑着时权限模式选不了
+### I can't change permission mode mid-session
 
-**为什么** — 这是故意锁的。跑到一半改权限会让界面显示和实际生效的权限对不上。
+**Why** — This is deliberate. Changing permissions mid-turn would leave the UI showing something different from what's enforced.
 
-**怎么办** — 等这一轮结束，或者先停止，再切换。
+**What to do** — Wait for the turn to end, or stop it first, then switch.
 
-### 拒绝了编辑，但不确定文件到底改没改
+### I denied an edit and I'm not sure whether the file changed
 
-**为什么** — 被拒绝的写入不会落盘，但界面展示和磁盘状态是两回事。
+**Why** — Denied writes never reach the disk, but what the UI displays and what's on disk are separate things.
 
-**怎么办** — 交付前自己跑一遍 `git status` 和 `git diff`。磁盘和 Git 才是最终事实源。
+**What to do** — Run `git status` and `git diff` before shipping. Disk and Git are the source of truth.
 
-## 端口冲突
+## Port conflicts
 
-**现象** — H5 打不开，或者应用启动后本地服务没起来。
+**What you see** — H5 won't load, or the local service doesn't come up after launch.
 
-**为什么** — 本地服务默认用 `3456` 端口。这个端口被别的程序占了，服务就换端口或者起不来。
+**Why** — The local server defaults to port `3456`. If something else already holds that port, the service moves elsewhere or fails to start.
 
-**怎么办** — 打开「设置 → 手机连接 → 同一 Wi-Fi」，展开「高级连接设置」，看「当前端口」显示的是多少——它可能已经自动换到别的端口了，而你手上的旧二维码还指向老端口。需要一个稳定的局域网地址（比如做书签或配反向代理），在这里填「固定端口」，范围 1024–65535，改完重启应用生效。这个端口与 Cloudflare 外出连接的本机网关端口相互独立。
+**What to do** — Open Settings → Phone connection → Same Wi-Fi, expand "Advanced connection settings", and read "Current port" — it may have already moved, leaving your old QR code pointing at the wrong place. If you need a stable LAN address (for a bookmark or a reverse proxy), set "Fixed port" here, anywhere in 1024–65535. Port changes apply after restarting the app. This port is independent of the local gateway port used for Cloudflare remote connections.
 
-## 手机连不上
+## Phone won't connect
 
-**现象** — 扫码后页面打不开，或者提示未授权。
+**What you see** — Scanning the QR code opens nothing, or you get an unauthorized error.
 
-**为什么** — 同一 Wi-Fi 使用局域网地址和访问令牌；Cloudflare 外出连接使用公网地址和逐设备配对。先确认选择的连接方式，再核对对应的地址、网络和授权。
+**Why** — Same-Wi-Fi connections use a LAN address and access token. Cloudflare remote connections use a public address and individual device pairing. First identify your connection method, then check its address, network, and authorization.
 
-**怎么办** — 打开「设置 → 手机连接」，按使用的方式检查。
+**What to do** — Open Settings → Phone connection and check the method you are using.
 
-### 同一 Wi-Fi
+### Same Wi-Fi
 
-1. 「开启局域网连接」是不是真的打开了。
-2. 「访问主机 / IP」显示的地址，是不是电脑当前网卡的地址（换了 Wi-Fi 就会变）。
-3. 二维码里的端口，和「当前端口」是不是同一个。
-4. 手机和电脑在不在同一个局域网里。
-5. 系统防火墙有没有放行这个端口。
-6. 令牌有没有被重新生成过——**一旦重新生成，旧二维码立刻失效**。
+1. Is "Enable local connection" actually switched on?
+2. Does "Access host / IP" still match your computer's current network interface? It changes when you switch Wi-Fi.
+3. Does the port in the QR code match "Current port"?
+4. Are the phone and computer on the same local network?
+5. Does your firewall allow that port?
+6. Has the token been regenerated? **The moment you regenerate it, every old QR code is dead.**
 
-改过固定端口一定要重启应用，再使用新的二维码。
+If you changed the fixed port, restart the app and use the new QR code.
 
-### Cloudflare 外出连接
+### Cloudflare remote connection
 
-1. 桌面连接状态是否为「连接已就绪」。如果提示网络或代理错误，检查电脑网络和「设置 → 通用 → 网络代理」，修改后关闭并重新开启连接。
-2. 手机当前网络能否打开分配的公网域名。电脑验证入口可达，不代表手机网络也能访问；可以关闭手机 Wi-Fi，用蜂窝网络测试。电脑需保持运行、联网且未休眠。
-3. 是否使用完整配对链接，例如 `https://host/remote#pair=一次性码`。一次性码 5 分钟内有效、仅能使用一次；过期或已使用时，在桌面点击「连接手机」生成新的二维码，或复制新的配对链接。**快速连接重新建立后地址会变化，也需要重新扫码。**
-4. 手机发起配对后，是否已在电脑上批准该设备。浏览器用户请在常用浏览器中打开链接，不同浏览器和无痕窗口不会共享授权。
+1. Does the desktop show "Connection ready"? For a network or proxy error, check the computer's network and Settings → General → Network proxy. Turn the connection off and on again after changing settings.
+2. Can the phone's current network open the assigned public hostname? Verification on the computer does not prove the phone's network can reach it. Turn off the phone's Wi-Fi and test over cellular data. Keep the computer running, online, and awake.
+3. Are you using the complete pairing link, such as `https://host/remote#pair=one-time-code`? The code lasts five minutes and works once. If it expired or was already used, click "Connect a phone" on the desktop to generate a new QR code, or copy a new pairing link. **Each newly created quick tunnel changes the address and requires another scan.**
+4. After the phone requests pairing, have you approved that device on the computer? Browser users should open the link in their usual browser. Authorization is not shared across browsers or private windows.
 
-快速连接无需账号或域名，由桌面自动管理连接程序。固定域名配置、完整步骤和安全边界见 [手机与 IM 接力](../desktop/remote.md)。
+Quick connection needs no account or domain; the desktop manages the connector. Fixed-domain setup, full instructions, and security boundaries are in [Phone and IM handoff](../desktop/remote.md).
 
-### 手机锁屏了，正在跑的任务会断吗
+### Does locking my phone kill a running task?
 
-不会。短暂断连不影响正在执行的任务，它会在后台跑完，重连之后你能看到结果。只有当任务已经空闲、且没有任何客户端连着时，才会按断连保活设置停掉对应的 CLI（默认 30 秒）。
+No. A brief disconnect doesn't stop work in progress — it finishes in the background and you'll see the result when you reconnect. Only when a task is already idle *and* no client is connected does the disconnect grace timer stop the corresponding CLI (30 seconds by default).
 
-但这不等于永远不会断——系统休眠、进程退出、代理故障、服务重启，照样会终止连接。
+That's not a promise it will never drop, though. System sleep, process exit, proxy failures, and service restarts all still end the connection.
 
-### IM 已经扫码绑定了，联系人还是聊不了
+### I scanned the IM QR code but my contacts still can't talk to it
 
-扫码只是把平台账号绑上来，不等于授权了所有联系人。对方还需要发一次桌面端生成的一次性配对码，或者被你加进允许列表。两者都为空时默认拒绝。各平台差异见 [IM 接入](../im/index.md)。
+Scanning only binds the platform account; it doesn't authorize everyone who can message you. Each person still has to send the one-time pairing code generated in the desktop app, or be added to the allowlist. With both empty, access is denied by default. Per-platform differences are in [IM integrations](../im/index.md).
 
-## Computer Use 没反应
+## Computer Use does nothing
 
-**现象** — 让它点屏幕、控制别的应用，它说做不到，或者干脆没动静。
+**What you see** — You ask it to click something or control another app, and it says it can't, or simply doesn't move.
 
-**为什么** — Computer Use 有一串前置条件，任何一环没过它都不干活。它只支持 macOS 和 Windows，**Linux 上没有这个能力**。
+**Why** — Computer Use has a chain of prerequisites and won't run unless every link passes. It supports macOS and Windows only — **there is no Linux support**.
 
-**怎么办** — 打开「设置 → Computer Use」，从上往下看哪一项是红的：
+**What to do** — Open Settings → Computer Use and find the first item that isn't green:
 
-1. 顶部的启用开关是不是打开了（关着的话新会话根本不会注入这套工具）。
-2. 页面显示的是原生运行组件还是 Python 兼容运行组件？macOS 14.4 及以上优先使用原生组件，提示缺失时更新或重装应用；显示 Python 检查时，再安装 Python 3 或指定已有解释器。
-3. 仅在页面显示虚拟环境与依赖包检查时，确认它们是「已就绪 / 已安装」；否则点「安装环境」。
-4. macOS 上还要「辅助功能权限」和「屏幕录制权限」两项都显示「已授权」——去「系统设置 → 隐私与安全性」里开。
-5. **授权之后必须重启 cc-haha**，系统权限对已经在跑的进程不生效。
-6. 第一次在应用中确认 Computer Use 的统一授权弹窗了吗？确认后所有应用共用这一次授权；还要确保目标应用正在运行、没有被系统权限拦住。
+1. Is the toggle at the top on? (With it off, new sessions never get these tools at all.)
+2. Does your page show the native runtime component or the Python compatibility path? macOS 14.4 and later prefer the native component; update or reinstall if it is missing. Install Python 3 or select an existing interpreter only when Python checks are shown.
+3. If the page shows virtual environment and dependency checks, make sure both are ready; otherwise click "Install Environment".
+4. On macOS, both "Accessibility Permission" and "Screen Recording Permission" must show as granted. Grant them under System Settings → Privacy & Security.
+5. **Restart cc-haha after granting them.** System permissions don't apply to an already-running process.
+6. Did you confirm the one-time Computer Use consent in the app? It covers all apps; also check that the target app is running and OS permissions are granted.
 
-完整说明见 [Computer Use](../desktop/computer-use.md)。
+Full details in [Computer Use](../desktop/computer-use.md).
 
-## 还是没解决
+## Still stuck
 
-去「设置 → 诊断」：
+Go to Settings → Diagnostics:
 
-1. 点「复制 Issue 报告」，先拿到一份结构化的现场信息。
-2. 到 [GitHub Issues](https://github.com/NanmiCoder/cc-haha/issues) 搜一下有没有人报过同样的问题，没有再新建。
-3. 光靠报告定位不了的话，再点「导出诊断包」附上。
+1. Click "Copy issue report" for a structured snapshot of the current state.
+2. Search [GitHub Issues](https://github.com/NanmiCoder/cc-haha/issues) for the same problem before opening a new one.
+3. If the report alone isn't enough to diagnose it, click "Export Bundle" and attach that too.
 
-一并提供这些能大幅提高解决速度：应用版本、操作系统和 CPU 架构、安装包文件名、用的哪类服务商（**不要贴 API 密钥**）、最短复现步骤、完整错误文字、问题出在桌面端还是手机端还是 CLI。
+Including these makes a fix much faster: app version, OS and CPU architecture, installer filename, which kind of provider you're using (**never paste an API key**), the shortest reproduction steps, the full error text, and whether the problem is in the desktop app, on the phone, or in the CLI.
 
 :::warning
-诊断报告会尽力省略聊天内容、文件正文、完整环境变量和 API 密钥，但仍可能带上本机路径、服务商主机名这类信息。**发出去之前自己看一遍。**
+Diagnostic reports make a real effort to omit chat content, file contents, full environment variables, and API keys — but they can still include local paths and provider hostnames. **Read one before you share it.**
 :::

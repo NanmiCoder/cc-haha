@@ -23,7 +23,7 @@ type Props = {
   /** Subagent breadcrumb: shown when viewing a subagent's trajectory. */
   agentLabel: string | null
   onExitAgent: () => void
-  /** Session controls after the search field: Stop, while 轨迹 hides the composer. */
+  /** Session controls after the search field: Stop, while Trajectory hides the composer. */
   actions?: ReactNode
 }
 

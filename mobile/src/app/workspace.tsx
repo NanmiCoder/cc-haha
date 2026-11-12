@@ -45,7 +45,7 @@ export default function Workspace() {
 }
 
 function changeDetail(change: WorkspaceChange) {
-  if (change.status === 'renamed' && change.oldPath) return `由 ${change.oldPath} 重命名`
+  if (change.status === 'renamed' && change.oldPath) return `Renamed from ${change.oldPath}`
   return workspaceStatusLabel(change.status)
 }
 
@@ -65,7 +65,7 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
   )
   const crumbs = useRef<ScrollViewInstance>(null)
 
-  // 工作区状态：每次回到这页都刷新，旧结果先留着，不闪空白。
+  // Workspace status: refresh every time this page is revisited, keeping old results meanwhile so it does not flash blank.
   useFocusEffect(
     useCallback(() => {
       void revision
@@ -85,7 +85,7 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
     }, [client, key, root, revision])
   )
 
-  // 当前目录。
+  // Current directory.
   useFocusEffect(
     useCallback(() => {
       void revision
@@ -112,8 +112,8 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
   const branch = status?.value?.branch
   const countLabel =
     summary?.kind === 'changes' || summary?.kind === 'clean'
-      ? `没提交的改动 · ${changed.length}`
-      : '没提交的改动'
+      ? `Uncommitted changes · ${changed.length}`
+      : 'Uncommitted changes'
   const waiting = !client && !connectionError
 
   const openDiff = (filePath: string) =>
@@ -129,22 +129,22 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
   else if (waiting || !status) changesBody = <Loading />
   else if (status.error) changesBody = <InlineError text={status.error} />
   else if (summary?.kind === 'clean')
-    changesBody = <EmptyState icon="circle-check" title="工作区很干净" detail="电脑上的文件改动会显示在这里。" />
+    changesBody = <EmptyState icon="circle-check" title="Workspace is clean" detail="File changes on the computer show up here." />
   else if (summary?.kind === 'not_git_repo')
     changesBody = (
       <EmptyState
         icon="folder"
-        title="普通文件夹"
-        detail="这个工作区没有 Git 仓库，可以切到文件查看内容。"
-        action={<Button title="查看全部文件" variant="secondary" onPress={() => setTab('files')} />}
+        title="Plain folder"
+        detail="This workspace has no Git repository; switch to Files to view contents."
+        action={<Button title="View all files" variant="secondary" onPress={() => setTab('files')} />}
       />
     )
   else if (summary?.kind === 'missing')
     changesBody = (
-      <EmptyState icon="circle-alert" title="工作目录不可用" detail="请在电脑上恢复这段会话的工作目录后刷新。" />
+      <EmptyState icon="circle-alert" title="Working directory unavailable" detail="Restore this session’s working directory on the computer and refresh." />
     )
   else if (summary?.kind === 'unavailable')
-    changesBody = <EmptyState icon="wifi-off" title="尚未获取工作区状态" detail="请确认电脑连接正常后刷新。" />
+    changesBody = <EmptyState icon="wifi-off" title="Workspace status not loaded yet" detail="Check the computer connection and refresh." />
   else if (summary?.kind === 'error') changesBody = <InlineError text={summary.message} />
   else
     changesBody = (
@@ -164,7 +164,7 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
             </View>
           ))}
         </Group>
-        <Footnote style={{ paddingTop: 10 }}>只读。要改文件，告诉它就行。</Footnote>
+        <Footnote style={{ paddingTop: 10 }}>Read-only. To change files, just tell it.</Footnote>
       </>
     )
 
@@ -175,8 +175,8 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
   else if (waiting || !currentTree) filesBody = <Loading />
   else if (currentTree.error) filesBody = <InlineError text={currentTree.error} />
   else if (currentTree.value?.state !== 'ok')
-    filesBody = <InlineError text={currentTree.value?.error || '目录无法读取'} />
-  else if (!entries.length) filesBody = <EmptyState icon="folder" title="这个文件夹是空的" />
+    filesBody = <InlineError text={currentTree.value?.error || 'Directory cannot be read'} />
+  else if (!entries.length) filesBody = <EmptyState icon="folder" title="This folder is empty" />
   else
     filesBody = (
       <>
@@ -197,16 +197,16 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
             )
           })}
         </Group>
-        <Footnote style={{ paddingTop: 10 }}>只读。要改文件，告诉它就行。</Footnote>
+        <Footnote style={{ paddingTop: 10 }}>Read-only. To change files, just tell it.</Footnote>
       </>
     )
 
-  const trail = breadcrumbs(project || host?.name || '工作区', path)
+  const trail = breadcrumbs(project || host?.name || 'Workspace', path)
 
   return (
     <ScreenView>
       <NavBar
-        title="项目文件"
+        title="Project files"
         subtitle={
           project ? (
             <SubtitleLine>
@@ -221,7 +221,7 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
         right={
           <IconButton
             icon="refresh-cw"
-            label="刷新"
+            label="Refresh"
             iconSize={20}
             color={colors.ink2}
             disabled={!client}
@@ -232,11 +232,11 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}>
         <InlineError text={connectionError} style={{ marginBottom: 12 }} />
         <Segmented<Tab>
-          label="查看内容"
+          label="View contents"
           height={36}
           options={[
             { label: countLabel, value: 'changes' },
-            { label: '全部文件', value: 'files' },
+            { label: 'All files', value: 'files' },
           ]}
           value={tab}
           onChange={setTab}
@@ -268,7 +268,7 @@ function WorkspacePage({ hostId, id }: { hostId: string; id: string }) {
                     ) : null}
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityLabel={last ? `当前目录 ${crumb.label}` : `打开 ${crumb.label}`}
+                      accessibilityLabel={last ? `Current directory ${crumb.label}` : `Open ${crumb.label}`}
                       accessibilityState={{ disabled: last }}
                       disabled={last}
                       hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}

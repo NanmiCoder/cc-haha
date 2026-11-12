@@ -13,11 +13,11 @@ const cases = {
       await h.start()
       await h.action(() => h.voice.stopAndSend())
       assert.equal(h.writes.length, 1)
-      assert.equal(h.writes[0].text, '旧新内容草稿')
-      assert.equal(h.frame.draft, '旧草稿', 'onDraft is a controlled parent update, not an immediate mutation')
+      assert.equal(h.writes[0].text, 'Old new-content draft')
+      assert.equal(h.frame.draft, 'Old draft', 'onDraft is a controlled parent update, not an immediate mutation')
       assert.deepEqual(h.sends, [], 'submitting before the parent render would send the old draft')
       await h.acceptDraft()
-      assert.deepEqual(h.sends, [{ text: '旧新内容草稿', key: 'host:chat', delivery: 'sent' }])
+      assert.deepEqual(h.sends, [{ text: 'Old new-content draft', key: 'host:chat', delivery: 'sent' }])
       await h.update({ busy: true })
       assert.equal(h.sends.length, 1, 'an unrelated render must not submit a completed voice turn twice')
     } finally { await h.dispose() }
@@ -171,8 +171,8 @@ const cases = {
         await h.action(() => h.voice.stopAndSend())
         const written = h.writes[0].text
         assert.deepEqual(h.sends, [])
-        if (change === 'context') await h.update({ contextKey: 'host:other', draft: '另一个会话' })
-        else await h.action(() => { h.voice.edited(); h.setFrame(previous => ({ ...previous, draft: '手动修改' })) })
+        if (change === 'context') await h.update({ contextKey: 'host:other', draft: 'Another session' })
+        else await h.action(() => { h.voice.edited(); h.setFrame(previous => ({ ...previous, draft: 'Manual edit' })) })
         await h.update({ draft: written })
         assert.deepEqual(h.sends, [], 'a pending send must not survive a ' + change + ' even if the text later matches')
       } finally { await h.dispose() }
@@ -187,7 +187,7 @@ const cases = {
       h.fixture.recognition.resolve(transcript())
       await h.action(() => {})
       assert.deepEqual(h.writes, [], 'even a type-and-delete invalidates the captured caret')
-      assert.equal(h.voice.pendingText, '新内容')
+      assert.equal(h.voice.pendingText, 'New content')
       await h.action(() => h.voice.insertPending())
       await h.acceptDraft()
       assert.deepEqual(h.sends, [], 'explicit insertion recovers text without resuming an old send request')
@@ -201,7 +201,7 @@ const cases = {
       await h.action(() => h.voice.stopAndSend())
       assert.deepEqual(h.sends, [])
       await h.acceptDraft()
-      assert.deepEqual(h.sends, [{ text: '旧新内容草稿', key: 'host:chat', delivery: 'queued' }])
+      assert.deepEqual(h.sends, [{ text: 'Old new-content draft', key: 'host:chat', delivery: 'queued' }])
       assert.equal(h.fixture.catalogCalls, 1)
       assert.equal(h.fixture.transcribeCalls.length, 1)
     } finally { await h.dispose() }
@@ -215,7 +215,7 @@ const cases = {
         await h.start()
         await h.action(() => h.voice.stopAndSend())
         if (change === 'unmount') { await h.dispose(); disposed = true }
-        else if (change === 'context') await h.update({ contextKey: 'host:other', draft: '另一条草稿' })
+        else if (change === 'context') await h.update({ contextKey: 'host:other', draft: 'Another draft' })
         else await h.update({ client: { host: { id: 'other-host' } } })
         assert.equal(h.fixture.transcribeCalls[0].signal.aborted, true)
         h.fixture.recognition.resolve(transcript())
@@ -288,7 +288,7 @@ const harness = `
     }
   }
   const appState = state => { for (const listener of appListeners) listener(state) }
-  const transcript = () => ({ text: '新内容', audioSeconds: 0.5, inferenceSeconds: 0.1 })
+  const transcript = () => ({ text: 'New content', audioSeconds: 0.5, inferenceSeconds: 0.1 })
   const catalog = {
     supported: true,
     preferences: { enabled: true, providerId: 'fixture-local', language: 'zh', downloadSource: 'auto' },
@@ -339,7 +339,7 @@ const harness = `
     let voice, frame, setFrame
     function Parent() {
       const [current, update] = React.useState({
-        client: { host: { id: 'fixture-host' } }, contextKey: 'host:chat', draft: '旧草稿',
+        client: { host: { id: 'fixture-host' } }, contextKey: 'host:chat', draft: 'Old draft',
         selection: { start: 1, end: 1 }, blocked: false, canSend: true, busy: false, ...overrides,
       })
       frame = current

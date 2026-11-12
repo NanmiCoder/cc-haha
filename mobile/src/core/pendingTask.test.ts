@@ -48,14 +48,14 @@ test('handoff snapshots the submitted draft instead of following later form edit
 })
 
 test('a team task keeps its marker for sending but drafts only the user text', () => {
-  const team = buildComposerMessage('拆成三个人做', [], true).content
+  const team = buildComposerMessage('Split it for three people', [], true).content
   putPendingTask('host', 'team', { content: team, attachments: [] })
   const task = peekPendingTask('host', 'team')!
   expect(task.content).toBe(team)
   expect(buildComposerMessage(task.content, [], false).content).toBe(team)
-  expect(pendingTaskDraft(task)).toEqual({ text: '拆成三个人做', team: true })
-  expect(pendingTaskDraft({ content: '普通任务', attachments: [] })).toEqual({
-    text: '普通任务',
+  expect(pendingTaskDraft(task)).toEqual({ text: 'Split it for three people', team: true })
+  expect(pendingTaskDraft({ content: 'Regular task', attachments: [] })).toEqual({
+    text: 'Regular task',
     team: false,
   })
   clearPendingTask('host', 'team')

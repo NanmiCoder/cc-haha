@@ -4,9 +4,9 @@ import { migrationMaintenance } from '../migrationMaintenance.js'
 /**
  * WebSocket connection handler
  *
- * 管理 WebSocket 连接生命周期，处理消息路由。
- * 用户消息通过 CLI 子进程（stream-json 模式）处理，
- * CLI stdout 消息被转换为 ServerMessage 并转发到 WebSocket。
+ * Manages the WebSocket connection lifecycle and message routing.
+ * User messages are handled by a CLI subprocess (stream-json mode);
+ * CLI stdout messages are converted to ServerMessage and forwarded to the WebSocket.
  */
 
 import type { ServerWebSocket } from 'bun'
@@ -704,9 +704,9 @@ export function listMobileSessionActivity() {
       ...(request ? {
         requestId: request.requestId,
         toolName: request.toolName,
-        preview: preview || (request.toolName === 'AskUserQuestion' ? '等待你回答问题' : request.toolName === 'ExitPlanMode' ? '计划等待确认' : '等待工具权限确认'),
+        preview: preview || (request.toolName === 'AskUserQuestion' ? 'Waiting for your answer' : request.toolName === 'ExitPlanMode' ? 'Plan awaiting confirmation' : 'Waiting for tool permission'),
         ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
-      } : computerUse ? { requestId: computerUse.requestId, toolName: 'ComputerUse', preview: '等待电脑操作权限确认' } : {}),
+      } : computerUse ? { requestId: computerUse.requestId, toolName: 'ComputerUse', preview: 'Waiting for computer control permission' } : {}),
     }
   })
 }
@@ -1274,7 +1274,7 @@ async function handleUserMessage(
 
     if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
 
-    // 启动 CLI 子进程（如果还没有）
+    // Start the CLI subprocess (if not already running)
     try {
       await ensureCliSessionStarted(ws, sessionId, 'user_message')
     } catch (err) {
@@ -4324,8 +4324,8 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     case 'user': {
-      // Bug #1: 处理 tool_result 消息
-      // CLI 发送 type:'user' 消息，其中 content 包含 tool_result 块
+      // Bug #1: handle tool_result messages
+      // The CLI sends type:'user' messages whose content contains tool_result blocks
       const messages: ServerMessage[] = []
 
       if (isCompactSummaryMessageContent(cliMsg.message?.content)) {
@@ -4566,7 +4566,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     case 'control_request': {
-      // 权限请求 — CLI 需要用户授权才能执行工具
+      // Permission request — the CLI needs user authorization to run a tool
       if (cliMsg.request?.subtype === 'can_use_tool') {
         return [{
           type: 'permission_request',
@@ -4617,7 +4617,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     case 'result': {
-      // 对话结果（成功或错误）
+      // Conversation result (success or error)
       const usage = translateCliUsage(cliMsg.usage)
       const timing = translateCliTiming(cliMsg)
       // Renderer reconnects and consumed human guides cannot recover the root
@@ -4659,7 +4659,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           streamState.lastApiError = undefined
           return [completion]
         }
-        // 错误和完成消息都发送
+        // Send both error and completion messages
         return [
           {
             type: 'error',
@@ -4675,7 +4675,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     case 'system': {
-      // 区分不同的 system 子类型
+      // Distinguish system subtypes
       const subtype = cliMsg.subtype
       if (subtype === 'api_retry') {
         const apiRetryMessage = toApiRetryServerMessage(cliMsg)
@@ -4688,7 +4688,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         return [toStreamingFallbackServerMessage(cliMsg)]
       }
       if (subtype === 'init') {
-        // CLI 初始化完成 — 缓存 slash commands 并发送模型信息
+        // CLI init complete — cache slash commands and send model info
         // NOTE: Do NOT send status:idle here — the CLI init fires while
         // processing the first user message, and sending idle would reset
         // the frontend's streaming state prematurely.
@@ -4732,11 +4732,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               : {}),
           }]
         }
-        // CLI 在权限模式变化时也会 enqueue 一条 status 事件（status:null +
-        // permissionMode），用于把恢复后的真实权限（如 ExitPlanMode 退出 plan、
-        // Shift+Tab）广播给前端。它带 status:null 但**不是** thinking 信号，
-        // 必须在下面的 null→thinking 兜底之前拦截，否则字段会被丢弃，桌面端
-        // 选择器就会一直卡在"计划模式"。
+        // The CLI also enqueues a status event when the permission mode changes (status:null +
+        // permissionMode), to broadcast the restored real permission (e.g. ExitPlanMode leaving plan,
+        // Shift+Tab) to the frontend. It carries status:null but is **not** a thinking signal;
+        // it must be intercepted before the null→thinking fallback below, otherwise the field is dropped and the desktop
+        // picker stays stuck on "plan mode".
         if (isPermissionMode(cliMsg.permissionMode)) {
           return [{ type: 'permission_mode_changed', mode: cliMsg.permissionMode }]
         }
@@ -4746,7 +4746,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         return []
       }
       if (subtype === 'hook_started' || subtype === 'hook_response') {
-        // Hook 执行中 — 不转发给前端
+        // Hook running — not forwarded to the frontend
         return []
       }
       if (subtype === 'local_command' || subtype === 'local_command_output') {
@@ -4779,7 +4779,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           { type: 'content_delta', text: localCommandOutput },
         ]
       }
-      // Bug #7: 处理 task/team system 消息
+      // Bug #7: handle task/team system messages
       if (subtype === 'task_notification') {
         return [{
           type: 'system_notification',
@@ -4886,7 +4886,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           data: cliMsg.compact_metadata ?? cliMsg,
         }]
       }
-      // 其他 system 消息
+      // Other system messages
       return []
     }
 
@@ -4896,7 +4896,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
     }
 
     default:
-      // 未知类型 — 调试输出但不转发
+      // Unknown type — debug log only, not forwarded
       console.log(`[WS] Unknown CLI message type: ${cliMsg.type}`, JSON.stringify(cliMsg).substring(0, 200))
       return []
   }

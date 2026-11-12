@@ -203,7 +203,7 @@ describe('persistent storage upgrade migrations', () => {
     expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
   })
 
-  test('旧配置读取为不限，保存并发上限再恢复不限时保留未知设置', async () => {
+  test('old config reads as unlimited; saving a concurrency limit then restoring unlimited keeps unknown settings', async () => {
     const userPath = path.join(tempDir, 'settings.json')
     const legacy = {
       env: { UNKNOWN_ENV: 'preserved' },

@@ -114,7 +114,7 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
     plan = review({ planId: 'p4', state: 'launching', members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
     page()
     tree = page()
-    assert.equal(find(tree, 'Toast')?.props.text, '已确认，正在启动 3 名成员')
+    assert.equal(find(tree, 'Toast')?.props.text, 'Approved, launching 3 members')
     assert.equal(find(find(tree, 'NavBar').props.right, 'ActivityCapsule')?.props.launching, true)
     assert.equal(find(tree, 'ActivitySheet')?.props.launching, 3)
     assert.equal(find(find(tree, 'ChatComposer').props.above, 'TeamPlanCard'), undefined)
@@ -128,7 +128,7 @@ test('the real chat page keeps the composer and Stop while a team plan waits, po
     running = false
     tree = page()
     assert.equal(find(tree, 'ChatComposer').props.background, true)
-    assert.ok(findAll(tree, 'ConfirmSheet').some((sheet) => sheet.props.title === '停止团队？'))
+    assert.ok(findAll(tree, 'ConfirmSheet').some((sheet) => sheet.props.title === 'Stop the team?'))
     membersStopped = true
     tree = page()
     assert.equal(find(tree, 'ChatComposer').props.background, false)

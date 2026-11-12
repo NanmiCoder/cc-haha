@@ -73,22 +73,22 @@ type GalleryTaskSpec = {
 }
 
 const AGENT_TEAMS_GALLERY_TASKS: GalleryTaskSpec[] = [
-  { id: '1', owner: 'backend-dev', blockedBy: [], subject: '初始化 FastAPI 骨架与依赖', description: 'uvicorn 起在 8000，CORS 已开' },
-  { id: '2', owner: 'frontend-dev', blockedBy: [], subject: 'Vite + React + Tailwind 脚手架', description: 'dev server 1420' },
-  { id: '3', owner: 'code-reviewer', blockedBy: [], subject: '拆解需求并冻结 API 契约', description: '契约写入 docs/api.md' },
-  { id: '4', owner: 'backend-dev', blockedBy: ['1', '3'], subject: 'models.py 与 schemas.py', description: 'Todo / Tag 两张表' },
-  { id: '5', owner: 'frontend-dev', blockedBy: ['2'], subject: 'TaskCard 与 FilterBar 组件', description: '纯展示层，不接口' },
-  { id: '6', owner: 'test-runner', blockedBy: ['3'], subject: '测试计划与用例清单', description: '共 24 条用例' },
-  { id: '7', owner: 'backend-dev', blockedBy: ['4'], subject: 'routes.py 全部 API 端点', description: '/todos /tags /stats' },
-  { id: '8', owner: 'frontend-dev', blockedBy: ['3', '5'], subject: 'useTodos / useTags hooks', description: '按契约先行打桩' },
-  { id: '9', owner: 'ui-reviewer', blockedBy: ['5'], subject: '建立 UI 走查基线', description: '对比度 / 焦点 / 命中区' },
-  { id: '10', owner: 'frontend-dev', blockedBy: ['7', '8'], subject: '列表页组装与状态接线', description: '真实接口替换打桩' },
-  { id: '11', owner: 'code-reviewer', blockedBy: ['7'], subject: '后端代码审查', description: '发现 7 项问题' },
-  { id: '12', owner: 'test-runner', blockedBy: ['6', '7'], subject: '接口自测 curl 全通', description: '24/24 通过' },
-  { id: '13', owner: 'backend-dev', blockedBy: ['11'], subject: '修复审查发现的 7 项问题', description: 'race condition 已修' },
-  { id: '14', owner: 'ui-reviewer', blockedBy: ['9', '10'], subject: '产出 UI_REVIEW.md 报告', description: '5 严重 + 7 重点' },
-  { id: '15', owner: 'test-runner', blockedBy: ['10', '12'], subject: '端到端回归', description: '零错误' },
-  { id: '16', owner: 'frontend-dev', blockedBy: ['14'], subject: '修复 UI 审查问题', description: 'aria / debounce / 焦点' },
+  { id: '1', owner: 'backend-dev', blockedBy: [], subject: 'Scaffold FastAPI and dependencies', description: 'uvicorn on 8000, CORS enabled' },
+  { id: '2', owner: 'frontend-dev', blockedBy: [], subject: 'Vite + React + Tailwind scaffold', description: 'dev server 1420' },
+  { id: '3', owner: 'code-reviewer', blockedBy: [], subject: 'Break down requirements and freeze the API contract', description: 'Contract written to docs/api.md' },
+  { id: '4', owner: 'backend-dev', blockedBy: ['1', '3'], subject: 'models.py and schemas.py', description: 'Todo / Tag tables' },
+  { id: '5', owner: 'frontend-dev', blockedBy: ['2'], subject: 'TaskCard and FilterBar components', description: 'Presentation only, no API calls' },
+  { id: '6', owner: 'test-runner', blockedBy: ['3'], subject: 'Test plan and case list', description: '24 cases total' },
+  { id: '7', owner: 'backend-dev', blockedBy: ['4'], subject: 'All API endpoints in routes.py', description: '/todos /tags /stats' },
+  { id: '8', owner: 'frontend-dev', blockedBy: ['3', '5'], subject: 'useTodos / useTags hooks', description: 'Stubbed against the contract first' },
+  { id: '9', owner: 'ui-reviewer', blockedBy: ['5'], subject: 'Establish the UI review baseline', description: 'Contrast / focus / hit targets' },
+  { id: '10', owner: 'frontend-dev', blockedBy: ['7', '8'], subject: 'Assemble the list page and wire state', description: 'Replace stubs with the real API' },
+  { id: '11', owner: 'code-reviewer', blockedBy: ['7'], subject: 'Backend code review', description: 'Found 7 issues' },
+  { id: '12', owner: 'test-runner', blockedBy: ['6', '7'], subject: 'API self-test, all curl checks pass', description: '24/24 passed' },
+  { id: '13', owner: 'backend-dev', blockedBy: ['11'], subject: 'Fix the 7 review issues', description: 'Race condition fixed' },
+  { id: '14', owner: 'ui-reviewer', blockedBy: ['9', '10'], subject: 'Write the UI_REVIEW.md report', description: '5 critical + 7 major' },
+  { id: '15', owner: 'test-runner', blockedBy: ['10', '12'], subject: 'End-to-end regression', description: 'Zero errors' },
+  { id: '16', owner: 'frontend-dev', blockedBy: ['14'], subject: 'Fix UI review issues', description: 'aria / debounce / focus' },
 ]
 
 const AGENT_TEAMS_GALLERY_COLORS: Record<string, AgentColor> = {
@@ -128,12 +128,12 @@ function galleryTeam(
     leadSessionId: AGENT_TEAMS_GALLERY_SESSION_ID,
     createdAt,
     members: [
-      member('team-lead', '队长', 'running', 'claude-opus-4-8'),
-      member('backend-dev', '后端实现', 'running', 'claude-sonnet-5'),
-      member('frontend-dev', '前端实现', 'running', 'claude-sonnet-5'),
-      member('ui-reviewer', 'UI 走查', 'running', 'claude-haiku-4-5'),
-      member('code-reviewer', '代码审查', 'running', 'qwen3.7-plus[1m]'),
-      member('test-runner', '测试验证', 'running'),
+      member('team-lead', 'Team lead', 'running', 'claude-opus-4-8'),
+      member('backend-dev', 'Backend', 'running', 'claude-sonnet-5'),
+      member('frontend-dev', 'Frontend', 'running', 'claude-sonnet-5'),
+      member('ui-reviewer', 'UI review', 'running', 'claude-haiku-4-5'),
+      member('code-reviewer', 'Code review', 'running', 'qwen3.7-plus[1m]'),
+      member('test-runner', 'Testing', 'running'),
     ],
   }
 }
@@ -146,7 +146,7 @@ function galleryTasks(
   const running = new Set(Object.keys(runningProgress))
   return AGENT_TEAMS_GALLERY_TASKS.map((spec) => ({
     ...spec,
-    activeForm: running.has(spec.id) ? `正在执行：${spec.subject}` : undefined,
+    activeForm: running.has(spec.id) ? `Working on: ${spec.subject}` : undefined,
     status: completed.has(spec.id)
       ? 'completed'
       : running.has(spec.id)
@@ -194,7 +194,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'team-lead',
     recipients: ['team-lead'],
     kind: 'system',
-    text: JSON.stringify({ type: 'idle_notification', message: '等待 TaskCard 交付后开始 UI 走查' }),
+    text: JSON.stringify({ type: 'idle_notification', message: 'Waiting for TaskCard before starting the UI review' }),
     timestamp: at(-228_000),
     protocolType: 'idle_notification',
   }
@@ -204,7 +204,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'team-lead',
     recipients: ['team-lead'],
     kind: 'direct',
-    text: '**#3 API 契约** 已冻结，字段命名统一写入 `docs/api.md`。',
+    text: '**#3 API contract** is frozen; field names are in `docs/api.md`.',
     timestamp: at(-224_000),
     taskId: '3',
   }
@@ -214,7 +214,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'backend-dev',
     recipients: ['backend-dev'],
     kind: 'direct',
-    text: '#3 已交付：`todo.tags` 使用 `string[]`，时间字段统一为 ISO 8601。',
+    text: '#3 delivered: `todo.tags` is `string[]`, and all time fields are ISO 8601.',
     timestamp: at(-220_000),
     taskId: '4',
   }
@@ -224,7 +224,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'team-lead',
     recipients: ['team-lead'],
     kind: 'direct',
-    text: '**#5 TaskCard 与 FilterBar 组件** 已完成。\n\n- 纯展示层已交付\n- 焦点态和空态已补齐',
+    text: '**#5 TaskCard and FilterBar components** are done.\n\n- Presentation layer delivered\n- Focus and empty states added',
     timestamp: at(-110_000),
     taskId: '5',
   }
@@ -234,7 +234,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'ui-reviewer',
     recipients: ['ui-reviewer'],
     kind: 'direct',
-    text: '**#5 已交付 → 你的 #9 解锁了。**\n\n组件在 `src/components`，请按这版布局建立走查基线。',
+    text: '**#5 delivered → your #9 is unblocked.**\n\nComponents are in `src/components`; build the review baseline against this layout.',
     timestamp: at(-106_000),
     taskId: '9',
   }
@@ -244,7 +244,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'frontend-dev',
     recipients: ['frontend-dev'],
     kind: 'system',
-    text: JSON.stringify({ type: 'task_assignment', taskId: '10', subject: '列表页组装与状态接线' }),
+    text: JSON.stringify({ type: 'task_assignment', taskId: '10', subject: 'Assemble the list page and wire state' }),
     timestamp: at(-52_000),
     taskId: '10',
     protocolType: 'task_assignment',
@@ -255,7 +255,7 @@ function createAgentTeamsGallerySnapshots(now = Date.now()): TeamWorkbenchSnapsh
     to: 'team-lead',
     recipients: ['team-lead'],
     kind: 'direct',
-    text: '**#9 建立 UI 走查基线** 已完成。\n\n- 对比度、焦点环、命中区均已记录\n- 报告位于 `UI_BASELINE.md`',
+    text: '**#9 UI review baseline** is done.\n\n- Contrast, focus rings and hit targets recorded\n- Report is in `UI_BASELINE.md`',
     timestamp: at(-46_000),
     taskId: '9',
   }

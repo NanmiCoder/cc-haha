@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AccessibilityInfo, Animated, Easing, Keyboard, Platform } from 'react-native'
 
-/** 系统「减弱动态效果」打开时，扫描线和光圈都停在静止状态。 */
+/** When system "Reduce Motion" is on, the scan line and halo stay still. */
 export function useReducedMotion() {
   const [reduced, setReduced] = useState(false)
   useEffect(() => {
@@ -21,7 +21,7 @@ export function useReducedMotion() {
   return reduced
 }
 
-/** 键盘是否弹出：手动连接面板在键盘弹出时放弃固定高度，让输入框留在可见区。 */
+/** Whether the keyboard is up: the manual connect panel drops its fixed height when the keyboard is up so the input stays visible. */
 export function useKeyboardShown() {
   const [shown, setShown] = useState(false)
   useEffect(() => {
@@ -41,7 +41,7 @@ export function useKeyboardShown() {
   return shown
 }
 
-/** 扫描框里的扫描线：2.4s 缓入缓出，上下往返 212pt。 */
+/** Scan line inside the scan frame: 2.4s ease-in-out, moving 212pt up and down. */
 export function ScanLine() {
   const reduced = useReducedMotion()
   const [progress] = useState(() => new Animated.Value(0))
@@ -82,7 +82,7 @@ export function ScanLine() {
   )
 }
 
-/** 等电脑批准时的外圈光圈：从 0.85 倍扩散到 1.35 倍并淡出，2s 一轮。 */
+/** Outer halo while waiting for computer approval: spreads from 0.85x to 1.35x and fades out, 2s per cycle. */
 export function PulseRing({ color, size = 120 }: { color: string; size?: number }) {
   const reduced = useReducedMotion()
   const [progress] = useState(() => new Animated.Value(0))

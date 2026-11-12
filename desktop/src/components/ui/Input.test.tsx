@@ -16,12 +16,12 @@ describe('Input', () => {
     // the same shared an id — pointing one <label> at the other field's input.
     render(
       <>
-        <Input label="名称" defaultValue="first" />
-        <Input label="名称" defaultValue="second" />
+        <Input label="Name" defaultValue="first" />
+        <Input label="Name" defaultValue="second" />
       </>,
     )
 
-    const inputs = screen.getAllByLabelText('名称')
+    const inputs = screen.getAllByLabelText('Name')
     expect(inputs).toHaveLength(2)
     expect(inputs[0]!.id).not.toBe(inputs[1]!.id)
   })

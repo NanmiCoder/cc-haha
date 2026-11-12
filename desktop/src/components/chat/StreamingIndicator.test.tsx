@@ -181,7 +181,7 @@ describe('StreamingIndicator', () => {
 
     const notice = screen.getByTestId('streaming-fallback-indicator')
     expect(notice.textContent).toContain('switched to non-streaming mode')
-    // 回合计时保留，证明"还在跑"而不是卡死。
+    // The turn timer stays, showing the turn is still running rather than stuck.
     expect(notice.textContent).toContain('1m 35s')
   })
 
@@ -204,7 +204,7 @@ describe('StreamingIndicator', () => {
 
     render(<StreamingIndicator />)
 
-    // api_retry 携带更具体的进度（第 N 次/倒计时），优先级高于泛化的降级提示。
+    // api_retry carries more specific progress (attempt N / countdown) and takes priority over the generic fallback notice.
     expect(screen.getByTestId('api-retry-indicator')).toBeTruthy()
     expect(screen.queryByTestId('streaming-fallback-indicator')).toBeNull()
   })
@@ -265,7 +265,7 @@ describe('StreamingIndicator', () => {
             maxRetries: 10,
             retryDelayMs: 1000,
             errorStatus: null,
-            // 倒计时早已结束：请求已在途，不该再显示"waiting 0s"。
+            // The countdown ended long ago: the request is in flight, so "waiting 0s" must not show.
             receivedAt: Date.now() - 10_000,
           },
         }),

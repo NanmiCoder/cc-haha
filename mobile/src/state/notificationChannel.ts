@@ -5,8 +5,8 @@ import { createNotificationChannels } from './notificationChannelSetup'
 let created: Promise<void> | undefined
 
 /**
- * Android 13+ 必须先有渠道，系统通知授权框才会弹出；幂等，可重复调用。
- * 成功后整个进程只创建一次（渠道的重要程度创建后即固定）；失败不缓存，下次重试。
+ * Android 13+ A channel must exist before the system notification permission prompt can show; idempotent and safe to call repeatedly.
+ * Created only once per process after success (channel importance is fixed after creation); failures are not cached and retried next time.
  */
 export function ensureNotificationChannel(): Promise<void> {
   if (Platform.OS !== 'android') return Promise.resolve()

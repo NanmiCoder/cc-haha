@@ -13,24 +13,24 @@ describe('applyEdit', () => {
     expect(diff.color?.to).toBe('rgb(255,0,0)')
   })
 
-  it('把不透明度 0 当作有效值写进去（而不是被 falsy 判断吃掉）', () => {
+  it('writes opacity 0 as a valid value (not swallowed by a falsy check)', () => {
     const el = document.getElementById('t')!
     const diff = applyEdit(el, { opacity: '0' })
     expect(el.style.opacity).toBe('0')
     expect(diff.opacity?.to).toBe('0')
   })
 
-  it('改表单控件的文本写 value 而不是 textContent', () => {
-    document.body.innerHTML = '<input id="f" value="旧值">'
+  it('edits a form control\'s text through value, not textContent', () => {
+    document.body.innerHTML = '<input id="f" value="Old value">'
     const field = document.getElementById('f') as HTMLInputElement
-    const diff = applyEdit(field, { text: '新值' })
-    expect(field.value).toBe('新值')
-    expect(diff.text).toEqual({ from: '旧值', to: '新值' })
+    const diff = applyEdit(field, { text: 'New value' })
+    expect(field.value).toBe('New value')
+    expect(diff.text).toEqual({ from: 'Old value', to: 'New value' })
   })
 })
 
 describe('readElementText / writeElementText', () => {
-  it('表单控件读写 value，其余元素读写 textContent', () => {
+  it('reads and writes value for form controls and textContent for other elements', () => {
     document.body.innerHTML = '<input id="f" value="v"><p id="p">t</p>'
     const field = document.getElementById('f') as HTMLInputElement
     const paragraph = document.getElementById('p')!
@@ -45,7 +45,7 @@ describe('readElementText / writeElementText', () => {
 })
 
 describe('canEditText', () => {
-  it('对表单控件和无子元素的节点开放，对容器关闭（避免夷平子树）', () => {
+  it('allows form controls and childless nodes, not containers (to avoid flattening the subtree)', () => {
     document.body.innerHTML = '<input id="f"><p id="p">t</p><div id="d"><span>a</span></div>'
     expect(canEditText(document.getElementById('f')!)).toBe(true)
     expect(canEditText(document.getElementById('p')!)).toBe(true)

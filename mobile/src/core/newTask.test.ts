@@ -34,10 +34,10 @@ test('explicit branch and isolated worktree use the real launch contract', () =>
   expect(newTaskRepository(context, null, true)).toEqual({ worktree: true })
 })
 test('deleted branches and missing directories block creation, non-git projects remain supported', () => {
-  expect(() => newTaskRepository(context, 'gone', true)).toThrow('分支')
+  expect(() => newTaskRepository(context, 'gone', true)).toThrow('branch')
   expect(() =>
     newTaskRepository({ ...context, state: 'missing_workdir' }, null, false)
-  ).toThrow('不存在')
+  ).toThrow('does not exist')
   expect(
     newTaskRepository({ ...context, state: 'not_git_repo' }, null, false)
   ).toBeUndefined()
@@ -70,37 +70,37 @@ test('target summary reflects the checkout that will actually be used', () => {
   expect(targetSummary({ ...base, repo: context })).toEqual({
     name: 'porthole',
     branch: 'changed-on-desktop',
-    mode: '当前目录',
+    mode: 'Current directory',
   })
   expect(
     targetSummary({ ...base, repo: context, branch: 'main', worktree: true })
-  ).toEqual({ name: 'porthole', branch: 'main', mode: '新开工作树' })
+  ).toEqual({ name: 'porthole', branch: 'main', mode: 'New worktree' })
   expect(
     targetSummary({ ...base, repo: { ...context, currentBranch: null } })
-  ).toEqual({ name: 'porthole', status: '当前工作树', mode: '当前目录' })
+  ).toEqual({ name: 'porthole', status: 'Current worktree', mode: 'Current directory' })
   expect(targetSummary({ ...base, repo: null })).toEqual({
     name: 'porthole',
-    status: '读取中…',
+    status: 'Loading…',
   })
   expect(
     targetSummary({ ...base, repo: { ...context, state: 'not_git_repo' } })
-  ).toEqual({ name: 'porthole', status: '无 Git 分支' })
+  ).toEqual({ name: 'porthole', status: 'No Git branch' })
   expect(targetSummary({ ...base, path: '', repo: null })).toEqual({
-    name: '电脑默认目录',
-    status: '无 Git 分支',
+    name: 'Computer default directory',
+    status: 'No Git branch',
   })
 })
 
 test('branch and worktree choices explain why they are unavailable', () => {
   expect(gitUnavailableReason(context, '/p')).toBeNull()
-  expect(gitUnavailableReason(context, ' ')).toContain('项目')
-  expect(gitUnavailableReason(null, '/p')).toContain('读取')
+  expect(gitUnavailableReason(context, ' ')).toContain('project')
+  expect(gitUnavailableReason(null, '/p')).toContain('Read')
   expect(
     gitUnavailableReason({ ...context, state: 'not_git_repo' }, '/p')
-  ).toBe('当前目录不是 Git 项目')
+  ).toBe('The current directory is not a Git project')
   expect(
     gitUnavailableReason({ ...context, state: 'missing_workdir' }, '/p')
-  ).toContain('不存在')
+  ).toContain('does not exist')
   expect(
     gitUnavailableReason({ ...context, state: 'error', error: 'boom' }, '/p')
   ).toBe('boom')

@@ -15,7 +15,7 @@ export type MessageAction = {
   icon: IconName
   disabled?: boolean
   busy?: boolean
-  /** 放在粗分隔带之后。 */
+  /** placed after the thick separator band. */
   group?: boolean
 }
 
@@ -25,7 +25,7 @@ function itemHeight(action: MessageAction) {
   return action.detail ? 58 : 44
 }
 
-/** 长按消息：遮罩里原处浮起被按的气泡，下面是操作菜单。 */
+/** Long-press a message: the pressed bubble floats up in place over a backdrop, with the action menu below. */
 export function MessageMenu({
   item,
   layout,
@@ -61,7 +61,7 @@ export function MessageMenu({
     <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="关闭消息操作"
+        accessibilityLabel="Close message actions"
         onPress={onClose}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: `${colors.bg}E0` }}
       />
@@ -93,15 +93,15 @@ export function MessageMenu({
               <UserBubble item={item} text={text} team={text !== item.text} />
             ) : (
               <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
-                {/* 浮起的副本和列表里用同一个挂载上限，超长消息不会整条再挂一遍。 */}
-                <Markdown text={text || '附件消息'} selectable={false} expandable={false} />
+                {/* The floating copy uses the same mount cap as the list, so very long messages are not mounted again in full. */}
+                <Markdown text={text || 'Attachment message'} selectable={false} expandable={false} />
               </View>
             )}
           </ScrollView>
         </View>
         <View
           accessibilityRole="menu"
-          accessibilityLabel="消息操作"
+          accessibilityLabel="Message actions"
           style={{
             width: MENU_WIDTH,
             backgroundColor: colors.sheet,
@@ -117,7 +117,7 @@ export function MessageMenu({
               ) : null}
               <Pressable
                 accessibilityRole="menuitem"
-                accessibilityLabel={action.detail ? `${action.label}，${action.detail}` : action.label}
+                accessibilityLabel={action.detail ? `${action.label}, ${action.detail}` : action.label}
                 accessibilityState={{ disabled: action.disabled, busy: action.busy }}
                 disabled={action.disabled || action.busy}
                 onPress={() => onAction(action.key)}

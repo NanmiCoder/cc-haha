@@ -168,7 +168,8 @@ describe('Electron IPC capabilities', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.updateCheck, { proxy: 'http://127.0.0.1:7890' })).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.updateCheck, { proxy: '' })).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.updateCheck, { proxy: 'http://127.0.0.1:7890', extra: true })).toBe(false)
-    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appSetLocalePreference, 'zh-TW')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appSetLocalePreference, 'en')).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appSetLocalePreference, 'zh-TW')).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.appSetLocalePreference, 'fr')).toBe(false)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsList, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsList, {})).toBe(false)
@@ -176,8 +177,8 @@ describe('Electron IPC capabilities', () => {
       slug: 'moon-cat',
       displayName: 'Moon Cat',
       description: 'A quiet companion.',
-      dialogTitle: '选择透明背景的宠物图片',
-      dialogFilterName: '宠物图片',
+      dialogTitle: 'Choose a pet image with a transparent background',
+      dialogFilterName: 'Pet image',
     })).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsCreateFromImage, {
       slug: 'moon-cat',
@@ -205,7 +206,7 @@ describe('Electron IPC capabilities', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsShow, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsHide, undefined)).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsShowContextMenu, {
-      closeLabel: '关闭宠物',
+      closeLabel: 'Close pet',
     })).toBe(true)
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.petsShowContextMenu, {
       closeLabel: '   ',

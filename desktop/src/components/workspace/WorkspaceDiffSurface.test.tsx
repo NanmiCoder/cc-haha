@@ -488,21 +488,6 @@ describe('WorkspaceDiffSurface', () => {
     expect(document.querySelector('[data-diff-word-change="addition"]')?.className).toContain('color-diff-added-word')
   })
 
-  it('renders the complete review flow in Chinese', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    render(<WorkspaceDiffSurface value={diff} path="src/a.ts" />)
-
-    const gutter = screen.getByRole('button', { name: '评论 src/a.ts 的新侧第 11 行' })
-    fireEvent.click(gutter)
-
-    expect(screen.getByRole('textbox', { name: '评审评论' })).toHaveFocus()
-    expect(screen.getByText('新 L11')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '提交评审评论' })).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: '评论 src/a.ts 的旧侧第 20 行' }), { shiftKey: true })
-    expect(screen.getByRole('status')).toHaveTextContent('只能选择同一侧、同一变更块中的行')
-  })
-
   it('does not request Shiki highlighting again for each controlled draft change', () => {
     const additions = Array.from(
       { length: 20 },

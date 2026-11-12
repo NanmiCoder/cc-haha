@@ -19,6 +19,6 @@ export async function handleWechatJournalFull(messages: WechatMessage[], deps: {
     if (!deps.first(`journal-full:${wechatMessageKey(message)}`)) continue
     deps.context(chatId, message.context_token)
     if (text !== '/delivery') deps.stop(chatId)
-    await deps.reply(chatId, `消息记录空间已满，普通任务暂未接收；接收位置没有前移。${text === '/delivery' ? '' : '已取消本地媒体处理，并尝试停止当前已连接的任务。'}\n${deps.summary(chatId)}`)
+    await deps.reply(chatId, `Message record storage is full; regular tasks are not being accepted yet and the receive position has not advanced. ${text === '/delivery' ? '' : 'Cancelled local media processing and tried to stop the currently connected task.'}\n${deps.summary(chatId)}`)
   }
 }

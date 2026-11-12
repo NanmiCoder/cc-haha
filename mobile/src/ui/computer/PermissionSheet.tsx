@@ -7,7 +7,7 @@ import { modes } from '../modes'
 import { ChoiceRow } from '../newtask/ChoiceRow'
 import type { PermissionMode } from '../../core/types'
 
-/** 新任务默认权限：点一项立即写到当前电脑，成功后收起，失败留在弹层里显示原因。 */
+/** New task default permission: tapping an item writes it to the current computer immediately, collapsing on success, and staying in the sheet with the reason on failure. */
 export function PermissionSheet({
   visible,
   current,
@@ -27,14 +27,14 @@ export function PermissionSheet({
       onClose()
       return
     }
-    // 和会话里的运行面板一致：默认权限切到全权限或自动之前先确认，其余直接生效。
+    // Consistent with the in-session run panel: confirm before switching the default permission to full access or auto; others take effect directly.
     if (modeChange(mode, current || undefined) !== 'confirm') {
       void save(mode)
       return
     }
     const copy = modeConfirmation(mode === 'auto' ? 'auto' : 'bypassPermissions')
-    Alert.alert(copy.title, `${copy.message}\n\n之后新任务都会默认使用这一档。`, [
-      { text: '取消', style: 'cancel' },
+    Alert.alert(copy.title, `${copy.message}\n\nNew tasks will use this tier by default from now on.`, [
+      { text: 'Cancel', style: 'cancel' },
       {
         text: copy.confirm,
         style: copy.destructive ? 'destructive' : 'default',
@@ -63,7 +63,7 @@ export function PermissionSheet({
         setError('')
         onClose()
       }}
-      title="新任务默认权限"
+      title="New task default permission"
     >
       <InlineError text={error} />
       <Group>

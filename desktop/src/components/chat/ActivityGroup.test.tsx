@@ -407,16 +407,12 @@ describe('buildActivitySegments', () => {
     expect(segments.map((segment) => segment.label)).toEqual([t('toolGroup.managedTasks')])
   })
 
-  it('joins clauses with the locale\'s own list mark', () => {
+  it('joins clauses with the list separator', () => {
     const steps: ActivityStep[] = [
       { kind: 'tool', toolCall: toolCall({ id: 'a', toolUseId: 'a', toolName: 'Grep' }) },
       { kind: 'tool', toolCall: toolCall({ id: 'b', toolUseId: 'b', toolName: 'Read' }) },
       { kind: 'tool', toolCall: toolCall({ id: 'c', toolUseId: 'c', toolName: 'Read' }) },
     ]
-    const zh = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate('zh', key, params)
-    const zhSummary = formatActivitySummary(buildActivitySegments(steps, zh), zh)
-    expect(zhSummary).toBe(`${zh('toolGroup.searchedOne')}、${zh('toolGroup.readMany', { count: 2 })}`)
-    expect(zhSummary).not.toContain(',')
     expect(formatActivitySummary(buildActivitySegments(steps, t), t)).toBe(`${t('toolGroup.searchedOne')}, ${t('toolGroup.readMany', { count: 2 })}`)
   })
 })

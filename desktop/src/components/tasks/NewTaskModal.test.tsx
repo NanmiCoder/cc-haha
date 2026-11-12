@@ -183,7 +183,7 @@ describe('NewTaskModal', () => {
     })
 
     it('names the time field even though it shares the frequency caption', () => {
-      // One「频率」heading covers both controls, so the time input carries its
+      // One "Frequency" heading covers both controls, so the time input carries its
       // name on `aria-label` rather than a second visible label.
       renderModal()
       expect(screen.getByLabelText('Run time')).toHaveValue('09:00')

@@ -392,10 +392,10 @@ describe('MarketHome catalog and live scope', () => {
     fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
     expect(submitQuery).not.toHaveBeenCalled()
 
-    fireEvent.change(input, { target: { value: '文档' } })
+    fireEvent.change(input, { target: { value: 'Document' } })
     fireEvent.compositionEnd(input)
     expect(setQuery).toHaveBeenCalledTimes(1)
-    expect(setQuery).toHaveBeenCalledWith('文档')
+    expect(setQuery).toHaveBeenCalledWith('Document')
 
     // Safari: the confirming keydown arrives as 229 once `isComposing` cleared.
     fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })

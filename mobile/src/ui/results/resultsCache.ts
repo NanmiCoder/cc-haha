@@ -1,8 +1,8 @@
 import type { Checkpoint, DiffResponse } from '../../core/operations'
 
 /**
- * 「改动与文件」几页之间共享的内存缓存（不落盘）：列表页取到的检查点、
- * 逐文件差异和工作区状态，进入差异页时可以先显示，再在后台刷新。
+ * In-memory cache shared across the "Changes and files" pages (not persisted): checkpoints fetched by the list page, 
+ * per-file diffs and workspace status can show first when entering the diff page, then refresh in the background.
  */
 export class BoundedCache<V> {
   private readonly map = new Map<string, V>()
@@ -48,8 +48,8 @@ export const sessionKey = (hostId: string, sessionId: string) =>
   `${hostId}\u0000${sessionId}`
 
 export const checkpointLists = new BoundedCache<Checkpoint[]>(16)
-/** key：sessionKey + 检查点签名 + 文件路径。 */
+/** key: sessionKey + checkpoint signature + file path. */
 export const checkpointDiffs = new BoundedCache<DiffResponse>(400)
 export const workspaceStatuses = new BoundedCache<WorkspaceStatus>(16)
-/** key：sessionKey + 用户消息 id。消息 id 对应的文字不会变。 */
+/** key: sessionKey + user message id. The text for a message id never changes. */
 export const turnPrompts = new BoundedCache<string>(400)

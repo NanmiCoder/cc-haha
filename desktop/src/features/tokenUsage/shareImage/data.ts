@@ -46,9 +46,7 @@ export type BuildShareImageDataInput = {
 export function buildShareImageData(input: BuildShareImageDataInput): ShareImageData {
   const { stats, models, daily, totalTokens, locale, t, profile, now } = input
   const total = formatTokenAmount(totalTokens, locale)
-  const described = describeTokenAmount(totalTokens, locale)
-  // English readers are served by the exact figure; "241亿" beside "24.1B" would only add a script they may not read.
-  const totalNote = locale === 'en' ? described.exact : `${described.alternate} · ${described.exact}`
+  const totalNote = describeTokenAmount(totalTokens, locale).exact
 
   const peakValue = Math.max(...daily.map((day) => day.total), 0)
   const peakIndex = peakValue > 0 ? daily.findIndex((day) => day.total === peakValue) : -1

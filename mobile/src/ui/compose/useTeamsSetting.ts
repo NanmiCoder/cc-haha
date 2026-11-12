@@ -3,8 +3,8 @@ import type { ApiClient } from '../../core/client'
 import type { TeamsSetting } from './runLogic'
 
 /**
- * 电脑设置里有没有开 Agent 团队。`epoch` 变化时（每次打开运行方式）重新读取；
- * 读到「已关闭」而草稿里还留着团队时，立刻关掉，免得发出去的消息带着不会生效的团队要求。
+ * Whether agent teams are enabled in the computer settings. Reread when `epoch` changes (every time run mode opens); 
+ * when "disabled" is read while the draft still has a team, turn it off immediately so the sent message does not carry a team request that will not take effect.
  */
 export function useTeamsSetting(
   client: ApiClient | null,

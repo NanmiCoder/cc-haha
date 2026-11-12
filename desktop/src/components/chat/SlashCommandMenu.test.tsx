@@ -128,10 +128,6 @@ it('keeps command rows on one line while preserving searchable argument hints an
 
 it.each([
   ['en', 'Frequent commands', 'Type to search commands, skills and plugins', 'navigate', 'select', 'dismiss', 'Search results'],
-  ['zh', '常用命令', '输入名称搜索命令、技能和插件', '导航', '选择', '关闭', '搜索结果'],
-  ['zh-TW', '常用指令', '輸入名稱搜尋指令、技能和外掛', '導航', '選擇', '關閉', '搜尋結果'],
-  ['jp', 'よく使うコマンド', '名前を入力してコマンド、スキル、プラグインを検索', '移動', '選択', '閉じる', '検索結果'],
-  ['kr', '자주 쓰는 명령', '이름을 입력하여 명령, 스킬 및 플러그인 검색', '이동', '선택', '닫기', '검색 결과'],
 ] as const)('localizes slash discovery and navigation in %s with the frequent heading inside the scrolling group', (locale, frequent, hint, navigate, select, dismiss, results) => {
   const previousLocale = useSettingsStore.getState().locale
   act(() => useSettingsStore.setState({ locale }))

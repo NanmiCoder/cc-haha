@@ -1,9 +1,9 @@
 /**
- * 会话串行队列
+ * Per-chat serial queue
  *
- * 同一 chatId 的消息串行处理，防并发冲突。
- * 不同 chatId 之间互不影响。
- * 参考 openclaw-lark chat-queue.ts 的 Promise 链设计。
+ * Messages for the same chatId are processed serially to avoid concurrency conflicts.
+ * Different chatIds do not affect each other.
+ * Based on the Promise-chain design of openclaw-lark chat-queue.ts.
  */
 
 import { adapterMigrationLifecycle } from './migration-lifecycle.js'

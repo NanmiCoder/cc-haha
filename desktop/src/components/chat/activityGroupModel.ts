@@ -180,11 +180,7 @@ export function buildActivitySegments(steps: ActivityStep[], t: Translate): Acti
   })
 }
 
-/**
- * The header sentence. The separator is the locale's own list mark — `、` in
- * Chinese and Japanese, a comma elsewhere — because a Latin comma between
- * Chinese clauses reads as a typo.
- */
+/** The header sentence, with clauses joined by the locale's list separator. */
 export function formatActivitySummary(segments: ActivitySegment[], t: Translate): string {
   return segments.map((segment) => segment.label).join(t('toolGroup.separator'))
 }

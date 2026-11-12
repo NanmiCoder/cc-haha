@@ -11,7 +11,7 @@ export type MobileActivity = {
   completedAt?: number
   terminalOutcome?: 'completed' | 'failed' | 'stopped'
   stalled?: boolean
-  /** 不是工具审批的决定：队长提交的团队方案在等你确认。 */
+  /** Not a tool approval decision: the team plan submitted by the lead is waiting for your confirmation. */
   decision?: 'team_plan'
 }
 export type DashboardRow = { session: Session; activity?: MobileActivity }
@@ -51,7 +51,7 @@ function sameDay(a: Date, b: Date) {
     a.getDate() === b.getDate()
   )
 }
-/** 时长：不到一小时 m:ss，超过一小时 h:mm:ss；负值按 0 处理。 */
+/** Duration: under an hour m:ss, over an hour h:mm:ss; negative treated as 0. */
 export function formatDuration(totalSeconds: number) {
   const seconds = Math.max(0, Math.floor(totalSeconds))
   const h = Math.floor(seconds / 3600)
@@ -62,15 +62,15 @@ export function formatDuration(totalSeconds: number) {
 export function elapsedLabel(date: string | number, now = Date.now()) {
   return formatDuration((now - new Date(date).getTime()) / 1000)
 }
-/** 列表右侧的时间：刚刚 / N 分钟 / N 小时（同一天）/ 昨天 / 10/21。 */
+/** Time on the right of the list: just now / N min / N h (same day) / yesterday / 10/21. */
 export function relativeLabel(date: string, now = new Date()) {
   const timestamp = new Date(date)
   const minutes = Math.floor((now.getTime() - timestamp.getTime()) / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟`
-  if (sameDay(timestamp, now)) return `${Math.floor(minutes / 60)} 小时`
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes} Minutes`
+  if (sameDay(timestamp, now)) return `${Math.floor(minutes / 60)} h`
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
-  if (sameDay(timestamp, yesterday)) return '昨天'
+  if (sameDay(timestamp, yesterday)) return 'Yesterday'
   return `${timestamp.getMonth() + 1}/${timestamp.getDate()}`
 }

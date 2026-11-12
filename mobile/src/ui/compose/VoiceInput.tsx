@@ -9,7 +9,7 @@ export function VoiceMicrophone({ blocked, onPress }: { blocked: boolean, onPres
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="语音输入"
+      accessibilityLabel="Voice input"
       accessibilityState={{ disabled: blocked }}
       disabled={blocked}
       onPress={onPress}
@@ -46,7 +46,7 @@ function VoiceTrace({ voice }: { voice: ComposerVoiceDictation }) {
     <View
       accessible
       accessibilityRole="image"
-      accessibilityLabel={phase === 'transcribing' ? '已录制的声音波形' : '麦克风音量'}
+      accessibilityLabel={phase === 'transcribing' ? 'Recorded sound waveform' : 'Microphone level'}
       onLayout={event => setWidth(event.nativeEvent.layout.width)}
       style={{ height: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden', gap: 2, opacity: phase === 'transcribing' ? 0.45 : 1 }}
     >
@@ -81,9 +81,9 @@ export function VoiceRecordingBar({ voice, canSend }: { voice: ComposerVoiceDict
   const elapsed = starting ? 0 : Math.max(0, (now - voice.startedAt) / 1000)
   const remaining = Math.max(0, voice.limitSeconds - elapsed)
   const countingDown = phase === 'recording' && voice.limitSeconds > 0 && remaining <= Math.min(15, voice.limitSeconds / 3)
-  const label = starting ? '准备麦克风…' : transcribing ? (voice.sendRequested ? '转写后发送…' : '正在转成文字…') : '正在聆听'
+  const label = starting ? 'Preparing microphone…' : transcribing ? (voice.sendRequested ? 'Sending after transcription…' : 'Transcribing…') : 'Listening'
   return (
-    <View testID="voice-recording-panel" accessibilityLabel="语音录音控制" style={{ padding: 10, gap: 12 }}>
+    <View testID="voice-recording-panel" accessibilityLabel="Voice recording controls" style={{ padding: 10, gap: 12 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {starting || transcribing
@@ -92,7 +92,7 @@ export function VoiceRecordingBar({ voice, canSend }: { voice: ComposerVoiceDict
           <Text accessibilityLiveRegion="polite" style={{ flexShrink: 1, fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.run }}>{label}</Text>
         </View>
         <Mono style={{ fontSize: 13, color: countingDown ? colors.attn : colors.ink3 }}>
-          {countingDown ? `剩余 ${voiceClock(Math.ceil(remaining))}` : voiceClock(elapsed)}
+          {countingDown ? `remaining ${voiceClock(Math.ceil(remaining))}` : voiceClock(elapsed)}
         </Mono>
       </View>
       <View style={{ paddingHorizontal: 12, borderRadius: 14, backgroundColor: colors.runTint }}>
@@ -101,7 +101,7 @@ export function VoiceRecordingBar({ voice, canSend }: { voice: ComposerVoiceDict
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="取消语音输入"
+          accessibilityLabel="Cancel voice input"
           onPress={voice.cancel}
           style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}
         >
@@ -109,19 +109,19 @@ export function VoiceRecordingBar({ voice, canSend }: { voice: ComposerVoiceDict
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="停止录音并转成文字"
-          accessibilityHint="转写文字会放回输入框，可以编辑后再发送"
+          accessibilityLabel="Stop recording and transcribe"
+          accessibilityHint="Transcribed text goes back into the input and can be edited before sending"
           accessibilityState={{ disabled: starting || transcribing, busy: starting || transcribing }}
           disabled={starting || transcribing}
           onPress={voice.stop}
           style={({ pressed }) => ({ flex: 1, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 22, backgroundColor: colors.fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: starting || transcribing ? 0.5 : pressed ? 0.6 : 1 })}
         >
           <Icon name="check" size={18} color={colors.ink} />
-          <Text style={{ fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.ink }}>完成</Text>
+          <Text style={{ fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.ink }}>Done</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="转写后发送"
+          accessibilityLabel="Send after transcribing"
           accessibilityState={{ disabled: !canSend || starting || voice.sendRequested, busy: transcribing && voice.sendRequested }}
           disabled={!canSend || starting || voice.sendRequested}
           onPress={voice.stopAndSend}
@@ -143,25 +143,25 @@ export function VoiceFeedback({ voice, blocked, onError }: { voice: ComposerVoic
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text accessibilityRole="alert" style={{ flex: 1, fontSize: 13, lineHeight: 19, color: colors.err }}>{voice.issue.message}</Text>
           {voice.issue.code === 'permission' ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="打开麦克风权限设置" onPress={() => { void Linking.openSettings().catch(() => onError('无法打开系统设置，请手动允许麦克风权限。')) }} style={{ paddingVertical: 10 }}>
-              <Text style={{ fontSize: 13, color: colors.run }}>设置</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Open microphone permission settings" onPress={() => { void Linking.openSettings().catch(() => onError('Cannot open system settings; please allow microphone permission manually.')) }} style={{ paddingVertical: 10 }}>
+              <Text style={{ fontSize: 13, color: colors.run }}>Settings</Text>
             </Pressable>
           ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="关闭语音提示" onPress={voice.dismissIssue} hitSlop={10}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Close voice hint" onPress={voice.dismissIssue} hitSlop={10}>
             <Icon name="x" size={16} color={colors.ink3} />
           </Pressable>
         </View>
       ) : null}
       {voice.pendingText !== null ? (
         <View style={{ gap: 4 }}>
-          <Text style={{ fontSize: 12, color: colors.ink3 }}>转写完成，文字已保留</Text>
+          <Text style={{ fontSize: 12, color: colors.ink3 }}>Transcription done, text kept</Text>
           <Text selectable style={{ fontSize: 14, lineHeight: 21, color: colors.ink }}>{voice.pendingText}</Text>
           <View style={{ flexDirection: 'row', gap: 20 }}>
-            <Pressable accessibilityRole="button" accessibilityLabel="插入转写文字" accessibilityState={{ disabled: blocked }} disabled={blocked} onPress={voice.insertPending} style={{ minHeight: 44, justifyContent: 'center', opacity: blocked ? 0.4 : 1 }}>
-              <Text style={{ color: colors.run, fontSize: 14 }}>插入文字</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Insert transcribed text" accessibilityState={{ disabled: blocked }} disabled={blocked} onPress={voice.insertPending} style={{ minHeight: 44, justifyContent: 'center', opacity: blocked ? 0.4 : 1 }}>
+              <Text style={{ color: colors.run, fontSize: 14 }}>Insert text</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="丢弃转写文字" onPress={voice.dismissPending} style={{ minHeight: 44, justifyContent: 'center' }}>
-              <Text style={{ color: colors.ink3, fontSize: 14 }}>取消</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Discard transcribed text" onPress={voice.dismissPending} style={{ minHeight: 44, justifyContent: 'center' }}>
+              <Text style={{ color: colors.ink3, fontSize: 14 }}>Cancel</Text>
             </Pressable>
           </View>
         </View>

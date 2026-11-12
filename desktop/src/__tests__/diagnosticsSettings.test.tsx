@@ -287,7 +287,7 @@ describe('Settings > Diagnostics tab', () => {
     expect(within(eventRow).getByText('error')).toBeInTheDocument()
     expect(within(eventRow).getByText('session-1')).toBeInTheDocument()
     expect(within(eventRow).getByText('CLI exited during startup with code 1')).toBeInTheDocument()
-    expect(within(eventRow).getByText(new Date('2026-05-02T00:00:00.000Z').toLocaleString())).toBeInTheDocument()
+    expect(within(eventRow).getByText(new Date('2026-05-02T00:00:00.000Z').toLocaleString('en-US'))).toBeInTheDocument()
     expect(within(eventRow).getByRole('button', { name: 'Copy event ID: event-1' })).toBeInTheDocument()
     expect(screen.getAllByTestId('diagnostic-event')).toHaveLength(100)
   })
@@ -315,7 +315,7 @@ describe('Settings > Diagnostics tab', () => {
     expect(within(section).getByText('128 KB')).toBeInTheDocument()
     expect(within(section).getByText('2')).toBeInTheDocument()
     expect(within(section).getByText('SOURCE_PARSE_DEGRADED')).toBeInTheDocument()
-    expect(within(section).getByText(new Date('2026-07-15T02:03:04.000Z').toLocaleString())).toBeInTheDocument()
+    expect(within(section).getByText(new Date('2026-07-15T02:03:04.000Z').toLocaleString('en-US'))).toBeInTheDocument()
   })
 
   it('confirms a no-path rebuild and says transcripts and settings are untouched', async () => {

@@ -1,86 +1,71 @@
 ---
-title: Telegram 接入
+title: Telegram Integration
 nav_title: Telegram
-description: 找 BotFather 要一个 Bot Token 填进桌面端，在 Telegram 私聊里点按钮批权限。
+description: Get a Bot Token from BotFather, paste it into Desktop, and approve permissions with native buttons.
 order: 2
 ---
 
-# Telegram 接入
+# Telegram Integration
 
-五个平台里接入最快的一个：找 `@BotFather` 要一个 Token，粘进桌面端就完事，权限审批是原生按钮。适合能连上 Telegram 的个人用户。限制是只处理私聊，不处理群组；国内网络下的连通性要你自己解决。
+The fastest of the five to set up: ask `@BotFather` for a token, paste it into Desktop, done. Permission requests come back as native buttons. It accepts private chats only; groups are not supported.
 
-## 创建机器人
+## Create a bot
 
-在 Telegram 里搜索官方账号 `@BotFather`。
+In Telegram, open the official `@BotFather` account and send `/newbot`. Then:
 
-![搜索 BotFather](../images/im/telegram/01-search-botfather.png)
+1. Choose a display name, for example `cc-haha Bot`.
+2. Choose a username in Latin letters ending in `_bot`, for example `jiang_cc_hah_bot`.
+3. Copy the **Bot Token** that BotFather returns.
 
-给它发送 `/newbot`。
+That token is the bot's password. Do not paste it anywhere public.
 
-![发送 newbot 命令](../images/im/telegram/02-newbot-command.png)
+## Enter the token in Desktop
 
-按提示走完两步：
+1. Open **Settings → IM Adapters** and select the **Telegram** tab.
+2. Paste the value into **Bot Token**.
+3. Select **Save**.
 
-1. 取一个机器人名称，例如 `cc-haha 机器人`。
-2. 取一个用户名，全英文且必须以 `_bot` 结尾，例如 `jiang_cc_hah_bot`。
+**Allowed Users** can stay empty. When it is, only paired accounts are accepted. To allowlist a known account directly, enter its numeric Telegram user ID; separate several with commas.
 
-创建成功后复制 BotFather 返回的**Bot Token**。这枚 Token 等同于机器人的密码，别贴到公开的地方。
+## Pair your account
 
-![复制 Bot Token](../images/im/telegram/03-bot-token.png)
+At the top of the page, under **Pairing**, select **Generate Code**. The six-character code takes effect immediately — no separate save.
 
-## 在桌面端填 Token
+Send any message to your new bot, then send the code when prompted. Once pairing is confirmed you can talk to Claude Code directly.
 
-1. 打开「设置」→「IM 接入」，切到「Telegram」Tab。
-2. 把 Bot Token 粘进「Bot Token」。
-3. 点「保存」。
+Codes are valid for 60 minutes, work once, and are invalidated when a new one is generated. Repeated failures are rate limited; wait a few minutes before retrying.
 
-![填写 Bot Token](../images/im/telegram/04-fill-bot-token.png)
+## Commands
 
-「允许的用户」可以留空。留空时只有完成配对的人能用。要直接放行已知账号，就填 Telegram 数字用户 ID，多个用逗号分隔。
+- `/start` — show help and available commands
+- `/help` — show available commands
+- `/projects` — list recent projects and switch
+- `/resume` — choose and restore a previous session
+- `/status` — project, model, run state, and task summary
+- `/new` — clear the current binding and choose a project again
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
+- `/provider` — view or switch the provider
+- `/model [model]` — view or switch the model
+- `/skills` — list project Skills and invoke one by selecting it
 
-## 配对
+## Agent capabilities and boundaries
 
-回到页面顶部的「配对管理」，点「生成配对码」，拿到一枚 6 位码。这一步立即生效，不需要再点保存。
+Telegram is not a separate question-and-answer model. Regular messages and Skills selected from `/skills` enter the same Claude Code Agent session for the current project, so they retain multi-turn context and can use the file, terminal, Git, Skill, and MCP tools already available to that session. Selecting a Skill sends its `/<skill-name>` invocation into the Agent, where the existing Skill system loads `SKILL.md` and continues the task.
 
-![生成配对码](../images/im/telegram/05-generate-pairing-code.png)
+These capabilities are intended for one trusted user remotely controlling their own machine. A paired account receives the full Agent capabilities available in the selected project. Permission prompts are an operation gate, not an operating-system sandbox. Do not expose the Bot to public groups or untrusted accounts, and do not install unreviewed Skills, Plugins, or MCP servers from chat.
 
-在 Telegram 里私聊刚创建的机器人，随便发一条消息，按提示把这枚码发过去。看到配对成功提示就可以开始对话。
+The adapter accepts private chats only from paired or allowlisted accounts. Project lists, name matching, and historical session restore are restricted to the configured project root. New remote sessions always use the `default` permission mode, and historical `bypassPermissions` sessions are not restored remotely. Local images in Agent output must resolve inside the active session work directory; the Adapter never fetches remote image URLs from Agent-authored text.
 
-![配对成功](../images/im/telegram/06-pair-success.png)
+## Approval and reply behavior
 
-配对码 60 分钟内有效、只能用一次，重新生成后旧码立刻作废。连续输错会被限流，等几分钟再试。
+A permission request arrives as a message with three buttons: allow once, always allow the matching operation for this session, and deny. Only a currently pending request can be confirmed, and the choice is converted to a `permission_response` for that same Desktop session.
 
-## 支持的命令
+Replies pass through a streaming buffer: a placeholder can be sent while Claude is thinking, text deltas accumulate in place, and completed text is split into platform-sized messages.
 
-- `/start` — 显示帮助和可用命令
-- `/help` — 显示当前可用命令
-- `/projects` — 列出最近项目并切换
-- `/resume` — 选择并恢复历史会话
-- `/status` — 当前项目、模型、运行状态和任务摘要
-- `/new` — 清空当前绑定并重新选择项目
-- `/clear` — 清空上下文，保留项目绑定
-- `/stop` — 停止本轮生成
-- `/provider` — 查看或切换 Provider
-- `/model [model]` — 查看或切换模型
-- `/skills` — 查看当前项目可用的 Skills，点选后直接调用
+## Development
 
-## Agent 能力与边界
-
-Telegram 不是一套独立的问答模型。普通消息和从 `/skills` 点选的 Skill 都会进入当前项目的同一条 Claude Code Agent 会话，因此会延续多轮上下文，并能使用该会话已经加载的文件、终端、Git、Skills 和 MCP 工具。点选 Skill 后，adapter 会把对应的 `/<skill-name>` 作为用户消息送入 Agent，由现有 Skill 系统加载 `SKILL.md` 并继续执行。
-
-这些能力只适合单一可信用户远程控制自己的机器。配对账号获得的是当前项目中的完整 Agent 能力，权限确认只是操作闸门，并不是操作系统沙箱；不要把 Bot 暴露给公开群聊或不可信账号，也不要从聊天中安装未经本机审核的 Skill、Plugin 或 MCP。
-
-Adapter 只接受已配对或在允许列表中的私聊账号。项目列表、名称匹配和历史会话恢复都会限制在配置的项目根目录内；新建远程会话固定使用 `default` 权限模式，`bypassPermissions` 历史会话不会在远程恢复。Agent 输出中的本地图片只能从当前会话工作目录读取，远程图片 URL 不会由 Adapter 自动请求。
-
-## 权限审批与消息表现
-
-Claude 请求敏感权限时，Telegram 里会收到一条带按钮的消息，三个选项分别是允许一次、本次会话内永久允许同类操作、拒绝。只有当前待处理的请求才能被确认，点完结果直接回传给同一条桌面端会话。
-
-回复走一层流式缓冲：思考阶段先发占位消息，正文逐步累积更新，完成后按 Telegram 的长度上限分片发送。
-
-## 本地开发启动
-
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -88,23 +73,23 @@ bun install
 bun run telegram
 ```
 
-可选的环境变量覆盖：
+Optional overrides:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="123456:ABC-DEF..."
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-## 常见问题
+## Troubleshooting
 
-**adapter 启动时报缺少 Token**：`TELEGRAM_BOT_TOKEN` 和 `~/.claude/adapters.json` 里的 `telegram.botToken` 都没生效，回设置页把 Token 填好并保存。
+**The adapter reports a missing token.** Neither `TELEGRAM_BOT_TOKEN` nor `telegram.botToken` in `~/.claude/adapters.json` took effect. Re-enter the token in Settings and save.
 
-**设置页能打开但机器人没反应**：源码运行时 webapp 只负责写配置，不会自动拉起 `bun run telegram`；发布版桌面端才会通过 sidecar 自动启动。
+**Settings opens but the bot does nothing.** When running from source, the web app only writes configuration; it does not launch `bun run telegram`. Packaged Desktop starts the sidecar for you.
 
-**发消息提示未授权**：检查是否已生成配对码、码是否还在 60 分钟有效期内、是否发到了正确的机器人私聊里。
+**A sender is rejected.** Confirm a code was generated, that it is within its 60-minute window, and that it was sent to the correct bot in a private chat.
 
-**重启后会话没接回来**：检查 `~/.claude/adapter-sessions.json` 能否正常写入，以及桌面端里那条会话是否还在。
+**Session not restored after a restart.** Verify that `~/.claude/adapter-sessions.json` is writable and that the session still exists in Desktop.
 
-## 源码入口
+## Source
 
-`adapters/telegram/index.ts`，以及 `adapters/common/` 下的 `pairing.ts`、`session-store.ts`、`ws-bridge.ts`、`message-buffer.ts`、`format.ts`。
+`adapters/telegram/index.ts`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, `message-buffer.ts`, and `format.ts` under `adapters/common/`.

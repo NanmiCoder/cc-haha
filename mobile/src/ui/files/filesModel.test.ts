@@ -32,9 +32,9 @@ test('changed rows split name and directory and leave unread diffs without a sta
     { path: 'README.md', name: 'README.md', dir: '', badge: undefined, added: undefined, removed: undefined },
     { path: 'src/app/scan.tsx', name: 'scan.tsx', dir: 'src/app/', badge: 'A', added: 7, removed: 0 },
   ])
-  expect(changedRowLabel(rows[2]!)).toBe('src/app/scan.tsx，新增，增加 7 行')
+  expect(changedRowLabel(rows[2]!)).toBe('src/app/scan.tsx, added, 7 lines added')
   expect(changedRowLabel({ ...rows[0]!, badge: 'M', added: 9, removed: 4 })).toBe(
-    'src/core/connectHost.ts，已修改，增加 9 行，删除 4 行'
+    'src/core/connectHost.ts, modified, 9 lines added, 4 lines deleted'
   )
   expect(changedRowLabel(rows[1]!)).toBe('README.md')
 })
@@ -55,8 +55,8 @@ test('directory responses that are not ok become errors, never empty folders', (
   expect(dirState({ state: 'ok', entries: [] })).toEqual({ entries: [] })
   expect(dirState({ state: 'ok', entries: [file('a')] })).toEqual({ entries: [file('a')] })
   expect(dirState({ state: 'error', error: 'outside workspace' })).toEqual({ error: 'outside workspace' })
-  expect(dirState({ state: 'missing' })).toEqual({ error: '目录无法读取' })
-  expect(dirState({ state: 'ok' })).toEqual({ error: '目录无法读取' })
+  expect(dirState({ state: 'missing' })).toEqual({ error: 'Directory cannot be read' })
+  expect(dirState({ state: 'ok' })).toEqual({ error: 'Directory cannot be read' })
 })
 
 test('folders sort before files, then by natural name without case', () => {
@@ -82,7 +82,7 @@ test('the tree puts an opened folder\'s children right after it, indented by dep
     [1, 'src/index.ts', false],
     [0, 'README.md', false],
   ])
-  // 没展开的文件夹，即使读过也不摊开；文件不会被当成展开。
+  // Unexpanded folders are not laid out even if read; files are never treated as expanded.
   expect(treeItems(dirs, new Set()).map((i) => (i.kind === 'entry' ? i.entry.path : i.kind))).toEqual([
     'docs',
     'src',
@@ -95,24 +95,24 @@ test('opened folders show loading, error with retry, or empty rows in place', ()
   const dirs: Record<string, DirState> = {
     '': { entries: [dir('a'), dir('b'), dir('c'), dir('d')] },
     a: 'loading',
-    b: { error: '读取失败' },
+    b: { error: 'Failed to load' },
     c: { entries: [] },
   }
   const items = treeItems(dirs, new Set(['a', 'b', 'c', 'd']))
   expect(items.map((i) => (i.kind === 'entry' ? i.entry.path : `${i.kind}:${i.text}`))).toEqual([
     'a',
-    'note:读取中…',
+    'note:Loading…',
     'b',
-    'note:读取失败，点按重试',
+    'note:Failed to load, tap to retry',
     'c',
-    'note:空文件夹',
+    'note:Empty folder',
     'd',
-    'note:读取中…',
+    'note:Loading…',
   ])
   const failed = items.find((i) => i.kind === 'note' && i.tone === 'err')
   expect(failed).toMatchObject({ retry: 'b', depth: 1 })
   expect(treeItems({}, new Set())).toEqual([
-    { kind: 'note', key: '\u0000loading', depth: 0, text: '读取中…', tone: 'ink3' },
+    { kind: 'note', key: '\u0000loading', depth: 0, text: 'Loading…', tone: 'ink3' },
   ])
 })
 

@@ -32,11 +32,11 @@ it('publishes the title carried by a CreateSession result before the index catch
       workDirExists: true,
     }],
   })
-  render(<SessionToolLinks input={{}} result={{ sessionId: 'child', title: '安全检查', state: 'queued', delivery: 'queued', messageId: 'm' }} />)
-  expect(screen.getByRole('button', { name: 'Open session 安全检查' })).toBeDefined()
-  await waitFor(() => expect(useSessionStore.getState().sessions[0]?.title).toBe('安全检查'))
-  fireEvent.click(screen.getByRole('button', { name: 'Open session 安全检查' }))
-  expect(openTab).toHaveBeenCalledWith('child', '安全检查')
+  render(<SessionToolLinks input={{}} result={{ sessionId: 'child', title: 'Security check', state: 'queued', delivery: 'queued', messageId: 'm' }} />)
+  expect(screen.getByRole('button', { name: 'Open session Security check' })).toBeDefined()
+  await waitFor(() => expect(useSessionStore.getState().sessions[0]?.title).toBe('Security check'))
+  fireEvent.click(screen.getByRole('button', { name: 'Open session Security check' }))
+  expect(openTab).toHaveBeenCalledWith('child', 'Security check')
 })
 it('handles protocol targets without scraping arbitrary content', () => {
   expect(sessionToolTargets({ targetSessionId: 'target' }, { members: [{ sessionId: 'target' }, { sessionId: 'child' }], content: 'sessionId=not-a-reference' })).toEqual(['target', 'child'])

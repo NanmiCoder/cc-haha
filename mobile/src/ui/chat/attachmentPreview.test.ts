@@ -11,14 +11,14 @@ test('previews local selections and replayed Base64 without treating computer pa
 
 test('mixed files, missing previews and duplicate images preserve the tapped attachment identity', () => {
   const images = [
-    { type: 'image' as const, name: '一', uri: 'file:///same.jpg' },
-    { type: 'file' as const, name: '文件.pdf' },
-    { type: 'image' as const, name: '旧图', path: '/computer/missing.png' },
-    { type: 'image' as const, name: '二', uri: 'file:///same.jpg' },
+    { type: 'image' as const, name: 'Mon', uri: 'file:///same.jpg' },
+    { type: 'file' as const, name: 'Files.pdf' },
+    { type: 'image' as const, name: 'Old image', path: '/computer/missing.png' },
+    { type: 'image' as const, name: 'Tue', uri: 'file:///same.jpg' },
   ]
   const selection = attachmentImageSelection(images, 3)
   expect(selection?.initialIndex).toBe(1)
-  expect(selection?.images.map((image) => image.name)).toEqual(['一', '二'])
+  expect(selection?.images.map((image) => image.name)).toEqual(['Mon', 'Tue'])
   expect(selection?.images.map((image) => image.id)).toEqual(['attachment-0', 'attachment-3'])
   expect(attachmentImageSelection(images, 1)).toBeNull()
   expect(attachmentImageSelection(images, 2)).toBeNull()

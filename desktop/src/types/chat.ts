@@ -153,8 +153,8 @@ export type ServerMessage =
       openAIFastMode?: boolean
       requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
     }
-  // CLI 回传的权限模式变化（如 ExitPlanMode 退出 plan 后恢复、Shift+Tab）。
-  // 桌面端据此把选择器校正回 CLI 的真实权限，避免本地影子值漂移。
+  // Permission-mode changes reported by the CLI (e.g. restored after ExitPlanMode leaves plan, Shift+Tab).
+  // The desktop corrects the picker to the CLI's real mode so the local shadow value does not drift.
   | { type: 'permission_mode_changed'; mode: PermissionMode }
   | {
       type: 'api_retry'
@@ -166,7 +166,7 @@ export type ServerMessage =
       errorMessage?: string
       requestId?: string
     }
-  // 流式请求失败后的恢复状态：可能安全重试流，也可能降级为非流式请求。
+  // Recovery state after a streaming request fails: it may retry the stream safely or fall back to a non-streaming request.
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string }
   | { type: 'background_task_stop_failed'; taskId: string; message: string }
@@ -228,7 +228,7 @@ export type ApiRetryState = {
 
 export type StreamingFallbackCause = 'watchdog' | 'stream_error' | '404_stream_creation' | 'stream_retry' | 'unknown'
 
-// 活动回合状态（与 apiRetry 同生命周期），不进消息历史。
+// Active-turn state (same lifecycle as apiRetry); not part of message history.
 export type StreamingFallbackState = {
   cause: StreamingFallbackCause
   receivedAt: number

@@ -61,7 +61,7 @@ export class WechatDeliveryRuntime {
       if (!execution.submitted) this.store.finishInbound(key)
     } catch {
       this.store.finishInbound(key, 'uncertain')
-      throw new Error('微信消息处理未完成；请查看 /delivery 和桌面会话，不会自动重复执行。')
+      throw new Error('WeChat message processing did not finish; check /delivery and the desktop session. It will not be re-run automatically.')
     } finally {
       this.active.delete(key)
     }
@@ -109,12 +109,12 @@ export class WechatDeliveryRuntime {
   summary(chatId: string): string {
     const counts = this.store.recoverySummary(chatId)
     const rows = this.store.listOutbound(chatId, 10)
-    const states: Record<string, string> = { pending: '待发送', sending: '发送中', failed: '失败', unknown: '送达未知' }
+    const states: Record<string, string> = { pending: 'pending', sending: 'sending', failed: 'failed', unknown: 'delivery unknown' }
     return [
-      `接收：待处理 ${counts.received}，处理中 ${counts.dispatching}，执行结果待核对 ${counts.uncertain}。`,
-      `回复：待发送 ${counts.pending}，发送中 ${counts.sending}，失败 ${counts.failed}，送达未知 ${counts.unknown}。`,
-      ...rows.map(row => `${row.kind === 'text' ? '文字' : '附件'} ${states[row.state]}：${row.replyId}`),
-      '执行结果待核对的任务请先查看桌面会话，不会自动重跑。文字补发：/retry <上面的 ID>；送达未知可能已收到，请先核对。附件请重新使用 /send。',
+      `Inbound: ${counts.received} pending, ${counts.dispatching} processing, ${counts.uncertain} awaiting result check.`,
+      `Replies: ${counts.pending} pending, ${counts.sending} sending, ${counts.failed} failed, ${counts.unknown} delivery unknown.`,
+      ...rows.map(row => `${row.kind === 'text' ? 'Text' : 'Attachment'} ${states[row.state]}: ${row.replyId}`),
+      'For tasks awaiting result check, review the desktop session first; they will not be re-run automatically. Resend text: /retry <ID above>; "delivery unknown" may already have arrived, so check first. For attachments, use /send again.',
     ].join('\n')
   }
 }

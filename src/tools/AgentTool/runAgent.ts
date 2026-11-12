@@ -372,7 +372,7 @@ export async function* runAgent({
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   isAsync: boolean
-  /** 前台转后台时切换交互边界，但不重建查询或重放已执行的工具。 */
+  /** Switch the interaction boundary when moving from foreground to background, without rebuilding the query or replaying executed tools. */
   isBackgrounded?: () => boolean
   /** Whether this agent can show permission prompts. Defaults to !isAsync.
    * Set to true for in-process teammates that run async but share the terminal. */
@@ -904,7 +904,7 @@ export async function* runAgent({
     agentToolUseContext.setAppState = updater => {
       if (!runsInBackground()) foregroundSetAppState(updater)
     }
-    // query 会复制上下文，计数对象必须从启动起稳定，转后台不能丢失或污染父回合。
+    // query copies the context, so the counter object must be stable from startup; backgrounding must not lose it or pollute the parent turn.
     agentToolUseContext.localDenialTracking = createDenialTrackingState()
   }
 

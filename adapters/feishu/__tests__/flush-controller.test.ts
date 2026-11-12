@@ -1,19 +1,19 @@
 /**
- * FlushController 单元测试
+ * FlushController unit tests
  *
- * 覆盖:
- * - 基础: cardMessageReady gate, complete() 锁死
- * - 节流窗口: 立即 flush / 延迟 flush
- * - Mutex: 进行中的 flush 重复调用标记 needsReflush
- * - Conflict reflush: API 结束后自动补一次
- * - 长间隔批量: elapsed > 2000ms 后延迟 300ms 再 flush
- * - waitForFlush: 等当前 flush 结束
+ * Covers:
+ * - Basics: cardMessageReady gate, complete() lock
+ * - Throttle window: immediate flush / delayed flush
+ * - Mutex: repeated calls during a flush mark needsReflush
+ * - Conflict reflush: automatic follow-up after the API call ends
+ * - Long-gap batching: after elapsed > 2000ms, delay 300ms before flushing
+ * - waitForFlush: wait for the current flush to finish
  */
 
 import { describe, it, expect } from 'bun:test'
 import { FlushController, THROTTLE } from '../flush-controller.js'
 
-// 创建一个可控的 doFlush —— 返回一个 Promise 可以手动 resolve
+// Create a controllable doFlush —— returns a Promise that can be resolved manually
 function makeControllableFlush() {
   const calls: string[] = []
   let resolveCurrent: (() => void) | null = null
@@ -54,7 +54,7 @@ async function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe('FlushController: cardMessageReady gate', () => {
-  it('在 cardMessageReady=false 时不 flush', async () => {
+  it('does not flush when cardMessageReady=false', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
@@ -64,7 +64,7 @@ describe('FlushController: cardMessageReady gate', () => {
     expect(count).toBe(0)
   })
 
-  it('setCardMessageReady(true) 后 flush 可执行', async () => {
+  it('flush can run after setCardMessageReady(true)', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
@@ -74,24 +74,24 @@ describe('FlushController: cardMessageReady gate', () => {
     expect(count).toBe(1)
   })
 
-  it('setCardMessageReady(true) 同步初始化 lastUpdateTime —— 刚 ready 时 throttledUpdate 被节流窗口阻挡', async () => {
+  it('setCardMessageReady(true) initializes lastUpdateTime synchronously —— throttledUpdate right after ready is held by the throttle window', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
     })
     fc.setCardMessageReady(true)
-    // 立即调用 throttledUpdate 500ms 窗口，首次 elapsed≈0 → 进入延迟分支
+    // Immediately call throttledUpdate with a 500ms window; first elapsed≈0 → enters delayed branch
     await fc.throttledUpdate(500)
-    // 同步阶段还没到 500ms，不应触发 flush
+    // Synchronous phase hasn't reached 500ms, should not flush
     expect(count).toBe(0)
-    // 500+ms 后延迟 timer 触发
+    // After 500+ms the delay timer fires
     await sleep(600)
     expect(count).toBe(1)
   })
 })
 
 describe('FlushController: complete()', () => {
-  it('complete() 后拒绝新 flush', async () => {
+  it('rejects new flushes after complete()', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
@@ -108,20 +108,20 @@ describe('FlushController: complete()', () => {
 // Throttle window
 // ---------------------------------------------------------------------------
 
-describe('FlushController: 节流窗口', () => {
-  it('超过窗口立即 flush', async () => {
+describe('FlushController: throttle window', () => {
+  it('flushes immediately past the window', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
     })
     fc.setCardMessageReady(true)
-    // 手动把 lastUpdateTime 挪远（等同于已过了节流窗口）
+    // Manually move lastUpdateTime far back (equivalent to the throttle window having passed)
     await sleep(150)
     await fc.throttledUpdate(100)
     expect(count).toBe(1)
   })
 
-  it('在窗口内首次调用安排延迟 flush', async () => {
+  it('schedules a delayed flush on the first call within the window', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
@@ -129,13 +129,13 @@ describe('FlushController: 节流窗口', () => {
     fc.setCardMessageReady(true) // lastUpdateTime = now
 
     await fc.throttledUpdate(200)
-    expect(count).toBe(0) // 延迟中，还没触发
+    expect(count).toBe(0) // delayed, not fired yet
 
     await sleep(300)
-    expect(count).toBe(1) // 200ms 后延迟 timer 触发
+    expect(count).toBe(1) // delay timer fires after 200ms
   })
 
-  it('窗口内多次调用复用同一个延迟 timer（不重复 flush）', async () => {
+  it('multiple calls within the window reuse the same delay timer (no duplicate flush)', async () => {
     let count = 0
     const fc = new FlushController(async () => {
       count += 1
@@ -156,37 +156,37 @@ describe('FlushController: 节流窗口', () => {
 // Mutex + conflict reflush
 // ---------------------------------------------------------------------------
 
-describe('FlushController: mutex + 冲突重刷', () => {
-  it('flush 进行中的重复调用不并发执行', async () => {
+describe('FlushController: mutex + conflict reflush', () => {
+  it('repeated calls during a flush do not run concurrently', async () => {
     const { doFlush, calls, blockNext, unblock } = makeControllableFlush()
     const fc = new FlushController(doFlush)
     fc.setCardMessageReady(true)
 
     blockNext()
-    const p1 = fc.flush() // flush-start 后被 latch 卡住
-    // 让事件循环走一轮，确保第一次 flush 进入 body
+    const p1 = fc.flush() // held by the latch after flush-start
+    // Let the event loop turn once so the first flush enters its body
     await sleep(10)
-    // 第二次调用时第一次还没结束 —— 应被 mutex 挡住
+    // The first one hasn't finished on the second call —— should be blocked by the mutex
     const p2 = fc.flush()
 
-    // 两次 Promise 都已登记，但都还没 end
+    // Both Promises are registered but neither has ended
     expect(calls).toEqual(['flush-start'])
 
     unblock()
     await p1
     await p2
-    // 第一次跑完后，由于 needsReflush 被标记，会触发一次补刷
-    // （conflict reflush 是通过 setTimeout 0 调度的，需要让它跑完）
+    // After the first finishes, needsReflush was set so one follow-up flush runs
+    // (conflict reflush is scheduled via setTimeout 0; let it finish)
     await sleep(20)
 
-    // 第一次 flush-start + flush-end，然后冲突补刷再一次 start + end
+    // First flush-start + flush-end, then the conflict reflush start + end once more
     expect(calls).toEqual([
       'flush-start', 'flush-end',
       'flush-start', 'flush-end',
     ])
   })
 
-  it('flush 进行中的 throttledUpdate 也会触发补刷', async () => {
+  it('throttledUpdate during a flush also triggers a reflush', async () => {
     const { doFlush, calls, blockNext, unblock } = makeControllableFlush()
     const fc = new FlushController(doFlush)
     fc.setCardMessageReady(true)
@@ -195,14 +195,14 @@ describe('FlushController: mutex + 冲突重刷', () => {
     const p1 = fc.flush()
     await sleep(10)
 
-    // API 进行中收到新的 update 请求
+    // New update request received while the API call is in progress
     await fc.throttledUpdate(10)
 
     unblock()
     await p1
     await sleep(30)
 
-    // 第一次 flush + 冲突补刷
+    // First flush + conflict reflush
     expect(calls.filter((c) => c === 'flush-end').length).toBe(2)
   })
 })
@@ -211,8 +211,8 @@ describe('FlushController: mutex + 冲突重刷', () => {
 // Long gap batching
 // ---------------------------------------------------------------------------
 
-describe('FlushController: 长间隔批量', () => {
-  it('elapsed > LONG_GAP_THRESHOLD_MS 时延迟 BATCH_AFTER_GAP_MS 再 flush', async () => {
+describe('FlushController: long-gap batching', () => {
+  it('delays by BATCH_AFTER_GAP_MS before flushing when elapsed > LONG_GAP_THRESHOLD_MS', async () => {
     let count = 0
     let flushAtMs = 0
     const start = Date.now()
@@ -222,18 +222,18 @@ describe('FlushController: 长间隔批量', () => {
     })
     fc.setCardMessageReady(true)
 
-    // 等到 elapsed > 2000ms
+    // Wait until elapsed > 2000ms
     await sleep(THROTTLE.LONG_GAP_THRESHOLD_MS + 50)
     const callAt = Date.now() - start
 
     await fc.throttledUpdate(THROTTLE.CARDKIT_MS)
-    // throttledUpdate 同步阶段不应立即 flush（因为走批量分支）
+    // throttledUpdate's synchronous phase should not flush immediately (takes the batch branch)
     expect(count).toBe(0)
 
-    // 等 BATCH_AFTER_GAP_MS + 余量
+    // Wait BATCH_AFTER_GAP_MS + margin
     await sleep(THROTTLE.BATCH_AFTER_GAP_MS + 50)
     expect(count).toBe(1)
-    // 实际 flush 时刻至少比 throttledUpdate 调用晚 300ms
+    // The actual flush happens at least 300ms after the throttledUpdate call
     expect(flushAtMs - callAt).toBeGreaterThanOrEqual(THROTTLE.BATCH_AFTER_GAP_MS - 20)
   })
 })
@@ -243,7 +243,7 @@ describe('FlushController: 长间隔批量', () => {
 // ---------------------------------------------------------------------------
 
 describe('FlushController: waitForFlush', () => {
-  it('没在 flush 时立即返回', async () => {
+  it('returns immediately when no flush is running', async () => {
     const fc = new FlushController(async () => {})
     fc.setCardMessageReady(true)
     const start = Date.now()
@@ -251,7 +251,7 @@ describe('FlushController: waitForFlush', () => {
     expect(Date.now() - start).toBeLessThan(10)
   })
 
-  it('有 flush 在跑时等它结束', async () => {
+  it('waits for a running flush to finish', async () => {
     const { doFlush, blockNext, unblock } = makeControllableFlush()
     const fc = new FlushController(doFlush)
     fc.setCardMessageReady(true)
@@ -275,10 +275,10 @@ describe('FlushController: waitForFlush', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 常量合理性
+// Constant sanity
 // ---------------------------------------------------------------------------
 
-describe('FlushController: THROTTLE 常量', () => {
+describe('FlushController: THROTTLE constants', () => {
   it('CARDKIT_MS=100, PATCH_MS=1500', () => {
     expect(THROTTLE.CARDKIT_MS).toBe(100)
     expect(THROTTLE.PATCH_MS).toBe(1500)

@@ -10,9 +10,9 @@ export const taskTitle = (task: BackgroundTask) =>
   task.description?.trim() || task.taskId
 
 /**
- * 行的第二行。电脑只给出开始时间，没有结束时间，所以只有运行中的任务带时长；
- * 已结束的任务不编造用时。后台命令的 summary/result 已经在输出预览里，
- * 第二行只放时长，避免同一段文字出现两次。
+ * second line of the row. The computer only gives a start time, no end time, so only running tasks have a duration; 
+ * finished tasks do not make up a duration. A background command's summary/result is already in the output preview, 
+ * so the second line holds only the duration, avoiding the same text twice.
  */
 export function taskSubline(
   task: BackgroundTask,
@@ -23,16 +23,16 @@ export function taskSubline(
     const elapsed = taskElapsed(task, now)
     const parts = isAgent(task) ? [summary, elapsed] : [elapsed]
     const text = parts.filter(Boolean).join(' · ')
-    return { text: text || '正在执行', mono: true, tone: 'muted' }
+    return { text: text || 'Running', mono: true, tone: 'muted' }
   }
   if (task.status === 'completed')
-    return { text: ['完成', summary].filter(Boolean).join(' · '), mono: false, tone: 'muted' }
+    return { text: ['Done', summary].filter(Boolean).join(' · '), mono: false, tone: 'muted' }
   if (task.status === 'stopped')
-    return { text: '已停止', mono: false, tone: 'muted' }
-  return { text: ['失败', summary].filter(Boolean).join(' · '), mono: false, tone: 'err' }
+    return { text: 'Stopped', mono: false, tone: 'muted' }
+  return { text: ['Failed', summary].filter(Boolean).join(' · '), mono: false, tone: 'err' }
 }
 
-/** 运行中的后台命令在行下预览两行输出。 */
+/** Running background commands preview two lines of output under the row. */
 export function outputPreview(task: BackgroundTask): string[] {
   if (isAgent(task) || task.status !== 'running') return []
   return (task.result || task.summary || '')
@@ -42,7 +42,7 @@ export function outputPreview(task: BackgroundTask): string[] {
     .slice(0, 2)
 }
 
-/** 停止确认只针对仍在运行的任务。 */
+/** Stop confirmation only targets tasks still running. */
 export function stopTargets(selected: BackgroundTask[], current: BackgroundTask[]) {
   return selected.filter((task) =>
     current.some((item) => item.taskId === task.taskId && item.status === 'running')

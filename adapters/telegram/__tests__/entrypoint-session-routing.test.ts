@@ -197,7 +197,7 @@ describe('Telegram entrypoint session routing', () => {
       return texts(chatId).at(-1)!
     }
     try {
-      expect(await status()).toContain('审批: 1 个待确认')
+      expect(await status()).toContain('Approvals: 1 pending')
       const calls = apiCalls.filter(call => call.payload.chat_id === chatId && call.payload.reply_markup && String(call.payload.text).includes(request.requestId))
       expect(calls).toHaveLength(1)
     } finally {
@@ -206,15 +206,15 @@ describe('Telegram entrypoint session routing', () => {
       permissionDelivery = undefined
     }
     // A failed send still leaves the approval available for a manual response.
-    expect(await status()).toContain('审批: 1 个待确认')
+    expect(await status()).toContain('Approvals: 1 pending')
     await handle({ type: 'permission_requests_snapshot', toolRequestIds: [request.requestId], turnActive: true })
     await handle(request)
     await handle(request)
     expect(apiCalls.filter(call => call.payload.chat_id === chatId && call.payload.reply_markup && String(call.payload.text).includes(request.requestId)))
       .toHaveLength(fail ? 2 : 1)
-    expect(await status()).toContain('审批: 1 个待确认')
+    expect(await status()).toContain('Approvals: 1 pending')
     await handle({ type: 'permission_resolved', permissionType: 'tool', requestId: request.requestId })
-    expect(await status()).not.toContain('待确认')
+    expect(await status()).not.toContain('Approvals:')
     await handle({ type: 'message_complete' })
   })
 
@@ -232,7 +232,7 @@ describe('Telegram entrypoint session routing', () => {
       expect(store.get(String(chatId))).toEqual(originalBinding)
       expect(requests.filter((request) => request === 'POST /api/sessions').length).toBe(creationsBefore)
       expect(messages.some((item) => item.message.content === 'Continue after reconnect')).toBe(false)
-      expect(texts(chatId).at(-1)).toContain('已保留会话和工作目录')
+      expect(texts(chatId).at(-1)).toContain('session and working directory are preserved')
       expect(texts(chatId).at(-1)).not.toContain('/new')
 
       await text(chatId, 'Retry the original conversation')
@@ -273,7 +273,7 @@ describe('Telegram entrypoint session routing', () => {
     try {
       await text(chatId, `/${command}`)
       // /stop and /clear dispatch asynchronously, so wait for their failure reply.
-      await eventually(() => expect(texts(chatId).at(-1)).toContain('已保留会话和工作目录'))
+      await eventually(() => expect(texts(chatId).at(-1)).toContain('session and working directory are preserved'))
       expect(store.get(String(chatId))).toEqual(originalBinding)
       expect(requests.filter((request) => request === 'POST /api/sessions').length).toBe(creationsBefore)
       expect(sendMessage).not.toHaveBeenCalled()
@@ -287,10 +287,10 @@ describe('Telegram entrypoint session routing', () => {
           expect(texts(chatId).at(-1)).toContain(sessionId)
         } else if (command === 'stop') {
           expect(messages.some((item) => item.sessionId === sessionId && item.message.type === 'stop_generation')).toBe(true)
-          expect(texts(chatId).at(-1)).toContain('已发送停止信号')
+          expect(texts(chatId).at(-1)).toContain('Stop signal sent')
         } else {
           expect(messages.some((item) => item.sessionId === sessionId && item.message.content === '/clear')).toBe(true)
-          expect(texts(chatId).some((value) => value.includes('已清空当前会话上下文'))).toBe(true)
+          expect(texts(chatId).some((value) => value.includes('Cleared the current session context'))).toBe(true)
         }
       })
       expect(store.get(String(chatId))).toEqual(originalBinding)
@@ -306,7 +306,7 @@ describe('Telegram entrypoint session routing', () => {
   it('runs registered history commands after authorization and deduplication', async () => {
     const before = requests.length
     await text(701, '/sessions', { userId: 99 })
-    expect(texts(701).at(-1)).toContain('未授权')
+    expect(texts(701).at(-1)).toContain('Not authorized')
     expect(requests.length).toBe(before)
     store.set('702', 'old', project)
     await text(702, '/sessions', { messageId: 10001 })
@@ -339,9 +339,9 @@ describe('Telegram entrypoint session routing', () => {
   it('serializes menu and text input and clears conflicting selection states', async () => {
     store.set('704', 'old', project)
     await Promise.all([text(704, '/sessions'), text(704, '/resume')])
-    expect(texts(704).at(-1)).toContain('选择要恢复的项目')
+    expect(texts(704).at(-1)).toContain('Select a project to resume')
     await text(704, '/resume 1')
-    expect(texts(704).at(-1)).toContain('已过期')
+    expect(texts(704).at(-1)).toContain('expired')
     await callback(704, 'tgsel:resume_project:pick:0', 'dedup-callback')
     const afterFirst = requests.length
     await callback(704, 'tgsel:resume_project:pick:0', 'dedup-callback')
@@ -384,9 +384,9 @@ describe('Telegram entrypoint session routing', () => {
   it('updates model and busy state through existing Skill and model menu wiring', async () => {
     store.set('706', 'old', project)
     await text(706, '/model fixture-model')
-    await eventually(() => expect(texts(706).some((value) => value.includes('已切换模型'))).toBe(true))
+    await eventually(() => expect(texts(706).some((value) => value.includes('Model switched'))).toBe(true))
     await text(706, '/skills')
-    await eventually(() => expect(texts(706).some((value) => value.includes('当前项目可用 Skills'))).toBe(true))
+    await eventually(() => expect(texts(706).some((value) => value.includes('Skills available for the current project'))).toBe(true))
     await callback(706, 'tgsel:skill:pick:0')
     await text(706, '/sessions')
     await text(706, '/resume 1')
@@ -408,7 +408,7 @@ describe('Telegram entrypoint session routing', () => {
     await text(707, '/sessions')
     await text(707, '/resume 1')
     expect(store.get('707')?.sessionId).toBe('history')
-    expect(texts(707).at(-1)).toContain('已恢复会话')
+    expect(texts(707).at(-1)).toContain('Session resumed')
   })
 
   it('delivers a resumed answer and accepts text approval through the same entrypoint', async () => {

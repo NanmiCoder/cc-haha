@@ -131,14 +131,14 @@ test('future or corrupt proof records fail closed and are never overwritten or s
   store.values.set(pushProofKey('a'), raw)
   await expect(
     coordinator.register(api.client('a'), input('a'))
-  ).rejects.toThrow('更新版本')
+  ).rejects.toThrow('newer version')
   await expect(
     coordinator.removeHost('a', api.client('a'), async () => 'removed')
-  ).rejects.toThrow('已保留')
+  ).rejects.toThrow('kept')
   expect(store.values.get(pushProofKey('a'))).toBe(raw)
   expect(api.log).toHaveLength(0)
   expect(() => migratePushProofs('{"version":1,"tokens":[false]}')).toThrow(
-    '无法读取'
+    'cannot be read'
   )
 })
 
@@ -209,13 +209,13 @@ test('process restart revokes ordinary and Live Activity registrations using the
 })
 
 test('a computer that cannot be told is still removed, however it fails', async () => {
-  // 想移除一台电脑，多半正因为连不上它：拒绝凭据、服务出错、网络不通，一律不拦移除。
-  // 每种失败用一台全新登记过的电脑。
+  // Wanting to remove a computer is most likely because it cannot be reached: rejected credentials, server errors or network failures never block removal.
+  // Each failure kind uses a freshly registered computer.
   for (const failure of [
-    new ApiError('不被接受', 401),
-    new ApiError('不被接受', 403),
-    new ApiError('服务出错', 500),
-    new ApiError('无法连接服务器，请检查地址与网络', 0, 'NETWORK_ERROR'),
+    new ApiError('not accepted', 401),
+    new ApiError('not accepted', 403),
+    new ApiError('service error', 500),
+    new ApiError('Cannot connect to the server; check the address and network', 0, 'NETWORK_ERROR'),
   ]) {
     const store = memory(),
       hosts = new HostRepository(memory(), store),
@@ -238,8 +238,8 @@ test('a computer that cannot be told is still removed, however it fails', async 
 })
 
 test('a computer whose address cannot be reached is removed over the real fetch', async () => {
-  // 用户现场的失败：旧的局域网地址、已失效的隧道，请求真的发不到电脑，不是手写的错误。
-  // 连接被拒还是被本机代理回 502 取决于环境，这里只要求「发出过、没成功」。
+  // A real-world failure: an old LAN address or expired tunnel where requests truly cannot reach the computer, not a handwritten error.
+  // Whether the connection is refused or a local proxy returns 502 depends on the environment; here we only require "sent, did not succeed".
   const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } })
   const port = listener.port
   listener.stop(true)
@@ -282,7 +282,7 @@ test('a computer that never answers holds removal up for the revoke budget at mo
     api = server()
   await new PushRegistrationCoordinator(store).register(api.client('a'), input('a'))
   let aborted = false
-  // 请求一直挂着直到被取消，像局域网里被丢包的旧地址。没有预算，这个用例会卡满请求自己的 6 秒。
+  // The request hangs until canceled, like an old LAN address that drops packets. Without a budget this case would hit the request's own full 6 seconds.
   const hanging = new ApiClient(
     { id: 'a', name: 'a', url: 'http://127.0.0.1:9000', auth: 'lan' },
     'fake-a',
@@ -324,7 +324,7 @@ test('clearing registrations keeps the proof while the computer is unreachable a
     coordinator.clearRegistrations(failing(new ApiError('offline', 0, 'NETWORK_ERROR')))
   ).rejects.toThrow('offline')
   expect(migratePushProofs(await store.getItem(pushProofKey('a'))).tokens).toEqual([token])
-  await coordinator.clearRegistrations(failing(new ApiError('不被接受', 401)))
+  await coordinator.clearRegistrations(failing(new ApiError('not accepted', 401)))
   expect(await store.getItem(pushProofKey('a'))).toBeNull()
 })
 
@@ -459,7 +459,7 @@ test('an offline computer is asked once and removal goes ahead without it', asyn
   expect((await hosts.load()).hosts).toHaveLength(0)
   expect(await hosts.credential('a')).toBeNull()
   expect(await store.getItem(pushProofKey('a'))).toBeNull()
-  // 电脑没收到注销：登记留在它那边，等它过期或撤销配对后清掉。
+  // The computer did not receive the unregistration: the registration stays there until it expires or pairing is revoked.
   expect(api.records.size).toBe(1)
 })
 
@@ -624,7 +624,7 @@ test('delivery payload: Android declares split channels only once they exist, iO
   expect(
     buildDelivery('android', { ...iosOptions, channelsReady: true })
   ).toEqual({ channels: 'split' })
-  // 渠道没建成功就不声明，服务端继续用 legacy 渠道。
+  // Do not declare if channels were not created; the server keeps using the legacy channel.
   expect(buildDelivery('android', { ...iosOptions })).toBeUndefined()
   expect(
     buildDelivery('ios', {
@@ -637,7 +637,7 @@ test('delivery payload: Android declares split channels only once they exist, iO
     liveActivity: 'decisions',
     showCommand: false,
   })
-  // iOS 没有 Android 渠道概念，即使误传 channelsReady 也不带 channels。
+  // iOS There is no Android channel concept, so channels is not sent even if channelsReady is passed by mistake.
   expect(
     buildDelivery('ios', { ...iosOptions, channelsReady: true })
   ).not.toHaveProperty('channels')
@@ -652,7 +652,7 @@ test('delivery is sent as a top-level field and old fixtures without it still re
   expect(api.records.get(`a-notification-${token}`)?.delivery).toEqual(
     delivery
   )
-  // 旧数据形状（无 delivery）不被改写。
+  // Old data shape (no delivery) is not rewritten.
   const legacy = input('b')
   await coordinator.register(api.client('b'), legacy)
   const stored = api.records.get(`b-notification-${token}`)
@@ -722,7 +722,7 @@ test('only a 400 triggers the delivery retry: other failures and a still-rejecte
     coordinator.register(api.client('a'), input('a', { delivery }))
   ).rejects.toThrow('Invalid push registration')
   expect(puts).toBe(2)
-  // 本来就没带 delivery 的请求被拒绝时不重试。
+  // Requests that never carried delivery are not retried when rejected.
   puts = 0
   await expect(
     coordinator.register(api.client('a'), input('a'))

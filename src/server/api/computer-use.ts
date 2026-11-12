@@ -505,7 +505,7 @@ export function getUnsupportedPythonVersionStep(
   return {
     name: 'python_version',
     ok: false,
-    message: `Computer Use 需要 Python >= ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}，当前版本为 ${version ?? 'unknown'}`,
+    message: `Computer Use requires Python >= ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}; current version is ${version ?? 'unknown'}`,
   }
 }
 
@@ -812,7 +812,7 @@ export async function handleComputerUseApi(
           error: 'COMPUTER_USE_CONFIG_INVALID',
           message: `Computer Use config could not be loaded: ${result.error}`,
           configPath,
-          recoveryHint: '删除或修复该文件即可恢复',
+          recoveryHint: 'Delete or repair this file to recover',
         },
         { status: 500 },
       )
@@ -840,7 +840,7 @@ export async function handleComputerUseApi(
           error: 'COMPUTER_USE_CONFIG_INVALID',
           message: `Computer Use config must be repaired before it can be changed: ${stored.error}`,
           configPath,
-          recoveryHint: '删除或修复该文件即可恢复',
+          recoveryHint: 'Delete or repair this file to recover',
         },
         { status: 409 },
       )

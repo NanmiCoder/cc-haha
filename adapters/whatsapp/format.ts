@@ -15,7 +15,7 @@ export function buildWhatsAppThinkingPreview(
   const preview = fullText.slice(0, Math.max(0, previewLimit)).trimStart()
   return {
     fullText,
-    messageText: preview ? `思考中...\n${preview}` : '思考中...',
+    messageText: preview ? `Thinking...\n${preview}` : 'Thinking...',
   }
 }
 

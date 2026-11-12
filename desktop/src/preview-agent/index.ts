@@ -18,7 +18,7 @@ import { afterNextPaint } from './paint'
   const postToHost = (raw: string) => {
     const post = previewWindow.__DESKTOP_PREVIEW_POST__
     if (post) post(raw)
-    // 回退（M1 证伪 IPC 时启用）：new WebSocket('ws://127.0.0.1:'+PORT+'/preview-agent') ...
+    // Fallback (enabled if M1 rules out IPC): new WebSocket('ws://127.0.0.1:'+PORT+'/preview-agent') ...
   }
 
   const bridge = createBridge({ postToHost, location: window.location, title: document.title })
@@ -80,8 +80,8 @@ import { afterNextPaint } from './paint'
   const queuedReverts = new Map<string, () => void>()
   const picker = createPicker({ onSelect: () => {} })
 
-  // 只做页面侧清理。宿主的 picker 授权由 selection / picker-exited 之一消费，
-  // 所以产出 selection 的路径必须走这个函数，绝不能再补发 picker-exited。
+  // Page-side cleanup only. The host's picker grant is consumed by either selection or picker-exited,
+  // so a path that produced a selection must use this function and never also send picker-exited.
   const closePicker = () => {
     activeBubble?.destroy()
     activeBubble = null
@@ -91,7 +91,7 @@ import { afterNextPaint } from './paint'
     updateChromeSuppression()
   }
 
-  // 本次拾取结束但没有产出 selection：通知宿主解除授权、复位按钮态。
+  // This pick ended without a selection: tell the host to revoke the grant and reset the button state.
   const teardown = (reason: 'cancel-current' | 'host' | 'invalid-target') => {
     persistentPicker = false
     activeBubble?.revert()
@@ -184,8 +184,8 @@ import { afterNextPaint } from './paint'
     pickerOn = false   // stop hovering; keep highlight on the selected element while the bubble is open
     if (!(el instanceof HTMLElement)) { teardown('invalid-target'); return }
     activeBubble = createEditBubble(el, {
-      // selection 自带「本次拾取结束」的语义，宿主收到后会自行复位 picker 态。
-      // 若这里先发 picker-exited，宿主会把授权解除在前、selection 到达在后而丢弃它。
+      // selection already means "this pick ended"; the host resets the picker state on receipt.
+      // Sending picker-exited first would make the host revoke the grant before selection arrives and drop it.
       onConfirm: (change) => { closePicker(); void emitSelection(el, change, 'send') },
       onQueue: (change) => {
         const itemId = `preview-selection-${++itemSequence}`

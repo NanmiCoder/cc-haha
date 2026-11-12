@@ -23,9 +23,9 @@ test('uses the dashboard snapshot: waiting first, then running, idle excluded', 
   const snapshot: DashboardSnapshot = {
     hostId: 'h',
     sessions: [
-      session('run', '扫码配对', '2026-10-25T10:00:00Z'),
+      session('run', 'QR pairing', '2026-10-25T10:00:00Z'),
       session('wait', '', '2026-10-25T09:00:00Z'),
-      session('idle', '发版说明', '2026-10-25T11:00:00Z'),
+      session('idle', 'Release notes', '2026-10-25T11:00:00Z'),
     ],
     activity: [activity('run', 'running'), activity('wait', 'waiting'), activity('idle', 'idle')],
     total: 3,
@@ -37,8 +37,8 @@ test('uses the dashboard snapshot: waiting first, then running, idle excluded', 
     },
   }
   expect(await activeSessions(client, snapshot)).toEqual([
-    { id: 'wait', title: '未命名会话' },
-    { id: 'run', title: '扫码配对' },
+    { id: 'wait', title: 'Untitled session' },
+    { id: 'run', title: 'QR pairing' },
   ])
 })
 
@@ -57,12 +57,12 @@ test('without a snapshot it reads mobile-status and tolerates a missing summary'
           ],
         } as T
       if (path.includes('/c/')) throw new Error('gone')
-      return session('a', '排查内存', '2026-10-25T10:00:00Z') as T
+      return session('a', 'Investigate memory', '2026-10-25T10:00:00Z') as T
     },
   }
   expect(await activeSessions(client, null)).toEqual([
-    { id: 'c', title: '未命名会话' },
-    { id: 'a', title: '排查内存' },
+    { id: 'c', title: 'Untitled session' },
+    { id: 'a', title: 'Investigate memory' },
   ])
   expect(paths).toEqual([
     '/api/sessions/mobile-status',

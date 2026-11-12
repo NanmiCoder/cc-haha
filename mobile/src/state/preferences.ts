@@ -6,13 +6,13 @@ export type Preferences = Record<string, unknown> & {
   appearance: Appearance
   notifications: { decisions: boolean; completed: boolean; errors: boolean }
   quietHours: { enabled: boolean; start: string; end: string }
-  /** 锁屏实时活动：有任务在跑就显示，还是只在等你决定时显示。 */
+  /** Lock screen Live Activity: show whenever a task runs, or only when waiting for your decision. */
   liveActivity: LiveActivityMode
-  /** 锁屏上是否显示命令内容；关掉后只写「想运行命令」。 */
+  /** Whether to show command content on the lock screen; when off only shows "Wants to run a command". */
   liveActivityShowCommand: boolean
-  /** 已经给过「开启通知」引导页，不再自动弹。 */
+  /** The "Turn on notifications" onboarding page has already been shown; do not auto-show again. */
   notifyPrompted: boolean
-  /** iOS：审批提醒标成时效性通知，专注模式下也送达。 */
+  /** iOS: approval alerts are marked time-sensitive and delivered even in Focus mode. */
   timeSensitive: boolean
 }
 export type LiveActivityMode = 'running' | 'decisions'
@@ -27,9 +27,9 @@ export const preferencesKey = 'cc-haha.mobile.preferences'
 export function migratePreferences(raw: string | null): Preferences {
   const value = raw ? JSON.parse(raw) : {}
   if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('手机设置无法读取，原始数据已保留')
+    throw new Error('Phone settings cannot be read; raw data kept')
   if (value.version !== undefined && value.version !== 0 && value.version !== 1)
-    throw new Error('手机设置来自更新版本，请先升级 App')
+    throw new Error('Phone settings are from a newer version; please upgrade first App')
   for (const key of ['notifications', 'quietHours']) {
     if (
       value[key] !== undefined &&
@@ -37,7 +37,7 @@ export function migratePreferences(raw: string | null): Preferences {
         typeof value[key] !== 'object' ||
         Array.isArray(value[key]))
     )
-      throw new Error('通知设置格式无效，原始数据已保留')
+      throw new Error('Invalid notification settings format; raw data kept')
   }
   const notifications = value.notifications ?? {}
   const quiet = value.quietHours ?? {}
@@ -46,17 +46,17 @@ export function migratePreferences(raw: string | null): Preferences {
       notifications[key] !== undefined &&
       typeof notifications[key] !== 'boolean'
     )
-      throw new Error('通知开关格式无效，原始数据已保留')
+      throw new Error('Invalid notification toggle format; raw data kept')
   }
   if (quiet.enabled !== undefined && typeof quiet.enabled !== 'boolean')
-    throw new Error('勿扰开关格式无效，原始数据已保留')
+    throw new Error('Invalid quiet hours toggle format; raw data kept')
   for (const key of ['start', 'end']) {
     if (
       quiet[key] !== undefined &&
       (typeof quiet[key] !== 'string' ||
         !/^([01]\d|2[0-3]):[0-5]\d$/.test(quiet[key]))
     )
-      throw new Error('勿扰时间格式无效，原始数据已保留')
+      throw new Error('Invalid quiet hours time format; raw data kept')
   }
   const time = (input: unknown, fallback: string) =>
     typeof input === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input)
@@ -80,7 +80,7 @@ export function migratePreferences(raw: string | null): Preferences {
       start: time(quiet.start, '23:00'),
       end: time(quiet.end, '08:00'),
     },
-    // 后加的三项：旧数据没有时取默认值（保持原有行为：运行中也显示、显示命令、没引导过）。
+    // Three later additions: default values when missing in old data (keeping the original behavior: show while running, show commands, not onboarded).
     liveActivity: value.liveActivity === 'decisions' ? 'decisions' : 'running',
     liveActivityShowCommand: value.liveActivityShowCommand !== false,
     notifyPrompted: value.notifyPrompted === true,

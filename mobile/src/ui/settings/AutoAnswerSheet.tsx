@@ -19,7 +19,7 @@ import {
   type AutoQuestion,
 } from './settingsModel'
 
-/** AI 代答等待时间：点一档立即写到当前电脑，成功后收起。 */
+/** AI Auto-answer wait time: tapping a tier writes it to the current computer immediately, collapsing on success. */
 export function AutoAnswerSheet({
   visible,
   hostName,
@@ -55,14 +55,14 @@ export function AutoAnswerSheet({
     }
   }
   return (
-    <Sheet visible={visible} onClose={onClose} dismissable={saving === null} title="AI 代答">
+    <Sheet visible={visible} onClose={onClose} dismissable={saving === null} title="AI Auto-answer">
       <Group style={{ marginTop: 4 }}>
         {autoAnswerMinutes.map((minutes, index) => (
           <View key={minutes}>
             {index > 0 && <Separator />}
             <ListRow
               title={autoAnswerLabel(minutes)}
-              accessibilityLabel={minutes ? `等 ${minutes} 分钟后代答` : '不代答'}
+              accessibilityLabel={minutes ? `Auto-answer after ${minutes} minutes` : 'No auto-answer'}
               disabled={saving !== null && saving !== minutes}
               onPress={() => void choose(minutes)}
               trailing={
@@ -80,7 +80,7 @@ export function AutoAnswerSheet({
         <InlineError text={error} />
       ) : (
         <Footnote style={{ paddingTop: 0 }}>
-          {`提问超过这段时间没人回，AI 按推荐选项作答；工具审批永远不代答。只对 ${hostName} 生效，保存在这台电脑上。`}
+          {`When a question goes unanswered for this long, AI answers with the recommended option; tool approvals are never auto-answered. Applies only to ${hostName} and is saved on that computer.`}
         </Footnote>
       )}
     </Sheet>

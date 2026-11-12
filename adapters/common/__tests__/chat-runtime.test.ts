@@ -300,7 +300,7 @@ describe('ImChatRuntime authorization', () => {
     await inbound(runtime, 'hello')
 
     expect(bridge.sent).toHaveLength(0)
-    expect(notices[0]).toContain('未授权')
+    expect(notices[0]).toContain('Not authorized')
     expect(httpClient.acquiredLeases).toEqual([])
   })
 
@@ -312,7 +312,7 @@ describe('ImChatRuntime authorization', () => {
     const { runtime, notices, bridge } = createRuntime()
 
     await inbound(runtime, 'ABC234')
-    expect(notices[0]).toContain('配对成功')
+    expect(notices[0]).toContain('Paired successfully')
 
     await inbound(runtime, 'hello there')
     expect(bridge.sent.map((item) => item.content)).toEqual(['hello there'])
@@ -434,7 +434,7 @@ describe('ImChatRuntime session lifecycle', () => {
     bridge.waitForOpen = async () => online
     try {
       await inbound(runtime, command, { dedupKey: 'command-retry' })
-      expect(notices[0]).toContain('重试')
+      expect(notices[0]).toContain('try again')
       online = true
       await inbound(runtime, command, { dedupKey: 'command-retry' })
       await inbound(runtime, command, { dedupKey: 'command-retry' })
@@ -493,8 +493,8 @@ describe('ImChatRuntime session lifecycle', () => {
     expect(bridge.sent).toEqual([])
     expect(bridge.stopped).toEqual([])
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toContain('重试')
-    expect(notices[0]).not.toContain('当前没有活动会话')
+    expect(notices[0]).toContain('try again')
+    expect(notices[0]).not.toContain('No active session')
   })
 
   it.each(['timeout', 'error'])('preserves the stored session and project after a reconnect %s, then retries it', async (failure) => {
@@ -520,7 +520,7 @@ describe('ImChatRuntime session lifecycle', () => {
     expect(new SessionStore(path.join(tmpDir, 'adapter-sessions.json')).get(CHAT_ID)).toEqual(original)
     expect(httpClient.createdSessions).toEqual([])
     expect(bridge.sent).toEqual([])
-    expect(notices.join('\n')).toContain('重试')
+    expect(notices.join('\n')).toContain('try again')
 
     await inbound(runtime, 'continue')
 
@@ -571,7 +571,7 @@ describe('ImChatRuntime session lifecycle', () => {
 
     await inbound(runtime, '/status')
 
-    expect(notices[0]).toContain('当前没有活动会话')
+    expect(notices[0]).toContain('No active session')
   })
 
   it('sends a stop signal for /stop once a session exists', async () => {
@@ -717,7 +717,7 @@ describe('ImChatRuntime server stream', () => {
     })
 
     expect(httpClient.createdSessions).toHaveLength(2)
-    expect(notices.join('\n')).toContain('已重建会话')
+    expect(notices.join('\n')).toContain('Session rebuilt')
   })
 
   it('reports an ordinary error without recreating the session', async () => {
@@ -776,7 +776,7 @@ describe('ImChatRuntime project selection', () => {
     httpClient.projects = [{ projectName: 'demo', realPath: tmpDir, branch: 'main' }]
 
     await inbound(runtime, 'hello')
-    expect(notices.join('\n')).toContain('选择项目')
+    expect(notices.join('\n')).toContain('Select a project')
     expect(httpClient.createdSessions).toHaveLength(0)
 
     await inbound(runtime, 'demo')
@@ -848,7 +848,7 @@ describe('ImChatRuntime attachment authorization', () => {
     })
 
     expect(loads).toBe(0)
-    expect(notices[0]).toContain('未授权')
+    expect(notices[0]).toContain('Not authorized')
   })
 
   it('does not download attachments for a replayed message', async () => {
@@ -890,7 +890,7 @@ describe('ImChatRuntime attachment authorization', () => {
     await inbound(runtime, '/status')
 
     expect(bridge.sent).toHaveLength(0)
-    expect(notices[0]).toContain('当前没有活动会话')
+    expect(notices[0]).toContain('No active session')
   })
 
   it('forwards a command-looking caption sent with a file instead of running it', async () => {
@@ -904,7 +904,7 @@ describe('ImChatRuntime attachment authorization', () => {
     })
 
     expect(bridge.sent.map((item) => item.content)).toEqual(['/status'])
-    expect(notices.join('\n')).not.toContain('当前没有活动会话')
+    expect(notices.join('\n')).not.toContain('No active session')
   })
 
   it('runs the download inside the per-chat queue, so order is preserved', async () => {
@@ -944,9 +944,9 @@ describe('ImChatRuntime historical sessions', () => {
     expect(bridge.sent).toEqual([])
     await inbound(runtime, '/resume 1')
     expect(sessionStore.get(CHAT_ID)?.sessionId).toBe('desktop-history')
-    await inbound(runtime, '接着完成刚才的任务')
+    await inbound(runtime, 'continue the task from before')
     expect(bridge.getSessionId(CHAT_ID)).toBe('desktop-history')
-    expect(bridge.sent).toEqual([{ content: '接着完成刚才的任务', attachments: undefined }])
+    expect(bridge.sent).toEqual([{ content: 'continue the task from before', attachments: undefined }])
     expect(httpClient.createdSessions).toEqual([])
   })
 
@@ -957,7 +957,7 @@ describe('ImChatRuntime historical sessions', () => {
     const original = sessionStore.get(CHAT_ID)?.sessionId
     await inbound(runtime, '/sessions')
     await inbound(runtime, '/resume 1')
-    expect(notices.at(-1)).toContain('正在运行')
+    expect(notices.at(-1)).toContain('is running')
     expect(sessionStore.get(CHAT_ID)?.sessionId).toBe(original)
     await runtime.handleServerMessage(CHAT_ID, { type: 'status', state: 'idle' })
     await inbound(runtime, '/resume 1')
@@ -973,7 +973,7 @@ describe('ImChatRuntime historical sessions', () => {
     expect(runtime.getRuntimeState(CHAT_ID).state).toBe('thinking')
     await inbound(runtime, '/sessions')
     await inbound(runtime, '/resume 1')
-    expect(notices.at(-1)).toContain('正在运行')
+    expect(notices.at(-1)).toContain('is running')
     expect(sessionStore.get(CHAT_ID)?.sessionId).toBe('desktop-history')
     await runtime.handleServerMessage(CHAT_ID, { type: 'permission_request', requestId: 'pending', toolName: 'Bash', input: {} })
     await runtime.handleServerMessage(CHAT_ID, { type: 'permission_requests_snapshot', turnActive: true })
@@ -992,7 +992,7 @@ describe('ImChatRuntime historical sessions', () => {
     expect(runtime.getRuntimeState(CHAT_ID).pendingPermissionCount).toBe(0)
     await inbound(runtime, '/sessions')
     await inbound(runtime, '/resume 1')
-    expect(notices.at(-1)).toContain('已恢复会话')
+    expect(notices.at(-1)).toContain('Session resumed')
   })
 
   it('keeps permission answers ahead of session numbers and cancels the picker for project switching', async () => {
@@ -1012,7 +1012,7 @@ describe('ImChatRuntime historical sessions', () => {
     const { runtime, httpClient, notices, bridge } = createRuntime()
     addHistory(httpClient)
     await inbound(runtime, '/sessions demo', { userId: 'stranger' })
-    expect(notices.at(-1)).toContain('未授权')
+    expect(notices.at(-1)).toContain('Not authorized')
     await inbound(runtime, '/sessions demo', { hasAttachments: true, loadAttachments: async () => [] })
     expect(bridge.sent.at(-1)?.content).toBe('/sessions demo')
   })

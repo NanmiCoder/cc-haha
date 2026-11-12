@@ -127,7 +127,7 @@ describe('runtime choices use desktop provider identities and capability contrac
     expect(
       runtimeSourceName('saved', [{ id: 'saved', name: 'My DeepSeek' }])
     ).toBe('My DeepSeek')
-    expect(runtimeSourceName('unknown', [])).toBe('电脑默认来源')
+    expect(runtimeSourceName('unknown', [])).toBe('Computer default source')
   })
   test('custom default still exposes all built-in accounts with provider-specific authentication', async () => {
     const fixture = clientFixture()
@@ -312,16 +312,16 @@ describe('runtime choices use desktop provider identities and capability contrac
 })
 
 test('model rows show description and a readable context size without inventing either', () => {
-  expect(contextLabel('200k')).toBe('200K 上下文')
-  expect(contextLabel('1m')).toBe('1M 上下文')
-  expect(contextLabel('128000')).toBe('128K 上下文')
-  expect(contextLabel('1048576')).toBe('1M 上下文')
-  expect(contextLabel('1500000')).toBe('1.5M 上下文')
+  expect(contextLabel('200k')).toBe('200K context')
+  expect(contextLabel('1m')).toBe('1M context')
+  expect(contextLabel('128000')).toBe('128K context')
+  expect(contextLabel('1048576')).toBe('1M context')
+  expect(contextLabel('1500000')).toBe('1.5M context')
   expect(contextLabel('')).toBeUndefined()
   expect(contextLabel('unknown')).toBeUndefined()
   expect(contextLabel('0')).toBeUndefined()
-  expect(modelDetail({ description: '日常编码', context: '200k' })).toBe(
-    '日常编码 · 200K 上下文'
+  expect(modelDetail({ description: 'Everyday coding', context: '200k' })).toBe(
+    'Everyday coding · 200K context'
   )
   expect(modelDetail({ description: 'main · sonnet' })).toBe('main · sonnet')
   expect(modelDetail({ context: '' })).toBe('')
@@ -349,11 +349,11 @@ test('model changes preserve fast mode only within the same official OpenAI acco
 describe('effort control explanation', () => {
   const base = { source: { auth: 'ready' as const }, canSetEffort: true }
   test('each reason names what the user has to fix', () => {
-    expect(effortUnavailableReason({ ...base, source: { auth: 'missing' } })).toContain('请先在电脑上登录')
-    expect(effortUnavailableReason({ ...base, source: { auth: 'error' } })).toContain('尚未确认此供应商的授权状态')
-    expect(effortUnavailableReason({ ...base, source: undefined })).toContain('供应商已不可用')
-    expect(effortUnavailableReason({ ...base, canSetEffort: false })).toContain('沿用电脑默认强度')
-    expect(effortUnavailableReason(base)).toBe('当前模型没有可调的思考强度。')
+    expect(effortUnavailableReason({ ...base, source: { auth: 'missing' } })).toContain('Sign in or configure this provider on the computer')
+    expect(effortUnavailableReason({ ...base, source: { auth: 'error' } })).toContain('Authorization status of this provider is not confirmed yet')
+    expect(effortUnavailableReason({ ...base, source: undefined })).toContain('provider is no longer available')
+    expect(effortUnavailableReason({ ...base, canSetEffort: false })).toContain('use the computer default effort')
+    expect(effortUnavailableReason(base)).toBe('The current model has no adjustable thinking effort.')
   })
 })
 
@@ -365,13 +365,13 @@ describe('current model efforts', () => {
 
   test('uses the listed model, ignoring the 1M context suffix', () => {
     expect(currentModelEfforts(models, 'deepseek-flash')).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
-    // 列表里只有不带后缀的那一项：会话里的 [1m] / :1m 仍能拿到它的档位。
+    // The list only has the item without suffix: [1m] / :1m in a session still gets its tiers.
     expect(currentModelEfforts(models, 'deepseek-flash[1m]')).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
     expect(currentModelEfforts(models, 'DeepSeek-Flash:1M'.toLowerCase())).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
   })
 
   test('a model missing from the list still gets the generic levels instead of an error', () => {
-    // 和桌面端一致：只去掉少数模型才支持的「超高」，由电脑校验。
+    // Same as desktop: only remove "Max", which few models support; the computer validates.
     expect(currentModelEfforts(models, 'custom-model')).toEqual({ efforts: ['low', 'medium', 'high', 'max'] })
     expect(currentModelEfforts([], 'deepseek-flash[1m]').efforts).toEqual(['low', 'medium', 'high', 'max'])
   })

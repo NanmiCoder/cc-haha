@@ -1,4 +1,4 @@
-/** 聊天里够用的 Markdown 子集：代码块、标题、列表、引用、表格、分隔线和段落。 */
+/** The Markdown subset sufficient for chat: code blocks, headings, lists, quotes, tables, rules and paragraphs. */
 export type MarkdownBlock =
   | { type: 'code'; text: string; lang?: string }
   | { type: 'heading'; level: number; text: string }
@@ -9,10 +9,10 @@ export type MarkdownBlock =
   | { type: 'paragraph'; text: string }
 
 const listLine = /^\s*([-*+]|\d+[.)])\s+(.*)$/
-// 表格分隔行：| --- | :---: | ---: |（外侧竖线可省）。
+// Table separator row: | --- | :---: | ---: | (outer pipes optional).
 const tableRule = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
 
-/** 把一行表格拆成单元格：去掉外侧竖线，支持 \| 转义。 */
+/** Split a table row into cells: strip outer pipes, support \| escaping. */
 export function splitTableRow(line: string): string[] {
   const body = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
   return body.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, '|').trim())
@@ -51,7 +51,7 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
       index += 2
       while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
         const cells = splitTableRow(lines[index])
-        // 行比表头短就补空，长就截断，保持矩形。
+        // Pad rows shorter than the header and truncate longer ones, keeping it rectangular.
         rows.push(header.map((_, column) => cells[column] ?? ''))
         index++
       }
@@ -94,26 +94,26 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks
 }
 
-/* ───────────── 超长消息的挂载上限 ───────────── */
+/* ───────────── Mount cap for very long messages ───────────── */
 
 /**
- * 一条消息是消息列表里的一行，列表虚拟化管不到行内：每个段落、列表项、表格单元格都会
- * 挂成原生视图。安卓上原生视图占 Java 堆（上限通常 256MB），模型重复输出几万段时，
- * 打开或长按这条消息就会 OutOfMemoryError 闪退。所以按大约要挂的原生视图数给每条消息
- * 设上限：超出时只留开头和结尾，中间折叠成可展开的一处。
+ * A message is one row in the message list, and list virtualization does not reach inside a row: every paragraph, list item and table cell
+ * mounts as a native view. On Android native views live on the Java heap (usually capped at 256MB), so when the model repeats tens of thousands of blocks, 
+ * opening or long-pressing that message crashes with OutOfMemoryError. So each message is capped by roughly how many native views it would mount:
+ * beyond the cap only the beginning and end are kept, and the middle collapses into one expandable spot.
  */
 export type MarkdownLimit = { head: number; tail: number }
 export const MARKDOWN_LIMIT: MarkdownLimit = { head: 1500, tail: 500 }
-/** 每展开一次开头多挂一份预算，最多挂到这么多；再长的部分只能在电脑上看，展开不能把上限又撑回去。 */
+/** Each expansion adds one more budget to the head, up to this many; anything longer can only be viewed on the computer, and expanding cannot push the cap back up. */
 export const MARKDOWN_EXPAND_LIMIT = 6000
 export type MarkdownWindow = { head: MarkdownBlock[]; hidden: number; tail: MarkdownBlock[] }
 
-// 与 Message.tsx 的渲染结构对应：列表项 = 行 + 序号 + 容器 + 正文；表格每行 = 行 + 每格（容器 + 正文），外加表框。
+// Matches the render structure in Message.tsx: list item = row + number + container + body; each table row = row + each cell (container + body), plus the table frame.
 const LIST_ITEM_COST = 4
 const TABLE_FRAME_COST = 3
 const tableRowCost = (block: { header: string[] }) => 1 + block.header.length * 2
 
-/** 拆成可单独取舍的片段：列表按项、表格按行，其余块（含只有表头的表格）整块算一段。 */
+/** Split into pieces that can be kept or dropped individually: lists by item, tables by row, other blocks (including header-only tables) as one piece each. */
 type Piece = { block: number; item: number; cost: number }
 
 function markdownPieces(blocks: MarkdownBlock[]): Piece[] {
@@ -124,7 +124,7 @@ function markdownPieces(blocks: MarkdownBlock[]): Piece[] {
     else if (block.type === 'table' && block.rows.length)
       block.rows.forEach((_, item) => pieces.push({ block: index, item, cost: tableRowCost(block) }))
     else {
-      // 只有表头的表格：表头和表框在 pieceCost 里按“开表”计入，这里不重复算。
+      // Header-only table: the header and frame are counted as "opening a table" in pieceCost, not counted again here.
       const cost = block.type === 'table' ? 0 : block.type === 'code' || block.type === 'quote' ? 2 : 1
       pieces.push({ block: index, item: -1, cost })
     }
@@ -132,7 +132,7 @@ function markdownPieces(blocks: MarkdownBlock[]): Piece[] {
   return pieces
 }
 
-/** 表格被切开时，每一截都带上表头和表框。 */
+/** When a table is split, each piece carries the header and frame. */
 function pieceCost(blocks: MarkdownBlock[], piece: Piece, opensTable: boolean) {
   const block = blocks[piece.block]
   return piece.cost + (opensTable && block.type === 'table' ? TABLE_FRAME_COST + tableRowCost(block) : 0)
@@ -155,7 +155,7 @@ function rebuild(blocks: MarkdownBlock[], pieces: Piece[]): MarkdownBlock[] {
   return out
 }
 
-/** 按原生视图预算截出开头和结尾；放得下就原样返回，hidden 是中间折叠的段数。 */
+/** Cut out the head and tail by native view budget; return as is if it fits, with hidden being the number of collapsed middle pieces. */
 export function windowMarkdown(blocks: MarkdownBlock[], limit: MarkdownLimit): MarkdownWindow {
   const pieces = markdownPieces(blocks)
   let head = 0
@@ -186,14 +186,14 @@ export function windowMarkdown(blocks: MarkdownBlock[], limit: MarkdownLimit): M
   }
 }
 
-/* ───────────── 表格列宽 ───────────── */
+/* ───────────── Table column widths ───────────── */
 
 export const TABLE_MIN_COLUMN = 72
 export const TABLE_MAX_COLUMN = 320
 
 /**
- * 估算文字的“半角单位”宽度：中日韩、全角标点和 emoji 按 2 个单位，
- * 其余按 1 个。只用来给列宽定初值，不要求精确。
+ * Estimate text width in "half-width units": CJK, full-width punctuation and emoji count as 2 units, 
+ * everything else as 1. Only used to seed column widths, no precision required.
  */
 export function textWidthUnits(text: string): number {
   let units = 0
@@ -213,7 +213,7 @@ export function textWidthUnits(text: string): number {
   return units
 }
 
-/** 每列按内容估算的自然宽度；用于放不下时判断谁更需要空间。 */
+/** Natural width of each column estimated from content; used to decide who needs space more when it does not fit. */
 export function naturalColumnWidths(header: string[], rows: string[][]): number[] {
   return header.map((title, column) => {
     let units = textWidthUnits(title)
@@ -230,8 +230,8 @@ function roundToTotal(values: number[], total: number): number[] {
 }
 
 /**
- * 把自然列宽分配到可用宽度：放得下就按比例铺满整行，放不下就等比压缩、
- * 但每列不低于 `TABLE_MIN_COLUMN`。列实在太多时返回 null，调用方退回横向滚动。
+ * Distribute natural column widths over the available width: when it fits fill the row proportionally, otherwise shrink proportionally, 
+ * but each column no narrower than `TABLE_MIN_COLUMN`. With truly too many columns return null and the caller falls back to horizontal scrolling.
  */
 export function fitColumnWidths(natural: number[], available: number): number[] | null {
   const count = natural.length

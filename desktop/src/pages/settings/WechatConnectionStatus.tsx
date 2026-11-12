@@ -68,7 +68,7 @@ export function WechatConnectionStatus({ paired }: { paired: boolean }) {
     }
   }
   const online = !unreachable && snapshot?.state === 'online'
-  const formatTime = (timestamp?: number) => timestamp ? new Date(timestamp).toLocaleString() : t('settings.adapters.wechatHealthNever')
+  const formatTime = (timestamp?: number) => timestamp ? new Date(timestamp).toLocaleString('en-US') : t('settings.adapters.wechatHealthNever')
   return (
     <div className="border-t border-[var(--color-border)] px-4 py-3.5" aria-live="polite">
       <div className="flex items-center justify-between gap-3">

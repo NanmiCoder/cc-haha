@@ -29,8 +29,8 @@ import { ChoiceRow } from './newtask/ChoiceRow'
 export type { Provider, Model } from '../core/runtimeCatalog'
 
 /**
- * 来源与模型的选择状态，保留独立的思考强度。打开即从电脑重新读取来源与授权，
- * 读完后回到 initial；`epoch` 变化表示重新打开，丢弃上次未保存的选择。
+ * Selection state of source and model, keeping a separate thinking effort. Opening rereads sources and authorization from the computer, 
+ * and returns to initial when done; a change in `epoch` means reopened, discarding the last unsaved selection.
  */
 export function useRuntimeChoice({
   client,
@@ -159,7 +159,7 @@ export function useRuntimeChoice({
     canSetEffort,
     selectConfig: (next: Model) => runtimeModelSelection(providerId, next, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope),
     reload: () => setRevision((value) => value + 1),
-    /** 可以应用的选择；来源未授权或还没选模型时为 null。 */
+    /** An applicable selection; null when the source is unauthorized or no model is chosen yet. */
     selection:
       model && source?.auth === 'ready'
         ? runtimeModelSelection(providerId, model, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope)
@@ -195,16 +195,16 @@ export function RuntimeChoiceView({
     <View style={{ height: Math.min(480, height * 0.58), flexShrink: 1, gap: 8 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}>
         {step === 'models' ? (
-          <TextButton title="‹ 供应商" onPress={() => { setStep('providers'); setQuery('') }} />
+          <TextButton title="‹ Provider" onPress={() => { setStep('providers'); setQuery('') }} />
         ) : null}
         <Text numberOfLines={1} style={{ flex: 1, fontSize: 14, color: colors.ink2, paddingHorizontal: 4 }}>
-          {step === 'providers' ? '先选择供应商' : choice.source?.name ?? '供应商已不可用'}
+          {step === 'providers' ? 'Choose a provider first' : choice.source?.name ?? 'Provider no longer available'}
         </Text>
       </View>
       <SearchField
         value={query}
         onChangeText={setQuery}
-        placeholder={step === 'providers' ? '搜索供应商' : '搜索模型'}
+        placeholder={step === 'providers' ? 'Search providers' : 'Search models'}
         editable={!busy}
       />
       <InlineError text={choice.error} />
@@ -218,19 +218,19 @@ export function RuntimeChoiceView({
             <ChoiceRow
               title={item.name}
               selected={item.id === choice.providerId}
-              detail={item.auth === 'missing' ? '尚未登录' : item.auth === 'error' ? '授权状态待确认' : undefined}
+              detail={item.auth === 'missing' ? 'Not signed in' : item.auth === 'error' ? 'Authorization status pending' : undefined}
               trailingText="›"
               disabled={busy}
               onPress={() => { choice.selectProvider(item.id); setStep('models'); setQuery('') }}
             />
           )}
-          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>没有匹配的供应商。</Text>}
+          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>No matching providers.</Text>}
         />
       ) : choice.source?.auth !== 'ready' ? (
         <Callout>
           {choice.source?.auth === 'missing'
-            ? '请先在电脑上登录或配置此供应商，再重新读取。'
-            : '尚未确认此供应商的授权状态，请重新读取后再选模型。'}
+            ? 'Sign in or configure this provider on the computer first, then reload.'
+            : 'Authorization status of this provider is not confirmed yet; reload before choosing a model.'}
         </Callout>
       ) : !choice.catalogReady && !choice.error ? <Loading /> : (
         <FlatList
@@ -250,21 +250,21 @@ export function RuntimeChoiceView({
               }}
             />
           )}
-          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>{query ? '没有匹配的模型。' : '这个供应商没有可用模型。'}</Text>}
+          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>{query ? 'No matching models.' : 'This provider has no available models.'}</Text>}
         />
       )}
       {warning ? <Callout>{warning}</Callout> : null}
-      <TextButton title="重新读取" disabled={busy || choice.loading} onPress={choice.reload} />
+      <TextButton title="Reload" disabled={busy || choice.loading} onPress={choice.reload} />
     </View>
   )
 }
 
-/** 内嵌选择器（带应用按钮）。新代码优先用 RuntimeSheet。 */
+/** Embedded picker (with apply button). New code should prefer RuntimeSheet. */
 export function RuntimePicker({
   client,
   initial,
   onApply,
-  applyLabel = '应用选择',
+  applyLabel = 'Apply selection',
   busy = false,
   defaultScope = false,
 }: {
@@ -293,13 +293,13 @@ export function RuntimePicker({
 }
 
 /**
- * 模型选择弹层。会话输入框、计划执行模型、新任务都用它，接口保持稳定：
- * 先选供应商，再点模型应用；关闭不保存。思考强度由独立控件设置。
+ * Model picker sheet. Used by the session input, plan execution model and new task; the interface stays stable: 
+ * choose a provider first, then tap a model to apply; closing does not save. Thinking effort is set by a separate control.
  */
 export function RuntimeSheet({
   visible,
   onClose,
-  title = '模型',
+  title = 'Model',
   client,
   initial,
   onApply,
@@ -338,7 +338,7 @@ export function RuntimeSheet({
       title={title}
       left={
         <View style={{ paddingHorizontal: 4 }}>
-          <TextButton title="取消" onPress={onClose} />
+          <TextButton title="Cancel" onPress={onClose} />
         </View>
       }
       scroll={false}

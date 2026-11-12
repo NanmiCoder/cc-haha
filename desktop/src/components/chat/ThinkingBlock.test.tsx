@@ -36,29 +36,29 @@ describe('thinkingPreview', () => {
 
 describe('ThinkingBlock', () => {
   beforeEach(() => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
   })
 
   afterEach(() => {
     cleanup()
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
   })
 
   it('shows the in-progress label while thinking is active', () => {
     render(<ThinkingBlock content="reasoning..." isActive />)
-    expect(screen.getByRole('button')).toHaveTextContent('思考中')
-    expect(screen.getByRole('button')).not.toHaveTextContent('已思考')
+    expect(screen.getByRole('button')).toHaveTextContent('Thinking')
+    expect(screen.getByRole('button')).not.toHaveTextContent('Thought')
   })
 
   it('shows the done label once thinking has completed', () => {
     render(<ThinkingBlock content="reasoning..." isActive={false} />)
-    expect(screen.getByRole('button')).toHaveTextContent('已思考')
-    expect(screen.getByRole('button')).not.toHaveTextContent('思考中')
+    expect(screen.getByRole('button')).toHaveTextContent('Thought')
+    expect(screen.getByRole('button')).not.toHaveTextContent('Thinking')
   })
 
   it('defaults to the done label when isActive is omitted', () => {
     render(<ThinkingBlock content="reasoning..." />)
-    expect(screen.getByRole('button')).toHaveTextContent('已思考')
+    expect(screen.getByRole('button')).toHaveTextContent('Thought')
   })
 
   it('localizes both labels in English', () => {

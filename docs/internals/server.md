@@ -1,29 +1,29 @@
 ---
-title: 本地 Server 与 API
-nav_title: 本地 Server
-description: 本地 Server 的启动参数、访问控制、REST 与 WebSocket 接口范围。
+title: Local Server and API
+nav_title: Local Server
+description: Startup flags, access control, REST surface, and chat WebSocket of the local server.
 order: 2
 ---
 
-# 本地 Server 与 API
+# Local Server and API
 
-本地 Server 是桌面端、H5 页面和 Claude CLI 之间的运行时边界。它提供 REST API、聊天 WebSocket、Provider 协议代理和桌面 Web 静态资源。打包后的桌面应用会自动管理它；只有源码开发、无界面部署或自定义客户端才需要手工启动。
+The local server is the runtime boundary between Desktop, the H5 browser client, and the Claude CLI. It provides REST APIs, the chat WebSocket, provider protocol translation, and Desktop web assets. The packaged Desktop app manages it automatically. Start it manually only for source development, headless deployment, or a custom client.
 
-## 启动
+## Start the server
 
-在仓库根目录运行：
+From the repository root:
 
 ```bash
 bun run src/server/index.ts
 ```
 
-默认监听 `127.0.0.1:3456`。确认服务就绪：
+It listens on `127.0.0.1:3456` by default. Check readiness with:
 
 ```bash
 curl http://127.0.0.1:3456/health
 ```
 
-返回格式：
+Response shape:
 
 ```json
 {
@@ -32,36 +32,36 @@ curl http://127.0.0.1:3456/health
 }
 ```
 
-`/health` 是启动探针，始终公开，不代表其他接口已通过认证。
+`/health` is an always-public startup probe. A successful response does not prove that another endpoint is authenticated.
 
-## 启动顺序
+## Startup order
 
-`Bun.serve` 先完成端口监听，之后才开始本地索引初始化：
+`Bun.serve` binds the port before local index startup begins:
 
-1. 端口绑定，从这里开始操作系统就会接受 TCP 连接。
-2. 在同一次同步调用里启动后台索引。会话投影在第一个 `await` 之前打开 SQLite、读取 `source_files`，全文检索回填随后才开始。
-3. 这段同步工作交还事件循环后，`/health` 就能应答，不等待发现、投影或回填；随后建立文件监听时每处理 25 个项目目录就让出一次事件循环。需要索引的 REST 请求在 `fetch` 内等待 `localIndexCoordinator.start()`。
+1. The port is bound; from here the operating system accepts TCP connections.
+2. In the same synchronous call, background index startup begins. The session projection opens SQLite and reads `source_files` before its first `await`; the full-text backfill follows later.
+3. `/health` is answered once that synchronous part returns to the event loop. It does not wait for discovery, projection, or backfill; the file watchers that follow open 25 project directories at a time and yield in between. REST requests that need the index await `localIndexCoordinator.start()` inside `fetch`.
 
-在这一切之前，`startServer` 会先打印 `[Server] modules loaded <ms> ms after process start; binding <host>:<port>`。在桌面 sidecar 里，`[claude-sidecar] starting server mode` 到这一行之间是模块加载耗时；之后到 `[Server] Claude Code API server running` 是启动工作。
+Before any of this, `startServer` logs `[Server] modules loaded <ms> ms after process start; binding <host>:<port>`. In the desktop sidecar, the time between `[claude-sidecar] starting server mode` and that line is module loading; whatever follows until `[Server] Claude Code API server running` is startup work.
 
-先监听并不会让 `/health` 更早应答，HTTP 仍要等这段同步工作结束。它改变的是宿主能看到的状态：旧顺序下整个同步初始化期间端口都不监听，看起来像进程已死；现在端口已打开而 `/health` 没有应答，就能判断为「进程活着但很忙」，桌面端的超时文案也据此区分。
+Binding first does not make `/health` answer sooner, because HTTP still waits for the synchronous part. What it changes is what the host can see: with the old order the port stayed unbound for the whole synchronous pass, which looked like a dead process. Now an open port with a silent `/health` reads as "alive but busy", and the desktop host words its timeout accordingly.
 
-索引重建是可续跑的：每份 transcript 单独提交事务，进程重启后已提交的部分不会重做。首次启动遇到 parser 版本升级（例如 v12 → v13）会全量重投影，耗时随数据量线性增长。启动后的第一轮全量扫描会打印 `[local-index]` 前缀的分阶段日志：`opening`、`opened`、`ready to reconcile`、`rebuilding <n> sources`、`discovery start`、最多每 5 秒一行的 `reprojected <n> sources (<checked>/<known> checked)`、`discovery complete`、`activity backfill start/complete`。进度只统计真正重新读取的文件。之后定期的兜底扫描保持安静，只有确实重新读取了文件时才打印一行 `discovery complete`。日志写 stdout，桌面端会把它记进诊断日志，也会放进启动失败弹窗的 `Recent server logs`。
+Index rebuilds are resumable: every transcript commits its own transaction, so work already committed survives a restart. The first launch after a parser version bump (for example v12 → v13) re-projects every transcript, which scales with transcript volume. The first full sweep after startup logs `[local-index]` phase lines: `opening`, `opened`, `ready to reconcile`, `rebuilding <n> sources`, `discovery start`, `reprojected <n> sources (<checked>/<known> checked)` at most every 5 s, `discovery complete`, and `activity backfill start/complete`. Progress counts only files that were actually re-read. The periodic safety sweeps that follow stay silent unless they re-read files, and then log a single `discovery complete` line. The lines go to stdout, which the desktop host keeps in its diagnostics log and in the `Recent server logs` section of the startup-failure dialog.
 
-## 启动参数
+## Startup options
 
-| 参数 | 环境变量 | 默认值 | 说明 |
-|------|----------|--------|------|
-| `--host <host>` | `SERVER_HOST` | `127.0.0.1` | 监听地址 |
-| `--port <port>` | `SERVER_PORT` | `3456` | HTTP 和 WebSocket 端口 |
-| `--cli-path <path>` | `CLAUDE_CLI_PATH` | 自动解析 | 指定 Server 拉起的 CLI |
-| `--auth-required` | `SERVER_AUTH_REQUIRED=1` | 关闭 | 对能力接口强制显式鉴权 |
+| Option | Environment variable | Default | Description |
+|--------|----------------------|---------|-------------|
+| `--host <host>` | `SERVER_HOST` | `127.0.0.1` | Listen address |
+| `--port <port>` | `SERVER_PORT` | `3456` | HTTP and WebSocket port |
+| `--cli-path <path>` | `CLAUDE_CLI_PATH` | Automatically resolved | CLI started by the server |
+| `--auth-required` | `SERVER_AUTH_REQUIRED=1` | Off | Require explicit authentication for capability endpoints |
 
-命令行的 host 和 port 优先于环境变量。开发时建议保留回环地址；`0.0.0.0` 只表示接受外部连接，并不会自动完成 H5 授权、TLS 或反向代理配置。
+Command-line host and port values take precedence over environment variables. Keep the loopback address for development. Listening on `0.0.0.0` accepts external connections but does not configure H5 authorization, TLS, or a reverse proxy.
 
-## 提供 H5 页面
+## Serve the H5 client
 
-源码运行时先构建桌面 Web 资源：
+For a source launch, build the Desktop web assets first:
 
 ```bash
 cd desktop
@@ -70,102 +70,102 @@ cd ..
 bun run src/server/index.ts
 ```
 
-`bun run build` 最后会把手机 App（`mobile/`）导出成网页放进 `desktop/dist/m`，所以构建前要先在 `mobile/` 里 `bun install`。手机和平板浏览器在桌面 H5 入口完成令牌验证或远程配对后，会跳到 `/m/` 使用这套界面；`/m/*` 的刷新由 Server 回落到 `dist/m/index.html`。没有构建 `dist/m` 时，`/m/*` 的页面请求重定向回 `/`，入口保留桌面版自带的手机布局。
+`bun run build` ends by exporting the phone app (`mobile/`) as a web app into `desktop/dist/m`, so run `bun install` in `mobile/` first. Phone and tablet browsers move to `/m/` once the desktop H5 entry has verified the token or finished remote pairing; the server answers reloads under `/m/*` with `dist/m/index.html`. Without a `dist/m` build, pages under `/m/*` redirect back to `/` and the entry keeps the desktop app's own phone layout.
 
-Server 会自动查找仓库的 `desktop/dist`。从其他目录启动时，用绝对路径指定构建产物：
+The server automatically finds `desktop/dist` in the repository. When starting from another directory, provide the absolute build path:
 
 ```bash
 CLAUDE_H5_DIST_DIR=/absolute/path/to/desktop/dist \
   bun run /absolute/path/to/src/server/index.ts
 ```
 
-| 变量 | 说明 |
-|------|------|
-| `CLAUDE_H5_DIST_DIR` | H5 构建产物目录，目录内必须有 `index.html` |
-| `CLAUDE_H5_PUBLIC_BASE_URL` | 固定的公开服务地址 |
-| `CLAUDE_H5_AUTO_PUBLIC_URL=1` | 在启用 H5 时尝试生成局域网公开地址 |
+| Variable | Description |
+|----------|-------------|
+| `CLAUDE_H5_DIST_DIR` | H5 build directory; it must contain `index.html` |
+| `CLAUDE_H5_PUBLIC_BASE_URL` | Fixed public server URL |
+| `CLAUDE_H5_AUTO_PUBLIC_URL=1` | Try to derive a LAN URL while H5 access is enabled |
 
-完整的 Token、允许来源、手机访问和 Nginx 配置见 [H5 访问](../desktop/remote.md)。
+Configure the H5 token and exact allowed browser origins in **Settings → Phone connection → Same Wi-Fi**. Treat the token like an API key and regenerate it to revoke existing browser access.
 
-## 访问控制
+## Access control
 
-Server 根据请求来源和能力路径决定是否允许访问：
+The server classifies the source of each request before granting access to a capability path:
 
-| 请求 | 默认行为 |
-|------|----------|
-| `GET /health` | 公开，用于启动探针 |
-| H5 静态页面和 assets | 公开的启动外壳；页面本身不包含会话数据 |
-| 直接回环请求 | 仅当客户端地址、Host 和 Origin 都是本机，且没有反向代理跟踪头时视为本机可信 |
-| H5 关闭时的远程能力请求 | 拒绝 `/api`、`/proxy`、`/ws` 和文件能力 |
-| H5 开启时的远程能力请求 | 要求有效 H5 Token，并校验浏览器 Origin |
-| `--auth-required` / `SERVER_AUTH_REQUIRED=1` | 即使 H5 未开启，也对能力接口要求显式认证 |
+| Request | Default behavior |
+|---------|------------------|
+| `GET /health` | Public startup probe |
+| H5 shell and static assets | Public bootstrap content; they do not contain session data |
+| Direct loopback request | Trusted only when client address, Host, and Origin are local and no proxy-trace header is present |
+| Remote capability request while H5 is disabled | Denied for `/api`, `/proxy`, `/ws`, and file capabilities |
+| Remote capability request while H5 is enabled | Requires a valid H5 token and an allowed browser Origin |
+| `--auth-required` / `SERVER_AUTH_REQUIRED=1` | Requires explicit authentication for capability endpoints even when H5 is disabled |
 
-“连接来自 `127.0.0.1`”本身不足以证明是本机用户。反向代理必须保留公开 `Host`，或传递 `Forwarded`、`X-Forwarded-*`、`X-Real-IP`、`Via` 中至少一种，让 Server 能区分反代流量和直接回环流量。
+A TCP peer address of `127.0.0.1` does not prove that the end user is local. A reverse proxy must preserve the public `Host` or send at least one of `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, or `Via`, allowing the server to distinguish proxied traffic from direct loopback traffic.
 
-### Token 传递
+### Passing tokens
 
-- REST、协议代理和文件接口：`Authorization: Bearer <token>`
-- 浏览器 WebSocket：`/ws/<session-id>?token=<token>`
+- REST, provider proxy, and file endpoints: `Authorization: Bearer <token>`
+- Browser WebSocket: `/ws/<session-id>?token=<token>`
 
-H5 模式使用设置页生成的 H5 Token。显式 `--auth-required` 模式也能接受与服务端 `ANTHROPIC_API_KEY` 相同的 Bearer Token，但不建议为了远程访问暴露模型密钥；优先启用 H5 并使用独立 Token。
+H5 mode uses the token generated in Settings. Explicit `--auth-required` mode can also accept a bearer token equal to the server's `ANTHROPIC_API_KEY`, but exposing a model credential for remote access is discouraged. Prefer H5 with its separate token.
 
-CORS 只限制浏览器读取响应，不是身份认证。非浏览器客户端不会因为 CORS 而安全。
+CORS restricts browser access to responses; it is not authentication. It does not make a non-browser client safe.
 
-## HTTP 接口范围
+## HTTP API surface
 
-业务 REST API 位于 `/api/*`，主要覆盖：
+Business REST APIs live under `/api/*` and cover:
 
-- 会话、对话、搜索和文件系统；
-- 设置、权限、模型、effort 和 Providers；
-- Agents、任务、团队和计划任务；
-- Skills、插件、市场和 MCP；
-- IM 适配器和 Computer Use；
-- 诊断、Doctor、活动统计、记忆和 traces；
-- H5 访问控制。
+- sessions, conversations, search, and filesystem access;
+- settings, permissions, models, effort, and providers;
+- agents, tasks, teams, and scheduled tasks;
+- skills, plugins, the market, and MCP;
+- IM adapters and Computer Use;
+- diagnostics, Doctor, activity statistics, memory, and traces;
+- H5 access control.
 
-具体请求与响应以 `src/server/api/` 的当前处理器为准。内部 `/sdk/<session-id>` WebSocket 是 Server 为自己拉起的 Claude CLI 使用的通道，不是第三方客户端 API。
+For exact request and response shapes, use the current handlers under `src/server/api/`. The internal `/sdk/<session-id>` WebSocket is used by the Claude CLI process started by the server; it is not a third-party client API.
 
-`/proxy/*` 是 Provider 的协议转换入口，包含运行时认证和模型路由状态。不要把它当成通用的、无状态 OpenAI 代理公开出去。
+`/proxy/*` is the provider protocol-translation boundary and depends on runtime authentication and model-routing state. Do not expose it as a general-purpose stateless OpenAI proxy.
 
-## 聊天 WebSocket
+## Chat WebSocket
 
-客户端连接：
+Clients connect to:
 
 ```text
 ws://127.0.0.1:3456/ws/<session-id>
 ```
 
-常用客户端消息包括：
+Common client messages include:
 
-- `user_message`、`stop_generation`
-- `permission_response`、`computer_use_permission_response`
-- `set_permission_mode`、`set_runtime_config`
-- `sync_state`、`prewarm_session`
-- `ping`
+- `user_message` and `stop_generation`;
+- `permission_response` and `computer_use_permission_response`;
+- `set_permission_mode` and `set_runtime_config`;
+- `sync_state` and `prewarm_session`;
+- `ping`.
 
-服务端会发送连接与会话状态、文本增量、思考、工具调用与结果、权限请求、重试/降级状态、错误、任务/团队更新和 `pong`。完整字段以 `src/server/ws/events.ts` 为准。
+The server sends connection and session state, text deltas, thinking, tool calls and results, permission requests, retry or fallback state, errors, task or team updates, and `pong`. Use `src/server/ws/events.ts` as the complete field contract.
 
-桌面客户端每 30 秒发送一次 ping；等待 pong 10 秒后会主动重连。重连退避上限为 30 秒，并不会在固定次数后永久停止。自定义客户端应能重复连接、重新同步状态，并忽略未知的新增消息字段。
+The Desktop client sends a ping every 30 seconds and reconnects if no pong arrives within 10 seconds. Reconnect delay is capped at 30 seconds; it does not stop permanently after a fixed number of attempts. A custom client should reconnect, resynchronize state, and ignore unknown fields added to future messages.
 
-## 反向代理清单
+## Reverse-proxy checklist
 
-远程使用时至少完成：
+For remote use:
 
-1. 在 Server 端启用 H5，生成独立 Token，并配置精确的允许来源。
-2. 使用 HTTPS，不在公开网络传输明文 Token。
-3. 转发静态页面、`/api/*`、`/proxy/*` 和 `/ws/*`。
-4. 为 `/ws/*` 开启 WebSocket upgrade。
-5. 保留公开 Host 和标准代理头。
-6. 不向公网转发内部 `/sdk/*`。
+1. Enable H5 on the server, generate a separate token, and configure exact allowed origins.
+2. Use HTTPS so the token is never sent over a public network in cleartext.
+3. Proxy static assets, `/api/*`, `/proxy/*`, and `/ws/*`.
+4. Enable WebSocket upgrade for `/ws/*`.
+5. Preserve the public Host and standard proxy headers.
+6. Do not expose the internal `/sdk/*` path.
 
-## 排查
+## Troubleshooting
 
-| 现象 | 检查 |
-|------|------|
-| 端口无法监听 | `SERVER_PORT` 是否被占用；是否传入了有效数字 |
-| `/health` 正常但 API 为 `403` | 请求被判定为远程，而 H5 尚未启用 |
-| API 或 WebSocket 为 `401` | H5 Token 过期、缺失，或 WebSocket 没有 query token |
-| 浏览器提示 CORS | 当前页面的精确 Origin 是否在 H5 允许列表 |
-| WebSocket 反复重连 | 代理是否支持 upgrade、Token 是否传入、空闲连接是否被代理关闭 |
-| 页面 `404` | 尚未构建 `desktop/dist`，或 `CLAUDE_H5_DIST_DIR` 指向错误 |
-| 远程请求被当成本机 | 反向代理是否删除了公开 Host 和全部代理跟踪头 |
+| Symptom | Check |
+|---------|-------|
+| Port does not bind | Whether `SERVER_PORT` is occupied and contains a valid number |
+| `/health` works but an API returns `403` | The request is classified as remote while H5 is disabled |
+| API or WebSocket returns `401` | H5 token is missing or stale, or the WebSocket lacks a query token |
+| Browser reports CORS | The page's exact Origin is in the H5 allowed-origin list |
+| WebSocket reconnects repeatedly | Proxy upgrade support, token forwarding, and proxy idle timeouts |
+| Page returns `404` | `desktop/dist` was not built or `CLAUDE_H5_DIST_DIR` is wrong |
+| Remote traffic is treated as local | The proxy removed both the public Host and every proxy-trace header |

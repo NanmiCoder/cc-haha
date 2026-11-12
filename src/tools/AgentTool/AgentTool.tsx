@@ -336,8 +336,8 @@ export const AgentTool = buildTool({
       };
     }
 
-    // 在异步准备和 worktree 副作用前预留名额；后台生命周期接管后自行释放。
-    // 未移交时由 using 保证返回、错误和取消都会释放，保留同步路径的 return await。
+    // Reserve a slot before async preparation and worktree side effects; the background lifecycle releases it once it takes over.
+    // When not handed off, `using` guarantees release on return, error and cancellation; keep the sync path's return await.
     const releaseSubagentSlot = reserveSubagentSlot();
     let slotTransferred = false;
     using _subagentSlot = {
@@ -901,12 +901,12 @@ export const AgentTool = buildTool({
         let backgroundHintShown = false;
         // Track if the agent was backgrounded (cleanup handled by backgrounded finally)
         let wasBackgrounded = false;
-        // 摘要器跟随同一个执行流；转后台后由后台生命周期负责停止。
+        // The summarizer follows the same execution flow; once backgrounded, the background lifecycle stops it.
         let stopForegroundSummarization: (() => void) | undefined;
         // const capture for sound type narrowing inside the callback below
         const summaryTaskId = foregroundTaskId;
 
-        // 前台跟随父回合取消；后台仍使用同一个控制器，显式停止任务也能终止原查询。
+        // Foreground follows parent-turn cancellation; background still uses the same controller, so explicitly stopping the task also ends the original query.
         const foregroundTask = foregroundTaskId ? toolUseContext.getAppState().tasks[foregroundTaskId] : undefined;
         const agentAbortController = isLocalAgentTask(foregroundTask)
           ? foregroundTask.abortController!
@@ -999,7 +999,7 @@ export const AgentTool = buildTool({
                     for (const existingMsg of agentMessages) {
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
-                    // 同时接管原迭代器和已发出的 next，避免丢消息、重复执行或提前释放名额。
+                    // Take over both the original iterator and the already-issued next, to avoid lost messages, duplicate execution or early slot release.
                     let result = await nextMessagePromise;
                     while (!result.done) {
                       const msg = result.value;
@@ -1227,7 +1227,7 @@ export const AgentTool = buildTool({
             toolUseContext.setToolJSX(null);
           }
 
-          // 转后台后由继续消费原流的生命周期清理。
+          // Once backgrounded, the lifecycle that keeps consuming the original stream cleans up.
           if (!wasBackgrounded) stopForegroundSummarization?.();
 
           // Unregister foreground task if agent completed without being backgrounded
@@ -1256,7 +1256,7 @@ export const AgentTool = buildTool({
             }
           }
 
-          // 转后台后保留仍在执行的技能作用域，由后台 finally 清理。
+          // Once backgrounded, keep the still-running skill scope; the background finally cleans it up.
           if (!wasBackgrounded) clearInvokedSkillsForAgent(syncAgentId);
 
           // Clean up dumpState entry for this agent to prevent unbounded growth

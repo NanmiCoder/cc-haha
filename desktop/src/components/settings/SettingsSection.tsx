@@ -4,7 +4,7 @@ import { Switch } from '@/components/ui/Switch'
 import { cx } from '@/lib/cx'
 
 /**
- * The settings page skeleton (「素 Porcelain」).
+ * The settings page skeleton ("Su" / Porcelain spec).
  *
  * Every settings pane is built from the same five pieces, so all of them read
  * as one page rather than sixteen hand-laid ones:

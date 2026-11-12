@@ -5,18 +5,18 @@ const base = { viewport: 700, content: 5000, toOldest: 4300, batches: 0 }
 
 describe('shouldPrefetchOlder', () => {
   test('starts loading before the reader reaches the oldest loaded content', () => {
-    // 离最早内容还有 1000（不到一屏半）就开始翻，不用等滑到顶、更不用点按钮。
+    // Start paging when 1000 (less than a screen and a half) from the earliest content, without waiting to reach the top, let alone tapping a button.
     expect(shouldPrefetchOlder({ ...base, toOldest: 1000 })).toBe(true)
     expect(shouldPrefetchOlder({ ...base, toOldest: 1100 })).toBe(false)
   })
 
   test('does not load while the reader is far from the top', () => {
-    // 停在最新处、上面还有好几屏已加载的内容。
+    // Staying at the newest with several screens of loaded content above.
     expect(shouldPrefetchOlder(base)).toBe(false)
   })
 
   test('keeps loading while still near the top after a batch added little height', () => {
-    // 上一批都折进了已有行，离顶部几乎没变：同一次拖动里继续翻，直到上限。
+    // The previous batch all folded into existing rows and the distance to the top barely changed: keep paging in the same drag, up to the cap.
     for (let batches = 0; batches < AUTO_BATCH_LIMIT; batches++)
       expect(shouldPrefetchOlder({ ...base, toOldest: 40, batches })).toBe(true)
     expect(shouldPrefetchOlder({ ...base, toOldest: 40, batches: AUTO_BATCH_LIMIT })).toBe(false)

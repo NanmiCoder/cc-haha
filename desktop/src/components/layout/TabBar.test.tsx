@@ -1090,7 +1090,7 @@ describe('TabBar', () => {
     const { SETTINGS_TAB_ID, useTabStore } = await import('../../stores/tabStore')
 
     useTabStore.setState({
-      tabs: [{ sessionId: SETTINGS_TAB_ID, title: '设置', type: 'settings', status: 'idle' }],
+      tabs: [{ sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' }],
       activeTabId: SETTINGS_TAB_ID,
     })
 
@@ -1099,7 +1099,7 @@ describe('TabBar', () => {
     })
 
     expect(screen.getByText('Localized Settings')).toBeInTheDocument()
-    expect(screen.queryByText('设置')).not.toBeInTheDocument()
+    expect(screen.queryByText('Settings')).not.toBeInTheDocument()
   })
 
   it('gives the settings tab the same chip width as every other tab', async () => {

@@ -1,11 +1,11 @@
 /**
- * Settings Service — 读写用户级和项目级设置文件
+ * Settings Service — read/write user-level and project-level settings files
  *
- * 设置文件为 JSON 格式：
- *   - 用户级: ~/.claude/settings.json
- *   - 项目级: {projectRoot}/.claude/settings.json
+ * Settings files are JSON:
+ *   - User level: ~/.claude/settings.json
+ *   - Project level: {projectRoot}/.claude/settings.json
  *
- * 合并策略：Object.assign({}, userSettings, projectSettings)
+ * Merge strategy: Object.assign({}, userSettings, projectSettings)
  */
 
 import * as fs from 'fs/promises'
@@ -44,17 +44,17 @@ export class SettingsService {
     this.projectRoot = projectRoot
   }
 
-  /** 配置目录，支持通过环境变量覆盖（便于测试） */
+  /** Config directory; can be overridden via environment variable (for tests) */
   private getConfigDir(): string {
     return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
   }
 
-  /** 用户级设置文件路径 */
+  /** User-level settings file path */
   private getUserSettingsPath(): string {
     return path.join(this.getConfigDir(), 'settings.json')
   }
 
-  /** 项目级设置文件路径 */
+  /** Project-level settings file path */
   private getProjectSettingsPath(projectRoot?: string): string {
     const root = projectRoot || this.projectRoot
     if (!root) {
@@ -63,7 +63,7 @@ export class SettingsService {
     return path.join(root, '.claude', 'settings.json')
   }
 
-  /** 项目本地设置文件路径（不建议提交到仓库） */
+  /** Project-local settings file path (not recommended to commit) */
   private getLocalSettingsPath(projectRoot?: string): string {
     const root = projectRoot || this.projectRoot
     if (!root) {
@@ -73,10 +73,10 @@ export class SettingsService {
   }
 
   // ---------------------------------------------------------------------------
-  // 读取
+  // Read
   // ---------------------------------------------------------------------------
 
-  /** 安全读取 JSON 文件，文件不存在时返回空对象 */
+  /** Safely read a JSON file; returns an empty object when the file does not exist */
   private async readJsonFile(filePath: string): Promise<Record<string, unknown>> {
     await ensurePersistentStorageUpgraded()
     return readRecoverableJsonFile({
@@ -87,19 +87,19 @@ export class SettingsService {
     })
   }
 
-  /** 获取合并后的设置（user + project） */
+  /** Get merged settings (user + project) */
   async getSettings(projectRoot?: string): Promise<Record<string, unknown>> {
     const user = await this.getUserSettings()
     try {
       const project = await this.getProjectSettings(projectRoot)
       return Object.assign({}, user, project)
     } catch {
-      // project root 未指定时，仅返回 user settings
+      // When project root is not specified, return only user settings
       return user
     }
   }
 
-  /** 获取用户级设置 */
+  /** Get user-level settings */
   async getUserSettings(): Promise<Record<string, unknown>> {
     return this.readJsonFile(this.getUserSettingsPath())
   }
@@ -118,7 +118,7 @@ export class SettingsService {
     return user.leanModeEnabled === true
   }
 
-  /** 旧设置缺少并发上限时按不限读取，不自动改写用户文件。 */
+  /** Older settings without a concurrency limit are read as unlimited; the user file is not rewritten automatically. */
   async getMaxConcurrentSubagents(settings?: Record<string, unknown>): Promise<number | null> {
     const user = settings ?? await this.getUserSettings()
     const value = user.maxConcurrentSubagents
@@ -144,21 +144,21 @@ export class SettingsService {
     return typeof legacyValue === 'string' ? isEnvTruthy(legacyValue) : true
   }
 
-  /** 获取项目级设置 */
+  /** Get project-level settings */
   async getProjectSettings(projectRoot?: string): Promise<Record<string, unknown>> {
     return this.readJsonFile(this.getProjectSettingsPath(projectRoot))
   }
 
-  /** 获取项目本地设置 */
+  /** Get project-local settings */
   async getLocalSettings(projectRoot?: string): Promise<Record<string, unknown>> {
     return this.readJsonFile(this.getLocalSettingsPath(projectRoot))
   }
 
   // ---------------------------------------------------------------------------
-  // 写入（原子写入：先写临时文件，再 rename）
+  // Write (atomic: write a temp file, then rename)
   // ---------------------------------------------------------------------------
 
-  /** 原子写入 JSON 文件 */
+  /** Atomically write a JSON file */
   private async withWriteLock<T>(
     filePath: string,
     task: () => Promise<T>,
@@ -213,7 +213,7 @@ export class SettingsService {
     )
   }
 
-  /** 更新用户级设置（顶层浅合并，并保留桌面终端的未知子字段） */
+  /** Update user-level settings (top-level shallow merge, preserving unknown subfields from the desktop terminal) */
   async updateUserSettings(settings: Record<string, unknown>): Promise<void> {
     if (Object.hasOwn(settings, 'leanModeEnabled') && typeof settings.leanModeEnabled !== 'boolean') {
       throw ApiError.badRequest('leanModeEnabled must be a boolean')
@@ -279,7 +279,7 @@ export class SettingsService {
     })
   }
 
-  /** 更新项目级设置（浅合并） */
+  /** Update project-level settings (shallow merge) */
   async updateProjectSettings(
     settings: Record<string, unknown>,
     projectRoot?: string,
@@ -292,7 +292,7 @@ export class SettingsService {
     })
   }
 
-  /** 更新项目本地设置（浅合并） */
+  /** Update project-local settings (shallow merge) */
   async updateLocalSettings(
     settings: Record<string, unknown>,
     projectRoot?: string,
@@ -310,15 +310,15 @@ export class SettingsService {
   }
 
   /**
-   * 合并单个内置 Agent 的 model/provider/effort 覆盖。
+   * Merge the model/provider/effort override for a single built-in Agent.
    *
-   * `patch` 为 null 时删除 model/provider/effort；字段值为 null 时只删该字段。
-   * 条目清空后连同条目一起删除，`builtInAgentOverrides` 变空时删掉这个 key，
-   * 不在用户的 settings.json 里留下空壳。
+   * When `patch` is null, delete model/provider/effort; when a field value is null, delete only that field.
+   * An emptied entry is deleted along with it, and the `builtInAgentOverrides` key is removed when it becomes empty,
+   * so no empty shell is left in the user's settings.json.
    *
-   * 不走 updateUserSettings：那是顶层浅合并，传一个 builtInAgentOverrides 会
-   * 整体替换 record。若在调用方先读再算差量，读改写就落在写锁之外，连点两个
-   * Agent 会丢掉一次更新。
+   * Does not use updateUserSettings: that is a top-level shallow merge, so passing builtInAgentOverrides would
+   * replace the whole record. If the caller read first and computed a diff, the read-modify-write would fall outside the write lock, and clicking two
+   * Agents in a row would lose one update.
    */
   async updateBuiltInAgentOverride(
     agentType: string,
@@ -368,10 +368,10 @@ export class SettingsService {
   }
 
   // ---------------------------------------------------------------------------
-  // 权限模式
+  // Permission mode
   // ---------------------------------------------------------------------------
 
-  /** 获取当前权限模式 */
+  /** Get the current permission mode */
   async getPermissionMode(): Promise<string> {
     const settings = await this.getUserSettings()
     const mode = settings.defaultMode
@@ -380,7 +380,7 @@ export class SettingsService {
       : 'default'
   }
 
-  /** 设置权限模式 */
+  /** Set the permission mode */
   async setPermissionMode(mode: string): Promise<void> {
     if (!isValidPermissionMode(mode)) {
       throw ApiError.badRequest(

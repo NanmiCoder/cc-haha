@@ -27,13 +27,13 @@ describe('snapshotEditableStyles', () => {
   })
 })
 
-/** vitest 以 desktop/ 为 root（见 vitest.config.ts）。 */
+/** vitest uses desktop/ as root (see vitest.config.ts). */
 const SOURCE_PATH = join(process.cwd(), 'src/preview-agent/editBubble.ts')
 
-describe('注入样式的 token 自洽', () => {
-  // 气泡活在第三方页面的 Shadow DOM 里，globals.css 够不到它，所以 var(--x) 必须
-  // 由这段样式自己定义 —— 拼错一个名字只会静默失效（背景透明、边框变 currentColor）。
-  it('每个 var(--token) 都在同一段样式里定义过', () => {
+describe('injected style tokens are self-consistent', () => {
+  // The bubble lives in a third-party page's Shadow DOM where globals.css cannot reach, so every var(--x)
+  // must be defined by this stylesheet itself; a misspelled name fails silently (transparent background, currentColor border).
+  it('defines every var(--token) in the same stylesheet', () => {
     const source = readFileSync(SOURCE_PATH, 'utf8')
     const defined = new Set([...source.matchAll(/^\s*(--[a-zA-Z0-9-]+)\s*:/gm)].map((m) => m[1]))
     const referenced = [...source.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].map((m) => m[1]!)
@@ -42,12 +42,12 @@ describe('注入样式的 token 自洽', () => {
     expect(referenced.length).toBeGreaterThan(0)
   })
 
-  it('浅色与暗色定义了同一组 token，暗色不会漏掉某个变量', () => {
+  it('defines the same tokens for light and dark, so dark misses none', () => {
     const source = readFileSync(SOURCE_PATH, 'utf8')
     const darkBlock = /@media \(prefers-color-scheme: dark\) \{([\s\S]*?)\n\}/.exec(source)?.[1] ?? ''
     const darkTokens = new Set([...darkBlock.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)].map((m) => m[1]))
 
-    // 暗色只覆写与明暗有关的那些；结构性 token（如 --mono）不该出现在暗色块里
+    // Dark only overrides tokens that depend on light/dark; structural tokens (such as --mono) must not appear in the dark block
     expect(darkTokens.has('--bg')).toBe(true)
     expect(darkTokens.has('--fg')).toBe(true)
     expect(darkTokens.has('--swatch-border')).toBe(true)
@@ -117,9 +117,9 @@ describe('createEditBubble', () => {
     const onConfirm = vi.fn()
     const bubble = createEditBubble(el, { onConfirm, onCancel: vi.fn() })
     const textInput = $(bubble, '[data-field="text"]'); textInput.value = 'New'; textInput.dispatchEvent(new Event('input'))
-    const descInput = $(bubble, '[data-field="description"]'); descInput.value = '改积极点'; descInput.dispatchEvent(new Event('input'))
+    const descInput = $(bubble, '[data-field="description"]'); descInput.value = 'Make it more upbeat'; descInput.dispatchEvent(new Event('input'))
     $(bubble, '[data-action="confirm"]').click()
-    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ text: { from: 'Old', to: 'New' }, description: '改积极点' }))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ text: { from: 'Old', to: 'New' }, description: 'Make it more upbeat' }))
     bubble.destroy()
   })
 
@@ -127,14 +127,14 @@ describe('createEditBubble', () => {
     const el = document.getElementById('t')!
     const onQueue = vi.fn()
     const single = createEditBubble(el, { onConfirm: vi.fn(), onQueue, onCancel: vi.fn() })
-    expect($(single, '[data-action="queue"]').textContent).toBe('添加并继续')
+    expect($(single, '[data-action="queue"]').textContent).toBe('Add & continue')
     expect(single.host.shadowRoot!.querySelector('[data-action="confirm"]')).not.toBeNull()
     $(single, '[data-action="queue"]').click()
     expect(onQueue).toHaveBeenCalled()
     single.destroy()
 
     const batch = createEditBubble(el, { onConfirm: vi.fn(), onQueue, onCancel: vi.fn(), mode: 'batch' })
-    expect($(batch, '[data-action="queue"]').textContent).toBe('添加')
+    expect($(batch, '[data-action="queue"]').textContent).toBe('Add')
     expect(batch.host.shadowRoot!.querySelector('[data-action="confirm"]')).toBeNull()
     batch.destroy()
   })
@@ -151,7 +151,7 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('颜色行给出取色器色块，初值按 hex 展示', () => {
+  it('color rows offer a picker swatch with the initial value shown as hex', () => {
     const el = document.getElementById('t')!
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({ color: 'rgb(26, 29, 41)', backgroundColor: 'rgba(0, 0, 0, 0)', opacity: '1', fontFamily: 'Arial' } as unknown as CSSStyleDeclaration)
     const bubble = createEditBubble(el, { onConfirm: vi.fn(), onCancel: vi.fn() })
@@ -161,12 +161,12 @@ describe('createEditBubble', () => {
     const swatches = bubble.host.shadowRoot!.querySelectorAll<HTMLInputElement>('input[type="color"]')
     expect(swatches).toHaveLength(2)
     expect(swatches[0]!.value).toBe('#1a1d29')
-    // 透明背景要露出棋盘格，而不是画成黑色
+    // A transparent background shows a checkerboard rather than black
     expect(swatches[1]!.parentElement!.dataset.transparent).toBe('true')
     bubble.destroy()
   })
 
-  it('取色器选色后写回元素并计入 diff', () => {
+  it('writes a picked color back to the element and records it in the diff', () => {
     const el = document.getElementById('t')!
     const onConfirm = vi.fn()
     const bubble = createEditBubble(el, { onConfirm, onCancel: vi.fn() })
@@ -182,14 +182,14 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('选中与原值相同的颜色不产生假 diff', () => {
+  it('picking the same color as the original produces no fake diff', () => {
     const el = document.getElementById('t')!
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({ color: 'rgb(26, 29, 41)', backgroundColor: 'rgba(0, 0, 0, 0)', opacity: '1', fontFamily: 'Arial' } as unknown as CSSStyleDeclaration)
     const onConfirm = vi.fn()
     const bubble = createEditBubble(el, { onConfirm, onCancel: vi.fn() })
 
     const swatch = bubble.host.shadowRoot!.querySelector<HTMLInputElement>('input[type="color"]')!
-    swatch.value = '#1a1d29'                 // 与 rgb(26, 29, 41) 是同一个颜色
+    swatch.value = '#1a1d29'                 // same color as rgb(26, 29, 41)
     swatch.dispatchEvent(new Event('input'))
 
     $(bubble, '[data-action="confirm"]').click()
@@ -197,7 +197,7 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('不透明度用滑块，按百分比读写', () => {
+  it('opacity uses a slider read and written as a percentage', () => {
     const el = document.getElementById('t')!
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({ color: 'rgb(0,0,0)', backgroundColor: 'rgba(0,0,0,0)', opacity: '0.5', fontFamily: 'Arial' } as unknown as CSSStyleDeclaration)
     const onConfirm = vi.fn()
@@ -215,7 +215,7 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('字体用下拉，首项是元素当前字体', () => {
+  it('font uses a dropdown whose first item is the element\'s current font', () => {
     const el = document.getElementById('t')!
     vi.spyOn(window, 'getComputedStyle').mockReturnValue({ color: 'rgb(0,0,0)', backgroundColor: 'rgba(0,0,0,0)', opacity: '1', fontFamily: 'Georgia, serif' } as unknown as CSSStyleDeclaration)
     const bubble = createEditBubble(el, { onConfirm: vi.fn(), onCancel: vi.fn() })
@@ -231,15 +231,15 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('选中输入框时文本字段读的是 value', () => {
-    document.body.innerHTML = '<input id="f" value="待办内容">'
+  it('reads value into the text field when an input is selected', () => {
+    document.body.innerHTML = '<input id="f" value="Todo content">'
     const field = document.getElementById('f')!
     const bubble = createEditBubble(field, { onConfirm: vi.fn(), onCancel: vi.fn() })
-    expect($(bubble, '[data-field="text"]').value).toBe('待办内容')
+    expect($(bubble, '[data-field="text"]').value).toBe('Todo content')
     bubble.destroy()
   })
 
-  it('选中含子元素的容器时不给文本字段（改它会夷平子树）', () => {
+  it('offers no text field for a container with element children (editing would flatten the subtree)', () => {
     document.body.innerHTML = '<div id="d"><span>a</span><span>b</span></div>'
     const container = document.getElementById('d')!
     const bubble = createEditBubble(container, { onConfirm: vi.fn(), onCancel: vi.fn() })
@@ -248,7 +248,7 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
-  it('Escape 取消、Cmd/Ctrl+Enter 确认', () => {
+  it('Escape cancels and Cmd/Ctrl+Enter confirms', () => {
     const el = document.getElementById('t')!
     const onCancel = vi.fn()
     const escBubble = createEditBubble(el, { onConfirm: vi.fn(), onCancel })

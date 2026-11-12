@@ -441,7 +441,7 @@ it('retains zoom controls across remounts and accepts native zoom changes', asyn
 
 describe('native toolbar menu', () => {
   it('anchors localized actions to the trigger in CSS coordinates', async () => {
-    useSettingsStore.setState({ locale: 'zh', uiZoom: 1.5 })
+    useSettingsStore.setState({ locale: 'en', uiZoom: 1.5 })
     const tab = openBrowserTab()
     await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
     const trigger = screen.getByTestId('workspace-browser-menu-trigger')
@@ -451,7 +451,7 @@ describe('native toolbar menu', () => {
       x: 750,
       y: 80,
       canOpenExternal: true,
-      labels: expect.objectContaining({ find: '在页面中查找', history: '历史记录' }),
+      labels: expect.objectContaining({ find: 'Find in page', history: 'History' }),
     }))
     expect(screen.queryByRole('menu')).toBeNull()
   })

@@ -408,21 +408,22 @@ struct StoredWindowState {
     maximized: bool,
 }
 
-/// 上一次 server sidecar 实际监听的端口。重启时优先复用同一端口，
-/// 这样手机书签 / 二维码 / 反向代理的 upstream 不会因为重启而失效
-/// （issue #767）。端口被占用时才回退到随机端口。
+/// The port the server sidecar last listened on. Restarts reuse it first so
+/// phone bookmarks, QR codes and reverse-proxy upstreams survive a restart
+/// (issue #767). Only when the port is taken does it fall back to a random one.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 struct StoredServerState {
     #[serde(rename = "lastPort")]
     last_port: u16,
 }
 
-/// 与 ServerState 平级的 adapter 子进程状态。
+/// Adapter child-process state, alongside ServerState.
 ///
-/// adapter sidecar（claude-sidecar adapters --telegram 等）的生命周期
-/// 跟 server 不同：它没有 HTTP 端口可探活，没配凭据时会自己干净退出，
-/// 而且需要支持运行时热重启 —— 用户在设置页保存 IM 凭据后，
-/// 前端会通过 invoke('restart_adapters_sidecar') 来重启它，让新凭据生效。
+/// The adapter sidecar (claude-sidecar adapters --telegram, etc.) has a different
+/// lifecycle from the server: it has no HTTP port to probe, exits cleanly when no
+/// credentials are configured, and must support hot restarts. After the user saves
+/// IM credentials in settings, the frontend restarts it via
+/// invoke('restart_adapters_sidecar') so the new credentials take effect.
 #[derive(Default)]
 struct AdapterState(Mutex<Vec<CommandChild>>);
 
@@ -494,15 +495,15 @@ fn get_server_url(state: State<'_, ServerState>) -> Result<String, String> {
         .unwrap_or_else(|| "desktop server did not start".to_string()))
 }
 
-/// 前端在设置页保存飞书 / Telegram / 微信凭据后调用，触发 adapter sidecar 热重启。
+/// Called by the frontend after Feishu / Telegram / WeChat credentials are saved in settings; hot-restarts the adapter sidecar.
 ///
-/// 流程：
-///   1. kill 当前 adapter 子进程（如果在跑）
-///   2. spawn 新的 adapter 子进程
-///   3. 新 sidecar 内部的 loadConfig() 会读到最新的 ~/.claude/adapters.json
-///      并重新建立 WebSocket 连接到飞书 / Telegram
+/// Steps:
+///   1. kill the current adapter child process (if running)
+///   2. spawn a new adapter child process
+///   3. loadConfig() in the new sidecar reads the latest ~/.claude/adapters.json
+///      and re-establishes the WebSocket connections to Feishu / Telegram
 ///
-/// 凭据缺失时 sidecar 自己会 warn + skip + 退出，所以这里不需要前置检查。
+/// With missing credentials the sidecar warns, skips and exits on its own, so no pre-check is needed here.
 #[tauri::command]
 fn restart_adapters_sidecar(app: AppHandle) -> Result<(), String> {
     stop_adapters_sidecar(&app);
@@ -583,7 +584,7 @@ fn set_app_mode(
     mode: String,
     portable_dir: Option<String>,
 ) -> Result<(), String> {
-    // 确定当前正在使用的配置目录
+    // Determine the config directory currently in use
     let active_config_dir = if let Ok(cd) = std::env::var("CLAUDE_CONFIG_DIR") {
         std::path::PathBuf::from(&cd)
     } else {
@@ -631,7 +632,7 @@ fn set_app_mode(
         portable_dir: portable_dir.clone(),
     };
 
-    // 写入当前活跃的配置目录
+    // Write to the currently active config directory
     write_app_mode_config(&active_config_dir, &config);
 
     if let Some(dir) = target_portable_dir.as_ref() {
@@ -640,8 +641,8 @@ fn set_app_mode(
         }
     }
 
-    // 修复：同时始终将模式状态写入系统默认配置目录，
-    // 以防止应用层切换模式后，main.rs在下一次启动时读取到旧的系统全局状态
+    // Fix: always also write the mode state to the system default config directory,
+    // so main.rs does not read stale global state on the next launch after the app switches modes
     if let Ok(sys_dir) = app.path().app_config_dir() {
         if sys_dir != active_config_dir {
             write_app_mode_config(&sys_dir, &config);
@@ -1444,8 +1445,8 @@ fn desktop_terminal_settings_path() -> Option<PathBuf> {
     claude_config_dir().map(|path| path.join("settings.json"))
 }
 
-/// 解析 cc-haha/settings.json 里的 h5Access.fixedPort。范围必须与
-/// 服务端 h5AccessService 的 MIN/MAX_FIXED_PORT 一致（1024..=65535）。
+/// Parse h5Access.fixedPort from cc-haha/settings.json. The range must match
+/// MIN/MAX_FIXED_PORT in the server's h5AccessService (1024..=65535).
 fn parse_h5_fixed_port(contents: &str) -> Option<u16> {
     let value: serde_json::Value = serde_json::from_str(contents).ok()?;
     let port = value.get("h5Access")?.get("fixedPort")?.as_u64()?;
@@ -1650,8 +1651,8 @@ fn reserve_local_port(bind_host: &str) -> Result<u16, String> {
     })
 }
 
-/// 按优先级尝试给定端口（h5Access.fixedPort > 上次使用的端口），
-/// 全部被占用时回退到 OS 随机分配。保证 app 总能启动。
+/// Try the given ports in priority order (h5Access.fixedPort > last used port),
+/// falling back to an OS-assigned port when all are taken, so the app always starts.
 fn reserve_local_port_with_preference(bind_host: &str, preferred: &[u16]) -> Result<u16, String> {
     for &port in preferred {
         if !is_browser_safe_port(port) {
@@ -1718,18 +1719,18 @@ fn format_server_startup_error(message: &str, logs: &Arc<Mutex<VecDeque<String>>
 }
 
 fn resolve_app_root(_app: &AppHandle) -> Result<PathBuf, String> {
-    // 历史用途：此前 sidecar launcher 用 dynamic file:// import 加载磁盘上
-    // 的 src/server/index.ts 和 preload.ts，所以 Tauri 必须把整个 src/ +
-    // node_modules/ 当 Resource 一起 ship 到 .app/Contents/Resources/app/。
+    // History: the sidecar launcher used to load src/server/index.ts and preload.ts
+    // from disk with a dynamic file:// import, so Tauri had to ship all of src/ +
+    // node_modules/ as Resources into .app/Contents/Resources/app/.
     //
-    // 现在 launcher 改成静态 import + bun build --compile 整棵静态打进二进制，
-    // sidecar 不再读磁盘上的 src/ 或 node_modules/。CLAUDE_APP_ROOT 现在
-    // 只剩一个名义上的"app 安装根目录"作用，给 conversationService 在
-    // spawn CLI 子进程时通过 --app-root 透传。
+    // The launcher now uses static imports and bun build --compile bundles the whole
+    // tree into the binary, so the sidecar no longer reads src/ or node_modules/ from
+    // disk. CLAUDE_APP_ROOT is now only a nominal "app install root", passed through
+    // with --app-root when conversationService spawns CLI child processes.
     //
-    // 我们直接用当前可执行文件所在目录作为 app_root：
-    //   Dev:  desktop/src-tauri/target/<profile>/  （rust 跑出来的 binary 那一层）
-    //   Prod: <App>.app/Contents/MacOS/             （sidecar 二进制的同级目录）
+    // Use the directory of the current executable as app_root:
+    //   Dev:  desktop/src-tauri/target/<profile>/  (where the rust binary lives)
+    //   Prod: <App>.app/Contents/MacOS/             (next to the sidecar binary)
     let exe = std::env::current_exe().map_err(|err| format!("resolve current exe path: {err}"))?;
     let dir = exe
         .parent()
@@ -1783,7 +1784,7 @@ fn start_server_sidecar(app: &AppHandle) -> Result<ServerRuntime, String> {
         .to_string_lossy()
         .to_string();
 
-    // 单一合并 sidecar：第一个参数选 server / cli / adapters 模式。
+    // One merged sidecar: the first argument selects server / cli / adapters mode.
     let mut sidecar = app
         .shell()
         .sidecar("claude-sidecar")
@@ -1882,8 +1883,8 @@ fn stop_server_sidecar(app: &AppHandle) {
     }
 }
 
-/// 启动 adapter sidecars。每个平台单独一个进程，避免某个平台的 SDK / long polling
-/// 影响其它平台（Telegram 尤其要求同一个 Bot Token 只有一个活跃 consumer）。
+/// Start adapter sidecars. Each platform gets its own process so one platform's SDK /
+/// long polling cannot affect the others (Telegram in particular allows only one active consumer per Bot Token).
 fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String> {
     #[cfg(unix)]
     kill_stale_unix_adapter_sidecars();
@@ -1891,13 +1892,12 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
     let app_root = resolve_app_root(app)?;
     let app_root_arg = app_root.to_string_lossy().to_string();
 
-    // adapter 内部的 WsBridge 默认连 ws://127.0.0.1:3456，但桌面端的 server
-    // 用的是 reserve_local_port() 拿到的动态端口。这里把实际端口通过
-    // ADAPTER_SERVER_URL env var 传过去 —— adapters/common/config.ts 的
-    // loadConfig() 会读它。
+    // The adapter's WsBridge connects to ws://127.0.0.1:3456 by default, but the desktop
+    // server uses a dynamic port from reserve_local_port(). Pass the real port through
+    // the ADAPTER_SERVER_URL env var, which loadConfig() in adapters/common/config.ts reads.
     //
-    // 如果 server 还没起来 / 没拿到 URL，回退到 3456 作为最后兜底（adapter
-    // 自己有重连逻辑，等 server 上线就能连上）。
+    // If the server is not up yet / has no URL, fall back to 3456 as a last resort (the
+    // adapter has its own reconnect logic and connects once the server is up).
     let server_http_url = app
         .try_state::<ServerState>()
         .and_then(|state| {
@@ -1908,8 +1908,8 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
                 .and_then(|guard| guard.runtime.as_ref().map(|r| r.url.clone()))
         })
         .unwrap_or_else(|| "http://127.0.0.1:3456".to_string());
-    // WsBridge 直接 `new WebSocket('${serverUrl}/ws/...')`，必须传 ws://；
-    // 不会自动从 http 转。
+    // WsBridge calls `new WebSocket('${serverUrl}/ws/...')` directly, so it must be given ws://;
+    // it does not convert from http.
     let server_ws_url = if let Some(rest) = server_http_url.strip_prefix("http://") {
         format!("ws://{rest}")
     } else if let Some(rest) = server_http_url.strip_prefix("https://") {
@@ -1951,8 +1951,8 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
             .map_err(|err| format!("spawn {label} adapter sidecar: {err}"))?;
         let label = label.to_string();
 
-        // 用一个 async task 把 sidecar 的 stdout/stderr 转发出来。它退出时
-        // 整个 task 也会自然结束。
+        // Forward the sidecar's stdout/stderr from an async task, which ends
+        // naturally when the sidecar exits.
         tauri::async_runtime::spawn(async move {
             while let Some(event) = rx.recv().await {
                 match event {
@@ -1965,9 +1965,9 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
                         eprintln!("[claude-adapters:{label}] {}", line.trim_end());
                     }
                     CommandEvent::Terminated(payload) => {
-                        // exit code != 0 是常态：用户没配凭据时 sidecar 内部会
-                        // warn + skip + process.exit(1)。这里只 info 一行，
-                        // 不要当错误冒泡。
+                        // A non-zero exit code is normal: without credentials the sidecar
+                        // warns, skips and calls process.exit(1). Log one info line
+                        // here instead of surfacing it as an error.
                         println!(
                             "[claude-adapters:{label}] sidecar exited (code={:?}, signal={:?})",
                             payload.code, payload.signal
@@ -1984,8 +1984,8 @@ fn start_adapters_sidecars(app: &AppHandle) -> Result<Vec<CommandChild>, String>
     Ok(children)
 }
 
-/// spawn adapter sidecars 并把 child handles 存进 AdapterState。
-/// 在启动 + 重启路径里复用，集中处理"无法 spawn"的日志。
+/// Spawn adapter sidecars and store the child handles in AdapterState.
+/// Shared by the start and restart paths so "could not spawn" logging lives in one place.
 fn spawn_and_track_adapters_sidecar(app: &AppHandle) {
     match start_adapters_sidecars(app) {
         Ok(children) => {
@@ -2642,8 +2642,8 @@ pub fn run() {
     let builder = builder
         .menu(|app| {
             let about_item =
-                MenuItemBuilder::with_id("nav_about", "关于 Claude Code Haha").build(app)?;
-            let settings_item = MenuItemBuilder::with_id("nav_settings", "设置...")
+                MenuItemBuilder::with_id("nav_about", "About Claude Code Haha").build(app)?;
+            let settings_item = MenuItemBuilder::with_id("nav_settings", "Settings...")
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
 
@@ -2721,9 +2721,9 @@ pub fn run() {
             }
             drop(guard);
 
-            // server 起来之后再起 adapter sidecar —— start_adapters_sidecar
-            // 内部会从 ServerState 读 server URL 注入 ADAPTER_SERVER_URL env，
-            // 让 adapter 连上动态端口。
+            // Start the adapter sidecar after the server: start_adapters_sidecar
+            // reads the server URL from ServerState and injects ADAPTER_SERVER_URL,
+            // so the adapter connects to the dynamic port.
             spawn_and_track_adapters_sidecar(&app.handle());
 
             Ok(())

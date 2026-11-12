@@ -2,7 +2,7 @@ import { parseDiff } from '../../core/operations'
 
 export type FileChange = { status: 'A' | 'M' | 'D'; added: number; removed: number }
 
-/** 从单个文件的统一 diff 读出新增/修改/删除和增删行数。 */
+/** Read added/modified/deleted and added/removed line counts from a single file's unified diff. */
 export function fileChange(diff: string): FileChange {
   const status = /^new file mode/m.test(diff) || /^--- \/dev\/null$/m.test(diff)
     ? 'A'

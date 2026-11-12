@@ -1,153 +1,153 @@
 ---
-title: 设置指南
-nav_title: 设置
-description: 从第一条会话出发，选择必要设置，并按任务查找高级配置。
+title: Settings guide
+nav_title: Settings
+description: Choose the settings needed for a first session, then find advanced options by task.
 order: 6
 ---
 
-# 设置指南
+# Settings guide
 
-点侧边栏最底部的「设置」打开。第一次使用时，先在「服务商」接通模型，再到「通用」确认权限与语言，就能开始[第一条会话](../start/first-session.md)。其余设置等遇到对应任务再打开。
+Click **Settings** at the bottom of the sidebar. For your first session, connect a model in **Providers**, check permissions and language in **General**, then follow [Your first session](../start/first-session.md). Open the other tabs when a task calls for them.
 
-## 服务商
+## Providers
 
-管理模型接入。支持 Claude 官方、ChatGPT 官方、Grok 官方、DeepSeek 账号四种账号登录（不需要 API 密钥），也支持填 API 密钥接入任意 Anthropic / OpenAI 兼容的服务商。
+Model access. Sign in to Claude, ChatGPT, Grok, or DeepSeek with an account (no API key required), or add any Anthropic- or OpenAI-compatible service with an API key.
 
-第一次用必须来这里，之后基本不用动。详细步骤见[连接模型服务](../start/models.md)。
+You'll come here once during setup and rarely again. Full steps in [Connecting a model](../start/models.md).
 
-## 通用
+## General
 
-通用设置分成四件事：界面和表达、Agent 如何工作、网络与提醒、数据保存。第一次只需要确认前两件；遇到具体问题再改后两件。
+General covers four areas: appearance and replies, how the agent works, network and notifications, and local data. Check the first two before your first session; adjust the others when you need them.
 
-![设置 → 通用：配色主题、语言、输出风格、默认权限](../images/app/zh-CN/settings-general.webp)
+![Settings → General: color themes, language, output style, default permissions (Chinese interface)](../images/app/en/settings-general.webp)
 
-### 第一条会话前：权限与表达
+### Before your first session: permissions and replies
 
-| 设置 | 建议怎么选 | 何时生效 |
+| Setting | What to choose | When it takes effect |
 |---|---|---|
-| 默认会话权限 | 初次使用保持默认的「询问权限」。写文件或运行高风险命令时先看清请求，再决定是否允许。[五档模式](./sessions.md#五档权限模式)可在会话输入框里单独切换。 | 作为新建聊天会话的默认值；已有会话的权限在会话里调整。 |
-| 回复语言 | 想让 Agent 稳定用中文回答就选中文；它与下方的界面语言相互独立。默认不指定。 | 保存后用于后续回复；已生成的内容不会改写。 |
-| 输出风格 | 默认最简洁；「解释型」解释实现选择；「学习型」会让你自己写一小段。还可选已安装的自定义风格。 | 新会话、在新进程中继续，或重启会话后生效；当前运行中的提示词不变。 |
-| 推理强度与思考模式 | 先沿用模型支持的默认档位。只有想调节速度、成本或遇到模型兼容问题时再改；关闭思考会给需要它的兼容供应商传递非思考参数。 | 新会话默认值；可选推理档位随当前模型变化。 |
+| Default session permissions | Keep the default **Ask for permission** at first. Inspect the target file or command before approving edits or higher-risk commands. You can change any session separately with the composer control; see [the five modes](./sessions.md#the-five-permission-modes). | Default for new chat sessions; change an existing session in its composer. |
+| Response language | Choose a language if you want consistent replies in it. This is independent of the interface language and is unset by default. | Subsequent replies; earlier messages are unchanged. |
+| Output style | **Default** is concise; **Explanatory** explains implementation choices; **Learning** asks you to write small pieces. Installed custom styles can also appear here. | New sessions, sessions resumed in a new process, or restarted sessions. A running session keeps its current prompt. |
+| Effort level and Thinking Mode | Start with the supported model default. Adjust for speed, cost, or provider compatibility; disabling thinking sends a non-thinking parameter to compatible providers that require one. | Defaults for new sessions; available effort levels depend on the selected model. |
 
-**试一次：**选一个有 Git 的练习目录，发「先列出你会改的文件，再做一个最小改动；完成后说明怎么验证」。收到权限请求时看目标文件和命令，结束后在工作区逐行[审阅 Diff](./workspace.md#diff-评审给某一行留话)。
+**Try it:** Choose a disposable Git project and ask: “List the files you plan to change, make one small edit, then tell me how to verify it.” Inspect any permission prompt, then [review the Diff](./workspace.md#diff-review-leaving-a-note-on-a-line) file by file.
 
-### 界面与输入：按个人习惯调整
+### Appearance and input
 
-- **配色主题**有纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝六套。开启「跟随系统」后，可分别指定浅色和深色主题。
-- **语言**只改变应用界面，支持简体中文、繁体中文、英语、日语和韩语；它不等同于「回复语言」。
-- **界面缩放**改变整个窗口。macOS 用 `⌘+` / `⌘-`，Windows 用 `Ctrl+` / `Ctrl-`，按 `0` 恢复到 100%。
-- **消息发送方式**默认 Enter 发送、Shift+Enter 换行；常写多行提示词可改成 `Ctrl/Cmd+Enter` 发送。
-- **默认编辑器**决定文件「打开方式」菜单默认选哪个本机已检测到的编辑器。
+- **Color theme:** Pure White, Paper, Warm Classic, Celadon, Ink Night, or Ink Blue. **Follow the system** lets you choose separate light and dark themes.
+- **Language:** changes only the interface, with English, Simplified and Traditional Chinese, Japanese, and Korean choices. It does not set the response language.
+- **UI Zoom:** scales the whole window. Use `⌘+` / `⌘-` on macOS or `Ctrl+` / `Ctrl-` on Windows; press `0` to reset to 100%.
+- **Message sending:** defaults to Enter to send and Shift+Enter for a newline. If you write long prompts, choose `Ctrl/Cmd+Enter` to send.
+- **Default editor:** chooses which detected local editor appears as the default under a file's **Open with** menu.
 
-### 需要更复杂的 Agent 工作流时
+### For more involved agent workflows
 
-| 设置 | 何时开启或调整 |
+| Setting | When to use it |
 |---|---|
-| Ultracode | 默认开启。独立出现的关键词会触发动态 Workflow 编排；普通代码块、引号、路径里的同名文字不会触发。 |
-| 智能体团队（Agent Teams） | 默认开启。开启时会提示：消耗大量 token、速度更慢、并非所有任务都适用。需要多个 Agent 分工处理较大任务时使用；设置对新会话生效，已有会话在重启应用后生效。入门先看[子 Agent 与任务拆分](./agents.md)。 |
-| 自动回答问题 | 默认关闭。无人响应 Agent 的选择题时，可在 1、5、10、30 分钟后尝试选择推荐项；没有可靠选择时继续等待。只适合你愿意让任务在无人值守时继续的场景。 |
-| 自动做梦 | 默认关闭。会话积累足够后，可在后台整理 auto-memory；会产生额外模型调用和 token 消耗。 |
-| Agent Trace | 默认开启。新会话的原始请求、响应与状态事件写入本机 traces 目录，出错时在会话「轨迹」里点开助手行，看「原始请求」页；关闭后不再产生新记录，旧记录仍可查看。 |
+| Ultracode | On by default. A standalone keyword triggers dynamic Workflow orchestration; the same text in code blocks, quotes, or paths keeps its literal meaning. |
+| Agent Teams | On by default. Turning it on warns that it uses a lot of tokens, runs slower, and does not suit every task. Use it when a larger task needs several agents working together. New sessions pick it up; existing sessions do after an app restart. See [Subagents](./agents.md) first. |
+| Auto-answer questions | Off by default. After 1, 5, 10, or 30 minutes without an answer to an agent's multiple-choice question, it can choose a recommended option. If it cannot choose reliably, it keeps waiting. Use only when you want unattended work to continue. |
+| Auto-dream | Off by default. After enough sessions have accumulated, it can organize auto-memory in the background, using additional model calls and tokens. |
+| Agent Trace | On by default. New sessions write raw request, response, and status events to a local traces directory. To investigate a failure, open an assistant line in the session's **Trajectory** and switch to its **Raw request** tab; turning it off stops new records, while old ones remain readable. |
 
-需要单独存放 Agent Trace 时，在启动应用前设置 `CC_HAHA_TRACE_DIR` 为可写的绝对目录，例如 Windows 的 `D:\HahaTraces` 或 macOS/Linux 的 `/data/haha-traces`，然后完全退出并重新启动应用。JSONL 文件直接写入该目录，辅助索引写入其 `cc-haha/db` 子目录；其他配置仍使用原位置。变量为空或未设置时使用原来的配置目录下的 `cc-haha/traces`。切换不会搬移、合并或删除旧文件，只有当前目录的记录会显示；移除变量并重启即可重新查看默认目录。无效路径会报错，不会自动改回默认目录写入。
+To store Agent Trace separately, set `CC_HAHA_TRACE_DIR` to a writable absolute directory before launching the app, such as `D:\HahaTraces` on Windows or `/data/haha-traces` on macOS/Linux, then fully quit and restart the app. JSONL files go directly in that directory; its `cc-haha/db` subdirectory holds the auxiliary index. Other configuration stays in its original location. An empty or unset variable uses the original `cc-haha/traces` under the configuration directory. Switching does not move, merge, or delete existing files, and only records in the current directory appear. Remove the variable and restart to view the default directory again. Invalid paths report an error instead of falling back to writes in the default directory.
 
-### 网络、联网搜索和提醒
+### Network, web search, and notifications
 
-- **系统通知**默认关闭。需要离开窗口等权限请求、回复或定时任务结果时打开，并授予操作系统通知权限。
-- **网络**默认采用系统代理。直连会绕过系统及进程代理；手动代理接收 HTTP/HTTPS 地址，带认证的例子是 `http://user:password@127.0.0.1:7890`。改完点「保存」，对新请求生效；正在执行的请求仍用原来的路由。模型服务、账号登录、MCP 与 Agent 工具受此设置影响，应用更新另在「关于」配置代理。
-- **AI 请求超时**默认 1800 秒，可填写至少 30 秒。只在模型首个响应或连接测试确实超时时调高；本地模型长时间思考可按需填 14400 秒（4 小时）。
-- **WebFetch 预检**默认跳过上游域名预检，以免第三方服务商或受限网络误报。只有明确需要恢复上游预检时才关闭此选项。
-- **WebSearch**默认「自动」：Claude 模型优先使用原生搜索，失败或非 Claude 模型再尝试 Tavily / Brave。想明确指定某条路径，可选 Claude、Tavily、Brave 或关闭；后两者需要填自己的 API Key 并点「保存」。
+- **System Notifications** are off by default. Enable them and grant OS permission when you need alerts for permission requests, completed replies, or scheduled tasks away from the app.
+- **Network** uses the system proxy by default. **Direct** bypasses system and inherited process proxies; **Manual** accepts an HTTP/HTTPS URL such as `http://user:password@127.0.0.1:7890`. Click **Save**. New requests use the new route; requests already in flight keep their old route. Model services, account sign-in, MCP, and agent tools use this setting. App updates have a separate proxy under **About**.
+- **AI request timeout** defaults to 1800 seconds and accepts at least 30 seconds. Raise it only when the first model response or connection test really times out. For a local model that thinks for a long time, you can enter 14400 seconds (four hours).
+- **WebFetch preflight** skips the upstream domain check by default to avoid false failures with third-party providers or restricted networks. Turn this off only when you specifically want the upstream check.
+- **WebSearch** defaults to **Auto**: Claude models try native search first, then Tavily or Brave on failure or with non-Claude models. You can force Claude, Tavily, Brave, or Off. Tavily and Brave require your own API keys and a click on **Save**.
 
-### 数据保留与存放：改前先确认结果
+### Local data: check the effect before changing it
 
-- **会话记录**默认保留 365 天，可设置 0–3650 天。缩短时间会立即删除更早记录，设置为 0 会删除已有全部记录并停止记录会话内容；界面会先预览并再次确认。这里不能用来代替备份。
-- **数据存储位置**默认是 `~/.claude`（Windows 为 `%USERPROFILE%\\.claude`）。便携模式可以指定一个不在应用安装目录内的绝对路径。切换后，配置、任务、会话、技能和插件将从新目录读取，重启应用才生效；两个目录不会自动合并或迁移。若启动时设置了 `CLAUDE_CONFIG_DIR`，需先移除该环境变量才能在界面里切换。
+- **Session retention** defaults to 365 days and accepts 0–3650 days. Reducing it immediately removes older records; setting 0 removes all existing records and stops recording session contents. The UI previews and confirms the change. This is not a backup system.
+- **Data Storage Location** defaults to `~/.claude` (`%USERPROFILE%\\.claude` on Windows). Portable mode takes an absolute path outside the app installation folder. After an app restart, sessions, configuration, tasks, skills, and plugins are read from the new location. The two directories are not merged or migrated automatically. If `CLAUDE_CONFIG_DIR` is set at launch, remove that environment variable before switching locations in the UI.
 
-本文的产品截图统一使用「纯白」主题，避免不同配色影响界面对比。
+Product screenshots in this guide consistently use the **Pure White** theme so the interface can be compared without palette changes.
 
-## 手机连接
+## Phone connection
 
-打开「设置 → 手机连接」，用手机 App 或浏览器继续同一条会话。同一 Wi-Fi 下选择局域网直连；外出时选择 Cloudflare 快速连接或固定域名。连接默认关闭，需要主动开启；外出连接还需要在电脑上批准手机配对。操作步骤见[手机 H5 与 IM 接力](./remote.md)。
+Open Settings → Phone connection to continue the same session in the phone app or a browser. Use a direct LAN connection on the same Wi-Fi, or choose Cloudflare Quick connection or Fixed domain while away. Connections are off by default and must be enabled; remote connections also require approving the phone's pairing request on the computer. See [Phone (H5) and IM](./remote.md) for the steps.
 
-## IM 接入
+## IM Adapters
 
-从微信、钉钉、WhatsApp、Telegram、飞书、企业微信、QQ、Slack 直接和 Claude 对话，并管理配对用户。见[手机 H5 与 IM 接力](./remote.md)和[IM 接入](../im/index.md)。
+Talk to Claude from WeChat, DingTalk, WhatsApp, Telegram, Feishu, WeCom, QQ, or Slack, and manage paired users. See [Phone (H5) and IM](./remote.md) and [IM integrations](../im/index.md).
 
-## 终端
+## Terminal
 
-内嵌一个真实的宿主机 Shell，用来装插件、技能、MCP 这类需要命令行的东西。桌面端已经内置 `claude-haha` 命令，文档里写 `claude <参数>` 的地方都可以换成 `claude-haha <参数>`。
+A real host shell embedded in the app, for installing plugins, skills, MCP servers, and anything else that needs a command line. The desktop app bundles `claude-haha`, so anywhere the docs say `claude <args>` you can run `claude-haha <args>`.
 
-Windows 用户可以在这里指定启动 Shell（系统默认 / PowerShell 7 / Windows PowerShell / 命令提示符 / 自定义可执行文件），以及一个 Bash 路径——工具调用 `grep`、`sed` 这类 Unix 命令时会用到，通常指向 Git Bash。
+On Windows you can also choose the startup shell (system default, PowerShell 7, Windows PowerShell, Command Prompt, or a custom executable) and set a Bash path — used when a tool calls Unix commands like `grep` or `sed`, usually pointing at Git Bash.
 
 ## MCP
 
-添加外部工具和数据源。支持 STDIO、Streamable HTTP、SSE 三种传输方式，配置范围和 CLI 保持一致：
+External tools and data sources. STDIO, Streamable HTTP, and SSE transports are supported, and the scopes match the CLI:
 
-- **项目私有** — 只对你生效，但绑定到某一个项目。
-- **项目共享** — 写进项目的 `.mcp.json`，团队成员共享。
-- **全局用户** — 写进你的全局配置，所有项目生效。
+- **Local** — only for you, but bound to one project.
+- **Project** — written to the project's `.mcp.json` and shared with the team.
+- **User** — written to your global config, active in every project.
 
-顶部三个数字是服务总数、当前已连接、需要处理。STDIO 类型的命令会直接在你的机器上运行，Node、Python、Bun 这些运行时需要你自己装好并保证在 PATH 里。
+The three numbers at the top are total servers, currently connected, and needs attention. STDIO commands run directly on your machine, so runtimes like Node, Python, and Bun must be installed and on your `PATH`.
 
 ## Agents
 
-浏览已安装的 Agent，创建自己的。见[子 Agent 与任务拆分](./agents.md)。
+Browse installed agents and create your own. See [Subagents](./agents.md).
 
-## 技能
+## Skills
 
-本机所有可用技能，按来源分组，可以直接读技能的正文和源码。见[技能与技能市场](./skills.md)。
+Every skill available on this machine, grouped by source, with the prose and source files readable in place. See [Skills and the Skills Market](./skills.md).
 
-## 记忆
+## Memory
 
-查看和编辑 Claude 为每个项目写的 Markdown 记忆文件。左边选项目，中间选文件，右边编辑或预览渲染结果。这些文件在 `~/.claude/projects/<project>/memory/`，CLI 运行时会加载它们。
+View and edit the Markdown memory files Claude keeps per project. Pick a project on the left, a file in the middle, then edit or preview the rendered output. The files live in `~/.claude/projects/<project>/memory/` and are loaded by the CLI at runtime.
 
-会话里也能直接用 `/memory` 跳到这里。想知道记忆是怎么写入和召回的，看[记忆系统](../internals/memory.md)。
+`/memory` in any session jumps straight here. For how memory is written and recalled, see [Memory system](../internals/memory.md).
 
-## 插件
+## Plugins
 
-插件把技能、Agent、Hook、MCP 服务打包在一起。这里能看已安装插件、健康状态和它们各自暴露了哪些能力，支持启用、禁用、更新、卸载，也能多选批量操作。
+A plugin bundles skills, agents, hooks, and MCP servers together. This tab shows installed plugins, their health, and what capabilities each one exposes, with enable, disable, update, and uninstall — including multi-select for bulk operations.
 
-启用或禁用之后要点一次「应用变更」，才会把插件变更重新应用到当前运行时。
+After enabling or disabling anything, click **Apply changes** to push the change into the running runtime.
 
-## 宠物
+## Pets
 
-一只悬浮在桌面上的小机器人。默认关闭。见[桌面宠物](./pets.md)。
+A little robot floating on your desktop. Off by default. See [Desktop pet](./pets.md).
 
 ## Computer Use
 
-让 Claude 读屏幕、点鼠标、敲键盘。开启开关、确认全局授权并满足系统权限要求后才能使用；各平台的环境准备步骤不同。见[Computer Use](./computer-use.md)。
+Let Claude read the screen, click, and type. Enable it, confirm the global consent, and satisfy the OS permission checks; setup steps vary by platform. See [Computer Use](./computer-use.md).
 
-## Token 用量
+## Token usage
 
-![设置 → Token 用量：热力图与统计卡](../images/app/zh-CN/settings-usage.webp)
+![Settings → Token usage: heatmap and stat cards (Chinese interface)](../images/app/en/settings-usage.webp)
 
-基于本机 Claude Code 会话记录统计出来的用量看板，全部在本地算，不上传。
+A usage dashboard computed from the Claude Code session records on this machine. Everything is calculated locally and nothing is uploaded.
 
-- 顶部是头像、昵称和项目链接，右边是累计 Token 数。中文按「万、亿」计，英文按 k / M / B 计；鼠标停在数字上能看到精确值和另一种写法（24.1B = 241 亿）。
-- 下面是近 90 天的逐日柱状图：每天一根柱，从零线起，按模型叠起来，高度就是当天的 Token，颜色固定属于某个模型（最多 4 个模型各有一色，其余并入灰色的「其他模型」），标出单日峰值。鼠标停在某一天上会显示当天总量和每个模型各用了多少（灰色里的模型逐个列名，超过 3 个时其余合成一行），点一下弹出当天的详情卡：占峰值多少、第几高、模型构成、会话 / 消息 / 工具调用数；再点同一天、点 × 或按 Esc 收起。再往下是最长任务时长、当前与最长连续天数、缓存命中率。
-- 热力图可以切每日 / 每周 / 累计三种口径，鼠标停在某一天上看当天的会话数和 Token。
-- 模型明细列出每个模型的占比、Token 和估算成本。估算成本不含未定价的模型，界面上会写明跳过了几个。最后是用得最多的技能和连接器。
-- 右上角「分享图片」把这些做成一张 PNG：竖版、方形、横版三种尺寸，图片主题默认跟随当前主题，也可以选其他主题；头像昵称、模型明细、项目链接都能单独关掉。估算成本默认不放进图片。图片在本机生成，可以复制到剪贴板或保存。
+- At the top: your avatar, name and project link, with the lifetime token total beside them. Counts use k / M / B; hover a number for the exact value.
+- Below: the last 90 days as one column per day, stacked by model on a zero baseline, so height is that day's tokens. A color belongs to a model (the four biggest models get one each; the rest share a gray "Other models"), and the peak day is labelled. Point at a day for its total and what each model spent (models in the gray are named one by one, with any past three summed into one row); click it to open a card with how it compares to the peak and the average day, its rank, the model mix, and its sessions, messages and tool calls. Click the day again, the × or press Esc to close it. Then the longest task, current and longest streak, and cache hit rate.
+- A heatmap with daily, weekly, and cumulative views. Hover a day for its sessions and tokens.
+- Model details list each model's share, tokens, and estimated cost. Estimated cost excludes models with no known price, and the UI says how many were skipped. The most-used skills and connectors come last.
+- **Share image** at the top right turns this into a PNG in portrait, square, or wide. The image follows the current theme unless you pick another, and the avatar and name, model details, and project link can each be switched off. Estimated cost stays off the image unless you turn it on. The image is drawn on this machine; copy it to the clipboard or save it.
 
-## 诊断
+## Diagnostics
 
-出问题时来这里。记录服务端和 CLI 的启动、服务商、会话运行错误。
+Where to go when something breaks. Logs server and CLI startup, provider, and session runtime errors.
 
-- 顶部是日志大小、事件数、24 小时内的警告数、保留策略。
-- 「最近事件」列出具体错误，每条带事件 ID，可以单独复制。
-- **导出诊断包** / **复制错误摘要** / **复制 Issue 报告** — 提 issue 时用后两个，格式已经整理好。
-- **Doctor** — 检查用户和当前项目的配置状态，只读不修改，给出健康 / 未配置 / 缺失 / 无效的清单。会话里输入 `/doctor` 也能直接打开。
-- **重置安全 UI 状态** — 只清标签页、主题、缩放这几个可再生的界面键。聊天历史、模型配置、技能、MCP、IM 和 OAuth 始终受保护，不会被它碰到。
-- **本地索引** — 显示 SQLite 派生索引的状态和大小，可以重建。重建只影响索引，不删源对话。
+- Across the top: log size, event count, warnings in the last 24 hours, retention policy.
+- **Recent events** lists the actual errors, each with an event ID you can copy on its own.
+- **Export Bundle** / **Copy error summary** / **Copy issue report** — use the latter two when filing an issue; they're already formatted.
+- **Doctor** — checks user and current-project configuration state, read-only, returning a healthy / not configured / missing / invalid list. `/doctor` in a session opens it directly.
+- **Reset safe UI state** — clears only regenerable interface keys like open tabs, theme, and zoom. Chat history, model config, skills, MCP, IM, and OAuth are always protected and never touched.
+- **Local index** — status and size of the derived SQLite index, with a rebuild button. Rebuilding only affects the index; source conversations are never deleted.
 
 :::info
-Issue 报告和导出包会尽力脱敏，省略聊天内容、文件内容、完整环境变量和 API 密钥。分享前还是自己扫一眼，看有没有内网域名、用户名或路径。
+Issue reports and exported bundles are redacted on a best-effort basis — chat contents, file contents, full environment variables, and API keys are omitted. Still give them a read before sharing, in case an internal hostname, username, or path slipped through.
 :::
 
-## 关于
+## About
 
-版本号、更新日志、GitHub 仓库、反馈入口。
+Version, changelog, GitHub repo, feedback link.
 
-「应用更新」会检查 GitHub Releases，下载后自动重启安装。更新下载走的是独立的代理设置，和 设置 → 通用 里的网络设置互不影响——公司网络下更新卡住时，来这里配「高级更新代理」。
+**App Updates** checks GitHub Releases, downloads, and restarts to install. Updates use their own proxy setting, separate from **Settings → General** — if updates stall on a corporate network, configure the advanced update proxy here.

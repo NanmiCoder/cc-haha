@@ -718,7 +718,7 @@ describe('SubagentRunPage', () => {
     expect(screen.getByText('Output: /tmp/result.md')).toBeInTheDocument()
     expect(screen.queryByText('Parent Agent Tool Call')).not.toBeInTheDocument()
     expect(document.body).not.toHaveTextContent('"prompt": "Read files"')
-    expect(screen.queryByText(/Dispatched an agent|派遣了一个代理/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Dispatched an agent/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Open run/ })).not.toBeInTheDocument()
 
     const transcript = screen.getByTestId('subagent-conversation')

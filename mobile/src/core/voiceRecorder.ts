@@ -33,7 +33,7 @@ function captureError(error: unknown): VoiceRecorderError {
 export async function startVoiceRecording(options: StartVoiceRecordingOptions): Promise<VoiceRecording> {
   const maxSeconds = voiceCaptureLimit(options.maxSeconds)
   if (options.signal?.aborted) throw voiceAbortError()
-  if (!isVoiceCaptureSupported()) throw new VoiceRecorderError('unavailable', '当前浏览器无法录音，请使用手机 App 或 HTTPS 连接')
+  if (!isVoiceCaptureSupported()) throw new VoiceRecorderError('unavailable', 'The current browser cannot record; use the phone app or an HTTPS connection')
   let stream: MediaStream
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })

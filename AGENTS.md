@@ -23,13 +23,13 @@ Rules closer to the code take precedence. For the directory you are changing, re
 | React documentation site and build tooling | [site/AGENTS.md](site/AGENTS.md) |
 | CI and quality policy | [.github/AGENTS.md](.github/AGENTS.md), `scripts/pr/`, `scripts/quality-gate/` |
 | GitHub issue routing and shared local task state | [.agents/workflows/issue-router.md](.agents/workflows/issue-router.md) |
-| Desktop releases and auto-update | `release-notes/`, `scripts/release.ts`, [release guide](docs/internals/contributing.md#发版与自动更新) |
+| Desktop releases and auto-update | `release-notes/`, `scripts/release.ts`, [release guide](docs/internals/contributing.md#releases-and-auto-update) |
 
 ## Implementation Rules
 
 - Keep changes tied to the requested behavior. Reuse existing utilities, stores, services, and test harnesses; add dependencies or abstractions only when the task needs them.
 - Computer Use has one app-authorization boundary on both macOS and Windows: enabling it in Settings and confirming its consent dialog authorizes all apps. Do not add per-app prompts, allowlists, denylists, category-based access tiers, or host/helper exceptions after that consent. Global disablement, OS permissions, and target/process validity checks still apply.
-- Executable JS/TS production changes under `src/`, `desktop/src/`, or `adapters/` require a same-area regression test unless a maintainer explicitly approves an exception. For bugs, reproduce the failure or add a test that fails for the intended reason; report when reproduction is unavailable. Test the behavior and affected boundaries. See [test design](docs/internals/contributing.md#回归测试设计) for state transitions, replay, and coverage caveats.
+- Executable JS/TS production changes under `src/`, `desktop/src/`, or `adapters/` require a same-area regression test unless a maintainer explicitly approves an exception. For bugs, reproduce the failure or add a test that fails for the intended reason; report when reproduction is unavailable. Test the behavior and affected boundaries. See [test design](docs/internals/contributing.md#regression-test-design) for state transitions, replay, and coverage caveats.
 - Keep TypeScript ESM style: 2-space indentation, no semicolons, `PascalCase` components, and `camelCase` functions/hooks/stores. Use structured parsers and existing boundaries for structured data.
 - Do not commit generated output such as `artifacts/`, coverage reports, `node_modules/`, build directories, or Rust `target/` trees.
 - When publishing is explicitly requested, use Conventional Commit subjects and product branch prefixes such as `fix/`, `feat/`, or `docs/`; do not create `codex/` branches in this repository.
@@ -39,7 +39,7 @@ Rules closer to the code take precedence. For the directory you are changing, re
 - `bun run check:impact` selects the required checks using paths and imports. Run the selected checks for the final diff; use focused tests while fixing failures. `package.json` and `scripts/pr/change-policy.ts` are the command and routing sources of truth.
 - Use `bun run verify` when full validation is requested or before claiming a code change is PR-ready or push-ready. It runs the selected PR lanes, so there is no need to run every lane separately first. Reuse passing results for unchanged code; rerun or broaden checks when subsequent edits, failures, or unresolved risks warrant it.
 - Required PR checks must be deterministic: no real models, public network, repository secrets, saved providers, or real user home/config. Use fake credentials, fixtures, mocked/loopback transports, temporary directories, and cleanup. Server-booting quality lanes use `scripts/quality-gate/sandbox.ts` and must fail on real user-state writes.
-- For user-visible desktop or cross-process changes that unit tests cannot prove, exercise a browser/desktop smoke path. Ad-hoc browser work uses the `ego-browser` skill; `agent-browser` is reserved for the committed smoke lane and `desktop/scripts/e2e-*-agent-browser.sh`. See the [deterministic agent/UI lanes](docs/internals/contributing.md#无模型的端到端-agent-门禁).
+- For user-visible desktop or cross-process changes that unit tests cannot prove, exercise a browser/desktop smoke path. Ad-hoc browser work uses the `ego-browser` skill; `agent-browser` is reserved for the committed smoke lane and `desktop/scripts/e2e-*-agent-browser.sh`. See the [deterministic agent/UI lanes](docs/internals/contributing.md#deterministic-agent-gate-no-model-required).
 - Live model checks are separate maintainer evidence after deterministic checks pass and quota use is explicitly authorized; finding credentials on the machine is not authorization.
 
 ## User-State Safety

@@ -11,6 +11,7 @@ import {
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
+import { buildSelectionBatchMessage, buildSelectionDirectMessage } from '../lib/selectionComposer'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
 const {
@@ -882,7 +883,7 @@ describe('chatStore history mapping', () => {
         parentToolUseId: 'agent-1',
         content: [
           { type: 'thinking', thinking: 'internal reasoning' },
-          { type: 'text', text: '目录结构分析' },
+          { type: 'text', text: 'Directory structure analysis' },
           { type: 'tool_use', name: 'Read', id: 'tool-1', input: { file_path: 'src/App.tsx' } },
         ],
       },
@@ -915,7 +916,7 @@ describe('chatStore history mapping', () => {
         id: 'collab-1',
         type: 'user',
         timestamp: '2026-04-06T00:00:00.000Z',
-        content: '只读发现：#1335 未复现',
+        content: 'Read-only finding: #1335 does not reproduce',
         collaboration: { sourceSessionId: 'root-1', messageId: 'm-1' },
       },
     ]
@@ -925,18 +926,18 @@ describe('chatStore history mapping', () => {
     expect(mapped).toHaveLength(1)
     expect(mapped[0]).toMatchObject({
       type: 'user_text',
-      content: '只读发现：#1335 未复现',
+      content: 'Read-only finding: #1335 does not reproduce',
       collaboration: { sourceSessionId: 'root-1', messageId: 'm-1' },
     })
   })
 
   it('keeps collaboration source metadata on live replayed user messages', () => {
-    const mapped = appendReplayedUserMessage([], '发现两条线索', 1000, undefined, { sourceSessionId: 'root-1', messageId: 'm-2' })
+    const mapped = appendReplayedUserMessage([], 'Found two leads', 1000, undefined, { sourceSessionId: 'root-1', messageId: 'm-2' })
 
     expect(mapped).toHaveLength(1)
     expect(mapped[0]).toMatchObject({
       type: 'user_text',
-      content: '发现两条线索',
+      content: 'Found two leads',
       collaboration: { sourceSessionId: 'root-1', messageId: 'm-2' },
     })
   })
@@ -949,35 +950,35 @@ describe('chatStore history mapping', () => {
         timestamp: '2026-04-06T00:00:00.000Z',
         content: [{ type: 'thinking', thinking: 'plan the fix' }],
       },
-      // 流式快照整块重发：逐字相同，应丢弃
+      // Streaming snapshot resent whole: verbatim duplicate, dropped
       {
         id: 'assistant-snap-2',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:01.000Z',
         content: [{ type: 'thinking', thinking: 'plan the fix' }],
       },
-      // 流式快照前缀增长：应替换为更全的新块而非追加
+      // Streaming snapshot prefix growth: replaced by the fuller block, not appended
       {
         id: 'assistant-snap-3',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:02.000Z',
         content: [{ type: 'thinking', thinking: 'plan the fix carefully' }],
       },
-      // 纯空白块：不应产生空壳气泡
+      // Whitespace-only block: no empty bubble
       {
         id: 'assistant-blank',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:03.000Z',
         content: [{ type: 'thinking', thinking: '   \n  ' }],
       },
-      // 相邻但内容无关的思考：合并为一个气泡
+      // Adjacent unrelated thinking: merged into one bubble
       {
         id: 'assistant-more',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:04.000Z',
         content: [{ type: 'thinking', thinking: 'then run tests' }],
       },
-      // 被工具打断后的新思考：保持独立
+      // New thinking after a tool call: kept separate
       {
         id: 'assistant-tools',
         type: 'assistant',
@@ -1204,7 +1205,7 @@ describe('chatStore history mapping', () => {
         id: 'transcript-user-1',
         type: 'user',
         timestamp: '2026-04-06T00:00:00.000Z',
-        content: '请从这里继续',
+        content: 'Please continue from here',
       },
       {
         id: 'transcript-assistant-1',
@@ -1212,7 +1213,7 @@ describe('chatStore history mapping', () => {
         timestamp: '2026-04-06T00:00:01.000Z',
         model: 'opus',
         content: [
-          { type: 'text', text: '这里是答复。' },
+          { type: 'text', text: 'Here is the answer.' },
           { type: 'tool_use', name: 'Read', id: 'tool-1', input: { file_path: 'src/App.tsx' } },
         ],
       },
@@ -1309,7 +1310,7 @@ describe('chatStore history mapping', () => {
         id: 'transcript-user-1',
         type: 'user',
         timestamp: '2026-06-15T03:32:15.000Z',
-        content: '继续处理这个问题',
+        content: 'Keep working on this issue',
       },
     ]
 
@@ -1327,7 +1328,7 @@ describe('chatStore history mapping', () => {
       {
         id: 'transcript-user-1',
         type: 'user_text',
-        content: '继续处理这个问题',
+        content: 'Keep working on this issue',
       },
     ])
   })
@@ -1366,7 +1367,7 @@ describe('chatStore history mapping', () => {
         type: 'user',
         timestamp: '2026-06-04T08:07:15.803Z',
         content: [
-          { type: 'text', text: '解释一下这张图片讲了什么东西' },
+          { type: 'text', text: 'Explain what this image shows' },
           {
             type: 'image',
             source: {
@@ -1389,9 +1390,9 @@ describe('chatStore history mapping', () => {
       {
         id: 'image-user-1',
         type: 'user_text',
-        content: '解释一下这张图片讲了什么东西',
+        content: 'Explain what this image shows',
         modelContent: [
-          '解释一下这张图片讲了什么东西',
+          'Explain what this image shows',
           '[Image source: /Users/test/.claude/uploads/session-1/pasted-image.jpeg]',
         ].join('\n'),
         attachments: [{
@@ -1412,7 +1413,7 @@ describe('chatStore history mapping', () => {
         type: 'user',
         timestamp: '2026-06-04T08:07:15.803Z',
         content: [
-          { type: 'text', text: '对比这两张图' },
+          { type: 'text', text: 'Compare these two images' },
           {
             type: 'image',
             source: {
@@ -1445,7 +1446,7 @@ describe('chatStore history mapping', () => {
       {
         id: 'multi-image-user-1',
         type: 'user_text',
-        content: '对比这两张图',
+        content: 'Compare these two images',
         attachments: [
           {
             type: 'image',
@@ -1488,6 +1489,63 @@ describe('chatStore history mapping', () => {
   })
 
   it('restores visual selection history as annotated screenshot attachment without exposing model prompt', () => {
+    const { modelText: modelPrompt } = buildSelectionDirectMessage({
+      pageUrl: 'http://127.0.0.1:47931/',
+      sourceHint: 'Todo Desk Board',
+      element: { selector: '#root > main > time', tag: 'time', text: '06/10 21:12', classes: [] } as never,
+      change: { description: 'Add the year to this time' } as never,
+    })
+
+    const mapped = mapHistoryMessagesToUiMessages([{
+      id: 'selection-user-en',
+      type: 'user',
+      timestamp: '2026-06-10T16:20:00.000Z',
+      content: [
+        { type: 'text', text: modelPrompt },
+        { type: 'image', source: { media_type: 'image/png', data: 'SELECTIONPNG' } },
+      ],
+    } as MessageEntry])
+
+    expect(mapped).toMatchObject([{
+      id: 'selection-user-en',
+      type: 'user_text',
+      content: '',
+      modelContent: modelPrompt,
+      attachments: [{ type: 'image', name: '<time>', note: 'Add the year to this time', quote: '#root > main > time' }],
+    }])
+  })
+
+  it('restores a batch selection as one numbered screenshot group with a compact summary', () => {
+    const { modelText: modelPrompt } = buildSelectionBatchMessage([
+      { id: 'one', number: 1, payload: { pageUrl: 'http://x/', element: { selector: '#title', tag: 'h1', classes: [] } as never, change: { description: 'Lighter title' } as never } },
+      { id: 'three', number: 3, payload: { pageUrl: 'http://x/', element: { selector: '#cta', tag: 'button', classes: [] } as never, change: { description: 'More prominent button' } as never } },
+    ])
+
+    const mapped = mapHistoryMessagesToUiMessages([{
+      id: 'selection-batch-user-en',
+      type: 'user',
+      timestamp: '2026-06-10T16:20:00.000Z',
+      content: [
+        { type: 'text', text: modelPrompt },
+        { type: 'image', source: { media_type: 'image/png', data: 'FIRSTPNG' } },
+        { type: 'image', source: { media_type: 'image/png', data: 'THIRDPNG' } },
+      ],
+    } as MessageEntry])
+
+    expect(mapped).toMatchObject([{
+      id: 'selection-batch-user-en',
+      type: 'user_text',
+      content: '2 page changes',
+      modelContent: modelPrompt,
+      attachments: [
+        { type: 'image', name: '<h1>', note: 'Lighter title', quote: '#title', selectionNumber: 1 },
+        { type: 'image', name: '<button>', note: 'More prominent button', quote: '#cta', selectionNumber: 3 },
+      ],
+    }])
+  })
+
+  // Sessions recorded before the app went English-only stored these prompts in Chinese.
+  it('restores legacy Chinese visual selection history', () => {
     const modelPrompt = [
       '请根据截图中编号 1 的蓝色标注修改本地前端。',
       '目标元素：<time>',
@@ -1537,7 +1595,7 @@ describe('chatStore history mapping', () => {
     ])
   })
 
-  it('restores a batch selection as one numbered screenshot group with a compact summary', () => {
+  it('restores a legacy Chinese batch selection', () => {
     const modelPrompt = [
       '请一次性处理以下批量标注的本地前端修改。每张截图中的蓝色编号与下方元素编号一一对应。',
       '',
@@ -3718,13 +3776,13 @@ describe('chatStore history mapping', () => {
           id: `transcript-user-${index + 1}`,
           type: 'user' as const,
           timestamp: `2026-08-06T00:00:0${index * 2}.000Z`,
-          content: '你好',
+          content: 'Hello',
         },
         {
           id: `transcript-assistant-${index + 1}`,
           type: 'assistant' as const,
           timestamp: `2026-08-06T00:00:0${index * 2 + 1}.000Z`,
-          content: '你好！有什么可以帮你的吗？',
+          content: 'Hello! How can I help?',
         },
       ],
     ).flat()
@@ -3739,10 +3797,10 @@ describe('chatStore history mapping', () => {
     })
 
     const completeTurn = async (expectedHistoryLoads: number) => {
-      useChatStore.getState().sendMessage(TEST_SESSION_ID, '你好')
+      useChatStore.getState().sendMessage(TEST_SESSION_ID, 'Hello')
       useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
         type: 'content_delta',
-        text: '你好！有什么可以帮你的吗？',
+        text: 'Hello! How can I help?',
       })
       useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
         type: 'message_complete',
@@ -3847,7 +3905,7 @@ describe('chatStore history mapping', () => {
   })
 
   // The bug this guard causes, as a test rather than a commit message. A turn can
-  // legitimately produce the same short text twice — "Done.", "好的", a one-line
+  // legitimately produce the same short text twice — "Done.", "OK", a one-line
   // command result — and a mid-turn loadHistory back-fills a transcriptMessageId onto
   // the first one by exact content match (mergeRestoredTranscriptMessageIds). The
   // second then looks identical to a replay and is dropped at message_complete, with
@@ -4093,8 +4151,8 @@ describe('chatStore history mapping', () => {
         timestamp: '2026-04-06T00:00:00.000Z',
         model: 'opus',
         content: [
-          { type: 'text', text: '第一段：Windows 下的桌面端输出。' },
-          { type: 'text', text: '\r\n第二段：刷新后也不应该被拆开。' },
+          { type: 'text', text: 'Paragraph one: desktop output on Windows.' },
+          { type: 'text', text: '\r\nParagraph two: must not be split after a refresh.' },
         ],
       },
     ]
@@ -4104,7 +4162,7 @@ describe('chatStore history mapping', () => {
     expect(mapped).toMatchObject([
       {
         type: 'assistant_text',
-        content: '第一段：Windows 下的桌面端输出。\r\n第二段：刷新后也不应该被拆开。',
+        content: 'Paragraph one: desktop output on Windows.\r\nParagraph two: must not be split after a refresh.',
       },
     ])
   })
@@ -4123,7 +4181,7 @@ describe('chatStore history mapping', () => {
         type: 'assistant',
         timestamp: '2026-04-06T00:00:01.000Z',
         model: 'opus',
-        content: '可见回复',
+        content: 'Visible reply',
       },
     ]
 
@@ -4133,7 +4191,7 @@ describe('chatStore history mapping', () => {
       {
         id: 'assistant-real',
         type: 'assistant_text',
-        content: '可见回复',
+        content: 'Visible reply',
       },
     ])
   })
@@ -4142,57 +4200,57 @@ describe('chatStore history mapping', () => {
     const notice = (taskId: string, toolUseId: string, name: string) =>
       `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>completed</status>\n<summary>Background command "Background sleep then write ${name}" completed (exit code 0)</summary>\n</task-notification>`
     const messages: MessageEntry[] = [
-      { id: 'user-real-1', type: 'user', timestamp: '2026-09-29T06:41:00.000Z', content: '启动两个后台命令' },
+      { id: 'user-real-1', type: 'user', timestamp: '2026-09-29T06:41:00.000Z', content: 'Start two background commands' },
       {
         id: 'assistant-dispatched',
         type: 'assistant',
         timestamp: '2026-09-29T06:41:03.000Z',
-        content: [{ type: 'text', text: '已派发' }],
+        content: [{ type: 'text', text: 'Dispatched' }],
       },
       { id: 'notice-alpha', type: 'user', timestamp: '2026-09-29T06:42:25.000Z', content: notice('bt1', 'call_alpha', 'alpha') },
       {
         id: 'assistant-alpha',
         type: 'assistant',
         timestamp: '2026-09-29T06:42:27.000Z',
-        content: [{ type: 'text', text: 'alpha 任务完成：ALPHA_DONE' }],
+        content: [{ type: 'text', text: 'alpha task done: ALPHA_DONE' }],
       },
       { id: 'notice-bravo', type: 'user', timestamp: '2026-09-29T06:43:55.000Z', content: notice('bt2', 'call_bravo', 'bravo') },
       {
         id: 'assistant-bravo',
         type: 'assistant',
         timestamp: '2026-09-29T06:43:57.000Z',
-        content: [{ type: 'text', text: 'bravo 任务完成：BRAVO_DONE' }],
+        content: [{ type: 'text', text: 'bravo task done: BRAVO_DONE' }],
       },
-      { id: 'user-real-2', type: 'user', timestamp: '2026-09-29T06:50:00.000Z', content: '继续' },
+      { id: 'user-real-2', type: 'user', timestamp: '2026-09-29T06:50:00.000Z', content: 'Continue' },
       {
         id: 'assistant-real-2',
         type: 'assistant',
         timestamp: '2026-09-29T06:50:02.000Z',
-        content: [{ type: 'text', text: '好的' }],
+        content: [{ type: 'text', text: 'OK' }],
       },
     ]
 
     const mapped = mapHistoryMessagesToUiMessages(messages)
 
     expect(mapped.map((message) => [message.type, 'content' in message ? message.content : undefined])).toEqual([
-      ['user_text', '启动两个后台命令'],
-      ['assistant_text', '已派发'],
-      ['assistant_text', 'alpha 任务完成：ALPHA_DONE'],
-      ['assistant_text', 'bravo 任务完成：BRAVO_DONE'],
-      ['user_text', '继续'],
-      ['assistant_text', '好的'],
+      ['user_text', 'Start two background commands'],
+      ['assistant_text', 'Dispatched'],
+      ['assistant_text', 'alpha task done: ALPHA_DONE'],
+      ['assistant_text', 'bravo task done: BRAVO_DONE'],
+      ['user_text', 'Continue'],
+      ['assistant_text', 'OK'],
     ])
     expect(JSON.stringify(mapped)).not.toContain('<task-notification>')
   })
 
   it('keeps thinking, tool calls and tool results the model produces after a task notification', () => {
     const messages: MessageEntry[] = [
-      { id: 'user-real-1', type: 'user', timestamp: '2026-09-29T07:00:00.000Z', content: '构建项目' },
+      { id: 'user-real-1', type: 'user', timestamp: '2026-09-29T07:00:00.000Z', content: 'Build the project' },
       {
         id: 'assistant-started',
         type: 'assistant',
         timestamp: '2026-09-29T07:00:01.000Z',
-        content: [{ type: 'text', text: '构建已在后台启动' }],
+        content: [{ type: 'text', text: 'Build started in the background' }],
       },
       {
         id: 'notice-build',
@@ -4204,7 +4262,7 @@ describe('chatStore history mapping', () => {
         id: 'assistant-thinking',
         type: 'assistant',
         timestamp: '2026-09-29T07:03:02.000Z',
-        content: [{ type: 'thinking', thinking: '构建失败，先看日志。' }],
+        content: [{ type: 'thinking', thinking: 'Build failed; check the logs first.' }],
       },
       {
         id: 'assistant-tool',
@@ -4222,7 +4280,7 @@ describe('chatStore history mapping', () => {
         id: 'assistant-fix',
         type: 'assistant',
         timestamp: '2026-09-29T07:03:06.000Z',
-        content: [{ type: 'text', text: '类型错误，正在修复。' }],
+        content: [{ type: 'text', text: 'Type error, fixing it.' }],
       },
     ]
 
@@ -4238,7 +4296,7 @@ describe('chatStore history mapping', () => {
     ])
     expect(mapped[3]).toMatchObject({ toolUseId: 'toolu_fix_1', toolName: 'Bash' })
     expect(mapped[4]).toMatchObject({ toolUseId: 'toolu_fix_1' })
-    expect(mapped[5]).toMatchObject({ content: '类型错误，正在修复。' })
+    expect(mapped[5]).toMatchObject({ content: 'Type error, fixing it.' })
     expect(JSON.stringify(mapped)).not.toContain('<task-notification>')
   })
 
@@ -4255,8 +4313,8 @@ describe('chatStore history mapping', () => {
         type: 'assistant',
         timestamp: '2026-09-29T07:10:02.000Z',
         content: [
-          { type: 'thinking', thinking: '读取输出文件。' },
-          { type: 'text', text: '先看一下输出。' },
+          { type: 'thinking', thinking: 'Reading the output file.' },
+          { type: 'text', text: 'Let me look at the output first.' },
           { type: 'tool_use', name: 'Read', id: 'toolu_read_1', input: { file_path: '/tmp/out.txt' } },
         ],
       },
@@ -4270,7 +4328,7 @@ describe('chatStore history mapping', () => {
         id: 'assistant-raw-final',
         type: 'assistant',
         timestamp: '2026-09-29T07:10:04.000Z',
-        content: [{ type: 'text', text: '全部通过。' }],
+        content: [{ type: 'text', text: 'All passing.' }],
       },
     ]
 
@@ -4283,7 +4341,7 @@ describe('chatStore history mapping', () => {
       'tool_result',
       'assistant_text',
     ])
-    expect(mapped[4]).toMatchObject({ content: '全部通过。' })
+    expect(mapped[4]).toMatchObject({ content: 'All passing.' })
     expect(JSON.stringify(mapped)).not.toContain('<task-notification>')
   })
 
@@ -4295,13 +4353,13 @@ describe('chatStore history mapping', () => {
         id: 'user-real-1',
         type: 'user',
         timestamp: '2026-04-06T00:00:00.000Z',
-        content: '创建项目',
+        content: 'Create project',
       },
       {
         id: 'assistant-real-1',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:01.000Z',
-        content: [{ type: 'text', text: '项目创建好了' }],
+        content: [{ type: 'text', text: 'Project created' }],
       },
       {
         id: 'task-notification',
@@ -4313,13 +4371,13 @@ describe('chatStore history mapping', () => {
         id: 'assistant-task-response',
         type: 'assistant',
         timestamp: '2026-04-06T00:00:03.000Z',
-        content: [{ type: 'text', text: '旧后台任务通知，无需处理' }],
+        content: [{ type: 'text', text: 'Old background task notice, nothing to do' }],
       },
       {
         id: 'user-real-2',
         type: 'user',
         timestamp: '2026-04-06T00:00:04.000Z',
-        content: '继续真实问题',
+        content: 'Continue with the real question',
       },
     ]
 
@@ -4329,20 +4387,20 @@ describe('chatStore history mapping', () => {
       {
         id: 'user-real-1',
         type: 'user_text',
-        content: '创建项目',
+        content: 'Create project',
       },
       {
         type: 'assistant_text',
-        content: '项目创建好了',
+        content: 'Project created',
       },
       {
         type: 'assistant_text',
-        content: '旧后台任务通知，无需处理',
+        content: 'Old background task notice, nothing to do',
       },
       {
         id: 'user-real-2',
         type: 'user_text',
-        content: '继续真实问题',
+        content: 'Continue with the real question',
       },
     ])
     expect(JSON.stringify(mapped)).not.toContain('<task-notification>')
@@ -4672,7 +4730,7 @@ describe('chatStore history mapping', () => {
         type: 'user',
         timestamp: '2026-04-06T00:00:00.000Z',
         content: [
-          { type: 'text', text: '请看这个文件' },
+          { type: 'text', text: 'Please look at this file' },
           { type: 'file', name: 'report.md' },
         ],
       },
@@ -4684,7 +4742,7 @@ describe('chatStore history mapping', () => {
       {
         id: 'user-with-attachment',
         type: 'user_text',
-        content: '请看这个文件',
+        content: 'Please look at this file',
         attachments: [{ type: 'file', name: 'report.md' }],
       },
     ])
@@ -4696,7 +4754,7 @@ describe('chatStore history mapping', () => {
         id: 'user-with-file-mention',
         type: 'user',
         timestamp: '2026-04-06T00:00:00.000Z',
-        content: '@"/private/tmp/example/src/sentinel.ts" 这个常量是什么？',
+        content: '@"/private/tmp/example/src/sentinel.ts" What is this constant?',
       },
     ]
 
@@ -4706,8 +4764,8 @@ describe('chatStore history mapping', () => {
       {
         id: 'user-with-file-mention',
         type: 'user_text',
-        content: '这个常量是什么？',
-        modelContent: '@"/private/tmp/example/src/sentinel.ts" 这个常量是什么？',
+        content: 'What is this constant?',
+        modelContent: '@"/private/tmp/example/src/sentinel.ts" What is this constant?',
         attachments: [{
           type: 'file',
           name: 'sentinel.ts',
@@ -4719,7 +4777,7 @@ describe('chatStore history mapping', () => {
 
   it.each(['string', 'blocks', 'replay'])('restores path-only image references as previews through %s', (mode) => {
     const path = '/private/tmp/uploads/screenshot.PNG'
-    const content = `@"${path}" @"/tmp/notes.md" 看这张图`
+    const content = `@"${path}" @"/tmp/notes.md" Look at this image`
     const mapped = mode === 'replay'
       ? appendReplayedUserMessage([], content, 1)
       : mapHistoryMessagesToUiMessages([{
@@ -4731,7 +4789,7 @@ describe('chatStore history mapping', () => {
 
     expect(mapped).toMatchObject([{
       type: 'user_text',
-      content: '看这张图',
+      content: 'Look at this image',
       modelContent: content,
       attachments: [
         { type: 'image', name: 'screenshot.PNG', path },
@@ -4744,7 +4802,7 @@ describe('chatStore history mapping', () => {
     const modelPrompt = [
       '@"/repo/homepage/src/App.vue" Referenced workspace context:',
       '@"homepage/src/App.vue:new:L94-L105":',
-      'Comment: 这块儿我们不能再修改一下',
+      'Comment: Can we change this part again',
       '```vue',
       '<section id="hero" class="pt-32 pb-20 px-6">',
       '  <h1>{{ name }}</h1>',
@@ -4773,7 +4831,7 @@ describe('chatStore history mapping', () => {
           lineStart: 94,
           lineEnd: 105,
           diffSide: 'new',
-          note: '这块儿我们不能再修改一下',
+          note: 'Can we change this part again',
           quote: '<section id="hero" class="pt-32 pb-20 px-6">\n  <h1>{{ name }}</h1>\n</section>',
         }],
       },
@@ -4818,7 +4876,7 @@ describe('chatStore history mapping', () => {
         quote: 'const value = 1',
       }],
       {
-        displayContent: '改这里',
+        displayContent: 'Change this',
         displayAttachments: [{
           type: 'file',
           name: 'App.tsx',
@@ -4836,7 +4894,7 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
       {
         type: 'user_text',
-        content: '改这里',
+        content: 'Change this',
         modelContent: '@"/repo/src/App.tsx" Referenced workspace context:\n@"src/App.tsx:L4":\nComment: tighten this\n```tsx\nconst value = 1\n```',
         attachments: [{
           type: 'file',
@@ -4946,13 +5004,13 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().sendMessage(
       TEST_SESSION_ID,
-      '请根据截图中编号 1 的 <h1> 修改：这个标题更轻一点',
+      'Per annotation 1 in the screenshot, change <h1>: make this title lighter',
       [{
         type: 'image',
         name: '<h1>',
         data: 'data:image/png;base64,AAAA',
         mimeType: 'image/png',
-        note: '这个标题更轻一点',
+        note: 'Make this title lighter',
       }],
       {
         hideDisplayContent: true,
@@ -4961,7 +5019,7 @@ describe('chatStore history mapping', () => {
           name: '<h1>',
           data: 'data:image/png;base64,AAAA',
           mimeType: 'image/png',
-          note: '这个标题更轻一点',
+          note: 'Make this title lighter',
         }],
       },
     )
@@ -4970,13 +5028,13 @@ describe('chatStore history mapping', () => {
       {
         type: 'user_text',
         content: '',
-        modelContent: '请根据截图中编号 1 的 <h1> 修改：这个标题更轻一点',
+        modelContent: 'Per annotation 1 in the screenshot, change <h1>: make this title lighter',
         attachments: [{
           type: 'image',
           name: '<h1>',
           data: 'data:image/png;base64,AAAA',
           mimeType: 'image/png',
-          note: '这个标题更轻一点',
+          note: 'Make this title lighter',
         }],
       },
     ])
@@ -4984,13 +5042,13 @@ describe('chatStore history mapping', () => {
       TEST_SESSION_ID,
       {
         type: 'user_message',
-        content: '请根据截图中编号 1 的 <h1> 修改：这个标题更轻一点',
+        content: 'Per annotation 1 in the screenshot, change <h1>: make this title lighter',
         attachments: [{
           type: 'image',
           name: '<h1>',
           data: 'data:image/png;base64,AAAA',
           mimeType: 'image/png',
-          note: '这个标题更轻一点',
+          note: 'Make this title lighter',
         }],
       },
     )
@@ -5023,10 +5081,10 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().sendMessage(
       TEST_SESSION_ID,
-      '记一下这个文件讲了什么东西。',
+      'Note what this file is about.',
       [{ type: 'file', name: 'conditions.py', path: '/repo/backend/conditions.py' }],
       {
-        displayContent: '记一下这个文件讲了什么东西。',
+        displayContent: 'Note what this file is about.',
         displayAttachments: [{ type: 'file', name: 'conditions.py', path: 'backend/conditions.py' }],
       },
     )
@@ -5034,8 +5092,8 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
       {
         type: 'user_text',
-        content: '记一下这个文件讲了什么东西。',
-        modelContent: '@"/repo/backend/conditions.py" 记一下这个文件讲了什么东西。',
+        content: 'Note what this file is about.',
+        modelContent: '@"/repo/backend/conditions.py" Note what this file is about.',
         attachments: [{
           type: 'file',
           name: 'conditions.py',
@@ -5091,7 +5149,7 @@ describe('chatStore history mapping', () => {
           id: 'user-next',
           type: 'user',
           timestamp: '2026-04-06T00:00:01.000Z',
-          content: '继续下一步',
+          content: 'Next step',
         },
       ],
     })
@@ -5125,7 +5183,7 @@ describe('chatStore history mapping', () => {
           id: 'user-next',
           type: 'user',
           timestamp: '2026-04-06T00:00:01.000Z',
-          content: '继续下一步',
+          content: 'Next step',
         },
       ],
     })
@@ -5183,7 +5241,7 @@ describe('chatStore history mapping', () => {
           id: 'user-next',
           type: 'user',
           timestamp: '2026-04-06T00:00:01.000Z',
-          content: '新的问题',
+          content: 'A new question',
         },
       ],
     })
@@ -5337,7 +5395,7 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      toolInput: '{"file_path":"/private/tmp/ai-code-novel.md","content":"第一章',
+      toolInput: '{"file_path":"/private/tmp/ai-code-novel.md","content":"Chapter 1',
     })
     vi.advanceTimersByTime(60)
 
@@ -5348,7 +5406,7 @@ describe('chatStore history mapping', () => {
         toolUseId: 'write-1',
         input: { file_path: '/private/tmp/ai-code-novel.md' },
         isPending: true,
-        partialInput: '{"file_path":"/private/tmp/ai-code-novel.md","content":"第一章',
+        partialInput: '{"file_path":"/private/tmp/ai-code-novel.md","content":"Chapter 1',
       },
     ])
 
@@ -5358,7 +5416,7 @@ describe('chatStore history mapping', () => {
       toolUseId: 'write-1',
       input: {
         file_path: '/private/tmp/ai-code-novel.md',
-        content: '第一章\n正文',
+        content: 'Chapter 1\nBody',
       },
     })
 
@@ -5371,7 +5429,7 @@ describe('chatStore history mapping', () => {
       toolUseId: 'write-1',
       input: {
         file_path: '/private/tmp/ai-code-novel.md',
-        content: '第一章\n正文',
+        content: 'Chapter 1\nBody',
       },
       isPending: false,
     })
@@ -5401,7 +5459,7 @@ describe('chatStore history mapping', () => {
 
     for (const [index, member] of ['feature-analyst', 'bug-analyst', 'quality-analyst'].entries()) {
       const toolUseId = `team-agent-${index + 1}`
-      const description = `分析第 ${index + 1} 组 commit`
+      const description = `Analyze commit group ${index + 1}`
 
       useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
         type: 'content_start',
@@ -5447,7 +5505,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      toolInput: '{"description":"审查普通 SubAgent 路径"',
+      toolInput: '{"description":"Review the ordinary SubAgent path"',
     })
     vi.advanceTimersByTime(60)
 
@@ -5457,13 +5515,13 @@ describe('chatStore history mapping', () => {
       type: 'tool_use_complete',
       toolName: 'Agent',
       toolUseId: 'direct-agent',
-      input: { description: '审查普通 SubAgent 路径' },
+      input: { description: 'Review the ordinary SubAgent path' },
     })
 
     expect(buildMainActivity().sections.subagents.rows).toEqual([
       expect.objectContaining({
         id: 'direct-agent',
-        label: '审查普通 SubAgent 路径',
+        label: 'Review the ordinary SubAgent path',
         status: 'running',
       }),
     ])
@@ -5490,11 +5548,11 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      toolInput: '{"file_path":"/private/tmp/story.md","content":"第一',
+      toolInput: '{"file_path":"/private/tmp/story.md","content":"Chap',
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      toolInput: '章\\n第二段',
+      toolInput: 'ter 1\\nSecond paragraph',
     })
 
     const beforeFlush = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages[0]
@@ -5510,7 +5568,7 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages[0]).toMatchObject({
       type: 'tool_use',
       input: { file_path: '/private/tmp/story.md' },
-      partialInput: '{"file_path":"/private/tmp/story.md","content":"第一章\\n第二段',
+      partialInput: '{"file_path":"/private/tmp/story.md","content":"Chapter 1\\nSecond paragraph',
     })
 
     vi.runOnlyPendingTimers()
@@ -5575,7 +5633,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      toolInput: '{"file_path":"/private/tmp/story.md","content":"第一章',
+      toolInput: '{"file_path":"/private/tmp/story.md","content":"Chapter 1',
     })
     vi.advanceTimersByTime(60)
 
@@ -10126,8 +10184,8 @@ describe('chatStore history mapping', () => {
       dedupeKey: 'permission:perm-ask-1',
       cooldownScope: 'permission-prompt',
       requestAttention: true,
-      title: 'Claude Code Haha 需要你的确认',
-      body: 'AskUserQuestion 请求执行，正在等待允许。',
+      title: 'Claude Code Haha needs your confirmation',
+      body: 'AskUserQuestion wants to run and is waiting for permission.',
       target: { type: 'session', sessionId: TEST_SESSION_ID },
     })
   })
@@ -10607,15 +10665,15 @@ describe('chatStore history mapping', () => {
     sendSubagentMessageMock.mockReset()
     sendSubagentMessageMock.mockResolvedValue({ ok: true })
 
-    // CLI 退出 plan 后恢复到 bypassPermissions，回传 permission_mode_changed。
+    // After leaving plan the CLI restores bypassPermissions and reports permission_mode_changed.
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'permission_mode_changed',
       mode: 'bypassPermissions',
     })
 
-    // 本地镜像被校正……
+    // The local mirror is corrected...
     expect(updateSessionPermissionModeMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'bypassPermissions')
-    // ……但绝不能再 set_permission_mode 回发给 CLI，否则形成回环。
+    // ...but must never send set_permission_mode back to the CLI, or it loops.
     expect(sendMock).not.toHaveBeenCalled()
   })
 
@@ -10971,8 +11029,8 @@ describe('chatStore history mapping', () => {
         task_id: 'agent-task-1',
         tool_use_id: 'agent-tool-1',
         status: 'completed',
-        summary: 'Agent "修复异常处理" completed',
-        result: '修复了异常处理并补充了回归覆盖。',
+        summary: 'Agent "Fix error handling" completed',
+        result: 'Fixed error handling and added regression coverage.',
         output_file: '/tmp/agent-output.txt',
       },
     })
@@ -10985,8 +11043,8 @@ describe('chatStore history mapping', () => {
       taskId: 'agent-task-1',
       toolUseId: 'agent-tool-1',
       status: 'completed',
-      summary: 'Agent "修复异常处理" completed',
-      result: '修复了异常处理并补充了回归覆盖。',
+      summary: 'Agent "Fix error handling" completed',
+      result: 'Fixed error handling and added regression coverage.',
       outputFile: '/tmp/agent-output.txt',
     })
   })
@@ -13826,7 +13884,7 @@ describe('chatStore history mapping', () => {
   })
 
   it('does not append localized completed turn duration after a running response finishes', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -13850,7 +13908,7 @@ describe('chatStore history mapping', () => {
       },
     ])
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'system', content: expect.stringContaining('已完成，用时') }),
+      expect.objectContaining({ type: 'system', content: expect.stringContaining('Completed in') }),
     ]))
   })
 
@@ -13960,13 +14018,13 @@ describe('chatStore history mapping', () => {
           id: 'assistant-dispatched',
           type: 'assistant',
           timestamp: '2026-09-29T06:41:03.000Z',
-          content: [{ type: 'text', text: '已派发' }],
+          content: [{ type: 'text', text: 'Dispatched' }],
         },
         {
           id: 'assistant-callback',
           type: 'assistant',
           timestamp: '2026-09-29T06:42:29.000Z',
-          content: [{ type: 'text', text: 'alpha 任务完成：ALPHA_DONE' }],
+          content: [{ type: 'text', text: 'alpha task done: ALPHA_DONE' }],
         },
       ],
     })
@@ -13976,7 +14034,7 @@ describe('chatStore history mapping', () => {
           chatState: 'idle',
           messages: [
             { id: 'user-1', type: 'user_text', content: 'Start the background commands', timestamp: 1 },
-            { id: 'assistant-dispatched', type: 'assistant_text', content: '已派发', timestamp: 2 },
+            { id: 'assistant-dispatched', type: 'assistant_text', content: 'Dispatched', timestamp: 2 },
           ],
         }),
       },
@@ -14009,7 +14067,7 @@ describe('chatStore history mapping', () => {
     send({ type: 'status', state: 'thinking', attemptStart: true })
     send({ type: 'status', state: 'thinking', verb: 'Thinking' })
     send({ type: 'content_start', blockType: 'text' })
-    for (const text of ['alpha', ' ', '任务', '完成', '：', 'AL', 'P', 'HA', '_D', 'ONE']) {
+    for (const text of ['alpha', ' ', 'task', ' done', ': ', 'AL', 'P', 'HA', '_D', 'ONE']) {
       send({ type: 'content_delta', text })
     }
     send({
@@ -14022,7 +14080,7 @@ describe('chatStore history mapping', () => {
     const live = useChatStore.getState().sessions[TEST_SESSION_ID]
     expect(live?.chatState).toBe('idle')
     expect(live?.messages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'assistant_text', content: 'alpha 任务完成：ALPHA_DONE' }),
+      expect.objectContaining({ type: 'assistant_text', content: 'alpha task done: ALPHA_DONE' }),
       expect.objectContaining({
         type: 'background_task',
         task: expect.objectContaining({ taskId: 'bt1uz0yz1', status: 'completed' }),
@@ -14030,8 +14088,8 @@ describe('chatStore history mapping', () => {
     ]))
     // The desktop notification previews the same reply the transcript shows.
     expect(notifyDesktopMock).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'Claude Code Haha 已完成回复',
-      body: expect.stringContaining('alpha 任务完成'),
+      title: 'Claude Code Haha finished replying',
+      body: expect.stringContaining('alpha task done'),
     }))
 
     // The authoritative reload carries the same reply and must not duplicate it.
@@ -14041,7 +14099,7 @@ describe('chatStore history mapping', () => {
       expect(settled?.historyStatus).toBe('ready')
       expect(settled?.messages.filter((message) => message.type === 'assistant_text')
         .map((message) => message.type === 'assistant_text' ? message.content : ''))
-        .toEqual(['已派发', 'alpha 任务完成：ALPHA_DONE'])
+        .toEqual(['Dispatched', 'alpha task done: ALPHA_DONE'])
     })
   })
 
@@ -14165,7 +14223,7 @@ describe('chatStore history mapping', () => {
         task_id: 'butp7dybq',
         tool_use_id: 'toolu_bdrk_01SvH8CKoRoBcv1T1Gr9jWT3',
         status: 'completed',
-        summary: 'Background command "1000 客户端压测并采样服务端内存" completed (exit code 0)',
+        summary: 'Background command "Load test with 1000 clients and sample server memory" completed (exit code 0)',
         output_file: '/tmp/butp7dybq.output',
       },
     })
@@ -14179,7 +14237,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: '那是早前的监控命令收尾通知，已被后续的多核压测取代，无需处理。交付已全部完成并验证通过。',
+      text: 'That is the wrap-up notice of an earlier monitoring command, superseded by the later multi-core load test; nothing to do. Delivery is complete and verified.',
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'message_complete',
@@ -14202,7 +14260,7 @@ describe('chatStore history mapping', () => {
       },
       {
         type: 'assistant_text',
-        content: '那是早前的监控命令收尾通知，已被后续的多核压测取代，无需处理。交付已全部完成并验证通过。',
+        content: 'That is the wrap-up notice of an earlier monitoring command, superseded by the later multi-core load test; nothing to do. Delivery is complete and verified.',
       },
     ])
     expect(session?.chatState).toBe('idle')
@@ -14391,13 +14449,13 @@ describe('chatStore history mapping', () => {
 
     const fallbackSession = useChatStore.getState().sessions[TEST_SESSION_ID]
     expect(fallbackSession?.streamingFallback).toMatchObject({ cause: 'watchdog' })
-    // 旧的流式重试横幅针对已放弃的请求，必须被降级提示接管。
+    // The old streaming retry banner refers to an abandoned request and must be replaced by the fallback notice.
     expect(fallbackSession?.apiRetry).toBeNull()
     expect(fallbackSession?.chatState).toBe('thinking')
     expect(fallbackSession?.statusVerb).toBe('')
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
 
-    // 非流式响应的首个内容块到达即清除降级提示。
+    // The first content block of the non-streaming response clears the fallback notice.
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_start',
       blockType: 'text',
@@ -14487,7 +14545,7 @@ describe('chatStore history mapping', () => {
       cause: '404_stream_creation',
     })
 
-    // idle 会话收到降级信号说明回合仍在跑，状态条要回到 thinking。
+    // An idle session receiving a fallback signal means the turn is still running, so the status bar returns to thinking.
     const session = useChatStore.getState().sessions[TEST_SESSION_ID]
     expect(session?.chatState).toBe('thinking')
     expect(session?.streamingFallback).toMatchObject({ cause: '404_stream_creation' })
@@ -14662,7 +14720,7 @@ describe('chatStore history mapping', () => {
           messages: [],
           chatState: 'streaming',
           connectionState: 'connected',
-          streamingText: '上一次分析结果 **还在流式区域**',
+          streamingText: 'Previous analysis **still in the streaming area**',
           streamingToolInput: '',
           activeToolUseId: null,
           activeToolName: null,
@@ -14680,16 +14738,16 @@ describe('chatStore history mapping', () => {
       },
     })
 
-    useChatStore.getState().sendMessage(TEST_SESSION_ID, '你是什么模型？')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'Which model are you?')
 
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
       {
         type: 'assistant_text',
-        content: '上一次分析结果 **还在流式区域**',
+        content: 'Previous analysis **still in the streaming area**',
       },
       {
         type: 'user_text',
-        content: '你是什么模型？',
+        content: 'Which model are you?',
       },
     ])
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.streamingText).toBe('')
@@ -14726,7 +14784,7 @@ describe('chatStore history mapping', () => {
       },
     })
 
-    useChatStore.getState().sendMessage(TEST_SESSION_ID, '继续下一轮')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'Next round')
 
     expect(resetCompletedTasksMock).toHaveBeenCalledWith(TEST_SESSION_ID)
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
@@ -14739,7 +14797,7 @@ describe('chatStore history mapping', () => {
       },
       {
         type: 'user_text',
-        content: '继续下一轮',
+        content: 'Next round',
       },
     ])
   })
@@ -14757,13 +14815,13 @@ describe('chatStore history mapping', () => {
       },
     })
 
-    useChatStore.getState().sendMessage('session-a', '继续 A 会话')
+    useChatStore.getState().sendMessage('session-a', 'Continue session A')
 
     expect(resetCompletedTasksMock).not.toHaveBeenCalled()
     expect(useChatStore.getState().sessions['session-a']?.messages).toMatchObject([
       {
         type: 'user_text',
-        content: '继续 A 会话',
+        content: 'Continue session A',
       },
     ])
   })
@@ -14872,7 +14930,7 @@ describe('chatStore history mapping', () => {
       dedupeKey: 'computer-use-permission:cu-1',
       cooldownScope: 'permission-prompt',
       requestAttention: true,
-      title: 'Claude Code Haha 需要你的确认',
+      title: 'Claude Code Haha needs your confirmation',
       body: 'Open Finder and inspect a file',
       target: { type: 'session', sessionId: TEST_SESSION_ID },
     })
@@ -14911,7 +14969,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: '第一段：先到达。',
+      text: 'Paragraph one: arrives first.',
     })
     vi.advanceTimersByTime(60)
 
@@ -14921,7 +14979,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: '\r\n第二段：稍后到达，但仍属于同一轮回复。',
+      text: '\r\nParagraph two: arrives later but belongs to the same reply.',
     })
     vi.advanceTimersByTime(60)
 
@@ -14933,7 +14991,7 @@ describe('chatStore history mapping', () => {
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toMatchObject([
       {
         type: 'assistant_text',
-        content: '第一段：先到达。\r\n第二段：稍后到达，但仍属于同一轮回复。',
+        content: 'Paragraph one: arrives first.\r\nParagraph two: arrives later but belongs to the same reply.',
       },
     ])
 
@@ -15062,7 +15120,7 @@ describe('chatStore history mapping', () => {
   })
 
   it('does not duplicate the current prompt when CLI replays it after thinking starts', () => {
-    const prompt = '# 角色与目标\n构建一个协同编辑器'
+    const prompt = '# Role and goal\nBuild a collaborative editor'
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -15151,8 +15209,8 @@ describe('chatStore history mapping', () => {
     // re-joins name + args with a single space. The replay must still match the
     // optimistic bubble — HTML collapses the extra space, so a mismatch renders
     // as a visually identical duplicate bubble mid-stream.
-    const typed = '/ego-browser  https://huggingface.co/MiniMaxAI/MiniMax-H3 \n\n去帮我看一下这个页面，我们本地部署这个模型需要大概怎样的配置？\n\n如果是用 macOS，它 M 系列芯片的统一内存大概要多少？'
-    const replay = '/ego-browser https://huggingface.co/MiniMaxAI/MiniMax-H3 \n\n去帮我看一下这个页面，我们本地部署这个模型需要大概怎样的配置？\n\n如果是用 macOS，它 M 系列芯片的统一内存大概要多少？'
+    const typed = '/ego-browser  https://huggingface.co/MiniMaxAI/MiniMax-H3 \n\nCheck this page for me: roughly what hardware do we need to deploy this model locally?\n\nOn macOS, how much unified memory would an M-series chip need?'
+    const replay = '/ego-browser https://huggingface.co/MiniMaxAI/MiniMax-H3 \n\nCheck this page for me: roughly what hardware do we need to deploy this model locally?\n\nOn macOS, how much unified memory would an M-series chip need?'
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -15188,7 +15246,7 @@ describe('chatStore history mapping', () => {
     const modelPrompt = [
       '@"/repo/src/App.vue" Referenced workspace context:',
       '@"src/App.vue:new:L94-L105":',
-      'Comment: 调整这里',
+      'Comment: Adjust this',
       '```vue',
       '<section id="hero">',
       '```',
@@ -15215,7 +15273,7 @@ describe('chatStore history mapping', () => {
           diffSide: 'new',
           lineStart: 94,
           lineEnd: 105,
-          note: '调整这里',
+          note: 'Adjust this',
           quote: '<section id="hero">',
         }],
       },
@@ -15228,7 +15286,7 @@ describe('chatStore history mapping', () => {
     // the server-appended `[Image source: …]` line on the same text. Dedupe must
     // still match — otherwise the raw prompt + absolute upload path leak in as a
     // second grey bubble (the reported Windows regression).
-    const prompt = '请根据截图中编号 1 的蓝色标注修改本地前端。\n目标元素：<button>'
+    const prompt = 'Edit the local frontend according to the blue annotation numbered 1 in the screenshot.\nTarget element: <button>'
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -15333,7 +15391,7 @@ describe('chatStore history mapping', () => {
   it.each(['simple', 'detailed'] as const)('reconciles a delayed image guide replay after history hydration (%s metadata)', async (metadataStyle) => {
     // A guide is persisted before the CLI's first assistant record triggers its
     // replay ACK. History can therefore restore the image metadata first.
-    const prompt = '造桥这块儿有闪烁的情况'
+    const prompt = 'The bridge-building part flickers'
     const metadata = ['first.png', 'second.png'].map((name) => metadataStyle === 'simple'
       ? `[Image: source: /tmp/fixture-uploads/${name}]`
       : `[Image: source: /tmp/fixture-uploads/${name}, original 1024x768, displayed at 512x384. Multiply coordinates by 2 to map to original image.]`)
@@ -15368,7 +15426,7 @@ describe('chatStore history mapping', () => {
   })
 
   it('dedupes a path-backed image after the server inlines it into replay content', () => {
-    const prompt = '检查这张截图'
+    const prompt = 'Check this screenshot'
     const imagePath = 'C:\\Users\\tester\\Desktop\\screen.png'
     useChatStore.setState({
       sessions: {
@@ -15403,7 +15461,7 @@ describe('chatStore history mapping', () => {
   })
 
   it('dedupes a prompt when data-only files replay with server-materialized upload paths', () => {
-    const prompt = '检查这两个附件'
+    const prompt = 'Check these two attachments'
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -15454,7 +15512,7 @@ describe('chatStore history mapping', () => {
   })
 
   it('keeps a replay whose materialized upload filename does not match the current attachment', () => {
-    const prompt = '检查这个附件'
+    const prompt = 'Check this attachment'
     useChatStore.setState({
       sessions: {
         [TEST_SESSION_ID]: makeSession({
@@ -15665,7 +15723,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: '1. **`core/audio/waveform.py:19-31`** — 同步阻塞 I/O。',
+      text: '1. **`core/audio/waveform.py:19-31`** — synchronous blocking I/O.',
     })
     vi.advanceTimersByTime(60)
 
@@ -15677,7 +15735,7 @@ describe('chatStore history mapping', () => {
 
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: ' 建议直接用 `subprocess.PIPE` 流式处理。',
+      text: ' Use `subprocess.PIPE` to stream instead.',
     })
     vi.advanceTimersByTime(60)
 
@@ -15690,7 +15748,7 @@ describe('chatStore history mapping', () => {
       {
         type: 'assistant_text',
         content:
-          '1. **`core/audio/waveform.py:19-31`** — 同步阻塞 I/O。 建议直接用 `subprocess.PIPE` 流式处理。',
+          '1. **`core/audio/waveform.py:19-31`** — synchronous blocking I/O. Use `subprocess.PIPE` to stream instead.',
       },
     ])
 
@@ -15740,7 +15798,7 @@ describe('chatStore history mapping', () => {
       sessions: {
         [TEST_SESSION_ID]: {
           messages: [
-            { id: 'user-1', type: 'user_text', content: '总结一下', timestamp: Date.now() },
+            { id: 'user-1', type: 'user_text', content: 'Summarize', timestamp: Date.now() },
           ],
           chatState: 'streaming',
           connectionState: 'connected',
@@ -15768,7 +15826,7 @@ describe('chatStore history mapping', () => {
     })
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
       type: 'content_delta',
-      text: '## 结果\n\n- **修复完成**\n- `bun test` 已通过',
+      text: '## Result\n\n- **Fix complete**\n- `bun test` passed',
     })
     vi.advanceTimersByTime(60)
     useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
@@ -15778,8 +15836,8 @@ describe('chatStore history mapping', () => {
 
     expect(notifyDesktopMock).toHaveBeenCalledWith(expect.objectContaining({
       cooldownScope: 'agent-completion',
-      title: 'Claude Code Haha 已完成回复',
-      body: '结果 修复完成 bun test 已通过',
+      title: 'Claude Code Haha finished replying',
+      body: 'Result Fix complete bun test passed',
       target: { type: 'session', sessionId: TEST_SESSION_ID },
     }))
     expect(notifyDesktopMock.mock.calls[0]?.[0].dedupeKey).toMatch(
@@ -15830,7 +15888,7 @@ describe('chatStore history mapping', () => {
           messages: [],
           chatState: 'idle',
           connectionState: 'connected',
-          streamingText: '用户已停止后的残余文本',
+          streamingText: 'Leftover text after the user stopped',
           streamingToolInput: '',
           activeToolUseId: null,
           activeToolName: null,
@@ -16053,13 +16111,13 @@ describe('chatStore history mapping', () => {
       workDirExists: true,
     }]
 
-    useChatStore.getState().sendMessage(TEST_SESSION_ID, '开始优化UI')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'Start optimizing the UI')
 
-    expect(updateSessionTitleMock).toHaveBeenCalledWith(TEST_SESSION_ID, '开始优化UI')
-    expect(updateTabTitleMock).toHaveBeenCalledWith(TEST_SESSION_ID, '开始优化UI')
+    expect(updateSessionTitleMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'Start optimizing the UI')
+    expect(updateTabTitleMock).toHaveBeenCalledWith(TEST_SESSION_ID, 'Start optimizing the UI')
     expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, {
       type: 'user_message',
-      content: '开始优化UI',
+      content: 'Start optimizing the UI',
       attachments: undefined,
     })
   })
@@ -16109,7 +16167,7 @@ describe('chatStore history mapping', () => {
       },
     })
 
-    useChatStore.getState().sendMessage(TEST_SESSION_ID, '继续')
+    useChatStore.getState().sendMessage(TEST_SESSION_ID, 'Continue')
 
     const session = useChatStore.getState().sessions[TEST_SESSION_ID]
     expect(session?.streamingResponseChars).toBe(0)
@@ -16119,7 +16177,7 @@ describe('chatStore history mapping', () => {
 })
 
 // A desktop window left open for hours re-renders a long-finished session as a
-// wall of collapsed "已思考" bubbles with no reply text between them. No new LLM
+// wall of collapsed "Thought" bubbles with no reply text between them. No new LLM
 // call happens — the finished turn's stream events are pushed at the renderer a
 // second time on top of already-hydrated history. appendAssistantTextMessage
 // guards against exactly that replay, `case 'thinking'` does not.
@@ -16133,37 +16191,37 @@ type FinishedTurnStep =
 // last assistant reply is elided — it is a long markdown table.
 const FINISHED_COMPUTER_USE_TURN: FinishedTurnStep[] = [
   { kind: 'thinking', text: 'User wants Computer Use. I need to load the computer-use tools. Let me fetch the tool schemas first.' },
-  { kind: 'text', text: '我先加载 Computer Use 工具，然后严格按顺序执行。' },
+  { kind: 'text', text: 'I will load the Computer Use tools first, then follow the steps in order.' },
   { kind: 'tool', id: 'tool_aJGuYYOY4gzHHHFIaTus4M3e', name: 'ToolSearch' },
   { kind: 'thinking', text: 'Start: get_app_state to find search box, then step 1 click it. User wants get_app_state after each step and report the search field content.' },
   { kind: 'tool', id: 'tool_kosJoZ93D4WBqAWnmelI9Rik', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: 'Search box at approx (410, 50). Step 1: single click.' },
-  { kind: 'text', text: '初始状态：搜索框为空（只有放大镜占位图标），位置约 (410, 50)。\n\n**第 1 步：单击搜索框**' },
+  { kind: 'text', text: 'Initial state: the search box is empty (only the magnifier placeholder), at about (410, 50).\n\n**Step 1: click the search box**' },
   { kind: 'tool', id: 'tool_KlLouIdZHyPcj0Jbmy5nfJOf', name: 'mcp__computer-use__click' },
   { kind: 'thinking', text: '' },
   { kind: 'tool', id: 'tool_lNWmFSm7Er61dyZJcWGkGH6b', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: 'Step 1 done: search box still empty (only magnifier icon). Step 2: type "test".' },
-  { kind: 'text', text: '第 1 步后：搜索框里**为空**（只有放大镜占位图标，无文字）。\n\n**第 2 步：type_text 输入 "test"**' },
+  { kind: 'text', text: 'After step 1: the search box is **empty** (only the magnifier placeholder, no text).\n\n**Step 2: type_text "test"**' },
   { kind: 'tool', id: 'tool_hTHyhielyvIaUIWN6YJDz2g5', name: 'mcp__computer-use__type_text' },
   { kind: 'thinking', text: '' },
   { kind: 'tool', id: 'tool_951Y0sQNx8tMZGGMS7XjVeOL', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: 'Step 2 done: search box still empty — "test" did not appear. Report honestly. Step 3: type "abc".' },
-  { kind: 'text', text: '第 2 步后：搜索框里**为空** —— "test" 没有显示出来。\n\n**第 3 步：type_text 输入 "abc"**' },
+  { kind: 'text', text: 'After step 2: the search box is **empty**; "test" did not appear.\n\n**Step 3: type_text "abc"**' },
   { kind: 'tool', id: 'tool_Y1MzoPySfdwd7tNrFj389CEN', name: 'mcp__computer-use__type_text' },
   { kind: 'thinking', text: 'Continue: get_app_state after step 3.' },
   { kind: 'tool', id: 'tool_8TrKG2qCE6Q4bDYE5hMvngSW', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: 'Step 3 done: still empty. Step 4: double-click search box.' },
-  { kind: 'text', text: '第 3 步后：搜索框里**依然为空** —— "abc" 也没有显示。\n\n**第 4 步：双击搜索框**' },
+  { kind: 'text', text: 'After step 3: the search box is **still empty**; "abc" did not appear either.\n\n**Step 4: double-click the search box**' },
   { kind: 'tool', id: 'tool_qguIh8LXvDxOn6wE4aSlys2K', name: 'mcp__computer-use__click' },
   { kind: 'thinking', text: '' },
   { kind: 'tool', id: 'tool_T4513oOu6to3GY1EeEPMLvFr', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: '' },
-  { kind: 'text', text: '第 4 步后：搜索框里**仍然为空**，界面无任何变化。\n\n**第 5 步：type_text 输入 "xyz"**' },
+  { kind: 'text', text: 'After step 4: the search box is **still empty** and nothing changed.\n\n**Step 5: type_text "xyz"**' },
   { kind: 'tool', id: 'tool_XhJWl5aNuSPaUXctFQ91KSPM', name: 'mcp__computer-use__type_text' },
   { kind: 'thinking', text: '' },
   { kind: 'tool', id: 'tool_b2c5HshyO48rmbYqmlcGj94K', name: 'mcp__computer-use__get_app_state' },
   { kind: 'thinking', text: 'Done. Report all 5 steps faithfully.' },
-  { kind: 'text', text: '5 步全部完成，如实汇报每步后搜索框的内容：' },
+  { kind: 'text', text: 'All 5 steps done; here is what the search box held after each step:' },
 ]
 
 const FIRST_THINKING = FINISHED_COMPUTER_USE_TURN[0] as { kind: 'thinking'; text: string }
@@ -16175,7 +16233,7 @@ function buildFinishedTurnHistory(): MessageEntry[] {
     id: 'cu-prompt',
     type: 'user',
     timestamp: '2026-07-28T15:00:00.000Z',
-    content: '用 Computer Use 操作网易云音乐，严格按顺序做，每步做完立刻 get_app_state。',
+    content: 'Use Computer Use to drive NetEase Cloud Music, strictly in order, calling get_app_state right after each step.',
   }]
   FINISHED_COMPUTER_USE_TURN.forEach((step, index) => {
     const timestamp = new Date(Date.UTC(2026, 6, 28, 15, 1, index)).toISOString()
@@ -16274,7 +16332,7 @@ describe('chatStore wake replay of a finished thinking turn', () => {
 
   // Defensive. The transcript really does hold five empty thinking blocks and
   // history mapping filters them, but no server emit path puts an empty
-  // thinking event on the wire today — so a collapsed "已思考" row on screen is
+  // thinking event on the wire today — so a collapsed "Thought" row on screen is
   // not by itself proof that an empty block was streamed.
   it('does not spawn empty thinking bubbles from replayed empty thinking events', () => {
     replayFinishedTurn({ withText: false, withEmptyThinking: true })
@@ -17142,7 +17200,7 @@ describe('chatStore inactive complete-page retention', () => {
 
   beforeEach(async () => {
     const { readFileSync } = await import('node:fs')
-    imageData = `data:image/png;base64,${readFileSync('src/assets/pets/action-sheet-guide.zh.png').toString('base64')}`
+    imageData = `data:image/png;base64,${readFileSync('src/assets/pets/action-sheet-guide.en.png').toString('base64')}`
     const { useTabStore } = await import('./tabStore')
     tabStoreSnapshot.tabs = []
     tabStoreSnapshot.activeTabId = null
@@ -17651,7 +17709,7 @@ describe('chatStore background-continue notice (#1674)', () => {
   // Frames below are copied from a real desktop server + CLI run (DeepSeek
   // Flash): a run_in_background Bash command finished after the turn ended.
   const SHELL_SUMMARY = 'Background command "Sleep 20s then print BG_DONE_7731" completed (exit code 0)'
-  const REPLY = '后台任务已完成（退出码 0），输出为 `BG_DONE_7731`。'
+  const REPLY = 'The background task finished (exit code 0) with output `BG_DONE_7731`.'
 
   beforeEach(() => {
     vi.mocked(sessionsApi.getFullHistory).mockReset()
@@ -17681,7 +17739,7 @@ describe('chatStore background-continue notice (#1674)', () => {
       historyStatus: 'ready',
       messages: [
         { id: 'user-1', type: 'user_text', content: 'start it in the background', timestamp: 1, transcriptMessageId: 'durable-user' },
-        { id: 'reply-1', type: 'assistant_text', content: '已在后台启动', timestamp: 2, transcriptMessageId: 'durable-started' },
+        { id: 'reply-1', type: 'assistant_text', content: 'Started in the background', timestamp: 2, transcriptMessageId: 'durable-started' },
       ],
       ...overrides,
     }) } })
@@ -17720,7 +17778,7 @@ describe('chatStore background-continue notice (#1674)', () => {
     seedIdle()
     vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [
       { id: 'durable-user', type: 'user', timestamp: '2026-11-02T01:00:00.000Z', content: 'start it in the background' },
-      { id: 'durable-started', type: 'assistant', timestamp: '2026-11-02T01:00:01.000Z', content: [{ type: 'text', text: '已在后台启动' }] },
+      { id: 'durable-started', type: 'assistant', timestamp: '2026-11-02T01:00:01.000Z', content: [{ type: 'text', text: 'Started in the background' }] },
       {
         id: 'durable-notification',
         type: 'system',
@@ -17736,7 +17794,7 @@ describe('chatStore background-continue notice (#1674)', () => {
 
     const expected = [
       'user_text: start it in the background',
-      'assistant_text: 已在后台启动',
+      'assistant_text: Started in the background',
       `system: ${t('chat.backgroundContinue', { summary: SHELL_SUMMARY })}`,
       'thinking: The background command completed.',
       `assistant_text: ${REPLY}`,
@@ -17868,7 +17926,7 @@ describe('chatStore background-continue notice (#1674)', () => {
 
     resolveHistory({ messages: [
       { id: 'durable-user', type: 'user', timestamp: new Date(Date.now() - 60_000).toISOString(), content: 'start it in the background' },
-      { id: 'durable-started', type: 'assistant', timestamp: new Date(Date.now() - 59_000).toISOString(), content: [{ type: 'text', text: '已在后台启动' }] },
+      { id: 'durable-started', type: 'assistant', timestamp: new Date(Date.now() - 59_000).toISOString(), content: [{ type: 'text', text: 'Started in the background' }] },
       {
         id: 'durable-notification',
         type: 'system',

@@ -253,8 +253,8 @@ describe('DirectoryPicker', () => {
 
     render(<DirectoryPicker value="" onChange={vi.fn()} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
-    fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
+    fireEvent.click(screen.getByRole('button', { name: /Select a project/ }))
+    fireEvent.click(await screen.findByText(/Choose a different folder/))
 
     expect(await screen.findByRole('button', { name: /project/ })).toBeInTheDocument()
     expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('validateDOMNesting'))
@@ -282,8 +282,8 @@ describe('DirectoryPicker', () => {
 
     render(<DirectoryPicker value="" onChange={onChange} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
-    fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
+    fireEvent.click(screen.getByRole('button', { name: /Select a project/ }))
+    fireEvent.click(await screen.findByText(/Choose a different folder/))
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('/workspace/native-project'))
     expect(open).toHaveBeenCalledWith({

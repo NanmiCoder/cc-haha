@@ -112,7 +112,7 @@ describe('loadSafeOutboundImage', () => {
     }, root)
 
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.reason).toContain('图片过大')
+    if (!result.ok) expect(result.reason).toContain('Image too large')
   })
 
   it('preflights base64 size and MIME before decoding', async () => {

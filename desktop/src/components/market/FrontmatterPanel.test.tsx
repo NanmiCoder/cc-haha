@@ -20,11 +20,11 @@ describe('FrontmatterPanel', () => {
   })
 
   it('renders sequences as individual chips rather than one joined string', () => {
-    render(<FrontmatterPanel frontmatter={{ xiaping_tags: ['AI工具', '技能发现', 'WorkBuddy'] }} />)
+    render(<FrontmatterPanel frontmatter={{ xiaping_tags: ['AI工具', 'Skill discovery', 'WorkBuddy'] }} />)
 
     const row = screen.getByTestId('skill-frontmatter-row-xiaping_tags')
     expect(within(row).getByText('AI工具')).toBeInTheDocument()
-    expect(within(row).getByText('技能发现')).toBeInTheDocument()
+    expect(within(row).getByText('Skill discovery')).toBeInTheDocument()
     expect(within(row).getByText('WorkBuddy')).toBeInTheDocument()
   })
 

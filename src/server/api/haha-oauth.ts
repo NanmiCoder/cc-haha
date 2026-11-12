@@ -1,12 +1,12 @@
 /**
  * Haha OAuth REST API
  *
- * POST   /api/haha-oauth/start    — 生成 PKCE+state,返回 authorize URL
- * GET    /callback                — 用户浏览器 redirect 到此,完成 token 交换
- * GET    /api/haha-oauth/callback — 兼容旧路径
- * GET    /api/haha-oauth          — 查询当前登录状态(不回传 token 本体)
- * GET    /api/haha-oauth/status   — 同上(legacy path)
- * DELETE /api/haha-oauth          — 登出,删除 token 文件
+ * POST   /api/haha-oauth/start    — generate PKCE+state, return the authorize URL
+ * GET    /callback                — user's browser redirects here to complete the token exchange
+ * GET    /api/haha-oauth/callback — legacy path compatibility
+ * GET    /api/haha-oauth          — query current login status (token itself not returned)
+ * GET    /api/haha-oauth/status   — same as above (legacy path)
+ * DELETE /api/haha-oauth          — log out, delete the token file
  */
 
 import { z } from 'zod'

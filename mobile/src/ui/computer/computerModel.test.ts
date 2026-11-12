@@ -25,20 +25,20 @@ test('permission default is editable on LAN and read-only over public access', (
   expect(permissionAccess(lan)).toEqual({ editable: true })
   const blocked = permissionAccess(remote)
   expect(blocked.editable).toBe(false)
-  expect(blocked.note).toContain('公网连接下只能在电脑上改')
+  expect(blocked.note).toContain('can only be changed on the computer over a public connection')
 })
 
 test('defaults footnote only mentions the permission limit on public connections', () => {
-  expect(defaultsFootnote(lan)).not.toContain('公网')
-  expect(defaultsFootnote(lan)).toContain('只影响之后新建的任务')
+  expect(defaultsFootnote(lan)).not.toContain('Public')
+  expect(defaultsFootnote(lan)).toContain('Affects only tasks created afterwards')
   const text = defaultsFootnote(remote)
-  expect(text).toContain('只影响之后新建的任务')
-  expect(text).toContain('公网连接下只能在电脑上改')
+  expect(text).toContain('Affects only tasks created afterwards')
+  expect(text).toContain('can only be changed on the computer over a public connection')
 })
 
 test('connection rows name the method and show host:port', () => {
-  expect(connectionMethod(lan)).toBe('局域网直连')
-  expect(connectionMethod(remote)).toBe('公网访问')
+  expect(connectionMethod(lan)).toBe('LAN direct')
+  expect(connectionMethod(remote)).toBe('Public access')
   expect(connectionAddress(lan)).toBe('192.168.1.8:3600')
   expect(connectionAddress(remote)).toBe('haha.example.com')
   expect(connectionAddress({ url: 'not a url' })).toBe('not a url')
@@ -48,10 +48,10 @@ test('public authorization countdown rounds up and is hidden on LAN', () => {
   const day = 86400000
   expect(remoteAuthLine(lan, { expiresAt: 5 * day, checkedAt: 0 })).toBeNull()
   expect(remoteAuthLine(remote, {})).toBeNull()
-  expect(remoteAuthLine(remote, { expiresAt: 2.2 * day, checkedAt: 0 })).toBe('还剩 3 天')
-  expect(remoteAuthLine(remote, { expiresAt: 0.4 * day, checkedAt: 0 })).toBe('还剩 1 天')
-  expect(remoteAuthLine(remote, { expiresAt: 0, checkedAt: 0 })).toBe('不足 1 天')
-  expect(remoteAuthLine(remote, { expiresAt: -day, checkedAt: 0 })).toBe('不足 1 天')
+  expect(remoteAuthLine(remote, { expiresAt: 2.2 * day, checkedAt: 0 })).toBe('3 days left')
+  expect(remoteAuthLine(remote, { expiresAt: 0.4 * day, checkedAt: 0 })).toBe('1 day left')
+  expect(remoteAuthLine(remote, { expiresAt: 0, checkedAt: 0 })).toBe('Less than 1 day')
+  expect(remoteAuthLine(remote, { expiresAt: -day, checkedAt: 0 })).toBe('Less than 1 day')
 })
 
 test('model display prefers the computer-provided name', () => {
@@ -62,37 +62,37 @@ test('model display prefers the computer-provided name', () => {
 })
 
 test('background activity never claims idle when some sessions were unreadable', () => {
-  expect(activitySummary({ running: 4, read: 2, total: 5 })).toBe('4 项在跑')
-  expect(activitySummary({ running: 0, read: 5, total: 5 })).toBe('空闲')
-  expect(activitySummary({ running: 0, read: 0, total: 0 })).toBe('空闲')
+  expect(activitySummary({ running: 4, read: 2, total: 5 })).toBe('4 running')
+  expect(activitySummary({ running: 0, read: 5, total: 5 })).toBe('Idle')
+  expect(activitySummary({ running: 0, read: 0, total: 0 })).toBe('Idle')
   expect(activitySummary({ running: 0, read: 2, total: 5 })).toBeUndefined()
 })
 
 test('desktop-only footnote keeps the shared list and points to the desktop', () => {
   expect(desktopOnlyText).toContain(desktopOnly)
-  expect(desktopOnlyText).toContain('在电脑上打开 cc-haha')
+  expect(desktopOnlyText).toContain('Open cc-haha settings on the computer')
 })
 
 test('removing a computer quotes its name in the confirmation', () => {
   const text = removeConfirmText('MacBook Pro')
-  expect(text.title).toBe('移除「MacBook Pro」？')
-  expect(text.message).toContain('电脑上的会话会保留')
-  // 移除不取决于电脑连不连得上：别再说「需要连接电脑完成注销」。
-  expect(text.message).toContain('连不上也能移除')
-  expect(text.message).not.toContain('需要连接电脑')
+  expect(text.title).toBe('Remove “MacBook Pro”?')
+  expect(text.message).toContain('sessions on the computer are kept')
+  // Removal does not depend on whether the computer is reachable: stop saying "requires connecting the computer to unregister".
+  expect(text.message).toContain('can be removed even when unreachable')
+  expect(text.message).not.toContain('Requires connecting the computer')
 })
 
 test('provider row names the active source and counts the others', () => {
   const sources = [
-    { id: null, name: 'Claude 官方' },
-    { id: 'openai-official', name: 'ChatGPT 官方' },
-    { id: 'p1', name: '自建' },
+    { id: null, name: 'Claude Official' },
+    { id: 'openai-official', name: 'ChatGPT Official' },
+    { id: 'p1', name: 'Self-hosted' },
   ]
-  expect(providerSummary(sources, null)).toEqual({ name: 'Claude 官方', others: '另有 2 个' })
-  expect(providerSummary(sources, 'p1')).toEqual({ name: '自建', others: '另有 2 个' })
-  expect(providerSummary(sources.slice(0, 1), null)).toEqual({ name: 'Claude 官方', others: undefined })
-  // 当前来源已被删除：不能把它算进“其他”。
-  expect(providerSummary(sources, 'gone')).toEqual({ name: '', others: '另有 3 个' })
+  expect(providerSummary(sources, null)).toEqual({ name: 'Claude Official', others: '2 more' })
+  expect(providerSummary(sources, 'p1')).toEqual({ name: 'Self-hosted', others: '2 more' })
+  expect(providerSummary(sources.slice(0, 1), null)).toEqual({ name: 'Claude Official', others: undefined })
+  // The current source was deleted: it must not be counted in "others".
+  expect(providerSummary(sources, 'gone')).toEqual({ name: '', others: '3 more' })
 })
 
 test('model rows show the id in mono only when the name differs', () => {
@@ -124,13 +124,13 @@ test('effort slider falls back from the current level to the model default, else
 
 test('header status reads online with the network, and keeps offline and revoked states apart', () => {
   const now = Date.now()
-  expect(computerStatus(lan, { state: 'online' }, now)).toEqual({ text: '在线 · 局域网', tone: 'ok' })
-  expect(computerStatus(remote, { state: 'online' }, now)).toEqual({ text: '在线 · 公网', tone: 'ok' })
+  expect(computerStatus(lan, { state: 'online' }, now)).toEqual({ text: 'Online · LAN', tone: 'ok' })
+  expect(computerStatus(remote, { state: 'online' }, now)).toEqual({ text: 'Online · Public', tone: 'ok' })
   expect(computerStatus(lan, { state: 'unauthorized' }, now).tone).toBe('err')
   const offline = computerStatus(lan, { state: 'offline' }, now)
   expect(offline.tone).toBe('faint')
-  expect(offline.text).toContain('离线')
-  expect(computerStatus(lan, { state: 'checking' }, now).text).toContain('检查')
+  expect(offline.text).toContain('Offline')
+  expect(computerStatus(lan, { state: 'checking' }, now).text).toContain('Check')
 })
 
 test('effort track puts the first and last stops 20pt inside the 2pt-inset track', () => {

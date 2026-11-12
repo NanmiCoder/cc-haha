@@ -6,8 +6,8 @@ import type { HostLink } from './homeModel'
 import { computerCardLabel, computerCardView } from './computerCardModel'
 
 /**
- * 首页顶部的电脑卡（设计稿 B1 / B2）：64pt 一行，点一下进电脑设置。
- * 离线时向下展开一句原因和两个按钮；授权失效时右侧换成「重新配对」胶囊。
+ * Computer card at the top of home (design B1 / B2): one 64pt row, tap to open computer settings.
+ * When offline expand a line of reason and two buttons; when auth is invalid the right side becomes a "Pair again" capsule.
  */
 export function ComputerCard({
   name,
@@ -25,12 +25,12 @@ export function ComputerCard({
   host: { auth: 'lan' | 'remote' }
   link: HostLink
   lastSyncedAt?: number
-  /** 新任务默认模型名；读不到就不传。 */
+  /** New task default model name; omitted when unavailable. */
   model?: string
-  /** 公网配对到期时间（毫秒时间戳）；读不到就不传。 */
+  /** Public pairing expiry (ms timestamp); omitted when unavailable. */
   expiresAt?: number
   onOpen(): void
-  /** 没有别的电脑可换时不传（网页版只连接打开它的电脑）。 */
+  /** Omitted when there is no other computer to switch to (the web version only connects to the computer that opened it). */
   onSwitch?: () => void
   onReconnect(): void
   onRepair(): void
@@ -41,7 +41,7 @@ export function ComputerCard({
   const view = computerCardView({ link, host, lastSyncedAt, now, model, expiresAt })
   const statusColor =
     view.textTone === 'attn' ? colors.attn : view.textTone === 'err' ? colors.err : colors.ink3
-  // 设计稿里空心圈和转圈的灰是 ink3，不是更浅的 faint。
+  // The grey of hollow rings and spinners in the design is ink3, not the lighter faint.
   const leadColor = view.leadTone === 'faint' ? colors.ink3 : toneColor(view.leadTone)
   const tileColor =
     view.tile === 'err' ? colors.err : view.tile === 'dim' ? colors.ink3 : colors.ink
@@ -132,7 +132,7 @@ export function ComputerCard({
           ) : null}
         </Pressable>
         {view.trailing === 'repair' ? (
-          <Button title="重新配对" size="sm" pill onPress={onRepair} />
+          <Button title="Pair again" size="sm" pill onPress={onRepair} />
         ) : null}
       </View>
       {view.detail ? (
@@ -149,14 +149,14 @@ export function ComputerCard({
                 onSwitch ? (
                 <Button
                   key={button}
-                  title="换一台电脑"
+                  title="Switch computer"
                   variant="secondary"
                   onPress={onSwitch}
                   style={{ flex: 1 }}
                 />
                 ) : null
               ) : (
-                <Button key={button} title="重新连接" onPress={onReconnect} style={{ flex: 1 }} />
+                <Button key={button} title="Reconnect" onPress={onReconnect} style={{ flex: 1 }} />
               )
             )}
           </View>

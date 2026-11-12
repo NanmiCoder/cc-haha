@@ -119,7 +119,7 @@ type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
 }
-/** 离最新处（倒置列表的起点）不到这么远就算停在最新处。 */
+/** Within this distance of the newest position (start of the inverted list) counts as staying at the newest. */
 const LATEST_SLOP = 120
 
 const toggle = (set: ReadonlySet<string>, key: string) => {
@@ -136,8 +136,8 @@ export default function Chat() {
     notificationAction?: string
     requestId?: string
   }>()
-  // 不带 host 的链接（cchaha://chat/<id>）按当前电脑打开，与其他带 host 参数的页面一致；
-  // 否则草稿、历史缓存和首页快照都按 undefined 取，冷启动时还会读到空快照闪退。
+  // Links without host (cchaha://chat/<id>) open on the current computer, consistent with other pages that take a host param; 
+  // otherwise draft, history cache and home snapshot are all read with undefined, and a cold start reads an empty snapshot and crashes.
   const { registry } = useApp()
   const hostId = host ?? registry.selectedId ?? ''
   return (
@@ -163,7 +163,7 @@ function ChatSession({
   notificationRequestId?: string
 }) {
   const { client, host, credential, error: connectionError } = useConnection(hostId)
-  // 工具结果里的图片按引用下载，缓存跟着这台电脑的连接走。
+  // Images in tool results are downloaded by reference; the cache follows this computer connection.
   const toolImages = useMemo(() => (client ? createToolImageLoader(client) : null), [client])
   const { drafts } = useApp()
   const colors = useColors()
@@ -173,34 +173,34 @@ function ChatSession({
   const handoff = useRef<{
     task: typeof initialTask
     phase: 'initial' | 'config' | 'done' | 'failed'
-    /** 编辑重发前输入框里没发出的内容，发送成功后还回去。 */
+    /** Content in the input that was not sent before edit-and-resend is restored after sending succeeds. */
     restore?: { text: string; attachments: ComposerAttachment[]; references?: ComposerReference[] }
   }>({
     task: initialTask,
     phase: 'initial',
   })
-  // 新任务移交的内容可能带团队标记：输入框只显示用户的话，团队开关替代标记。
+  // Content handed over by a new task may carry a team marker: the input shows only the user text, and the team toggle replaces the marker.
   const [initialDraft] = useState(() => (initialTask ? pendingTaskDraft(initialTask) : null))
   const [draft, setDraft] = useState(initialDraft?.text ?? drafts.get(draftKey) ?? '')
-  // 上次离开时排队消息里的材料和团队开关（文字已经在草稿里）。
+  // Materials and team toggle from queued messages when last leaving (the text is already in the draft).
   const [parked] = useState(() => (initialTask ? undefined : parkedComposer(draftKey)))
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(
     initialTask?.attachments ?? parked?.attachments ?? []
   )
   const [references, setReferences] = useState<ComposerReference[]>(initialTask?.references ?? parked?.references ?? [])
   const [team, setTeam] = useState(initialDraft?.team ?? parked?.team ?? false)
-  // 运行中追加的消息先在手机上排队，这一轮结束后按顺序发出。
+  // Messages added while running queue on the phone first and send in order after this turn ends.
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const queueSeq = useRef(0)
   const leaving = useRef<ComposerQueueState>({ queue, draft, attachments, team, references })
   const focused = useRef(false)
-  // 在模型弹层里选过的模型：用它的显示名和上下文大小，其余时候只有模型 id。
+  // Model chosen in the model sheet: use its display name and context size; otherwise only the model id is known.
   const [chosenModel, setChosenModel] = useState<Model | null>(null)
   const [state, setState] = useState<ChatState>(() => createChatState(id))
   const [connection, setConnection] = useState<ConnectionState>('connecting')
-  // 真正和电脑对齐（读过历史）的次数：续传、换路接回不变，分支和检查点只跟它重读。
+  // Number of real syncs with the computer (history read): resume and reroute keep it unchanged; branches and checkpoints only reread on it.
   const [syncEpoch, setSyncEpoch] = useState(0)
-  // 连着失败的建连次数：两次就不再等满十秒才提示。
+  // Consecutive failed connection attempts: after two, warn without waiting the full ten seconds.
   const [failures, setFailures] = useState(0)
   const [session, setSession] = useState<Session | null>(null)
   const [error, setError] = useState('')
@@ -220,16 +220,16 @@ function ChatSession({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderFailed, setOlderFailed] = useState(false)
   const [awayFromLatest, setAwayFromLatest] = useState(false)
-  // 停在最新处附近：这时不开「保持阅读位置」，新内容由倒置列表自然贴底。
+  // Near the newest position: do not enable keep-reading-position; new content sticks to the bottom via the inverted list.
   const [atLatest, setAtLatest] = useState(true)
   const [branch, setBranch] = useState<string | null>(null)
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
   const [ui, setUi] = useState<StepUi>(() => ({ expanded: new Set(), open: new Set(), closed: new Set(), revealed: new Set() }))
   const [turnClock, setTurnClock] = useState<{ startedAt?: number; endedAt?: number; live?: boolean }>({})
-  // 进页面时已经在跑的一轮，用电脑给的开始时间，和首页一致。
+  // A turn already running when entering the page uses the start time from the computer, consistent with home.
   const { snapshot: dashboard, holdActivityScope } = useDashboard()
-  // 聊天页只用到运行状态；聚焦期间不再反复拉整份会话列表，把隧道留给聊天。
+  // The chat page only needs run state; do not repeatedly fetch the full session list while focused, leaving the tunnel to chat.
   useFocusEffect(useCallback(() => holdActivityScope(), [holdActivityScope]))
   const liveActivity =
     dashboard?.hostId === hostId ? dashboard.activity.find((item) => item.id === id) : undefined
@@ -239,18 +239,18 @@ function ChatSession({
       : undefined
   const clockRef = useRef<{ active: boolean; startedAt?: number; live: boolean } | undefined>(undefined)
   const connectionRef = useRef<ConnectionState>('connecting')
-  // 远程电脑的连接路径：经 Cloudflare，还是已升级成直连。
+  // Connection path for a remote computer: through Cloudflare, or upgraded to direct.
   const [linkPath, setLinkPath] = useState<LinkPath | null>(null)
   const transport = useRef<SessionTransport | null>(null)
-  // 消息流是倒置列表：offset 0 就是最新处。打开会话、键盘弹起、输入框变高、流式输出变长时
-  // 由原生保持在底部，不需要 JS 算位置补滚动（那样会和原生尺寸变化赛跑，滚不到底）。
+  // The message stream is an inverted list: offset 0 is the newest. When opening a session, keyboard opening, input growing, or streaming output growing,
+  // native keeps it at the bottom; no JS position math or scroll correction is needed (that would race native size changes and fail to reach the bottom).
   const list = useRef<FlatList<ChatRow>>(null)
-  // 离最新处的距离，以及列表可视高度和内容高度：决定什么时候提前往前翻。
+  // Distance from the newest, plus list viewport and content height: decide when to page back early.
   const scrollMetrics = useRef({ offset: 0 })
   const listSize = useRef({ viewport: 0, content: 0 })
   const olderInFlight = useRef(false)
   const olderFailedRef = useRef(false)
-  // 一次拖动里连续自动翻了几批，见 shouldPrefetchOlder。
+  // How many batches were auto-paged in one drag; see shouldPrefetchOlder.
   const autoBatches = useRef(0)
   const notificationSeen = useRef(new Set<string>())
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -267,7 +267,7 @@ function ChatSession({
     // An H5 page authenticated by its cookie or loopback address has credential ''.
     if (!client || credential === undefined) return
     let alive = true
-    /** 本轮起止时间只在收到状态时记录：亲眼看到开始用本地时间，否则用消息时间。 */
+    /** Turn start and end are only recorded on status: use local time when the start was seen, otherwise message time. */
     function trackTurn(value: ChatState) {
       const previous = clockRef.current
       const now = Date.now()
@@ -284,8 +284,8 @@ function ChatSession({
         live: connectionRef.current === 'ready',
       }
       if (previous?.active === value.turnActive && previous?.startedAt === startedAt) return
-      // 本页亲眼看到这一轮开始（连着线、从空闲变成运行）时本地时间最准；
-      // 进页面时已经在跑的一轮才借用电脑给的开始时间。
+      // Local time is most accurate when this page saw the turn start (connected, idle to running); 
+      // only a turn already running on page entry borrows the start time from the computer.
       if (value.turnActive)
         setTurnClock({ startedAt, live: !!previous && !previous.active && previous.live })
       else if (previous?.active)
@@ -312,7 +312,7 @@ function ChatSession({
       platform: Platform.OS === 'web' ? 'web' : 'native',
       history: sessionHistory.store(hostId, id),
       gate: foregroundGate,
-      // 断线后接回原来的流：只补发错过的部分，不重读历史（电脑不支持时自动退回旧方式）。
+      // After a disconnect, resume the original stream: only resend missed parts, no history reread (falls back to the old way if the computer does not support it).
       newStreamId: () =>
         newStreamId(Platform.OS === 'web' ? globalThis.crypto : { getRandomValues }),
       socketFactory: (options) =>
@@ -332,7 +332,7 @@ function ChatSession({
           setConnection(value)
           setSyncEpoch(channel.syncEpoch)
           setFailures(channel.failures)
-          // 重新连上后，之前因为断线没翻成的可以再自动翻。
+          // After reconnecting, paging that failed due to the disconnect can auto-page again.
           if (value === 'ready') {
             olderFailedRef.current = false
             setOlderFailed(false)
@@ -359,11 +359,11 @@ function ChatSession({
         return
       }
       if (value !== 'active') return
-      // 离开多久都先探活；连接还活着就接着用，不拆掉重来。
+      // Probe liveness regardless of how long we were away; if the connection is still alive keep using it instead of tearing down.
       channel.resume(hiddenAt)
       hiddenAt = undefined
     })
-    // 直连打通了：会话带着已看到的帧号换到新路上；直连断了由续传经 Cloudflare 接回。
+    // Direct connection established: the session moves to the new path with the frames already seen; if direct drops, resume reconnects through Cloudflare.
     queueMicrotask(() => {
       if (alive) setLinkPath(link?.path ?? null)
     })
@@ -371,7 +371,7 @@ function ChatSession({
       if (alive) setLinkPath(path)
       if (path !== 'cf') channel.migrate()
     })
-    // 换了网络：不等心跳漏掉，马上探一次。
+    // Network changed: probe right away instead of waiting for a missed heartbeat.
     const stopNetwork = watchDeviceNetwork(() => channel.resume())
     return () => {
       alive = false
@@ -400,8 +400,8 @@ function ChatSession({
   const pendingUser = state.items.some((item) => item.type === 'user' && item.pending)
   const waitingForDecision =
     state.permissions.length > 0 || state.computerUsePermissions.length > 0
-  // 这一轮结束后按顺序发出排队的消息。发送失败（断线、电脑还没确认上一条）时
-  // 保持排队，条件变化后再试；传输层本身也会拒绝在上一条未确认时再发。
+  // After this turn ends, send queued messages in order. If sending fails (disconnected, computer has not confirmed the previous one)
+  // keep them queued and retry when conditions change; the transport also refuses to send while the previous one is unconfirmed.
   const lastUser = state.items.findLast((item) => item.type === 'user')
   const queueGate: QueueGate = {
     ready,
@@ -449,7 +449,7 @@ function ChatSession({
   }, [draftKey])
   const restoreQueue = useCallback((current: ComposerQueueState, ids?: string[]) => {
     const restored = withdrawQueuedComposer(draftKey, current, drafts, ids)
-    // 先同步 ref 和内存草稿，停止后紧接着离开也不会丢稿或重复归还附件。
+    // Sync the ref and in-memory draft first so leaving right after stopping neither loses the draft nor returns attachments twice.
     leaving.current = restored
     if (restored !== current && mounted.current) {
       setQueue(restored.queue)
@@ -463,7 +463,7 @@ function ChatSession({
     useCallback(() => {
       focused.current = true
       return () => {
-        // push 工作区等页面时聊天仍挂载；失焦即停止自动续发并退回输入框。
+        // push Chat stays mounted under pages like workspace; on blur stop auto-sending and return to the input.
         focused.current = false
         restoreQueue(leaving.current)
       }
@@ -477,7 +477,7 @@ function ChatSession({
       showLatest()
     }
   }
-  /** 立即把排队消息插进正在运行的一轮；这一轮刚好结束时退回普通发送。 */
+  /** Insert queued messages into the running turn immediately; if the turn just ended, fall back to a normal send. */
   function guideQueued(itemId: string) {
     const item = queue.find((value) => value.id === itemId)
     if (!item) return
@@ -491,7 +491,7 @@ function ChatSession({
       showLatest()
       return
     }
-    showNotice('现在还不能引导，等上一条确认或当前决定处理完再试。', true)
+    showNotice('Cannot steer yet; try again after the previous message is confirmed or the current decision is handled.', true)
   }
   function withdrawQueued(ids?: string[]) {
     restoreQueue({ queue, draft, attachments, team, references }, ids)
@@ -506,15 +506,15 @@ function ChatSession({
         }
       : undefined)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
-  const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
+  const modelLabel = runtime ? knownModel?.name || runtime.modelId : 'Choose model'
   const permissionMode = state.permissionMode ?? session?.permissionMode
   const backgroundCount = state.backgroundTaskIds.length
-  const title = state.title || session?.title || '会话'
+  const title = state.title || session?.title || 'Session'
   const computer = useComputerUse(client)
   const sendRaw = useCallback((message: ClientMessage) => transport.current?.send(message) ?? false, [])
   useEffect(() => registerSessionSender(id, sendRaw), [id, sendRaw])
-  // 队长提交团队后只有人确认才会开工：手机上也要能处理。和桌面端一样放在输入框上方，
-  // 不占输入框——追加成员时原有成员还在跑，用户仍要能停止、能和队长说话。
+  // After the lead submits a team, work starts only after a human approves: this must work on mobile too. Like desktop, it sits above the input, 
+  // not taking over the input — while adding members, existing members are still running and the user must still be able to stop and talk to the lead.
   const teamPlan = useTeamPlan({
     client,
     sessionId: id,
@@ -523,13 +523,13 @@ function ChatSession({
     turnActive: state.turnActive,
   })
   const teamSurface = teamPlanSurface(teamPlan.plan)
-  // 每份新提交的方案从底部自动弹出一次；关掉后从卡片再打开。开关放在页面上，
-  // 卡片随输入框或审批切换重挂载时不会把它关掉或重复弹出。
+  // Each newly submitted plan pops up from the bottom once; after closing, reopen from the card. The toggle lives on the page, 
+  // so remounting the card when switching between input and approval neither closes it nor pops it twice.
   const reviewPlanId = teamSurface === 'review' ? teamPlan.plan?.planId : undefined
   const [teamSheet, setTeamSheet] = useState<{ planId?: string; open: boolean }>({ open: false })
   if (reviewPlanId && teamSheet.planId !== reviewPlanId) setTeamSheet({ planId: reviewPlanId, open: true })
   const teamSheetOpen = !!reviewPlanId && teamSheet.planId === reviewPlanId && teamSheet.open
-  // 确认后审阅卡就消失了：顶栏下方说一句「正在启动」，顶部胶囊接着显示进度。
+  // After approval the review card disappears: show "starting" below the header, and the top capsule shows progress.
   const [seenPlan, setSeenPlan] = useState(teamPlan.plan)
   const [teamToast, setTeamToast] = useState('')
   if (seenPlan !== teamPlan.plan) {
@@ -558,14 +558,14 @@ function ChatSession({
     send: sendRaw,
     teamPlan: teamPlan.plan,
   })
-  // 队长这一轮结束了、已确认的成员还在跑：停止照样要给（同桌面的 background 停止）。
+  // Lead turn ended while approved members are still running: still offer stop (same as desktop background stop).
   const teamWorking =
     !state.turnActive &&
     (teamPlan.plan?.state === 'launching' || teamPlan.plan?.state === 'running') &&
     !teamMembersAllStopped(activity.team)
 
-  // 分支只用于副标题与菜单；取不到就只显示项目名。只在真正和电脑重新对齐后重读：
-  // 续传、换到直连这类接回不读历史，也不该在回前台时顺带多发一个请求。
+  // Branch is only for the subtitle and menu; if unavailable show only the project name. Reread only after truly resyncing with the computer: 
+  // reconnects like resume or switching to direct do not read history, and returning to foreground should not fire an extra request.
   useEffect(() => {
     if (!client || !syncEpoch) return
     const controller = new AbortController()
@@ -578,7 +578,7 @@ function ChatSession({
     return () => controller.abort()
   }, [client, id, syncEpoch])
 
-  // 本轮改动卡和菜单里的文件数都来自最新一轮检查点；运行中不读，一轮结束或重新对齐后再读。
+  // File counts in this turn's changes card and the menu come from the latest checkpoint; not read while running, read after the turn ends or a resync.
   const hasItems = state.items.length > 0
   useEffect(() => {
     if (!client || !syncEpoch || state.turnActive || !hasItems) return
@@ -594,7 +594,7 @@ function ChatSession({
   }, [client, id, syncEpoch, state.turnActive, hasItems, revision])
   const latest = useMemo(() => latestTurnCheckpoint(checkpoints), [checkpoints])
 
-  // 后台任务列表只用来把“后台进行中”对到具体的子 Agent 步骤上。
+  // The background task list is only used to map "running in background" to specific subagent steps.
   const backgroundKey = state.backgroundTaskIds.join('\n')
   useEffect(() => {
     if (!client || !backgroundKey) return
@@ -621,7 +621,7 @@ function ChatSession({
       return
     if (busy || workspaceMissing) {
       value.phase = 'failed'
-      setNotice('首条任务留在输入框里了，确认会话状态后再发送。')
+      setNotice('The first task stayed in the input; check the session state before sending.')
       return
     }
     try {
@@ -629,13 +629,13 @@ function ChatSession({
       if (desired && !runtimeMatches(state.runtime, desired)) {
         if (value.phase === 'config') {
           value.phase = 'failed'
-          setError('电脑没有换成所选模型，首条任务留在输入框里了。')
+          setError('The computer did not switch to the selected model; the first task stayed in the input.')
           return
         }
         value.phase = 'config'
         if (!transport.current?.send({ type: 'set_runtime_config', ...desired })) {
           value.phase = 'failed'
-          setError('模型还没准备好，首条任务留在输入框里了。')
+          setError('The model is not ready yet; the first task stayed in the input.')
         }
         return
       }
@@ -644,7 +644,7 @@ function ChatSession({
       value.phase = 'done'
       if (transport.current?.send(message)) {
         clearPendingTask(hostId, id)
-        // 团队只对首条生效；编辑重发时把之前没发出的输入框内容还回去。
+        // Team applies only to the first message; on edit-and-resend restore the previously unsent input content.
         setTeam(false)
         const restore = value.restore
         setDraft(restore?.text ?? '')
@@ -654,7 +654,7 @@ function ChatSession({
         else drafts.delete(draftKey)
       } else {
         value.phase = 'failed'
-        setError('首条任务没发出去，确认连接后手动发送。')
+        setError('The first task was not sent; send manually after checking the connection.')
       }
     } catch (e) {
       value.phase = 'failed'
@@ -678,16 +678,16 @@ function ChatSession({
     notificationSeen.current.add(key)
     const response = notificationPermissionResponse(state, notificationAction, notificationRequestId)
     if (!response) {
-      setNotice('这条审批已经处理过，或者需要在会话里作答，请核对当前状态。')
+      setNotice('This approval was already handled or must be answered in the session; please check the current state.')
       return
     }
     if (transport.current?.send(response))
       setNotice(
         notificationAction === 'allow'
-          ? '已提交这一次允许，等电脑确认。'
-          : '已提交这一次拒绝，等电脑确认。'
+          ? 'Allow submitted for this time, waiting for the computer to confirm.'
+          : 'Deny submitted for this time, waiting for the computer to confirm.'
       )
-    else setError('通知里的操作没发出去，请在当前审批里重试。')
+    else setError('The notification action was not sent; retry in the current approval.')
   })
   useEffect(() => {
     let active = true
@@ -699,12 +699,12 @@ function ChatSession({
     }
   }, [ready, notificationAction, notificationRequestId, state])
 
-  /** 发出一条指令；失败原因写到调用处给的位置，同一个错误只显示一次。 */
+  /** Send a command; failure reasons go to the slot given by the caller, and the same error is shown only once. */
   function dispatch(message: ClientMessage, report: (message: string) => void = setError) {
     report('')
     try {
       const sent = transport.current?.send(message) ?? false
-      if (!sent) report('操作还没发出。等会话同步完成，或核对当前任务状态。')
+      if (!sent) report('Action not sent yet. Wait for the session to finish syncing, or check the current task state.')
       return sent
     } catch (e) {
       report(errorText(e))
@@ -712,7 +712,7 @@ function ChatSession({
     }
   }
   const send = (message: ClientMessage) => dispatch(message)
-  /** 往前翻一批（两页）；in-flight 只认 ref，避免重复请求。更早的内容接在倒置列表末尾（画面顶部），阅读位置不动。 */
+  /** Page back one batch (two pages); in-flight only trusts the ref to avoid duplicate requests. Older content is appended to the end of the inverted list (top of the screen) without moving the reading position. */
   function loadOlderBatch() {
     if (olderInFlight.current) return
     const channel = transport.current
@@ -739,13 +739,13 @@ function ChatSession({
         olderInFlight.current = false
         if (!mounted.current) return
         setLoadingOlder(false)
-        // 整批都并进了已有的折叠行时内容高度不变，不会再有布局回调，这里补一次判断。
+        // When the whole batch merges into existing collapsed rows the content height does not change and no layout callback fires, so check once here.
         requestAnimationFrame(() => {
           if (mounted.current) maybeLoadOlder()
         })
       })
   }
-  /** 滑近顶部（已加载的最早内容）时提前往前翻。只读 ref 和传输层，加载结束的回调里调用也不会读到旧状态。 */
+  /** Page back early when scrolling near the top (earliest loaded content). Reads only the ref and transport so calling it from a load-finished callback does not see stale state. */
   function maybeLoadOlder() {
     const { viewport, content } = listSize.current
     if (
@@ -779,7 +779,7 @@ function ChatSession({
     autoBatches.current = 0
     loadOlderBatch()
   }
-  /** 回到最新处（倒置列表的起点）：发消息、点「回到最新」时用。 */
+  /** Back to the newest (start of the inverted list): used when sending a message or tapping Back to latest. */
   function showLatest(animated = true) {
     list.current?.scrollToOffset({ offset: 0, animated })
   }
@@ -787,8 +787,8 @@ function ChatSession({
     setAwayFromLatest(false)
     showLatest()
   }
-  // 列表往往在连上电脑之前就量好了尺寸；连上之后没有新的布局或滚动事件，要补一次判断，
-  // 否则不满一屏的会话会停在「加载更早的消息」上不动。
+  // The list is often measured before connecting to the computer; after connecting there are no new layout or scroll events, so check once more, 
+  // otherwise sessions shorter than one screen get stuck on "Load earlier messages".
   const prefetchWhenReady = useEffectEvent(() => maybeLoadOlder())
   useEffect(() => {
     if (!ready) return
@@ -803,7 +803,7 @@ function ChatSession({
         if (mounted.current) setNotice((value) => (value === text ? '' : value))
       }, 2000)
   }
-  /** iOS 不能在一个弹层收起的同时弹出另一个，先收起再打开。 */
+  /** iOS Cannot open one sheet while another is closing; close first, then open. */
   function openPanel(next: Exclude<Panel, null>) {
     setSheetError('')
     const covered = panel !== null || selected !== null
@@ -970,14 +970,14 @@ function ChatSession({
       drafts.set(draftKey, editText.trim())
       setPanel(null)
       reloadSession()
-      setNotice('已回退对话，正在重新同步并发送修改后的消息。')
+      setNotice('Conversation rewound; resyncing and sending the edited message.')
     } catch (e) {
       if (mounted.current) setSheetError(errorText(e))
     } finally {
       if (mounted.current) setWorking(false)
     }
   }
-  /** 会话记录在别处被改写（回退）后，丢掉本地状态、重新连接并读取历史。 */
+  /** After the transcript is rewritten elsewhere (rewind), drop local state, reconnect and reread history. */
   const reloadSession = useCallback(() => {
     sessionHistory.forget(hostId, id)
     setState(createChatState(id))
@@ -993,22 +993,22 @@ function ChatSession({
     useCallback(() => {
       if (!takeSessionStale(hostId, id)) return
       reloadSession()
-      setNotice('已回退，正在重新读取这段会话。')
+      setNotice('Rewound; rereading this session.')
     }, [hostId, id, reloadSession])
   )
   function copy(text: string) {
     void Clipboard.setStringAsync(text)
       .then((ok) => {
-        if (!ok) throw new Error('系统没有允许复制，请用“选择文字”手动选取。')
-        if (mounted.current) showNotice('已复制。', true)
+        if (!ok) throw new Error('Copying is not allowed by the system; use Select text to select it manually.')
+        if (mounted.current) showNotice('Copied.', true)
       })
       .catch((e) => {
         if (mounted.current) setError(errorText(e))
       })
   }
 
-  // 消息流：连续工具调用合成一组；展开状态留在页面里，列表回收行时不丢。
-  // 子 Agent 内部的工具步骤只在它自己的页面里看，不混进主对话。
+  // Message stream: consecutive tool calls are merged into a group; expansion state stays on the page so it survives list row recycling.
+  // Tool steps inside a subagent are only shown on its own page, not mixed into the main conversation.
   const rows = useMemo(
     () =>
       visibleChatRows(
@@ -1021,7 +1021,7 @@ function ChatSession({
       ),
     [state.items, state.turnActive, turnClock, ui.open]
   )
-  // 倒置列表从最新的一行排起。
+  // The inverted list starts from the newest row.
   const latestFirst = useMemo(() => [...rows].reverse(), [rows])
   const waitingKey = state.permissions.map((request) => request.toolUseId ?? '').join('\n')
   const runningBackgroundKey = backgroundCount
@@ -1072,14 +1072,14 @@ function ChatSession({
     [longPress, stepContext, ui, toggleStep, toggleOpen, reveal]
   )
 
-  // 一轮结束：不在运行、最后一条不是用户消息（长的一轮里用户消息可能还在更早的分页里）。
+  // Turn ended: not running, and the last message is not from the user (in a long turn the user message may be on an earlier page).
   const turnSettled = !busy && hasItems && state.items.at(-1)?.type !== 'user'
   const meta = turnSettled
     ? turnMeta({ items: state.items, checkpoint: latest, local: turnClock, modelId: runtime?.modelId })
     : ''
 
-  // 连接问题只在这一处说明并给出重试；导航栏副标题只显示状态。
-  // 回到前台、切网这类短暂断线通常自己就恢复了，过一会儿还没好才提示。
+  // Connection problems are explained only here with a retry; the nav bar subtitle only shows the status.
+  // Brief disconnects like returning to foreground or switching networks usually recover on their own; only warn if not recovered after a while.
   const reconnect = () => transport.current?.reconnect()
   const connectionProblem: {
     tone: 'attention' | 'error'
@@ -1090,7 +1090,7 @@ function ChatSession({
     : connection === 'pairing_required'
       ? {
           tone: 'error',
-          text: recoveryError || '这台电脑的配对已经失效，重新配对后才能继续。',
+          text: recoveryError || 'Pairing with this computer has expired; pair again to continue.',
           action: 'hosts',
         }
       : !connectionNotice.banner && connection !== 'ready'
@@ -1098,7 +1098,7 @@ function ChatSession({
       : showsReconnectBanner(connection)
         ? {
             tone: 'attention',
-            text: recoveryError || '和电脑的连接断开了，正在自动重连。',
+            text: recoveryError || 'Disconnected from the computer, reconnecting automatically.',
             action: 'retry',
           }
         : recoveryError
@@ -1120,7 +1120,7 @@ function ChatSession({
             {connectionProblem.text}
           </Text>
           <Button
-            title={connectionProblem.action === 'hosts' ? (isH5 ? '重新连接' : '管理电脑') : '重试'}
+            title={connectionProblem.action === 'hosts' ? (isH5 ? 'Reconnect' : 'Manage computers') : 'Retry'}
             size="sm"
             variant="outline"
             pill
@@ -1135,7 +1135,7 @@ function ChatSession({
     ) : null,
     workspaceMissing ? (
       <Callout key="workspace" tone="error">
-        这段会话的工作目录已经不可用。请在电脑上恢复目录后继续。
+        This session’s working directory is no longer available. Restore the directory on the computer to continue.
       </Callout>
     ) : null,
     error ? <InlineError key="error" text={error} /> : null,
@@ -1146,7 +1146,7 @@ function ChatSession({
     ) : null,
     state.configPending ? (
       <Callout key="config" tone="info">
-        正在等电脑确认新的运行配置…
+        Waiting for the computer to confirm the new run configuration…
       </Callout>
     ) : null,
     teamPlan.plan && teamSurface ? (
@@ -1173,7 +1173,7 @@ function ChatSession({
     [state.items, approvalToolUseId, session?.workDir]
   )
   const outputTokens = useMemo(() => turnOutputTokens({ items: state.items }).tokens, [state.items])
-  // 「…」菜单头部和上下文底单共用一份占用：优先用电脑上报的实时上下文，读不到再用本轮用量近似。
+  // The "…" menu header and the context sheet share one usage figure: prefer the live context reported by the computer, otherwise approximate with this turn's usage.
   const insight = useContextInspection({
     client,
     sessionId: id,
@@ -1185,7 +1185,7 @@ function ChatSession({
     usage: state.usage,
     window: contextWindow(runtime?.modelId, knownModel?.context),
   })
-  // 输入框上方唯一的运行提示；等批准时同一行变琥珀。
+  // The single run hint above the input; turns amber on the same line while waiting for approval.
   const caption = busy ? (
     <StatusCaption
       step={captionStep}
@@ -1223,32 +1223,32 @@ function ChatSession({
   const sheetNow = useNow(panel === 'activity' && state.turnActive)
   const elapsed = runStartedAt && state.turnActive ? elapsedLabel(runStartedAt, sheetNow) : undefined
 
-  // 菜单锚在导航栏下沿（kit 的 Menu 在 Android 上不覆盖状态栏）。
+  // The menu anchors to the bottom edge of the nav bar (kit Menu does not cover the status bar on Android).
   const menuTop = (simulatedPhoneChrome ? 54 : insets.top) + 46
   const changedCount = latest?.code.filesChanged.length ?? 0
   const menuItems: ActionMenuItem[] = [
     {
       key: 'rename',
-      label: '重命名',
+      label: 'Rename',
       icon: 'pencil',
       onPress: () => {
-        setTitleDraft(title === '会话' ? '' : title)
+        setTitleDraft(title === 'Session' ? '' : title)
         openPanel('rename')
       },
     },
     {
       key: 'copy-id',
-      label: '复制会话 ID',
+      label: 'Copy session ID',
       icon: 'copy',
       onPress: () => {
         setPanel(null)
         copy(id)
       },
     },
-    { key: 'sync', label: '重新同步', icon: 'refresh-cw', onPress: reconnect },
+    { key: 'sync', label: 'Resync', icon: 'refresh-cw', onPress: reconnect },
     {
       key: 'delete',
-      label: '删除会话…',
+      label: 'Delete session…',
       icon: 'trash',
       destructive: true,
       onPress: () => openPanel('delete'),
@@ -1256,15 +1256,15 @@ function ChatSession({
     'separator',
     {
       key: 'changes',
-      label: '更改',
+      label: 'Changes',
       icon: 'git-branch',
       count: changedCount || undefined,
       onPress: () => openFiles('changed'),
     },
-    { key: 'files', label: '文件', icon: 'folder', onPress: () => openFiles('all') },
+    { key: 'files', label: 'Files', icon: 'folder', onPress: () => openFiles('all') },
     {
       key: 'activity',
-      label: '运行中',
+      label: 'Running',
       icon: 'activity',
       count: activity.runningCount || undefined,
       onPress: () => openPanel('activity'),
@@ -1275,35 +1275,35 @@ function ChatSession({
     const persisted = persistedMessageId(item)
     const text = visibleMessageText(item.text)
     const actions: MessageAction[] = [
-      { key: 'copy', label: '复制', icon: 'copy', disabled: !text },
-      { key: 'select', label: '选择文字', icon: 'text-cursor', disabled: !text },
+      { key: 'copy', label: 'Copy', icon: 'copy', disabled: !text },
+      { key: 'select', label: 'Select text', icon: 'text-cursor', disabled: !text },
     ]
     if (item.type === 'user')
       actions.push({
         key: 'edit',
         group: true,
-        label: '编辑后重新发送',
+        label: 'Edit and resend',
         icon: 'pencil',
         detail: busy
-          ? '这一轮结束后才能用'
+          ? 'Available after this turn ends'
           : !persisted
-            ? '等电脑保存这条消息后可用'
+            ? 'Available once the computer saves this message'
             : item.editableText === undefined
-              ? '带材料的消息请复制文字后重新添加材料'
-              : '回退到这条消息，电脑上的文件不动',
+              ? 'For messages with materials, copy the text and re-add the materials'
+              : 'Rewind to this message; files on the computer are untouched',
         disabled: busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
         busy: menuBusy === 'edit',
       })
     actions.push({
       key: 'fork',
       group: item.type !== 'user',
-      label: '从这里分叉',
+      label: 'Fork from here',
       icon: 'git-fork',
       detail: lean
-        ? '轻量档位不支持分叉'
+        ? 'The light tier does not support forking'
         : !persisted
-          ? '等电脑保存这条消息后可用'
-          : '保留到这条，另开一段新会话',
+          ? 'Available once the computer saves this message'
+          : 'Keep up to this message and start a new session',
       disabled: lean || !persisted || working || menuBusy === 'edit',
       busy: menuBusy === 'fork',
     })
@@ -1324,11 +1324,11 @@ function ChatSession({
   }
 
   const modeUnavailable = busy
-    ? '这一轮结束后才能切换。'
+    ? 'Can switch only after this turn ends.'
     : state.configPending
-      ? '正在等电脑确认上一次修改。'
+      ? 'Waiting for the computer to confirm the previous change.'
       : !ready
-        ? '连上电脑后才能切换。'
+        ? 'Can switch only after connecting to the computer.'
         : undefined
 
   return (
@@ -1352,7 +1352,7 @@ function ChatSession({
             />
             <FloatingButton
               icon="more"
-              label="会话操作"
+              label="Session actions"
               active={panel === 'menu'}
               onPress={() => openPanel('menu')}
             />
@@ -1375,7 +1375,7 @@ function ChatSession({
             keyExtractor={(row) => row.key}
             renderItem={renderRow}
             style={{ flex: 1 }}
-            // 倒置后 paddingTop 在画面底部、paddingBottom 在画面顶部。
+            // When inverted, paddingTop is at the bottom of the screen and paddingBottom at the top.
             contentContainerStyle={{
               paddingHorizontal: 16,
               paddingTop: 16,
@@ -1390,9 +1390,9 @@ function ChatSession({
               alignSelf: 'center',
             }}
             keyboardShouldPersistTaps="handled"
-            // 往上翻着看时，最新那条还在变长（流式输出、一轮结束后折叠）也不挪动正在看的内容；
-            // 锚点跳过正在变化的最新一行（列表头部由 VirtualizedList 单独计入）。停在最新处时不开，
-            // 新内容自然贴底。
+            // while scrolled up reading, the newest message still growing (streaming, collapsing after the turn) does not move the content being read; 
+            // the anchor skips the changing newest row (the list header is counted separately by VirtualizedList). Not enabled when at the newest, 
+            // new content naturally sticks to the bottom.
             maintainVisibleContentPosition={atLatest ? undefined : { minIndexForVisible: 1 }}
             onLayout={({ nativeEvent }) => {
               listSize.current.viewport = nativeEvent.layout.height
@@ -1402,7 +1402,7 @@ function ChatSession({
               autoBatches.current = 0
             }}
             onScroll={({ nativeEvent }) => trackScroll(nativeEvent)}
-            // 滚动事件有节流，一次快速甩到顶时最后的位置可能收不到；停下时再按最终位置判断一次。
+            // Scroll events are throttled; a fast fling to the top may miss the final position, so check once more using the final position when it stops.
             onScrollEndDrag={({ nativeEvent }) => trackScroll(nativeEvent)}
             onMomentumScrollEnd={({ nativeEvent }) => trackScroll(nativeEvent)}
             scrollEventThrottle={100}
@@ -1410,7 +1410,7 @@ function ChatSession({
               listSize.current.content = height
               maybeLoadOlder()
             }}
-            // 倒置列表的尾部在画面顶部。头尾始终挂着、没内容时只隐藏，保持位置用的下标才不会变。
+            // The tail of the inverted list is at the top of the screen. Header and footer are always mounted and only hidden when empty, so indices used for position keeping stay stable.
             ListFooterComponentStyle={hasOlder ? undefined : { display: 'none' }}
             ListFooterComponent={
               <OlderHistoryStatus
@@ -1424,10 +1424,10 @@ function ChatSession({
               ready ? (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 }}>
                   <Text style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink, textAlign: 'center' }}>
-                    从这里开始
+                    Start here
                   </Text>
                   <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink3, textAlign: 'center' }}>
-                    {`说说你想做什么，任务会在 ${host?.name ?? '电脑'} 上执行。下面可以换模型和权限模式。`}
+                    {`Describe what you want to do; the task runs on ${host?.name ?? 'computer'} . You can change the model and permission mode below.`}
                   </Text>
                 </View>
               ) : connectionProblem ? undefined : (
@@ -1436,7 +1436,7 @@ function ChatSession({
                 </View>
               )
             }
-            // 头部在画面底部，紧挨着最新一条：操作电脑的确认、本轮改动和用时。
+            // The header is at the bottom of the screen next to the newest message: computer-use confirmation, this turn's changes and duration.
             ListHeaderComponentStyle={
               state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? undefined : { display: 'none' }
             }
@@ -1445,23 +1445,23 @@ function ChatSession({
                 {state.computerUsePermissions.map((request) => (
                   <Card key={request.requestId}>
                     <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
-                      操作电脑需要在电脑上确认
+                      Computer use must be confirmed on the computer
                     </Text>
                     {request.request.reason ? (
                       <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
                         {request.request.reason}
                       </Text>
                     ) : null}
-                    <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
+                    <Callout>Finish global enabling and system permission grants in the computer settings.</Callout>
                     <View style={{ flexDirection: 'row', gap: 8 }}>
                       <Button
-                        title="刷新授权状态"
+                        title="Refresh authorization status"
                         variant="secondary"
                         style={{ flex: 1 }}
                         onPress={reconnect}
                       />
                       <Button
-                        title="拒绝本次请求"
+                        title="Deny this request"
                         variant="danger"
                         disabled={!ready}
                         style={{ flex: 1 }}
@@ -1501,7 +1501,7 @@ function ChatSession({
           />
           {awayFromLatest ? (
             <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center' }}>
-              <FloatingButton icon="arrow-down" label="回到最新" onPress={jumpToLatest} />
+              <FloatingButton icon="arrow-down" label="Back to latest" onPress={jumpToLatest} />
             </View>
           ) : null}
         </View>
@@ -1541,7 +1541,7 @@ function ChatSession({
             }}
             attachments={attachments}
             onAttachments={(value) => {
-              // 换了材料，之前关于材料的错误就过时了。
+              // Materials changed, so earlier material errors are stale.
               setAttachments(value)
               setError('')
             }}
@@ -1590,11 +1590,11 @@ function ChatSession({
         header={
           <>
             <Mono numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12.5, color: colors.ink3 }}>
-              {[displayPath(session?.workDir) || '默认目录', branch].filter(Boolean).join(' · ')}
+              {[displayPath(session?.workDir) || 'Default directory', branch].filter(Boolean).join(' · ')}
             </Mono>
             {linkPath ? (
               <Text style={{ fontSize: 12, color: colors.ink3 }}>
-                {`连接：${linkPathLabels[linkPath]}`}
+                {`Connection: ${linkPathLabels[linkPath]}`}
               </Text>
             ) : null}
             <ContextMenuHeader
@@ -1632,7 +1632,7 @@ function ChatSession({
           })
         }}
         onStopTurn={() => {
-          // 和「停止这段会话」一样：停下来就不再自动追加，排队的内容回到输入框由用户决定要不要发。
+          // Same as "stop this session": once stopped there is no auto follow-up; queued content returns to the input for the user to decide whether to send.
           if (state.turnActive && dispatch({ type: 'stop_generation' })) withdrawQueued()
         }}
         launching={teamLaunching}
@@ -1662,9 +1662,9 @@ function ChatSession({
       <ConfirmSheet
         visible={panel === 'delete'}
         onClose={closePanel}
-        title="删除这段会话？"
-        message="这会删除电脑上保存的这段会话，并停止它的任务。"
-        confirmLabel="删除"
+        title="Delete this session?"
+        message="This deletes the session saved on the computer and stops its tasks."
+        confirmLabel="Delete"
         destructive
         busy={working}
         disabled={!client}
@@ -1674,20 +1674,20 @@ function ChatSession({
       <ConfirmSheet
         visible={panel === 'stop'}
         onClose={closePanel}
-        title={teamWorking ? '停止团队？' : '停止这段会话？'}
+        title={teamWorking ? 'Stop the team?' : 'Stop this session?'}
         message={
           teamWorking
-            ? '成员会停在当前步骤，已经改好的文件会保留。之后发一条消息，团队就从这里接着做。'
-            : '当前生成和后台任务都会停下，已经改好的文件会保留。'
+            ? 'Members stop at their current step and files already changed are kept. Send a message later and the team continues from here.'
+            : 'The current generation and background tasks stop; files already changed are kept.'
         }
-        confirmLabel="停止"
+        confirmLabel="Stop"
         destructive
         disabled={!ready}
-        error={sheetError || (!ready ? '连上电脑后才能停止。' : '')}
+        error={sheetError || (!ready ? 'Can stop only after connecting to the computer.' : '')}
         onConfirm={() => {
           if (dispatch({ type: 'stop_generation' }, setSheetError)) {
             setPanel(null)
-            // 停下来就不再自动追加：排队的内容回到输入框，由用户决定要不要发。
+            // Once stopped there is no auto follow-up: queued content returns to the input for the user to decide whether to send.
             withdrawQueued()
           }
         }}
@@ -1711,12 +1711,12 @@ function ChatSession({
         disabled={{
           ...(modeUnavailable ? { mode: modeUnavailable } : {}),
           ...(busy || state.configPending || !ready
-            ? { runtime: modeUnavailable ?? '这一轮结束后才能切换。' }
+            ? { runtime: modeUnavailable ?? 'Can switch only after this turn ends.' }
             : {}),
         }}
         warning={
           backgroundCount
-            ? `换模型会重启执行环境，正在跑的 ${backgroundCount} 项后台任务会停下。`
+            ? `Changing models restarts the runtime; the ${backgroundCount} running background tasks will stop.`
             : undefined
         }
         error={sheetError}
@@ -1739,7 +1739,7 @@ function ChatSession({
         removed={rewindPreview?.conversation.messagesRemoved ?? 0}
         busy={working}
         disabled={busy}
-        disabledReason={busy ? '这一轮结束后才能回退。' : undefined}
+        disabledReason={busy ? 'Can rewind only after this turn ends.' : undefined}
         error={sheetError}
         onConfirm={() => void resendEdit()}
       />

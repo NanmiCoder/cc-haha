@@ -59,7 +59,7 @@ function RegisterHost({
     const recovery = new PushRegistrationRecovery(async (signal, nativeToken) => {
       let stage: PushStage = 'permission'
       const check = () => {
-        if (signal.aborted) throw new ApiError('通知登记已取消', 0, 'ABORTED')
+        if (signal.aborted) throw new ApiError('Notification registration canceled', 0, 'ABORTED')
       }
       try {
         const permission = await Notifications.getPermissionsAsync()
@@ -81,7 +81,7 @@ function RegisterHost({
         check()
         const platform = Platform.OS === 'ios' ? 'ios' : 'android'
         if (typeof configured?.platforms?.[platform] !== 'boolean')
-          throw new ApiError('电脑返回的推送状态无效', 0, 'INVALID_RESPONSE')
+          throw new ApiError('The computer returned an invalid push status', 0, 'INVALID_RESPONSE')
         const provider = choosePushProvider(platform, configured)
         if (!provider) {
           backgroundDuty.set(id, undefined)
@@ -125,7 +125,7 @@ function RegisterHost({
           backgroundDuty.set(id, provider === 'desktop' && (decisions || completed || errors)
             ? {
                 hostId: id,
-                hostName: client.host.name || '电脑',
+                hostName: client.host.name || 'computer',
                 origin: client.host.url,
                 headers: connectionHeaders(client.host, credential ?? ''),
                 token,
@@ -141,7 +141,7 @@ function RegisterHost({
           backgroundDuty.set(id, undefined)
           return { info: { status: 'notConfigured' } }
         }
-        throw new ApiError('电脑返回的通知登记结果无效', 0, 'INVALID_RESPONSE')
+        throw new ApiError('The computer returned an invalid notification registration result', 0, 'INVALID_RESPONSE')
       } catch (error) {
         return pushRegistrationFailure(error, stage)
       }

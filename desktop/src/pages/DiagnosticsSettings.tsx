@@ -516,7 +516,7 @@ function LocalIndexPanel({
               <IndexMetric label={t('settings.diagnostics.localIndex.walSize')} value={formatBytes(status.walBytes)} />
               <IndexMetric
                 label={t('settings.diagnostics.localIndex.lastUpdated')}
-                value={status.lastUpdatedAt ? new Date(status.lastUpdatedAt).toLocaleString() : t('settings.diagnostics.localIndex.never')}
+                value={status.lastUpdatedAt ? new Date(status.lastUpdatedAt).toLocaleString('en-US') : t('settings.diagnostics.localIndex.never')}
               />
               <IndexMetric
                 label={t('settings.diagnostics.localIndex.errorCode')}
@@ -613,7 +613,7 @@ function EventRow({
           <span className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{event.type}</span>
           <Badge tone={tone} size="xs">{event.severity}</Badge>
           <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
-            {new Date(event.timestamp).toLocaleString()}
+            {new Date(event.timestamp).toLocaleString('en-US')}
           </span>
         </div>
         {event.sessionId && (

@@ -3,8 +3,8 @@ import type { ComposerAttachment } from '../../core/chatComposer'
 import type { ClientMessage } from '../../core/types'
 
 /**
- * 运行中追加的消息。手机端的传输层不在一轮进行中发送 user_message，
- * 所以和桌面端的默认行为一样先在手机上排队，等这一轮结束再发。
+ * Messages added while running. The mobile transport does not send user_message during a turn, 
+ * so like the desktop default they queue on the phone first and send after this turn ends.
  */
 export type QueuedMessage = {
   id: string
@@ -22,9 +22,9 @@ export type QueueGate = {
   pendingUser: boolean
   configPending: boolean
   workspaceMissing: boolean
-  /** 上一轮以错误结束：排队的追加多半依赖它，先停下让用户决定。 */
+  /** The previous turn ended with an error: queued follow-ups likely depend on it, so stop and let the user decide. */
   lastTurnFailed: boolean
-  /** 上一条消息没确认送达：不能在它前面或后面悄悄接着发。 */
+  /** Delivery of the previous message was not confirmed: do not silently send before or after it. */
   deliveryUncertain: boolean
 }
 
@@ -36,20 +36,20 @@ const settled = (gate: QueueGate) =>
   !gate.configPending &&
   !gate.workspaceMissing
 
-/** 只有这一轮顺利结束、没有待处理的决定和未确认的发送时才自动发出。 */
+/** Send automatically only when this turn ended cleanly with no pending decisions and no unconfirmed sends. */
 export function canFlushQueue(gate: QueueGate, focused = true) {
   return focused && settled(gate) && !gate.lastTurnFailed && !gate.deliveryUncertain
 }
 
-/** 这一轮已经停下但不适合自动续发时，给排队区一句原因；能手动发送时才返回。 */
+/** When this turn stopped but is not suitable for auto-continuing, give the queue area a reason; returned only when manual send is possible. */
 export function queuePauseReason(gate: QueueGate) {
   if (!settled(gate)) return ''
-  if (gate.lastTurnFailed) return '上一轮出错了，排队的消息先不发'
-  if (gate.deliveryUncertain) return '上一条没确认送达，排队的消息先不发'
+  if (gate.lastTurnFailed) return 'The previous turn errored; queued messages are on hold'
+  if (gate.deliveryUncertain) return 'Delivery of the previous message was not confirmed; queued messages are on hold'
   return ''
 }
 
-/** 停止任务或离开会话时，排队的文字退回输入框，绝不悄悄发出。 */
+/** When stopping a task or leaving the session, queued text returns to the input and is never sent silently. */
 export function queueToDraft(draft: string, queued: Pick<QueuedMessage, 'text'>[]) {
   return [...queued.map((item) => item.text), draft]
     .map((text) => text.trim())
@@ -72,7 +72,7 @@ export type ComposerQueueState = {
   references?: ComposerReference[]
 }
 
-/** 停止、撤回或失焦都使用同一条队列恢复路径。 */
+/** Stop, withdraw and blur all use the same queue restore path. */
 export function withdrawQueuedComposer(
   key: string,
   current: ComposerQueueState,
@@ -97,8 +97,8 @@ export function withdrawQueuedComposer(
 }
 
 /**
- * 离开会话页时，排队消息里的材料和团队开关先存在内存里（文字进草稿），
- * 回来时还给输入框。和草稿一样只在这次打开 App 期间有效，不落盘。
+ * When leaving the session page, materials and team toggle of queued messages are kept in memory first (the text goes into the draft), 
+ * and given back to the input on return. Like drafts, only valid while the app stays open, never persisted.
  */
 type Parked = { attachments: ComposerAttachment[]; team: boolean; references?: ComposerReference[] }
 const parked = new Map<string, Parked>()
@@ -108,7 +108,7 @@ export function parkComposer(key: string, value: Parked) {
   else parked.set(key, { attachments: [...value.attachments], team: value.team, ...(value.references?.length ? { references: [...value.references] } : {}) })
 }
 
-/** 只读不取走：React 开发模式可能把初始化函数调用两次。挂载后再 clear。 */
+/** Read without taking: React dev mode may call the initializer twice. Clear after mount. */
 export function parkedComposer(key: string): Parked | undefined {
   return parked.get(key)
 }

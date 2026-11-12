@@ -1,11 +1,11 @@
 import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
- * 飞书 (Feishu/Lark) Adapter for Claude Code Desktop
+ * Feishu (Lark) Adapter for Claude Code Desktop
  *
- * 基于 @larksuiteoapi/node-sdk 的轻量飞书 Bot，直连服务端 /ws/:sessionId。
- * 使用 WebSocket 长连接接收事件，无需公网地址。
+ * Lightweight Feishu bot built on @larksuiteoapi/node-sdk, connecting directly to the server /ws/:sessionId.
+ * Receives events over a WebSocket long connection; no public address needed.
  *
- * 启动：FEISHU_APP_ID=xxx FEISHU_APP_SECRET=xxx bun run feishu/index.ts
+ * Start: FEISHU_APP_ID=xxx FEISHU_APP_SECRET=xxx bun run feishu/index.ts
  */
 
 import * as Lark from '@larksuiteoapi/node-sdk'
@@ -361,7 +361,7 @@ function prettyPath(realPath: string, maxLen = 64): string {
  *
  *  Design: one column_set per project with exactly 2 columns:
  *    - Col 1 (weighted): project info (title markdown + small grey path)
- *    - Col 2 (auto):     "选择" button, vertically centered
+ *    - Col 2 (auto):     "Select" button, vertically centered
  *
  *  Only 2 columns with one weighted + one auto means the weight distribution
  *  is trivial (auto takes its natural width, weighted takes the rest). This
@@ -371,8 +371,8 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
   const total = projects.length
   const subtitleText =
     total > items.length
-      ? `共 ${total} 个最近项目，显示前 ${items.length}`
-      : `共 ${total} 个最近项目`
+      ? `${total} recent projects, showing the first ${items.length}`
+      : `${total} recent projects`
 
   const rows = items.map((p, i) => {
     const branch = p.branch ? `  ·  *${p.branch}*` : ''
@@ -409,7 +409,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
           elements: [
             {
               tag: 'button',
-              text: { tag: 'plain_text', content: '选择' },
+              text: { tag: 'plain_text', content: 'Select' },
               type: i === 0 ? 'primary' : 'default',
               size: 'small',
               value: {
@@ -431,7 +431,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
       update_multi: true,
     },
     header: {
-      title: { tag: 'plain_text', content: '📁 选择项目' },
+      title: { tag: 'plain_text', content: '📁 Select project' },
       subtitle: { tag: 'plain_text', content: subtitleText },
       template: 'blue',
     },
@@ -441,7 +441,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
         { tag: 'hr', margin: '14px 0 0 0' },
         {
           tag: 'markdown',
-          content: '💡 点击右侧 **选择** 按钮，或发送 `/new <项目名>`',
+          content: '💡 Tap the **Select** button on the right, or send `/new <project name>`',
           text_size: 'notation',
           margin: '6px 0 0 0',
         },
@@ -471,27 +471,27 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
   switch (toolName) {
     case 'Write': {
       const fp = str('file_path')
-      return { icon: '✏️', label: '写入文件', target: fp, filePath: fp }
+      return { icon: '✏️', label: 'Write file', target: fp, filePath: fp }
     }
     case 'Edit':
     case 'MultiEdit':
     case 'NotebookEdit': {
       const fp = str('file_path') ?? str('notebook_path')
-      return { icon: '✏️', label: '修改文件', target: fp, filePath: fp }
+      return { icon: '✏️', label: 'Edit file', target: fp, filePath: fp }
     }
     case 'Read': {
       const fp = str('file_path')
-      return { icon: '📖', label: '读取文件', target: fp, filePath: fp }
+      return { icon: '📖', label: 'Read file', target: fp, filePath: fp }
     }
     case 'Bash':
     case 'BashOutput': {
-      return { icon: '🖥️', label: '执行命令', target: str('command') }
+      return { icon: '🖥️', label: 'Run command', target: str('command') }
     }
     case 'Grep': {
       const pattern = str('pattern')
       return {
         icon: '🔍',
-        label: '搜索内容',
+        label: 'Search content',
         target: pattern ? `pattern: ${pattern}` : undefined,
         filePath: str('path'),
       }
@@ -500,15 +500,15 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
       const pattern = str('pattern')
       return {
         icon: '📁',
-        label: '查找文件',
+        label: 'Find files',
         target: pattern ? `pattern: ${pattern}` : undefined,
         filePath: str('path'),
       }
     }
     case 'WebFetch':
-      return { icon: '🌐', label: '访问网页', target: str('url') }
+      return { icon: '🌐', label: 'Fetch web page', target: str('url') }
     case 'WebSearch':
-      return { icon: '🌐', label: '搜索网页', target: str('query') }
+      return { icon: '🌐', label: 'Search web', target: str('query') }
     default:
       return { icon: '🔧', label: toolName }
   }
@@ -523,16 +523,16 @@ function truncateTarget(s: string, maxLen = 160): string {
 /** Build a permission request card (Schema 2.0, mobile-friendly).
  *
  *  Layout:
- *    header  →  🔐 需要权限确认 (orange / red if cross-dir)
+ *    header  →  🔐 Permission required (orange / red if cross-dir)
  *    body    →  <icon> **<label>**  `<toolName>`
  *              ```
  *              <target>           (path or command, if present)
  *              ```
- *              ⚠️ 跨目录警告        (only when filePath escapes workDir)
+ *              ⚠️ Cross-directory warning (only when filePath escapes workDir)
  *              ────
- *              [ ✅ 允许 | ♾️ 永久允许 | ❌ 拒绝 ]
+ *              [ ✅ Allow | ♾️ Always allow | ❌ Deny ]
  *
- *  The 永久允许 button carries `rule: 'always'` in its value — the server
+ *  The "Always allow" button carries `rule: 'always'` in its value — the server
  *  turns that into `updatedPermissions` using the CLI's permission_suggestions,
  *  so the same tool call won't prompt again in this session. */
 function buildPermissionCard(
@@ -570,7 +570,7 @@ function buildPermissionCard(
   if (crossDir) {
     elements.push({
       tag: 'markdown',
-      content: '⚠️ **该操作位于当前项目目录之外**',
+      content: '⚠️ **This operation is outside the current project directory**',
       margin: '8px 0 0 0',
       text_size: 'notation',
     })
@@ -579,7 +579,7 @@ function buildPermissionCard(
   // Divider
   elements.push({ tag: 'hr', margin: '12px 0 0 0' })
 
-  // Action row — three equal columns: 允许 / 永久允许 / 拒绝
+  // Action row — three equal columns: Allow / Always allow / Deny
   elements.push({
     tag: 'column_set',
     flex_mode: 'stretch',
@@ -594,7 +594,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '✅ 允许' },
+            text: { tag: 'plain_text', content: '✅ Allow' },
             type: 'primary',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: true },
@@ -609,7 +609,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '♾️ 永久允许' },
+            text: { tag: 'plain_text', content: '♾️ Always allow' },
             type: 'default',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: true, rule: 'always' },
@@ -624,7 +624,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '❌ 拒绝' },
+            text: { tag: 'plain_text', content: '❌ Deny' },
             type: 'danger',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: false },
@@ -641,10 +641,10 @@ function buildPermissionCard(
       update_multi: true,
     },
     header: {
-      title: { tag: 'plain_text', content: '🔐 需要权限确认' },
+      title: { tag: 'plain_text', content: '🔐 Permission required' },
       subtitle: {
         tag: 'plain_text',
-        content: crossDir ? '⚠️ 跨目录操作' : toolName,
+        content: crossDir ? '⚠️ Cross-directory operation' : toolName,
       },
       template: crossDir ? 'red' : 'orange',
       padding: '12px 12px 12px 12px',
@@ -694,12 +694,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '⚠️ 连接服务器超时，请重试。')
+      await sendText(chatId, '⚠️ Timed out connecting to the server. Please try again.')
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `❌ 无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `❌ Could not create session: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -710,7 +710,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
       await sendText(chatId,
-        `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+        `No recent projects found. Sending /new will use the default working directory: ${defaultWorkDir}\nYou can also send /new /path/to/project to pick a project.`)
       return
     }
     const cardId = await sendCard(chatId, buildProjectPickerCard(projects))
@@ -719,10 +719,10 @@ async function showProjectPicker(chatId: string): Promise<void> {
       const lines = projects.slice(0, 10).map((p, i) =>
         `${i + 1}. **${p.projectName}**${p.branch ? ` (${p.branch})` : ''}\n   ${p.realPath}`
       )
-      await sendText(chatId, `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+      await sendText(chatId, `Select a project (reply with its number):\n\n${lines.join('\n\n')}\n\n💡 Next time you can send /new <number, name or absolute path> to create a session quickly`)
     }
   } catch (err) {
-    await sendText(chatId, `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `❌ Could not fetch project list: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -756,41 +756,41 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     case 'status': {
       runtime.state = msg.state
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
-      // 注意: 故意不在 thinking 时创建卡片。/clear、/compact 这类命令
-      // 不产生文本输出，但 CLI 仍会发 thinking → message_complete 事件。
-      // 如果在 thinking 就建卡，这些命令会留下一张空卡片。
-      // 真正的创建时机是 content_start{text} 或第一次 content_delta。
+      // Note: deliberately do not create a card on thinking. Commands like /clear and /compact
+      // produce no text output, but the CLI still sends thinking → message_complete events.
+      // Creating the card on thinking would leave an empty card for these commands.
+      // The real creation point is content_start{text} or the first content_delta.
       break
     }
 
     case 'content_start': {
       if (msg.blockType === 'text') {
-        // 幂等: 预建卡或上一次 content_delta 已经创建了卡片则复用，否则现在创建
+        // Idempotent: reuse the card if pre-created or created by a previous content_delta, otherwise create it now
         const card = getOrCreateStreamingCard(chatId)
         await card.ensureCreated().catch((err) => {
           logger.error('[Feishu] ensureCreated on content_start failed:', err)
         })
       } else if (msg.blockType === 'tool_use') {
-        // 把工具调用起点登记到已存在的卡 —— 让用户看到 "⚙️ 运行中..." 指示。
-        // 只读 map，不 getOrCreate: /clear 这类无回复命令不应该因为上游发了
-        // 孤立的 tool_use 事件而被迫建一张空卡。
+        // Register the tool call start on the existing card —— so the user sees a "⚙️ running..." indicator.
+        // Read the map only, no getOrCreate: reply-less commands like /clear should not be forced
+        // to create an empty card because upstream sent an orphan tool_use event.
         const card = streamingCards.get(chatId)
         if (card) {
           card.startTool(msg.toolUseId, msg.toolName)
         }
       }
-      // 注意: tool_use 不 finalize 当前卡。让整个 turn 的所有文本输出
-      // 合并到同一张卡里 —— 更接近 Desktop UI 的一体化答复体验，也避免
-      // "预建空卡 + tool_use finalize → 留下空白卡" 的视觉 bug。
+      // Note: tool_use does not finalize the current card. All text output of the turn
+      // is merged into one card —— closer to the unified reply in the Desktop UI, and avoids
+      // the "pre-created empty card + tool_use finalize → blank card left behind" visual bug.
       break
     }
 
     case 'content_delta': {
       if (typeof msg.text === 'string' && msg.text) {
-        // 正常情况 content_start{text} 已经创建了卡片，这里直接 appendText。
-        // 极端情况（上游跳过了 content_start）也要能容错 —— getOrCreate + async ensureCreated。
+        // Normally content_start{text} already created the card, so just appendText here.
+        // In edge cases (upstream skipped content_start) we must still cope —— getOrCreate + async ensureCreated.
         const card = getOrCreateStreamingCard(chatId)
-        // ensureCreated 幂等，已 streaming 时是 no-op
+        // ensureCreated is idempotent; a no-op when already streaming
         void card.ensureCreated().catch((err) => {
           logger.error('[Feishu] ensureCreated on delta failed:', err)
         })
@@ -810,9 +810,9 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     }
 
     case 'thinking': {
-      // 推理文本（reasoning）—— 作为卡片顶部的 blockquote 预览持续更新，
-      // 让用户在工具执行期间也能看到模型的思考过程（对齐 Telegram 的行为）。
-      // 同样不 auto-create: 没有预建卡的命令路径不应该被 thinking 事件撑出一张空卡。
+      // Reasoning text —— continuously updated as a blockquote preview at the top of the card,
+      // so the user can see the model's thinking during tool execution (matches Telegram behavior).
+      // Also no auto-create: command paths without a pre-created card should not get an empty card from thinking events.
       const card = streamingCards.get(chatId)
       if (card && typeof msg.text === 'string' && msg.text) {
         card.appendReasoning(msg.text)
@@ -821,7 +821,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
     }
 
     case 'tool_use_complete': {
-      // 把对应 tool step 从 "⚙️ running" 切到 "✅ done"，让用户看到进度推进。
+      // Switch the matching tool step from "⚙️ running" to "✅ done" so the user sees progress.
       const card = streamingCards.get(chatId)
       if (card) {
         card.completeTool(msg.toolUseId, msg.toolName)
@@ -874,7 +874,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
         if (workDir) {
-          await sendText(chatId, '⚠️ 会话上下文已失效，正在自动重建...')
+          await sendText(chatId, '⚠️ Session context is no longer valid, rebuilding automatically...')
           bridge.resetSession(chatId)
           sessionStore.delete(chatId)
           imageWatchers.delete(chatId)
@@ -882,12 +882,12 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
           runtimeStates.delete(chatId)
           const ok = await createSessionForChat(chatId, workDir)
           if (ok) {
-            await sendText(chatId, '✅ 已重建会话，请重新发送消息。')
+            await sendText(chatId, '✅ Session rebuilt. Please resend your message.')
           } else {
-            await sendText(chatId, '❌ 重建会话失败，请发送 /new 手动新建。')
+            await sendText(chatId, '❌ Failed to rebuild session. Send /new to create one manually.')
           }
         } else {
-          await sendText(chatId, '⚠️ 会话上下文已失效，请发送 /new 新建会话。')
+          await sendText(chatId, '⚠️ Session context is no longer valid. Send /new to create a new session.')
         }
       } else if (streamingCards.has(chatId)) {
         await abortStreamingCard(chatId, new Error(msg.message ?? 'unknown error'))
@@ -944,23 +944,23 @@ async function handleMessage(data: any): Promise<void> {
 
   if (!dedup.tryRecord(messageId)) return
 
-  // 只处理私聊
+  // Direct messages only
   if (chatType === 'p2p') {
     if (!isAllowedUser('feishu', senderOpenId)) {
-      // 尝试配对
+      // Try pairing
       const pairText = extractInboundPayload(content, msgType).text.trim() || null
       if (pairText) {
         const success = tryPair(pairText.trim(), { userId: senderOpenId, displayName: 'Feishu User' }, 'feishu')
         if (success) {
-          await sendText(chatId, '✅ 配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。')
+          await sendText(chatId, '✅ Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude.')
         } else {
-          await sendText(chatId, '🔒 未授权。请在 Claude Code 桌面端生成配对码后发送给我。')
+          await sendText(chatId, '🔒 Not authorized. Generate a pairing code in the Claude Code desktop app and send it to me.')
         }
       }
       return
     }
   } else {
-    // 群聊不处理
+    // Group chats are ignored
     return
   }
 
@@ -982,7 +982,7 @@ async function handleMessage(data: any): Promise<void> {
   // All user input (commands + normal chat) goes through a single per-chat
   // serial queue. Without this, rapidly-fired commands could have their
   // async bodies interleave at `await` points, causing reply messages
-  // (e.g. "🧹 已清空..." after "✅ 已新建...") to appear in the wrong order.
+  // (e.g. "🧹 Cleared..." after "✅ New session created...") to appear in the wrong order.
   enqueue(chatId, async () => {
     // ----- Commands (only when there are no attachments — `command + image`
     //       isn't a meaningful combo, so attachments always take precedence) -----
@@ -1021,10 +1021,10 @@ async function handleMessage(data: any): Promise<void> {
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) getRuntimeState(chatId).state = 'thinking'
       if (!sent) {
-        await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
+        await sendText(chatId, '⚠️ Could not send /clear. Send /new first to reconnect the session.')
         return
       }
-      await sendText(chatId, '🧹 已清空当前会话上下文。')
+      await sendText(chatId, '🧹 Cleared the current session context.')
       return
     }
     if (!hasAttachments && (msgText === '/stop' || msgText === '停止')) {
@@ -1034,7 +1034,7 @@ async function handleMessage(data: any): Promise<void> {
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendText(chatId, '⏹ 已发送停止信号。')
+      await sendText(chatId, '⏹ Stop signal sent.')
       return
     }
     if (!hasAttachments && (msgText === '/projects' || msgText === '项目列表')) {
@@ -1099,20 +1099,20 @@ async function handleMessage(data: any): Promise<void> {
           await sendText(
             chatId,
             downloadFailures === pendingDownloads.length
-              ? '📎 附件下载失败,请稍后重试'
-              : `📎 ${downloadFailures} 个附件下载失败,已跳过`,
+              ? '📎 Attachment download failed, please try again later'
+              : `📎 ${downloadFailures} attachment(s) failed to download and were skipped`,
           )
         }
         if (accepted.length > 0) attachments = accepted
       } catch (err) {
         logger.error('[Feishu] Unexpected attachment pipeline error:', err)
-        await sendText(chatId, '📎 附件处理异常,请稍后重试')
+        await sendText(chatId, '📎 Attachment processing error, please try again later')
         return
       }
     }
 
     const effectiveText =
-      msgText || (attachments && attachments.length > 0 ? '(用户发送了附件)' : '')
+      msgText || (attachments && attachments.length > 0 ? '(user sent an attachment)' : '')
 
     // If all attachments were rejected (limit / download fail) AND user had
     // no text, silently abort — the rejection hints have already been sent
@@ -1120,7 +1120,7 @@ async function handleMessage(data: any): Promise<void> {
     if (!effectiveText && !(attachments && attachments.length > 0)) return
 
     // Pre-create the streaming card immediately so the user sees a
-    // "☁️ 正在思考中..." indicator while the backend is still thinking
+    // "☁️ Thinking..." indicator while the backend is still thinking
     // (before the first content_delta arrives). We intentionally do NOT
     // create a card for /clear-style commands (which go through the
     // earlier branches), so they won't leave an empty card behind.
@@ -1132,7 +1132,7 @@ async function handleMessage(data: any): Promise<void> {
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments)
     if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
-      await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendText(chatId, '⚠️ Failed to send message; the connection may be down. Send /new to start over.')
     }
   })
 }
@@ -1141,13 +1141,13 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+    void sendText(chatId, `No pending permission request found: ${requestId}`)
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。')
+    void sendText(chatId, 'Failed to send permission response. Please check the session status.')
     return false
   }
 
@@ -1159,7 +1159,7 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
 
 async function handlePermissionDecision(chatId: string, decision: PermissionDecision): Promise<void> {
   const sent = applyPermissionDecision(chatId, decision)
-  if (sent) await sendText(chatId, `${formatPermissionDecisionStatus(decision)}。`)
+  if (sent) await sendText(chatId, `${formatPermissionDecisionStatus(decision)}.`)
 }
 
 async function handleCardAction(data: any): Promise<any> {
@@ -1182,7 +1182,7 @@ async function handleCardAction(data: any): Promise<any> {
   const chatId = event.context?.open_chat_id
   if (!chatId) return
   if (!event.operator?.open_id || !isAllowedUser('feishu', event.operator.open_id)) {
-    return { toast: { type: 'warning', content: '未授权' } }
+    return { toast: { type: 'warning', content: 'Not authorized' } }
   }
 
   if (action === 'permit') {
@@ -1196,15 +1196,15 @@ async function handleCardAction(data: any): Promise<any> {
       allowed,
       rule: rule === 'always' ? 'always' : undefined,
     })
-    if (!sent) return { toast: { type: 'warning', content: '权限响应发送失败' } }
+    if (!sent) return { toast: { type: 'warning', content: 'Failed to send permission response' } }
 
     const statusText = allowed
       ? rule === 'always'
-        ? '♾️ 已永久允许（本次会话内不再询问相同操作）'
-        : '✅ 已允许'
-      : '❌ 已拒绝'
+        ? '♾️ Always allowed (same operation will not be asked again this session)'
+        : '✅ Allowed'
+      : '❌ Denied'
     await sendText(chatId, statusText)
-    return { toast: { type: 'info', content: allowed ? (rule === 'always' ? '♾️ 永久允许' : '✅ 已允许') : '❌ 已拒绝' } }
+    return { toast: { type: 'info', content: allowed ? (rule === 'always' ? '♾️ Always allowed' : '✅ Allowed') : '❌ Denied' } }
   }
 
   if (action === 'pick_project') {
@@ -1217,7 +1217,7 @@ async function handleCardAction(data: any): Promise<any> {
       // createSessionForChat handles its own error messaging on failure
       const ok = await createSessionForChat(chatId, realPath)
       if (ok) {
-        await sendText(chatId, `✅ 已新建会话：**${projectName}**`)
+        await sendText(chatId, `✅ New session created: **${projectName}**`)
       }
     })
     return { toast: { type: 'info', content: `📁 ${projectName}` } }

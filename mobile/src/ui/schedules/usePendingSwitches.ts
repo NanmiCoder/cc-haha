@@ -1,8 +1,8 @@
 import { useState } from 'react'
 
 /**
- * 开关先按用户的选择显示，等电脑返回的值一致后再撤掉本地值；
- * 请求失败时立即撤掉，开关回到电脑上的真实状态。
+ * The toggle first shows the user's choice, and the local value is dropped once the computer returns a matching value; 
+ * on request failure it is dropped immediately and the toggle returns to the real state on the computer.
  */
 export function settlePending(
   pending: Record<string, boolean>,
@@ -16,7 +16,7 @@ export function settlePending(
 
 export function usePendingSwitches(server: Map<string, boolean>) {
   const [pending, setPending] = useState<Record<string, boolean>>({})
-  // 电脑返回新数据时在渲染中结算（React 推荐的“随 props 调整 state”写法）。
+  // Settle during render when the computer returns new data (React's recommended "adjust state with props" pattern).
   const [seen, setSeen] = useState(server)
   if (seen !== server) {
     setSeen(server)

@@ -7,21 +7,21 @@ import { GeneralSettings } from './GeneralSettings'
 
 // The settings people ask about in the group chat, each with a "?" beside it.
 const HELP_TRIGGERS = [
-  { name: '思考模式是什么？', row: '启用思考模式' },
-  { name: '精简模式是什么？', row: '启用精简模式' },
-  { name: 'Ultracode 是什么？', row: '启用 Ultracode 关键词触发' },
-  { name: '智能体团队是什么？', row: '启用 智能体团队' },
-  { name: 'SubAgent 是什么？', row: '普通 SubAgent 并发上限' },
-  { name: '自动回答问题是什么？', row: '等待超时后自动选择答案' },
-  { name: '自动做梦是什么？', row: '启用自动做梦' },
-  { name: 'WebFetch 域名预检是什么？', row: '跳过 WebFetch 域名预检' },
-  { name: 'Agent Trace 是什么？', row: '收集 Agent Trace' },
+  { name: 'What is thinking mode?', row: 'Enable thinking mode' },
+  { name: 'What is lean mode?', row: 'Enable lean mode' },
+  { name: 'What is Ultracode?', row: 'Enable Ultracode keyword trigger' },
+  { name: 'What are Agent Teams?', row: 'Enable Agent Teams' },
+  { name: 'What is a SubAgent?', row: 'Ordinary SubAgent concurrency limit' },
+  { name: 'What does auto-answer do?', row: 'Answer questions automatically after a timeout' },
+  { name: 'What is Auto-dream?', row: 'Enable Auto-dream' },
+  { name: 'What is the WebFetch domain preflight?', row: 'Skip WebFetch domain preflight' },
+  { name: 'What is Agent Trace?', row: 'Collect agent traces' },
 ]
 
 describe('General settings help cards', () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      locale: 'zh',
+      locale: 'en',
       fetchOutputStyles: async () => {},
       fetchAppMode: async () => {},
     })
@@ -41,28 +41,28 @@ describe('General settings help cards', () => {
 
   it('adds exactly these help triggers and none to self-explanatory settings', () => {
     render(<GeneralSettings />)
-    const triggers = screen.getAllByRole('button', { name: /是什么？$/ })
+    const triggers = screen.getAllByRole('button', { name: /^What (is|are|does)/ })
     expect(triggers.map((trigger) => trigger.getAttribute('aria-label')).sort())
       .toEqual(HELP_TRIGGERS.map(({ name }) => name).sort())
   })
 
   it('explains Auto-dream in plain words when its "?" is clicked', () => {
     render(<GeneralSettings />)
-    fireEvent.click(screen.getByRole('button', { name: '自动做梦是什么？' }))
-    const card = screen.getByRole('dialog', { name: '自动做梦是什么？' })
-    expect(within(card).getByText('是什么')).toBeInTheDocument()
-    expect(within(card).getByText('适合')).toBeInTheDocument()
-    expect(within(card).getByText('代价')).toBeInTheDocument()
-    expect(card).toHaveTextContent('满 24 小时')
-    expect(card).toHaveTextContent('不碰代码')
+    fireEvent.click(screen.getByRole('button', { name: 'What is Auto-dream?' }))
+    const card = screen.getByRole('dialog', { name: 'What is Auto-dream?' })
+    expect(within(card).getByText('What it is')).toBeInTheDocument()
+    expect(within(card).getByText('Use it when')).toBeInTheDocument()
+    expect(within(card).getByText('Trade-off')).toBeInTheDocument()
+    expect(card).toHaveTextContent('24 hours')
+    expect(card).toHaveTextContent('never your code')
   })
 
   it('uses the "why" label for the WebFetch preflight card', () => {
     render(<GeneralSettings />)
-    fireEvent.click(screen.getByRole('button', { name: 'WebFetch 域名预检是什么？' }))
-    const card = screen.getByRole('dialog', { name: 'WebFetch 域名预检是什么？' })
-    expect(within(card).getByText('为什么')).toBeInTheDocument()
-    expect(within(card).queryByText('代价')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'What is the WebFetch domain preflight?' }))
+    const card = screen.getByRole('dialog', { name: 'What is the WebFetch domain preflight?' })
+    expect(within(card).getByText('Why')).toBeInTheDocument()
+    expect(within(card).queryByText('Trade-off')).not.toBeInTheDocument()
   })
 
   it('follows the interface language', () => {

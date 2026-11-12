@@ -407,7 +407,7 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
       sessionStats={sessionStats}
       updatedAtLabel={displayContext ? formatUpdatedAt(updatedAt, t) : undefined}
       autoCompactLabel={displayContext?.autoCompactThreshold
-        ? t('contextIndicator.autoCompactAt', { tokens: new Intl.NumberFormat().format(displayContext.autoCompactThreshold) })
+        ? t('contextIndicator.autoCompactAt', { tokens: new Intl.NumberFormat('en-US').format(displayContext.autoCompactThreshold) })
         : undefined}
       estimate={contextSource === 'estimate'}
       status={detailsStatus}

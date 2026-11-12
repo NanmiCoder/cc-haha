@@ -33,20 +33,20 @@ const reference = (kind: 'skill' | 'plugin', id: string, displayName: string, ex
   id,
   name: id,
   displayName,
-  description: `${displayName}的说明`,
+  description: `${displayName} description`,
   modelText: `use ${id}`,
   ...extra,
 })
-const review = reference('skill', 'cr', '代码审查', { description: '按团队规范审一遍改动' })
-const feishu = reference('plugin', 'feishu@market', '飞书插件', { description: '审批、日历、文档', mcpServerNames: ['feishu'] })
-const helper = reference('plugin', 'helper@market', '小帮手')
+const review = reference('skill', 'cr', 'Code review', { description: 'Review changes once against team conventions' })
+const feishu = reference('plugin', 'feishu@market', 'Feishu plugin', { description: 'Approvals, calendar, docs, reviews', mcpServerNames: ['feishu'] })
+const helper = reference('plugin', 'helper@market', 'Helper')
 const candidates: ComposerCandidate[] = [
   { name: 'cr', description: review.description, kind: 'skill', reference: review },
   { name: 'feishu', description: feishu.description, kind: 'plugin', reference: feishu },
   { name: 'helper', description: helper.description, kind: 'plugin', reference: helper },
-  { name: 'review', description: '审查当前分支的改动', kind: 'command' },
-  { name: 'security-review', description: '审查待提交改动的安全问题', kind: 'command' },
-  { name: 'compact', description: '压缩上下文', kind: 'command' },
+  { name: 'review', description: 'Review changes on the current branch', kind: 'command' },
+  { name: 'security-review', description: 'Review pending changes for security issues', kind: 'command' },
+  { name: 'compact', description: 'Compact context', kind: 'command' },
 ]
 const items = candidateBringItems(candidates, { lean: false })
 const find = (key: string) => items.find((item) => item.key === key)!
@@ -61,7 +61,7 @@ describe('catalog to items', () => {
       ['command:security-review', 'command'],
       ['command:compact', 'command'],
     ])
-    expect(find('ref:skill:cr').token).toBe('@代码审查')
+    expect(find('ref:skill:cr').token).toBe('@Code review')
     expect(find('command:review')).toMatchObject({ token: '/review', insertText: '/review ' })
   })
 
@@ -73,10 +73,10 @@ describe('catalog to items', () => {
   test('entry rows form two cards like the desktop menu, and empty groups have no row', () => {
     expect(bringEntries(items)).toEqual([
       [
-        { group: 'skill', title: '技能', count: 2 },
-        { group: 'connector', title: '连接器', count: 1 },
+        { group: 'skill', title: 'Skills', count: 2 },
+        { group: 'connector', title: 'Connectors', count: 1 },
       ],
-      [{ group: 'command', title: '斜杠命令', count: 3 }],
+      [{ group: 'command', title: 'Slash commands', count: 3 }],
     ])
     expect(bringEntries([])).toEqual([])
   })
@@ -90,7 +90,7 @@ describe('catalog to items', () => {
     expect(rows[1]!.slice(0, 2).map((entry) => entry.count)).toEqual([0, 0])
     // Nothing loaded and no plugin connectors: no connector row at all.
     expect(bringEntries(candidateBringItems([candidates[0]!], { lean: false }), { connector: false, agent: false, workflow: false }))
-      .toEqual([[{ group: 'skill', title: '技能', count: 1 }]])
+      .toEqual([[{ group: 'skill', title: 'Skills', count: 1 }]])
     const withoutPlugin = candidateBringItems([candidates[0]!, candidates[3]!], { lean: false })
     expect(bringEntries(withoutPlugin, { connector: false, agent: false, workflow: false }).flat().map((entry) => entry.group)).toEqual(['skill', 'command'])
   })
@@ -98,26 +98,26 @@ describe('catalog to items', () => {
   test('agents and workflows become text insertions, inactive agents are left out', () => {
     expect(
       agentBringItems([
-        { agentType: 'reviewer', description: '审代码' },
+        { agentType: 'reviewer', description: 'Review code' },
         { agentType: 'old', isActive: false },
       ])
     ).toMatchObject([{ key: 'agent:reviewer', insertText: '/agent reviewer ', group: 'agent' }])
-    expect(workflowBringItems([{ name: 'ship', description: '发版' }])).toMatchObject([
-      { key: 'workflow:ship', insertText: '/ship ', group: 'workflow', description: '发版' },
+    expect(workflowBringItems([{ name: 'ship', description: 'Release' }])).toMatchObject([
+      { key: 'workflow:ship', insertText: '/ship ', group: 'workflow', description: 'Release' },
     ])
   })
 
   const catalog: Connector[] = [
-    { id: 'feishu', displayName: '飞书', pluginId: 'feishu@market', connection: 'connected', installed: true, supported: true, status: 'ready' },
-    { id: 'github', displayName: 'GitHub', pluginId: 'github@market', description: '代码托管', connection: 'connected', installed: true, supported: true, status: 'ready' },
-    { id: 'dingtalk', displayName: '钉钉', description: '消息、审批', installed: true, connection: 'needs-auth', supported: true, status: 'needs-auth' },
-    { id: 'broken', displayName: '坏了', installed: true, connection: 'disconnected', status: 'error', supported: true },
-    { id: 'tools', displayName: '工具集', collection: 'tools', installed: true, connection: 'needs-auth', supported: true },
-    { id: 'busy', displayName: '处理中', installed: true, connection: 'needs-auth', operation: {}, supported: true },
-    { id: 'context7', displayName: 'Context7', description: '查文档', installed: false, connection: 'disconnected', supported: true },
+    { id: 'feishu', displayName: 'Feishu', pluginId: 'feishu@market', connection: 'connected', installed: true, supported: true, status: 'ready' },
+    { id: 'github', displayName: 'GitHub', pluginId: 'github@market', description: 'Code hosting', connection: 'connected', installed: true, supported: true, status: 'ready' },
+    { id: 'dingtalk', displayName: 'DingTalk', description: 'Messages, approvals', installed: true, connection: 'needs-auth', supported: true, status: 'needs-auth' },
+    { id: 'broken', displayName: 'Broken', installed: true, connection: 'disconnected', status: 'error', supported: true },
+    { id: 'tools', displayName: 'Toolset', collection: 'tools', installed: true, connection: 'needs-auth', supported: true },
+    { id: 'busy', displayName: 'Processing', installed: true, connection: 'needs-auth', operation: {}, supported: true },
+    { id: 'context7', displayName: 'Context7', description: 'Look up docs', installed: false, connection: 'disconnected', supported: true },
     { id: 'notion', displayName: 'Notion', installed: false, connection: 'disconnected', supported: true },
-    { id: 'amap', displayName: '高德', installed: false, connection: 'disconnected', supported: true },
-    { id: 'windows-only', displayName: '别的平台', installed: false, connection: 'disconnected', supported: false },
+    { id: 'amap', displayName: 'Amap', installed: false, connection: 'disconnected', supported: true },
+    { id: 'windows-only', displayName: 'Other platforms', installed: false, connection: 'disconnected', supported: false },
   ]
   const fromCatalog = connectorBringItems(catalog, items)
   const row = (key: string) => fromCatalog.find((item) => item.key === key)!
@@ -149,23 +149,23 @@ describe('catalog to items', () => {
   })
 
   test('a connected connector with its plugin can be picked as a reference; without one it is shown only', () => {
-    expect(row('ref:plugin:feishu@market')).toMatchObject({ token: '飞书', dot: 'ok' })
+    expect(row('ref:plugin:feishu@market')).toMatchObject({ token: 'Feishu', dot: 'ok' })
     expect(row('ref:plugin:feishu@market').reference).toBe(feishu)
     expect(row('ref:plugin:feishu@market').unavailable).toBeUndefined()
-    expect(row('connector:github')).toMatchObject({ dot: 'ok', unavailable: '在电脑上管理', tone: 'muted' })
+    expect(row('connector:github')).toMatchObject({ dot: 'ok', unavailable: 'Manage on the computer', tone: 'muted' })
     expect(toggleBringItem([], row('connector:github'))).toEqual([])
   })
 
   test('needing authorization or erroring is flagged amber and cannot be picked; the tap says what to do', () => {
-    expect(row('connector:dingtalk')).toMatchObject({ dot: 'attn', unavailable: '需授权', tone: 'attn', notice: '请在电脑上完成授权', description: '需要登录授权' })
-    expect(row('connector:broken')).toMatchObject({ dot: 'attn', unavailable: '需处理', tone: 'attn', description: '连接出错' })
+    expect(row('connector:dingtalk')).toMatchObject({ dot: 'attn', unavailable: 'Needs auth', tone: 'attn', notice: 'Please complete authorization on the computer', description: 'Sign-in authorization needed' })
+    expect(row('connector:broken')).toMatchObject({ dot: 'attn', unavailable: 'Needs attention', tone: 'attn', description: 'Connection error' })
     expect(toggleBringItem([], row('connector:dingtalk'))).toEqual([])
   })
 
   test('suggestions are not installable from the phone: they say to connect on the computer', () => {
-    expect(row('connector:context7')).toMatchObject({ unavailable: '在电脑上连接', tone: 'muted', description: '查文档' })
+    expect(row('connector:context7')).toMatchObject({ unavailable: 'Connect on the computer', tone: 'muted', description: 'Look up docs' })
     expect(row('connector:context7').dot).toBeUndefined()
-    expect(row('connector:busy').unavailable).toBe('在电脑上管理')
+    expect(row('connector:busy').unavailable).toBe('Manage on the computer')
     expect(toggleBringItem([], row('connector:notion'))).toEqual([])
   })
 
@@ -184,7 +184,7 @@ describe('catalog to items', () => {
   test('merging keeps one row per plugin and prefers the catalog name', () => {
     const merged = mergeBringItems(items, fromCatalog)
     expect(merged.filter((item) => item.key === 'ref:plugin:feishu@market')).toHaveLength(1)
-    expect(merged.find((item) => item.key === 'ref:plugin:feishu@market')!.token).toBe('飞书')
+    expect(merged.find((item) => item.key === 'ref:plugin:feishu@market')!.token).toBe('Feishu')
   })
 
   test('probe responses that are not lists count as unavailable', () => {
@@ -197,36 +197,36 @@ describe('catalog to items', () => {
 
 describe('search', () => {
   test('highlight ranges cover every occurrence of every term, merged', () => {
-    expect(matchRanges('审查当前分支的审查', '审')).toEqual([[0, 1], [7, 8]])
+    expect(matchRanges('Review the branch review', 'Rev')).toEqual([[0, 3], [18, 21]])
     expect(matchRanges('/security-review', 'sec rev')).toEqual([[1, 4], [10, 13]])
     expect(matchRanges('abcd', 'bc cd')).toEqual([[1, 4]])
     expect(matchRanges('Review', 'REV')).toEqual([[0, 3]])
     expect(matchRanges('anything', '  ')).toEqual([])
-    expect(matchRanges('', '审')).toEqual([])
+    expect(matchRanges('', 'rev')).toEqual([])
   })
 
   test('text splits into plain and highlighted pieces that rebuild the original', () => {
-    const parts = splitByRanges('按团队规范审一遍', matchRanges('按团队规范审一遍', '审'))
+    const parts = splitByRanges('Team review once', matchRanges('Team review once', 'rev'))
     expect(parts).toEqual([
-      { text: '按团队规范', hit: false },
-      { text: '审', hit: true },
-      { text: '一遍', hit: false },
+      { text: 'Team ', hit: false },
+      { text: 'rev', hit: true },
+      { text: 'iew once', hit: false },
     ])
     expect(splitByRanges('abc', [])).toEqual([{ text: 'abc', hit: false }])
     expect(splitByRanges('abc', [[0, 3]])).toEqual([{ text: 'abc', hit: true }])
   })
 
   test('results are grouped as skills, commands, connectors, with the matching characters marked', () => {
-    const groups = searchBringItems(mergeBringItems(items), '审')
+    const groups = searchBringItems(mergeBringItems(items), 'rev')
     expect(groups.map((group) => [group.group, group.title, group.hits.map((hit) => hit.item.key)])).toEqual([
-      ['skill', '技能', ['ref:skill:cr']],
-      ['command', '命令', ['command:review', 'command:security-review']],
-      ['connector', '连接器', ['ref:plugin:feishu@market']],
+      ['skill', 'Skills', ['ref:skill:cr']],
+      ['command', 'Commands', ['command:review', 'command:security-review']],
+      ['connector', 'Connectors', ['ref:plugin:feishu@market']],
     ])
     const skill = groups[0]!.hits[0]!
-    expect(skill.titleRanges).toEqual([[3, 4]])
-    expect(skill.descriptionRanges).toEqual([[5, 6]])
-    expect(groups[1]!.hits[0]!.descriptionRanges).toEqual([[0, 1]])
+    expect(skill.titleRanges).toEqual([[6, 9]])
+    expect(skill.descriptionRanges).toEqual([[0, 3]])
+    expect(groups[1]!.hits[0]!.descriptionRanges).toEqual([[0, 3]])
   })
 
   test('every term must match, title matches come before description-only matches', () => {
@@ -242,7 +242,7 @@ describe('search', () => {
   })
 })
 
-describe('selection and 完成', () => {
+describe('selection and Done', () => {
   test('tapping toggles an item and keeps the order they were picked in', () => {
     const a = find('command:review')
     const b = find('ref:skill:cr')
@@ -254,11 +254,11 @@ describe('selection and 完成', () => {
   })
 
   test('the button label counts the selection, with the full-width brackets from the design', () => {
-    expect(doneLabel(0)).toBe('完成')
-    expect(doneLabel(2)).toBe('完成（2）')
+    expect(doneLabel(0)).toBe('Done')
+    expect(doneLabel(2)).toBe('Done (2)')
   })
 
-  test('the root page shows 完成 only after the selection changed; sub pages and search always do', () => {
+  test('the root page shows Done only after the selection changed; sub pages and search always do', () => {
     const initial = initialSelection([review])
     expect(initial.map((item) => item.key)).toEqual(['ref:skill:cr'])
     expect(showDone({ page: 'root', searching: false, selected: initial, initial })).toBe(false)
@@ -271,20 +271,20 @@ describe('selection and 完成', () => {
   test('applying adds skills as references and commands as text, and reports only what is new', () => {
     const initial = initialSelection([review])
     const result = applyBringSelection({
-      draft: '帮我看看',
+      draft: 'Take a look for me',
       initial,
       selected: [...initial, find('ref:plugin:helper@market'), find('command:review'), find('command:compact')],
     })
     expect(result.references.map((value) => value.id)).toEqual(['cr', 'helper@market'])
-    expect(result.draft).toBe('帮我看看 /review /compact ')
+    expect(result.draft).toBe('Take a look for me /review /compact ')
     expect(result.added.map((item) => item.key)).toEqual(['ref:plugin:helper@market', 'command:review', 'command:compact'])
   })
 
   test('unchecking a skill that was already in the box removes it, and nothing is appended twice', () => {
     const initial = initialSelection([review, helper])
-    const result = applyBringSelection({ draft: '检查 ', initial, selected: initial.filter((item) => item.reference?.id !== 'cr') })
+    const result = applyBringSelection({ draft: 'Check ', initial, selected: initial.filter((item) => item.reference?.id !== 'cr') })
     expect(result.references.map((value) => value.id)).toEqual(['helper@market'])
-    expect(result.draft).toBe('检查 ')
+    expect(result.draft).toBe('Check ')
     expect(result.added).toEqual([])
   })
 
@@ -296,8 +296,8 @@ describe('selection and 完成', () => {
 
   test('appending adds one space only when the draft does not already end in whitespace', () => {
     expect(appendInsertText('', '/a ')).toBe('/a ')
-    expect(appendInsertText('改一下', '/a ')).toBe('改一下 /a ')
-    expect(appendInsertText('改一下\n', '/a ')).toBe('改一下\n/a ')
+    expect(appendInsertText('Change it', '/a ')).toBe('Change it /a ')
+    expect(appendInsertText('Change it\n', '/a ')).toBe('Change it\n/a ')
   })
 
   test('the same plugin chosen twice is one reference', () => {
@@ -314,7 +314,7 @@ describe('recent items', () => {
   const recent = (key: string, usedAt: number): RecentItem => ({ key, kind: 'command', name: key, description: '', usedAt })
 
   test('only items still in the catalog and pickable are shown, newest first, at most four', () => {
-    const catalog = [...items, ...connectorBringItems([{ id: 'x', displayName: '未授权', installed: true, connection: 'needs-auth' }], items)]
+    const catalog = [...items, ...connectorBringItems([{ id: 'x', displayName: 'Unauthorized', installed: true, connection: 'needs-auth' }], items)]
     const recents = [
       recent('command:gone', 9),
       recent('connector:x', 8),
@@ -335,7 +335,7 @@ describe('recent items', () => {
   })
 
   test('what is stored for a chosen item is enough to find it again by key', () => {
-    expect(toRecent(find('ref:skill:cr'))).toEqual({ key: 'ref:skill:cr', kind: 'skill', name: 'cr', displayName: '代码审查', description: review.description })
+    expect(toRecent(find('ref:skill:cr'))).toEqual({ key: 'ref:skill:cr', kind: 'skill', name: 'cr', displayName: 'Code review', description: review.description })
     expect(toRecent(find('command:review')).kind).toBe('command')
     expect(toRecent(agentBringItems([{ agentType: 'a' }])[0]!).kind).toBe('agent')
     expect(toRecent(workflowBringItems([{ name: 'w' }])[0]!).kind).toBe('workflow')
@@ -345,16 +345,16 @@ describe('recent items', () => {
 
 describe('assembling every source', () => {
   const connectors: Connector[] = [
-    { id: 'feishu', displayName: '飞书', pluginId: 'feishu@market', connection: 'connected', installed: true, supported: true },
-    { id: 'helper', displayName: '小帮手连接器', pluginId: 'helper@market', connection: 'needs-auth', installed: true, supported: true, status: 'needs-auth' },
+    { id: 'feishu', displayName: 'Feishu', pluginId: 'feishu@market', connection: 'connected', installed: true, supported: true },
+    { id: 'helper', displayName: 'Helper connector', pluginId: 'helper@market', connection: 'needs-auth', installed: true, supported: true, status: 'needs-auth' },
   ]
   const all = assembleBringItems({
     candidates,
     lean: false,
     extras: {
       connectors,
-      agents: [{ agentType: 'reviewer', description: '审代码' }, { agentType: 'off', isActive: false }],
-      workflows: [{ name: 'ship', description: '发版' }],
+      agents: [{ agentType: 'reviewer', description: 'Review code' }, { agentType: 'off', isActive: false }],
+      workflows: [{ name: 'ship', description: 'Release' }],
     },
   })
   const keys = (group: BringItem['group']) => all.filter((item) => item.group === group).map((item) => item.key)
@@ -372,7 +372,7 @@ describe('assembling every source', () => {
   test('a plugin owned by an unconnected connector falls back to a searchable skill, not a connector', () => {
     const helperItem = all.find((item) => item.key === 'ref:plugin:helper@market')!
     expect(helperItem.group).toBe('skill')
-    expect(helperItem.token).toBe('@小帮手')
+    expect(helperItem.token).toBe('@Helper')
   })
 
   test('without the connector catalog, plugins that bring an MCP server still show as connectors', () => {
@@ -396,12 +396,12 @@ describe('assembling every source', () => {
       candidates,
       lean: false,
       extras: {
-        connectors: [...connectors, { id: 'notion', displayName: 'Notion 文档', installed: false, connection: 'disconnected', supported: true }],
-        agents: [{ agentType: 'doc-writer', description: '写文档' }],
-        workflows: [{ name: 'doc-sync', description: '同步文档' }],
+        connectors: [...connectors, { id: 'notion', displayName: 'Notion Docs', installed: false, connection: 'disconnected', supported: true }],
+        agents: [{ agentType: 'doc-writer', description: 'Write docs' }],
+        workflows: [{ name: 'doc-sync', description: 'Sync docs' }],
       },
     })
-    const groups = searchBringItems(searchable, '文档')
+    const groups = searchBringItems(searchable, 'Docs')
     expect(groups.map((group) => [group.group, group.hits.map((hit) => hit.item.key)])).toEqual([
       ['connector', ['connector:notion', 'ref:plugin:feishu@market']],
       ['agent', ['agent:doc-writer']],
@@ -419,8 +419,8 @@ describe('reading the three desktop endpoints', () => {
   })
 
   test('workflows come from the workflows list', () => {
-    expect(normalizeWorkflows({ workflows: [{ name: 'ship', description: '发版', filePath: '/x' }, { description: 'no name' }] }))
-      .toEqual([{ name: 'ship', description: '发版' }])
+    expect(normalizeWorkflows({ workflows: [{ name: 'ship', description: 'Release', filePath: '/x' }, { description: 'no name' }] }))
+      .toEqual([{ name: 'ship', description: 'Release' }])
     expect(normalizeWorkflows({ items: [] })).toBeNull()
     expect(normalizeWorkflows(undefined)).toBeNull()
   })

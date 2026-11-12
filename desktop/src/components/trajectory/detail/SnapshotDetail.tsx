@@ -52,7 +52,7 @@ export function SnapshotDetail({ sessionId, snapshot, tab }: { sessionId: string
     if (sys.status !== 'ready') return <Loading />
     const text = sys.value?.text ?? ''
     return (
-      <DetailSection title={t('trajectory.detail.systemPrompt', { count: text.length.toLocaleString() })} actions={<CopyAction text={text} />}>
+      <DetailSection title={t('trajectory.detail.systemPrompt', { count: text.length.toLocaleString('en-US') })} actions={<CopyAction text={text} />}>
         {sys.value?.truncated && <TruncatedNotice />}
         <PlainText text={text} />
       </DetailSection>

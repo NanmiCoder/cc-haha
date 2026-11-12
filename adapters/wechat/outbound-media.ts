@@ -71,31 +71,31 @@ export async function loadWechatOutboundMedia(target: string, workDir: string, s
   if ((source.startsWith('"') && source.endsWith('"')) || (source.startsWith("'") && source.endsWith("'"))) source = source.slice(1, -1)
   if (source.startsWith('file:')) {
     const url = new URL(source)
-    if (url.host || url.search || url.hash) throw new Error('只支持当前项目中的本地文件')
+    if (url.host || url.search || url.hash) throw new Error('Only local files in the current project are supported')
     source = fileURLToPath(url)
   }
-  if (!source || /^(?:[a-z]+:\/\/|\\\\|\/\/)/i.test(source) || source.includes('\0')) throw new Error('只支持当前项目中的本地文件')
+  if (!source || /^(?:[a-z]+:\/\/|\\\\|\/\/)/i.test(source) || source.includes('\0')) throw new Error('Only local files in the current project are supported')
   const root = await fs.realpath(workDir)
   const resolved = await fs.realpath(path.resolve(root, source))
   const relative = path.relative(root, resolved)
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('文件不在当前会话的项目目录内')
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('File is not inside the current session\'s project directory')
   const handle = await fs.open(resolved, 'r')
   try {
     const stat = await handle.stat()
-    if (!stat.isFile() || stat.size === 0) throw new Error('请选择非空普通文件')
-    if (stat.size > FILE_MAX_BYTES) throw new Error('文件超过 30 MiB 上限')
+    if (!stat.isFile() || stat.size === 0) throw new Error('Please choose a non-empty regular file')
+    if (stat.size > FILE_MAX_BYTES) throw new Error('File exceeds the 30 MiB limit')
     const chunks: Buffer[] = []
     let size = 0
     for await (const chunk of handle.createReadStream({ autoClose: false })) {
       signal?.throwIfAborted()
       const bytes = Buffer.from(chunk)
       size += bytes.length
-      if (size > FILE_MAX_BYTES) throw new Error('文件超过 30 MiB 上限')
+      if (size > FILE_MAX_BYTES) throw new Error('File exceeds the 30 MiB limit')
       chunks.push(bytes)
     }
     const buffer = Buffer.concat(chunks)
     const detected = detectWechatMedia(buffer)
-    if (detected.kind === 'image' && buffer.length > IMAGE_MAX_BYTES) throw new Error('图片超过 10 MiB 上限')
+    if (detected.kind === 'image' && buffer.length > IMAGE_MAX_BYTES) throw new Error('Image exceeds the 10 MiB limit')
     return { ...detected, buffer, fileName: path.basename(resolved) }
   } finally {
     await handle.close()

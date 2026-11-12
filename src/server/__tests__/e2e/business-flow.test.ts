@@ -1,8 +1,8 @@
 /**
  * Business Flow E2E Tests
  *
- * 完整的业务流程测试：涵盖定时任务、权限模式、Agent 管理、
- * WebSocket 对话、搜索、会话历史互通等所有核心业务逻辑。
+ * Full business-flow tests: covering scheduled tasks, permission modes, Agent management,
+ * WebSocket conversations, search, session history sharing and all other core business logic.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'
@@ -102,7 +102,7 @@ describe('Business Flow: Scheduled Tasks', () => {
   afterAll(stopTestServer)
 
   // ==========================================================================
-  // 定时任务完整生命周期
+  // Full scheduled-task lifecycle
   // ==========================================================================
 
   it('should start with no scheduled tasks', async () => {

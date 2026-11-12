@@ -365,9 +365,9 @@ describe('hydrateSession', () => {
     updatedAt: 1_700_000_000_500,
     endedAt: 1_700_000_000_500,
     agents: [
-      { agentId: 'a1', label: 'review:imagegen', phaseIndex: 1, phaseTitle: '维度审查', agentIndex: 1, state: 'done' as const },
-      { agentId: 'a2', label: 'review:security', phaseIndex: 1, phaseTitle: '维度审查', agentIndex: 2, state: 'done' as const },
-      { agentId: 'a3', label: 'verify:security', phaseIndex: 2, phaseTitle: '对抗验证', agentIndex: 3, state: 'done' as const },
+      { agentId: 'a1', label: 'review:imagegen', phaseIndex: 1, phaseTitle: 'Dimension review', agentIndex: 1, state: 'done' as const },
+      { agentId: 'a2', label: 'review:security', phaseIndex: 1, phaseTitle: 'Dimension review', agentIndex: 2, state: 'done' as const },
+      { agentId: 'a3', label: 'verify:security', phaseIndex: 2, phaseTitle: 'Adversarial verification', agentIndex: 3, state: 'done' as const },
     ],
   }
 
@@ -384,7 +384,7 @@ describe('hydrateSession', () => {
     const runs = runsForSession(useWorkflowStore.getState(), SESSION)
     expect(runs).toHaveLength(1)
     const { phases } = groupRunPhases(runs[0]!)
-    expect(phases.map(phase => phase.title)).toEqual(['维度审查', '对抗验证'])
+    expect(phases.map(phase => phase.title)).toEqual(['Dimension review', 'Adversarial verification'])
     expect(phases[0]!.agents.map(agent => agent.label)).toEqual([
       'review:imagegen',
       'review:security',

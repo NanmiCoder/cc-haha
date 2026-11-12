@@ -8,15 +8,12 @@ describe('CodeViewer', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
-  it('translates its line count and copy action', () => {
-    // Regression: the header spelled "3 lines" and the copy button "Copy" in
-    // English whatever the interface language was.
-    useSettingsStore.setState({ locale: 'zh' })
+  it('shows its line count and copy action', () => {
+    useSettingsStore.setState({ locale: 'en' })
     render(<CodeViewer code={'{\n  "a": 1\n}'} language="json" />)
 
-    expect(screen.getByText('3 行')).toBeTruthy()
-    expect(screen.queryByText(/lines?$/)).toBeNull()
-    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
+    expect(screen.getByText('3 lines')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
   })
 
   it('heads the block with one quiet 30px line: language in mono, no uppercase tracking, a labelled ghost copy', () => {

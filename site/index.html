@@ -20,22 +20,7 @@
     <meta name="twitter:card" content="summary_large_image">
     <title>cc-haha — Claude Code on your desktop and in your pocket</title>
     <script>
-      // 首帧就把语言定下来：没有保存的选择时按浏览器首选语言。只认根路径，带语言前缀
-      // 的地址是用户的明确意图。规则与 src/lib/locale.js 保持一致。
-      (function () {
-        if (window.location.pathname.replace(/\/+$/, '') !== '') return
-        var preferredLanguage = (navigator.languages && navigator.languages[0]) || navigator.language || ''
-        var locale = /^zh(?:[-_]|$)/i.test(preferredLanguage) ? 'zh' : 'en'
-        try {
-          var stored = localStorage.getItem('cch-locale')
-          if (stored === 'en' || stored === 'zh') locale = stored
-        } catch (error) { /* 私密模式下仍按浏览器语言 */ }
-        if (locale === 'en') window.location.replace('/en' + window.location.search + window.location.hash)
-        else document.documentElement.lang = 'zh-CN'
-      })()
-    </script>
-    <script>
-      // 首帧就把主题定下来，避免深色偏好的用户先闪一下白屏。
+      // Set the theme on the first frame so users who prefer dark mode don't see a white flash.
       (function () {
         try {
           var stored = localStorage.getItem('cch-theme')

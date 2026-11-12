@@ -42,15 +42,15 @@ import {
   removeConfirmText,
 } from '../ui/computer/computerModel'
 
-/** /computer?host —— 一台电脑的设置：存在电脑上、每台一份。 */
+/** /computer?host — Settings for one computer: stored on the computer, one per computer. */
 export default function Computer() {
   const { host: id } = useLocalSearchParams<{ host?: string }>()
   const { host } = useConnection(id)
   if (!host)
     return (
       <ScreenView>
-        <NavBar floating title="电脑设置" />
-        <EmptyState icon="laptop" title="还没有连接电脑" detail="先连接一台电脑，再回到这里。" />
+        <NavBar floating title="Computer settings" />
+        <EmptyState icon="laptop" title="No computer connected yet" detail="Connect a computer first, then come back here." />
       </ScreenView>
     )
   return <ComputerBody key={host.id} host={host} />
@@ -73,18 +73,18 @@ function ComputerBody({ host }: { host: Host }) {
   const authLine = remoteAuthLine(host, check)
   const go = (pathname: '/models' | '/schedules' | '/activity') =>
     router.push({ pathname, params: { host: host.id } })
-  // 一项读到就显示值；读失败显示“读取失败”；还没回来显示“读取中…”。
+  // Show the value once read; on failure show "Failed to load"; while pending show "Loading…".
   const shown = (key: ComputerKey, value: string | undefined) =>
-    value ?? (values.errors[key] !== undefined ? '读取失败' : '读取中…')
+    value ?? (values.errors[key] !== undefined ? 'Failed to load' : 'Loading…')
   const firstError = Object.values(values.errors).find(Boolean)
 
   async function savePermission(mode: PermissionMode) {
-    if (!client) throw new Error('正在连接电脑')
+    if (!client) throw new Error('Connecting to computer')
     await client.put('/api/permissions/mode', { mode })
     patch({ mode })
   }
   async function saveAutoAnswer(minutes: number) {
-    if (!client || !values.autoQuestion) throw new Error('还没读到电脑上的设置，请稍后再试')
+    if (!client || !values.autoQuestion) throw new Error('Settings from the computer are not loaded yet; please try again later')
     const autoQuestion = nextAutoQuestion(values.autoQuestion, minutes)
     await client.put('/api/settings/user', { autoQuestion })
     patch({ autoQuestion })
@@ -93,9 +93,9 @@ function ComputerBody({ host }: { host: Host }) {
     if (removing) return
     const text = removeConfirmText(host.name)
     Alert.alert(text.title, text.message, [
-      { text: '取消', style: 'cancel' },
+      { text: 'Cancel', style: 'cancel' },
       {
-        text: '移除连接',
+        text: 'Remove connection',
         style: 'destructive',
         onPress: () => {
           setRemoving(true)
@@ -147,7 +147,7 @@ function ComputerBody({ host }: { host: Host }) {
           {isH5 ? null : (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="切换电脑"
+              accessibilityLabel="Switch computer"
               onPress={() => router.push('/hosts')}
               style={({ pressed }) => ({
                 height: 34,
@@ -160,46 +160,46 @@ function ComputerBody({ host }: { host: Host }) {
                 opacity: pressed ? 0.6 : 1,
               })}
             >
-              <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>切换</Text>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>Switch</Text>
               <Icon name="chevron-down" size={14} color={colors.ink} strokeWidth={2.4} />
             </Pressable>
           )}
         </View>
         <InlineError text={connectionError || firstError} style={{ marginTop: 8 }} />
 
-        <SectionHeader title="新任务默认" />
+        <SectionHeader title="New task defaults" />
         <Group>
           <SettingRow
             icon="cpu"
-            title="模型"
+            title="Model"
             value={shown('model', values.model)}
             onPress={() => go('/models')}
           />
           <Separator inset={48} />
           <SettingRow
             glyph={<GaugeGlyph color={colors.ink2} />}
-            title="思考强度"
+            title="Thinking effort"
             value={shown('effort', values.effort && effortName(values.effort))}
             onPress={() => go('/models')}
           />
           <Separator inset={48} />
           <SettingRow
             icon="shield"
-            title="权限"
+            title="Permissions"
             value={shown('mode', values.mode && modeName(values.mode))}
             disabled={access.editable && values.mode === undefined}
             onPress={access.editable ? () => setPermissionOpen(true) : undefined}
-            label={`权限，${values.mode ? modeName(values.mode) : '读取中'}${access.editable ? '' : '，公网连接下只能在电脑上改'}`}
+            label={`Permissions, ${values.mode ? modeName(values.mode) : 'Loading'}${access.editable ? '' : '; can only be changed on the computer over a public connection'}`}
           />
         </Group>
         <Footnote>{defaultsFootnote(host)}</Footnote>
 
-        <SectionHeader title="我不在的时候" />
+        <SectionHeader title="While I am away" />
         <Group>
           <SettingRow
             glyph={<Glyph name="bot" color={colors.ink2} />}
-            title="提问没人回，AI 代答"
-            subtitle="按推荐选项作答，审批永远不代答"
+            title="Unanswered questions get AI answers"
+            subtitle="Answer with the recommended option; approvals are never answered for you"
             minHeight={60}
             value={shown(
               'autoQuestion',
@@ -210,37 +210,37 @@ function ComputerBody({ host }: { host: Host }) {
           />
         </Group>
 
-        <SectionHeader title="运行情况" />
+        <SectionHeader title="Run status" />
         <Group>
           <SettingRow
             icon="clock"
-            title="定时任务"
+            title="Scheduled task"
             value={shown('schedules', values.schedules)}
             onPress={() => go('/schedules')}
           />
           <Separator inset={48} />
           <SettingRow
             icon="activity"
-            title="后台活动"
+            title="Background activity"
             value={shown('activity', values.activity)}
             onPress={() => go('/activity')}
           />
         </Group>
 
-        <SectionHeader title="连接" />
+        <SectionHeader title="Connection" />
         <Group>
-          <SettingRow title="方式" value={connectionMethod(host)} />
+          <SettingRow title="Method" value={connectionMethod(host)} />
           <Separator />
-          <SettingRow title="地址" mono value={connectionAddress(host)} />
+          <SettingRow title="Address" mono value={connectionAddress(host)} />
           {authLine ? (
             <>
               <Separator />
-              <SettingRow title="公网授权" value={authLine} />
+              <SettingRow title="Public access authorization" value={authLine} />
             </>
           ) : null}
         </Group>
 
-        <SectionHeader title="只能在电脑上改" />
+        <SectionHeader title="Can only be changed on the computer" />
         <Group>
           <View
             style={{
@@ -266,7 +266,7 @@ function ComputerBody({ host }: { host: Host }) {
             <Group style={{ marginTop: 28 }}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`从这台手机移除 ${host.name}`}
+                accessibilityLabel={`Remove from this phone ${host.name}`}
                 disabled={removing}
                 onPress={removeHost}
                 style={({ pressed }) => ({
@@ -277,11 +277,11 @@ function ComputerBody({ host }: { host: Host }) {
                   opacity: removing ? 0.45 : 1,
                 })}
               >
-                <Text style={{ fontSize: 16, color: colors.err }}>从这台手机移除</Text>
+                <Text style={{ fontSize: 16, color: colors.err }}>Remove from this phone</Text>
               </Pressable>
             </Group>
             <InlineError text={removeError} style={{ marginTop: 8 }} />
-            <Footnote>只删掉手机上的连接，电脑上的会话都还在。</Footnote>
+            <Footnote>Only removes the connection on the phone; sessions on the computer stay.</Footnote>
           </>
         )}
       </ScrollView>

@@ -35,9 +35,9 @@ test('the actual composer wires microphone, recording controls, transcript feedb
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const props = {
       client: { host: { id: 'phone-fixture' } }, sessionId: 'fixture-chat',
-      draft: '原来的草稿', onDraft: () => {}, references: [], onReferences: () => {}, attachments: [], onAttachments: () => {},
+      draft: 'Original draft', onDraft: () => {}, references: [], onReferences: () => {}, attachments: [], onAttachments: () => {},
       team: false, onTeam: () => {}, computer: { enabled: false }, lean: false, empty: false, busy: false, disabled: false,
-      run: { label: '测试模型', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
+      run: { label: 'Test model', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
     }
     const flatten = node => {
       if (Array.isArray(node)) return node.flatMap(flatten)
@@ -48,50 +48,50 @@ test('the actual composer wires microphone, recording controls, transcript feedb
     const render = () => flatten(ChatComposer(props))
     const button = (nodes, label) => nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === label)
     let nodes = render()
-    assert.equal(button(nodes, '语音输入').props.disabled, false)
-    button(nodes, '语音输入').props.onPress()
+    assert.equal(button(nodes, 'Voice input').props.disabled, false)
+    button(nodes, 'Voice input').props.onPress()
     assert.deepEqual([blurred, dismissed, started], [1, 1, 1])
     assert.ok(options.contextKey.includes('phone-fixture:fixture-chat'))
     voice = { ...voice, phase: 'recording', live: true }
     nodes = render()
-    assert.equal(button(nodes, '语音输入'), undefined)
-    assert.equal(nodes.some(node => node.props?.accessibilityLabel?.startsWith('运行方式：')), false)
+    assert.equal(button(nodes, 'Voice input'), undefined)
+    assert.equal(nodes.some(node => node.props?.accessibilityLabel?.startsWith('Run mode: ')), false)
     assert.equal(nodes.find(node => node.type === 'TextInput').props.editable, false)
-    assert.equal(nodes.find(node => node.type === 'TextInput').props.value, '原来的草稿')
+    assert.equal(nodes.find(node => node.type === 'TextInput').props.value, 'Original draft')
     // Recording owns the composer: an empty, disabled editor used to take up
     // space while the waveform was squeezed between three toolbar buttons.
     assert.equal(nodes.find(node => node.type === 'TextInput').props.style.display, 'none')
     const panel = nodes.find(node => node.props?.testID === 'voice-recording-panel')
     assert.ok(panel, 'recording has its own full-width surface')
     assert.notEqual(panel.props.style.flexDirection, 'row', 'the trace and actions must not share one narrow row')
-    assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === '正在聆听'))
-    button(nodes, '停止录音并转成文字').props.onPress()
-    button(nodes, '转写后发送').props.onPress()
-    button(nodes, '取消语音输入').props.onPress()
+    assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === 'Listening'))
+    button(nodes, 'Stop recording and transcribe').props.onPress()
+    button(nodes, 'Send after transcribing').props.onPress()
+    button(nodes, 'Cancel voice input').props.onPress()
     assert.deepEqual([stopped, sent, cancelled], [1, 1, 1])
     props.busy = true
     props.queueing = true
     nodes = render()
-    assert.equal(button(nodes, '转写后发送').props.disabled, false, 'a running model permits a dictated queued message')
+    assert.equal(button(nodes, 'Send after transcribing').props.disabled, false, 'a running model permits a dictated queued message')
     voice = { ...voice, phase: 'transcribing' }
     nodes = render()
-    assert.equal(button(nodes, '停止录音并转成文字').props.disabled, true)
-    assert.equal(button(nodes, '取消语音输入').props.disabled, undefined)
+    assert.equal(button(nodes, 'Stop recording and transcribe').props.disabled, true)
+    assert.equal(button(nodes, 'Cancel voice input').props.disabled, undefined)
     voice = { ...voice, sendRequested: true }
-    assert.equal(button(render(), '转写后发送').props.disabled, true)
-    voice = { ...voice, phase: 'idle', live: false, pendingText: '待插入的识别文字', issue: { code: 'permission', message: '请允许麦克风' } }
+    assert.equal(button(render(), 'Send after transcribing').props.disabled, true)
+    voice = { ...voice, phase: 'idle', live: false, pendingText: 'Recognized text to insert', issue: { code: 'permission', message: 'Please allow the microphone' } }
     nodes = render()
     assert.notEqual(nodes.find(node => node.type === 'TextInput').props.style.display, 'none')
-    assert.equal(nodes.find(node => node.type === 'TextInput').props.value, '原来的草稿')
-    assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === '待插入的识别文字'))
-    button(nodes, '插入转写文字').props.onPress()
+    assert.equal(nodes.find(node => node.type === 'TextInput').props.value, 'Original draft')
+    assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === 'Recognized text to insert'))
+    button(nodes, 'Insert transcribed text').props.onPress()
     assert.equal(inserted, 1)
-    await button(nodes, '打开麦克风权限设置').props.onPress()
+    await button(nodes, 'Open microphone permission settings').props.onPress()
     assert.equal(settings, 1)
     props.disabled = true
     nodes = render()
-    assert.equal(button(nodes, '插入转写文字').props.disabled, true)
-    assert.equal(button(nodes, '语音输入').props.disabled, true)
+    assert.equal(button(nodes, 'Insert transcribed text').props.disabled, true)
+    assert.equal(button(nodes, 'Voice input').props.disabled, true)
   `
   try {
     execFileSync(process.execPath, ['--no-env-file', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })

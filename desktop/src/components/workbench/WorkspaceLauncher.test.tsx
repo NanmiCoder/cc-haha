@@ -3,10 +3,6 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
 import { en } from '../../i18n/locales/en'
-import { zh } from '../../i18n/locales/zh'
-import { zh as zhTW } from '../../i18n/locales/zh-TW'
-import { jp } from '../../i18n/locales/jp'
-import { kr } from '../../i18n/locales/kr'
 
 describe('WorkspaceLauncher', () => {
   it('offers side chat alongside the existing workspace kinds', () => {
@@ -99,7 +95,7 @@ describe('WorkspaceLauncher', () => {
  * three keys and the other two belong to sibling components in this directory.
  */
 describe('retired workbench translation keys', () => {
-  const locales = { en, zh, 'zh-TW': zhTW, jp, kr }
+  const locales = { en }
   const retired = [
     'workspace.launcher.bottomTerminalOnly',
     'workspace.review.stats',

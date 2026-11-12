@@ -26,7 +26,7 @@ function checkLayout(kind: 'diff' | 'code', fontScale: number) {
     mock.module(${JSON.stringify(import.meta.resolve('../theme'))}, () => ({ useTheme: () => ({ colors: {} }) }))
     const { DiffView } = require(${JSON.stringify(import.meta.resolve('../kit'))})
     const { CodeView } = require(${JSON.stringify(import.meta.resolve('./CodeView'))})
-    const text = 'HELLO from approved Android 中文';
+    const text = 'HELLO from approved Android Chinese';
     const scale = ${fontScale}
     const lines = Array.from({length: 5000}, (_, index) => ({ kind: 'add', text, after: index + 1 }))
     const root = ${JSON.stringify(kind)} === 'diff'

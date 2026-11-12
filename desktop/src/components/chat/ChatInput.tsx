@@ -134,7 +134,7 @@ function isRuntimeEffortLevel(value: string | undefined): value is NonNullable<R
  * narrow layout and kept the narrow one wide.
  *
  * The number comes off the shipped toolbar with the longest mode label
- * ("Ask permissions" / 询问权限): the leading group measures 193px and the
+ * ("Ask permissions"): the leading group measures 193px and the
  * trailing cluster 361px, which with the 32px round send button needs a 530px
  * column.
  *
@@ -1633,7 +1633,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         <div
           ref={panelRef}
           data-testid="chat-input-panel"
-          // The floating card (「素」): `glass-panel--composer` supplies the
+          // The floating card ("Su" design spec): `glass-panel--composer` supplies the
           // opaque lifted fill, the hairline and the composer step of the shadow
           // scale; `--radius-xl` is the composer corner. One geometry for every
           // variant — the editor and the toolbar carry their own insets, so a

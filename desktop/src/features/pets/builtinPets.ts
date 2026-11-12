@@ -12,8 +12,8 @@ export const BUILTIN_PETS = [
   {
     source: 'builtin',
     id: 'dada-code',
-    displayName: '搭搭 Dada',
-    description: '沉稳的协作机器人，陪你把想法一块块搭起来。',
+    displayName: 'Dada',
+    description: 'A steady coding robot that helps build ideas one block at a time.',
     descriptionKey: 'settings.pets.builtin.dada',
     imageUrl: dadaImage,
     spriteVersionNumber: 2,
@@ -23,8 +23,8 @@ export const BUILTIN_PETS = [
   {
     source: 'builtin',
     id: 'huhu-plan',
-    displayName: '弧弧 Huhu',
-    description: '拿着铅笔和计划本的路线机器人，复杂任务也能找到出口。',
+    displayName: 'Huhu',
+    description: 'A pencil-and-notepad planning robot that maps a way through complex tasks.',
     descriptionKey: 'settings.pets.builtin.huhu',
     imageUrl: huhuImage,
     spriteVersionNumber: 2,
@@ -34,8 +34,8 @@ export const BUILTIN_PETS = [
   {
     source: 'builtin',
     id: 'bubu-fix',
-    displayName: '补补 Bubu',
-    description: '举着修补扳手的小机器人，最擅长发现并修好裂缝。',
+    displayName: 'Bubu',
+    description: 'A wrench-carrying repair robot with a knack for spotting and fixing cracks.',
     descriptionKey: 'settings.pets.builtin.bubu',
     imageUrl: bubuImage,
     spriteVersionNumber: 2,
@@ -45,8 +45,8 @@ export const BUILTIN_PETS = [
   {
     source: 'builtin',
     id: 'huihui-build',
-    displayName: '回回 Huihui',
-    description: '抱着构建齿轮的小机器人，新回复一到就精神满满。',
+    displayName: 'Huihui',
+    description: 'A gear-carrying build robot that perks up whenever a new reply arrives.',
     descriptionKey: 'settings.pets.builtin.huihui',
     imageUrl: huihuiImage,
     spriteVersionNumber: 2,

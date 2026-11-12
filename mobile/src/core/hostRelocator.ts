@@ -3,11 +3,11 @@ import type { HostUrlUpdate } from './notifications'
 import { parseLocatorHints, verifyHostUrlPush, type LocatorHints } from './relocate'
 import type { Host } from './types'
 
-/** 同一台电脑连不上时，最多这么久在局域网里找一次新地址。 */
+/** When the same computer is unreachable, look for a new address on the LAN at most this often. */
 export const LOCATE_COOLDOWN_MS = 30_000
-/** 局域网线索（端口、IP）多久向电脑重新要一次。 */
+/** How often to re-request LAN hints (port, IP) from the computer. */
 export const HINTS_MAX_AGE_MS = 6 * 3600_000
-/** 要线索失败（不是旧电脑）后，隔多久再要。 */
+/** How long to wait before asking for hints again after a failure (not an old computer). */
 export const HINTS_RETRY_MS = 10 * 60_000
 
 export type LocatorRecord = LocatorHints & { updatedAt: number }
@@ -16,7 +16,7 @@ export type LocatorStore = {
   set(id: string, record: LocatorRecord): Promise<void>
   retain(ids: readonly string[]): Promise<void>
 }
-/** App 的电脑登记表（AppContext 挂上来）。 */
+/** App computer registry (attached by AppContext). */
 export type RelocationTarget = {
   host(id: string): Host | undefined
   credential(id: string): Promise<string | null>
@@ -24,9 +24,9 @@ export type RelocationTarget = {
 }
 type LocatorClient = Pick<ApiClient, 'host' | 'get'>
 
-/** Cloudflare 收到了请求却够不着电脑：隧道没了（530）或电脑那头没回应（502–504）。 */
+/** Cloudflare The request was received but could not reach the computer: tunnel gone (530) or no response from the computer (502–504). */
 const GATEWAY_STATUSES = new Set([502, 503, 504, 530])
-/** 网络层面连不上（没回应、超时、DNS、断连、网关错误）；授权、配对失败都不算。 */
+/** Unreachable at the network level (no response, timeout, DNS, disconnect, gateway error); auth and pairing failures do not count. */
 export function isUnreachable(error: unknown) {
   return (
     error instanceof ApiError &&
@@ -35,11 +35,11 @@ export function isUnreachable(error: unknown) {
 }
 
 /**
- * 远程电脑公网地址变了时把它找回来，全 App 只此一处（见 state/api.ts 的 createApiClient：
- * 每个发往远程电脑的请求结束时都报到这里）：
- * - 请求成功：线索没有或超过 6 小时，就向电脑要一份局域网线索存起来；
- * - 网络原因连不上：同一台电脑 30 秒内最多一次，按线索在局域网里问出新地址，
- *   签名对、和登记的不同，就改登记——各处的客户端随之换成新地址重来。
+ * Find a remote computer again when its public address changes; the only place in the app (see createApiClient in state/api.ts: 
+ * every request to a remote computer reports here when it ends): 
+ * - Request succeeded: if there are no hints or they are older than 6 hours, ask the computer for LAN hints and store them; 
+ * - Unreachable due to network: at most once per 30 seconds per computer, ask for the new address on the LAN using the hints, 
+ *   and if the signature is valid and differs from the registry, update it — clients everywhere switch to the new address and retry.
  */
 export class HostRelocator {
   #target?: RelocationTarget
@@ -66,13 +66,13 @@ export class HostRelocator {
     }
   }
 
-  /** 一个请求结束：`null` 是成功，否则是它的错误。 */
+  /** A request ended: `null` means success, otherwise its error. */
   settled(client: LocatorClient, error: unknown) {
     if (error === null) void this.contacted(client)
     else if (isUnreachable(error)) void this.unreachable(client.host)
   }
 
-  /** 只留登记表里还在的电脑：删掉的电脑连同它的线索一起忘掉。 */
+  /** Keep only computers still in the registry: forget deleted computers along with their hints. */
   retain(ids: readonly string[]) {
     const kept = new Set(ids)
     for (const map of [this.#hintsDue, this.#locatedAt])
@@ -80,7 +80,7 @@ export class HostRelocator {
     return this.deps.hints.retain(ids)
   }
 
-  /** 发请求的客户端还指向登记表里这台电脑的现行地址；换过地址后的旧客户端不算。 */
+  /** The requesting client still points to this computer's current address in the registry; old clients from before an address change do not count. */
   #current(host: Host) {
     const current = this.#target?.host(host.id)
     return current && current.auth === 'remote' && !current.page && current.url === host.url ? current : undefined
@@ -94,7 +94,7 @@ export class HostRelocator {
     this.#refreshing.add(id)
     try {
       if (due === undefined) {
-        // 这次运行头一回：存着的线索还新鲜就不问。
+        // First time this run: do not ask if stored hints are still fresh.
         const stored = await this.deps.hints.get(id)
         const now = this.#now()
         if (stored && stored.updatedAt <= now && now - stored.updatedAt < HINTS_MAX_AGE_MS) {
@@ -111,7 +111,7 @@ export class HostRelocator {
       await this.deps.hints.set(id, { ...hints, updatedAt: this.#now() })
       this.#hintsDue.set(id, this.#now() + HINTS_MAX_AGE_MS)
     } catch (error) {
-      // 旧电脑没有这个接口：这次运行内不再问。
+      // Old computers have no such endpoint: do not ask again during this run.
       this.#hintsDue.set(
         id,
         error instanceof ApiError && error.status === 404 ? Infinity : this.#now() + HINTS_RETRY_MS
@@ -121,7 +121,7 @@ export class HostRelocator {
     }
   }
 
-  /** 返回是否改了登记的地址。 */
+  /** Returns whether the registered address was changed. */
   async unreachable(host: Host): Promise<boolean> {
     const id = host.id
     if (!this.#current(host) || this.#locating.has(id)) return false
@@ -150,8 +150,8 @@ export class HostRelocator {
 }
 
 /**
- * 电脑推来的新地址：用这台电脑存着的凭据核对签名。relocated=改了登记；
- * current=签名对、地址没变；ignored=不认识的电脑、没有凭据或签名不对。
+ * New address pushed by the computer: verify the signature with this computer's stored credential. relocated = registry changed; 
+ * current=signature valid, address unchanged; ignored = unknown computer, no credential or bad signature.
  */
 export async function applyHostUrlUpdate(
   update: HostUrlUpdate,

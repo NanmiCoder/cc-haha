@@ -351,7 +351,7 @@ public enum AXAction {
     /// Max UTF-16 units per `keyboardSetUnicodeString` chunk (blueprint §4 ≤64).
     private static let unicodeChunk = 64
 
-    /// How far down to scan for an actionable descendant (blueprint §4: "向下3层").
+    /// How far down to scan for an actionable descendant (blueprint §4: "3 levels down").
     private static let descendantScanDepth = 3
 
     /// AX action names (string-literal; not all are exported as kAX… constants).

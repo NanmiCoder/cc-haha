@@ -24,8 +24,8 @@ export const checkpointDiffKey = (
 ) => `${sessionKey(hostId, sessionId)}\u0000${checkpointSignature(checkpoint)}\u0000${path}`
 
 /**
- * 检查点列表只给文件名和总数；逐文件的增删和 M/A/D 来自每个文件自己的差异。
- * 每次进入页面最多预取前 12 个、并发 3 个（服务端每次比较都会重读会话记录，长会话不能一口气全取），取到的差异缓存给差异页直接用。
+ * The checkpoint list only gives file names and totals; per-file additions/deletions and M/A/D come from each file's own diff.
+ * Each page visit prefetches at most the first 12, 3 concurrently (the server rereads the transcript for every comparison, so long sessions cannot fetch all at once), and fetched diffs are cached for the diff page to use directly.
  */
 const PREFETCH_LIMIT = 12
 const CONCURRENCY = 3
@@ -77,7 +77,7 @@ export function useCheckpointFileSummaries(
               controller.signal
             )
             if (controller.signal.aborted) return
-            // 临时的 error 不缓存，下次进页面再试；missing / not_git_repo 是确定结果，照常缓存。
+            // Temporary errors are not cached and retried on the next visit; missing / not_git_repo are definite results and cached as usual.
             if (response.state === 'error') continue
             checkpointDiffs.set(
               checkpointDiffKey(hostId, sessionId, checkpoint, path),
@@ -85,7 +85,7 @@ export function useCheckpointFileSummaries(
             )
             bump()
           } catch {
-            // 这一行只是不显示统计；打开差异页时会给出具体错误。
+            // This row only hides the stats; opening the diff page shows the specific error.
           }
         }
       }
@@ -102,8 +102,8 @@ export function useCheckpointFileSummaries(
 }
 
 /**
- * 这一轮开头那条用户消息的文字。先读最新一页历史，找不到再往前翻，最多 3 页；
- * 翻到的每条用户消息都缓存起来，换一轮时多半不用再请求。
+ * Text of the user message that starts this turn. Read the latest history page first, page back if not found, at most 3 pages; 
+ * every user message paged through is cached, so switching turns usually needs no new request.
  */
 const PROMPT_PAGES = 3
 export function useTurnPrompt(
@@ -136,7 +136,7 @@ export function useTurnPrompt(
           cursor = result.page.nextCursor
         }
       })().catch(() => {
-        // 引用只是辅助信息：取不到时只显示轮次和时间。
+        // The quote is only auxiliary info: when unavailable only the turn number and time are shown.
       })
       return () => controller.abort()
     }, [client, key, scope, sessionId])

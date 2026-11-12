@@ -73,9 +73,9 @@ test('a computer without APNs / FCM keys still delivers through Expo and the pho
   // An acknowledged alert is never handed out twice.
   expect(await f.service.pull(pullToken, pulledId, {}, new AbortController().signal)).toEqual([])
   f.state([completed()]); await f.service.tick()
-  expect(f.sent[1]?.payload).toMatchObject({ body: '任务已完成', categoryId: 'cchahaResult' })
+  expect(f.sent[1]?.payload).toMatchObject({ body: 'Task completed', categoryId: 'cchahaResult' })
   expect(f.sent[1]?.payload.interruptionLevel).toBeUndefined()
-  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ body: '任务已完成', channelId: 'cc-haha-completed' }])
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ body: 'Task completed', channelId: 'cc-haha-completed' }])
 })
 
 test('only the registered owner of a pull token may read its alerts', async () => {
@@ -99,10 +99,10 @@ test('the phone test reaches a pull registration and Expo reports removed device
   expect(await f.service.sendTest(pullToken, undefined, {})).toEqual({ status: 'sent' })
   // The test must be able to show a banner: the phone creates "completed" at default
   // importance (no heads-up), so the test rides the high-importance decisions channel.
-  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: '测试通知 · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-decisions', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
+  expect(await f.service.pull(pullToken, undefined, {}, new AbortController().signal)).toMatchObject([{ title: 'Test notification · cc-haha', category: 'cchahaResult', channelId: 'cc-haha-decisions', data: { hostId: 'local-phone-host-a', eventType: 'test' } }])
   f.service.register(input({ provider: 'expo', token: expoToken }), {})
   expect(await f.service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
-  expect(f.sent[0]?.payload).toMatchObject({ title: '测试通知 · cc-haha', categoryId: 'cchahaResult', data: { eventType: 'test' } })
+  expect(f.sent[0]?.payload).toMatchObject({ title: 'Test notification · cc-haha', categoryId: 'cchahaResult', data: { eventType: 'test' } })
 })
 
 test('a remote listener restart pauses delivery but keeps the registration; only losing the pairing deletes it', async () => {
@@ -169,11 +169,11 @@ test('the latest Expo failure is reported to phones until a send succeeds again'
   service.register(input({ provider: 'expo', token: expoToken }), {})
   expect(service.status().relayErrors).toBeUndefined()
   expect(await service.sendTest(expoToken, undefined, {})).toMatchObject({ status: 'failed' })
-  expect(service.status().relayErrors).toEqual({ expo: '电脑连不上 Expo 推送服务（exp.host）' })
+  expect(service.status().relayErrors).toEqual({ expo: 'The computer cannot reach the Expo push service (exp.host)' })
   // An answer from Expo itself names its reason, e.g. missing APNs credentials on EAS.
   fail = new Error('Expo push rejected delivery (InvalidCredentials)')
   await service.sendTest(expoToken, undefined, {})
-  expect(service.status().relayErrors).toEqual({ expo: 'Expo 推送服务拒绝了发送（InvalidCredentials）' })
+  expect(service.status().relayErrors).toEqual({ expo: 'Expo push service rejected the send (InvalidCredentials)' })
   expect(JSON.stringify(service.status())).not.toContain(expoToken)
   fail = undefined
   expect(await service.sendTest(expoToken, undefined, {})).toEqual({ status: 'sent' })
@@ -235,7 +235,7 @@ test('pushes authoritative transitions once and limits quick actions to ordinary
   f.service.register(input(), {})
   f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
   expect(f.sent).toHaveLength(0)
-  f.state([{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash', preview: '等待工具权限确认' }]); await f.service.tick(); await f.service.tick()
+  f.state([{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash', preview: 'Waiting for tool permission' }]); await f.service.tick(); await f.service.tick()
   expect(f.sent).toHaveLength(1)
   expect(f.sent[0]?.payload).toMatchObject({ aps: { category: 'cchahaTool' }, hostId: 'local-phone-host-a', sessionId: 's', requestId: 'q1', eventType: 'decision' })
   f.state([{ id: 's', activityState: 'waiting', requestId: 'q2', toolName: 'AskUserQuestion' }]); await f.service.tick()
@@ -291,7 +291,7 @@ test('errors expose no token and do not claim delivery', async () => {
   f.service.register(input(), {})
   f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
   f.state([{ id: 's', activityState: 'failed' }]); await f.service.tick()
-  expect(f.service.status().error).toContain('投递失败')
+  expect(f.service.status().error).toContain('delivery failed')
   expect(JSON.stringify(f.service.status())).not.toContain(input().token)
 })
 
@@ -461,7 +461,7 @@ test('completion retries retain explicit durable evidence; stalled work sends on
   f.advance(5000); await f.service.tick()
   expect(f.sent[0]?.payload.eventType).toBe('completed')
   f.state([{ id: 's', activityState: 'running', stalled: true }]); await f.service.tick(); await f.service.tick()
-  expect(f.sent[1]?.payload.aps).toMatchObject({ alert: { body: '超过 5 分钟没有进展，请打开查看' } })
+  expect(f.sent[1]?.payload.aps).toMatchObject({ alert: { body: 'No progress for over 5 minutes; open to check' } })
   expect(f.sent).toHaveLength(2)
 })
 
@@ -555,7 +555,7 @@ test('old registration store without delivery migration loads unchanged and beha
   next.start(() => true)
   await next.tick(); await next.stop()
   const ios = f.sent.find(row => row.platform === 'ios')!, droid = f.sent.find(row => row.platform === 'android')!
-  expect(ios.payload.aps).toEqual({ alert: { title: 'cc-haha 会话', body: '需要你做决定' }, sound: 'default', category: 'cchahaDecision' })
+  expect(ios.payload.aps).toEqual({ alert: { title: 'cc-haha session', body: 'Needs your decision' }, sound: 'default', category: 'cchahaDecision' })
   expect(channelOf(droid)).toBe('cc-haha')
 })
 
@@ -637,7 +637,7 @@ test('Live Activity showCommand=false hides the raw command and preview', async 
     f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'Bash', preview: 'curl http://secret.example' }]); await f.service.tick()
     f.state([{ id: 's', activityState: 'waiting', requestId: 'p', toolName: 'Edit', preview: 'secret/path.ts' }]); await f.service.tick()
     const details = f.sent.map(row => props(row).detail)
-    expect(details).toEqual(hidden ? ['', '打开 App 查看命令', '需要你做决定'] : ['secret-run-preview', 'curl http://secret.example', 'secret/path.ts'])
+    expect(details).toEqual(hidden ? ['', 'Open the app to view the command', 'Needs your decision'] : ['secret-run-preview', 'curl http://secret.example', 'secret/path.ts'])
     expect(JSON.stringify(f.sent.map(row => row.payload)).includes('secret')).toBe(!hidden)
   }
 })
@@ -651,7 +651,7 @@ test('showCommand=false also hides the raw Bash command in the regular notificat
       f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'Bash', preview: 'curl http://secret.example' }]); await f.service.tick()
       const payload = f.sent[0]!.payload
       const body = (payload.aps ? (payload.aps as { alert: { body: string } }).alert : (payload.notification as { body: string })).body
-      expect(body).toBe(hidden ? '打开 App 查看命令' : 'curl http://secret.example')
+      expect(body).toBe(hidden ? 'Open the app to view the command' : 'curl http://secret.example')
       expect(JSON.stringify(payload).includes('secret')).toBe(!hidden)
     }
   }
@@ -668,9 +668,9 @@ test('explicit push test bypasses preferences and quiet hours, honours ownership
   expect(await f.service.sendTest(input().token, undefined, {})).toEqual({ status: 'noRegistration' })
   expect(f.sent).toHaveLength(0)
   expect(await f.service.sendTest(input().token, 'local-phone-host-a', { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
-  expect(f.sent[0]!.payload).toEqual({ aps: { alert: { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。' }, sound: 'default', category: 'cchahaResult' }, hostId: 'local-phone-host-a', eventType: 'test' })
+  expect(f.sent[0]!.payload).toEqual({ aps: { alert: { title: 'Test notification · cc-haha', body: 'Computer push works: this was sent from your computer to your phone.' }, sound: 'default', category: 'cchahaResult' }, hostId: 'local-phone-host-a', eventType: 'test' })
   expect(await f.service.sendTest(androidToken, undefined, { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
-  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-decisions' } } })
+  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: 'Test notification · cc-haha' }, android: { notification: { channel_id: 'cc-haha-decisions' } } })
   const lan = fixture()
   lan.service.register(input(), {})
   expect(await lan.service.sendTest(input().token, undefined, {})).toEqual({ status: 'sent' })
@@ -705,7 +705,7 @@ test('a changed public address goes to remotely paired phones that do not pull f
   expect(f.sent.map(delivery => ({ provider: delivery.provider, token: delivery.token, payload: delivery.payload }))).toEqual([{
     provider: 'expo', token: expoToken,
     payload: {
-      title: '电脑地址已更新 · cc-haha', body: 'Studio Mac重新建立了外出连接，打开 App 会自动换到新地址。',
+      title: 'Computer address updated · cc-haha', body: 'Studio Mac re-established its remote connection; opening the app switches to the new address automatically.',
       data: { hostId: 'host-on-phone-a', eventType: 'hostUrl', url: 'https://new-name.trycloudflare.com', mac: 'mac-for-phone-a' },
       categoryId: 'cchahaResult', sound: 'default', priority: 'high', ttl: 300,
     },

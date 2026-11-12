@@ -28,15 +28,13 @@ describe('chat blocks', () => {
     expect(container.querySelector('[data-tool-use-id="toolu_mark"]')!.className).not.toContain('chat-tool-navigation-target')
   })
 
-  it.each(['card', 'row'] as const)('names the %s output copy action in the interface language', (chrome) => {
-    // Regression: tool output copy buttons fell back to CopyButton's English "Copy".
-    useSettingsStore.setState({ locale: 'zh' })
+  it.each(['card', 'row'] as const)('names the %s output copy action', (chrome) => {
+    useSettingsStore.setState({ locale: 'en' })
     const { container } = render(
       <ToolCallBlock chrome={chrome} toolName="Bash" input={{ command: 'ls' }} result={{ content: 'a.txt', isError: false }} />,
     )
     fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
-    expect(screen.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
-    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Copy' }).length).toBeGreaterThan(0)
   })
 
   it('keeps thinking collapsed by default', () => {
@@ -713,7 +711,7 @@ describe('chat blocks', () => {
         toolName="Write"
         input={{ file_path: '/private/tmp/ai-code-novel.md' }}
         isPending
-        partialInput={'{"file_path":"/private/tmp/ai-code-novel.md","content":"第一章'}
+        partialInput={'{"file_path":"/private/tmp/ai-code-novel.md","content":"Chapter 1'}
       />,
     )
 
@@ -745,15 +743,15 @@ describe('chat blocks', () => {
         toolName="Write"
         input={{ file_path: '/private/tmp/ai-code-novel.md' }}
         isPending
-        partialInput={'{"file_path":"/private/tmp/ai-code-novel.md","content":"# 第一章\\n\\n正文正在生成'}
+        partialInput={'{"file_path":"/private/tmp/ai-code-novel.md","content":"# Chapter 1\\n\\nBody is being generated'}
       />,
     )
 
     fireEvent.click(screen.getByRole('button'))
 
     expect(container.textContent).toContain('Writer')
-    expect(container.textContent).toContain('# 第一章')
-    expect(container.textContent).toContain('正文正在生成')
+    expect(container.textContent).toContain('# Chapter 1')
+    expect(container.textContent).toContain('Body is being generated')
     expect(container.textContent).not.toContain('"content"')
   })
 

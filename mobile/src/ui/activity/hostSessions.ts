@@ -6,11 +6,11 @@ import type { Session } from '../../core/types'
 
 export type ActiveSession = { id: string; title: string }
 
-const untitled = '未命名会话'
+const untitled = 'Untitled session'
 
 /**
- * 整机后台活动只看“等你”和“运行中”的会话。优先用首页已经拉到的快照；
- * 快照不是这台电脑的（比如从别的电脑进来）时，自己读一次 mobile-status 和会话摘要。
+ * Whole-computer background activity only looks at "waiting for you" and "running" sessions. Prefer the snapshot home already fetched; 
+ * when the snapshot is not for this computer (e.g. entered from another computer), read mobile-status and session summaries itself.
  */
 export async function activeSessions(
   client: Pick<ApiClient, 'get'>,

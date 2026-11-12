@@ -1,124 +1,124 @@
 ---
-title: Skills 实现原理
-nav_title: Skills 实现
-description: Skill 如何被发现、解析、注入对话、在 fork 子 Agent 中执行。
+title: Skills Internals
+nav_title: Skills Internals
+description: How skills are discovered, parsed, injected into conversations, and run in fork subagents.
 order: 8
 ---
 
-# Skills 实现原理
+# Skills Internals
 
-深度剖析 Skills 如何被发现、加载、注入、执行和管理。
+A deep dive into how Skills are discovered, loaded, injected, executed, and managed.
 
-![Skills 架构概览](./images/04-skills-architecture.png)
+![Skills Architecture Overview](./images/04-skills-architecture.png)
 
-## 整体架构
+## Overall Architecture
 
-Skills 系统由 5 个核心模块协同工作：
+The Skills system consists of 5 core modules working together:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   Skills 系统                        │
+│                   Skills System                      │
 │                                                     │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────┐ │
 │  │  Discovery   │  │   Prompt     │  │  SkillTool │ │
-│  │  发现 & 加载  │→│  注入 & 呈现  │→│  执行引擎   │ │
+│  │  & Loading   │→│  Injection   │→│  Execution  │ │
 │  └─────────────┘  └──────────────┘  └────────────┘ │
 │         ↑                                    ↓      │
 │  ┌─────────────┐                     ┌────────────┐ │
 │  │  Activation  │                     │  Context   │ │
-│  │  条件激活    │←────────────────────│  上下文修改 │ │
+│  │  Conditional │←────────────────────│  Modifier  │ │
 │  └─────────────┘                     └────────────┘ │
 └─────────────────────────────────────────────────────┘
 ```
 
-### 模块职责
+### Module Responsibilities
 
-| 模块 | 核心文件 | 职责 |
-|------|---------|------|
-| Discovery | `loadSkillsDir.ts` | 从 6 种来源发现和加载 Skills |
-| Prompt | `prompt.ts` + `attachments.ts` | 将 Skill 列表注入 system-reminder |
-| SkillTool | `SkillTool.ts` | 验证、权限检查、执行 Skill |
-| Activation | `loadSkillsDir.ts` (后半段) | 条件激活和动态发现 |
-| Context | `forkedAgent.ts` | 上下文准备和修改 |
+| Module | Core File | Responsibility |
+|--------|-----------|----------------|
+| Discovery | `loadSkillsDir.ts` | Discover and load Skills from 6 sources |
+| Prompt | `prompt.ts` + `attachments.ts` | Inject Skill listing into system-reminder |
+| SkillTool | `SkillTool.ts` | Validation, permission checks, Skill execution |
+| Activation | `loadSkillsDir.ts` (second half) | Conditional activation and dynamic discovery |
+| Context | `forkedAgent.ts` | Context preparation and modification |
 
-## Skill 发现与加载
+## Skill Discovery and Loading
 
-### 加载入口
+### Loading Entry Point
 
-Skills 加载从 `commands.ts` 的 `getSkills()` 函数开始：
+Skills loading begins with the `getSkills()` function in `commands.ts`:
 
 ```typescript
 // src/commands.ts:351-396
 async function getSkills(cwd: string) {
   const [skillDirCommands, pluginSkills] = await Promise.all([
-    getSkillDirCommands(cwd),    // 目录 Skills（managed/user/project）
-    getPluginSkills(),            // 插件 Skills
+    getSkillDirCommands(cwd),    // Directory Skills (managed/user/project)
+    getPluginSkills(),            // Plugin Skills
   ])
-  const bundledSkills = getBundledSkills()          // 内置 Skills
-  const builtinPluginSkills = getBuiltinPluginSkillCommands()  // 内置插件 Skills
+  const bundledSkills = getBundledSkills()          // Built-in Skills
+  const builtinPluginSkills = getBuiltinPluginSkillCommands()  // Built-in plugin Skills
   return { skillDirCommands, pluginSkills, bundledSkills, builtinPluginSkills }
 }
 ```
 
-### 聚合与排序
+### Aggregation and Ordering
 
-所有来源的 Skills 汇总到 `loadAllCommands()`，按优先级排列：
+All Skills from all sources are aggregated in `loadAllCommands()`, ordered by priority:
 
 ```typescript
 // src/commands.ts:447-467
 const loadAllCommands = memoize(async (cwd: string): Promise<Command[]> => {
   return [
-    ...bundledSkills,        // 1. 内置 Skills（最高优先级）
-    ...builtinPluginSkills,  // 2. 内置插件 Skills
-    ...skillDirCommands,     // 3. 目录 Skills（managed → user → project）
-    ...workflowCommands,     // 4. Workflow 命令
-    ...pluginCommands,       // 5. 插件命令
-    ...pluginSkills,         // 6. 插件 Skills
-    ...COMMANDS(),           // 7. 内建命令（最低优先级）
+    ...bundledSkills,        // 1. Built-in Skills (highest priority)
+    ...builtinPluginSkills,  // 2. Built-in plugin Skills
+    ...skillDirCommands,     // 3. Directory Skills (managed → user → project)
+    ...workflowCommands,     // 4. Workflow commands
+    ...pluginCommands,       // 5. Plugin commands
+    ...pluginSkills,         // 6. Plugin Skills
+    ...COMMANDS(),           // 7. Built-in commands (lowest priority)
   ]
 })
 ```
 
-**关键特性：** 使用 `memoize` 缓存，避免重复磁盘 I/O。
+**Key feature:** Uses `memoize` for caching to avoid redundant disk I/O.
 
-### 目录 Skill 加载流程
+### Directory Skill Loading Flow
 
-![Skill 加载流程](./images/05-skill-loading.png)
+![Skill Loading Flow](./images/05-skill-loading.png)
 
-`getSkillDirCommands()` 是目录 Skills 的核心加载函数：
+`getSkillDirCommands()` is the core loading function for directory Skills:
 
 ```
 getSkillDirCommands(cwd)
-├─ 确定加载路径
+├─ Determine loading paths
 │  ├─ managed: ${MANAGED_PATH}/.claude/skills/
 │  ├─ user:    ~/.claude/skills/
-│  ├─ project: .claude/skills/ (向上遍历到 HOME)
-│  └─ additional: --add-dir 指定的路径
+│  ├─ project: .claude/skills/ (traverse upward to HOME)
+│  └─ additional: paths specified via --add-dir
 │
-├─ 并行加载（Promise.all）
+├─ Parallel loading (Promise.all)
 │  ├─ loadSkillsFromSkillsDir(managedDir, 'policySettings')
 │  ├─ loadSkillsFromSkillsDir(userDir, 'userSettings')
 │  ├─ loadSkillsFromSkillsDir(projectDirs, 'projectSettings')
 │  ├─ loadSkillsFromSkillsDir(additionalDirs, 'projectSettings')
-│  └─ loadSkillsFromCommandsDir(cwd)  ← 兼容遗留 /commands/ 格式
+│  └─ loadSkillsFromCommandsDir(cwd)  ← Legacy /commands/ format compatibility
 │
-├─ 去重（按 realpath）
-│  └─ getFileIdentity(filePath) → realpath 解析符号链接
-│     └─ seenFileIds Map，首次出现者胜出
+├─ Deduplication (by realpath)
+│  └─ getFileIdentity(filePath) → realpath resolves symlinks
+│     └─ seenFileIds Map, first occurrence wins
 │
-└─ 分离条件 Skills
-   ├─ 无 paths → unconditionalSkills（立即可用）
-   └─ 有 paths → conditionalSkills Map（等待激活）
+└─ Separate conditional Skills
+   ├─ No paths → unconditionalSkills (immediately available)
+   └─ Has paths → conditionalSkills Map (awaiting activation)
 ```
 
-### 去重机制
+### Deduplication Mechanism
 
 ```typescript
 // src/skills/loadSkillsDir.ts:725-763
 const fileIds = await Promise.all(
   allSkillsWithPaths.map(({ skill, filePath }) =>
     skill.type === 'prompt'
-      ? getFileIdentity(filePath)  // realpath() 解析符号链接
+      ? getFileIdentity(filePath)  // realpath() resolves symlinks
       : Promise.resolve(null),
   ),
 )
@@ -127,23 +127,23 @@ const seenFileIds = new Map<string, SettingSource>()
 for (const entry of allSkillsWithPaths) {
   const fileId = fileIds[i]
   const existingSource = seenFileIds.get(fileId)
-  if (existingSource !== undefined) continue  // 跳过重复
+  if (existingSource !== undefined) continue  // Skip duplicates
   seenFileIds.set(fileId, skill.source)
   deduplicatedSkills.push(skill)
 }
 ```
 
-### Bundled Skill 注册
+### Bundled Skill Registration
 
-内置 Skills 使用完全不同的注册路径：
+Built-in Skills use an entirely different registration path:
 
 ```typescript
 // src/skills/bundledSkills.ts:53-100
 export function registerBundledSkill(definition: BundledSkillDefinition): void {
-  // 如果有 files，创建提取目录和延迟提取逻辑
+  // If files are present, create extraction directory and lazy extraction logic
   if (files && Object.keys(files).length > 0) {
     skillRoot = getBundledSkillExtractDir(definition.name)
-    // 首次调用时提取文件到磁盘
+    // Extract files to disk on first invocation
     getPromptForCommand = async (args, ctx) => {
       extractionPromise ??= extractBundledSkillFiles(name, files)
       const extractedDir = await extractionPromise
@@ -156,15 +156,15 @@ export function registerBundledSkill(definition: BundledSkillDefinition): void {
     type: 'prompt',
     source: 'bundled',
     loadedFrom: 'bundled',
-    // ...其他字段
+    // ...other fields
   }
   bundledSkills.push(command)
 }
 ```
 
-**文件提取：** Bundled Skills 可以携带 `files: Record<string, string>` 字段，首次调用时将这些文件提取到磁盘（`getBundledSkillExtractDir()`），让模型能通过 Read/Grep 访问。
+**File extraction:** Bundled Skills can include a `files: Record<string, string>` field. On first invocation, these files are extracted to disk (`getBundledSkillExtractDir()`), allowing the model to access them via Read/Grep.
 
-### 启动注册
+### Startup Registration
 
 ```typescript
 // src/skills/bundled/index.ts:13-58
@@ -174,42 +174,42 @@ export function initBundledSkills(): void {
   require('./remember.js').registerRememberSkill()
   // ...
   if (feature('AGENT_TRIGGERS')) {
-    require('./loop.js').registerLoopSkill()     // 特性门控
+    require('./loop.js').registerLoopSkill()     // Feature-gated
   }
   if (feature('KAIROS')) {
-    require('./dream.js').registerDreamSkill()    // 特性门控
+    require('./dream.js').registerDreamSkill()    // Feature-gated
   }
 }
 ```
 
-### Plugin Skill 加载
+### Plugin Skill Loading
 
 ```
-插件系统
+Plugin System
 ├─ loadAllPluginsCacheOnly()
-│  └─ 获取所有已启用插件
+│  └─ Get all enabled plugins
 │
-├─ 每个插件:
-│  ├─ 读取 manifest.skillsPath → 默认 Skills 目录
-│  ├─ 读取 manifest.skillsPaths[] → 额外 Skills 目录
-│  └─ loadSkillsFromDirectory() 加载 SKILL.md
+├─ For each plugin:
+│  ├─ Read manifest.skillsPath → default Skills directory
+│  ├─ Read manifest.skillsPaths[] → additional Skills directories
+│  └─ loadSkillsFromDirectory() to load SKILL.md
 │
-├─ 命名空间:
+├─ Namespacing:
 │  └─ {pluginName}:{namespace}:{skillName}
-│     例如: superpowers:code-reviewer
+│     e.g.: superpowers:code-reviewer
 │
-└─ 变量替换:
-   ├─ ${CLAUDE_PLUGIN_ROOT} → 插件根目录
-   ├─ ${CLAUDE_PLUGIN_DATA} → 插件数据目录
-   ├─ ${CLAUDE_SKILL_DIR}   → 技能目录
-   └─ ${user_config.X}      → 用户配置值
+└─ Variable substitution:
+   ├─ ${CLAUDE_PLUGIN_ROOT} → plugin root directory
+   ├─ ${CLAUDE_PLUGIN_DATA} → plugin data directory
+   ├─ ${CLAUDE_SKILL_DIR}   → skill directory
+   └─ ${user_config.X}      → user configuration values
 ```
 
-### MCP Skill 加载
+### MCP Skill Loading
 
 ```typescript
 // src/services/mcp/client.ts:2030-2102
-// MCP prompts 转换为 Command 对象
+// MCP prompts are converted to Command objects
 async function fetchCommandsForClient(client) {
   const prompts = await client.listPrompts()
   return prompts.map(prompt => ({
@@ -217,41 +217,41 @@ async function fetchCommandsForClient(client) {
     name: `mcp__${normalizeNameForMCP(serverName)}__${prompt.name}`,
     source: 'mcp',
     loadedFrom: 'mcp',
-    // getPromptForCommand 调用 MCP 服务器获取内容
+    // getPromptForCommand calls the MCP server to fetch content
   }))
 }
 ```
 
-**特性门控：** `feature('MCP_SKILLS')` 控制 MCP Skills 是否可用。
+**Feature gate:** `feature('MCP_SKILLS')` controls whether MCP Skills are available.
 
-## Frontmatter 解析
+## Frontmatter Parsing
 
-### 解析流程
+### Parsing Flow
 
 ```
-SKILL.md 文件
+SKILL.md file
     ↓
 parseFrontmatter()              ← frontmatterParser.ts
-    ├─ 分离 YAML frontmatter 和 Markdown 内容
-    ├─ quoteProblematicValues()  ← 处理特殊字符（glob 模式等）
-    └─ parseYaml()               ← 解析 YAML
+    ├─ Separate YAML frontmatter from Markdown content
+    ├─ quoteProblematicValues()  ← Handle special characters (glob patterns, etc.)
+    └─ parseYaml()               ← Parse YAML
     ↓
 parseSkillFrontmatterFields()   ← loadSkillsDir.ts:185-265
-    ├─ description 提取优先级:
-    │  1. frontmatter.description 字段
-    │  2. Markdown 第一个 # 标题
-    │  3. 技能名称兜底
-    ├─ parseUserSpecifiedModel()     ← 模型别名解析
-    ├─ parseEffortValue()            ← 力度级别解析
-    ├─ parseHooksFromFrontmatter()   ← Hook 配置验证
-    ├─ parseBooleanFrontmatter()     ← boolean 字段解析
-    └─ parseSlashCommandToolsFromFrontmatter() ← 工具列表解析
+    ├─ description extraction priority:
+    │  1. frontmatter.description field
+    │  2. First # heading in Markdown
+    │  3. Skill name as fallback
+    ├─ parseUserSpecifiedModel()     ← Model alias resolution
+    ├─ parseEffortValue()            ← Effort level parsing
+    ├─ parseHooksFromFrontmatter()   ← Hook configuration validation
+    ├─ parseBooleanFrontmatter()     ← Boolean field parsing
+    └─ parseSlashCommandToolsFromFrontmatter() ← Tool list parsing
     ↓
 createSkillCommand()            ← loadSkillsDir.ts:270-401
-    └─ 生成 Command 对象（含 getPromptForCommand 闭包）
+    └─ Generate Command object (with getPromptForCommand closure)
 ```
 
-### FrontmatterData 类型定义
+### FrontmatterData Type Definition
 
 ```typescript
 // src/utils/frontmatterParser.ts:10-59
@@ -265,7 +265,7 @@ export type FrontmatterData = {
   'user-invocable'?: string | null
   'disable-model-invocation'?: string | null
   hooks?: HooksSettings | null
-  effort?: string | null         // low, medium, high, max, 或数字
+  effort?: string | null         // low, medium, high, max, or numeric
   context?: 'inline' | 'fork' | null
   agent?: string | null
   paths?: string | string[] | null
@@ -274,30 +274,30 @@ export type FrontmatterData = {
 }
 ```
 
-### getPromptForCommand 闭包
+### The getPromptForCommand Closure
 
-每个 Command 对象都包含一个 `getPromptForCommand` 闭包，在调用时执行：
+Each Command object contains a `getPromptForCommand` closure that executes upon invocation:
 
 ```typescript
 // src/skills/loadSkillsDir.ts:344-399
 async getPromptForCommand(args, toolUseContext) {
-  // 1. 添加基目录头
+  // 1. Add base directory header
   let finalContent = baseDir
     ? `Base directory for this skill: ${baseDir}\n\n${markdownContent}`
     : markdownContent
 
-  // 2. 参数替换
+  // 2. Argument substitution
   finalContent = substituteArguments(finalContent, args, true, argumentNames)
 
-  // 3. 技能目录变量替换
+  // 3. Skill directory variable substitution
   if (baseDir) {
     finalContent = finalContent.replace(/\$\{CLAUDE_SKILL_DIR\}/g, skillDir)
   }
 
-  // 4. 会话 ID 替换
+  // 4. Session ID substitution
   finalContent = finalContent.replace(/\$\{CLAUDE_SESSION_ID\}/g, getSessionId())
 
-  // 5. 执行内联 Shell 命令（MCP Skills 跳过此步 — 安全限制）
+  // 5. Execute inline shell commands (skipped for MCP Skills — security restriction)
   if (loadedFrom !== 'mcp') {
     finalContent = await executeShellCommandsInPrompt(finalContent, context)
   }
@@ -306,69 +306,69 @@ async getPromptForCommand(args, toolUseContext) {
 }
 ```
 
-## Skill 注入到对话
+## Skill Injection into Conversations
 
-### 注入流程
+### Injection Flow
 
-![Skill 列表注入](./images/06-skill-injection.png)
+![Skill Listing Injection](./images/06-skill-injection.png)
 
-Skills 通过 `system-reminder` 消息注入到对话中：
+Skills are injected into conversations via `system-reminder` messages:
 
 ```
-每轮对话开始
+Start of each conversation turn
     ↓
 getSkillListingAttachments()          ← attachments.ts:2600-2747
-    ├─ getSkillToolCommands(cwd)      ← 获取所有模型可调用 Skills
-    ├─ getMcpSkillCommands()          ← 获取 MCP Skills
-    ├─ sentSkillNames Map 追踪        ← 避免重复发送（per-agent）
-    └─ formatCommandsWithinBudget()   ← 按上下文预算截断
+    ├─ getSkillToolCommands(cwd)      ← Get all model-invocable Skills
+    ├─ getMcpSkillCommands()          ← Get MCP Skills
+    ├─ sentSkillNames Map tracking    ← Avoid duplicate sends (per-agent)
+    └─ formatCommandsWithinBudget()   ← Truncate to context budget
     ↓
-返回 Attachment:
+Returns Attachment:
   { type: 'skill_listing', content, skillCount, isInitial }
     ↓
 normalizeAttachmentForAPI()           ← messages.ts:3732-3737
     ↓
-包装为 <system-reminder> 用户消息:
+Wrapped as <system-reminder> user message:
   "The following skills are available for use with the Skill tool:
    - commit: Create a git commit...
    - review-pr: Review a pull request...
    - superpowers:code-reviewer: Expert code review..."
 ```
 
-### 上下文预算控制
+### Context Budget Control
 
 ```typescript
 // src/tools/SkillTool/prompt.ts:21-29
-export const SKILL_BUDGET_CONTEXT_PERCENT = 0.01  // 上下文窗口的 1%
+export const SKILL_BUDGET_CONTEXT_PERCENT = 0.01  // 1% of context window
 export const CHARS_PER_TOKEN = 4
-export const DEFAULT_CHAR_BUDGET = 8_000           // 200k × 4 × 1% 兜底
-export const MAX_LISTING_DESC_CHARS = 250          // 每条描述上限
+export const DEFAULT_CHAR_BUDGET = 8_000           // 200k × 4 × 1% fallback
+export const MAX_LISTING_DESC_CHARS = 250          // Max characters per description
 ```
 
-**截断策略：**
+**Truncation strategy:**
 
 ```
 formatCommandsWithinBudget(commands, contextWindowTokens)
-    ├─ 所有条目的 description + whenToUse 先限制为 250 字符（含 Bundled）
-    ├─ 计算总预算 = contextWindowTokens × 4 × 1%
-    ├─ 尝试保留上述已限长描述
-    │  └─ 总字符 ≤ 预算 → 全部输出
+    ├─ Cap description + whenToUse at 250 characters for every entry, including Bundled
+    ├─ Calculate total budget = contextWindowTokens × 4 × 1%
+    ├─ Try retaining these already capped descriptions
+    │  └─ Total chars ≤ budget → output all
     │
-    ├─ 分区: Bundled（不再按总预算截断） + 其余
-    │  ├─ Bundled Skills 保留经过 250 字符限制的描述
-    │  └─ 其余 Skills 平分剩余预算
+    ├─ Partition: Bundled (no further truncation for the total budget) + rest
+    │  ├─ Bundled Skills retain their descriptions after the 250-character cap
+    │  └─ Remaining Skills split the leftover budget evenly
     │
-    ├─ 截断描述 → maxDescLen 字符
-    │  └─ maxDescLen < 20 → 极端情况: 非 Bundled 只显示名称
+    ├─ Truncate descriptions → maxDescLen characters
+    │  └─ maxDescLen < 20 → extreme case: non-Bundled show name only
     │
-    └─ 输出格式: "- skill-name: description..."
+    └─ Output format: "- skill-name: description..."
 ```
 
-技能列表用于发现，正文在调用时加载。编写描述时先写清具体触发条件和用途；将操作步骤、例子和参考文件放在正文，按任务需要读取。不要把整套工作流塞进描述，也不要要求每次调用都读完所有参考文件。
+The listing supports discovery; the body loads when the skill is invoked. Start descriptions with specific trigger conditions and purpose. Put steps, examples, and references in the body, and read them as the task requires. Avoid putting the entire workflow in the description or requiring every reference to be read on every invocation.
 
 ### SkillTool Prompt
 
-模型看到的工具提示词定义：
+The tool prompt definition seen by the model:
 
 ```typescript
 // src/tools/SkillTool/prompt.ts:173-196
@@ -392,98 +392,98 @@ Important:
 })
 ```
 
-## SkillTool 执行引擎
+## SkillTool Execution Engine
 
-### 工具定义
+### Tool Definition
 
 ```typescript
 // src/tools/SkillTool/SkillTool.ts:331-340
 export const SkillTool = buildTool({
   name: 'Skill',
   inputSchema: z.object({
-    skill: z.string(),    // 技能名称
-    args: z.string().optional(),  // 可选参数
+    skill: z.string(),    // Skill name
+    args: z.string().optional(),  // Optional arguments
   }),
   outputSchema: z.union([inlineOutputSchema, forkedOutputSchema]),
 })
 ```
 
-### 执行流程
+### Execution Flow
 
-![SkillTool 执行流程](./images/07-skill-execution.png)
+![SkillTool Execution Flow](./images/07-skill-execution.png)
 
 ```
 SkillTool.call({ skill, args })
     │
-    ├─ 1. 标准化输入
-    │  └─ 去除前导 / , trim 空白
+    ├─ 1. Normalize input
+    │  └─ Strip leading /, trim whitespace
     │
-    ├─ 2. 远程 Skill 检查（实验性）
-    │  └─ _canonical_<slug> 前缀 → executeRemoteSkill()
+    ├─ 2. Remote Skill check (experimental)
+    │  └─ _canonical_<slug> prefix → executeRemoteSkill()
     │
-    ├─ 3. 查找 Command 对象
+    ├─ 3. Find Command object
     │  └─ getAllCommands(context) → findCommand(name, commands)
     │
-    ├─ 4. 记录使用频率
-    │  └─ recordSkillUsage(commandName) → 影响排序推荐
+    ├─ 4. Record usage frequency
+    │  └─ recordSkillUsage(commandName) → influences sorting recommendations
     │
-    ├─ 5. 判断执行路径
+    ├─ 5. Determine execution path
     │  ├─ command.context === 'fork'
-    │  │  └─ → executeForkedSkill()  [见第六节]
+    │  │  └─ → executeForkedSkill()  [see Section 6]
     │  │
-    │  └─ 默认 inline
+    │  └─ Default: inline
     │     ├─ processPromptSlashCommand()
     │     │  └─ getMessagesForPromptSlashCommand()
     │     │     ├─ command.getPromptForCommand(args, context)
-    │     │     ├─ registerSkillHooks()      ← 注册 Hook
-    │     │     ├─ addInvokedSkill()         ← 记录（压缩后恢复）
+    │     │     ├─ registerSkillHooks()      ← Register hooks
+    │     │     ├─ addInvokedSkill()         ← Record (restored after compression)
     │     │     ├─ formatCommandLoadingMetadata()
     │     │     │  └─ <command-name>/skillName</command-name>
-    │     │     └─ 提取附件 → 创建消息
+    │     │     └─ Extract attachments → create messages
     │     │
-    │     ├─ 提取 metadata: allowedTools, model, effort
-    │     ├─ tagMessagesWithToolUseID() ← 关联 tool_use
-    │     └─ 返回 { newMessages, contextModifier }
+    │     ├─ Extract metadata: allowedTools, model, effort
+    │     ├─ tagMessagesWithToolUseID() ← Associate with tool_use
+    │     └─ Return { newMessages, contextModifier }
     │
-    └─ 6. contextModifier() 闭包
-       ├─ 更新 allowedTools
+    └─ 6. contextModifier() closure
+       ├─ Update allowedTools
        │  └─ appState.toolPermissionContext.alwaysAllowRules.command
-       ├─ 更新 model
-       │  └─ resolveSkillModelOverride() 保留 [1m] 后缀
-       └─ 更新 effort
+       ├─ Update model
+       │  └─ resolveSkillModelOverride() preserves [1m] suffix
+       └─ Update effort
           └─ appState.effortValue
 ```
 
-### 验证逻辑
+### Validation Logic
 
 ```typescript
 // src/tools/SkillTool/SkillTool.ts:354-430
 async validateInput({ skill }, context) {
-  // 1. 格式检查 — 非空
-  // 2. 标准化 — 去除前导 /
-  // 3. 远程 Skill 检查 — _canonical_ 前缀
-  // 4. 查找 — findCommand() 在 getAllCommands() 中
-  // 5. 禁用检查 — disableModelInvocation
-  // 6. 类型检查 — 必须是 'prompt' 类型
+  // 1. Format check — non-empty
+  // 2. Normalize — strip leading /
+  // 3. Remote Skill check — _canonical_ prefix
+  // 4. Lookup — findCommand() within getAllCommands()
+  // 5. Disabled check — disableModelInvocation
+  // 6. Type check — must be 'prompt' type
 }
 ```
 
-**错误码定义：**
+**Error code definitions:**
 
-| errorCode | 含义 |
-|-----------|------|
-| 1 | 格式无效（空技能名） |
-| 2 | 未知技能 |
-| 4 | 模型调用被禁用 |
-| 5 | 非 prompt 类型 |
-| 6 | 远程技能未发现 |
+| errorCode | Meaning |
+|-----------|---------|
+| 1 | Invalid format (empty skill name) |
+| 2 | Unknown skill |
+| 4 | Model invocation disabled |
+| 5 | Not a prompt type |
+| 6 | Remote skill not found |
 
-### getAllCommands — MCP Skill 合并
+### getAllCommands -- MCP Skill Merging
 
 ```typescript
 // src/tools/SkillTool/SkillTool.ts:81-94
 async function getAllCommands(context: ToolUseContext): Promise<Command[]> {
-  // 从 AppState 获取 MCP Skills（loadedFrom === 'mcp'）
+  // Get MCP Skills from AppState (loadedFrom === 'mcp')
   const mcpSkills = context.getAppState()
     .mcp.commands.filter(
       cmd => cmd.type === 'prompt' && cmd.loadedFrom === 'mcp',
@@ -494,31 +494,31 @@ async function getAllCommands(context: ToolUseContext): Promise<Command[]> {
 }
 ```
 
-## Fork 子 Agent 执行
+## Fork Sub-Agent Execution
 
-### 执行流程
+### Execution Flow
 
 ```
 executeForkedSkill(command, commandName, args, context, ...)
     │
-    ├─ 1. 创建子代理 ID
+    ├─ 1. Create sub-agent ID
     │  └─ agentId = createAgentId()
     │
-    ├─ 2. 遥测记录
+    ├─ 2. Telemetry recording
     │  └─ logEvent('tengu_skill_tool_invocation', { execution_context: 'fork' })
     │
-    ├─ 3. 准备 Fork 上下文
+    ├─ 3. Prepare fork context
     │  └─ prepareForkedCommandContext(command, args, context)
-    │     ├─ command.getPromptForCommand(args, context)  ← 获取技能内容
-    │     ├─ parseToolListFromCLI(allowedTools)           ← 解析工具白名单
-    │     ├─ createGetAppStateWithAllowedTools()          ← 修改 AppState
-    │     ├─ 选择 agent: command.agent ?? 'general-purpose'
+    │     ├─ command.getPromptForCommand(args, context)  ← Get skill content
+    │     ├─ parseToolListFromCLI(allowedTools)           ← Parse tool whitelist
+    │     ├─ createGetAppStateWithAllowedTools()          ← Modify AppState
+    │     ├─ Select agent: command.agent ?? 'general-purpose'
     │     └─ promptMessages = [createUserMessage(skillContent)]
     │
-    ├─ 4. 合并 effort
-    │  └─ command.effort → 注入 agentDefinition
+    ├─ 4. Merge effort
+    │  └─ command.effort → inject into agentDefinition
     │
-    ├─ 5. 运行子代理
+    ├─ 5. Run sub-agent
     │  └─ for await (message of runAgent({
     │       agentDefinition,
     │       promptMessages,
@@ -526,13 +526,13 @@ executeForkedSkill(command, commandName, args, context, ...)
     │       model: command.model,
     │       override: { agentId },
     │     }))
-    │     └─ 收集消息 + 报告进度 (onProgress)
+    │     └─ Collect messages + report progress (onProgress)
     │
-    ├─ 6. 提取结果
+    ├─ 6. Extract results
     │  └─ extractResultText(agentMessages)
-    │     └─ 获取最后一条 assistant 消息的文本
+    │     └─ Get text from the last assistant message
     │
-    └─ 7. 清理
+    └─ 7. Cleanup
        └─ clearInvokedSkillsForAgent(agentId)
 ```
 
@@ -545,30 +545,30 @@ export async function prepareForkedCommandContext(
   args: string,
   context: ToolUseContext,
 ): Promise<PreparedForkedContext> {
-  // 获取技能内容（含参数替换和 shell 执行）
+  // Get skill content (with argument substitution and shell execution)
   const skillPrompt = await command.getPromptForCommand(args, context)
   const skillContent = skillPrompt.map(b => b.type === 'text' ? b.text : '').join('\n')
 
-  // 构建工具白名单
+  // Build tool whitelist
   const allowedTools = parseToolListFromCLI(command.allowedTools ?? [])
   const modifiedGetAppState = createGetAppStateWithAllowedTools(
     context.getAppState, allowedTools,
   )
 
-  // 选择代理类型
+  // Select agent type
   const agentTypeName = command.agent ?? 'general-purpose'
   const baseAgent = agents.find(a => a.agentType === agentTypeName)
 
-  // 构建提示消息
+  // Build prompt messages
   const promptMessages = [createUserMessage({ content: skillContent })]
 
   return { skillContent, modifiedGetAppState, baseAgent, promptMessages }
 }
 ```
 
-### Inline vs Fork 返回差异
+### Inline vs Fork Return Differences
 
-**Inline 返回:**
+**Inline return:**
 ```typescript
 {
   data: {
@@ -578,12 +578,12 @@ export async function prepareForkedCommandContext(
     model: 'sonnet',
     status: 'inline',
   },
-  newMessages: [...],        // 注入到对话
-  contextModifier: (ctx) => { ... },  // 修改上下文
+  newMessages: [...],        // Injected into conversation
+  contextModifier: (ctx) => { ... },  // Modifies context
 }
 ```
 
-**Fork 返回:**
+**Fork return:**
 ```typescript
 {
   data: {
@@ -591,43 +591,43 @@ export async function prepareForkedCommandContext(
     commandName: 'verify',
     status: 'forked',
     agentId: 'agent_abc123',
-    result: '验证通过，所有测试已运行...',
+    result: 'Verification passed, all tests have run...',
   },
-  // 无 newMessages — 结果嵌入 tool_result block
+  // No newMessages — result is embedded in the tool_result block
 }
 ```
 
-## 条件激活与动态发现
+## Conditional Activation and Dynamic Discovery
 
-### 条件 Skills
+### Conditional Skills
 
-![条件激活机制](./images/08-conditional-activation.png)
+![Conditional Activation Mechanism](./images/08-conditional-activation.png)
 
-带 `paths` frontmatter 的 Skills 不会立即暴露给模型：
+Skills with `paths` frontmatter are not immediately exposed to the model:
 
 ```
-启动时
-├─ 加载所有 Skills
-├─ 有 paths 的 → conditionalSkills Map
-└─ 无 paths 的 → 立即可用
+At startup
+├─ Load all Skills
+├─ Those with paths → conditionalSkills Map
+└─ Those without paths → immediately available
 
-运行时（文件操作触发）
+At runtime (triggered by file operations)
 ├─ activateConditionalSkillsForPaths(filePaths, cwd)
-│  ├─ 遍历 conditionalSkills Map
-│  ├─ 用 ignore 库匹配 paths 模式
-│  │  └─ filePath 转为 cwd 相对路径后匹配
-│  ├─ 匹配成功:
-│  │  ├─ 移入 dynamicSkills Map
-│  │  ├─ 从 conditionalSkills 删除
-│  │  ├─ 加入 activatedConditionalSkillNames Set
-│  │  └─ 记录遥测 tengu_dynamic_skills_changed
-│  └─ 一旦激活，会话内持续有效
-└─ 通知缓存失效 → skillsLoaded.emit()
+│  ├─ Iterate over conditionalSkills Map
+│  ├─ Match paths patterns using the ignore library
+│  │  └─ filePath converted to cwd-relative path before matching
+│  ├─ On match:
+│  │  ├─ Move to dynamicSkills Map
+│  │  ├─ Remove from conditionalSkills
+│  │  ├─ Add to activatedConditionalSkillNames Set
+│  │  └─ Log telemetry: tengu_dynamic_skills_changed
+│  └─ Once activated, remains active for the session
+└─ Notify cache invalidation → skillsLoaded.emit()
 ```
 
-### 动态发现
+### Dynamic Discovery
 
-当操作深层目录文件时，系统自动发现新的 Skills：
+When operating on files in deeply nested directories, the system automatically discovers new Skills:
 
 ```typescript
 // src/skills/loadSkillsDir.ts:861-915
@@ -637,28 +637,28 @@ export async function discoverSkillDirsForPaths(
 ): Promise<string[]> {
   for (const filePath of filePaths) {
     let currentDir = dirname(filePath)
-    // 从文件所在目录向上遍历到 cwd（不含 cwd 本身）
+    // Traverse upward from the file's directory to cwd (excluding cwd itself)
     while (currentDir.startsWith(resolvedCwd + pathSep)) {
       const skillDir = join(currentDir, '.claude', 'skills')
       if (!dynamicSkillDirs.has(skillDir)) {
         dynamicSkillDirs.add(skillDir)
-        await fs.stat(skillDir)  // 检查是否存在
-        // 检查是否被 .gitignore 忽略
+        await fs.stat(skillDir)  // Check if it exists
+        // Check if ignored by .gitignore
         if (await isPathGitignored(currentDir, resolvedCwd)) continue
         newDirs.push(skillDir)
       }
       currentDir = dirname(currentDir)
     }
   }
-  // 按深度排序（最深优先），确保就近 Skill 优先级更高
+  // Sort by depth (deepest first), ensuring nearest Skills have higher priority
   return newDirs.sort((a, b) => b.split(pathSep).length - a.split(pathSep).length)
 }
 ```
 
-### 缓存失效链
+### Cache Invalidation Chain
 
 ```
-动态 Skill 变化
+Dynamic Skill change
     ↓
 skillsLoaded.emit()
     ↓
@@ -668,14 +668,14 @@ clearCommandMemoizationCaches()
     ├─ getSlashCommandToolSkills.cache.clear()
     └─ clearSkillIndexCache()
     ↓
-下一轮对话会加载新的 Skill 列表
+Next conversation turn loads the updated Skill list
 ```
 
-## Hook 集成
+## Hook Integration
 
-### Hook 注册
+### Hook Registration
 
-Skills 可以通过 frontmatter 声明 Hook，在调用时自动注册为会话级 Hook：
+Skills can declare hooks via frontmatter, which are automatically registered as session-level hooks upon invocation:
 
 ```typescript
 // src/utils/hooks/registerSkillHooks.ts:20-64
@@ -687,7 +687,7 @@ export function registerSkillHooks(
     if (!matchers) continue
     for (const matcher of matchers) {
       for (const hook of matcher.hooks) {
-        // once: true → 执行一次后自动移除
+        // once: true → automatically removed after one execution
         const onHookSuccess = hook.once
           ? () => removeSessionHook(setAppState, sessionId, eventName, hook)
           : undefined
@@ -703,54 +703,54 @@ export function registerSkillHooks(
 }
 ```
 
-### Hook 生命周期
+### Hook Lifecycle
 
 ```
-Skill 调用
+Skill invocation
     ↓
 processPromptSlashCommand()
-    ├─ 检查 command.hooks
+    ├─ Check command.hooks
     └─ registerSkillHooks(setAppState, sessionId, hooks, skillName, skillRoot)
-         ├─ 遍历 HOOK_EVENTS（PreToolUse, PostToolUse, Stop, ...）
-         ├─ 为每个 matcher 注册 addSessionHook()
-         ├─ skillRoot → CLAUDE_PLUGIN_ROOT 环境变量
-         └─ once: true → 首次执行后 removeSessionHook()
+         ├─ Iterate over HOOK_EVENTS (PreToolUse, PostToolUse, Stop, ...)
+         ├─ Register addSessionHook() for each matcher
+         ├─ skillRoot → CLAUDE_PLUGIN_ROOT environment variable
+         └─ once: true → removeSessionHook() after first execution
     ↓
-会话期间
-    ├─ 工具调用触发 PreToolUse/PostToolUse
-    ├─ matcher 匹配 → 执行 Hook 命令
-    └─ once: true 的 Hook 执行一次后自动移除
+During session
+    ├─ Tool calls trigger PreToolUse/PostToolUse
+    ├─ Matcher matches → execute hook command
+    └─ Hooks with once: true are automatically removed after first execution
 ```
 
-## 权限系统
+## Permission System
 
-### 检查流程
+### Check Flow
 
 ```
 checkPermissions({ skill, args }, context)
     │
-    ├─ 1. Deny 规则检查（最高优先级）
+    ├─ 1. Deny rule check (highest priority)
     │  └─ getRuleByContentsForTool(context, SkillTool, 'deny')
-    │     ├─ 精确匹配: "commit" === commandName
-    │     └─ 前缀匹配: "review:*" → commandName.startsWith("review")
+    │     ├─ Exact match: "commit" === commandName
+    │     └─ Prefix match: "review:*" → commandName.startsWith("review")
     │
-    ├─ 2. 远程 Skill 自动允许
-    │  └─ _canonical_<slug> → 自动允许（Ant 专属实验性）
+    ├─ 2. Remote Skill auto-allow
+    │  └─ _canonical_<slug> → auto-allow (Ant-specific experimental)
     │
-    ├─ 3. Allow 规则检查
+    ├─ 3. Allow rule check
     │  └─ getRuleByContentsForTool(context, SkillTool, 'allow')
     │
-    ├─ 4. 安全属性自动允许
+    ├─ 4. Safe property auto-allow
     │  └─ skillHasOnlySafeProperties(command)
-    │     └─ SAFE_SKILL_PROPERTIES 白名单检查
+    │     └─ SAFE_SKILL_PROPERTIES whitelist check
     │
-    └─ 5. 默认: 询问用户
-       └─ 提供建议: 精确允许 + 前缀允许
+    └─ 5. Default: ask user
+       └─ Provide suggestions: exact allow + prefix allow
 ```
 
-### 安全属性白名单
+### Safe Property Whitelist
 
-如果 Skill 只包含以下属性（无 hooks、无 allowedTools、无 fork），自动允许：
+If a Skill contains only the following properties (no hooks, no allowedTools, no fork), it is automatically allowed:
 
 ```
 SAFE_SKILL_PROPERTIES = {
@@ -761,121 +761,121 @@ SAFE_SKILL_PROPERTIES = {
 }
 ```
 
-**核心逻辑：** 新增的 frontmatter 字段默认需要权限，除非显式加入白名单。
+**Core principle:** Newly added frontmatter fields require permission by default, unless explicitly added to the whitelist.
 
-## 完整生命周期
+## Complete Lifecycle
 
-### 数据流总览
+### Data Flow Overview
 
-![完整生命周期](./images/09-skill-lifecycle.png)
+![Complete Lifecycle](./images/09-skill-lifecycle.png)
 
 ```
-第一阶段: 发现与注册
-──────────────────
-CLI 启动
+Phase 1: Discovery and Registration
+──────────────────────────────────
+CLI startup
     ├─ initBundledSkills()        → bundledSkills[]
     ├─ getPluginSkills()          → pluginSkills[]
     ├─ getSkillDirCommands(cwd)   → skillDirCommands[]
-    │  └─ 条件 Skills → conditionalSkills Map
-    └─ loadAllCommands()          → 聚合 & memoize
+    │  └─ Conditional Skills → conditionalSkills Map
+    └─ loadAllCommands()          → aggregate & memoize
 
-第二阶段: 注入到对话
-──────────────────
-每轮对话
+Phase 2: Injection into Conversation
+────────────────────────────────────
+Each conversation turn
     ├─ getSkillListingAttachments()
-    │  ├─ getSkillToolCommands()  → 过滤模型可调用 Skills
+    │  ├─ getSkillToolCommands()  → filter model-invocable Skills
     │  ├─ getMcpSkillCommands()   → MCP Skills
-    │  └─ formatCommandsWithinBudget()  → 截断到预算
-    └─ 包装为 <system-reminder> 消息注入
+    │  └─ formatCommandsWithinBudget()  → truncate to budget
+    └─ Wrap as <system-reminder> message and inject
 
-第三阶段: 调用与执行
-──────────────────
-模型/用户触发
-    ├─ SkillTool.validateInput()  → 验证
-    ├─ SkillTool.checkPermissions()  → 权限
+Phase 3: Invocation and Execution
+─────────────────────────────────
+Model/user trigger
+    ├─ SkillTool.validateInput()  → validation
+    ├─ SkillTool.checkPermissions()  → permissions
     └─ SkillTool.call()
        ├─ Inline → processPromptSlashCommand()
-       │  ├─ getPromptForCommand()  → 内容展开
-       │  ├─ registerSkillHooks()   → Hook 注册
-       │  ├─ addInvokedSkill()      → 记录（压缩恢复）
-       │  └─ contextModifier()      → 更新 tools/model/effort
+       │  ├─ getPromptForCommand()  → content expansion
+       │  ├─ registerSkillHooks()   → hook registration
+       │  ├─ addInvokedSkill()      → record (restored after compression)
+       │  └─ contextModifier()      → update tools/model/effort
        └─ Fork → executeForkedSkill()
           ├─ prepareForkedCommandContext()
-          ├─ runAgent()             → 子代理运行
-          └─ extractResultText()    → 提取结果
+          ├─ runAgent()             → sub-agent execution
+          └─ extractResultText()    → extract results
 
-第四阶段: 运行时发现
-──────────────────
-文件操作触发
-    ├─ discoverSkillDirsForPaths()   → 新 Skills 目录
-    ├─ addSkillDirectories()          → 加载 & 注册
-    ├─ activateConditionalSkillsForPaths()  → 条件激活
-    └─ clearCommandMemoizationCaches()      → 缓存失效
+Phase 4: Runtime Discovery
+─────────────────────────
+File operation trigger
+    ├─ discoverSkillDirsForPaths()   → new Skills directories
+    ├─ addSkillDirectories()          → load & register
+    ├─ activateConditionalSkillsForPaths()  → conditional activation
+    └─ clearCommandMemoizationCaches()      → cache invalidation
 ```
 
-### Skill 内容持久化
+### Skill Content Persistence
 
-Inline Skills 的内容通过 `addInvokedSkill()` 记录到会话状态，确保在上下文压缩后仍可恢复：
+Inline Skill content is recorded to session state via `addInvokedSkill()`, ensuring it can be restored after context compression:
 
 ```
 addInvokedSkill(name, path, content, agentId)
     ↓
-存储在 session state 中
+Stored in session state
     ↓
-压缩时 → buildPostCompactMessages()
+On compression → buildPostCompactMessages()
     ↓
-按 agentId 作用域恢复（防止跨代理泄漏）
+Restored scoped by agentId (prevents cross-agent leakage)
 ```
 
-## 源码索引
+## Source Code Index
 
-### 核心文件
+### Core Files
 
-| 文件 | 职责 |
-|------|------|
-| `src/tools/SkillTool/SkillTool.ts` | SkillTool 定义、验证、权限、执行 |
-| `src/tools/SkillTool/prompt.ts` | 工具提示词、Skill 列表格式化、预算控制 |
-| `src/skills/loadSkillsDir.ts` | 目录 Skill 发现、加载、去重、条件激活 |
-| `src/skills/bundledSkills.ts` | 内置 Skill 注册系统 |
-| `src/skills/bundled/index.ts` | 内置 Skills 初始化入口 |
-| `src/commands.ts` | 命令聚合、排序、过滤、缓存管理 |
+| File | Responsibility |
+|------|----------------|
+| `src/tools/SkillTool/SkillTool.ts` | SkillTool definition, validation, permissions, execution |
+| `src/tools/SkillTool/prompt.ts` | Tool prompt, Skill listing formatting, budget control |
+| `src/skills/loadSkillsDir.ts` | Directory Skill discovery, loading, deduplication, conditional activation |
+| `src/skills/bundledSkills.ts` | Built-in Skill registration system |
+| `src/skills/bundled/index.ts` | Built-in Skills initialization entry point |
+| `src/commands.ts` | Command aggregation, ordering, filtering, cache management |
 
-### 类型定义
+### Type Definitions
 
-| 文件 | 关键类型 |
-|------|---------|
+| File | Key Types |
+|------|-----------|
 | `src/types/command.ts` | `PromptCommand`, `Command`, `LocalCommandResult` |
 | `src/utils/frontmatterParser.ts` | `FrontmatterData`, `ParsedMarkdown` |
 | `src/skills/bundledSkills.ts` | `BundledSkillDefinition` |
 
-### 辅助模块
+### Utility Modules
 
-| 文件 | 职责 |
-|------|------|
-| `src/utils/forkedAgent.ts` | Fork 上下文准备、结果提取 |
-| `src/utils/hooks/registerSkillHooks.ts` | Skill Hook 注册 |
-| `src/utils/argumentSubstitution.ts` | 参数替换（$ARGUMENTS, ${ARG1}） |
-| `src/utils/promptShellExecution.ts` | 内联 Shell 命令执行 |
-| `src/utils/attachments.ts` | Skill 列表附件生成 |
-| `src/utils/messages.ts` | system-reminder 包装 |
-| `src/utils/plugins/loadPluginCommands.ts` | 插件 Skill 加载 |
-| `src/services/mcp/client.ts` | MCP Skill 转换 |
-| `src/skills/mcpSkillBuilders.ts` | MCP Skill 构建器注册 |
+| File | Responsibility |
+|------|----------------|
+| `src/utils/forkedAgent.ts` | Fork context preparation, result extraction |
+| `src/utils/hooks/registerSkillHooks.ts` | Skill hook registration |
+| `src/utils/argumentSubstitution.ts` | Argument substitution ($ARGUMENTS, ${ARG1}) |
+| `src/utils/promptShellExecution.ts` | Inline shell command execution |
+| `src/utils/attachments.ts` | Skill listing attachment generation |
+| `src/utils/messages.ts` | system-reminder wrapping |
+| `src/utils/plugins/loadPluginCommands.ts` | Plugin Skill loading |
+| `src/services/mcp/client.ts` | MCP Skill conversion |
+| `src/skills/mcpSkillBuilders.ts` | MCP Skill builder registration |
 
-### 关键常量
+### Key Constants
 
-| 常量 | 值 | 位置 |
-|------|----|----|
+| Constant | Value | Location |
+|----------|-------|----------|
 | `SKILL_BUDGET_CONTEXT_PERCENT` | 0.01 | prompt.ts:21 |
 | `DEFAULT_CHAR_BUDGET` | 8,000 | prompt.ts:23 |
 | `MAX_LISTING_DESC_CHARS` | 250 | prompt.ts:29 |
 | `SKILL_TOOL_NAME` | `'Skill'` | constants.ts |
 
-### 遥测事件
+### Telemetry Events
 
-| 事件 | 说明 |
-|------|------|
-| `tengu_skill_tool_invocation` | Skill 调用（含 execution_context, invocation_trigger） |
-| `tengu_skill_tool_slash_prefix` | 模型使用了 / 前缀 |
-| `tengu_dynamic_skills_changed` | 动态 Skills 变化（条件激活/目录发现） |
-| `tengu_skill_descriptions_truncated` | Skill 描述被截断 |
+| Event | Description |
+|-------|-------------|
+| `tengu_skill_tool_invocation` | Skill invocation (includes execution_context, invocation_trigger) |
+| `tengu_skill_tool_slash_prefix` | Model used the / prefix |
+| `tengu_dynamic_skills_changed` | Dynamic Skills changed (conditional activation/directory discovery) |
+| `tengu_skill_descriptions_truncated` | Skill descriptions were truncated |

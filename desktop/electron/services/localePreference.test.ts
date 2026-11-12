@@ -27,11 +27,11 @@ describe('locale preference persistence', () => {
   })
 
   it('persists a valid manual locale across service instances', () => {
-    writeLocalePreference(app, 'jp')
+    writeLocalePreference(app, 'en')
 
-    expect(readLocalePreference(app)).toBe('jp')
+    expect(readLocalePreference(app)).toBe('en')
     expect(JSON.parse(fs.readFileSync(localePreferencePath(app), 'utf8'))).toEqual({
-      locale: 'jp',
+      locale: 'en',
     })
   })
 
@@ -40,6 +40,10 @@ describe('locale preference persistence', () => {
     expect(readLocalePreference(app)).toBeNull()
 
     fs.writeFileSync(localePreferencePath(app), JSON.stringify({ locale: 'fr' }))
+    expect(readLocalePreference(app)).toBeNull()
+
+    // Locales stored by older builds that shipped other languages.
+    fs.writeFileSync(localePreferencePath(app), JSON.stringify({ locale: 'zh-TW' }))
     expect(readLocalePreference(app)).toBeNull()
 
     fs.writeFileSync(localePreferencePath(app), JSON.stringify({ locale: 'en', extra: true }))

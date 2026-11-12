@@ -347,7 +347,7 @@ export function PluginList() {
                     {marketplace.lastUpdated && (
                       <>
                         <span aria-hidden="true">·</span>
-                        <span>{t('settings.plugins.marketplaceUpdatedAt', { value: new Date(marketplace.lastUpdated).toLocaleString() })}</span>
+                        <span>{t('settings.plugins.marketplaceUpdatedAt', { value: new Date(marketplace.lastUpdated).toLocaleString('en-US') })}</span>
                       </>
                     )}
                   </div>

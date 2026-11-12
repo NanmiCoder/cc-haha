@@ -1,101 +1,101 @@
-# Claude Code Desktop App — UI 设计规范
+# Claude Code Desktop App — UI design spec
 
-> 本文档面向设计图生成，包含完整的配色方案、布局尺寸、组件规格和页面交互逻辑。
-> 可直接用于 AI 设计工具或设计师参考。
-
----
-
-## 一、设计风格概述
-
-### 1.1 整体风格
-
-- **设计语言**: 现代简约，暖色调，类 Notion/Linear 风格
-- **背景色**: 白色/米白色为主，非纯白（偏暖）
-- **圆角**: 大圆角风格（8-12px），卡片和输入框更大（12-16px）
-- **阴影**: 微妙的阴影，仅用于浮层和下拉菜单
-- **字体**: 系统字体栈（-apple-system, SF Pro, Segoe UI, Inter）
-- **图标风格**: 线条图标，1.5px 线宽，圆角端点
-- **品牌色**: 橙色 `rgb(215,119,87)` — Claude 品牌橙
-
-### 1.2 吉祥物 (Clawd)
-
-- 像素风格小动物（类似小螃蟹/外星生物）
-- 主体颜色: `rgb(215,119,87)` (Claude 橙)
-- 8bit 像素风格，大约 64x64px 像素尺寸
-- 两个黑色方形眼睛
-- 四条短腿
-- 背景: 透明或 `rgb(0,0,0)` (clawd_background)
+> This document is meant for generating design mockups. It covers the full color scheme, layout dimensions, component specs and page interaction logic.
+> It can be used directly by AI design tools or as a designer reference.
 
 ---
 
-## 二、配色方案
+## 1. Design style overview
 
-### 2.1 Light 主题（默认主题，截图使用的主题）
+### 1.1 Overall style
 
-#### 品牌与核心色
+- **Design language**: modern minimal, warm tones, Notion/Linear-like
+- **Background**: mainly white/off-white, not pure white (leaning warm)
+- **Corner radius**: large radii (8-12px), larger for cards and inputs (12-16px)
+- **Shadows**: subtle, only on floating layers and dropdowns
+- **Font**: system font stack (-apple-system, SF Pro, Segoe UI, Inter)
+- **Icon style**: line icons, 1.5px stroke, round caps
+- **Brand color**: orange `rgb(215,119,87)` — Claude brand orange
 
-| Token | 色值 | 用途 |
+### 1.2 Mascot (Clawd)
+
+- A pixel-art critter (something like a little crab/alien)
+- Body color: `rgb(215,119,87)` (Claude orange)
+- 8-bit pixel style, roughly 64x64px
+- Two black square eyes
+- Four short legs
+- Background: transparent or `rgb(0,0,0)` (clawd_background)
+
+---
+
+## 2. Color scheme
+
+### 2.1 Light theme (default theme, used in the screenshots)
+
+#### Brand and core colors
+
+| Token | Value | Usage |
 |-------|------|------|
-| `claude` | `rgb(215,119,87)` | 品牌橙，主色调，吉祥物颜色 |
-| `claudeShimmer` | `rgb(245,149,117)` | 品牌橙浅色，闪烁动画 |
-| `permission` | `rgb(87,105,247)` | 权限蓝，权限模式标识 |
-| `permissionShimmer` | `rgb(137,155,255)` | 权限蓝浅色 |
-| `autoAccept` | `rgb(135,0,255)` | 自动接受紫，Auto 模式标识 |
-| `planMode` | `rgb(0,102,102)` | 计划模式青，Plan 模式标识 |
-| `fastMode` | `rgb(255,106,0)` | 快速模式橙 |
+| `claude` | `rgb(215,119,87)` | Brand orange, primary color, mascot color |
+| `claudeShimmer` | `rgb(245,149,117)` | Light brand orange, shimmer animation |
+| `permission` | `rgb(87,105,247)` | Permission blue, permission mode marker |
+| `permissionShimmer` | `rgb(137,155,255)` | Light permission blue |
+| `autoAccept` | `rgb(135,0,255)` | Auto-accept purple, Auto mode marker |
+| `planMode` | `rgb(0,102,102)` | Plan mode teal, Plan mode marker |
+| `fastMode` | `rgb(255,106,0)` | Fast mode orange |
 
-#### 文本色
+#### Text colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `text` | `rgb(0,0,0)` | 主文本（黑色） |
-| `inverseText` | `rgb(255,255,255)` | 反色文本（白色） |
-| `inactive` | `rgb(102,102,102)` | 不活跃文本（深灰） |
-| `subtle` | `rgb(175,175,175)` | 次要文本（浅灰） |
-| `suggestion` | `rgb(87,105,247)` | 建议文本（蓝紫） |
+| `text` | `rgb(0,0,0)` | Primary text (black) |
+| `inverseText` | `rgb(255,255,255)` | Inverse text (white) |
+| `inactive` | `rgb(102,102,102)` | Inactive text (dark gray) |
+| `subtle` | `rgb(175,175,175)` | Secondary text (light gray) |
+| `suggestion` | `rgb(87,105,247)` | Suggestion text (blue-purple) |
 
-#### 语义色
+#### Semantic colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `success` | `rgb(44,122,57)` | 成功（绿色） |
-| `error` | `rgb(171,43,63)` | 错误（红色） |
-| `warning` | `rgb(150,108,30)` | 警告（琥珀色） |
-| `merged` | `rgb(135,0,255)` | 已合并（紫色） |
+| `success` | `rgb(44,122,57)` | Success (green) |
+| `error` | `rgb(171,43,63)` | Error (red) |
+| `warning` | `rgb(150,108,30)` | Warning (amber) |
+| `merged` | `rgb(135,0,255)` | Merged (purple) |
 
-#### Diff 色
+#### Diff colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `diffAdded` | `rgb(105,219,124)` | 添加行背景（浅绿） |
-| `diffRemoved` | `rgb(255,168,180)` | 删除行背景（浅红） |
-| `diffAddedDimmed` | `rgb(199,225,203)` | 添加行弱化（极浅绿） |
-| `diffRemovedDimmed` | `rgb(253,210,216)` | 删除行弱化（极浅红） |
-| `diffAddedWord` | `rgb(47,157,68)` | 添加的单词（中绿） |
-| `diffRemovedWord` | `rgb(209,69,75)` | 删除的单词（中红） |
+| `diffAdded` | `rgb(105,219,124)` | Added line background (light green) |
+| `diffRemoved` | `rgb(255,168,180)` | Removed line background (light red) |
+| `diffAddedDimmed` | `rgb(199,225,203)` | Dimmed added line (very light green) |
+| `diffRemovedDimmed` | `rgb(253,210,216)` | Dimmed removed line (very light red) |
+| `diffAddedWord` | `rgb(47,157,68)` | Added word (medium green) |
+| `diffRemovedWord` | `rgb(209,69,75)` | Removed word (medium red) |
 
-#### 背景色
+#### Background colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `userMessageBackground` | `rgb(240,240,240)` | 用户消息气泡背景 |
-| `userMessageBackgroundHover` | `rgb(252,252,252)` | 用户消息悬停 |
-| `messageActionsBackground` | `rgb(232,236,244)` | 消息操作栏背景 |
-| `bashMessageBackgroundColor` | `rgb(250,245,250)` | Bash 命令背景 |
-| `memoryBackgroundColor` | `rgb(230,245,250)` | 记忆块背景 |
-| `selectionBg` | `rgb(180,213,255)` | 文本选中背景 |
+| `userMessageBackground` | `rgb(240,240,240)` | User message bubble background |
+| `userMessageBackgroundHover` | `rgb(252,252,252)` | User message hover |
+| `messageActionsBackground` | `rgb(232,236,244)` | Message action bar background |
+| `bashMessageBackgroundColor` | `rgb(250,245,250)` | Bash command background |
+| `memoryBackgroundColor` | `rgb(230,245,250)` | Memory block background |
+| `selectionBg` | `rgb(180,213,255)` | Text selection background |
 
-#### 边框色
+#### Border colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `promptBorder` | `rgb(153,153,153)` | 输入框边框 |
-| `promptBorderShimmer` | `rgb(183,183,183)` | 输入框边框闪烁 |
-| `bashBorder` | `rgb(255,0,135)` | Bash 块边框（粉色） |
+| `promptBorder` | `rgb(153,153,153)` | Input border |
+| `promptBorderShimmer` | `rgb(183,183,183)` | Input border shimmer |
+| `bashBorder` | `rgb(255,0,135)` | Bash block border (pink) |
 
-#### Agent 专用色
+#### Agent colors
 
-| Token | 色值 |
+| Token | Value |
 |-------|------|
 | `red` | `rgb(220,38,38)` |
 | `blue` | `rgb(37,99,235)` |
@@ -106,33 +106,33 @@
 | `pink` | `rgb(219,39,119)` |
 | `cyan` | `rgb(8,145,178)` |
 
-#### 其他
+#### Other
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `rate_limit_fill` | `rgb(87,105,247)` | 速率限制进度条填充 |
-| `rate_limit_empty` | `rgb(39,47,111)` | 速率限制进度条空白 |
-| `briefLabelYou` | `rgb(37,99,235)` | 用户标签蓝 |
-| `briefLabelClaude` | `rgb(215,119,87)` | Claude 标签橙 |
+| `rate_limit_fill` | `rgb(87,105,247)` | Rate limit progress bar fill |
+| `rate_limit_empty` | `rgb(39,47,111)` | Rate limit progress bar empty |
+| `briefLabelYou` | `rgb(37,99,235)` | User label blue |
+| `briefLabelClaude` | `rgb(215,119,87)` | Claude label orange |
 
 ---
 
-### 2.2 Dark 主题
+### 2.2 Dark theme
 
-#### 品牌与核心色
+#### Brand and core colors
 
-| Token | 色值 | 用途 |
+| Token | Value | Usage |
 |-------|------|------|
-| `claude` | `rgb(215,119,87)` | 品牌橙（同 Light） |
-| `claudeShimmer` | `rgb(235,159,127)` | 品牌橙浅色 |
-| `permission` | `rgb(177,185,249)` | 权限蓝紫 |
-| `autoAccept` | `rgb(175,135,255)` | 自动接受紫 |
-| `planMode` | `rgb(72,150,140)` | 计划模式青绿 |
-| `fastMode` | `rgb(255,120,20)` | 快速模式橙 |
+| `claude` | `rgb(215,119,87)` | Brand orange (same as Light) |
+| `claudeShimmer` | `rgb(235,159,127)` | Light brand orange |
+| `permission` | `rgb(177,185,249)` | Permission blue-purple |
+| `autoAccept` | `rgb(175,135,255)` | Auto-accept purple |
+| `planMode` | `rgb(72,150,140)` | Plan mode teal-green |
+| `fastMode` | `rgb(255,120,20)` | Fast mode orange |
 
-#### 文本色
+#### Text colors
 
-| Token | 色值 |
+| Token | Value |
 |-------|------|
 | `text` | `rgb(255,255,255)` |
 | `inverseText` | `rgb(0,0,0)` |
@@ -140,17 +140,17 @@
 | `subtle` | `rgb(80,80,80)` |
 | `suggestion` | `rgb(177,185,249)` |
 
-#### 语义色
+#### Semantic colors
 
-| Token | 色值 |
+| Token | Value |
 |-------|------|
 | `success` | `rgb(78,186,101)` |
 | `error` | `rgb(255,107,128)` |
 | `warning` | `rgb(255,193,7)` |
 
-#### 背景色
+#### Background colors
 
-| Token | 色值 |
+| Token | Value |
 |-------|------|
 | `userMessageBackground` | `rgb(55,55,55)` |
 | `userMessageBackgroundHover` | `rgb(70,70,70)` |
@@ -159,9 +159,9 @@
 | `memoryBackgroundColor` | `rgb(55,65,70)` |
 | `selectionBg` | `rgb(38,79,120)` |
 
-#### Diff 色
+#### Diff colors
 
-| Token | 色值 |
+| Token | Value |
 |-------|------|
 | `diffAdded` | `rgb(34,92,43)` |
 | `diffRemoved` | `rgb(122,41,54)` |
@@ -170,70 +170,70 @@
 
 ---
 
-### 2.3 应用 UI 表面色（从截图提取）
+### 2.3 App UI surface colors (extracted from screenshots)
 
-截图中使用的 Light 主题 UI 表面色:
+Light theme UI surface colors used in the screenshots:
 
-| 区域 | 颜色 | 说明 |
+| Area | Color | Notes |
 |------|------|------|
-| 应用背景 | `#FFFFFF` | 纯白 |
-| 侧边栏背景 | `#FAF9F7` | 暖白/米白 |
-| 侧边栏选中项 | `#F0EDE8` | 暖灰 |
-| 导航项悬停 | `#F5F3EF` | 极浅暖灰 |
-| 主内容区背景 | `#FFFFFF` | 纯白 |
-| 输入框背景 | `#FFFFFF` | 纯白 |
-| 输入框边框 | `#E5E3DE` | 浅灰 |
-| 输入框圆角 | `16px` | 大圆角 |
-| 分隔线 | `#E5E3DE` | 浅灰 |
-| 状态栏背景 | `#FAF9F7` | 暖白 |
-| 按钮背景(主要) | `#3D3D3D` | 深灰/黑色 |
-| 按钮文字(主要) | `#FFFFFF` | 白色 |
-| 按钮背景(次要) | `#FFFFFF` | 白色 |
-| 按钮边框(次要) | `#E5E3DE` | 浅灰 |
-| 下拉菜单背景 | `#FFFFFF` | 白色 |
-| 下拉菜单阴影 | `0 4px 12px rgba(0,0,0,0.1)` | 微妙阴影 |
-| 用户消息气泡 | `#F5F0E8` | 暖米色 |
-| Info 横幅背景 | `#F5F3EF` | 浅暖灰 |
+| App background | `#FFFFFF` | Pure white |
+| Sidebar background | `#FAF9F7` | Warm white / off-white |
+| Sidebar selected item | `#F0EDE8` | Warm gray |
+| Nav item hover | `#F5F3EF` | Very light warm gray |
+| Main content background | `#FFFFFF` | Pure white |
+| Input background | `#FFFFFF` | Pure white |
+| Input border | `#E5E3DE` | Light gray |
+| Input radius | `16px` | Large radius |
+| Divider | `#E5E3DE` | Light gray |
+| Status bar background | `#FAF9F7` | Warm white |
+| Button background (primary) | `#3D3D3D` | Dark gray / black |
+| Button text (primary) | `#FFFFFF` | White |
+| Button background (secondary) | `#FFFFFF` | White |
+| Button border (secondary) | `#E5E3DE` | Light gray |
+| Dropdown background | `#FFFFFF` | White |
+| Dropdown shadow | `0 4px 12px rgba(0,0,0,0.1)` | Subtle shadow |
+| User message bubble | `#F5F0E8` | Warm beige |
+| Info banner background | `#F5F3EF` | Light warm gray |
 
 ---
 
-## 三、排版规范
+## 3. Typography
 
-### 3.1 字体栈
+### 3.1 Font stack
 
 ```css
 --font-family-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
 --font-family-mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, "Courier New", monospace;
 ```
 
-### 3.2 字号层级
+### 3.2 Type scale
 
-| 层级 | 字号 | 行高 | 字重 | 用途 |
+| Level | Size | Line height | Weight | Usage |
 |------|------|------|------|------|
-| H1 | 24px | 32px | 700 (Bold) | 页面标题（如 "Scheduled tasks"） |
-| H2 | 18px | 24px | 600 (SemiBold) | 区段标题 |
-| H3 | 16px | 22px | 600 | 对话框标题、组件标题 |
-| Body | 14px | 20px | 400 (Regular) | 正文文本 |
-| Small | 13px | 18px | 400 | 次要文本、时间戳 |
-| Caption | 12px | 16px | 400 | 标签、描述、提示文本 |
-| Tiny | 11px | 14px | 500 (Medium) | Badge、状态标签 |
-| Code | 13px | 18px | 400 | 代码块内文本 |
+| H1 | 24px | 32px | 700 (Bold) | Page titles (e.g. "Scheduled tasks") |
+| H2 | 18px | 24px | 600 (SemiBold) | Section titles |
+| H3 | 16px | 22px | 600 | Dialog titles, component titles |
+| Body | 14px | 20px | 400 (Regular) | Body text |
+| Small | 13px | 18px | 400 | Secondary text, timestamps |
+| Caption | 12px | 16px | 400 | Labels, descriptions, hint text |
+| Tiny | 11px | 14px | 500 (Medium) | Badges, status labels |
+| Code | 13px | 18px | 400 | Text in code blocks |
 
-### 3.3 文本颜色层级
+### 3.3 Text color levels
 
-| 层级 | Light 色值 | Dark 色值 | 用途 |
+| Level | Light value | Dark value | Usage |
 |------|-----------|----------|------|
-| Primary | `#000000` | `#FFFFFF` | 标题、正文 |
-| Secondary | `#666666` | `#999999` | 次要信息 |
-| Tertiary | `#AFAFAF` | `#505050` | 占位符、禁用 |
-| Accent | `rgb(87,105,247)` | `rgb(177,185,249)` | 链接、强调 |
-| Brand | `rgb(215,119,87)` | `rgb(215,119,87)` | 品牌元素 |
+| Primary | `#000000` | `#FFFFFF` | Titles, body |
+| Secondary | `#666666` | `#999999` | Secondary information |
+| Tertiary | `#AFAFAF` | `#505050` | Placeholders, disabled |
+| Accent | `rgb(87,105,247)` | `rgb(177,185,249)` | Links, emphasis |
+| Brand | `rgb(215,119,87)` | `rgb(215,119,87)` | Brand elements |
 
 ---
 
-## 四、布局规格
+## 4. Layout
 
-### 4.1 整体布局
+### 4.1 Overall layout
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -248,52 +248,53 @@
 │             │                                             │
 │             │                                             │
 │             │                                             │
+│             │                                             │
 ├─────────────┴─────────────────────────────────────────────┤
 │                  Status Bar (36px)                         │
 └───────────────────────────────────────────────────────────┘
 ```
 
-| 区域 | 尺寸 | 说明 |
+| Area | Size | Notes |
 |------|------|------|
-| Title Bar | 高 40px | 固定，不可滚动 |
-| Sidebar | 宽 280px | 固定宽度，可调整（最小 240px，最大 400px） |
-| Main Content | flex: 1 | 自适应填充剩余空间 |
-| Status Bar | 高 36px | 固定，常驻底部 |
-| 最小窗口尺寸 | 900 x 600px | |
-| 推荐窗口尺寸 | 1280 x 800px | |
+| Title Bar | 40px tall | Fixed, does not scroll |
+| Sidebar | 280px wide | Fixed width, resizable (min 240px, max 400px) |
+| Main Content | flex: 1 | Fills the remaining space |
+| Status Bar | 36px tall | Fixed, always at the bottom |
+| Minimum window size | 900 x 600px | |
+| Recommended window size | 1280 x 800px | |
 
-### 4.2 间距系统
+### 4.2 Spacing system
 
-| Token | 值 | 用途 |
+| Token | Value | Usage |
 |-------|-----|------|
-| `space-1` | 4px | 最小间距 |
-| `space-2` | 8px | 紧凑间距 |
-| `space-3` | 12px | 标准间距 |
-| `space-4` | 16px | 舒适间距 |
-| `space-5` | 20px | 区块间距 |
-| `space-6` | 24px | 大区块间距 |
-| `space-8` | 32px | 区段间距 |
-| `space-10` | 40px | 页面边距 |
+| `space-1` | 4px | Minimum spacing |
+| `space-2` | 8px | Compact spacing |
+| `space-3` | 12px | Standard spacing |
+| `space-4` | 16px | Comfortable spacing |
+| `space-5` | 20px | Block spacing |
+| `space-6` | 24px | Large block spacing |
+| `space-8` | 32px | Section spacing |
+| `space-10` | 40px | Page margin |
 
-### 4.3 圆角规范
+### 4.3 Corner radius
 
-| 元素 | 圆角 |
+| Element | Radius |
 |------|------|
-| 按钮 | 8px |
-| 输入框 | 12px |
-| 对话输入框 | 16px |
-| 卡片/面板 | 12px |
-| 下拉菜单 | 12px |
-| 模态框 | 16px |
-| Avatar | 50% (圆形) |
+| Button | 8px |
+| Input | 12px |
+| Chat input | 16px |
+| Card/panel | 12px |
+| Dropdown | 12px |
+| Modal | 16px |
+| Avatar | 50% (circle) |
 | Badge | 4px |
 | Tooltip | 8px |
 
 ---
 
-## 五、组件设计规格
+## 5. Component specs
 
-### 5.1 Title Bar（标题栏）
+### 5.1 Title Bar
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -301,63 +302,63 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 高度 | 40px |
-| 背景 | 白色 `#FFFFFF` |
-| 底部分隔线 | 1px solid `#E5E3DE` |
-| 红绿灯按钮 | 左偏移 12px，垂直居中 |
-| 红绿灯尺寸 | 12px 圆形，间距 8px |
-| 导航箭头 | 尺寸 20px，灰色 `#666666`，hover 变深 |
-| 标签页 | 居中对齐 |
-| 标签页字号 | 14px, 字重 500 |
-| 活跃标签 | 背景 `#F0EDE8`，圆角 8px，padding 6px 12px |
-| 非活跃标签 | 无背景，色 `#666666` |
-| 标签间距 | 4px |
+| Height | 40px |
+| Background | White `#FFFFFF` |
+| Bottom divider | 1px solid `#E5E3DE` |
+| Traffic lights | 12px left offset, vertically centered |
+| Traffic light size | 12px circles, 8px apart |
+| Nav arrows | 20px, gray `#666666`, darker on hover |
+| Tabs | Centered |
+| Tab font size | 14px, weight 500 |
+| Active tab | Background `#F0EDE8`, radius 8px, padding 6px 12px |
+| Inactive tab | No background, color `#666666` |
+| Tab gap | 4px |
 
 ---
 
-### 5.2 Sidebar（侧边栏）
+### 5.2 Sidebar
 
 ```
 ┌──────────────┐
-│ + New session │ ← 导航项
+│ + New session │ ← nav item
 │ ⏰ Scheduled  │
 │              │
-│ All projects ▾│ ← 项目过滤
+│ All projects ▾│ ← project filter
 │ ─────────────│
-│ Today        │ ← 时间分组标题
-│  ○ Session 1 │ ← 会话项
-│  ● Session 2 │ ← 选中项
+│ Today        │ ← time group heading
+│  ○ Session 1 │ ← session item
+│  ● Session 2 │ ← selected item
 │              │
 │ Previous 7d  │
 │  ○ Session 3 │
 └──────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 宽度 | 280px |
-| 背景 | `#FAF9F7` (暖白) |
-| 右侧分隔线 | 1px solid `#E5E3DE` |
-| 内边距 | 上下 12px，左右 12px |
-| 导航项高度 | 36px |
-| 导航项 padding | 8px 12px |
-| 导航项字号 | 14px |
-| 导航项图标 | 18px，与文字间距 10px |
-| 导航项悬停 | 背景 `#F5F3EF`，圆角 8px |
-| 导航项选中 | 背景 `#F0EDE8`，字重 500 |
-| 项目过滤器高度 | 32px |
-| 分组标题 | 12px, 字重 600, 色 `#999999`, uppercase |
-| 分组标题上边距 | 16px |
-| 会话项高度 | 36px |
-| 会话项 padding | 8px 12px 8px 20px |
-| 选中指示器 | 左侧 4px 宽圆形点，色 `#000000` |
-| 选中背景 | `#F0EDE8` |
+| Width | 280px |
+| Background | `#FAF9F7` (warm white) |
+| Right divider | 1px solid `#E5E3DE` |
+| Padding | 12px top/bottom, 12px left/right |
+| Nav item height | 36px |
+| Nav item padding | 8px 12px |
+| Nav item font size | 14px |
+| Nav item icon | 18px, 10px from the text |
+| Nav item hover | Background `#F5F3EF`, radius 8px |
+| Nav item selected | Background `#F0EDE8`, weight 500 |
+| Project filter height | 32px |
+| Group heading | 12px, weight 600, color `#999999`, uppercase |
+| Group heading top margin | 16px |
+| Session item height | 36px |
+| Session item padding | 8px 12px 8px 20px |
+| Selected indicator | 4px round dot on the left, color `#000000` |
+| Selected background | `#F0EDE8` |
 
 ---
 
-### 5.3 Status Bar（状态栏）
+### 5.3 Status Bar
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -366,29 +367,29 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 高度 | 36px |
-| 背景 | `#FAF9F7` |
-| 顶部分隔线 | 1px solid `#E5E3DE` |
-| 内边距 | 0 12px |
-| 用户 Avatar | 28px 圆形 |
-| 用户名字号 | 13px, 字重 500 |
-| 订阅标签 | 11px, 色 `#999999` |
-| 仓库名 | 13px, 带 GitHub 图标 |
-| 分支名 | 13px, 带分支图标 |
-| Worktree 复选框 | 14px |
-| Local/Remote | 13px 下拉，带 ▾ |
-| 分隔符 | 1px solid `#E5E3DE`，垂直 |
+| Height | 36px |
+| Background | `#FAF9F7` |
+| Top divider | 1px solid `#E5E3DE` |
+| Padding | 0 12px |
+| User avatar | 28px circle |
+| User name font | 13px, weight 500 |
+| Subscription label | 11px, color `#999999` |
+| Repository name | 13px, with GitHub icon |
+| Branch name | 13px, with branch icon |
+| Worktree checkbox | 14px |
+| Local/Remote | 13px dropdown with ▾ |
+| Separator | 1px solid `#E5E3DE`, vertical |
 
 ---
 
-### 5.4 对话输入框
+### 5.4 Chat input
 
 ```
 ┌─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
 │                                                      │
-│  🐙 (Clawd 吉祥物)                                   │
+│  🐙 (Clawd mascot)                                   │
 │                                                      │
 │  ┌────────────────────────────────────────────────┐  │
 │  │ Find a small todo in the codebase and do it    │  │
@@ -400,26 +401,26 @@
 └─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 输入框外边距 | 水平 auto（居中），最大宽度 720px |
-| 输入框圆角 | 16px |
-| 输入框边框 | 1px solid `#E5E3DE` |
-| 输入框 focus 边框 | 1px solid `#999999` |
-| 输入框 padding | 16px 16px 48px 16px |
-| placeholder 色 | `#AFAFAF` |
-| placeholder 字号 | 14px |
-| 底部工具栏高度 | 36px |
-| 底部工具栏 padding | 0 8px |
-| `+` 按钮 | 24px, 圆角 6px, hover 背景 `#F5F3EF` |
-| 权限选择器 | 字号 13px, 左对齐 |
-| 权限图标 | 16px |
-| 模型选择器 | 字号 13px, 右对齐 |
-| 麦克风图标 | 20px, 最右侧 |
+| Input outer margin | Horizontal auto (centered), max width 720px |
+| Input radius | 16px |
+| Input border | 1px solid `#E5E3DE` |
+| Input focus border | 1px solid `#999999` |
+| Input padding | 16px 16px 48px 16px |
+| Placeholder color | `#AFAFAF` |
+| Placeholder font size | 14px |
+| Bottom toolbar height | 36px |
+| Bottom toolbar padding | 0 8px |
+| `+` button | 24px, radius 6px, hover background `#F5F3EF` |
+| Permission picker | 13px, left-aligned |
+| Permission icon | 16px |
+| Model picker | 13px, right-aligned |
+| Microphone icon | 20px, far right |
 
 ---
 
-### 5.5 权限模式下拉菜单
+### 5.5 Permission mode dropdown
 
 ```
 ┌──────────────────────────────────────┐
@@ -437,25 +438,25 @@
 └──────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 宽度 | 320px |
-| 背景 | `#FFFFFF` |
-| 圆角 | 12px |
-| 阴影 | `0 4px 16px rgba(0,0,0,0.12)` |
-| 边框 | 1px solid `#E5E3DE` |
-| 选项高度 | 56px |
-| 选项 padding | 12px 16px |
-| 选项标题 | 14px, 字重 500, 色 `#000000` |
-| 选项描述 | 12px, 色 `#999999` |
-| 选项图标 | 18px, 左侧 |
-| ✓ 标记 | 右侧, 色 `#000000` |
-| 选项间分隔线 | 1px solid `#F0EDE8` |
-| 选项 hover | 背景 `#F5F3EF` |
+| Width | 320px |
+| Background | `#FFFFFF` |
+| Radius | 12px |
+| Shadow | `0 4px 16px rgba(0,0,0,0.12)` |
+| Border | 1px solid `#E5E3DE` |
+| Option height | 56px |
+| Option padding | 12px 16px |
+| Option title | 14px, weight 500, color `#000000` |
+| Option description | 12px, color `#999999` |
+| Option icon | 18px, left |
+| ✓ mark | Right, color `#000000` |
+| Divider between options | 1px solid `#F0EDE8` |
+| Option hover | Background `#F5F3EF` |
 
 ---
 
-### 5.6 模型选择器下拉菜单
+### 5.6 Model picker dropdown
 
 ```
 ┌──────────────────────────────────┐
@@ -480,60 +481,60 @@
 └──────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 宽度 | 300px |
-| 背景 | `#FFFFFF` |
-| 圆角 | 12px |
-| 阴影 | `0 4px 16px rgba(0,0,0,0.12)` |
-| 模型项高度 | 52px |
-| 模型名字号 | 14px, 字重 500 |
-| 模型描述字号 | 12px, 色 `#999999` |
-| 分隔线(模型/Effort) | 1px solid `#E5E3DE` |
-| "Effort" 标签 | 12px, 字重 600, 色 `#999999` |
-| Effort 项高度 | 36px |
-| Effort 字号 | 14px |
-| ✓ 标记 | 右侧, 色 `#000000` |
+| Width | 300px |
+| Background | `#FFFFFF` |
+| Radius | 12px |
+| Shadow | `0 4px 16px rgba(0,0,0,0.12)` |
+| Model item height | 52px |
+| Model name font | 14px, weight 500 |
+| Model description font | 12px, color `#999999` |
+| Divider (models/Effort) | 1px solid `#E5E3DE` |
+| "Effort" label | 12px, weight 600, color `#999999` |
+| Effort item height | 36px |
+| Effort font size | 14px |
+| ✓ mark | Right, color `#000000` |
 
 ---
 
-### 5.7 消息气泡
+### 5.7 Message bubbles
 
-#### 用户消息
+#### User message
 
 ```
                               ┌──────────────────────┐
-                              │ 分析下这个项目        │
+                              │ Analyze this project │
                               └──────────────────────┘
 ```
 
-| 属性 | 规格 |
+| Property | Spec |
 |------|------|
-| 对齐 | 右对齐 |
-| 背景 | `#F5F0E8` (暖米色) |
-| 圆角 | 16px（左上 16px，右上 4px，右下 16px，左下 16px） |
-| 最大宽度 | 70% 容器宽度 |
-| 字号 | 14px |
-| 字色 | `#000000` |
-| padding | 10px 14px |
+| Alignment | Right |
+| Background | `#F5F0E8` (warm beige) |
+| Radius | 16px (top-left 16px, top-right 4px, bottom-right 16px, bottom-left 16px) |
+| Max width | 70% of the container |
+| Font size | 14px |
+| Text color | `#000000` |
+| Padding | 10px 14px |
 | margin-bottom | 12px |
 
-#### AI 回复消息
+#### AI reply message
 
-| 属性 | 规格 |
+| Property | Spec |
 |------|------|
-| 对齐 | 左对齐 |
-| 背景 | 无（透明） |
-| 最大宽度 | 100% |
-| 字号 | 14px |
-| 字色 | `#000000` |
-| padding | 0 16px |
+| Alignment | Left |
+| Background | None (transparent) |
+| Max width | 100% |
+| Font size | 14px |
+| Text color | `#000000` |
+| Padding | 0 16px |
 | margin-bottom | 16px |
-| Markdown | 使用标准 Markdown 渲染 |
+| Markdown | Standard Markdown rendering |
 
 ---
 
-### 5.8 折叠区段
+### 5.8 Collapsed sections
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -541,51 +542,51 @@
 │     Ran a hook on session startup                │
 │     { "hookSpecificOutput": { ...               │
 │                                                  │
-│ ▸ 探索配置和基础设施                                │
-│ │   Agent  探索项目整体结构                        │
+│ ▸ Explore config and infrastructure              │
+│ │   Agent  Explore overall project structure     │
 │ │   Bash · 3 tool calls                          │
-│ │   Agent  探索核心业务代码                        │
+│ │   Agent  Explore core business code            │
 │ │   Bash · 2 tool calls                          │
-│ │   Agent  探索配置和基础设施                      │
+│ │   Agent  Explore config and infrastructure     │
 └──────────────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 折叠标题 | 14px, 字重 500 |
-| 折叠图标 | ▸ (收起) / ▾ (展开), 12px |
-| 左侧竖线 | 2px 宽, 色 `#E5E3DE` |
-| 子项缩进 | 24px |
-| `Agent` 标签 | 12px, 字重 500, 背景 `#F0EDE8`, 圆角 4px, padding 2px 6px |
-| `Bash · N tool calls` 标签 | 12px, 色 `#666666` |
-| 子项间距 | 4px |
-| 区段间距 | 8px |
+| Section title | 14px, weight 500 |
+| Toggle icon | ▸ (collapsed) / ▾ (expanded), 12px |
+| Left rule | 2px wide, color `#E5E3DE` |
+| Child indent | 24px |
+| `Agent` label | 12px, weight 500, background `#F0EDE8`, radius 4px, padding 2px 6px |
+| `Bash · N tool calls` label | 12px, color `#666666` |
+| Child spacing | 4px |
+| Section spacing | 8px |
 
 ---
 
-### 5.9 加载状态
+### 5.9 Loading state
 
 ```
   ✦ Crafting...                    13s · ↓ 531 tokens
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| ✦ 图标 | 16px, 色 `rgb(215,119,87)`, 闪烁动画 |
-| 状态文本 | 14px, 色 `rgb(215,119,87)`, 字重 500 |
-| 计时器 | 13px, 色 `#999999` |
-| Token 计数 | 13px, 色 `#999999` |
-| 闪烁周期 | 1.5s ease-in-out |
+| ✦ icon | 16px, color `rgb(215,119,87)`, shimmer animation |
+| Status text | 14px, color `rgb(215,119,87)`, weight 500 |
+| Timer | 13px, color `#999999` |
+| Token count | 13px, color `#999999` |
+| Shimmer period | 1.5s ease-in-out |
 
 ---
 
-### 5.10 Agent Teams 面板
+### 5.10 Agent Teams panel
 
-当对话中创建 Agent Teams 时，消息列表下方出现 Team 状态栏和成员标签。
+When Agent Teams are created in a conversation, a team status bar and member tags appear below the message list.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ [消息列表...]                                            │
+│ [message list...]                                        │
 │                                                          │
 │ ▸ Team: ui-backend-dev (3 members)                      │
 │ ┌──────────────────────────────────────────────────────┐ │
@@ -595,52 +596,52 @@
 │                                                          │
 │ ─────── Viewing: session-dev transcript ──────────      │
 │                                                          │
-│  [该成员的独立消息流]                                      │
-│  > 正在读取 sessionStorage.ts...                          │
-│  Agent  探索会话存储                                      │
+│  [that member's own message stream]                      │
+│  > Reading sessionStorage.ts...                          │
+│  Agent  Explore session storage                          │
 │  Bash · 2 tool calls                                     │
 │                                                          │
 │  [← Back to Leader]                                      │
 └──────────────────────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| Team 状态栏高度 | 32px |
-| Team 状态栏背景 | `#F5F3EF` |
-| Team 名称 | 13px, 字重 600 |
-| 成员数量 | 13px, 色 `#999999` |
-| 成员标签容器 | flex row, gap 8px, padding 8px 12px |
-| 成员标签 | 圆角 6px, padding 4px 10px, 字号 12px, 字重 500 |
-| 成员标签背景(默认) | `#F0EDE8` |
-| 成员标签背景(选中) | Agent 专用色（半透明 15%） |
-| 成员标签边框(选中) | 2px solid Agent 专用色 |
-| 状态指示器 | 左侧 6px 圆点 |
-| Running 指示器 | 色 `rgb(202,138,4)` (黄), 闪烁动画 |
-| Completed 指示器 | 色 `rgb(44,122,57)` (绿), 实心 |
-| Failed 指示器 | 色 `rgb(171,43,63)` (红), 实心 |
-| Idle 指示器 | 色 `#CCCCCC` (灰), 空心 |
-| 分隔线("Viewing...") | 1px solid `#E5E3DE`, 上下 8px margin |
-| "Viewing" 标签 | 12px, 色 `#999999`, 居中 |
-| Back 按钮 | 13px, 色 `rgb(87,105,247)`, 左对齐, cursor pointer |
-| Teammate transcript | 与主消息列表相同的渲染规则 |
+| Team status bar height | 32px |
+| Team status bar background | `#F5F3EF` |
+| Team name | 13px, weight 600 |
+| Member count | 13px, color `#999999` |
+| Member tag container | flex row, gap 8px, padding 8px 12px |
+| Member tag | Radius 6px, padding 4px 10px, 12px, weight 500 |
+| Member tag background (default) | `#F0EDE8` |
+| Member tag background (selected) | Agent color (15% opacity) |
+| Member tag border (selected) | 2px solid agent color |
+| Status indicator | 6px dot on the left |
+| Running indicator | Color `rgb(202,138,4)` (yellow), blinking |
+| Completed indicator | Color `rgb(44,122,57)` (green), solid |
+| Failed indicator | Color `rgb(171,43,63)` (red), solid |
+| Idle indicator | Color `#CCCCCC` (gray), hollow |
+| Divider ("Viewing...") | 1px solid `#E5E3DE`, 8px margin top and bottom |
+| "Viewing" label | 12px, color `#999999`, centered |
+| Back button | 13px, color `rgb(87,105,247)`, left-aligned, cursor pointer |
+| Teammate transcript | Same rendering rules as the main message list |
 
-**Agent 颜色分配** (来自 `src/utils/theme.ts`):
+**Agent color assignment** (from `src/utils/theme.ts`):
 
-| 颜色名 | Light 色值 | 用于标签边框和背景色 |
+| Color name | Light value | Used for tag border and background |
 |--------|-----------|---------------------|
-| red | `rgb(220,38,38)` | 第 1 个 agent |
-| blue | `rgb(37,99,235)` | 第 2 个 agent |
-| green | `rgb(22,163,74)` | 第 3 个 agent |
-| yellow | `rgb(202,138,4)` | 第 4 个 agent |
-| purple | `rgb(147,51,234)` | 第 5 个 agent |
-| orange | `rgb(234,88,12)` | 第 6 个 agent |
-| pink | `rgb(219,39,119)` | 第 7 个 agent |
-| cyan | `rgb(8,145,178)` | 第 8 个 agent |
+| red | `rgb(220,38,38)` | 1st agent |
+| blue | `rgb(37,99,235)` | 2nd agent |
+| green | `rgb(22,163,74)` | 3rd agent |
+| yellow | `rgb(202,138,4)` | 4th agent |
+| purple | `rgb(147,51,234)` | 5th agent |
+| orange | `rgb(234,88,12)` | 6th agent |
+| pink | `rgb(219,39,119)` | 7th agent |
+| cyan | `rgb(8,145,178)` | 8th agent |
 
 ---
 
-### 5.11 Scheduled 页面
+### 5.11 Scheduled page
 
 ```
 ┌──────────────────────────────────────────┐
@@ -657,18 +658,18 @@
 └──────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 页面 padding | 32px 40px |
-| 标题字号 | 24px, 字重 700 |
-| 描述字号 | 14px, 色 `#666666` |
-| 空状态图标 | 48px, 居中 |
-| 空状态文本 | 14px, 色 `#999999`, 居中 |
-| `+ New task` 按钮 | 背景 `#3D3D3D`, 色 `#FFFFFF`, 圆角 8px, padding 8px 16px |
+| Page padding | 32px 40px |
+| Title font | 24px, weight 700 |
+| Description font | 14px, color `#666666` |
+| Empty state icon | 48px, centered |
+| Empty state text | 14px, color `#999999`, centered |
+| `+ New task` button | Background `#3D3D3D`, color `#FFFFFF`, radius 8px, padding 8px 16px |
 
 ---
 
-### 5.12 New Scheduled Task 模态框
+### 5.12 New Scheduled Task modal
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -711,255 +712,255 @@
 └──────────────────────────────────────────────┘
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 模态框宽度 | 560px |
-| 模态框圆角 | 16px |
-| 模态框阴影 | `0 8px 32px rgba(0,0,0,0.15)` |
-| 遮罩层 | `rgba(0,0,0,0.5)` |
-| 模态框 padding | 24px |
-| 标题字号 | 20px, 字重 700 |
-| Info 横幅 | 背景 `#F5F3EF`, 圆角 8px, padding 12px 16px |
-| Info 图标 | ℹ, 16px, 色 `#666666` |
-| Label 字号 | 14px, 字重 500 |
-| 必填标记 | `*`, 色 `#E53E3E` |
-| 输入框 | 高 40px, 圆角 8px, 边框 1px `#E5E3DE` |
-| Prompt 输入框 | 最小高 120px, 圆角 12px |
-| 频率下拉 | 高 40px |
-| 时间选择器 | 宽 80px, 高 36px, 圆角 8px, 边框 1px `#E5E3DE` |
-| 注释文本 | 12px, 色 `#999999` |
-| Cancel 按钮 | 背景 `#FFFFFF`, 边框 1px `#E5E3DE`, 色 `#000000` |
-| Create task 按钮 | 背景 `#3D3D3D`, 色 `#FFFFFF` |
-| 按钮间距 | 8px |
-| 按钮 padding | 8px 20px |
-| 按钮圆角 | 8px |
+| Modal width | 560px |
+| Modal radius | 16px |
+| Modal shadow | `0 8px 32px rgba(0,0,0,0.15)` |
+| Overlay | `rgba(0,0,0,0.5)` |
+| Modal padding | 24px |
+| Title font | 20px, weight 700 |
+| Info banner | Background `#F5F3EF`, radius 8px, padding 12px 16px |
+| Info icon | ℹ, 16px, color `#666666` |
+| Label font | 14px, weight 500 |
+| Required marker | `*`, color `#E53E3E` |
+| Input | 40px tall, radius 8px, border 1px `#E5E3DE` |
+| Prompt input | Min height 120px, radius 12px |
+| Frequency dropdown | 40px tall |
+| Time picker | 80px wide, 36px tall, radius 8px, border 1px `#E5E3DE` |
+| Note text | 12px, color `#999999` |
+| Cancel button | Background `#FFFFFF`, border 1px `#E5E3DE`, color `#000000` |
+| Create task button | Background `#3D3D3D`, color `#FFFFFF` |
+| Button gap | 8px |
+| Button padding | 8px 20px |
+| Button radius | 8px |
 
 ---
 
-### 5.13 活跃会话标题栏
+### 5.13 Active session title bar
 
 ```
   Analyze project structure and codebase ▾        ▷ Preview ▾
 ```
 
-| 元素 | 规格 |
+| Element | Spec |
 |------|------|
-| 标题字号 | 14px, 字重 500 |
-| 标题色 | `#000000` |
-| ▾ 图标 | 12px, 色 `#999999` |
-| Preview 按钮 | 字号 13px, 边框 1px `#E5E3DE`, 圆角 6px, padding 4px 10px |
-| 区域高度 | 44px |
-| 底部分隔线 | 1px solid `#F0EDE8` |
+| Title font | 14px, weight 500 |
+| Title color | `#000000` |
+| ▾ icon | 12px, color `#999999` |
+| Preview button | 13px, border 1px `#E5E3DE`, radius 6px, padding 4px 10px |
+| Area height | 44px |
+| Bottom divider | 1px solid `#F0EDE8` |
 
 ---
 
-## 六、交互状态规范
+## 6. Interaction states
 
-### 6.1 按钮状态
+### 6.1 Button states
 
-| 状态 | 主要按钮 | 次要按钮 |
+| State | Primary button | Secondary button |
 |------|----------|----------|
-| 默认 | bg `#3D3D3D`, fg `#FFFFFF` | bg `#FFFFFF`, border `#E5E3DE` |
+| Default | bg `#3D3D3D`, fg `#FFFFFF` | bg `#FFFFFF`, border `#E5E3DE` |
 | Hover | bg `#2D2D2D` | bg `#F5F3EF` |
 | Active | bg `#1D1D1D` | bg `#E5E3DE` |
 | Disabled | bg `#D0D0D0`, fg `#999999` | bg `#F5F3EF`, fg `#CCCCCC` |
-| Loading | 显示 spinner，文字不变 | 同上 |
+| Loading | Show spinner, text unchanged | Same |
 
-### 6.2 输入框状态
+### 6.2 Input states
 
-| 状态 | 规格 |
+| State | Spec |
 |------|------|
-| 默认 | border `#E5E3DE` |
+| Default | border `#E5E3DE` |
 | Focus | border `#999999`, box-shadow `0 0 0 3px rgba(153,153,153,0.1)` |
 | Error | border `rgb(171,43,63)`, box-shadow `0 0 0 3px rgba(171,43,63,0.1)` |
-| Disabled | bg `#F5F3EF`, border `#E5E3DE`, 文字色 `#CCCCCC` |
+| Disabled | bg `#F5F3EF`, border `#E5E3DE`, text color `#CCCCCC` |
 
-### 6.3 导航项状态
+### 6.3 Nav item states
 
-| 状态 | 规格 |
+| State | Spec |
 |------|------|
-| 默认 | 透明背景, 色 `#666666` |
-| Hover | bg `#F5F3EF`, 色 `#000000` |
-| Active/选中 | bg `#F0EDE8`, 色 `#000000`, 字重 500 |
+| Default | Transparent background, color `#666666` |
+| Hover | bg `#F5F3EF`, color `#000000` |
+| Active/selected | bg `#F0EDE8`, color `#000000`, weight 500 |
 
-### 6.4 下拉菜单项状态
+### 6.4 Dropdown item states
 
-| 状态 | 规格 |
+| State | Spec |
 |------|------|
-| 默认 | 透明背景 |
+| Default | Transparent background |
 | Hover | bg `#F5F3EF` |
-| 选中 | 右侧 ✓ 标记, 色 `#000000` |
+| Selected | ✓ on the right, color `#000000` |
 
-### 6.5 会话列表项状态
+### 6.5 Session list item states
 
-| 状态 | 规格 |
+| State | Spec |
 |------|------|
-| 默认 | 透明背景 |
+| Default | Transparent background |
 | Hover | bg `#F5F3EF` |
-| 选中 | bg `#F0EDE8`, 左侧实心圆点 |
+| Selected | bg `#F0EDE8`, solid dot on the left |
 
 ---
 
-## 七、动画规范
+## 7. Animation
 
-### 7.1 过渡动画
+### 7.1 Transitions
 
-| 动画 | 属性 | 时长 | 缓动 |
+| Animation | Property | Duration | Easing |
 |------|------|------|------|
-| 按钮悬停 | background-color | 150ms | ease |
-| 导航项切换 | background-color | 200ms | ease-out |
-| 下拉菜单展开 | opacity + transform(Y) | 200ms | ease-out |
-| 下拉菜单收起 | opacity + transform(Y) | 150ms | ease-in |
-| 模态框弹出 | opacity + scale | 250ms | cubic-bezier(0.16,1,0.3,1) |
-| 模态框关闭 | opacity + scale | 200ms | ease-in |
-| 折叠/展开 | height | 200ms | ease-out |
-| 遮罩层 | opacity | 200ms | ease |
+| Button hover | background-color | 150ms | ease |
+| Nav item switch | background-color | 200ms | ease-out |
+| Dropdown open | opacity + transform(Y) | 200ms | ease-out |
+| Dropdown close | opacity + transform(Y) | 150ms | ease-in |
+| Modal open | opacity + scale | 250ms | cubic-bezier(0.16,1,0.3,1) |
+| Modal close | opacity + scale | 200ms | ease-in |
+| Collapse/expand | height | 200ms | ease-out |
+| Overlay | opacity | 200ms | ease |
 
-### 7.2 特效动画
+### 7.2 Effects
 
-| 动画 | 描述 |
+| Animation | Description |
 |------|------|
-| Clawd 吉祥物 | 像素眨眼动画，间隔 3-5s |
-| ✦ 闪烁 | opacity 0.4 ↔ 1.0，周期 1.5s |
-| Spinner | 旋转 360°，周期 1s，linear |
-| Shimmer | 品牌色 ↔ shimmer 色，周期 2s，ease-in-out |
+| Clawd mascot | Pixel blink animation every 3-5s |
+| ✦ shimmer | opacity 0.4 ↔ 1.0, 1.5s period |
+| Spinner | Rotate 360°, 1s period, linear |
+| Shimmer | Brand color ↔ shimmer color, 2s period, ease-in-out |
 
 ---
 
-## 八、页面交互流程
+## 8. Page interaction flows
 
-### 8.1 新会话流程
-
-```
-用户点击 "New session"
-  → 侧边栏选中 "New session"
-  → 主内容区显示 Code 空状态页
-  → 用户在输入框输入 prompt
-  → 按 Enter 发送
-  → 创建新会话，侧边栏添加会话项
-  → 主内容区切换到活跃会话页
-  → 显示用户消息气泡
-  → 显示 AI 加载状态 (✦ Crafting...)
-  → AI 回复逐步流式渲染
-  → 工具调用时显示折叠块
-  → 需要权限时弹出权限请求对话框
-  → 用户批准/拒绝 → 继续/终止工具执行
-```
-
-### 8.2 定时任务创建流程
+### 8.1 New session flow
 
 ```
-用户点击侧边栏 "Scheduled"
-  → 主内容区显示 Scheduled 页面
-  → 用户点击 "+ New task"
-  → 弹出 "New scheduled task" 模态框
-  → 填写 Name, Description, Prompt, 选择 Frequency/Time
-  → 选择权限模式和模型
-  → 点击 "Create task"
-  → 模态框关闭
-  → 任务列表中显示新任务
+User clicks "New session"
+  → "New session" selected in the sidebar
+  → Main content shows the Code empty state
+  → User types a prompt in the input
+  → Presses Enter to send
+  → A new session is created and added to the sidebar
+  → Main content switches to the active session page
+  → The user message bubble is shown
+  → AI loading state is shown (✦ Crafting...)
+  → The AI reply streams in progressively
+  → Tool calls are shown as collapsible blocks
+  → When permission is needed, a permission request dialog pops up
+  → User approves/denies → tool execution continues/stops
 ```
 
-### 8.3 权限模式切换流程
+### 8.2 Scheduled task creation flow
 
 ```
-用户点击权限模式图标 (⚙)
-  → 展开下拉菜单
-  → 用户选择新模式（如 "Plan mode"）
-  → 下拉菜单关闭
-  → 权限图标更新为新模式图标 (📋)
-  → 如果选择 "Bypass permissions"，弹出安全确认对话框
-  → 用户确认后切换
+User clicks "Scheduled" in the sidebar
+  → Main content shows the Scheduled page
+  → User clicks "+ New task"
+  → The "New scheduled task" modal opens
+  → Fill in Name, Description, Prompt, choose Frequency/Time
+  → Choose permission mode and model
+  → Click "Create task"
+  → The modal closes
+  → The new task appears in the task list
 ```
 
-### 8.4 模型切换流程
+### 8.3 Permission mode switch flow
 
 ```
-用户点击模型名称 (Opus 4.7 1M)
-  → 展开下拉菜单（模型列表 + Effort 等级）
-  → 用户选择新模型
-  → 或调整 Effort 等级
-  → 下拉菜单关闭
-  → 模型选择器显示更新
-  → 后续对话使用新模型
+User clicks the permission mode icon (⚙)
+  → The dropdown opens
+  → User picks a new mode (e.g. "Plan mode")
+  → The dropdown closes
+  → The permission icon updates to the new mode icon (📋)
+  → If "Bypass permissions" is chosen, a safety confirmation dialog pops up
+  → Switches after the user confirms
 ```
 
-### 8.5 会话切换流程
+### 8.4 Model switch flow
 
 ```
-用户在侧边栏点击历史会话
-  → 该会话高亮选中
-  → 主内容区加载该会话的消息历史
-  → 滚动到最新消息
-  → 输入框恢复为空/上次未发送的草稿
+User clicks the model name (Opus 4.7 1M)
+  → The dropdown opens (model list + Effort level)
+  → User picks a new model
+  → or adjusts the Effort level
+  → The dropdown closes
+  → The model picker updates
+  → Subsequent conversation uses the new model
 ```
 
-### 8.6 Agent Teams 流程
+### 8.5 Session switch flow
 
 ```
-对话中 AI 调用 TeamCreate
-  → 消息列表下方出现 Team 状态栏
-  → 显示 Team 名称 + 成员标签列表
-  → 各成员标签显示 ● running（黄色闪烁）
+User clicks a past session in the sidebar
+  → That session is highlighted
+  → Main content loads that session's message history
+  → Scrolls to the latest message
+  → The input is restored to empty / the last unsent draft
+```
 
-用户点击某个成员标签
-  → 消息列表切换到该成员的 transcript
-  → 显示 "Viewing: {name} transcript" 分隔线
-  → 实时渲染该 agent 的消息流（工具调用、文本）
-  → 底部显示 "← Back to Leader" 按钮
+### 8.6 Agent Teams flow
 
-成员完成任务
-  → 对应标签变为 ● completed（绿色实心）
-  → Leader 视图收到 task-notification 消息
+```
+AI calls TeamCreate in the conversation
+  → A team status bar appears below the message list
+  → Shows the team name + member tags
+  → Each member tag shows ● running (blinking yellow)
 
-用户点击 "← Back to Leader"
-  → 返回 Leader 的主对话流
-  → Team 状态栏依然可见
+User clicks a member tag
+  → The message list switches to that member's transcript
+  → Shows a "Viewing: {name} transcript" divider
+  → Renders that agent's message stream live (tool calls, text)
+  → A "← Back to Leader" button appears at the bottom
+
+A member finishes its task
+  → The tag becomes ● completed (solid green)
+  → The Leader view receives a task-notification message
+
+User clicks "← Back to Leader"
+  → Returns to the Leader's main conversation
+  → The team status bar stays visible
 ```
 
 ---
 
-## 九、响应式适配
+## 9. Responsive behavior
 
-### 9.1 窗口尺寸断点
+### 9.1 Window size breakpoints
 
-| 断点 | 宽度 | 布局变化 |
+| Breakpoint | Width | Layout change |
 |------|------|----------|
-| 紧凑 | < 900px | 侧边栏可折叠，浮层显示 |
-| 标准 | 900-1440px | 侧边栏固定 280px |
-| 宽屏 | > 1440px | 侧边栏可拉宽至 400px |
+| Compact | < 900px | Sidebar collapsible, shown as an overlay |
+| Standard | 900-1440px | Sidebar fixed at 280px |
+| Wide | > 1440px | Sidebar can be widened to 400px |
 
-### 9.2 侧边栏折叠
+### 9.2 Sidebar collapse
 
-- 窗口 < 900px 时，侧边栏默认折叠
-- 可通过汉堡菜单图标展开
-- 展开时覆盖在主内容区上方
-- 点击主内容区或按 ESC 关闭
+- Below 900px the sidebar is collapsed by default
+- Expand it with the hamburger menu icon
+- When expanded it overlays the main content
+- Click the main content or press ESC to close
 
 ---
 
-## 十、图标清单
+## 10. Icon list
 
-| 用途 | 图标 | 说明 |
+| Usage | Icon | Notes |
 |------|------|------|
-| New session | `+` | 加号，创建新会话 |
-| Scheduled | ⏰ | 时钟 |
-| Ask permissions | ⚙ | 齿轮 |
-| Auto accept | `</>` | 代码符号 |
-| Plan mode | 📋 | 剪贴板 |
-| Bypass | ⚠ | 警告三角 |
-| 添加附件 | `+` | 圆形加号 |
-| 语音输入 | 🎤 | 麦克风 |
-| 停止生成 | ⏹ | 方形停止 |
-| 折叠 | ▸ | 右三角 |
-| 展开 | ▾ | 下三角 |
+| New session | `+` | Plus, creates a new session |
+| Scheduled | ⏰ | Clock |
+| Ask permissions | ⚙ | Gear |
+| Auto accept | `</>` | Code symbol |
+| Plan mode | 📋 | Clipboard |
+| Bypass | ⚠ | Warning triangle |
+| Add attachment | `+` | Circled plus |
+| Voice input | 🎤 | Microphone |
+| Stop generation | ⏹ | Square stop |
+| Collapse | ▸ | Right triangle |
+| Expand | ▾ | Down triangle |
 | GitHub | 🐙 | GitHub logo |
-| Git 分支 | 🔀 | 分支图标 |
-| 前进 | → | 右箭头 |
-| 后退 | ← | 左箭头 |
-| 选中 | ✓ | 勾选 |
-| 信息 | ℹ | 圆形 i |
-| Agent Running | ● | 6px 圆点，闪烁 |
-| Agent Completed | ● | 6px 实心绿点 |
-| Agent Failed | ● | 6px 实心红点 |
-| Back to Leader | ← | 左箭头 + 文本 |
+| Git branch | 🔀 | Branch icon |
+| Forward | → | Right arrow |
+| Back | ← | Left arrow |
+| Selected | ✓ | Check |
+| Info | ℹ | Circled i |
+| Agent Running | ● | 6px dot, blinking |
+| Agent Completed | ● | 6px solid green dot |
+| Agent Failed | ● | 6px solid red dot |
+| Back to Leader | ← | Left arrow + text |

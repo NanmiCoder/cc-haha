@@ -280,8 +280,8 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   activateProvider: async (id) => {
     await providersApi.activate(id)
     await get().fetchProviders()
-    // 更新默认 provider 时，同步刷新默认 model，避免 settings.json 里残留
-    // 旧 provider 的 model id 导致默认选择指向不存在的模型。
+    // When the default provider changes, refresh the default model too, so settings.json does
+    // not keep the old provider's model id pointing the default at a model that no longer exists.
     const settings = useSettingsStore.getState()
     if (
       id === OPENAI_OFFICIAL_PROVIDER_ID ||
@@ -303,7 +303,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   activateOfficial: async () => {
     await providersApi.activateOfficial()
     await get().fetchProviders()
-    // 切回官方默认时同样重置 currentModel，避免残留第三方 model id。
+    // Switching back to the official default also resets currentModel so no third-party model id lingers.
     const settings = useSettingsStore.getState()
     const { models } = await providersApi.getOfficialModels(CLAUDE_OFFICIAL_PROVIDER_ID)
     await settings.setModel(models.main)

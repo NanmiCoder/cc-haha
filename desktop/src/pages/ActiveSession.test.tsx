@@ -289,7 +289,7 @@ describe('ActiveSession trajectory view', () => {
     expect(decisions).not.toHaveClass('hidden')
   })
 
-  it('marks 对话 while a card waits there and the trajectory hides it', async () => {
+  it('marks Chat while a card waits there and the trajectory hides it', async () => {
     const id = 'attention-session'
     seedSession(id)
     render(<ActiveSession sessionId={id} />)
@@ -309,7 +309,7 @@ describe('ActiveSession trajectory view', () => {
       })
     })
 
-    // In 对话 the card itself is on screen; the mark would only repeat it.
+    // In Chat the card itself is on screen; the mark would only repeat it.
     setPending(true)
     expect(mark()).toBeNull()
 
@@ -971,7 +971,7 @@ describe('ActiveSession task polling', () => {
 
     render(<ActiveSession />)
 
-    expect(screen.getByRole('status')).toHaveTextContent(/Loading|加载中/)
+    expect(screen.getByRole('status')).toHaveTextContent(/Loading/)
     expect(screen.queryByTestId('message-list')).not.toBeInTheDocument()
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-variant', 'default')
   })
@@ -1538,7 +1538,7 @@ describe('ActiveSession task polling', () => {
 
     expect(within(screen.getByTestId('session-activity-panel')).getByLabelText('Stopped')).toBeInTheDocument()
     expect(within(screen.getByTestId('session-activity-panel')).queryByLabelText('Task in progress')).not.toBeInTheDocument()
-    expect(screen.queryByText(/session active|会话活跃中/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/session active/)).not.toBeInTheDocument()
 
     act(() => {
       useActivityPanelStore.getState().close(sessionId)
@@ -2473,7 +2473,7 @@ describe('ActiveSession task polling', () => {
 
     render(<ActiveSession />)
 
-    expect(screen.getByText(/session active|会话活跃中/)).toBeInTheDocument()
+    expect(screen.getByText(/session active/)).toBeInTheDocument()
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-variant', 'default')
   })
 
@@ -3030,8 +3030,9 @@ describe('ActiveSession task polling', () => {
 })
 
 describe('ActiveSession header', () => {
-  // 回归锚点：标题曾经是 text-[22px] 且不截断，长标题会折成两行再加一行元数据，
-  // 连同 pt-6/pb-4 把聊天区顶掉约 120px。标题必须单行截断，元数据留在它下面那行。
+  // Regression anchor: the title used to be text-[22px] without truncation, so a long title wrapped to two
+  // lines plus a metadata line and, with pt-6/pb-4, pushed the chat down about 120px. The title must truncate to
+  // one line, with metadata on the line below.
   const longTitle = 'Create a todo_cccc-ccccbb directory, write a throwaway todo app with react + vite + tailwindcss, then start it'
 
   function mountSessionWithLongTitle(sessionId: string) {
@@ -3110,7 +3111,7 @@ describe('ActiveSession header', () => {
     const titleRow = heading.parentElement as HTMLElement
     const meta = titleRow.nextElementSibling as HTMLElement
 
-    // 元数据挤在标题右侧时会离标题很远，读起来像飘在角落的另一块内容。
+    // Metadata squeezed to the right of the title sits far from it and reads like a separate block floating in the corner.
     expect(within(titleRow).queryByText('2 messages')).not.toBeInTheDocument()
     expect(within(meta).getByText('2 messages')).toBeInTheDocument()
     expect(within(meta).getByText('15k API tokens')).toBeInTheDocument()
@@ -3146,8 +3147,8 @@ describe('ActiveSession header', () => {
     const heading = within(screen.getByTestId('session-header')).getByRole('heading', { level: 1 })
     const meta = (heading.parentElement as HTMLElement).nextElementSibling as HTMLElement
 
-    // 分隔符（3px 圆点）只出现在两项之间，开头不该有；它是纯装饰，读屏时不该被念出来。
-    // 图标也带 aria-hidden，所以这里只数元数据行的直接子元素。
+    // The separator (a 3px dot) only appears between two items, never first; it is decoration and must not be read aloud.
+    // Icons carry aria-hidden too, so only the metadata row's direct children are counted here.
     const children = [...meta.children]
     const separators = children.filter((child) => child.getAttribute('aria-hidden') === 'true')
     expect(children[0]?.getAttribute('aria-hidden')).not.toBe('true')

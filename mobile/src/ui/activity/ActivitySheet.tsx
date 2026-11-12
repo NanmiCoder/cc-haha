@@ -26,9 +26,9 @@ type Group = 'tasks' | 'subagents' | 'team' | 'commands'
 type Confirm = { ids: string[]; all?: boolean; subject?: string }
 
 /**
- * 运行中底单：标题行「运行中 · 32:35」+ 右上「全部停止」，下面按 任务 → 团队 →
- * 子 Agent → 后台命令分组，组标题粘顶、可折叠。半高放不下，所以有任务或团队时子 Agent
- * 默认折起。有团队时任务都挂在各自成员名下（队长名下是会话自己的清单），不再单列。
+ * Running sheet: title row "Running · 32:35" + "Stop all" at top right, then groups by Tasks → Team →
+ * → Subagents → Background commands, with sticky collapsible group headers. Half height cannot fit everything, so with tasks or a team the subagent
+ * collapse by default. With a team all tasks hang under their members (the lead's are the session's own list) and are not listed separately.
  */
 export function ActivitySheet({
   visible,
@@ -45,18 +45,18 @@ export function ActivitySheet({
   visible: boolean
   onClose(): void
   activity: SessionActivity
-  /** 本轮已运行时长（如 32:35）；没有就不显示。 */
+  /** Duration this turn has run (e.g. 32:35); hidden when absent. */
   elapsed?: string
-  /** 点子 Agent 卡：底单先关闭，再把任务交给整合者去开全屏页。 */
+  /** Tap a subagent card: close the sheet first, then hand the task to the integrator to open the full-screen page. */
   onOpenAgent(task: BackgroundTask): void
   host: Pick<Host, 'id'>
-  /** 传入后，点后台命令行可以看它的完整输出。 */
+  /** When passed, tapping a background command row shows its full output. */
   sessionId?: string
-  /** 「全部停止」确认后额外调用，用来同时停掉主 Agent 这一轮。 */
+  /** Extra call after confirming "Stop all", used to stop the main agent's turn as well. */
   onStopTurn?(): void
-  /** 团队方案已确认、成员还没出现时，正在启动的成员数。 */
+  /** Number of members starting when the team plan is approved but members have not appeared yet. */
   launching?: number
-  /** 点成员卡：底单先关闭，再由整合者打开它的执行记录。 */
+  /** Tap a member card: close the sheet first, then the integrator opens its execution log. */
   onOpenMember?(team: TeamModel, member: TeamRow): void
 }) {
   const colors = useColors()
@@ -68,7 +68,7 @@ export function ActivitySheet({
     setDetail(null)
     onClose()
   }
-  // 团队启动中和胶囊一样算在跑。
+  // Team starting counts as running, same as the capsule.
   const active = activity.active || !!launching
   const running = [...activity.subagents, ...activity.commands].filter((row) => row.status === 'running')
   const allStopping = running.length > 0 && running.every((row) => row.stopping)
@@ -93,7 +93,7 @@ export function ActivitySheet({
         >
           {active ? <Spinner size={15} thickness={2.4} /> : null}
           <Text style={{ fontSize: 17, lineHeight: 22, fontWeight: '600', color: colors.ink }}>
-            {active ? '运行中' : '任务'}
+            {active ? 'Running' : 'Tasks'}
           </Text>
           {active && elapsed ? (
             <Mono style={{ fontSize: 15, color: colors.ink2 }}>{elapsed}</Mono>
@@ -104,7 +104,7 @@ export function ActivitySheet({
         running.length > 0 ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="全部停止"
+            accessibilityLabel="Stop all"
             accessibilityState={{ disabled: allStopping }}
             disabled={allStopping}
             onPress={() => setConfirm({ ids: running.map((row) => row.id), all: true })}
@@ -117,7 +117,7 @@ export function ActivitySheet({
             })}
           >
             <Text style={{ fontSize: 15, fontWeight: '600', color: colors.err }}>
-              {allStopping ? '停止中' : '全部停止'}
+              {allStopping ? 'Stopping' : 'Stop all'}
             </Text>
           </Pressable>
         ) : undefined
@@ -141,16 +141,16 @@ export function ActivitySheet({
             : undefined
         }
       />
-      {/* 嵌套的弹层放在绝对定位的零尺寸容器里：它们要挂在这张底单下面才能叠出来，又不能占一格 gap。 */}
+      {/* Nested sheets are placed in an absolutely positioned zero-size container: they must hang under this sheet to stack on top, without taking a gap slot. */}
       <View pointerEvents="box-none" style={{ position: 'absolute', width: 0, height: 0 }}>
         <ConfirmSheet
           visible={!!confirm}
           title={
-            confirm?.all ? `停止全部 ${confirm.ids.length} 项运行中的活动？` : '停止这项后台活动？'
+            confirm?.all ? `Stop all ${confirm.ids.length} running activities?` : 'Stop this background activity?'
           }
           subject={confirm?.subject}
-          detail="已修改的文件会保留，尚未完成的输出可能不完整。"
-          confirmTitle="确认停止"
+          detail="Modified files are kept; unfinished output may be incomplete."
+          confirmTitle="Confirm stop"
           destructive
           onConfirm={stop}
           onClose={() => setConfirm(null)}
@@ -168,7 +168,7 @@ export function ActivitySheet({
   )
 }
 
-/* ───────────── 内容 ───────────── */
+/* ───────────── Content ───────────── */
 
 function Content({
   activity,
@@ -189,7 +189,7 @@ function Content({
   const summaries = sectionSummaries(activity)
   const hasTasks = activity.tasks.length > 0
   const team = activity.team
-  // 半高放不下全部：有任务或团队时子 Agent 默认折起来。
+  // Half height cannot fit everything: when there are tasks or a team, subagents collapse by default.
   const [open, setOpen] = useState<Partial<Record<Group, boolean>>>({})
   const isOpen = (group: Group) =>
     open[group] ?? (group === 'subagents' ? !(hasTasks || team || launching) : true)
@@ -212,19 +212,19 @@ function Content({
   if (hasTasks)
     section(
       'tasks',
-      '任务',
+      'Tasks',
       summaries.tasks,
       <>
         <ProgressBar done={activity.progress.done} total={activity.progress.total} />
         <TaskCard tasks={activity.tasks} />
       </>
     )
-  // 有团队时任务都在成员名下，团队顶上任务的位置。
+  // With a team all tasks are under members, and the team takes the tasks' place on top.
   if (team || launching)
     section(
       'team',
-      '团队',
-      team ? summaries.team : '启动中',
+      'Team',
+      team ? summaries.team : 'Starting',
       <>
         {team?.progress.total ? <ProgressBar done={team.progress.done} total={team.progress.total} /> : null}
         <View style={{ gap: 8 }}>
@@ -236,7 +236,7 @@ function Content({
             />
           ))}
           {team?.unassigned.length ? <UnassignedCard tasks={team.unassigned} /> : null}
-          {/* 队长先建团队再提交方案：启动中时团队里可能只有队长，占位行接在已有成员后面。 */}
+          {/* The lead creates the team before submitting the plan: while starting the team may only have the lead, and placeholder rows follow existing members. */}
           {launching ? <LaunchingCard count={launching} /> : null}
         </View>
       </>
@@ -244,7 +244,7 @@ function Content({
   if (activity.subagents.length)
     section(
       'subagents',
-      '子 Agent',
+      'Subagent',
       summaries.subagents,
       <View style={{ gap: 8 }}>
         {activity.subagents.map((row) => (
@@ -255,7 +255,7 @@ function Content({
   if (activity.commands.length)
     section(
       'commands',
-      '后台命令',
+      'Background commands',
       summaries.commands,
       <CommandCard
         rows={activity.commands}
@@ -271,8 +271,8 @@ function Content({
       {empty ? (
         <EmptyState
           icon="list-checks"
-          title={activity.loading ? '正在读取…' : '没有任务或后台活动'}
-          detail={activity.loading ? undefined : '任务清单、子 Agent、团队和后台命令开始后会显示在这里。'}
+          title={activity.loading ? 'Loading…' : 'No tasks or background activity'}
+          detail={activity.loading ? undefined : 'Task lists, subagents, teams and background commands show up here once they start.'}
         />
       ) : (
         <ScrollView
@@ -303,7 +303,7 @@ function GroupHeader({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${label}，${summary}`}
+      accessibilityLabel={`${label}, ${summary}`}
       accessibilityState={{ expanded: open }}
       onPress={onPress}
       style={{
@@ -352,7 +352,7 @@ const card = (colors: ReturnType<typeof useColors>) => ({
   boxShadow: `0 0 0 1px ${colors.hair}`,
 })
 
-/* ───────────── 任务 ───────────── */
+/* ───────────── Tasks ───────────── */
 
 function TaskCard({ tasks }: { tasks: PlanTask[] }) {
   const colors = useColors()
@@ -374,11 +374,11 @@ function TaskLine({ task }: { task: PlanTask }) {
   const colors = useColors()
   const active = task.state === 'active'
   const done = task.state === 'done'
-  const status = done ? '已完成' : active ? '进行中' : task.state === 'waiting' ? '等待依赖' : '待开始'
+  const status = done ? 'Done' : active ? 'In progress' : task.state === 'waiting' ? 'Waiting on dependencies' : 'Not started'
   return (
     <View
       accessible
-      accessibilityLabel={[task.title, status, active ? task.detail : '', task.owner].filter(Boolean).join('，')}
+      accessibilityLabel={[task.title, status, active ? task.detail : '', task.owner].filter(Boolean).join(', ')}
       style={{
         minHeight: active ? 56 : 40,
         borderRadius: active ? 12 : 0,
@@ -426,7 +426,7 @@ function TaskLine({ task }: { task: PlanTask }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           <Icon name="clock" size={13} color={colors.ink3} />
           <Text style={{ fontSize: 12, color: colors.ink3 }}>
-            {['等待依赖', task.owner].filter(Boolean).join(' · ')}
+            {['Waiting on dependencies', task.owner].filter(Boolean).join(' · ')}
           </Text>
         </View>
       ) : task.owner && !done ? (
@@ -438,10 +438,10 @@ function TaskLine({ task }: { task: PlanTask }) {
   )
 }
 
-/* ───────────── 子 Agent ───────────── */
+/* ───────────── Subagents ───────────── */
 
 const stepIcon = (verb: string): IconName =>
-  verb === '运行' ? 'terminal' : verb === '搜索' || verb === '查找' || verb === '搜网页' ? 'search' : 'file'
+  verb === 'Run' ? 'terminal' : verb === 'Search' || verb === 'Find' || verb === 'Web search' ? 'search' : 'file'
 
 function SubagentCard({ row, now, onPress }: { row: SubagentRow; now: number; onPress(): void }) {
   const colors = useColors()
@@ -455,11 +455,11 @@ function SubagentCard({ row, now, onPress }: { row: SubagentRow; now: number; on
           ? colors.err
           : colors.ink3
   const time = running ? clock(row.startedAt, now) : ''
-  const status = row.stopping && running ? '停止中' : agentStatusText(row.status)
+  const status = row.stopping && running ? 'Stopping' : agentStatusText(row.status)
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${row.title}，${status}${time ? `，已运行 ${time}` : ''}${row.stats ? `，${row.stats}` : ''}，打开对话`}
+      accessibilityLabel={`${row.title}, ${status}${time ? `, running for ${time}` : ''}${row.stats ? `, ${row.stats}` : ''}, open conversation`}
       onPress={onPress}
       style={({ pressed }) => [card(colors), { paddingHorizontal: 14, paddingVertical: 12, opacity: pressed ? 0.7 : 1 }]}
     >
@@ -532,24 +532,24 @@ function StepRow({ step, current }: { step: StepLine; current: boolean }) {
   )
 }
 
-/* ───────────── 团队 ───────────── */
+/* ───────────── Team ───────────── */
 
-/** 方案确认后、成员出现在团队里之前的占位。 */
+/** Placeholder after plan approval and before members appear in the team. */
 function LaunchingCard({ count }: { count: number }) {
   const colors = useColors()
   return (
     <View
       accessible
-      accessibilityLabel={`${count} 名成员正在就位`}
+      accessibilityLabel={`${count} members getting in place`}
       style={[card(colors), { minHeight: 52, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }]}
     >
       <Spinner size={18} thickness={2.4} />
-      <Text style={{ fontSize: 15, color: colors.ink }}>{`${count} 名成员正在就位`}</Text>
+      <Text style={{ fontSize: 15, color: colors.ink }}>{`${count} members getting in place`}</Text>
     </View>
   )
 }
 
-/* ───────────── 后台命令 ───────────── */
+/* ───────────── Background commands ───────────── */
 
 function CommandCard({
   rows,
@@ -626,7 +626,7 @@ function CommandLine({
       {onOpen ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`查看 ${row.command} 的输出`}
+          accessibilityLabel={`View output of ${row.command}`}
           onPress={onOpen}
           style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
         >
@@ -638,7 +638,7 @@ function CommandLine({
       {running ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`停止 ${row.command}`}
+          accessibilityLabel={`Stop ${row.command}`}
           accessibilityState={{ disabled: row.stopping, busy: row.stopping }}
           disabled={row.stopping}
           onPress={onStop}
@@ -664,7 +664,7 @@ function CommandLine({
           >
             <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: colors.err }} />
             <Text style={{ fontSize: 13, fontWeight: '600', color: colors.err }}>
-              {row.stopping ? '停止中' : '停止'}
+              {row.stopping ? 'Stopping' : 'Stop'}
             </Text>
           </View>
         </Pressable>

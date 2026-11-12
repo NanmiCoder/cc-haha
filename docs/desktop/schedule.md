@@ -1,79 +1,79 @@
 ---
-title: 定时任务
-nav_title: 定时任务
-description: 在对话中安排稍后继续或重复任务，编辑计划，并查看实际执行结果。
+title: Scheduled tasks
+nav_title: Scheduled tasks
+description: Schedule a conversation to continue later, edit recurring plans, and read actual execution results.
 order: 5
 ---
 
-# 定时任务
+# Scheduled tasks
 
-把一段任务指令保存下来，让它在指定时间执行。可以继续当前会话，也可以每次开启新会话；聊天里的任务卡片和侧边栏的「定时任务」管理的是同一份计划。
+Save instructions to run at a specified time. A task can continue an existing chat or open a new chat on each run. Task cards in chat and the **Scheduled** sidebar page manage the same plans.
 
-## 从对话或任务页创建
+## Create from chat or the task page
 
-在普通桌面对话中直接说出任务和时间，例如：
+In a standard desktop conversation, describe the work and time:
 
 ```text
-明天北京时间上午 9 点，在这个会话继续检查昨天的提交，只报告有证据的问题。
-每个工作日上午 9 点审查这个项目，每次新建一个会话。
+Tomorrow at 9 am Beijing time, continue reviewing yesterday's commits in this chat. Report only evidence-backed findings.
+Review this project every weekday at 9 am, opening a new chat each time.
 ```
 
-也可以输入内置的 `/schedule`，例如 `/schedule 查看当前会话的定时任务`。不需要额外安装 skill。创建成功后，聊天中会出现任务卡片，显示名称、执行计划和状态；点击「打开任务」可编辑。只有收到成功结果后才算创建完成。
+You can also use the built-in `/schedule`, for example `/schedule show this chat's scheduled tasks`. No additional skill installation is required. A successful creation produces a task card with the name, schedule, and status. Choose **Open task** to edit it. A task is created only after a successful result.
 
-另一种入口是左侧**定时任务 → ＋ 新建任务**。这里创建的任务默认每次开启新会话；在对话中创建则默认继续当前会话。
+Alternatively, open **Scheduled → + New task** in the sidebar. Tasks created there default to opening a new chat each time; tasks created in conversation default to continuing that conversation.
 
 :::warning
-任务在本机执行，需要桌面应用打开、电脑唤醒。新任务错过执行时间后，会在应用恢复运行且目标会话空闲时补执行一次；周期任务不会把离线期间的每个周期都重放。旧的独立 Cron 任务保持原行为，不补跑离线期间错过的触发。
+Tasks run locally and require the desktop app to be open and the computer awake. If a new task misses its time, it catches up once when the app resumes and the target chat is idle. Recurring tasks do not replay every interval missed while offline. Older independent cron tasks retain their previous behavior and do not catch up missed triggers.
 :::
 
-## 时间和执行位置
+## Time and execution location
 
-- **名称、描述和任务指令** — 名称便于查找，描述可选。指令应说明要做什么、输出什么；每次新建会话时尤其需要写足上下文。
-- **重复** — 支持一次、每 N 分钟、每 N 小时、每天、工作日、指定星期几、每月和自定义五段 Cron（分、时、日、月、星期）。
-- **一次性时间和时区** — 选择「一次」后填写日期、时间和时区，例如 `Asia/Shanghai`。周期计划也按保存的时区计算；保存前核对卡片显示的时间。一次性任务运行结束后停止自动触发，执行记录仍保留。
-- **继续已有会话** — 在「运行于」选择目标会话。执行时沿用该会话的模型、权限和工作目录；不会因为设了定时任务就把会话升级成「所有权限」。会话忙碌时延后执行。
-- **每次开启新会话** — 每次运行都有独立会话。可配置模型、工作目录和独立工作树。从对话创建的任务会继承来源会话的默认运行设置；从任务页独立创建时，应核对编辑器显示的模型、目录和权限。
-- **独立任务（沿用现有设置）** — 旧任务升级后保留原来的独立执行模式，不会自动绑定某个会话。其原有「所有权限」设置保持不变；可以主动编辑为继续已有会话或每次新建会话。
+- **Name, description, and instructions** — use a recognizable name; description is optional. Specify the work and expected output. A task that opens a new chat especially needs self-contained instructions.
+- **Repeat** — once, every N minutes, every N hours, daily, weekdays, specific days, monthly, or a custom five-field cron expression (minute, hour, day, month, weekday).
+- **One-time date and time zone** — choose **Once**, then enter the date, time, and time zone, such as `Asia/Shanghai`. Recurring plans also use the saved time zone. Check the displayed time before saving. A one-time task stops firing automatically after its run ends; its history remains available.
+- **Continue a chat** — select a target under **Run in**. The task uses that chat's model, permissions, and workspace; scheduling does not grant it full permissions. Execution waits while the chat is busy.
+- **Open a new chat each time** — each run gets an independent conversation. Configure its model, workspace, and optional isolated worktree. Tasks created from a chat inherit default runtime settings from their source chat. For tasks created independently on the task page, check the model, directory, and permissions shown in the editor.
+- **Independent task (existing settings)** — upgrades preserve older tasks' standalone execution. They are not automatically attached to a chat. Their previous full-permissions setting remains unchanged; you can explicitly change the execution mode to continue a chat or open new chats.
 
-工作目录说明任务从哪里开始执行，不是文件访问的安全沙箱。独立工作树提供 Git 工作副本隔离，也不等于权限隔离。
+The working directory is the starting location, not a file-access sandbox. An isolated worktree separates the Git working copy; it is not a permission boundary.
 
-## 聊天中的卡片和标记
+## Cards and markers in chat
 
-- 创建、查看或修改任务后，聊天里显示任务卡片。卡片、任务列表共用编辑界面，可修改指令、时间和通知偏好，或暂停、恢复。删除任务请使用任务列表的菜单。
-- 绑定计划的会话在侧栏显示时钟。悬停可看任务数量、下次时间或暂停状态；一次性任务结束或任务删除后，不再作为活动计划显示。
-- 到期执行时，会话中出现「由定时任务触发」的专用开篇，带任务名称和时间，点击可打开任务。重新打开会话仍能看到这一来源。
-- 删除任务后，原先的聊天卡片和已有执行记录保留；删除阻止后续执行，不会撤销已经完成的操作。
+- Creating, viewing, or updating a task produces a chat card. Cards and the task list share the same editor for instructions, timing, notification preferences, pause, and resume. Delete tasks from the task list menu.
+- Chats with attached plans show a clock in the sidebar. Hover to see the task count, next run, or paused state. Completed one-time tasks and deleted tasks no longer appear as active plans.
+- When a task fires, the chat shows a dedicated **Sent by scheduled task** introduction with its name and time. Select it to open the task. This provenance remains visible after reopening the conversation.
+- Deleting a task preserves its previous chat card and execution records. It prevents future runs and does not undo completed actions.
 
-## 查看执行结果
+## Read execution results
 
-任务列表中的**日志**显示运行中、已完成、失败或超时及耗时。可以查看输出摘要；存在关联会话时，点击「查看完整对话」核对实际过程。**立即执行**会马上执行一次，可能产生与自动触发相同的实际操作。
+**Logs** on the task page shows running, completed, failed, or timed-out runs and their duration. Read the output summary, or choose **View full conversation** when a session is linked. **Run now** executes immediately and can perform the same real actions as a scheduled trigger.
 
-也可以直接在聊天中查询：
+You can also ask in chat:
 
 ```text
-列出我的定时任务。
-查看 daily-code-review 最近一次运行的结果；如果失败，告诉我原因。
-上次结果被截断了，继续读取剩余输出。
+List my scheduled tasks.
+Read the latest result for daily-code-review. If it failed, explain why.
+The last result was truncated; read the remaining output.
 ```
 
-助手会读取保存的运行记录和输出，而不是根据任务指令猜测结果。正在运行或尚无记录不代表执行成功；较长输出可继续分页读取。删除计划后，仍可通过保留的运行记录查询已经执行的结果。
+The assistant reads saved execution records and output rather than inferring a result from the task instructions. A running task or an empty history is not proof of success. Long output can be read in further pages. Results remain queryable from retained execution records after a plan is deleted.
 
-## 通知偏好
+## Notification preferences
 
-打开通知后，选择桌面系统通知或已配置的 IM 渠道，并设置：
+Enable notifications, choose desktop or configured messaging channels, and select:
 
-| 偏好 | 行为 |
+| Preference | Behavior |
 | --- | --- |
-| 重要更新 | 对有意义的变化、完成、失败或需要你处理的情况通知；没有变化的巡检可以保持静默 |
-| 每次运行结束 | 每次结束后通知，包括失败 |
-| 仅失败时 | 失败或超时时通知 |
-| 关闭 | 不发送任务通知，结果仍可在会话和日志中查看 |
+| Important updates | Notify for meaningful changes, completion, failure, or required user action; unchanged checks can stay silent |
+| Every completed run | Notify after every run ends, including failures |
+| Failures only | Notify on failure or timeout |
+| Off | Send no task notifications; results remain available in chat and logs |
 
-对话中新建任务默认使用「重要更新」和桌面通知，明确提出的关闭偏好会保留。桌面通知仍需在**设置 → 通用**开启系统通知并获得系统权限；IM 渠道配置见[手机 H5 与 IM 接力](./remote.md)。旧任务保留已有通知设置。
+Tasks created in conversation default to **Important updates** and desktop notifications. Explicit requests to disable them are preserved. Desktop notifications still require **Settings → General → System Notifications** and OS permission. See [Phone (H5) and IM](./remote.md) for messaging-channel setup. Older tasks retain their existing notification settings.
 
-## 使用建议
+## Practical tips
 
-1. 先用一个范围明确的任务试跑，检查实际输出，再决定重复频率。
-2. 一次性任务试跑也会执行真实工作；不要把「立即执行」当成无副作用的预览。
-3. 频率越密，模型用量越高。日常审查可以从每天一次开始。
-4. 任务失败、目标会话被删除或目录不可用时，先查看日志再决定是否重试，避免重复已经完成的外部操作。
+1. Trial a narrowly defined task and inspect its output before choosing a repeat frequency.
+2. Trialing a one-time task performs real work too. **Run now** is not a side-effect-free preview.
+3. Frequent runs increase model use. Start routine reviews at once a day.
+4. If a task fails, its target chat is deleted, or its workspace is unavailable, inspect the logs before retrying to avoid repeating completed external actions.

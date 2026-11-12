@@ -83,8 +83,8 @@ export function ToolTimeline({ children, className = '' }: { children: ReactNode
  * One contiguous run of thinking + tool calls.
  *
  * It plays open while it runs, so the reader can watch the work, then folds
- * itself into a single counted line the moment it finishes: `思考 2 次、读取
- * 1 个文件、运行 1 条命令`. Standing rows open forever flattened the transcript —
+ * itself into a single counted line the moment it finishes: `Thought 2 times, read
+ * 1 file, ran 1 command`. Standing rows open forever flattened the transcript —
  * machinery took as much room as the sentences it produced, and nothing looked
  * more important than anything else. A counted digest is small enough to skip
  * and specific enough to be worth reading, which a vaguer "ran some commands"

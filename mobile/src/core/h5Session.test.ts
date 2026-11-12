@@ -32,7 +32,7 @@ test('a LAN page uses the token the desktop entry verified for this address, wit
   const { fetch, calls } = probe(500)
   const result = await resolveH5Session({ location: lan, storage: desktopToken(`${lan.origin}/`), fetch })
   if (!('host' in result)) throw new Error('expected a connection')
-  expect(result.host).toEqual({ id: H5_HOST_ID, name: '这台电脑', url: lan.origin, auth: 'lan', page: true })
+  expect(result.host).toEqual({ id: H5_HOST_ID, name: 'This computer', url: lan.origin, auth: 'lan', page: true })
   expect(h5CredentialValue(result.credential)).toBe('h5_token_from_desktop')
   expect(calls).toHaveLength(0)
 })

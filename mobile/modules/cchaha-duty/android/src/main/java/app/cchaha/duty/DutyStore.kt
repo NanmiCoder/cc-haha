@@ -41,7 +41,7 @@ internal object DutyStore {
     item.optJSONObject("headers")?.let { values ->
       values.keys().forEach { key -> headers[key] = values.optString(key) }
     }
-    return DutyHost(hostId, item.optString("hostName").ifEmpty { "电脑" }, origin.trimEnd('/'), headers, token)
+    return DutyHost(hostId, item.optString("hostName").ifEmpty { "computer" }, origin.trimEnd('/'), headers, token)
   }
 
   @Synchronized

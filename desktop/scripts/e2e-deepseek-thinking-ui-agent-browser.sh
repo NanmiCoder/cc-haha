@@ -172,12 +172,12 @@ ui_eval() {
 ui_eval "
 const buttonByName = (name) => [...document.querySelectorAll('button')]
   .find((node) => (node.getAttribute('aria-label') || node.textContent || '').trim() === name);
-buttonByName('设置')?.click();
+buttonByName('Settings')?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').includes('添加服务商'))
+  .find((node) => (node.textContent || '').includes('Add Model'))
   ?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
@@ -196,35 +196,35 @@ setValue(byPlaceholder('sk-...'), 'ui-test-key');
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').trim() === '添加' && !node.disabled)
+  .find((node) => (node.textContent || '').trim() === 'Add' && !node.disabled)
   ?.click();
 "
 "${AB[@]}" wait 700 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').includes('设为默认'))
+  .find((node) => (node.textContent || '').includes('Set default'))
   ?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.getAttribute('aria-label') || node.textContent || '').includes('通用'))
+  .find((node) => (node.getAttribute('aria-label') || node.textContent || '').includes('General'))
   ?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').trim() === '中')
+  .find((node) => (node.textContent || '').trim() === 'Medium')
   ?.click();
 const thinking = [...document.querySelectorAll('input[type=\"checkbox\"]')]
-  .find((node) => node.getAttribute('aria-label') === '启用思考模式');
+  .find((node) => node.getAttribute('aria-label') === 'Enable thinking mode');
 if (thinking?.checked) thinking.click();
 "
 "${AB[@]}" wait 300 >/dev/null
-ui_eval "document.querySelector('button[aria-label=\"Close 设置\"]')?.click();"
+ui_eval "document.querySelector('button[aria-label=\"Close Settings\"]')?.click();"
 "${AB[@]}" wait 300 >/dev/null
 "${AB[@]}" fill textarea "Say ok" >/dev/null
-"${AB[@]}" eval "[...document.querySelectorAll('button')].find((node)=>node.textContent?.includes('运行') && !node.disabled)?.click();" >/dev/null
+"${AB[@]}" eval "[...document.querySelectorAll('button')].find((node)=>node.textContent?.includes('Run') && !node.disabled)?.click();" >/dev/null
 "${AB[@]}" wait 5000 >/dev/null
 
 node --input-type=module <<NODE
@@ -241,12 +241,12 @@ NODE
 ui_eval "
 const buttonByName = (name) => [...document.querySelectorAll('button')]
   .find((node) => (node.getAttribute('aria-label') || node.textContent || '').trim() === name);
-buttonByName('设置')?.click();
+buttonByName('Settings')?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').includes('添加服务商'))
+  .find((node) => (node.textContent || '').includes('Add Model'))
   ?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
@@ -277,12 +277,12 @@ const setValue = (el, value) => {
 };
 const byPlaceholder = (placeholder) => [...document.querySelectorAll('input,textarea')]
   .find((node) => node.getAttribute('placeholder') === placeholder);
-setValue(byPlaceholder('服务商名称'), 'Custom OpenAI DeepSeek');
+setValue(byPlaceholder('Configuration name'), 'Custom OpenAI DeepSeek');
 setValue(byPlaceholder('https://api.example.com/anthropic'), '${UPSTREAM_URL}');
 setValue(byPlaceholder('sk-...'), 'ui-test-key');
 setValue(byPlaceholder('Model ID'), 'deepseek-v4-pro');
 const sameAsMain = [...document.querySelectorAll('input')]
-  .filter((node) => node.getAttribute('placeholder') === '与主模型相同');
+  .filter((node) => node.getAttribute('placeholder') === 'Same as main');
 setValue(sameAsMain[0], 'deepseek-v4-flash');
 setValue(sameAsMain[1], 'deepseek-v4-pro');
 setValue(sameAsMain[2], 'deepseek-v4-pro');
@@ -290,26 +290,26 @@ setValue(sameAsMain[2], 'deepseek-v4-pro');
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.textContent || '').trim() === '添加' && !node.disabled)
+  .find((node) => (node.textContent || '').trim() === 'Add' && !node.disabled)
   ?.click();
 "
 "${AB[@]}" wait 700 >/dev/null
 ui_eval "
 const buttons = [...document.querySelectorAll('button')]
-  .filter((node) => (node.textContent || '').includes('设为默认'));
+  .filter((node) => (node.textContent || '').includes('Set default'));
 buttons.at(-1)?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
-ui_eval "document.querySelector('button[aria-label=\"Close 设置\"]')?.click();"
+ui_eval "document.querySelector('button[aria-label=\"Close Settings\"]')?.click();"
 "${AB[@]}" wait 300 >/dev/null
 ui_eval "
 [...document.querySelectorAll('button')]
-  .find((node) => (node.getAttribute('aria-label') || node.textContent || '').trim() === '新建会话')
+  .find((node) => (node.getAttribute('aria-label') || node.textContent || '').trim() === 'New session')
   ?.click();
 "
 "${AB[@]}" wait 300 >/dev/null
 "${AB[@]}" fill textarea "Say ok through custom openai" >/dev/null
-"${AB[@]}" eval "[...document.querySelectorAll('button')].find((node)=>node.textContent?.includes('运行') && !node.disabled)?.click();" >/dev/null
+"${AB[@]}" eval "[...document.querySelectorAll('button')].find((node)=>node.textContent?.includes('Run') && !node.disabled)?.click();" >/dev/null
 "${AB[@]}" wait 5000 >/dev/null
 
 node --input-type=module <<NODE

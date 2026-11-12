@@ -91,7 +91,7 @@ export function createAnnotationOverlay(el: Element, label: number | string): HT
   return root
 }
 
-/** Viewport screenshot with the picked element's region annotated (blue box + numbered badge). 图4 */
+/** Viewport screenshot with the picked element's region annotated (blue box + numbered badge), figure 4. */
 export async function captureAnnotatedRegion(el: Element, label = 1): Promise<string> {
   const overlay = createAnnotationOverlay(el, label)
   try {

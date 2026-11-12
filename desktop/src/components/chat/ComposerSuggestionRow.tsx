@@ -14,7 +14,7 @@ type Props = Omit<HTMLAttributes<HTMLDivElement>, 'children'> & {
 
 /**
  * Shared dense row for composer capability and reference suggestions — the
- * 「素」 menu item: 32px minimum, the small row corner, 13px label, and the
+ * "Su" spec menu item: 32px minimum, the small row corner, 13px label, and the
  * hover fill doubling as the keyboard highlight.
  */
 export const ComposerSuggestionRow = forwardRef<HTMLDivElement, Props>(function ComposerSuggestionRow({

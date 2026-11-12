@@ -1111,8 +1111,8 @@ async function createMainWindow() {
       console.error(`[desktop] failed to load Electron renderer: ${detail}`)
       writeWindowSmokeSnapshot(mainWindow, 'renderer-load-failed')
       dialog.showErrorBox(
-        '启动错误 / Startup Error',
-        `桌面界面加载失败，请重启应用。如果问题持续存在，请附上诊断日志反馈。\n\nThe desktop interface could not be loaded. Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
+        'Startup Error',
+        `The desktop interface could not be loaded. Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
       )
     },
   })
@@ -1135,7 +1135,7 @@ app.whenReady().then(async () => {
     applyStartupPortableMode(app)
   } catch (error) {
     setStorageWritesFrozen(true)
-    dialog.showErrorBox('数据目录不可用 / Data directory unavailable', error instanceof Error ? error.message : 'Migration recovery failed')
+    dialog.showErrorBox('Data directory unavailable', error instanceof Error ? error.message : 'Migration recovery failed')
     await createMainWindow()
     return
   }
@@ -1170,7 +1170,7 @@ app.whenReady().then(async () => {
         await getServerRuntime().startServer().catch(startError => console.error('[desktop] original directory restart failed', startError))
       } catch (recoveryError) {
         setStorageWritesFrozen(true)
-        dialog.showErrorBox('数据目录不可用 / Data directory unavailable', recoveryError instanceof Error ? recoveryError.message : 'Migration recovery failed')
+        dialog.showErrorBox('Data directory unavailable', recoveryError instanceof Error ? recoveryError.message : 'Migration recovery failed')
         await createMainWindow()
         return
       }

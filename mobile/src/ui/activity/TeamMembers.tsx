@@ -11,17 +11,17 @@ const card = (colors: ReturnType<typeof useColors>) => ({
 })
 
 const stateLabel = (state: TeamTask['state']) =>
-  state === 'done' ? '已完成' : state === 'active' ? '进行中' : state === 'waiting' ? '等待依赖' : '待开始'
+  state === 'done' ? 'Done' : state === 'active' ? 'In progress' : state === 'waiting' ? 'Waiting on dependencies' : 'Not started'
 
-/** 「等 #2 #3」；前置任务已被删掉、编号对不上时只说在等。 */
+/** "Waiting on #2 #3"; when prerequisites were deleted and numbers do not match, only say it is waiting. */
 export const waitingText = (task: Pick<TeamTask, 'waitingOn'>) =>
-  task.waitingOn.length ? `等 ${task.waitingOn.map((id) => `#${id}`).join(' ')}` : '等待依赖'
+  task.waitingOn.length ? `Waiting on ${task.waitingOn.map((id) => `#${id}`).join(' ')}` : 'Waiting on dependencies'
 
 export function memberTone(row: Pick<TeamRow, 'tone'>, colors: ReturnType<typeof useColors>) {
   return row.tone === 'run' ? colors.run : row.tone === 'err' ? colors.err : colors.ink3
 }
 
-/** 成员头像：两个字母；在干活时外圈一道运行蓝。 */
+/** Member avatar: two letters; a running-blue ring while working. */
 export function MemberMark({ row, size = 32 }: { row: Pick<TeamRow, 'mark' | 'tone'>; size?: number }) {
   const colors = useColors()
   return (
@@ -61,13 +61,13 @@ export function MemberTaskLine({ task }: { task: TeamTask }) {
     <View
       accessible
       accessibilityLabel={[
-        task.ref ? `任务 ${task.ref}` : '',
+        task.ref ? `Tasks ${task.ref}` : '',
         task.title,
         task.state === 'waiting' ? waitingText(task) : stateLabel(task.state),
         active ? task.detail : '',
       ]
         .filter(Boolean)
-        .join('，')}
+        .join(', ')}
       style={{
         minHeight: active && task.detail ? 56 : 44,
         paddingHorizontal: 14,
@@ -119,8 +119,8 @@ export function TaskLines({ tasks }: { tasks: TeamTask[] }) {
 }
 
 /**
- * 一个成员一张卡：头像、名字、模型、状态；它认领的任务挂在下面。
- * 传了 onOpen 就能点进去看它的执行记录（队长就是这段会话本身，不传）。
+ * One card per member: avatar, name, model, status; tasks it claimed hang below.
+ * With onOpen it can be tapped to view its execution log (the lead is the session itself, so not passed).
  */
 export function MemberCard({ row, onOpen }: { row: TeamRow; onOpen?(): void }) {
   const colors = useColors()
@@ -146,14 +146,14 @@ export function MemberCard({ row, onOpen }: { row: TeamRow; onOpen?(): void }) {
       {onOpen ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${row.name}，${row.state}，查看执行记录`}
+          accessibilityLabel={`${row.name}, ${row.state}, view execution log`}
           onPress={onOpen}
           style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
         >
           {header}
         </Pressable>
       ) : (
-        <View accessible accessibilityLabel={`${row.name}，${row.state}`}>
+        <View accessible accessibilityLabel={`${row.name}, ${row.state}`}>
           {header}
         </View>
       )}
@@ -162,13 +162,13 @@ export function MemberCard({ row, onOpen }: { row: TeamRow; onOpen?(): void }) {
   )
 }
 
-/** 团队看板里还没人认领的任务。 */
+/** Tasks on the team board not yet claimed by anyone. */
 export function UnassignedCard({ tasks }: { tasks: TeamTask[] }) {
   const colors = useColors()
   return (
     <View style={card(colors)}>
       <View accessibilityRole="header" style={{ height: 40, paddingHorizontal: 14, justifyContent: 'center' }}>
-        <Text style={{ fontSize: 13, fontWeight: '600', color: colors.ink2 }}>{`待认领 · ${tasks.length}`}</Text>
+        <Text style={{ fontSize: 13, fontWeight: '600', color: colors.ink2 }}>{`Unclaimed · ${tasks.length}`}</Text>
       </View>
       <TaskLines tasks={tasks} />
     </View>

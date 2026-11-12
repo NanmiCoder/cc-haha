@@ -127,12 +127,12 @@ describe('ToolResultImages · thumbnails', () => {
     expect(screen.getByRole('group', { name: 'Tool result' })).toBeInTheDocument()
   })
 
-  it('localizes its labels', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+  it('labels each image and the group', () => {
+    useSettingsStore.setState({ locale: 'en' })
     render(<ToolResultImages images={[FIRST, SECOND]} />)
 
-    expect(screen.getByRole('button', { name: '打开图片 2/2' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: '工具结果' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open image 2 of 2' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Tool result' })).toBeInTheDocument()
   })
 
   it('decodes each image into a Blob with its own type and bytes', async () => {
@@ -453,10 +453,10 @@ describe('ToolResultImages · omitted images', () => {
     expect(screen.queryByText(/not shown/)).toBeNull()
   })
 
-  it('localizes the note', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+  it('notes how many images were omitted', () => {
+    useSettingsStore.setState({ locale: 'en' })
     render(<ToolResultImages images={[]} omitted={2} />)
 
-    expect(screen.getByText('另有 2 张图片未显示')).toBeInTheDocument()
+    expect(screen.getByText('Images not shown: 2')).toBeInTheDocument()
   })
 })

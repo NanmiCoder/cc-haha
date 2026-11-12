@@ -241,7 +241,7 @@ const finishedProps = (sessionId: string, status: 'completed' | 'failed'): TaskA
   sessionId,
   status,
   detail: '',
-  summary: status === 'completed' ? '完成 · 用时 1:00' : '出错停下',
+  summary: status === 'completed' ? 'Done · took 1:00' : 'Stopped with error',
 })
 
 test('a tracked task that finishes shows its outcome until the dismissal date and revokes its push registration', async () => {

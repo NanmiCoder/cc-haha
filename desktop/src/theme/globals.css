@@ -83,7 +83,7 @@
 }
 
 /* Noto Serif SC – variable weight 600-900, latin only.
-   The serif headings of 「纸 · 墨 · 印」 are the "墨" half of the identity, but
+   The serif headings of "Paper · Ink · Seal" are the "Ink" half of the identity, but
    the CJK cuts of this family run ~6MB per weight. Only the latin subset is
    self-hosted (43KB for all three weights); Chinese glyphs fall through to the
    platform serif named in `--font-headline`, which is what the handoff
@@ -232,7 +232,7 @@
   white-space: nowrap;
 }
 
-/* The kbd chip of the 「素」 spec: mono 11px, 18px tall, xs radius, hairline
+/* The kbd chip of the "Su" spec: mono 11px, 18px tall, xs radius, hairline
    border on white, tertiary text. */
 .settings-zoom-kbd {
   min-width: 18px;
@@ -728,7 +728,7 @@
   --font-label: var(--font-body);
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 
-  /* Corner scale (「素」): 4 chips / 6 rows and small controls / 8 controls and
+  /* Corner scale ("Su" spec): 4 chips / 6 rows and small controls / 8 controls and
      inner blocks / 12 cards / 16 composer and large panels / 20 dialogs. */
   --radius-xs: 4px;
   --radius-sm: 6px;
@@ -741,18 +741,18 @@
 }
 
 /* ─── Theme sources ───────────────────────────────────────────────
-   Six palettes from the 「纸 · 墨 · 印」 handoff. Each block carries only
+   Six palettes from the "Paper · Ink · Seal" handoff. Each block carries only
    raw color values; the semantic layer below turns them into the
    `--color-*` tokens the components consume. Generated values
    (`*-ink`, the heat ramp, the `*-rgb` triplets) are derived from these
    sources — see the header comment on the semantic layer. */
 
-/* 纯白 pure-white — 默认 */
+/* pure-white (default) */
 :root,
 [data-theme="white"] {
   color-scheme: light;
 
-  /* 「素 Porcelain」(2026-10 visual direction). One warm-neutral ramp that
+  /* "Su" / Porcelain (2026-10 visual direction). One warm-neutral ramp that
      climbs in a single direction — page → sidebar (s0) → card lining (s2) →
      hover/selected (s1) — and every shadow below uses the same warm hue, so
      the surfaces no longer mix cool greys with brown shadows. Terracotta is
@@ -840,7 +840,7 @@
   --cc-scrim-rgb: 24, 22, 20;
 }
 
-/* 纸墨 paper */
+/* paper */
 [data-theme="paper"] {
   color-scheme: light;
 
@@ -924,7 +924,7 @@
   --cc-scrim-rgb: 21, 17, 11;
 }
 
-/* 经典暖色 warm-classic */
+/* warm-classic */
 [data-theme="warm-classic"] {
   color-scheme: light;
 
@@ -1008,7 +1008,7 @@
   --cc-scrim-rgb: 22, 18, 10;
 }
 
-/* 青瓷 celadon */
+/* celadon */
 [data-theme="celadon"] {
   color-scheme: light;
 
@@ -1092,7 +1092,7 @@
   --cc-scrim-rgb: 17, 21, 17;
 }
 
-/* 墨夜 dark */
+/* dark */
 [data-theme="dark"] {
   color-scheme: dark;
 
@@ -1180,7 +1180,7 @@
   --cc-scrim-rgb: 6, 6, 6;
 }
 
-/* 墨夜蓝 ink-blue */
+/* ink-blue */
 [data-theme="ink-blue"] {
   color-scheme: dark;
 
@@ -1741,7 +1741,7 @@ body > :not(#root, [role="tooltip"]) * {
   -webkit-app-region: no-drag;
 }
 
-/* 「素」 popover shell: a near-opaque white sheet, the same hairline every card
+/* "Su" spec popover shell: a near-opaque white sheet, the same hairline every card
    uses, and the dropdown step of the shadow scale. The old translucent border
    (`--color-surface-glass-border`) vanished against white pages, so menus read
    as floating shadows with no edge. */
@@ -1782,7 +1782,7 @@ body > :not(#root, [role="tooltip"]) * {
   box-shadow: var(--shadow-overlay);
 }
 
-/* The composer is a floating card (「素」): an opaque lifted sheet — white on
+/* The composer is a floating card ("Su" spec): an opaque lifted sheet — white on
    the light themes, one step up the ramp on the ink ones — with the card
    hairline and the composer step of the shadow scale. No blur: it sits over
    the transcript's fade, not over content that has to stay legible behind it.

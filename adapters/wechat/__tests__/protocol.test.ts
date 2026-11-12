@@ -42,7 +42,7 @@ describe('WeChat protocol helpers', () => {
           message_item: { type: 1, text_item: { text: 'quoted body' } },
         },
       },
-    ])).toBe('[引用: quote title | quoted body]\nreply')
+    ])).toBe('[Quote: quote title | quoted body]\nreply')
   })
 
   it('collects image and file media candidates from message items', () => {

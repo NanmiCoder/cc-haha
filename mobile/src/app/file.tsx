@@ -45,7 +45,7 @@ type WorkspaceFile = {
   error?: string
 }
 
-/** 只读文件预览：文本带行号和轻量高亮，图片按比例显示，其他格式请到电脑上打开。 */
+/** Read-only file preview: text with line numbers and light highlighting, images scaled; open other formats on the computer. */
 export default function FilePreview() {
   const { id, host, path } = useLocalSearchParams<{ id: string; host: string; path: string }>()
   return <FilePage key={`${host}:${id}:${path}`} hostId={host} id={id} path={path ?? ''} />
@@ -87,14 +87,14 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
     setShareError('')
     const timeout = setTimeout(() => {
       if (request.isCurrent()) {
-        setShareError('文件下载超时，请重试')
+        setShareError('File download timed out, please retry')
         setSharing(false)
         transfers.invalidate()
       }
     }, SHARE_TIMEOUT_MS)
     try {
       if (Platform.OS === 'web') {
-        // 浏览器没有系统分享面板：直接下载到手机。
+        // Browsers have no system share sheet: download straight to the phone.
         const result = await downloadWorkspaceFile(
           host, credential, id, path, fetch as DownloadFetch, undefined, fetchCredentials
         )
@@ -116,7 +116,7 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
           clearTimeout(timeout)
           return Sharing.shareAsync(uri, {
             mimeType: result.mimeType,
-            dialogTitle: '存储或分享文件',
+            dialogTitle: 'Save or share file',
           })
         },
       })
@@ -154,7 +154,7 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
 
   return (
     <ReaderScreen
-      title={name || '文件'}
+      title={name || 'Files'}
       subtitle={
         dir || size ? (
           <SubtitleLine>
@@ -172,7 +172,7 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
         ) : (
           <IconButton
             icon="share"
-            label={Platform.OS === 'web' ? '下载文件' : '存储或分享文件'}
+            label={Platform.OS === 'web' ? 'Download file' : 'Save or share file'}
             iconSize={20}
             color={colors.ink2}
             disabled={!host || credential === undefined}
@@ -183,7 +183,7 @@ function FilePage({ hostId, id, path }: { hostId: string; id: string; path: stri
     >
       {error ? <InlineError text={error} style={{ margin: 16, marginBottom: file ? 0 : 16 }} /> : null}
       {file?.truncated ? (
-        <Callout style={{ marginHorizontal: 16, marginTop: 12 }}>文件较大，只显示前面一部分。</Callout>
+        <Callout style={{ marginHorizontal: 16, marginTop: 12 }}>File is large; only the beginning is shown.</Callout>
       ) : null}
       {body}
     </ReaderScreen>

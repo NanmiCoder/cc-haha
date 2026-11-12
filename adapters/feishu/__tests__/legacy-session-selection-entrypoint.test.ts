@@ -502,9 +502,9 @@ for (const platform of platforms) {
         expect(sendSpy).not.toHaveBeenCalled()
         expect(stopSpy).not.toHaveBeenCalled()
         expect(notices).toHaveLength(noticesBefore + 1)
-        expect(notices.at(-1)).toContain('已保留会话和工作目录')
-        expect(notices.at(-1)).toContain('重试')
-        expect(notices.at(-1)).not.toContain('当前没有活动会话')
+        expect(notices.at(-1)).toContain('session and working directory are preserved')
+        expect(notices.at(-1)).toContain('try again')
+        expect(notices.at(-1)).not.toContain('No active session')
 
         await send(platform, command)
 
@@ -555,7 +555,7 @@ for (const platform of platforms) {
         expect(newSessionCount).toBe(creationsBefore)
         expect(sentPrompts.some((prompt) => prompt.content === failedPrompt)).toBe(false)
         expect(sendSpy).not.toHaveBeenCalled()
-        expect(notices.at(-1)).toContain('已保留会话和工作目录')
+        expect(notices.at(-1)).toContain('session and working directory are preserved')
         expect(notices.at(-1)).not.toContain('/new')
 
         await send(platform, 'Retry the original conversation')
@@ -594,7 +594,7 @@ for (const platform of platforms) {
       expect(sendSpy).not.toHaveBeenCalled()
       await send(platform, '/sessions')
       await send(platform, '/resume 1')
-      expect(notices.at(-1)).toContain('正在运行')
+      expect(notices.at(-1)).toContain('is running')
       await adapter.handleServerMessage(chatId, { type: 'status', state: 'idle' })
       sendSpy.mockRestore()
     })
@@ -621,7 +621,7 @@ for (const platform of platforms) {
       const chatId = chatFor(platform)
       const binding = adapter.sessionStore.get(chatId)?.sessionId
       await send(platform, '/sessions', { unauthorized: true })
-      expect(notices.at(-1)).toContain('未授权')
+      expect(notices.at(-1)).toContain('Not authorized')
       expect(adapter.sessionStore.get(chatId)?.sessionId).toBe(binding)
       adapter.clearTransientChatState(chatId)
       await send(platform, '/sessions')
@@ -767,7 +767,7 @@ describe('WeChat compact permission prompts', () => {
       for (const [digit, allowed, rule] of [['1', true, undefined], ['2', true, 'always'], ['3', false, undefined]] as const) {
         const requestId = `compact-${digit}`
         await wechat.handleServerMessage(chatId, { type: 'permission_request', requestId, toolName: 'Write', input: { file_path: 'fixture.txt' } })
-        expect(notices.at(-1)).toContain('回复 1 允许一次，2 永久允许，3 拒绝。')
+        expect(notices.at(-1)).toContain('Reply 1 to allow once, 2 to always allow, 3 to deny.')
         expect(notices.at(-1)).not.toContain('/allow')
         expect(notices.at(-1)).not.toContain('/always')
         expect(notices.at(-1)).not.toContain('/deny')
@@ -788,9 +788,9 @@ describe('WeChat compact permission prompts', () => {
       expect(notices.at(-1)).toContain('/allow second')
       expect(notices.at(-1)).toContain('/always second')
       expect(notices.at(-1)).toContain('/deny second')
-      expect(notices.at(-1)).not.toContain('回复 1')
+      expect(notices.at(-1)).not.toContain('Reply 1')
       await send('wechat', '1')
-      expect(notices.at(-1)).toContain('无法确定这个数字对应哪一个')
+      expect(notices.at(-1)).toContain('unclear which one this number refers to')
       expect(approval).not.toHaveBeenCalled()
       expect(model).not.toHaveBeenCalled()
       await send('wechat', '/deny second')
@@ -820,7 +820,7 @@ describe('WeChat actual module multimedia integration', () => {
       try {
         await send('wechat', 'too early while prior turn is stopping')
         expect(model).not.toHaveBeenCalled()
-        expect(notices.at(-1)).toContain('上一轮仍在停止中')
+        expect(notices.at(-1)).toContain('previous turn is still stopping')
       } finally { model.mockRestore() }
       await wechat.handleServerMessage(chatId, { type: 'content_delta', text: 'cancelled late fixture' })
       await wechat.handleServerMessage(chatId, { type: 'message_complete' })
@@ -867,7 +867,7 @@ describe('WeChat actual module multimedia integration', () => {
   it('explains a failed image transfer without starting a model request to find local photos', async () => {
     const chatId = await prepareWechatMediaSession()
     spyOn(WechatMediaService.prototype, 'downloadCandidate').mockImplementationOnce(async () => {
-      throw new WechatMediaDownloadError('download', '微信媒体服务返回 HTTP 403')
+      throw new WechatMediaDownloadError('download', 'WeChat media service returned HTTP 403')
     })
     const model = spyOn(wechat.bridge, 'sendUserMessage')
     try {
@@ -875,9 +875,9 @@ describe('WeChat actual module multimedia integration', () => {
         { type: 2, image_item: { media: { encrypt_query_param: 'fixture' } } },
       ] })
       await enqueue(chatId, async () => {})
-      expect(notices.at(-1)).toContain('已收到附件消息')
+      expect(notices.at(-1)).toContain('Received the attachment message')
       expect(notices.at(-1)).toContain('HTTP 403')
-      expect(notices.at(-1)).toContain('授权搜索电脑图片目录不能解决')
+      expect(notices.at(-1)).toContain('authorizing search of the computer\'s image folder will not fix')
       expect(model).not.toHaveBeenCalled()
     } finally {
       model.mockRestore()
@@ -946,14 +946,14 @@ describe('WeChat actual module multimedia integration', () => {
     try {
       await send('wechat', '/voice on')
       expect(wechat.sessionStore.get(chatId)?.sessionId).toStartWith('new-')
-      await wechat.handleServerMessage(chatId, { type: 'content_delta', text: '这是完整回答。' })
+      await wechat.handleServerMessage(chatId, { type: 'content_delta', text: 'This is the complete answer.' })
       await wechat.handleServerMessage(chatId, { type: 'message_complete' })
       await waitUntilMedia(() => cleaned)
       expect(synthesis).toHaveBeenCalledTimes(1)
-      expect(synthesis.mock.calls[0][0]).toBe('这是完整回答。')
+      expect(synthesis.mock.calls[0][0]).toBe('This is the complete answer.')
       expect(upload).toHaveBeenCalledTimes(1)
       expect(upload.mock.calls[0][0]).toMatchObject({ to: chatId, kind: 'file', fileName: 'reply.wav', mimeType: 'audio/wav', buffer: audio })
-      expect(notices.some(notice => notice.includes('这是完整回答。'))).toBe(true)
+      expect(notices.some(notice => notice.includes('This is the complete answer.'))).toBe(true)
       await send('wechat', '/voice off')
     } finally {
       wechat.clearTransientChatState(chatId)
@@ -1227,7 +1227,7 @@ describe('DingTalk reply delivery through the adapter entrypoint', () => {
       await wechat.handleServerMessage(chatId, { type: 'error', message: 'ADAPTER_CONNECTION_LOST' })
       const textReplies = () => notices.slice(before).map(text => JSON.parse(text).msg?.item_list?.[0]?.text_item?.text)
       expect(textReplies()).toContain('Important partial answer')
-      expect(textReplies()).toContain('错误: ADAPTER_CONNECTION_LOST')
+      expect(textReplies()).toContain('Error: ADAPTER_CONNECTION_LOST')
       await wechat.handleServerMessage(chatId, { type: 'message_complete' })
       expect(textReplies().filter(text => text === 'Important partial answer')).toHaveLength(1)
     } finally { wechat.clearTransientChatState(chatId) }

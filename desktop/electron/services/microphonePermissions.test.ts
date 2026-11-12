@@ -270,7 +270,7 @@ describe('main window wiring', () => {
       expect(plist).toMatch(/<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/)
     }
     const pkg = JSON.parse(readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'))
-    expect(pkg.build.mac.extendInfo.NSMicrophoneUsageDescription).toMatch(/麦克风/)
+    expect(pkg.build.mac.extendInfo.NSMicrophoneUsageDescription).toMatch(/Microphone/)
     expect(pkg.build.mac.extendInfo.NSMicrophoneUsageDescription).toMatch(/[Mm]icrophone/)
   })
 })

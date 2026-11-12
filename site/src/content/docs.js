@@ -7,7 +7,7 @@ const SITE_BASE = `/${String(import.meta.env.BASE_URL || '/').replace(/^\/+|\/+$
   .replace(/\/{2,}/g, '/')
   .replace(/\/$/, '') || '/'
 
-/* ── 路由归一化 ─────────────────────────────────────────────── */
+/* ── Route normalization ─────────────────────────────────────── */
 
 function cleanRoute(route) {
   const withoutQuery = route.split(/[?#]/, 1)[0]
@@ -47,7 +47,7 @@ function withoutSiteBase(pathname) {
   return route
 }
 
-/* ── 索引 ───────────────────────────────────────────────────── */
+/* ── Index ──────────────────────────────────────────────────── */
 
 const docsByRoute = new Map(docsIndex.map((doc) => [doc.path.toLowerCase(), doc]))
 const docsBySource = new Map(
@@ -55,8 +55,8 @@ const docsBySource = new Map(
 )
 
 /**
- * 2026-07 的信息架构重组把大部分文档挪了位置。老链接（README、外站、App 内）
- * 不能死在 404 上，这里做一次性重定向。
+ * The 2026-07 information architecture reorganization moved most docs. Old links (README, other sites, in-app)
+ * must not die on a 404, so they are redirected once here.
  */
 const LEGACY_ROUTES = new Map(Object.entries({
   '/agent': '/internals/agent',
@@ -103,16 +103,20 @@ const LEGACY_ROUTES = new Map(Object.entries({
   '/skills/02-implementation': '/internals/skills-internals'
 }))
 
+/**
+ * The docs used to be bilingual, with English under an `/en` prefix. The site is English-only now,
+ * so `/en/...` links fall through to the same page without the prefix.
+ */
 export function resolveLegacyRoute(pathname) {
   const route = withoutSiteBase(pathname)
-  const isEnglish = route === '/en' || route.startsWith('/en/')
-  const bare = isEnglish ? route.slice(3) || '/' : route
-  if (bare.toLowerCase() === '/docs') return '/en/start'
-  const target = LEGACY_ROUTES.get(bare.toLowerCase())
+  const hadLocalePrefix = route === '/en' || route.startsWith('/en/')
+  const bare = hadLocalePrefix ? route.slice(3) || '/' : route
+  if (bare.toLowerCase() === '/docs') return '/start'
+  if (hadLocalePrefix && (bare === '/' || docsByRoute.has(bare.toLowerCase()))) return bare
 
+  const target = LEGACY_ROUTES.get(bare.toLowerCase())
   if (!target) return null
-  const next = isEnglish ? `/en${target}` : target
-  return docsByRoute.has(next.toLowerCase()) ? next : null
+  return docsByRoute.has(target.toLowerCase()) ? target : null
 }
 
 export function findDoc(pathname) {
@@ -120,26 +124,26 @@ export function findDoc(pathname) {
   return docsByRoute.get(withoutSiteBase(pathname).toLowerCase()) || null
 }
 
-export function getAllDocs(locale) {
-  return docsIndex.filter((doc) => !locale || doc.locale === locale)
+export function getAllDocs() {
+  return docsIndex
 }
 
 export function getSections() {
   return sections
 }
 
-/** 侧边栏：按登记好的分区顺序分组，组内按 frontmatter 的 order。 */
-export function getDocNavigation(locale = 'zh') {
+/** Sidebar: grouped in the registered section order, ordered within a group by frontmatter `order`. */
+export function getDocNavigation() {
   const grouped = new Map()
 
-  for (const doc of getAllDocs(locale)) {
+  for (const doc of getAllDocs()) {
     if (!grouped.has(doc.section)) grouped.set(doc.section, [])
     grouped.get(doc.section).push(doc)
   }
 
   const known = sections
     .filter((section) => grouped.has(section.id))
-    .map((section) => ({ id: section.id, label: section[locale] || section.id }))
+    .map((section) => ({ id: section.id, label: section.label || section.id }))
   const extras = [...grouped.keys()]
     .filter((id) => !sections.some((section) => section.id === id))
     .sort()
@@ -156,17 +160,6 @@ export function getDocNavigation(locale = 'zh') {
   }))
 }
 
-export function alternateLocaleRoute(doc) {
-  if (!doc) return '/'
-
-  const source = doc.sourcePath.replace(/^docs\//, '')
-  const target = doc.locale === 'en' ? source.replace(/^en\//, '') : `en/${source}`
-  const alternate = docsBySource.get(target.toLowerCase())
-
-  if (alternate) return alternate.path
-  return doc.locale === 'en' ? '/start' : '/en/start'
-}
-
 export function getAdjacentDocs(doc, navigation) {
   const flat = navigation.flatMap((group) =>
     group.items.map((item) => ({ ...item, section: group.label }))
@@ -179,7 +172,7 @@ export function getAdjacentDocs(doc, navigation) {
   }
 }
 
-/** 按需拉取一篇文档的正文，Vite 会把每篇切成独立 chunk。 */
+/** Fetch a page body on demand; Vite splits each page into its own chunk. */
 export async function loadDocContent(route) {
   const load = docsContent[route]
   if (!load) return null
@@ -187,7 +180,7 @@ export async function loadDocContent(route) {
   return module.default
 }
 
-/* ── Markdown 渲染 ──────────────────────────────────────────── */
+/* ── Markdown rendering ─────────────────────────────────────── */
 
 function normalizeRelativePath(basePath, targetPath) {
   const segments = basePath.split('/')
@@ -277,17 +270,17 @@ function preprocessDirectives(markdown) {
     (_, _fence, kind = 'info', label, content) => {
       const safeKind = kind || 'info'
       const heading = label.trim() || {
-        danger: '注意',
-        info: '说明',
-        tip: '提示',
-        warning: '当心'
+        danger: 'Danger',
+        info: 'Note',
+        tip: 'Tip',
+        warning: 'Warning'
       }[safeKind]
       return `<aside class="doc-callout doc-callout--${safeKind}">\n<strong>${escapeAttribute(heading)}</strong>\n\n${content.trim()}\n</aside>\n\n`
     }
   )
 }
 
-/** 语法高亮按需加载：首屏不为它买单，加载好之后重渲染一次。 */
+/** Syntax highlighting loads on demand: the first paint doesn't pay for it, and the page re-renders once it is ready. */
 let highlighter = null
 let highlighterPromise = null
 
@@ -379,16 +372,16 @@ export function renderMarkdown(doc, markdown) {
   renderer.image = function image({ href, title, text }) {
     const resolvedHref = resolveDocAsset(doc, href)
     const titleAttribute = title ? ` title="${escapeAttribute(title)}"` : ''
-    // 带上真实像素尺寸，浏览器才能在图片下载完之前按比例留位，正文不会跳。
+    // Real pixel sizes let the browser reserve proportional space before the image loads, so the text doesn't jump.
     const size = imageSizes[resolvedHref.split(/[?#]/, 1)[0]]
     const sizeAttributes = size ? ` width="${size[0]}" height="${size[1]}"` : ''
-    // 竖图（手机截图、聊天软件的扫码页）在正文列宽下能铺满两屏，得单独限高。
-    // 构建期就知道比例，所以这里标出来，CSS 不用去猜文件名。
+    // Tall images (phone screenshots, chat-app QR pages) can fill two screens at body width and need a height cap.
+    // The ratio is known at build time, so mark it here and CSS doesn't have to guess from file names.
     const tall = size ? ` data-tall="${size[1] / size[0] > 1.1}"` : ''
     return `<img src="${escapeAttribute(resolvedHref)}" alt="${escapeAttribute(text || '')}"${titleAttribute}${sizeAttributes}${tall} loading="lazy" decoding="async">`
   }
 
-  // 宽表格在窄屏上必须自己横向滚动，不能把页面撑出横向滚动条。
+  // Wide tables must scroll horizontally on their own on narrow screens instead of giving the page a horizontal scrollbar.
   renderer.table = function table(token) {
     const header = `<tr>${token.header.map((cell, index) =>
       `<th${token.align[index] ? ` style="text-align:${token.align[index]}"` : ''}>${this.parser.parseInline(cell.tokens)}</th>`

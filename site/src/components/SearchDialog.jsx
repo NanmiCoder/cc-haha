@@ -5,36 +5,19 @@ import { highlightParts, queryTerms, searchEntries, shouldOpenSearchResult } fro
 import './search-dialog.css'
 
 const copy = {
-  zh: {
-    close: '关闭搜索',
-    clear: '清空搜索',
-    loading: '正在载入文档…',
-    failed: '搜索暂时无法加载，请关闭后重试。',
-    popular: '从这里开始',
-    title: '找到下一步',
-    count: (total, shown) => total > shown ? `显示前 ${shown} 篇 · 共 ${total} 篇` : `${total} 篇文档`,
-    empty: '没有匹配的文档',
-    hint: '搜标题、摘要和正文',
-    label: '搜索文档',
-    placeholder: '搜索文档…',
-    results: '搜索结果',
-    tips: ['↑↓ 选择', '↵ 打开', 'Esc 关闭']
-  },
-  en: {
-    close: 'Close search',
-    clear: 'Clear search',
-    loading: 'Loading documentation…',
-    failed: 'Search could not load. Close and try again.',
-    popular: 'Start exploring',
-    title: 'Find your next step',
-    count: (total, shown) => total > shown ? `Top ${shown} of ${total} results` : `${total} documents`,
-    empty: 'Nothing matched',
-    hint: 'Searches titles, summaries and body text',
-    label: 'Search docs',
-    placeholder: 'Search docs…',
-    results: 'Search results',
-    tips: ['↑↓ to move', '↵ to open', 'Esc to close']
-  }
+  close: 'Close search',
+  clear: 'Clear search',
+  loading: 'Loading documentation…',
+  failed: 'Search could not load. Close and try again.',
+  popular: 'Start exploring',
+  title: 'Find your next step',
+  count: (total, shown) => total > shown ? `Top ${shown} of ${total} results` : `${total} documents`,
+  empty: 'Nothing matched',
+  hint: 'Searches titles, summaries and body text',
+  label: 'Search docs',
+  placeholder: 'Search docs…',
+  results: 'Search results',
+  tips: ['↑↓ to move', '↵ to open', 'Esc to close']
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input, [tabindex]'
@@ -45,7 +28,7 @@ function Highlight({ text, terms }) {
     : part.text)
 }
 
-export default function SearchDialog({ locale = 'zh', onClose }) {
+export default function SearchDialog({ onClose }) {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -53,13 +36,13 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const dialogRef = useRef(null)
-  const c = copy[locale] || copy.zh
+  const c = copy
 
   const sectionLabels = useMemo(() => {
     const map = new Map()
-    for (const section of getSections()) map.set(section.id, section[locale] || section.id)
+    for (const section of getSections()) map.set(section.id, section.label || section.id)
     return map
-  }, [locale])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -82,8 +65,8 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
     }
   }, [])
 
-  // 关掉对话框要把焦点还给打开它的那个控件，否则键盘用户会被扔回文档开头。
-  // 触发者要在首次渲染时就记下来 —— 等 effect 跑完，焦点已经被搬进输入框了。
+  // Closing the dialog must return focus to the control that opened it, or keyboard users get thrown back to the top of the document.
+  // The opener has to be recorded on first render — by the time the effect runs, focus has already moved into the input.
   const openerRef = useRef(undefined)
   if (openerRef.current === undefined) openerRef.current = document.activeElement
 
@@ -94,18 +77,18 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
 
   const terms = useMemo(() => queryTerms(query), [query])
   const searching = terms.length > 0
-  const matches = useMemo(() => searchEntries(index, locale, terms), [index, locale, terms])
+  const matches = useMemo(() => searchEntries(index, terms), [index, terms])
   const suggestions = useMemo(() => {
     const routes = ['/start/install', '/start/first-session', '/desktop', '/desktop/computer-use']
-    const docs = getAllDocs(locale)
-    return routes.map((route) => docs.find((doc) => doc.path === `${locale === 'en' ? '/en' : ''}${route}`))
+    const docs = getAllDocs()
+    return routes.map((route) => docs.find((doc) => doc.path === route))
       .filter(Boolean)
       .map((doc) => ({ path: doc.path, title: doc.title, section: doc.section, excerpt: doc.description || '' }))
-  }, [locale])
+  }, [])
   const results = searching ? matches.results : suggestions
   const selected = Math.min(active, Math.max(0, results.length - 1))
 
-  useEffect(() => setActive(0), [query, locale])
+  useEffect(() => setActive(0), [query])
 
   function clearQuery() {
     setQuery('')
@@ -118,7 +101,7 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
     onClose()
   }
 
-  /** 挂在对话框根节点上：Esc 和方向键在关闭按钮、结果项上一样要管用。 */
+  /** Attached to the dialog root so Esc and the arrow keys also work on the close button and on results. */
   function onKeyDown(event) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -126,7 +109,7 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
       return
     }
 
-    // 模态对话框必须困住 Tab，否则焦点会溜到背后被遮住的页面上。
+    // A modal dialog must trap Tab, or focus slips onto the covered page behind it.
     if (event.key === 'Tab') {
       const stops = [...(dialogRef.current?.querySelectorAll(FOCUSABLE) || [])]
         .filter((node) => node.tabIndex >= 0 && node.offsetParent !== null)
@@ -211,7 +194,7 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
           {searching && index && !hasResults && (
             <div className="search-dialog__empty"><Icon name="search" size={28} /><strong>{c.empty}</strong><p>{c.hint}</p></div>
           )}
-          {/* 选中项靠 aria-activedescendant 汇报，所以结果本身不进 Tab 序列。 */}
+          {/* The selection is announced via aria-activedescendant, so results themselves stay out of the Tab order. */}
           <div aria-label={c.results} id="search-results" role="listbox">
             {results.map((result, position) => (
               <button

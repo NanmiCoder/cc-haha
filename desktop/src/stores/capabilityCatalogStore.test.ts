@@ -3,7 +3,7 @@ import type { ComposerReferenceCandidate } from '../types/composerReference'
 import { useCapabilityCatalogStore } from './capabilityCatalogStore'
 
 const candidate = (overrides: Partial<ComposerReferenceCandidate>): ComposerReferenceCandidate => ({
-  kind: 'plugin', id: 'amap@official', name: 'amap', displayName: '高德地图', description: '',
+  kind: 'plugin', id: 'amap@official', name: 'amap', displayName: 'Amap', description: '',
   source: 'amap@official', modelText: '', ...overrides,
 })
 
@@ -16,7 +16,7 @@ describe('capabilityCatalogStore', () => {
       candidate({ kind: 'skill', id: 'amap@official', displayName: '', name: 'route', icon: 'https://evil.example/x.svg' }),
     ])
     expect(useCapabilityCatalogStore.getState().entries).toEqual({
-      'plugin:amap@official': { label: '高德地图', icon: '/connectors/amap.svg' },
+      'plugin:amap@official': { label: 'Amap', icon: '/connectors/amap.svg' },
       'skill:amap@official': { label: 'route' },
     })
   })

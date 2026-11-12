@@ -4,9 +4,9 @@ import type { SocketLike } from '../sessionTransport'
 import { chunkText, decodeFrame, encodeFrame, P2P_CHUNK, type Body, type P2PChannel } from './frames'
 
 /**
- * 在直连数据通道上提供和 Cloudflare 路径一样的 HTTP 与 WebSocket：
- * ApiClient 和 SessionTransport 不用知道底下换了路。电脑那边把这些帧还原成
- * 同一个网关入口的请求，鉴权、白名单、限流都和走 Cloudflare 时一样。
+ * Provide the same HTTP and WebSocket on the direct data channel as on the Cloudflare path: 
+ * ApiClient and SessionTransport need not know the path changed underneath. The computer turns these frames back into
+ * requests to the same gateway entry, with auth, allowlist and rate limiting identical to Cloudflare.
  */
 type Pending = {
   status?: number
@@ -16,13 +16,13 @@ type Pending = {
   resolve(response: FetchResponse): void
   reject(error: Error): void
   url: string
-  /** 答复头到了之后的正文：收完、通道断了或被重置。 */
+  /** Body after response headers arrive: finished, channel dropped, or reset. */
   rest?: { done: Promise<string>; finish(text: string): void; fail(error: Error): void }
 }
 type TunnelSocket = SocketLike & { stream: number; parts: string[] }
 
 const abortError = () => Object.assign(new Error('Aborted'), { name: 'AbortError' })
-/** 请求在正文阶段失败：答复已经交出去了，失败只能由读正文的地方看到。 */
+/** Request failed during the body phase: the response was already handed over, so the failure is only visible where the body is read. */
 function failRequest(pending: Pending, error: Error) {
   if (pending.rest) pending.rest.fail(error)
   else pending.reject(error)
@@ -40,7 +40,7 @@ export class Tunnel {
     return this.#closed
   }
 
-  /** 一帧从电脑来。 */
+  /** A frame from the computer. */
   receive(text: unknown) {
     const frame = decodeFrame(text)
     if (!frame) return
@@ -50,7 +50,7 @@ export class Tunnel {
       case 'resb': {
         const socket = this.#sockets.get(header.s)
         if (socket && header.t === 'res') {
-          // 电脑拒绝了套接字（未授权、限流）：当成一次握手失败。
+          // The computer rejected the socket (unauthorized, rate limited): treat as a handshake failure.
           this.#closeSocket(socket, header.st === 401 ? 1008 : 1006, 'Rejected')
           return
         }
@@ -61,15 +61,15 @@ export class Tunnel {
           pending.status = header.st
           pending.headers = header.h
           pending.body = header.b
-          // 答复头一到就交出去：电脑显然在线，ApiClient 从这里起改按正文时限等，
-          // 大的正文在慢直连上传得再久，也不算「电脑没答复」。
+          // Hand over as soon as response headers arrive: the computer is clearly online, so ApiClient switches to the body timeout from here, 
+          // and however long a large body takes on a slow direct path it does not count as "the computer did not respond".
           let finish!: (text: string) => void
           let fail!: (error: Error) => void
           const done = new Promise<string>((resolve, reject) => {
             finish = resolve
             fail = reject
           })
-          // 没人读正文时失败也不算未处理的拒绝。
+          // A failure with nobody reading the body does not count as an unhandled rejection.
           done.catch(() => {})
           pending.rest = { done, finish, fail }
           pending.resolve(this.#response(pending))
@@ -124,7 +124,7 @@ export class Tunnel {
       init.signal.addEventListener(
         'abort',
         () => {
-          // 正文还在路上也一样：告诉电脑别再发，读正文的一方收到中止。
+          // Same while the body is still in flight: tell the computer to stop sending, and the body reader gets an abort.
           if (!this.#pending.delete(stream)) return
           this.link.send('ctl', encodeFrame({ t: 'rst', s: stream, code: 'aborted' }))
           failRequest(pending, abortError())
@@ -150,7 +150,7 @@ export class Tunnel {
       }
     })
 
-  /** 这个请求还没收到电脑的答复头：换路重试不会重复执行（只对 GET 有意义）。 */
+  /** This request has not received response headers from the computer: rerouting and retrying will not execute twice (only meaningful for GET). */
   socket(url: string, headers: Record<string, string> = {}): SocketLike {
     const target = new URL(url)
     const stream = this.#next++
@@ -184,7 +184,7 @@ export class Tunnel {
     return socket
   }
 
-  /** 通道断了：没答复的请求、没收完的正文都失败，套接字按网络断开处理（会话会经 Cloudflare 续上）。 */
+  /** Channel dropped: unanswered requests and unfinished bodies fail, and sockets are treated as network disconnects (sessions resume via Cloudflare). */
   close() {
     if (this.#closed) return
     this.#closed = true
@@ -218,7 +218,7 @@ export class Tunnel {
         const data = await bytes()
         return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
       },
-      // 图片本来就是 base64 传过来的：要 data URI 时直接用原文，不解码再编码。
+      // Images arrive as base64 already: when a data URI is wanted use the original text directly instead of decoding and re-encoding.
       base64: async () => (pending.body === 'b64' ? body() : bytesToBase64(await bytes())),
       headers: { get: (name: string) => lower[name.toLowerCase()] ?? null },
     }

@@ -1,169 +1,169 @@
 ---
-title: 命令参考
-nav_title: 命令参考
-description: 交互式会话、--print 无头模式、恢复模式与常用命令行参数。
+title: Command Reference
+nav_title: Commands
+description: Interactive sessions, --print headless mode, recovery mode, and common command-line flags.
 order: 1
 ---
 
-# 命令参考
+# Command Reference
 
-cc-haha 默认启动交互式会话，也可以用 `--print` 作为脚本、CI 或其他程序中的非交互式 Agent。源码仓库中的命令是 `./bin/claude-haha`；安装后的可执行文件名称以安装方式为准。
+cc-haha starts an interactive session by default. With `--print`, it can also run as a non-interactive agent in scripts, CI, or another program. The command in a source checkout is `./bin/claude-haha`; the installed executable name depends on the installation method.
 
 ```bash
 ./bin/claude-haha --help
 ```
 
-`--help` 是当前版本参数的最终依据。本页按任务解释最常用的参数，避免复制一份很快过期的完整帮助输出。
+`--help` is the source of truth for the installed version. This page explains common options by task instead of duplicating a complete help listing that would quickly become stale.
 
-## 快速示例
+## Quick examples
 
 ```bash
-# 在当前目录开始交互式会话
+# Start an interactive session in the current directory
 ./bin/claude-haha
 
-# 带着第一条需求进入会话
-./bin/claude-haha "解释这个仓库的启动路径"
+# Start with an initial request
+./bin/claude-haha "Explain how this repository starts"
 
-# 返回一段文本后退出
-./bin/claude-haha --print "总结最近一次提交"
+# Return text and exit
+./bin/claude-haha --print "Summarize the latest commit"
 
-# 返回一个完整 JSON 结果
-./bin/claude-haha --print --output-format json "列出主要模块"
+# Return one complete JSON result
+./bin/claude-haha --print --output-format json "List the main modules"
 
-# 继续当前目录最近的会话
+# Continue the latest session in this directory
 ./bin/claude-haha --continue
 
-# 恢复指定会话，同时创建新的会话分支
+# Resume a session but fork it to a new session ID
 ./bin/claude-haha --resume <session-id> --fork-session
 
-# 在新 Git worktree 中工作
+# Work in a new Git worktree
 ./bin/claude-haha --worktree docs-refresh
 ```
 
-## 先理解 `--print` 的安全边界
+## Understand the `--print` trust boundary first
 
-`-p, --print` 会跳过工作区信任对话框。它仍会读取启用的用户、项目和本地设置；可信项目中的 hooks、MCP、工具权限和环境配置也可能影响运行。
+`-p, --print` skips the workspace trust dialog. It can still load enabled user, project, and local settings. Hooks, MCP servers, tool permissions, and environment configuration in a trusted project can also affect execution.
 
-因此：
+Consequently:
 
-- 只在你信任的目录中运行 `--print`、`doctor` 和自动化任务。
-- 处理陌生仓库时，先检查 `.claude/`、`.mcp.json`、插件和工作区说明。
-- `--dangerously-skip-permissions` 会绕过所有权限检查，只适合无网络、可丢弃的隔离沙箱。
-- `--allow-dangerously-skip-permissions` 只是允许会话选择绕过模式，并不会自动开启它。
-- 自动化中明确限制 `--tools`、`--allowed-tools`、预算和可访问目录。
+- Run `--print`, `doctor`, and automation only in directories you trust.
+- Before processing an unfamiliar repository, inspect `.claude/`, `.mcp.json`, plugins, and workspace instructions.
+- `--dangerously-skip-permissions` bypasses every permission check. Use it only in a disposable, isolated sandbox with no network access.
+- `--allow-dangerously-skip-permissions` only makes bypass mode selectable; it does not enable bypass by itself.
+- In automation, explicitly limit tools, allowed directories, and budget.
 
-## 非交互输入与输出
+## Non-interactive input and output
 
-| 参数 | 说明 |
-|------|------|
-| `-p, --print` | 处理请求，输出结果并退出 |
-| `--output-format text` | 纯文本；默认格式 |
-| `--output-format json` | 单个完整 JSON 结果 |
-| `--output-format stream-json` | 持续输出 JSON 事件 |
-| `--input-format text` | 普通文本输入；默认格式 |
-| `--input-format stream-json` | 从标准输入持续接收 JSON 事件 |
-| `--json-schema '<schema>'` | 要求最终结构化输出符合 JSON Schema |
-| `--include-partial-messages` | 在 `stream-json` 中包含增量消息片段 |
-| `--include-hook-events` | 在 `stream-json` 中包含 hook 生命周期事件 |
-| `--replay-user-messages` | 流式输入输出时，把用户消息重新发到标准输出作为确认 |
-| `--no-session-persistence` | 非交互运行后不保存会话 |
-| `--max-budget-usd <amount>` | 为 `--print` 设置最高 API 费用 |
+| Option | Description |
+|--------|-------------|
+| `-p, --print` | Process a request, write the result, and exit |
+| `--output-format text` | Plain text; the default |
+| `--output-format json` | One complete JSON result |
+| `--output-format stream-json` | A stream of JSON events |
+| `--input-format text` | Plain-text input; the default |
+| `--input-format stream-json` | Receive a stream of JSON events on standard input |
+| `--json-schema '<schema>'` | Require the final structured output to match a JSON Schema |
+| `--include-partial-messages` | Include incremental message chunks in `stream-json` |
+| `--include-hook-events` | Include hook lifecycle events in `stream-json` |
+| `--replay-user-messages` | Echo streamed user messages to standard output as acknowledgements |
+| `--no-session-persistence` | Do not save the non-interactive session |
+| `--max-budget-usd <amount>` | Set the maximum API spend for `--print` |
 
-结构化输出示例：
+Structured output example:
 
 ```bash
 ./bin/claude-haha --print \
   --output-format json \
   --json-schema '{"type":"object","properties":{"risk":{"type":"string"}},"required":["risk"]}' \
-  "审查当前改动，只返回风险级别"
+  "Review the current changes and return only the risk level"
 ```
 
-流式输出是事件协议，不等同于把普通 JSON 拆成多行。消费端应按 `type` 处理事件，并允许新事件字段出现。
+Streaming output is an event protocol, not ordinary JSON split across lines. Consumers should dispatch on `type` and tolerate additional event fields.
 
-## 会话与工作区
+## Sessions and workspaces
 
-| 参数 | 说明 |
-|------|------|
-| `-c, --continue` | 继续当前目录最近一次会话 |
-| `-r, --resume [value]` | 按会话 ID 恢复；省略值时打开选择器，也可传搜索词 |
-| `--fork-session` | 恢复时创建新会话 ID，不覆盖原会话路径 |
-| `--session-id <uuid>` | 指定本次会话 ID |
-| `-n, --name <name>` | 设置在恢复列表和终端标题中显示的名称 |
-| `--from-pr [value]` | 按 PR 编号或 URL 恢复关联会话 |
-| `--add-dir <paths...>` | 额外允许工具访问的目录 |
-| `-w, --worktree [name]` | 为会话创建 Git worktree |
-| `--tmux` | 与 `--worktree` 配合创建 tmux 会话；受支持时使用 iTerm2 pane |
+| Option | Description |
+|--------|-------------|
+| `-c, --continue` | Continue the latest session in the current directory |
+| `-r, --resume [value]` | Resume by session ID; omit the value for the picker, or pass a search term |
+| `--fork-session` | Create a new session ID when resuming |
+| `--session-id <uuid>` | Use a specific session ID |
+| `-n, --name <name>` | Set the name shown in the resume list and terminal title |
+| `--from-pr [value]` | Resume a session linked to a PR number or URL |
+| `--add-dir <paths...>` | Allow tools to access additional directories |
+| `-w, --worktree [name]` | Create a Git worktree for the session |
+| `--tmux` | Create a tmux session with `--worktree`; uses an iTerm2 pane when supported |
 
-`--worktree` 会改变本地 Git 工作区布局。运行前先确认仓库状态，并在自动化中提供明确名称。
+`--worktree` changes the local Git workspace layout. Check repository status first and provide an explicit name in automation.
 
-## 模型与上下文
+## Models and context
 
-| 参数 | 说明 |
-|------|------|
-| `--model <model>` | 使用模型别名或完整模型 ID |
-| `--fallback-model <model>` | `--print` 模式下主模型过载时使用备用模型 |
-| `--effort <level>` | 设置推理投入，如 `low`、`medium`、`high`、`xhigh` 或 `max` |
-| `--agent <agent>` | 使用已配置的 Agent |
-| `--agents '<json>'` | 为本次会话定义自定义 Agent |
-| `--system-prompt <text>` | 替换本次会话的 system prompt |
-| `--append-system-prompt <text>` | 在默认 system prompt 后追加内容 |
-| `--file <specs...>` | 启动时下载文件资源，格式为 `file_id:relative_path` |
-| `--bare` | 启动最小运行时，跳过 hooks、LSP、插件同步、自动记忆等自动发现能力 |
+| Option | Description |
+|--------|-------------|
+| `--model <model>` | Select a model alias or complete model ID |
+| `--fallback-model <model>` | Use a fallback if the primary model is overloaded in `--print` mode |
+| `--effort <level>` | Set reasoning effort, such as `low`, `medium`, `high`, `xhigh`, or `max` |
+| `--agent <agent>` | Use a configured agent |
+| `--agents '<json>'` | Define custom agents for this session |
+| `--system-prompt <text>` | Replace the system prompt for this session |
+| `--append-system-prompt <text>` | Append text to the default system prompt |
+| `--file <specs...>` | Download file resources at startup as `file_id:relative_path` |
+| `--bare` | Start a minimal runtime without hooks, LSP, plugin sync, auto-memory, or other automatic discovery |
 
-`--bare` 不是“更宽松”的模式。它减少隐式上下文和凭据来源，调用方需要显式提供 prompts、目录、MCP、设置、Agents 或插件。
+`--bare` is not a less restricted mode. It reduces implicit context and credential sources, so the caller must explicitly provide prompts, directories, MCP configuration, settings, agents, or plugins.
 
-## 工具与权限
+## Tools and permissions
 
-| 参数 | 说明 |
-|------|------|
-| `--tools <tools...>` | 指定可用的内置工具；`""` 禁用全部，`default` 使用默认集合 |
-| `--allowed-tools <tools...>` | 允许匹配的工具，例如 `Bash(git:*) Edit` |
-| `--disallowed-tools <tools...>` | 拒绝匹配的工具 |
-| `--permission-mode <mode>` | 选择 `default`、`acceptEdits`、`plan`、`dontAsk`、`bypassPermissions` 或 `auto` |
-| `--no-computer-use` | 本次会话不加载 Computer Use MCP |
-| `--chrome` / `--no-chrome` | 开启或关闭 Chrome 集成 |
-| `--ide` | 只有一个有效 IDE 时自动连接 |
+| Option | Description |
+|--------|-------------|
+| `--tools <tools...>` | Select built-in tools; `""` disables all tools and `default` uses the default set |
+| `--allowed-tools <tools...>` | Allow matching tools, for example `Bash(git:*) Edit` |
+| `--disallowed-tools <tools...>` | Deny matching tools |
+| `--permission-mode <mode>` | Choose `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, or `auto` |
+| `--no-computer-use` | Do not load the Computer Use MCP for this session |
+| `--chrome` / `--no-chrome` | Enable or disable Chrome integration |
+| `--ide` | Connect automatically when exactly one valid IDE is available |
 
-拒绝规则和平台策略仍可能覆盖允许规则。生产自动化应使用最小工具集，而不是依赖一次人工批准后的本机状态。
+Deny rules and platform policy can still override allow rules. Production automation should select the smallest tool set instead of relying on approvals stored on a developer machine.
 
-## 设置、MCP 与插件
+## Settings, MCP, and plugins
 
-| 参数 | 说明 |
-|------|------|
-| `--settings <file-or-json>` | 加载额外的设置文件或 JSON 字符串 |
-| `--setting-sources <sources>` | 选择 `user`、`project`、`local` 设置来源 |
-| `--mcp-config <configs...>` | 从 JSON 文件或 JSON 字符串加载 MCP 服务 |
-| `--strict-mcp-config` | 忽略其他 MCP 配置，只使用命令行指定的配置 |
-| `--plugin-dir <path>` | 为本次会话加载插件目录；多个目录要重复传参 |
-| `--disable-slash-commands` | 禁用所有 Skills |
-| `-d, --debug [filter]` | 开启调试日志，可按分类筛选 |
-| `--debug-file <path>` | 把调试日志写入指定文件 |
+| Option | Description |
+|--------|-------------|
+| `--settings <file-or-json>` | Load an additional settings file or JSON string |
+| `--setting-sources <sources>` | Select `user`, `project`, and `local` settings sources |
+| `--mcp-config <configs...>` | Load MCP servers from JSON files or JSON strings |
+| `--strict-mcp-config` | Ignore other MCP configuration and use only command-line entries |
+| `--plugin-dir <path>` | Load a plugin directory for this session; repeat the option for multiple paths |
+| `--disable-slash-commands` | Disable all skills |
+| `-d, --debug [filter]` | Enable debug logging with optional category filtering |
+| `--debug-file <path>` | Write debug logs to a file |
 
-`--mcp-debug` 已弃用，请使用 `--debug`。
+`--mcp-debug` is deprecated; use `--debug`.
 
-## 子命令
+## Subcommands
 
-| 子命令 | 用途 |
-|--------|------|
-| `agents` | 列出已配置的 Agents |
-| `auth` | 管理认证 |
-| `auto-mode` | 查看 Auto mode 分类器配置 |
-| `doctor` | 检查更新器和运行环境健康状态 |
-| `install` | 安装指定渠道或版本的原生构建 |
-| `mcp` | 配置和管理 MCP 服务 |
-| `plugin` / `plugins` | 管理插件 |
-| `setup-token` | 为 Claude 订阅创建长期认证 Token |
-| `update` / `upgrade` | 检查并安装更新 |
+| Subcommand | Purpose |
+|------------|---------|
+| `agents` | List configured agents |
+| `auth` | Manage authentication |
+| `auto-mode` | Inspect the Auto mode classifier configuration |
+| `doctor` | Check updater and runtime health |
+| `install` | Install a selected native-build channel or version |
+| `mcp` | Configure and manage MCP servers |
+| `plugin` / `plugins` | Manage plugins |
+| `setup-token` | Create a long-lived token for a Claude subscription |
+| `update` / `upgrade` | Check for and install updates |
 
-每个子命令都有独立帮助：
+Each subcommand has separate help:
 
 ```bash
 ./bin/claude-haha mcp --help
 ./bin/claude-haha plugin --help
 ```
 
-## 交互式命令
+## Interactive commands
 
-交互会话中输入 `/help` 查看当前可用命令。`/commit`、`/review` 等命令来自内置命令集；Skills 和插件也能动态加入命令，所以不要依赖文档中的固定清单。
+Enter `/help` in an interactive session to see the commands available in the current build. Commands such as `/commit` and `/review` come from the built-in command set. Skills and plugins can add commands dynamically, so do not rely on a fixed list in documentation.
 
-如果命令不存在，先以 `/help` 的当前输出为准，并检查是否使用了 `--disable-slash-commands`。
+If a command is missing, trust the current `/help` output first and check whether `--disable-slash-commands` was used.

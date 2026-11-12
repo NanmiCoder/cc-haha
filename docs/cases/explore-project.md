@@ -1,58 +1,58 @@
 ---
-title: 10 分钟读懂陌生项目
-nav_title: 读懂项目
-description: 用计划模式摸清项目入口、运行方法和关键模块，并逐项核对来源。
+title: Understand an unfamiliar project in 10 minutes
+nav_title: Explore a project
+description: Use Plan mode to identify entry points, run commands, and important modules, then verify each claim.
 order: 1
 ---
 
-# 10 分钟读懂陌生项目
+# Understand an unfamiliar project in 10 minutes
 
-接手一个仓库时，先让 Claude 画出有证据的“项目地图”，再决定要不要动代码。这个案例不需要写文件。
+When you inherit a repository, ask Claude for an evidence-backed map before changing code. This guide does not require writing files.
 
-## 准备
+## Before you start
 
-- 完成[安装、连接模型与第一条会话](../start/first-session.md)。
-- 准备一个你能读取的项目目录，最好有 README、包管理文件和 Git 历史。
+- Finish [installation, model setup, and your first session](../start/first-session.md).
+- Have a project folder you can read. A README, package manifest, and Git history help.
 
-## 操作
+## Steps
 
-1. 新建会话，选择这个项目目录。在输入框工具栏把权限切到**计划模式**。
+1. Start a new session and select the project folder. Switch the composer permission control to **Plan mode**.
 
-![新建会话的输入框，权限模式、项目目录和模型都在底部工具栏](../images/app/zh-CN/session-new.webp)
+![New session composer with permission, project, and model controls in its toolbar (Chinese interface)](../images/app/en/session-new.webp)
 
-2. 发送下面的提示词。这里的“证据”指仓库文件和实际命令输出，不要求它猜测没有读过的部分。
-
-```text
-请只读地带我认识这个项目，不修改文件，不安装依赖，不启动外部服务。
-先读 README、项目清单和主要入口，再回答：
-1. 它解决什么问题？用户从哪里开始使用？
-2. 程序从哪个入口启动？列出 3～5 个关键目录及各自职责。
-3. 本地启动和运行测试的命令是什么？只列出你在仓库中找到的命令，不要执行。
-4. 我如果要改 [填入你关心的功能]，应该先读哪几个文件？
-每项结论附文件路径；找不到证据就写“未确认”。最后给我一个不超过 5 步的阅读顺序。
-```
-
-3. 对照它给出的路径打开“所有文件”树。点开入口文件和测试脚本，核对回答是否对应源码。
-4. 如果某项仍含糊，继续问：“你说的启动命令来自哪个文件的哪一段？请只给证据，不补猜测。”
-
-### 用这个仓库实际练一次
-
-如果手边没有练习项目，就把 cc-haha 源码仓库选为项目目录，在计划模式发送：
+2. Send this prompt. “Evidence” means repository files and actual command output, not guesses about files it has not read.
 
 ```text
-只读地找出这个仓库的文档官网如何工作：页面入口在哪里，长文档从哪里来，本地如何构建。每个结论给出文件路径；不要改文件，也不要运行构建。
+Help me understand this project using read-only investigation. Do not edit files, install dependencies, or start external services.
+Read the README, project manifests, and main entry points first. Then answer:
+1. What problem does it solve, and where does a user start?
+2. Where does the program start? Name 3–5 important directories and their roles.
+3. What are the local run and test commands? List only commands found in this repository; do not run them.
+4. To change [the feature you care about], which files should I read first?
+Cite file paths for every conclusion. Write “unconfirmed” where evidence is missing. End with a reading order of no more than five steps.
 ```
 
-你应能核对到三个具体结果：`site/src/App.jsx` 负责首页与文档页路由，`site/scripts/generate-docs-manifest.mjs` 从 `docs/` 生成文档索引，根目录 `package.json` 提供 `bun run docs:build`。逐个打开这些文件确认；若模型给出了不同命令，要求它指出对应的脚本行。
+3. Open the cited paths in the **All files** tree. Check the entry points and test scripts against the answer.
+4. If a claim is vague, ask: “Which file and passage supports that run command? Give the evidence without guessing.”
 
-## 应看到什么
+### Try it on this repository
 
-一份短项目地图：用途、入口、关键目录、仓库里能找到的启动与测试命令，以及下一步阅读顺序。**不应出现文件改动**；在 Git 项目里，“已更改文件”应与开始前一致。
+If you do not have a practice project, select the cc-haha source repository and send this in Plan mode:
 
-## 验收与常见卡点
+```text
+Investigate this repository's documentation site without editing or building it. Find the page entry point, the source of long-form docs, and the local build command. Cite a file path for each conclusion.
+```
 
-- 随机挑两条结论，打开引用文件核对。命令只在你确认适合本机后再运行。
-- 如果它把通用框架习惯当成项目事实，要求它标为“推测”并补证据。
-- 仓库没有 README 也能做；让它从项目清单、入口和测试目录开始，并明确哪些问题无法确认。
+You can verify three concrete results: `site/src/App.jsx` routes the homepage and documentation pages, `site/scripts/generate-docs-manifest.mjs` creates the docs index from `docs/`, and the root `package.json` offers `bun run docs:build`. Open each file to confirm it. If the model suggests a different command, ask it to cite the exact script.
 
-下一步可以用[修复 Bug](./fix-bug.md)练习一轮真正的代码改动；[会话与权限](../desktop/sessions.md)解释计划模式和文件引用。
+## Expected result
+
+A short project map: purpose, entry point, key directories, run and test commands found in the repo, and a reading order. **No files should change**; in a Git project, the Changed files view should match its starting state.
+
+## Check it and unblock yourself
+
+- Pick two claims at random and verify them in the referenced files. Run commands only after checking they make sense on your machine.
+- If Claude presents a framework convention as a project fact, ask it to mark that claim as an inference and find evidence.
+- No README? Start from manifests, entry points, and tests, and call out what remains unknown.
+
+Next, practice a real edit with [Fix a bug](./fix-bug.md). [Sessions and permissions](../desktop/sessions.md) explains Plan mode and file references.

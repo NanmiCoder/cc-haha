@@ -141,7 +141,7 @@ describe('host-scoped API transport', () => {
       code: 'HISTORY_PAGE_STALE',
       message: 'history changed',
     })
-    // 服务端把机器码放在 error 里；没有 code 字段时也要保留，调用方才能识别。
+    // The server puts the machine code in error; keep it even without a code field so callers can recognize it.
     const rewritten = new ApiClient(lan, 'fake', {
       fetch: async () =>
         response(
@@ -422,9 +422,9 @@ describe('slow links and tool images', () => {
     const silent: FetchAdapter = async (_url, init) =>
       new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
     await expect(new ApiClient(lan, 'fake', { fetch: silent, timeoutMs: 10, bodyTimeoutMs: 200 }).get('/api/sessions'))
-      .rejects.toMatchObject({ code: 'TIMEOUT', message: '连接超时，请检查电脑是否在线' })
+      .rejects.toMatchObject({ code: 'TIMEOUT', message: 'Connection timed out; check whether the computer is online' })
     await expect(new ApiClient(lan, 'fake', { fetch: slowBody(500), timeoutMs: 10, bodyTimeoutMs: 30 }).get('/api/sessions'))
-      .rejects.toMatchObject({ code: 'TIMEOUT', message: '网络太慢，内容没能及时传完，请稍后重试' })
+      .rejects.toMatchObject({ code: 'TIMEOUT', message: 'Network too slow, content could not finish transferring; please retry later' })
   })
 
   test('history always asks for tool images by reference', async () => {

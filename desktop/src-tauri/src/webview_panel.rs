@@ -29,7 +29,7 @@ pub struct PreviewBounds {
     pub height: f64,
 }
 
-/// 仅允许 http/https；其它（file:、javascript: 等）拒绝。返回规范化后的 url 字符串。
+/// Only http/https are allowed; anything else (file:, javascript:, ...) is rejected. Returns the normalized URL string.
 pub fn normalize_preview_url(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -137,15 +137,15 @@ pub async fn preview_close<R: Runtime>(
     Ok(())
 }
 
-/// 页面 → 宿主：注入脚本经 IPC 调此命令；Rust 校验后转发给前端。
+/// Page → host: the injected script calls this command over IPC; Rust validates and forwards it to the frontend.
 #[tauri::command]
 pub fn preview_message<R: Runtime>(app: AppHandle<R>, raw: String) -> Result<(), String> {
-    // 仅转发 JSON 字符串；前端做强类型解析（schema 校验在 TS 侧 protocol）
+    // Forward only the JSON string; the frontend parses it with strong types (schema validation lives in the TS protocol)
     serde_json::from_str::<serde_json::Value>(&raw).map_err(|e| e.to_string())?;
     app.emit("preview://event", raw).map_err(|e| e.to_string())
 }
 
-/// 宿主 → 页面：在子 webview 内 eval 一段 JS。
+/// Host → page: eval a JS snippet inside the child webview.
 #[tauri::command]
 pub async fn preview_eval<R: Runtime>(app: AppHandle<R>, js: String) -> Result<(), String> {
     let webview = app.get_webview(PREVIEW_LABEL).ok_or_else(|| "preview not open".to_string())?;

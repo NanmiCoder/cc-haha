@@ -31,20 +31,20 @@ Dark/monochrome marks have a light backplate so the original mark remains legibl
 2026-09-14 global service marks: neon, cloudflare, firecrawl, clickup, miro, postman, render, airtable, atlassian, webflow, todoist, intercom. Source: https://registry.npmjs.org/simple-icons/-/simple-icons-16.31.0.tgz (icons/; CC0, trademarks belong to service owners).
 Firecrawl exception: official favicon https://www.firecrawl.dev/favicon.png (not in Simple Icons).
 
-### 国内目录补充（2026-09-14）
+### China directory additions (2026-09-14)
 
-下列图片均取自对应供应商官网标识。ICO/PNG 通过系统 sips 转为最大 128px PNG，再以本地 SVG 的 data:image/png 包装，避免远程加载。ListingGood 保留官网内联 favicon SVG；飞常准保留官方 SVG 路径并去除 XML/外部 DTD 声明。仅为产品识别，不表示供应商合作或背书。
+All images below come from each vendor's official website logo. ICO/PNG files were converted with the system `sips` tool to PNG of at most 128px, then wrapped in a local SVG as data:image/png to avoid remote loading. ListingGood keeps the inline favicon SVG from its official site; VariFlight keeps the official SVG paths with the XML/external DTD declarations removed. For product identification only; does not imply vendor partnership or endorsement.
 
-| 文件 | 官方图片来源 / 发现页 |
+| File | Official image source / discovery page |
 | --- | --- |
 | qingflow.svg | https://qingflow.com/favicon.ico |
-| qcc.svg | https://agent.qcc.com/favicon-qcc.png （官网 /guide 的 icon 链接） |
-| xmind.svg | https://framerusercontent.com/images/PvPQXjvou7vNNpBBUrFlOgF4MCI.png （https://xmind.cn 的 favicon 链接） |
-| kuaicha.svg | https://s.thsi.cn/cd/kc-menhu-pc/public/img/logo.png （快查开放平台官网品牌图） |
+| qcc.svg | https://agent.qcc.com/favicon-qcc.png (icon link on the official /guide page) |
+| xmind.svg | https://framerusercontent.com/images/PvPQXjvou7vNNpBBUrFlOgF4MCI.png (favicon link on https://xmind.cn) |
+| kuaicha.svg | https://s.thsi.cn/cd/kc-menhu-pc/public/img/logo.png (brand image from the Kuaicha open platform website) |
 | qveris.svg | https://qveris.cn/apple-touch-icon.png |
-| listinggood.svg | https://listinggood.cn/ 的内联 data:image/svg+xml favicon |
+| listinggood.svg | inline data:image/svg+xml favicon on https://listinggood.cn/ |
 | bazhuayu.svg | https://www.bazhuayu.com/favicon.ico?v1 |
-| variflight.svg | https://static.variflight.com/assets/mcp/assets/variflight-logo.svg （官方 MCP 页 favicon） |
+| variflight.svg | https://static.variflight.com/assets/mcp/assets/variflight-logo.svg (favicon on the official MCP page) |
 | jufa.svg | https://www.jufaai.com/favicon.ico |
 | sorftime.svg | https://www.sorftime.com/content/home/img/favicon.ico?v=2.9.9 |
 

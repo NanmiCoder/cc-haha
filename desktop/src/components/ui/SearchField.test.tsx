@@ -51,10 +51,10 @@ describe('SearchField', () => {
     // They must not share a name: getByLabelText would match both and throw.
     // The component also must not compose the name itself — an English
     // `Clear ${label}` makes adoption an i18n regression.
-    render(<SearchField label="搜索会话" clearLabel="清除搜索" value="abc" onChange={() => {}} />)
+    render(<SearchField label="Search sessions" clearLabel="Clear search" value="abc" onChange={() => {}} />)
 
-    expect(screen.getByLabelText('搜索会话')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '清除搜索' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Search sessions')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Clear search' })).toBeInTheDocument()
   })
 
   it('can drop the clear button entirely', () => {

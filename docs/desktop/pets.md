@@ -1,120 +1,120 @@
 ---
-title: 桌面宠物
-nav_title: 桌面宠物
-description: 一只悬浮在桌面上的小机器人，用动作告诉你任务跑到哪了。
+title: Desktop pet
+nav_title: Desktop pet
+description: A little robot on your desktop that shows you how the current task is going.
 order: 8
 ---
 
-# 桌面宠物
+# Desktop pet
 
-一只悬浮在桌面上的小机器人。它会用动作反映本机任务的状态——在跑的时候低头忙活，等你审批的时候东张西望，出错了垂头丧气。你去做别的事时，瞄一眼就知道该不该切回来。
+A small robot that floats above your desktop and acts out what's happening on this machine — head down and busy while a task runs, glancing around while it waits for your approval, slumped over when something failed. Glance at it while you're doing something else and you'll know whether to switch back.
 
-它只是个状态提示和跳转入口，不能替你批准权限，也不能在悬浮窗里直接提问。
+It's a status indicator and a shortcut, nothing more. It can't approve permissions for you, and you can't type into it.
 
-## 打开它
+## Turning it on
 
-宠物**默认关闭**。打开方式：
+The pet is **off by default**:
 
-1. 点侧边栏最底部的「设置」。
-2. 选「宠物」分栏。
-3. 从「内置宠物」里挑一个。
-4. 打开「显示桌面宠物」。
+1. Click **Settings** at the bottom of the sidebar.
+2. Choose the **Pets** tab.
+3. Pick one from **Built-in pets**.
+4. Turn on **Show desktop pet**.
 
-![设置 → 宠物：四只内置宠物与外观参数](../images/app/zh-CN/settings-pets.webp)
+![Settings → Pets: four built-in pets and appearance controls (Chinese interface)](../images/app/en/settings-pets.webp)
 
-## 四只内置宠物
+## The four built-in pets
 
-| 角色 | 它是谁 |
+| Character | Who it is |
 |---|---|
-| 搭搭 Dada | 沉稳的协作机器人，陪你把想法一块块搭起来 |
-| 弧弧 Huhu | 拿着铅笔和计划本的路线机器人，复杂任务也能找到出口 |
-| 补补 Bubu | 举着修补扳手的小机器人，最擅长发现并修好裂缝 |
-| 回回 Huihui | 抱着构建齿轮的小机器人，新回复一到就精神满满 |
+| Dada | A steady coding robot that helps build ideas one block at a time |
+| Huhu | A pencil-and-notepad planning robot that maps a way through complex tasks |
+| Bubu | A wrench-carrying repair robot with a knack for spotting and fixing cracks |
+| Huihui | A gear-carrying build robot that perks up whenever a new reply arrives |
 
-换角色时已经打开的宠物窗口会立刻同步。
+Switching characters updates an already-open pet window immediately.
 
-## 和它互动
+## Interacting with it
 
-- **悬停** — 空闲时它会跳一下，视线跟着你的指针转。
-- **单击** — 唤起主窗口，同时挥个手。注意它只是把窗口叫出来，不会自动跳进某条会话。
-- **拖动** — 按住它挪到桌面别的位置，下次打开会尽量回到原处。
-- **右键** — 系统菜单里选「关闭宠物」。这只关掉悬浮窗，不会停掉任何任务。想再开回 设置 → 宠物。
+- **Hover** — while idle it hops, and its gaze follows your pointer.
+- **Click** — brings the main window forward with a wave. Note that it only raises the window; it doesn't jump into a particular session.
+- **Drag** — move it anywhere on the desktop. It tries to return to the same spot next launch.
+- **Right-click** — choose **Close pet** from the system menu. That closes the floating window only; no task is stopped. To bring it back, return to **Settings → Pets**.
 
-打开「显示进行中的任务区域」后，有任务在跑时它旁边会出现一块任务面板，按状态分组：
+With **Show active task panel** enabled, a panel appears beside the pet whenever work is in flight, grouped by state:
 
-- **工作中** — 会话、后台任务或 Agent 正在跑。
-- **等待你处理** — 在等权限审批或其他操作。
-- **需要关注** — 最近一次运行失败了。
+- **Working** — a session, background task, or agent is running.
+- **Waiting for you** — something needs a permission approval or other input.
+- **Needs attention** — the last run failed.
 
-点任务行会唤起主窗口并跳到那条会话。权限还是要在主窗口里批。关掉这个开关的话，有活跃任务时只保留一个数字角标，点角标能再展开。
+Clicking a row raises the main window and opens that session. Permissions are still approved in the main window. With the panel off, active work collapses to a numeric badge you can click to expand.
 
-## 外观参数
+## Appearance controls
 
-- **宠物大小** — 96 到 192 像素之间。
-- **播放动画** — 关掉之后宠物还在，只是不动了。想要安静一点又不想彻底关掉时用它。
-- **显示进行中的任务区域** — 见上。
-- **默认收起** — 平时只露宠物，需要时再展开任务面板。
+- **Pet size** — anywhere between 96 and 192 pixels.
+- **Play animations** — turn it off and the pet stays but stops moving. Useful when you want it quieter without dismissing it.
+- **Show active task panel** — see above.
+- **Collapsed by default** — show just the pet and expand the task panel only when you want it.
 
-## 做一只自己的
+## Making your own
 
-![添加宠物：三种创建方式](../images/app/zh-CN/pet-create.webp)
+![Add a pet: three ways to create your own (Chinese interface)](../images/app/en/pet-create.webp)
 
-点「你的宠物」右边的「添加宠物」。所有图片都在你自己的电脑上处理，不会上传，也不消耗对话额度。
+Click **Add pet** to the right of **Your pets**. Every image is processed on your own machine — nothing is uploaded, and nothing costs conversation credits.
 
-不管选哪种做法都要先填三个字段：**宠物 ID**（只用小写字母、数字和中间的连字符，比如 `moon-cat`）、**显示名称**、**宠物描述**。
+All three routes ask for the same three fields first: a **pet ID** (lowercase letters, digits, and single hyphens, e.g. `moon-cat`), a **display name**, and a **description**.
 
-### 做法一：用一张现成的图
+### Route 1: use an image you already have
 
-最省事，大概一分钟。选一张背景透明的静态 PNG 或 WebP，应用会给它加上呼吸和上下浮动的轻动画。
+The quickest — about a minute. Pick a static PNG or WebP with a transparent background and the app adds gentle breathing and floating motion.
 
-这种宠物**不会跑、不会挥手、不会跟着鼠标转头**。想要完整动作，用下面两种。
+This kind of pet **won't run, wave, or track your cursor**. For that, use one of the routes below.
 
-### 做法二：让 AI 画一张动作表
+### Route 2: have an AI draw an action sheet
 
-大概十分钟，需要一个能画图的 AI。弹窗里已经准备好一段完整提示词和一张对照模板，点「复制这段提示词」就能直接发给 AI，只要把开头「角色」那两行换成你想要的样子。
+About ten minutes and an image-generating AI. The dialog already contains a complete prompt and a reference template; click **Copy this prompt** and paste it into the AI, replacing the two "character" lines with what you want.
 
-要画的是一张 **8 列 × 9 行**的动作表，每格一个动作帧：
+What it needs to draw is an **8-column by 9-row** action sheet, one frame per cell:
 
-| 行 | 内容 | 用到的格数 |
+| Row | Content | Frames used |
 |---|---|---|
-| 1 | 待机：站着不动，轻微呼吸起伏 | 6 |
-| 2 | 向右跑：完整跑步循环，始终朝右 | 8 |
-| 3 | 挥手：抬手打招呼 | 4 |
-| 4 | 跳跃：下蹲 → 起跳 → 落地 | 5 |
-| 5 | 失败：沮丧、垂头、叹气 | 8 |
-| 6 | 等待：东张西望、原地踱步 | 6 |
-| 7 | 工作：低头忙碌 | 6 |
-| 8 | 视线上半圈：从正上方转到接近正下方 | 8 |
-| 9 | 视线下半圈：从正下方转回接近正上方 | 8 |
+| 1 | Idle: standing still with a slight breathing motion | 6 |
+| 2 | Run right: a full run cycle, always facing right | 8 |
+| 3 | Wave: raising a hand in greeting | 4 |
+| 4 | Jump: crouch, leap, land | 5 |
+| 5 | Fail: dejected, head down, sighing | 8 |
+| 6 | Wait: looking around, pacing in place | 6 |
+| 7 | Work: head down, busy | 6 |
+| 8 | Gaze, upper arc: from straight up around to nearly straight down | 8 |
+| 9 | Gaze, lower arc: from straight down back around to nearly straight up | 8 |
 
-「向左跑」不用画，应用会把第 2 行水平镜像自动补出来。最后两行懒得画也行，重复待机的第一帧就好，只是它不会跟着鼠标转头。
+"Run left" doesn't need drawing — the app mirrors row 2 horizontally. The last two rows are optional too; repeat the first idle frame and the pet simply won't track your cursor.
 
-图出来以后对着弹窗里的模板检查三件事：背景是透空的不是白底、横 8 格竖 9 行、九行里从头到尾是同一只。不对就让 AI 重画，或者说「角色保持不变，只重画第 2 行」。
+When the image comes back, check three things against the template in the dialog: the background is genuinely transparent rather than white, it really is 8 across by 9 down, and it's the same character in all nine rows. If not, ask the AI to redraw — "keep the character, redraw row 2 only" works well.
 
-### 做法三：我已经有动作图了
+### Route 3: I already have an action sheet
 
-已经画好了就走这条，跳过教程直接填表选图。校验规则和做法二完全一样。
+Skip the tutorial and go straight to the form. The validation rules are identical to route 2.
 
-### 尺寸不用自己算
+### You don't have to compute the size
 
-选图之后应用会在本地把它整理成运行时需要的图集：按 8 列 × 9 行切格、等比缩放、把角色在格子里居中、镜像补出向左跑的一行，再补齐其余行。
+Once you pick the image, the app assembles the runtime atlas locally: it slices the 8×9 grid, scales proportionally, centers the character in each cell, mirrors the run-left row, and fills in the remaining rows.
 
-所以**长宽不必是某个精确数值**，AI 常出的 `1024 × 1152` 之类都能用，比例接近 8:9 时效果最好。已经是 `1536 × 2288` 的成品图集会原样保留，不会被重新缩放。
+So the **dimensions don't need to be exact**. Common AI output sizes like `1024 × 1152` work fine, and anything close to an 8:9 ratio works best. An existing `1536 × 2288` atlas is kept as-is and never rescaled.
 
-图片本身要满足：静态 PNG 或 WebP（动图不行）、长宽都在 32–4096 像素之间、总像素不超过 16,777,216、文件不超过 8 MB。
+The image itself must be: a static PNG or WebP (no animated formats), between 32 and 4096 pixels on each side, at most 16,777,216 pixels total, and under 8 MB.
 
 :::warning
-最常见的失败是**白底**。白底导出的图在桌面上会变成一个方块，应用会直接拒绝导入。让 AI 重新导出透明背景的 PNG，或者用抠图工具去掉背景。
+The most common failure is a **white background**. A white-backed image becomes a rectangle sitting on your desktop, so the app rejects it outright. Have the AI re-export a transparent PNG, or remove the background yourself.
 :::
 
-## 存在哪、怎么删
+## Where they live, and deleting one
 
-自定义宠物包在 `${CLAUDE_CONFIG_DIR:-~/.claude}/cc-haha/pets`，设置页底部有「打开文件夹」按钮。每只宠物一个独立子目录，里面是 `pet.json` 和图片。
+Custom pet packages live in `${CLAUDE_CONFIG_DIR:-~/.claude}/cc-haha/pets`, and there's an **Open folder** button at the bottom of the settings page. Each pet gets its own subdirectory containing `pet.json` and its images.
 
-界面上目前没有删除按钮。要删的话：先在设置页选回一只内置宠物，点「打开文件夹」，只删掉目标宠物那个子目录，回设置页点「刷新」。不要删整个 `pets` 或 `cc-haha` 目录。
+There's no delete button in the UI yet. To remove one: select a built-in pet first, click **Open folder**, delete only that pet's subdirectory, then click **Refresh** back in settings. Don't delete the whole `pets` or `cc-haha` directory.
 
-手工改过的 `pet.json` 或替换过的图片可能过不了校验，无效的包会被跳过并在设置页提示。
+A hand-edited `pet.json` or a swapped image may fail validation; invalid packages are skipped and reported in the settings page.
 
-## 边界
+## Limits
 
-宠物只在桌面端跑，H5 页面里看不到它。退出应用或电脑休眠后它不会继续工作。窗口置顶、拖动和多显示器的行为受各操作系统限制。
+The pet is desktop-only and never appears in H5. It stops working when you quit the app or the machine sleeps. Always-on-top behavior, dragging, and multi-monitor placement are all subject to what each operating system allows.

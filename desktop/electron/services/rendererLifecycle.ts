@@ -197,10 +197,10 @@ export async function showRendererRecoveryFailure({
   if (isQuitting() || window.isDestroyed()) return
   const { response } = await dialog.showMessageBox(window, {
     type: 'error',
-    title: '界面恢复失败 / Interface Recovery Failed',
-    message: '桌面界面自动恢复失败。/ The desktop interface could not recover automatically.',
-    detail: `请重启应用；如果问题持续存在，请附上诊断日志反馈。\nRestart the app and include diagnostics when reporting the problem.\n\n${detail}`,
-    buttons: ['重启应用 / Restart App', '稍后 / Later'],
+    title: 'Interface Recovery Failed',
+    message: 'The desktop interface could not recover automatically.',
+    detail: `Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
+    buttons: ['Restart App', 'Later'],
     defaultId: 0,
     cancelId: 1,
     noLink: true,

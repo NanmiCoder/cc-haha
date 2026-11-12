@@ -46,7 +46,7 @@ type Props = {
   markerWhenPending?: boolean
 }
 
-/** Card shell shared by the permission and plan-approval cards (「素」). */
+/** Card shell shared by the permission and plan-approval cards ("Su" spec). */
 const PENDING_CARD =
   'mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-raised)]'
 

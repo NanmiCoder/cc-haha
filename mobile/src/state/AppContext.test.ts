@@ -210,7 +210,7 @@ test('a missing credential stays unavailable without deleting the paired host or
     assert.equal(connection.host.id, hostA.id)
     await advance(60000)
     assert.equal(reads.length, 1)
-    assert.equal(connection.error.includes('移除'), false)
+    assert.equal(connection.error.includes('Remove'), false)
   `)
 })
 

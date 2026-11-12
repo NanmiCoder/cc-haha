@@ -86,7 +86,7 @@ describe('MermaidRenderer', () => {
       <MermaidRenderer
         code={[
           'flowchart TD',
-          '  D1[/api/dcl] --> D2[直接调用 dclService]',
+          '  D1[/api/dcl] --> D2[Call dclService directly]',
         ].join('\n')}
       />,
     )
@@ -96,7 +96,7 @@ describe('MermaidRenderer', () => {
         expect.any(String),
         [
           'flowchart TD',
-          '  D1["/api/dcl"] --> D2[直接调用 dclService]',
+          '  D1["/api/dcl"] --> D2[Call dclService directly]',
         ].join('\n'),
       )
     })

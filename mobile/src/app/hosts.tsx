@@ -82,7 +82,7 @@ function HostRow({
     <View style={{ backgroundColor: colors.err }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`移除 ${host.name}`}
+        accessibilityLabel={`Remove ${host.name}`}
         onPress={onRemove}
         style={{
           position: 'absolute',
@@ -96,7 +96,7 @@ function HostRow({
         }}
       >
         <Icon name="trash" size={20} color="#FFFFFF" />
-        <Text style={{ color: colors.onErr, fontSize: 12, fontWeight: '600' }}>移除</Text>
+        <Text style={{ color: colors.onErr, fontSize: 12, fontWeight: '600' }}>Remove</Text>
       </Pressable>
       <Animated.View
         {...swipe.panHandlers}
@@ -104,8 +104,8 @@ function HostRow({
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${host.name}，${detail}${badge ? `，${badge.text}` : ''}${current ? '，当前电脑' : ''}`}
-          accessibilityActions={[{ name: 'delete', label: '移除连接' }]}
+          accessibilityLabel={`${host.name}, ${detail}${badge ? `, ${badge.text}` : ''}${current ? ', current computer' : ''}`}
+          accessibilityActions={[{ name: 'delete', label: 'Remove connection' }]}
           onAccessibilityAction={(event) => {
             if (event.nativeEvent.actionName === 'delete') onRemove()
           }}
@@ -161,7 +161,7 @@ function HostRow({
   )
 }
 
-/** 管理多台电脑只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+/** Managing multiple computers is native app only; the web version connects only to the computer that opened it, so go straight home. */
 export default function HostsRoute() {
   return isH5 ? <Redirect href="/" /> : <Hosts />
 }
@@ -175,9 +175,9 @@ function Hosts() {
   function removeHost(host: Host) {
     const text = removeConfirmText(host.name)
     Alert.alert(text.title, text.message, [
-      { text: '取消', style: 'cancel' },
+      { text: 'Cancel', style: 'cancel' },
       {
-        text: '移除连接',
+        text: 'Remove connection',
         style: 'destructive',
         onPress: () => {
           void remove(host.id).catch((e) => setError(errorText(e)))
@@ -200,7 +200,7 @@ function Hosts() {
   }
   return (
     <ScreenView>
-      <NavBar floating title="你的电脑" />
+      <NavBar floating title="Your computers" />
       <ScrollView
         refreshControl={
           <RefreshControl
@@ -231,20 +231,20 @@ function Hosts() {
               ))}
             </Group>
             <Footnote>
-              电脑休眠或没打开 cc-haha 时连不上。左滑或长按可移除，只会删掉手机上的连接，电脑上的会话还在。
+              Cannot connect while the computer is asleep or cc-haha is not open. Swipe left or long-press to remove; this only removes the connection on the phone, sessions on the computer stay.
             </Footnote>
           </>
         ) : (
           <EmptyState
             icon="laptop"
-            title="先连接第一台电脑"
-            detail="打开电脑上的 cc-haha，在「设置 → 手机连接」中开启局域网，或选择 Cloudflare 快速连接 / 固定域名，再用手机扫码。"
+            title="Connect your first computer"
+            detail="Open cc-haha on the computer, turn on LAN in Settings → Mobile connection, or choose Cloudflare quick connect / fixed domain, then scan with your phone."
           />
         )}
         <Group style={{ marginTop: 22 }}>
           <ListRow
             leading={<Icon name="plus" size={20} color={colors.ink} strokeWidth={2} />}
-            title="添加电脑"
+            title="Add computer"
             minHeight={52}
             onPress={() => router.push('/connect')}
           />

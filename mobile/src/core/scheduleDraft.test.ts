@@ -3,7 +3,7 @@ import { applySchedulePreset, createScheduleInput, newScheduleDraft, scheduleDra
 import type { ScheduledTask } from './operations'
 
 const now = Date.parse('2035-10-26T18:00:00Z')
-const options: ScheduleCreateOptions = { name: '', prompt: '检查构建\n报告结果', execution: { kind: 'new-session' }, folderPath: '/fixture/project', runtime: { providerId: 'fixture', modelId: 'fast' }, useWorktree: false, notificationPolicy: 'none', channels: [] }
+const options: ScheduleCreateOptions = { name: '', prompt: 'Check the build\nReport results', execution: { kind: 'new-session' }, folderPath: '/fixture/project', runtime: { providerId: 'fixture', modelId: 'fast' }, useWorktree: false, notificationPolicy: 'none', channels: [] }
 
 test('quick presets use the selected timezone and tomorrow crosses months safely', () => {
   const draft = newScheduleDraft('Asia/Shanghai', now)
@@ -28,7 +28,7 @@ test('an unchanged one-time draft preserves seconds and the later side of a DST 
   // Editing either wall time or timezone must invalidate the preset's instant.
   const preset = applySchedulePreset(newScheduleDraft('UTC', now), 'halfHour', now)
   expect(scheduleFromDraft({ ...preset, runAt: '2035-10-27T09:00' }, now)).toEqual({ kind: 'once', runAt: '2035-10-27T09:00:00.000Z', timeZone: 'UTC' })
-  expect(() => scheduleFromDraft({ ...preset, timeZone: 'Asia/Shanghai' }, now)).toThrow('未来')
+  expect(() => scheduleFromDraft({ ...preset, timeZone: 'Asia/Shanghai' }, now)).toThrow('future')
 })
 
 test('a new quick choice replaces an old instant even when its repeated wall time is identical', () => {
@@ -66,7 +66,7 @@ test.each([
 test('single execution is sent using the same explicit schedule and execution target as desktop', () => {
   const draft = applySchedulePreset(newScheduleDraft('UTC', now), 'halfHour', now)
   const input = createScheduleInput(options, draft, now)
-  expect(input).toMatchObject({ name: '检查构建', recurring: false, execution: { kind: 'new-session' }, folderPath: '/fixture/project', model: 'fast', providerId: 'fixture', permissionMode: 'bypassPermissions', schedule: { kind: 'once', runAt: '2035-10-26T18:30:00.000Z', timeZone: 'UTC' }, notificationPolicy: 'none', notification: { enabled: false, channels: [] } })
+  expect(input).toMatchObject({ name: 'Check the build', recurring: false, execution: { kind: 'new-session' }, folderPath: '/fixture/project', model: 'fast', providerId: 'fixture', permissionMode: 'bypassPermissions', schedule: { kind: 'once', runAt: '2035-10-26T18:30:00.000Z', timeZone: 'UTC' }, notificationPolicy: 'none', notification: { enabled: false, channels: [] } })
   expect(input).not.toHaveProperty('cron')
   const attached = createScheduleInput({ ...options, execution: { kind: 'session', targetSessionId: 'chat' }, notificationPolicy: 'failed', channels: ['desktop'] }, draft, now)
   expect(attached.execution).toEqual({ kind: 'session', targetSessionId: 'chat' })
@@ -77,13 +77,13 @@ test('completed one-time edits preserve seconds without rearming, while changed 
   const task: ScheduledTask = { id: 'once', prompt: 'check', cron: '', createdAt: 0, revision: 9, schedule: { kind: 'once', runAt: '2030-01-01T00:00:23Z', timeZone: 'UTC' } }
   const draft = scheduleDraftForTask(task)
   expect(scheduleUpdate(draft, task, now)).toBeNull()
-  expect(() => scheduleUpdate({ ...draft, runAt: '2030-01-01T00:01' }, task, now)).toThrow('未来')
+  expect(() => scheduleUpdate({ ...draft, runAt: '2030-01-01T00:01' }, task, now)).toThrow('future')
 })
 
 test('property order cannot rearm an unchanged recurring task', () => {
   const task: ScheduledTask = { id: 'cron', prompt: 'check', cron: '0 9 * * *', createdAt: 0, schedule: { timeZone: 'UTC', expression: '0 9 * * *', kind: 'cron' } }
   expect(scheduleUpdate(scheduleDraftForTask(task), task, now)).toBeNull()
-  expect(() => applySchedulePreset({ ...newScheduleDraft('UTC', now), timeZone: 'invalid' }, 'tomorrow', now)).toThrow('时区')
+  expect(() => applySchedulePreset({ ...newScheduleDraft('UTC', now), timeZone: 'invalid' }, 'tomorrow', now)).toThrow('time zone')
 })
 
 test('legacy edits retain computer-local timing and one-shot recurrence until explicitly converted', () => {
@@ -99,9 +99,9 @@ test('legacy edits retain computer-local timing and one-shot recurrence until ex
 test('validation rejects past, invalid calendar dates, DST gaps, invalid zones and unsupported cron', () => {
   const draft = newScheduleDraft('America/New_York', now)
   for (const runAt of ['2030-01-01T09:00', '2036-02-30T09:00', '2036-03-09T02:30']) expect(() => scheduleFromDraft({ ...draft, frequency: 'once', runAt }, now)).toThrow()
-  expect(() => scheduleFromDraft({ ...draft, timeZone: 'Mars/Test' }, now)).toThrow('时区')
-  expect(() => scheduleFromDraft({ ...draft, frequency: 'specificDays', selectedDays: [] }, now)).toThrow('一天')
+  expect(() => scheduleFromDraft({ ...draft, timeZone: 'Mars/Test' }, now)).toThrow('time zone')
+  expect(() => scheduleFromDraft({ ...draft, frequency: 'specificDays', selectedDays: [] }, now)).toThrow('day of the week')
   for (const customCron of ['*/0 * * * *', '0 24 * * *', '0 9 * * 5-1', '0/5 * * * *']) expect(() => scheduleFromDraft({ ...draft, frequency: 'customCron', customCron }, now)).toThrow()
-  expect(() => createScheduleInput({ ...options, folderPath: '' }, draft, now)).toThrow('项目目录')
-  expect(() => createScheduleInput({ ...options, notificationPolicy: 'all' }, draft, now)).toThrow('渠道')
+  expect(() => createScheduleInput({ ...options, folderPath: '' }, draft, now)).toThrow('project directory')
+  expect(() => createScheduleInput({ ...options, notificationPolicy: 'all' }, draft, now)).toThrow('notification channel')
 })

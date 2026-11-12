@@ -490,7 +490,7 @@ function sortRows(rows: CcSwitchProviderRow[]): CcSwitchProviderRow[] {
 /**
  * cc-switch pins settings.json to `$HOME/.cc-switch` on purpose — it holds the
  * directory override itself, so it cannot live inside the overridden directory
- * (`settings.rs`: "settings.json 必须使用固定路径，不能被 app_config_dir 覆盖").
+ * (`settings.rs`: "settings.json must use a fixed path and cannot be overridden by app_config_dir").
  * Reading it from the resolved dir would silently miss it whenever an override
  * is set, so try the fixed location too.
  */

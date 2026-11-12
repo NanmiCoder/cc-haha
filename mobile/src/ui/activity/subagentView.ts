@@ -5,26 +5,26 @@ import { currentStepLabel } from '../chat/captionModel'
 import { buildChatRows, type ChatRow, type StepLabel } from '../chat/steps'
 
 export type SubagentRunView = {
-  /** 主 Agent 交给它的任务（transcript 里的第一条用户消息）。 */
+  /** Task given by the main agent (the first user message in the transcript). */
   prompt: ChatItem | null
-  /** 和主对话同一套行：第一行是 prompt，结束后的处理过程折成「用时 …」。 */
+  /** Same rows as the main conversation: the first row is the prompt, and the process after finishing collapses into "Took …". */
   rows: ChatRow[]
-  /** 运行中正在做的这一步（已从步骤摘要里扣掉，由页面单独画在末尾）。 */
+  /** The step currently in progress while running (already removed from the step summary and drawn separately at the end by the page). */
   current: StepLabel | null
   truncated: boolean
-  /** transcript 里一条都没有。 */
+  /** transcript has none at all. */
   empty: boolean
 }
 
 /**
- * 把电脑返回的子 Agent 原始记录归一化成和主对话一致的时间线：
- * 第一条用户消息是主 Agent 交给它的任务，整段走同一套 buildChatRows（工具聚合、折叠）。
- * 一条记录都没有时，已结束的运行退而显示电脑给出的最终结果，运行中则保持空白。
+ * Normalize raw subagent records from the computer into the same timeline as the main conversation: 
+ * the first user message is the task given by the main agent, and the whole thing goes through the same buildChatRows (tool aggregation, collapsing).
+ * When there are no records at all, finished runs fall back to the final result from the computer, and running ones stay blank.
  */
 export function subagentRunView(
   output: Pick<SubagentOutput, 'messages' | 'result' | 'truncated'> | null,
   running: boolean,
-  /** 团队成员页：显示成员之间的消息。 */
+  /** Team member page: show messages between members. */
   options: { teammates?: 'show' } = {}
 ): SubagentRunView {
   if (!output) return { prompt: null, rows: [], current: null, truncated: false, empty: true }
@@ -52,7 +52,7 @@ export type SubagentHeader = {
 
 const known = ['running', 'completed', 'failed', 'stopped'] as const
 
-/** 页眉：名称取任务说明，状态以后台任务列表为准，列表里找不到时退回 transcript 自带的状态。 */
+/** Header: name from the task description, state from the background task list, falling back to the transcript's own state when not in the list. */
 export function subagentHeader(
   task: BackgroundTask | undefined,
   output: Pick<SubagentOutput, 'status'> | null
@@ -60,7 +60,7 @@ export function subagentHeader(
   const reported = known.find((status) => status === output?.status)
   const started = task?.startedAt ? Date.parse(task.startedAt) : NaN
   return {
-    title: task?.description?.trim() || '子 Agent',
+    title: task?.description?.trim() || 'Subagent',
     status: task?.status ?? reported ?? 'completed',
     ...(Number.isFinite(started) ? { startedAt: started } : {}),
   }

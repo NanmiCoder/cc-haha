@@ -1,54 +1,54 @@
-# Claude Code Desktop App — 服务端架构设计
+# Claude Code Desktop App — Server architecture design
 
-## 一、设计原则
+## 1. Design principles
 
-1. **非侵入性**: 不修改现有 CLI 源代码，在 `src/server/` 下新建服务层
-2. **数据一致性**: 读写与 CLI 完全相同的文件（JSONL 会话、JSON 设置、Cron 任务）
-3. **CLI/UI 互通**: UI 的操作落盘到 CLI 的文件系统，CLI 的会话在 UI 可见
-4. **渐进式**: 先实现核心 API，再扩展高级功能
+1. **Non-invasive**: do not modify the existing CLI source; build a new service layer under `src/server/`
+2. **Data consistency**: read and write exactly the same files as the CLI (JSONL sessions, JSON settings, cron tasks)
+3. **CLI/UI interoperability**: UI actions land in the CLI's file system, and CLI sessions are visible in the UI
+4. **Incremental**: implement the core APIs first, then extend with advanced features
 
-## 二、技术栈
+## 2. Tech stack
 
-| 层 | 技术 | 理由 |
+| Layer | Technology | Reason |
 |----|------|------|
-| HTTP Server | Bun.serve() | 原项目已用 Bun，零额外依赖 |
-| WebSocket | Bun 原生 WebSocket | 已有 `ws` 依赖，Bun 原生更高效 |
-| 验证 | Zod v4 | 已在依赖中 |
-| 测试 | bun:test | Bun 内置，无需额外依赖 |
-| API 风格 | REST + WebSocket | REST 用于 CRUD，WS 用于流式传输 |
+| HTTP Server | Bun.serve() | The project already uses Bun; zero extra dependencies |
+| WebSocket | Bun native WebSocket | `ws` is already a dependency, but Bun native is more efficient |
+| Validation | Zod v4 | Already a dependency |
+| Testing | bun:test | Built into Bun; no extra dependency |
+| API style | REST + WebSocket | REST for CRUD, WS for streaming |
 
-## 三、目录结构
+## 3. Directory structure
 
 ```
 src/server/
-├── index.ts                    # 服务器入口
-├── router.ts                   # 路由注册
+├── index.ts                    # server entry
+├── router.ts                   # route registration
 ├── middleware/
-│   ├── auth.ts                 # API Key 鉴权
-│   ├── cors.ts                 # CORS 处理
-│   └── errorHandler.ts         # 统一错误处理
+│   ├── auth.ts                 # API key auth
+│   ├── cors.ts                 # CORS handling
+│   └── errorHandler.ts         # unified error handling
 ├── api/
-│   ├── sessions.ts             # 会话管理 API
-│   ├── conversations.ts        # 对话/消息 API
-│   ├── settings.ts             # 设置 API
-│   ├── models.ts               # 模型选择 API
-│   ├── scheduled-tasks.ts      # 定时任务 API
-│   ├── search.ts               # 搜索 API
-│   ├── agents.ts               # Agent 管理 API
-│   ├── mcp.ts                  # MCP 服务器管理 API
-│   └── status.ts               # 状态与诊断 API
+│   ├── sessions.ts             # session management API
+│   ├── conversations.ts        # conversation/message API
+│   ├── settings.ts             # settings API
+│   ├── models.ts               # model selection API
+│   ├── scheduled-tasks.ts      # scheduled task API
+│   ├── search.ts               # search API
+│   ├── agents.ts               # agent management API
+│   ├── mcp.ts                  # MCP server management API
+│   └── status.ts               # status and diagnostics API
 ├── ws/
-│   ├── handler.ts              # WebSocket 连接管理
-│   ├── chatStream.ts           # 对话流式传输
-│   └── events.ts               # 事件类型定义
+│   ├── handler.ts              # WebSocket connection management
+│   ├── chatStream.ts           # conversation streaming
+│   └── events.ts               # event type definitions
 ├── services/
-│   ├── sessionService.ts       # 会话服务（封装 sessionStorage）
-│   ├── conversationService.ts  # 对话服务（封装 query engine）
-│   ├── settingsService.ts      # 设置服务（封装 settings）
-│   ├── cronService.ts          # 定时任务服务（封装 cronTasks）
-│   ├── searchService.ts        # 搜索服务（封装 ripgrep）
-│   ├── agentService.ts         # Agent 服务
-│   └── mcpService.ts           # MCP 服务
+│   ├── sessionService.ts       # session service (wraps sessionStorage)
+│   ├── conversationService.ts  # conversation service (wraps the query engine)
+│   ├── settingsService.ts      # settings service (wraps settings)
+│   ├── cronService.ts          # scheduled task service (wraps cronTasks)
+│   ├── searchService.ts        # search service (wraps ripgrep)
+│   ├── agentService.ts         # agent service
+│   └── mcpService.ts           # MCP service
 └── __tests__/
     ├── sessions.test.ts
     ├── conversations.test.ts
@@ -59,49 +59,49 @@ src/server/
         └── full-flow.test.ts
 ```
 
-## 四、API 设计
+## 4. API design
 
-### 4.1 会话管理 (Sessions)
+### 4.1 Sessions
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/sessions` | 获取会话列表（支持分页、项目过滤） |
-| GET | `/api/sessions/:id` | 获取会话详情（标题、消息数、时间） |
-| POST | `/api/sessions` | 创建新会话 |
-| DELETE | `/api/sessions/:id` | 删除会话 |
-| PATCH | `/api/sessions/:id` | 更新会话（重命名） |
-| GET | `/api/sessions/:id/messages` | 获取会话消息历史 |
+| GET | `/api/sessions` | List sessions (pagination, project filter) |
+| GET | `/api/sessions/:id` | Session details (title, message count, timestamps) |
+| POST | `/api/sessions` | Create a new session |
+| DELETE | `/api/sessions/:id` | Delete a session |
+| PATCH | `/api/sessions/:id` | Update a session (rename) |
+| GET | `/api/sessions/:id/messages` | Session message history |
 
-**数据来源**: `~/.claude/projects/{proj}/{sid}.jsonl` (JSONL 格式)
+**Data source**: `~/.claude/projects/{proj}/{sid}.jsonl` (JSONL format)
 
-**实现要点**:
-- 调用 `loadMessageLogs()` 获取会话列表
-- 调用 `loadTranscriptFile()` 解析 JSONL 消息
-- 使用 `getProjectDir()` 定位项目目录
-- 会话 ID 为 UUID v4
+**Implementation notes**:
+- Call `loadMessageLogs()` to get the session list
+- Call `loadTranscriptFile()` to parse JSONL messages
+- Use `getProjectDir()` to locate the project directory
+- Session IDs are UUID v4
 
-### 4.2 对话 (Conversations)
+### 4.2 Conversations
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| POST | `/api/sessions/:id/chat` | 未实现，返回 501；发送消息请使用会话 WebSocket 的 `user_message` |
-| GET | `/api/sessions/:id/chat/status` | 获取对话状态 |
-| POST | `/api/sessions/:id/chat/stop` | 停止生成 |
+| POST | `/api/sessions/:id/chat` | Not implemented, returns 501; send messages with `user_message` over the session WebSocket |
+| GET | `/api/sessions/:id/chat/status` | Conversation status |
+| POST | `/api/sessions/:id/chat/stop` | Stop generation |
 
 **WebSocket**: `ws://host:port/ws/chat/:sessionId`
-- 发送消息 → 流式接收 AI 回复
-- 实时推送工具调用进度
-- 权限请求转发给前端
+- Send a message → receive the AI reply as a stream
+- Live tool call progress
+- Permission requests forwarded to the front end
 
-**WebSocket 消息格式**:
+**WebSocket message format**:
 ```typescript
-// 客户端 → 服务器
+// client → server
 type ClientMessage =
   | { type: 'user_message'; content: string; attachments?: Attachment[] }
   | { type: 'permission_response'; requestId: string; allowed: boolean }
   | { type: 'stop_generation' }
 
-// 服务器 → 客户端
+// server → client
 type ServerMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use' }
   | { type: 'content_delta'; text?: string; toolInput?: string }
@@ -113,122 +113,122 @@ type ServerMessage =
   | { type: 'status'; state: 'thinking' | 'tool_executing' | 'idle' }
 ```
 
-### 4.3 设置 (Settings)
+### 4.3 Settings
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/settings` | 获取合并后的设置 |
-| GET | `/api/settings/user` | 获取用户级设置 |
-| GET | `/api/settings/project` | 获取项目级设置 |
-| PUT | `/api/settings/user` | 更新用户级设置 |
-| PUT | `/api/settings/project` | 更新项目级设置 |
-| GET | `/api/permissions/mode` | 获取当前权限模式 |
-| PUT | `/api/permissions/mode` | 切换权限模式 |
+| GET | `/api/settings` | Merged settings |
+| GET | `/api/settings/user` | User-level settings |
+| GET | `/api/settings/project` | Project-level settings |
+| PUT | `/api/settings/user` | Update user-level settings |
+| PUT | `/api/settings/project` | Update project-level settings |
+| GET | `/api/permissions/mode` | Current permission mode |
+| PUT | `/api/permissions/mode` | Switch permission mode |
 
-**数据来源**: `~/.claude/settings.json` + `.claude/settings.json`
+**Data source**: `~/.claude/settings.json` + `.claude/settings.json`
 
-### 4.4 模型 (Models)
+### 4.4 Models
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/models` | 获取可用模型列表 |
-| GET | `/api/models/current` | 获取当前选中模型 |
-| PUT | `/api/models/current` | 切换模型 |
-| GET | `/api/effort` | 获取当前 Effort 等级 |
-| PUT | `/api/effort` | 设置 Effort 等级 |
+| GET | `/api/models` | Available models |
+| GET | `/api/models/current` | Currently selected model |
+| PUT | `/api/models/current` | Switch model |
+| GET | `/api/effort` | Current effort level |
+| PUT | `/api/effort` | Set effort level |
 
-### 4.5 定时任务 (Scheduled Tasks)
+### 4.5 Scheduled tasks
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/scheduled-tasks` | 获取定时任务列表 |
-| POST | `/api/scheduled-tasks` | 创建定时任务 |
-| PUT | `/api/scheduled-tasks/:id` | 更新定时任务 |
-| DELETE | `/api/scheduled-tasks/:id` | 删除定时任务 |
+| GET | `/api/scheduled-tasks` | List scheduled tasks |
+| POST | `/api/scheduled-tasks` | Create a scheduled task |
+| PUT | `/api/scheduled-tasks/:id` | Update a scheduled task |
+| DELETE | `/api/scheduled-tasks/:id` | Delete a scheduled task |
 
-**数据来源**: `.claude/scheduled_tasks.json`
+**Data source**: `.claude/scheduled_tasks.json`
 
-### 4.6 搜索 (Search)
+### 4.6 Search
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| POST | `/api/search` | 全局搜索（ripgrep） |
-| POST | `/api/search/sessions` | 搜索会话历史 |
+| POST | `/api/search` | Global search (ripgrep) |
+| POST | `/api/search/sessions` | Search session history |
 
-### 4.7 Agent 管理
+### 4.7 Agent management
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/agents` | 获取 Agent 定义列表 |
-| GET | `/api/agents/:name` | 获取 Agent 详情 |
-| POST | `/api/agents` | 创建 Agent 定义 |
-| PUT | `/api/agents/:name` | 更新 Agent 定义 |
-| DELETE | `/api/agents/:name` | 删除 Agent 定义 |
-| GET | `/api/tasks` | 获取后台任务列表 |
-| GET | `/api/tasks/:id` | 获取任务详情 |
+| GET | `/api/agents` | List agent definitions |
+| GET | `/api/agents/:name` | Agent details |
+| POST | `/api/agents` | Create an agent definition |
+| PUT | `/api/agents/:name` | Update an agent definition |
+| DELETE | `/api/agents/:name` | Delete an agent definition |
+| GET | `/api/tasks` | List background tasks |
+| GET | `/api/tasks/:id` | Task details |
 
-### 4.8 MCP 服务器管理
+### 4.8 MCP server management
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/mcp/servers` | 获取 MCP 服务器列表 |
-| POST | `/api/mcp/servers` | 添加 MCP 服务器 |
-| DELETE | `/api/mcp/servers/:name` | 移除 MCP 服务器 |
-| GET | `/api/mcp/tools` | 获取 MCP 工具列表 |
+| GET | `/api/mcp/servers` | List MCP servers |
+| POST | `/api/mcp/servers` | Add an MCP server |
+| DELETE | `/api/mcp/servers/:name` | Remove an MCP server |
+| GET | `/api/mcp/tools` | List MCP tools |
 
-### 4.9 状态与诊断
+### 4.9 Status and diagnostics
 
-| 方法 | 路径 | 描述 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/status` | 服务器状态（健康检查） |
-| GET | `/api/status/diagnostics` | 系统诊断信息 |
-| GET | `/api/status/usage` | Token 用量统计 |
-| GET | `/api/status/user` | 用户信息 |
+| GET | `/api/status` | Server status (health check) |
+| GET | `/api/status/diagnostics` | System diagnostics |
+| GET | `/api/status/usage` | Token usage statistics |
+| GET | `/api/status/user` | User info |
 
-## 五、服务层设计
+## 5. Service layer design
 
-每个 Service 封装对现有工具函数的调用，提供统一的错误处理和数据转换：
+Each service wraps calls to existing utility functions, providing unified error handling and data conversion:
 
 ```typescript
-// 示例: SessionService
+// Example: SessionService
 class SessionService {
-  // 列出所有会话
+  // List all sessions
   async listSessions(options: { project?: string; limit?: number; offset?: number }): Promise<SessionListResponse>
-  
-  // 获取会话消息
+
+  // Get session messages
   async getSessionMessages(sessionId: string): Promise<Message[]>
-  
-  // 创建新会话
+
+  // Create a new session
   async createSession(workDir: string): Promise<SessionInfo>
-  
-  // 删除会话
+
+  // Delete a session
   async deleteSession(sessionId: string): Promise<void>
-  
-  // 重命名会话
+
+  // Rename a session
   async renameSession(sessionId: string, title: string): Promise<void>
 }
 ```
 
-**关键实现**:
-- `SessionService` 调用 `loadMessageLogs()` 和 `loadTranscriptFile()`
-- `SettingsService` 调用 `getSettings()` 和 `updateSettingsForSource()`
-- `CronService` 调用 `readCronTasks()` 和 `writeCronTasks()`
-- `SearchService` 调用 ripgrep 流式搜索
-- `ConversationService` 使用 `queryModelWithStreaming()` + `StreamingToolExecutor`
+**Key implementation**:
+- `SessionService` calls `loadMessageLogs()` and `loadTranscriptFile()`
+- `SettingsService` calls `getSettings()` and `updateSettingsForSource()`
+- `CronService` calls `readCronTasks()` and `writeCronTasks()`
+- `SearchService` calls ripgrep streaming search
+- `ConversationService` uses `queryModelWithStreaming()` + `StreamingToolExecutor`
 
-## 六、WebSocket 协议
+## 6. WebSocket protocol
 
-### 连接流程
+### Connection flow
 
 ```
-1. 客户端连接: ws://host:port/ws/chat/{sessionId}
+1. Client connects: ws://host:port/ws/chat/{sessionId}
    Headers: Authorization: Bearer {apiKey}
 
-2. 服务器确认: { type: 'connected', sessionId: '...' }
+2. Server acknowledges: { type: 'connected', sessionId: '...' }
 
-3. 客户端发送消息: { type: 'user_message', content: '...' }
+3. Client sends a message: { type: 'user_message', content: '...' }
 
-4. 服务器流式响应:
+4. Server streams the response:
    { type: 'status', state: 'thinking' }
    { type: 'content_start', blockType: 'text' }
    { type: 'content_delta', text: 'Let me...' }
@@ -236,37 +236,37 @@ class SessionService {
    { type: 'content_start', blockType: 'tool_use', toolName: 'Bash' }
    { type: 'tool_use_complete', toolName: 'Bash', toolUseId: '...' }
    { type: 'permission_request', requestId: '...', toolName: 'Bash', input: {...} }
-   
-5. 客户端批准: { type: 'permission_response', requestId: '...', allowed: true }
 
-6. 服务器继续:
+5. Client approves: { type: 'permission_response', requestId: '...', allowed: true }
+
+6. Server continues:
    { type: 'tool_result', toolUseId: '...', content: '...', isError: false }
    { type: 'content_delta', text: 'Done!' }
    { type: 'message_complete', usage: { input_tokens: 1000, output_tokens: 500 } }
    { type: 'status', state: 'idle' }
 ```
 
-## 七、鉴权方案
+## 7. Authentication
 
-- 本地运行: 简单 API Key 验证（从 .env 读取）
+- Local runs: simple API key check (read from .env)
 - Header: `Authorization: Bearer {ANTHROPIC_API_KEY}`
-- WebSocket: 首次连接时通过 URL query 或首条消息验证
-- 不做复杂的用户系统，依赖 Anthropic API Key 鉴权
+- WebSocket: verified via URL query or the first message on connect
+- No complex user system; rely on Anthropic API key authentication
 
-## 八、测试策略
+## 8. Testing strategy
 
-### 单元测试
-- 每个 Service 独立测试
-- Mock 文件系统操作
-- 验证输入输出格式
+### Unit tests
+- Test each service in isolation
+- Mock file system operations
+- Verify input/output formats
 
-### 集成测试
-- 启动测试服务器
-- 发送 HTTP 请求验证响应
-- WebSocket 连接和消息流测试
+### Integration tests
+- Start a test server
+- Send HTTP requests and verify responses
+- WebSocket connection and message flow tests
 
-### E2E 测试
-- 完整对话流程（创建会话 → 发消息 → 收回复 → 停止 → 查看历史）
-- 定时任务 CRUD
-- 设置读写
-- 搜索功能
+### E2E tests
+- Full conversation flow (create session → send message → receive reply → stop → view history)
+- Scheduled task CRUD
+- Settings read/write
+- Search

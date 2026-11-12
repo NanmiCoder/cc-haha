@@ -1,29 +1,29 @@
 import type { ChatItem, TokenUsage } from './types'
 
 /**
- * 本轮输出 token 的数量与流速。
+ * Count and rate of output tokens this turn.
  *
- * 口径（与桌面 StreamingIndicator 一致，只是多算了思考文字）：
- * - 数量：协议在回合结束前不给真实 usage（`message_complete` 才带），所以运行中用
- *   本轮已流出的文字字符数 ÷ 4 估算；拿到真实 usage 时（`finished`）用真实值，两者的
- *   来源用 `source` 区分。
- * - 速度：最近几秒的滑动速率，不是整轮均值；采样不足、停顿时返回 null（隐藏），
- *   不显示 0。
+ * Counting rule (same as desktop StreamingIndicator, except thinking text is also counted): 
+ * - Count: the protocol gives no real usage before the turn ends (only `message_complete` carries it), so while running use
+ *   characters of text streamed this turn ÷ 4 as an estimate; when real usage arrives (`finished`) use the real value, and the two
+ *   sources are distinguished by `source`.
+ * - Speed: sliding rate over the last few seconds, not a whole-turn average; returns null (hidden) with too few samples or during a pause, 
+ *   does not show 0.
  */
 
 export const CHARS_PER_TOKEN = 4
-/** 速率只看最近这么长的采样。 */
+/** The rate only looks at samples within this span. */
 export const RATE_WINDOW_MS = 5000
-/** 窗口内首尾采样至少隔这么久才给速率，避免刚开始就出现跳动的数字。 */
+/** The first and last samples in the window must be at least this far apart before giving a rate, to avoid jumpy numbers at the start. */
 export const RATE_MIN_SPAN_MS = 1000
-/** 这么久没有新增 token 就认为停顿（工具执行、等批准），隐藏速率。 */
+/** No new tokens for this long counts as a pause (tool running, waiting for approval), hiding the rate. */
 export const RATE_STALL_MS = 3000
 const MAX_SAMPLES = 24
 
 export type RateSample = { at: number; tokens: number }
 export type TurnTokens = { tokens: number; source: 'usage' | 'estimate' }
 
-/** 最后一条用户消息之后，主 Agent 已流出的文字字符数（回答 + 思考；子 Agent 内部的不算）。 */
+/** Characters of text streamed by the main agent after the last user message (answer + thinking; not inside subagents). */
 export function turnOutputChars(items: readonly ChatItem[]): number {
   let chars = 0
   for (let index = items.length - 1; index >= 0; index--) {
@@ -39,7 +39,7 @@ export function estimateTokens(chars: number): number {
   return Number.isFinite(chars) && chars > 0 ? Math.round(chars / CHARS_PER_TOKEN) : 0
 }
 
-/** 一轮已输出的 token：有结束时的真实 usage 用真实值，否则按字符数估算。 */
+/** Tokens output in a turn: use real usage at the end if available, otherwise estimate from characters. */
 export function turnOutputTokens(input: {
   items: readonly ChatItem[]
   finished?: Pick<TokenUsage, 'output_tokens'>
@@ -51,8 +51,8 @@ export function turnOutputTokens(input: {
 }
 
 /**
- * 追加一个采样。时钟回拨、同一时刻重复、token 回退（会话重新同步、新一轮开始）
- * 都以新采样重新开始，旧窗口作废，不会算出负速率。
+ * Append a sample. Clock moving back, duplicate at the same instant, or token rollback (session resync, new turn starting)
+ * all restart from the new sample, voiding the old window, so no negative rate is computed.
  */
 export function pushRateSample(samples: readonly RateSample[], sample: RateSample): RateSample[] {
   if (!Number.isFinite(sample.at) || !Number.isFinite(sample.tokens) || sample.tokens < 0)
@@ -61,17 +61,17 @@ export function pushRateSample(samples: readonly RateSample[], sample: RateSampl
   if (last && (sample.at < last.at || sample.tokens < last.tokens)) return [sample]
   const next = last && sample.at === last.at ? [...samples.slice(0, -1), sample] : [...samples, sample]
   const oldest = sample.at - (RATE_WINDOW_MS + RATE_STALL_MS)
-  // 最老的一条保留到刚好越过窗口，停顿判断要拿它做参照。
+  // Keep the oldest one until it just crosses the window, since the pause check uses it as a reference.
   let start = 0
   while (start < next.length - 1 && next[start + 1].at <= oldest) start++
   return next.slice(Math.max(start, next.length - MAX_SAMPLES))
 }
 
-/** 最近几秒的输出速率（token/秒）；数据不足或停顿时返回 null。 */
+/** Output rate over the last few seconds (tokens/s); returns null with insufficient data or during a pause. */
 export function streamRate(samples: readonly RateSample[], now: number): number | null {
   const last = samples.at(-1)
   if (!last || !Number.isFinite(now)) return null
-  // 采样器停了（页面后台、计时器被挂起）或时钟回拨：宁可不显示。
+  // Sampler stopped (page in background, timers suspended) or clock moved back: better not to show.
   if (now < last.at || now - last.at > RATE_STALL_MS) return null
   const stallRef = [...samples].reverse().find((sample) => sample.at <= last.at - RATE_STALL_MS)
   if (stallRef && last.tokens - stallRef.tokens <= 0) return null
@@ -82,7 +82,7 @@ export function streamRate(samples: readonly RateSample[], now: number): number 
   return delta / ((last.at - first.at) / 1000)
 }
 
-/** 847 / 1.2k / 12k / 1.2M：去掉多余的 .0，进位时不出现 “1000k”。 */
+/** 847 / 1.2k / 12k / 1.2M: drop the extra .0, and never show "1000k" when rounding up. */
 export function formatTokenCount(value: number): string {
   if (!Number.isFinite(value) || value < 0) return '0'
   if (value < 1000) return String(Math.round(value))
@@ -96,8 +96,8 @@ export function formatRate(rate: number): string {
 }
 
 /**
- * 状态行里的可选段：`↓1.2k tokens · 38 tok/s`。没有 token 数就整段为空；速率为 null
- * 只省略速率。`compact` 去掉 “tokens” 一词，给前面还有命令的窄屏用。
+ * Optional segment in the status line: `↓1.2k tokens · 38 tok/s`. Without a token count the whole segment is empty; a rate of null
+ * only the rate is omitted. `compact` drops the word "tokens", for narrow screens with a command in front.
  */
 export function captionTokens(input: {
   tokens?: number

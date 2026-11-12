@@ -1,86 +1,88 @@
 ---
-title: Skills 使用指南
-nav_title: Skills 使用
-description: Skill 的六种来源、定义格式、调用方式、执行上下文与权限控制。
+title: Skills Usage Guide
+nav_title: Skills Usage
+description: Skill sources, definition format, invocation, execution context, and permission control.
 order: 7
 ---
 
-# Skills 使用指南
+# Skills Usage Guide
 
-Skills 是 Claude Code 的扩展能力引擎，让你用 Markdown 文件定义专属的自动化工作流。
+Skills are the extensible capability engine of Claude Code, allowing you to define custom automated workflows using Markdown files.
 
-![Skills 系统概览](./images/01-skills-overview.png)
+![Skills System Overview](./images/01-skills-overview.png)
 
-## 什么是 Skills？
+## What Are Skills?
 
-Skills 是 Claude Code 的**可扩展能力插件系统**。每个 Skill 是一个 Markdown 文件（含 YAML frontmatter），定义了一段专门的提示词和行为配置，让 Claude 在特定场景下执行专业化的工作流。
+Skills are Claude Code's **extensible capability plugin system**. Each Skill is a Markdown file (with YAML frontmatter) that defines a specialized prompt and behavioral configuration, enabling Claude to execute professional workflows in specific scenarios.
 
-核心能力：
+Core capabilities:
 
-| 能力 | 说明 |
-|------|------|
-| 专业化工作流 | 定义代码审查、TDD、调试等标准流程 |
-| 工具权限控制 | 限制 Skill 只能使用指定的工具 |
-| 模型切换 | 为不同 Skill 指定不同的模型 |
-| 执行隔离 | Fork 模式在子 Agent 中独立运行 |
-| 条件激活 | 只在操作特定文件时才激活 |
-| Hook 注入 | Skill 调用时自动注册生命周期钩子 |
+| Capability | Description |
+|------------|-------------|
+| Specialized Workflows | Define standard processes for code review, TDD, debugging, etc. |
+| Tool Permission Control | Restrict a Skill to only use specified tools |
+| Model Switching | Assign different models to different Skills |
+| Execution Isolation | Fork mode runs in an isolated subagent |
+| Conditional Activation | Activate only when specific files are being operated on |
+| Hook Injection | Automatically register lifecycle hooks when a Skill is invoked |
 
-## 六种 Skill 来源
+## Six Skill Sources
 
-![Skill 来源类型](./images/02-skill-sources.png)
+![Skill Source Types](./images/02-skill-sources.png)
 
-Claude Code 从 6 个不同来源加载 Skills，按优先级从高到低：
+Claude Code loads Skills from 6 different sources, ordered by priority from highest to lowest:
 
-### 1. Bundled（内置 Skills）
+### 1. Bundled (Built-in Skills)
 
-编译到 CLI 二进制中，按运行环境和特性开关决定是否可用。以 TypeScript 定义，通过 `registerBundledSkill()` 注册。
+Compiled into the CLI binary, with availability determined by the runtime environment and feature gates. Defined in TypeScript and registered via `registerBundledSkill()`.
 
-**当前内置 Skills：**
+**Current Built-in Skills:**
 
-| Skill | 说明 | 特殊条件 |
-|-------|------|----------|
-| `/verify` | 验证代码变更 | — |
-| `/debug` | 调试助手 | — |
-| `/simplify` | 代码简化审查 | — |
-| `/remember` | 记忆管理 | 需启用 auto-memory |
-| `/batch` | 批量处理 | — |
-| `/stuck` | 卡住时求助 | — |
-| `/skillify` | 创建新 Skill | — |
-| `/keybindings` | 自定义快捷键 | — |
-| `/loop` | CLI 进程内定时循环 | AGENT_TRIGGERS 特性门控；桌面调度入口可用时不注册 |
-| `/schedule` | 桌面定时任务管理与结果查询；非桌面环境可为远程代理调度 | 桌面认证 bridge 可用且非 lean profile 时使用本地实现；否则远程实现仍受 AGENT_TRIGGERS_REMOTE、账号与策略限制 |
-| `/claude-api` | Claude API 集成 | BUILDING_CLAUDE_APPS 特性门控 |
-| `/dream` | 自动记忆整理 | KAIROS 特性门控 |
+| Skill | Description | Special Conditions |
+|-------|-------------|--------------------|
+| `/verify` | Verify code changes | -- |
+| `/debug` | Debugging assistant | -- |
+| `/simplify` | Code simplification review | -- |
+| `/remember` | Memory management | Requires auto-memory enabled |
+| `/batch` | Batch processing | -- |
+| `/stuck` | Help when stuck | -- |
+| `/skillify` | Create a new Skill | -- |
+| `/keybindings` | Custom keyboard shortcuts | -- |
+| `/loop` | In-process CLI recurring tasks | AGENT_TRIGGERS gate; not registered when desktop scheduling is available |
+| `/schedule` | Desktop scheduling and result queries; remote agent scheduling outside desktop | Local implementation with an authenticated desktop bridge and a non-lean profile; otherwise the remote implementation still requires AGENT_TRIGGERS_REMOTE and its account/policy conditions |
+| `/claude-api` | Claude API integration | BUILDING_CLAUDE_APPS feature gate |
+| `/dream` | Automatic memory organization | KAIROS feature gate |
 
-桌面 `/schedule` 由 `src/skills/bundled/scheduleDesktop.ts` 注册，指导模型调用原生 `ScheduledTask` 工具；自然语言请求也可直接调用该工具，不依赖先调用 skill。`src/skills/bundled/index.ts` 对本地和远程同名 skill 采用互斥注册，避免桌面任务被误发到云端。
+Desktop `/schedule` is registered by `src/skills/bundled/scheduleDesktop.ts` and guides the model to the native `ScheduledTask` tool. Natural-language requests can call the tool directly without invoking the skill first. `src/skills/bundled/index.ts` registers the local and remote versions mutually exclusively so desktop requests are not accidentally sent to the cloud.
 
-`ScheduledTask` 通过会话认证的本地 bridge 调用已有桌面 `CronService`，与任务页共享存储。当前会话身份由服务端认证提供；工具支持任务 CRUD、运行记录列表和有长度限制的结果分页读取。成功结果以版本化 JSON 写入实际 `tool_result.content`，供实时聊天和历史重载渲染卡片。CLI 原有 Cron 工具及项目级任务文件保留独立语义，桌面入口无需启用 AGENT_TRIGGERS。用户操作见[定时任务](../desktop/schedule.md)。
+`ScheduledTask` uses a session-authenticated local bridge to the existing desktop `CronService`, sharing storage with the task page. The server derives the caller's session identity from authentication. The tool supports task CRUD, execution-history listings, and bounded, paginated result reads. Successful results are serialized as versioned JSON in the actual `tool_result.content`, allowing live chat and reloaded history to render the same cards. The original CLI Cron tools and project-local task file retain separate semantics; desktop scheduling does not require enabling AGENT_TRIGGERS. For user instructions, see [Scheduled tasks](../desktop/schedule.md).
 
-### 2. Managed（策略管理 Skills）
+### 2. Managed (Policy-Managed Skills)
 
-由组织策略控制，存放在 `<managed-path>/.claude/skills/`，适用于企业部署。
+Controlled by organizational policies, stored in `<managed-path>/.claude/skills/`. Suitable for enterprise deployments.
 
-### 3. User（用户 Skills）
+### 3. User (User Skills)
 
-用户个人定义，存放在 `~/.claude/skills/`，同时也会读取跨工具开放标准目录 `~/.agents/skills/`。
+Defined by individual users, stored in `~/.claude/skills/`. The cross-client open-standard
+directory `~/.agents/skills/` is read as well.
 
 ```
 ~/.claude/skills/
 ├── my-review/
-│   └── SKILL.md          ← 主 Skill 文件
+│   └── SKILL.md          ← Main Skill file
 ├── deploy-check/
 │   └── SKILL.md
 └── ...
 
-~/.agents/skills/         ← 开放标准目录，与 Codex / Cursor / Gemini CLI 共享
+~/.agents/skills/         ← Open-standard directory, shared with Codex / Cursor / Gemini CLI
 └── pdf-processing/
     └── SKILL.md
 ```
 
-### 4. Project（项目 Skills）
+### 4. Project (Project Skills)
 
-项目级别定义，存放在 `.claude/skills/` 或 `.agents/skills/`，可提交到版本控制。
+Defined at the project level, stored in `.claude/skills/` or `.agents/skills/`. Can be
+committed to version control.
 
 ```
 your-project/
@@ -91,125 +93,127 @@ your-project/
 │       └── test-runner/
 │           └── SKILL.md
 └── .agents/
-    └── skills/           ← 团队共享，其它 Agent 工具同样能发现
+    └── skills/           ← Shared with the team; other agent tools discover it too
         └── deploy-app/
             └── SKILL.md
 ```
 
-### 关于 `.agents/skills/`（Agent Skills 开放标准）
+### About `.agents/skills/` (the Agent Skills open standard)
 
-`.agents/skills/` 是 [agentskills.io](https://agentskills.io) 规范推荐的跨客户端共享目录，
-OpenAI Codex、Cursor、Gemini CLI、opencode 等工具都会扫描它。放在这里的技能不必再往每个
-工具的私有目录里复制一份。
+`.agents/skills/` is the cross-client directory recommended by the
+[agentskills.io](https://agentskills.io) specification, and is scanned by OpenAI Codex,
+Cursor, Gemini CLI, and opencode among others. Skills placed there no longer need to be
+copied into each tool's private directory.
 
-- 两种目录**同时生效**，`SKILL.md` 格式完全一致，无需改写。
-- 同一层级下若出现同名技能，`.claude/` 优先，`.agents/` 中的同名项被忽略（会记录一条 warn 日志）。
-  不同层级（如用户级与项目级）同名仍按原有规则各自保留。
-- 通过软链接共享同一份技能时会自动识别为同一个，不会重复加载。
-- 如需关闭，在 `settings.json` 中设置 `"disableAgentSkillsDirectory": true`，
-  或设置环境变量 `CLAUDE_CODE_DISABLE_AGENT_SKILLS_DIR=1`。关闭后 `.claude/skills/` 不受影响。
-- 技能市场安装、`/skillify` 创建等写入操作仍然写到 `~/.claude/skills/`。
+- Both directories are active at once, and the `SKILL.md` format is identical — nothing to rewrite.
+- If the same skill name appears in both at one level, `.claude/` wins and the `.agents/` entry
+  is skipped (a warn-level log records it). Names colliding across different levels — user vs.
+  project, say — still both survive, exactly as before.
+- Sharing one skill through a symlink is recognized as a single skill, not loaded twice.
+- To turn it off, set `"disableAgentSkillsDirectory": true` in `settings.json`, or set the
+  `CLAUDE_CODE_DISABLE_AGENT_SKILLS_DIR=1` environment variable. `.claude/skills/` is unaffected.
+- Writes — Skills Market installs, `/skillify` — still go to `~/.claude/skills/`.
 
-### 5. Plugin（插件 Skills）
+### 5. Plugin (Plugin Skills)
 
-由已安装的插件提供。插件通过 manifest 的 `skillsPath` / `skillsPaths` 声明 Skills 目录。
+Provided by installed plugins. Plugins declare Skills directories via `skillsPath` / `skillsPaths` in their manifest.
 
-命名格式：`{pluginName}:{skillName}`
+Naming format: `{pluginName}:{skillName}`
 
 ```
-例如：superpowers:code-reviewer
-      superpowers:brainstorming
+Examples: superpowers:code-reviewer
+          superpowers:brainstorming
 ```
 
-### 6. MCP（MCP 服务器 Skills）
+### 6. MCP (MCP Server Skills)
 
-由连接的 MCP 服务器提供，命名格式：`mcp__server-name__prompt-name`。
+Provided by connected MCP servers, naming format: `mcp__server-name__prompt-name`.
 
-**安全限制**：MCP Skills 为远程不受信来源，**禁止执行** `!`...`` 内联 shell 命令。
+**Security restriction**: MCP Skills are from remote untrusted sources and are **prohibited from executing** `!`...`` inline shell commands.
 
-## Skill 定义格式
+## Skill Definition Format
 
-### 目录结构
+### Directory Structure
 
-每个 Skill 是一个目录，包含一个 `SKILL.md` 文件：
+Each Skill is a directory containing a `SKILL.md` file:
 
 ```
 skill-name/
-└── SKILL.md    ← 文件名必须是 SKILL.md（大小写不敏感）
+└── SKILL.md    ← Filename must be SKILL.md (case-insensitive)
 ```
 
-### Frontmatter 完整字段
+### Complete Frontmatter Fields
 
 ```yaml
 ---
-name: 我的技能                    # 显示名称（可选，默认用目录名）
-description: 这个技能做什么         # 描述（必填，缺少时自动从内容提取）
-when_to_use: 什么时候该用这个技能   # 使用场景说明（可选）
-version: 1.0.0                   # 版本号（可选）
+name: My Skill                       # Display name (optional, defaults to directory name)
+description: What this skill does     # Description (required; auto-extracted from content if missing)
+when_to_use: When to use this skill   # Usage scenario description (optional)
+version: 1.0.0                       # Version number (optional)
 
-# ── 调用控制 ──
-user-invocable: true             # 用户能否通过 /skill-name 调用（默认 true）
-disable-model-invocation: false  # 禁止模型通过 Skill tool 调用（可选）
-argument-hint: "<文件路径>"       # 参数提示（可选）
+# ── Invocation Control ──
+user-invocable: true                  # Whether user can invoke via /skill-name (default: true)
+disable-model-invocation: false       # Prevent model from invoking via Skill tool (optional)
+argument-hint: "<file path>"          # Argument hint (optional)
 
-# ── 执行配置 ──
-context: inline                  # 执行上下文：inline（默认）或 fork（子代理）
-agent: general-purpose           # fork 时使用的代理类型（可选）
-model: sonnet                    # 模型覆盖：haiku / sonnet / opus / inherit（可选）
-effort: high                     # 思考力度：low / medium / high / max（可选）
-allowed-tools: "Bash, Read"      # 允许使用的工具（逗号分隔或 YAML 列表）
-shell: bash                      # Shell 类型：bash（默认）或 powershell
+# ── Execution Configuration ──
+context: inline                       # Execution context: inline (default) or fork (sub-agent)
+agent: general-purpose                # Agent type when forked (optional)
+model: sonnet                         # Model override: haiku / sonnet / opus / inherit (optional)
+effort: high                          # Thinking effort: low / medium / high / max (optional)
+allowed-tools: "Bash, Read"           # Allowed tools (comma-separated or YAML list)
+shell: bash                           # Shell type: bash (default) or powershell
 
-# ── 条件激活 ──
-paths: "src/**/*.ts, test/**/*.ts"  # Glob 模式，只在匹配文件被操作时激活
+# ── Conditional Activation ──
+paths: "src/**/*.ts, test/**/*.ts"    # Glob patterns; activate only when matching files are operated on
 
-# ── 生命周期 Hook ──
+# ── Lifecycle Hooks ──
 hooks:
   PreToolUse:
     - matcher: "Bash"
       hooks:
         - command: "echo 'Before bash'"
-          once: true              # 仅执行一次
+          once: true                  # Execute only once
 ---
 
-# Skill 正文内容
+# Skill Body Content
 
-这里是 Markdown 格式的提示词，Claude 调用此 Skill 时会看到这些内容。
+This is the Markdown-formatted prompt that Claude sees when this Skill is invoked.
 
-支持的特殊语法：
-- `${CLAUDE_SKILL_DIR}` — 展开为 Skill 所在目录
-- `${CLAUDE_SESSION_ID}` — 展开为当前会话 ID
-- `$ARGUMENTS` / `${ARG1}` — 参数替换
-- !`shell command` — 内联 Shell 命令执行
+Supported special syntax:
+- `${CLAUDE_SKILL_DIR}` — Expands to the Skill's directory
+- `${CLAUDE_SESSION_ID}` — Expands to the current session ID
+- `$ARGUMENTS` / `${ARG1}` — Argument substitution
+- !`shell command` — Inline shell command execution
 ```
 
-### Frontmatter 字段速查表
+### Frontmatter Field Reference
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` | string | 目录名 | 显示名称覆盖 |
-| `description` | string | 自动提取 | Skill 简述 |
-| `when_to_use` | string | — | 使用场景描述 |
-| `user-invocable` | boolean | true | 用户能否输入 /name 调用 |
-| `disable-model-invocation` | boolean | false | 禁止模型调用 |
-| `context` | `inline` \| `fork` | inline | 执行上下文 |
-| `agent` | string | general-purpose | fork 时代理类型 |
-| `model` | string | 继承 | 模型覆盖（haiku/sonnet/opus） |
-| `effort` | string \| int | — | 思考力度 |
-| `allowed-tools` | string \| list | 全部 | 允许工具白名单 |
-| `paths` | string \| list | — | 条件激活 Glob 模式 |
-| `shell` | `bash` \| `powershell` | bash | Shell 命令类型 |
-| `hooks` | object | — | 生命周期 Hook 配置 |
-| `argument-hint` | string | — | 参数提示文本 |
-| `version` | string | — | 版本号 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | Directory name | Display name override |
+| `description` | string | Auto-extracted | Brief Skill description |
+| `when_to_use` | string | -- | Usage scenario description |
+| `user-invocable` | boolean | true | Whether user can invoke via /name |
+| `disable-model-invocation` | boolean | false | Prevent model invocation |
+| `context` | `inline` \| `fork` | inline | Execution context |
+| `agent` | string | general-purpose | Agent type when forked |
+| `model` | string | Inherited | Model override (haiku/sonnet/opus) |
+| `effort` | string \| int | -- | Thinking effort level |
+| `allowed-tools` | string \| list | All | Allowed tools whitelist |
+| `paths` | string \| list | -- | Conditional activation glob patterns |
+| `shell` | `bash` \| `powershell` | bash | Shell command type |
+| `hooks` | object | -- | Lifecycle hook configuration |
+| `argument-hint` | string | -- | Argument hint text |
+| `version` | string | -- | Version number |
 
-## 调用方式
+## Invocation Methods
 
-![Skill 调用流程](./images/03-skill-invocation.png)
+![Skill Invocation Flow](./images/03-skill-invocation.png)
 
-### 方式一：用户斜杠命令
+### Method 1: User Slash Commands
 
-直接在终端输入 `/skill-name`：
+Type `/skill-name` directly in the terminal:
 
 ```
 > /commit
@@ -217,191 +221,191 @@ hooks:
 > /verify
 ```
 
-**前提**：Skill 的 `user-invocable` 必须为 `true`。
+**Prerequisite**: The Skill's `user-invocable` must be `true`.
 
-### 方式二：模型自动调用
+### Method 2: Automatic Model Invocation
 
-Claude 在对话中识别到合适的 Skill 时，通过 SkillTool 自动调用：
-
-```
-用户：帮我审查一下这段代码
-Claude：[通过 SkillTool 调用 superpowers:code-reviewer]
-```
-
-**前提**：Skill 的 `disable-model-invocation` 不能为 `true`。
-
-### 方式三：嵌套调用
-
-一个 Skill 执行过程中可以触发另一个 Skill：
+When Claude identifies a suitable Skill during conversation, it automatically invokes it via SkillTool:
 
 ```
-/verify → 内部调用 → /simplify
+User: Please review this code for me
+Claude: [Invokes superpowers:code-reviewer via SkillTool]
 ```
 
-遥测中通过 `invocation_trigger: 'nested-skill'` 追踪。
+**Prerequisite**: The Skill's `disable-model-invocation` must not be `true`.
 
-### 调用优先级
+### Method 3: Nested Invocation
 
-当同名 Skill 存在于多个来源时，按以下顺序解析（先匹配先用）：
+One Skill can trigger another during execution:
 
 ```
-1. Bundled（内置）      ← 最高优先级
-2. Built-in Plugin（内置插件）
-3. Skill Dirs（用户/项目目录）
+/verify → internally invokes → /simplify
+```
+
+Tracked in telemetry via `invocation_trigger: 'nested-skill'`.
+
+### Invocation Priority
+
+When Skills with the same name exist in multiple sources, they are resolved in the following order (first match wins):
+
+```
+1. Bundled (built-in)           ← Highest priority
+2. Built-in Plugin
+3. Skill Dirs (user/project directories)
 4. Workflow Commands
-5. Plugin Commands（插件命令）
-6. Plugin Skills（插件技能）
-7. Built-in Commands（内建命令）  ← 最低优先级
+5. Plugin Commands
+6. Plugin Skills
+7. Built-in Commands            ← Lowest priority
 ```
 
-## 执行上下文
+## Execution Context
 
-### Inline 模式（默认）
+### Inline Mode (Default)
 
-Skill 内容**展开到当前对话**中，Claude 直接看到提示词并在同一上下文中执行。
+Skill content is **expanded into the current conversation**. Claude directly sees the prompt and executes within the same context.
 
 ```yaml
-context: inline   # 默认值，可省略
+context: inline   # Default value, can be omitted
 ```
 
-**特点：**
-- 共享父对话的 token 预算
-- 可以访问对话历史上下文
-- `allowedTools` 限制当前轮次可用工具
-- `model` 覆盖当前轮次使用的模型
+**Characteristics:**
+- Shares the parent conversation's token budget
+- Can access conversation history context
+- `allowedTools` restricts available tools for the current turn
+- `model` overrides the model used for the current turn
 
-### Fork 模式（子 Agent）
+### Fork Mode (Sub-Agent)
 
-Skill 在**隔离的子 Agent**中运行，拥有独立的 token 预算和上下文。
+The Skill runs in an **isolated subagent** with its own independent token budget and context.
 
 ```yaml
 context: fork
-agent: general-purpose   # 可选，指定代理类型
+agent: general-purpose   # Optional, specifies agent type
 ```
 
-**特点：**
-- 独立的 token 预算，不消耗父对话额度
-- 隔离的对话上下文
-- 可指定不同的 agent 类型（如 `Bash`、`general-purpose`）
-- 执行完成后提取结果返回父对话
-- 支持进度汇报（`onProgress` 回调）
+**Characteristics:**
+- Independent token budget; does not consume the parent conversation's quota
+- Isolated conversation context
+- Can specify a different agent type (e.g., `Bash`, `general-purpose`)
+- Results are extracted and returned to the parent conversation upon completion
+- Supports progress reporting (`onProgress` callback)
 
-### 两种模式对比
+### Comparison of Both Modes
 
-| 特性 | Inline | Fork |
-|------|--------|------|
-| Token 预算 | 共享父对话 | 独立预算 |
-| 上下文访问 | 完整对话历史 | 仅 Skill 提示词 |
-| 结果返回 | 直接在对话中 | 提取文本嵌入 tool_result |
-| 适用场景 | 简短指导、扩展上下文 | 长任务、独立运算 |
-| 工具限制 | contextModifier 修改 | modifiedGetAppState |
+| Feature | Inline | Fork |
+|---------|--------|------|
+| Token Budget | Shared with parent | Independent budget |
+| Context Access | Full conversation history | Skill prompt only |
+| Result Return | Directly in conversation | Text extracted into tool_result |
+| Use Cases | Brief guidance, extended context | Long tasks, independent computation |
+| Tool Restrictions | contextModifier modification | modifiedGetAppState |
 
-## 条件激活
+## Conditional Activation
 
-Skill 可以通过 `paths` frontmatter 实现**按需激活**，只在操作匹配文件时才对模型可见。
+Skills can use the `paths` frontmatter to implement **on-demand activation**, becoming visible to the model only when matching files are operated on.
 
-### 配置方式
+### Configuration
 
 ```yaml
 ---
-name: TypeScript 修复
-description: 修复 TypeScript 类型错误
+name: TypeScript Fix
+description: Fix TypeScript type errors
 paths: "src/**/*.ts, test/**/*.ts"
 ---
 ```
 
-### 工作原理
+### How It Works
 
 ```
-1. 启动时加载所有 Skill
-2. 带 paths 的 Skill 存入 conditionalSkills Map（不暴露给模型）
-3. 当用户操作文件时（Read/Write/Edit）
-4. activateConditionalSkillsForPaths() 用 ignore 库匹配
-5. 匹配成功 → 移入 dynamicSkills Map → 模型可见
-6. 一旦激活，在会话内持续有效
+1. All Skills are loaded at startup
+2. Skills with paths are stored in the conditionalSkills Map (not exposed to the model)
+3. When the user operates on a file (Read/Write/Edit)
+4. activateConditionalSkillsForPaths() matches using the ignore library
+5. On match → moved to the dynamicSkills Map → visible to model
+6. Once activated, remains active for the entire session
 ```
 
-### 动态发现
+### Dynamic Discovery
 
-除了条件激活，Skills 还支持**运行时发现**：
+In addition to conditional activation, Skills also support **runtime discovery**:
 
 ```
-1. 用户操作某个深层目录中的文件
-2. discoverSkillDirsForPaths() 从文件路径向上遍历
-3. 寻找 .claude/skills/ 与 .agents/skills/ 目录（不超过 cwd）
-4. 跳过 .gitignore 忽略的目录
-5. 发现新目录 → addSkillDirectories() → 加载并注册
+1. User operates on a file in a deeply nested directory
+2. discoverSkillDirsForPaths() traverses upward from the file path
+3. Looks for .claude/skills/ and .agents/skills/ directories (not beyond cwd)
+4. Skips directories ignored by .gitignore
+5. New directory found → addSkillDirectories() → load and register
 ```
 
-## 权限控制
+## Permission Control
 
-### 自动允许
+### Auto-Allow
 
-如果 Skill 只包含"安全属性"（无 `allowedTools`、无 `hooks`、无 `fork`），将**自动获准**执行，无需用户确认。
+If a Skill contains only "safe properties" (no `allowedTools`, no `hooks`, no `fork`), it is **automatically approved** for execution without user confirmation.
 
-### 手动确认
+### Manual Confirmation
 
-包含工具限制、Hook 或 fork 执行的 Skill，首次调用时会提示用户：
+Skills with tool restrictions, hooks, or fork execution will prompt the user on first invocation:
 
 ```
 Execute skill: my-custom-skill
 Allow? (y)es / (n)o / (a)lways allow / (d)eny
 ```
 
-### 权限规则
+### Permission Rules
 
-| 规则类型 | 格式 | 说明 |
-|----------|------|------|
-| 精确允许 | `Skill:commit` | 允许执行 commit Skill |
-| 前缀允许 | `Skill:review:*` | 允许所有 review: 前缀的 Skill |
-| 精确拒绝 | `Skill:dangerous` 设为 deny | 拒绝执行 |
-| 前缀拒绝 | `Skill:untrusted:*` 设为 deny | 拒绝所有 untrusted: 前缀 |
+| Rule Type | Format | Description |
+|-----------|--------|-------------|
+| Exact Allow | `Skill:commit` | Allow execution of the commit Skill |
+| Prefix Allow | `Skill:review:*` | Allow all Skills with the review: prefix |
+| Exact Deny | `Skill:dangerous` set to deny | Deny execution |
+| Prefix Deny | `Skill:untrusted:*` set to deny | Deny all Skills with the untrusted: prefix |
 
-**处理顺序：** deny 规则 → allow 规则 → 安全属性检查 → 询问用户
+**Processing order:** Deny rules → Allow rules → Safe property check → Ask user
 
-## 快速参考
+## Quick Reference
 
-### 创建一个 Skill
+### Creating a Skill
 
 ```bash
-# 1. 创建目录
+# 1. Create directory
 mkdir -p ~/.claude/skills/my-skill
 
-# 2. 创建 SKILL.md
+# 2. Create SKILL.md
 cat > ~/.claude/skills/my-skill/SKILL.md << 'EOF'
 ---
-name: 我的技能
-description: 一个示例 Skill
+name: My Skill
+description: An example Skill
 user-invocable: true
 ---
 
-# 技能内容
+# Skill Content
 
-你好，这是我的自定义 Skill。
+Hello, this is my custom Skill.
 EOF
 ```
 
-### 常用操作
+### Common Operations
 
-| 操作 | 方法 |
-|------|------|
-| 创建 Skill | `~/.claude/skills/<name>/SKILL.md` |
-| 项目级 Skill | `.claude/skills/<name>/SKILL.md` |
-| 跨工具共享 Skill | `~/.agents/skills/<name>/SKILL.md`（Codex / Cursor / Gemini CLI 同样可见） |
-| 调用 Skill | 终端输入 `/skill-name` |
-| 查看可用 Skills | 终端输入 `/skills` |
-| 用 AI 创建 Skill | `/skillify` |
-| 限制工具 | frontmatter 添加 `allowed-tools` |
-| Fork 执行 | frontmatter 添加 `context: fork` |
-| 条件激活 | frontmatter 添加 `paths: "src/**"` |
+| Operation | Method |
+|-----------|--------|
+| Create a Skill | `~/.claude/skills/<name>/SKILL.md` |
+| Project-level Skill | `.claude/skills/<name>/SKILL.md` |
+| Cross-tool shared Skill | `~/.agents/skills/<name>/SKILL.md` (visible to Codex / Cursor / Gemini CLI too) |
+| Invoke a Skill | Type `/skill-name` in terminal |
+| View available Skills | Type `/skills` in terminal |
+| Create Skill with AI | `/skillify` |
+| Restrict tools | Add `allowed-tools` in frontmatter |
+| Fork execution | Add `context: fork` in frontmatter |
+| Conditional activation | Add `paths: "src/**"` in frontmatter |
 
-### Skill 可用性矩阵
+### Skill Availability Matrix
 
-| 来源 | 用户可调用 | 模型可调用 | 支持 Fork | 支持 Hook |
-|------|-----------|-----------|----------|----------|
-| Bundled | 依定义 | 依定义 | 是 | 是 |
-| Managed | 是 | 是 | 是 | 是 |
-| User | 是（默认） | 是 | 是 | 是 |
-| Project | 是（默认） | 是 | 是 | 是 |
-| Plugin | 依配置 | 依配置 | 是 | 是 |
-| MCP | 依配置 | 依配置 | 是 | 否（安全限制） |
+| Source | User Invocable | Model Invocable | Supports Fork | Supports Hooks |
+|--------|---------------|-----------------|---------------|----------------|
+| Bundled | Per definition | Per definition | Yes | Yes |
+| Managed | Yes | Yes | Yes | Yes |
+| User | Yes (default) | Yes | Yes | Yes |
+| Project | Yes (default) | Yes | Yes | Yes |
+| Plugin | Per config | Per config | Yes | Yes |
+| MCP | Per config | Per config | Yes | No (security restriction) |

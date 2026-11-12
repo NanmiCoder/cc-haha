@@ -114,7 +114,7 @@ describe('desktop persistence migrations', () => {
     // Exactly what a schema-5 build persisted with the Trace list open, two
     // per-session trace tabs (one of whose sessions also has a chat tab), and
     // a trace tab focused. The Trace page is gone; traces live in the chat's
-    // 轨迹 view, so a trace tab must reopen as its session's chat tab.
+    // Trajectory view, so a trace tab must reopen as its session's chat tab.
     localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '5')
     localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
       openTabs: [
@@ -240,7 +240,7 @@ describe('desktop persistence migrations', () => {
   })
 
   test('renames the retired light theme to warm-classic instead of resetting it', () => {
-    // `light` was the warm workspace, labelled 经典暖色 in the picker. Falling
+    // `light` was the warm workspace, labelled Warm Classic in the picker. Falling
     // through to the enum check would drop it and silently reset those
     // installs to pure white, which reads as the app forgetting the setting.
     window.localStorage.setItem('cc-haha-theme', 'light')
@@ -306,14 +306,23 @@ describe('desktop persistence migrations', () => {
     expect(window.localStorage.getItem('cc-haha-dark-theme')).toBe('ink-blue')
   })
 
-  test('preserves every supported locale during startup migration', () => {
-    for (const locale of ['en', 'zh', 'zh-TW', 'jp', 'kr']) {
+  test('preserves the English locale during startup migration', () => {
+    window.localStorage.setItem('cc-haha-locale', 'en')
+
+    const report = runDesktopPersistenceMigrations()
+
+    expect(report.migratedKeys).not.toContain('cc-haha-locale')
+    expect(window.localStorage.getItem('cc-haha-locale')).toBe('en')
+  })
+
+  test('removes locales stored by older builds during startup migration', () => {
+    for (const locale of ['zh', 'zh-TW', 'jp', 'kr']) {
       window.localStorage.setItem('cc-haha-locale', locale)
 
       const report = runDesktopPersistenceMigrations()
 
-      expect(report.migratedKeys).not.toContain('cc-haha-locale')
-      expect(window.localStorage.getItem('cc-haha-locale')).toBe(locale)
+      expect(report.migratedKeys).toContain('cc-haha-locale')
+      expect(window.localStorage.getItem('cc-haha-locale')).toBeNull()
     }
   })
 

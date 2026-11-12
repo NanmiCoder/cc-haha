@@ -148,10 +148,10 @@ describe('teamStore incremental transcript polling', () => {
     // so the durable user echo can carry a timestamp minutes after the send.
     const existing = [
       userMessage('durable-1', 'queued output', 900),
-      userMessage('pending-1', '改为 portal 渲染', 1_000, true),
+      userMessage('pending-1', 'switch to portal rendering', 1_000, true),
     ]
     const delta = [
-      { ...userMessage('server-echo', '改为 portal 渲染', 400_000), teammateFrom: 'user' },
+      { ...userMessage('server-echo', 'switch to portal rendering', 400_000), teammateFrom: 'user' },
     ]
 
     const merged = mergeMemberTranscriptDelta(existing, delta)
@@ -161,8 +161,8 @@ describe('teamStore incremental transcript polling', () => {
 
   it('does not let an older identical user echo consume a newer pending send', () => {
     const existing = [
-      userMessage('server-echo', '继续', 1_000),
-      userMessage('pending-1', '继续', 400_000, true),
+      userMessage('server-echo', 'Continue', 1_000),
+      userMessage('pending-1', 'Continue', 400_000, true),
     ]
 
     const merged = mergeMemberTranscriptDelta(existing, [])
@@ -172,10 +172,10 @@ describe('teamStore incremental transcript polling', () => {
 
   it('keeps a pending send unmatched by teammate-to-teammate rows', () => {
     const existing = [
-      userMessage('pending-1', '重新跑一遍测试', 1_000, true),
+      userMessage('pending-1', 'rerun the tests', 1_000, true),
     ]
     const delta = [
-      { ...userMessage('server-1', '重新跑一遍测试', 1_100), teammateFrom: 'team-lead' },
+      { ...userMessage('server-1', 'rerun the tests', 1_100), teammateFrom: 'team-lead' },
     ]
 
     const merged = mergeMemberTranscriptDelta(existing, delta)
@@ -194,12 +194,12 @@ describe('teamStore incremental transcript polling', () => {
 
     it('settles a steered turn whose prompt persisted late as a user echo', () => {
       const messages: UIMessage[] = [
-        teammateUserEcho('echo-1', '补一下边界钳制', 400_000),
-        assistantText('a1', '已补齐', 401_000),
+        teammateUserEcho('echo-1', 'add the boundary clamp', 400_000),
+        assistantText('a1', 'Added', 401_000),
       ]
 
       const settlement = memberReplySettlement(messages, {
-        content: '补一下边界钳制',
+        content: 'add the boundary clamp',
         sentAt: 1_000,
         baselineMessageKeys: new Set(),
       })
@@ -210,12 +210,12 @@ describe('teamStore incremental transcript polling', () => {
 
     it('does not settle on a prompt row that predates the send', () => {
       const messages: UIMessage[] = [
-        teammateUserEcho('echo-0', '继续', 1_000),
-        assistantText('a0', '好的', 2_000),
+        teammateUserEcho('echo-0', 'Continue', 1_000),
+        assistantText('a0', 'OK', 2_000),
       ]
 
       const settlement = memberReplySettlement(messages, {
-        content: '继续',
+        content: 'Continue',
         sentAt: 400_000,
         baselineMessageKeys: new Set(),
       })
@@ -225,13 +225,13 @@ describe('teamStore incremental transcript polling', () => {
 
     it('bounds the settled turn at the next steered prompt', () => {
       const messages: UIMessage[] = [
-        teammateUserEcho('echo-1', '第一步', 400_000),
-        teammateUserEcho('echo-2', '第二步', 500_000),
-        assistantText('a2', '完成第二步', 501_000),
+        teammateUserEcho('echo-1', 'Step one', 400_000),
+        teammateUserEcho('echo-2', 'Step two', 500_000),
+        assistantText('a2', 'Finished step two', 501_000),
       ]
 
       const settlement = memberReplySettlement(messages, {
-        content: '第一步',
+        content: 'Step one',
         sentAt: 1_000,
         baselineMessageKeys: new Set(),
       })

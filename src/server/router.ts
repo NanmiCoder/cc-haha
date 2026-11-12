@@ -1,7 +1,7 @@
 import { handleSessionCollaborationUiApi } from './api/sessionCollaboration.js'
 import { getSessionCollaborationService } from './services/sessionCollaborationHost.js'
 /**
- * API Router — 将请求路由到对应的 API handler
+ * API Router — routes requests to the corresponding API handler
  */
 
 import { handleSessionsApi } from './api/sessions.js'

@@ -33,7 +33,6 @@ import { PermissionModeSelector } from '../../components/controls/PermissionMode
 import { ReasoningEffortPopover } from '../../components/controls/ReasoningEffortPopover'
 import { isDarkThemeMode, isLightThemeMode, isMaxConcurrentSubagents } from '../../types/settings'
 import type { ThemeMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource, ReasoningEffortLevel } from '../../types/settings'
-import type { Locale } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
@@ -105,8 +104,6 @@ export function GeneralSettings() {
     setAutoDreamEnabled,
     autoQuestion,
     setAutoQuestion,
-    locale,
-    setLocale,
     setTheme,
     chatSendBehavior,
     setChatSendBehavior,
@@ -286,37 +283,29 @@ export function GeneralSettings() {
     setPortableDirDraft(appMode.portableDir ?? '')
   }, [appMode.portableDir])
 
-  const LANGUAGES: Array<{ value: Locale; label: string }> = [
-    { value: 'en', label: 'English' },
-    { value: 'zh', label: '简体中文' },
-    { value: 'zh-TW', label: '繁體中文' },
-    { value: 'jp', label: '日本語' },
-    { value: 'kr', label: '한국어' },
-  ]
-
   const RESPONSE_LANGUAGES: Array<{ value: string; label: string }> = [
     { value: '', label: t('settings.general.responseLangDefault') },
     { value: 'english', label: 'English' },
-    { value: 'chinese', label: '中文 (Chinese)' },
-    { value: 'japanese', label: '日本語 (Japanese)' },
-    { value: 'korean', label: '한국어 (Korean)' },
-    { value: 'spanish', label: 'Español (Spanish)' },
-    { value: 'french', label: 'Français (French)' },
-    { value: 'german', label: 'Deutsch (German)' },
-    { value: 'portuguese', label: 'Português (Portuguese)' },
-    { value: 'italian', label: 'Italiano (Italian)' },
-    { value: 'russian', label: 'Русский (Russian)' },
-    { value: 'dutch', label: 'Nederlands (Dutch)' },
-    { value: 'polish', label: 'Polski (Polish)' },
-    { value: 'turkish', label: 'Türkçe (Turkish)' },
-    { value: 'hindi', label: 'हिन्दी (Hindi)' },
-    { value: 'indonesian', label: 'Bahasa Indonesia' },
-    { value: 'ukrainian', label: 'Українська (Ukrainian)' },
-    { value: 'greek', label: 'Ελληνικά (Greek)' },
-    { value: 'czech', label: 'Čeština (Czech)' },
-    { value: 'danish', label: 'Dansk (Danish)' },
-    { value: 'swedish', label: 'Svenska (Swedish)' },
-    { value: 'norwegian', label: 'Norsk (Norwegian)' },
+    { value: 'chinese', label: 'Chinese' },
+    { value: 'japanese', label: 'Japanese' },
+    { value: 'korean', label: 'Korean' },
+    { value: 'spanish', label: 'Spanish' },
+    { value: 'french', label: 'French' },
+    { value: 'german', label: 'German' },
+    { value: 'portuguese', label: 'Portuguese' },
+    { value: 'italian', label: 'Italian' },
+    { value: 'russian', label: 'Russian' },
+    { value: 'dutch', label: 'Dutch' },
+    { value: 'polish', label: 'Polish' },
+    { value: 'turkish', label: 'Turkish' },
+    { value: 'hindi', label: 'Hindi' },
+    { value: 'indonesian', label: 'Indonesian' },
+    { value: 'ukrainian', label: 'Ukrainian' },
+    { value: 'greek', label: 'Greek' },
+    { value: 'czech', label: 'Czech' },
+    { value: 'danish', label: 'Danish' },
+    { value: 'swedish', label: 'Swedish' },
+    { value: 'norwegian', label: 'Norwegian' },
   ]
   const selectedResponseLanguageLabel =
     RESPONSE_LANGUAGES.find(({ value }) => value === responseLanguage)?.label ?? RESPONSE_LANGUAGES[0]!.label
@@ -959,15 +948,6 @@ export function GeneralSettings() {
 
       <SettingsSection title={t('settings.general.languageTitle')}>
         <SettingsGroup>
-          <SettingsRow title={t('settings.general.languageTitle')} description={t('settings.general.languageDescription')}>
-            <SegmentedControl<Locale>
-              label={t('settings.general.languageTitle')}
-              size="sm"
-              value={locale}
-              onChange={setLocale}
-              items={LANGUAGES}
-            />
-          </SettingsRow>
           <SettingsRow title={t('settings.general.responseLangTitle')} description={t('settings.general.responseLangDescription')}>
             <Dropdown<string>
               items={RESPONSE_LANGUAGES}
@@ -1185,8 +1165,8 @@ export function GeneralSettings() {
               disabled={subagentLimitSaving}
               error={subagentLimitError ?? undefined}
               onChange={(event) => {
-                // 保留非法草稿供保存时校验，避免 number 控件将 abc
-                // 等输入过滤为空值后误保存为不限。
+                // Keep an invalid draft for validation on save, so a number input that filters
+                // "abc" to empty is not saved as unlimited by mistake.
                 setSubagentLimitInput(event.target.value)
                 setSubagentLimitError(null)
               }}

@@ -3,28 +3,28 @@ import type { ConnectionState } from '../../core/sessionTransport'
 import type { Checkpoint } from '../../core/operations'
 import { formatDuration } from '../../core/dashboard'
 
-/** 电脑没连上时，导航栏副标题只显示这一处连接状态。 */
+/** When the computer is not connected, the nav bar subtitle shows only this connection status. */
 export const connectionLabels: Record<ConnectionState, string> = {
-  connecting: '正在连接电脑…',
-  syncing: '正在同步…',
-  ready: '已连接',
-  resuming: '正在恢复连接…',
-  reconnecting: '正在重连…',
-  offline: '连接已断开',
-  pairing_required: '需要重新配对',
+  connecting: 'Connecting to computer…',
+  syncing: 'Syncing…',
+  ready: 'Connected',
+  resuming: 'Restoring connection…',
+  reconnecting: 'Reconnecting…',
+  offline: 'Connection lost',
+  pairing_required: 'Needs re-pairing',
 }
 
-/** 到远程电脑走的是哪条路，只在菜单里轻轻提一句。 */
+/** Which path a remote computer uses is only mentioned lightly in the menu. */
 export const linkPathLabels: Record<'cf' | 'lan' | 'direct', string> = {
-  cf: '经 Cloudflare',
-  lan: '局域网直连',
-  direct: '直连',
+  cf: 'via Cloudflare',
+  lan: 'LAN direct',
+  direct: 'Direct',
 }
 
 const basename = (path: string) =>
   path.replace(/\\/g, '/').replace(/\/+$/, '').split('/').filter(Boolean).at(-1) ?? ''
 
-/** 项目名取仓库根目录（工作树会话的 workDir 是工作树路径），取不到再用工作目录。 */
+/** Project name comes from the repo root (worktree sessions have workDir as the worktree path), falling back to the working directory. */
 export function projectName(session: Session | null | undefined) {
   if (!session) return ''
   return (
@@ -34,21 +34,21 @@ export function projectName(session: Session | null | undefined) {
   )
 }
 
-/** “项目名 · 分支”，分支取不到就只显示项目名。 */
+/** "Project name · branch", showing only the project name when the branch is unavailable. */
 export function sessionSubtitle(session: Session | null | undefined, branch?: string | null) {
   const name = projectName(session)
   return [name, branch?.trim()].filter(Boolean).join(' · ')
 }
 
-/** 菜单头部的工作目录：macOS / Linux 的用户目录缩写成 ~。 */
+/** Working directory in the menu header: the macOS / Linux home directory is abbreviated as ~. */
 export function displayPath(path?: string | null) {
   if (!path) return ''
   return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
 }
 
 /**
- * 上下文窗口只取可靠来源：模型目录给出的大小（如 “200k”“1m”），或模型 id 明确
- * 标了 1M；其他情况不猜。
+ * Context window only from reliable sources: the size given by the model catalog (e.g. "200k", "1m"), or a model id explicitly
+ * marked 1M; no guessing otherwise.
  */
 export function contextWindow(modelId?: string | null, catalogContext?: string | null) {
   const match = catalogContext?.trim().match(/^(\d+(?:\.\d+)?)\s*([km])$/i)
@@ -65,8 +65,8 @@ export function contextPercent(usage: TokenUsage | undefined, window: number | u
 }
 
 /**
- * 本轮开始时间。看到这一轮从空闲变成运行，就用本地时间；页面打开时已经在跑
- * （或断线重连后才看到），用最后一条用户消息的时间，没有再退回本地时间。
+ * This turn's start time. If the turn was seen going from idle to running use local time; if already running on page open
+ * (or only seen after reconnecting) use the time of the last user message, falling back to local time.
  */
 export function nextTurnStart(input: {
   previous?: { active: boolean; startedAt?: number; live: boolean }
@@ -88,8 +88,8 @@ const clock = (time: number) => {
 }
 
 /**
- * 一轮结束后的元信息“HH:mm · 用时 m:ss · 模型”。历史记录用消息时间，本页亲眼
- * 看到的一轮用本地记录的起止时间；算不出的部分省略。
+ * Metadata after a turn ends "HH:mm · took m:ss · model". History uses message time, and a turn witnessed on this page
+ * uses the locally recorded start/end time; parts that cannot be computed are omitted.
  */
 export function turnMeta(input: {
   items: readonly ChatItem[]
@@ -124,9 +124,9 @@ export function turnMeta(input: {
     input.modelId
   return [
     endedAt !== undefined ? clock(endedAt) : '',
-    // 不到 1 秒的一轮不写“用时 0:00”，那只会让人以为计时坏了。
+    // A turn under 1 second does not show "took 0:00", which would only make people think the timer is broken.
     endedAt !== undefined && startedAt !== undefined && endedAt - startedAt >= 1000
-      ? `用时 ${formatDuration((endedAt - startedAt) / 1000)}`
+      ? `took ${formatDuration((endedAt - startedAt) / 1000)}`
       : '',
     model ?? '',
   ]
@@ -134,7 +134,7 @@ export function turnMeta(input: {
     .join(' · ')
 }
 
-/** 最新一个检查点就是刚结束的这一轮，才算“本轮改动”。 */
+/** Only when the latest checkpoint is the turn that just ended does it count as "this turn's changes". */
 export function latestTurnCheckpoint(checkpoints: readonly Checkpoint[]) {
   const latest = checkpoints.reduce<Checkpoint | undefined>(
     (previous, current) =>

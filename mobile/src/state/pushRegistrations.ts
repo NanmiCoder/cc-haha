@@ -17,7 +17,7 @@ export type PushRegistrationInput = {
   preferences: { decisions: boolean; completed: boolean; errors: boolean }
   quietHours: { enabled: boolean; start: string; end: string }
   timeZone: string
-  /** 告诉电脑这台手机怎么投递（渠道、时效性通知、锁屏活动过滤）；旧版电脑不认识。 */
+  /** Tell the computer how to deliver to this phone (channels, time-sensitive notifications, lock screen activity filter); older desktop versions do not recognize it. */
   delivery?: PushDelivery
 }
 export type PushDelivery = {
@@ -34,8 +34,8 @@ export type PushRegistrationResult = {
 export type PushRegistrationProofs = { version: 1; tokens: string[] }
 
 /**
- * 登记时附带的投递方式。Android 只声明渠道已拆分（调用方必须先创建好渠道才传
- * channelsReady）；iOS 带上时效性通知和锁屏活动的过滤设置。
+ * Delivery method attached at registration. Android only declares that channels are split (the caller must create the channels before passing
+ * channelsReady); iOS includes time-sensitive notification and lock screen activity filter settings.
  */
 export function buildDelivery(
   platform: 'ios' | 'android',
@@ -61,9 +61,9 @@ export function migratePushProofs(raw: string | null): PushRegistrationProofs {
   if (!raw) return { version: 1, tokens: [] }
   const value = JSON.parse(raw)
   if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('通知登记凭据无法读取，原始数据已保留')
+    throw new Error('Notification registration credentials cannot be read; raw data kept')
   if (value.version !== undefined && value.version !== 0 && value.version !== 1)
-    throw new Error('通知登记来自更新版本，请先升级 App')
+    throw new Error('Notification registration is from a newer version; please upgrade first App')
   if (
     !Array.isArray(value.tokens) ||
     value.tokens.some(
@@ -71,12 +71,12 @@ export function migratePushProofs(raw: string | null): PushRegistrationProofs {
         typeof token !== 'string' || !token || token.length > 4096
     )
   )
-    throw new Error('通知登记凭据无法读取，原始数据已保留')
+    throw new Error('Notification registration credentials cannot be read; raw data kept')
   return { version: 1, tokens: [...new Set<string>(value.tokens)] }
 }
 
-const cancelled = () => new ApiError('通知登记已取消', 0, 'ABORTED')
-/** 移除一台电脑时，最多花这么久请它注销本机的通知登记。 */
+const cancelled = () => new ApiError('Notification registration canceled', 0, 'ABORTED')
+/** When removing a computer, spend at most this long asking it to unregister this phone's notifications. */
 const REMOVE_REVOKE_BUDGET_MS = 3000
 
 /** One queue per host drains accepted writes before removal. A durable token is saved
@@ -98,7 +98,7 @@ export class PushRegistrationCoordinator {
   ): Promise<PushRegistrationResult> {
     const hostId = client.host.id
     if (hostId !== input.hostId)
-      return Promise.reject(new Error('通知登记的电脑不匹配'))
+      return Promise.reject(new Error('Notification registration computer mismatch'))
     if (this.blocked.has(hostId) || signal?.aborted)
       return Promise.reject(cancelled())
     return this.serial(hostId, async () => {
@@ -108,7 +108,7 @@ export class PushRegistrationCoordinator {
       check()
       const deviceToken =
         input.kind === 'liveActivity' ? input.deviceToken : input.token
-      if (!deviceToken) throw new Error('锁屏活动缺少设备通知凭据')
+      if (!deviceToken) throw new Error('Lock screen activity is missing the device notification credential')
       const raw = await this.secrets.getItem(pushProofKey(hostId))
       const previous = migratePushProofs(raw)
       check()
@@ -139,14 +139,14 @@ export class PushRegistrationCoordinator {
       try {
         result = await put(input)
       } catch (error) {
-        // 旧版电脑严格校验登记字段，遇到 delivery 会整体回 400：去掉后重试一次。
+        // Older desktop versions strictly validate registration fields and return 400 when they see delivery: retry once without it.
         if (!(input.delivery && error instanceof ApiError && error.status === 400))
           throw error
         const { delivery: _delivery, ...legacy } = input
         result = await put(legacy)
       }
       if (result.registered && !result.id)
-        throw new ApiError('服务器未返回通知登记编号', 0, 'INVALID_RESPONSE')
+        throw new ApiError('The server did not return a notification registration ID', 0, 'INVALID_RESPONSE')
       if (signal?.aborted || this.blocked.has(hostId)) {
         if (result.registered && result.id)
           await this.deleteOne(client, result.id, input.token)
@@ -196,7 +196,7 @@ export class PushRegistrationCoordinator {
     const result = (async () => {
       await this.serial(hostId, async () => {
         if (client && client.host.id !== hostId)
-          throw new Error('通知注销的电脑不匹配')
+          throw new Error('Notification unregistration computer mismatch')
         const proof = migratePushProofs(
           await this.secrets.getItem(pushProofKey(hostId))
         )
@@ -215,7 +215,7 @@ export class PushRegistrationCoordinator {
       .catch((error) => {
         this.blocked.delete(hostId)
         throw new Error(
-          `移除未完成，电脑和凭据已保留。${error instanceof Error ? error.message : '请稍后重试'}`
+          `Removal did not finish; the computer and credentials were kept. ${error instanceof Error ? error.message : 'Please retry later'}`
         )
       })
       .finally(() => {
@@ -260,8 +260,8 @@ export class PushRegistrationCoordinator {
           signal,
         })
       } catch (error) {
-        // 电脑已经不认这份凭据（重新配对后旧条目、电脑清了授权）：远程撤销不可能成功，
-        // 当作已撤销，登记凭证才不会因为反复重试而永远留着。
+        // The computer no longer recognizes this credential (old entry after re-pairing, computer cleared authorization): remote revocation cannot succeed, 
+        // so treat it as revoked, otherwise the registration would stay forever through repeated retries.
         if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return
         throw error
       }

@@ -1,8 +1,8 @@
 /**
- * CronService — 管理定时任务的增删改查
+ * CronService — CRUD for scheduled tasks
  *
- * 任务持久化到 ~/.claude/scheduled_tasks.json（JSON 文件）。
- * 文件格式: { "tasks": [ CronTask, ... ] }
+ * Tasks are persisted to ~/.claude/scheduled_tasks.json (a JSON file).
+ * File format: { "tasks": [ CronTask, ... ] }
  */
 
 import * as fs from 'fs/promises'
@@ -61,16 +61,16 @@ export type CreateCronTaskInput = Omit<CronTask, 'id' | 'createdAt' | 'cron'> & 
 const TASKS_FILE_WRITE_ATTEMPTS = 2
 
 /**
- * 每个任务文件一条互斥队列（模块级，跨实例共享）。
- * 调度器会在同一分钟并发启动多个任务（各自调用 updateLastFired），
- * API 的增删改也可能与调度器写入交错；无互斥时后完成的写回会覆盖
- * 先完成的修改（执行时间丢失、创建不落盘、已删除任务复活）。
- * 注意 API 层（scheduled-tasks.ts）与调度器（cronScheduler.ts）持有
- * 不同的 CronService 实例，因此队列必须按文件路径共享而非挂在实例上。
+ * One mutex queue per task file (module-level, shared across instances).
+ * The scheduler may start several tasks concurrently in the same minute (each calling updateLastFired),
+ * and API CRUD may interleave with scheduler writes; without a mutex the later write-back would overwrite
+ * the earlier change (lost run times, creations not persisted, deleted tasks resurrected).
+ * Note the API layer (scheduled-tasks.ts) and the scheduler (cronScheduler.ts) hold
+ * different CronService instances, so the queue must be shared by file path rather than attached to the instance.
  */
 const mutationQueues = new Map<string, Promise<unknown>>()
 
-/** 在指定文件的互斥队列中执行变更操作，保留其原始结果/错误。 */
+/** Run a mutation in the given file's mutex queue, preserving its original result/error. */
 function runExclusive<T>(filePath: string, operation: () => Promise<T>): Promise<T> {
   const previous = mutationQueues.get(filePath) ?? Promise.resolve()
   const result = previous.then(operation)
@@ -85,7 +85,7 @@ function runExclusive<T>(filePath: string, operation: () => Promise<T>): Promise
 }
 
 export class CronService {
-  /** 任务文件路径 */
+  /** Task file path */
   private getTasksFilePath(): string {
     const configDir =
       process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -93,16 +93,16 @@ export class CronService {
   }
 
   // ---------------------------------------------------------------------------
-  // 公开方法
+  // Public methods
   // ---------------------------------------------------------------------------
 
-  /** 获取所有任务 */
+  /** Get all tasks */
   async listTasks(): Promise<CronTask[]> {
     const data = await this.readTasksFile()
     return data.tasks.map(task => this.snapshot(task))
   }
 
-  /** 创建新任务 */
+  /** Create a new task */
   async createTask(
     task: CreateCronTaskInput,
     options?: { sourceSessionId?: string; requestId?: string },
@@ -141,7 +141,7 @@ export class CronService {
     })
   }
 
-  /** 更新已有任务 */
+  /** Update an existing task */
   async updateTask(id: string, updates: Partial<CronTask>, options?: { expectedRevision?: number }): Promise<CronTask> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
@@ -154,7 +154,7 @@ export class CronService {
       this.validateTask({ ...data.tasks[index], ...updates })
       const onceSchedule = updates.schedule ?? data.tasks[index].schedule
       if ((updates.schedule || updates.enabled === true) && onceSchedule?.kind === 'once' && Date.parse(onceSchedule.runAt) <= Date.now()) throw ApiError.badRequest('One-time task must be scheduled in the future')
-      // 不允许修改 id 和 createdAt
+      // id and createdAt may not be changed
       const { id: _id, createdAt: _ca, revision: _revision, nextRunAt: _next, scheduleState: _state, ...safeUpdates } = updates
       data.tasks[index] = {
         ...data.tasks[index],
@@ -169,7 +169,7 @@ export class CronService {
     })
   }
 
-  /** 删除任务 */
+  /** Delete a task */
   async deleteTask(id: string, options?: { expectedRevision?: number }): Promise<void> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
@@ -183,7 +183,7 @@ export class CronService {
     })
   }
 
-  /** 更新任务的最后执行时间 */
+  /** Update a task's last run time */
   async updateLastFired(taskId: string, timestamp: string, options?: { expectedRevision?: number }): Promise<void> {
     return runExclusive(this.getTasksFilePath(), async () => {
       const data = await this.readTasksFile()
@@ -226,13 +226,13 @@ export class CronService {
   }
 
   // ---------------------------------------------------------------------------
-  // 内部: 文件读写
+  // Internal: file I/O
   // ---------------------------------------------------------------------------
 
   /**
-   * 读取任务 JSON 文件。文件不存在、或内容为空（空白 / 全 NUL，见 isBlankFileContent）
-   * 时返回空列表；带 UTF-8 BOM 的文件（PowerShell 5.x 默认写入）照常解析。
-   * 有实际内容却无法解析时仍然抛错：此时文件可能还能人工恢复，绝不能让后续写入悄悄覆盖它。
+   * Read the task JSON file. Returns an empty list when the file is missing or empty (whitespace / all NUL, see isBlankFileContent);
+   * files with a UTF-8 BOM (written by default by PowerShell 5.x) are parsed normally.
+   * Still throws when there is real content that cannot be parsed: the file may be manually recoverable, and later writes must never silently overwrite it.
    */
   private async readTasksFile(): Promise<TasksFile> {
     try {
@@ -241,7 +241,7 @@ export class CronService {
         return { tasks: [] }
       }
       const parsed = JSON.parse(stripBOM(raw)) as TasksFile
-      // 兼容异常格式
+      // Handle malformed format
       if (!Array.isArray(parsed.tasks)) {
         return { tasks: [] }
       }
@@ -257,7 +257,7 @@ export class CronService {
     }
   }
 
-  /** 原子写入任务 JSON 文件 */
+  /** Atomically write the task JSON file */
   private async writeTasksFile(data: TasksFile): Promise<void> {
     const filePath = this.getTasksFilePath()
     const dir = path.dirname(filePath)
@@ -276,8 +276,8 @@ export class CronService {
         lastError = err as Error
         await fs.unlink(tmpFile).catch(() => {})
 
-        // EPERM: Windows 上与其他进程同时 rename 到同一目标可能瞬时失败，
-        // 与 ENOENT 一样属于可重试的瞬时错误。
+        // EPERM: on Windows, renaming to the same target concurrently with another process can fail transiently,
+        // a retryable transient error like ENOENT.
         const code = (err as NodeJS.ErrnoException).code
         const retryable = code === 'ENOENT' || code === 'EPERM'
         if (!retryable || attempt === TASKS_FILE_WRITE_ATTEMPTS - 1) {

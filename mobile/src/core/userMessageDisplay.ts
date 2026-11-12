@@ -11,13 +11,13 @@ export type UserMessageCapability = {
 export function userMessageDisplay(text: string, teamRequested = false) {
   const unwrapped = visibleMessageText(text)
   const capabilities: UserMessageCapability[] = teamRequested || unwrapped !== text
-    ? [{ kind: 'team', id: 'agent-team', label: 'Agent 团队' }]
+    ? [{ kind: 'team', id: 'agent-team', label: 'Agent Team' }]
     : []
   const addCapability = (segment: Exclude<UserMessageSegment, { type: 'text' }>) => {
     if (segment.type === 'command') {
       capabilities.push({ kind: 'command', id: segment.name, label: segment.name })
     } else if (segment.type === 'skill' && segment.label === 'computer-use') {
-      capabilities.push({ kind: 'computer', id: segment.id, label: '操作电脑' })
+      capabilities.push({ kind: 'computer', id: segment.id, label: 'Computer use' })
     } else {
       capabilities.push({ kind: segment.type, id: segment.id, label: `@${segment.label}` })
     }

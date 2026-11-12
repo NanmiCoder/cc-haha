@@ -5,7 +5,7 @@ import { Button, Group, Icon, InlineError, Separator, useColors } from '../kit'
 import { Text } from '../Text'
 import type { Delivery, RowTone } from './deliveryModel'
 
-/** 设置首页只显示通知状态，诊断和测试按需展开。 */
+/** The settings home only shows notification status; diagnostics and tests expand on demand. */
 export function DeliveryCard({
   delivery,
   busy,
@@ -30,8 +30,8 @@ export function DeliveryCard({
     <Group>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`通知，${delivery.title}`}
-        accessibilityHint={expanded ? '收起通知详情' : '查看通知状态与测试'}
+        accessibilityLabel={`Notifications, ${delivery.title}`}
+        accessibilityHint={expanded ? 'Collapse notification details' : 'View notification status and test'}
         accessibilityState={{ expanded }}
         onPress={() => setExpanded((value) => !value)}
         style={({ pressed }) => ({
@@ -58,7 +58,7 @@ export function DeliveryCard({
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
           <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '500', color: colors.ink }}>
-            通知
+            notification
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
             {delivery.title}
@@ -80,7 +80,7 @@ export function DeliveryCard({
                   <View
                     key={row.key}
                     accessible
-                    accessibilityLabel={`${row.label}，${row.value}`}
+                    accessibilityLabel={`${row.label}, ${row.value}`}
                     style={{ minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 10 }}
                   >
                     <ToneGlyph tone={row.tone} color={color} />
@@ -103,7 +103,7 @@ export function DeliveryCard({
             </View>
             {delivery.actions.some((action) => action.kind === 'test') && (
               <Text style={{ fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
-                发送一条通知，检查手机能否收到提醒。
+                Send a notification to check whether the phone receives alerts.
               </Text>
             )}
             <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -121,7 +121,7 @@ export function DeliveryCard({
               {delivery.guide && (
                 <Pressable
                   accessibilityRole="link"
-                  accessibilityLabel="推送设置说明"
+                  accessibilityLabel="Push setup guide"
                   onPress={onGuide}
                   style={({ pressed }) => ({
                     minHeight: 44,
@@ -131,7 +131,7 @@ export function DeliveryCard({
                     opacity: pressed ? 0.6 : 1,
                   })}
                 >
-                  <Text style={{ fontSize: 14, color: colors.ink2 }}>推送设置说明</Text>
+                  <Text style={{ fontSize: 14, color: colors.ink2 }}>Push setup guide</Text>
                 </Pressable>
               )}
             </View>
@@ -162,7 +162,7 @@ function toneColor(tone: RowTone, colors: ReturnType<typeof useColors>) {
   }
 }
 
-/** 17pt 圆形状态标记：勾=通、叉=关、叹号=待处理、横线=不适用。 */
+/** 17pt Round status marker: check = working, cross = off, exclamation = pending, dash = not applicable. */
 function ToneGlyph({ tone, color }: { tone: RowTone; color: string }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">

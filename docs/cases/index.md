@@ -1,28 +1,28 @@
 ---
-title: 实战案例：从目标到验收
-nav_title: 案例总览
-description: 用五个真实任务练习 cc-haha，从读项目、改代码到定时任务与手机接力。
+title: Practical guides: from goal to verification
+nav_title: Guide overview
+description: Five real tasks to practice with cc-haha, from understanding a project to scheduled work and phone access.
 order: 0
 ---
 
-# 实战案例：从目标到验收
+# Practical guides: from goal to verification
 
-不必先记住所有设置。选一个你现在想完成的任务，照着步骤走一遍：每篇都给出前置条件、可复制的提示词和验收方法。
+You do not need to memorize every setting first. Pick a task you want to finish and follow its steps. Every guide has prerequisites, a prompt you can copy, and a way to check the result.
 
-## 按你要做的事选择
+## Choose your task
 
-| 你的目标 | 从哪开始 | 练到的能力 |
+| Your goal | Start here | What you practice |
 |---|---|---|
-| 刚接手代码，不知道从哪里读 | [10 分钟读懂陌生项目](./explore-project.md) | 选目录、计划模式、核对证据 |
-| 有一个能复现的错误 | [修复 Bug 并检查回归](./fix-bug.md) | 限定范围、测试、审 Diff |
-| 想给网页加一个功能 | [实现功能并预览页面](./ship-feature.md) | 分步实现、浏览器预览、行级反馈 |
-| 想每天自动检查仓库 | [建立每日代码审查](./daily-review.md) | 定时任务、首次试跑、查看日志 |
-| 离开电脑后继续跟进 | [用手机接力当前会话](./phone-handoff.md) | H5 配对、查看进度、远程回复 |
+| You inherited an unfamiliar codebase | [Understand a project in 10 minutes](./explore-project.md) | Select a folder, use Plan mode, check evidence |
+| You can reproduce an error | [Fix a bug and check for regressions](./fix-bug.md) | Scope the change, test, review the diff |
+| You want to add a web feature | [Build a feature and preview it](./ship-feature.md) | Implement in steps, preview, give line-level feedback |
+| You want to check a repo daily | [Set up a daily code review](./daily-review.md) | Schedule a task, run it once, inspect logs |
+| You need to leave your desk | [Continue a session on your phone](./phone-handoff.md) | Pair H5, check progress, respond remotely |
 
-## 每条路径都遵守这套节奏
+## A repeatable rhythm
 
-1. **先给目标和边界。** 写清楚要解决什么、哪些目录能碰、哪些事需要先问你。
-2. **让它给出证据。** 要求列出读到的文件、实际运行的命令、测试结果和改动清单。
-3. **自己验收。** 打开工作区看 Diff；涉及代码时再核对磁盘上的 `git status`、`git diff` 和相关测试。模型说“完成”不等于交付完成。
+1. **State the goal and boundary.** Say what success looks like, which folders are in scope, and what requires your approval.
+2. **Ask for evidence.** Request the files inspected, commands actually run, test results, and a change list.
+3. **Verify it yourself.** Review the diff in the workspace. For code changes, check `git status`, `git diff`, and the relevant tests on disk. A model's “done” message is not the final check.
 
-还没有安装或连接模型？先完成[跑通第一条会话](../start/first-session.md)。界面按钮找不到时查[桌面端功能地图](../desktop/index.md)。
+Need to install or connect a model? Start with [your first session](../start/first-session.md). If you cannot find a control, use the [desktop feature map](../desktop/index.md).

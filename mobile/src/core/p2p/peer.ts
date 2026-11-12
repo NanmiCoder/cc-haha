@@ -1,6 +1,6 @@
 import { encodeFrame, decodeFrame, type P2PChannel } from './frames'
 
-/** 只用到的那一小部分 WebRTC，原生库和测试替身都按它来。 */
+/** The small part of WebRTC that is used; the native library and test doubles both follow it. */
 export type RtcChannel = {
   readonly readyState: string
   send(text: string): void
@@ -10,19 +10,19 @@ export type RtcChannel = {
 }
 export type RtcPeer = {
   createChannel(label: P2PChannel, id: number): RtcChannel
-  /** 建 offer 并设为本地描述，返回 SDP。 */
+  /** Create an offer, set it as local description, and return the SDP. */
   createOffer(): Promise<string>
   setAnswer(sdp: string): Promise<void>
   addCandidate(candidate: string): Promise<void>
-  /** null 表示收集完了。 */
+  /** null means gathering is complete. */
   onCandidate(listener: (candidate: string | null) => void): void
   onState(listener: (state: string) => void): void
-  /** 选中的候选对两端都是内网地址时是 lan。 */
+  /** It is lan when both ends of the selected candidate pair are private addresses. */
   selectedPath(): Promise<'lan' | 'direct'>
   close(): void
 }
 export type RtcFactory = (config: { iceServers: unknown[] }) => RtcPeer
-/** 电脑的直连信息：开没开、用哪些 STUN 服务器、收集候选等多久。 */
+/** The computer's direct info: whether enabled, which STUN servers, and how long to gather candidates. */
 export type P2PInfo = { available: boolean; iceServers: unknown[]; gatherMs?: number }
 export type Signaling = {
   info(): Promise<P2PInfo>
@@ -31,7 +31,7 @@ export type Signaling = {
 }
 type Timers = { set(callback: () => void, ms: number): unknown; clear(handle: unknown): void }
 
-/** 协商加通道打开的总时限：超时就继续走 Cloudflare。 */
+/** Total deadline for negotiation plus channel open: on timeout keep using Cloudflare. */
 export const P2P_CONNECT_MS = 8000
 export const P2P_HEALTH_MS = 5000
 export const P2P_PONG_MS = 1500
@@ -39,15 +39,15 @@ export const P2P_PONG_MS = 1500
 export class P2PUnavailable extends Error {}
 
 const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|fe80:|f[cd][0-9a-f]{2}:)/i
-/** 选中的候选对两端都是内网地址：同一局域网。 */
+/** Both ends of the selected candidate pair are private addresses: same LAN. */
 export function classifyPath(local?: string, remote?: string): 'lan' | 'direct' {
   return local && remote && PRIVATE.test(local) && PRIVATE.test(remote) ? 'lan' : 'direct'
 }
 
 /**
- * 一条到电脑的直连。先经 Cloudflare 交换 offer/answer（收集候选最多 gatherMs，
- * 晚到的再补），两条通道都打开才算连上；之后每 5 秒探一次，连续两次没回音
- * （其间也没收到任何别的帧）就断开。
+ * A direct connection to the computer. First exchange offer/answer via Cloudflare (gather candidates for at most gatherMs, 
+ * trickle late ones), connected only when both channels open; afterwards probe every 5 seconds, and two consecutive misses
+ * (with no other frames received meanwhile) disconnect.
  */
 export class P2PPeer {
   #peer?: RtcPeer
@@ -58,7 +58,7 @@ export class P2PPeer {
   #awaiting?: number
   #health?: unknown
   #pongTimer?: unknown
-  /** 正在等自己那个 pong 的确认（见 `check`），按 ping 序号。 */
+  /** Waiting for confirmation of its own pong (see `check`), by ping sequence number. */
   #checks = new Map<number, (alive: boolean) => void>()
 
   constructor(
@@ -66,9 +66,9 @@ export class P2PPeer {
       rtc: RtcFactory
       signaling: Signaling
       timers: Timers
-      /** 一帧从电脑来（不含心跳）。 */
+      /** A frame from the computer (excluding heartbeat). */
       onFrame(text: string): void
-      /** 直连断了（只调一次）。 */
+      /** Direct dropped (called only once). */
       onClose(): void
     }
   ) {}
@@ -100,7 +100,7 @@ export class P2PPeer {
         failed(new Error(`Direct connection ${state}`))
         this.close()
       }
-      // 网络抖动：先探一次，不急着断。
+      // Network blip: probe first, do not rush to disconnect.
       else if (state === 'disconnected' && this.open) this.#probe()
     })
     const opened = Promise.all(
@@ -134,7 +134,7 @@ export class P2PPeer {
       const answer = await this.options.signaling.offer({ v: 1, sdp, candidates: local.splice(0), complete: localComplete })
       await peer.setAnswer(answer.sdp)
       for (const candidate of answer.candidates) await peer.addCandidate(candidate).catch(() => {})
-      // 两边还没收集完就在后台互相补发，直到都收集完或通道打开；连上不等它。
+      // While either side is still gathering, trickle to each other in the background until both finish or the channel opens; connecting does not wait for it.
       void trickle(answer.peerId, answer.complete)
     }
     const trickle = async (id: string, remoteDone: boolean) => {
@@ -148,7 +148,7 @@ export class P2PPeer {
           remoteComplete = reply.complete
         }
       } catch {
-        // 补发失败不算失败：已有的候选可能已经够连上，连不上由总时限收尾。
+        // A failed trickle is not a failure: existing candidates may suffice, and a failure to connect is handled by the overall deadline.
       }
     }
     try {
@@ -174,9 +174,9 @@ export class P2PPeer {
   }
 
   /**
-   * 这条路眼下还通不通（回到前台时问）：发一个 ping，限时内等到它自己的 pong 才算通。
-   * 挂起期间压在缓冲里的旧帧、之前心跳的 pong 只能说明那时还通，不算数。
-   * 不通也不在这里断开，由调用方决定。
+   * Whether this path is still alive right now (asked on return to foreground): send a ping and count it alive only if its own pong arrives in time.
+   * Old frames buffered during suspension and pongs from earlier heartbeats only show it was alive back then and do not count.
+   * Even if dead, do not disconnect here; the caller decides.
    */
   check(timeoutMs = P2P_PONG_MS): Promise<boolean> {
     if (!this.open) return Promise.resolve(false)
@@ -209,8 +209,8 @@ export class P2PPeer {
 
   #receive(data: unknown) {
     if (typeof data !== 'string') return
-    // 收到任何一帧都说明这条路还通：pong 和大量补发帧挤在同一条有序通道里时会排在后面，
-    // 不能因为它晚到就判断开。pong 只是没有别的帧时的兜底。
+    // Any received frame shows the path is still alive: when a pong shares one ordered channel with many replayed frames it queues behind them, 
+    // so arriving late must not be judged as dead. Pong is only the fallback when there are no other frames.
     this.#awaiting = undefined
     this.#misses = 0
     this.options.timers.clear(this.#pongTimer)
@@ -240,7 +240,7 @@ export class P2PPeer {
     this.#pongTimer = this.options.timers.set(() => {
       if (this.#awaiting !== n) return
       this.#awaiting = undefined
-      // 漏了一次马上再探；连续两次没回音，这条路就不通了，回 Cloudflare。
+      // One miss triggers an immediate re-probe; two consecutive misses mean the path is dead, so go back to Cloudflare.
       if (++this.#misses >= 2) this.close()
       else this.#probe()
     }, P2P_PONG_MS)

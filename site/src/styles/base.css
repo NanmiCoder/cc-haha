@@ -1,12 +1,11 @@
 /* ============================================================================
-   cc-haha — 文档站设计系统
-   色板取自桌面端「纸·墨·印」的「纯白」与「墨夜」两套主题，
-   保证网站和应用是同一个产品。字体自托管，零 CDN 依赖。
+   cc-haha — docs site design system
+   The palette comes from the desktop app's "Paper · Ink · Seal" Pure White and Ink Night themes,
+   so the site and the app feel like the same product. Fonts are self-hosted, with zero CDN dependencies.
    ========================================================================== */
 
-/* ── 自托管字体（与桌面端同一批文件）──────────────────────────────
-   中文刻意不加载 webfont：Noto Serif SC 的 CJK 切片每字重约 6MB，
-   落到系统宋体/苹方就是桌面端本身的观感。 */
+/* ── Self-hosted fonts (the same files as the desktop app) ──────────────────────────────
+   Only the Latin subsets are loaded: the Noto Serif SC CJK slices are about 6MB per weight. */
 
 @font-face {
   font-family: 'Inter';
@@ -57,7 +56,7 @@
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
-/* ── 刻度（与主题无关）───────────────────────────────────────── */
+/* ── Scales (theme-independent) ───────────────────────────────────────── */
 
 :root {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC',
@@ -65,7 +64,7 @@
   --font-serif: 'Noto Serif SC', 'Songti SC', 'Source Han Serif SC', 'SimSun', Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* 字号 */
+  /* Font sizes */
   --fs-2xs: 11px;
   --fs-xs: 12px;
   --fs-sm: 13px;
@@ -78,7 +77,7 @@
   --fs-4xl: 30px;
   --fs-5xl: 38px;
 
-  /* 间距 */
+  /* Spacing */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -93,7 +92,7 @@
   --sp-24: 96px;
   --sp-32: 128px;
 
-  /* 圆角（与桌面端一致） */
+  /* Corner radii (same as the desktop app) */
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 13px;
@@ -102,19 +101,19 @@
   --r-3xl: 24px;
   --r-full: 9999px;
 
-  /* 版心 */
+  /* Content widths */
   --w-page: 1180px;
   --w-prose: 748px;
   --w-sidebar: 258px;
   --w-toc: 208px;
   --h-header: 60px;
 
-  /* 动效 */
+  /* Motion */
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --t-fast: 120ms;
   --t-base: 200ms;
 
-  /* 层级 */
+  /* Z-index layers */
   --z-sticky: 20;
   --z-nav: 30;
   --z-scrim: 40;
@@ -123,7 +122,7 @@
   --z-popover: 75;
 }
 
-/* ── 浅色：桌面端「纯白」───────────────────────────────────────── */
+/* ── Light: desktop "Pure White" ───────────────────────────────────────── */
 
 :root,
 :root[data-theme='light'] {
@@ -150,8 +149,8 @@
   --brand-soft-hover: #efded4;
   --brand-border: #e6cdbf;
   --on-brand: #fbf6ec;
-  /* 压在 --brand-soft 上的文字。浅色下与 --brand 同色够用，深色下必须提亮，
-     否则只有 4.32:1 —— 侧栏当前项和巡览当前 tab 都吃这个色。 */
+  /* Text on --brand-soft. In light mode the same color as --brand is enough; in dark mode it must be brightened,
+     otherwise contrast is only 4.32:1 — the current sidebar item and the current tour tab both use this color. */
   --on-brand-soft: #96442b;
 
   --ink: #1f1c17;
@@ -180,7 +179,7 @@
   --scrim: rgba(19, 17, 14, 0.42);
   --glass: rgba(255, 255, 255, 0.86);
 
-  /* 语法高亮 */
+  /* Syntax highlighting */
   --c-comment: #756f63;
   --c-string: #437220;
   --c-keyword: #b8533b;
@@ -191,7 +190,7 @@
   --c-punct: #5c504a;
 }
 
-/* ── 深色：桌面端「墨夜」───────────────────────────────────────── */
+/* ── Dark: desktop "Ink Night" ───────────────────────────────────────── */
 
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -255,7 +254,7 @@
   --c-punct: #a79b83;
 }
 
-/* ── 重置与基础 ─────────────────────────────────────────────── */
+/* ── Reset and base ─────────────────────────────────────────────── */
 
 *,
 *::before,
@@ -344,7 +343,7 @@ p {
   margin: 0;
 }
 
-/* ── 通用件 ─────────────────────────────────────────────────── */
+/* ── Shared pieces ─────────────────────────────────────────────────── */
 
 .u-shell {
   width: 100%;
@@ -370,8 +369,8 @@ p {
   transform: translateY(0);
 }
 
-/* 跳过链接和换页会把焦点搬进 <main>，这是给读屏用的落点，
-   不需要围着整块正文画一圈焦点环。 */
+/* The skip link and page changes move focus into <main> as a landing point for screen readers;
+   there is no need to draw a focus ring around the whole body. */
 main[tabindex='-1']:focus,
 main[tabindex='-1']:focus-visible {
   outline: none;
@@ -395,7 +394,7 @@ main[tabindex='-1']:focus-visible {
   transform: scale(0.98);
 }
 
-/* 主按钮是墨色实心，hover 才转陶土 —— 与桌面端一致 */
+/* The primary button is solid ink and turns terracotta on hover — same as the desktop app */
 .btn--primary {
   background: var(--ink);
   color: var(--on-ink);
@@ -441,7 +440,7 @@ main[tabindex='-1']:focus-visible {
   line-height: 1.7;
 }
 
-/* ── 站点头（首页与文档共用一套）────────────────────────────── */
+/* ── Site header (shared by the home page and the docs) ────────────────────────────── */
 
 .site-header {
   position: sticky;
@@ -552,8 +551,8 @@ main[tabindex='-1']:focus-visible {
     transform: translateY(-8px);
     opacity: 0;
     pointer-events: none;
-    /* opacity:0 挡得住鼠标，挡不住 Tab —— 收起来的菜单必须 visibility:hidden，
-       否则键盘用户会在看不见的地方连按 4 下空焦点。延迟到淡出结束再隐藏。 */
+    /* opacity:0 stops the mouse but not Tab — a collapsed menu must be visibility:hidden,
+       or keyboard users tab through 4 invisible focus stops. Hide it after the fade-out finishes. */
     visibility: hidden;
     transition: opacity var(--t-base) var(--ease), transform var(--t-base) var(--ease),
       visibility 0s linear var(--t-base);
@@ -581,13 +580,13 @@ main[tabindex='-1']:focus-visible {
     display: none;
   }
 
-  /* 下拉导航展开时锁住背景滚动，免得菜单浮在原地、正文却滑走了 */
+  /* Lock background scrolling while the dropdown nav is open, so the content doesn't slide away under the menu */
   html:has(.site-nav[data-open='true']) {
     overflow: hidden;
   }
 }
 
-/* ── 加载态与 404 ───────────────────────────────────────────── */
+/* ── Loading state and 404 ───────────────────────────────────────────── */
 
 .page-loading {
   min-height: 60vh;

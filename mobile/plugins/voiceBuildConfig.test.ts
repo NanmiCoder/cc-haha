@@ -19,7 +19,7 @@ test('the composed native config grants foreground dictation without image-picke
     })
     const config = JSON.parse(output.toString())
     const mods = config._internal.modResults
-    expect(mods.ios.infoPlist.NSMicrophoneUsageDescription).toContain('连接的电脑进行转写')
+    expect(mods.ios.infoPlist.NSMicrophoneUsageDescription).toContain('connected computer for transcription')
     expect(mods.ios.infoPlist.UIBackgroundModes).not.toContain('audio')
     const permissions = mods.android.manifest.manifest['uses-permission'] as { $: Record<string, string> }[]
     const microphone = permissions.filter(permission => permission.$['android:name'] === 'android.permission.RECORD_AUDIO')

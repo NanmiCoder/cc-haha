@@ -4,7 +4,7 @@ import { Chevron, Dot, Mono, useColors } from '../kit'
 import { Text } from '../Text'
 import { useToneColor } from './parts'
 
-/** 最近运行一行：圆点 · 时间与结果 · 等宽时长 · chevron。 */
+/** A recent run row: dot · time and result · monospace duration · chevron. */
 export function RunRow({
   run,
   now,
@@ -24,7 +24,7 @@ export function RunRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${when}，${result.text}${run.sessionId ? '，打开会话' : '，查看结果'}`}
+      accessibilityLabel={`${when}, ${result.text}${run.sessionId ? ', open session' : ', view result'}`}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}

@@ -32,7 +32,12 @@ import { checkUserMessageBudget } from '../lib/userMessageBudget'
 import { t } from '../i18n'
 import {
   VISUAL_SELECTION_BATCH_PROMPT_HEADER,
+  VISUAL_SELECTION_NOTE_LABEL,
   VISUAL_SELECTION_PROMPT_FOOTER,
+  VISUAL_SELECTION_PROMPT_HEADER,
+  VISUAL_SELECTION_SELECTOR_LABEL,
+  VISUAL_SELECTION_TARGET_LABEL,
+  visualSelectionEndMarker,
 } from '../lib/selectionComposer'
 import { hasRunningBackgroundTasks, hasRunningSubagentTasks } from '../lib/backgroundTasks'
 import { AGENT_LIFECYCLE_TYPES } from '../types/team'
@@ -226,7 +231,7 @@ export type PerSessionState = {
   elapsedSeconds: number
   statusVerb: string
   apiRetry?: ApiRetryState | null
-  // 流式恢复/非流式降级提示（活动回合状态，与 apiRetry 同清除时机）。
+  // Streaming-recovery / non-streaming fallback notice (active-turn state, cleared with apiRetry).
   streamingFallback?: StreamingFallbackState | null
   slashCommands: SlashCommandOption[]
   agentTaskNotifications: Record<string, AgentTaskNotification>
@@ -1193,11 +1198,11 @@ function clearPendingToolInputDelta(sessionId: string): void {
 }
 
 /**
- * 后台（异步）子 agent 的工具活动会带着 parentToolUseId 冒泡进主消息流，但
- * 渲染层把它们折叠进父 agent 卡片、不在主流单独显示（MessageList 的
- * childToolCallsByParent）。合并流式块时必须跳过这些"隐形"消息去看真正的上一
- * 条主流消息，否则主 agent 一段连续的 thinking / 正文会被它们切成好几块 ——
- * 块之间还什么都不显示（#1108）。
+ * Tool activity from background (async) sub-agents bubbles into the main message stream with a
+ * parentToolUseId, but rendering folds it into the parent agent card instead of the main stream
+ * (MessageList's childToolCallsByParent). Merging streamed blocks must skip these "invisible"
+ * messages to find the real previous main-stream message, or one continuous run of main-agent
+ * thinking / text gets cut into several blocks with nothing shown between them (#1108).
  */
 function findStreamMergeTargetIndex(messages: UIMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -1232,21 +1237,21 @@ function appendAssistantTextMessage(
   ) {
     return messages
   }
-  // 这里曾经还有一道守卫：扫描整个 messages，只要某条 hydrated 回复与来文逐字相同
-  // 就丢弃。它必须去掉 —— 内容相等原理上区分不了「重放」和「模型真的又答了一遍同样
-  // 的话」。一轮里出现两次「好的」、两次「完成了」、两次同样的一行命令输出毫不稀奇，
-  // 而 mergeRestoredTranscriptMessageIds 会按逐字相同把 transcript id 回填到 live
-  // 消息上，于是第一条就成了第二条的毒药。用户眼看着流式输出完的回复会在
-  // message_complete 时凭空消失，且没有任何路径能找回来。
+  // There used to be another guard here: scan all messages and drop the incoming one if any
+  // hydrated reply matched it verbatim. It had to go: equal content cannot in principle tell a
+  // replay from the model really saying the same thing again. Two "OK"s, two "Done"s, or the same
+  // one-line command output twice in one turn is common, and mergeRestoredTranscriptMessageIds
+  // backfills transcript ids onto live messages by verbatim match, so the first poisoned the second.
+  // Users watched a fully streamed reply vanish at message_complete with no way to get it back.
   //
-  // d39e82b62 试过把扫描限定在当前轮次，被 3a630db11 回退：同轮重复照样丢，而且
-  // 尾部只要有一条 user_text 就让守卫彻底失效。换任何扫描边界都不成立。
+  // d39e82b62 tried limiting the scan to the current turn and was reverted by 3a630db11: repeats
+  // within a turn were still dropped, and one trailing user_text disabled the guard entirely. No scan boundary works.
   //
-  // 真正挡住重放的是服务端按 uuid 去重（conversationService.isReplayedSdkMessage，
-  // 与这道守卫同一个提交 de52656bb 加入）。那里的容量是 2000 条 uuid，而 de52656bb
-  // 记录的最坏情况是 858 条消息重放 31 次 —— 858 < 2000，整个重放窗口都在集合里，
-  // 逐条按身份挡掉。上面那道尾部子串守卫保留：它只在尾部仍是那条 hydrated 消息时
-  // 才生效，够不到一轮之内被工具调用隔开的重复。
+  // What really blocks replays is server-side uuid dedupe (conversationService.isReplayedSdkMessage,
+  // added in the same commit de52656bb as this guard). It holds 2000 uuids, and the worst case
+  // de52656bb recorded is 858 messages replayed 31 times; 858 < 2000, so the whole replay window
+  // is in the set and blocked by identity. The tail-substring guard above stays: it only applies
+  // while the tail is still that hydrated message, so it cannot reach repeats split by tool calls within a turn.
   const canMergeIntoLast =
     last?.type === 'assistant_text' &&
     (
@@ -2378,7 +2383,7 @@ function buildAgentCompletionNotification(
   const lastAssistant = [...messages].reverse().find((message) => message.type === 'assistant_text')
   const suffix = preview.length > AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS ? '...' : ''
   return {
-    title: 'Claude Code Haha 已完成回复',
+    title: 'Claude Code Haha finished replying',
     body: preview.slice(0, AGENT_COMPLETION_NOTIFICATION_PREVIEW_CHARS) + suffix,
     dedupeKey: `agent-completion:${sessionId}:${lastAssistant?.id ?? Date.now()}`,
   }
@@ -5278,10 +5283,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'permission_mode_changed': {
-        // CLI 是权限模式的真相来源。这里把它恢复/切换后的权威值校正到本地镜像。
-        // 注意：只更新本地状态，**不要**走 setSessionPermissionMode —— 那会把
-        // set_permission_mode 再回发给 CLI 形成回环。未知模式直接忽略，避免
-        // 选择器拿到无法渲染的值。
+        // The CLI is the source of truth for permission mode; sync its restored/switched value into
+        // the local mirror. Only update local state; do **not** call setSessionPermissionMode, which
+        // would send set_permission_mode back to the CLI in a loop. Unknown modes are ignored so the
+        // picker never gets a value it cannot render.
         const KNOWN_MODES: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions', 'dontAsk']
         if (KNOWN_MODES.includes(msg.mode)) {
           update(() => ({ permissionMode: msg.mode }))
@@ -5429,8 +5434,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           break
         }
 
-        // 进入非流式降级阶段：旧的重试横幅（针对失败的流式请求）已过时，
-        // 清掉换成降级提示；后续非流式重试到来的 api_retry 会重新接管显示。
+        // Entering the non-streaming fallback: the old retry banner (for the failed streaming request)
+        // is stale, so replace it with the fallback notice; a later api_retry for a non-streaming retry takes over again.
         update((session) => ({
           streamingFallback: {
             cause: msg.cause,
@@ -5507,8 +5512,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'thinking': {
-        // 重放/空块都不该冒出一个新的「已思考」气泡，也不该把会话拖回 thinking 态
-        // 或者启动计时器 —— 那正是"打开一个早就结束的会话，它自己开始输出"的观感。
+        // Neither a replay nor an empty block should open a new "Thought" bubble, put the session back
+        // in the thinking state or start the timer; that is exactly the "an old session starts outputting on its own" effect.
         let skippedThinkingBlock = false
         update((s) => {
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
@@ -5517,18 +5522,18 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             : s.messages
           const lastIndex = findStreamMergeTargetIndex(base)
           const last = lastIndex >= 0 ? base[lastIndex] : undefined
-          // 服务端两个 thinking 发射点都做了非空过滤，但 `&& delta.thinking` 是真值
-          // 判断，纯空白仍能漏过来，落到下面就是一个点开什么都没有的空壳气泡。
-          // 只挡整块空白和会新开气泡的空白；正在流式的思考里，单独的空格/换行
-          // 增量是正文的一部分，丢掉它会让实时内容和 transcript 对不上（#1476）。
+          // Both server thinking emitters filter empties, but `&& delta.thinking` is a truthiness check,
+          // so pure whitespace still slips through and becomes an empty bubble below.
+          // Only block whole-whitespace blocks and whitespace that would open a new bubble; inside
+          // streaming thinking, a lone space/newline delta is content, and dropping it makes live text and the transcript disagree (#1476).
           if (!msg.text.trim() && (msg.complete === true || last?.type !== 'thinking')) {
             skippedThinkingBlock = true
             return { messages: base, streamingText: '' }
           }
-          // 真正的重放源已在服务端按 uuid 挡掉（conversationService.isReplayedSdkMessage）。
-          // 这里再兜一道：thinking 没有 transcriptMessageId 之类的身份，任何漏网的
-          // 重放都只能靠"整块内容与已有 thinking 逐字相同"来认。流式 delta 是碎片，
-          // 不会命中；命中的必然是被整块重发的同一段思考。
+          // The real replay source is blocked by uuid on the server (conversationService.isReplayedSdkMessage).
+          // This is a second net: thinking has no identity such as transcriptMessageId, so any replay
+          // that slips through can only be recognized by a whole block matching existing thinking verbatim.
+          // Streaming deltas are fragments and never match; a match is the same thinking resent whole.
           if (base.some((message) => message.type === 'thinking' && message.content === msg.text)) {
             skippedThinkingBlock = true
             return { messages: base, streamingText: '' }
@@ -5568,10 +5573,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const parentToolUseId = msg.parentToolUseId ?? getPendingToolParentUseId(sessionId, toolUseId)
         rememberPendingToolParentUseId(sessionId, toolUseId, parentToolUseId)
         update((s) => {
-          // 流式路径上，工具块的 content_start 已经把待定正文冲刷成一条消息了
-          // （见 case 'content_start' 里 blockType !== 'text' 的分支）。但整块兜底
-          // 路径只发 tool_use_complete、不发 content_start —— 不在这里补一次冲刷，
-          // 工具调用前后的两段正文就会跨消息粘成一条。
+          // On the streaming path, a tool block's content_start already flushed pending text into a
+          // message (see the blockType !== 'text' branch of case 'content_start'). The whole-block
+          // fallback path sends only tool_use_complete, no content_start, so without a flush here the
+          // text before and after the tool call would be glued into one message.
           const pendingText = `${s.streamingText}${consumePendingDelta(sessionId)}`
           const base = pendingText.trim()
             ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
@@ -5662,12 +5667,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           dedupeKey: `permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
           requestAttention: true,
-          title: 'Claude Code Haha 需要你的确认',
+          title: 'Claude Code Haha needs your confirmation',
           body: msg.displayName && msg.toolName
-            ? `${msg.displayName} 请求使用 ${msg.toolName}，正在等待允许。`
+            ? `${msg.displayName} wants to use ${msg.toolName} and is waiting for permission.`
             : msg.toolName
-            ? `${msg.toolName} 请求执行，正在等待允许。`
-            : '有一个工具请求正在等待允许。',
+            ? `${msg.toolName} wants to run and is waiting for permission.`
+            : 'A tool request is waiting for permission.',
           target: { type: 'session', sessionId },
         })
         update((s) => {
@@ -5730,8 +5735,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           dedupeKey: `computer-use-permission:${msg.requestId}`,
           cooldownScope: 'permission-prompt',
           requestAttention: true,
-          title: 'Claude Code Haha 需要你的确认',
-          body: msg.request.reason || 'Computer Use 正在等待允许。',
+          title: 'Claude Code Haha needs your confirmation',
+          body: msg.request.reason || 'Computer Use is waiting for permission.',
           target: { type: 'session', sessionId },
         })
         update((session) => {
@@ -6461,7 +6466,37 @@ function isTeammateMessage(text: string): boolean {
 const SIMPLE_IMAGE_SOURCE_RE = /^\[Image source: (.+)\]$/
 const DETAILED_IMAGE_SOURCE_RE = /^\[Image: source: (.+?)(?:, original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.)?\]$/
 const IMAGE_RESIZE_METADATA_RE = /^\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by \d+(?:\.\d+)? to map to original image\.\]$/
-const VISUAL_SELECTION_PROMPT_HEADER = '请根据截图中编号 1 的蓝色标注修改本地前端。'
+// Sessions recorded before the app went English-only stored these prompts with
+// Chinese markers. They are still parsed so old history keeps its image labels.
+const LEGACY_VISUAL_SELECTION = {
+  header: '请根据截图中编号 1 的蓝色标注修改本地前端。',
+  batchHeader: '请一次性处理以下批量标注的本地前端修改。每张截图中的蓝色编号与下方元素编号一一对应。',
+  footer: '请优先依据截图里的编号标注定位元素，selector 只作为辅助线索。',
+  target: '目标元素：',
+  selector: 'Selector：',
+  note: '用户注释：',
+  end: (number: number) => `[元素 ${number} 结束]`,
+  startRe: /^\[元素 (\d+)\]$/,
+}
+
+type VisualSelectionMarkers = {
+  footer: string
+  target: string
+  selector: string
+  note: string
+  end: (number: number) => string
+  startRe: RegExp
+}
+
+const CURRENT_VISUAL_SELECTION: VisualSelectionMarkers = {
+  footer: VISUAL_SELECTION_PROMPT_FOOTER,
+  target: VISUAL_SELECTION_TARGET_LABEL,
+  selector: VISUAL_SELECTION_SELECTOR_LABEL,
+  note: VISUAL_SELECTION_NOTE_LABEL,
+  end: visualSelectionEndMarker,
+  // Mirrors `visualSelectionStartMarker`.
+  startRe: /^\[Element (\d+)\]$/,
+}
 
 type VisualSelectionHistoryItem = {
   number: number
@@ -6521,33 +6556,40 @@ export function stripGeneratedImageMetadataLines(text: string): string {
 function parseVisualSelectionHistoryPrompt(text: string): VisualSelectionHistoryDisplay | null {
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
   const header = lines[0]?.trim()
-  if (header === VISUAL_SELECTION_BATCH_PROMPT_HEADER) {
+  const batchMarkers = header === VISUAL_SELECTION_BATCH_PROMPT_HEADER
+    ? CURRENT_VISUAL_SELECTION
+    : header === LEGACY_VISUAL_SELECTION.batchHeader ? LEGACY_VISUAL_SELECTION : null
+  if (batchMarkers) {
     const items: VisualSelectionHistoryDisplay['items'] = []
     for (let index = 1; index < lines.length; index += 1) {
-      const match = lines[index]?.trim().match(/^\[元素 (\d+)\]$/)
+      const match = lines[index]?.trim().match(batchMarkers.startRe)
       if (!match) continue
       const number = Number(match[1])
-      const endMarker = `[元素 ${number} 结束]`
+      const endMarker = batchMarkers.end(number)
       const block: string[] = []
       index += 1
       while (index < lines.length && lines[index]?.trim() !== endMarker) {
         block.push(lines[index] ?? '')
         index += 1
       }
-      const parsedItem = parseVisualSelectionItem(block, number)
+      const parsedItem = parseVisualSelectionItem(block, number, batchMarkers)
       if (parsedItem) items.push(parsedItem)
     }
     return items.length ? { batch: true, items } : null
   }
-  if (header !== VISUAL_SELECTION_PROMPT_HEADER) return null
+  const markers = header === VISUAL_SELECTION_PROMPT_HEADER
+    ? CURRENT_VISUAL_SELECTION
+    : header === LEGACY_VISUAL_SELECTION.header ? LEGACY_VISUAL_SELECTION : null
+  if (!markers) return null
 
-  const item = parseVisualSelectionItem(lines.slice(1), 1)
+  const item = parseVisualSelectionItem(lines.slice(1), 1, markers)
   return item ? { batch: false, items: [item] } : null
 }
 
 function parseVisualSelectionItem(
   lines: string[],
   number: number,
+  markers: VisualSelectionMarkers,
 ): VisualSelectionHistoryItem | null {
   let displayName: string | undefined
   let selector: string | undefined
@@ -6555,15 +6597,15 @@ function parseVisualSelectionItem(
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]?.trim() ?? ''
-    if (line.startsWith('目标元素：')) {
-      displayName = line.slice('目标元素：'.length).trim()
-    } else if (line.startsWith('Selector：')) {
-      selector = line.slice('Selector：'.length).trim()
-    } else if (line === '用户注释：') {
+    if (line.startsWith(markers.target)) {
+      displayName = line.slice(markers.target.length).trim()
+    } else if (line.startsWith(markers.selector)) {
+      selector = line.slice(markers.selector.length).trim()
+    } else if (line === markers.note) {
       const noteLines: string[] = []
       for (let noteIndex = index + 1; noteIndex < lines.length; noteIndex += 1) {
         const noteLine = lines[noteIndex] ?? ''
-        if (noteLine.trim() === VISUAL_SELECTION_PROMPT_FOOTER) break
+        if (noteLine.trim() === markers.footer) break
         noteLines.push(noteLine)
       }
       const trimmedNote = noteLines.join('\n').trim()
@@ -7700,14 +7742,14 @@ function pushAssistantHistoryThinking(
   content: string,
   timestamp: number,
 ): void {
-  // 与流式路径（case 'thinking'）保持同等防护：纯空白块不产生空壳气泡。
+  // Same protection as the streaming path (case 'thinking'): whitespace-only blocks produce no empty bubble.
   if (!content.trim()) return
 
   const last = messages[messages.length - 1]
   if (last?.type === 'thinking') {
-    // 流式落盘的快照会让同一段思考在 jsonl 里以"整块重发"或"前缀增长"的
-    // 形态重复出现，逐字相同直接丢弃，前缀包含则用更全的新块替换旧块。
-    // 合并时保留首个块的确定性 id，保证轮询重映射时 React key 稳定。
+    // Snapshots written while streaming make the same thinking repeat in the jsonl as a whole-block
+    // resend or a growing prefix; verbatim duplicates are dropped and a prefix is replaced by the
+    // fuller new block. Merging keeps the first block's deterministic id so React keys stay stable on poll remaps.
     if (last.content === content) return
     if (content.startsWith(last.content)) {
       last.content = content

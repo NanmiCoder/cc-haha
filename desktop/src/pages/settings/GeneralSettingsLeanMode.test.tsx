@@ -9,7 +9,7 @@ import { GeneralSettings } from './GeneralSettings'
 describe('General settings lean mode availability', () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      locale: 'zh', leanModeEnabled: false,
+      locale: 'en', leanModeEnabled: false,
       fetchOutputStyles: async () => {}, fetchAppMode: async () => {},
     })
     useOpenTargetStore.setState({ ensureTargets: async () => {} })
@@ -23,7 +23,7 @@ describe('General settings lean mode availability', () => {
   })
   it('defaults off and saves both choices', async () => {
     render(<GeneralSettings />)
-    const toggle = screen.getByRole('switch', { name: '启用精简模式' })
+    const toggle = screen.getByRole('switch', { name: 'Enable lean mode' })
     expect(toggle).not.toBeChecked()
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toBeChecked())
@@ -35,7 +35,7 @@ describe('General settings lean mode availability', () => {
   it('keeps the previous choice when saving fails', async () => {
     vi.mocked(settingsApi.updateUser).mockRejectedValue(new Error('fixture failure'))
     render(<GeneralSettings />)
-    const toggle = screen.getByRole('switch', { name: '启用精简模式' })
+    const toggle = screen.getByRole('switch', { name: 'Enable lean mode' })
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).not.toBeDisabled())
     expect(toggle).not.toBeChecked()

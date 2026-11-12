@@ -13,7 +13,7 @@ describe('tab settings in General', () => {
   beforeEach(() => {
     localStorage.clear()
     useSettingsStore.setState({
-      locale: 'zh',
+      locale: 'en',
       fetchOutputStyles: async () => {},
       fetchAppMode: async () => {},
     })
@@ -33,11 +33,11 @@ describe('tab settings in General', () => {
       render(<GeneralSettings />)
     })
 
-    const limit = screen.getByLabelText('最多保留的会话标签')
-    const restore = screen.getByRole('switch', { name: '启动时恢复上次打开的标签' })
+    const limit = screen.getByLabelText('Session tabs to keep')
+    const restore = screen.getByRole('switch', { name: 'Restore tabs on launch' })
     expect(limit).toHaveValue('unlimited')
     expect(restore).toBeChecked()
-    expect(screen.getByText(/关闭标签不会删除会话/)).toBeInTheDocument()
+    expect(screen.getByText(/Closing a tab never deletes the session/)).toBeInTheDocument()
 
     fireEvent.change(limit, { target: { value: '8' } })
     expect(useTabBehaviorStore.getState().behavior.sessionTabLimit).toBe(8)
@@ -45,7 +45,7 @@ describe('tab settings in General', () => {
 
     fireEvent.click(restore)
     expect(restore).not.toBeChecked()
-    expect(screen.getByText('重新打开应用时标签栏为空，会话仍在左侧列表里。')).toBeInTheDocument()
+    expect(screen.getByText('The app starts with no tabs open. Your sessions stay in the sidebar.')).toBeInTheDocument()
     expect(storedBehavior()).toMatchObject({ sessionTabLimit: 8, restoreOnLaunch: false })
 
     fireEvent.change(limit, { target: { value: 'unlimited' } })

@@ -26,14 +26,14 @@ import { usePendingSwitches } from './usePendingSwitches'
 
 export const schedulePath = (id: string) => `/api/scheduled-tasks/${encodeURIComponent(id)}`
 
-/** 定时任务列表（Schedules 稿）：每 5 秒刷新，开关即时生效，点行看详情。 */
+/** Scheduled task list (Schedules design): refreshes every 5 seconds, toggles take effect immediately, tap a row for details. */
 export function ScheduleList({ hostId }: { hostId: string }) {
   const colors = useColors()
   const { host, client, error: connectionError } = useConnection(hostId)
   const resource = useFocusedResource(
     useCallback(
       async (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
+        if (!client) throw new Error('Connecting to computer')
         const [tasks, runs] = await Promise.all([
           client.get<{ tasks: ScheduledTask[] }>('/api/scheduled-tasks', { signal }),
           client.get<{ runs: RunSummary[] }>(
@@ -78,7 +78,7 @@ export function ScheduleList({ hostId }: { hostId: string }) {
     <ScreenView>
       <NavBar
         right={
-          <IconButton icon="plus" label="新建定时任务" strokeWidth={2} onPress={openCreate} />
+          <IconButton icon="plus" label="New scheduled task" strokeWidth={2} onPress={openCreate} />
         }
       />
       <ScrollView
@@ -95,8 +95,8 @@ export function ScheduleList({ hostId }: { hostId: string }) {
         }
       >
         <LargeTitle
-          title="定时任务"
-          subtitle={`${host?.name ?? '电脑'} 开着、cc-haha 在运行时，按计划指定的时区执行`}
+          title="Scheduled task"
+          subtitle={`${host?.name ?? 'computer'} Runs in the time zone set by the schedule while the computer is on and cc-haha is running`}
           style={{ paddingBottom: 16 }}
         />
         <InlineError text={connectionError || resource.error} style={{ marginBottom: 12 }} />
@@ -125,16 +125,16 @@ export function ScheduleList({ hostId }: { hostId: string }) {
                 </View>
               ))}
             </Group>
-            <Footnote style={{ paddingTop: 10 }}>点开任务可修改执行计划。执行内容可在电脑上继续编辑。</Footnote>
+            <Footnote style={{ paddingTop: 10 }}>Open a task to change its schedule. Task content can be edited further on the computer.</Footnote>
           </>
         ) : tasks ? (
           <EmptyState
             icon="clock"
-            title="还没有定时任务"
-            detail="选一个时间，到点后由这台电脑执行。"
+            title="No scheduled tasks yet"
+            detail="Pick a time, and this computer runs it when due."
             action={
               <View style={{ alignItems: 'center' }}>
-                <Button title="新建" icon="plus" onPress={openCreate} disabled={!client} />
+                <Button title="New" icon="plus" onPress={openCreate} disabled={!client} />
               </View>
             }
           />

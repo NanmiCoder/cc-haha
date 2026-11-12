@@ -245,7 +245,7 @@ describe('the shape of a sheet', () => {
     // 12 characters is what the file asked for; the preview font needs more for this figure.
     const grid = await firstGrid(workbookOf([{
       name: 'A',
-      rows: [['预算', 1234567890.12]],
+      rows: [['Budget', 1234567890.12]],
       columns: [{ wpx: 40 }, { wpx: 40 }],
     }]))
 

@@ -55,10 +55,10 @@ test('notification capability failures can be retried and configured remote chan
     render(); await flush()
     let root = render()
     assert.ok(find(root, item => item.type === 'InlineError' && item.props.text.includes('fixture temporarily offline')))
-    assert.equal(find(root, item => item.type === 'ScheduleChoice' && item.props.label === '飞书').props.disabled, true)
-    find(root, item => item.type === 'TextButton' && item.props.title === '重新读取通知渠道').props.onPress()
+    assert.equal(find(root, item => item.type === 'ScheduleChoice' && item.props.label === 'Feishu').props.disabled, true)
+    find(root, item => item.type === 'TextButton' && item.props.title === 'Reload notification channels').props.onPress()
     render(); await flush(); root = render()
-    for (const label of ['飞书', 'Telegram']) {
+    for (const label of ['Feishu', 'Telegram']) {
       const channel = find(root, item => item.type === 'ScheduleChoice' && item.props.label === label)
       assert.equal(channel.props.disabled, false)
       channel.props.onPress()

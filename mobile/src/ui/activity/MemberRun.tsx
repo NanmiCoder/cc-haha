@@ -27,8 +27,8 @@ const toggle = (set: ReadonlySet<string>, key: string) => {
 }
 
 /**
- * 团队成员全屏页：顶栏是名字 + 状态 + 模型，下面先列它认领的任务，再是和主对话同一种
- * 只读时间线（队长交给它的任务、聚合的工具行、当前一步、回复）。团队在跑时定时刷新。
+ * Team member full-screen page: the header is name + status + model; below first its claimed tasks, then the same
+ * read-only timeline as the main conversation (task from the lead, aggregated tool rows, current step, replies). Refreshes periodically while the team runs.
  */
 export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sessionId: string; agentId: string }) {
   const colors = useColors()
@@ -37,9 +37,9 @@ export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sess
   const resource = useFocusedResource<Loaded>(
     useCallback(
       async (signal: AbortSignal) => {
-        if (!client) throw new Error('正在连接电脑')
+        if (!client) throw new Error('Connecting to computer')
         const timeline = await loadTeam(client, sessionId, signal)
-        // 团队收尾后会归档：成员和记录照样能看，只是不再刷新。
+        // After the team wraps up it is archived: members and records stay viewable, just no longer refreshed.
         const ended = !teamModel(timeline)
         const team = teamModel(timeline, [], { ended: true })
         const member = team?.members.find((row) => row.id === agentId) ?? null
@@ -51,8 +51,8 @@ export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sess
     live ? REFRESH_MS : 0
   )
   const member = resource.value?.member ?? null
-  // 团队结束或成员退出后不再刷新。
-  const stillLive = !resource.value || (!resource.value.ended && !!member && member.state !== '已退出')
+  // No more refreshing after the team ends or the member exits.
+  const stillLive = !resource.value || (!resource.value.ended && !!member && member.state !== 'Exited')
   if (stillLive !== live) setLive(stillLive)
   const working = member?.tone === 'run'
   const view = subagentRunView(resource.value ? { messages: resource.value.messages } : null, working, { teammates: 'show' })
@@ -64,14 +64,14 @@ export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sess
   if (resource.value && !member)
     return (
       <ScreenView>
-        <NavBar title="团队成员" />
-        <EmptyState title="找不到这个成员" detail="这段会话里已经没有这个团队的记录。" />
+        <NavBar title="Team member" />
+        <EmptyState title="Cannot find this member" detail="This session no longer has records of this team." />
       </ScreenView>
     )
   return (
     <ScreenView>
       <NavBar
-        title={member?.name ?? '团队成员'}
+        title={member?.name ?? 'Team member'}
         subtitle={
           member ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
@@ -113,7 +113,7 @@ export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sess
             ) : undefined
           }
           ListEmptyComponent={
-            <Footnote>{working ? '它还没有留下可看的内容，稍等一下。' : '没有可以显示的执行记录。'}</Footnote>
+            <Footnote>{working ? 'It has not left anything to view yet; wait a moment.' : 'No execution log to show.'}</Footnote>
           }
           ListFooterComponent={working && view.current ? <StatusCaption step={view.current} /> : undefined}
           renderItem={({ item: row }) =>
@@ -126,7 +126,7 @@ export function MemberRun({ hostId, sessionId, agentId }: { hostId: string; sess
             ) : row.kind === 'message' && (row.item.id === view.prompt?.id || row.item.teammateFrom) ? (
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
                 <Text style={{ fontSize: 12, color: colors.ink3, paddingRight: 4 }}>
-                  {row.item.teammateFrom ? `${teammateLabel(row.item.teammateFrom)} 发来` : '队长交给它的任务'}
+                  {row.item.teammateFrom ? `${teammateLabel(row.item.teammateFrom)} sent` : 'Task given by the lead'}
                 </Text>
                 <TaskPrompt text={row.item.text ?? ''} />
               </View>

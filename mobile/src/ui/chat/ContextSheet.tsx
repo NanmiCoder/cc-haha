@@ -24,15 +24,15 @@ type Inspection = {
   snapshot: ContextSnapshot | null
   stats: SessionUsageStats | null
   failed: boolean
-  /** 已经完成的那一次请求；和当前请求对不上就是还在读。 */
+  /** The request that already finished; if it does not match the current request it is still loading. */
   settled?: object
 }
 const empty: Inspection = { snapshot: null, stats: null, failed: false }
 
 /**
- * 按需读取电脑上的上下文快照：只在 `active` 为真时请求（菜单或底单打开），关掉就取消，
- * 后台不轮询。`refreshKey` 变化时重新读（传 `state.usage`，每轮结束都会换一个对象）。
- * 失败时保留上一次读到的数字；换会话时清空。`client` 必须引用稳定，否则每次渲染都会重读。
+ * Read the context snapshot from the computer on demand: only request when `active` is true (menu or sheet open), cancel when closed, 
+ * no background polling. Reread when `refreshKey` changes (pass `state.usage`, which becomes a new object every turn end).
+ * On failure keep the last read numbers; clear when switching sessions. `client` must be referentially stable, or every render rereads.
  */
 export function useContextInspection(input: {
   client?: Pick<ApiClient, 'get'> | null
@@ -43,7 +43,7 @@ export function useContextInspection(input: {
   const { client, sessionId, active, refreshKey } = input
   const [state, setState] = useState<Inspection>(empty)
   const [nonce, setNonce] = useState(0)
-  // 每组触发条件对应一个新对象，完成时把它记下来，渲染时对比就知道是否还在读。
+  // Each set of trigger conditions maps to a new object, recorded on completion, so comparing at render time tells whether it is still loading.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const request = useMemo(() => ({}), [active, client, sessionId, refreshKey, nonce])
   useEffect(() => {
@@ -79,7 +79,7 @@ function toneColor(tone: ContextTone, colors: ReturnType<typeof useColors>) {
   return tone === 'full' ? colors.err : tone === 'warn' ? colors.attn : colors.ink2
 }
 
-/** 一条细进度条；用 fill 0..1，颜色由调用方决定。 */
+/** A thin progress bar; uses fill 0..1, with color decided by the caller. */
 function Meter({ fill, color, height = 8, label }: { fill: number; color: string; height?: number; label?: string }) {
   const colors = useColors()
   return (
@@ -113,7 +113,7 @@ function Row({ label, value, fill, first }: { label: string; value: string; fill
   return (
     <View
       accessible
-      accessibilityLabel={`${label}，${value}`}
+      accessibilityLabel={`${label}, ${value}`}
       style={{
         minHeight: 44,
         justifyContent: 'center',
@@ -135,14 +135,14 @@ function Row({ label, value, fill, first }: { label: string; value: string; fill
 }
 
 const sourceNote: Record<NonNullable<ContextSummary['source']>, string> = {
-  live: '来自电脑上正在运行的会话',
-  estimate: '电脑上的会话未在运行，按对话记录估算',
-  turn: '按最近一轮的用量估算，可能偏高',
+  live: 'From the session running on the computer',
+  estimate: 'The session on the computer is not running; estimated from the transcript',
+  turn: 'Estimated from the last turn’s usage; may be high',
 }
 
 /**
- * 上下文底单（半高）：已用 / 窗口、进度条、构成、最近一轮 token 明细、本会话速度与缓存命中。
- * 窗口大小未知时只给已用 token，不给百分比；没有的字段整行不显示。
+ * Context sheet (half height): used / window, progress bar, composition, last turn token breakdown, session speed and cache hits.
+ * When the window size is unknown give only used tokens without a percentage; rows with missing fields are hidden entirely.
  */
 export function ContextSheet({
   visible,
@@ -160,7 +160,7 @@ export function ContextSheet({
   onClose(): void
   summary: ContextSummary
   modelLabel?: string
-  /** `state.usage`：最近一轮结束时的用量。 */
+  /** `state.usage`: usage at the end of the last turn. */
   usage?: TokenUsage
   snapshot?: ContextSnapshot | null
   stats?: SessionUsageStats | null
@@ -172,16 +172,16 @@ export function ContextSheet({
   const categories = categoryRows(snapshot)
   const turn = usageRows(usage)
   const sessionRows = [
-    stats?.tokensPerSecond ? { key: 'speed', label: '生成速度', value: `${formatRate(stats.tokensPerSecond)} tok/s` } : null,
+    stats?.tokensPerSecond ? { key: 'speed', label: 'Generation speed', value: `${formatRate(stats.tokensPerSecond)} tok/s` } : null,
     stats?.cacheHitRate !== null && stats?.cacheHitRate !== undefined
-      ? { key: 'cache', label: '缓存命中', value: formatCacheHit(stats.cacheHitRate) }
+      ? { key: 'cache', label: 'Cache hits', value: formatCacheHit(stats.cacheHitRate) }
       : null,
-    stats?.cost ? { key: 'cost', label: '会话费用', value: stats.cost } : null,
+    stats?.cost ? { key: 'cost', label: 'Session cost', value: stats.cost } : null,
   ].filter((row): row is { key: string; label: string; value: string } => row !== null)
   const color = toneColor(summary.tone, colors)
   const hasData = summary.source !== null
   return (
-    <DetentSheet visible={visible} onClose={onClose} title="上下文" allowFull={false}>
+    <DetentSheet visible={visible} onClose={onClose} title="Context" allowFull={false}>
       <View style={{ gap: 14, paddingTop: 4 }}>
         <View style={{ borderRadius: 16, backgroundColor: colors.card, padding: 16, gap: 10 }}>
           <Text
@@ -194,17 +194,17 @@ export function ContextSheet({
             <Meter
               fill={summary.fill}
               color={summary.tone === 'ok' || summary.tone === 'unknown' ? colors.ink : color}
-              label={summary.percentLabel ? `上下文已用 ${summary.percentLabel}` : '上下文用量'}
+              label={summary.percentLabel ? `Context used ${summary.percentLabel}` : 'Context usage'}
             />
           ) : null}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 18 }}>
             {loading && !hasData ? <Spinner size={13} thickness={2.4} /> : null}
             <Text style={[type.caption, { flex: 1, color: colors.ink3 }]}>
               {loading && !hasData
-                ? '正在读取…'
+                ? 'Loading…'
                 : [modelLabel?.trim(), hasData && summary.source ? sourceNote[summary.source] : '']
                     .filter(Boolean)
-                    .join(' · ') || '会话开始后才有用量'}
+                    .join(' · ') || 'Usage is available after the session starts'}
             </Text>
           </View>
         </View>
@@ -213,29 +213,29 @@ export function ContextSheet({
           <Callout tone={summary.tone === 'full' ? 'error' : 'attention'}>{summary.notice}</Callout>
         ) : hasData ? (
           <Text style={[type.caption, { color: colors.ink3, paddingHorizontal: 4 }]}>
-            接近上限时，电脑会自动压缩较早的对话。
+            Near the limit, the computer automatically compacts earlier conversation.
           </Text>
         ) : null}
 
         {failed && !snapshot ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4 }}>
-            <Text style={[type.caption, { flex: 1, color: colors.ink3 }]}>暂时读不到电脑上的上下文用量。</Text>
+            <Text style={[type.caption, { flex: 1, color: colors.ink3 }]}>Cannot read context usage from the computer right now.</Text>
             {onRetry ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="重新读取上下文用量"
+                accessibilityLabel="Reload context usage"
                 onPress={onRetry}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}
               >
-                <Text style={{ fontSize: 14, fontWeight: '600', color: colors.run }}>重试</Text>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: colors.run }}>Retry</Text>
               </Pressable>
             ) : null}
           </View>
         ) : null}
 
         {categories.length ? (
-          <Section title="构成">
+          <Section title="Composition">
             {categories.map((row, index) => (
               <Row key={row.key} label={row.label} value={row.value} fill={row.fill} first={index === 0} />
             ))}
@@ -244,8 +244,8 @@ export function ContextSheet({
 
         {turn.length ? (
           <Section
-            title="最近一轮用量"
-            footnote={usage?.cache_read_tokens ? '一轮里多次调用模型时，缓存读取按次累加。' : undefined}
+            title="Last turn usage"
+            footnote={usage?.cache_read_tokens ? 'When a turn calls the model several times, cache reads accumulate per call.' : undefined}
           >
             {turn.map((row, index) => (
               <Row key={row.key} label={row.label} value={row.value} first={index === 0} />
@@ -254,7 +254,7 @@ export function ContextSheet({
         ) : null}
 
         {sessionRows.length ? (
-          <Section title="本会话">
+          <Section title="This session">
             {sessionRows.map((row, index) => (
               <Row key={row.key} label={row.label} value={row.value} first={index === 0} />
             ))}
@@ -266,8 +266,8 @@ export function ContextSheet({
 }
 
 /**
- * “…”菜单顶部的一行：模型名 · 上下文 N%，下面一条细进度条，点它打开 {@link ContextSheet}。
- * 窗口未知时没有进度条，仍可点开看已用 token。≥80% 整行转琥珀色。
+ * A row at the top of the "…" menu: model name · context N%, with a thin progress bar below; tap it to open {@link ContextSheet}.
+ * With an unknown window there is no progress bar but it can still be opened to see used tokens. At ≥80% the whole row turns amber.
  */
 export function ContextMenuHeader({
   modelLabel,
@@ -284,7 +284,7 @@ export function ContextMenuHeader({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${line}，查看上下文用量`}
+      accessibilityLabel={`${line}, view context usage`}
       onPress={onPress}
       hitSlop={{ left: 16, right: 16 }}
       style={({ pressed }) => ({

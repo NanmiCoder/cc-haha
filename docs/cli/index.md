@@ -1,19 +1,19 @@
 ---
-title: 安装与启动
-nav_title: 安装与启动
-description: 从源码运行 CLI：安装依赖、配置模型服务、在任意目录启动。
+title: Install and Run
+nav_title: Install and Run
+description: Run the CLI from source - install dependencies, configure a provider, launch from any directory.
 order: 0
 ---
 
-# 安装与启动
+# Install and Run
 
-CLI 是 cc-haha 的内核，桌面端每个会话背后跑的都是它。如果你只想用图形界面，装桌面端就够了，见 [下载与安装](../start/install.md)；下面这些步骤是给需要终端交互、`--print` 脚本自动化，或者准备读源码、提 PR 的人看的。
+The CLI is the core of cc-haha — every desktop session runs one underneath. If you only want the graphical app, installing that is enough; see [Download and install](../start/install.md). The steps below are for people who want a terminal workflow, `--print` automation, or a source checkout to read and contribute to.
 
-CLI 目前只从源码运行，没有单独的安装包。
+The CLI runs from source only. There is no separate installer for it.
 
-## 获取源码
+## Get the source
 
-先装好 [Git](https://git-scm.com/downloads) 和 [Bun](https://bun.sh)，然后：
+Install [Git](https://git-scm.com/downloads) and [Bun](https://bun.sh) first, then:
 
 ```bash
 git clone https://github.com/NanmiCoder/cc-haha.git
@@ -21,13 +21,13 @@ cd cc-haha
 bun install
 ```
 
-## 配置模型服务
+## Configure a model provider
 
 ```bash
 cp .env.example .env
 ```
 
-编辑 `.env`，至少给出一种可用的认证方式、接口地址和模型。一个 Anthropic 兼容接口的最小配置是这样：
+Edit `.env` with at least one working authentication method, base URL, and model. A minimal Anthropic-compatible setup looks like this:
 
 ```ini
 ANTHROPIC_AUTH_TOKEN=sk-example
@@ -35,81 +35,81 @@ ANTHROPIC_BASE_URL=https://provider.example.com/anthropic
 ANTHROPIC_MODEL=provider-model
 ```
 
-变量含义、认证头的区别、Azure 与其他协议的写法见 [环境变量](./env.md)。如果你已经在桌面端配好了服务商，CLI 会直接复用那份配置，不需要再写 `.env`。
+See [Environment variables](./env.md) for what each variable means, how the authentication headers differ, and how to configure Azure and other protocols. If you already configured a provider in the desktop app, the CLI reuses it and you do not need a `.env` at all.
 
-不要把真实 API Key 提交到 Git，也不要在 Issue、截图或诊断附件里公开它。
+Never commit a real API key, and never paste one into an issue, a screenshot, or a diagnostics bundle.
 
-## 启动并验证
+## Start and verify
 
-macOS、Linux 或 Git Bash：
+macOS, Linux, or Git Bash:
 
 ```bash
 ./bin/claude-haha
-./bin/claude-haha -p "概括当前项目的目录结构"
+./bin/claude-haha -p "Summarize the directory structure of this project"
 ```
 
-Windows PowerShell 或 cmd：
+Windows PowerShell or cmd:
 
 ```powershell
 bun --env-file=.env ./src/entrypoints/cli.tsx
 ```
 
-看到流式回复和工具调用，说明模型服务、项目目录和 CLI 已经连通。
+Once you see streaming output and tool calls, the provider, the project directory, and the CLI are connected.
 
-## 在任意目录启动
+## Run from any directory
 
-`./bin/claude-haha` 只在仓库里能用。把它加进 `PATH`，就能在任何项目目录直接敲 `claude-haha`，CLI 会自动把当前工作目录当成项目根。
+`./bin/claude-haha` only works inside the checkout. Put it on your `PATH` and you can type `claude-haha` in any project directory — the CLI treats the current working directory as the project root.
 
-macOS 和 Linux 在 `~/.bashrc` 或 `~/.zshrc` 中添加：
+On macOS and Linux, add this to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-# 方式一：加入 PATH（推荐）
+# Option 1: add to PATH (recommended)
 export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
 
-# 方式二：alias
+# Option 2: alias
 alias claude-haha="$HOME/path/to/claude-code-haha/bin/claude-haha"
 ```
 
-改完重新加载：
+Reload the shell config:
 
 ```bash
-source ~/.zshrc  # 或 source ~/.bashrc
+source ~/.zshrc  # or source ~/.bashrc
 ```
 
-Windows 的 Git Bash 同样在 `~/.bashrc` 中加 `PATH`：
+On Windows, add the same `PATH` line to `~/.bashrc` under Git Bash:
 
 ```bash
 export PATH="$HOME/path/to/claude-code-haha/bin:$PATH"
 ```
 
-验证方式是换个目录再启动，然后问它「当前目录是什么」：
+To verify, start it from a different directory and ask what the current directory is:
 
 ```bash
 cd ~/your-other-project
 claude-haha
 ```
 
-### Windows 配 WSL 工具链
+### Windows with a WSL toolchain
 
-如果 `claude-haha` 跑在 Windows 或 Git Bash 里，而 Node、Python、uv、bun 这些工具装在 WSL 中，可以显式经 WSL 调用：
+If `claude-haha` runs on Windows or Git Bash while Node, Python, uv, and bun live inside WSL, call them through WSL explicitly:
 
 ```bash
 wsl -e bash -lc 'node --version && python3 --version'
 ```
 
-检测到 `wsl` / `wsl.exe` 调用时，CLI 会自动设置 `MSYS2_ARG_CONV_EXCL=*`，避免 Git Bash 把 `/home/...` 这类 WSL 路径错误转换成 `C:/Program Files/Git/home/...`。
+When the CLI detects a `wsl` / `wsl.exe` invocation, it sets `MSYS2_ARG_CONV_EXCL=*` so Git Bash does not rewrite WSL paths such as `/home/...` into `C:/Program Files/Git/home/...`.
 
-想让 Bash 工具默认进 WSL，启动前设置：
+To route Bash tool commands through WSL by default, set this before startup:
 
 ```bash
 export CLAUDE_CODE_SHELL_PREFIX='wsl -e bash -lc'
 ```
 
-Computer Use 控制的仍然是 Windows 桌面应用，WSL 内的命令行工具不需要写进 `computer-use-config.json`。只用 WSL 工具链、不需要桌面控制时，加 `--no-computer-use`，或在 设置 → Computer Use 里关掉它。
+Computer Use still controls Windows desktop apps, so CLI tools inside WSL do not need an entry in `computer-use-config.json`. If you only need the WSL toolchain and no desktop control, pass `--no-computer-use` or turn it off under Settings → Computer Use.
 
-## 下一步
+## Next steps
 
-- [命令参考](./reference.md)：命令行参数、无头模式与恢复模式
-- [环境变量](./env.md)：认证、模型与本地运行变量的完整清单
-- [架构总览](../internals/index.md)：CLI、Server、桌面壳与 Adapter 的分工
-- [参与贡献与质量门禁](../internals/contributing.md)：提 PR 之前要跑哪些检查
+- [Command reference](./reference.md): flags, headless mode, and recovery mode
+- [Environment variables](./env.md): the full list of authentication, model, and runtime variables
+- [Architecture overview](../internals/index.md): how the CLI, server, desktop shell, and adapters divide the work
+- [Contributing and quality gates](../internals/contributing.md): what to run before opening a PR

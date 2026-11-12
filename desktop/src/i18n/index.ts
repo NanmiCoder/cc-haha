@@ -1,18 +1,10 @@
 import { useCallback } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
 import { en, type TranslationKey } from './locales/en'
-import { zh } from './locales/zh'
-import { zh as zhTW } from './locales/zh-TW'
-import { jp } from './locales/jp'
-import { kr } from './locales/kr'
 import type { Locale } from './locale'
 
 const translations: Record<Locale, Record<string, string>> = {
   en,
-  zh,
-  'zh-TW': zhTW,
-  jp,
-  kr,
 }
 
 /**
@@ -43,7 +35,7 @@ export function translate(
  *
  * @example
  * const t = useTranslation()
- * t('sidebar.newSession')  // => "New session" or "新建会话"
+ * t('sidebar.newSession')  // => "New session"
  */
 export function useTranslation() {
   const locale = useSettingsStore((s) => s.locale)

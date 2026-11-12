@@ -14,7 +14,7 @@ export async function shareFocusedWorkspaceFile<T>(
   if (!request.isCurrent()) return
   const available = await actions.available()
   if (!request.isCurrent()) return
-  if (!available) throw new Error('此设备暂不支持系统分享')
+  if (!available) throw new Error('This device does not support system sharing yet')
   const uri = actions.write(value)
   await actions.share(uri, value)
 }

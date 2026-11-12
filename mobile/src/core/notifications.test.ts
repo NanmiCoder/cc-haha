@@ -15,7 +15,7 @@ const prefs = migratePreferences(null)
 // Direct APNs shape observed in the real plan notification. Expo 58 iOS maps
 // userInfo.body to content.data and preserves the entire userInfo in trigger.payload.
 const planPayload = {
-  aps: { alert: { title: '测试任务', body: '需要确认计划' }, category: 'cchahaDecision' },
+  aps: { alert: { title: 'Test task', body: 'Plan needs confirmation' }, category: 'cchahaDecision' },
   hostId: 'known-host',
   sessionId: 'plan-session',
   requestId: 'pending-plan',
@@ -192,14 +192,14 @@ test('hiding the command on the lock screen also hides the Bash command in local
     { ...prefs, liveActivityShowCommand: false },
     new Date()
   )[0]
-  expect(hidden.preview).toBe('想运行命令')
+  expect(hidden.preview).toBe('Wants to run a command')
   const question = notificationEvents(
     null,
-    [{ ...bash, toolName: 'AskUserQuestion', preview: '要用哪个分支？' }],
+    [{ ...bash, toolName: 'AskUserQuestion', preview: 'Which branch to use?' }],
     { ...prefs, liveActivityShowCommand: false },
     new Date()
   )[0]
-  expect(question.preview).toContain('要用哪个分支？')
+  expect(question.preview).toContain('Which branch to use?')
 })
 test('completed alerts require new durable success evidence after the initial baseline', () => {
   const success = { id: 's', activityState: 'idle' as const, terminalOutcome: 'completed' as const, completedAt: 100 }
@@ -322,27 +322,29 @@ test('decision notifications share one voice and only quote previews the server 
       new Date()
     )[0]
   expect(event('Bash', 'bun test src/core')).toMatchObject({
-    preview: '想运行 bun test src/core',
+    preview: 'Wants to run bun test src/core',
     category: 'cchahaTool',
   })
-  expect(event('AskUserQuestion', '旧字段怎么处理？')).toMatchObject({
-    preview: '在问你：旧字段怎么处理？',
+  expect(event('AskUserQuestion', 'How should old fields be handled?')).toMatchObject({
+    preview: 'Asking you: How should old fields be handled?',
     category: 'cchahaDecision',
   })
-  expect(event('ExitPlanMode', '计划等待确认')).toMatchObject({
-    preview: '计划写好了，等你确认',
+  expect(event('ExitPlanMode', 'Plan awaiting confirmation')).toMatchObject({
+    preview: 'Plan is ready, waiting for your confirmation',
     category: 'cchahaDecision',
   })
   // Non-Bash previews are generic server placeholders and are not quoted.
-  expect(event('Edit', '等待工具权限确认').preview).toBe('想修改文件，等你确认')
-  expect(event('PowerShell', '等待工具权限确认').preview).toBe('想运行命令，等你确认')
-  expect(event('ComputerUse', '等待电脑操作权限确认')).toMatchObject({
-    preview: '想操作电脑，等你允许',
+  expect(event('Edit', 'Waiting for tool permission').preview).toBe('Wants to edit files, waiting for your confirmation')
+  expect(event('PowerShell', 'Waiting for tool permission').preview).toBe('Wants to run a command, waiting for your confirmation')
+  // Older desktop servers still send the Chinese placeholders.
+  expect(event('Edit', '等待工具权限确认').preview).toBe('Wants to edit files, waiting for your confirmation')
+  expect(event('ComputerUse', 'Waiting for computer control permission')).toMatchObject({
+    preview: 'Wants to use the computer, waiting for your permission',
     category: 'cchahaDecision',
   })
-  expect(event(undefined).preview).toBe('需要你做决定')
-  expect(event('Bash', '  ').preview).toBe('想运行命令')
-  expect(decisionLabel('mcp__x__y')).toBe('想使用 mcp__x__y')
+  expect(event(undefined).preview).toBe('Needs your decision')
+  expect(event('Bash', '  ').preview).toBe('Wants to run a command')
+  expect(decisionLabel('mcp__x__y')).toBe('Wants to use mcp__x__y')
 })
 test('result notifications use the same plain wording', () => {
   expect(

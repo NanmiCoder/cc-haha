@@ -21,7 +21,7 @@ function makeSession(overrides: Partial<SessionListItem> & { id: string }): Sess
   }
 }
 
-/** 本地时间构造，避免测试跟着运行机器的时区漂。 */
+/** Built in local time so the test does not drift with the machine's time zone. */
 function localIso(year: number, month: number, day: number, hour = 12, minute = 0): string {
   return new Date(year, month - 1, day, hour, minute, 0, 0).toISOString()
 }
@@ -45,7 +45,7 @@ function sessionIdsIn(
 
 describe('buildSidebarTaskGroups', () => {
   it('buckets by calendar day, not by elapsed hours', () => {
-    // 23:50 收工，第二天 00:10 打开：只差 20 分钟，但它属于昨天。
+    // Finished at 23:50, opened at 00:10 the next day: only 20 minutes apart, but it belongs to yesterday.
     const lateLastNight = makeSession({ id: 'late', modifiedAt: localIso(2026, 8, 22, 23, 50) })
     const now = localTime(2026, 8, 23, 0, 10)
 
@@ -74,7 +74,7 @@ describe('buildSidebarTaskGroups', () => {
     expect(sessionIdsIn(groups, 'earlier')).toEqual(['earlier'])
   })
 
-  // now = 2026-08-23。每个用例都钉住一侧的桶边界，写反了会红。
+  // now = 2026-08-23. Each case pins one side of a bucket boundary, so a reversed comparison fails.
   it.each([
     ['seven days ago is still last7Days', 8, 16, 'last7Days'],
     ['eight days ago rolls into last30Days', 8, 15, 'last30Days'],
@@ -155,7 +155,7 @@ describe('getSessionWorkspaceLabel', () => {
     const session = makeSession({ id: 'a', projectRoot: '/Users/dev/work/alpha' })
 
     expect(getSessionWorkspaceLabel(session, (key) =>
-      key === '/Users/dev/work/alpha' ? '雷鸟 AI 眼镜' : null)).toBe('雷鸟 AI 眼镜')
+      key === '/Users/dev/work/alpha' ? 'Thunderbird AI Glasses' : null)).toBe('Thunderbird AI Glasses')
   })
 
   it('falls back to the last path segment when there is no display name', () => {
@@ -171,12 +171,12 @@ describe('getSessionWorkspaceLabel', () => {
   })
 
   it('looks the display name up under the same key the sidebar groups by', () => {
-    // projectRoot 缺失时分组 key 退到 workDir；显示名必须跟着退，否则任务视图
-    // 会对同一个工作区显示两个不同的名字。
+    // Without projectRoot the group key falls back to workDir; the display name must follow, or the task view
+    // shows two different names for the same workspace.
     const session = makeSession({ id: 'a', projectRoot: null, workDir: '/Users/dev/work/beta' })
 
     expect(getSessionWorkspaceLabel(session, (key) =>
-      key === '/Users/dev/work/beta' ? 'Beta 工作区' : null)).toBe('Beta 工作区')
+      key === '/Users/dev/work/beta' ? 'Beta workspace' : null)).toBe('Beta workspace')
   })
 })
 

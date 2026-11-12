@@ -2,32 +2,32 @@ import { isLocalHostname } from './connection'
 import type { Host } from './types'
 
 /**
- * H5：桌面服务端把这份网页版托管给手机浏览器。页面所在的电脑就是唯一的电脑，
- * 没有添加、切换、配对电脑这些步骤——连接由桌面 H5 的入口（令牌页、远程配对页）
- * 完成，这里只沿用它已经验证过的那份凭据。
+ * H5: the desktop server hosts this web version for phone browsers. The page's computer is the only computer, 
+ * with no add, switch or pair steps — the connection is done by the desktop H5 entry (token page, remote pairing page)
+ * and here we only reuse the credential it already verified.
  */
 
-/** 桌面 H5 入口验证令牌后写下的两个键，见 desktop/src/lib/desktopRuntime.ts。 */
+/** The two keys written after the desktop H5 entry verifies the token; see desktop/src/lib/desktopRuntime.ts. */
 export const H5_SERVER_URL_STORAGE_KEY = 'cc-haha-h5-server-url'
 export const H5_TOKEN_STORAGE_KEY = 'cc-haha-h5-token'
 export const H5_HOST_ID = 'h5'
-export const H5_HOST_NAME = '这台电脑'
+export const H5_HOST_NAME = 'This computer'
 
 export type H5Location = { origin: string; hostname: string }
 export type H5Storage = { getItem(key: string): string | null }
 
 /**
- * 页面能直接用的连接方式，按优先级：
- * - token：局域网 H5，桌面入口验证过、属于这个地址的访问令牌；
- * - cookie：远程浏览器，桌面入口配对后由服务端种下的设备 Cookie，浏览器自己带上；
- * - loopback：就在这台电脑上打开，服务端信任回环地址，不需要凭据。
+ * Connection methods the page can use directly, by priority: 
+ * - token: LAN H5, an access token for this address verified by the desktop entry; 
+ * - cookie: remote browser, a device cookie set by the server after pairing via the desktop entry, sent by the browser itself; 
+ * - loopback: opened on this very computer; the server trusts loopback addresses and needs no credentials.
  */
 export type H5Credential =
   | { kind: 'token'; token: string }
   | { kind: 'cookie' }
   | { kind: 'loopback' }
 
-/** 只取属于当前地址的令牌：令牌只对验证它的那台服务器有效。 */
+/** Only take tokens for the current address: a token is only valid for the server that verified it. */
 export function storedH5Token(location: H5Location, storage: H5Storage | null): string | null {
   if (!storage) return null
   let serverUrl: string | null
@@ -58,8 +58,8 @@ export function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
- * 页面这台电脑。`auth` 沿用原生 App 的含义：remote 表示经公网网关访问
- * （首页显示「公网」、读取授权到期时间），其余都是 lan。
+ * the page's computer. `auth` keeps the native app meaning: remote means accessed through the public gateway
+ * (home shows "Public" and reads the auth expiry), everything else is lan.
  */
 export function h5Host(location: H5Location, credential: H5Credential): Host {
   return {
@@ -71,15 +71,15 @@ export function h5Host(location: H5Location, credential: H5Credential): Host {
   }
 }
 
-/** 请求和 WebSocket 里携带的凭据字符串；Cookie 和回环地址不需要。 */
+/** Credential string carried in requests and WebSocket; cookies and loopback need none. */
 export function h5CredentialValue(credential: H5Credential): string {
   return credential.kind === 'token' ? credential.token : ''
 }
 
 /**
- * 凭据失效或缺失时回到桌面 H5 入口：那里有令牌页和远程配对页，完成后会再送回来。
- * 局域网入口带上 `reconnect`：桌面 index.html 对已存令牌的手机会直接跳回这里，
- * 带参数才会重新验证令牌（失效的令牌在那里被清掉、显示令牌页）。
+ * When credentials are invalid or missing return to the desktop H5 entry: it has the token page and remote pairing page and sends back afterwards.
+ * The LAN entry adds `reconnect`: the desktop index.html redirects phones with a stored token straight back here, 
+ * and only re-verifies the token with the param (invalid tokens are cleared there and the token page is shown).
  */
 export function h5EntryUrl(location: H5Location, remote: boolean): string {
   return `${location.origin}${remote ? '/remote' : '/?reconnect=1'}`
@@ -92,13 +92,13 @@ type SessionProbe = (
 
 export type H5Resolution =
   | { credential: H5Credential; host: Host }
-  /** 这个页面还没连上：回到桌面入口（局域网是令牌页，远程网关是配对页）。 */
+  /** This page is not connected yet: go back to the desktop entry (token page on LAN, pairing page on the remote gateway). */
   | { entry: string }
 
 /**
- * 决定页面用哪种凭据连接电脑。令牌不需要请求就能判断；没有令牌时问一次
- * 远程网关的会话接口——只有网关会回答它（主服务端对浏览器一律拒绝），
- * 回答了「未登录」就说明这是远程网关上一个还没配对的浏览器。
+ * Decide which credential the page uses to connect to the computer. Tokens need no request to decide; without a token ask once
+ * The remote gateway session endpoint — only the gateway answers it (the main server rejects browsers outright), 
+ * so answering "not logged in" means this is an unpaired browser on the remote gateway.
  */
 export async function resolveH5Session(input: {
   location: H5Location
@@ -129,7 +129,7 @@ export async function resolveH5Session(input: {
     }
   } catch (error) {
     if (input.signal?.aborted) throw error
-    // 网络失败时不判断是不是网关；回环地址仍可直接连接。
+    // On network failure do not decide whether it is the gateway; loopback addresses can still connect directly.
   }
   if (!gateway && isLoopbackHostname(location.hostname)) {
     const credential = { kind: 'loopback' } as const

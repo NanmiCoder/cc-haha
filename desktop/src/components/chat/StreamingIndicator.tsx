@@ -143,8 +143,8 @@ export function StreamingIndicator() {
   }
 
   if (streamingFallback) {
-    // 预期内的降级等待（非错误）：非流式响应一次性返回，期间无增量输出。
-    // 用中性样式的轻提示 + 回合计时，与 api_retry 的警示横幅区分开。
+    // An expected fallback wait (not an error): the non-streaming response arrives at once,
+    // with no incremental output meanwhile. A neutral hint plus the turn timer keeps it distinct from the api_retry warning banner.
     return (
       <div
         data-testid="streaming-fallback-indicator"

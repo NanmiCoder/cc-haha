@@ -375,7 +375,7 @@ describe('renderer recovery failure dialog', () => {
     })
     expect(showMessageBox).toHaveBeenCalledWith(window, expect.objectContaining({
       detail: expect.stringContaining('exitCode=-1073741819 (0xC0000005)'),
-      buttons: ['重启应用 / Restart App', '稍后 / Later'], cancelId: 1,
+      buttons: ['Restart App', 'Later'], cancelId: 1,
     }))
     expect(app.relaunch).toHaveBeenCalledTimes(response === 0 ? 1 : 0)
     expect(app.quit).toHaveBeenCalledTimes(response === 0 ? 1 : 0)

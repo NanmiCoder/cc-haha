@@ -23,9 +23,9 @@ describe('team plans waiting for review', () => {
       { sessionId: 'not-open', addition: false },
     ])
     const byId = new Map(rows.map(row => [row.id, row]))
-    expect(byId.get('lead')).toEqual({ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认', startedAt: 1, lastProgressAt: 2 })
+    expect(byId.get('lead')).toEqual({ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: 'Team is ready, awaiting your confirmation', startedAt: 1, lastProgressAt: 2 })
     // Members already running keep working; the addition still needs the user.
-    expect(byId.get('adding')).toMatchObject({ activityState: 'waiting', decision: 'team_plan', preview: '要追加的成员等你确认' })
+    expect(byId.get('adding')).toMatchObject({ activityState: 'waiting', decision: 'team_plan', preview: 'New members awaiting your confirmation' })
     // A tool permission answerable from the list wins.
     expect(byId.get('approval')).toEqual({ id: 'approval', activityState: 'waiting', requestId: 'r1', toolName: 'Bash', preview: 'ls' })
     // The lead process may have exited; the plan still waits.
@@ -40,7 +40,7 @@ describe('team plans waiting for review', () => {
       teamReviews: async () => [{ sessionId: 'lead', addition: false }],
       now: () => now,
     })
-    expect(rows).toEqual([{ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认' }])
+    expect(rows).toEqual([{ id: 'lead', activityState: 'waiting', decision: 'team_plan', preview: 'Team is ready, awaiting your confirmation' }])
   })
 })
 

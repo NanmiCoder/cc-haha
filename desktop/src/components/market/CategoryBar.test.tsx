@@ -26,14 +26,6 @@ describe('CategoryBar', () => {
     expect(screen.getByRole('radio', { name: 'Development 40' })).toBeInTheDocument()
   })
 
-  it('uses the Chinese category names for Chinese readers', () => {
-    useSettingsStore.setState({ locale: 'zh-TW' })
-    render(<CategoryBar categories={CATEGORIES} value="dev" onChange={vi.fn()} />)
-
-    expect(screen.getByRole('radio', { name: '全部' })).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: '开发编程 40' })).toHaveAttribute('aria-checked', 'true')
-  })
-
   it('reports the picked category key', () => {
     const onChange = vi.fn()
     render(<CategoryBar categories={CATEGORIES} value="all" onChange={onChange} />)

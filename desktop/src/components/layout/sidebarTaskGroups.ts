@@ -1,8 +1,8 @@
 import type { SessionListItem } from '../../types/session'
 
 /**
- * 任务视图的分段。`running` 是状态段，其余五段是「最后活动时间」的自然日分桶。
- * 顺序即渲染顺序。
+ * Sections of the task view. `running` is a status section; the other five bucket by the
+ * calendar day of last activity. Order is render order.
  */
 export type SidebarTaskGroupId =
   | 'running'
@@ -69,8 +69,8 @@ export function isWorktreeSession(session: SessionListItem): boolean {
 }
 
 /**
- * 任务行第二行显示的所属目录名。与 `groupByProject` 的组标题同一套口径：
- * 用户改过名就用改过的名字，否则取路径末段。
+ * Folder name shown on a task row's second line. Same rule as `groupByProject` group titles:
+ * the user's rename if any, otherwise the last path segment.
  */
 export function getSessionWorkspaceLabel(
   session: SessionListItem,
@@ -94,10 +94,10 @@ function startOfLocalDay(timestamp: number): number {
 }
 
 /**
- * 自然日之差，不是「距今多少个 24 小时」。晚上 23:50 跑完的任务，第二天
- * 00:10 打开必须落在「昨天」——按 24 小时算会把它留在「今天」。
+ * The difference in calendar days, not in 24-hour periods. A task finished at 23:50 and opened
+ * at 00:10 the next day must land in "Yesterday"; counting 24 hours would keep it in "Today".
  *
- * 两个本地零点之差在夏令时切换日是 23 或 25 小时，`round` 把它归回整数天。
+ * Two local midnights are 23 or 25 hours apart on DST change days; `round` brings that back to whole days.
  */
 function calendarDaysAgo(timestamp: number, now: number): number {
   return Math.round((startOfLocalDay(now) - startOfLocalDay(timestamp)) / DAY_MS)
@@ -105,7 +105,7 @@ function calendarDaysAgo(timestamp: number, now: number): number {
 
 function resolveTimeGroupId(timestamp: number, now: number): SidebarTaskGroupId {
   const daysAgo = calendarDaysAgo(timestamp, now)
-  // 未来时间戳（时钟漂移 / 机器时区不一致）归到今天，而不是掉进「更早」。
+  // Future timestamps (clock drift / mismatched machine time zones) go to today rather than "Earlier".
   if (daysAgo <= 0) return 'today'
   if (daysAgo === 1) return 'yesterday'
   if (daysAgo <= 7) return 'last7Days'
@@ -114,8 +114,8 @@ function resolveTimeGroupId(timestamp: number, now: number): SidebarTaskGroupId 
 }
 
 /**
- * 把会话切成任务视图的分段。正在跑的会话只出现在 `running` 段，不再按时间
- * 重复一次。空段不产出，调用方可以直接 map。
+ * Split sessions into task-view sections. Running sessions appear only in `running`, not again
+ * by time. Empty sections are omitted, so callers can map directly.
  */
 export function buildSidebarTaskGroups(
   sessions: SessionListItem[],

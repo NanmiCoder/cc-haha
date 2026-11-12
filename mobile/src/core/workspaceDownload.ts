@@ -36,14 +36,14 @@ export async function downloadWorkspaceFile(
       new URL(response.url).origin !== new URL(host.url).origin) ||
     (response.status >= 300 && response.status < 400)
   )
-    throw new Error('文件下载重定向已拒绝')
-  if (!response.ok) throw new Error(`文件无法下载 (${response.status})`)
+    throw new Error('File download redirect was rejected')
+  if (!response.ok) throw new Error(`File cannot be downloaded (${response.status})`)
   if (Number(response.headers.get('content-length')) > maxBytes) {
     await response.body?.cancel()
-    throw new Error('文件超过 20 MB，请在电脑上处理')
+    throw new Error('File exceeds 20 MB; please handle it on the computer')
   }
   const reader = response.body?.getReader()
-  if (!reader) throw new Error('文件下载内容不可用')
+  if (!reader) throw new Error('File download content is unavailable')
   const chunks: Uint8Array[] = []
   let size = 0
   while (true) {
@@ -52,7 +52,7 @@ export async function downloadWorkspaceFile(
     size += value.byteLength
     if (size > maxBytes) {
       await reader.cancel()
-      throw new Error('文件超过 20 MB，请在电脑上处理')
+      throw new Error('File exceeds 20 MB; please handle it on the computer')
     }
     chunks.push(value)
   }

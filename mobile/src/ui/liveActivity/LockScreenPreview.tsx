@@ -4,9 +4,9 @@ import { dark } from '../palette'
 import { Text } from '../Text'
 
 /**
- * 锁屏与灵动岛设置页顶部的装饰预览：深色的灵动岛胶囊 + 等待态的锁屏活动。
- * 锁屏本身不跟随 App 的明暗主题，所以这里的深色是固定的；琥珀/文字色取深色 token。
- * 只是示意（对读屏隐藏），内容随「锁屏上显示命令」开关变化，文案与真实活动一致。
+ * Decorative preview at the top of the lock screen and Dynamic Island settings page: a dark Dynamic Island capsule + a waiting lock screen activity.
+ * The lock screen itself does not follow the app light/dark theme, so the dark here is fixed; amber/text colors use dark tokens.
+ * Illustration only (hidden from screen readers); content follows the "Show commands on lock screen" toggle, with text matching the real activity.
  */
 const SCREEN = '#26251F'
 const PANEL = 'rgba(72,70,65,0.72)'
@@ -43,7 +43,7 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
         }}
       >
         <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: AMBER }} />
-        <Text style={{ fontSize: 12, fontWeight: '600', color: AMBER }}>等你</Text>
+        <Text style={{ fontSize: 12, fontWeight: '600', color: AMBER }}>Waiting</Text>
       </View>
       <View
         style={{
@@ -57,10 +57,10 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: AMBER }} />
-          <Text style={{ fontSize: 13, fontWeight: '600', color: AMBER }}>想运行命令</Text>
+          <Text style={{ fontSize: 13, fontWeight: '600', color: AMBER }}>Wants to run a command</Text>
         </View>
         <Text numberOfLines={1} style={{ fontSize: 15, lineHeight: 20, fontWeight: '600', color: TEXT }}>
-          修复 WebSocket 重连后消息重复
+          Fix duplicate messages after WebSocket reconnect
         </Text>
         {showCommand ? (
           <Mono
@@ -71,7 +71,7 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
           </Mono>
         ) : (
           <Text numberOfLines={1} style={{ fontSize: 12.5, lineHeight: 18, color: 'rgba(243,241,236,0.78)' }}>
-            打开 App 查看命令
+            Open the app to view the command
           </Text>
         )}
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
@@ -85,7 +85,7 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
               justifyContent: 'center',
             }}
           >
-            <Text style={{ fontSize: 14, fontWeight: '600', color: TEXT }}>拒绝</Text>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: TEXT }}>Deny</Text>
           </View>
           <View
             style={{
@@ -97,11 +97,11 @@ export function LockScreenPreview({ showCommand }: { showCommand: boolean }) {
               justifyContent: 'center',
             }}
           >
-            <Text style={{ fontSize: 14, fontWeight: '600', color: '#1D1C1A' }}>允许</Text>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: '#1D1C1A' }}>Allow</Text>
           </View>
         </View>
         <Text style={{ fontSize: 12, color: 'rgba(243,241,236,0.6)', marginTop: 4 }}>
-          MacBook Pro · 还有 1 个任务在跑
+          MacBook Pro · 1 more task running
         </Text>
       </View>
     </View>

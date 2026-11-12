@@ -1,8 +1,8 @@
 /**
- * Adapter Service — 读写 IM Adapter 配置文件
+ * Adapter Service — read/write the IM adapter config file
  *
- * 配置文件：~/.claude/adapters.json
- * 原子写入：先写临时文件，再 rename
+ * Config file: ~/.claude/adapters.json
+ * Atomic write: write a temp file, then rename
  */
 
 import * as fs from 'fs/promises'
@@ -119,7 +119,7 @@ function isMasked(value: string | undefined): boolean {
 class AdapterService {
   private updateQueue: Promise<void> = Promise.resolve()
 
-  /** 读取原始配置（不脱敏） */
+  /** Read the raw config (unmasked) */
   async getRawConfig(): Promise<AdapterFileConfig> {
     try {
       const raw = await fs.readFile(getConfigPath(), 'utf-8')
@@ -133,7 +133,7 @@ class AdapterService {
     }
   }
 
-  /** 读取配置（敏感字段脱敏） */
+  /** Read config (sensitive fields masked) */
   async getConfig(): Promise<AdapterFileConfig> {
     const config = await this.getRawConfig()
     if (config.telegram?.botToken) {
@@ -166,7 +166,7 @@ class AdapterService {
     return config
   }
 
-  /** 更新配置（浅合并，敏感字段如果是脱敏值则保留原值） */
+  /** Update config (shallow merge; sensitive fields keep the original value if a masked value is sent) */
   async updateConfig(patch: Partial<AdapterFileConfig>): Promise<void> {
     const update = this.updateQueue.then(() => this.applyConfigPatch(patch))
     this.updateQueue = update.catch(() => {})
@@ -176,7 +176,7 @@ class AdapterService {
   private async applyConfigPatch(patch: Partial<AdapterFileConfig>): Promise<void> {
     const current = await this.getRawConfig()
 
-    // 保留已存储的密钥（如果前端传回的是脱敏值）
+    // Keep stored secrets (if the frontend sent back a masked value)
     if (patch.telegram && isMasked(patch.telegram.botToken)) {
       patch.telegram.botToken = current.telegram?.botToken
     }

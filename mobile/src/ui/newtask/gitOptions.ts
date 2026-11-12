@@ -11,9 +11,9 @@ export function gitBranchOptions(repo: RepositoryContext | null, query: string, 
         ...branch,
         current,
         disabled: occupied && !worktree,
-        detail: occupied ? '另一个工作树在用，可新开工作树从这里开始'
-          : current ? '电脑当前分支'
-            : branch.remote && !branch.local ? `远端分支 · ${branch.remoteRef ?? branch.name}` : '本地分支',
+        detail: occupied ? 'In use by another worktree; open a new worktree to start from here'
+          : current ? 'Computer’s current branch'
+            : branch.remote && !branch.local ? `Remote branch · ${branch.remoteRef ?? branch.name}` : 'Local branch',
       }
     })
 }
@@ -21,9 +21,9 @@ export function gitBranchOptions(repo: RepositoryContext | null, query: string, 
 export function gitLaunchWarning(repo: RepositoryContext | null, branch: string | null, worktree: boolean): string | null {
   if (repo?.state !== 'ok' || worktree || !branch || branch === repo.currentBranch) return null
   const selected = repo.branches.find(item => item.name === branch)
-  if (selected?.checkedOut) return '这个分支已被另一个工作树使用，请新开工作树或选择其他分支。'
+  if (selected?.checkedOut) return 'This branch is used by another worktree; open a new worktree or choose another branch.'
   if (repo.dirty && !(repo.headCommit && selected?.commit === repo.headCommit))
-    return '当前目录有未提交改动。发送任务时切换分支可能被 Git 拦下；可新开工作树。'
+    return 'The current directory has uncommitted changes. Switching branches when sending the task may be blocked by Git; you can open a new worktree.'
   return null
 }
 

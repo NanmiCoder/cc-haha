@@ -7,7 +7,7 @@ import { formatSidecarStartupTimeout } from '../../lib/sidecarStartupError'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 beforeEach(() => {
-  useSettingsStore.setState({ locale: 'zh' })
+  useSettingsStore.setState({ locale: 'en' })
 })
 
 describe('splitStartupError', () => {
@@ -57,11 +57,11 @@ describe('StartupErrorView', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: '本地服务仍在启动' })).toBeInTheDocument()
-    expect(screen.getByText(/本地服务进程仍在运行，只是还没完成启动/)).toBeInTheDocument()
-    expect(screen.queryByText('本地服务启动失败')).not.toBeInTheDocument()
-    expect(screen.queryByText('反馈这个问题时，请把这块诊断信息截图一起发到 issue 里。')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Local server is still starting' })).toBeInTheDocument()
+    expect(screen.getByText(/The local server process is still running but has not finished starting/)).toBeInTheDocument()
+    expect(screen.queryByText('Local server failed to start')).not.toBeInTheDocument()
+    expect(screen.queryByText('Please include a screenshot of this diagnostic panel when reporting the issue.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
   it('explains a crashed sidecar and lists what to check before a reinstall', () => {
@@ -73,8 +73,8 @@ describe('StartupErrorView', () => {
 
     const hint = screen.getByTestId('startup-crash-hint')
     expect(hint).toHaveTextContent('3221225477 (0xC0000005)')
-    expect(hint).toHaveTextContent('安全软件')
-    expect(hint).toHaveTextContent('完整安装包')
+    expect(hint).toHaveTextContent('Security software')
+    expect(hint).toHaveTextContent('full installer')
   })
 
   it('shows no crash hint for an ordinary startup failure', () => {
@@ -104,12 +104,12 @@ describe('StartupErrorView', () => {
         <StartupErrorView error={'startup failed\n\nRecent server logs:\n[stderr] boom'} />,
       )
 
-      expect(screen.getByText('本地服务启动失败')).toBeInTheDocument()
-      expect(screen.getByText('反馈这个问题时，请把这块诊断信息截图一起发到 issue 里。')).toBeInTheDocument()
+      expect(screen.getByText('Local server failed to start')).toBeInTheDocument()
+      expect(screen.getByText('Please include a screenshot of this diagnostic panel when reporting the issue.')).toBeInTheDocument()
       expect(screen.getByText('startup failed')).toBeInTheDocument()
       expect(screen.getByText('[stderr] boom')).toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: '复制诊断信息' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }))
 
       await waitFor(() => {
         expect(execCommand).toHaveBeenCalledWith('copy')
@@ -117,7 +117,7 @@ describe('StartupErrorView', () => {
       expect(writeText).toHaveBeenCalledWith(
         'startup failed\n\nRecent server logs:\n[stderr] boom',
       )
-      expect(screen.getByText('已复制')).toBeInTheDocument()
+      expect(screen.getByText('Copied')).toBeInTheDocument()
     } finally {
       Object.defineProperty(document, 'execCommand', {
         configurable: true,

@@ -203,7 +203,7 @@ describe('subagent runtime configuration', () => {
     expect(captured.getAppState().toolPermissionContext.shouldAvoidPermissionPrompts).not.toBe(true)
     captured.setAppState(state => state)
     expect(updates).toBe(1)
-    // query 会复制上下文；拒绝计数必须跟随同一对象，不能靠 getter 在复制后切换。
+    // query copies the context; the denial counter must follow the same object, not switch via a getter after the copy.
     const queryContext = { ...captured }
     expect(queryContext.localDenialTracking).toEqual({ consecutiveDenials: 0, totalDenials: 0 })
     Object.assign(queryContext.localDenialTracking!, { consecutiveDenials: 1, totalDenials: 1 })

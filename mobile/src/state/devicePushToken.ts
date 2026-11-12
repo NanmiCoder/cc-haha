@@ -3,10 +3,10 @@ import * as Notifications from 'expo-notifications'
 export class DevicePushTokenError extends Error {
   constructor(public readonly code: 'NOT_CONFIGURED' | 'UNAVAILABLE' | 'TIMEOUT') {
     super(code === 'NOT_CONFIGURED'
-      ? '此版本暂不支持后台推送。'
+      ? 'This version does not support background push yet.'
       : code === 'TIMEOUT'
-        ? '手机推送服务响应超时，请稍后重试。'
-        : '暂时无法连接手机推送服务，请检查网络后重试。')
+        ? 'The phone push service timed out; please retry later.'
+        : 'Cannot reach the phone push service right now; check the network and retry.')
     this.name = 'DevicePushTokenError'
   }
 }

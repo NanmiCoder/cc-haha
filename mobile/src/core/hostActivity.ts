@@ -4,8 +4,8 @@ import { sessionPath, type BackgroundSnapshot, type BackgroundTask } from './ope
 export type SessionTasks = { sessionId: string; tasks: BackgroundTask[] }
 
 /**
- * 一台电脑上的后台活动 = 各会话后台任务的并集。服务端只有按会话的接口，
- * 这里并发读取；单个会话失败不影响其他会话，失败的会话不出现在结果里。
+ * Background activity on a computer = union of each session's background tasks. The server only has per-session endpoints, 
+ * so read concurrently here; a single session failure does not affect others, and failed sessions are omitted from the result.
  */
 export async function loadHostBackgroundTasks(
   client: Pick<ApiClient, 'get'>,

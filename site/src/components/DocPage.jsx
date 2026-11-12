@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  alternateLocaleRoute,
   ensureHighlighter,
   findDoc,
   getAdjacentDocs,
@@ -22,10 +21,7 @@ import { setPageMeta } from '../lib/meta'
 import '../docs/doc.css'
 import '../docs/doc-wandor.css'
 
-const copy = {
-  zh: { home: '首页', menu: '目录', reading: '正在打开…', sidebar: '文档目录' },
-  en: { home: 'Home', menu: 'Contents', reading: 'Opening…', sidebar: 'Documentation' }
-}
+const copy = { home: 'Home', menu: 'Contents', reading: 'Opening…', sidebar: 'Documentation' }
 
 function defaultNavigate(href) {
   window.history.pushState({}, '', toSiteHref(href))
@@ -56,9 +52,8 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
   const mainRef = useRef(null)
   const firstRender = useRef(true)
 
-  const locale = doc?.locale || 'zh'
-  const c = copy[locale] || copy.zh
-  const navigation = useMemo(() => getDocNavigation(locale), [locale])
+  const c = copy
+  const navigation = useMemo(() => getDocNavigation(), [])
 
   useEffect(() => {
     let cancelled = false
@@ -78,7 +73,7 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
 
   const rendered = useMemo(
     () => (doc && markdown !== null ? renderMarkdown(doc, markdown) : null),
-    // highlightReady 参与依赖：高亮器就绪后要用带高亮的结果重渲染一次
+    // highlightReady is a dependency: once the highlighter is ready, re-render once with highlighting
     [doc, markdown, highlightReady]
   )
 
@@ -88,12 +83,9 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
 
   useEffect(() => {
     if (!doc) return
-    const alternate = alternateLocaleRoute(doc)
     setPageMeta({
       canonical: doc.path,
       description: doc.description,
-      lang: doc.locale === 'en' ? 'en' : 'zh-CN',
-      alternate: alternate === doc.path ? null : alternate,
       title: `${doc.title} · cc-haha`
     })
   }, [doc])
@@ -105,22 +97,22 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
       const button = document.createElement('button')
       button.type = 'button'
       button.className = 'doc-code-copy'
-      button.textContent = locale === 'en' ? 'Copy' : '复制'
-      button.setAttribute('aria-label', locale === 'en' ? 'Copy code' : '复制代码')
+      button.textContent = 'Copy'
+      button.setAttribute('aria-label', 'Copy code')
       pre.append(button)
     })
     document.querySelectorAll('.prose img').forEach((image) => {
       image.tabIndex = 0
       image.setAttribute('role', 'button')
-      image.setAttribute('aria-label', `${locale === 'en' ? 'Enlarge image' : '放大图片'}：${image.alt || ''}`)
+      image.setAttribute('aria-label', `Enlarge image: ${image.alt || ''}`)
     })
     const hash = window.location.hash
     if (hash) scrollToDocHeading(decodeURIComponent(hash.slice(1)))
     else requestAnimationFrame(() => window.scrollTo({ top: 0 }))
-  }, [rendered, locale])
+  }, [rendered])
 
-  // 换页是客户端跳转，浏览器不会重置焦点。不把焦点搬进正文，读屏用户
-  // 停在旧页面的某个链接上，也听不到新页面的标题。
+  // Page changes are client-side, so the browser doesn't reset focus. Without moving focus into the content, screen reader users
+  // stay on a link from the old page and never hear the new page's title.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false
@@ -130,7 +122,7 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
     mainRef.current?.focus({ preventScroll: true })
   }, [doc])
 
-  // 抽屉是覆盖在正文上的，Esc 得能关掉它。
+  // The drawer overlays the content, so Esc has to close it.
   useEffect(() => {
     if (!navOpen) return undefined
     const onKeyDown = (event) => { if (event.key === 'Escape') setNavOpen(false) }
@@ -220,7 +212,7 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
   if (!doc) return onNotFound ? onNotFound(pathname) : null
 
   const adjacent = getAdjacentDocs(doc, navigation)
-  const sectionLabel = getSections().find((section) => section.id === doc.section)?.[locale] || doc.section
+  const sectionLabel = getSections().find((section) => section.id === doc.section)?.label || doc.section
 
   async function handleArticleClick(event) {
     const copyButton = event.target.closest('.doc-code-copy')
@@ -230,10 +222,10 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
       const copied = await copyCode(code, navigator.clipboard)
       if (!copyButton.isConnected) return
       copyButton.disabled = false
-      copyButton.textContent = copied ? (locale === 'en' ? 'Copied ✓' : '已复制 ✓') : (locale === 'en' ? 'Try again' : '重试')
-      setCopyStatus(copied ? (locale === 'en' ? 'Code copied' : '代码已复制') : (locale === 'en' ? 'Clipboard unavailable. Select and copy the code manually.' : '剪贴板不可用，请选中代码手动复制。'))
+      copyButton.textContent = copied ? 'Copied ✓' : 'Try again'
+      setCopyStatus(copied ? 'Code copied' : 'Clipboard unavailable. Select and copy the code manually.')
       const timer = setTimeout(() => {
-        if (copyButton.isConnected) copyButton.textContent = locale === 'en' ? 'Copy' : '复制'
+        if (copyButton.isConnected) copyButton.textContent = 'Copy'
         copyTimers.current.delete(timer)
       }, 2000)
       copyTimers.current.add(timer)
@@ -269,12 +261,8 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
 
   return (
     <div className="docs-site">
-      <a className="u-skip" href="#doc-main">{locale === 'en' ? 'Skip to content' : '跳到正文'}</a>
-      <SiteHeader
-        activeSection={doc.section}
-        locale={locale}
-        localeHref={alternateLocaleRoute(doc)}
-      />
+      <a className="u-skip" href="#doc-main">Skip to content</a>
+      <SiteHeader activeSection={doc.section} />
 
       <div className="doc-read-progress" style={{ transform: `scaleX(${progress / 100})` }} aria-hidden="true" />
       <div className="doc-mobilebar">
@@ -296,27 +284,26 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
         <DocSidebar
           activeRoute={doc.path}
           label={c.sidebar}
-          locale={locale}
           navigation={navigation}
           onNavigate={onNavigate}
           onRequestClose={() => setNavOpen(false)}
           open={navOpen}
         />
 
-        {/* tabIndex -1 让「跳到正文」和换页真的把焦点搬进来，而不是停在 body 上 */}
+        {/* tabIndex -1 lets "Skip to content" and page changes actually move focus here instead of leaving it on body */}
         <main className="doc-main" id="doc-main" ref={mainRef} tabIndex={-1}>
           <div className="doc-reading-head">
-            <span>cc-haha / {locale === 'en' ? 'FIELD GUIDE' : '使用指南'}</span>
-            <span>{locale === 'en' ? 'TAKE A CLOSER LOOK' : '从这里，走进你的工作流'}</span>
+            <span>cc-haha / FIELD GUIDE</span>
+            <span>TAKE A CLOSER LOOK</span>
           </div>
           <div className="doc-cover" aria-hidden="true">
-            <span>{locale === 'en' ? 'A GUIDE FOR CURIOUS MINDS' : '给每一个好奇的你'}</span>
-            <span>{locale === 'en' ? 'YOUR NEXT CHAPTER STARTS HERE' : '下一章，从这里开始'}</span>
+            <span>A GUIDE FOR CURIOUS MINDS</span>
+            <span>YOUR NEXT CHAPTER STARTS HERE</span>
           </div>
           <div className="doc-breadcrumb">
             <a
-              href={toSiteHref(locale === 'en' ? '/en' : '/')}
-              onClick={(event) => { event.preventDefault(); onNavigate(locale === 'en' ? '/en' : '/') }}
+              href={toSiteHref('/')}
+              onClick={(event) => { event.preventDefault(); onNavigate('/') }}
             >
               {c.home}
             </a>
@@ -337,7 +324,6 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
             : <p className="doc-loading">{c.reading}</p>}
 
           <DocPager
-            locale={locale}
             next={adjacent.next}
             onNavigate={onNavigate}
             previous={adjacent.previous}
@@ -348,7 +334,6 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
           <DocToc
             progress={progress}
             headings={rendered.tableOfContents}
-            locale={locale}
             onAnchorNavigate={(event, id) => {
               event.preventDefault()
               window.history.pushState({}, '', `#${encodeURIComponent(id)}`)
@@ -358,8 +343,8 @@ export function DocPage({ onNavigate = defaultNavigate, onNotFound, path, pathna
         )}
       </div>
 
-      {enlargedImage && <ImageViewer image={enlargedImage} locale={locale} onClose={() => setEnlargedImage(null)} />}
-      <button className="doc-back-top" data-visible={progress > 8} tabIndex={progress > 8 ? 0 : -1} aria-label={locale === 'en' ? 'Back to top' : '回到顶部'} type="button" onClick={() => { window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); mainRef.current?.focus({ preventScroll: true }) }}>↑</button>
+      {enlargedImage && <ImageViewer image={enlargedImage} onClose={() => setEnlargedImage(null)} />}
+      <button className="doc-back-top" data-visible={progress > 8} tabIndex={progress > 8 ? 0 : -1} aria-label="Back to top" type="button" onClick={() => { window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); mainRef.current?.focus({ preventScroll: true }) }}>↑</button>
     </div>
   )
 }

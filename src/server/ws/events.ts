@@ -2,7 +2,7 @@ import type { ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 /**
  * WebSocket event type definitions
  *
- * 定义客户端与服务器之间 WebSocket 通信的消息类型。
+ * Defines the message types for WebSocket communication between client and server.
  */
 
 // ============================================================================
@@ -128,9 +128,9 @@ export type ServerMessage =
       effortLevel?: string
       openAIFastMode?: boolean
     }
-  // CLI 是权限模式的唯一真相来源。当 CLI 内部 mode 变化（如 ExitPlanMode 后
-  // 恢复到进入 plan 前的模式、Shift+Tab 切换）时，把新模式回传给前端，让桌面端
-  // 选择器与 CLI 保持同步，而不是停留在本地影子值上。
+  // The CLI is the single source of truth for permission mode. When the CLI's internal mode changes (e.g. restoring
+  // the pre-plan mode after ExitPlanMode, Shift+Tab switching), send the new mode back to the frontend so the desktop
+  // picker stays in sync with the CLI instead of a stale local shadow value.
   | { type: 'permission_mode_changed'; mode: PermissionMode }
   | {
       type: 'api_retry'
@@ -142,8 +142,8 @@ export type ServerMessage =
       errorMessage?: string
       requestId?: string
     }
-  // 流式请求失败、CLI 已降级为非流式重试。非流式响应要等完整生成才返回，
-  // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
+  // The streaming request failed and the CLI fell back to a non-streaming retry. Non-streaming responses return only after full generation,
+  // with no incremental output in between; the frontend uses this to show a light "slow mode" hint instead of a bare spinner.
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string; transcriptMessageId?: string }
   | { type: 'background_task_stop_failed'; taskId: string; message: string }
@@ -196,8 +196,8 @@ export type TurnTiming = {
 
 export type ChatState = 'idle' | 'thinking' | 'compacting' | 'tool_executing' | 'streaming' | 'permission_pending'
 
-// 与 CLI 的 streaming_fallback cause 对齐；unknown 兜底未来新增的 cause 值，
-// 避免新 CLI + 旧 server 组合下丢消息。
+// Aligned with the CLI's streaming_fallback cause; unknown covers cause values added in the future,
+// avoiding dropped messages with a new CLI + old server combination.
 export type StreamingFallbackCause = 'watchdog' | 'stream_error' | '404_stream_creation' | 'stream_retry' | 'unknown'
 
 export type TeamMemberStatus = {

@@ -1,8 +1,8 @@
 /**
  * Search REST API
  *
- * POST /api/search          — 全局工作区搜索
- * POST /api/search/sessions — 搜索会话历史
+ * POST /api/search          — global workspace search
+ * POST /api/search/sessions — search session history
  */
 
 import { SearchService } from '../services/searchService.js'

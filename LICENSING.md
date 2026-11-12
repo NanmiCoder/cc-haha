@@ -1,74 +1,74 @@
-# cc-haha 许可说明 / Licensing guide
+# cc-haha Licensing Guide
 
-当前许可为 **cc-haha Community Source License 1.0**，完整英文条款见
-[LICENSE](LICENSE)。这是自定义的源码可用许可，不是 MIT、Apache-2.0、BUSL，
-也不是 OSI 认可的开源许可证。本页仅解释条款，实际授权以 LICENSE 及适用的独立许可为准。
+The current license is the **cc-haha Community Source License 1.0**; the full terms are in
+[LICENSE](LICENSE). This is a custom source-available license. It is not MIT, Apache-2.0, or BUSL,
+nor is it an OSI-approved open-source license. This page only explains the terms; the actual grant is governed by LICENSE and any applicable separate licenses.
 
-## 允许与需要授权的用途
+## Permitted uses and uses that require permission
 
-| 场景 | 当前许可的处理 |
+| Scenario | Treatment under the current license |
 | --- | --- |
-| 个人非商业使用、学习、研究、修改 | 允许 |
-| 企业内部自用：内部部署、内部工具、仅供自身内部需要的修改 | 允许；不包括下列需要授权的商业盈利活动 |
-| 员工因正常内部工作领取工资 | 不会仅因此被认定为需要授权的商业盈利活动 |
-| 免费发布非商业社区 fork、修改版或提供非商业远程访问 | 允许，须履行来源署名、许可保留和修改说明要求 |
-| 使用 cc-haha 接单、承接付费委托、开发或交付收费的代码、文档、设计等成果 | 需事先取得书面商业授权，即使交付物不包含 cc-haha 源码 |
-| 使用 cc-haha 开发用于对外商业销售或许可的软件或其他成果 | 需事先取得书面商业授权 |
-| 对 cc-haha 或其衍生版本进行收费定制、二次开发、集成、部署或维护 | 需事先取得书面商业授权 |
-| 换皮售卖、收费分发、商业集成或商业再分发 cc-haha 或其衍生版本 | 需事先取得书面商业授权，不以是否构成竞争产品为条件 |
-| 面向第三方提供付费托管、SaaS、托管服务或远程访问 | 需事先取得书面商业授权 |
-| 表面免费，但通过广告、佣金或捆绑收费产品、服务变现 | 同样需事先取得书面商业授权 |
+| Personal noncommercial use, learning, research, modification | Allowed |
+| An organization's own internal use: internal deployment, internal tools, modifications solely for its own internal needs | Allowed; excludes the commercial for-profit activities below that require permission |
+| Employees receiving salary for ordinary internal work | Not, by itself, treated as a commercial for-profit activity requiring permission |
+| Free distribution of noncommercial community forks or modified versions, or providing noncommercial remote access | Allowed, subject to source attribution, license retention, and modification notice requirements |
+| Using cc-haha for client work, paid commissions, or to develop or deliver paid code, documentation, designs, or other deliverables | Requires prior written commercial permission, even if the deliverables contain no cc-haha source code |
+| Using cc-haha to develop software or other deliverables for external commercial sale or licensing | Requires prior written commercial permission |
+| Paid customization, secondary development, integration, deployment, or maintenance of cc-haha or its derivatives | Requires prior written commercial permission |
+| Reskinning for sale, paid distribution, commercial integration, or commercial redistribution of cc-haha or its derivatives | Requires prior written commercial permission, regardless of whether it constitutes a competing product |
+| Providing paid hosting, SaaS, managed services, or remote access to third parties | Requires prior written commercial permission |
+| Nominally free, but monetized through advertising, commissions, or bundled paid products or services | Likewise requires prior written commercial permission |
 
-**企业内部自用可用；接单、对外商业盈利、收费修改和二次开发须事先取得书面商业授权。**
-内部部署、员工操作、公开源码或保留署名，均不能豁免上述需要授权的活动。
-限制不以是否与 cc-haha 竞争为条件，不保留“非竞争性商业集成或再分发”的免费例外。
-输入、输出的所有权不会仅因使用工具转移给本项目，但使用工具生成商业交付物仍须遵守上述用途限制；
-直接复制的软件代码还受其适用许可约束。私人修改及独立代码不因此被要求公开。
-仅为非商业社区项目维护提供自愿捐赠、且不换取付费访问、功能或服务，本身不视为需要授权的商业盈利活动。
-商业授权联系：**relakkes@gmail.com**。第三方权利人拥有的部分可能还需另行取得其授权。
+**Internal use within an organization is allowed; client work, external commercial profit-making, paid modification, and secondary development require prior written commercial permission.**
+Internal deployment, employee operation, public source code, or retained attribution do not exempt any of the activities above that require permission.
+The restrictions do not depend on whether the activity competes with cc-haha, and there is no free exception for "non-competing commercial integration or redistribution."
+Ownership of inputs and outputs is not transferred to this project merely by using the tool, but using the tool to produce commercial deliverables remains subject to the use restrictions above;
+directly copied software code is also subject to its applicable license. Private modifications and independent code are not required to be published as a result.
+Voluntary donations made solely to support maintenance of a noncommercial community project, in exchange for no paid access, features, or services, are not by themselves treated as a commercial for-profit activity requiring permission.
+Commercial licensing contact: **relakkes@gmail.com**. Portions owned by third-party rights holders may also require separate permission from them.
 
-## 二次分发必须显著标明来源
+## Redistributions must prominently state the source
 
-对于适用新许可的代码和修改版，应包含完整 LICENSE、版权和第三方许可声明，并展示：
+Code and modified versions governed by the new license must include the complete LICENSE, copyright, and third-party license notices, and display:
 
 ```text
 Based on cc-haha: https://github.com/NanmiCoder/cc-haha
 Copyright (c) 2026 cc-haha
 ```
 
-- 源码分发：放在主 README 靠前位置。
-- 图形界面应用：放在正常可访问的“关于”或法律信息页面。
-- 二进制分发：在产品介绍或随包文档中展示，并随包附带许可文件。
-- 纯命令行分发：在正常帮助或许可输出中展示。
-- 远程访问：通过正常可访问的法律或许可页面提供完整声明；嵌入组件在宿主相应位置明确该组件来源。
-- 修改版：明确标记为非官方或修改版，并说明实质性修改，不得暗示官方背书。
+- Source distributions: near the beginning of the main README.
+- Graphical applications: on a normally accessible "About" or legal information page.
+- Binary distributions: in the product description or accompanying documentation, with the license files included in the package.
+- CLI-only distributions: in normal help or license output.
+- Remote access: provide the full notice on a normally accessible legal or license page; embedded components must clearly state the component's source in the appropriate place in the host.
+- Modified versions: clearly mark them as unofficial or modified, describe material modifications, and do not imply official endorsement.
 
-这些要求不意味着必须使用 cc-haha 的 Logo，也不要求“修改一定比例的代码”。
-修改名称、界面或大量代码不能自动豁免商业限制和署名义务。
-本许可没有强制公开私人修改或独立编写代码的条款。
+These requirements do not mean you must use the cc-haha logo, nor do they require "modifying a certain percentage of the code."
+Changing the name, interface, or large amounts of code does not automatically exempt you from the commercial restrictions or attribution obligations.
+This license contains no clause requiring publication of private modifications or independently written code.
 
-## 从 MIT 迁移的边界
+## Boundaries of the transition from MIT
 
-1. 此次变更前的主分支提交
-   [`755a18edb7e7519a12f5c7ee4265c9eb4f2ed508`](https://github.com/NanmiCoder/cc-haha/commit/755a18edb7e7519a12f5c7ee4265c9eb4f2ed508)
-   使用 MIT；后续若在迁移前有其他 MIT 提交，也以相应版本实际分发的许可为准。
-2. 旧版 MIT 授权继续有效；已经按 MIT 获得的代码不会因替换根目录 LICENSE 而失去原授权。
-   历史全文可在[旧提交的 LICENSE](https://github.com/NanmiCoder/cc-haha/blob/755a18edb7e7519a12f5c7ee4265c9eb4f2ed508/LICENSE) 中查看；当前仓库不再单独附带历史 MIT 文件，也不向后续新增代码授予 MIT 权利。
-3. 新许可只在相应权利人有权授权的范围内生效。第三方依赖、内嵌代码、单独授权的文件及既有 MIT 贡献，
-   继续保留适用的许可与通知，参见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) 及文件、目录中的声明。
-4. 本变更不能追溯要求旧版 MIT 使用者在 README 或界面新增署名，也不能阻止其按 MIT 对旧代码进行合规商用。
-   旧版 MIT 原本要求的版权和许可保留义务仍然存在。
-5. 对新增贡献，应在接受前明确贡献者的授权；不能仅靠修改根目录文件宣称取得所有贡献者的版权或重新许可权。
+1. The main-branch commit before this change,
+   [`755a18edb7e7519a12f5c7ee4265c9eb4f2ed508`](https://github.com/NanmiCoder/cc-haha/commit/755a18edb7e7519a12f5c7ee4265c9eb4f2ed508),
+   uses MIT; if there were other MIT commits before the transition, the license actually distributed with the corresponding version governs.
+2. Prior MIT grants remain in effect; code already obtained under MIT does not lose its original grant because the root LICENSE was replaced.
+   The historical full text is available in the [LICENSE at the old commit](https://github.com/NanmiCoder/cc-haha/blob/755a18edb7e7519a12f5c7ee4265c9eb4f2ed508/LICENSE); the current repository no longer carries a separate historical MIT file and does not grant MIT rights to later additions.
+3. The new license takes effect only to the extent the relevant rights holders are entitled to grant it. Third-party dependencies, embedded code, separately licensed files, and existing MIT contributions
+   keep their applicable licenses and notices; see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and notices in files and directories.
+4. This change cannot retroactively require users of the earlier MIT version to add attribution to their README or UI, nor can it prevent them from compliantly using the old code commercially under MIT.
+   The copyright and license retention obligations originally required by MIT still apply.
+5. For new contributions, the contributor's grant must be made explicit before acceptance; modifying root files alone cannot claim copyright or relicensing rights from all contributors.
 
-本次迁移没有新增业务代码，不能把已经按 MIT 发布的代码变成只能按新许可使用。
-任何人仍可从历史版本取得这些代码并按 MIT 合规修改、分发和商用。
-新增限制主要作用于未来由有权授权者按新许可发布、且没有其他独立授权的新增内容。
+This transition adds no product code and cannot turn code already released under MIT into code usable only under the new license.
+Anyone may still obtain that code from historical versions and compliantly modify, distribute, and commercialize it under MIT.
+The new restrictions mainly apply to future additions released under the new license by those entitled to grant it, without any other independent grant.
 
-本次迁移仅更新源码仓库的许可文本和说明，不发布新的安装包。
-后续分发适用新许可的安装包时，应随包携带 LICENSE、NOTICE 及适用的第三方或单独授权代码所需的许可声明，
-并核查上面的可见署名要求；既有发布包不会被本次源码变更自动更新。
+This transition only updates the license text and notes in the source repository; no new installers are published.
+When installers governed by the new license are distributed in the future, they must include LICENSE, NOTICE, and the license notices required for applicable third-party or separately licensed code,
+and must be checked against the visible attribution requirements above; existing release packages are not automatically updated by this source change.
 
-## English summary
+## Summary
 
 The governing terms are in [LICENSE](LICENSE). Noncommercial personal,
 educational, and research use, and an organization's own internal operations,

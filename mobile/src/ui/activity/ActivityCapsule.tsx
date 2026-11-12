@@ -7,9 +7,9 @@ import { capsuleBadge, capsuleLabel, capsuleText } from './activityView'
 const SHADOW = '0 1px 2px rgba(28,25,23,0.06), 0 2px 8px rgba(28,25,23,0.07)'
 
 /**
- * 顶栏右侧的活动胶囊：转圈 + 完成数/总数，子 Agent/后台在跑时角上叠个数；
- * 等你批准时变琥珀色带「!」；团队刚确认、成员还在就位时显示「启动中」。
- * 没有任务也没有在跑的东西时不渲染。点开运行中底单。
+ * Activity capsule on the right of the header: spinner + done/total, with a corner count when subagents/background are running; 
+ * turns amber with "!" while waiting for your approval; shows "Starting" right after the team is approved while members are getting in place.
+ * Not rendered when there are no tasks and nothing running. Tap to open the running sheet.
  */
 export function ActivityCapsule({
   progress,
@@ -24,11 +24,11 @@ export function ActivityCapsule({
   runningCount: number
   tone: 'run' | 'attention'
   onPress(): void
-  /** 是否转圈；默认只要有东西在跑就转。清单没做完但已空闲时传 false。 */
+  /** Whether to spin; by default spins whenever something is running. Pass false when the list is unfinished but idle. */
   active?: boolean
-  /** 默认：有任务或有东西在跑。整合者可传入 `activity.capsuleVisible`。 */
+  /** Default: there are tasks or something is running. The integrator may pass `activity.capsuleVisible`. */
   visible?: boolean
-  /** 团队方案已确认、成员还没就位：没有任务也要出现。 */
+  /** Team plan approved but members not in place yet: show even without tasks. */
   launching?: boolean
 }) {
   const colors = useColors()
@@ -77,7 +77,7 @@ export function ActivityCapsule({
           <Icon name="list-checks" size={16} color={colors.ink2} />
         )}
         {starting ? (
-          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>启动中</Text>
+          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>Starting</Text>
         ) : (
           <Mono
             style={{ fontSize: 14, fontWeight: '600', color: attention ? colors.attnInk : colors.ink }}

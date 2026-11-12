@@ -1635,7 +1635,7 @@ describe('Settings > General tab', () => {
     const trigger = screen.getByRole('button', { name: 'Response Language' })
     expect(trigger).toHaveTextContent('Default (English)')
     fireEvent.click(trigger)
-    fireEvent.click(screen.getByRole('option', { name: '中文 (Chinese)' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Chinese' }))
 
     expect(useSettingsStore.getState().setResponseLanguage).toHaveBeenCalledWith('chinese')
   })
@@ -2552,11 +2552,7 @@ describe('Settings > Providers tab', () => {
   })
 
   it.each([
-    ['zh', '模型配置', '添加模型', '配置名称'],
-    ['zh-TW', '模型設定', '新增模型', '設定名稱'],
     ['en', 'Model Settings', 'Add Model', 'Configuration name'],
-    ['jp', 'モデル設定', 'モデルを追加', '設定名'],
-    ['kr', '모델 설정', '모델 추가', '설정 이름'],
   ] as const)('uses model terminology throughout settings in %s', (locale, menu, add, name) => {
     useSettingsStore.setState({ locale })
     render(<Settings />)
@@ -2757,7 +2753,7 @@ describe('Settings > Providers tab', () => {
   })
 
   it('localizes the main model placeholder in the provider form', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     providerStoreState.presets = [
       {
         id: 'custom',
@@ -2777,12 +2773,11 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByPlaceholderText('例如： deepseek-v4-flash')).toBeInTheDocument()
-    expect(within(dialog).getByText('要填写 API Key 才能获取模型列表')).toBeInTheDocument()
-    expect(within(dialog).queryByPlaceholderText('e.g. deepseek-v4-flash')).not.toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('e.g. deepseek-v4-flash')).toBeInTheDocument()
+    expect(within(dialog).getByText('Enter an API key to fetch the model list.')).toBeInTheDocument()
   })
 
   it('normalizes blank model mappings to the main model when saving a provider', async () => {
@@ -2819,15 +2814,15 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
       expect(settingsTextarea?.value).toContain('"ANTHROPIC_MODEL"')
     })
     fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-test' } })
-    fireEvent.change(within(dialog).getByLabelText(/Main Model|主模型/i), { target: { value: 'gpt-5.5' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.change(within(dialog).getByLabelText(/Main Model/i), { target: { value: 'gpt-5.5' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     await waitFor(() => {
       expect(providerStoreState.createProvider).toHaveBeenCalledWith(expect.objectContaining({
@@ -2846,7 +2841,7 @@ describe('Settings > Providers tab', () => {
       connectivity: {
         success: false,
         latencyMs: 3,
-        error: '未配置供应商',
+        error: 'No provider configured',
         modelUsed: 'claude-sonnet-4-6',
         httpStatus: 503,
       },
@@ -2884,7 +2879,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     const settingsTextarea = await waitFor(() => {
       const textarea = dialog.querySelector('textarea')
@@ -2911,7 +2906,7 @@ describe('Settings > Providers tab', () => {
     })
 
     await waitFor(() => {
-      expect(within(dialog).getByLabelText(/Main Model|主模型/i)).toHaveValue('claude-sonnet-4-6')
+      expect(within(dialog).getByLabelText(/Main Model/i)).toHaveValue('claude-sonnet-4-6')
       expect(within(dialog).getByLabelText(/Haiku Model/i)).toHaveValue('claude-haiku-4-5')
       expect(within(dialog).getByLabelText(/Opus Model/i)).toHaveValue('claude-opus-4-8')
     })
@@ -2934,7 +2929,7 @@ describe('Settings > Providers tab', () => {
       modelId: 'deepseek-v4-pro',
     }))
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     await waitFor(() => {
       expect(providerStoreState.createProvider).toHaveBeenCalledWith(expect.objectContaining({
@@ -2973,7 +2968,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -2981,17 +2976,17 @@ describe('Settings > Providers tab', () => {
     })
 
     fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-test' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     await waitFor(() => {
       expect(providerStoreState.createProvider).toHaveBeenCalledTimes(1)
     })
 
-    const cancelButton = within(dialog).getByRole('button', { name: /Cancel|取消/i })
+    const cancelButton = within(dialog).getByRole('button', { name: /Cancel/i })
     expect(cancelButton).toBeDisabled()
 
     fireEvent.click(cancelButton)
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(providerStoreState.createProvider).toHaveBeenCalledTimes(1)
@@ -3266,7 +3261,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -3282,7 +3277,7 @@ describe('Settings > Providers tab', () => {
       expect(settingsTextarea?.value).toContain('"CLAUDE_CODE_MODEL_CONTEXT_WINDOWS"')
       expect(settingsTextarea?.value).toContain('\\"claude-sonnet-4-6\\":1000000')
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     await waitFor(() => {
       expect(providerStoreState.createProvider).toHaveBeenCalledWith(expect.objectContaining({
@@ -3348,7 +3343,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       const settingsTextarea = dialog.querySelector('textarea')
@@ -3371,7 +3366,7 @@ describe('Settings > Providers tab', () => {
     await waitFor(() => {
       expect(dialog.querySelector('textarea')?.value).toContain('"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"')
     })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add|保存|添加/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save|Add/i }))
 
     await waitFor(() => {
       expect(providerStoreState.createProvider).toHaveBeenCalledWith(expect.objectContaining({
@@ -3442,7 +3437,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
     await waitFor(() => {
       expect(dialog.querySelector('textarea')?.value).toContain('"ANTHROPIC_MODEL"')
@@ -3466,7 +3461,7 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Import from cc-switch|从 cc-switch 导入/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Import from cc-switch/i }))
 
     await waitFor(() => {
       expect(providerStoreState.scanCcSwitch).toHaveBeenCalled()
@@ -3479,9 +3474,9 @@ describe('Settings > Providers tab', () => {
 
     render(<Settings />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Add Model|添加模型/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
     const dialog = screen.getByRole('dialog')
-    const fetchButton = within(dialog).getByRole('button', { name: /Fetch models|获取模型/i })
+    const fetchButton = within(dialog).getByRole('button', { name: /Fetch models/i })
 
     expect(fetchButton).toBeDisabled()
     expect(within(dialog).getByText(/Enter an API key to fetch the model list/i)).toBeInTheDocument()
@@ -3502,7 +3497,7 @@ describe('Settings > Providers tab', () => {
       ],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     await waitFor(() => {
       expect(providerStoreState.fetchModels).toHaveBeenCalledWith({
@@ -3516,7 +3511,7 @@ describe('Settings > Providers tab', () => {
     // The picker supplements the field; a model id that is not on the list must
     // still be typeable. Queried by role because the picker's own accessible
     // name also contains the slot label.
-    const mainInput = within(dialog).getByRole('combobox', { name: /Main Model|主模型/i })
+    const mainInput = within(dialog).getByRole('combobox', { name: /Main Model/i })
     fireEvent.change(mainInput, { target: { value: 'gpt-5-mini[1m]' } })
     expect(mainInput).toHaveValue('gpt-5-mini')
     expect(within(dialog).getByRole('option', { name: 'gpt-5-mini' })).toBeInTheDocument()
@@ -3538,7 +3533,7 @@ describe('Settings > Providers tab', () => {
       ],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     await waitFor(() => {
       expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
@@ -3555,7 +3550,7 @@ describe('Settings > Providers tab', () => {
       models: [],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     await waitFor(() => {
       expect(providerStoreState.fetchModels).toHaveBeenCalled()
@@ -3573,8 +3568,8 @@ describe('Settings > Providers tab', () => {
       ],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
-    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model|主模型/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
+    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model/i })
     const pickerButton = within(dialog).getByRole('button', { name: /Main Model.*fetched list/i })
     expect(pickerButton).toHaveAttribute('tabindex', '-1')
 
@@ -3603,7 +3598,7 @@ describe('Settings > Providers tab', () => {
       ],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
     const comboboxes = await within(dialog).findAllByRole('combobox')
     const mainCombobox = comboboxes[0]!
     const haikuCombobox = comboboxes[1]!
@@ -3630,8 +3625,8 @@ describe('Settings > Providers tab', () => {
       })),
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
-    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model|主模型/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
+    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model/i })
     fireEvent.click(mainCombobox)
 
     expect(within(dialog).getAllByRole('option')).toHaveLength(100)
@@ -3659,7 +3654,7 @@ describe('Settings > Providers tab', () => {
       endpointsTried: ['https://api.example.com/v1/models'],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     expect(await within(dialog).findByText(expected)).toBeInTheDocument()
     // Changed from asserting the upstream text is hidden. Dropping it made a
@@ -3671,7 +3666,7 @@ describe('Settings > Providers tab', () => {
   })
 
   it('surfaces the upstream message when a 200 response cloaks an auth failure', async () => {
-    // 智谱 answers HTTP 200 with {"code":1000,"msg":"身份验证失败。"}, which the
+    // Zhipu answers HTTP 200 with {"code":1000,"msg":"身份验证失败。"} ("authentication failed"), which the
     // server can only classify as `not-supported`. On the code alone the user is
     // told to type model ids by hand, when the actual fix is the rejected key.
     const dialog = await openProviderFormWithModels({
@@ -3682,7 +3677,7 @@ describe('Settings > Providers tab', () => {
       endpointsTried: ['https://open.bigmodel.cn/api/anthropic/v1/models'],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     const alert = await within(dialog).findByRole('alert')
     expect(alert).toHaveTextContent(/does not publish a model list/i)
@@ -3697,7 +3692,7 @@ describe('Settings > Providers tab', () => {
       endpointsTried: [],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     const alert = await within(dialog).findByRole('alert')
     // No dangling "Provider response:" label with nothing behind it.
@@ -3712,7 +3707,7 @@ describe('Settings > Providers tab', () => {
       endpointsTried: ['https://api.example.com/v1/models'],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     const alert = await within(dialog).findByRole('alert')
     expect(alert.textContent).toBe('The provider did not respond in time.')
@@ -3727,12 +3722,12 @@ describe('Settings > Providers tab', () => {
     )
     const dialog = await openProviderForm()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
     await waitFor(() => {
       expect(providerStoreState.fetchModels).toHaveBeenCalledTimes(1)
     })
 
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 
@@ -3750,7 +3745,7 @@ describe('Settings > Providers tab', () => {
     expect(within(dialog).queryByText(/Model list loaded/i)).not.toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: /from the fetched list/i })).not.toBeInTheDocument()
     // ...and the discarded response must not leave the button spinning either.
-    expect(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: /Fetch models/i })).toBeEnabled()
   })
 
   it('discards a failed model fetch that arrives after the base URL changed', async () => {
@@ -3762,12 +3757,12 @@ describe('Settings > Providers tab', () => {
     )
     const dialog = await openProviderForm()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
     await waitFor(() => {
       expect(providerStoreState.fetchModels).toHaveBeenCalledTimes(1)
     })
 
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 
@@ -3782,7 +3777,7 @@ describe('Settings > Providers tab', () => {
 
     // Blaming the key the user is halfway through replacing is its own bug.
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i })).toBeEnabled()
+    expect(within(dialog).getByRole('button', { name: /Fetch models/i })).toBeEnabled()
   })
 
   it('treats an empty model list as a neutral result rather than an error', async () => {
@@ -3792,7 +3787,7 @@ describe('Settings > Providers tab', () => {
       models: [],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
 
     expect(await within(dialog).findByText(/No models found/i)).toBeInTheDocument()
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
@@ -3806,10 +3801,10 @@ describe('Settings > Providers tab', () => {
       models: [{ id: 'gpt-5-mini', ownedBy: 'openai' }],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
     expect(await within(dialog).findByText(/Model list loaded \(1\)/i)).toBeInTheDocument()
 
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL|接口地址/i }), {
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Base URL/i }), {
       target: { value: 'https://other.example.com/anthropic' },
     })
 
@@ -3825,9 +3820,9 @@ describe('Settings > Providers tab', () => {
       models: [{ id: 'gpt-5-mini', ownedBy: 'openai' }],
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
     expect(await within(dialog).findByText(/Model list loaded \(1\)/i)).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('combobox', { name: /Main Model|主模型/i }))
+    fireEvent.click(within(dialog).getByRole('combobox', { name: /Main Model/i }))
     expect(within(dialog).getByRole('listbox')).toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByPlaceholderText('sk-...'), { target: { value: 'sk-other' } })
@@ -3835,8 +3830,8 @@ describe('Settings > Providers tab', () => {
     expect(within(dialog).queryByText(/Model list loaded/i)).not.toBeInTheDocument()
     expect(within(dialog).queryByRole('listbox')).not.toBeInTheDocument()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
-    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model|主模型/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models/i }))
+    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model/i })
     expect(mainCombobox).toHaveAttribute('aria-expanded', 'false')
     expect(within(dialog).queryByRole('listbox')).not.toBeInTheDocument()
   })

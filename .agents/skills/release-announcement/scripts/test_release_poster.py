@@ -3,17 +3,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from release_poster import PALETTE, check_spec, chinese_release_section, render, scan, wrap_lines
+from release_poster import PALETTE, check_spec, release_section, render, scan, wrap_lines
 
 
 class ReleasePosterTest(unittest.TestCase):
-    def test_latest_semver_and_chinese_credits(self):
+    def test_latest_semver_and_english_credits(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             notes = repo / "release-notes"
             notes.mkdir()
-            (notes / "v0.6.9.md").write_text("# v0.6.9\n本次版本修复桌面端加载问题 **@latest-user**\n<details>\n@english-only\n", encoding="utf-8")
-            (notes / "v0.6.8.md").write_text("# v0.6.8\n本次版本修复桌面端加载问题 **@old-user**\n", encoding="utf-8")
+            (notes / "v0.6.9.md").write_text("# v0.6.9\nThis release fixes a desktop loading problem. Thanks **@latest-user**\n<details>\n这是旧的中文版本 @chinese-only\n", encoding="utf-8")
+            (notes / "v0.6.8.md").write_text("# v0.6.8\nThis release fixes a desktop loading problem. Thanks **@old-user**\n", encoding="utf-8")
             result = scan(repo)
             self.assertEqual(result["version"], "0.6.9")
             self.assertEqual([person["login"] for person in result["mentions"]], ["latest-user"])
@@ -21,15 +21,42 @@ class ReleasePosterTest(unittest.TestCase):
             self.assertEqual(older["version"], "0.6.8")
             self.assertEqual([person["login"] for person in older["mentions"]], ["old-user"])
 
-    def test_chinese_section_in_either_order_and_without_details(self):
+    def test_english_section_in_either_order_and_without_details(self):
         title = "# Claude Code Haha v0.5.4\n"
-        english_first = title + "English changes here.\n<details>\n<summary>中文版本</summary>\n" + title + "这里是中文修复内容和版本更新。\n</details>"
-        chinese_first = title + "这里是中文修复内容和版本更新。\n<details>\n<summary>English</summary>\n" + title + "English changes here.\n</details>"
-        no_details = title + "这里是中文修复内容和版本更新。\n" + title + "English changes here.\n"
-        for markdown in (english_first, chinese_first, no_details):
-            selected = chinese_release_section(markdown)
-            self.assertIn("这里是中文修复内容", selected)
-            self.assertNotIn("English changes", selected)
+        english = "English changes here: the desktop app reconnects reliably after sleep.\n"
+        english_only = title + english
+        english_first = title + english + "<details>\n<summary>中文版本</summary>\n" + title + "这里是中文修复内容和版本更新。\n</details>"
+        chinese_first = title + "这里是中文修复内容和版本更新。\n<details>\n<summary>English Version</summary>\n" + title + english + "</details>"
+        no_details = title + "这里是中文修复内容和版本更新。\n" + title + english
+        for markdown in (english_only, english_first, chinese_first, no_details):
+            selected = release_section(markdown)
+            self.assertIn("English changes", selected)
+            self.assertNotIn("中文", selected)
+            self.assertNotIn("<summary>", selected)
+
+    def test_note_without_english_body_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "No English release body"):
+            release_section("# Claude Code Haha v0.1.0\n这里只有中文修复内容。\n")
+
+    def test_english_credit_phrases(self):
+        cases = {
+            "Thanks @alice.": True,
+            "- Fixed reconnects (#42). Thanks to @alice.": True,
+            "Credits: @alice": True,
+            "Contributors: @bob, @alice": True,
+            "Contributed by @alice": True,
+            "- PR template asks @alice to review.": False,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            notes = repo / "release-notes"
+            notes.mkdir()
+            for index, (line, expected) in enumerate(cases.items()):
+                (notes / f"v0.0.{index}.md").write_text(f"# Claude Code Haha v0.0.{index}\nThis release contains fixes.\n{line}\n", encoding="utf-8")
+                result = scan(repo, f"0.0.{index}")
+                credited = {person["login"]: person["credit_candidate"] for person in result["mentions"]}
+                with self.subTest(line=line):
+                    self.assertEqual(credited["alice"], expected)
 
     def test_incidental_mention_is_not_contributor_credit(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -37,37 +64,37 @@ class ReleasePosterTest(unittest.TestCase):
             notes = repo / "release-notes"
             notes.mkdir()
             (notes / "v0.2.0.md").write_text(
-                "# Claude Code Haha v0.2.0\n本次修复桌面问题。\n- PR 模板默认要求 @dosubot review。\n- 修复连接问题 **@actual-author**（#42）。\n",
+                "# Claude Code Haha v0.2.0\nThis release fixes desktop problems.\n- The PR template asks @dosubot to review by default.\n- Fixed a connection problem **@actual-author** (#42).\n",
                 encoding="utf-8",
             )
             result = scan(repo)
             candidates = {person["login"]: person["credit_candidate"] for person in result["mentions"]}
             self.assertEqual(candidates, {"dosubot": False, "actual-author": True})
             spec = {
-                "version": "0.2.0", "features": [], "fixes": [{"title": "修复", "body": "说明"}],
-                "contributors": [{"login": "dosubot", "contribution": "代码贡献"}],
+                "version": "0.2.0", "features": [], "fixes": [{"title": "Fix", "body": "Details"}],
+                "contributors": [{"login": "dosubot", "contribution": "Code contribution"}],
             }
-            with self.assertRaisesRegex(ValueError, "未在 release note 中文部分明确署名"):
+            with self.assertRaisesRegex(ValueError, "not explicitly credited"):
                 check_spec(spec, result)
 
     def test_cannot_credit_unmentioned_account(self):
         source = {"version": "0.6.7", "mentions": [{"login": "actual-author", "credit_candidate": True}]}
         spec = {
             "version": "0.6.7",
-            "features": [{"title": "功能", "body": "说明"}],
-            "fixes": [{"title": "修复", "body": "说明"}],
-            "contributors": [{"login": "different-author", "contribution": "贡献"}],
+            "features": [{"title": "Feature", "body": "Details"}],
+            "fixes": [{"title": "Fix", "body": "Details"}],
+            "contributors": [{"login": "different-author", "contribution": "Contribution"}],
         }
-        with self.assertRaisesRegex(ValueError, "未在 release note 中文部分明确署名"):
+        with self.assertRaisesRegex(ValueError, "not explicitly credited"):
             check_spec(spec, source)
 
     def test_offline_avatar_requires_explicit_test_mode(self):
         source = {"version": "0.6.7", "mentions": [{"login": "actual-author", "credit_candidate": True}]}
         spec = {
-            "version": "0.6.7", "features": [], "fixes": [{"title": "修复", "body": "说明"}],
-            "contributors": [{"login": "actual-author", "contribution": "修复", "avatar_path": "fake.png"}],
+            "version": "0.6.7", "features": [], "fixes": [{"title": "Fix", "body": "Details"}],
+            "contributors": [{"login": "actual-author", "contribution": "Fix", "avatar_path": "fake.png"}],
         }
-        with self.assertRaisesRegex(ValueError, "仅供显式离线测试"):
+        with self.assertRaisesRegex(ValueError, "only for explicit offline tests"):
             check_spec(spec, source)
         check_spec(spec, source, allow_offline_avatars=True)
 
@@ -78,6 +105,14 @@ class ReleasePosterTest(unittest.TestCase):
             lines = wrap_lines(value, width, measure)
             self.assertTrue(all(not line.startswith(("；", "。", "、")) for line in lines[1:]))
             self.assertTrue(all(not line.endswith("「") for line in lines[:-1]))
+
+    def test_ascii_punctuation_does_not_start_a_wrapped_line(self):
+        for value in ("a task is running; it takes effect", "see the note (details) here, then done."):
+            for width in range(8, 24):
+                lines = wrap_lines(value, width, len)
+                self.assertEqual("".join(lines).replace(" ", ""), value.replace(" ", ""))
+                self.assertTrue(all(not line.startswith((";", ",", ".", ")")) for line in lines[1:]), lines)
+                self.assertTrue(all(not line.endswith("(") for line in lines[:-1]), lines)
 
     def test_overwide_latin_tokens_wrap_without_losing_characters(self):
         value = "https://example.invalid/" + "long-model-name-" * 12
@@ -126,7 +161,7 @@ class ReleasePosterTest(unittest.TestCase):
             for other, other_bounds, _ in text_bounds[index + 1:]:
                 left, top = max(bounds[0], other_bounds[0]), max(bounds[1], other_bounds[1])
                 right, bottom = min(bounds[2], other_bounds[2]), min(bounds[3], other_bounds[3])
-                self.assertFalse(left < right and top < bottom, f"重叠：{text} / {other}")
+                self.assertFalse(left < right and top < bottom, f"Overlap: {text} / {other}")
         return text_bounds, size
 
     def test_render_feature_and_fix_only_variants_without_empty_sections(self):
@@ -135,41 +170,40 @@ class ReleasePosterTest(unittest.TestCase):
             with self.subTest(features=count), tempfile.TemporaryDirectory() as directory:
                 spec = {
                     "version": "0.7.0",
-                    "features": [{"title": f"改进功能{index}", "body": "现在可以完成任务，保留必要条件。"} for index in range(count)],
-                    "fixes": [] if count else [{"title": "修复连接", "body": "连接恢复后可以继续处理。"}],
+                    "features": [{"title": f"Improved feature {index}", "body": "You can now finish the task while keeping the required conditions."} for index in range(count)],
+                    "fixes": [] if count else [{"title": "Fixed connection", "body": "Work continues once the connection is restored."}],
                     "contributors": [],
                 }
                 texts, _ = self.render_fixture(spec, source, Path(directory))
                 labels = [entry[0] for entry in texts]
                 # The lead feature lives in the hero; the list starts at 02.
-                self.assertEqual("本版重点" in labels, bool(count))
-                self.assertEqual("新增与改进" in labels, count > 1)
-                self.assertEqual("重点修复" in labels, not count)
-                self.assertEqual("本版为修复更新 · 1 项修复" in labels, not count)
-                self.assertNotIn("感谢社区贡献者", labels)
-                self.assertNotIn("更多变化", labels)
-                self.assertNotIn("安装提示", labels)
+                self.assertEqual("Highlight" in labels, bool(count))
+                self.assertEqual("New and improved" in labels, count > 1)
+                self.assertEqual("Key fixes" in labels, not count)
+                self.assertEqual("Fix release · 1 fix" in labels, not count)
+                self.assertNotIn("Thanks to community contributors", labels)
+                self.assertNotIn("Install note", labels)
                 if count:
-                    self.assertTrue(any(size >= 36 and "现在可以" in text for text, _, size in texts))
+                    self.assertTrue(any(size >= 36 and "You can now" in text for text, _, size in texts))
 
     def test_lead_feature_is_readable_on_the_first_phone_screen(self):
         source = {"version": "0.7.0", "mentions": []}
         spec = {
             "version": "0.7.0",
-            "features": [{"title": "桌面 UI 全面换新", "body": "全新视觉系统覆盖所有页面：工具调用变时间线，消息用气泡，输入框换成悬浮卡片。"}],
+            "features": [{"title": "Desktop UI redesigned", "body": "A new visual system covers every page: tool calls become a timeline, messages use bubbles, and the composer becomes a floating card."}],
             "fixes": [], "contributors": [],
         }
         with tempfile.TemporaryDirectory() as directory:
             texts, _ = self.render_fixture(spec, source, Path(directory))
         # A 390px-wide phone shows roughly the top 1700px of a 1080px poster.
-        lead = [bounds for text, bounds, _ in texts if "悬浮卡片" in text]
+        lead = [bounds for text, bounds, _ in texts if "floating card" in text]
         self.assertTrue(lead)
         self.assertLess(max(bottom for _, _, _, bottom in lead), 1100)
 
     def test_paragraphs_are_balanced_instead_of_leaving_an_orphan(self):
         source = {"version": "0.7.0", "mentions": []}
         # 23 characters at 36px in the 792px column would leave one on the last line.
-        spec = {"version": "0.7.0", "features": [{"title": "标题", "body": "说" * 23}], "fixes": [], "contributors": []}
+        spec = {"version": "0.7.0", "features": [{"title": "Title", "body": "说" * 23}], "fixes": [], "contributors": []}
         with tempfile.TemporaryDirectory() as directory:
             texts, _ = self.render_fixture(spec, source, Path(directory))
         body_lines = [text for text, _, _ in texts if set(text) == {"说"}]
@@ -180,7 +214,7 @@ class ReleasePosterTest(unittest.TestCase):
     def test_paragraphs_with_a_long_last_line_keep_the_full_measure(self):
         source = {"version": "0.7.0", "mentions": []}
         # 36 characters wrap as 22 + 14; full balancing would squeeze them to 18 + 18.
-        spec = {"version": "0.7.0", "features": [{"title": "标题", "body": "说" * 36}], "fixes": [], "contributors": []}
+        spec = {"version": "0.7.0", "features": [{"title": "Title", "body": "说" * 36}], "fixes": [], "contributors": []}
         with tempfile.TemporaryDirectory() as directory:
             texts, _ = self.render_fixture(spec, source, Path(directory))
         body_lines = [text for text, _, _ in texts if set(text) == {"说"}]
@@ -197,15 +231,15 @@ class ReleasePosterTest(unittest.TestCase):
             source = {"version": "10.120.3000", "mentions": [{"login": login, "credit_candidate": True} for login in logins]}
             spec = {
                 "version": "10.120.3000",
-                "product": "很长的中文产品名称" * 7,
-                "features": [{"title": "很长的功能标题" * 8, "body": "说明正文" * 30 + "\n" + "LongModelName" * 20}],
-                "fixes": [{"title": "修复历史任务", "body": "确认后再执行，失败保留原状态。"}],
-                "extras": [{"title": "更多模型变化" * 8, "headline": "新模型" * 12, "body": "模型条件" * 20}],
-                "contributors": [{"login": login, "contribution": "长贡献概述" * 30, "avatar_path": "avatar.png"} for login in logins],
-                "install_note": "安装提醒" * 40,
+                "product": "A very long product name " * 7,
+                "features": [{"title": "A very long feature title " * 8, "body": "Body text " * 30 + "\n" + "LongModelName" * 20}],
+                "fixes": [{"title": "Fixed past tasks", "body": "Runs only after confirmation and keeps the original state on failure."}],
+                "extras": [{"title": "More model changes " * 8, "headline": "New models " * 12, "body": "Model conditions " * 20}],
+                "contributors": [{"login": login, "contribution": "A long contribution summary " * 30, "avatar_path": "avatar.png"} for login in logins],
+                "install_note": "Install reminder " * 40,
                 "footer_url": "https://example.invalid/" + "long-path/" * 30,
             }
-            with patch("release_poster.urlopen", side_effect=AssertionError("测试不得联网")):
+            with patch("release_poster.urlopen", side_effect=AssertionError("tests must not access the network")):
                 texts, _ = self.render_fixture(spec, source, directory, offline=True)
             labels = [entry[0] for entry in texts]
             for login in logins:
@@ -214,8 +248,8 @@ class ReleasePosterTest(unittest.TestCase):
     def test_overheight_render_fails_without_saving_a_clipped_poster(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
-            spec = {"version": "0.7.0", "features": [], "fixes": [{"title": "修复", "body": "多行正文\n" * 400}], "contributors": []}
-            with self.assertRaisesRegex(ValueError, "超出上限"):
+            spec = {"version": "0.7.0", "features": [], "fixes": [{"title": "Fix", "body": "Multi-line body\n" * 400}], "contributors": []}
+            with self.assertRaisesRegex(ValueError, "exceeds the limit"):
                 render(spec, {"version": "0.7.0"}, directory / "spec.json", directory / "poster.png")
             self.assertFalse((directory / "poster.png").exists())
 

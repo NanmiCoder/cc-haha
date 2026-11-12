@@ -11,7 +11,7 @@ type AttemptResult = { info: PushInfo; retry?: boolean }
 
 /** Keep native token availability separate from computer transport and stored proofs. */
 export function pushRegistrationFailure(error: unknown, stage: PushStage): AttemptResult {
-  const message = error instanceof Error ? error.message : '通知登记失败'
+  const message = error instanceof Error ? error.message : 'Notification registration failed'
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
   if (stage === 'device') {
     if (code === 'NOT_CONFIGURED')
@@ -30,9 +30,9 @@ export function pushRegistrationFailure(error: unknown, stage: PushStage): Attem
 }
 
 const retryDelays = [2000, 5000, 15000]
-/** 回到前台时，这么久之内登记成功过就不复查；token 轮换另有监听，会立即重新登记。 */
+/** On foreground return skip the recheck if registration succeeded within this time; token rotation has its own listener that re-registers immediately. */
 export const FOREGROUND_RECHECK_AFTER_MS = 30 * 60_000
-/** 回到前台后最多等聊天连接这么久再复查，别和它抢慢的公网隧道。 */
+/** After returning to foreground wait at most this long for the chat connection before rechecking, so as not to compete with it for the slow public tunnel. */
 export const FOREGROUND_YIELD_MS = 5000
 export type RecoveryOptions = {
   gate?: { readonly busy: boolean; whenIdle(maxMs: number): Promise<void> }
@@ -130,7 +130,7 @@ export class PushRegistrationRecovery {
     if (this.active) this.update({ status: 'loading' })
     try {
       const result = await this.attempt(request.signal, token)
-      // 只有确认送得到（没有任何问题）才算登记好了，回到前台时可以跳过复查。
+      // Registration counts as done only when delivery is confirmed (no issues at all), so the recheck can be skipped on foreground return.
       this.registeredAt =
         result.info.status === 'registered' && !result.info.issue
           ? this.now()

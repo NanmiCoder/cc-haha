@@ -13,9 +13,9 @@ describe('IM audio transcription through the local server', () => {
       expect(new Headers(init?.headers).get('Content-Type')).toBe('audio/wav')
       expect(init?.redirect).toBe('error')
       expect(Buffer.from(init?.body as Uint8Array).toString()).toBe('wav fixture')
-      return Response.json({ text: '转写结果', audioSeconds: 1 })
+      return Response.json({ text: 'transcript text', audioSeconds: 1 })
     }) as unknown as typeof fetch
-    expect(await client.transcribeAudio(Buffer.from('wav fixture'))).toBe('转写结果')
+    expect(await client.transcribeAudio(Buffer.from('wav fixture'))).toBe('transcript text')
   })
   it('rejects oversized input before fetch and propagates cancellation', async () => {
     const client = new AdapterHttpClient('ws://127.0.0.1:3456', { localAccessToken: 'fixture-token' })
@@ -38,6 +38,6 @@ describe('IM audio transcription through the local server', () => {
     globalThis.fetch = mock(async () => Response.json({ message: 'not ready' }, { status: 409 })) as unknown as typeof fetch
     await expect(client.transcribeAudio(Buffer.from('wav'))).rejects.toThrow('409')
     globalThis.fetch = mock(async () => Response.json({ text: 4 })) as unknown as typeof fetch
-    await expect(client.transcribeAudio(Buffer.from('wav'))).rejects.toThrow('无效结果')
+    await expect(client.transcribeAudio(Buffer.from('wav'))).rejects.toThrow('invalid result')
   })
 })

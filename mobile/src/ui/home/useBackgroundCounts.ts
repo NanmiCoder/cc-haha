@@ -4,8 +4,8 @@ import { useConnection } from '../../state/AppContext'
 import { loadHostBackgroundTasks, runningTaskCount } from '../../core/hostActivity'
 
 /**
- * 进行中各会话正在跑的后台任务数（首页行右侧的“后台 N”）。只在首页聚焦、
- * 电脑在线且有运行中会话时每 10 秒读一次；读不到的会话不显示数字。
+ * Background task counts of each running session ("background N" on the right of home rows). Only while home is focused, 
+ * the computer is online and there are running sessions, read every 10 seconds; sessions that cannot be read show no number.
  */
 export function useBackgroundCounts(sessionIds: string[], enabled: boolean) {
   const { client } = useConnection()

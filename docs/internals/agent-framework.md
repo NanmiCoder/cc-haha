@@ -1,84 +1,84 @@
 ---
-title: Agent 框架深度解析
-nav_title: Agent 框架
-description: 从源码视角拆解核心 Agent 循环、提示词工程、工具系统与上下文压缩。
+title: Agent Framework Deep Dive
+nav_title: Agent Framework
+description: The core agent loop, prompt engineering, tool system, and context compression, read from source.
 order: 6
 ---
 
-# Agent 框架深度解析
+# Agent Framework Deep Dive
 
-从源码视角剖析全球最流行 AI Code Editor 背后的 Agent 架构设计哲学。
+Deconstructing the architecture behind the world's most popular AI code editor — from source code to design philosophy.
 
-![Agent 框架架构总览](./images/11-agent-framework-overview.png)
+![Agent Framework Architecture Overview](./images/11-agent-framework-overview.png)
 
-## 这套框架要解决什么
+## What This Framework Solves
 
-这套运行时为模型提供以下执行机制：
+The runtime provides these execution mechanisms for the model:
 
-- 在一次对话中执行多步文件修改
-- 对部分 token 溢出、API 超时和工具失败进行恢复
-- 管理多个子 Agent 协作完成复杂任务
-- 在上下文压力增大时裁剪工具结果或生成摘要
+- Execute multiple file edits in one conversation
+- Recover from some token overflows, API timeouts, and tool failures
+- Manage multiple subagents collaborating on complex tasks
+- Trim tool results or generate summaries as context pressure grows
 
-任务质量取决于模型、提示词、可用工具和运行时的共同作用。这些机制支持任务持续执行，但不能保证修改正确或长对话不丢失信息。下面按源码顺序拆开看。
+Task quality depends on the model, prompts, available tools, and runtime together. These mechanisms help work continue, but cannot guarantee correct edits or lossless long conversations. The rest of this page walks the source in order.
 
-## 核心 Agent 循环
+## The Core Agent Loop
 
-### 不是 ReAct，而是 Async Generator 状态机
+### Not ReAct — An Async Generator State Machine
 
-大多数 Agent 框架（包括 LangChain）采用经典的 **ReAct** 模式：
+Most agent frameworks (including LangChain) adopt the classic **ReAct** pattern:
 
 ```
-思考(Thought) → 行动(Action) → 观察(Observation) → 思考 → ...
+Thought → Action → Observation → Thought → ...
 ```
 
-Claude Code **没有**采用这个模式。它的核心是一个 **异步生成器（Async Generator）驱动的状态机**，定义在 `src/query.ts`（约 1730 行）：
+Claude Code does **not** use this pattern. Its core is an **async generator-driven state machine**, defined in `src/query.ts` (~1730 lines):
 
 ```typescript
 // src/query.ts:219
 export async function* query(params: QueryParams): AsyncGenerator<...>
 ```
 
-这个函数是整个 Agent 的心脏。它不是简单的"想-做-看"循环，而是一个**流式状态机**，通过 `yield` 实时产出消息，通过状态赋值（而非递归调用）驱动循环。
+This function is the heart of the entire agent. It's not a simple "think-act-observe" loop but a **streaming state machine** that yields messages in real-time and drives iteration through state assignment (not recursive calls).
 
-### 状态结构
+### The State Structure
 
 ```typescript
 // src/query.ts:204-217
 type State = {
-  messages: Message[]                    // 完整对话历史
-  toolUseContext: ToolUseContext          // 工具执行上下文
-  autoCompactTracking: AutoCompactTracking  // 自动压缩追踪
-  maxOutputTokensRecoveryCount: number   // 输出恢复计数
-  hasAttemptedReactiveCompact: boolean   // 是否已尝试反应式压缩
-  maxOutputTokensOverride: number        // 输出 token 覆盖值
-  pendingToolUseSummary: Promise<...>    // 待处理的工具摘要
-  stopHookActive: boolean               // 停止钩子状态
-  turnCount: number                      // 对话轮数
-  transition: Continue | undefined       // 状态转换原因
+  messages: Message[]                    // Full conversation history
+  toolUseContext: ToolUseContext          // Tool execution context
+  autoCompactTracking: AutoCompactTracking  // Auto-compaction tracking
+  maxOutputTokensRecoveryCount: number   // Output recovery counter
+  hasAttemptedReactiveCompact: boolean   // Whether reactive compact was tried
+  maxOutputTokensOverride: number        // Output token override
+  pendingToolUseSummary: Promise<...>    // Pending tool summary
+  stopHookActive: boolean               // Stop hook state
+  turnCount: number                      // Conversation turn count
+  transition: Continue | undefined       // Transition reason
 }
 ```
 
-### 核心循环的五个阶段
+### Five Phases of the Core Loop
 
-整个 `while (true)` 循环（`src/query.ts:307-1728`）分为五个阶段：
+The entire `while (true)` loop (`src/query.ts:307-1728`) consists of five phases:
 
-![Agent 核心循环](./images/12-agent-core-loop.png)
+![Agent Core Loop](./images/12-agent-core-loop.png)
 
-#### 阶段 1：消息准备与智能压缩（第 365-543 行）
+#### Phase 1: Message Preparation & Smart Compression (lines 365-543)
 
-调用 API 之前，循环会检查可用的上下文处理路径；并非每轮都会实际执行四种压缩：
+Before calling the API, the loop checks the available context processing paths; it does not necessarily perform all four kinds of compression on every turn:
 
-| 压缩策略 | 原理 | 触发时机 |
-|----------|------|----------|
-| **Snip 压缩** | 裁剪历史消息的入口 | 需要 `HISTORY_SNIP`；当前仓库对应模块是占位 stub |
-| **Micro 压缩** | 清空部分旧工具结果，或使用缓存编辑路径 | 满足时间阈值，或特性、模型与主线程条件时 |
-| **上下文折叠** | 投影历史摘要的入口 | 需要 `CONTEXT_COLLAPSE`；当前仓库对应模块是占位 stub |
-| **Auto Compact** | 调用模型生成摘要 | 自动压缩启用且达到模型对应阈值时 |
+| Compression Strategy | Mechanism | Trigger |
+|---------------------|-----------|---------|
+| **Snip Compression** | Entry point for trimming history | Requires `HISTORY_SNIP`; the module in this repository is a placeholder stub |
+| **Micro Compression** | Clear some old tool results, or use cache editing | When the time threshold is met, or feature, model, and main-thread conditions hold |
+| **Context Collapse** | Entry point for projecting historical summaries | Requires `CONTEXT_COLLAPSE`; the module in this repository is a placeholder stub |
+| **Auto Compact** | Ask the model to generate a summary | When auto-compaction is enabled and the model-specific threshold is reached |
 
-压缩可以释放上下文空间，也可能丢失细节；需要核实的内容仍应回到文件或原始证据中读取。具体路径见下文「上下文管理与压缩」。
+Compression frees context space but can lose detail. Read files or original evidence again when a detail needs verification. See “Context Management & Compression” below for the available paths.
 
-#### 阶段 2：流式 API 调用（第 652-954 行）
+#### Phase 2: Streaming API Call (lines 652-954)
 
 ```typescript
 // src/query.ts:659-708
@@ -91,35 +91,35 @@ for await (const message of deps.callModel({
 }))
 ```
 
-关键设计：**工具在流式传输过程中就开始执行**，而不是等模型生成完整响应。这通过 `StreamingToolExecutor` 实现——当模型生成 `tool_use` 块时，工具立即开始运行。
+Key design: **tools begin executing during streaming**, not after the model generates a complete response. This is achieved through `StreamingToolExecutor` — when the model generates `tool_use` blocks, tools start running immediately.
 
-#### 阶段 3：决策点（第 1062-1358 行）
-
-```
-模型响应完成
-  │
-  ├─ 有工具调用？ ──→ 继续循环（阶段 4）
-  │
-  └─ 无工具调用？ ──→ 运行 Stop 钩子 → 检查 token 预算 → 返回结果
-```
-
-#### 阶段 4：工具编排执行（第 1363-1409 行）
-
-工具执行不是简单的逐个运行，而是有精心设计的**编排策略**（`src/services/tools/toolOrchestration.ts`）：
+#### Phase 3: Decision Point (lines 1062-1358)
 
 ```
-工具调用列表
+Model response complete
   │
-  ├─ 分区：只读 vs 写入
+  ├─ Has tool calls? ──→ Continue loop (Phase 4)
   │
-  ├─ 只读工具 ──→ 并行执行（最多 10 个并发）
-  │
-  └─ 写入工具 ──→ 串行执行（防止竞态条件）
+  └─ No tool calls?  ──→ Run stop hooks → Check token budget → Return result
 ```
 
-#### 阶段 5：状态更新与循环（第 1704-1728 行）
+#### Phase 4: Tool Orchestration (lines 1363-1409)
 
-这是整个设计最优雅的部分——**通过状态赋值而非递归调用驱动循环**：
+Tool execution isn't simple sequential invocation — it uses a carefully designed **orchestration strategy** (`src/services/tools/toolOrchestration.ts`):
+
+```
+Tool call list
+  │
+  ├─ Partition: read-only vs. write
+  │
+  ├─ Read-only tools ──→ Parallel execution (up to 10 concurrent)
+  │
+  └─ Write tools ──→ Serial execution (prevent race conditions)
+```
+
+#### Phase 5: State Update & Loop (lines 1704-1728)
+
+This is the most elegant part of the design — **driving the loop through state assignment rather than recursive calls**:
 
 ```typescript
 // src/query.ts:1715-1728
@@ -131,353 +131,353 @@ const next: State = {
   transition: { reason: 'next_turn' },
 }
 state = next
-// 回到 while(true) 循环顶部
+// Back to top of while(true) loop
 ```
 
-没有递归，没有回调地狱，只是简单的 `state = next` 然后 `continue`。这保证了：
-- **内存稳定**：不会因为深度递归导致栈溢出
-- **状态可追溯**：每一轮的状态转换原因都被记录
-- **恢复可控**：任何阶段的错误都可以通过修改 state 来恢复
+No recursion, no callback hell — just simple `state = next` followed by `continue`. This guarantees:
+- **Memory stability**: No stack overflow from deep recursion
+- **State traceability**: Every transition reason is recorded
+- **Controllable recovery**: Errors at any phase can be recovered by modifying state
 
-## 系统提示词工程
+## System Prompt Engineering
 
-### 分层构建架构
+### Layered Construction Architecture
 
-系统提示词不是一个静态字符串，而是通过**分层管道**动态组装的（`src/constants/prompts.ts:444-577`）：
+The system prompt isn't a static string — it's dynamically assembled through a **layered pipeline** (`src/constants/prompts.ts:444-577`):
 
-![系统提示词构建流程](./images/13-system-prompt-pipeline.png)
+![System Prompt Pipeline](./images/13-system-prompt-pipeline.png)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    静态可缓存区域                              │
+│                    Static Cacheable Zone                      │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │ 角色定义  │  系统规则  │  任务指导  │  工具说明  │  风格  │  │
+│  │ Role Def │ System Rules │ Task Guide │ Tool Desc │ Style│  │
 │  └───────────────────────────────────────────────────────┘  │
-├─────────────────────── 缓存边界 ────────────────────────────┤
-│                    动态可变区域                                │
+├─────────────────────── Cache Boundary ──────────────────────┤
+│                    Dynamic Variable Zone                      │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │ 会话指引 │ 记忆系统 │ 环境信息 │ MCP 指令 │ Token 预算 │  │
+│  │ Session Guide │ Memory │ Env Info │ MCP Instr │ Budget │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-这里的**缓存边界（`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`）**是一个关键设计：
+The **cache boundary (`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`)** is a critical design element:
 
-- **边界之上**：跨用户、跨组织通用的内容，使用 `scope: 'global'` 缓存
-- **边界之下**：用户/会话特定的内容，使用 `scope: 'ephemeral'` 缓存
+- **Above the boundary**: Content universal across users and organizations, cached with `scope: 'global'`
+- **Below the boundary**: User/session-specific content, cached with `scope: 'ephemeral'`
 
-这意味着 Claude Code 的系统提示词**不需要每次都重新处理**——静态部分在全球范围内共享缓存，大幅降低延迟和成本。
+This means Claude Code's system prompt **doesn't need to be reprocessed every time** — the static portion is shared globally, dramatically reducing latency and cost.
 
-### 两种 Section 类型
+### Two Section Types
 
 ```typescript
 // src/constants/systemPromptSections.ts
 
-// 类型 1：缓存 Section（计算一次，整个会话复用）
+// Type 1: Cached Section (computed once, reused for entire session)
 systemPromptSection('memory', async () => {
-  return buildMemoryLines()  // 读取 CLAUDE.md、记忆文件等
+  return buildMemoryLines()  // Load CLAUDE.md, memory files, etc.
 })
 
-// 类型 2：缓存破坏 Section（每轮重新计算）
+// Type 2: Cache-Breaking Section (recomputed every turn)
 DANGEROUS_uncachedSystemPromptSection('mcp_instructions', async () => {
-  return getMcpInstructions()  // MCP 服务器可能中途连接/断开
+  return getMcpInstructions()  // MCP servers may connect/disconnect mid-session
 }, 'MCP servers can connect/disconnect mid-session')
 ```
 
-### CLAUDE.md 的加载机制
+### CLAUDE.md Loading Mechanism
 
-CLAUDE.md 是用户自定义指令系统，按**优先级从低到高**加载（`src/utils/claudemd.ts`）：
+CLAUDE.md is the custom instruction system, loaded by **priority from low to high** (`src/utils/claudemd.ts`):
 
 ```
-/etc/claude-code/CLAUDE.md          ← 全局管理配置（最低优先级）
+/etc/claude-code/CLAUDE.md          ← Global managed config (lowest priority)
   ↓
-~/.claude/CLAUDE.md                 ← 用户全局指令
+~/.claude/CLAUDE.md                 ← User-level global instructions
   ↓
-项目根目录/CLAUDE.md                 ← 项目级指令
-项目根目录/.claude/CLAUDE.md
-项目根目录/.claude/rules/*.md
+project-root/CLAUDE.md              ← Project-level instructions
+project-root/.claude/CLAUDE.md
+project-root/.claude/rules/*.md
   ↓
-项目根目录/CLAUDE.local.md           ← 本地私有指令（最高优先级）
+project-root/CLAUDE.local.md        ← Local private instructions (highest priority)
 ```
 
-支持 `@path` 语法递归引用其他文件，并自动防止循环引用。
+Supports `@path` syntax for recursive file inclusion, with automatic circular reference prevention.
 
-### 系统提示词的优先级解析
+### System Prompt Priority Resolution
 
-最终的系统提示词通过 `buildEffectiveSystemPrompt()`（`src/utils/systemPrompt.ts:41-123`）按优先级决定：
+The final system prompt is determined through `buildEffectiveSystemPrompt()` (`src/utils/systemPrompt.ts:41-123`):
 
-1. **Override 提示词** — 完全替换（Loop 模式使用）
-2. **Coordinator 提示词** — 协调者模式
-3. **Agent 提示词** — 自定义 Agent 定义
-4. **Custom 提示词** — `--system-prompt` 命令行参数
-5. **默认提示词** — 标准系统提示词
-6. **Append 提示词** — 始终追加到末尾
+1. **Override prompt** — Complete replacement (used in loop mode)
+2. **Coordinator prompt** — Coordinator mode
+3. **Agent prompt** — Custom agent definition
+4. **Custom prompt** — `--system-prompt` CLI flag
+5. **Default prompt** — Standard system prompt
+6. **Append prompt** — Always appended at the end
 
-## 工具系统设计
+## Tool System Design
 
-### 工具接口：不只是函数调用
+### Tools: More Than Function Calls
 
-Claude Code 的工具不是简单的"名称 + 参数 + 执行"。每个工具是一个**完整的生命周期管理单元**（`src/Tool.ts:362-695`）：
+Claude Code's tools aren't simple "name + params + execute". Each tool is a **complete lifecycle management unit** (`src/Tool.ts:362-695`):
 
 ```typescript
 type Tool<Input, Output> = {
-  // 身份
+  // Identity
   name: string
-  aliases?: string[]        // 向后兼容的旧名称
-  searchHint?: string       // ToolSearch 关键词匹配
+  aliases?: string[]        // Backward-compatible old names
+  searchHint?: string       // ToolSearch keyword matching
 
-  // 能力声明
+  // Capability declarations
   isEnabled(): boolean
-  isConcurrencySafe(input): boolean   // 是否可并行
-  isReadOnly(input): boolean          // 是否只读
-  isDestructive(input): boolean       // 是否破坏性
+  isConcurrencySafe(input): boolean   // Can run in parallel?
+  isReadOnly(input): boolean          // Read-only operation?
+  isDestructive(input): boolean       // Destructive operation?
 
-  // 生命周期
-  validateInput(input, context)       // 输入验证
-  checkPermissions(input, context)    // 权限检查
-  call(input, context, ...)           // 实际执行
+  // Lifecycle
+  validateInput(input, context)       // Input validation
+  checkPermissions(input, context)    // Permission check
+  call(input, context, ...)           // Actual execution
 
-  // 输出与渲染
-  renderToolUseMessage(input)         // 渲染调用信息
-  renderToolResultMessage(content)    // 渲染结果信息
-  renderToolUseProgressMessage(...)   // 渲染进度
-  mapToolResultToToolResultBlockParam()  // 映射为 API 格式
+  // Output & rendering
+  renderToolUseMessage(input)         // Render invocation info
+  renderToolResultMessage(content)    // Render result info
+  renderToolUseProgressMessage(...)   // Render progress
+  mapToolResultToToolResultBlockParam()  // Map to API format
 
-  // 智能特性
-  inputSchema: Zod schema             // Zod 类型验证
-  maxResultSizeChars: number           // 结果大小阈值
-  toAutoClassifierInput(input)         // 安全分类器输入
-  getToolUseSummary?(input): string    // 工具使用摘要
+  // Smart features
+  inputSchema: Zod schema             // Zod type validation
+  maxResultSizeChars: number           // Result size threshold
+  toAutoClassifierInput(input)         // Security classifier input
+  getToolUseSummary?(input): string    // Tool usage summary
 }
 ```
 
-这种设计使得每个工具都是**自描述、自验证、自渲染**的——框架不需要了解工具的内部逻辑，只需调用标准接口。
+This design makes every tool **self-describing, self-validating, and self-rendering** — the framework doesn't need to understand tool internals, just call standard interfaces.
 
-### 工具注册：三阶段流水线
+### Tool Registration: Three-Stage Pipeline
 
-工具的发现和注册分三个阶段（`src/tools.ts`）：
+Tool discovery and registration happens in three stages (`src/tools.ts`):
 
 ```
-阶段 1：基础工具池（getAllBaseTools）
-  │  ~48 个内置工具
-  │  + Feature Flag 控制的条件工具
+Stage 1: Base Tool Pool (getAllBaseTools)
+  │  ~48 built-in tools
+  │  + Feature-flag-gated conditional tools
   │
-阶段 2：过滤（getTools）
-  │  按权限模式过滤
-  │  按 REPL 模式过滤
-  │  按 isEnabled() 过滤
+Stage 2: Filtering (getTools)
+  │  Filter by permission mode
+  │  Filter by REPL mode
+  │  Filter by isEnabled()
   │
-阶段 3：MCP 合并（assembleToolPool）
-     + MCP 服务器提供的动态工具
-     去重（内置优先）
-     排序（缓存稳定性）
+Stage 3: MCP Merge (assembleToolPool)
+     + Dynamic tools from MCP servers
+     Deduplication (built-in takes precedence)
+     Sorting (cache stability)
 ```
 
-### 工具执行管道
+### Tool Execution Pipeline
 
-一次工具调用要经过**7 步管道**（`src/services/tools/toolExecution.ts`）：
+Each tool invocation passes through a **7-step pipeline** (`src/services/tools/toolExecution.ts`):
 
 ```
-1. 工具查找 ─→ 2. 输入解析（Zod） ─→ 3. 自定义验证
+1. Tool Lookup → 2. Input Parsing (Zod) → 3. Custom Validation
        │
-4. Pre-Tool 钩子 ─→ 5. 权限检查 ─→ 6. 实际执行 ─→ 7. Post-Tool 钩子
+4. Pre-Tool Hooks → 5. Permission Check → 6. Actual Execution → 7. Post-Tool Hooks
 ```
 
-每一步都可以**中断、修改或增强**执行流程。这不是简单的 `try { tool.call(input) } catch`，而是一个完整的中间件管道。
+Each step can **interrupt, modify, or enhance** the execution flow. This isn't a simple `try { tool.call(input) } catch` — it's a full middleware pipeline.
 
-### 工具延迟加载（Tool Deferred Loading）
+### Deferred Tool Loading
 
-Claude Code 有 48+ 个内置工具。如果每次 API 调用都把所有工具定义发给模型，会浪费大量 token。解决方案：
+Claude Code has 48+ built-in tools. Sending all tool definitions to the model on every API call would waste massive tokens. The solution:
 
 ```typescript
-// 工具可以标记为"延迟加载"
+// Tools can be marked for deferred loading
 {
-  shouldDefer: true,       // 只在 ToolSearch 中列出名称
-  alwaysLoad: false,       // 不在初始提示词中包含完整 schema
-  searchHint: "notebook"   // 搜索关键词
+  shouldDefer: true,       // Only list name in ToolSearch
+  alwaysLoad: false,       // Don't include full schema in initial prompt
+  searchHint: "notebook"   // Search keywords
 }
 ```
 
-模型需要时通过 `ToolSearch` 工具动态获取完整定义。这大幅减少了系统提示词的大小。
+The model dynamically retrieves full definitions via the `ToolSearch` tool when needed. This dramatically reduces system prompt size.
 
-## 上下文管理与压缩
+## Context Management & Compression
 
-### 有限窗口中的对话延续
+### Continuing Within a Finite Window
 
-模型的上下文窗口仍然有限。`src/query.ts` 中保留了以下四类处理入口，其可用性取决于构建特性、模型和配置；图中的入口不代表当前构建全部实现或启用。
+The model's context window remains finite. `src/query.ts` contains four kinds of processing entry points, whose availability depends on build features, model, and configuration. The diagram does not mean every path is implemented or enabled in the current build.
 
-![上下文压缩策略](./images/14-context-compression.png)
+![Context Compression Strategy](./images/14-context-compression.png)
 
-#### 第 1 级：Snip 压缩
+#### Level 1: Snip Compression
 
-`HISTORY_SNIP` 控制历史裁剪入口。当前 `src/services/compact/snipCompact.ts` 是外部构建占位 stub，不能据此认为应用已经执行了历史裁剪。
+`HISTORY_SNIP` gates the history-trimming entry point. The current `src/services/compact/snipCompact.ts` is a placeholder stub for external builds, so its presence does not establish that the app trims history through this path.
 
-#### 第 2 级：Micro 压缩
+#### Level 2: Micro Compression
 
-`src/services/compact/microCompact.ts` 先检查时间阈值，满足条件时清空部分旧工具结果。缓存编辑路径另受 `CACHED_MICROCOMPACT`、模型支持和主线程来源限制；条件不满足时可以原样返回消息，并由 Auto Compact 处理上下文压力。
+`src/services/compact/microCompact.ts` checks the time threshold first and clears some old tool results when the conditions hold. Cache editing separately requires `CACHED_MICROCOMPACT`, model support, and a main-thread source. When conditions do not hold, it can return messages unchanged and leave context pressure to Auto Compact.
 
-#### 第 3 级：上下文折叠（Context Collapse）
+#### Level 3: Context Collapse
 
-`CONTEXT_COLLAPSE` 控制历史摘要投影入口。当前 `src/services/contextCollapse/index.ts` 同样是占位 stub，不能把这一入口描述为已启用的渐进式摘要能力。
+`CONTEXT_COLLAPSE` gates the historical-summary projection entry point. The current `src/services/contextCollapse/index.ts` is also a placeholder stub, so this entry point cannot be described as an enabled progressive summarization capability.
 
-#### 第 4 级：Auto Compact
+#### Level 4: Auto Compact
 
-自动压缩启用且达到阈值时，`src/services/compact/autoCompact.ts` 尝试生成摘要，并用压缩后的消息继续对话。阈值使用运行时解析的模型窗口；连续失败会停止自动重试。摘要不能保证保留全部历史细节。
+When auto-compaction is enabled and its threshold is reached, `src/services/compact/autoCompact.ts` attempts a summary and continues with the compacted messages. Thresholds use the model window resolved by the runtime; consecutive failures stop automatic retries. Summaries cannot guarantee retention of every historical detail.
 
-### 系统上下文注入
+### System Context Injection
 
-每次 API 调用前，自动注入两种上下文（`src/context.ts`）：
+Before every API call, two types of context are automatically injected (`src/context.ts`):
 
 ```typescript
-// 系统上下文（memoized，整个会话缓存）
+// System context (memoized, cached for entire session)
 getSystemContext() → {
-  gitStatus,           // 当前分支、最近提交、文件状态
-  cacheBreakerInjection  // 系统级注入
+  gitStatus,           // Current branch, recent commits, file status
+  cacheBreakerInjection  // System-level injection
 }
 
-// 用户上下文（memoized，CLAUDE.md 变化时清除）
+// User context (memoized, cleared when CLAUDE.md changes)
 getUserContext() → {
-  claudeMdContent,     // 所有 CLAUDE.md 合并内容
-  currentDate,         // 当前日期
-  mcpInstructions      // MCP 服务器指令
+  claudeMdContent,     // Merged content from all CLAUDE.md files
+  currentDate,         // Current date
+  mcpInstructions      // MCP server instructions
 }
 ```
 
-### 系统提醒（System Reminders）
+### System Reminders
 
-系统提醒是一种特殊的**附件消息**，注入到工具结果或用户消息中（`src/utils/attachments.ts`）：
+System reminders are special **attachment messages** injected into tool results or user messages (`src/utils/attachments.ts`):
 
 ```xml
 <system-reminder>
-  这里是系统级的上下文信息，与具体的工具结果无关。
+  System-level context information, unrelated to specific tool results.
 </system-reminder>
 ```
 
-用途包括：
-- 文件读取时的安全警告
-- 记忆系统的时效提醒
-- 用户侧问的附带信息
-- Deferred 工具的可用通知
+Use cases include:
+- Security warnings during file reads
+- Memory staleness notifications
+- Accompanying information for side questions
+- Availability notices for deferred tools
 
-## 技能与插件生态
+## Skills & Plugin Ecosystem
 
-### 技能系统（Skills）
+### Skills System
 
-技能是 Claude Code 最强大的扩展机制之一。它不是简单的"命令别名"，而是**完整的 AI 行为定义**。
+Skills are one of Claude Code's most powerful extension mechanisms. They're not simple "command aliases" but **complete AI behavior definitions**.
 
-#### 技能定义结构
+#### Skill Definition Structure
 
 ```typescript
 type BundledSkillDefinition = {
   name: string
   description: string
-  whenToUse?: string           // 模型自动判断何时使用
-  allowedTools?: string[]      // 限制工具池
-  model?: string               // 指定模型
-  hooks?: HooksSettings        // 生命周期钩子
-  context?: 'inline' | 'fork'  // 内联 or 独立上下文
-  agent?: string               // 关联的 Agent 类型
+  whenToUse?: string           // Model auto-determines when to use
+  allowedTools?: string[]      // Restrict tool pool
+  model?: string               // Specify model
+  hooks?: HooksSettings        // Lifecycle hooks
+  context?: 'inline' | 'fork'  // Inline or independent context
+  agent?: string               // Associated agent type
   getPromptForCommand: (args, context) => Promise<ContentBlockParam[]>
 }
 ```
 
-#### 两种执行上下文
+#### Two Execution Contexts
 
-| 上下文 | 行为 | 适用场景 |
-|--------|------|----------|
-| `inline` | 技能内容直接展开到当前对话 | 简单指令、格式模板 |
-| `fork` | 技能作为子 Agent 在独立上下文中运行 | 复杂工作流、需要独立 token 预算 |
+| Context | Behavior | Use Case |
+|---------|----------|----------|
+| `inline` | Skill content expands directly into current conversation | Simple instructions, format templates |
+| `fork` | Skill runs as a subagent in an independent context | Complex workflows, independent token budget |
 
-#### 技能发现来源
+#### Skill Discovery Sources
 
 ```
-内置技能（bundled）         ← 编译到 CLI 中，15+ 个
+Bundled skills (bundled)          ← Compiled into CLI, 15+
   ↓
-插件技能（plugin）          ← 插件注册
+Plugin skills (plugin)            ← Plugin-registered
   ↓
-用户技能（~/.claude/skills/） ← 用户全局
+User skills (~/.claude/skills/)   ← User-global
   ↓
-项目技能（.claude/skills/）   ← 项目级
+Project skills (.claude/skills/)  ← Project-level
   ↓
-策略技能（policy）           ← 组织管理
+Policy skills (policy)            ← Organization-managed
 ```
 
-### 插件系统（Plugins）
+### Plugin System
 
-插件是更高层级的扩展单元，可以包含**技能、钩子、MCP 服务器、LSP 服务器**：
+Plugins are higher-level extension units that can contain **skills, hooks, MCP servers, and LSP servers**:
 
 ```typescript
 type BuiltinPluginDefinition = {
   name: string
   description: string
-  skills?: BundledSkillDefinition[]     // 技能集合
-  hooks?: HooksSettings                  // 生命周期钩子
-  mcpServers?: Record<string, McpServerConfig>  // MCP 服务器
-  lspServers?: Record<string, LspServerConfig>  // LSP 服务器
-  isAvailable?: () => boolean            // 可用性检查
-  defaultEnabled?: boolean               // 默认启用
+  skills?: BundledSkillDefinition[]     // Skill collection
+  hooks?: HooksSettings                  // Lifecycle hooks
+  mcpServers?: Record<string, McpServerConfig>  // MCP servers
+  lspServers?: Record<string, LspServerConfig>  // LSP servers
+  isAvailable?: () => boolean            // Availability check
+  defaultEnabled?: boolean               // Default enabled state
 }
 ```
 
-插件的关键设计：**用户可切换启用/禁用**，这与直接注册的技能不同。
+The key plugin design: **users can toggle enable/disable**, unlike directly registered skills.
 
-### 钩子系统（Hooks）
+### Hooks System
 
-钩子是整个生命周期的**可编程拦截点**：
+Hooks are **programmable interception points** across the entire lifecycle:
 
 ```
-SessionStart ─→ UserPromptSubmit ─→ PreToolUse ─→ [工具执行]
+SessionStart → UserPromptSubmit → PreToolUse → [Tool Execution]
        │                                              │
        │                                          PostToolUse
        │                                              │
-       └─ SubagentStart ←─── Stop ←─── TaskCompleted ←┘
+       └── SubagentStart ←── Stop ←── TaskCompleted ←─┘
               │
-          SubagentStop ─→ SessionEnd
+          SubagentStop → SessionEnd
 ```
 
-钩子通过 shell 命令执行，退出码控制行为：
-- **0**：成功，stdout 内容按事件类型处理
-- **2**：stderr 内容展示给模型或用户
-- **其他**：仅展示给用户
+Hooks execute as shell commands, with exit codes controlling behavior:
+- **0**: Success, stdout content processed per event type
+- **2**: stderr content shown to model or user
+- **Other**: Shown to user only
 
-### MCP：模型上下文协议
+### MCP: Model Context Protocol
 
-MCP 是 Claude Code 与外部世界交互的标准协议。工具命名规范：
+MCP is the standard protocol for Claude Code's interaction with the external world. Tool naming convention:
 
 ```
-mcp__{标准化服务器名}__{工具名}
-例如：mcp__chrome_devtools__take_screenshot
+mcp__{normalized_server_name}__{tool_name}
+e.g.: mcp__chrome_devtools__take_screenshot
 ```
 
-支持的传输方式：`stdio`、`sse`、`http`、`websocket`、`sdk`
+Supported transports: `stdio`, `sse`, `http`, `websocket`, `sdk`
 
-MCP 工具在运行时动态发现，与内置工具**无缝合并**到统一的工具池中。
+MCP tools are discovered at runtime and **seamlessly merged** into the unified tool pool alongside built-in tools.
 
-## 权限与安全体系
+## Permission & Security Model
 
-### 分层权限模型
+### Layered Permission Model
 
 ```
 ┌─────────────────────────────────────┐
-│         权限规则（Rules）             │
-│  来源：userSettings, projectSettings │
-│        flagSettings, policySettings  │
+│         Permission Rules             │
+│  Sources: userSettings, project,     │
+│           flagSettings, policy       │
 ├─────────────────────────────────────┤
-│        权限模式（Modes）              │
+│         Permission Modes             │
 │  default | plan | acceptEdits       │
 │  bypassPermissions | auto | bubble  │
 ├─────────────────────────────────────┤
-│         钩子（Hooks）                │
-│  PreToolUse 可拦截或修改            │
+│              Hooks                   │
+│  PreToolUse can intercept/modify    │
 ├─────────────────────────────────────┤
-│      安全分类器（Classifier）         │
-│  ML 模型评估工具调用安全性           │
+│      Security Classifier             │
+│  ML model evaluates tool call safety│
 └─────────────────────────────────────┘
 ```
 
-### 权限决策流
+### Permission Decision Flow
 
-每次工具调用的权限检查：
+Permission check for every tool invocation:
 
 ```typescript
 type PermissionResult =
@@ -487,276 +487,276 @@ type PermissionResult =
   | { behavior: 'passthrough', message }
 ```
 
-决策原因追溯：
-- `type: 'rule'` — 匹配了权限规则
-- `type: 'mode'` — 权限模式决定
-- `type: 'hook'` — 钩子拦截
-- `type: 'classifier'` — ML 分类器判定
+Decision reason traceability:
+- `type: 'rule'` — Matched a permission rule
+- `type: 'mode'` — Determined by permission mode
+- `type: 'hook'` — Hook interception
+- `type: 'classifier'` — ML classifier decision
 
-### 权限规则模式匹配
+### Permission Rule Pattern Matching
 
 ```javascript
-// 精确匹配
+// Exact match
 { tool: 'Bash', behavior: 'deny' }
 
-// 参数模式匹配
-{ tool: 'Bash(git *)', behavior: 'allow' }   // 允许所有 git 命令
-{ tool: 'Bash(rm -rf *)', behavior: 'deny' }  // 禁止 rm -rf
+// Parameter pattern matching
+{ tool: 'Bash(git *)', behavior: 'allow' }     // Allow all git commands
+{ tool: 'Bash(rm -rf *)', behavior: 'deny' }   // Block rm -rf
 
-// 通配符
-{ tool: 'File*', behavior: 'allow' }          // 允许所有 File 开头的工具
+// Wildcard
+{ tool: 'File*', behavior: 'allow' }            // Allow all File* tools
 ```
 
-## 故障恢复机制
+## Fault Recovery Mechanisms
 
-这是 Claude Code 最精妙的设计之一。`src/query.ts` 的核心循环内置了**6 种恢复策略**：
+This is one of Claude Code's most sophisticated designs. The core loop in `src/query.ts` has **6 built-in recovery strategies**:
 
-| 恢复策略 | 触发条件 | 恢复方式 |
-|----------|----------|----------|
-| `collapse_drain_retry` | prompt 过长 | 排空已暂存的上下文折叠，重试 |
-| `reactive_compact_retry` | 仍然过长 | 通过 Claude 生成摘要，重试 |
-| `max_output_tokens_escalate` | 触及 8k 默认限制 | 升级到 64k 限制重试 |
-| `max_output_tokens_recovery` | 触及任何限制 | 注入"继续"提示，重试（最多 3 次） |
-| `stop_hook_blocking` | Stop 钩子阻塞 | 将阻塞错误注入上下文，重试 |
-| `token_budget_continuation` | 预算尚余 | 注入预算提示，继续执行 |
+| Recovery Strategy | Trigger | Recovery Method |
+|-------------------|---------|-----------------|
+| `collapse_drain_retry` | Prompt too long | Drain staged context collapses, retry |
+| `reactive_compact_retry` | Still too long | Generate summary via Claude, retry |
+| `max_output_tokens_escalate` | Hit 8k default limit | Escalate to 64k limit, retry |
+| `max_output_tokens_recovery` | Hit any limit | Inject "continue" nudge, retry (up to 3x) |
+| `stop_hook_blocking` | Stop hook blocked | Inject blocking errors into context, retry |
+| `token_budget_continuation` | Budget remaining | Inject budget nudge, continue |
 
-每种恢复都通过修改 `state` 实现：
+Each recovery works by modifying `state`:
 
 ```typescript
-// 例：prompt 过长恢复
+// Example: prompt-too-long recovery
 if (error.type === 'prompt_too_long') {
-  // 排空所有暂存的折叠
+  // Drain all staged collapses
   const compacted = drainStagedCollapses(state.messages)
   state = { ...state, messages: compacted, transition: { reason: 'collapse_drain_retry' } }
-  continue  // 回到循环顶部重试
+  continue  // Back to loop top to retry
 }
 ```
 
-### 模型降级
+### Model Fallback
 
-当主模型流式传输失败时，系统会：
-1. 清理孤立的未完成消息
-2. 切换到备用模型
-3. 用新模型重试
+When the primary model's stream fails, the system:
+1. Cleans up orphaned incomplete messages
+2. Switches to a fallback model
+3. Retries with the new model
 
-### 媒体大小恢复
+### Media Size Recovery
 
-当图片等媒体内容导致 token 超限时：
-- 触发反应式压缩
-- 自动剥离图片内容
-- 保留文本信息重试
+When images or other media cause token overflow:
+- Triggers reactive compaction
+- Automatically strips image content
+- Retains text information and retries
 
-## 与 LangChain/ReAct 的本质区别
+## How It Differs from LangChain/ReAct
 
-### 架构范式对比
+### Architecture Paradigm Comparison
 
-| 维度 | LangChain | Claude Code |
-|------|-----------|-------------|
-| **核心模式** | ReAct（Think→Act→Observe） | Async Generator 状态机 |
-| **执行模型** | 同步阻塞 | 流式非阻塞 |
-| **工具执行** | 等待模型完整响应后执行 | 流式传输中即时执行 |
-| **状态管理** | 外部 Memory 对象 | 内置状态赋值 + 循环 |
-| **错误恢复** | 需要手动编排 | 6 种内置恢复策略 |
-| **上下文压缩** | 简单截断或摘要 | 按构建、模型和配置启用裁剪或摘要路径 |
-| **多 Agent** | Chain/Graph 显式编排 | 统一工具接口 + 状态机 |
-| **扩展机制** | Python 类继承 | 技能 + 插件 + 钩子 + MCP |
-| **缓存策略** | 无 | 全局/会话/按轮三级缓存 |
+| Dimension | LangChain | Claude Code |
+|-----------|-----------|-------------|
+| **Core Pattern** | ReAct (Think→Act→Observe) | Async Generator State Machine |
+| **Execution Model** | Synchronous blocking | Streaming non-blocking |
+| **Tool Execution** | After complete model response | During streaming |
+| **State Management** | External Memory objects | Built-in state assignment + loop |
+| **Error Recovery** | Manual orchestration required | 6 built-in recovery strategies |
+| **Context Compression** | Simple truncation or summary | Trimming or summary paths enabled by build, model, and configuration |
+| **Multi-Agent** | Chain/Graph explicit orchestration | Unified tool interface + state machine |
+| **Extension Mechanisms** | Python class inheritance | Skills + Plugins + Hooks + MCP |
+| **Caching Strategy** | None | Global / session / per-turn three-level cache |
 
-### 为什么不用 ReAct？
+### Why Not ReAct?
 
-ReAct 模式有几个固有限制：
+The ReAct pattern has several inherent limitations:
 
-1. **串行瓶颈**：每一步必须等待完整的"思考→行动→观察"循环
-2. **无流式能力**：模型生成完整响应后才能开始执行工具
-3. **恢复困难**：没有统一的状态表示，难以实现自动恢复
-4. **缓存不友好**：每次循环的 prompt 结构变化大，难以利用缓存
+1. **Serial bottleneck**: Each step must wait for the complete "think→act→observe" cycle
+2. **No streaming capability**: Tools can't execute until the model completes its full response
+3. **Recovery difficulty**: No unified state representation makes automatic recovery hard
+4. **Cache-unfriendly**: Prompt structure changes significantly each cycle, making caching difficult
 
-Claude Code 的 Async Generator 模式解决了所有这些问题：
+Claude Code's Async Generator pattern solves all these problems:
 
-- **流式执行**：工具在模型生成过程中就开始运行
-- **状态可控**：`State` 对象包含所有需要的信息，恢复只需修改状态
-- **缓存优化**：静态提示词全局缓存，动态部分最小化
-- **并行能力**：只读工具自动并行，写入工具串行保序
+- **Streaming execution**: Tools run while the model generates
+- **Controllable state**: The `State` object contains all needed info; recovery means just modifying state
+- **Cache optimization**: Static prompts cached globally, dynamic parts minimized
+- **Parallel capability**: Read-only tools auto-parallelize, write tools serialize for ordering
 
-### 与 LangChain Agent 的具体差异
+### Specific Differences from LangChain Agents
 
 ```
 LangChain Agent:
   agent = initialize_agent(tools, llm, agent="zero-shot-react-description")
   result = agent.run("do something")
-  # 内部：LLM → parse → tool → LLM → parse → tool → ... → final answer
-  # 每一步都是独立的 LLM 调用
+  # Internal: LLM → parse → tool → LLM → parse → tool → ... → final answer
+  # Each step is an independent LLM call
 
 Claude Code Agent:
   for await (const msg of query({ messages, tools, systemPrompt })) {
-    yield msg  // 实时产出消息
-    // 内部：流式 LLM → 流式工具执行 → 状态更新 → 继续
-    // 单次 API 调用可以触发多个工具，工具在流式中执行
+    yield msg  // Real-time message output
+    // Internal: streaming LLM → streaming tool execution → state update → continue
+    // A single API call can trigger multiple tools, which execute during streaming
   }
 ```
 
-关键差异：
-- LangChain 的每一"步"是一次完整的 LLM 调用
-- Claude Code 的每一"轮"可以包含多个工具调用，且工具在流式传输中执行
-- LangChain 需要 OutputParser 解析模型输出中的工具调用
-- Claude Code 直接使用 Anthropic API 的原生 `tool_use` 能力，无需解析
+Key differences:
+- Each LangChain "step" is a complete LLM call
+- Each Claude Code "turn" can include multiple tool calls, with tools executing during streaming
+- LangChain requires an OutputParser to parse tool calls from model output
+- Claude Code directly uses Anthropic API's native `tool_use` capability — no parsing needed
 
-### 与 LangGraph 的对比
+### Comparison with LangGraph
 
-LangGraph 是 LangChain 的升级版，引入了图结构：
+LangGraph is LangChain's evolution, introducing graph structures:
 
-| 维度 | LangGraph | Claude Code |
-|------|-----------|-------------|
-| **状态流转** | 显式图节点 + 边 | 隐式状态机（while + continue） |
-| **可视化** | 可导出为图 | 状态转换原因可追溯 |
-| **持久化** | Checkpoint + State | 文件系统 + 消息历史 |
-| **人机交互** | interrupt_before/after | 权限系统 + 钩子 |
-| **多 Agent** | 需要显式编排 | AgentTool 统一接口 |
+| Dimension | LangGraph | Claude Code |
+|-----------|-----------|-------------|
+| **State Flow** | Explicit graph nodes + edges | Implicit state machine (while + continue) |
+| **Visualization** | Exportable as graph | Transition reasons are traceable |
+| **Persistence** | Checkpoint + State | File system + message history |
+| **Human-in-Loop** | interrupt_before/after | Permission system + hooks |
+| **Multi-Agent** | Requires explicit orchestration | Unified AgentTool interface |
 
-Claude Code 的优势在于**简单性**——不需要定义图结构，一个 while 循环就能处理所有情况。
+Claude Code's advantage is **simplicity** — no need to define graph structures; a single while loop handles everything.
 
-## 为什么 Claude Code 能做到这么好？
+## Why Claude Code Is So Good
 
-从源码分析中，我们可以总结出以下核心设计原则：
+From source code analysis, we can distill these core design principles:
 
-### 流式优先（Streaming First）
+### Streaming First
 
-核心循环通过 `AsyncGenerator` 逐步产出进度：
+The core loop uses `AsyncGenerator` to report progress incrementally:
 
-- 模型响应是流式的
-- 工具在流式中执行
-- 进度实时更新
+- Model responses are streamed
+- Tools execute during streaming
+- Progress updates in real-time
 
-用户可以在任务完成前看到模型和工具的进度；模型响应、工具执行和压缩仍需要时间。
+Users can see model and tool progress before the task finishes. Model responses, tool execution, and compaction still take time.
 
-### 智能缓存（Intelligent Caching）
+### Intelligent Caching
 
-三级提示词缓存系统（`src/services/api/claude.ts:3213-3237`）：
+Three-level prompt caching system (`src/services/api/claude.ts:3213-3237`):
 
 ```
-Global Cache（跨组织）    ← 静态系统提示词
+Global Cache (cross-org)      ← Static system prompt
   ↓
-Ephemeral Cache（会话级） ← 动态系统提示词
+Ephemeral Cache (session)     ← Dynamic system prompt
   ↓
-Section Cache（轮级）     ← systemPromptSection 记忆化
+Section Cache (per-turn)      ← systemPromptSection memoization
 ```
 
-这大幅降低了每次 API 调用的延迟和成本。
+This dramatically reduces latency and cost for every API call.
 
-### 优雅降级（Graceful Degradation）
+### Graceful Degradation
 
-运行时提供多种恢复路径，实际能否继续取决于错误类型、配置和重试限制：
+The runtime provides several recovery paths. Whether work can continue depends on the error type, configuration, and retry limits:
 
-- Token 超限？自动压缩
-- API 超时？自动重试
-- 模型失败？降级到备用模型
-- 工具失败？记录错误，继续对话
+- Token overflow? Auto-compress
+- API timeout? Auto-retry
+- Model failure? Fall back to alternate model
+- Tool failure? Log error, continue conversation
 
-### 最小抽象原则（Minimal Abstraction）
+### Minimal Abstraction Principle
 
-与 LangChain 的"万物皆抽象"不同，Claude Code 的核心只有：
-- **一个循环**（`while (true)` in `query()`）
-- **一个状态**（`State` 对象）
-- **一个接口**（`Tool` 类型）
+Unlike LangChain's "abstract everything" philosophy, Claude Code's core has only:
+- **One loop** (`while (true)` in `query()`)
+- **One state** (`State` object)
+- **One interface** (`Tool` type)
 
-没有 Agent → AgentExecutor → Chain → Memory → Callback 的嵌套抽象层。这使得代码**易于理解、调试和扩展**。
+No Agent → AgentExecutor → Chain → Memory → Callback nesting layers. This makes the code **easy to understand, debug, and extend**.
 
-### 原生 API 集成（Native API Integration）
+### Native API Integration
 
-Claude Code 直接使用 Anthropic API 的原生能力：
-- **原生工具调用**：无需 OutputParser，直接使用 `tool_use` 块
-- **原生流式传输**：无需包装层，直接消费 SSE 流
-- **原生缓存**：利用 API 的 prompt caching 特性
-- **原生思维链**：直接使用 extended thinking
+Claude Code directly leverages Anthropic API's native capabilities:
+- **Native tool calling**: No OutputParser needed, directly uses `tool_use` blocks
+- **Native streaming**: No wrapper layers, directly consumes SSE streams
+- **Native caching**: Leverages API's prompt caching feature
+- **Native chain-of-thought**: Directly uses extended thinking
 
-这避免了"框架税"——LangChain 等框架在 LLM 和开发者之间增加的抽象层。
+This avoids the "framework tax" — the abstraction layer that frameworks like LangChain add between the LLM and the developer.
 
-### 工具驱动的 Agent（Tool-Driven Agent）
+### Tool-Driven Agent
 
-工具接口为模型提供执行操作的入口：
+Tool interfaces give the model entry points for taking action:
 
-- 子 Agent 生成？是一个工具（`AgentTool`）
-- 团队管理？是一个工具（`TeamCreate`/`SendMessage`）
-- 文件编辑？是一个工具（`FileEdit`）
-- 技能执行？是一个工具（`SkillTool`）
+- Spawn a subagent? That's a tool (`AgentTool`)
+- Manage a team? That's a tool (`TeamCreate`/`SendMessage`)
+- Edit a file? That's a tool (`FileEdit`)
+- Execute a skill? That's a tool (`SkillTool`)
 
-模型根据任务和上下文选择工具；运行时负责工具调度、权限检查和状态更新。工具决定可执行的操作范围，模型与提示词影响如何选择、组合和验证这些操作。
+The model selects tools based on the task and context; the runtime handles scheduling, permission checks, and state updates. Tools define the available actions, while the model and prompts affect how those actions are selected, combined, and verified.
 
-### 深度集成的开发体验
+### Deep Developer Experience Integration
 
-Claude Code 不是"通用 Agent + 代码插件"，而是**从底层为编码场景深度优化**：
+Claude Code isn't "generic agent + code plugin" — it's **deeply optimized for coding scenarios from the ground up**:
 
-- **Git 感知**：自动注入 git 状态，理解分支、提交、diff
-- **文件系统感知**：理解项目结构，智能搜索文件
-- **Worktree 隔离**：安全的实验性修改环境
-- **LSP 集成**：语言服务器协议提供类型信息和诊断
-- **MCP 生态**：通过标准协议连接各种外部工具
+- **Git-aware**: Automatically injects git status, understands branches, commits, diffs
+- **Filesystem-aware**: Understands project structure, intelligently searches files
+- **Worktree isolation**: Safe experimental modification environments
+- **LSP integration**: Language Server Protocol provides type information and diagnostics
+- **MCP ecosystem**: Connects to various external tools via standard protocol
 
-## 核心组件关系
+## Core Component Relationships
 
 ```
-用户输入
+User Input
   │
   ▼
-QueryEngine（src/QueryEngine.ts）
+QueryEngine (src/QueryEngine.ts)
   │
-  ├─ 构建系统提示词（prompts.ts + context.ts + claudemd.ts）
-  ├─ 组装工具池（tools.ts + MCP）
+  ├─ Build system prompt (prompts.ts + context.ts + claudemd.ts)
+  ├─ Assemble tool pool (tools.ts + MCP)
   │
   ▼
-query() 异步生成器循环（src/query.ts）
+query() async generator loop (src/query.ts)
   │
-  ├─ 阶段1: 消息压缩（snip → micro → collapse → compact）
-  ├─ 阶段2: 流式 API 调用（callModel + StreamingToolExecutor）
-  ├─ 阶段3: 决策点（继续 or 完成）
-  ├─ 阶段4: 工具编排（并行只读 + 串行写入）
-  └─ 阶段5: 状态更新（state = next → continue）
+  ├─ Phase 1: Message compression (snip → micro → collapse → compact)
+  ├─ Phase 2: Streaming API call (callModel + StreamingToolExecutor)
+  ├─ Phase 3: Decision point (continue or complete)
+  ├─ Phase 4: Tool orchestration (parallel read-only + serial write)
+  └─ Phase 5: State update (state = next → continue)
        │
-       ├─ 恢复策略（6种）
-       ├─ 钩子系统（PreToolUse / PostToolUse / Stop / ...）
-       └─ 子代理生成（AgentTool → runAgent → 新的 query() 实例）
+       ├─ Recovery strategies (6 types)
+       ├─ Hook system (PreToolUse / PostToolUse / Stop / ...)
+       └─ Subagent spawning (AgentTool → runAgent → new query() instance)
             │
-            ├─ 同步前台
-            ├─ 异步后台（LocalAgentTask）
-            ├─ Fork（继承上下文）
-            └─ Teammate（邮箱通信）
+            ├─ Synchronous foreground
+            ├─ Async background (LocalAgentTask)
+            ├─ Fork (inherit context)
+            └─ Teammate (mailbox communication)
 ```
 
-## 关键源文件索引
+## Key Source File Index
 
-| 组件 | 文件路径 | 说明 |
-|------|----------|------|
-| 核心循环 | `src/query.ts` | Agent 主循环（~1730 行） |
-| 查询引擎 | `src/QueryEngine.ts` | 高层封装 |
-| 工具定义 | `src/Tool.ts` | Tool 类型系统（~792 行） |
-| 工具注册 | `src/tools.ts` | 工具发现和注册（~389 行） |
-| 工具执行 | `src/services/tools/toolExecution.ts` | 执行管道 |
-| 工具编排 | `src/services/tools/toolOrchestration.ts` | 并行/串行策略 |
-| 系统提示词 | `src/constants/prompts.ts` | 提示词组装 |
-| 提示词 Sections | `src/constants/systemPromptSections.ts` | 分段缓存 |
-| 上下文管理 | `src/context.ts` | 系统/用户上下文 |
-| CLAUDE.md | `src/utils/claudemd.ts` | 用户指令加载 |
-| 记忆系统 | `src/memdir/memdir.ts` | 持久化记忆 |
-| Agent 生成 | `src/tools/AgentTool/AgentTool.tsx` | Agent 工具入口 |
-| Agent 运行 | `src/tools/AgentTool/runAgent.ts` | Agent 执行逻辑 |
-| Fork Agent | `src/tools/AgentTool/forkSubagent.ts` | Fork 缓存优化 |
-| 团队管理 | `src/utils/swarm/teamHelpers.ts` | Teams 基础设施 |
-| 邮箱通信 | `src/utils/teammateMailbox.ts` | 异步消息队列 |
-| 技能系统 | `src/skills/bundledSkills.ts` | 技能注册与管理 |
-| 插件系统 | `src/plugins/builtinPlugins.ts` | 插件框架 |
-| 钩子系统 | `src/utils/hooks/hooksConfigManager.ts` | 钩子管理 |
-| 权限系统 | `src/utils/permissions/permissions.ts` | 权限检查 |
-| 状态管理 | `src/state/AppStateStore.ts` | 全局状态 |
-| 成本追踪 | `src/cost-tracker.ts` | API 成本计算 |
-| API 客户端 | `src/services/api/claude.ts` | Anthropic API 封装 |
-| MCP 客户端 | `src/services/mcp/client.ts` | MCP 协议实现 |
-| 协调者模式 | `src/coordinator/coordinatorMode.ts` | 多 Agent 编排 |
-| 远程会话 | `src/remote/RemoteSessionManager.ts` | CCR 连接管理 |
-| Bridge | `src/bridge/bridgeMain.ts` | 远程桥接 |
+| Component | File Path | Description |
+|-----------|-----------|-------------|
+| Core Loop | `src/query.ts` | Main agent loop (~1730 lines) |
+| Query Engine | `src/QueryEngine.ts` | High-level wrapper |
+| Tool Definition | `src/Tool.ts` | Tool type system (~792 lines) |
+| Tool Registry | `src/tools.ts` | Tool discovery and registration (~389 lines) |
+| Tool Execution | `src/services/tools/toolExecution.ts` | Execution pipeline |
+| Tool Orchestration | `src/services/tools/toolOrchestration.ts` | Parallel/serial strategy |
+| System Prompt | `src/constants/prompts.ts` | Prompt assembly |
+| Prompt Sections | `src/constants/systemPromptSections.ts` | Section caching |
+| Context Management | `src/context.ts` | System/user context |
+| CLAUDE.md | `src/utils/claudemd.ts` | User instruction loading |
+| Memory System | `src/memdir/memdir.ts` | Persistent memory |
+| Agent Spawning | `src/tools/AgentTool/AgentTool.tsx` | Agent tool entry point |
+| Agent Execution | `src/tools/AgentTool/runAgent.ts` | Agent execution logic |
+| Fork Agent | `src/tools/AgentTool/forkSubagent.ts` | Fork cache optimization |
+| Team Management | `src/utils/swarm/teamHelpers.ts` | Teams infrastructure |
+| Mailbox Communication | `src/utils/teammateMailbox.ts` | Async message queue |
+| Skills System | `src/skills/bundledSkills.ts` | Skill registration and management |
+| Plugin System | `src/plugins/builtinPlugins.ts` | Plugin framework |
+| Hook System | `src/utils/hooks/hooksConfigManager.ts` | Hook management |
+| Permission System | `src/utils/permissions/permissions.ts` | Permission checking |
+| State Management | `src/state/AppStateStore.ts` | Global state |
+| Cost Tracking | `src/cost-tracker.ts` | API cost calculation |
+| API Client | `src/services/api/claude.ts` | Anthropic API wrapper |
+| MCP Client | `src/services/mcp/client.ts` | MCP protocol implementation |
+| Coordinator Mode | `src/coordinator/coordinatorMode.ts` | Multi-agent orchestration |
+| Remote Sessions | `src/remote/RemoteSessionManager.ts` | CCR connection management |
+| Bridge | `src/bridge/bridgeMain.ts` | Remote bridge |
 
-## 进一步阅读
+## Further Reading
 
-- [使用指南](./agent.md) — 面向用户的多 Agent 使用手册
-- [实现原理](./agent-internals.md) — 多 Agent 编排的技术细节
-- [Anthropic API 文档](https://docs.anthropic.com/) — 原生 API 能力
-- [MCP 协议规范](https://modelcontextprotocol.io/) — 模型上下文协议
+- [Usage Guide](./agent.md) — User-facing multi-agent manual
+- [Implementation Details](./agent-internals.md) — Technical deep dive into multi-agent orchestration
+- [Anthropic API Docs](https://docs.anthropic.com/) — Native API capabilities
+- [MCP Protocol Spec](https://modelcontextprotocol.io/) — Model Context Protocol

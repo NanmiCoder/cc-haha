@@ -24,9 +24,9 @@ import { createLiveActivity, type LiveActivityEnvironment } from 'expo-widgets'
 import type { TaskActivityProps } from './activityData'
 
 /**
- * 锁屏实时活动与灵动岛（LockScreen 稿）。'widget' 函数会被序列化后在扩展里执行，
- * 只能用 props、environment 和 @expo/ui 的全局组件；文案都在 activityData 里算好。
- * 电脑端 APNs 推送只带基础字段，新字段缺失时这里兜底。
+ * Lock screen Live Activity and Dynamic Island (LockScreen design). The 'widget' function is serialized and run in the extension, 
+ * so it can only use props, environment and @expo/ui global components; all text is computed in activityData.
+ * Desktop APNs pushes carry only basic fields, so missing new fields are backfilled here.
  */
 const TaskActivity = (
   props: TaskActivityProps,
@@ -48,12 +48,12 @@ const TaskActivity = (
   const completed = !stale && props.status === 'completed'
   const failed = !stale && props.status === 'failed'
   const tone = waiting ? attn : running ? run : completed ? ok : failed ? err : ink3
-  const label = stale ? '状态待更新' : props.label || '需要你决定'
-  const detail = stale ? '打开 App 重新连接' : props.detail
+  const label = stale ? 'Status pending update' : props.label || 'Needs your decision'
+  const detail = stale ? 'Open the app to reconnect' : props.detail
   const summary =
-    props.summary || (completed ? '完成' : failed ? '出错停下' : '')
+    props.summary || (completed ? 'Done' : failed ? 'Stopped with error' : '')
   const others = Math.max(0, props.activeCount - (completed || failed ? 0 : 1))
-  const othersText = others > 0 ? `还有 ${others} 个任务在跑` : ''
+  const othersText = others > 0 ? `${others} more tasks running` : ''
   const footer = othersText ? `${props.hostName} · ${othersText}` : props.hostName
   const canAnswer = waiting && Boolean(props.allowUrl && props.denyUrl)
   const started =
@@ -110,11 +110,11 @@ const TaskActivity = (
   )
   const actions = canAnswer ? (
     <HStack spacing={8}>
-      {pill('拒绝', props.denyUrl!, false)}
-      {pill('允许', props.allowUrl!, true)}
+      {pill('Deny', props.denyUrl!, false)}
+      {pill('Allow', props.allowUrl!, true)}
     </HStack>
   ) : waiting || stale ? (
-    pill(stale ? '打开 App' : props.actionLabel || '打开 App 处理', props.openUrl, false)
+    pill(stale ? 'Open App' : props.actionLabel || 'Open the app to handle', props.openUrl, false)
   ) : null
   const titleText = (size: number) => (
     <Text
@@ -205,13 +205,13 @@ const TaskActivity = (
       </VStack>
     )
   const compactText = stale
-    ? '待更新'
+    ? 'Pending update'
     : waiting
-      ? '等你'
+      ? 'Waiting'
       : completed
-        ? '完成'
+        ? 'Done'
         : failed
-          ? '出错'
+          ? 'Error'
           : String(props.activeCount)
   return {
     banner,

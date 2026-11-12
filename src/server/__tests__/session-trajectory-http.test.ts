@@ -1,5 +1,5 @@
 /**
- * Route-level contract for the trajectory (轨迹) ledger: bounded tail/older
+ * Route-level contract for the trajectory ledger: bounded tail/older
  * pages, live appends validated by an opaque tail token, per-row detail by
  * byte locator, prompt snapshot rows from the sidecar, and a guard that the
  * chat `/messages` surface is unaffected.

@@ -24,7 +24,7 @@ export function ImagePreview({ images, initialIndex, onClose }: ImagePreviewProp
   const Footer = useCallback(({ imageIndex }: { imageIndex: number }) => (
     <View>
       {failed && imageIndex === selectedIndex ? <ImagePreviewError onRetry={() => { setOpening((previous) => ({ ...previous, index: selectedIndex })); retry() }} /> : null}
-      <ImagePreviewNavigation index={imageIndex} count={images.length} onSelect={select} hint={images.length > 1 ? '双指缩放 · 双击放大 · 左右滑动切图' : '双指缩放 · 双击放大'} />
+      <ImagePreviewNavigation index={imageIndex} count={images.length} onSelect={select} hint={images.length > 1 ? 'Pinch to zoom · double-tap to zoom in · swipe to switch images' : 'Pinch to zoom · double-tap to zoom in'} />
     </View>
   ), [failed, images.length, retry, select, selectedIndex])
   if (!images.length) return null

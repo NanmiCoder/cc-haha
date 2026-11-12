@@ -280,7 +280,7 @@ describe('buildOpenWithItems – file context with targets', () => {
 
   it('names the file manager after the platform, not after the server label', () => {
     // The server label is a bare identifier with no locale behind it, so
-    // interpolating it produced "在 Explorer 中显示" on Windows — an English name
+    // interpolating it produced a localized "Show in Explorer" on Windows — an English name
     // inside a Chinese sentence, and not the name Windows uses.
     const deps = makeDeps()
     const ctx: OpenWithContext = { kind: 'file', absolutePath: '/w/app.py', relPath: 'app.py', previewable: true }

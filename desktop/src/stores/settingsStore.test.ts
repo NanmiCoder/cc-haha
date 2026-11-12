@@ -30,51 +30,22 @@ describe('settingsStore locale defaults', () => {
     delete window.desktopHost
   })
 
-  it.each([
-    ['en-GB', 'en'],
-    ['zh-CN', 'zh'],
-    ['zh-SG', 'zh'],
-    ['zh-Hant', 'zh-TW'],
-    ['zh-HK', 'zh-TW'],
-    ['ja-JP', 'jp'],
-    ['ko-KR', 'kr'],
-  ] as const)('maps the system language %s to %s', async (systemLanguage, expectedLocale) => {
+  it.each(['en-GB', 'zh-CN', 'zh-Hant', 'ja-JP', 'ko-KR', 'fr-FR'])('uses English for the system language %s', async (systemLanguage) => {
     mockSystemLanguages([systemLanguage])
-
-    const { useSettingsStore } = await import('./settingsStore')
-
-    expect(useSettingsStore.getState().locale).toBe(expectedLocale)
-  })
-
-  it('uses the first supported language in the system preference list', async () => {
-    mockSystemLanguages(['fr-FR', 'ja-JP', 'en-US'])
-
-    const { useSettingsStore } = await import('./settingsStore')
-
-    expect(useSettingsStore.getState().locale).toBe('jp')
-  })
-
-  it('defaults to English when no system language is supported', async () => {
-    mockSystemLanguages(['fr-FR', 'de-DE'])
 
     const { useSettingsStore } = await import('./settingsStore')
 
     expect(useSettingsStore.getState().locale).toBe('en')
   })
 
-  it('keeps a stored locale override', async () => {
+  it('ignores a locale stored by an older build', async () => {
     mockSystemLanguages(['en-US'])
     window.localStorage.setItem('cc-haha-locale', 'zh-TW')
 
     const { useSettingsStore } = await import('./settingsStore')
 
-    expect(useSettingsStore.getState().locale).toBe('zh-TW')
-    expect(document.documentElement.lang).toBe('zh-TW')
-
-    useSettingsStore.getState().setLocale('jp')
-
-    expect(window.localStorage.getItem('cc-haha-locale')).toBe('jp')
-    expect(document.documentElement.lang).toBe('ja')
+    expect(useSettingsStore.getState().locale).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
   })
 
   it('persists a manual desktop choice and restores it after a simulated restart', async () => {
@@ -91,19 +62,19 @@ describe('settingsStore locale defaults', () => {
     }
 
     const firstLoad = await import('./settingsStore')
-    firstLoad.useSettingsStore.getState().setLocale('jp')
+    firstLoad.useSettingsStore.getState().setLocale('en')
 
     await vi.waitFor(() => {
-      expect(setLocalePreference).toHaveBeenCalledWith('jp')
+      expect(setLocalePreference).toHaveBeenCalledWith('en')
     })
-    expect(window.localStorage.getItem('cc-haha-locale')).toBe('jp')
+    expect(window.localStorage.getItem('cc-haha-locale')).toBe('en')
 
     vi.resetModules()
     mockSystemLanguages(['ko-KR'])
     const restarted = await import('./settingsStore')
 
-    expect(restarted.useSettingsStore.getState().locale).toBe('jp')
-    expect(document.documentElement.lang).toBe('ja')
+    expect(restarted.useSettingsStore.getState().locale).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
   })
 
   it('keeps the local choice when desktop persistence fails', async () => {
@@ -121,7 +92,7 @@ describe('settingsStore locale defaults', () => {
     }
 
     const { useSettingsStore } = await import('./settingsStore')
-    useSettingsStore.getState().setLocale('kr')
+    useSettingsStore.getState().setLocale('en')
 
     await vi.waitFor(() => {
       expect(consoleError).toHaveBeenCalledWith(
@@ -129,8 +100,8 @@ describe('settingsStore locale defaults', () => {
         persistenceError,
       )
     })
-    expect(useSettingsStore.getState().locale).toBe('kr')
-    expect(window.localStorage.getItem('cc-haha-locale')).toBe('kr')
+    expect(useSettingsStore.getState().locale).toBe('en')
+    expect(window.localStorage.getItem('cc-haha-locale')).toBe('en')
   })
 
   it('applies a locale event from another desktop window', async () => {
@@ -154,10 +125,10 @@ describe('settingsStore locale defaults', () => {
     const { initializeLocale } = await import('../i18n/locale')
     await initializeLocale(window.desktopHost.app)
 
-    emitLocale?.('zh-TW')
+    emitLocale?.('en')
 
-    expect(useSettingsStore.getState().locale).toBe('zh-TW')
-    expect(document.documentElement.lang).toBe('zh-TW')
+    expect(useSettingsStore.getState().locale).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
   })
 })
 

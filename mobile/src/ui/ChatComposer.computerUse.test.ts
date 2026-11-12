@@ -31,11 +31,11 @@ test('computer-use chips belong to the current message, clear with references an
     mock.module(${JSON.stringify(import.meta.resolve('../core/useVoiceDictation'))}, () => ({ useVoiceDictation: () => ({ phase: 'idle', live: false, issue: null, pendingText: null }) }))
     const { ChatComposer } = require(${JSON.stringify(import.meta.resolve('./ChatComposer'))})
     const props = {
-      draft: '检查这个页面', onDraft: () => {}, references: [], onReferences: value => { props.references = value },
+      draft: 'Check this page', onDraft: () => {}, references: [], onReferences: value => { props.references = value },
       attachments: [], onAttachments: () => {}, team: false, onTeam: () => {},
       computer: { enabled: true, toggle: () => mutations++ },
       lean: false, empty: false, busy: false, disabled: false,
-      run: { label: '测试模型', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
+      run: { label: 'Test model', risk: 'normal' }, onOpenRun: () => {}, onSend: () => {}, onError: () => {},
     }
     const flatten = node => {
       if (Array.isArray(node)) return node.flatMap(flatten)
@@ -45,13 +45,13 @@ test('computer-use chips belong to the current message, clear with references an
     }
     const render = () => { cursor = 0; return flatten(ChatComposer(props)) }
     let nodes = render()
-    assert.equal(nodes.some(node => node.props?.children === '操作电脑'), false, 'global consent alone must not leave a permanent chip in an empty selection')
+    assert.equal(nodes.some(node => node.props?.children === 'Computer use'), false, 'global consent alone must not leave a permanent chip in an empty selection')
     nodes.find(node => node.type === 'BringSheet').props.onComputerSelected(true)
     nodes = render()
     assert.equal(props.references.length, 1)
     assert.equal(props.references[0].id, 'computer-use')
     assert.equal(props.references[0].modelText, 'Use the Skill tool with skill: "computer-use" for this request.')
-    const remove = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === '移除 操作电脑')
+    const remove = nodes.find(node => node.type === 'Pressable' && node.props.accessibilityLabel === 'Remove computer use')
     assert.ok(remove)
     remove.props.onPress()
     assert.equal(props.references.length, 0)
@@ -61,9 +61,9 @@ test('computer-use chips belong to the current message, clear with references an
     assert.equal(props.references.length, 1, 'an already authorized computer can be chosen for the next message')
     // The chat page clears references after either sending or queueing, and
     // preserves them after a failed send. The composer must follow that state.
-    assert.ok(render().some(node => node.props?.children === '操作电脑'))
+    assert.ok(render().some(node => node.props?.children === 'Computer use'))
     props.references = []
-    assert.equal(render().some(node => node.props?.children === '操作电脑'), false)
+    assert.equal(render().some(node => node.props?.children === 'Computer use'), false)
     assert.equal(props.computer.enabled, true)
     assert.equal(mutations, 0)
   `

@@ -112,14 +112,14 @@ test('native connectors without a display name get their Chinese name, others ke
   const list = normalizeConnectors({
     items: [
       { id: 'feishu', supported: true },
-      { id: 'github', displayName: 'GitHub', description: '检索仓库代码。', supported: true },
+      { id: 'github', displayName: 'GitHub', description: 'Search repository code.', supported: true },
       { id: 'unknown-service', supported: true },
     ],
   })!
   expect(list.map((item) => [item.id, item.displayName])).toEqual([
-    ['feishu', '飞书'],
+    ['feishu', 'Feishu'],
     ['github', 'GitHub'],
     ['unknown-service', undefined],
   ])
-  expect(list[0].description).toBe('管理飞书文档、日历与办公协作。')
+  expect(list[0].description).toBe('Manage Feishu docs, calendar and office collaboration.')
 })

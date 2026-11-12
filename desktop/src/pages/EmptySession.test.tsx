@@ -1508,11 +1508,11 @@ describe('EmptySession', () => {
 
     render(<EmptySession />)
 
-    setComposerText('@backend 讲一下这个目录。', '@backend'.length)
+    setComposerText('@backend explain this directory.', '@backend'.length)
     fireEvent.click(await screen.findByRole('option', { name: /backend/i }))
 
     await waitFor(() => {
-      expect(getComposerText()).toBe('@backend/ 讲一下这个目录。')
+      expect(getComposerText()).toBe('@backend/ explain this directory.')
     })
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@backend/')
 
@@ -1523,7 +1523,7 @@ describe('EmptySession', () => {
     })
     expect(mocks.wsSend).toHaveBeenCalledWith('draft-session', {
       type: 'user_message',
-      content: '@"/workspace/project/backend" 讲一下这个目录。',
+      content: '@"/workspace/project/backend" explain this directory.',
       attachments: [],
     })
     expect(getComposerText()).toBe('')

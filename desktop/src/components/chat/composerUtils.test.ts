@@ -337,14 +337,14 @@ describe('composerUtils', () => {
   it('uses the localized description when the translation key resolves to a real string', () => {
     const mockT = (key: string) => {
       const map: Record<string, string> = {
-        'slashCmd.context.description': '当前上下文用量',
+        'slashCmd.context.description': 'Current context usage',
       }
       return map[key] ?? key
     }
 
     const commands = getLocalizedFallbackCommands(mockT)
     const contextCmd = commands.find((c) => c.name === 'context')
-    expect(contextCmd?.description).toBe('当前上下文用量')
+    expect(contextCmd?.description).toBe('Current context usage')
 
     // A command without a translated key should still fall back to English
     const mcpCmd = commands.find((c) => c.name === 'mcp')

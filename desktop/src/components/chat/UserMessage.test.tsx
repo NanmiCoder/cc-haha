@@ -121,17 +121,6 @@ describe('UserMessage', () => {
     expect(screen.getByRole('link', { name: longUrl }).className).toContain('[overflow-wrap:anywhere]')
   })
 
-  // The copy label was a hardcoded "Copy prompt" literal, so it stayed English
-  // under every locale. English is also what `chat.copyPrompt` resolves to, so
-  // only a non-English locale can tell the wiring from the old literal.
-  it('translates the copy action label instead of hardcoding English', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-
-    render(<UserMessage content="把这条复制走" />)
-
-    expect(screen.getByRole('button', { name: '复制提示词' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Copy prompt' })).toBeNull()
-  })
 })
 
 // #1145. The prompt bubble rendered raw text, so a URL the user typed (or pasted
@@ -179,7 +168,7 @@ describe('UserMessage bare-URL linkify', () => {
 
   // Prompts are literal text: linkifying must not smuggle in markdown parsing.
   it('does not render markdown syntax in the prompt', () => {
-    const content = '改一下 **bold** 和 `code`，还有 # 标题 与 [x](y)'
+    const content = 'change **bold** and `code`, also # heading and [x](y)'
     const { container } = render(<UserMessage sessionId="s1" content={content} />)
 
     const bubble = bubbleOf(container)
@@ -191,7 +180,7 @@ describe('UserMessage bare-URL linkify', () => {
   })
 
   it('preserves line breaks around a linkified URL', () => {
-    const content = '第一行\n打开 http://localhost:3000\n第三行'
+    const content = 'Line one\nopen http://localhost:3000\nLine three'
     const { container } = render(<UserMessage sessionId="s1" content={content} />)
 
     expect(bubbleOf(container).textContent).toBe(content)
@@ -199,7 +188,7 @@ describe('UserMessage bare-URL linkify', () => {
   })
 
   it('renders no link when the prompt has no URL', () => {
-    const { container } = render(<UserMessage sessionId="s1" content={'把样式改一下'} />)
+    const { container } = render(<UserMessage sessionId="s1" content={'Tweak the styles'} />)
     expect(container.querySelectorAll('a')).toHaveLength(0)
   })
 
@@ -282,7 +271,7 @@ it('opens the exact referenced conversation from a source chip', () => {
 it('labels a collaboration delivery with its source session above a normal user bubble', () => {
   const open = vi.spyOn(useTabStore.getState(), 'openTab')
   const { container } = render(
-    <UserMessage content="只读发现：#1335 未复现" collaboration={{ sourceSessionId: 'root-1', messageId: 'm-1' }} />,
+    <UserMessage content="Read-only finding: #1335 does not reproduce" collaboration={{ sourceSessionId: 'root-1', messageId: 'm-1' }} />,
   )
 
   const label = screen.getByRole('button', { name: 'Sent by root-1 from another session' })
@@ -290,13 +279,13 @@ it('labels a collaboration delivery with its source session above a normal user 
   expect(open).toHaveBeenCalledWith('root-1', 'root-1')
   // Codex parity: the payload stays an ordinary right-aligned user bubble, not a panel row.
   expect(container.firstElementChild?.className).toContain('justify-end')
-  expect(bubbleOf(container).textContent).toBe('只读发现：#1335 未复现')
+  expect(bubbleOf(container).textContent).toBe('Read-only finding: #1335 does not reproduce')
   open.mockRestore()
 })
 
 describe('UserMessage capability pills', () => {
   const SKILL = 'Use the Skill tool with skill: "frontend-design" for this request.'
-  const TEAM_MODEL_CONTENT = withAgentTeamRequest(`${SKILL} 做个落地页`)
+  const TEAM_MODEL_CONTENT = withAgentTeamRequest(`${SKILL} build a landing page`)
 
   afterEach(() => {
     useSettingsStore.setState({ locale: 'en' })
@@ -310,7 +299,7 @@ describe('UserMessage capability pills', () => {
 
   it('shows the Agent Team switch as a read-only chip above the bubble', () => {
     useSettingsStore.setState({ locale: 'en' })
-    const { container } = render(<UserMessage content="@frontend-design 做个落地页" modelContent={TEAM_MODEL_CONTENT} />)
+    const { container } = render(<UserMessage content="@frontend-design build a landing page" modelContent={TEAM_MODEL_CONTENT} />)
     const chip = screen.getByTestId('agent-team-chip')
     expect(chip.textContent).toBe('Agent Teams')
     expect(bubbleOf(container).contains(chip)).toBe(false)
@@ -319,12 +308,12 @@ describe('UserMessage capability pills', () => {
 
   it('renders a live pill and its reloaded copy the same way', () => {
     // Live: the bubble text is the composer projection, the model text the sentence.
-    const live = render(<UserMessage content="@Frontend Design 做个落地页" modelContent={TEAM_MODEL_CONTENT} />)
+    const live = render(<UserMessage content="@Frontend Design build a landing page" modelContent={TEAM_MODEL_CONTENT} />)
     // Reload: history keeps the sentence in the text (no team block, no modelContent).
-    const reloaded = render(<UserMessage content={`${SKILL} 做个落地页`} />)
+    const reloaded = render(<UserMessage content={`${SKILL} build a landing page`} />)
     for (const { container } of [live, reloaded]) {
       expect(pills(container)).toEqual(['skill:@frontend-design'])
-      expect(bubbleOf(container).textContent).toBe('@frontend-design 做个落地页')
+      expect(bubbleOf(container).textContent).toBe('@frontend-design build a landing page')
       expect(bubbleOf(container).textContent).not.toContain('Use the Skill tool')
     }
     expect(reloaded.container.querySelector('[data-testid="agent-team-chip"]')).toBeNull()
@@ -335,27 +324,27 @@ describe('UserMessage capability pills', () => {
       + 'MCP server identities: ["plugin:amap:maps"]. Invoke skills using the Skill tool and use only tools currently '
       + 'available from these servers. If unavailable or authentication is required, report that; do not install or authenticate automatically.'
     useCapabilityCatalogStore.getState().remember([
-      { kind: 'plugin', id: 'amap@official', name: 'amap', displayName: '高德地图', description: '', source: 'amap@official', icon: '/connectors/amap.svg', modelText: PLUGIN },
+      { kind: 'plugin', id: 'amap@official', name: 'amap', displayName: 'Amap', description: '', source: 'amap@official', icon: '/connectors/amap.svg', modelText: PLUGIN },
       { kind: 'skill', id: 'frontend-design', name: 'frontend-design', displayName: 'Frontend Design', description: '', source: 'skills', modelText: SKILL },
     ])
     // Live (composer projection + model text) and reloaded (sentence only) agree.
-    const live = render(<UserMessage content="@Frontend Design 用 @高德地图 查路线" modelContent={`${SKILL} 用 ${PLUGIN} 查路线`} />)
-    const reloaded = render(<UserMessage content={`${SKILL} 用 ${PLUGIN} 查路线`} />)
+    const live = render(<UserMessage content="@Frontend Design use @Amap to find a route" modelContent={`${SKILL} use ${PLUGIN} to find a route`} />)
+    const reloaded = render(<UserMessage content={`${SKILL} use ${PLUGIN} to find a route`} />)
     for (const { container } of [live, reloaded]) {
-      expect(pills(container)).toEqual(['skill:@Frontend Design', 'plugin:@高德地图'])
+      expect(pills(container)).toEqual(['skill:@Frontend Design', 'plugin:@Amap'])
       const brand = bubbleOf(container).querySelector('[data-user-message-pill="plugin"] img')
       expect(brand?.getAttribute('src')).toMatch(/connectors\/amap\.svg$/)
     }
   })
 
   it('marks a leading slash command inside the bubble', () => {
-    const { container } = render(<UserMessage content="/commit 只提交 docs" />)
+    const { container } = render(<UserMessage content="/commit only commit docs" />)
     expect(pills(container)).toEqual(['command:/commit'])
-    expect(bubbleOf(container).textContent).toBe('/commit 只提交 docs')
+    expect(bubbleOf(container).textContent).toBe('/commit only commit docs')
   })
 
   it('leaves a plain prompt as plain text', () => {
-    const { container } = render(<UserMessage content="分析最近一个版本的commit" />)
+    const { container } = render(<UserMessage content="Analyze the latest release commits" />)
     expect(pills(container)).toEqual([])
     expect(screen.queryByTestId('agent-team-chip')).toBeNull()
   })

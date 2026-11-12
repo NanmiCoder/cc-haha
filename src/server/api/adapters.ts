@@ -1,8 +1,8 @@
 /**
- * Adapters API — IM Adapter 配置读写
+ * Adapters API — read/write IM adapter config
  *
- * GET  /api/adapters  → 返回配置（敏感字段脱敏）
- * PUT  /api/adapters  → 更新配置（浅合并），返回更新后的脱敏配置
+ * GET  /api/adapters  → returns config (sensitive fields masked)
+ * PUT  /api/adapters  → updates config (shallow merge), returns the updated masked config
  */
 
 import { adapterService, type AdapterFileConfig, type PairedUser } from '../services/adapterService.js'
@@ -397,7 +397,7 @@ type RegistrationBeginPayload = {
 
 /** Pre-filled on Feishu's confirmation page; the user can still edit both. */
 const FEISHU_REGISTRATION_APP_NAME = 'Claude Code Haha'
-const FEISHU_REGISTRATION_APP_DESC = '把飞书私聊接到本机的 Claude Code 会话。'
+const FEISHU_REGISTRATION_APP_DESC = 'Connect Feishu direct messages to Claude Code sessions on this computer.'
 
 const DINGTALK_REGISTRATION_BASE_URL =
   process.env.DINGTALK_REGISTRATION_BASE_URL?.trim() || 'https://oapi.dingtalk.com'

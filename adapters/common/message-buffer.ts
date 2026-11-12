@@ -1,8 +1,8 @@
 /**
- * 流式消息缓冲
+ * Streaming message buffer
  *
- * 将 content_delta 累积后按时间窗口或字符数批量 flush。
- * 用于 Telegram editMessage / 飞书流式卡片更新。
+ * Accumulates content_delta and flushes in batches by time window or character count.
+ * Used for Telegram editMessage / Feishu streaming card updates.
  */
 
 export type FlushCallback = (text: string, isComplete: boolean) => void | Promise<void>

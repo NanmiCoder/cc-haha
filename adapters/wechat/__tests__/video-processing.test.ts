@@ -50,8 +50,8 @@ describe('WeChat bounded video processing', () => {
     expect(result.frames.map(frame => frame.timestampMs)).toEqual([4166, 12500, 20833])
     expect(result.audioPath).toEndWith('audio.wav')
     expect(validateVoiceWav(await fs.readFile(result.audioPath!))).toEqual({ audioSeconds: 0.01 })
-    expect(result.coverageNote).toContain('未逐帧观看')
-    expect(result.coverageNote).toContain('需另行转写')
+    expect(result.coverageNote).toContain('not watched frame by frame')
+    expect(result.coverageNote).toContain('transcribed separately')
     expect(fake.calls.every(call => call.args.includes('file,pipe'))).toBe(true)
     const audio = fake.calls.at(-1)!.args
     expect(audio).toContain('16000')
@@ -81,15 +81,15 @@ describe('WeChat bounded video processing', () => {
   it('rejects long videos explicitly and cleans partial staging', async () => {
     const { root, source } = await fixture()
     const fake = fakeRunner({ duration: 121 })
-    await expect(processWechatVideo(source, { outputDir: root, run: fake.run })).rejects.toThrow('未被完整分析')
+    await expect(processWechatVideo(source, { outputDir: root, run: fake.run })).rejects.toThrow('not fully analyzed')
     expect(fake.calls).toHaveLength(1)
     expect(await fs.readdir(root)).toEqual([path.basename(source)])
   })
 
   it('rejects malformed metadata and incomplete frame output', async () => {
     const { root, source } = await fixture()
-    await expect(processWechatVideo(source, { outputDir: root, run: async () => 'null' })).rejects.toThrow('元数据')
-    await expect(processWechatVideo(source, { outputDir: root, run: fakeRunner({ corruptFrame: true }).run })).rejects.toThrow('抽帧')
+    await expect(processWechatVideo(source, { outputDir: root, run: async () => 'null' })).rejects.toThrow('metadata')
+    await expect(processWechatVideo(source, { outputDir: root, run: fakeRunner({ corruptFrame: true }).run })).rejects.toThrow('frame extraction')
     expect(await fs.readdir(root)).toEqual([path.basename(source)])
   })
 
@@ -102,7 +102,7 @@ describe('WeChat bounded video processing', () => {
       controller.abort()
       return output
     }
-    await expect(processWechatVideo(source, { outputDir: root, signal: controller.signal, run })).rejects.toThrow('取消')
+    await expect(processWechatVideo(source, { outputDir: root, signal: controller.signal, run })).rejects.toThrow('cancelled')
     expect(fake.calls).toHaveLength(1)
     expect(await fs.readdir(root)).toEqual([path.basename(source)])
   })
@@ -118,7 +118,7 @@ describe('WeChat bounded video processing', () => {
       throw new Error('fixture failure')
     } })
     await ready
-    await expect(processWechatVideo(source, { outputDir: root })).rejects.toThrow('另一个视频')
+    await expect(processWechatVideo(source, { outputDir: root })).rejects.toThrow('Another video')
     unblock()
     await expect(first).rejects.toThrow('fixture failure')
     const result = await processWechatVideo(source, { outputDir: root, run: fakeRunner().run })
@@ -132,18 +132,18 @@ describe('Video process runner', () => {
   })
 
   it('terminates timed-out processes', async () => {
-    await expect(runVideoCommand(process.execPath, ['--no-env-file', '-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 100 })).rejects.toThrow('超时')
+    await expect(runVideoCommand(process.execPath, ['--no-env-file', '-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 100 })).rejects.toThrow('timed out')
   })
 
   it('terminates a child on cancellation', async () => {
     const controller = new AbortController()
     const job = runVideoCommand(process.execPath, ['--no-env-file', '-e', 'setInterval(() => {}, 1000)'], { timeoutMs: 5000, signal: controller.signal })
     controller.abort()
-    await expect(job).rejects.toThrow('取消')
+    await expect(job).rejects.toThrow('cancelled')
   })
 
   it('bounds stdout and stderr instead of buffering untrusted tool output', async () => {
-    await expect(runVideoCommand(process.execPath, ['--no-env-file', '-e', 'console.log("x".repeat(70000))'], { timeoutMs: 5000 })).rejects.toThrow('输出超出限制')
+    await expect(runVideoCommand(process.execPath, ['--no-env-file', '-e', 'console.log("x".repeat(70000))'], { timeoutMs: 5000 })).rejects.toThrow('output exceeded the limit')
   })
 })
 

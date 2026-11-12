@@ -1,14 +1,12 @@
-export type Locale = 'en' | 'zh' | 'zh-TW' | 'jp' | 'kr'
+// The app ships English only. Older builds stored other locale codes; those
+// fail `isLocale` and resolve to English.
+export type Locale = 'en'
 
 export const LOCALE_STORAGE_KEY = 'cc-haha-locale'
 
-const VALID_LOCALES: readonly Locale[] = ['en', 'zh', 'zh-TW', 'jp', 'kr']
+const VALID_LOCALES: readonly Locale[] = ['en']
 const DOCUMENT_LANG: Record<Locale, string> = {
   en: 'en',
-  zh: 'zh-CN',
-  'zh-TW': 'zh-TW',
-  jp: 'ja',
-  kr: 'ko',
 }
 
 let initializedLocale: Locale | null = null
@@ -43,25 +41,7 @@ export function readBrowserLanguages(): string[] {
   }
 }
 
-function mapLanguageTag(languageTag: string): Locale | null {
-  const [language, ...subtags] = languageTag.trim().replace(/_/g, '-').toLowerCase().split('-')
-  if (language === 'en') return 'en'
-  if (language === 'ja') return 'jp'
-  if (language === 'ko') return 'kr'
-  if (language !== 'zh') return null
-
-  if (subtags.includes('hant')) return 'zh-TW'
-  if (subtags.includes('hans')) return 'zh'
-  return subtags.some(subtag => subtag === 'tw' || subtag === 'hk' || subtag === 'mo')
-    ? 'zh-TW'
-    : 'zh'
-}
-
-export function resolveSupportedLocale(languageTags: readonly string[]): Locale {
-  for (const languageTag of languageTags) {
-    const locale = mapLanguageTag(languageTag)
-    if (locale) return locale
-  }
+export function resolveSupportedLocale(_languageTags: readonly string[]): Locale {
   return 'en'
 }
 

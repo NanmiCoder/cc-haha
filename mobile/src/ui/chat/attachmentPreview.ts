@@ -31,7 +31,7 @@ export function attachmentImageSelection(
     const uri = attachmentImageUri(attachment)
     return uri ? [{
       id: attachment.id || `attachment-${index}`,
-      name: attachment.name || `图片 ${index + 1}`,
+      name: attachment.name || `Image ${index + 1}`,
       uri,
       attachmentIndex: index,
     }] : []

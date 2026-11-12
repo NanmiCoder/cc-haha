@@ -47,7 +47,7 @@ export default function Home() {
   const { host, error: credentialError, credentialIssue } = useConnection()
   const { snapshot, loading, fresh, error, failure, refresh } = useDashboard()
   const [searching, setSearching] = useState(false)
-  // 状态筛选、项目展开都只在内存里，并且跟着电脑走：换电脑后回到默认。
+  // Status filters and project expansion are in memory only and follow the computer: switching computers resets to defaults.
   const [view, setView] = useState<{
     hostId: string
     filter: HomeFilter
@@ -58,7 +58,7 @@ export default function Home() {
   const expanded = useMemo(() => mine?.expanded ?? {}, [mine])
   const shown = useMemo(() => mine?.shown ?? {}, [mine])
   const link = hostLink({ host, fresh, failure, credentialError, credentialIssue })
-  // 电脑卡状态行的模型名 / 配对到期：只在电脑连得上时读。
+  // Model name / pairing expiry in the computer card status row: read only when the computer is reachable.
   const cardInfo = useHostCardInfo(link === 'online' || link === 'slow')
 
   const grouped = useMemo(
@@ -99,7 +99,7 @@ export default function Home() {
       pathname: '/chat/[id]',
       params: { id: row.session.id, host: host.id, ...params },
     })
-  // dir 是新任务页已有的参数：带上就把工作目录预选为这个项目。
+  // dir An existing new-task page param: when present, preselect this project as the working directory.
   const newTask = (dir?: string) =>
     host &&
     router.push({
@@ -122,7 +122,7 @@ export default function Home() {
       </ScreenView>
     )
 
-  // 还没有电脑：整页是欢迎页，没有顶栏（≡ 和搜索在没有电脑时哪里也去不了）。
+  // No computer yet: the whole page is the welcome page with no header (≡ and search lead nowhere without a computer).
   if (ready && !host)
     return (
       <ScreenView>
@@ -146,7 +146,7 @@ export default function Home() {
             paddingHorizontal: 16,
           }}
         >
-          {/* 品牌只是标识，不可点；设置在右侧。 */}
+          {/* The brand is only a mark and not tappable; settings are on the right. */}
           <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
             <Logo size={35} />
             <Text
@@ -157,13 +157,13 @@ export default function Home() {
             </Text>
           </View>
           <FloatButton
-            label="搜索任务或项目"
+            label="Search tasks or projects"
             disabled={!host || disconnected}
             onPress={() => setSearching(true)}
           >
             <Icon name="search" size={20} color={colors.ink} strokeWidth={2} />
           </FloatButton>
-          <FloatButton label="设置" onPress={() => router.push('/settings')}>
+          <FloatButton label="Settings" onPress={() => router.push('/settings')}>
             <Icon name="settings" size={21} color={colors.ink} strokeWidth={1.9} />
           </FloatButton>
         </View>
@@ -211,7 +211,7 @@ export default function Home() {
                 <>
                   {all.length ? (
                     <View style={{ opacity: 0.72 }}>
-                      <SectionTitle>断开前的状态</SectionTitle>
+                      <SectionTitle>State before disconnect</SectionTitle>
                       {[
                         ...grouped.waiting,
                         ...grouped.running,
@@ -227,8 +227,8 @@ export default function Home() {
               ) : !all.length ? (
                 <EmptyState
                   icon="compose"
-                  title="还没有任务"
-                  detail="把下一件事交给电脑，在这里看它的进展。"
+                  title="No tasks yet"
+                  detail="Hand the next thing to your computer and watch its progress here."
                 />
               ) : (
                 <>
@@ -239,7 +239,7 @@ export default function Home() {
                       onChange={(value) => patch({ filter: value })}
                     />
                   ) : null}
-                  <SectionTitle>最近</SectionTitle>
+                  <SectionTitle>Recent</SectionTitle>
                   {recent.map((row) => (
                     <RecentRow
                       key={row.session.id}
@@ -248,7 +248,7 @@ export default function Home() {
                       onPress={() => open(row)}
                     />
                   ))}
-                  {groups.length || loose.length ? <SectionTitle bottom={4}>项目</SectionTitle> : null}
+                  {groups.length || loose.length ? <SectionTitle bottom={4}>Projects</SectionTitle> : null}
                   {groups.map((group) => {
                     const limit = shown[group.key] ?? projectPage
                     return (
@@ -285,7 +285,7 @@ export default function Home() {
                   })}
                   {loose.length ? (
                     <>
-                      <SectionTitle>其他</SectionTitle>
+                      <SectionTitle>Other</SectionTitle>
                       {loose.map((row) => (
                         <RecentRow
                           key={row.session.id}

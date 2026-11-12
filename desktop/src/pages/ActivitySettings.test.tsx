@@ -214,19 +214,8 @@ describe('ActivitySettings', () => {
     expect(screen.getByTestId('token-total-value')).toHaveTextContent('2.9')
     expect(screen.getByTestId('token-total-unit')).toHaveTextContent('M')
     expect(screen.getByText(/Total tokens · 20 active days/)).toBeInTheDocument()
-    // The exact figure and the other family's notation are one hover away.
-    expect(screen.getByTestId('token-total-value').closest('[title]')).toHaveAttribute('title', '2,864,000 · 286万')
-  })
-
-  it('counts in 万 for Chinese readers and keeps the exact figure on hover', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    render(<ActivitySettings />)
-
-    await flushActivityLoad()
-
-    expect(screen.getByTestId('token-total-value')).toHaveTextContent('286')
-    expect(screen.getByTestId('token-total-unit')).toHaveTextContent('万')
-    expect(screen.getByTestId('token-total-value').closest('[title]')).toHaveAttribute('title', '2,864,000 · 2.9M')
+    // The exact figure is one hover away.
+    expect(screen.getByTestId('token-total-value').closest('[title]')).toHaveAttribute('title', '2,864,000')
   })
 
   it('summarises the run as four plain figures', async () => {
@@ -368,7 +357,6 @@ describe('ActivitySettings', () => {
     await flushActivityLoad()
 
     expect(screen.getAllByText('May').length).toBeGreaterThan(0)
-    expect(screen.queryByText('5月')).not.toBeInTheDocument()
     // May 2026 starts in the final column, too late to fit its name.
     expect(screen.getByTestId('activity-month-labels').lastElementChild).toHaveTextContent('Apr')
 
@@ -451,28 +439,28 @@ describe('ActivitySettings', () => {
   })
 
   it('supports localized heatmap mode switches and persisted display name edits', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     render(<ActivitySettings />)
 
     await flushActivityLoad()
 
-    expect(screen.getByText('Token 活动')).toBeInTheDocument()
-    const modeGroup = screen.getByRole('radiogroup', { name: 'Token 活动' })
-    expect(within(modeGroup).getByRole('radio', { name: '每日' })).toHaveAttribute('aria-checked', 'true')
-    fireEvent.click(within(modeGroup).getByRole('radio', { name: '每周' }))
-    expect(within(modeGroup).getByRole('radio', { name: '每周' })).toHaveAttribute('aria-checked', 'true')
-    expect(within(modeGroup).getByRole('radio', { name: '每日' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByText('Token Activity')).toBeInTheDocument()
+    const modeGroup = screen.getByRole('radiogroup', { name: 'Token Activity' })
+    expect(within(modeGroup).getByRole('radio', { name: 'Daily' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(within(modeGroup).getByRole('radio', { name: 'Weekly' }))
+    expect(within(modeGroup).getByRole('radio', { name: 'Weekly' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(modeGroup).getByRole('radio', { name: 'Daily' })).toHaveAttribute('aria-checked', 'false')
     // Weekly mode relabels the cells as week ranges.
-    expect(screen.getAllByRole('gridcell', { name: /^2026年5月3日 - 2026年5月9日:/ }).length).toBeGreaterThan(0)
-    fireEvent.click(within(modeGroup).getByRole('radio', { name: '累计' }))
-    expect(within(modeGroup).getByRole('radio', { name: '累计' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getAllByRole('gridcell', { name: /^May 3, 2026 - May 9, 2026:/ }).length).toBeGreaterThan(0)
+    fireEvent.click(within(modeGroup).getByRole('radio', { name: 'Cumulative' }))
+    expect(within(modeGroup).getByRole('radio', { name: 'Cumulative' })).toHaveAttribute('aria-checked', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: '编辑个人资料' }))
-    const input = screen.getByLabelText('显示名称')
-    const displayName = '大厂程序员阿江的 Token 活动统计展示'
+    fireEvent.click(screen.getByRole('button', { name: 'Edit profile' }))
+    const input = screen.getByLabelText('Display name')
+    const displayName = 'A very long display name for the token activity card'
     fireEvent.change(input, { target: { value: displayName } })
-    fireEvent.change(screen.getByLabelText('第二行'), { target: { value: 'relakkes.dev' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    fireEvent.change(screen.getByLabelText('Second line'), { target: { value: 'relakkes.dev' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await flushActivityLoad()
 
@@ -551,8 +539,8 @@ describe('ActivitySettings', () => {
     expect(screen.getByAltText('cc-haha avatar')).toHaveAttribute('src', '/app-icon.png')
   })
 
-  it('shows localized duration and the Chinese streak figures', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+  it('shows the longest session duration and message count', async () => {
+    useSettingsStore.setState({ locale: 'en' })
     getStatsMock.mockResolvedValueOnce({
       ...activityResponse,
       longestSession: {
@@ -568,12 +556,12 @@ describe('ActivitySettings', () => {
 
     await flushActivityLoad()
 
-    expect(screen.getByText('1 小时 30 分钟')).toBeInTheDocument()
-    expect(screen.getByText('12 消息')).toBeInTheDocument()
+    expect(screen.getByText('1h 30m')).toBeInTheDocument()
+    expect(screen.getByText('12 Messages')).toBeInTheDocument()
   })
 
   it('shows the empty usage state with the identity but no charts', async () => {
-    useSettingsStore.setState({ locale: 'zh' })
+    useSettingsStore.setState({ locale: 'en' })
     getStatsMock.mockResolvedValueOnce({
       ...activityResponse,
       totalSessions: 0,
@@ -592,11 +580,11 @@ describe('ActivitySettings', () => {
 
     await flushActivityLoad()
 
-    expect(screen.getByText('暂无本地用量')).toBeInTheDocument()
+    expect(screen.getByText('No local usage yet')).toBeInTheDocument()
     expect(screen.getByTestId('token-total-value')).toHaveTextContent('0')
-    expect(screen.queryByRole('img', { name: /按模型统计的每日 Token/ })).not.toBeInTheDocument()
-    expect(screen.queryByText('Token 活动')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '分享图片' })).toBeDisabled()
+    expect(screen.queryByRole('img', { name: /Daily tokens by model/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('Token Activity')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Share image' })).toBeDisabled()
   })
 
   it('says so, instead of drawing an empty stream, when all usage is older than the 90-day window', async () => {

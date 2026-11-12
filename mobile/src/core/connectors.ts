@@ -1,13 +1,13 @@
 /**
- * 电脑上「连接器」目录在手机上的样子，规则和桌面输入框「＋」菜单一致
- * （desktop/src/components/chat/capabilityMenuModel.ts）：
- * 已连接、需要处理、推荐（固定名单，跳过已安装的）、其余。
- * 手机上不能安装也不能授权，这里只负责分类和展示。
+ * How the computer's Connectors directory looks on the phone; rules match the desktop input "+" menu
+ * (desktop/src/components/chat/capabilityMenuModel.ts): 
+ * connected, needs attention, recommended (fixed list, skipping installed), rest.
+ * The phone can neither install nor authorize; this only classifies and displays.
  */
 
 import { isPluginIdVisible } from './capabilityVisibility'
 
-/** 手机拿到的一个连接器：服务端对远程请求已经裁掉授权链接、错误原文和安装细节。 */
+/** A connector as received by the phone: the server already strips auth links, raw errors and install details for remote requests. */
 export type Connector = {
   id: string
   displayName?: string
@@ -22,11 +22,11 @@ export type Connector = {
   installed?: boolean
   enabled?: boolean
   accountLabel?: string
-  /** 正在安装或授权中：只有「有没有」有意义。 */
+  /** Installing or authorizing: only "whether there is one" matters. */
   operation?: { kind?: string; phase?: string }
 }
 
-/** 同桌面：推荐给还没添加的人，固定顺序；已安装的跳过，后面的顺位补上。 */
+/** Same as desktop: recommend to those who have not added them, in fixed order; skip installed ones and fill from the next. */
 export const SUGGESTED_CONNECTOR_IDS = [
   'github',
   'feishu',
@@ -46,12 +46,12 @@ export { isPluginIdVisible }
 const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
 const flag = (value: unknown) => (typeof value === 'boolean' ? value : undefined)
 
-/** `/api/connectors` 的返回体：不是 `{ items: [...] }`（接口不存在、被拦截后的错误体）就当作不可用。 */
-/** 电脑端对这三个原生连接器不发名称（桌面端用多语言文案显示），手机端用同样的中文名。 */
+/** `/api/connectors` response body: anything other than `{ items: [...] }` (missing endpoint, error body after being blocked) counts as unavailable. */
+/** The desktop server sends no names for these three native connectors (desktop shows localized copy); mobile uses the same English names. */
 const nativeNames: Record<string, { name: string; description: string }> = {
-  feishu: { name: '飞书', description: '管理飞书文档、日历与办公协作。' },
-  dingtalk: { name: '钉钉', description: '连接钉钉的日程与团队办公服务。' },
-  wecom: { name: '企业微信', description: '使用企业微信开展团队协作。' },
+  feishu: { name: 'Feishu', description: 'Manage Feishu docs, calendar and office collaboration.' },
+  dingtalk: { name: 'DingTalk', description: 'Connect DingTalk calendar and team office services.' },
+  wecom: { name: 'WeCom', description: 'Use WeCom for team collaboration.' },
 }
 
 export function normalizeConnectors(value: unknown): Connector[] | null {
@@ -88,14 +88,14 @@ export function normalizeConnectors(value: unknown): Connector[] | null {
   return connectors
 }
 
-/** 技能包也在目录里，但它们不是要连接的服务。 */
+/** Skill packages are also in the directory, but they are not services to connect. */
 export const isServiceConnector = (connector: Connector) =>
   connector.collection !== 'tools' && connector.transport !== 'skills'
 
 export const isVisibleConnector = (connector: Connector) =>
   connector.supported === true && isServiceConnector(connector) && isPluginIdVisible(connector.pluginId ?? '')
 
-/** 已安装、没有正在进行的操作、又没连上，而且是要授权或出错了。 */
+/** Installed, no operation in progress, not connected, and needs auth or errored. */
 export const connectorNeedsAttention = (connector: Connector) =>
   !!connector.installed &&
   !connector.operation &&
@@ -106,7 +106,7 @@ export type ConnectorSections = {
   connected: Connector[]
   attention: Connector[]
   suggested: Connector[]
-  /** 「浏览全部」展开后的其余连接器：上面三段没列出的。 */
+  /** Remaining connectors after expanding Browse all: those not listed in the three sections above. */
   rest: Connector[]
 }
 

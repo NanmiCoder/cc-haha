@@ -1,28 +1,28 @@
 ---
 name: release-announcement
-description: 从本项目最新的 release-notes Markdown 制作微信群发布短文案与竖版长图，核验贡献者 GitHub ID 并嵌入真实头像。用于版本发布宣传，不负责创建或发布 GitHub Release。
+description: Produce a short WeChat group announcement and a tall vertical poster from this project's latest release-notes Markdown, verifying contributor GitHub IDs and embedding their real avatars. Used for release promotion; does not create or publish GitHub Releases.
 ---
 
 # Release announcement
 
-在本仓库调用 `$release-announcement` 时，交付一张可发微信群的 PNG 长图和一段很短的群文案。默认使用 [版式与文案要求](references/editorial-brief.md)；用户另有要求时以用户要求为准。
+When `$release-announcement` is invoked in this repository, deliver one PNG long poster suitable for a WeChat group plus a very short group message. Use the [layout and copy requirements](references/editorial-brief.md) by default; if the user asks for something different, the user's request wins.
 
-调用方式：Codex 使用 `$release-announcement`；Claude Code Haha 的终端输入 `/release-announcement`。这两个工具都从项目的 `.agents/skills/` 读取同一份技能。
+Invocation: Codex uses `$release-announcement`; the Claude Code Haha terminal uses `/release-announcement`. Both tools read the same skill from the project's `.agents/skills/`.
 
-## 工作流
+## Workflow
 
-1. 在仓库根目录运行 `python3 .agents/skills/release-announcement/scripts/release_poster.py scan --repo . --out artifacts/release-posters/latest-scan.json`。它按语义版本比较工作区、当前 Git 历史、本地 `main` 和已有的 `origin/main`，不切换分支、不抓取远程。读取 JSON 中的中文发布说明、来源和 `@GitHubID` 提及；`credit_candidate` 仅表示有明确署名格式，仍需核对上下文。如果来源不是工作区文件，明确告知用户。
-   复测旧版本时加 `--version 0.6.6` 并使用独立输出路径，避免覆盖最新版本的 scan 结果。
-2. 仅依据该版本的中文 release note 提炼主要功能和关键修复；纯修复版的 `features` 留空，纯功能版的 `fixes` 留空，绝不为了填版式虚构内容。有重要模型或供应商更新时可加一个简短区块。每条信息必须能追溯到原文，压缩表述时保留条件和边界。安装提醒只写原文确有的信息。不要把英文译文重复计数。
-3. 对 `credit_candidate: true` 的账号逐个核对发布说明里的贡献项；普通 `@ID` 提及（例如 PR reviewer）不算代码署名。`render` 会通过 GitHub 公共用户 API 校验 ID 并下载真实头像；无法核验时停止并报告，不能臆造头像、错配姓名，不能让图像生成模型重绘头像。正式生成不能使用 `avatar_path` 跳过核验。
-4. 按 [数据格式](references/poster-spec.md) 写 `poster-spec.json`，版本必须与 scan 结果一致。`features` 按用户价值排序，第一项会放进橙色首屏作为「本版重点」；其余在纸色区单列编号，修复与贡献者在墨色收尾区。运行 `python3 .agents/skills/release-announcement/scripts/release_poster.py render --scan artifacts/release-posters/latest-scan.json --spec <poster-spec.json> --out <poster.png>`。建议输出到 `artifacts/release-posters/v<version>/`，保留已有文件，文件名加版本或修订号。此脚本使用固定的编辑式视觉系统绘制准确中文和头像；不要用 imagegen 绘制正文。
-5. 写一段适合微信群的短文案，保存为同目录的 `wechat-copy.txt`：版本号 + 1 句主要变化 + 1 句感谢，具体细节交给图片。有本次明确署名的贡献者时感谢代码贡献；没有时只感谢反馈与支持，不暗示本版有特定群友提交。文案不要宣称未核实的下载地址或公开发布状态，也不要自动向群发送。若需要下载入口，先检查对应 GitHub Release 是否存在。
-6. 打开原图和缩至 390px 宽的手机预览，检查首屏能否读到第一项功能、正文可读性、长标题与链接换行、头像和 ID 对应。纯修复版直接进入修复区，不出现空功能区。最后提供 PNG、短文案、所用 release note 来源和任何未核实项。生成物放在被 Git 忽略的 `artifacts/`，不要提交生成图、头像缓存或中间 JSON。
+1. From the repository root, run `python3 .agents/skills/release-announcement/scripts/release_poster.py scan --repo . --out artifacts/release-posters/latest-scan.json`. It compares the working tree, current Git history, local `main`, and any existing `origin/main` by semantic version, without switching branches or fetching from the remote. Read the release note body (`release_markdown`), source, and `@GitHubID` mentions from the JSON; `credit_candidate` only means an explicit credit format was found, so still check the context. If the source is not a working-tree file, tell the user explicitly.
+   When re-testing an older version, add `--version 0.6.6` and use a separate output path so you don't overwrite the latest scan result.
+2. Extract the main features and key fixes only from that version's release note. For a fixes-only release leave `features` empty; for a features-only release leave `fixes` empty. Never invent content to fill the layout. When there are important model or provider updates, you may add a short section. Every item must be traceable to the source text; when condensing, keep conditions and limits. Only include install reminders that actually appear in the source.
+3. For accounts with `credit_candidate: true`, check each one against the contribution items in the release note; ordinary `@ID` mentions (e.g. PR reviewers) are not code credits. `render` validates IDs through the public GitHub users API and downloads real avatars; if verification fails, stop and report. Never fabricate avatars, mismatch names, or let an image generation model redraw avatars. Production renders must not use `avatar_path` to skip verification.
+4. Write `poster-spec.json` following the [data format](references/poster-spec.md); the version must match the scan result. Order `features` by user value; the first item goes on the orange first screen under the "Highlight" label. The rest are listed in a numbered single column in the paper section, and fixes and contributors go in the ink closing section. Run `python3 .agents/skills/release-announcement/scripts/release_poster.py render --scan artifacts/release-posters/latest-scan.json --spec <poster-spec.json> --out <poster.png>`. Output to `artifacts/release-posters/v<version>/` is recommended; keep existing files and include the version or revision number in file names. This script draws accurate text and avatars with a fixed editorial visual system; do not use imagegen to draw body text.
+5. Write a short message suited to a WeChat group and save it as `wechat-copy.txt` in the same directory: version number + 1 sentence on the main change + 1 sentence of thanks, leaving details to the image. If this release has explicitly credited contributors, thank them for their code contributions; if not, only thank people for feedback and support, without implying specific group members submitted code to this release. The message must not claim unverified download links or public release status, and must not be sent to the group automatically. If a download link is needed, first check that the corresponding GitHub Release exists.
+6. Open the original image and a phone preview scaled to 390px wide. Check that the first feature is readable on the first screen, body text is legible, long titles and links wrap correctly, and avatars match IDs. A fixes-only release goes straight into the fixes section with no empty features section. Finally, provide the PNG, the short message, the release note source used, and any unverified items. Generated output belongs in the Git-ignored `artifacts/`; do not commit generated images, avatar caches, or intermediate JSON.
 
-## 图像与环境
+## Images and environment
 
-默认采用「瑞士大字」版式：信号橙首屏放产品名、超大版本号和本版重点，纸色区放其余功能与补充变化，墨色区收尾放修复、贡献者和安装提示，详见 [视觉规则](references/editorial-brief.md)。主要正文 36px，单列排版。默认不需要插画。用户明确想增加插画时，可用 imagegen 只生成无字装饰素材，再用脚本绘制全部文字与真实头像；不能让装饰占去首屏。
+The default layout is "Swiss bold type": a signal-orange first screen with the product name, an oversized version number, and the release highlight; a paper section with the remaining features and additional changes; and an ink closing section with fixes, contributors, and install notes. See the [visual rules](references/editorial-brief.md). Main body text is 36px in a single column. No illustrations by default. If the user explicitly wants an illustration, imagegen may generate only text-free decorative assets, with the script drawing all text and real avatars; decoration must not take over the first screen.
 
-`scan` 只用 Python 标准库；`render` 需要 Pillow 和可用的中文系统字体。缺依赖时先查看项目已有运行环境，不为一次制图修改生产依赖。GitHub 头像获取是公开只读请求；失败时给出具体账号和原因。
+`scan` uses only the Python standard library; `render` requires Pillow and a usable CJK-capable system font. If dependencies are missing, first look at the project's existing runtime environment; do not change production dependencies for a one-off render. Fetching GitHub avatars is a public read-only request; on failure, report the specific account and reason.
 
-修改模板后运行 `python3 -m unittest discover -s .agents/skills/release-announcement/scripts -p 'test_*.py' -v`（需要同样的 Pillow 和中文字体）。测试覆盖纯功能/纯修复、首项落在手机首屏、段落末行孤字、长文本与超长版本号边界、离线贡献者、文字重叠和各色带对比度；再用真实 release note 渲染并检查手机预览。美术调整必须落到脚本和本目录的参考说明中，不能只改变一次生成时的提示词。
+After changing the template, run `python3 -m unittest discover -s .agents/skills/release-announcement/scripts -p 'test_*.py' -v` (requires the same Pillow and fonts). Tests cover features-only/fixes-only releases, the first item landing on the phone's first screen, orphaned characters on the last line of a paragraph, long text and overlong version number edge cases, offline contributors, text overlap, and contrast for each color band. Then render with a real release note and check the phone preview. Art adjustments must be made in the script and the reference notes in this directory, not only in the prompt for a single render.

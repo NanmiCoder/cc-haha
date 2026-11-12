@@ -131,12 +131,12 @@ test('design seed has six titled sessions: two waiting, two running and two expl
     expect(dashboard.running).toHaveLength(2)
     expect(dashboard.completedToday).toBe(2)
     expect(sessions.map((session) => session.title)).toEqual([
-      '修复 WebSocket 重连后消息重复',
-      '迁移设置存储到 v3',
-      '给移动端加扫码配对',
-      '排查 Windows sidecar 内存占用',
-      '整理 v0.7.6 发版说明',
-      '统一桌面设置页的分组',
+      'Fix duplicate messages after WebSocket reconnect',
+      'Migrate settings storage to v3',
+      'Add QR pairing to mobile',
+      'Investigate Windows sidecar memory usage',
+      'Prepare v0.7.6 release notes',
+      'Unify desktop settings page groups',
     ])
     await a.client.request('/api/sessions/fixture-release', {
       method: 'PATCH',
@@ -145,7 +145,7 @@ test('design seed has six titled sessions: two waiting, two running and two expl
     expect(
       (await b.client.get<Session>('/api/sessions/fixture-release/summary'))
         .title
-    ).toBe('整理 v0.7.6 发版说明')
+    ).toBe('Prepare v0.7.6 release notes')
     await a.client.request('/api/sessions/fixture-settings', {
       method: 'DELETE',
     })
@@ -202,7 +202,7 @@ test('production transport hydrates exact question, cancels real deadline and su
         allowed: true,
         updatedInput: {
           questions: [],
-          answers: { '旧字段怎么处理？': '迁移时保留，读取时兼容（推荐）' },
+          answers: { 'How should old fields be handled?': 'Keep on migration, stay compatible on read (recommended)' },
         },
       })
     ).toBe(true)
@@ -234,7 +234,7 @@ test('approval deny and plan model/mode approval acknowledge only current reques
       type: 'permission_response',
       requestId: request.requestId,
       allowed: false,
-      denyMessage: '先解释测试范围',
+      denyMessage: 'Explain the test scope first',
     })
     expect((await approval.next('permission_resolved')).allowed).toBe(false)
     await approval.next('message_complete')
@@ -332,7 +332,7 @@ test('background stop updates WS and HTTP and full stop preserves partial reply'
     expect(
       normalizeHistory(history.messages).some(
         (item) =>
-          item.type === 'assistant' && item.text.startsWith('Fixture：收到了')
+          item.type === 'assistant' && item.text.startsWith('Fixture: received')
       )
     ).toBe(true)
   } finally {
@@ -498,7 +498,7 @@ test('schedule create/pause/run/results/delete and repository branches remain ho
       `/api/scheduled-tasks/runs/${runs[0]!.id}`
     )
     expect(run.status).toBe('completed')
-    expect(run.output).toContain('没有运行命令或调用模型')
+    expect(run.output).toContain('No commands were run and no model was called')
     await a.client.request(`/api/scheduled-tasks/${task.id}`, {
       method: 'DELETE',
     })

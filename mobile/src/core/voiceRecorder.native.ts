@@ -41,7 +41,7 @@ async function loadRuntime(options: StartVoiceRecordingOptions): Promise<NativeV
   try {
     audio = await import('react-native-audio-api')
   } catch {
-    throw new VoiceRecorderError('unavailable', '请更新手机 App 以使用语音输入')
+    throw new VoiceRecorderError('unavailable', 'Update the phone app to use voice input')
   }
   const { File } = await import('expo-file-system')
   const { AudioManager } = audio

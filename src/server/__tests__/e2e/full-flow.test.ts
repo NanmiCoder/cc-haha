@@ -1,7 +1,7 @@
 /**
- * E2E Test — 完整流程测试
+ * E2E Test — full flow test
  *
- * 启动真实服务器，模拟 UI 前端的完整操作流程。
+ * Starts a real server and simulates the UI frontend's full operation flow.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test'

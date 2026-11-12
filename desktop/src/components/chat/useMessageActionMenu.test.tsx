@@ -38,7 +38,7 @@ function renderPrompt(overrides: Partial<Parameters<typeof UserMessage>[0]> = {}
   const onStart = vi.fn()
   render(
     <UserMessage
-      content="把登录页错误提示改成 i18n"
+      content="Move the login page error messages to i18n"
       timestamp={TIMESTAMP}
       branchAction={{ label: 'Branch from here', onBranch }}
       editAction={{
@@ -95,7 +95,7 @@ describe('message actions on a phone', () => {
       fireEvent.click(within(screen.getByTestId('message-action-sheet')).getByRole('menuitem', { name: 'Copy' }))
     })
 
-    expect(clipboard.copy).toHaveBeenCalledWith('把登录页错误提示改成 i18n')
+    expect(clipboard.copy).toHaveBeenCalledWith('Move the login page error messages to i18n')
     expect(useUIStore.getState().toasts.at(-1)?.type).toBe('success')
     expect(screen.queryByTestId('message-action-sheet')).not.toBeInTheDocument()
   })
@@ -106,7 +106,7 @@ describe('message actions on a phone', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Select text' }))
 
     const text = screen.getByTestId('message-select-text')
-    expect(text).toHaveTextContent('把登录页错误提示改成 i18n')
+    expect(text).toHaveTextContent('Move the login page error messages to i18n')
     expect(text).toHaveClass('select-text')
   })
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useTranslation, type Locale } from '@/i18n'
+import { useTranslation } from '@/i18n'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { settingsApi } from '@/api/settings'
@@ -31,9 +31,6 @@ export function H5GeneralSettings() {
     catch { setFailed(true) }
     finally { setBusy(false) }
   }
-  const languages: { value: Locale, label: string }[] = [
-    { value: 'en', label: 'English' }, { value: 'zh', label: '简体中文' }, { value: 'zh-TW', label: '繁體中文' }, { value: 'jp', label: '日本語' }, { value: 'kr', label: '한국어' },
-  ]
   const themes: { value: ThemeMode, label: string }[] = [
     { value: 'white', label: t('settings.general.appearance.white') }, { value: 'paper', label: t('settings.general.appearance.paper') },
     { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') }, { value: 'celadon', label: t('settings.general.appearance.celadon') },
@@ -48,7 +45,7 @@ export function H5GeneralSettings() {
   const effortOptions = !settings.currentModel ? [] : levels.filter((value) => supported ? supported.includes(value) : value !== 'xhigh')
   const selectedEffort = effortOptions.includes(settings.effortLevel) ? settings.effortLevel : effortOptions[0] ?? settings.effortLevel
   const responseLanguages = [{ value: '', label: t('settings.general.responseLangDefault') },
-    { value: 'english', label: 'English' }, { value: 'chinese', label: '中文' }, { value: 'japanese', label: '日本語' }, { value: 'korean', label: '한국어' }]
+    { value: 'english', label: 'English' }, { value: 'chinese', label: 'Chinese' }, { value: 'japanese', label: 'Japanese' }, { value: 'korean', label: 'Korean' }]
   if (settings.responseLanguage && !responseLanguages.some((item) => item.value === settings.responseLanguage)) responseLanguages.push({ value: settings.responseLanguage, label: settings.responseLanguage })
   const styles = [{ value: 'default', label: t('settings.general.outputStyleBuiltin.default.label') },
     { value: 'Explanatory', label: t('settings.general.outputStyleBuiltin.explanatory.label') }, { value: 'Learning', label: t('settings.general.outputStyleBuiltin.learning.label') }]
@@ -65,7 +62,6 @@ export function H5GeneralSettings() {
     <SettingsSection className="mt-0" title={t('settings.general.appearanceTitle')} description={t('h5Settings.browserOnly')}>
       <SettingsGroup>
         {select<ThemeMode>(t('settings.general.appearanceTitle'), { value: theme, options: themes, onChange: (value) => { useUIStore.getState().setFollowSystemTheme(false); void settings.setTheme(value) } })}
-        {select<Locale>(t('settings.general.languageTitle'), { value: settings.locale, options: languages, onChange: settings.setLocale })}
       </SettingsGroup>
     </SettingsSection>
     <SettingsSection title={t('h5Settings.agentPreferences')} description={t('h5Settings.agentPreferencesHint')}>

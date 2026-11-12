@@ -211,7 +211,7 @@ describe('CronService', () => {
   })
 
   it('should keep both updates when updateLastFired races across tasks', async () => {
-    // 复现调度器同一分钟并发触发多个任务：每个任务各自调用 updateLastFired
+    // Reproduce the scheduler firing several tasks concurrently in the same minute: each task calls updateLastFired
     const first = await service.createTask({
       cron: '* * * * *',
       prompt: 'first',
@@ -249,7 +249,7 @@ describe('CronService', () => {
   })
 
   it('should serialize mutations across separate service instances', async () => {
-    // API 层与调度器持有不同的 CronService 实例，但写同一个文件
+    // The API layer and the scheduler hold different CronService instances but write the same file
     const apiInstance = new CronService()
     const schedulerInstance = new CronService()
 
@@ -377,7 +377,7 @@ describe('SearchService', () => {
     process.env.CLAUDE_CONFIG_DIR = tmpDir
     service = new SearchService()
 
-    // 创建搜索用的临时文件
+    // Create temp files for searching
     searchDir = path.join(tmpDir, 'workspace')
     await fs.mkdir(searchDir, { recursive: true })
     await fs.writeFile(
@@ -413,7 +413,7 @@ describe('SearchService', () => {
   })
 
   it('should respect maxResults limit', async () => {
-    // 写入多行匹配
+    // Write multiple matching lines
     const lines = Array.from({ length: 50 }, (_, i) => `match line ${i}`).join(
       '\n',
     )
@@ -439,7 +439,7 @@ describe('SearchService', () => {
 // ─── Scheduled Tasks API integration ────────────────────────────────────────
 
 describe('Scheduled Tasks API', () => {
-  // 直接测试 handler 函数，不需要启动完整服务器
+  // Test handler functions directly, no need to start the full server
   let handleScheduledTasksApi: (
     req: Request,
     url: URL,
@@ -450,7 +450,7 @@ describe('Scheduled Tasks API', () => {
     tmpDir = await createTmpDir()
     process.env.CLAUDE_CONFIG_DIR = tmpDir
 
-    // 动态导入以获取最新的环境变量
+    // Dynamic import to pick up the latest environment variables
     const mod = await import('../api/scheduled-tasks.js')
     handleScheduledTasksApi = mod.handleScheduledTasksApi
   })

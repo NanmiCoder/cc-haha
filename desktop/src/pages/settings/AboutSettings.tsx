@@ -37,9 +37,9 @@ const GITHUB_ISSUES = `${GITHUB_REPO}/issues`
 const GITHUB_RELEASES = `${GITHUB_REPO}/releases`
 const AUTHOR_GITHUB = 'https://github.com/NanmiCoder'
 const SOCIAL_LINKS = [
-  { name: 'Bilibili', icon: '/icons/bilibili.svg', url: 'https://space.bilibili.com/434377496', label: '程序员阿江-Relakkes' },
-  { name: 'Douyin', icon: '/icons/douyin.svg', url: 'https://www.douyin.com/user/MS4wLjABAAAATJPY7LAlaa5X-c8uNdWkvz0jUGgpw4eeXIwu_8BhvqE', label: '程序员阿江-Relakkes' },
-  { name: 'Xiaohongshu', icon: '/icons/xiaohongshu.svg', url: 'https://www.xiaohongshu.com/user/profile/5f58bd990000000001003753', label: '程序员阿江-Relakkes' },
+  { name: 'Bilibili', icon: '/icons/bilibili.svg', url: 'https://space.bilibili.com/434377496', label: 'Relakkes' },
+  { name: 'Douyin', icon: '/icons/douyin.svg', url: 'https://www.douyin.com/user/MS4wLjABAAAATJPY7LAlaa5X-c8uNdWkvz0jUGgpw4eeXIwu_8BhvqE', label: 'Relakkes' },
+  { name: 'Xiaohongshu', icon: '/icons/xiaohongshu.svg', url: 'https://www.xiaohongshu.com/user/profile/5f58bd990000000001003753', label: 'Relakkes' },
 ] as const
 
 export function AboutSettings() {
@@ -99,7 +99,7 @@ export function AboutSettings() {
 
   const checkedAtText =
     checkedAt
-      ? new Date(checkedAt).toLocaleString(undefined, {
+      ? new Date(checkedAt).toLocaleString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
           month: 'short',
@@ -417,7 +417,7 @@ export function AboutSettings() {
         <SettingsGroup>
           <LinkRow
             icon={<img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="h-4 w-4 opacity-60" />}
-            title="程序员阿江-Relakkes"
+            title="Relakkes"
             meta="GitHub"
             onClick={() => openUrl(AUTHOR_GITHUB)}
           />

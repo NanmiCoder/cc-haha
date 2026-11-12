@@ -1,89 +1,85 @@
 ---
-title: 钉钉接入
-nav_title: 钉钉
-description: 用钉钉扫码授权机器人，走 DingTalk Stream 长连接，不需要公网回调地址。
+title: DingTalk Integration
+nav_title: DingTalk
+description: Authorize a DingTalk bot by QR code and run over DingTalk Stream, with no public callback URL required.
 order: 4
 ---
 
-# 钉钉接入
+# DingTalk Integration
 
-适合把钉钉当主力办公工具的国内团队：扫一次码就能授权出一个机器人，走 DingTalk Stream 长连接，不需要公网回调地址和内网穿透。回复默认用 AI Card 流式输出。限制是只处理单聊，不处理群聊；想要可点的权限卡片还得额外配一个模板 ID，否则只能回复文本命令。
+For organizations already running on DingTalk: one QR scan authorizes a bot, and the adapter connects over DingTalk Stream, so no public callback URL or tunnel is needed. Replies stream through an AI Card by default. Only private chats are supported, and tappable approval cards need one extra template ID — otherwise approval is text replies.
 
-## 扫码绑定机器人
+## Bind the bot by QR code
 
-1. 打开「设置」→「IM 接入」，切到「钉钉」Tab。
-2. 在「扫码绑定钉钉机器人」里点「扫码绑定」。
-3. 用钉钉手机 App 扫码，并在钉钉里确认创建和授权。
-4. 等页面显示「钉钉机器人已绑定」。
+1. Open **Settings → IM Adapters** and select the **DingTalk** tab.
+2. Under **Bind DingTalk bot with QR**, select **Scan to bind**.
+3. Scan with the DingTalk mobile app and confirm bot creation and authorization.
+4. Wait for Desktop to report the bound state.
 
-![扫码绑定与手动填写凭据](../images/im/dingding/dingding01.png)
+**Client ID** and **Client Secret** are filled in and written to local configuration automatically, and the adapter reconnects with them.
 
-授权成功后 `Client ID` 和 `Client Secret` 会自动填好并写入本机配置，adapter 随即用新凭据重连。
+## Manual credentials
 
-## 手动填写凭据
+If QR binding is unavailable, fill in the fields below the QR area yourself:
 
-扫码走不通时，也可以自己填。这几个字段就在扫码区域下面：
+- **Client ID** — the DingTalk application `appKey`
+- **Client Secret** — the application `appSecret`
+- **Stream Endpoint** — optional; defaults to `https://api.dingtalk.com`
+- **Permission Card Template ID** — optional; when set, permission requests prefer an interactive card
+- **Allowed Users** — optional; explicit DingTalk user IDs
 
-- **Client ID** — 钉钉应用的 `appKey`
-- **Client Secret** — 钉钉应用的 `appSecret`
-- **Stream Endpoint** — 可选，默认 `https://api.dingtalk.com`
-- **权限卡片模板 ID** — 可选，填了之后权限请求优先发钉钉互动卡片
-- **允许的用户** — 可选，直接放行指定的钉钉用户 ID
+Select **Save**, and the adapter opens a DingTalk Stream connection with the new credentials.
 
-填完点「保存」，adapter 会用新凭据重新建立 Stream 长连接。
+## Authorize a user
 
-## 授权具体用户
+Binding the bot does not authorize every DingTalk account.
 
-机器人绑定完成后，还要让具体的人通过配对码获得授权。
+1. Back at the top of the page, under **Pairing**, select **Generate Code**.
+2. Send the six-character code to the bot in a private chat.
+3. Once pairing is confirmed, you can start chatting.
 
-1. 回到页面顶部的「配对管理」，点「生成配对码」。
-2. 在钉钉里私聊机器人，把这枚 6 位码发过去。
-3. 看到配对成功提示后就能开始聊。
+Codes are valid for 60 minutes and work once. Paired accounts appear under **Paired Users** and can be revoked at any time; a revoked user needs a fresh code.
 
-![在钉钉里发送配对码并开始对话](../images/im/dingding/dingding02.png)
+## Projects and sessions
 
-配对码 60 分钟内有效、只能用一次。配对成功的人会出现在「已配对用户」列表里，随时可以解绑；被解绑的人要重新发一枚新码。
+With **Default Project** set, the first accepted message opens a session in that directory. Without it, the bot lists recent projects; reply with a number, project name, or absolute path.
 
-## 选项目并开始对话
+Later messages in the same chat reuse that session. `/new` picks another project; `/clear` empties the context while keeping the project binding.
 
-配了「默认项目」的话，第一条消息就直接在那个目录下开会话。没配的话，机器人会先列出最近用过的项目，回复编号、项目名或绝对路径即可。
+## Commands
 
-之后同一个聊天窗口的消息会复用同一条会话。发 `/new` 重新选项目，发 `/clear` 清空上下文但保留项目绑定。
+DingTalk has no bot menu like Feishu, so the chat box is the only entry point. After pairing, the bot suggests `/help`.
 
-## 支持的命令
+- `/help` — show available commands
+- `/status` — project, branch, model, run state, and task summary
+- `/projects` — list recent projects again
+- `/new` — clear the current binding and choose a project
+- `/new <number, project name, or absolute path>` — start directly in that project
+- `/clear` — clear context, keep the project binding
+- `/stop` — stop the current generation
 
-钉钉没有像飞书那样的机器人菜单，命令入口就是单聊输入框。配对成功后机器人会提示发 `/help`。
+## Approval and reply behavior
 
-- `/help` 或 `帮助` — 显示可用命令
-- `/status` 或 `状态` — 当前项目、分支、模型、运行状态和任务摘要
-- `/projects` 或 `项目列表` — 重新列出最近项目
-- `/new` 或 `新会话` — 清空当前绑定并重新选择项目
-- `/new <编号、项目名或绝对路径>` — 直接在指定项目下开新会话
-- `/clear` 或 `清空` — 清空上下文，保留项目绑定
-- `/stop` 或 `停止` — 停止本轮生成
+By default a permission request arrives as text. Reply with one of:
 
-## 权限审批与消息表现
+- `/allow <requestId>` — allow once
+- `/always <requestId>` — persist the matching approval
+- `/deny <requestId>` — deny
 
-默认情况下，权限请求以文本消息发出，回复其中一条：
+With a published template entered in **Permission Card Template ID**, the adapter prefers an interactive card and receives the button callback over DingTalk Stream. Text commands stay available whenever a card fails to send or cannot be seen.
 
-- `/allow <requestId>` — 允许这一次
-- `/always <requestId>` — 永久允许同类请求
-- `/deny <requestId>` — 拒绝
+Normal replies prefer AI Card streaming. Image attachments are downloaded and passed as inline image input; oversized attachments are reported back in the chat.
 
-如果在设置页填了已发布的「权限卡片模板 ID」，adapter 会优先发互动卡片，按钮回调走 DingTalk Stream 回传。卡片发不出去或看不见时，文本命令始终可用。
+## Unbind
 
-普通回复优先用 AI Card 做流式输出，图片附件会下载后以内联图片进入模型输入，附件超出大小限制时机器人会在钉钉里提示。
+Two levels:
 
-## 解除绑定
+- **Unbind bot account** clears the DingTalk credentials, the permission card template ID, and this platform's authorization lists. Binding again means scanning or entering credentials again.
+- **Unbind** next to a name under **Paired Users** revokes only that person.
 
-两种粒度：
+## Development
 
-- 「解除机器人绑定」清掉钉钉凭据、权限卡片模板 ID 和这个平台的授权名单，之后要重新扫码或手动填凭据。
-- 在「已配对用户」列表里点某个用户右侧的「解绑」，只撤销那一个人。
-
-## 本地开发启动
-
-发布版桌面端会自动把 adapter 作为 sidecar 拉起。只有从源码运行或单独调试时才需要手动启动：
+Packaged Desktop starts the sidecar automatically. Run it by hand only when working from source:
 
 ```bash
 cd adapters
@@ -91,7 +87,7 @@ bun install
 bun run dingtalk
 ```
 
-可选的环境变量覆盖：
+Optional overrides:
 
 ```bash
 export DINGTALK_CLIENT_ID="..."
@@ -101,22 +97,20 @@ export DINGTALK_PERMISSION_CARD_TEMPLATE_ID="..."
 export ADAPTER_SERVER_URL="ws://127.0.0.1:3456"
 ```
 
-正常使用桌面端不需要手动设置这些，扫码绑定或手动填写会写好本机配置。
+Normal Desktop use needs none of these; QR binding or manual entry writes the local configuration.
 
-## 常见问题
+## Troubleshooting
 
-**扫码成功后发消息仍提示未授权**：这是正常流程。扫码只写入机器人凭据，具体用户还要发配对码，或被写进「允许的用户」。
+**Still unauthorized after a successful scan.** That is the expected flow. Scanning only stores bot credentials; the individual user still has to send a pairing code or appear in **Allowed Users**.
 
-**扫码失败或一直等待确认**：重新点「扫码绑定」生成新二维码；仍然不行就手动填 `Client ID` 和 `Client Secret`。
+**Scanning fails or waits forever.** Select **Scan to bind** again for a fresh QR code. If it still fails, enter **Client ID** and **Client Secret** manually.
 
-**adapter 启动时报缺少 clientId/clientSecret**：环境变量和 `~/.claude/adapters.json` 里的 `dingtalk.clientId`/`dingtalk.clientSecret` 都没生效，先在设置页完成扫码或手动填写。
+**The adapter reports missing credentials.** Neither the environment variables nor `dingtalk.clientId` / `dingtalk.clientSecret` in `~/.claude/adapters.json` took effect. Complete QR binding or manual entry in Settings first.
 
-**权限卡片没出现**：确认模板 ID 填的是已发布的模板、模板支持 adapter 用的回调路由、机器人已发布新版本。卡片不可见时用 `/allow`、`/always`、`/deny` 照样能批。
+**No permission card appears.** Confirm the template ID belongs to a published template, that the template supports the callback route the adapter uses, and that the bot has published a new version. Text approval works regardless.
 
-**收不到回复**：依次确认桌面端在运行、Tab 里显示已绑定、当前用户已配对或在「允许的用户」里、`~/.claude/adapters.json` 能正常写入；源码运行时还要确认 `ADAPTER_SERVER_URL` 指向正在跑的桌面服务。
+**No replies.** Confirm Desktop is running, the tab shows the bound state, the sender is paired or allowlisted, and `~/.claude/adapters.json` is writable. When running from source, also confirm `ADAPTER_SERVER_URL` points at the running Desktop server.
 
-**重启后会话没接回来**：检查 `~/.claude/adapter-sessions.json` 能否正常写入，以及桌面端里那条会话是否还在。
+## Source
 
-## 源码入口
-
-`adapters/dingtalk/` 下的 `index.ts`、`helpers.ts`、`ai-card.ts`、`permission-card.ts`、`media.ts`，以及 `adapters/common/` 下的 `pairing.ts`、`session-store.ts`、`ws-bridge.ts`、`http-client.ts`。
+`index.ts`, `helpers.ts`, `ai-card.ts`, `permission-card.ts`, and `media.ts` under `adapters/dingtalk/`, plus `pairing.ts`, `session-store.ts`, `ws-bridge.ts`, and `http-client.ts` under `adapters/common/`.

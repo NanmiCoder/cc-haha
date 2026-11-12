@@ -1,8 +1,8 @@
 /**
- * 消息去重
+ * Message deduplication
  *
- * 防止 WebSocket 重连等场景下消息重复处理。
- * 参考 openclaw-lark dedup.ts 的 Map + TTL + 容量 设计。
+ * Prevents duplicate processing in cases such as WebSocket reconnects.
+ * Based on the Map + TTL + capacity design of openclaw-lark dedup.ts.
  */
 
 const DEFAULT_TTL_MS = 10 * 60_000  // 10 minutes

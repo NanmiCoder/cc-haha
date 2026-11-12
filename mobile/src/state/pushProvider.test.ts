@@ -86,8 +86,8 @@ test('a failed storage write is retried by the next request instead of being cac
 })
 
 test('only a relay failure that concerns this phone becomes its problem', () => {
-  const failing = { platforms: { ios: false, android: false }, providers: { expo: true, desktop: true }, relayErrors: { expo: '电脑连不上 Expo 推送服务（exp.host）' } }
-  expect(relayFailure('expo', failing)).toBe('电脑连不上 Expo 推送服务（exp.host）')
+  const failing = { platforms: { ios: false, android: false }, providers: { expo: true, desktop: true }, relayErrors: { expo: 'The computer cannot reach the Expo push service (exp.host)' } }
+  expect(relayFailure('expo', failing)).toBe('The computer cannot reach the Expo push service (exp.host)')
   // Android pulls from the computer; an Expo outage does not touch it.
   expect(relayFailure('desktop', failing)).toBeUndefined()
   expect(relayFailure('direct', failing)).toBeUndefined()

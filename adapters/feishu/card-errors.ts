@@ -1,35 +1,35 @@
 /**
- * Feishu CardKit API 错误码解析与谓词
+ * Feishu CardKit API error code parsing and predicates
  *
- * 参考实现: openclaw-lark/src/card/card-error.ts + src/core/api-error.ts
+ * Reference implementation: openclaw-lark/src/card/card-error.ts + src/core/api-error.ts
  *
- * Lark SDK 抛出的错误对象结构有多种：
- *   - SDK 把 Feishu 的 {code, msg} 直接挂在 error 对象上
- *   - Axios 风格: error.response.data.{code, msg}
- *   - data.code 嵌套（某些包装层）
+ * Error objects thrown by the Lark SDK come in several shapes:
+ *   - The SDK attaches Feishu's {code, msg} directly to the error object
+ *   - Axios style: error.response.data.{code, msg}
+ *   - Nested data.code (some wrapper layers)
  *
- * 此模块把这些统一成 { code, subCode, errMsg } 结构，
- * 供 streaming-card-controller 判断是否跳帧重试、或降级到 Patch 路径。
+ * This module normalizes them into a { code, subCode, errMsg } shape
+ * so streaming-card-controller can decide whether to skip a frame and retry, or fall back to the Patch path.
  */
 
 // ---------------------------------------------------------------------------
 // Error code constants
 // ---------------------------------------------------------------------------
 
-/** 卡片 API 级别错误码。 */
+/** Card API level error codes. */
 export const CARD_ERROR = {
-  /** 发送频率限制。需跳过当前帧，下次 flush 继续。 */
+  /** Send rate limit. Skip the current frame; the next flush continues. */
   RATE_LIMITED: 230020,
-  /** 卡片内容创建失败（通用码，需看子错误确认具体原因）。 */
+  /** Card content creation failed (generic code; inspect the sub-error for the actual cause). */
   CARD_CONTENT_FAILED: 230099,
 } as const
 
 /**
- * 230099 的子错误码，嵌套在 msg 的 `ErrCode: xxx` 字段中。
- * 11310 是通用的"元素超限"码，需配合 errMsg 匹配具体原因。
+ * Sub-error codes of 230099, nested in the `ErrCode: xxx` field of msg.
+ * 11310 is the generic "element over limit" code; match errMsg to find the actual cause.
  */
 export const CARD_CONTENT_SUB_ERROR = {
-  /** 卡片元素（表格等）数量超限 */
+  /** Card element (table etc.) count over limit */
   ELEMENT_LIMIT: 11310,
 } as const
 
@@ -47,10 +47,10 @@ function coerceCode(value: unknown): number | undefined {
 }
 
 /**
- * 从 Lark SDK 抛错对象中提取飞书 API code。支持三种结构：
- *   - `{ code }`                    (SDK 直接挂载)
- *   - `{ data: { code } }`          (响应体嵌套)
- *   - `{ response: { data: { code } } }` (Axios 风格)
+ * Extract the Feishu API code from a Lark SDK error object. Supports three shapes:
+ *   - `{ code }`                    (attached directly by the SDK)
+ *   - `{ data: { code } }`          (nested in the response body)
+ *   - `{ response: { data: { code } } }` (Axios style)
  */
 export function extractLarkApiCode(err: unknown): number | undefined {
   if (!err || typeof err !== 'object') return undefined
@@ -67,11 +67,11 @@ export function extractLarkApiCode(err: unknown): number | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * 从 msg 字符串里提取子错误码（`ErrCode: xxx`）。
+ * Extract the sub-error code (`ErrCode: xxx`) from the msg string.
  *
- * 示例输入:
+ * Example input:
  *   "Failed to create card content, ext=ErrCode: 11310; ErrMsg: card table number over limit; ..."
- * 返回: 11310
+ * Returns: 11310
  */
 export function extractSubCode(msg: string): number | null {
   const match = /ErrCode:\s*(\d+)/.exec(msg)
@@ -91,15 +91,15 @@ export type CardApiErrorInfo = {
 }
 
 /**
- * 从任意抛错对象中解析卡片 API 错误结构。
+ * Parse a card API error structure from any thrown object.
  *
- * 返回 { code, subCode, errMsg }。无法提取 code 时返回 null。
+ * Returns { code, subCode, errMsg }, or null when no code can be extracted.
  */
 export function parseCardApiError(err: unknown): CardApiErrorInfo | null {
   const code = extractLarkApiCode(err)
   if (code === undefined) return null
 
-  // 按优先级提取 msg 文本
+  // Extract msg text in priority order
   let errMsg = ''
   if (err && typeof err === 'object') {
     const e = err as {
@@ -124,7 +124,7 @@ export function parseCardApiError(err: unknown): CardApiErrorInfo | null {
 // Helper predicates
 // ---------------------------------------------------------------------------
 
-/** 判断错误是否为卡片发送频率限制（230020）。 */
+/** Whether the error is a card send rate limit (230020). */
 export function isCardRateLimitError(err: unknown): boolean {
   const parsed = parseCardApiError(err)
   if (!parsed) return false
@@ -132,12 +132,12 @@ export function isCardRateLimitError(err: unknown): boolean {
 }
 
 /**
- * 判断错误是否为卡片表格数超限。
+ * Whether the error is a card table count over limit.
  *
- * 匹配条件: code 230099 + subCode 11310 + errMsg 含 "table number over limit"
- * （11310 是通用元素超限码，光靠它不够；必须同时检查 errMsg 锁定是表格数量问题）。
+ * Match: code 230099 + subCode 11310 + errMsg contains "table number over limit"
+ * (11310 is the generic element-over-limit code and is not enough alone; errMsg must also be checked to pin it to the table count).
  *
- * 实际生产错误格式（openclaw-lark 2026-03 实测）:
+ * Actual production error format (measured by openclaw-lark 2026-03):
  *   "Failed to create card content, ext=ErrCode: 11310; ErrMsg: card table number over limit; ErrorValue: table; "
  */
 export function isCardTableLimitError(err: unknown): boolean {

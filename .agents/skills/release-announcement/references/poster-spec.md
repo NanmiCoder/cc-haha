@@ -1,31 +1,31 @@
-# `poster-spec.json` 格式
+# `poster-spec.json` format
 
-运行 `scan` 后，以最新 release note 填写 JSON。字段：
+After running `scan`, fill in the JSON from the latest release note. Fields:
 
 ```json
 {
   "version": "0.6.7",
   "product": "Claude Code Haha",
   "features": [
-    {"title": "侧边对话", "body": "输入 /btw，在右侧开启独立的临时对话，不打断主任务。"}
+    {"title": "Side conversation", "body": "Type /btw to open a separate temporary conversation on the right without interrupting the main task."}
   ],
   "extras": [
-    {"title": "模型与供应商", "headline": "新版模型与映射", "body": "依据本版说明压缩成一句话。"}
+    {"title": "Models and providers", "headline": "New models and mappings", "body": "Condense this release's notes into one sentence."}
   ],
   "fixes": [
-    {"title": "超大会话打不开", "body": "超过 20MB 的历史可以继续打开。"}
+    {"title": "Huge sessions won't open", "body": "History larger than 20MB can be opened again."}
   ],
   "contributors": [
-    {"login": "example-user", "contribution": "此人本次被署名的贡献"}
+    {"login": "example-user", "contribution": "What this person is credited with in this release"}
   ],
-  "install_note": "仅在发布说明明确写有安装提醒时填写。",
+  "install_note": "Only fill this in when the release note explicitly includes an install reminder.",
   "footer_url": "github.com/NanmiCoder/cc-haha"
 }
 ```
 
-- `version`、`features`、`fixes`、`contributors` 必填；`extras`、`install_note`、`footer_url` 可省略。纯修复版填 `"features": []`，纯功能版填 `"fixes": []`，两者不能同时为空。没有署名贡献者时 `contributors` 为 `[]`。
-- `features` 一般选 2–4 项，大版本最多 6 项；按用户价值排序，第一项绘制在橙色首屏作为「本版重点」。其他功能为单列编号，说明不必手动添加换行。`fixes` 一般不超过 9 项，硬上限 12 项；`extras` 用于补充输入、模型或供应商变化，合并在「更多变化」区，不用于堆放剩余 commit。
-- 现有 JSON 无需新增样式字段即可使用新版模板。配色和字号统一由脚本维护；长标题、贡献说明、ID 和 URL 会自动换行，超长英文串仅在超出可用宽度时拆分，不裁切或省略内容。
-- `render --scan` 会校验版本及贡献者 ID 必须是 release note 中文部分的明确署名候选。普通提及不算署名；不要把示例 ID 写入真实结果。
-- 测试或离线排版时，贡献者可以另给 `avatar_path` 并显式传 `--allow-offline-avatars`；正式生成禁止该选项，必须实时核验公开 GitHub 账号与头像。
-- 正式图保留所有已核验、已署名的贡献者；如果名字很多，可以缩短每人的贡献概述，不能遗漏账号或用假头像填位。
+- `version`, `features`, `fixes`, and `contributors` are required; `extras`, `install_note`, and `footer_url` may be omitted. For a fixes-only release use `"features": []`; for a features-only release use `"fixes": []`; they cannot both be empty. With no credited contributors, `contributors` is `[]`.
+- Choose 2–4 `features` normally, up to 6 for a major release; order them by user value. The first is drawn on the orange first screen under the "Highlight" label. Other features are a numbered single column; descriptions don't need manual line breaks. `fixes` should normally be at most 9, with a hard limit of 12; `extras` is for additional input, model, or provider changes, shown as panels in the paper section, and is not a place to dump leftover commits.
+- Existing JSON works with the new template without adding style fields. Colors and font sizes are maintained centrally by the script; long titles, contribution notes, IDs, and URLs wrap automatically, and overlong English strings are split only when they exceed the available width, never truncated or elided.
+- `render --scan` validates that the version and contributor IDs are explicit credit candidates in the release note. Ordinary mentions are not credits; don't put example IDs in real results.
+- For tests or offline layout, contributors may be given an `avatar_path` with `--allow-offline-avatars` passed explicitly; production renders must not use this option and must verify public GitHub accounts and avatars live.
+- The production image keeps every verified, credited contributor; if there are many names, shorten each contribution summary, but never drop accounts or fill slots with fake avatars.

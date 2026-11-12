@@ -2,8 +2,8 @@ import type { HistoryStore } from './sessionTransport'
 import type { HistoryPage } from './types'
 
 /**
- * 最近打开过的几段会话的历史，只存在内存里。返回会话时先显示上次读到的内容
- * （包括往前翻过的页），再由传输层和电脑对齐，不用从最新一页重新翻起。
+ * History of the few recently opened sessions, kept only in memory. When returning to a session, show what was last read first
+ * (including paged-back pages), then let the transport resync with the computer instead of paging again from the latest page.
  */
 export function createHistoryCache(limit = 6) {
   const pages = new Map<string, HistoryPage>()

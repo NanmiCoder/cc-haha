@@ -190,13 +190,13 @@ public enum AppGuidance {
             "qqmusic",
             "tencent.qqmusic",
             "spotify",      // desktop Spotify is a custom CEF shell
-            "wechat",       // 微信
-            "wework",       // 企业微信
+            "wechat",       // WeChat
+            "wework",       // WeCom
             "wexin",
             "tencent.xinwen",
-            "feishu",       // 飞书
+            "feishu",       // Feishu
             "lark",         // Lark (international Feishu)
-            "dingtalk",     // 钉钉
+            "dingtalk",     // DingTalk
             "qq",           // QQ / TIM custom shells
             "linear",
             "1password",    // Electron rewrite

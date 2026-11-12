@@ -223,7 +223,7 @@ export function parseServerEvent(raw: unknown): ServerEvent | null {
 
 const TOOL_IMAGE_URL = /^\/api\/sessions\/[^/?#]+\/tool-images\/[^/?#]+\/\d+$/
 
-/** 工具结果里的图片：电脑给的引用，或旧版电脑内联的 base64。 */
+/** Images in tool results: references from the computer, or base64 inlined by older computers. */
 export function toolResultImages(value: unknown): ToolImage[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((block): ToolImage[] => {
@@ -263,7 +263,7 @@ function resultText(value: unknown): string {
 /** Normalizes real transcript blocks; never synthesizes an assistant answer. */
 export function normalizeHistory(
   entries: readonly HistoryEntry[],
-  /** 成员之间的消息：队长主对话里不算用户发言（hide），成员页显示正文（show）。 */
+  /** Messages between members: not user speech in the lead's main conversation (hide); member page shows the body (show). */
   options: { teammates?: 'hide' | 'show' } = {}
 ): ChatItem[] {
   const items: ChatItem[] = []
@@ -453,7 +453,7 @@ export function normalizeHistory(
         items.push({
           ...base,
           type: entry.type === 'user' ? 'user' : 'assistant',
-          text: attachment ? '' : '[图片附件]',
+          text: attachment ? '' : '[Image attachment]',
           ...(attachment ? { attachments: [attachment] } : {}),
         })
       }
@@ -506,9 +506,9 @@ export function mergeHistoryPages(
 }
 
 /**
- * 把从末尾往后读到的新增记录接在已加载的历史后面。游标链（nextCursor、sourceVersion）
- * 沿用已加载的那份：再往前翻拿到的页带着原来的版本，合并时要对得上。
- * 上次读到时还没写完的最后一条会被重新读到，以新读到的为准。
+ * Append newly read records from the end after the loaded history. The cursor chain (nextCursor, sourceVersion)
+ * follows the loaded one: pages fetched further back carry the original version and must match on merge.
+ * The last record that was not fully written when last read will be read again; the newly read one wins.
  */
 export function appendFollowPage(loaded: HistoryPage, delta: HistoryPage): HistoryPage {
   const fresh = new Set(delta.messages.map((entry) => entry.id))
@@ -538,10 +538,10 @@ export function appendFollowPage(loaded: HistoryPage, delta: HistoryPage): Histo
 }
 
 /**
- * 用重新读到的最新一页刷新已经往前翻过的历史，不把翻过的部分丢掉。
- * 会话只追加时，最新一页的第一条一定落在已加载的范围里：把更早的部分接回去，
- * 继续沿用原来那条游标链（服务端校验首尾指纹，只追加时它仍然有效）。
- * 接不上（新增超过一页、或会话被改写）时返回 undefined，由调用方决定补页还是只用最新一页。
+ * Refresh already paged-back history with the newly reread latest page without dropping the paged parts.
+ * When a session only appends, the first item of the latest page always falls within the loaded range: reattach the earlier part, 
+ * keep using the original cursor chain (the server checks head/tail fingerprints, which stay valid for appends).
+ * Returns undefined when it cannot be stitched (more than a page added, or session rewritten); the caller decides whether to backfill or use only the latest page.
  */
 export function stitchLatestPage(
   loaded: HistoryPage | undefined,
@@ -571,7 +571,7 @@ export function stitchLatestPage(
       ...latest.page,
       nextCursor: loaded.page.nextCursor,
       hasMore: loaded.page.hasMore,
-      // 再往前翻拿到的页带着游标链的版本，合并时要对得上。
+      // Pages fetched further back carry the cursor chain version and must match on merge.
       sourceVersion: loaded.page.sourceVersion,
       omittedOversizedEntries: omitted,
       contentTruncated: truncated,
@@ -657,7 +657,7 @@ export function appendPendingUserMessage(
   )
 }
 
-/** 子 Agent 的实时轨迹另存一份（state.subagents），供运行中底单使用。 */
+/** Live trajectories of subagents are stored separately (state.subagents) for the running sheet. */
 export function chatReducer(state: ChatState, event: ServerEvent): ChatState {
   const next = reduceChat(state, event)
   const subagents = reduceSubagents(next.subagents, event)
@@ -895,7 +895,7 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       return { ...next, status: permissionStatus(next) }
     }
     case 'user_message_replay': {
-      // 成员发给队长的消息开启了队长的新一轮，但不是用户发言（和桌面端一致）。
+      // A member's message to the lead starts a new lead turn but is not user speech (same as desktop).
       if (isTeammateEnvelope(event.content))
         return {
           ...clearActive(state),
@@ -906,7 +906,7 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       let matchedText = restored.text
       let metadata: { path?: string }[] = []
       const matched = state.items.find((item) => {
-        // 回合先结束时 pending 会被清掉，但 awaitingReplay 还留着：回放晚到也要对回原消息。
+        // When the turn ends first pending is cleared but awaitingReplay remains: a late replay must still match the original message.
         if (item.type !== 'user' || !(item.pending || item.awaitingReplay)) return false
         if (item.text === event.content || item.text === restored.text) {
           matchedText = item.text
@@ -1025,13 +1025,13 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       return event.sessionId === state.sessionId
         ? { ...state, title: event.title }
         : state
-    // 方案本身走 REST 读取；这里只记下“变了”，让审批入口重新读一次。
+    // The plan itself is read via REST; here we only note it "changed" so the approval entry rereads it.
     case 'team_plan_updated': {
       if (event.sessionId !== state.sessionId) return state
       const signal = `${event.planId}:${event.revision}:${event.state}`
       return signal === state.teamPlanSignal ? state : { ...state, teamPlanSignal: signal }
     }
-    // 团队目录被删时方案也没了；删得太快时电脑来不及推 team_plan_updated，只有这一条。
+    // When the team directory is deleted the plan is gone too; if deleted too fast the computer has no time to push team_plan_updated, only this one.
     case 'team_deleted': {
       if (event.leadSessionId && event.leadSessionId !== state.sessionId) return state
       const signal = `deleted:${event.teamName}:${event.incarnationId ?? event.createdAt ?? ''}`
@@ -1066,8 +1066,8 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
           }
         }
       }
-      // 子 Agent / 后台任务的开始、进度、结束只更新活动底单和顶栏胶囊；它们的说明文字
-      // （「Reading src/todo.ts」「Sleep 45 seconds…」）若进主对话流，一个任务会刷出几十行灰字。
+      // Subagent / background task start, progress and end only update the activity sheet and header capsule; their descriptions
+      // ("Reading src/todo.ts", "Sleep 45 seconds…") would flood the main stream with dozens of grey lines per task.
       const taskEvent =
         event.subtype === 'task_started' ||
         event.subtype === 'task_progress' ||

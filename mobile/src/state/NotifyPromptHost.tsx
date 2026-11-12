@@ -10,7 +10,7 @@ import {
   type NotifyPermission,
 } from './notifyPromptGate'
 
-/** 挂在根布局：连上电脑回到首页后，系统还没问过通知权限就推一次引导页。 */
+/** Mounted on the root layout: after connecting a computer and returning home, push the onboarding page once if the system has not asked for notification permission yet. */
 export function NotifyPromptHost() {
   const { registry, ready } = useApp()
   const {
@@ -31,7 +31,7 @@ export function NotifyPromptHost() {
     preferencesReady &&
     !preferencesError &&
     !preferences.notifyPrompted
-  // 满足条件时（含每次冷启动）重新读一遍系统权限，用户可能在系统设置里改过。
+  // Reread system permissions when conditions are met (including every cold start); the user may have changed them in system settings.
   useEffect(() => {
     if (!eligible) return
     let alive = true
@@ -57,12 +57,12 @@ export function NotifyPromptHost() {
   })
   useEffect(() => {
     if (decision === 'markPrompted') {
-      // 每次运行只尝试一次，写入失败也不反复重试。
+      // Try only once per run; do not retry repeatedly even if the write fails.
       if (marked.current) return
       marked.current = true
       update({ notifyPrompted: true }).catch(() => {})
     } else if (decision === 'show' && navigation?.key) {
-      // 每次运行只推一次引导页；effect 可能因 update 引用变化重复触发。
+      // Push the onboarding page only once per run; the effect may fire repeatedly as the update reference changes.
       if (shown.current) return
       shown.current = true
       router.push('/notify')

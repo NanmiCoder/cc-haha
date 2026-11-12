@@ -41,7 +41,7 @@ export type ToolRespond = (options: {
   note?: string
 }) => boolean
 
-/** 普通工具审批：命令 / 文件修改两种底座，加“拒绝并说明”状态。 */
+/** Regular tool approval: command / file edit bases, plus a "deny with note" state. */
 export function ToolDecision({
   request,
   input,
@@ -71,12 +71,12 @@ export function ToolDecision({
   const change = isFileChange(toolName) ? fileChange(toolName, input) : null
 
   const stop = onStop ? (
-    <QuietButton title="停止整个任务" onPress={onStop} />
+    <QuietButton title="Stop the whole task" onPress={onStop} />
   ) : null
 
   if (denying)
     return (
-      <DecisionSurface label="拒绝并说明">
+      <DecisionSurface label="Deny with note">
         <View style={{ gap: 4 }}>
           <Text accessibilityRole="header" style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink }}>
             {denyTitle(toolName)}
@@ -87,10 +87,10 @@ export function ToolDecision({
         </View>
         <View style={{ gap: 6 }}>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-            告诉它该怎么做（可以不填）
+            Tell it what to do (optional)
           </Text>
           <NoteInput
-            accessibilityLabel="告诉它该怎么做（可以不填）"
+            accessibilityLabel="Tell it what to do (optional)"
             autoFocus
             value={note}
             onChangeText={setNote}
@@ -112,14 +112,14 @@ export function ToolDecision({
         ) : (
           <View style={{ flexDirection: 'row', gap: 8, paddingTop: 4 }}>
             <Button
-              title="返回"
+              title="Back"
               variant="secondary"
               size="lg"
               style={{ flex: 1 }}
               onPress={() => setDenying(false)}
             />
             <Button
-              title={note.trim() ? '拒绝并发送' : '直接拒绝'}
+              title={note.trim() ? 'Deny and send' : 'Just deny'}
               size="lg"
               style={{ flex: 1 }}
               disabled={!ready}
@@ -135,8 +135,8 @@ export function ToolDecision({
   ) : (
     <View style={{ flexDirection: 'row', gap: 8 }}>
       <Button
-        title="拒绝…"
-        accessibilityLabel="拒绝，可以附上说明"
+        title="Deny…"
+        accessibilityLabel="Deny, optionally with a note"
         variant="secondary"
         size="lg"
         style={{ flex: 1 }}
@@ -144,7 +144,7 @@ export function ToolDecision({
         onPress={() => setDenying(true)}
       />
       <Button
-        title="允许"
+        title="Allow"
         size="lg"
         style={{ flex: 1 }}
         disabled={!ready}
@@ -157,10 +157,10 @@ export function ToolDecision({
 
   if (change)
     return (
-      <DecisionSurface label="审批" style={{ height: Math.max(360, height - 196) }}>
+      <DecisionSurface label="Approvals" style={{ height: Math.max(360, height - 196) }}>
         <DecisionHeader title={approvalTitle(toolName)} position={position} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {/* 相对项目目录显示；仍放不下就从头部省略，文件名永远看得见。 */}
+          {/* Shown relative to the project directory; if it still does not fit truncate from the start, keeping the file name always visible. */}
           <Mono
             selectable
             numberOfLines={1}
@@ -202,7 +202,7 @@ export function ToolDecision({
   const description = approvalDescription(request.description, input)
   const command = toolKind(toolName) === 'command'
   return (
-    <DecisionSurface label="审批">
+    <DecisionSurface label="Approvals">
       <DecisionHeader title={approvalTitle(toolName)} position={position} />
       {description ? (
         <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>{description}</Text>

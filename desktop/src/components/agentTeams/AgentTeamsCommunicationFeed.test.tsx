@@ -200,21 +200,6 @@ describe('AgentTeamsCommunicationFeed', () => {
     expect(document.body.textContent).not.toContain('idle_notification')
   })
 
-  it('localizes an unknown structured protocol instead of inventing an English label', () => {
-    useSettingsStore.setState({ locale: 'zh' })
-    render(<AgentTeamsCommunicationFeed snapshot={snapshot([
-      message({
-        id: 'custom',
-        kind: 'system',
-        protocolType: 'custom_event',
-        text: '{"type":"custom_event","payload":42}',
-      }),
-    ])} />)
-
-    expect(screen.getByTestId('agent-teams-message-custom-body').textContent).toBe('系统')
-    expect(document.body.textContent).not.toContain('Custom event')
-  })
-
   it('keeps authored Markdown readable and uses compact 22px routing figures', () => {
     render(<AgentTeamsCommunicationFeed snapshot={snapshot([
       message({

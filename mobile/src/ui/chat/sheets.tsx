@@ -12,7 +12,7 @@ import {
   useColors,
 } from '../kit'
 
-/** 回退稿同款的弹层头：20 号标题 + 一行说明。 */
+/** Sheet header in the same style as the rewind design: 20pt title + one line of description. */
 function SheetHeading({ title, detail }: { title: string; detail?: string }) {
   const colors = useColors()
   return (
@@ -44,7 +44,7 @@ function SheetButtons({
 }) {
   return (
     <View style={{ flexDirection: 'row', gap: 8, paddingTop: 4 }}>
-      <Button title="取消" variant="secondary" size="lg" onPress={onCancel} disabled={busy} style={{ flex: 1 }} />
+      <Button title="Cancel" variant="secondary" size="lg" onPress={onCancel} disabled={busy} style={{ flex: 1 }} />
       <Button
         title={confirmLabel}
         variant={destructive ? 'destructive' : 'primary'}
@@ -58,7 +58,7 @@ function SheetButtons({
   )
 }
 
-/** 需要再确认一次的操作（停止、删除）：每次打开都是全新的确认。 */
+/** Actions needing one more confirmation (stop, delete): each open is a fresh confirmation. */
 export function ConfirmSheet({
   visible,
   onClose,
@@ -167,17 +167,17 @@ export function RenameSheet({
       visible={visible}
       onClose={onClose}
       dismissable={!busy}
-      title="重命名"
-      left={<TextButton title="取消" onPress={onClose} disabled={busy} />}
+      title="Rename"
+      left={<TextButton title="Cancel" onPress={onClose} disabled={busy} />}
     >
-      <Input value={value} onChangeText={onChange} label="会话名称" editable={!busy} autoFocus />
+      <Input value={value} onChangeText={onChange} label="Session name" editable={!busy} autoFocus />
       <InlineError text={error} />
-      <Button title="保存" size="lg" busy={busy} disabled={!value.trim()} onPress={onSave} />
+      <Button title="Save" size="lg" busy={busy} disabled={!value.trim()} onPress={onSave} />
     </Sheet>
   )
 }
 
-/** 可以选中任意一段的全文。 */
+/** Full text of any segment can be selected. */
 export function SelectTextSheet({
   visible,
   onClose,
@@ -194,20 +194,20 @@ export function SelectTextSheet({
     <Sheet
       visible={visible}
       onClose={onClose}
-      title="选择文字"
-      left={<TextButton title="完成" strong onPress={onClose} />}
-      right={<TextButton title="复制全部" onPress={onCopy} />}
+      title="Select text"
+      left={<TextButton title="Done" strong onPress={onClose} />}
+      right={<TextButton title="Copy all" onPress={onCopy} />}
     >
       <View style={{ backgroundColor: colors.card, borderRadius: 16, padding: 14 }}>
         <Text selectable style={{ fontSize: 16, lineHeight: 25, color: colors.ink }}>
-          {text || '这条消息只有附件，没有文字。'}
+          {text || 'This message only has attachments, no text.'}
         </Text>
       </View>
     </Sheet>
   )
 }
 
-/** 编辑后重新发送：沿用对话回退，电脑上的文件不动。 */
+/** Edit and resend: reuses conversation rewind; files on the computer are untouched. */
 export function EditResendSheet({
   visible,
   onClose,
@@ -233,15 +233,15 @@ export function EditResendSheet({
 }) {
   return (
     <Sheet visible={visible} onClose={onClose} dismissable={!busy}>
-      <SheetHeading title="编辑后重新发送" detail="回退到这条消息，电脑上的文件不动。" />
+      <SheetHeading title="Edit and resend" detail="Rewind to this message; files on the computer are untouched." />
       <Callout>
-        {`会删掉从这条消息开始的 ${removed} 条对话记录，再发出修改后的内容。`}
+        {`This deletes ${removed} conversation records starting from this message, then sends the edited content.`}
       </Callout>
-      <Input value={value} onChangeText={onChange} label="修改后的消息" multiline editable={!busy} />
+      <Input value={value} onChangeText={onChange} label="Edited message" multiline editable={!busy} />
       {disabledReason ? <Footnote style={{ paddingTop: 0 }}>{disabledReason}</Footnote> : null}
       <InlineError text={error} />
       <SheetButtons
-        confirmLabel="回退并重新发送"
+        confirmLabel="Rewind and resend"
         busy={busy}
         disabled={disabled || !value.trim()}
         onCancel={onClose}

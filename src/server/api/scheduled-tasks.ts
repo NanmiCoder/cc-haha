@@ -1,14 +1,14 @@
 /**
  * Scheduled Tasks REST API
  *
- * GET    /api/scheduled-tasks           — 获取任务列表
- * GET    /api/scheduled-tasks/notification-capabilities — 通知渠道配置状态
- * POST   /api/scheduled-tasks           — 创建任务
- * GET    /api/scheduled-tasks/runs      — 获取所有任务的最近执行记录
- * GET    /api/scheduled-tasks/:id/runs  — 获取指定任务的执行记录
- * POST   /api/scheduled-tasks/:id/run   — 立即执行指定任务
- * PUT    /api/scheduled-tasks/:id       — 更新任务
- * DELETE /api/scheduled-tasks/:id       — 删除任务
+ * GET    /api/scheduled-tasks           — get the task list
+ * GET    /api/scheduled-tasks/notification-capabilities — notification channel config status
+ * POST   /api/scheduled-tasks           — create a task
+ * GET    /api/scheduled-tasks/runs      — get recent runs of all tasks
+ * GET    /api/scheduled-tasks/:id/runs  — get runs of the given task
+ * POST   /api/scheduled-tasks/:id/run   — run the given task now
+ * PUT    /api/scheduled-tasks/:id       — update a task
+ * DELETE /api/scheduled-tasks/:id       — delete a task
  */
 
 import { z } from 'zod/v4'

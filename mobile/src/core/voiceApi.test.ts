@@ -21,7 +21,7 @@ const catalog: VoiceCatalog = {
   limits: { maxAudioSeconds: 120, maxAudioBytes: 4 * 1024 * 1024 },
   correction: { defaultTarget: null, target: null },
 }
-const transcript = { text: '语音转写内容', audioSeconds: 2.5, inferenceSeconds: 0.4 }
+const transcript = { text: 'Voice transcription content', audioSeconds: 2.5, inferenceSeconds: 0.4 }
 const response = (value: unknown, status = 200) => ({
   ok: status >= 200 && status < 300, status, redirected: false, url: '',
   text: async () => JSON.stringify(value),
@@ -79,10 +79,10 @@ test('omitted voice overrides use the server preferences, without updating or pr
 
 test('voice API keeps server failure codes and supports cancellation before recording upload', async () => {
   const client = new ApiClient(host, 'fixture', {
-    fetch: async () => response({ error: 'voice/not-ready', message: '尚未准备语音模型' }, 409),
+    fetch: async () => response({ error: 'voice/not-ready', message: 'Voice model not prepared yet' }, 409),
   })
   await expect(transcribeVoice(client, new Uint8Array([1]), {})).rejects.toMatchObject({
-    status: 409, code: 'voice/not-ready', message: '尚未准备语音模型',
+    status: 409, code: 'voice/not-ready', message: 'Voice model not prepared yet',
   })
   const controller = new AbortController()
   controller.abort()

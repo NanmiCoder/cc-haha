@@ -7,7 +7,7 @@ import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/mi
  * (`appId` / `appSecret`) come from the QR binding in Desktop Settings → IM,
  * or from QQ_APP_ID / QQ_APP_SECRET.
  *
- * 启动：QQ_APP_ID=xxx QQ_APP_SECRET=yyy bun run qq/index.ts
+ * Start: QQ_APP_ID=xxx QQ_APP_SECRET=yyy bun run qq/index.ts
  */
 
 import { MediaFileType, QQBot, type ReplyTarget, type StreamSession } from '@tencent-connect/qqbot-nodejs'
@@ -222,7 +222,7 @@ async function collectAttachments(
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === attachments.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === attachments.length ? 'Attachment download failed, please try again later.' : `${failures} attachment(s) failed to download and were skipped.`,
     )
   }
   return refs

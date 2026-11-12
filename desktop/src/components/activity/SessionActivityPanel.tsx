@@ -755,7 +755,7 @@ export function SessionActivityPanel({
                   utilities would otherwise resolve by stylesheet order. */}
               <span className="inline-flex w-[52px] shrink-0">
                 {/* Named for what it measures, not the section: reusing the
-                    section title made screen readers announce "任务, 50%". */}
+                    section title made screen readers announce "Tasks, 50%". */}
                 <Progress
                   size="xs"
                   tone="success"

@@ -1,13 +1,13 @@
 /**
  * Conversation API Routes
  *
- * 提供对话交互的 REST 端点。实际的流式对话通过 WebSocket 处理，
- * 此处的 REST API 用于非流式操作与状态查询。
+ * Provides REST endpoints for conversation interaction. Actual streaming conversations go through WebSocket;
+ * this REST API is for non-streaming operations and status queries.
  *
  * Routes:
- *   POST /api/sessions/:id/chat        — 未实现；返回 501，发送请使用 WebSocket
- *   GET  /api/sessions/:id/chat/status  — 查询对话状态
- *   POST /api/sessions/:id/chat/stop    — 停止生成
+ *   POST /api/sessions/:id/chat        — not implemented; returns 501, use WebSocket to send
+ *   GET  /api/sessions/:id/chat/status  — query conversation status
+ *   POST /api/sessions/:id/chat/stop    — stop generation
  */
 
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'

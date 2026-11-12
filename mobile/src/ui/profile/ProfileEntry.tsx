@@ -19,8 +19,8 @@ function ConnectedEntry({ client }: { client: ApiClient | null }) {
   return (
     <Group style={{ marginBottom: 16 }}>
       <ListRow
-        title="个人主页"
-        subtitle={value?.displayName || '个人资料、Token 用量与使用记录'}
+        title="Profile"
+        subtitle={value?.displayName || 'Profile, token usage and usage records'}
         minHeight={72}
         leading={<ProfileAvatar profile={value} size={40} />}
         trailing={<Icon name="chevron-right" size={16} color={colors.chevron} />}

@@ -3,7 +3,7 @@ import { Text } from '../Text'
 import { Icon, useColors, type IconName } from '../kit'
 import type { ComposerAttachment } from '../../core/chatComposer'
 
-/** 运行设置 chip（36 高、圆角 18、发丝描边、尾部下箭头）。长模型名截断而不撑破一行。 */
+/** Run settings chip (36 high, radius 18, hairline outline, trailing down chevron). Long model names truncate instead of breaking the row. */
 export function TaskChip({
   label,
   icon,
@@ -50,7 +50,7 @@ export function TaskChip({
   )
 }
 
-/** 44 圆形描边按钮（“+”材料）。 */
+/** 44 Round outline button ("+" materials). */
 export function RoundButton({
   icon,
   label,
@@ -86,7 +86,7 @@ export function RoundButton({
   )
 }
 
-/** “团队”切换胶囊：未选描边，选中蓝底蓝字。 */
+/** "Team" toggle capsule: outlined when off, blue background and text when on. */
 export function TeamToggle({
   value,
   onChange,
@@ -103,7 +103,7 @@ export function TeamToggle({
   return (
     <Pressable
       accessibilityRole="switch"
-      accessibilityLabel="团队"
+      accessibilityLabel="Team"
       accessibilityHint={hint}
       accessibilityState={{ checked: value, disabled }}
       disabled={disabled}
@@ -124,13 +124,13 @@ export function TeamToggle({
       <Text
         style={{ fontSize: 14, color: fg, fontWeight: value ? '600' : '400' }}
       >
-        团队
+        Team
       </Text>
     </Pressable>
   )
 }
 
-/** 墨色“开始 ↑”胶囊，高 48。 */
+/** Ink "Start ↑" capsule, 48 high. */
 export function StartButton({
   onPress,
   disabled,
@@ -146,7 +146,7 @@ export function StartButton({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="开始"
+      accessibilityLabel="Start"
       accessibilityState={{ disabled: inactive, busy }}
       disabled={inactive}
       onPress={onPress}
@@ -162,7 +162,7 @@ export function StartButton({
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <Text style={{ fontSize: 16, fontWeight: '600', color: fg }}>开始</Text>
+      <Text style={{ fontSize: 16, fontWeight: '600', color: fg }}>Start</Text>
       {busy ? (
         <ActivityIndicator size="small" color={fg} />
       ) : (
@@ -172,7 +172,7 @@ export function StartButton({
   )
 }
 
-/** 64 缩略图，右上角 × 移除。图片显示预览，文件显示图标和文件名。 */
+/** 64 Thumbnail with × at the top right to remove. Images show a preview, files show an icon and file name. */
 export function AttachmentThumb({
   item,
   onRemove,
@@ -183,7 +183,7 @@ export function AttachmentThumb({
   disabled?: boolean
 }) {
   const colors = useColors()
-  const name = item.name ?? (item.type === 'image' ? '图片' : '文件')
+  const name = item.name ?? (item.type === 'image' ? 'Image' : 'Files')
   return (
     <View style={{ width: 64, height: 64 }}>
       <View
@@ -224,7 +224,7 @@ export function AttachmentThumb({
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`移除${name}`}
+        accessibilityLabel={`Remove ${name}`}
         disabled={disabled}
         hitSlop={8}
         onPress={onRemove}
@@ -250,12 +250,12 @@ export function AttachmentThumb({
 
 const materials: { kind: 'photos' | 'camera' | 'file'; label: string; icon: IconName }[] =
   [
-    { kind: 'photos', label: '相册', icon: 'image' },
-    { kind: 'camera', label: '拍照', icon: 'camera' },
-    { kind: 'file', label: '文件', icon: 'file' },
+    { kind: 'photos', label: 'Photo library', icon: 'image' },
+    { kind: 'camera', label: 'Take photo', icon: 'camera' },
+    { kind: 'file', label: 'Files', icon: 'file' },
   ]
 
-/** 材料面板：相册 / 拍照 / 文件三个图块。 */
+/** Materials panel: Photos / Camera / Files tiles. */
 export function MaterialTiles({
   onPick,
   disabled,

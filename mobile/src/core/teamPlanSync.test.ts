@@ -23,7 +23,7 @@ const plan = (patch: Partial<TeamPlanRecord> = {}): TeamPlanRecord => ({
 type Call = { method: string; path: string; body?: Record<string, unknown> }
 type Reply = TeamPlanRecord | null | Error | Promise<TeamPlanRecord | null>
 
-/** 按调用顺序给出回复的假客户端；记录每次请求，方便核对 requestId 和重读。 */
+/** A fake client that replies in call order; records every request to check requestId and rereads. */
 function harness(replies: Reply[]) {
   const calls: Call[] = []
   const respond = async () => {
@@ -46,10 +46,10 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('team plan sync', () => {
   test('a retried approval reuses its request id so the computer cannot launch the team twice', async () => {
-    const { sync, calls } = harness([plan(), new ApiError('无法连接服务器', 0, 'NETWORK_ERROR'), plan({ state: 'running', revision: 3 })])
+    const { sync, calls } = harness([plan(), new ApiError('Cannot connect to the server', 0, 'NETWORK_ERROR'), plan({ state: 'running', revision: 3 })])
     await sync.load()
     expect(await sync.act('approve')).toBe(false)
-    expect(sync.snapshot.error).toBe('无法连接服务器')
+    expect(sync.snapshot.error).toBe('Cannot connect to the server')
     expect(await sync.act('approve')).toBe(true)
     const approvals = calls.filter((call) => call.path.endsWith('/approve'))
     expect(approvals.map((call) => call.body?.requestId)).toEqual(['request-1', 'request-1'])
@@ -68,7 +68,7 @@ describe('team plan sync', () => {
     await settle()
     expect(calls.map((call) => call.method)).toEqual(['GET', 'PATCH', 'GET'])
     expect(sync.snapshot.plan?.revision).toBe(5)
-    expect(sync.snapshot.error).toContain('方案刚在别处更新过')
+    expect(sync.snapshot.error).toContain('The plan was just updated elsewhere')
   })
 
   test('a plan removed elsewhere (404) is read again, so the review entry goes away', async () => {
@@ -87,7 +87,7 @@ describe('team plan sync', () => {
     const first = sync.load()
     await sync.load()
     expect(sync.snapshot.plan).toBeNull()
-    // 团队删掉之前发起的读取迟到，不能把已经没有的方案又放回来。
+    // A read started before the team was deleted arriving late must not put back a plan that no longer exists.
     releaseOld(plan())
     await first
     expect(sync.snapshot.plan).toBeNull()

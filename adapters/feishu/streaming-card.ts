@@ -1,15 +1,15 @@
 /**
- * 单个 chat 的流式卡片生命周期状态机
+ * Streaming card lifecycle state machine for a single chat
  *
- * 负责把 LLM 的流式文本增量渲染成一张随着内容生长的飞书 CardKit 卡片。
- * 封装了：
- * - CardKit API 的 5 步调用（create → send → stream × N → settings → update）
- * - 节流 + 并发保护（FlushController）
- * - Markdown 预处理（optimizeMarkdownForFeishu + sanitizeTextForCard）
- * - 错误降级：CardKit 挂了自动切到 im.message.patch + Schema 2.0 卡
- * - 速率限制：230020 跳帧，下次重试；230099 表格超限禁用 CardKit 流式
+ * Renders the LLM's streaming text increments into a Feishu CardKit card that grows with the content.
+ * Encapsulates:
+ * - The 5 CardKit API calls (create → send → stream × N → settings → update)
+ * - Throttling + concurrency protection (FlushController)
+ * - Markdown preprocessing (optimizeMarkdownForFeishu + sanitizeTextForCard)
+ * - Error fallback: if CardKit fails, switch automatically to im.message.patch + Schema 2.0 card
+ * - Rate limits: 230020 skips a frame and retries next time; 230099 table overflow disables CardKit streaming
  *
- * 每个 chatId 一个实例，由 index.ts 的 handleServerMessage 协调 lifecycle。
+ * One instance per chatId; index.ts handleServerMessage coordinates the lifecycle.
  */
 
 import type * as Lark from '@larksuiteoapi/node-sdk'
@@ -31,13 +31,13 @@ import { optimizeMarkdownForFeishu, sanitizeTextForCard } from './markdown-style
 // Card JSON builders
 // ---------------------------------------------------------------------------
 
-/** 初始流式卡片：Schema 2.0 + streaming_mode + element_id。
+/** Initial streaming card: Schema 2.0 + streaming_mode + element_id.
  *
- *  只包含一个 markdown 元素 `streaming_content`，初始内容为 loading 提示。
- *  由 renderedText() 统一控制显示状态（思考中 / reasoning / 正文），
- *  避免静态 loading 元素和 streaming 内容同时显示造成"两个思考中"。
+ *  Contains a single markdown element `streaming_content` whose initial content is a loading hint.
+ *  renderedText() controls what is displayed (thinking / reasoning / body),
+ *  avoiding a static loading element and streaming content showing at once ("two thinking indicators").
  *
- *  finalize 时整卡 update 替换为纯答复正文。 */
+ *  On finalize the whole card is updated to just the reply body. */
 export function buildInitialStreamingCard(): Record<string, unknown> {
   return {
     schema: '2.0',
@@ -49,7 +49,7 @@ export function buildInitialStreamingCard(): Record<string, unknown> {
       elements: [
         {
           tag: 'markdown',
-          content: '☁️ *正在思考中...*',
+          content: '☁️ *Thinking...*',
           text_align: 'left',
           element_id: STREAMING_ELEMENT_ID,
         },
@@ -58,11 +58,11 @@ export function buildInitialStreamingCard(): Record<string, unknown> {
   }
 }
 
-/** 已渲染完成的卡片：Schema 2.0，无 streaming_mode，单 markdown 元素。
+/** Fully rendered card: Schema 2.0, no streaming_mode, single markdown element.
  *
- *  代码块的 "10 行代码 >" 手机端 bug 是通过 `optimizeMarkdownForFeishu` 把
- *  fenced code 降级成纯文字来规避的，不依赖多元素结构。这里就是最朴素的
- *  一张纯 markdown 卡片。 */
+ *  The mobile "10 lines of code >" bug is avoided by `optimizeMarkdownForFeishu` downgrading
+ *  fenced code to plain text, not by a multi-element structure. This is simply
+ *  the plainest markdown card. */
 export function buildRenderedCard(renderedMarkdown: string): Record<string, unknown> {
   return {
     schema: '2.0',
@@ -81,30 +81,30 @@ export function buildRenderedCard(renderedMarkdown: string): Record<string, unkn
   }
 }
 
-/** 错误卡片：红色 header + 错误文本。用于 abort() 兜底。 */
+/** Error card: red header + error text. Used as the abort() fallback. */
 export function buildErrorCard(message: string): Record<string, unknown> {
   return {
     schema: '2.0',
     config: { update_multi: true },
     header: {
-      title: { tag: 'plain_text', content: '❌ 出错了' },
+      title: { tag: 'plain_text', content: '❌ Something went wrong' },
       template: 'red',
     },
     body: {
       elements: [
         {
           tag: 'markdown',
-          content: message || '未知错误',
+          content: message || 'Unknown error',
         },
       ],
     },
   }
 }
 
-/** 从末尾截取最多 maxLen 个字符；超过时前缀 "..." 保留最新 maxLen-3 个字。
+/** Take at most maxLen characters from the end; when longer, prefix "..." and keep the latest maxLen-3 characters.
  *
- *  思考内容往往是"先分析 → 得出结论"的线性过程，截取末尾比截取开头更有用 —— 用户
- *  最关心的是"模型现在在想什么"，不是"五千个 token 前在想什么"。 */
+ *  Thinking is usually a linear "analyze → conclude" process, so the tail is more useful than the head —— users
+ *  care most about "what the model is thinking now", not "what it thought five thousand tokens ago". */
 function truncateReasoningPreview(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
   return '...' + text.slice(text.length - maxLen + 3)
@@ -115,12 +115,12 @@ function truncateReasoningPreview(text: string, maxLen: number): string {
 // ---------------------------------------------------------------------------
 
 export type StreamingCardPhase =
-  | 'idle' // constructor 后、ensureCreated 之前
-  | 'creating' // ensureCreated 进行中
-  | 'streaming' // 初始卡已发出，接受 appendText
-  | 'finalizing' // finalize 进行中
-  | 'completed' // finalize 完成
-  | 'aborted' // abort 已调用
+  | 'idle' // after constructor, before ensureCreated
+  | 'creating' // ensureCreated in progress
+  | 'streaming' // initial card sent, accepting appendText
+  | 'finalizing' // finalize in progress
+  | 'completed' // finalize done
+  | 'aborted' // abort called
 
 export type StreamingCardDeps = {
   larkClient: Lark.Client
@@ -136,12 +136,12 @@ type ToolStep = {
   status: 'running' | 'done'
 }
 
-/** 最多保留的 reasoning 预览字符数，超过则取末尾 + 省略号前缀。 */
+/** Maximum reasoning preview characters kept; beyond that take the tail with an ellipsis prefix. */
 const REASONING_PREVIEW_CHARS = 600
 
-/** 连续 streamCardContent 失败多少次后才放弃 CardKit 流式。
- *  设成 3 而不是 1，是为了避免单次抖动（网络、临时校验失败等）把整张卡片
- *  冻结到 finalize —— 用户看到的就是 "long wait → 一次性 dump"。 */
+/** How many consecutive streamCardContent failures before giving up on CardKit streaming.
+ *  Set to 3 rather than 1 so a single blip (network, transient validation failure, etc.) does not freeze
+ *  the whole card until finalize —— which users experience as "long wait → dump everything at once". */
 const STREAM_FAIL_DISABLE_THRESHOLD = 3
 
 export class StreamingCard {
@@ -151,26 +151,26 @@ export class StreamingCard {
   private creationPromise: Promise<void> | null = null
 
   // ---- CardKit state ----
-  /** CardKit card_id。null = CardKit 创建失败，已退到 patch fallback 模式。 */
+  /** CardKit card_id. null = CardKit creation failed and we fell back to patch mode. */
   private cardId: string | null = null
-  /** IM message_id。始终应该有值（否则连 patch 也做不了）。 */
+  /** IM message_id. Should always be set (otherwise even patch is impossible). */
   private messageId: string | null = null
   /** Same idempotency key for the first IM send and any create fallback. */
   private readonly outboundMessageUuid = randomUUID()
-  /** CardKit cardElement.content() 单调递增序列号。 */
+  /** Monotonically increasing sequence number for CardKit cardElement.content(). */
   private sequence = 0
-  /** CardKit 流式还在工作。230099 或连续 N 次未知错误之后置为 false，
-   *  中间帧将跳过，最终 finalize 仍会尝试 settings+update（cardId 仍然有效）。 */
+  /** CardKit streaming still working. Set to false after 230099 or N consecutive unknown errors;
+   *  intermediate frames are skipped, final finalize still tries settings+update (cardId still valid). */
   private cardKitStreamActive = false
-  /** 连续 streamCardContent 未知错误计数。一次成功就清零。 */
+  /** Consecutive unknown streamCardContent error count. Reset on any success. */
   private consecutiveStreamFailures = 0
 
   // ---- text state ----
   private accumulatedText = ''
   private lastFlushedText = ''
-  /** 累积 thinking_delta，渲染为卡片顶部的推理预览 blockquote。 */
+  /** Accumulated thinking_delta, rendered as the reasoning preview blockquote at the top of the card. */
   private accumulatedReasoningText = ''
-  /** 工具调用轨迹：按 startTool 调用顺序排列，completeTool 改其 status。 */
+  /** Tool call trace: ordered by startTool calls; completeTool updates status. */
   private toolSteps: ToolStep[] = []
 
   // ---- flush ----
@@ -185,8 +185,8 @@ export class StreamingCard {
   // ------------------------------------------------------------------
 
   /**
-   * 首次创建卡片（CardKit 主路径；失败则降级到直发 Schema 2.0 卡 + patch）。
-   * 幂等：正在创建时等待同一次创建，已创建时直接返回。
+   * Create the card for the first time (CardKit main path; on failure fall back to sending a Schema 2.0 card + patch).
+   * Idempotent: while creating, waits for the same creation; once created, returns immediately.
    */
   async ensureCreated(): Promise<void> {
     if (this.creationPromise) return this.creationPromise
@@ -198,7 +198,7 @@ export class StreamingCard {
 
   private async createCard(): Promise<void> {
     try {
-      // CardKit 主路径
+      // CardKit main path
       const cardId = await createCardEntity(
         this.deps.larkClient,
         buildInitialStreamingCard(),
@@ -217,7 +217,7 @@ export class StreamingCard {
       if (this.phase === 'creating') this.phase = 'streaming'
       this.flushController.setCardMessageReady(true)
     } catch (cardKitErr) {
-      // CardKit 不可用（权限、网络、API 兼容性等）→ 降级到直发卡片 + patch
+      // CardKit unavailable (permissions, network, API compatibility, etc.) → fall back to direct card + patch
       console.warn(
         '[Feishu StreamingCard] CardKit create/send failed, falling back to im.message.patch:',
         cardKitErr instanceof Error ? cardKitErr.message : cardKitErr,
@@ -244,7 +244,7 @@ export class StreamingCard {
         if (this.phase === 'creating') this.phase = 'streaming'
         this.flushController.setCardMessageReady(true)
       } catch (fallbackErr) {
-        // 兜底都失败了 —— 无法显示任何东西
+        // Even the fallback failed —— nothing can be displayed
         console.error(
           '[Feishu StreamingCard] Fallback card creation also failed:',
           fallbackErr instanceof Error ? fallbackErr.message : fallbackErr,
@@ -255,15 +255,15 @@ export class StreamingCard {
       }
     }
 
-    // 卡片可写之后若已有 buffered 内容（text / reasoning / tools），
-    // 立刻触发一次 flush —— 否则 content_start{tool_use} 或 thinking 在
-    // ensureCreated 期间到达的状态会一直卡在节流 gate 上，用户看不到。
+    // Once the card is writable, if there is already buffered content (text / reasoning / tools),
+    // trigger a flush immediately —— otherwise state from content_start{tool_use} or thinking arriving
+    // during ensureCreated stays stuck at the throttle gate and the user never sees it.
     if (this.phase === 'streaming' && this.hasAnyContent()) {
       void this.flushController.throttledUpdate(this.currentThrottle())
     }
   }
 
-  /** 追加文本增量。不等待，只安排一次节流 flush。 */
+  /** Append a text delta. Does not wait; just schedules a throttled flush. */
   appendText(delta: string): void {
     if (!delta) return
     if (this.phase === 'completed' || this.phase === 'aborted') return
@@ -271,7 +271,7 @@ export class StreamingCard {
     void this.flushController.throttledUpdate(this.currentThrottle())
   }
 
-  /** 追加 reasoning/thinking delta —— 与 appendText 并列，渲染为顶部预览。 */
+  /** Append a reasoning/thinking delta —— parallel to appendText, rendered as the top preview. */
   appendReasoning(delta: string): void {
     if (!delta) return
     if (this.phase === 'completed' || this.phase === 'aborted') return
@@ -279,7 +279,7 @@ export class StreamingCard {
     void this.flushController.throttledUpdate(this.currentThrottle())
   }
 
-  /** 记录一次 tool_use 开始。dedupe 按 toolUseId（缺省时按 name+index）。 */
+  /** Record a tool_use start. Deduped by toolUseId (or name+index when absent). */
   startTool(toolUseId: string | undefined, toolName: string | undefined): void {
     if (this.phase === 'completed' || this.phase === 'aborted') return
     if (!toolName) return
@@ -289,7 +289,7 @@ export class StreamingCard {
     void this.flushController.throttledUpdate(this.currentThrottle())
   }
 
-  /** 把指定 tool 的状态从 running 切到 done。先按 id 匹配，再 fallback name。 */
+  /** Switch the given tool's status from running to done. Match by id first, then fall back to name. */
   completeTool(toolUseId: string | undefined, toolName: string | undefined): void {
     if (this.phase === 'completed' || this.phase === 'aborted') return
     let step: ToolStep | undefined
@@ -311,7 +311,7 @@ export class StreamingCard {
     void this.flushController.throttledUpdate(this.currentThrottle())
   }
 
-  /** 是否已有任何可渲染内容（文本 / 推理 / 工具）。 */
+  /** Whether there is any renderable content (text / reasoning / tools). */
   private hasAnyContent(): boolean {
     return (
       this.accumulatedText.length > 0 ||
@@ -321,16 +321,16 @@ export class StreamingCard {
   }
 
   /**
-   * 流式结束，切到最终态。
-   * - 先等待正在进行的创建，再 waitForFlush 确保中间帧写入完成
-   * - 然后 close streaming_mode（仅 CardKit 路径）
-   * - 最后用完整 rendered 卡片 update
-   * - complete FlushController 锁死，后续 appendText 被忽略
+   * Streaming finished; switch to the final state.
+   * - Wait for any in-progress creation, then waitForFlush to ensure intermediate frames are written
+   * - Then close streaming_mode (CardKit path only)
+   * - Finally update with the fully rendered card
+   * - complete locks the FlushController; later appendText calls are ignored
    */
   async finalize(): Promise<void> {
     if (this.phase === 'completed' || this.phase === 'aborted') return
     if (this.phase === 'idle') {
-      // 完全没开始 —— 直接标记完成
+      // Never started —— mark complete directly
       this.phase = 'completed'
       this.flushController.complete()
       return
@@ -346,7 +346,7 @@ export class StreamingCard {
     const finalText = this.terminalText()
     try {
       if (this.cardId) {
-        // CardKit 路径: settings(false) + card.update（即使中间 stream 曾失败）
+        // CardKit path: settings(false) + card.update (even if intermediate streams failed)
         this.sequence += 1
         await setCardStreamingMode(
           this.deps.larkClient,
@@ -362,7 +362,7 @@ export class StreamingCard {
           this.sequence,
         )
       } else if (this.messageId) {
-        // Patch fallback 路径: 全量替换
+        // Patch fallback path: full replace
         await withImCardRequestTimeout('im.message.patch', () =>
           this.deps.larkClient.im.message.patch({
             path: { message_id: this.messageId! },
@@ -390,7 +390,7 @@ export class StreamingCard {
           )
         }
       }
-      // 不抛出 —— 用户已经看到某种版本的内容，finalize 失败不是致命错误
+      // Don't throw —— the user has already seen some version of the content; a finalize failure is not fatal
     } finally {
       this.phase = 'completed'
       this.lastFlushedText = finalText
@@ -398,7 +398,7 @@ export class StreamingCard {
     }
   }
 
-  /** 错误中止 —— 尝试把错误信息渲染到卡片上。 */
+  /** Abort on error —— try to render the error message on the card. */
   async abort(err: Error): Promise<void> {
     if (this.phase === 'completed' || this.phase === 'aborted') return
     const wasIdle = this.phase === 'idle'
@@ -408,7 +408,7 @@ export class StreamingCard {
     await this.flushController.waitForFlush().catch(() => {})
 
     if (wasIdle || !this.messageId) {
-      // 卡片还没创建成功，没法渲染错误 —— 由上层 sendText 兜底
+      // Card was never created, so the error can't be rendered —— the caller falls back to sendText
       this.flushController.complete()
       return
     }
@@ -424,7 +424,7 @@ export class StreamingCard {
           this.cardId,
           false,
           this.sequence,
-        ).catch(() => {}) // 关流失败无所谓，update 才是关键
+        ).catch(() => {}) // closing the stream failing doesn't matter; update is what counts
         this.sequence += 1
         await updateCardKitCard(
           this.deps.larkClient,
@@ -454,29 +454,29 @@ export class StreamingCard {
   // Internals
   // ------------------------------------------------------------------
 
-  /** 当前应使用的节流时长。 */
+  /** Throttle duration to use right now. */
   private currentThrottle(): number {
     return this.cardKitStreamActive ? THROTTLE.CARDKIT_MS : THROTTLE.PATCH_MS
   }
 
-  /** 组合 reasoning + toolSteps + answerText，经 sanitize + optimize 管道出来。
+  /** Combine reasoning + toolSteps + answerText through the sanitize + optimize pipeline.
    *
-   *  顺序为 tools → reasoning → answer，以分隔符隔开：
-   *  - tools 永远在最顶部，方便用户先看到 "现在在跑什么"
-   *  - reasoning 居中（thinking 文本）
-   *  - answer 在底部
+   *  Order is tools → reasoning → answer, separated by dividers:
+   *  - tools always at the very top so the user first sees "what is running now"
+   *  - reasoning in the middle (thinking text)
+   *  - answer at the bottom
    *
-   *  整张卡片只用最朴素的 markdown：plain text + emoji + bold + line break。
-   *  **不使用** blockquote / list / heading —— 这些会被
-   *  optimizeMarkdownForFeishu 触发额外的 <br> 注入和 H 降级，并且历史上
-   *  曾导致飞书 CardKit 校验报错（"long wait → 一次性 dump" 退化的根因）。
-   *  任意 section 为空则忽略；全部为空时返回等待提示。 */
+   *  The whole card uses only the plainest markdown: plain text + emoji + bold + line break.
+   *  **No** blockquote / list / heading —— these trigger extra <br> injection and H downgrades
+   *  in optimizeMarkdownForFeishu, and historically caused
+   *  Feishu CardKit validation errors (the root cause of the "long wait → dump at once" regression).
+   *  Empty sections are skipped; returns the waiting hint when all are empty. */
   private renderedText(): string {
     const sections: string[] = []
 
     if (this.toolSteps.length > 0) {
-      // 单行 inline 形式: ⚙️ Bash · ✅ Read · ⚙️ Glob ...
-      // 用中点分隔，比 markdown list 更不容易触发 Feishu 排版异常
+      // Single-line inline form: ⚙️ Bash · ✅ Read · ⚙️ Glob ...
+      // Separated by middle dots; less likely than a markdown list to trigger Feishu layout glitches
       const inline = this.toolSteps
         .map((s) => `${s.status === 'done' ? '✅' : '⚙️'} ${s.name}`)
         .join(' · ')
@@ -488,33 +488,33 @@ export class StreamingCard {
         this.accumulatedReasoningText,
         REASONING_PREVIEW_CHARS,
       )
-      // openclaw 风格: 一行 header + 空行 + 原文。不引用 / 不缩进，让飞书
-      // markdown 元素按普通段落渲染。
-      sections.push(`💭 **思考中**\n\n${preview}`)
+      // openclaw style: one header line + blank line + raw text. No quoting / indenting, so the Feishu
+      // markdown element renders it as a normal paragraph.
+      sections.push(`💭 **Thinking**\n\n${preview}`)
     }
 
     if (this.accumulatedText) {
       sections.push(this.accumulatedText)
     }
 
-    if (sections.length === 0) return '☁️ *正在思考中...*'
+    if (sections.length === 0) return '☁️ *Thinking...*'
 
-    // 用一行分隔符把 sections 分开，比单纯空行更稳定
+    // Separate sections with a divider line, more stable than plain blank lines
     const composed = sections.join('\n\n---\n\n')
 
-    // 表格数限制在 optimize 之前做 —— sanitize 对原始 markdown 最准
+    // Apply the table limit before optimize —— sanitize is most accurate on raw markdown
     const limited = sanitizeTextForCard(composed)
     return optimizeMarkdownForFeishu(limited, 2)
   }
 
-  /** 终态文本: 只渲染最终答复正文，丢弃 reasoning 和 toolSteps。
+  /** Final text: render only the final reply body, discarding reasoning and toolSteps.
    *
-   *  推理过程和工具调用是"过程态"信息，已经在流式中展示给用户看过；
-   *  message_complete 之后用户应该看到一张干净的答复卡（与 Desktop UI 对齐）。
-   *  这个方法专供 finalize 调用，不要在中间帧用。
+   *  Reasoning and tool calls are "in-progress" information already shown during streaming;
+   *  after message_complete the user should see a clean reply card (aligned with the Desktop UI).
+   *  This method is only for finalize; do not use it for intermediate frames.
    *
-   *  边界情况: 如果完全没有 accumulatedText（比如纯 thinking 没产出答案
-   *  这种异常 case），退回到 renderedText() 至少把推理留下来当兜底。 */
+   *  Edge case: if there is no accumulatedText at all (e.g. an abnormal case where only thinking
+   *  produced no answer), fall back to renderedText() so at least the reasoning is kept. */
   private terminalText(): string {
     if (this.accumulatedText) {
       const limited = sanitizeTextForCard(this.accumulatedText)
@@ -523,20 +523,20 @@ export class StreamingCard {
     return this.renderedText()
   }
 
-  /** FlushController 调用的 doFlush。 */
+  /** doFlush called by FlushController. */
   private async performFlush(): Promise<void> {
     if (this.phase !== 'streaming') return
     if (!this.messageId) return
 
-    // CardKit 中间帧被禁用但 cardId 仍有效 —— 跳过中间 flush，
-    // 等 finalize 用 cardId 做最终 settings + update
+    // CardKit intermediate frames disabled but cardId still valid —— skip intermediate flushes,
+    // wait for finalize to do the final settings + update with cardId
     if (this.cardId && !this.cardKitStreamActive) return
 
     const finalText = this.renderedText()
     if (finalText === this.lastFlushedText) return
 
     if (this.cardKitStreamActive && this.cardId) {
-      // CardKit 主路径
+      // CardKit main path
       this.sequence += 1
       try {
         await streamCardContent(
@@ -550,25 +550,25 @@ export class StreamingCard {
         this.consecutiveStreamFailures = 0
       } catch (err) {
         if (isCardRateLimitError(err)) {
-          // 跳帧 —— 下次 throttledUpdate 会重试
+          // Skip frame —— the next throttledUpdate retries
           return
         }
         if (isCardTableLimitError(err)) {
-          // 表格超限 —— 禁用流式中间帧，等 finalize 用 update 一次性发完整卡
+          // Table overflow —— disable streaming intermediate frames; finalize sends the full card via update
           console.warn(
             '[Feishu StreamingCard] 230099 table limit, disabling CardKit streaming',
           )
           this.cardKitStreamActive = false
           return
         }
-        // 其他错误 —— 跳帧重试，避免单次失败把整张卡冻在最初状态。
-        // 只有连续失败超过阈值才认定 CardKit 不可用并降级 —— 否则
-        // 用户会看到 "long wait → 完事后一次性把所有内容刷出来" 的体验
-        // 退化（这是 streamCardContent 一旦报错就 disable 流式造成的）。
+        // Other errors —— skip the frame and retry, so a single failure doesn't freeze the card in its initial state.
+        // Only after consecutive failures exceed the threshold do we deem CardKit unavailable and fall back —— otherwise
+        // users see the "long wait → flush everything at once when done" experience
+        // regression (caused by disabling streaming the moment streamCardContent errors).
         this.consecutiveStreamFailures += 1
         const errMsg = err instanceof Error ? err.message : String(err)
         if (this.consecutiveStreamFailures === 1) {
-          // 首帧失败先记录一次，避免日志风暴
+          // Log the first-frame failure once to avoid a log storm
           console.warn(
             '[Feishu StreamingCard] stream flush failed (will retry):',
             errMsg,
@@ -584,7 +584,7 @@ export class StreamingCard {
         return
       }
     } else {
-      // Patch fallback 路径（CardKit 从未成功）
+      // Patch fallback path (CardKit never succeeded)
       try {
         await withImCardRequestTimeout('im.message.patch', () =>
           this.deps.larkClient.im.message.patch({

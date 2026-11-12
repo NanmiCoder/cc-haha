@@ -111,7 +111,7 @@ export class ApiClient {
         value = raw ? JSON.parse(raw) : undefined
       } catch {
         throw new ApiError(
-          '服务器返回了无效数据',
+          'The server returned invalid data',
           response.status,
           'INVALID_RESPONSE'
         )
@@ -128,7 +128,7 @@ export class ApiClient {
     options?: RequestControlOptions
   ): Promise<string> {
     if (!TOOL_IMAGE_PATH.test(path))
-      return Promise.reject(new ApiError('图片地址无效', 0, 'INVALID_PATH'))
+      return Promise.reject(new ApiError('Invalid image URL', 0, 'INVALID_PATH'))
     return this.#send(`${path}?variant=${variant}`, options ?? {}, 'image/*', async (response) => {
       if (!response.ok) {
         let value: unknown
@@ -140,10 +140,10 @@ export class ApiClient {
         throw failure(response.status, value)
       }
       if (!response.arrayBuffer && !response.base64)
-        throw new ApiError('当前网络组件无法读取图片', 0, 'UNSUPPORTED')
+        throw new ApiError('The current network component cannot read images', 0, 'UNSUPPORTED')
       const type = response.headers?.get('Content-Type')?.split(';')[0]?.trim()
       if (!type?.startsWith('image/') || type === 'image/svg+xml')
-        throw new ApiError('服务器返回了无效图片', response.status, 'INVALID_RESPONSE')
+        throw new ApiError('The server returned an invalid image', response.status, 'INVALID_RESPONSE')
       const encoded = response.base64
         ? await response.base64()
         : bytesToBase64(new Uint8Array(await response.arrayBuffer!()))
@@ -163,17 +163,17 @@ export class ApiClient {
       path.includes('\\') ||
       path.includes('#')
     )
-      throw new ApiError('请求路径无效', 0, 'INVALID_PATH')
+      throw new ApiError('Invalid request path', 0, 'INVALID_PATH')
     const url = new URL(path, this.host.url)
     if (url.origin !== this.host.url)
-      throw new ApiError('禁止跨主机请求', 0, 'CROSS_ORIGIN')
+      throw new ApiError('Cross-host requests are not allowed', 0, 'CROSS_ORIGIN')
     if (options.body !== undefined && options.rawBody !== undefined)
-      throw new ApiError('请求不能同时包含 JSON 和二进制数据', 0, 'INVALID_BODY')
+      throw new ApiError('A request cannot contain both JSON and binary data', 0, 'INVALID_BODY')
     const controller = new AbortController()
     let timedOut: 'headers' | 'body' | null = null
     const timeoutMs = options.timeoutMs ?? this.#timeoutMs
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
-      throw new ApiError('请求超时配置无效', 0, 'INVALID_TIMEOUT')
+      throw new ApiError('Invalid request timeout config', 0, 'INVALID_TIMEOUT')
     const abort = () => controller.abort(options.signal?.reason)
     if (options.signal?.aborted) abort()
     else options.signal?.addEventListener('abort', abort, { once: true })
@@ -184,7 +184,7 @@ export class ApiClient {
     let timer = setTimeout(expire('headers'), timeoutMs)
     try {
       if (controller.signal.aborted)
-        throw new ApiError('请求已取消', 0, 'ABORTED')
+        throw new ApiError('Request canceled', 0, 'ABORTED')
       const response = await this.#fetch(url.toString(), {
         method: options.method ?? 'GET',
         headers: {
@@ -215,7 +215,7 @@ export class ApiClient {
         (response.status >= 300 && response.status < 400)
       )
         throw new ApiError(
-          '服务器重定向已被拒绝',
+          'Server redirect was rejected',
           response.status,
           'REDIRECT_BLOCKED'
         )
@@ -228,14 +228,14 @@ export class ApiClient {
     } catch (error) {
       const failure =
         timedOut === 'headers'
-          ? new ApiError('连接超时，请检查电脑是否在线', 0, 'TIMEOUT')
+          ? new ApiError('Connection timed out; check whether the computer is online', 0, 'TIMEOUT')
           : timedOut === 'body'
-            ? new ApiError('网络太慢，内容没能及时传完，请稍后重试', 0, 'TIMEOUT')
+            ? new ApiError('Network too slow, content could not finish transferring; please retry later', 0, 'TIMEOUT')
             : options.signal?.aborted
-              ? new ApiError('请求已取消', 0, 'ABORTED')
+              ? new ApiError('Request canceled', 0, 'ABORTED')
               : error instanceof ApiError
                 ? error
-                : new ApiError('无法连接服务器，请检查地址与网络', 0, 'NETWORK_ERROR')
+                : new ApiError('Cannot connect to the server; check the address and network', 0, 'NETWORK_ERROR')
       this.#settled(failure)
       throw failure
     } finally {
@@ -287,7 +287,7 @@ export class ApiClient {
       options
     )
     if (!session.authenticated)
-      throw new ApiError('需要重新配对这台电脑', 401, 'PAIRING_REQUIRED')
+      throw new ApiError('This computer needs to be paired again', 401, 'PAIRING_REQUIRED')
     return { ok: true }
   }
   listSessions() {
@@ -313,7 +313,7 @@ export class ApiClient {
   pair(secret: string, name: string) {
     if (this.host.auth !== 'remote')
       return Promise.reject(
-        new ApiError('仅远程连接使用配对流程', 0, 'INVALID_AUTH')
+        new ApiError('Pairing is only used for remote connections', 0, 'INVALID_AUTH')
       )
     return this.post<PairRequest>('/api/public-access/pair', {
       secret,
@@ -334,10 +334,10 @@ function failure(status: number, value: unknown): ApiError {
       ? data.message
       : typeof data.error === 'string'
         ? data.error
-        : `请求失败 (${status})`,
+        : `Request failed (${status})`,
     status,
-    // 服务端把机器码放在 error 里（如 HISTORY_CHANGED）；没有 code 字段时也要保留，
-    // 否则调用方只能按提示文案猜。
+    // The server puts the machine code in error (e.g. HISTORY_CHANGED); keep it even without a code field, 
+    // otherwise callers can only guess from the message text.
     typeof data.code === 'string'
       ? data.code
       : typeof data.error === 'string'

@@ -8,10 +8,10 @@ import { isTeamLeadNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { readHistoryContexts } from './sessionHistoryContext.js'
 import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './sessionHistoryRecovery.js'
 /**
- * Session Service — 会话文件的读写操作封装
+ * Session Service — wraps read/write operations on session files
  *
- * 读写 CLI 持久化在 ~/.claude/projects/{sanitized_path}/{sessionId}.jsonl 的会话数据，
- * 确保 Desktop App 与 CLI 的数据完全互通。
+ * Reads and writes session data persisted by the CLI at ~/.claude/projects/{sanitized_path}/{sessionId}.jsonl,
+ * so the Desktop App and the CLI share data completely.
  */
 
 import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'

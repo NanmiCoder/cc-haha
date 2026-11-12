@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
  * shipped at `--radius-lg` in one and `--radius-xl` in the other, and only a
  * walkthrough that opened both in the same session caught it.
  *
- * Every popover above the composer row (「素」: model, effort, permission
+ * Every popover above the composer row ("Su" spec: model, effort, permission
  * mode, the + menu, slash commands, references, context) is a menu sheet at
  * the card corner, `--radius-lg`; only the composer card itself is `xl`. The
  * shared recipe lives in `composerMenuStyles.ts`, so a component may either

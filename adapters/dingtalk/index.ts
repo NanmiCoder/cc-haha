@@ -363,12 +363,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '⚠️ 连接服务器超时，请重试。')
+      await sendText(chatId, '⚠️ Timed out connecting to the server. Please try again.')
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `❌ 无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `❌ Could not create session: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
@@ -378,7 +378,7 @@ function formatProjectList(projects: RecentProject[]): string {
     const branch = project.branch ? ` (${project.branch})` : ''
     return `${index + 1}. **${project.projectName}**${branch}\n   ${project.realPath}`
   })
-  return `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n也可以发送 /new <编号或名称>`
+  return `Select a project (reply with its number):\n\n${lines.join('\n\n')}\n\nYou can also send /new <number or name>`
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
@@ -386,12 +386,12 @@ async function showProjectPicker(chatId: string): Promise<void> {
   try {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
-      await sendText(chatId, `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+      await sendText(chatId, `No recent projects found. Sending /new will use the default working directory: ${defaultWorkDir}\nYou can also send /new /path/to/project to pick a project.`)
       return
     }
     await sendText(chatId, formatProjectList(projects))
   } catch (err) {
-    await sendText(chatId, `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, `❌ Could not fetch project list: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
@@ -477,7 +477,7 @@ async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promis
       if (card) {
         // The actionable card was delivered. A failed supplementary notice
         // must not cause replay to send another copy of that card.
-        await sendText(chatId, `${requestText}\n\n已发送钉钉权限卡片；如果卡片不可见，也可以${instructions}`, { requireDelivery: true })
+        await sendText(chatId, `${requestText}\n\nA DingTalk permission card was sent; if the card is not visible, you can also ${instructions}`, { requireDelivery: true })
           .catch(error => console.warn('[DingTalk] Permission card notice failed:', error))
         return
       }
@@ -501,13 +501,13 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`).catch(error => console.warn('[DingTalk] Permission notice failed:', error))
+    void sendText(chatId, `No pending permission request found: ${requestId}`).catch(error => console.warn('[DingTalk] Permission notice failed:', error))
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。').catch(error => console.warn('[DingTalk] Permission notice failed:', error))
+    void sendText(chatId, 'Failed to send permission response. Please check the session status.').catch(error => console.warn('[DingTalk] Permission notice failed:', error))
     return false
   }
 
@@ -555,11 +555,11 @@ async function routeUserMessage(chatId: string, text: string, attachmentsOrLoade
       }
       clearTransientChatState(chatId)
       if (!bridge.sendUserMessage(chatId, '/clear')) {
-        await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
+        await sendText(chatId, '⚠️ Could not send /clear. Send /new first to reconnect the session.')
         return
       }
       getRuntimeState(chatId).state = 'thinking'
-      await sendText(chatId, '🧹 已清空当前会话上下文。')
+      await sendText(chatId, '🧹 Cleared the current session context.')
       return
     }
     if (!hasAttachments && (trimmed === '/stop' || trimmed === '停止')) {
@@ -569,7 +569,7 @@ async function routeUserMessage(chatId: string, text: string, attachmentsOrLoade
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendText(chatId, '⏹ 已发送停止信号。')
+      await sendText(chatId, '⏹ Stop signal sent.')
       return
     }
     if (!hasAttachments && (trimmed === '/projects' || trimmed === '项目列表')) {
@@ -579,13 +579,13 @@ async function routeUserMessage(chatId: string, text: string, attachmentsOrLoade
 
     const ready = await ensureSession(chatId)
     if (!ready) return
-    const effectiveText = trimmed || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effectiveText = trimmed || (attachments.length > 0 ? '(user sent an attachment)' : '')
     if (!effectiveText && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments.length ? attachments : undefined)
     if (sent) {
       getRuntimeState(chatId).state = 'thinking'
     } else {
-      await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendText(chatId, '⚠️ Failed to send message; the connection may be down. Send /new to start over.')
     }
   })
 }
@@ -606,8 +606,8 @@ async function handleRobotMessage(data: DingTalkRobotMessage): Promise<void> {
     await sendText(
       chatId,
       success
-        ? '✅ 配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。发送 /help 查看可用命令。'
-        : '🔒 未授权。请先在 Claude Code 桌面端完成钉钉扫码绑定，再生成 IM 配对码后发送给我。',
+        ? '✅ Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude. Send /help to see available commands.'
+        : '🔒 Not authorized. First bind DingTalk by QR scan in the Claude Code desktop app, then generate an IM pairing code and send it to me.',
     )
     return
   }
@@ -645,7 +645,7 @@ async function collectAttachments(
     token = await getAccessToken()
   } catch (err) {
     console.error('[DingTalk] access token for attachment download failed:', err)
-    await sendText(chatId, '📎 附件下载授权失败，请稍后重试。')
+    await sendText(chatId, '📎 Attachment download authorization failed, please try again later.')
     return []
   }
 
@@ -690,7 +690,7 @@ async function collectAttachments(
   if (failures > 0) {
     await sendText(
       chatId,
-      failures === candidates.length ? '📎 附件下载失败，请稍后重试。' : `📎 ${failures} 个附件下载失败，已跳过。`,
+      failures === candidates.length ? '📎 Attachment download failed, please try again later.' : `📎 ${failures} attachment(s) failed to download and were skipped.`,
     )
   }
   return attachments

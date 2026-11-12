@@ -1,8 +1,8 @@
 /**
  * Authentication middleware
  *
- * 本地桌面应用场景下，使用 Anthropic API Key 做简单鉴权。
- * 验证请求头中的 Authorization: Bearer <key> 与 .env 中的 ANTHROPIC_API_KEY 是否匹配。
+ * In the local desktop app scenario, uses the Anthropic API Key for simple authentication.
+ * Verifies that the Authorization: Bearer <key> request header matches ANTHROPIC_API_KEY in .env.
  */
 
 import { H5AccessService } from '../services/h5AccessService.js'

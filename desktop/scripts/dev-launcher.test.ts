@@ -4,9 +4,9 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createElectronDevEnv, DEFAULT_RENDERER_URL, mergeNoProxy, resolveElectronExecutable } from './electron-dev'
 
-// resolveElectronExecutable 依赖 node_modules/electron/dist 真实存在,
-// 但 bun 默认不执行 electron 的 postinstall 下载,dist 在本机/CI 经常缺席。
-// 测试用自带夹具 desktopRoot,不依赖环境安装状态。
+// resolveElectronExecutable needs node_modules/electron/dist to exist, but bun does not run
+// electron's postinstall download by default, so dist is often missing locally and in CI.
+// The test uses its own desktopRoot fixture instead of relying on the install state.
 function createDesktopRootFixture(withExecutables = true) {
   const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-dev-launcher-'))
   if (!withExecutables) return root

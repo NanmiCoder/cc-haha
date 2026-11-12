@@ -1,280 +1,280 @@
-# Computer Use 原生化设计方案（Swift Helper）
+# Computer Use native design (Swift helper)
 
-> 目标：把底层执行层从 `pyautogui`（HID 层模拟，独占鼠标）替换为原生 Swift helper（按 PID 定向注入 + Accessibility + ScreenCaptureKit），实现 **不抢占用户鼠标键盘** 与 **后台窗口操作/截图**，向 Codex Computer Use 的体验对齐。
+> Goal: replace the low-level execution layer, currently `pyautogui` (HID-level simulation that monopolizes the mouse), with a native Swift helper (PID-targeted injection + Accessibility + ScreenCaptureKit), to achieve **no hijacking of the user's mouse and keyboard** and **operating/capturing background windows**, in line with the Codex Computer Use experience.
 >
-> 本文是**技术方案/评审稿**，不含落地代码。决策点见末尾「八、待决策」。
+> This is a **technical proposal / review draft**, with no production code. Decision points are listed at the end in "9. Open decisions".
 
-相关文档：[Computer Use 架构深度解析](./computer-use.md) · [功能指南](../desktop/computer-use.md)
+Related docs: [Computer Use architecture deep dive](./computer-use.md) · [Feature guide](../desktop/computer-use.md)
 
 ---
 
-## 一、动机与问题
+## 1. Motivation and problem
 
-当前实现（见架构文档「五、Python Bridge」）用 `pyautogui` 执行鼠标/键盘：
+The current implementation (see "5. Python Bridge" in the architecture doc) drives mouse/keyboard with `pyautogui`:
 
 ```python
 # runtime/mac_helper.py
-pyautogui.moveTo(x, y)          # 移动系统唯一的真光标
+pyautogui.moveTo(x, y)          # moves the system's single real cursor
 pyautogui.click(x=x, y=y, ...)
 pyautogui.write(text, ...)
 ```
 
-`pyautogui` 在 macOS 底层调用 `CGEventPost(kCGHIDEventTap, event)`——注入到**硬件 HID 事件层**。后果：
+On macOS, `pyautogui` calls `CGEventPost(kCGHIDEventTap, event)` under the hood — it injects into the **hardware HID event layer**. Consequences:
 
-1. **独占外设**：系统只有一个物理光标，注入即把它拖走，用户无法同时操作；
-2. **全局生效**：事件落到"当前前台窗口/光标下的窗口"，无法定向到某个后台 App；
-3. **必须前台可见**：要点的窗口必须在最前。
+1. **Monopolizes peripherals**: the system has a single physical cursor; injection drags it away, so the user cannot work at the same time;
+2. **Global effect**: events land on "the current frontmost window / the window under the cursor" and cannot be targeted at a specific background app;
+3. **Must be visible in front**: the window to click has to be frontmost.
 
-这与用户的核心诉求冲突：**一边自己工作，一边让 Agent 在另一个 App 上跑自动化（build / 点击 / 截图），且不需要把那个桌面亮在最前**。
+This conflicts with the user's core need: **keep working yourself while the agent runs automation in another app (build / click / screenshot), without bringing that desktop to the front**.
 
 ---
 
-## 二、Codex 机制拆解（逆向证据）
+## 2. How Codex does it (reverse-engineering evidence)
 
-对 `Codex Computer Use.app` 做 `otool -L` / `nm -u` / `strings` / `codesign` 分析，得到以下事实（证据见附录 A）：
+Running `otool -L` / `nm -u` / `strings` / `codesign` on `Codex Computer Use.app` yields the following facts (evidence in Appendix A):
 
-### 2.1 进程拓扑
+### 2.1 Process topology
 
 ```
 Codex Computer Use.app
-├─ MacOS/SkyComputerUseService            主服务（Swift，LSUIElement=true 无 Dock 后台代理）
+├─ MacOS/SkyComputerUseService            main service (Swift, LSUIElement=true background agent without a Dock icon)
 └─ SharedSupport/
-   ├─ SkyComputerUseClient.app            真正承载 MCP 的客户端（.mcp.json 指向它 + `mcp` 参数）
-   ├─ CUALockScreenGuardian.app           锁屏守卫（检测物理输入→fail-closed 重锁）
-   └─ Codex Computer Use Installer.app    安装授权插件
+   ├─ SkyComputerUseClient.app            the client that actually hosts MCP (.mcp.json points to it + the `mcp` argument)
+   ├─ CUALockScreenGuardian.app           lock-screen guardian (detects physical input → fail-closed relock)
+   └─ Codex Computer Use Installer.app    installer authorization plugin
 ```
 
-- entitlements：`com.apple.security.application-groups`（进程间共享）+ `com.apple.security.automation.apple-events`。
-- 自动更新：`SUFeedURL` 指向 OpenAI 的 appcast（独立于 Codex 主体更新）。
+- entitlements: `com.apple.security.application-groups` (sharing between processes) + `com.apple.security.automation.apple-events`.
+- Auto-update: `SUFeedURL` points to OpenAI's appcast (updated independently of the main Codex app).
 
-### 2.2 三项关键能力 = 不抢鼠标的根因
+### 2.2 Three key capabilities = the root of not hijacking the mouse
 
-| 能力 | 用到的 API（二进制实证） | 作用 |
+| Capability | APIs used (binary evidence) | Effect |
 |------|--------------------------|------|
-| **按 PID 定向注入** | `CGEvent*` + IPC `ComputerUseIPCAppPerformActionRequest` + `targetPID` | 事件投给**目标 App 进程**，不经过全局 HID 光标 |
-| **控件级操作** | `AXUIElementPerformAction` / `AXUIElementSetAttributeValue` / `AXUIElementCopyElementAtPosition` | 直接按按钮、设值，后台窗口也能操作；字符串提示 `Prefer simulating physical clicks over Accessibility actions.` 说明 CGEvent 优先、AX 兜底 |
-| **虚拟光标** | `AccessibilitySupport.VirtualCursor`、`cursorPositionInScaledCoordinates`、`SkyLensView` + `Lens_frame_00~44.png` | 自己维护一个逻辑光标位置，并画一个**覆盖层"AI 光标(透镜)"**给用户看，而非借用系统真光标 |
+| **PID-targeted injection** | `CGEvent*` + IPC `ComputerUseIPCAppPerformActionRequest` + `targetPID` | Events are delivered to **the target app process**, bypassing the global HID cursor |
+| **Control-level operations** | `AXUIElementPerformAction` / `AXUIElementSetAttributeValue` / `AXUIElementCopyElementAtPosition` | Press buttons and set values directly, even in background windows; the string `Prefer simulating physical clicks over Accessibility actions.` shows CGEvent first, AX as fallback |
+| **Virtual cursor** | `AccessibilitySupport.VirtualCursor`, `cursorPositionInScaledCoordinates`, `SkyLensView` + `Lens_frame_00~44.png` | Maintains its own logical cursor position and draws an **overlay "AI cursor (lens)"** for the user, instead of borrowing the real system cursor |
 
-### 2.3 截屏
+### 2.3 Screen capture
 
-`ScreenCaptureKit`（`SCStream` + `ComputerUseIPCAppStartCaptureRequest`，带捕获动画覆盖层）——可捕获**指定窗口的图层 surface**，窗口即使不在最前、被遮挡、在别的 Space 也能抓到。
+`ScreenCaptureKit` (`SCStream` + `ComputerUseIPCAppStartCaptureRequest`, with a capture animation overlay) — can capture **the layer surface of a specific window**, even when the window is not frontmost, is covered, or is on another Space.
 
-### 2.4 共存 / 锁屏自治（高级，本方案不复刻）
+### 2.4 Coexistence / lock-screen autonomy (advanced; not replicated in this proposal)
 
-- `ComputerUseUserInteractionMonitor` + `userInteractionDebounceDuration`：检测真人输入并退避。
-- `LockScreenPhysicalInputMonitor` / `SystemLockScreenOverlayPresenter`：可在锁屏下 auto-unlock 全自动接管，一旦检测物理输入立即 fail-closed 重锁。**涉及密码与安全，风险高，v1 砍掉。**
+- `ComputerUseUserInteractionMonitor` + `userInteractionDebounceDuration`: detects real human input and backs off.
+- `LockScreenPhysicalInputMonitor` / `SystemLockScreenOverlayPresenter`: can auto-unlock and take over fully while the screen is locked, and fail-closed relock as soon as physical input is detected. **Involves passwords and security; high risk; cut from v1.**
 
-### 2.5 结论
+### 2.5 Conclusion
 
-> Codex 不抢鼠标的本质 = **事件按 PID 定向投递 + AX 控件操作 + 自绘虚拟光标**，三者都绕开了"系统唯一物理光标"。我们用 `kCGHIDEventTap` 走的恰是相反方向。
-
----
-
-## 三、关键认知校正：macOS 没有"免费的后台桌面"
-
-必须写清楚，避免方向性误解：
-
-- macOS 整机**只有一个 WindowServer / 一个 GUI 会话**，没有 Linux Xvfb 式的无头第二桌面。
-- 所谓"后台/不亮桌面"的真实含义：
-  - **截屏**靠 ScreenCaptureKit 抓窗口 surface → 窗口不必在最前；
-  - **注入**靠按 PID / AX → 不抢真光标；
-  - 你**能**在 App B 工作、让它驱动 App A。
-- **真·完全隔离**（互不干扰的独立桌面）在 macOS 上只能靠：① 独立用户账户 + 快速用户切换；② macOS 虚拟机。
-- Codex 的锁屏自治是"你离开 → 全自动；你回来碰一下 → 退避重锁"的折中，不是隔离桌面。
+> The essence of Codex not hijacking the mouse = **PID-targeted event delivery + AX control operations + a self-drawn virtual cursor**; all three bypass "the system's single physical cursor". Using `kCGHIDEventTap` is exactly the opposite direction.
 
 ---
 
-## 四、目标架构：只换最底一层
+## 3. Key correction: macOS has no "free background desktop"
 
-最大化复用——**上层全不动，只把 helper 从 Python 换成 Swift 二进制**。
+This must be stated clearly to avoid a misunderstanding of direction:
+
+- macOS has **only one WindowServer / one GUI session** per machine; there is no Linux Xvfb-style headless second desktop.
+- What "background / desktop not in front" really means:
+  - **Screen capture** grabs window surfaces via ScreenCaptureKit → the window need not be frontmost;
+  - **Injection** goes by PID / AX → the real cursor is not hijacked;
+  - You **can** work in app B while it drives app A.
+- **True full isolation** (independent desktops that don't interfere) is only possible on macOS via: ① a separate user account + fast user switching; ② a macOS virtual machine.
+- Codex's lock-screen autonomy is a compromise of "you leave → fully automatic; you come back and touch something → back off and relock", not an isolated desktop.
+
+---
+
+## 4. Target architecture: replace only the bottom layer
+
+Maximize reuse — **leave every upper layer alone and only swap the helper from Python to a Swift binary**.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ Layer 1-4  MCP 工具(24) · 9 层安全关卡 · 191 应用分类 · 权限 UI │  ← 完全复用，零改动
+│ Layer 1-4  MCP tools (24) · 9 safety gates · 191 app categories · permission UI │  ← fully reused, zero changes
 ├─────────────────────────────────────────────────────────┤
-│ Layer 5    pythonBridge.ts —— 进程调用边界                  │  ← 改几行：指向 Swift 二进制
+│ Layer 5    pythonBridge.ts — process call boundary                     │  ← a few lines: point at the Swift binary
 ├─────────────────────────────────────────────────────────┤
-│ Layer 6    [旧] mac_helper.py (pyautogui, HID 层)          │
-│            [新] cu-helper  (Swift: CGEventPostToPid+AX+SCK) │  ← 本方案唯一新增/重写
+│ Layer 6    [old] mac_helper.py (pyautogui, HID level)                  │
+│            [new] cu-helper  (Swift: CGEventPostToPid+AX+SCK)           │  ← the only new/rewritten part
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 4.1 可替换边界（已确认）
+### 4.1 Replaceable boundary (confirmed)
 
-`src/utils/computerUse/pythonBridge.ts:159` 的调用形态：
+The call shape at `src/utils/computerUse/pythonBridge.ts:159`:
 
 ```ts
 execFile(pythonBinPath(), [helperPath, command, '--payload', JSON.stringify(payload)])
-// 解析 stdout 的 { ok: boolean, result?: T, error?: { message } }
+// parses stdout as { ok: boolean, result?: T, error?: { message } }
 ```
 
-Swift 二进制只要遵守**完全相同的协议**即可热插拔：
+The Swift binary can be hot-swapped in as long as it follows **exactly the same protocol**:
 
 ```
 cu-helper <command> --payload '<json>'
-# stdout: {"ok":true,"result":...}  或  {"ok":false,"error":{"message":"..."}}
+# stdout: {"ok":true,"result":...}  or  {"ok":false,"error":{"message":"..."}}
 ```
 
-替换点：把 `pythonBinPath()` + `helperPath` 抽象成 `resolveHelperCommand()`，按配置/平台返回 `["python3", mac_helper.py]` 或 `[cu-helper]`。保留 Python 作为 fallback / 非 mac 平台。
+Replacement point: abstract `pythonBinPath()` + `helperPath` into `resolveHelperCommand()`, returning `["python3", mac_helper.py]` or `[cu-helper]` based on config/platform. Keep Python as a fallback / for non-mac platforms.
 
-### 4.2 命令协议（Swift 端需实现的全集）
+### 4.2 Command protocol (the full set the Swift side must implement)
 
-沿用架构文档「命令映射表」，逐条给出新实现方式：
+Following the "command mapping table" in the architecture doc, the new implementation for each:
 
-| 命令 | 旧（pyautogui/mss） | 新（Swift） |
+| Command | Old (pyautogui/mss) | New (Swift) |
 |------|--------------------|-------------|
-| `screenshot` / `zoom` | mss 全屏 | `SCScreenshotManager.captureImage`（显示器或窗口 filter） |
-| `click`/`double`/`triple` | `pyautogui.click` (HID) | `CGEventPostToPid(pid)` 鼠标事件；可选 AX `kAXPressAction` 兜底 |
-| `type` | `pyautogui.write` (HID) | `CGEventPostToPid` 键盘事件；文本框可走 AX `setValue` |
-| `key` / `hold_key` | `pyautogui.hotkey` | `CGEventPostToPid` 带 flags |
-| `drag` / `mouse_down` / `mouse_up` | `pyautogui.dragTo` | `CGEventPostToPid` mouseDown→moved→up 序列 |
+| `screenshot` / `zoom` | mss full screen | `SCScreenshotManager.captureImage` (display or window filter) |
+| `click`/`double`/`triple` | `pyautogui.click` (HID) | `CGEventPostToPid(pid)` mouse events; optional AX `kAXPressAction` fallback |
+| `type` | `pyautogui.write` (HID) | `CGEventPostToPid` keyboard events; text fields can use AX `setValue` |
+| `key` / `hold_key` | `pyautogui.hotkey` | `CGEventPostToPid` with flags |
+| `drag` / `mouse_down` / `mouse_up` | `pyautogui.dragTo` | `CGEventPostToPid` mouseDown→moved→up sequence |
 | `scroll` | `pyautogui.scroll` | `CGEventCreateScrollWheelEvent` + `PostToPid` |
-| `mouse_move` / `cursor_position` | `pyautogui.moveTo`/`position` | 仅更新**虚拟光标**逻辑坐标 + mouseMoved 事件（驱动 hover） |
-| `frontmost_app` / `list_*` / `open_app` | NSWorkspace/Quartz | 同（`AppKit`/`CoreGraphics` 原生） |
-| `read_clipboard`/`write_clipboard` | NSPasteboard | 同 |
+| `mouse_move` / `cursor_position` | `pyautogui.moveTo`/`position` | Only update the **virtual cursor** logical position + a mouseMoved event (drives hover) |
+| `frontmost_app` / `list_*` / `open_app` | NSWorkspace/Quartz | Same (native `AppKit`/`CoreGraphics`) |
+| `read_clipboard`/`write_clipboard` | NSPasteboard | Same |
 | `check_permissions` | osascript+CGDisplayCapture | `CGPreflightScreenCaptureAccess` + `AXIsProcessTrustedWithOptions` |
 
-> 关键差异只在 **鼠标/键盘注入** 和 **截屏** 两类；其余命令照搬原生等价实现即可。
+> The key differences are only in **mouse/keyboard injection** and **screen capture**; the other commands just get native equivalents.
 
 ---
 
-## 五、关键技术点详解
+## 5. Key technical points
 
-### 5.1 事件注入：从 HID 层切到按 PID
+### 5.1 Event injection: from the HID layer to per-PID
 
-核心就这一个 API 替换（伪代码）：
+The core is this single API replacement (pseudocode):
 
 ```swift
-// 旧路径（pyautogui 等价）：注入到硬件层 → 抢真光标
+// Old path (pyautogui equivalent): inject at the hardware layer → hijacks the real cursor
 CGEvent(...)?.post(tap: .cghidEventTap)
 
-// 新路径：投给目标进程 → 不动真光标
+// New path: deliver to the target process → the real cursor does not move
 let e = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown,
                 mouseCursorPosition: pt, mouseButton: .left)
 e?.postToPid(targetPid)   // CGEventPostToPid(pid, event)
 ```
 
-- `targetPid` 来自 `frontmost_app` / 已授权 App 的 `NSRunningApplication.processIdentifier`。
-- 点击序列：`mouseMoved → leftMouseDown → leftMouseUp`，多击靠 `setIntegerValueField(.mouseEventClickState, n)`。
-- 坐标仍走现有 `scaleCoord()`（架构文档「坐标系统」），无需改上层。
+- `targetPid` comes from `frontmost_app` / the authorized app's `NSRunningApplication.processIdentifier`.
+- Click sequence: `mouseMoved → leftMouseDown → leftMouseUp`; multi-clicks via `setIntegerValueField(.mouseEventClickState, n)`.
+- Coordinates still go through the existing `scaleCoord()` ("Coordinate system" in the architecture doc); no upper-layer changes.
 
-### 5.2 Accessibility 兜底
+### 5.2 Accessibility fallback
 
-CGEventPostToPid 对后台 App **不是万能**（见 §6.2），故对"按钮/菜单项/文本框"提供 AX 路径：
+CGEventPostToPid is **not a silver bullet** for background apps (see §6.2), so provide an AX path for "buttons / menu items / text fields":
 
 ```swift
 let app = AXUIElementCreateApplication(targetPid)
-// 命中坐标处控件
+// hit-test the control at the coordinates
 var elem: AXUIElement?
 AXUIElementCopyElementAtPosition(systemWide, Float(x), Float(y), &elem)
-AXUIElementPerformAction(elem, kAXPressAction as CFString)        // 点击
-AXUIElementSetAttributeValue(elem, kAXValueAttribute as CFString, text) // 设值
+AXUIElementPerformAction(elem, kAXPressAction as CFString)        // click
+AXUIElementSetAttributeValue(elem, kAXValueAttribute as CFString, text) // set value
 ```
 
-策略：**CGEvent 优先（更像真实交互），失败/不可靠场景 AX 兜底**（与 Codex 一致）。
+Strategy: **CGEvent first (closer to real interaction), AX fallback for failing/unreliable cases** (same as Codex).
 
-### 5.3 ScreenCaptureKit 后台窗口捕获
+### 5.3 ScreenCaptureKit background window capture
 
 ```swift
 let content = try await SCShareableContent.current
 let window = content.windows.first { $0.owningApplication?.bundleIdentifier == bundleId }
-let filter = SCContentFilter(desktopIndependentWindow: window)   // 或 display
+let filter = SCContentFilter(desktopIndependentWindow: window)   // or display
 let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
 ```
 
-- macOS 14+ 的 `SCScreenshotManager` 适合"每步一张"的单帧截图，无需常驻 stream。
-- 输出仍编码为 JPEG/base64，尺寸经现有 `imageResize.ts` 处理，上层零改动。
+- `SCScreenshotManager` on macOS 14+ suits single-frame "one per step" screenshots without a resident stream.
+- Output is still encoded as JPEG/base64 and resized by the existing `imageResize.ts`; zero upper-layer changes.
 
-### 5.4 虚拟光标覆盖层（可选但强烈建议）
+### 5.4 Virtual cursor overlay (optional but strongly recommended)
 
-不动真光标后，用户看不到 AI 在点哪 → 需自绘：
+Once the real cursor no longer moves, users cannot see where the AI is clicking → draw our own:
 
 ```swift
 let win = NSWindow(...)
-win.level = .screenSaver                 // 或 CGShieldingWindowLevel
-win.ignoresMouseEvents = true            // 不拦截用户真实操作
+win.level = .screenSaver                 // or CGShieldingWindowLevel
+win.ignoresMouseEvents = true            // do not intercept the user's real input
 win.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
 win.backgroundColor = .clear; win.isOpaque = false
-// 内部画一个光标/透镜图标，随逻辑坐标移动（对应 Codex SkyLensView/Lens_frame_*）
+// draw a cursor/lens icon inside that moves with the logical position (cf. Codex SkyLensView/Lens_frame_*)
 ```
 
-### 5.5 人机共存监听（可选，v2）
+### 5.5 Human coexistence monitoring (optional, v2)
 
 ```swift
 NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .keyDown]) { _ in
-  // 检测到真人输入 → 暂停注入 / debounce 让位
+  // real human input detected → pause injection / debounce and yield
 }
 ```
 
 ---
 
-## 六、风险与权衡（决策关键）
+## 6. Risks and trade-offs (key to the decision)
 
-### 6.1 签名 / TCC —— 隐形的最大成本
+### 6.1 Signing / TCC — the biggest hidden cost
 
-- Computer Use 需要两项 TCC：**屏幕录制** + **辅助功能（Accessibility）**。
-- **未签名 / ad-hoc 签名的二进制，每次 rebuild 都会让已授予的 TCC 失效**，开发期反复重新授权，极其影响迭代。
-- 要稳定授权 + 可分发，需要 Developer ID 签名（理想情况再公证）。这与本项目已知的 **Apple 付费签名墙** 是同一堵墙（见 memory：未签名 DMG 分发问题、Electron 迁移的签名前置）。
-- 缓解：开发期固定一个稳定签名身份（哪怕自签 + 手动信任），把 helper 作为长期稳定的独立二进制，减少 rebuild 对主 App 授权的牵连。
+- Computer Use needs two TCC permissions: **Screen Recording** + **Accessibility**.
+- **For unsigned / ad-hoc signed binaries, every rebuild invalidates granted TCC permissions**, forcing repeated re-authorization during development, which badly hurts iteration.
+- Stable authorization + distribution need Developer ID signing (ideally notarized too). This is the same **paid Apple signing wall** the project already knows (see memory: unsigned DMG distribution issues, signing as a prerequisite of the Electron migration).
+- Mitigation: during development, pin a stable signing identity (even self-signed + manually trusted), and keep the helper as a long-lived standalone binary so rebuilds don't drag the main app's authorization along.
 
-### 6.2 各 App 可控性预期（务必管理预期）
+### 6.2 Expected controllability per app type (manage expectations)
 
-| App 类型 | CGEventPostToPid | AX | 预期 |
+| App type | CGEventPostToPid | AX | Expectation |
 |----------|------------------|----|----|
-| 原生 AppKit（Notes/Finder/系统设置/多数三方原生） | 多数可用 | 好 | ✅ 可靠 |
-| 后台**键盘**输入（非 key 窗口） | 最不稳 | 文本框走 setValue 较稳 | ⚠️ 需 AX 兜底 |
-| 浏览器（Safari/Chrome/Arc…） | 不可靠 | 差 | ❌ 应走 Chrome MCP（现有 deniedApps 已降级只读） |
-| Electron（VS Code/部分应用） | 不稳 | 不全 | ⚠️ 逐个验证 |
-| 游戏 / Metal / IOKit HID | 几乎不响应 | 无 | ❌ 不支持 |
+| Native AppKit (Notes/Finder/System Settings/most third-party native) | Mostly works | Good | ✅ Reliable |
+| Background **keyboard** input (non-key window) | Least reliable | Text fields via setValue are steadier | ⚠️ Needs AX fallback |
+| Browsers (Safari/Chrome/Arc…) | Unreliable | Poor | ❌ Use Chrome MCP (existing deniedApps already downgrades to read-only) |
+| Electron (VS Code / some apps) | Unstable | Incomplete | ⚠️ Verify one by one |
+| Games / Metal / IOKit HID | Almost no response | None | ❌ Not supported |
 
-> Codex 之所以给 Notion/Spotify 等各写 `AppInstructions/*.md`、并保留锁屏全自动通道，正是因为"任意 App 都稳"做不到，要逐 App 调教。我们 v1 只承诺 **原生 AppKit App 的不抢鼠标控制**。
+> Codex writes `AppInstructions/*.md` for Notion/Spotify etc. and keeps a fully automatic lock-screen channel precisely because "every app works reliably" is not achievable and each app needs tuning. Our v1 only promises **mouse-free control of native AppKit apps**.
 
-### 6.3 macOS 单会话限制
+### 6.3 macOS single-session limit
 
-见 §三。"后台"≠ 隔离桌面；要真隔离须独立账户或 VM，超出本方案范围。
+See §3. "Background" ≠ an isolated desktop; true isolation needs a separate account or a VM, which is out of scope.
 
 ---
 
-## 七、分阶段实施计划
+## 7. Phased implementation plan
 
-| 里程碑 | 内容 | 验收 | 预估 |
+| Milestone | Content | Acceptance | Estimate |
 |--------|------|------|------|
-| **M0** | TS 侧抽象 `resolveHelperCommand()`，支持 Python/Swift 切换 + 配置开关 | 切到一个 echo Swift 二进制能跑通 JSON 协议 | 0.5 天 |
-| **M1** | Swift：`screenshot`/`zoom`（SCK）+ 只读类命令（frontmost/list/clipboard/permissions） | 截图与 Python 版一致；权限检测正确 | 2–3 天 |
-| **M2** | Swift：`click` 用 `CGEventPostToPid`，**验证真光标不动** | 在 Notes/计算器点击成功且光标不移动 | 2–3 天 |
-| **M3** | `type`/`key`/`scroll`/`drag`/`mouse_down/up` | 输入/滚动/拖拽在原生 App 成立 | 2–3 天 |
-| **M4** | AX 兜底（`kAXPressAction`/`setValue`/命中坐标） | CGEvent 失败的控件用 AX 成功 | 2–3 天 |
-| **M5** | 虚拟光标覆盖层 | 用户能看到 AI 光标位置 | 1–2 天 |
-| **M6（可选）** | 共存监听退避 | 真人输入时暂停 | 1–2 天 |
-| **砍** | 锁屏自治 / Guardian / auto-unlock | —— | 不做 |
+| **M0** | TS-side `resolveHelperCommand()` abstraction supporting Python/Swift switching + a config switch | Switching to an echo Swift binary runs the JSON protocol end to end | 0.5 day |
+| **M1** | Swift: `screenshot`/`zoom` (SCK) + read-only commands (frontmost/list/clipboard/permissions) | Screenshots match the Python version; permission detection is correct | 2–3 days |
+| **M2** | Swift: `click` via `CGEventPostToPid`, **verify the real cursor does not move** | Clicks succeed in Notes/Calculator and the cursor does not move | 2–3 days |
+| **M3** | `type`/`key`/`scroll`/`drag`/`mouse_down/up` | Typing/scrolling/dragging work in native apps | 2–3 days |
+| **M4** | AX fallback (`kAXPressAction`/`setValue`/hit-test) | Controls where CGEvent fails succeed via AX | 2–3 days |
+| **M5** | Virtual cursor overlay | The user can see the AI cursor position | 1–2 days |
+| **M6 (optional)** | Coexistence monitoring and back-off | Pauses while a human is typing | 1–2 days |
+| **Cut** | Lock-screen autonomy / Guardian / auto-unlock | — | Not doing |
 
-打包：Swift binary 随 `runtime/` 分发（类比 `mac_helper.py`），或作为 SwiftPM executable 在构建期产物。注意 §6.1 签名。
+Packaging: ship the Swift binary with `runtime/` (like `mac_helper.py`), or build it as a SwiftPM executable at build time. Mind the signing issue in §6.1.
 
-**总计：核心（M0–M5）约 2 周；M6 + 调教另算。**
-
----
-
-## 八、对照方案：你"自测自己 App"其实有更轻的路
-
-用户的原始诉求里有"**开发桌面 App → build → 自动测试 → 自动截图**"。对**自己开发的 App**，computer-use（视觉+盲点击）是错的重型工具：
-
-- **build**：`cargo tauri build` / `xcodebuild` —— 纯 CLI，无需 computer use。
-- **自动测试 + 截图**：本项目是 **Tauri**，正解是 **`tauri-driver` + WebdriverIO**（Tauri 官方 WebDriver）或对 WebView 直接 **Playwright**；原生壳可用 **XCUITest**。它们通过**自动化协议**驱动，**天然不碰光标、可真后台、可进 CI**，比模拟点击稳一个数量级。
-
-> 判据：**computer-use 适合驱动"无 API 的第三方任意 App"；驱动"你自己的 App"用 WebDriver/Playwright 更优。** 两者可并存：自测走 WebDriver，通用控制走 Swift helper。
+**Total: core (M0–M5) about 2 weeks; M6 + tuning on top.**
 
 ---
 
-## 九、待决策
+## 8. Alternative: testing "your own app" has a lighter path
 
-1. **范围**：v1 是否就锁定"原生 AppKit App 的不抢鼠标控制 + 后台窗口截图"，明确不承诺浏览器/Electron/游戏？
-2. **签名**：开发期是否接受固定一个自签身份手动信任以稳住 TCC？分发是否仍走现有未签名脚本路径（helper 单独处理）？
-3. **是否并行做对照方案**：要不要先用 tauri-driver/Playwright 把"自测自己 App"这条最高频需求快速跑通，Swift helper 作为中长期通用能力推进？
-4. **虚拟光标 / 共存监听** 是否纳入 v1（建议虚拟光标纳入、共存监听放 v2）？
+The user's original request included "**develop a desktop app → build → automated tests → automated screenshots**". For **an app you build yourself**, computer use (vision + blind clicks) is the wrong, heavy tool:
+
+- **build**: `cargo tauri build` / `xcodebuild` — pure CLI, no computer use needed.
+- **automated tests + screenshots**: this project is **Tauri**, so the right answer is **`tauri-driver` + WebdriverIO** (Tauri's official WebDriver) or **Playwright** directly against the WebView; the native shell can use **XCUITest**. These drive through **automation protocols**, **naturally never touch the cursor, can truly run in the background and in CI**, and are an order of magnitude more stable than simulated clicks.
+
+> Rule of thumb: **computer use is for driving "arbitrary third-party apps with no API"; for driving "your own app", WebDriver/Playwright is better.** Both can coexist: self-testing via WebDriver, general control via the Swift helper.
 
 ---
 
-## 附录 A：逆向证据（可复现）
+## 9. Open decisions
+
+1. **Scope**: should v1 be locked to "mouse-free control of native AppKit apps + background window screenshots", explicitly not promising browsers/Electron/games?
+2. **Signing**: during development, do we accept pinning a self-signed identity with manual trust to keep TCC stable? Does distribution still use the existing unsigned script path (with the helper handled separately)?
+3. **Pursue the alternative in parallel**: should we first get the most frequent need, "testing your own app", working quickly with tauri-driver/Playwright, and push the Swift helper as a mid- to long-term general capability?
+4. **Virtual cursor / coexistence monitoring** in v1? (Recommendation: virtual cursor in v1, coexistence monitoring in v2.)
+
+---
+
+## Appendix A: reverse-engineering evidence (reproducible)
 
 ```bash
 BIN="/Applications/Codex.app/Contents/Resources/plugins/openai-bundled/plugins/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService"
@@ -288,14 +288,14 @@ strings -a "$BIN"      # → VirtualCursor / cursorPositionInScaledCoordinates /
 codesign -d --entitlements - "$BIN"   # → application-groups / automation.apple-events
 ```
 
-关键字符串原样：
+Key strings verbatim:
 - `Enable the virtual cursor in Computer Use.`
-- `Prefer simulating physical clicks over Accessibilty actions.`（原文拼写）
+- `Prefer simulating physical clicks over Accessibilty actions.` (original spelling)
 - `Detected physical input during lock-screen Computer Use auto-unlock; relocking and suppressing auto-unlock until manual unlock.`
 
-## 附录 B：我们当前实现锚点
+## Appendix B: anchors in our current implementation
 
-- 调用边界：`src/utils/computerUse/pythonBridge.ts:159`（`callPythonHelper`）
-- 执行器：`src/utils/computerUse/executor.ts`
-- Python helper：`runtime/mac_helper.py`（`click()` 在 :585）
-- 上层（复用不动）：`src/vendor/computer-use-mcp/`（tools.ts / toolCalls.ts / deniedApps.ts …）
+- Call boundary: `src/utils/computerUse/pythonBridge.ts:159` (`callPythonHelper`)
+- Executor: `src/utils/computerUse/executor.ts`
+- Python helper: `runtime/mac_helper.py` (`click()` at :585)
+- Upper layer (reused unchanged): `src/vendor/computer-use-mcp/` (tools.ts / toolCalls.ts / deniedApps.ts …)

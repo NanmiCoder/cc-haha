@@ -17,8 +17,12 @@ from urllib.request import Request, urlopen
 VERSION_RE = re.compile(r"^release-notes/v(\d+)\.(\d+)\.(\d+)\.md$")
 LOGIN_RE = re.compile(r"(?<![A-Za-z0-9._%+-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)")
 RELEASE_HEADING_RE = re.compile(r"(?m)^#\s+Claude Code Haha v\d+\.\d+\.\d+\s*$")
-CLOSING_PUNCTUATION = set("，。、；：！？）》」』】〕”’％")
-OPENING_PUNCTUATION = set("（《「『【〔“‘")
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+CREDIT_RE = r"(?:thanks(?:\s+to)?|thank\s+you|credits?|contributors?|contributed\s+by|co-authored\s+by)"
+# Line-breaking rules: closing marks never start a line, opening marks never end one.
+CLOSING_PUNCTUATION = set("，。、；：！？）》」』】〕”’％") | set(",.;:!?)]}%")
+OPENING_PUNCTUATION = set("（《「『【〔“‘") | set("([{")
+OPENING_TAIL_RE = "[" + re.escape("".join(OPENING_PUNCTUATION)) + "]*(?:[A-Za-z0-9._/+:-]+|.)$"
 POSTER_WIDTH = 1080
 MAX_POSTER_HEIGHT = 16000
 MARGIN, RIGHT = 64, 1016
@@ -96,7 +100,13 @@ def release_candidates(repo):
     return candidates
 
 
-def chinese_release_section(markdown):
+def release_section(markdown):
+    """Return the English release body.
+
+    Current notes are English-only. Older notes read from Git history may still
+    carry a second language in <details> or after a repeated H1, so pick the
+    section with the least CJK text.
+    """
     headings = list(RELEASE_HEADING_RE.finditer(markdown))
     if len(headings) >= 2:
         sections = [
@@ -105,27 +115,26 @@ def chinese_release_section(markdown):
         ]
     else:
         sections = [markdown]
-    # Older releases put English first and Chinese in <details>; others invert
-    # that order or repeat the H1 without <details>.
     candidates = []
     for section in sections:
         candidates.extend(re.split(r"(?i)<details(?:\s[^>]*)?>", section))
-    selected = max(candidates, key=lambda part: len(re.findall(r"[\u4e00-\u9fff]", part)))
-    if len(re.findall(r"[\u4e00-\u9fff]", selected)) < 10:
-        raise ValueError("发布说明里未找到足够的中文正文，请人工核对语言版本")
-    return re.sub(r"(?is)</?details[^>]*>|<summary[^>]*>.*?</summary>", "", selected).strip() + "\n"
-
+    candidates = [re.sub(r"(?is)</?details[^>]*>|<summary[^>]*>.*?</summary>", "", part).strip() for part in candidates]
+    selected = min(candidates, key=lambda part: (len(CJK_RE.findall(part)), -len(part)))
+    if len(re.findall(r"[A-Za-z]", selected)) < 40:
+        raise ValueError("No English release body found in the release note; check the note's language")
+    return selected + "\n"
 
 def is_explicit_credit(line, login):
     escaped = re.escape(login)
     if re.search(rf"\*\*@{escaped}\*\*", line, re.IGNORECASE):
         return True
-    return bool(re.search(rf"(?:感谢|致谢|代码贡献者|贡献者)[^\n@]{{0,70}}@{escaped}\b", line, re.IGNORECASE))
+    # Earlier logins in the same list ("Contributors: @a, @b") are allowed in the gap.
+    return bool(re.search(rf"\b{CREDIT_RE}\b(?:[^\n@]|@[A-Za-z0-9-]+){{0,70}}@{escaped}\b", line, re.IGNORECASE))
 
 
 def wrap_lines(value, width, measure):
     result, current = [], ""
-    # Latin model names and IDs stay together; CJK wraps character by character.
+    # Latin words, model names and IDs stay together; CJK wraps character by character.
     tokens = re.findall(r"@?[A-Za-z0-9][A-Za-z0-9._/+:-]*|.", str(value), flags=re.DOTALL)
     # An unbroken URL/model name must never escape the image's safe area.
     pending = deque(part for token in tokens for part in (list(token) if token != "\n" and measure(token) > width else [token]))
@@ -138,7 +147,7 @@ def wrap_lines(value, width, measure):
         trial = current + token
         if current and measure(trial) > width:
             if token in CLOSING_PUNCTUATION:
-                tail_match = re.search(r"(?:[A-Za-z0-9._/+:-]+|.)$", current)
+                tail_match = re.search(OPENING_TAIL_RE, current)
                 tail = tail_match.group(0) if tail_match else ""
                 if measure(tail + token) > width:
                     tail = current[-1]
@@ -147,7 +156,7 @@ def wrap_lines(value, width, measure):
                     result.append(prefix)
                 current = tail + token
                 if measure(current) > width:
-                    raise ValueError("排版宽度不足以容纳标点，请增加可用宽度")
+                    raise ValueError("Line width is too narrow to fit the punctuation; increase the available width")
             elif current[-1] in OPENING_PUNCTUATION:
                 prefix = current[:-1].rstrip()
                 if prefix:
@@ -155,7 +164,7 @@ def wrap_lines(value, width, measure):
                 current = current[-1]
                 if measure(current + token) > width:
                     if len(token) == 1:
-                        raise ValueError("排版宽度不足以容纳标点，请增加可用宽度")
+                        raise ValueError("Line width is too narrow to fit the punctuation; increase the available width")
                     pending.extendleft(reversed(list(token)))
                 else:
                     current += token
@@ -173,24 +182,24 @@ def scan(repo, requested_version=None):
     if requested_version:
         requested = requested_version.removeprefix("v")
         if not re.fullmatch(r"\d+\.\d+\.\d+", requested):
-            raise ValueError(f"无效版本号：{requested_version}")
+            raise ValueError(f"Invalid version: {requested_version}")
         target = tuple(map(int, requested.split(".")))
         candidates = [candidate for candidate in candidates if candidate[0] == target]
     if not candidates:
-        label = requested_version or "最新版本"
-        raise ValueError(f"未找到 {label} 的 release-notes Markdown")
+        label = requested_version or "the latest version"
+        raise ValueError(f"No release-notes Markdown found for {label}")
     version, _, source, relative = max(candidates)
     if source == "working-tree":
         markdown = (repo / relative).read_text(encoding="utf-8")
     else:
         result = git(repo, "show", f"{source}:{relative}")
         if result.returncode:
-            raise ValueError(f"无法从 {source} 读取 {relative}: {result.stderr.strip()}")
+            raise ValueError(f"Cannot read {relative} from {source}: {result.stderr.strip()}")
         markdown = result.stdout
 
-    chinese = chinese_release_section(markdown)
+    body = release_section(markdown)
     mentions = {}
-    for line in chinese.splitlines():
+    for line in body.splitlines():
         for match in LOGIN_RE.finditer(line):
             login = match.group(1)
             key = login.lower()
@@ -204,8 +213,8 @@ def scan(repo, requested_version=None):
         "version": ".".join(map(str, version)),
         "source": source,
         "path": relative,
-        "sha256": hashlib.sha256(chinese.encode("utf-8")).hexdigest(),
-        "chinese_markdown": chinese,
+        "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "release_markdown": body,
         "mentions": list(mentions.values()),
     }
 
@@ -216,45 +225,45 @@ def choose_font(role):
             return path, index
     if role == "display":
         return choose_font("bold")
-    raise RuntimeError("缺少可用的中文系统字体；请提供冬青黑体、华文黑体、Noto Sans CJK 或微软雅黑")
+    raise RuntimeError("No usable CJK-capable system font found; install Hiragino Sans GB, STHeiti, Noto Sans CJK or Microsoft YaHei")
 
 
 def check_spec(spec, scan_data, allow_offline_avatars=False):
     if not isinstance(spec, dict):
-        raise ValueError("poster spec 必须是 JSON 对象")
+        raise ValueError("poster spec must be a JSON object")
     if spec.get("version") != scan_data.get("version"):
-        raise ValueError("poster spec 的 version 与最新 release note 不一致")
+        raise ValueError("poster spec version does not match the scanned release note")
     for field in ("features", "fixes", "contributors"):
         if not isinstance(spec.get(field), list):
-            raise ValueError(f"poster spec 缺少数组字段 {field}")
+            raise ValueError(f"poster spec is missing array field {field}")
     if not spec["features"] and not spec["fixes"]:
-        raise ValueError("至少需要一个主要功能或修复项")
+        raise ValueError("At least one feature or fix is required")
     if len(spec["features"]) > 6 or len(spec["fixes"]) > 12:
-        raise ValueError("内容过多：最多 6 项功能、12 项修复，请先提炼")
+        raise ValueError("Too much content: at most 6 features and 12 fixes; condense first")
     mention_ids = {m["login"].lower() for m in scan_data.get("mentions", []) if m.get("credit_candidate") is True}
     seen = set()
     for person in spec["contributors"]:
         login = person.get("login", "")
         if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", login):
-            raise ValueError(f"无效 GitHub ID: {login!r}")
+            raise ValueError(f"Invalid GitHub ID: {login!r}")
         if login.lower() not in mention_ids:
-            raise ValueError(f"贡献者 @{login} 未在 release note 中文部分明确署名")
+            raise ValueError(f"Contributor @{login} is not explicitly credited in the release note")
         if login.lower() in seen:
-            raise ValueError(f"重复的贡献者 @{login}")
+            raise ValueError(f"Duplicate contributor @{login}")
         seen.add(login.lower())
         if not person.get("contribution"):
-            raise ValueError(f"缺少 @{login} 的贡献概述")
+            raise ValueError(f"Missing contribution summary for @{login}")
         if person.get("avatar_path") and not allow_offline_avatars:
-            raise ValueError("avatar_path 仅供显式离线测试使用，正式成图必须核验 GitHub 头像")
+            raise ValueError("avatar_path is only for explicit offline tests; production renders must verify GitHub avatars")
     for field in ("features", "fixes"):
         for item in spec[field]:
             if not item.get("title") or not item.get("body"):
-                raise ValueError(f"{field} 每项都需要 title 和 body")
+                raise ValueError(f"Every {field} item needs a title and body")
     if not isinstance(spec.get("extras", []), list):
-        raise ValueError("extras 必须是数组")
+        raise ValueError("extras must be an array")
     for extra in spec.get("extras", []):
         if not all(extra.get(key) for key in ("title", "headline", "body")):
-            raise ValueError("extras 每项需要 title、headline、body")
+            raise ValueError("Every extras item needs a title, headline and body")
 
 
 def get_avatar(person, spec_path, avatar_dir, allow_offline_avatars=False):
@@ -263,7 +272,7 @@ def get_avatar(person, spec_path, avatar_dir, allow_offline_avatars=False):
     login = person["login"]
     if person.get("avatar_path"):
         if not allow_offline_avatars:
-            raise ValueError("正式成图不能使用 avatar_path")
+            raise ValueError("Production renders cannot use avatar_path")
         path = Path(person["avatar_path"])
         if not path.is_absolute():
             path = spec_path.parent / path
@@ -277,15 +286,15 @@ def get_avatar(person, spec_path, avatar_dir, allow_offline_avatars=False):
         with urlopen(request, timeout=20) as response:
             profile = json.load(response)
         if profile.get("login", "").lower() != login.lower():
-            raise ValueError(f"GitHub 返回的账号与 @{login} 不符")
+            raise ValueError(f"GitHub returned an account that does not match @{login}")
         url = profile.get("avatar_url")
         if not url:
-            raise ValueError(f"@{login} 没有公开头像地址")
+            raise ValueError(f"@{login} has no public avatar URL")
         image_request = Request(url + "&s=256", headers={"User-Agent": "cc-haha-release-announcement"})
         with urlopen(image_request, timeout=20) as response:
             content = response.read()
     except (HTTPError, URLError, TimeoutError) as exc:
-        raise RuntimeError(f"获取 @{login} 的 GitHub 头像失败：{exc}") from exc
+        raise RuntimeError(f"Failed to fetch the GitHub avatar for @{login}: {exc}") from exc
     avatar_dir.mkdir(parents=True, exist_ok=True)
     path = avatar_dir / (login + ".png")
     path.write_bytes(content)
@@ -309,7 +318,7 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
             path, index = choose_font(role)
             faces[key] = ImageFont.truetype(path, size, index=index)
             # Without a black weight, only display-size headings get a 1px
-            # stroke; thicker strokes fill in dense characters such as 重.
+            # stroke; thicker strokes fill in dense CJK characters.
             strokes[faces[key]] = 1 if role == "heavy" and size >= 60 and "Black" not in path else 0
         return faces[key]
 
@@ -387,20 +396,20 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
         # Signal hero: product, oversized version, and the release's lead feature.
         y = 64
         tag_face = face(30, "bold")
-        put(right, y, "版本更新", tag_face, p["ink"], anchor="rt")
-        y = write(margin, y, product, tag_face, p["ink"], content_width - measure("版本更新", tag_face) - 40, 1.35)
+        put(right, y, "New release", tag_face, p["ink"], anchor="rt")
+        y = write(margin, y, product, tag_face, p["ink"], content_width - measure("New release", tag_face) - 40, 1.35)
         y = numerals(margin, y + 48, spec["version"], 400, p["ink"], content_width) + 72
         rect((margin, y, right, y + 3), fill=p["ink"])
         y += 44
         if features:
             lead = features[0]
             number_bottom = numerals(margin, y + 8, "01", 72, p["ink"])
-            put(margin, number_bottom + 16, "本版重点", face(26, "bold"), p["ink"])
+            put(margin, number_bottom + 16, "Highlight", face(26, "bold"), p["ink"])
             text_end = write(body_x, y, lead["title"], face(64, "heavy"), p["ink"], body_width, 1.25)
             text_end = paragraph(body_x, text_end + 18, lead["body"], face(36), p["ink"], body_width)
             y = max(text_end, number_bottom + 16 + 40)
         else:
-            y = write(margin, y, f"本版为修复更新 · {len(fixes)} 项修复", face(44, "heavy"), p["ink"], content_width, 1.3)
+            y = write(margin, y, f"Fix release · {len(fixes)} {'fix' if len(fixes) == 1 else 'fixes'}", face(44, "heavy"), p["ink"], content_width, 1.3)
         y += 72
         bands.append((0, y, p["signal"]))
 
@@ -411,7 +420,7 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
             span = "02" if len(features) == 2 else f"02—{len(features):02d}"
             span_width = ink_box(span, face(32, "display"))[2]
             numerals(right - span_width, y + 30, span, 32, p["accent_ink"])
-            y = write(margin, y, "新增与改进", face(64, "heavy"), p["ink"], content_width - span_width - 40, 1.3)
+            y = write(margin, y, "New and improved", face(64, "heavy"), p["ink"], content_width - span_width - 40, 1.3)
             for index, item in enumerate(features[1:], 2):
                 y += 40
                 rect((margin, y, right, y + 2), fill=p["ink"])
@@ -444,7 +453,7 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
         night_top = y
         y += 88
         if fixes:
-            y = write(margin, y, "重点修复", face(64, "heavy"), p["night_text"], content_width, 1.3)
+            y = write(margin, y, "Key fixes", face(64, "heavy"), p["night_text"], content_width, 1.3)
             for item in fixes:
                 y += 36
                 rect((margin, y, right, y), fill=p["night_rule"])
@@ -455,7 +464,7 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
             y += 88
 
         if people:
-            y = write(margin, y, "感谢社区贡献者", face(64, "heavy"), p["night_text"], content_width, 1.3)
+            y = write(margin, y, "Thanks to community contributors", face(64, "heavy"), p["night_text"], content_width, 1.3)
             for person in people:
                 y += 36
                 if paint:
@@ -470,11 +479,11 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
 
         if spec.get("install_note"):
             label_face, note_face = face(30, "heavy"), face(32)
-            note_x = margin + 39 + measure("安装提示", label_face) + 32
+            note_x = margin + 39 + measure("Install note", label_face) + 32
             note_width = right - 39 - note_x
             height = 32 + max(text_height(spec["install_note"], note_face, note_width), 50) + 32
             rect((margin, y, right, y + height), outline=p["signal"], width=3)
-            put(margin + 39, y + 37, "安装提示", label_face, p["signal"])
+            put(margin + 39, y + 37, "Install note", label_face, p["signal"])
             paragraph(note_x, y + 32, spec["install_note"], note_face, p["night_text"], note_width)
             y += height + 88
 
@@ -507,7 +516,7 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
     canvas = Image.new("RGB", (POSTER_WIDTH, MAX_POSTER_HEIGHT), p["paper"])
     height, bands = layout(canvas, paint=False)
     if height > MAX_POSTER_HEIGHT:
-        raise ValueError(f"海报高度 {height}px 超出上限，请减少内容")
+        raise ValueError(f"Poster height {height}px exceeds the limit; reduce the content")
     background = ImageDraw.Draw(canvas)
     for top, bottom, color in bands:
         if bottom > top:
@@ -521,15 +530,15 @@ def render(spec, scan_data, spec_path, output, allow_offline_avatars=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    scan_cmd = commands.add_parser("scan", help="查找最新 release note，并输出中文内容与署名候选")
+    scan_cmd = commands.add_parser("scan", help="Find the latest release note and output its English body and credit candidates")
     scan_cmd.add_argument("--repo", type=Path, default=Path.cwd())
-    scan_cmd.add_argument("--version", help="指定旧版本进行复测，例如 0.6.6；默认选最新版本")
+    scan_cmd.add_argument("--version", help="Pick an older version to re-test, e.g. 0.6.6; defaults to the latest version")
     scan_cmd.add_argument("--out", type=Path, required=True)
-    render_cmd = commands.add_parser("render", help="从经过审核的 JSON 绘制微信群长图")
+    render_cmd = commands.add_parser("render", help="Render the WeChat group long image from a reviewed JSON spec")
     render_cmd.add_argument("--scan", type=Path, required=True)
     render_cmd.add_argument("--spec", type=Path, required=True)
     render_cmd.add_argument("--out", type=Path, required=True)
-    render_cmd.add_argument("--allow-offline-avatars", action="store_true", help="仅测试用：允许 avatar_path 跳过 GitHub 请求")
+    render_cmd.add_argument("--allow-offline-avatars", action="store_true", help="Tests only: allow avatar_path to skip the GitHub request")
     args = parser.parse_args()
     try:
         if args.command == "scan":

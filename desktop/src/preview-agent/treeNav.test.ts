@@ -7,7 +7,7 @@ describe('tree navigation', () => {
   it('climb returns parent element, not past body', () => {
     const h1 = document.querySelector('h1')!
     expect(climb(h1)?.tagName.toLowerCase()).toBe('section')
-    expect(climb(document.querySelector('main')!)).toBeNull() // body 为界
+    expect(climb(document.querySelector('main')!)).toBeNull() // body is the boundary
   })
   it('descend returns first element child', () => {
     const section = document.querySelector('section')!

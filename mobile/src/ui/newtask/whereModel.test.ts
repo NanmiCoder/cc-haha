@@ -60,9 +60,9 @@ describe('branch section', () => {
   })
 
   test('follow row names the commit it stays on, or the base of a new worktree', () => {
-    expect(model().follow).toMatchObject({ title: '沿用电脑当前提交', detail: '不切分支，停在电脑现在的位置 · a3f9c21' })
-    expect(model({ worktree: true }).follow).toMatchObject({ title: '使用默认起始分支', detail: '新工作树基于 main' })
-    expect(wherePageModel({ repo: { ...repo, headCommit: null }, path: '/p', branch: null, worktree: false, query: '' }).follow.detail).toBe('不切分支，停在电脑现在的位置')
+    expect(model().follow).toMatchObject({ title: 'Keep the computer’s current commit', detail: 'Do not switch branch, stay where the computer is now · a3f9c21' })
+    expect(model({ worktree: true }).follow).toMatchObject({ title: 'Use the default base branch', detail: 'New worktree based on main' })
+    expect(wherePageModel({ repo: { ...repo, headCommit: null }, path: '/p', branch: null, worktree: false, query: '' }).follow.detail).toBe('Do not switch branch, stay where the computer is now')
   })
 
   test('search filters by branch name and remote ref, and says when nothing matches', () => {
@@ -77,26 +77,26 @@ describe('branch section', () => {
   test('a branch another worktree holds is only selectable when starting a new worktree', () => {
     expect(model().rows.find((row) => row.name === 'fix/ws-replay')).toMatchObject({ disabled: true })
     expect(model({ worktree: true }).rows.find((row) => row.name === 'fix/ws-replay')).toMatchObject({ disabled: false })
-    expect(model({ branch: 'fix/ws-replay' }).warning).toContain('另一个工作树')
+    expect(model({ branch: 'fix/ws-replay' }).warning).toContain('another worktree')
   })
 
   test('unreadable or non-Git folders explain themselves instead of listing branches', () => {
     const loading = wherePageModel({ repo: null, path: '/p', branch: null, worktree: false, query: '' })
-    expect(loading).toMatchObject({ reason: '正在读取 Git 状态…', canRetry: true, gitHidden: false })
+    expect(loading).toMatchObject({ reason: 'Reading Git status…', canRetry: true, gitHidden: false })
     const plain = wherePageModel({ repo: { ...repo, state: 'not_git_repo', branches: [] }, path: '/p', branch: null, worktree: false, query: '' })
-    expect(plain).toMatchObject({ reason: '当前目录不是 Git 项目', canRetry: false, gitHidden: true, rows: [] })
+    expect(plain).toMatchObject({ reason: 'The current directory is not a Git project', canRetry: false, gitHidden: true, rows: [] })
     const none = wherePageModel({ repo: null, path: '', branch: null, worktree: false, query: '' })
-    expect(none.reason).toBe('先选择一个项目目录')
+    expect(none.reason).toBe('Choose a project directory first')
     expect(model().reason).toBeNull()
   })
 
   test('a repository without commits cannot host a worktree', () => {
     const empty = wherePageModel({ repo: { ...repo, headCommit: null, branches: [] }, path: '/p', branch: null, worktree: true, query: '' })
-    expect(empty.worktree).toMatchObject({ on: false, disabled: true, detail: '仓库还没有提交，暂时无法创建工作树' })
+    expect(empty.worktree).toMatchObject({ on: false, disabled: true, detail: 'The repo has no commits yet, so a worktree cannot be created yet' })
     expect(model({ worktree: true, branch: 'feat/qr-pair' }).worktree).toMatchObject({
       on: true,
       disabled: false,
-      detail: '发送时基于 feat/qr-pair 创建独立目录',
+      detail: 'Creates a separate directory from feat/qr-pair when sending',
     })
   })
 })
@@ -128,17 +128,17 @@ describe('compact target card', () => {
       name: 'porthole',
       branch: 'main',
       status: undefined,
-      note: '新工作树',
+      note: 'New worktree',
     })
     expect(targetLine({ name: 'porthole', branch: 'main' }, false).note).toBeUndefined()
   })
 
   test('without a branch the status stands in, and the label reads the same facts', () => {
-    const line = targetLine({ name: 'notes', status: '无 Git 分支' }, false)
-    expect(line).toMatchObject({ branch: undefined, status: '无 Git 分支' })
-    expect(targetAccessibility(line)).toBe('位置：notes，无 Git 分支')
-    expect(targetAccessibility(targetLine({ name: 'porthole', branch: 'main' }, true))).toBe('位置：porthole，main，新工作树')
+    const line = targetLine({ name: 'notes', status: 'No Git branch' }, false)
+    expect(line).toMatchObject({ branch: undefined, status: 'No Git branch' })
+    expect(targetAccessibility(line)).toBe('Location: notes, No Git branch')
+    expect(targetAccessibility(targetLine({ name: 'porthole', branch: 'main' }, true))).toBe('Location: porthole, main, New worktree')
     // A branch wins over a status that is no longer relevant.
-    expect(targetLine({ name: 'a', branch: 'main', status: '读取中…' }, false).status).toBeUndefined()
+    expect(targetLine({ name: 'a', branch: 'main', status: 'Loading…' }, false).status).toBeUndefined()
   })
 })

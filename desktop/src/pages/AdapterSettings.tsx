@@ -247,8 +247,8 @@ export function AdapterSettings() {
   // Active IM tab
   const [activeIm, setActiveIm] = useState<ImTab>('telegram')
 
-  // Server —— serverUrl 不再暴露在 UI 里（见下方 Server URL 注释），
-  // 桌面端用 sidecar env var 注入动态端口。
+  // Server: serverUrl is no longer exposed in the UI (see the Server URL note below);
+  // the desktop injects the dynamic port through a sidecar env var.
   const [defaultProjectDir, setDefaultProjectDir] = useState('')
   // Which directories the IM bots may reach at all. Empty = the built-in default
   // (home directory + default project), which is what restores /projects (#1191).
@@ -301,7 +301,7 @@ export function AdapterSettings() {
   const [isStartingDtAuth, setIsStartingDtAuth] = useState(false)
   const [isUnbindingDtBot, setIsUnbindingDtBot] = useState(false)
 
-  // WeCom (企业微信)
+  // WeCom
   const [wecomAllowedUsers, setWecomAllowedUsers] = useState('')
   const [isUnbindingWecomBot, setIsUnbindingWecomBot] = useState(false)
 
@@ -1011,7 +1011,7 @@ export function AdapterSettings() {
                     <Badge size="xs">{t(`settings.adapters.platform.${user.platform}`)}</Badge>
                     <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]">{user.displayName}</span>
                     <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">
-                      {new Date(user.pairedAt).toLocaleDateString()}
+                      {new Date(user.pairedAt).toLocaleDateString('en-US')}
                     </span>
                     <Button
                       variant="danger-ghost"
@@ -1029,11 +1029,11 @@ export function AdapterSettings() {
         </SettingsGroup>
       </section>
 
-      {/* Server URL —— 之前是个手填字段，但桌面端启动 adapter sidecar
-          时已经把 server 的动态端口通过 ADAPTER_SERVER_URL env var 注进去了，
-          loadConfig() 里 env 优先级高于这里的 file value，所以这个字段在桌面
-          运行时完全不会被读到。用户也根本不知道该填什么端口（每次启动随机）。
-          Standalone 模式（直接 bun run adapters/...）保留 file 字段兜底就够了。 */}
+      {/* Server URL: this used to be a manual field, but the desktop already injects the server's
+          dynamic port through the ADAPTER_SERVER_URL env var when it starts the adapter sidecar,
+          and env beats the file value in loadConfig(), so the field is never read at desktop
+          runtime. Users could not know which port to enter either (it is random per launch).
+          Standalone mode (bun run adapters/... directly) keeps the file field as a fallback. */}
 
       <section className="mt-7">
         <SettingsGroup>
@@ -1051,9 +1051,10 @@ export function AdapterSettings() {
             <DirectoryPicker value={defaultProjectDir} onChange={setDefaultProjectDir} />
           </SettingsRow>
 
-          {/* Allowed project roots —— 这是 IM 通道真正的边界。刻意和「默认项目」分开：
-              「默认项目」只决定新会话开在哪，一度被当成唯一允许的根目录，导致 /projects
-              只剩下那一个项目（#1191）。留空 = 主目录，足以覆盖绝大多数用法。 */}
+          {/* Allowed project roots: the real boundary of the IM channel. Deliberately separate from
+              "Default project", which only decides where new sessions open; it was once treated as the
+              only allowed root, leaving /projects with just that one project (#1191). Empty = home
+              directory, which covers almost every use. */}
           <SettingsRow
             title={t('settings.adapters.allowedRoots')}
             description={t('settings.adapters.allowedRootsHint')}

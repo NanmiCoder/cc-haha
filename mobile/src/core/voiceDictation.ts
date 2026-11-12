@@ -57,20 +57,20 @@ export const initialVoiceDictationState = (): VoiceDictationState => ({
 export function voiceIssue(error: unknown): VoiceIssue {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'failed'
   const messages: Record<string, string> = {
-    permission: '请在系统设置中允许 cc-haha 使用麦克风。',
-    unavailable: '当前环境无法录音，请更新手机 App 后重试。',
-    interrupted: '录音已中断，请重新录制。',
-    'no-device': '没有找到可用的麦克风。',
-    'device-busy': '麦克风正在被其他应用使用。',
-    'voice/not-ready': '请先在电脑的「设置 → 语音输入」下载并准备语音模型。',
-    'voice/invalid-audio': '录音无效或超过限制，请重新录制。',
-    'voice/unknown-provider': '电脑上的语音模型已变化，请重新录制。',
-    TIMEOUT: '电脑转写超时，请重试。',
-    NETWORK_ERROR: '无法连接电脑，请检查连接后重试。',
+    permission: 'Allow cc-haha to use the microphone in system settings.',
+    unavailable: 'Cannot record in the current environment; update the phone app and retry.',
+    interrupted: 'Recording was interrupted; please record again.',
+    'no-device': 'No usable microphone found.',
+    'device-busy': 'The microphone is in use by another app.',
+    'voice/not-ready': 'Download and prepare the voice model in Settings → Voice input on the computer first.',
+    'voice/invalid-audio': 'Recording invalid or over the limit; please record again.',
+    'voice/unknown-provider': 'The voice model on the computer changed; please record again.',
+    TIMEOUT: 'Transcription on the computer timed out; please retry.',
+    NETWORK_ERROR: 'Cannot connect to the computer; check the connection and retry.',
   }
   return {
     code,
-    message: messages[code] ?? (error instanceof Error ? error.message : '语音转写未完成，请重试。'),
+    message: messages[code] ?? (error instanceof Error ? error.message : 'Voice transcription did not finish; please retry.'),
   }
 }
 
@@ -126,7 +126,7 @@ export function createVoiceDictation(deps: Dependencies) {
       const audio = await run.recording.stop()
       if (!current(run)) return
       if (audio.seconds < 0.25) {
-        fail(run, { code: 'too-short', message: '录音太短，请说完后再停止。' })
+        fail(run, { code: 'too-short', message: 'Recording too short; stop after you finish speaking.' })
         return
       }
       if (audio.wav.byteLength > run.limits.maxBytes || audio.seconds > run.limits.seconds + 0.01) {
@@ -143,7 +143,7 @@ export function createVoiceDictation(deps: Dependencies) {
       active = undefined
       change({ phase: 'idle', sendRequested: false })
       if (!text) {
-        change({ issue: { code: 'no-speech', message: '没有识别到说话内容，请重试。' } })
+        change({ issue: { code: 'no-speech', message: 'No speech detected; please retry.' } })
         return
       }
       const latest = deps.read()
@@ -174,7 +174,7 @@ export function createVoiceDictation(deps: Dependencies) {
         const catalog = await deps.catalog(run.abort.signal)
         if (!current(run)) return
         if (!catalog.supported || !catalog.preferences.enabled) {
-          fail(run, { code: 'disabled', message: '请在电脑的「设置 → 语音输入」开启语音输入。' })
+          fail(run, { code: 'disabled', message: 'Turn on voice input in Settings → Voice input on the computer.' })
           return
         }
         const provider = catalog.providers.find(value => value.info.id === catalog.preferences.providerId)
@@ -184,7 +184,7 @@ export function createVoiceDictation(deps: Dependencies) {
         }
         const seconds = Math.min(120, catalog.limits.maxAudioSeconds)
         const maxBytes = Math.min(4 * 1024 * 1024, catalog.limits.maxAudioBytes)
-        if (!(seconds > 0) || !(maxBytes > 44)) throw new Error('电脑返回了无效的录音限制。')
+        if (!(seconds > 0) || !(maxBytes > 44)) throw new Error('The computer returned an invalid recording limit.')
         run.limits = { seconds, maxBytes, providerId: provider.info.id, language: catalog.preferences.language }
         const recording = await deps.record({
           maxSeconds: seconds, signal: run.abort.signal,

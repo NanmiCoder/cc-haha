@@ -45,7 +45,7 @@ export type SchedulePreset = 'halfHour' | 'tomorrow' | 'workdays'
 /** Presets use the selected timezone, including when phone and computer differ. */
 export function applySchedulePreset(draft: ScheduleDraft, preset: SchedulePreset, now = Date.now()): ScheduleDraft {
   try { new Intl.DateTimeFormat('en', { timeZone: draft.timeZone }).format(now) }
-  catch { throw new Error('请输入有效时区，例如 Asia/Shanghai') }
+  catch { throw new Error('Please enter a valid time zone, e.g. Asia/Shanghai') }
   if (preset === 'workdays') return { ...draft, frequency: 'weekdays', time: '09:00', legacy: false }
   if (preset === 'halfHour') {
     const at = Math.ceil((now + 30 * 60_000) / 60_000) * 60_000
@@ -60,7 +60,7 @@ export function applySchedulePreset(draft: ScheduleDraft, preset: SchedulePreset
 
 export function scheduleFromDraft(draft: ScheduleDraft, now = Date.now(), original?: TaskSchedule): TaskSchedule {
   try { new Intl.DateTimeFormat('en', { timeZone: draft.timeZone }).format(now) }
-  catch { throw new Error('请输入有效时区，例如 Asia/Shanghai') }
+  catch { throw new Error('Please enter a valid time zone, e.g. Asia/Shanghai') }
   if (draft.frequency === 'once') {
     const anchoredRunAt = draft.runAtInstant && dateTimeInZone(draft.runAtInstant, draft.timeZone) === draft.runAt
       ? draft.runAtInstant : undefined
@@ -69,13 +69,13 @@ export function scheduleFromDraft(draft: ScheduleDraft, now = Date.now(), origin
     if (original?.kind === 'once' && original.timeZone === draft.timeZone && dateTimeInZone(original.runAt, original.timeZone) === draft.runAt &&
       (!anchoredRunAt || Date.parse(anchoredRunAt) === Date.parse(original.runAt))) return original
     const runAt = anchoredRunAt ?? zonedDateTimeToIso(draft.runAt, draft.timeZone)
-    if (!runAt || Date.parse(runAt) <= now) throw new Error('请选择未来的有效日期和时间')
+    if (!runAt || Date.parse(runAt) <= now) throw new Error('Please choose a valid future date and time')
     return { kind: 'once', runAt, timeZone: draft.timeZone }
   }
-  if (draft.frequency === 'specificDays' && (!draft.selectedDays.length || draft.selectedDays.some(day => !Number.isInteger(day) || day < 0 || day > 7))) throw new Error('请至少选择一周中的一天')
-  if (['daily', 'weekdays', 'specificDays', 'monthly'].includes(draft.frequency) && !/^\d{1,2}:\d{2}$/.test(draft.time)) throw new Error('请输入有效时间，例如 09:00')
+  if (draft.frequency === 'specificDays' && (!draft.selectedDays.length || draft.selectedDays.some(day => !Number.isInteger(day) || day < 0 || day > 7))) throw new Error('Please choose at least one day of the week')
+  if (['daily', 'weekdays', 'specificDays', 'monthly'].includes(draft.frequency) && !/^\d{1,2}:\d{2}$/.test(draft.time)) throw new Error('Please enter a valid time, e.g. 09:00')
   const expression = buildCron(draft.frequency, draft.time, draft)
-  if (!isValidCron(expression)) throw new Error('请输入有效的五段 Cron 表达式或执行时间')
+  if (!isValidCron(expression)) throw new Error('Please enter a valid five-field Cron expression or run time')
   return { kind: 'cron', expression, timeZone: draft.timeZone }
 }
 
@@ -121,11 +121,11 @@ export type ScheduleCreateOptions = {
 
 export function createScheduleInput(options: ScheduleCreateOptions, draft: ScheduleDraft, now = Date.now()) {
   const prompt = options.prompt.trim()
-  if (!prompt) throw new Error('请填写要执行的内容')
+  if (!prompt) throw new Error('Please enter what to run')
   const schedule = scheduleFromDraft(draft, now)
-  if (options.execution.kind === 'session' && !options.execution.targetSessionId) throw new Error('请选择要执行的会话')
-  if (options.execution.kind === 'new-session' && !options.folderPath.trim()) throw new Error('请选择电脑上的项目目录')
-  if (options.notificationPolicy !== 'none' && !options.channels.length) throw new Error('请至少选择一个通知渠道')
+  if (options.execution.kind === 'session' && !options.execution.targetSessionId) throw new Error('Please choose the session to run in')
+  if (options.execution.kind === 'new-session' && !options.folderPath.trim()) throw new Error('Please choose a project directory on the computer')
+  if (options.notificationPolicy !== 'none' && !options.channels.length) throw new Error('Please choose at least one notification channel')
   return {
     name: options.name.trim() || prompt.split('\n').find(line => line.trim())!.slice(0, 40),
     prompt,

@@ -11,7 +11,7 @@ test('computer-use is an ordinary deduplicated skill reference that survives sen
   expect(withComputerUseReference(references, true)).toHaveLength(1)
   expect(withComputerUseReference(references, false)).toEqual([])
   expect(isComputerUseReference({ kind: 'plugin', id: 'computer-use' })).toBe(false)
-  const message = buildComposerMessage(serializeComposer('检查页面', references), [], true)
+  const message = buildComposerMessage(serializeComposer('Check page', references), [], true)
   expect(message.content).toContain(computerUseReference.modelText)
   const live = appendPendingUserMessage(createChatState('fixture'), message.content)
   const replayed = chatReducer(live, { type: 'user_message_replay', content: message.content })
@@ -23,14 +23,14 @@ test('computer-use is an ordinary deduplicated skill reference that survives sen
 
 test('queue withdrawal and new-task handoff keep the per-message computer selection without adding persisted state', () => {
   const references = withComputerUseReference([], true)
-  const message = buildComposerMessage(serializeComposer('稍后检查', references), [], false)
-  const current = { queue: [{ id: 'queued', text: '稍后检查', attachments: [], team: false, references, message }], draft: '', attachments: [], team: false, references: [] }
+  const message = buildComposerMessage(serializeComposer('Check later', references), [], false)
+  const current = { queue: [{ id: 'queued', text: 'Check later', attachments: [], team: false, references, message }], draft: '', attachments: [], team: false, references: [] }
   const restored = withdrawQueuedComposer('computer-fixture', current, new Map())
   expect(restored.queue).toEqual([])
   expect(restored.references).toEqual(references)
-  expect(restored.draft).toBe('稍后检查')
+  expect(restored.draft).toBe('Check later')
   clearParkedComposer('computer-fixture')
-  putPendingTask('fixture-host', 'fixture-session', { content: message.content, displayText: '稍后检查', references, attachments: [] })
+  putPendingTask('fixture-host', 'fixture-session', { content: message.content, displayText: 'Check later', references, attachments: [] })
   const handoff = peekPendingTask('fixture-host', 'fixture-session')!
   expect(handoff.references).toEqual(references)
   expect(buildComposerMessage(handoff.content, handoff.attachments, false).content).toBe(message.content)

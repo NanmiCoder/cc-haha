@@ -47,10 +47,10 @@ export type RuntimeDirectory = {
 
 // These are protocol identities, not saved provider rows. null explicitly means Claude.
 export const OFFICIAL_RUNTIME_SOURCES = [
-  { id: null, authId: 'claude-official', name: 'Claude 官方' },
-  { id: 'openai-official', authId: 'openai-official', name: 'ChatGPT 官方' },
-  { id: 'grok-official', authId: 'grok-official', name: 'Grok 官方' },
-  { id: 'deepseek-account', authId: 'deepseek-account', name: 'DeepSeek 账号' },
+  { id: null, authId: 'claude-official', name: 'Claude Official' },
+  { id: 'openai-official', authId: 'openai-official', name: 'ChatGPT Official' },
+  { id: 'grok-official', authId: 'grok-official', name: 'Grok Official' },
+  { id: 'deepseek-account', authId: 'deepseek-account', name: 'DeepSeek Account' },
 ] as const
 export function runtimeSourceName(
   id: string | null,
@@ -59,7 +59,7 @@ export function runtimeSourceName(
   return (
     providers.find((provider) => provider.id === id)?.name ??
     OFFICIAL_RUNTIME_SOURCES.find((source) => source.id === id)?.name ??
-    '电脑默认来源'
+    'Computer default source'
   )
 }
 export const runtimeProviderIdentity = (id: string | null) =>
@@ -226,15 +226,15 @@ export function contextLabel(context?: string): string | undefined {
   const raw = context?.trim()
   if (!raw || raw.toLowerCase() === 'unknown') return undefined
   const tier = raw.match(/^(\d+(?:\.\d+)?)\s*([km])$/i)
-  if (tier) return `${tier[1]}${tier[2]!.toUpperCase()} 上下文`
+  if (tier) return `${tier[1]}${tier[2]!.toUpperCase()} context`
   if (/^\d+$/.test(raw)) {
     const tokens = Number(raw)
     if (!tokens) return undefined
-    if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M 上下文`
-    if (tokens >= 1000) return `${Math.round(tokens / 1000)}K 上下文`
-    return `${tokens} 上下文`
+    if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M context`
+    if (tokens >= 1000) return `${Math.round(tokens / 1000)}K context`
+    return `${tokens} context`
   }
-  return `${raw} 上下文`
+  return `${raw} context`
 }
 
 /** Second line of a model row: description · context, omitting whatever the computer did not report. */
@@ -264,14 +264,14 @@ export function runtimeModelSelection(
 }
 
 /** Why the effort control has nothing to offer, in the words shown beside it. */
-/** 去掉 1M 上下文后缀：`x[1m]` 和 `x` 是同一个模型，思考强度一样。 */
+/** Strip the 1M context suffix: `x[1m]` and `x` are the same model with the same thinking effort. */
 const contextBase = (id: string) => id.replace(/(?:\[1m\]|:1m)$/i, '').trim()
-/** 当前模型不在列表里时给的通用档位，和桌面端一致：去掉只有少数模型支持的「超高」，由电脑校验。 */
+/** Generic tiers when the current model is not in the list, same as desktop: remove "Max", which few models support; the computer validates. */
 const FALLBACK_EFFORTS: readonly string[] = MODEL_REASONING_EFFORTS.filter((value) => value !== 'xhigh')
 
 /**
- * 当前模型可调的思考强度，和桌面端模型选择器一致：先按 id 找，再忽略 1M 上下文后缀找；
- * 列表里没有这个模型也不报错，给通用档位。只有模型明确声明没有可调强度时才为空。
+ * Adjustable thinking efforts of the current model, same as the desktop model picker: look up by id, then ignoring the 1M context suffix; 
+ * no error if the model is not in the list, use generic tiers. Empty only when the model explicitly declares no adjustable effort.
  */
 export function currentModelEfforts(
   models: readonly Model[],
@@ -286,18 +286,18 @@ export function currentModelEfforts(
   }
 }
 
-/** 思考强度调不了时的原因；模型不在列表里不算（见 currentModelEfforts）。 */
+/** Reason thinking effort cannot be adjusted; a model missing from the list does not count (see currentModelEfforts). */
 export function effortUnavailableReason(choice: {
   source?: { auth: RuntimeSource['auth'] }
   canSetEffort: boolean
 }): string {
   return choice.source?.auth === 'missing'
-    ? '请先在电脑上登录或配置此供应商，再重新读取。'
+    ? 'Sign in or configure this provider on the computer first, then reload.'
     : choice.source?.auth === 'error'
-      ? '尚未确认此供应商的授权状态，请重新读取。'
+      ? 'Authorization status of this provider is not confirmed yet; please reload.'
       : !choice.source
-        ? '当前供应商已不可用，请重新选择模型。'
+        ? 'The current provider is no longer available; please choose the model again.'
         : !choice.canSetEffort
-          ? '此账号的新任务沿用电脑默认强度，可在会话中调整。'
-          : '当前模型没有可调的思考强度。'
+          ? 'New tasks for this account use the computer default effort; adjustable in the session.'
+          : 'The current model has no adjustable thinking effort.'
 }

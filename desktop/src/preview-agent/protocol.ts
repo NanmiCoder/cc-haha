@@ -5,7 +5,7 @@ export type AgentMessage =
   | { type: 'browser-zoom'; action: 'out' | 'in' | 'reset' }
   | { type: 'navigated'; url: string; title: string }
   | { type: 'error'; message: string }
-  | { type: 'selection'; generation?: number; payload: unknown }   // M5 填充结构
+  | { type: 'selection'; generation?: number; payload: unknown }   // structure filled in at M5
   | { type: 'screenshot'; dataUrl: string; kind: 'full' | 'viewport' | 'element' } // M4
   | { type: 'picker-exited'; generation?: number; reason?: 'cancel-current' | 'host' | 'invalid-target' }
 

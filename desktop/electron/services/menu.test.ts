@@ -95,11 +95,11 @@ describe('Electron application menu service', () => {
     const copyImageAt = vi.fn()
     const template = buildRendererContextMenuTemplate(
       rendererContextMenuParams({ mediaType: 'image' }),
-      { locale: 'zh', copyImageAt },
+      { locale: 'en', copyImageAt },
     )
 
     expect(template).toHaveLength(1)
-    expect(template[0]?.label).toBe('复制图片')
+    expect(template[0]?.label).toBe('Copy Image')
     template[0]?.click?.({} as never, {} as never, {} as never)
     expect(copyImageAt).toHaveBeenCalledWith(120, 80)
   })

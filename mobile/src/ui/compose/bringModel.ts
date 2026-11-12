@@ -6,28 +6,28 @@ import {
 import type { RecentItem, RecentKind } from '../../core/recentSkills'
 import { connectorSections, type Connector } from '../../core/connectors'
 
-/** 「＋ 带什么」里能带上的东西：技能、命令、连接器、Agent、工作流。 */
+/** Things that can be brought in "+ Bring": skills, commands, connectors, agents, workflows. */
 export type BringGroup = 'skill' | 'command' | 'connector' | 'agent' | 'workflow'
 export const bringGroupOrder: BringGroup[] = ['skill', 'command', 'connector', 'agent', 'workflow']
-/** 搜索结果里的分组名。 */
+/** Group name in search results. */
 export const bringGroupTitle: Record<BringGroup, string> = {
-  skill: '技能',
-  command: '命令',
-  connector: '连接器',
+  skill: 'Skills',
+  command: 'Commands',
+  connector: 'Connectors',
   agent: 'Agent',
-  workflow: '工作流',
+  workflow: 'Workflows',
 }
-/** 半高底单入口行的名称。 */
+/** Name of the entry row in the half-height sheet. */
 export const bringEntryTitle: Record<BringGroup, string> = {
-  skill: '技能',
-  connector: '连接器',
+  skill: 'Skills',
+  connector: 'Connectors',
   agent: 'Agent',
-  workflow: '工作流',
-  command: '斜杠命令',
+  workflow: 'Workflows',
+  command: 'Slash commands',
 }
 /**
- * 入口行分两张卡，和桌面「＋」菜单的两组一致：
- * 给这次任务用的（技能、连接器）；其余的工具（Agent、工作流、斜杠命令）。
+ * Entry rows are split into two cards, matching the two groups in the desktop "+" menu: 
+ * For this task (skills, connectors); the other tools (agents, workflows, slash commands).
  */
 export const bringEntryCards: BringGroup[][] = [
   ['skill', 'connector'],
@@ -35,40 +35,40 @@ export const bringEntryCards: BringGroup[][] = [
 ]
 
 export type BringItem = {
-  /** 稳定标识：引用类用 `ref:种类:id`，纯文本类用 `组:名称`。 */
+  /** Stable ID: references use `ref:kind:id`, plain text items use `group:name`. */
   key: string
   group: BringGroup
-  /** 列表里的标题：`/review`、`@代码审查`、`飞书`。 */
+  /** Title in the list: `/review`, `@code-review`, `Feishu`. */
   token: string
   name: string
   displayName?: string
   description: string
-  /** 技能/插件引用：选中后成为输入框里的可移除胶囊。 */
+  /** Skill/plugin references: once selected they become removable capsules in the input. */
   reference?: ComposerReference
-  /** 命令、Agent、工作流：选中后把这段文字写进输入框。 */
+  /** Commands, agents, workflows: once selected, write this text into the input. */
   insertText?: string
-  /** 现在不能选的原因（例如连接器还没授权）；同时作为行尾的状态标签。 */
+  /** Reason it cannot be selected now (e.g. connector not authorized yet); also used as the status label at the row end. */
   unavailable?: string
-  /** 连接器的 logo：用连接器 id 在 connectorIconSources 里找。 */
+  /** Connector logo: looked up in connectorIconSources by connector id. */
   iconId?: string
-  /** 连接器所在的段：已连接、需要处理、推荐、其余。 */
+  /** Section of the connector: connected, needs attention, recommended, rest. */
   section?: ConnectorSection
-  /** 连接器状态点：绿是已连接，琥珀是需要处理。 */
+  /** Connector status dot: green is connected, amber needs attention. */
   dot?: 'ok' | 'attn'
-  /** 行尾标签的口气：琥珀（要处理）或灰（只是说明）。 */
+  /** Tone of the row-end label: amber (needs action) or grey (informational only). */
   tone?: 'attn' | 'muted'
-  /** 点不能选的行时给用户看的一句话。 */
+  /** One line shown to the user when tapping an unselectable row. */
   notice?: string
 }
 
 export type ConnectorSection = 'connected' | 'attention' | 'suggested' | 'rest'
 export const connectorSectionTitle: Record<ConnectorSection, string> = {
-  connected: '已连接',
-  attention: '需要处理',
-  suggested: '推荐',
-  rest: '全部连接器',
+  connected: 'Connected',
+  attention: 'Needs attention',
+  suggested: 'Recommended',
+  rest: 'All connectors',
 }
-export const connectorOnComputer = '在电脑上连接'
+export const connectorOnComputer = 'Connect on the computer'
 
 export const referenceKey = (reference: Pick<ComposerReference, 'kind' | 'id'>) =>
   `ref:${reference.kind}:${reference.id}`
@@ -89,7 +89,7 @@ export function bringItemFromReference(reference: ComposerReference, asSkill = f
 
 const commandText = (name: string) => `/${name.replace(/^\//, '')} `
 
-/** 轻量档位只保留技能和斜杠命令。 */
+/** The light tier keeps only skills and slash commands. */
 export function candidateBringItems(candidates: ComposerCandidate[], options: { lean: boolean }): BringItem[] {
   const items: BringItem[] = []
   const seen = new Set<string>()
@@ -112,11 +112,11 @@ export function candidateBringItems(candidates: ComposerCandidate[], options: { 
   return items
 }
 
-/** 电脑上 `/api/agents` 返回的一项（只取用到的字段）。 */
+/** One item returned by `/api/agents` on the computer (only the fields used). */
 export type ProbedAgent = { agentType: string; description?: string; isActive?: boolean }
 export type ProbedWorkflow = { name: string; description?: string }
 
-/** 探测接口的返回：取出某个字段里的数组；不是数组（接口不存在、被拦截后的错误体）就当作不可用。 */
+/** Probe endpoint response: take the array from a field; anything not an array (missing endpoint, error body after being blocked) counts as unavailable. */
 export function probeList<T>(value: unknown, key: string): T[] | null {
   if (!value || typeof value !== 'object') return null
   const list = (value as Record<string, unknown>)[key]
@@ -127,7 +127,7 @@ const str = (value: unknown) => (typeof value === 'string' ? value : undefined)
 const records = (list: unknown[]) =>
   list.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object')
 
-/** `/api/agents` 返回 `{ activeAgents, allAgents }`，列表里只用生效的那份。 */
+/** `/api/agents` Returns `{ activeAgents, allAgents }`; the list only uses the active one. */
 export function normalizeAgents(value: unknown): ProbedAgent[] | null {
   const list = probeList<unknown>(value, 'activeAgents')
   if (!list) return null
@@ -144,7 +144,7 @@ export function normalizeAgents(value: unknown): ProbedAgent[] | null {
   })
 }
 
-/** `/api/workflows` 返回 `{ workflows }`。 */
+/** `/api/workflows` Returns `{ workflows }`. */
 export function normalizeWorkflows(value: unknown): ProbedWorkflow[] | null {
   const list = probeList<unknown>(value, 'workflows')
   if (!list) return null
@@ -181,8 +181,8 @@ export function workflowBringItems(workflows: ProbedWorkflow[]): BringItem[] {
 }
 
 /**
- * 连接器目录按桌面的四段排：已连接（有插件就能引用，没有就只展示）、
- * 需要处理（手机上不能授权，只提示）、推荐（手机上不能安装）、其余。
+ * The connectors directory is ordered in the four desktop sections: connected (referenceable if it has a plugin, otherwise display only), 
+ * needs attention (cannot authorize on the phone, hint only), recommended (cannot install on the phone), rest.
  */
 export function connectorBringItems(connectors: Connector[], existing: BringItem[]): BringItem[] {
   const sections = connectorSections(connectors)
@@ -211,9 +211,9 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
         description: connector.description ?? '',
         section: 'connected',
         dot: 'ok',
-        unavailable: '在电脑上管理',
+        unavailable: 'Manage on the computer',
         tone: 'muted',
-        notice: '这个连接器还不能在手机上引用，请在电脑上使用',
+        notice: 'This connector cannot be referenced on the phone yet; please use it on the computer',
       })
     }
   }
@@ -225,12 +225,12 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
       iconId: connector.id,
       token: title(connector),
       name: title(connector),
-      description: failed ? '连接出错' : '需要登录授权',
+      description: failed ? 'Connection error' : 'Sign-in authorization needed',
       section: 'attention',
       dot: 'attn',
-      unavailable: failed ? '需处理' : '需授权',
+      unavailable: failed ? 'Needs attention' : 'Needs auth',
       tone: 'attn',
-      notice: failed ? '请在电脑上查看并处理' : '请在电脑上完成授权',
+      notice: failed ? 'Please view and handle it on the computer' : 'Please complete authorization on the computer',
     })
   }
   const offline = (connector: Connector, section: 'suggested' | 'rest'): BringItem => ({
@@ -241,23 +241,23 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
     name: title(connector),
     description: connector.description ?? '',
     section,
-    unavailable: connector.installed ? '在电脑上管理' : connectorOnComputer,
+    unavailable: connector.installed ? 'Manage on the computer' : connectorOnComputer,
     tone: 'muted',
-    notice: connector.installed ? '请在电脑上管理这个连接器' : '请在电脑上连接这个连接器',
+    notice: connector.installed ? 'Please manage this connector on the computer' : 'Please connect this connector on the computer',
   })
   for (const connector of sections.suggested) result.push(offline(connector, 'suggested'))
   for (const connector of sections.rest) result.push(offline(connector, 'rest'))
   return result
 }
 
-/** 合并各来源，同一个 key 只留第一次出现的那条（连接器目录的名称优先于插件原名）。 */
+/** Merge all sources, keeping only the first entry per key (connector directory names win over raw plugin names). */
 export function mergeBringItems(...groups: BringItem[][]): BringItem[] {
   const map = new Map<string, BringItem>()
   for (const item of groups.flat()) if (!map.has(item.key) || item.group === 'connector') map.set(item.key, item)
   return [...map.values()]
 }
 
-/** 三类要单独探测的目录；拿不到（旧电脑没有接口、网络出错）就是 null，对应入口不显示。 */
+/** Three directories probed separately; unavailable (old computer without endpoint, network error) is null, and the corresponding entry is hidden. */
 export type BringExtrasData = {
   agents: ProbedAgent[] | null
   connectors: Connector[] | null
@@ -265,8 +265,8 @@ export type BringExtrasData = {
 }
 
 /**
- * 把技能/命令目录和三类探测结果合成一份。轻量档位只保留技能和斜杠命令。
- * 目录里「带 MCP 的插件」由连接器目录接管：没连上的退回技能（仍可搜到），连上的以连接器出现。
+ * Combine the skill/command directory with the three probe results. The light tier keeps only skills and slash commands.
+ * "Plugins with MCP" in the directory are taken over by the connectors directory: unconnected ones fall back to skills (still searchable), connected ones appear as connectors.
  */
 export function assembleBringItems(input: {
   candidates: ComposerCandidate[]
@@ -293,9 +293,9 @@ export function assembleBringItems(input: {
 export type BringEntry = { group: BringGroup; title: string; count: number }
 
 /**
- * 半高底单的入口行，分两张卡。技能、命令没有就不显示；
- * 连接器、Agent、工作流只要探测成功就显示（连接器还有推荐可看）。
- * 数字是现成可用的个数：连接器数的是已连接的。
+ * Entry rows of the half-height sheet, in two cards. Skills and commands are hidden when empty; 
+ * connectors, agents and workflows show whenever the probe succeeds (connectors also have recommendations to view).
+ * Numbers are counts ready to use: for connectors it counts connected ones.
  */
 export function bringEntries(
   items: BringItem[],
@@ -320,7 +320,7 @@ export function bringEntries(
 
 export const groupItems = (items: BringItem[], group: BringGroup) => items.filter((item) => item.group === group)
 
-/* ───────────── 搜索 ───────────── */
+/* ───────────── Search ───────────── */
 
 export type Range = [number, number]
 export type BringHit = { item: BringItem; titleRanges: Range[]; descriptionRanges: Range[] }
@@ -328,12 +328,12 @@ export type BringResultGroup = { group: BringGroup; title: string; hits: BringHi
 
 const queryTerms = (query: string) => query.toLowerCase().split(/\s+/).filter(Boolean)
 
-/** 所有关键词在文本里出现的位置，合并重叠后按起点排序。 */
+/** Positions of all keywords in the text, overlaps merged and sorted by start. */
 export function matchRanges(text: string, query: string): Range[] {
   const terms = queryTerms(query)
   if (!terms.length || !text) return []
   const lower = text.toLowerCase()
-  // 个别字符转小写会改变长度，位置就对不上了：这种文本不高亮。
+  // Lowercasing some characters changes length so positions no longer line up: such text is not highlighted.
   if (lower.length !== text.length) return []
   const found: Range[] = []
   for (const term of terms) {
@@ -355,7 +355,7 @@ export function matchRanges(text: string, query: string): Range[] {
   return merged
 }
 
-/** 把文本按高亮区间切成片段，用来渲染。 */
+/** Split text into pieces by highlight ranges for rendering. */
 export function splitByRanges(text: string, ranges: Range[]): { text: string; hit: boolean }[] {
   const parts: { text: string; hit: boolean }[] = []
   let at = 0
@@ -371,8 +371,8 @@ export function splitByRanges(text: string, ranges: Range[]): { text: string; hi
 const stripSigil = (text: string) => text.replace(/^[/@]/, '')
 
 /**
- * 每个关键词都要出现在标题、名称或说明里；标题以关键词开头的排前，
- * 其次是标题包含，最后才是只有说明命中；同档保持目录里的顺序。
+ * Every keyword must appear in the title, name or description; titles starting with the keyword come first, 
+ * then titles containing it, and finally description-only matches; within a tier keep directory order.
  */
 export function searchBringItems(items: BringItem[], query: string): BringResultGroup[] {
   const terms = queryTerms(query)
@@ -408,12 +408,12 @@ export function searchBringItems(items: BringItem[], query: string): BringResult
     .filter((value) => value.hits.length > 0)
 }
 
-/* ───────────── 选择 ───────────── */
+/* ───────────── Selection ───────────── */
 
 export const isBringSelected = (selected: BringItem[], item: BringItem) =>
   selected.some((value) => value.key === item.key)
 
-/** 点一下：没选就加到末尾，已选就取消。不能选的（还没授权）不改变选择。 */
+/** Tap: add to the end if not selected, deselect if selected. Unselectable ones (not authorized yet) do not change the selection. */
 export function toggleBringItem(selected: BringItem[], item: BringItem): BringItem[] {
   if (item.unavailable) return selected
   return isBringSelected(selected, item)
@@ -421,13 +421,13 @@ export function toggleBringItem(selected: BringItem[], item: BringItem): BringIt
     : [...selected, item]
 }
 
-/** 打开时输入框里已有的技能胶囊算「已选」，可以在这里取消。 */
+/** Skill capsules already in the input when opened count as "selected" and can be deselected here. */
 export const initialSelection = (references: ComposerReference[]): BringItem[] =>
   mergeComposerReferences(references).map((reference) => bringItemFromReference(reference))
 
-export const doneLabel = (count: number) => (count > 0 ? `完成（${count}）` : '完成')
+export const doneLabel = (count: number) => (count > 0 ? `Done (${count})` : 'Done')
 
-/** 底部「完成」只在有东西可确认时出现：二级页、搜索，或已经改动了选择。 */
+/** The bottom Done only appears when there is something to confirm: subpage, search, or the selection has changed. */
 export function showDone(input: { page: 'root' | 'list'; searching: boolean; selected: BringItem[]; initial: BringItem[] }) {
   const changed =
     input.selected.length !== input.initial.length ||
@@ -435,15 +435,15 @@ export function showDone(input: { page: 'root' | 'list'; searching: boolean; sel
   return input.page !== 'root' || input.searching || changed
 }
 
-/** 把一段文字接到草稿末尾，前面没有空白就补一个空格。 */
+/** Append text to the end of the draft, adding a space if there is no whitespace before it. */
 export function appendInsertText(draft: string, text: string) {
   const prefix = draft && !/\s$/.test(draft) ? ' ' : ''
   return `${draft}${prefix}${text}`
 }
 
 /**
- * 点「完成」：引用类以最终勾选为准（取消勾选的会从输入框移除）；
- * 命令、Agent、工作流只对新选的追加文字。返回新增的几项，用来记「最近用过」。
+ * Tap Done: references follow the final checks (unchecked ones are removed from the input); 
+ * commands, agents and workflows append text only for newly selected ones. Returns the added items to record "Recently used".
  */
 export function applyBringSelection(input: {
   draft: string
@@ -461,7 +461,7 @@ export function applyBringSelection(input: {
   return { draft, references, added }
 }
 
-/* ───────────── 最近用过 ───────────── */
+/* ───────────── Recently used ───────────── */
 
 export function toRecent(item: BringItem): Omit<RecentItem, 'usedAt'> {
   const kind: RecentKind = item.reference
@@ -474,7 +474,7 @@ export function toRecent(item: BringItem): Omit<RecentItem, 'usedAt'> {
   return { key: item.key, kind, name: item.name, displayName: item.displayName, description: item.description }
 }
 
-/** 只显示目录里仍然存在的、也能直接选的，最多几条。 */
+/** Show only items still in the directory and directly selectable, at most a few. */
 export function resolveRecents(recents: RecentItem[], items: BringItem[], limit = 4): BringItem[] {
   const result: BringItem[] = []
   for (const recent of recents) {

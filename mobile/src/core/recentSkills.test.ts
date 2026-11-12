@@ -15,7 +15,7 @@ const entry = (key: string, extra: Partial<RecentItem> = {}): Omit<RecentItem, '
   key,
   kind: 'command',
   name: key,
-  description: `${key} 的说明`,
+  description: `${key} description`,
   ...extra,
 })
 
@@ -38,9 +38,9 @@ describe('recent skills', () => {
     let list: RecentItem[] = []
     list = recordRecent(list, entry('a'), 1)
     list = recordRecent(list, entry('b'), 2)
-    list = recordRecent(list, entry('a', { description: '更新后的说明' }), 3)
+    list = recordRecent(list, entry('a', { description: 'Updated description' }), 3)
     expect(list.map((item) => item.key)).toEqual(['a', 'b'])
-    expect(list[0]).toMatchObject({ usedAt: 3, description: '更新后的说明' })
+    expect(list[0]).toMatchObject({ usedAt: 3, description: 'Updated description' })
   })
 
   test('keeps only the most recent eight', () => {

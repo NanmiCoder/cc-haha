@@ -15,16 +15,16 @@ import { Text } from '../Text'
 import { monoFont } from '../palette'
 import { simulatedPhoneChrome } from '../webChrome'
 
-/** web 的 textarea 自带 focus ring（outline-style:auto 不受宽度影响），由我们自己画描边。 */
+/** web textarea has its own focus ring (outline-style:auto ignores width), so we draw the outline ourselves. */
 export const webNoOutline = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as object
 
-/** 底部安全区；网页预览按 iPhone 的 34pt Home 指示条模拟（与 ScreenView 的 47pt 顶部一致）。 */
+/** Bottom safe area; web preview simulates the iPhone 34pt home indicator (consistent with the 47pt top in ScreenView). */
 export function useBottomInset() {
   const insets = useSafeAreaInsets()
   return simulatedPhoneChrome ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 16)
 }
 
-/** “需要你决定”的底座：card 背景、顶部圆角 26、向上投影。 */
+/** "Needs your decision" base: card background, top corner radius 26, upward shadow. */
 export function DecisionSurface({
   label,
   children,
@@ -59,7 +59,7 @@ export function DecisionSurface({
   )
 }
 
-/** 琥珀呼吸点 + 标题 + 右侧（队列位置或胶囊）。 */
+/** Amber breathing dot + title + right side (queue position or capsule). */
 export function DecisionHeader({
   title,
   position,
@@ -93,7 +93,7 @@ export function DecisionHeader({
       {right}
       {position && position.total > 1 ? (
         <Mono
-          accessibilityLabel={`第 ${position.index} 个，共 ${position.total} 个`}
+          accessibilityLabel={`${position.index} of ${position.total}`}
           style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}
         >
           {position.index} / {position.total}
@@ -103,7 +103,7 @@ export function DecisionHeader({
   )
 }
 
-/** 居中的弱按钮（“停止整个任务”“上一题”）：32 高、13 号、ink3。 */
+/** Centered weak button ("Stop the whole task", "Previous"): 32 high, size 13, ink3. */
 export function QuietButton({
   title,
   onPress,
@@ -138,7 +138,7 @@ export function QuietButton({
   )
 }
 
-/** 快捷说明胶囊：34 高、fill 底、14 号。 */
+/** Quick note capsule: 34 high, fill background, size 14. */
 export function NoteChip({
   label,
   onPress,
@@ -152,7 +152,7 @@ export function NoteChip({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`填入：${label}`}
+      accessibilityLabel={`Fill in: ${label}`}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
@@ -170,7 +170,7 @@ export function NoteChip({
   )
 }
 
-/** 多行说明输入：bg 底，聚焦时 1.5px 运行蓝描边。 */
+/** Multiline note input: bg background, 1.5px running-blue outline when focused. */
 export function NoteInput({
   minHeight = 92,
   style,
@@ -215,8 +215,8 @@ export function NoteInput({
   )
 }
 
-/** 已发出、等电脑回执：占住按钮区高度，避免底座跳动。 */
-export function SubmittedRow({ text = '已提交，正在等待电脑确认。' }: { text?: string }) {
+/** Sent, waiting for the computer acknowledgement: hold the button area height so the base does not jump. */
+export function SubmittedRow({ text = 'Submitted, waiting for the computer to confirm.' }: { text?: string }) {
   const colors = useColors()
   return (
     <View
@@ -230,7 +230,7 @@ export function SubmittedRow({ text = '已提交，正在等待电脑确认。' 
   )
 }
 
-/** AI 代答胶囊：倒计时（琥珀）/ 已接手（灰）/ 已到时（灰）。 */
+/** AI Auto-answer capsule: countdown (amber) / taken over (grey) / time up (grey). */
 export function CountdownPill({
   state,
   label,
@@ -244,11 +244,11 @@ export function CountdownPill({
   const counting = state === 'counting'
   const text =
     state === 'takenOver'
-      ? '你已接手，AI 不会代答'
+      ? 'You took over; AI will not answer for you'
       : state === 'expired'
-        ? 'AI 代答时间已到'
-        : '后 AI 代答'
-  // 环形进度：从 12 点钟方向顺时针画剩余比例。
+        ? 'AI Auto-answer time is up'
+        : 'until AI answers'
+  // Ring progress: draw the remaining ratio clockwise from 12 o'clock.
   const clamped = Math.min(1, Math.max(0, fraction))
   const angle = clamped * 2 * Math.PI
   const r = 6
@@ -261,7 +261,7 @@ export function CountdownPill({
   return (
     <View
       accessibilityRole="text"
-      accessibilityLabel={counting ? `${label} 后 AI 代答` : text}
+      accessibilityLabel={counting ? `${label} until AI answers` : text}
       style={{
         height: 28,
         paddingHorizontal: 10,

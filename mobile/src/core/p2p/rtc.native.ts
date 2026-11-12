@@ -2,8 +2,8 @@ import { NativeModules } from 'react-native'
 import { classifyPath, type RtcChannel, type RtcFactory } from './peer'
 
 /**
- * react-native-webrtc 包成直连用的那一小部分接口。原生模块不在（旧安装包）时
- * 返回 undefined，整个 App 照常只走 Cloudflare，不会因为少一个模块崩溃。
+ * react-native-webrtc Wrap into the small interface used by direct. When the native module is absent (old install)
+ * return undefined, and the whole app keeps using only Cloudflare without crashing for a missing module.
  */
 export function nativeRtc(): RtcFactory | undefined {
   if (!NativeModules.WebRTCModule) return undefined

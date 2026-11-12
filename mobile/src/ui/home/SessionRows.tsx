@@ -22,16 +22,16 @@ const outcomeGlyph: Record<Outcome, StatusKind> = {
   unknown: 'idle',
 }
 
-const untitled = (row: DashboardRow) => row.session.title || '未命名任务'
+const untitled = (row: DashboardRow) => row.session.title || 'Untitled task'
 
-/** 进行中：转圈 · 实时步骤（没有就写项目）· 走秒时长；卡住时换成琥珀虚线圈。 */
+/** In progress: spinner · live step (project if none) · ticking duration; when stuck it becomes an amber dashed ring. */
 export function RunningRow({
   row,
   background,
   onPress,
 }: {
   row: DashboardRow
-  /** 这个会话正在跑的后台任务数；未知时不显示。 */
+  /** Number of background tasks running in this session; hidden when unknown. */
   background?: number
   onPress(): void
 }) {
@@ -39,7 +39,7 @@ export function RunningRow({
   const { activity } = row
   const project = projectOf(row.session)?.name
   const stalled = Boolean(activity?.stalled)
-  const step = activity?.preview?.trim() || project || '正在处理'
+  const step = activity?.preview?.trim() || project || 'Working'
   return (
     <TaskRow
       glyph={stalled ? <StatusGlyph status="stalled" /> : <Spinner />}
@@ -53,13 +53,13 @@ export function RunningRow({
             {activity?.startedAt ? <Elapsed since={activity.startedAt} /> : null}
             {background ? (
               <Text style={{ fontSize: 12, lineHeight: 18, color: colors.ink3 }}>
-                后台 {background}
+                background {background}
               </Text>
             ) : null}
           </View>
         ) : null
       }
-      accessibilityLabel={`${untitled(row)}，${stalled ? '没有进展' : '进行中'}，${step}${background ? `，后台 ${background} 项` : ''}`}
+      accessibilityLabel={`${untitled(row)}, ${stalled ? 'No progress' : 'In progress'}, ${step}${background ? `, ${background} in background` : ''}`}
       onPress={onPress}
     />
   )
@@ -70,7 +70,7 @@ function StalledText({ row }: { row: DashboardRow }) {
   return <>{stalledLabel(row.activity, now)}</>
 }
 
-/** 最近：完成绿勾 / 出错红叹号 / 你停止了灰方块 / 未查看蓝点；没有记录的历史会话只写项目。 */
+/** Recent: green check for done / red exclamation for error / grey square for you stopped / blue dot for unviewed; history sessions without records only show the project. */
 export function SettledRow({ row, onPress }: { row: DashboardRow; onPress?(): void }) {
   const colors = useColors()
   const outcome = settledOutcome(row.activity)
@@ -87,13 +87,13 @@ export function SettledRow({ row, onPress }: { row: DashboardRow; onPress?(): vo
           <TimeLabel text={relativeLabel(row.session.modifiedAt)} unread={outcome === 'review'} />
         ) : null
       }
-      accessibilityLabel={`${untitled(row)}，${line}`}
+      accessibilityLabel={`${untitled(row)}, ${line}`}
       onPress={onPress}
     />
   )
 }
 
-/** 搜索结果：所有状态共用一行，标题和项目名里的关键词高亮；不是实时视图，所以不转圈不呼吸。 */
+/** Search results: all states share one row, with keywords highlighted in title and project name; not a live view, so no spinning or breathing. */
 export function SearchRow({
   row,
   query,
@@ -130,15 +130,15 @@ export function SearchRow({
         {projectNode}
         {projectNode ? ' · ' : ''}
         <Text style={{ color: stalled ? colors.attn : colors.run }}>
-          {stalled ? '没有进展' : '进行中'}
+          {stalled ? 'No progress' : 'In progress'}
         </Text>
       </>
     )
-    description = stalled ? '没有进展' : '进行中'
+    description = stalled ? 'No progress' : 'In progress'
   } else {
     const outcome = settledOutcome(row.activity)
     glyph = <StatusGlyph status={outcomeGlyph[outcome]} />
-    const lead = outcome === 'failed' ? '出错停下' : outcome === 'stopped' ? '你停止了' : ''
+    const lead = outcome === 'failed' ? 'Stopped with error' : outcome === 'stopped' ? 'You stopped' : ''
     const tail = outcomeLine(outcome, null)
     subtitle = lead ? (
       <>
@@ -163,13 +163,13 @@ export function SearchRow({
       subtitle={subtitle}
       subtitleColor={subtitleColor}
       trailing={<TimeLabel text={relativeLabel(row.session.modifiedAt)} />}
-      accessibilityLabel={`${untitled(row)}，${description}`}
+      accessibilityLabel={`${untitled(row)}, ${description}`}
       onPress={onPress}
     />
   )
 }
 
-/** 断开前的快照：等待和运行的状态都已无法确认，只如实说明。 */
+/** Snapshot from before disconnecting: waiting and running states can no longer be confirmed, so just say so. */
 export function OfflineRow({ row }: { row: DashboardRow }) {
   const state = row.activity?.activityState
   if (state === 'waiting')
@@ -185,13 +185,13 @@ export function OfflineRow({ row }: { row: DashboardRow }) {
       <TaskRow
         glyph={<StatusGlyph status="idle" />}
         title={untitled(row)}
-        subtitle="断开时在运行 · 状态未知"
+        subtitle="Was running when disconnected · status unknown"
       />
     )
   return <SettledRow row={row} />
 }
 
-/** 列表末尾的“显示更早的 N 个”。 */
+/** "Show N earlier" at the end of the list. */
 export function MoreRow({ count, onPress }: { count: number; onPress(): void }) {
   const colors = useColors()
   return (
@@ -207,7 +207,7 @@ export function MoreRow({ count, onPress }: { count: number; onPress(): void }) 
       })}
     >
       <View>
-        <Text style={{ fontSize: 15, color: colors.ink2 }}>显示更早的 {count} 个</Text>
+        <Text style={{ fontSize: 15, color: colors.ink2 }}>Show {count} earlier</Text>
       </View>
     </Pressable>
   )

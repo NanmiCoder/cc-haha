@@ -9,7 +9,7 @@ test('personal page loads the selected computer profile and consistent usage thr
   try {
     const client = new ApiClient({ id: 'fixture', name: 'Profile fixture', url: `http://127.0.0.1:${fixture.server.port}`, auth: 'lan' }, FIXTURE_TOKEN)
     const overview = await loadProfileOverview(client)
-    expect(overview.profile?.subtitle).toBe('Profile fixture 的使用记录')
+    expect(overview.profile?.subtitle).toBe('Profile fixture usage records')
     expect(overview.statsError).toBe('')
     const model = profileModel(overview.stats!)
     expect(model.total).toBe(model.modelTotal)

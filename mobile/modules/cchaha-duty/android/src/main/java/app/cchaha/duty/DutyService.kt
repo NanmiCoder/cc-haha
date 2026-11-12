@@ -207,14 +207,14 @@ class DutyService : Service() {
     if (Build.VERSION.SDK_INT < 26) return
     val manager = getSystemService(NotificationManager::class.java)
     if (manager.getNotificationChannel(DUTY_CHANNEL) == null) {
-      manager.createNotificationChannel(NotificationChannel(DUTY_CHANNEL, "后台连接", NotificationManager.IMPORTANCE_LOW).apply {
-        description = "保持与电脑的连接，用来在后台接收提醒"
+      manager.createNotificationChannel(NotificationChannel(DUTY_CHANNEL, "Background connection", NotificationManager.IMPORTANCE_LOW).apply {
+        description = "Keeps the connection to your computer to receive alerts in the background"
         setShowBadge(false)
       })
     }
     // The app creates the real channels; this only covers a service started before the app ran.
     if (manager.getNotificationChannel(FALLBACK_CHANNEL) == null) {
-      manager.createNotificationChannel(NotificationChannel(FALLBACK_CHANNEL, "任务与审批", NotificationManager.IMPORTANCE_HIGH))
+      manager.createNotificationChannel(NotificationChannel(FALLBACK_CHANNEL, "Tasks and approvals", NotificationManager.IMPORTANCE_HIGH))
     }
   }
 
@@ -227,8 +227,8 @@ class DutyService : Service() {
 
   private fun ongoing(connected: Boolean): Notification = NotificationCompat.Builder(this, DUTY_CHANNEL)
     .setSmallIcon(R.drawable.cchaha_duty_icon)
-    .setContentTitle(if (connected) "正在值守" else "正在连接电脑…")
-    .setContentText(if (connected) "电脑需要你决定或任务结束时，会马上提醒你" else "连上后，电脑的审批和任务提醒会出现在这里")
+    .setContentTitle(if (connected) "On duty" else "Connecting to computer…")
+    .setContentText(if (connected) "Get alerted right away when your computer needs a decision or a task finishes" else "Once connected, approvals and task alerts from your computer appear here")
     .setOngoing(true)
     .setSilent(true)
     .setShowWhen(false)
@@ -272,8 +272,8 @@ class DutyService : Service() {
       .setSilent(appActive && !test)
     // Like the iOS category: the app opens, re-checks the exact pending request, then answers it.
     if (item.optString("category") == "cchahaTool" && base != null && requestId != null) {
-      builder.addAction(0, "拒绝", launchIntent("$base&notificationAction=deny"))
-      builder.addAction(0, "允许", launchIntent("$base&notificationAction=allow"))
+      builder.addAction(0, "Deny", launchIntent("$base&notificationAction=deny"))
+      builder.addAction(0, "Allow", launchIntent("$base&notificationAction=allow"))
     }
     // A newer alert for the same session replaces the older one instead of stacking.
     try { manager.notify("cchaha:${host.hostId}:${sessionId ?: "test"}", 1, builder.build()) } catch (_: SecurityException) {}

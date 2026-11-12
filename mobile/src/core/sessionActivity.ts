@@ -17,7 +17,7 @@ export * from './sessionActivityModel'
 const noopSubscribe = () => () => {}
 const emptySnapshot = () => emptyActivityData
 
-/** App 在前台时为 true；切到后台就停止轮询。 */
+/** App true in the foreground; polling stops when switched to background. */
 function useAppActive() {
   const [active, setActive] = useState(() => AppState.currentState !== 'background')
   useEffect(() => {
@@ -32,42 +32,42 @@ export type UseSessionActivityOptions = {
   host: Pick<Host, 'id'>
   sessionId: string
   turnActive: boolean
-  /** 聊天状态里当前活动的后台任务 id；增减时立刻重读。 */
+  /** IDs of currently active background tasks in chat state; reread immediately when they change. */
   backgroundTaskIds: readonly string[]
   enabled?: boolean
   /**
-   * 通过会话 WebSocket 发送（停止任务用）；没发出去返回 false。
-   * 不传时用 `registerSessionSender` 登记的发送函数。
+   * Send via the session WebSocket (used to stop tasks); returns false if not sent.
+   * When omitted uses the send function registered via `registerSessionSender`.
    */
   send?(message: ClientMessage): boolean
-  /** 待审批的数量；大于 0 时 tone 为 attention。 */
+  /** Number of pending approvals; tone is attention when greater than 0. */
   pendingApprovals?: number
-  /** 聊天状态里的 `subagents`：子 Agent 的实时步骤和计数。 */
+  /** `subagents` in chat state: live steps and counts of subagents. */
   live?: Record<string, SubagentLive>
-  /** 工作目录，用于把步骤里的路径显示成相对路径。 */
+  /** Working directory, used to show paths in steps as relative paths. */
   workDir?: string | null
-  /** 团队方案的 planId 与状态；确认、启动、结束时立刻重读团队。 */
+  /** planId and state of the team plan; reread the team immediately on approval, launch or end. */
   teamPlan?: { planId: string; state: string } | null
 }
 
 export type SessionActivity = SessionActivityModel & {
   loading: boolean
-  /** 读取失败的说明（部分失败时旧数据保留）。 */
+  /** Description of load failures (old data kept on partial failure). */
   error: string
   stopError: string
-  /** 已发出停止请求、等电脑确认的任务 id。 */
+  /** IDs of tasks with a stop request sent, waiting for computer confirmation. */
   stopping: readonly string[]
   refresh(): Promise<void>
-  /** 停止一个子 Agent 或后台命令；没发出去返回 false。 */
+  /** Stop a subagent or background command; returns false if not sent. */
   stopTask(taskId: string): boolean
-  /** 停止所有仍在运行的子 Agent 和后台命令。 */
+  /** Stop all subagents and background commands still running. */
   stopAll(): boolean
 }
 
 /**
- * 一个会话的运行活动：任务清单、团队、后台任务只在这里拉一次，
- * 胶囊、底单、状态行共用同一份派生结果。运行或有后台任务时每 3.5 秒读一次，
- * 空闲、页面不可见或 App 在后台时不读。
+ * Run activity of one session: task list, team and background tasks are fetched only here, 
+ * and the capsule, sheet and status line share the same derived result. Read every 3.5 seconds while running or with background tasks, 
+ * and not when idle, page hidden or app in background.
  */
 export function useSessionActivity({
   client,
@@ -92,7 +92,7 @@ export function useSessionActivity({
             send: (message) => sendToSession(sessionId, message),
           })
         : null,
-    // 换电脑或换会话就换一个新的仓库，旧请求随之取消。
+    // Switching computer or session creates a new store and cancels old requests.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [client, sessionId, host.id]
   )

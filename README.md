@@ -1,7 +1,7 @@
 # cc-haha
 
 <p align="center">
-  <img src="docs/images/readme/cover-zh.webp" alt="cc-haha — Claude Code 桌面端 + 手机端" width="960">
+  <img src="docs/images/readme/cover-en.webp" alt="cc-haha — Claude Code for desktop and mobile" width="960">
 </p>
 
 <div align="center">
@@ -11,86 +11,82 @@
 [![GitHub Issues](https://img.shields.io/github/issues/NanmiCoder/cc-haha)](https://github.com/NanmiCoder/cc-haha/issues)
 [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/NanmiCoder/cc-haha)](https://github.com/NanmiCoder/cc-haha/pulls)
 [![License](https://img.shields.io/badge/License-Community_Source-orange)](https://github.com/NanmiCoder/cc-haha/blob/main/LICENSE)
-[![中文](https://img.shields.io/badge/🇨🇳_简体中文-当前-blue)](README.md)
-[![English](https://img.shields.io/badge/🇺🇸_English-Available-green)](README.en.md)
-[![Docs](https://img.shields.io/badge/📖_文档站点-Visit-FF7A00)](https://cchaha.ai)
-
-**简体中文** · [English](README.en.md)
+[![Docs](https://img.shields.io/badge/📖_Documentation-Visit-FF7A00)](https://cchaha.ai)
 
 </div>
 
-cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、Agent Teams 协作工作台、动态 Workflow 编排、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、手机 App 与 H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。**Computer Use 在 macOS 上使用原有原生引擎，在 Windows / Linux 上复用 agent-desktop；支持的后台语义操作不移动真实鼠标，物理输入仍会占用前台。** 配套的 Android / iPhone App 扫码连上电脑，离开工位也能审批、派任务。
+cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, mobile app and H5 remote access, IM integration, and scheduled tasks, all in one app. **Computer Use keeps the existing native macOS engine and reuses agent-desktop on Windows / Linux. Supported background semantic actions leave the physical pointer alone; physical input still uses the foreground.** The companion Android / iPhone app pairs with your computer by QR code, so you can approve actions and start tasks away from your desk.
 
-<p align="center"><b>白金赞助商 · Modelflare</b></p>
+<p align="center"><b>Platinum Sponsor · Modelflare</b></p>
 
 <p align="center">
   <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">
-    <img src="docs/images/sponsors/modelflare-banner-zh.png" width="720" alt="Modelflare：满血稳定不掺水，低成本享受全球 SOTA 模型">
+    <img src="docs/images/sponsors/modelflare-banner-en.png" width="720" alt="Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost.">
   </a>
 </p>
 
-<p><sub>感谢 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> 赞助本项目！Modelflare：满血稳定不掺水，低成本享受全球 SOTA 模型。站点由美国 LLC 主体 Havenbyte LLC 运营，支持 GPT、Claude、Gemini、Grok 等主流模型和常用兼容协议，还支持 40 多种图片和视频模型。</sub></p>
+<p><sub>Thanks to <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> for sponsoring this project! Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost. Operated by US-based Havenbyte LLC, Modelflare supports GPT, Claude, Gemini, Grok, and other leading models through common compatible protocols, plus 40+ image and video models.</sub></p>
 
-<p><sub><b>缓存补偿是一大亮点：</b>部分 OpenAI 价格优先、稳定和高级分组提供每日 65%、75%、85% 的缓存命中率保障，符合条件的请求没达到目标的，平台补偿差额，结算后可在用量看板查看。</sub></p>
+<p><sub><b>Cache compensation is a highlight:</b> selected OpenAI groups (price-first, stable, and premium) guarantee daily cache hit rates of 65%, 75%, or 85%, and if eligible requests fall short, Modelflare refunds the difference, visible on the usage dashboard after settlement.</sub></p>
 
-<p><sub><b>特惠活动：</b>单笔充值 US$20 即可解锁 0.015 倍价格倍率的 GPT 特惠分组，单笔充值 US$50 即可解锁 0.03 倍价格倍率的 Claude 特惠分组。通过 <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">专属链接注册</a>即可参与。</sub></p>
+<p><sub><b>Special offers:</b> a single top-up of US$20 unlocks the GPT discount group at a 0.015x price multiplier, and a single top-up of US$50 unlocks the Claude discount group at a 0.03x multiplier. Register via <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">this exclusive link</a> to get started.</sub></p>
 
 <p align="center">
-  <a href="#功能预览">功能预览</a> · <a href="#安装">安装</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#用户交流群">用户交流群</a>
+  <a href="#feature-preview">Feature Preview</a> · <a href="#install">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
 </p>
 
 ---
 
-## 功能预览
+## Feature Preview
 
 <p align="center">
-  <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_下载桌面端-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="下载桌面端"></a>
-  <a href="https://github.com/NanmiCoder/cc-haha/releases/latest"><img src="https://img.shields.io/badge/Android-APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="下载 Android APK"></a>
-  <a href="https://testflight.apple.com/join/Nd49JrWZ"><img src="https://img.shields.io/badge/iOS-TestFlight-1F1A17?style=for-the-badge&logo=apple&logoColor=white" alt="通过 TestFlight 安装 iOS App"></a>
+  <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
+  <a href="https://github.com/NanmiCoder/cc-haha/releases/latest"><img src="https://img.shields.io/badge/Android-APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download the Android APK"></a>
+  <a href="https://testflight.apple.com/join/Nd49JrWZ"><img src="https://img.shields.io/badge/iOS-TestFlight-1F1A17?style=for-the-badge&logo=apple&logoColor=white" alt="Install the iOS app with TestFlight"></a>
 </p>
 
 <table>
   <tr>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/mobile-zh.webp" width="100%" alt="手机 App：离开电脑，也能审批、回答提问和派新任务">
-      <br><sub><a href="docs/desktop/remote.md">手机 App</a></sub>
+      <img src="docs/images/readme/mobile-en.webp" width="100%" alt="Mobile app: approve actions, answer questions, and start new tasks away from your computer">
+      <br><sub><a href="docs/desktop/remote.md">Mobile app</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/agent-teams-zh.webp" width="100%" alt="Agent Teams：队长拆分任务、指派成员，成员并行推进">
+      <img src="docs/images/readme/agent-teams-en.webp" width="100%" alt="Agent Teams: the lead splits the work and members run in parallel">
       <br><sub><a href="docs/internals/agent.md">Agent Teams</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/computer-use-zh.webp" width="100%" alt="Computer Use macOS 示例：Agent 用虚拟光标操作其他应用，真实鼠标仍可使用">
-      <br><sub><a href="docs/desktop/computer-use.md">Computer Use（macOS 示例）</a></sub>
+      <img src="docs/images/readme/computer-use-en.webp" width="100%" alt="Computer Use macOS example: an agent cursor drives another app while the physical pointer remains usable">
+      <br><sub><a href="docs/desktop/computer-use.md">Computer Use (macOS example)</a></sub>
     </td>
   </tr>
   <tr>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/models-zh.webp" width="100%" alt="多模型：输入框里的模型菜单，DeepSeek、Kimi、智谱 GLM 等按服务商分组；也支持 Claude、ChatGPT、Grok 账号登录和本地模型">
-      <br><sub><a href="docs/start/models.md">多模型</a></sub>
+      <img src="docs/images/readme/models-en.webp" width="100%" alt="Models: the composer's model menu groups DeepSeek, Kimi, Zhipu GLM and other providers; Claude, ChatGPT, and Grok sign-in and local models work too (Chinese interface)">
+      <br><sub><a href="docs/start/models.md">Models</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/workbench-zh.webp" width="100%" alt="桌面工作台：多会话并行、内置浏览器预览、逐文件审阅改动">
-      <br><sub><a href="docs/desktop/workspace.md">桌面工作台</a></sub>
+      <img src="docs/images/readme/workbench-en.webp" width="100%" alt="Desktop workbench: parallel sessions, built-in browser preview, and file-by-file diff review">
+      <br><sub><a href="docs/desktop/workspace.md">Desktop workbench</a></sub>
     </td>
     <td width="33%" align="center" valign="top">
-      <img src="docs/images/readme/skills-zh.webp" width="100%" alt="技能市场：浏览 ClawHub 与 SkillHub 的精选技能，来源和安全扫描状态摆在明处">
-      <br><sub><a href="docs/desktop/skills.md">技能市场</a></sub>
+      <img src="docs/images/readme/skills-en.webp" width="100%" alt="Skills Market: browse curated ClawHub and SkillHub skills with their source and security scan status in plain view">
+      <br><sub><a href="docs/desktop/skills.md">Skills Market</a></sub>
     </td>
   </tr>
 </table>
 
 ---
 
-## 赞助与合作
+## Sponsorship & Partnership
 
-本项目由个人利用业余时间维护，欢迎企业或个人赞助支持持续开发，也可洽谈定制、集成或商务合作。
+This project is maintained in the author's spare time. Corporate or individual sponsorships are welcome to support ongoing development. Custom features, integrations, and business partnerships are also open for discussion.
 
 <table>
   <thead>
     <tr>
-      <th width="220">赞助商</th>
-      <th align="left">介绍</th>
+      <th width="220">Sponsor</th>
+      <th align="left">Description</th>
     </tr>
   </thead>
   <tbody>
@@ -101,7 +97,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
         </a>
       </td>
       <td valign="middle">
-        感谢 <a href="https://aruhub.com/sign-up?aff=Z54g">AruHub</a> 对本项目的赞助！AruHub 专注为开发者提供长期稳定的主力 API 上游服务。面向 Codex / Claude Code 等高频 AI Coding 场景，提供 GPT 企业分组官方接口、Claude 稳定企业分组，适合长时间持续调用；同时覆盖 GPT、Claude 等主流模型。Image 2 / 2.5 全天稳定供应，低至 0.04 元/张。按量付费，支持企业大用量、开发票及退款。通过 <a href="https://aruhub.com/sign-up?aff=Z54g">专属链接</a>注册即送 1 美元全模型通用额度，不限制模型使用。
+        Thanks to <a href="https://aruhub.com/sign-up?aff=Z54g">AruHub</a> for sponsoring this project! AruHub focuses on providing developers with a stable, long-term primary API upstream service. Built for high-frequency AI coding workflows such as Codex and Claude Code, it offers official GPT API access through enterprise groups and stable Claude enterprise groups for sustained use, with support for leading models including GPT and Claude. Image 2 / 2.5 is available around the clock, starting at CNY 0.04 per image. Pay-as-you-go billing supports high-volume enterprise usage, invoicing, and refunds. Register through the <a href="https://aruhub.com/sign-up?aff=Z54g">exclusive link</a> to receive US$1 in credit usable across all models, with no model restrictions.
       </td>
     </tr>
     <tr>
@@ -111,7 +107,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
         </a>
       </td>
       <td valign="middle">
-        感谢 <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> 对本项目的赞助！Moe API 是面向开发者与团队的统一大模型 API 平台，一个 Key 即可接入 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM、Qwen 等 120+ 模型，原生兼容 OpenAI（Chat / Responses）、Anthropic Messages 与 Gemini 协议，可直接用于 cc-haha、Claude Code、Codex 等工具。价格按 1 元 = 1 美元额度计费，Codex 自营号池倍率低至 0.1x，Gemini 自营 0.25x、Grok 0.2x、Claude Code 第三方号池 0.35x、DeepSeek / GLM / Kimi 0.5x 起，并支持 GPT Image、Gemini 生图。支持支付宝、微信扫码充值，余额实时到账；可按需开具发票，余额支持退款，团队采购与报销都方便。全球 CDN 线路，API 请求与响应正文不在平台持久化保存。
+        Thanks to <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> for sponsoring this project! Moe API is a unified large language model API platform for developers and teams. A single API key provides access to 120+ models, including GPT, Claude, Gemini, Grok, DeepSeek, Kimi, GLM, and Qwen, with native compatibility with OpenAI (Chat / Responses), Anthropic Messages, and Gemini protocols for direct use with cc-haha, Claude Code, Codex, and other tools. Pricing is CNY 1 per US$1 of credit: multipliers start as low as 0.1x for self-operated Codex account pools, with self-operated Gemini at 0.25x, Grok at 0.2x, third-party Claude Code account pools at 0.35x, and DeepSeek / GLM / Kimi starting at 0.5x. It also supports GPT Image and Gemini image generation. Top up via Alipay or WeChat QR code payments, with credit added in real time. Invoices are available on request and balances are refundable, making team purchasing and reimbursement convenient. Global CDN routing is available; API request and response bodies are not persistently stored on the platform.
       </td>
     </tr>
     <tr>
@@ -121,58 +117,58 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
         </a>
       </td>
       <td valign="middle">
-        感谢 <a href="https://www.kk-vibe.top/r/j8d6we">kk-vibe</a> 对本项目的赞助！kk-vibe 覆盖 GPT、Claude、Gemini、DeepSeek 等主流模型，24 小时「鹈鹕骑车」实测，渠道状态随时可查。内置无限画布，支持 GPT、Nano Banana 生图，兼顾编程开发与视觉创作。模型表现看得见 · 无限画布自由创作。
+        Thanks to <a href="https://www.kk-vibe.top/r/j8d6we">kk-vibe</a> for sponsoring this project! kk-vibe covers leading models including GPT, Claude, Gemini, and DeepSeek, runs round-the-clock "pelican riding a bicycle" tests, and lets you check channel status at any time. Its built-in infinite canvas supports GPT and Nano Banana image generation, serving both coding and visual creation. See how models perform · Create freely on an infinite canvas.
       </td>
     </tr>
     <tr>
       <td align="center" valign="middle">
-        <a href="https://www.zuiquanapi.com/"><b>最全 API<br>中转站导航</b></a>
+        <a href="https://www.zuiquanapi.com/"><b>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">
-        朋友做的一个 AI API 中转站导航——<a href="https://www.zuiquanapi.com/">最全 API 中转站导航</a>，汇总各家站点，方便按模型和价格查找、对比。如果你还不知道怎么选中转站，可以先来这里看看。
+        Built by a friend, <a href="https://www.zuiquanapi.com/">Zuiquan API Directory</a> brings together AI API relay providers so you can find and compare options by model and price. If you're unsure which provider to choose, it's a useful place to start.
       </td>
     </tr>
   </tbody>
 </table>
 
-📧 **联系邮箱**：relakkes@gmail.com
+📧 **Contact**: relakkes@gmail.com
 
 ---
 
-## 安装
+## Install
 
-1. 前往 [Releases](https://github.com/NanmiCoder/cc-haha/releases) 下载 macOS / Windows / Linux 桌面端安装包。
-2. 首次启动后，在桌面端设置里配置模型提供商、API Key 和默认模型。
-3. 正式 macOS Release 需要经过签名和公证；如果安装的是 draft/unsigned 临时包，首次打开可能仍需手动放行。Windows 未签名安装包可能出现 SmartScreen 提示，点「更多信息」→「仍要运行」即可。详见 [桌面端安装指南](docs/start/install.md)。
-4. 手机端（可选）：Android 在 Releases 下载 `cc-haha-mobile-*.apk` 安装；iPhone 先装 TestFlight，再打开[公开链接](https://testflight.apple.com/join/Nd49JrWZ)加入测试。手机 App 需要桌面端 v0.7.6 或更新版本。在桌面端「手机连接」里扫码配对，同一 Wi-Fi 直连，外出用 Cloudflare 连接，详见 [手机 App 与远程连接](docs/desktop/remote.md)。
+1. Download the macOS / Windows / Linux desktop installer from [Releases](https://github.com/NanmiCoder/cc-haha/releases).
+2. On first launch, configure your model provider, API key, and default model in Settings.
+3. Public macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway". See the [desktop installation guide](docs/start/install.md).
+4. Mobile (optional): on Android, download `cc-haha-mobile-*.apk` from Releases; on iPhone, install TestFlight and open the [public link](https://testflight.apple.com/join/Nd49JrWZ). The mobile app needs desktop v0.7.6 or later. Pair it by scanning the QR code under **Phone connection** in the desktop app: connect directly on the same Wi-Fi, or through Cloudflare when you are away. See [Mobile app and remote connection](docs/desktop/remote.md).
 
-发布可信度与隐私：[Code signing policy](docs/start/code-signing.md) · [隐私与联网说明](docs/start/privacy.md)
+Release trust and privacy: [Code signing policy](docs/start/code-signing.md) · [Privacy and network access](docs/start/privacy.md)
 
 ---
 
-## 用户交流群
+## User Group
 
-使用过程中有问题、想反馈 Bug，或者想看看别人怎么用，欢迎扫码加入 cc-haha 企业微信用户群。也可以直接来 [Issues](https://github.com/NanmiCoder/cc-haha/issues) 提问。企业定制 / 私有化部署 / Agent 定制需求，请联系作者 [NanmiCoder](https://github.com/NanmiCoder)。
+Scan the QR code below to join the cc-haha user group on WeCom (WeChat Work) — the conversation there is mostly in Chinese. For questions and bug reports in English, [Issues](https://github.com/NanmiCoder/cc-haha/issues) is the better place. For enterprise deployment, customization, or Agent development needs, contact the author [NanmiCoder](https://github.com/NanmiCoder).
 
 <p align="center">
-  <img src="docs/images/community/wechat-group-qr.png" width="300" alt="cc-haha 企业微信用户群二维码">
+  <img src="docs/images/community/wechat-group-qr.png" width="300" alt="cc-haha WeCom user group QR code">
 </p>
 
 ---
 
-## ☕ 请作者喝杯咖啡
+## ☕ Buy Me a Coffee
 
-如果这个项目对您有帮助，欢迎打赏支持，您的每一份支持都是我持续更新的动力 ❤️
+If this project helps you, consider buying me a coffee — every bit of support keeps this project going ❤️
 
 <table>
 <tr>
 <td align="center" width="33%">
-<img src="docs/images/donate/wechat_pay.jpeg" width="250" alt="微信赞赏"><br>
-<b>微信赞赏</b>
+<img src="docs/images/donate/wechat_pay.jpeg" width="250" alt="WeChat Pay"><br>
+<b>WeChat Pay</b>
 </td>
 <td align="center" width="33%">
-<img src="docs/images/donate/zfb_pay.png" width="250" alt="支付宝"><br>
-<b>支付宝</b>
+<img src="docs/images/donate/zfb_pay.png" width="250" alt="Alipay"><br>
+<b>Alipay</b>
 </td>
 <td align="center" width="33%">
 <a href="https://buymeacoffee.com/relakkes" target="_blank">
@@ -185,75 +181,75 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 
 ---
 
-## 桌面端亮点
+## Desktop Highlights
 
-- **多会话工作台**：标签页、项目切换、终端入口和会话历史集中管理，侧边栏宽度可拖拽。
-- **全局搜索**：按 Cmd+K 跨所有会话全文搜索，一键跳到命中位置。
-- **分支 / Worktree 启动**：新会话可以选择仓库分支，并决定用当前工作树还是隔离 Worktree。
-- **改动逐个文件审阅**：右侧工作区列出本轮改动，点开就是带语法高亮的 Diff，整轮可撤销。
-- **内置浏览器预览**：Agent 刚改完的页面直接在应用内渲染，登录态和 Cookie 真实可用。
-- **五档权限模式**：从「询问权限」到「跳过权限」，危险命令、工具调用和 AI 反问都在桌面端审批。
-- **模型自选**：Claude / ChatGPT / Grok 官方账号可直接登录；DeepSeek、Kimi、智谱 GLM 等第三方 API 有现成预设；LM Studio、Ollama 的本地模型也接得上。
-- **图片生成**：聊天中直接生成和编辑图片——ChatGPT / Grok 授权登录即可使用，也支持接入任意 OpenAI 兼容的 Images API。
-- **MCP 图形化管理**：界面化增删改 MCP Server，支持 STDIO / Streamable HTTP / SSE 三种传输方式与项目私有、共享、全局三种作用域。
-- **六套配色主题**：纯白、纸墨、经典暖色、青瓷、墨夜、墨夜蓝，可跟随系统深浅色自动切换。
-- **技能市场**：发现、预览、安装 ClawHub / SkillHub 的第三方技能，来源和安全状态摆在明处。
-- **会话活动面板**：集中查看任务进度、后台任务、SubAgent 与来源。
-- **可视化 SubAgent 管理**：图形界面创建和调校子代理，选择模型、工具与权限模式。
-- **Agent Teams 协作工作台**：桌面端可视化多 Agent 协作团队——成员、任务、通信流和依赖泳道一目了然。
-- **动态 Workflow 编排**：模型当场编写并运行编排脚本，并发或流水线调度多个子代理，支持阶段视图、中断与断点续跑。
-- **模型请求追踪**：本地记录每轮模型请求的状态与耗时，可搜索筛选，快速定位卡死或失败调用。
-- **Computer Use**：macOS / Windows / Linux 原生桌面控制，无需 Python；一次确认授权所有受支持应用。Windows / Linux 复用 agent-desktop，优先后台语义操作；需要物理输入时仍受系统与前台限制。
-- **桌面宠物**：搭搭、弧弧、补补、回回随任务状态换动作，也能自己做一只（默认关闭）。
-- **手机 App 与 H5**：Android / iPhone App 扫码连上电脑，在手机上审批工具调用、回答提问、派新任务、查看改动、随时停止；也可以直接用手机浏览器接入。任务始终在电脑上跑，手机锁屏切后台都不打断。
-- **IM 接入**：通过 Telegram / 飞书 / 微信 / 钉钉 / WhatsApp / 企业微信 / QQ / Slack 远程对话、切换项目和审批权限。
-- **定时任务与用量统计**：创建计划任务在独立会话执行，并查看本机 Token 使用趋势。
-
----
-
-## 更多文档
-
-完整文档站：<https://cchaha.ai>
-
-| 分区 | 文档 |
-|------|------|
-| **开始使用** | [这是什么](docs/start/index.md) · [下载与安装](docs/start/install.md) · [连接模型服务](docs/start/models.md) · [跑通第一条会话](docs/start/first-session.md) · [故障排查](docs/start/troubleshooting.md) |
-| **桌面端功能** | [功能总览](docs/desktop/index.md) · [Computer Use](docs/desktop/computer-use.md) · [桌面宠物](docs/desktop/pets.md) · [手机 App、H5 与 IM 接力](docs/desktop/remote.md) |
-| **IM 接入** | [总览与配对流程](docs/im/index.md) · [飞书](docs/im/feishu.md) · [Telegram](docs/im/telegram.md) · [微信](docs/im/wechat.md) · [钉钉](docs/im/dingtalk.md) · [WhatsApp](docs/im/whatsapp.md) · [企业微信](docs/im/wecom.md) · [QQ](docs/im/qq.md) · [Slack](docs/im/slack.md) |
-| **命令行** | [安装与启动](docs/cli/index.md) · [命令参考](docs/cli/reference.md) · [环境变量](docs/cli/env.md) |
-| **深入原理** | [桌面端架构](docs/internals/desktop.md) · [多 Agent 系统](docs/internals/agent.md) · [Skills 系统](docs/internals/skills.md) · [记忆系统](docs/internals/memory.md) · [Computer Use 架构](docs/internals/computer-use.md) · [本地 Server 与 API](docs/internals/server.md) · [Channel 系统](docs/internals/channel.md) · [项目结构](docs/internals/structure.md) · [参与贡献与质量门禁](docs/internals/contributing.md) |
+- **Multi-session workspace**: tabs, project switching, terminal entry, and session history in one place, with a resizable sidebar.
+- **Global search**: press Cmd+K to search across every session and jump to the match.
+- **Branch / Worktree launch**: choose a repository branch and decide whether to use the current working tree or an isolated Worktree.
+- **Review edits file by file**: the workspace lists this turn's changes; open any file for a syntax-highlighted diff, or undo the whole turn.
+- **Built-in browser preview**: the page your agent just edited renders right inside the app, cookies and login state included.
+- **Five permission modes**: from "ask every time" to "skip permissions" — risky commands, tool calls, and follow-up questions are all approved in the GUI.
+- **Bring your own model**: sign in to Claude, ChatGPT, or Grok; use presets for DeepSeek, Kimi, Zhipu GLM and others; or point it at LM Studio and Ollama running locally.
+- **Image generation**: generate and edit images right in the chat — sign in with ChatGPT or Grok for instant use, or plug in any OpenAI-compatible Images API.
+- **Visual MCP manager**: add and edit MCP servers in a GUI — STDIO / Streamable HTTP / SSE, with project, shared, or global scope.
+- **Six colour themes**: white, paper, warm classic, celadon, ink night, and ink blue — optionally following your system's light/dark setting.
+- **Skill marketplace**: discover, preview, and install third-party skills from ClawHub / SkillHub, with source and safety status shown up front.
+- **Session activity panel**: track task progress, background tasks, SubAgents, and sources in one side panel.
+- **Visual SubAgent manager**: create and tune SubAgents in a GUI — model, tools, and permission mode.
+- **Agent Teams workbench**: visualize multi-agent collaboration in the GUI — members, tasks, a communication feed, and a dependency-lane canvas.
+- **Dynamic Workflow orchestration**: the model writes and runs orchestration scripts on the fly, driving subagents concurrently or in pipelines, with phase views, interrupts, and resume.
+- **Model trace**: every model request is logged locally with status and timing — search and filter to diagnose stuck or failed calls.
+- **Computer Use**: native desktop control on macOS / Windows / Linux, with no Python setup and one confirmation for all supported apps. Windows / Linux reuse agent-desktop and prefer background semantic actions; physical input remains subject to OS and foreground limits.
+- **Desktop pets**: Dada, Huhu, Bubu, and Huihui change what they do with the task at hand — or raise one of your own (off by default).
+- **Mobile app and H5**: pair the Android / iPhone app with your computer by QR code to approve tool calls, answer questions, start new tasks, review changes, and stop work from your phone, or connect from the phone browser. Tasks always run on the computer, so locking the phone won't interrupt them.
+- **IM integration**: chat, switch projects, and approve actions through Telegram / Feishu / WeChat / DingTalk / WhatsApp / WeCom / QQ / Slack.
+- **Scheduled tasks and usage stats**: run planned tasks in their own sessions and track local token usage trends.
 
 ---
 
-## 技术栈
+## More Documentation
 
-| 类别 | 技术 |
+Full documentation site: <https://cchaha.ai>
+
+| Section | Documents |
 |------|------|
-| 语言 | TypeScript |
-| 桌面 APP | Electron |
-| 桌面 UI | React + Vite |
-| 本地运行时 | [Bun](https://bun.sh) |
-| 终端 UI | React + [Ink](https://github.com/vadimdemedes/ink) |
-| CLI 解析 | Commander.js |
+| **Getting started** | [What this is](docs/start/index.md) · [Download and install](docs/start/install.md) · [Connect a model provider](docs/start/models.md) · [Your first session](docs/start/first-session.md) · [Troubleshooting](docs/start/troubleshooting.md) |
+| **Desktop features** | [Feature overview](docs/desktop/index.md) · [Computer Use](docs/desktop/computer-use.md) · [Desktop pets](docs/desktop/pets.md) · [Mobile app, H5, and IM relay](docs/desktop/remote.md) |
+| **IM integrations** | [Overview and pairing](docs/im/index.md) · [Feishu](docs/im/feishu.md) · [Telegram](docs/im/telegram.md) · [WeChat](docs/im/wechat.md) · [DingTalk](docs/im/dingtalk.md) · [WhatsApp](docs/im/whatsapp.md) · [WeCom](docs/im/wecom.md) · [QQ](docs/im/qq.md) · [Slack](docs/im/slack.md) |
+| **CLI** | [Install and run](docs/cli/index.md) · [Command reference](docs/cli/reference.md) · [Environment variables](docs/cli/env.md) |
+| **Internals** | [Desktop architecture](docs/internals/desktop.md) · [Multi-agent system](docs/internals/agent.md) · [Skills system](docs/internals/skills.md) · [Memory system](docs/internals/memory.md) · [Computer Use architecture](docs/internals/computer-use.md) · [Local server and API](docs/internals/server.md) · [Channel system](docs/internals/channel.md) · [Project structure](docs/internals/structure.md) · [Contributing and quality gates](docs/internals/contributing.md) |
+
+---
+
+## Tech Stack
+
+| Category | Technology |
+|------|------|
+| Language | TypeScript |
+| Desktop app | Electron |
+| Desktop UI | React + Vite |
+| Local runtime | [Bun](https://bun.sh) |
+| Terminal UI | React + [Ink](https://github.com/vadimdemedes/ink) |
+| CLI parsing | Commander.js |
 | API | Anthropic SDK |
-| 协议 | MCP, LSP |
+| Protocols | MCP, LSP |
 
-## 致谢
+## Acknowledgements
 
-感谢以下开源项目和社区实践为本项目提供参考与启发：
+Thanks to the following open-source projects and community practices for reference and inspiration:
 
-- [React](https://github.com/facebook/react)：前端工程与组件化 UI 生态。
-- [Electron](https://github.com/electron/electron)：跨端桌面应用能力与工程实践。
-- [agent-desktop](https://github.com/vercel-labs/agent-desktop)（Vercel Labs）：Windows / Linux Computer Use 参考并直接复用其原生实现。固定版本 **1.0.2**，commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d)；保留 [Apache-2.0 许可](native/agent-desktop/LICENSE)、[来源与文件摘要](native/agent-desktop/UPSTREAM.json)及[本地改动说明](native/agent-desktop/PATCHES.md)。
-- [cc-switch](https://github.com/farion1231/cc-switch)：模型供应商配置能力参考。
-- [LINUX DO](https://linux.do/)：新的理想型开发者社区。
-- [AtomGit](https://atomgit.com/NanmiCoder/cc-haha)：为本项目提供国内代码托管。
+- [React](https://github.com/facebook/react): frontend engineering and component-based UI ecosystem.
+- [Electron](https://github.com/electron/electron): cross-platform desktop app capabilities and engineering practices.
+- [agent-desktop](https://github.com/vercel-labs/agent-desktop) by Vercel Labs: a reference and directly reused native implementation for Windows / Linux Computer Use. Pinned to **1.0.2**, commit [`9eb9b296192fcb70bda25e918cd6dd66abfa3d0d`](https://github.com/vercel-labs/agent-desktop/tree/9eb9b296192fcb70bda25e918cd6dd66abfa3d0d), with the [Apache-2.0 license](native/agent-desktop/LICENSE), [provenance and file hashes](native/agent-desktop/UPSTREAM.json), and [local changes](native/agent-desktop/PATCHES.md) retained.
+- [cc-switch](https://github.com/farion1231/cc-switch): reference for model provider configuration.
+- [LINUX DO](https://linux.do/): a new ideal developer community.
+- [AtomGit](https://atomgit.com/NanmiCoder/cc-haha): code hosting for this project in China.
 
 ---
 
 ## ⭐ Star History
 
-如果这个项目对你有帮助，欢迎点一个 ⭐ Star，让更多人发现 cc-haha。
+If this project helps you, please support it with a ⭐ Star so more people can discover cc-haha.
 
 <a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
   <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />
@@ -261,8 +257,8 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 
 ---
 
-## 许可说明
+## License
 
-当前采用 [cc-haha Community Source License 1.0](LICENSE)。允许个人非商业使用及企业内部自用；接单、对外商业盈利、收费修改或二次开发、商业分发及付费服务须事先取得书面商业授权；二次分发须显著保留来源署名。历史 MIT 授权与第三方许可继续有效。详见[许可说明](LICENSING.md)。当前许可属于源码可用许可，不是 OSI 认可的开源许可证。
+Current terms are the [cc-haha Community Source License 1.0](LICENSE). Noncommercial personal use and internal business operations are allowed; paid client work, commercial deliverables, paid customization or secondary development, commercial distribution, and paid services require prior written commercial permission; redistributions require visible source attribution. Existing MIT grants and third-party licenses remain valid. See the [licensing guide](LICENSING.md). This is source-available, not an OSI-approved open-source license.
 
-复用的 agent-desktop 原有代码继续适用 Apache-2.0，其原授权不受本项目 Community Source License 的额外限制；第三方依赖保留各自许可，见[第三方许可](THIRD_PARTY_LICENSES.md)。
+Original reused agent-desktop code remains under Apache-2.0; the project's Community Source License does not add restrictions to those existing grants. Third-party dependencies retain their own licenses; see [Third-Party Licenses](THIRD_PARTY_LICENSES.md).

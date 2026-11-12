@@ -64,7 +64,7 @@ describe('WeChat outbound project files', () => {
     await fs.mkdir(outside)
     await fs.writeFile(path.join(outside, 'secret.txt'), 'secret')
     await fs.symlink(outside, path.join(project, 'link'), process.platform === 'win32' ? 'junction' : 'dir')
-    await expect(loadWechatOutboundMedia('link/secret.txt', project)).rejects.toThrow('项目目录')
+    await expect(loadWechatOutboundMedia('link/secret.txt', project)).rejects.toThrow('project directory')
   })
   it('rejects oversized files before reading', async () => {
     const { project } = await fixture()

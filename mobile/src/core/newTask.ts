@@ -32,14 +32,14 @@ export function newTaskRepository(
 ): CreateSessionInput['repository'] {
   if (!context || context.state === 'not_git_repo') return undefined
   if (context.state === 'missing_workdir')
-    throw new Error('这个目录不存在，请检查电脑上的路径。')
+    throw new Error('This directory does not exist; check the path on the computer.')
   if (context.state !== 'ok')
-    throw new Error(context.error || '暂时无法读取项目的 Git 状态，请重试。')
+    throw new Error(context.error || 'Cannot read the project Git status right now; please retry.')
   if (
     explicitBranch &&
     !context.branches.some((branch) => branch.name === explicitBranch)
   )
-    throw new Error('选择的分支已不在电脑上，请重新选择。')
+    throw new Error('The selected branch is no longer on the computer; please choose again.')
   if (!worktree && !explicitBranch) return undefined
   return { ...(explicitBranch ? { branch: explicitBranch } : {}), worktree }
 }
@@ -81,16 +81,16 @@ export function targetSummary({
   const name = path
     ? (projects.find((project) => project.realPath === path)?.projectName ??
       projectNameFromPath(path))
-    : '电脑默认目录'
+    : 'Computer default directory'
   if (repo?.state === 'ok') {
     const shown = branch || repo.currentBranch
     return {
       name,
-      ...(shown ? { branch: shown } : { status: '当前工作树' }),
-      mode: worktree ? '新开工作树' : '当前目录',
+      ...(shown ? { branch: shown } : { status: 'Current worktree' }),
+      mode: worktree ? 'New worktree' : 'Current directory',
     }
   }
-  return { name, status: path && !repo ? '读取中…' : '无 Git 分支' }
+  return { name, status: path && !repo ? 'Loading…' : 'No Git branch' }
 }
 
 /** Why branch and worktree choices are unavailable; null when the project is a readable Git repo. */
@@ -98,17 +98,17 @@ export function gitUnavailableReason(
   repo: RepositoryContext | null,
   path: string
 ): string | null {
-  if (!path.trim()) return '先选择一个项目目录'
-  if (!repo) return '正在读取 Git 状态…'
+  if (!path.trim()) return 'Choose a project directory first'
+  if (!repo) return 'Reading Git status…'
   switch (repo.state) {
     case 'ok':
       return null
     case 'not_git_repo':
-      return '当前目录不是 Git 项目'
+      return 'The current directory is not a Git project'
     case 'missing_workdir':
-      return '这个目录不存在，请重新选择。'
+      return 'This directory does not exist; please choose again.'
     default:
-      return repo.error || '暂时无法读取项目的 Git 状态，请重试。'
+      return repo.error || 'Cannot read the project Git status right now; please retry.'
   }
 }
 

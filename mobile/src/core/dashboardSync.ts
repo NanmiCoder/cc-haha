@@ -12,13 +12,13 @@ export type DashboardSnapshot = {
 type DashboardClient = Pick<ApiClient, 'host' | 'get'>
 const pageSize = 500
 
-/** slow=电脑回应太慢；offline=连不上；unauthorized=凭据被拒；failed=电脑回应了但读取失败。 */
+/** slow=the computer responds too slowly; offline = unreachable; unauthorized = credentials rejected; failed = the computer responded but loading failed. */
 export type DashboardFailure = 'slow' | 'offline' | 'unauthorized' | 'failed'
 export function classifyDashboardError(error: unknown): DashboardFailure {
   if (!(error instanceof ApiError)) return 'failed'
   if ([401, 403].includes(error.status) || error.code === 'PAIRING_REQUIRED')
     return 'unauthorized'
-  // 公网访问经中转时，睡着的电脑表现为网关错误。
+  // When public access goes through a relay, a sleeping computer shows up as a gateway error.
   if (
     ['NETWORK_ERROR', 'TIMEOUT'].includes(error.code ?? '') ||
     [502, 503, 504].includes(error.status)
@@ -47,7 +47,7 @@ export async function loadDashboardSnapshot(
       !Number.isSafeInteger(page.total) ||
       page.total < 0
     )
-      throw new ApiError('电脑返回的会话分页无效', 0, 'INVALID_RESPONSE')
+      throw new ApiError('The computer returned an invalid session page', 0, 'INVALID_RESPONSE')
     for (const session of page.sessions) sessions.set(session.id, session)
     total = page.total
     offset += pageSize
@@ -78,7 +78,7 @@ export async function loadDashboardSnapshot(
       { signal }
     )
     if (session.id !== id)
-      throw new ApiError('电脑返回的任务信息不匹配', 0, 'INVALID_RESPONSE')
+      throw new ApiError('Task info returned by the computer does not match', 0, 'INVALID_RESPONSE')
     sessions.set(id, session)
   }
   return {
@@ -91,8 +91,8 @@ export async function loadDashboardSnapshot(
 }
 
 /**
- * 只刷新各会话的运行状态，会话列表沿用上一份。聊天页只需要这部分；
- * 上百条会话的列表每 3 秒经公网隧道整份拉一遍，会和聊天的连接抢带宽。
+ * Only refresh each session's run state and keep the previous session list. The chat page only needs this part; 
+ * fetching a list of hundreds of sessions over the public tunnel every 3 seconds would compete with chat for bandwidth.
  */
 export async function loadDashboardActivity(
   client: DashboardClient,
@@ -106,14 +106,14 @@ export async function loadDashboardActivity(
     { signal }
   )
   if (!Array.isArray(status.sessions))
-    throw new ApiError('电脑返回的任务状态无效', 0, 'INVALID_RESPONSE')
+    throw new ApiError('The computer returned an invalid task status', 0, 'INVALID_RESPONSE')
   return { ...previous, activity: status.sessions, checkedAt }
 }
 
-/** full：会话列表和运行状态；activity：只刷新运行状态（聊天页）。 */
+/** full: session list and run state; activity: refresh run state only (chat page). */
 export type DashboardScope = 'full' | 'activity'
 const POLL_MS: Record<DashboardScope, number> = { full: 3000, activity: 5000 }
-/** 回到前台后最多等聊天连接这么久，再发首页的同步请求。 */
+/** After returning to foreground wait at most this long for the chat connection before sending the home sync request. */
 export const RESUME_YIELD_MS = 1500
 export type DashboardGate = { readonly busy: boolean; whenIdle(maxMs: number): Promise<void> }
 
@@ -121,7 +121,7 @@ type Callbacks = {
   snapshot(value: DashboardSnapshot): void
   fresh(value: boolean): void
   loading(value: boolean): void
-  /** 空字符串表示恢复；kind 让界面区分离线、授权失效和读取失败。 */
+  /** Empty string means recovered; kind lets the UI distinguish offline, auth expired and load failure. */
   error(value: string, kind?: DashboardFailure): void
 }
 type Timers = {
@@ -145,7 +145,7 @@ export class DashboardPoller {
   private hasSnapshot = false
   private last?: DashboardSnapshot
   private scope: DashboardScope = 'full'
-  /** 连续连不上的次数；已有快照时第一次失败只算“正在重试”，不立刻判离线。 */
+  /** Consecutive failed connections; with an existing snapshot the first failure only counts as "retrying", not offline right away. */
   private offlineStreak = 0
   private epoch = 0
   private request?: AbortController
@@ -173,7 +173,7 @@ export class DashboardPoller {
     this.clock.clear(this.pollTimer)
     this.clock.clear(this.freshnessTimer)
     if (active) {
-      // 聊天正在和电脑重新对齐时先让它用链路，等它好了（或等够了）再同步首页。
+      // While chat is resyncing with the computer let it use the link first; sync home once it is done (or after waiting long enough).
       if (!this.gate?.busy) this.refresh()
       else {
         const epoch = this.epoch
@@ -190,7 +190,7 @@ export class DashboardPoller {
   setScope(scope: DashboardScope) {
     if (this.scope === scope) return
     this.scope = scope
-    // 回到需要完整列表的页面时立即补一份，不等下一轮。
+    // When returning to a page that needs the full list, fetch one immediately instead of waiting for the next round.
     if (scope === 'full') this.refresh()
   }
   refresh() {
@@ -233,7 +233,7 @@ export class DashboardPoller {
         this.callbacks.snapshot(snapshot)
         const remaining = snapshot.checkedAt + 12000 - this.clock.now()
         if (remaining > 0) this.callbacks.error('')
-        else this.callbacks.error('电脑状态更新耗时较长，正在重新同步', 'slow')
+        else this.callbacks.error('Computer status update is taking longer; resyncing', 'slow')
         this.callbacks.fresh(remaining > 0)
         this.clock.clear(this.freshnessTimer)
         if (remaining > 0)
@@ -247,12 +247,12 @@ export class DashboardPoller {
         this.callbacks.fresh(false)
         const kind = classifyDashboardError(error)
         this.offlineStreak = kind === 'offline' ? this.offlineStreak + 1 : 0
-        // 一次网络抖动不应把首页切到离线卡；连续两次连不上才算离线。
+        // A single network blip should not switch home to the offline card; only two consecutive failures count as offline.
         if (kind === 'offline' && this.hasSnapshot && this.offlineStreak < 2)
-          this.callbacks.error('连接不太稳定，正在重试', 'slow')
+          this.callbacks.error('Connection is unstable; retrying', 'slow')
         else
           this.callbacks.error(
-            error instanceof Error ? error.message : '无法同步电脑状态',
+            error instanceof Error ? error.message : 'Cannot sync computer status',
             kind
           )
       }

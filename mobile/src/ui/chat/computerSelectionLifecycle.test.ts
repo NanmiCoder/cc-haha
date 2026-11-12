@@ -68,13 +68,13 @@ test('the real chat page preserves failed selections, consumes sent or queued se
     }
     function composer() { cursor = 0; const page = Chat(); return find(page.type(page.props), 'ChatComposer').props }
     let box = composer()
-    box.onDraft('用电脑检查')
+    box.onDraft('Check with the computer')
     box.onReferences([computerUseReference])
     box.onTeam(true)
     box = composer()
     box.onSend()
     box = composer()
-    assert.equal(box.draft, '用电脑检查')
+    assert.equal(box.draft, 'Check with the computer')
     assert.equal(box.references[0].id, 'computer-use', 'a failed socket send must keep the current message selection')
     accepted = true
     box.onSend()
@@ -85,7 +85,7 @@ test('the real chat page preserves failed selections, consumes sent or queued se
     assert.ok(sends.at(-1).content.includes(computerUseReference.modelText))
     assert.ok(sends.at(-1).content.includes('<agent-team-request>'))
     running = true
-    box.onDraft('下一轮继续检查')
+    box.onDraft('Keep checking next turn')
     box.onReferences([computerUseReference])
     box = composer()
     const sentBeforeQueue = sends.length
@@ -99,7 +99,7 @@ test('the real chat page preserves failed selections, consumes sent or queued se
     assert.ok(queued.items[0].message.content.includes(computerUseReference.modelText))
     queued.onWithdraw(queued.items[0].id)
     box = composer()
-    assert.equal(box.draft, '下一轮继续检查')
+    assert.equal(box.draft, 'Keep checking next turn')
     assert.equal(box.references[0].id, 'computer-use')
     assert.equal(box.computer.enabled, true)
     assert.equal(sends.length, sentBeforeQueue)

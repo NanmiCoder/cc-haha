@@ -1,131 +1,131 @@
-# Claude Code Desktop App — 产品需求文档 (PRD)
+# Claude Code Desktop App — Product Requirements Document (PRD)
 
-## 一、项目概述
+## 1. Project overview
 
-### 1.1 目标
+### 1.1 Goal
 
-复刻 Claude Code Desktop App 的桌面端 GUI 核心功能。聚焦于 **AI 对话交互**、**会话管理**、**定时任务** 和 **Agent Teams 可视化** 四大模块。
+Replicate the core desktop GUI features of the Claude Code Desktop App. Focus on four modules: **AI chat interaction**, **session management**, **scheduled tasks** and **Agent Teams visualization**.
 
-### 1.2 复刻技术栈
+### 1.2 Replication tech stack
 
-- **前端框架**: React 18 + TypeScript
-- **UI 渲染**: 标准浏览器 DOM（替换 Ink 终端渲染）
-- **桌面容器**: Electron 或 Tauri
-- **样式方案**: TailwindCSS v4
-- **状态管理**: Zustand
+- **Front-end framework**: React 18 + TypeScript
+- **UI rendering**: standard browser DOM (replacing Ink terminal rendering)
+- **Desktop container**: Electron or Tauri
+- **Styling**: TailwindCSS v4
+- **State management**: Zustand
 
-### 1.3 核心原则
+### 1.3 Core principles
 
-- **CLI/UI 数据互通**: UI 读写与 CLI 完全相同的 JSONL/JSON 文件
-- **非侵入性**: 不修改原始 CLI 源代码
-- **聚焦核心**: 只做对话 + 会话 + 定时任务 + Agent Teams，不做 Search/Dispatch/Customize
+- **CLI/UI data interoperability**: the UI reads and writes exactly the same JSONL/JSON files as the CLI
+- **Non-invasive**: do not modify the original CLI source code
+- **Focus on the core**: only chat + sessions + scheduled tasks + Agent Teams; no Search/Dispatch/Customize
 
 ---
 
-## 二、页面清单
+## 2. Page list
 
-| 编号 | 页面 | 描述 | 优先级 |
+| ID | Page | Description | Priority |
 |------|------|------|--------|
-| P1 | 顶部标题栏 | macOS 窗口控件 + Code 标签 | P0 |
-| P2 | 左侧边栏 | New session + Scheduled + 项目选择 + 会话列表 | P0 |
-| P3 | 底部状态栏 | 用户信息 + 仓库信息 | P1 |
-| P4 | Code 空状态页 | 吉祥物 + 输入框 | P0 |
-| P5 | Code 活跃会话页 | 消息列表 + 输入区 + 工具调用 + Agent Teams 面板 | P0 |
-| P6 | 权限模式选择器 | Ask/Auto/Plan/Bypass 下拉菜单 | P0 |
-| P7 | 模型选择器 | 模型列表 + Effort 等级 | P0 |
-| P8 | Scheduled 定时任务页 | 任务列表 + 空状态 | P1 |
-| P9 | 新建定时任务模态框 | 创建定时任务表单 | P1 |
+| P1 | Top title bar | macOS window controls + Code tab | P0 |
+| P2 | Left sidebar | New session + Scheduled + project picker + session list | P0 |
+| P3 | Bottom status bar | User info + repository info | P1 |
+| P4 | Code empty state | Mascot + input box | P0 |
+| P5 | Code active session | Message list + input area + tool calls + Agent Teams panel | P0 |
+| P6 | Permission mode picker | Ask/Auto/Plan/Bypass dropdown | P0 |
+| P7 | Model picker | Model list + Effort level | P0 |
+| P8 | Scheduled tasks page | Task list + empty state | P1 |
+| P9 | New scheduled task modal | Form for creating a scheduled task | P1 |
 
-**已移除**: Search 搜索页、Dispatch 分发页、Customize 设置页（设置直接在输入框控件里完成）
-
----
-
-## 三、功能需求
-
-### 3.1 顶部标题栏 (P1)
-
-- R-001: macOS 红绿灯按钮（关闭/最小化/全屏）
-- R-002: 前进/后退导航箭头
-- R-003: `Code` 标签居中显示（Chat/Cowork 预留位但暂不实现）
-- R-004: 标题栏可拖拽移动窗口
+**Removed**: Search page, Dispatch page, Customize settings page (settings are done directly in the input box controls)
 
 ---
 
-### 3.2 左侧边栏 (P2)
+## 3. Functional requirements
 
-#### 导航菜单
+### 3.1 Top title bar (P1)
 
-- R-005: 显示 `+ New session` 和 `Scheduled` 两个导航项
-- R-006: 点击导航项切换主内容区
-- R-007: 当前选中项高亮
+- R-001: macOS traffic-light buttons (close/minimize/full screen)
+- R-002: Back/forward navigation arrows
+- R-003: `Code` tab centered (Chat/Cowork slots reserved but not implemented yet)
+- R-004: Title bar can be dragged to move the window
 
-#### 项目选择器
+---
 
-- R-008: `All projects ▾` 下拉选择器
-- R-009: 可选择特定项目过滤会话列表
+### 3.2 Left sidebar (P2)
 
-#### 会话列表
+#### Navigation menu
 
-- R-010: 按时间分组（Today / Previous 7 Days / Older）
-- R-011: 每项显示会话标题（首条消息摘要 或 自定义标题）
-- R-012: 选中会话高亮，左侧圆点指示
-- R-013: 支持搜索过滤
-- R-014: 右键菜单：重命名、删除
-- R-015: 点击切换到对应会话
+- R-005: Show two navigation items, `+ New session` and `Scheduled`
+- R-006: Clicking a navigation item switches the main content area
+- R-007: The current item is highlighted
 
-**数据模型**:
+#### Project picker
+
+- R-008: `All projects ▾` dropdown picker
+- R-009: Choose a specific project to filter the session list
+
+#### Session list
+
+- R-010: Grouped by time (Today / Previous 7 Days / Older)
+- R-011: Each item shows the session title (summary of the first message or a custom title)
+- R-012: The selected session is highlighted with a dot on the left
+- R-013: Supports search filtering
+- R-014: Context menu: rename, delete
+- R-015: Clicking switches to that session
+
+**Data model**:
 ```typescript
 type Session = {
   id: string              // UUID v4
-  title: string           // 首条消息摘要 或 customTitle
+  title: string           // summary of the first message or customTitle
   createdAt: Date
   modifiedAt: Date
   messageCount: number
-  projectPath: string     // 项目目录（sanitized）
+  projectPath: string     // project directory (sanitized)
 }
 ```
 
 ---
 
-### 3.3 底部状态栏 (P3)
+### 3.3 Bottom status bar (P3)
 
-- R-016: 用户头像 + 用户名 + 订阅等级（如 `Max plan`）
-- R-017: Git 仓库名 + 分支名
-- R-018: worktree 复选框
-- R-019: Local / Remote 模式切换
-
----
-
-### 3.4 Code 空状态页 (P4)
-
-- R-020: 居中显示 Clawd 吉祥物（像素风橙色小动物）
-- R-021: 底部输入框，圆角，placeholder 文本
-- R-022: `+` 按钮（添加附件/上下文）
-- R-023: 权限模式选择器（左下）
-- R-024: 模型选择器（右下）
-- R-025: 麦克风图标（语音输入，右侧）
+- R-016: User avatar + user name + subscription tier (e.g. `Max plan`)
+- R-017: Git repository name + branch name
+- R-018: worktree checkbox
+- R-019: Local / Remote mode toggle
 
 ---
 
-### 3.5 Code 活跃会话页 (P5) — 核心页面
+### 3.4 Code empty state (P4)
 
-#### 3.5.1 会话标题栏
+- R-020: Centered Clawd mascot (a pixel-art orange critter)
+- R-021: Input box at the bottom, rounded, with placeholder text
+- R-022: `+` button (add attachments/context)
+- R-023: Permission mode picker (bottom left)
+- R-024: Model picker (bottom right)
+- R-025: Microphone icon (voice input, right side)
 
-- R-026: 会话标题可点击修改
-- R-027: `▷ Preview ▾` 按钮（右上）
+---
 
-#### 3.5.2 消息列表
+### 3.5 Code active session (P5) — the core page
 
-- R-028: 用户消息 — 右对齐暖色气泡
-- R-029: AI 文本 — 左对齐，Markdown 富文本
-- R-030: AI 思考 — 可折叠灰色块
-- R-031: 工具调用 — 可折叠块，显示工具名 + 摘要
-- R-032: 系统消息 — 居中灰色
-- R-033: 折叠区段 — `▸ Initialized your session`，内含子工具列表
-- R-034: 上下文压缩分界线
-- R-035: "N new messages" 跳转提示
+#### 3.5.1 Session title bar
 
-**消息类型**:
+- R-026: The session title can be clicked to edit
+- R-027: `▷ Preview ▾` button (top right)
+
+#### 3.5.2 Message list
+
+- R-028: User messages — right-aligned warm-colored bubbles
+- R-029: AI text — left-aligned, Markdown rich text
+- R-030: AI thinking — collapsible gray block
+- R-031: Tool calls — collapsible block showing tool name + summary
+- R-032: System messages — centered gray
+- R-033: Collapsed sections — `▸ Initialized your session`, containing a list of sub-tools
+- R-034: Context compaction divider
+- R-035: "N new messages" jump prompt
+
+**Message types**:
 ```typescript
 type MessageType =
   | 'user_text'          | 'user_image'
@@ -134,19 +134,19 @@ type MessageType =
   | 'grouped_tool_use'   | 'collapsed_section'   | 'compact_boundary'
 ```
 
-#### 3.5.3 Agent Teams 可视化
+#### 3.5.3 Agent Teams visualization
 
-**功能描述**: 当对话中创建 Agent Teams 时，UI 需要展示每个 Team 成员的实时工作状态，等同于 CLI 终端中用 Shift+Up/Down 切换查看各成员 transcript 的体验。
+**Description**: when Agent Teams are created in a conversation, the UI needs to show the live working state of each team member, equivalent to the CLI experience of switching between members' transcripts with Shift+Up/Down.
 
-- R-036: 底部 Team 状态栏 — 显示活跃的 Team 名称 + 成员数量
-- R-037: 成员标签列表 — 每个 teammate 显示为可点击的标签（名称 + 颜色标识 + 状态指示）
-- R-038: 点击成员标签 → 切换到该成员的 transcript 视图
-- R-039: 成员 transcript 视图 — 独立的消息列表，展示该 agent 的完整对话
-- R-040: 成员状态指示 — `running`（闪烁点）/ `completed`（绿勾）/ `failed`（红叉）
-- R-041: 返回 Leader 视图按钮
-- R-042: 后台任务通知 — 当 teammate 完成时在 Leader 视图中显示 `<task-notification>` 消息
+- R-036: Bottom team status bar — shows the active team name + member count
+- R-037: Member tag list — each teammate is a clickable tag (name + color + status indicator)
+- R-038: Clicking a member tag → switches to that member's transcript view
+- R-039: Member transcript view — a separate message list showing that agent's full conversation
+- R-040: Member status indicator — `running` (blinking dot) / `completed` (green check) / `failed` (red cross)
+- R-041: Back to Leader view button
+- R-042: Background task notification — when a teammate finishes, a `<task-notification>` message appears in the Leader view
 
-**数据模型**:
+**Data model**:
 ```typescript
 type TeamContext = {
   teamName: string
@@ -160,63 +160,63 @@ type TeamContext = {
   }>
 }
 
-// 视图状态
+// View state
 expandedView: 'none' | 'tasks' | 'teammates'
-viewingAgentTaskId?: string  // 当前正在查看的 teammate transcript
+viewingAgentTaskId?: string  // the teammate transcript currently being viewed
 ```
 
-**交互流程**:
+**Interaction flow**:
 ```
-Leader 视图（默认）
-  ├─ 对话中 AI 调用 TeamCreate → 底部出现 Team 状态栏
-  ├─ Team 成员开始工作 → 各标签显示 running 状态
-  ├─ 点击成员标签 → 切换到该成员的 transcript
-  │   ├─ 显示该 agent 的独立消息流
-  │   ├─ 实时更新（工具调用、文本输出）
-  │   └─ 点击 "← Back to Leader" 返回
-  ├─ 成员完成 → 标签变为 completed + Leader 收到 task-notification
-  └─ 所有成员完成 → Leader 综合结果
+Leader view (default)
+  ├─ AI calls TeamCreate in the conversation → the team status bar appears at the bottom
+  ├─ Team members start working → each tag shows running
+  ├─ Click a member tag → switch to that member's transcript
+  │   ├─ Show that agent's own message stream
+  │   ├─ Live updates (tool calls, text output)
+  │   └─ Click "← Back to Leader" to return
+  ├─ A member finishes → tag becomes completed + Leader receives a task-notification
+  └─ All members finish → Leader synthesizes the results
 ```
 
-**源码参考**:
+**Source references**:
 - `src/state/AppStateStore.ts` — `expandedView`, `viewingAgentTaskId`, `teamContext`
-- `src/components/TeammateViewHeader.tsx` — 切换队友视图头部
-- `src/components/CoordinatorAgentStatus.tsx` — 协调者状态面板
-- `src/components/tasks/BackgroundTaskStatus.tsx` — 后台任务状态
+- `src/components/TeammateViewHeader.tsx` — header for switching teammate views
+- `src/components/CoordinatorAgentStatus.tsx` — coordinator status panel
+- `src/components/tasks/BackgroundTaskStatus.tsx` — background task status
 - `src/state/selectors.ts` — `getViewedTeammateTask()`, `getActiveAgentForInput()`
 
-#### 3.5.4 工具调用展示
+#### 3.5.4 Tool call display
 
-- R-043: 单个工具调用 — 可折叠块（工具名 + 参数 + 结果）
-- R-044: Agent 子任务 — `Agent  描述` 格式，带 Agent 颜色标识
-- R-045: Bash 命令 — 命令文本高亮 + 可展开输出
-- R-046: 文件编辑 — Diff 结构化展示（绿色添加/红色删除）
-- R-047: 分组工具调用 — 连续同类工具合并为一组
+- R-043: Single tool call — collapsible block (tool name + arguments + result)
+- R-044: Agent subtask — `Agent  description` format, with the agent's color
+- R-045: Bash command — highlighted command text + expandable output
+- R-046: File edit — structured diff (green additions / red deletions)
+- R-047: Grouped tool calls — consecutive calls of the same tool merged into one group
 
-#### 3.5.5 实时状态
+#### 3.5.5 Live status
 
-- R-048: `✦ Crafting...` 闪烁动画 + 动态动词
-- R-049: 计时器 + token 计数
-- R-050: 停止生成按钮
+- R-048: `✦ Crafting...` shimmer animation + dynamic verb
+- R-049: Timer + token count
+- R-050: Stop generation button
 
-#### 3.5.6 底部输入区
+#### 3.5.6 Bottom input area
 
-- R-051: 多行文本输入，自动扩展
-- R-052: `+` 添加附件
-- R-053: 权限模式指示器
-- R-054: 模型选择器
-- R-055: 停止按钮（AI 运行中）
+- R-051: Multi-line text input, auto-expanding
+- R-052: `+` to add attachments
+- R-053: Permission mode indicator
+- R-054: Model picker
+- R-055: Stop button (while the AI is running)
 
 ---
 
-### 3.6 权限模式选择器 (P6)
+### 3.6 Permission mode picker (P6)
 
-- R-056: 4 个选项的下拉菜单
-- R-057: 每项显示图标 + 名称 + 描述
-- R-058: 选中项 ✓ 标记
-- R-059: 切换即时生效
+- R-056: Dropdown with 4 options
+- R-057: Each item shows icon + name + description
+- R-058: ✓ on the selected item
+- R-059: Switching takes effect immediately
 
-| 选项 | 图标 | 描述 |
+| Option | Icon | Description |
 |------|------|------|
 | Ask permissions | ⚙ | Always ask before making changes |
 | Auto accept edits | `</>` | Automatically accept all file edits |
@@ -225,13 +225,13 @@ Leader 视图（默认）
 
 ---
 
-### 3.7 模型选择器 (P7)
+### 3.7 Model picker (P7)
 
-- R-060: 模型列表（上部）+ Effort 等级（下部，分隔线分割）
-- R-061: 模型 — 名称 + 描述 + ✓ 选中
-- R-062: Effort — Low / Medium / High / Max + ✓ 选中
+- R-060: Model list (top) + Effort level (bottom, separated by a divider)
+- R-061: Model — name + description + ✓ when selected
+- R-062: Effort — Low / Medium / High / Max + ✓ when selected
 
-| 模型 | 描述 |
+| Model | Description |
 |------|------|
 | Opus 4.7 | Most capable for ambitious work |
 | Opus 4.7 1M | Most capable for ambitious work |
@@ -240,90 +240,90 @@ Leader 视图（默认）
 
 ---
 
-### 3.8 Scheduled 定时任务页 (P8)
+### 3.8 Scheduled tasks page (P8)
 
-- R-063: 页面标题 `Scheduled tasks`
-- R-064: 空状态：时钟图标 + `No scheduled tasks yet.`
-- R-065: `+ New task` 按钮（右上）
-- R-066: 任务列表：名称 + 描述 + 频率 + 下次执行
-- R-067: 每项支持编辑、删除
-
----
-
-### 3.9 新建定时任务模态框 (P9)
-
-- R-068: Info 横幅: `Local tasks only run while your computer is awake.`
-- R-069: Name（必填）+ Description（必填）
-- R-070: Prompt 多行输入
-- R-071: Permissions + Model 选择器
-- R-072: Select folder + worktree 复选框
-- R-073: Frequency 下拉 + Time 时间选择
-- R-074: Cancel / Create task 按钮
+- R-063: Page title `Scheduled tasks`
+- R-064: Empty state: clock icon + `No scheduled tasks yet.`
+- R-065: `+ New task` button (top right)
+- R-066: Task list: name + description + frequency + next run
+- R-067: Each item supports edit and delete
 
 ---
 
-## 四、交互组件
+### 3.9 New scheduled task modal (P9)
 
-### 4.1 权限请求对话框
-
-- R-075: Bash 命令 — 显示命令内容
-- R-076: 文件编辑 — 显示 diff
-- R-077: 文件写入 — 显示路径
-- R-078: 操作按钮：允许 / 拒绝 / 总是允许 / 总是拒绝
-
-### 4.2 Markdown 渲染
-
-- R-079: 标题、列表、粗体/斜体
-- R-080: 代码块语法高亮
-- R-081: 表格
-- R-082: 文件路径可点击
-
-### 4.3 Diff 展示
-
-- R-083: 添加行绿色 / 删除行红色
-- R-084: 行号 + 文件路径头部
-- R-085: Word-level diff 高亮
-
-### 4.4 通知
-
-- R-086: Toast 通知（成功/错误/警告）
-- R-087: 自动消失 + 队列
-
-### 4.5 通用对话框
-
-- R-088: 标题 + 内容 + 按钮
-- R-089: ESC 关闭
+- R-068: Info banner: `Local tasks only run while your computer is awake.`
+- R-069: Name (required) + Description (required)
+- R-070: Multi-line Prompt input
+- R-071: Permissions + Model pickers
+- R-072: Select folder + worktree checkbox
+- R-073: Frequency dropdown + Time picker
+- R-074: Cancel / Create task buttons
 
 ---
 
-## 五、数据模型
+## 4. Interaction components
 
-### 5.1 全局状态 (AppState)
+### 4.1 Permission request dialog
+
+- R-075: Bash command — show the command
+- R-076: File edit — show the diff
+- R-077: File write — show the path
+- R-078: Action buttons: Allow / Deny / Always allow / Always deny
+
+### 4.2 Markdown rendering
+
+- R-079: Headings, lists, bold/italic
+- R-080: Code block syntax highlighting
+- R-081: Tables
+- R-082: Clickable file paths
+
+### 4.3 Diff display
+
+- R-083: Added lines green / deleted lines red
+- R-084: Line numbers + file path header
+- R-085: Word-level diff highlighting
+
+### 4.4 Notifications
+
+- R-086: Toast notifications (success/error/warning)
+- R-087: Auto-dismiss + queue
+
+### 4.5 Generic dialog
+
+- R-088: Title + content + buttons
+- R-089: ESC to close
+
+---
+
+## 5. Data models
+
+### 5.1 Global state (AppState)
 
 ```typescript
 type AppState = {
-  // 模型
+  // model
   mainLoopModel: string | null
   effort: 'low' | 'medium' | 'high' | 'max'
   permissionMode: PermissionMode
 
-  // 视图
+  // view
   expandedView: 'none' | 'tasks' | 'teammates'
   viewingAgentTaskId?: string
 
-  // 任务
+  // tasks
   tasks: Record<string, TaskState>
   foregroundedTaskId?: string
 
-  // 团队
+  // team
   teamContext?: TeamContext
 
-  // 通知
+  // notifications
   notifications: { current: Notification | null; queue: Notification[] }
 }
 ```
 
-### 5.2 消息模型
+### 5.2 Message model
 
 ```typescript
 type Message = {
@@ -344,67 +344,67 @@ type ContentBlock =
 
 ---
 
-## 六、导航模型
+## 6. Navigation model
 
-状态驱动（非 URL 路由）:
+State-driven (not URL routing):
 
 ```
-侧边栏: + New session → Code 空状态
-         Scheduled → 定时任务页
-         会话列表项 → Code 活跃会话页
+Sidebar: + New session → Code empty state
+         Scheduled → scheduled tasks page
+         Session list item → Code active session
                       ↓
-                      expandedView = 'teammates' → Agent Teams 面板
-                      viewingAgentTaskId → 切换到某个 teammate 的 transcript
+                      expandedView = 'teammates' → Agent Teams panel
+                      viewingAgentTaskId → switch to a teammate's transcript
 ```
 
 ---
 
-## 七、实施路线图
+## 7. Implementation roadmap
 
-### Phase 1: 基础框架
-1. 项目脚手架 + 主题系统
-2. 设计系统组件（Dialog, Select, Button）
-3. App Shell 布局（标题栏 + 侧边栏 + 状态栏）
-4. 全局状态管理
+### Phase 1: Foundation
+1. Project scaffolding + theme system
+2. Design system components (Dialog, Select, Button)
+3. App shell layout (title bar + sidebar + status bar)
+4. Global state management
 
-### Phase 2: 核心对话
-5. Code 空状态页
-6. 输入区域（文本 + 选择器）
-7. 消息列表（用户 + AI 文本）
-8. 权限 / 模型选择器
-9. 加载状态
+### Phase 2: Core chat
+5. Code empty state
+6. Input area (text + pickers)
+7. Message list (user + AI text)
+8. Permission / model pickers
+9. Loading states
 
-### Phase 3: 高级渲染
-10. Markdown + 代码高亮
-11. 工具调用展示
-12. Diff 展示
-13. 权限请求对话框
+### Phase 3: Advanced rendering
+10. Markdown + code highlighting
+11. Tool call display
+12. Diff display
+13. Permission request dialog
 
 ### Phase 4: Agent Teams
-14. Team 状态栏 + 成员标签
-15. Teammate transcript 视图切换
-16. 后台任务通知
+14. Team status bar + member tags
+15. Teammate transcript view switching
+16. Background task notifications
 
-### Phase 5: 定时任务
-17. Scheduled 页面 + 新建模态框
+### Phase 5: Scheduled tasks
+17. Scheduled page + new task modal
 
 ---
 
-## 八、关键源码索引
+## 8. Key source index
 
-| 功能 | 路径 |
+| Feature | Path |
 |------|------|
-| 全局状态 | `src/state/AppStateStore.ts` |
-| 主屏幕 | `src/screens/REPL.tsx` |
-| 布局 | `src/components/FullscreenLayout.tsx` |
-| 输入 | `src/components/PromptInput/PromptInput.tsx` |
-| 消息 | `src/components/Message.tsx`, `src/components/messages/` |
-| 权限类型 | `src/types/permissions.ts` |
-| 模型选择 | `src/components/ModelPicker.tsx` |
-| 主题 | `src/utils/theme.ts` |
-| 定时任务 | `src/utils/cronTasks.ts` |
+| Global state | `src/state/AppStateStore.ts` |
+| Main screen | `src/screens/REPL.tsx` |
+| Layout | `src/components/FullscreenLayout.tsx` |
+| Input | `src/components/PromptInput/PromptInput.tsx` |
+| Messages | `src/components/Message.tsx`, `src/components/messages/` |
+| Permission types | `src/types/permissions.ts` |
+| Model picker | `src/components/ModelPicker.tsx` |
+| Theme | `src/utils/theme.ts` |
+| Scheduled tasks | `src/utils/cronTasks.ts` |
 | Agent Teams | `src/components/TeammateViewHeader.tsx`, `src/components/CoordinatorAgentStatus.tsx` |
-| 后台任务 | `src/components/tasks/BackgroundTaskStatus.tsx` |
+| Background tasks | `src/components/tasks/BackgroundTaskStatus.tsx` |
 | Diff | `src/components/StructuredDiff.tsx` |
-| 会话管理 | `src/components/LogSelector.tsx` |
-| 服务端 API | `src/server/` |
+| Session management | `src/components/LogSelector.tsx` |
+| Server API | `src/server/` |

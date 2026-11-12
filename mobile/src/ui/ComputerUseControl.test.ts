@@ -42,10 +42,10 @@ test('computer selection uses existing authorization and remains selected when t
     row.props.onValueChange(false)
     assert.equal(rowProps.selected, false)
     assert.equal(mutations, 0, 'deselecting the message must not revoke global authorization')
-    const skill = { kind: 'skill', id: 'review', name: 'review', displayName: '检查', description: '', modelText: 'Use the Skill tool with skill: "review" for this request.' }
+    const skill = { kind: 'skill', id: 'review', name: 'review', displayName: 'Check', description: '', modelText: 'Use the Skill tool with skill: "review" for this request.' }
     let applied
     const props = { visible: true, onClose() {}, client: null, workDir: '/fixture', lean: false, candidates: [], loading: false, error: '',
-      references: [skill], draft: '检查页面', picking: null, onPick() {}, team: false, onTeam() {}, computer,
+      references: [skill], draft: 'Check page', picking: null, onPick() {}, team: false, onTeam() {}, computer,
       onComputerSelected: value => { props.references = withComputerUseReference(props.references, value) }, onApply: next => { applied = next },
     }
     const render = () => { cursor = 0; return BringSheet(props) }
@@ -57,7 +57,7 @@ test('computer selection uses existing authorization and remains selected when t
     assert.ok(sheet.props.footer)
     sheet.props.footer.props.onPress()
     assert.deepEqual(applied.references.map(reference => reference.id), ['review', 'computer-use'], 'confirming the material sheet must preserve both staged skills and the computer request')
-    assert.equal(applied.draft, '检查页面')
+    assert.equal(applied.draft, 'Check page')
     assert.equal(mutations, 0)
   `
   try {

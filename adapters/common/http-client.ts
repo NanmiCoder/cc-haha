@@ -105,7 +105,7 @@ export class AdapterHttpClient {
    * or silently select an external provider on behalf of an IM attachment. */
   async transcribeAudio(wav: Buffer, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted()
-    if (!wav.length || wav.length > 4 * 1024 * 1024) throw new Error('音轨必须为不超过 4 MiB 的 16 kHz 单声道 WAV')
+    if (!wav.length || wav.length > 4 * 1024 * 1024) throw new Error('Audio track must be a 16 kHz mono WAV no larger than 4 MiB')
     const controller = new AbortController()
     const abort = () => controller.abort()
     signal?.addEventListener('abort', abort, { once: true })
@@ -115,9 +115,9 @@ export class AdapterHttpClient {
         method: 'POST', headers: { 'Content-Type': 'audio/wav' },
         body: new Uint8Array(wav), signal: controller.signal, redirect: 'error',
       })
-      if (!response.ok) throw new Error(`音轨识别不可用 (${response.status})，请在桌面语音设置中准备识别模型`)
+      if (!response.ok) throw new Error(`Audio transcription unavailable (${response.status}); prepare a recognition model in desktop voice settings`)
       const body: unknown = await response.json()
-      if (!body || typeof body !== 'object' || !('text' in body) || typeof body.text !== 'string') throw new Error('音轨识别返回了无效结果')
+      if (!body || typeof body !== 'object' || !('text' in body) || typeof body.text !== 'string') throw new Error('Audio transcription returned an invalid result')
       return body.text
     } finally {
       clearTimeout(timer)

@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process'
 import { expect, test } from 'bun:test'
 
 /**
- * 冷启动直接进聊天页时首页快照还是 null。不带 host 的链接（cchaha://chat/<id>）曾让页面拿
- * undefined 当 hostId，`dashboard?.hostId === hostId` 成立后读 null.activity 闪退。
+ * On a cold start straight into chat the home snapshot is still null. Links without host (cchaha://chat/<id>) used to make the page take
+ * undefined as hostId, and once `dashboard?.hostId === hostId` held, reading null.activity crashed.
  */
 function renderHostlessChat(selectedId: string | undefined) {
   const script = `
@@ -81,14 +81,14 @@ function renderHostlessChat(selectedId: string | undefined) {
   }
 }
 
-test('不带 host 的聊天链接冷启动时按当前电脑打开，不读空快照', () => {
+test('Chat links without host open on the current computer on cold start, without reading an empty snapshot', () => {
   const page = renderHostlessChat('desk')
   expect(page.hostId).toBe('desk')
   expect(page.key).toBe('desk:cold-start')
   expect(page.connections).toEqual(['desk'])
 })
 
-test('一台电脑都没有时，不带 host 的聊天链接也不闪退', () => {
+test('Chat links without host do not crash even with no computer at all', () => {
   const page = renderHostlessChat(undefined)
   expect(page.hostId).toBe('')
   expect(page.connections).toEqual([''])

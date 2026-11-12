@@ -145,16 +145,16 @@ export async function startQqQrLogin(
         const first = credentials?.[0]
         if (!first?.appId || !first?.appSecret) {
           session.status = 'failed'
-          session.failureMessage = 'QQ 返回的机器人凭据不完整，请重新扫码。'
+          session.failureMessage = 'QQ returned incomplete bot credentials. Please scan again.'
           return
         }
         session.status = 'success'
         session.credentials = first
       },
       onFailure(error) {
-        const message = error?.message ?? 'QQ 扫码授权失败。'
+        const message = error?.message ?? 'QQ QR authorization failed.'
         // The connector reports expiry through onFailure once it stops retrying.
-        session.status = /expire|timeout|过期/i.test(message) ? 'expired' : 'failed'
+        session.status = /expire|timeout|过期/i.test(message) ? 'expired' : 'failed' // 过期 = "expired" in upstream Chinese messages
         session.failureMessage = message
         rejectReady?.(error instanceof Error ? error : new Error(message))
       },
@@ -170,7 +170,7 @@ export async function startQqQrLogin(
       ready,
       new Promise<string>((_, reject) => {
         readyTimer = setTimeout(
-          () => reject(new Error('QQ 二维码获取超时，请重试。')),
+          () => reject(new Error('Timed out fetching the QQ QR code. Please try again.')),
           QR_READY_TIMEOUT_MS,
         )
       }),
@@ -191,7 +191,7 @@ export async function startQqQrLogin(
     sessionKey,
     verificationUrl,
     pollIntervalMs: QQ_POLL_INTERVAL_MS,
-    message: '使用 QQ 扫描二维码，创建并授权机器人。',
+    message: 'Scan the QR code with QQ to create and authorize the bot.',
   }
 }
 
@@ -203,7 +203,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
     return {
       connected: false,
       status: 'not_started',
-      message: '当前没有进行中的 QQ 绑定，请重新生成二维码。',
+      message: 'No QQ binding in progress. Please generate a new QR code.',
     }
   }
 
@@ -225,7 +225,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
       connected: false,
       status: session.status,
       message: session.failureMessage
-        ?? (session.status === 'expired' ? '二维码已过期，请重新生成。' : 'QQ 授权失败，请重新扫码。'),
+        ?? (session.status === 'expired' ? 'QR code expired. Please generate a new one.' : 'QQ authorization failed. Please scan again.'),
     }
   }
 
@@ -234,7 +234,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
   return {
     connected: false,
     status: 'waiting',
-    message: '等待 QQ 扫码确认...',
+    message: 'Waiting for QQ scan confirmation...',
     verificationUrl: rotated ? session.verificationUrl : undefined,
   }
 }

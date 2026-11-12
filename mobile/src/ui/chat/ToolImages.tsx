@@ -52,7 +52,7 @@ function Tile({ image, label, onOpen }: { image: ToolImage; label: string; onOpe
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={failed ? `${label}，加载失败，点按重试` : `查看${label}`}
+      accessibilityLabel={failed ? `${label}, failed to load, tap to retry` : `View ${label}`}
       disabled={!uri && !failed}
       onPress={() => {
         if (failed) return retry()
@@ -75,7 +75,7 @@ function Tile({ image, label, onOpen }: { image: ToolImage; label: string; onOpe
       ) : failed ? (
         <View style={{ alignItems: 'center', gap: 4, paddingHorizontal: 6 }}>
           <Icon name="image" size={18} color={colors.ink3} />
-          <Text style={{ fontSize: 11.5, color: colors.ink3 }}>点按重试</Text>
+          <Text style={{ fontSize: 11.5, color: colors.ink3 }}>Tap to retry</Text>
         </View>
       ) : (
         <Spinner size={14} thickness={2} />
@@ -99,7 +99,7 @@ export function ToolImageStrip({ images }: { images: NamedToolImage[] }) {
       {rest > 0 ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`查看其余 ${rest} 张图片`}
+          accessibilityLabel={`View the other ${rest} images`}
           onPress={() => setPreview(STRIP_LIMIT)}
           style={{ height: TILE_HEIGHT, minWidth: 64, borderRadius: 10, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center' }}
         >

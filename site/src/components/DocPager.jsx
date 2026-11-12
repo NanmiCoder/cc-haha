@@ -1,13 +1,10 @@
 import { toSiteHref } from '../content/docs'
 
-const copy = {
-  zh: { label: '上一篇 / 下一篇', next: '下一篇', previous: '上一篇' },
-  en: { label: 'Previous and next page', next: 'Next', previous: 'Previous' }
-}
+const copy = { label: 'Previous and next page', next: 'Next', previous: 'Previous' }
 
-export function DocPager({ locale = 'zh', next, onNavigate, previous }) {
+export function DocPager({ next, onNavigate, previous }) {
   if (!previous && !next) return null
-  const c = copy[locale] || copy.zh
+  const c = copy
 
   const link = (doc, direction) => (
     <a

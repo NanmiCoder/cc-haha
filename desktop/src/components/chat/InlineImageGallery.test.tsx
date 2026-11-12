@@ -60,8 +60,6 @@ describe('InlineImageGallery', () => {
   it.each([
     ['en', 'See /tmp/chart.png', '1 image'],
     ['en', 'See /tmp/a.png and /tmp/b.png', '2 images'],
-    ['zh', 'See /tmp/a.png and /tmp/b.png', '2 张图片'],
-    ['jp', 'See /tmp/a.png and /tmp/b.png', '画像 2 枚'],
   ] as const)('counts the pictures in the reader\'s language (%s: %s)', (locale, text, header) => {
     // The header was typed in English and read "1 IMAGE" in every locale.
     useSettingsStore.setState({ locale })

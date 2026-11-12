@@ -27,7 +27,7 @@ export function buildTelegramThinkingUpdate(
   const preview = fullText.slice(0, Math.max(0, previewLimit)).trimStart()
   return {
     fullText,
-    messageText: preview ? `💭 ${preview}...` : '💭 思考中...',
+    messageText: preview ? `💭 ${preview}...` : '💭 Thinking...',
   }
 }
 

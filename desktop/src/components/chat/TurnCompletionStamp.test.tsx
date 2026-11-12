@@ -34,11 +34,11 @@ describe('TurnCompletionStamp', () => {
     )
   })
 
-  it('follows the active locale', () => {
-    useSettingsStore.setState({ locale: 'zh' })
+  it('shows the turn duration', () => {
+    useSettingsStore.setState({ locale: 'en' })
     const { container } = render(<TurnCompletionStamp completion={{ completedAt: COMPLETED_AT, durationMs: 739_000 }} />)
 
-    expect(container.textContent).toContain('耗时 12 分 19 秒')
+    expect(container.textContent).toContain('took 12m 19s')
   })
 
   it('renders nothing for an unusable timestamp', () => {

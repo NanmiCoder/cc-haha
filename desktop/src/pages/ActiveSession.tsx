@@ -94,7 +94,7 @@ const WORKSPACE_RESIZE_STEP = 32
 const TERMINAL_RESIZE_STEP = 24
 const EMPTY_DISMISSED_BACKGROUND_TASK_KEYS: readonly string[] = []
 
-// Loaded on first switch to 轨迹, so sessions that never open it pay nothing.
+// Loaded on first switch to Trajectory, so sessions that never open it pay nothing.
 const TrajectoryView = lazy(() => import('../components/trajectory/TrajectoryView'))
 
 function isSessionTabState(activeTabId: string | null, activeTabType: TabType | null | undefined) {
@@ -743,7 +743,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   // composer; squeezed by a side panel, the terminal or a phone, they go.
   const showNewSessionStarter = isEmpty && !showRightPanel && !compactEmptyHero && !isMobileLayout
   // Where the session runs, first: the project by the name the sidebar shows,
-  // then the branch git reports for it (「素」 su-01: folder · branch · …).
+  // then the branch git reports for it ("Su" spec su-01: folder · branch · …).
   const headerProjectLabel = session && (session.projectRoot || session.workDir)
     ? getSessionWorkspaceLabel(session, resolveProjectDisplayName)
     : null
@@ -818,11 +818,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             <span
               className="shrink-0"
               title={t('session.apiTokenBreakdown', {
-                total: totalTokens.toLocaleString(),
-                input: tokenUsage.input_tokens.toLocaleString(),
-                output: tokenUsage.output_tokens.toLocaleString(),
-                cacheRead: cacheReadTokens.toLocaleString(),
-                cacheWrite: cacheCreationTokens.toLocaleString(),
+                total: totalTokens.toLocaleString('en-US'),
+                input: tokenUsage.input_tokens.toLocaleString('en-US'),
+                output: tokenUsage.output_tokens.toLocaleString('en-US'),
+                cacheRead: cacheReadTokens.toLocaleString('en-US'),
+                cacheWrite: cacheCreationTokens.toLocaleString('en-US'),
               })}
             >
               {t(cachedTokens > 0 ? 'session.apiTokensWithCache' : 'session.apiTokens', {
@@ -919,7 +919,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             </div>
           )}
           {isEmpty ? (
-            // The new-session page (「素」, su-12): mark, question, one line of
+            // The new-session page ("Su" spec, su-12): mark, question, one line of
             // context, then the composer and the starter row below it. The hero
             // bottom-aligns and the starter top-aligns, so the composer between
             // them lands just above the middle of the column — without moving
@@ -994,7 +994,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                 </SessionChatHeader>
               )}
 
-              {/* The chat stays mounted under 轨迹 so its scroll position, measured heights and draft survive the switch. */}
+              {/* The chat stays mounted under Trajectory so its scroll position, measured heights and draft survive the switch. */}
               <div className={showTrajectory ? 'hidden' : 'contents'}>
                 {isHistoryLoading ? (
                   <div className="flex flex-1 items-center justify-center p-8">
@@ -1055,11 +1055,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           )}
 
           {/*
-            轨迹 is for reading: a reply sent from it would land in the hidden
+            Trajectory is for reading: a reply sent from it would land in the hidden
             chat, and the card — centred under a two-pane ledger, with its fade
             over both panes' last rows — cost the ledger its bottom. Hidden, not
-            unmounted, so the draft survives; Stop moves to the 轨迹 toolbar and
-            a waiting card marks 对话.
+            unmounted, so the draft survives; Stop moves to the Trajectory toolbar and
+            a waiting card marks Chat.
           */}
           <div className={showTrajectory ? 'hidden' : 'contents'} data-testid="session-composer-slot">
             <ChatInput

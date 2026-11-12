@@ -257,7 +257,7 @@ export function GlobalSearchModal({ open, onClose }: Props) {
         onClick={onClose}
       />
 
-      {/* The command palette (「素」): a paper sheet with a 52px query row,
+      {/* The command palette ("Su" spec): a paper sheet with a 52px query row,
           sectioned 36px rows, and the key legend as its footer. */}
       <div
         className="animate-overlay-in relative z-10 flex max-h-[70vh] w-[620px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
@@ -362,7 +362,7 @@ export function GlobalSearchModal({ open, onClose }: Props) {
   )
 }
 
-/** 「素」 kbd: mono 11, 18px tall, `--radius-xs`, hairline, paper fill, tertiary ink. */
+/** "Su" spec kbd: mono 11, 18px tall, `--radius-xs`, hairline, paper fill, tertiary ink. */
 const KEYCAP_CLASS = 'inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-1 font-mono text-[11px] leading-none text-[var(--color-text-tertiary)]'
 
 function Keycap({ children }: { children: ReactNode }) {
@@ -498,5 +498,5 @@ function formatRelativeTime(
   if (hr < 24) return t('session.timeHours', { n: hr })
   const day = Math.floor(hr / 24)
   if (day < 30) return t('session.timeDays', { n: day })
-  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric' }).format(date)
+  return new Intl.DateTimeFormat('en-US', { month: 'numeric', day: 'numeric' }).format(date)
 }

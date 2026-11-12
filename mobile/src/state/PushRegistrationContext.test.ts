@@ -482,10 +482,10 @@ test('a remote computer that moved hands its new address to the Android backgrou
 test('an iPhone registered through Expo is told when the computer cannot send through it', () => {
   runCase(`
     platformOS = 'ios'
-    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, relayErrors: { expo: '电脑连不上 Expo 推送服务（exp.host）' }, status: 'configured' })
+    hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, relayErrors: { expo: 'The computer cannot reach the Expo push service (exp.host)' }, status: 'configured' })
     tokenImpl = async () => 'ExponentPushToken[fixture]'
     await render()
-    assert.deepEqual(status(), { status: 'registered', provider: 'expo', issue: 'relayFailing', error: '电脑连不上 Expo 推送服务（exp.host）' })
+    assert.deepEqual(status(), { status: 'registered', provider: 'expo', issue: 'relayFailing', error: 'The computer cannot reach the Expo push service (exp.host)' })
     assert.equal(registerCalls, 1, 'the registration itself still stands')
     hostImpl = async () => ({ platforms: { android: false, ios: false }, providers: { expo: true, desktop: true }, status: 'configured' })
     retry(); await flush()

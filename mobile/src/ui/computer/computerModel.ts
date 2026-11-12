@@ -2,10 +2,11 @@ import type { Host } from '../../core/types'
 import { desktopOnly } from '../settings/settingsModel'
 import { effortStopAt, effortStopX } from '../compose/runLogic'
 import { hostCheckLine, networkName, type HostCheck, type StatusTone } from '../home/homeModel'
+import { plural } from '../../core/plural'
 
-/* ───────────── 头部状态 ───────────── */
+/* ───────────── Header status ───────────── */
 
-/** 标题下的一行状态：在线显示“在线 · 局域网”，其余沿用连通检查的说明。 */
+/** Status line under the title: online shows "Online · LAN", otherwise reuse the connectivity check description. */
 export function computerStatus(
   host: Pick<Host, 'auth'>,
   check: HostCheck,
@@ -13,7 +14,7 @@ export function computerStatus(
 ): { text: string; tone: StatusTone } {
   switch (check.state) {
     case 'online':
-      return { text: `在线 · ${networkName(host)}`, tone: 'ok' }
+      return { text: `Online · ${networkName(host)}`, tone: 'ok' }
     case 'unauthorized':
       return { text: hostCheckLine(host, check, now), tone: 'err' }
     default:
@@ -21,12 +22,12 @@ export function computerStatus(
   }
 }
 
-/* ───────────── 连接 ───────────── */
+/* ───────────── Connection ───────────── */
 
 export const connectionMethod = (host: Pick<Host, 'auth'>) =>
-  host.auth === 'lan' ? '局域网直连' : '公网访问'
+  host.auth === 'lan' ? 'LAN direct' : 'Public access'
 
-/** 连接地址的主机和端口；已保存的地址都校验过，解析失败只是展示兜底。 */
+/** Host and port of the connection address; saved addresses are all validated, so parse failure is only a display fallback. */
 export function connectionAddress(host: Pick<Host, 'url'>) {
   try {
     return new URL(host.url).host
@@ -35,7 +36,7 @@ export function connectionAddress(host: Pick<Host, 'url'>) {
   }
 }
 
-/** 公网授权剩余天数；局域网或没读到到期时间时为 null。 */
+/** Remaining days of public authorization; null on LAN or when the expiry was not read. */
 export function remoteAuthLine(
   host: Pick<Host, 'auth'>,
   check: { expiresAt?: number; checkedAt?: number }
@@ -45,79 +46,79 @@ export function remoteAuthLine(
     0,
     Math.ceil((check.expiresAt - (check.checkedAt ?? check.expiresAt)) / 86400000)
   )
-  return days < 1 ? '不足 1 天' : `还剩 ${days} 天`
+  return days < 1 ? 'Less than 1 day' : `${plural(days, 'day')} left`
 }
 
-/* ───────────── 新任务默认 ───────────── */
+/* ───────────── New task defaults ───────────── */
 
 /**
- * 服务端不允许公网配对写 /api/permissions/mode（publicAccess.ts 只放行 GET），
- * 局域网可以写。公网连接下这一行只读，并说明原因。
+ * The server does not allow public pairing to write /api/permissions/mode (publicAccess.ts only allows GET), 
+ * while LAN can write. Over a public connection this row is read-only, with the reason stated.
  */
 export function permissionAccess(host: Pick<Host, 'auth'>): {
   editable: boolean
   note?: string
 } {
   return host.auth === 'remote'
-    ? { editable: false, note: '权限：公网连接下只能在电脑上改。' }
+    ? { editable: false, note: 'Permissions: can only be changed on the computer over a public connection.' }
     : { editable: true }
 }
 
 export const defaultsFootnote = (host: Pick<Host, 'auth'>) =>
   [
-    '只影响之后新建的任务。某个任务想临时换，用输入框里的运行胶囊。',
+    'Affects only tasks created afterwards. To change it temporarily for a task, use the run capsule in the input.',
     permissionAccess(host).note,
   ]
     .filter(Boolean)
     .join('\n')
 
-/** 当前模型显示名：优先电脑给的名称，否则用 id。 */
+/** Current model display name: prefer the name from the computer, otherwise the id. */
 export const modelDisplayName = (model?: { id?: string; name?: string } | null) =>
   model?.name?.trim() || model?.id || ''
 
-/* ───────────── 运行情况 ───────────── */
+/* ───────────── Run status ───────────── */
 
 /**
- * 后台活动一行的值。有会话没读到时不能断言“空闲”：
- * 有在跑的就只报读到的部分，一个都没读到就留空（undefined）。
+ * Value of the background activity row. When some sessions were not read we cannot claim "idle": 
+ * if some are running report only what was read; if none were read leave it empty (undefined).
  */
 export function activitySummary(input: { running: number; read: number; total: number }) {
-  if (input.running > 0) return `${input.running} 项在跑`
-  if (input.read === input.total) return '空闲'
+  if (input.running > 0) return `${input.running} running`
+  if (input.read === input.total) return 'Idle'
   return undefined
 }
 
-/* ───────────── 只能在电脑上改 ───────────── */
+/* ───────────── Can only be changed on the computer ───────────── */
 
-export const desktopOnlyText = `${desktopOnly}。在电脑上打开 cc-haha 的设置。`
+export const desktopOnlyText = `${desktopOnly}. Open cc-haha settings on the computer.`
 
-/* ───────────── 移除 ───────────── */
+/* ───────────── Remove ───────────── */
 
 export function removeConfirmText(hostName: string) {
   return {
-    title: `移除「${hostName}」？`,
+    title: `Remove “${hostName}”?`,
     message:
-      '只删除手机上的连接，电脑上的会话会保留。电脑在线时会一并注销手机通知；连不上也能移除，那边的通知登记最长 30 天后失效。',
+      'Only removes the connection on the phone; sessions on the computer are kept. When the computer is online phone notifications are unregistered too; it can be removed even when unreachable, and the notification registration there expires within 30 days.',
   }
 }
 
-/* ───────────── 新任务默认模型页 ───────────── */
+/* ───────────── New task default model page ───────────── */
 
 export type SourceLike = { id: string | null; name: string }
 
-/** 服务商行：当前服务商名 + “另有 N 个”。当前服务商已不在列表里时名称为空。 */
+/** Provider row: current provider name + "N more". The name is empty when the current provider is no longer in the list. */
 export function providerSummary(sources: SourceLike[], providerId: string | null) {
   const current = sources.find((source) => source.id === providerId)
   const others = sources.length - (current ? 1 : 0)
   return {
     name: current?.name ?? '',
-    others: others > 0 ? `另有 ${others} 个` : undefined,
+    others: others > 0 ? `${others} more` : undefined,
   }
 }
 
 /**
- * 模型行：名称 + 副行。名称和 id 不同才把 id 当等宽副行；
- * 名称就是 id（自定义服务商）时副行改用电脑给的说明，且不等宽。
+ * Model row: name + subline. Only when name and id differ is the id a monospace subline; 
+ * when the name is the id (custom provider) the subline uses the description from the computer instead, not monospace.
  */
 export function modelRow(model: { id: string; name: string }, description?: string) {
   if (model.name && model.name !== model.id)
@@ -129,18 +130,18 @@ export function modelRow(model: { id: string; name: string }, description?: stri
   }
 }
 
-/** 滑条上选中的档位：当前值不在可选档位里时落到模型默认档；都没有返回 -1（不画滑块，沿用电脑默认）。 */
+/** Selected tier on the slider: when the current value is not a selectable tier fall back to the model default tier; returns -1 if none (no thumb drawn, using the computer default). */
 export function effortIndex(options: string[], current?: string, fallback?: string) {
   const at = current ? options.indexOf(current) : -1
   if (at >= 0) return at
   return fallback ? options.indexOf(fallback) : -1
 }
 
-/* ───────────── 思考强度滑条几何（设计稿 P2：40pt 轨道、左右各缩 2pt、44pt 滑块） ───────────── */
+/* ───────────── Thinking effort slider geometry (design P2: 40pt track, 2pt inset left and right, 44pt thumb) ───────────── */
 
 export const EFFORT_TRACK = { height: 40, inset: 2, thumb: 44, dotInset: 20 } as const
 
-/** 各档中心在滑条区域（含左右 2pt 外缩）里的横坐标；首尾档距轨道边 20pt。 */
+/** X coordinate of each tier center in the slider area (including the 2pt inset each side); the first and last tiers are 20pt from the track edge. */
 export function effortTrackStops(width: number, count: number) {
   const { inset, dotInset } = EFFORT_TRACK
   return Array.from({ length: count }, (_, index) =>
@@ -148,7 +149,7 @@ export function effortTrackStops(width: number, count: number) {
   )
 }
 
-/** 手指在滑条区域横坐标 x 时最近的档位。 */
+/** Nearest tier for a finger at x in the slider area. */
 export function effortTrackIndex(x: number, width: number, count: number) {
   const { inset, dotInset } = EFFORT_TRACK
   return effortStopAt(x - inset, { width: Math.max(0, width - inset * 2), count, thumb: dotInset * 2 })

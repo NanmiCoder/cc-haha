@@ -38,6 +38,7 @@ import { FileChangeRow } from '../ui/results/parts'
 import { RewindSheet, TurnSheet } from '../ui/results/sheets'
 import { useCheckpointFileSummaries, useTurnPrompt } from '../ui/results/hooks'
 import { checkpointLists, sessionKey } from '../ui/results/resultsCache'
+import { plural } from '../core/plural'
 
 export default function Changes() {
   const { host, id } = useLocalSearchParams<{ host: string; id: string }>()
@@ -60,8 +61,8 @@ function TurnCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[`第 ${turnNumber(checkpoint)} 轮`, time, prompt].filter(Boolean).join('，')}
-      accessibilityHint="换一轮"
+      accessibilityLabel={[`Turn ${turnNumber(checkpoint)}`, time, prompt].filter(Boolean).join(', ')}
+      accessibilityHint="Switch turn"
       onPress={onPress}
       style={({ pressed }) => ({
         backgroundColor: colors.card,
@@ -77,24 +78,24 @@ function TurnCard({
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
           <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '600', color: colors.ink }}>
-            第 {turnNumber(checkpoint)} 轮
+            Turn {turnNumber(checkpoint)}
           </Text>
           {time ? <Text style={{ fontSize: 13, color: colors.ink3 }}>{time}</Text> : null}
         </View>
         {prompt ? (
           <View style={{ flexDirection: 'row' }}>
-            <Text style={{ fontSize: 14, lineHeight: 18, color: colors.ink2 }}>「</Text>
+            <Text style={{ fontSize: 14, lineHeight: 18, color: colors.ink2 }}>”</Text>
             <Text
               numberOfLines={1}
               style={{ flexShrink: 1, fontSize: 14, lineHeight: 18, color: colors.ink2 }}
             >
               {prompt}
             </Text>
-            <Text style={{ fontSize: 14, lineHeight: 18, color: colors.ink2 }}>」</Text>
+            <Text style={{ fontSize: 14, lineHeight: 18, color: colors.ink2 }}>”</Text>
           </View>
         ) : null}
       </View>
-      <Text style={{ fontSize: 14, color: colors.ink2 }}>换一轮</Text>
+      <Text style={{ fontSize: 14, color: colors.ink2 }}>Switch turn</Text>
       <Icon name="chevron-down" size={14} color={colors.ink3} strokeWidth={2.2} />
     </Pressable>
   )
@@ -143,8 +144,8 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
       (signal) => rewind(client, id, preview.target, mode, false, signal),
       () => {
         setPreview(null)
-        // 改了对话记录之后回到会话页重新读取历史。从会话页进来的就返回原页（让它刷新），
-        // 不再在旧会话页上面再叠一个新的，否则返回时会看到回退前的内容。
+        // After the transcript changes, go back to the session page and reload history. When opened from the session page, return to it (so it refreshes), 
+        // instead of stacking a new session page on top of the old one, otherwise going back shows pre-rewind content.
         markSessionStale(hostId, id)
         if (router.canGoBack()) router.back()
         else router.replace({ pathname: '/chat/[id]', params: { id, host: hostId } })
@@ -180,7 +181,7 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
     body = pageError ? (
       <View style={{ padding: 16, gap: 12 }}>
         <InlineError text={pageError} />
-        <Button title="重试" variant="secondary" onPress={() => void resource.refresh()} />
+        <Button title="Retry" variant="secondary" onPress={() => void resource.refresh()} />
       </View>
     ) : (
       <Loading />
@@ -191,10 +192,10 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
         <InlineError text={pageError} />
         <EmptyState
           icon="rotate-ccw"
-          title="还没有改动记录"
-          detail="电脑会在会话运行后记录可用的文件检查点。"
+          title="No change records yet"
+          detail="The computer records available file checkpoints after the session runs."
           action={
-            <Button title="刷新" variant="secondary" onPress={() => void resource.refresh()} />
+            <Button title="Refresh" variant="secondary" onPress={() => void resource.refresh()} />
           }
         />
       </ScrollView>
@@ -223,7 +224,7 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
                 }}
               >
                 <Text accessibilityRole="header" style={[type.section, { flex: 1, color: colors.ink2 }]}>
-                  {files.length} 个文件
+                  {plural(files.length, 'file')}
                 </Text>
                 <DiffStat added={checkpoint.code.insertions} removed={checkpoint.code.deletions} />
               </View>
@@ -245,28 +246,28 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
                 })}
               </Group>
               <Footnote style={{ paddingTop: 10 }}>
-                这是 cc-haha 在这一轮开始前存下的检查点。想看工作区里所有没提交的改动，去「
+                This is the checkpoint cc-haha saved before this turn started. To see all uncommitted changes in the workspace, go to ”
                 <Text
                   accessibilityRole="link"
                   onPress={openWorkspace}
                   style={{ color: colors.ink2, textDecorationLine: 'underline' }}
                 >
-                  项目文件
+                  Project files
                 </Text>
-                」。
+                ”.
               </Footnote>
             </>
           ) : (
             <EmptyState
               icon="file"
-              title="这一轮没有可比较的文件"
-              detail={translateReason(checkpoint.code.reason) ?? '仍可选择只回退对话。'}
+              title="No comparable files in this turn"
+              detail={translateReason(checkpoint.code.reason) ?? 'You can still rewind the conversation only.'}
             />
           )}
         </ScrollView>
         <BottomBar>
           <Button
-            title="回退到这一轮之前…"
+            title="Rewind to before this turn…"
             variant="danger"
             size="lg"
             icon="rotate-ccw"
@@ -281,7 +282,7 @@ function ChangesPage({ hostId, id }: { hostId: string; id: string }) {
 
   return (
     <ScreenView>
-      <NavBar title="改动与回退" />
+      <NavBar title="Changes and rewind" />
       {body}
       <TurnSheet
         visible={picking}

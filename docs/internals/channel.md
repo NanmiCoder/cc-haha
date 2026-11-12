@@ -1,57 +1,57 @@
 ---
-title: Channel 系统
-nav_title: Channel 系统
-description: IM 平台远程控制 Agent 的消息协议、六层访问控制与权限中继。
+title: Channel System
+nav_title: Channel System
+description: The message protocol, six-layer access control, and permission relay behind IM remote control.
 order: 13
 ---
 
-# Channel 系统
+# Channel System
 
-从源码视角深度剖析 Claude Code 如何通过 IM 平台远程控制 Agent
+A deep dive into how Claude Code enables remote Agent control via IM platforms
 
 ![Channel System Overview](./images/01-channel-overview.png)
 
-## 什么是 Channel
+## What is a Channel
 
-Channel 是 Claude Code 的 **IM 集成系统**，它允许用户通过 Telegram、Feishu（飞书）、Discord、Slack 等即时通讯平台远程控制正在运行的 Claude Code Agent。
+A Channel is Claude Code's **IM integration system** that allows users to remotely control a running Claude Code Agent through instant messaging platforms such as Telegram, Feishu (Lark), Discord, and Slack.
 
-### 核心理念
+### Core Idea
 
-传统的 AI 编程助手只能在终端中交互。Channel 系统打破了这一限制——你可以在手机上通过 Telegram 给 Claude Code 发消息，它会像在终端中一样理解并执行你的请求，并将结果回复到你的聊天窗口。
+Traditional AI coding assistants can only interact through the terminal. The Channel system breaks this limitation — you can send messages to Claude Code from your phone via Telegram, and it will understand and execute your requests just as it would in the terminal, replying directly to your chat window.
 
-### Channel 的本质
+### The Essence of a Channel
 
-从技术角度看，一个 Channel 就是一个特殊的 **MCP（Model Context Protocol）Server**，它需要：
+From a technical perspective, a Channel is simply a special **MCP (Model Context Protocol) Server** that must:
 
-1. **声明能力**：在 MCP 握手时声明 `experimental['claude/channel']` 能力
-2. **推送消息**：通过 `notifications/claude/channel` 通知将 IM 消息推入 Agent 对话
-3. **暴露工具**：提供 `reply`、`react`、`edit_message` 等 MCP 工具，让 Agent 回复到 IM 平台
+1. **Declare capability**: Announce `experimental['claude/channel']` during MCP handshake
+2. **Push messages**: Send inbound messages via `notifications/claude/channel` notifications
+3. **Expose tools**: Provide MCP tools like `reply`, `react`, `edit_message` for the Agent to respond through
 
 ```typescript
-// Channel 的两种形态
+// Two forms of Channel entries
 type ChannelEntry =
   | { kind: 'plugin'; name: string; marketplace: string; dev?: boolean }
   | { kind: 'server'; name: string; dev?: boolean }
 ```
 
-**plugin 类型**：来自 marketplace 的验证插件（如 `plugin:telegram@anthropic`）
-**server 类型**：直接指定的 MCP 服务器名称（始终需要 dev 旁路）
+**Plugin kind**: Verified plugins from a marketplace (e.g., `plugin:telegram@anthropic`)
+**Server kind**: Directly specified MCP server names (always requires dev bypass)
 
-## 整体架构
+## Architecture Overview
 
 ![Message Flow](./images/02-message-flow.png)
 
-### 消息流转全链路
+### End-to-End Message Flow
 
-Channel 系统的消息流转遵循一个清晰的双向路径：
+The Channel system follows a clear bidirectional message path:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    入站（IM → Agent）                        │
+│                    Inbound (IM → Agent)                      │
 │                                                             │
 │  Telegram/Feishu/Discord                                    │
 │       ↓                                                     │
-│  Channel Plugin（MCP Server）                               │
+│  Channel Plugin (MCP Server)                                │
 │       ↓                                                     │
 │  notifications/claude/channel { content, meta }             │
 │       ↓                                                     │
@@ -61,47 +61,47 @@ Channel 系统的消息流转遵循一个清晰的双向路径：
 │       ↓                                                     │
 │  enqueue({ priority: 'next', isMeta: true })                │
 │       ↓                                                     │
-│  SleepTool 每 ~1s 轮询 hasCommandsInQueue()                │
+│  SleepTool polls hasCommandsInQueue() every ~1s             │
 │       ↓                                                     │
-│  Model 看到 <channel> 标签，理解消息来源                      │
+│  Model sees <channel> tag, understands message source       │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│                    出站（Agent → IM）                        │
+│                    Outbound (Agent → IM)                     │
 │                                                             │
-│  Model 决定使用哪个工具回复                                   │
+│  Model decides which tool to use for reply                  │
 │       ↓                                                     │
-│  callTool() → Channel 的 MCP 工具                           │
-│  （reply / react / edit_message / download_attachment）      │
+│  callTool() → Channel's MCP tools                           │
+│  (reply / react / edit_message / download_attachment)        │
 │       ↓                                                     │
-│  MCP 协议调用 Channel Server                                │
+│  MCP protocol calls Channel Server                          │
 │       ↓                                                     │
-│  Channel Server 发送消息到 IM 平台                           │
+│  Channel Server sends message to IM platform                │
 │       ↓                                                     │
-│  Telegram/Feishu/Discord 用户收到回复                        │
+│  Telegram/Feishu/Discord user receives reply                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 核心组件关系
+### Core Component Map
 
-| 组件 | 文件 | 职责 |
-|------|------|------|
-| **Channel Gate** | `channelNotification.ts` | 六层访问控制门 |
-| **Message Wrapper** | `channelNotification.ts` | XML 消息封装 |
-| **Permission Relay** | `channelPermissions.ts` | 远程权限审批 |
-| **Allowlist** | `channelAllowlist.ts` | GrowthBook 白名单管理 |
-| **MCP Connection** | `useManageMCPConnections.ts` | 连接管理与通知注册 |
-| **Channel Message UI** | `UserChannelMessage.tsx` | 终端渲染 Channel 消息 |
-| **Dev Dialog** | `DevChannelsDialog.tsx` | 开发模式确认对话框 |
-| **Channels Notice** | `ChannelsNotice.tsx` | 启动时 Channel 状态通知 |
-| **Plugin Integration** | `mcpPluginIntegration.ts` | 插件作用域命名 |
-| **State** | `bootstrap/state.ts` | 全局 Channel 白名单状态 |
+| Component | File | Responsibility |
+|-----------|------|---------------|
+| **Channel Gate** | `channelNotification.ts` | Six-layer access control |
+| **Message Wrapper** | `channelNotification.ts` | XML message wrapping |
+| **Permission Relay** | `channelPermissions.ts` | Remote permission approval |
+| **Allowlist** | `channelAllowlist.ts` | GrowthBook allowlist management |
+| **MCP Connection** | `useManageMCPConnections.ts` | Connection mgmt & notification registration |
+| **Channel Message UI** | `UserChannelMessage.tsx` | Terminal rendering of channel messages |
+| **Dev Dialog** | `DevChannelsDialog.tsx` | Development mode confirmation dialog |
+| **Channels Notice** | `ChannelsNotice.tsx` | Startup channel status notifications |
+| **Plugin Integration** | `mcpPluginIntegration.ts` | Plugin scoped naming |
+| **State** | `bootstrap/state.ts` | Global channel allowlist state |
 
-## 消息协议
+## Message Protocol
 
-### 入站通知 Schema
+### Inbound Notification Schema
 
-Channel Server 推送到 Claude Code 的通知格式：
+The notification format Channel Servers push to Claude Code:
 
 ```typescript
 // channelNotification.ts
@@ -109,16 +109,16 @@ const ChannelMessageNotificationSchema = z.object({
   method: z.literal('notifications/claude/channel'),
   params: z.object({
     content: z.string(),
-    // 透传元数据 — thread_id、user 等
-    // 渲染为 <channel> 标签的属性
+    // Opaque passthrough — thread_id, user, etc.
+    // Rendered as attributes on the <channel> tag
     meta: z.record(z.string(), z.string()).optional(),
   }),
 })
 ```
 
-### XML 封装
+### XML Wrapping
 
-收到通知后，系统将其封装为 `<channel>` XML 标签：
+After receiving the notification, the system wraps it in a `<channel>` XML tag:
 
 ```typescript
 // channelNotification.ts:106-116
@@ -128,7 +128,7 @@ function wrapChannelMessage(
   meta?: Record<string, string>,
 ): string {
   const attrs = Object.entries(meta ?? {})
-    .filter(([k]) => SAFE_META_KEY.test(k))  // 防 XML 注入
+    .filter(([k]) => SAFE_META_KEY.test(k))  // Prevent XML injection
     .map(([k, v]) => ` ${k}="${escapeXmlAttr(v)}"`)
     .join('')
   return `<channel source="${escapeXmlAttr(serverName)}"${attrs}>
@@ -137,50 +137,50 @@ ${content}
 }
 ```
 
-**封装结果示例**：
+**Example output**:
 ```xml
 <channel source="plugin:telegram:tg" user="alice" chat_id="123456">
-帮我看看 main.ts 有什么问题
+Can you check what's wrong with main.ts?
 </channel>
 ```
 
-Model 看到这个标签后，就知道消息来自 Telegram 的用户 alice，并会使用 Telegram 的 `reply` 工具回复。
+When the model sees this tag, it knows the message came from Telegram user "alice" and will use Telegram's `reply` tool to respond.
 
-### 安全的元数据过滤
+### Safe Metadata Filtering
 
-Meta 键名会成为 XML 属性名，恶意构造的键（如 `x="" injected="y`）可能导致 XML 注入。系统使用严格的正则过滤：
+Meta keys become XML attribute names. A crafted key like `x="" injected="y` could break out of the attribute structure. The system uses strict regex filtering:
 
 ```typescript
-// 只允许纯标识符格式的键名
+// Only allow plain identifier-format key names
 const SAFE_META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 ```
 
-实际场景中，Channel 服务器只发送 `chat_id`、`user`、`thread_ts`、`message_id` 这类安全键名。
+In practice, channel servers only send safe keys like `chat_id`, `user`, `thread_ts`, `message_id`.
 
-### 消息入队
+### Message Enqueuing
 
-封装后的消息通过 enqueue 推入消息队列：
+Wrapped messages are pushed into the message queue:
 
 ```typescript
 enqueue({
   mode: 'prompt',
   value: wrapChannelMessage(serverName, content, meta),
-  priority: 'next',        // 高优先级
-  isMeta: true,             // 元数据消息
+  priority: 'next',        // High priority
+  isMeta: true,             // Metadata message
   origin: { kind: 'channel', server: serverName },
-  skipSlashCommands: true   // 不解释为斜杠命令
+  skipSlashCommands: true   // Don't interpret as slash commands
 })
 ```
 
-SleepTool 每约 1 秒轮询一次 `hasCommandsInQueue()`，发现新消息后唤醒 Agent。
+SleepTool polls `hasCommandsInQueue()` every ~1 second, waking the Agent when new messages arrive.
 
-## 六层访问控制
+## Six-Layer Access Control
 
 ![Access Control](./images/03-access-control.png)
 
-Channel 系统采用**六层递进式访问控制**，每一层都可以独立阻断 Channel 注册。这是整个系统安全性的基石。
+The Channel system employs **six progressive access control layers**, each capable of independently blocking Channel registration. This is the cornerstone of the system's security.
 
-### Gate 函数签名
+### Gate Function Signature
 
 ```typescript
 // channelNotification.ts:191-316
@@ -191,7 +191,7 @@ function gateChannelServer(
 ): ChannelGateResult  // { action: 'register' } | { action: 'skip', kind, reason }
 ```
 
-### 第一层：能力声明（Capability）
+### Layer 1: Capability Declaration
 
 ```typescript
 if (!capabilities?.experimental?.['claude/channel']) {
@@ -200,9 +200,9 @@ if (!capabilities?.experimental?.['claude/channel']) {
 }
 ```
 
-MCP Server 必须在握手时声明 `experimental['claude/channel']: {}` 能力。这是 MCP 的"存在信号"惯例（类似 `tools: {}`），将普通 MCP Server 与 Channel Server 区分开来。
+The MCP Server must declare `experimental['claude/channel']: {}` during handshake. This is MCP's "presence signal" idiom (similar to `tools: {}`), separating Channel Servers from ordinary MCP Servers.
 
-### 第二层：运行时开关（Runtime Gate）
+### Layer 2: Runtime Gate
 
 ```typescript
 if (!isChannelsEnabled()) {
@@ -211,9 +211,9 @@ if (!isChannelsEnabled()) {
 }
 ```
 
-`isChannelsEnabled()` 检查 GrowthBook 特性开关 `tengu_harbor`（默认 false，5 分钟刷新）。这是全局的"紧急制动"——关闭此开关立即禁用所有 Channel，不需要发版。
+`isChannelsEnabled()` checks GrowthBook feature flag `tengu_harbor` (default false, 5-minute refresh). This is the global "emergency brake" — flipping this switch immediately disables all Channels without a release.
 
-### 第三层：OAuth 认证（Auth）
+### Layer 3: OAuth Authentication
 
 ```typescript
 if (!getClaudeAIOAuthTokens()?.accessToken) {
@@ -222,9 +222,9 @@ if (!getClaudeAIOAuthTokens()?.accessToken) {
 }
 ```
 
-Channel 仅限 OAuth 认证用户。API Key 用户被阻止，因为 Console 端目前还没有 `channelsEnabled` 的管理界面。
+Channels are restricted to OAuth-authenticated users. API key users are blocked because Console doesn't have a `channelsEnabled` admin surface yet.
 
-### 第四层：组织策略（Policy）
+### Layer 4: Organization Policy
 
 ```typescript
 const sub = getSubscriptionType()
@@ -236,9 +236,9 @@ if (managed && policy?.channelsEnabled !== true) {
 }
 ```
 
-Teams/Enterprise 组织必须在托管设置中显式启用 `channelsEnabled: true`。默认关闭——即使没有配置任何策略的团队组织也不会回退到非托管路径。
+Teams/Enterprise organizations must explicitly enable `channelsEnabled: true` in managed settings. Default is OFF — even a team org with zero configured policy keys is still considered managed and does not fall through to the unmanaged path.
 
-### 第五层：会话白名单（Session）
+### Layer 5: Session Allowlist
 
 ```typescript
 const entry = findChannelEntry(serverName, getAllowedChannels())
@@ -248,14 +248,14 @@ if (!entry) {
 }
 ```
 
-MCP Server 必须在本次会话的 `--channels` 参数列表中。即使一个受信任的 Server 动态添加了 `claude/channel` 能力，也无法绕过——必须用户在启动时显式列出。
+The MCP Server must be in the current session's `--channels` parameter list. Even if a trusted server dynamically adds the `claude/channel` capability, it cannot bypass this — the user must explicitly list it at startup.
 
-### 第六层：Marketplace 验证 + 白名单（Allowlist）
+### Layer 6: Marketplace Verification + Allowlist
 
-对于 plugin 类型的 Channel：
+For plugin-kind channels:
 
 ```typescript
-// Marketplace 验证：确保安装的插件来自声称的市场
+// Marketplace verification: ensure installed plugin matches claimed source
 const actual = pluginSource
   ? parsePluginIdentifier(pluginSource).marketplace
   : undefined
@@ -264,7 +264,7 @@ if (actual !== entry.marketplace) {
     reason: `tag mismatch: asked for @${entry.marketplace}, installed from ${actual}` }
 }
 
-// 白名单检查：插件必须在 GrowthBook 审批列表中
+// Allowlist check: plugin must be on GrowthBook approved list
 if (!entry.dev) {
   const { entries } = getEffectiveChannelAllowlist(sub, policy?.allowedChannelPlugins)
   if (!entries.some(e => e.plugin === entry.name && e.marketplace === entry.marketplace)) {
@@ -273,54 +273,54 @@ if (!entry.dev) {
 }
 ```
 
-**双重验证**：先验证 `--channels plugin:slack@anthropic` 中的 `@anthropic` 标签与实际安装的插件来源是否匹配（防止 `slack@evil` 冒充 `slack@anthropic`），再检查是否在审批白名单中。
+**Dual verification**: First verify that the `@anthropic` tag in `--channels plugin:slack@anthropic` matches the actual installed plugin source (preventing `slack@evil` from impersonating `slack@anthropic`), then check against the approved allowlist.
 
-**白名单来源优先级**：Team/Enterprise 组织可以设置 `allowedChannelPlugins`，此时它替代 GrowthBook ledger 白名单（管理员拥有信任决策权）。
+**Allowlist source priority**: Team/Enterprise orgs can set `allowedChannelPlugins`, which replaces the GrowthBook ledger allowlist (admin owns the trust decision).
 
-对于 server 类型，白名单始终失败（schema 是 `{marketplace, plugin}` 格式，server 类型无法匹配），除非使用 `--dangerously-load-development-channels`（设置 `entry.dev = true` 旁路白名单）。
+For server-kind entries, the allowlist always fails (schema is `{marketplace, plugin}` format, server kind cannot match), unless `--dangerously-load-development-channels` is used (setting `entry.dev = true` to bypass).
 
-### Gate 结果类型
+### Gate Result Type
 
 ```typescript
 type ChannelGateResult =
-  | { action: 'register' }           // 通过所有检查，注册通知处理器
-  | { action: 'skip'; kind: string; reason: string }  // 某层拦截
+  | { action: 'register' }           // Passed all checks, register notification handler
+  | { action: 'skip'; kind: string; reason: string }  // Blocked at some layer
 
-// kind 枚举：capability | disabled | auth | policy | session | marketplace | allowlist
+// kind enum: capability | disabled | auth | policy | session | marketplace | allowlist
 ```
 
-## 权限中继系统
+## Permission Relay System
 
 ![Permission Relay](./images/04-permission-relay.png)
 
-### 为什么需要权限中继
+### Why Permission Relay Exists
 
-当 Claude Code 需要执行敏感操作（如运行 Bash 命令），会弹出权限确认对话框。但如果用户通过 Telegram 远程控制 Agent，他看不到本地终端的对话框。
+When Claude Code needs to execute sensitive operations (like running a Bash command), it shows a permission confirmation dialog. But if the user is controlling the Agent remotely via Telegram, they can't see the local terminal dialog.
 
-权限中继系统解决了这个问题：**将权限提示转发到 IM 平台，让用户在手机上也能审批或拒绝操作**。
+The permission relay system solves this: **forward permission prompts to the IM platform so users can approve or deny operations from their phone**.
 
-### 出站：CC → Channel（权限请求）
+### Outbound: CC → Channel (Permission Request)
 
-当 Agent 触发权限对话框且 Channel 声明了 `experimental['claude/channel/permission']` 能力时：
+When the Agent triggers a permission dialog and a Channel has declared `experimental['claude/channel/permission']` capability:
 
 ```typescript
-// 通知 Schema
+// Notification schema
 const CHANNEL_PERMISSION_REQUEST_METHOD =
   'notifications/claude/channel/permission_request'
 
 type ChannelPermissionRequestParams = {
-  request_id: string      // 5 字母标识符（如 "tbxkq"）
-  tool_name: string       // 工具名（如 "Bash"）
-  description: string     // 人类可读描述
-  input_preview: string   // JSON 输入预览，截断到 200 字符
+  request_id: string      // 5-letter identifier (e.g., "tbxkq")
+  tool_name: string       // Tool name (e.g., "Bash")
+  description: string     // Human-readable description
+  input_preview: string   // JSON input preview, truncated to 200 chars
 }
 ```
 
-Channel Server 收到后，按各平台格式化（Telegram markdown、Discord embed 等）发送给用户。
+The Channel Server formats this for its platform (Telegram markdown, Discord embed, etc.) and sends it to the user.
 
-### Short Request ID 生成
+### Short Request ID Generation
 
-5 字母标识符的设计充满巧思：
+The 5-letter identifier design is thoughtfully crafted:
 
 ```typescript
 // channelPermissions.ts:140-152
@@ -336,22 +336,22 @@ function shortRequestId(toolUseID: string): string {
 }
 ```
 
-**设计决策**：
-- **25 字母表**：a-z 去掉 `l`（与 1/I 混淆），25^5 约 980 万种组合
-- **FNV-1a 哈希**：不是加密级别，但足够稳定且快速
-- **脏话过滤**：5 个随机字母可能拼出不雅词汇（如发短信给老板的场景），内置屏蔽词表
-- **纯字母**：手机用户不需要切换键盘模式（十六进制需要在字母和数字间切换）
-- **大小写不敏感**：适配手机自动更正
+**Design decisions**:
+- **25-letter alphabet**: a-z minus `l` (confusion with 1/I), 25^5 ≈ 9.8M combinations
+- **FNV-1a hash**: Not cryptographic, but stable and fast
+- **Profanity filter**: 5 random letters can spell offensive words (imagine texting your boss), built-in blocklist
+- **Letters only**: Phone users don't need to switch keyboard modes (hex alternates between letters and digits)
+- **Case insensitive**: Accommodates phone autocorrect
 
-### 入站：Channel → CC（权限响应）
+### Inbound: Channel → CC (Permission Response)
 
-用户在 IM 中回复格式：`yes tbxkq` 或 `no tbxkq`
+Users reply in IM with format: `yes tbxkq` or `no tbxkq`
 
 ```typescript
-// 服务端解析正则
+// Server-side parsing regex
 const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 
-// 结构化通知（服务端解析后发出，而非 CC 端正则匹配文本）
+// Structured notification (server parses and emits, CC doesn't regex-match text)
 const ChannelPermissionNotificationSchema = z.object({
   method: z.literal('notifications/claude/channel/permission'),
   params: z.object({
@@ -361,31 +361,31 @@ const ChannelPermissionNotificationSchema = z.object({
 })
 ```
 
-**关键设计**：Channel Server 负责解析用户回复并发出结构化事件，CC 端不做文本正则匹配。这意味着普通聊天中的文字永远不会意外触发权限审批。
+**Key design**: The Channel Server is responsible for parsing the user's reply and emitting a structured event — CC never does text regex matching. This means casual conversation text can never accidentally trigger permission approval.
 
-### 多源竞争
+### Multi-Source Racing
 
-权限响应来自四个来源，先到先得：
+Permission responses come from four sources, first to resolve wins:
 
 ```
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│   本地终端    │   │    Bridge    │   │   Channels   │   │    Hooks     │
-│  Local UI    │   │   远程控制    │   │ Telegram etc │   │  Permission  │
+│  Local UI    │   │    Bridge    │   │   Channels   │   │    Hooks     │
+│  Terminal    │   │   Remote     │   │ Telegram etc │   │  Permission  │
 └──────┬───────┘   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘
        │                   │                   │                  │
        └───────────────────┴───────────────────┴──────────────────┘
                                     │
-                              claim() — 先到先得
+                              claim() — first to resolve wins
                                     │
                               ┌─────┴─────┐
                               │  resolve   │
-                              │  allow/deny│
+                              │ allow/deny │
                               └───────────┘
 ```
 
-`createChannelPermissionCallbacks()` 使用闭包维护 pending Map（不在模块级别，也不在 AppState 中——函数引用在状态中会导致序列化问题），构造一次后存入 AppState。
+`createChannelPermissionCallbacks()` uses a closure to maintain a pending Map (not at module level, not in AppState — function references in state cause serialization issues), constructed once and stored in AppState.
 
-### 过滤权限中继客户端
+### Filtering Permission Relay Clients
 
 ```typescript
 // channelPermissions.ts:177-194
@@ -399,50 +399,50 @@ function filterPermissionRelayClients(clients, isInAllowlist) {
 }
 ```
 
-**三个条件全部必须**：已连接 + 在白名单中 + 同时声明了两个能力（`claude/channel` 和 `claude/channel/permission`）。第二个能力是显式 opt-in——只推消息的 Channel 永远不会意外成为权限审批入口。
+**All three conditions required**: connected + in allowlist + declares BOTH capabilities (`claude/channel` AND `claude/channel/permission`). The second capability is explicit opt-in — a relay-only Channel never accidentally becomes a permission approval surface.
 
-## UI 组件
+## UI Components
 
-### 终端消息渲染（UserChannelMessage）
+### Terminal Message Rendering (UserChannelMessage)
 
 ```typescript
 // UserChannelMessage.tsx
-// 解析 <channel> XML 标签并在终端中渲染
+// Parses <channel> XML tags and renders them in terminal
 
 const CHANNEL_RE = new RegExp(
   `<${CHANNEL_TAG}\\s+source="([^"]+)"([^>]*)>\\n?([\\s\\S]*?)\\n?</${CHANNEL_TAG}>`
 )
 
-// 插件服务器名称显示：plugin:slack-channel:slack → slack
+// Plugin server name display: plugin:slack-channel:slack → slack
 function displayServerName(name: string): string {
   const i = name.lastIndexOf(':')
   return i === -1 ? name : name.slice(i + 1)
 }
 
-const TRUNCATE_AT = 60  // 消息体截断长度
+const TRUNCATE_AT = 60  // Message body truncation length
 ```
 
-**渲染效果**：
+**Rendered output**:
 ```
-◁ tg · alice: 帮我看看 main.ts 有什么问题
+◁ tg · alice: Can you check what's wrong with main.ts?
 ```
 
-其中 `◁` 是 Channel 箭头符号（`CHANNEL_ARROW`），显示服务器叶子名称和可选的用户名。
+Where `◁` is the Channel arrow symbol (`CHANNEL_ARROW`), showing the server leaf name and optional username.
 
-### 状态通知（ChannelsNotice）
+### Status Notice (ChannelsNotice)
 
-启动时显示 `--channels` 条目的状态，报告阻断原因：
+Shows the status of `--channels` entries at startup, reporting blockers:
 
-| 阻断类型 | 含义 |
-|----------|------|
-| `disabled` | Channel 功能未启用（tengu_harbor 关闭） |
-| `noAuth` | 未通过 OAuth 认证 |
-| `policyBlocked` | 组织策略未启用 channels |
-| `unmatched` | 未在 `--channels` 列表中匹配到 |
+| Block Type | Meaning |
+|------------|---------|
+| `disabled` | Channel feature not enabled (tengu_harbor off) |
+| `noAuth` | Not OAuth authenticated |
+| `policyBlocked` | Org policy hasn't enabled channels |
+| `unmatched` | Not matched in `--channels` list |
 
-### 开发者确认对话框（DevChannelsDialog）
+### Developer Confirmation Dialog (DevChannelsDialog)
 
-使用 `--dangerously-load-development-channels` 时显示的警告对话框：
+Warning dialog shown when using `--dangerously-load-development-channels`:
 
 ```
 ┌─ WARNING: Loading development channels ──────────────────┐
@@ -460,21 +460,21 @@ const TRUNCATE_AT = 60  // 消息体截断长度
 └──────────────────────────────────────────────────────────┘
 ```
 
-选择 "Exit" 会调用 `gracefulShutdownSync(1)` 立即退出。
+Selecting "Exit" calls `gracefulShutdownSync(1)` for immediate exit.
 
-## 插件 Channel 架构
+## Plugin Channel Architecture
 
-### Plugin Manifest 中的 Channel 声明
+### Channel Declaration in Plugin Manifest
 
-插件通过 `plugin.json` 中的 `channels` 数组声明 Channel：
+Plugins declare channels via the `channels` array in `plugin.json`:
 
 ```typescript
 // schemas.ts:670-703
 const PluginManifestChannelsSchema = z.object({
   channels: z.array(z.object({
-    server: z.string().min(1),       // MCP 服务器名，必须匹配 mcpServers 中的 key
-    displayName: z.string().optional(),  // 配置对话框标题（如 "Telegram"）
-    userConfig: z.record(             // 安装时提示用户配置的字段
+    server: z.string().min(1),       // MCP server name, must match key in mcpServers
+    displayName: z.string().optional(),  // Config dialog title (e.g., "Telegram")
+    userConfig: z.record(             // Fields to prompt user for at install time
       z.string(),
       PluginUserConfigOptionSchema()
     ).optional(),
@@ -482,7 +482,7 @@ const PluginManifestChannelsSchema = z.object({
 })
 ```
 
-**示例 plugin.json**：
+**Example plugin.json**:
 ```json
 {
   "name": "telegram",
@@ -519,14 +519,14 @@ const PluginManifestChannelsSchema = z.object({
 }
 ```
 
-### 配置流（PluginOptionsFlow）
+### Configuration Flow (PluginOptionsFlow)
 
-启用插件后，如果 Channel 有未配置的 `userConfig` 字段：
+After enabling a plugin, if a Channel has unconfigured `userConfig` fields:
 
-1. `getUnconfiguredChannels()` 检测未满足验证的字段
-2. `PluginOptionsFlow` 组件逐个提示用户输入
-3. 敏感值（如 bot_token）存入 Keychain
-4. 普通值存入 `~/.claude/plugins/options/{pluginId}.json`
+1. `getUnconfiguredChannels()` detects fields that haven't passed validation
+2. `PluginOptionsFlow` component prompts the user for each field
+3. Sensitive values (like bot_token) stored in Keychain
+4. Regular values stored in `~/.claude/plugins/options/{pluginId}.json`
 
 ```typescript
 // mcpPluginIntegration.ts:290-318
@@ -551,9 +551,9 @@ function getUnconfiguredChannels(plugin: LoadedPlugin): UnconfiguredChannel[] {
 }
 ```
 
-### 作用域命名（Scoped Naming）
+### Scoped Naming
 
-插件提供的 MCP Server 会被添加作用域前缀以避免冲突：
+Plugin-provided MCP Servers get a scope prefix to avoid naming conflicts:
 
 ```typescript
 // mcpPluginIntegration.ts:341-360
@@ -575,40 +575,40 @@ function addPluginScopeToServers(
 }
 ```
 
-**命名转换**：
-- 输入：`{ "tg": { ... } }` from `telegram@anthropic`
-- 输出：`{ "plugin:telegram:tg": { scope: 'dynamic', pluginSource: 'telegram@anthropic', ... } }`
+**Naming transformation**:
+- Input: `{ "tg": { ... } }` from `telegram@anthropic`
+- Output: `{ "plugin:telegram:tg": { scope: 'dynamic', pluginSource: 'telegram@anthropic', ... } }`
 
-`pluginSource` 被保存在配置上，后续 Channel Gate 的 marketplace 验证步骤会用到它。
+`pluginSource` is preserved on the config for later marketplace verification in the Channel Gate.
 
-### 白名单有效来源
+### Effective Allowlist Source
 
 ```typescript
 // channelNotification.ts:127-138
 function getEffectiveChannelAllowlist(sub, orgList) {
-  // Team/Enterprise 组织自定义白名单 → 替代 GrowthBook ledger
+  // Team/Enterprise custom allowlist → replaces GrowthBook ledger
   if ((sub === 'team' || sub === 'enterprise') && orgList) {
     return { entries: orgList, source: 'org' }
   }
-  // 默认使用 GrowthBook ledger
+  // Default to GrowthBook ledger
   return { entries: getChannelAllowlist(), source: 'ledger' }
 }
 ```
 
-组织管理员可以通过 `allowedChannelPlugins` 完全控制哪些 Channel 插件被信任，而不依赖全局 ledger。
+Organization admins can fully control which Channel plugins are trusted via `allowedChannelPlugins`, independent of the global ledger.
 
-## 安全设计
+## Security Design
 
-### XML 注入防护
+### XML Injection Prevention
 
-Channel 消息中的元数据会成为 XML 属性。两道防线：
+Channel message metadata becomes XML attributes. Two lines of defense:
 
-1. **键名过滤**：`SAFE_META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/` 只允许纯标识符
-2. **值转义**：`escapeXmlAttr()` 对属性值进行 XML 转义
+1. **Key name filtering**: `SAFE_META_KEY = /^[a-zA-Z_][a-zA-Z0-9_]*$/` — only plain identifiers
+2. **Value escaping**: `escapeXmlAttr()` applies XML escaping to attribute values
 
-### Marketplace 验证
+### Marketplace Verification
 
-`--channels plugin:slack@anthropic` 只是用户的"意图声明"。运行时名称 `plugin:slack:X` 可能来自 `slack@anthropic` 或 `slack@evil`。Gate 验证两者必须匹配：
+`--channels plugin:slack@anthropic` is merely the user's "intent declaration." The runtime name `plugin:slack:X` could come from `slack@anthropic` or `slack@evil`. The gate verifies they must match:
 
 ```typescript
 const actual = pluginSource
@@ -619,53 +619,53 @@ if (actual !== entry.marketplace) {
 }
 ```
 
-### 权限中继的信任边界
+### Trust Boundary of Permission Relay
 
-来自代码注释中 Kenneth 的分析（PR 讨论 #2956440848）：
+From Kenneth's analysis in code comments (PR discussion #2956440848):
 
-> "Claude 会自我审批吗？" 答：审批方是通过 Channel 的人类，不是 Claude。但信任边界不是终端——而是白名单（tengu_harbor_ledger）。一个被妥协的 Channel Server 可以在人类没看到提示的情况下伪造 "yes \<id\>"。这是被接受的风险：一个已妥协的 Channel 本来就有无限的对话注入轮次（可以社会工程攻击、等待 acceptEdits 模式等）；注入后自动审批更快，但能力上并不更强。权限对话框减缓了已妥协 Channel 的攻击速度，但不能完全阻止。
+> "Would this let Claude self-approve?" Answer: the approving party is the human via the channel, not Claude. But the trust boundary isn't the terminal — it's the allowlist (tengu_harbor_ledger). A compromised channel server CAN fabricate "yes \<id\>" without the human seeing the prompt. Accepted risk: a compromised channel already has unlimited conversation-injection turns (social-engineer over time, wait for acceptEdits, etc.); inject-then-self-approve is faster, not more capable. The dialog slows a compromised channel; it doesn't stop one.
 
 ### skipSlashCommands
 
-Channel 消息入队时设置 `skipSlashCommands: true`，确保 IM 用户发送的 `/help` 等文本不会被解释为 Claude Code 的斜杠命令。
+Channel messages are enqueued with `skipSlashCommands: true`, ensuring text like `/help` sent by IM users is not interpreted as Claude Code slash commands.
 
-### dev 旁路的粒度
+### Dev Bypass Granularity
 
-`--dangerously-load-development-channels` 的 `dev` 标记是**每个条目**级别的，不是全局的。接受开发对话框后，只有显式标记为 dev 的条目才旁路白名单，`--channels` 中的正常条目仍然需要通过完整的白名单检查。
+The `dev` flag from `--dangerously-load-development-channels` is **per-entry**, not global. After accepting the dev dialog, only explicitly dev-flagged entries bypass the allowlist — normal `--channels` entries still go through full allowlist verification.
 
-## 命令行接口
+## Command-Line Interface
 
-### 启动参数
+### Startup Parameters
 
 ```bash
-# 使用已审批的 Channel 插件
+# Use approved Channel plugins
 claude --channels plugin:telegram@anthropic plugin:feishu@anthropic
 
-# 本地开发模式（旁路白名单）
+# Local development mode (bypass allowlist)
 claude --dangerously-load-development-channels plugin:my-channel@local
 
-# 两者可以同时使用
+# Both can be used simultaneously
 claude --channels plugin:telegram@anthropic \
        --dangerously-load-development-channels plugin:dev-channel@local
 ```
 
-### 参数解析
+### Argument Parsing
 
 ```typescript
 // main.tsx
 const parseChannelEntries = (raw: string[], flag: string): ChannelEntry[] => {
-  // 解析 "plugin:slack@anthropic"、"server:slack" 等格式
-  // 验证格式正确性
-  // 返回 ChannelEntry 数组
+  // Parse "plugin:slack@anthropic", "server:slack", etc.
+  // Validate format correctness
+  // Return ChannelEntry array
 }
 
-// 存入全局状态
+// Store in global state
 setAllowedChannels(channelEntries)
 ```
 
-### 特性门控
+### Feature Gating
 
-这两个 CLI 选项只在特性开关启用时可用：
+These CLI options are only available when feature flags are enabled:
 
 ```typescript
 // main.tsx:3850-3852
@@ -675,30 +675,30 @@ if (feature('KAIROS') || feature('KAIROS_CHANNELS')) {
 }
 ```
 
-`hideHelp()` 表示这些选项不会出现在 `--help` 输出中——Channel 功能目前处于隐藏特性阶段。
+`hideHelp()` means these options don't appear in `--help` output — the Channel feature is currently in hidden feature stage.
 
-## 特性开关与分析
+## Feature Flags and Analytics
 
-### 特性开关
+### Feature Flags
 
-| 开关 | 来源 | 用途 |
-|------|------|------|
-| `KAIROS` / `KAIROS_CHANNELS` | 编译时 | 控制 CLI 参数注册和代码路径 |
-| `tengu_harbor` | GrowthBook 运行时 | Channel 功能总开关（默认 false） |
-| `tengu_harbor_ledger` | GrowthBook 运行时 | 审批插件白名单 |
-| `tengu_harbor_permissions` | GrowthBook 运行时 | 权限中继功能开关 |
+| Flag | Source | Purpose |
+|------|--------|---------|
+| `KAIROS` / `KAIROS_CHANNELS` | Build-time | Controls CLI argument registration and code paths |
+| `tengu_harbor` | GrowthBook runtime | Channel system master switch (default false) |
+| `tengu_harbor_ledger` | GrowthBook runtime | Approved plugin allowlist |
+| `tengu_harbor_permissions` | GrowthBook runtime | Permission relay feature switch |
 
-### 分析事件
+### Analytics Events
 
 ```typescript
-// Channel Gate 结果
+// Channel Gate result
 tengu_mcp_channel_gate: {
   gate_kind: 'disabled' | 'auth' | 'policy' | 'session' | 'marketplace' | 'allowlist'
   plugin: string
   is_dev: boolean
 }
 
-// Channel 消息
+// Channel message
 tengu_mcp_channel_message: {
   content_length: number
   meta_key_count: number
@@ -707,7 +707,7 @@ tengu_mcp_channel_message: {
   plugin: string
 }
 
-// 启动标志
+// Startup flags
 tengu_mcp_channel_flags: {
   channels_count: number
   dev_count: number
@@ -716,18 +716,18 @@ tengu_mcp_channel_flags: {
 }
 ```
 
-## 源码文件索引
+## Source File Index
 
-| 文件 | 行数 | 职责 |
-|------|------|------|
-| `src/services/mcp/channelNotification.ts` | ~320 | 门控、消息封装、白名单集成 |
-| `src/services/mcp/channelPermissions.ts` | ~240 | 权限中继、请求 ID 生成 |
-| `src/services/mcp/channelAllowlist.ts` | ~80 | GrowthBook 白名单查询 |
-| `src/services/mcp/useManageMCPConnections.ts` | - | 连接管理、通知处理器注册 |
-| `src/components/messages/UserChannelMessage.tsx` | ~140 | 终端渲染 Channel 消息 |
-| `src/components/DevChannelsDialog.tsx` | ~105 | 开发模式确认对话框 |
-| `src/components/LogoV2/ChannelsNotice.tsx` | - | 启动时状态通知 |
-| `src/utils/plugins/mcpPluginIntegration.ts` | - | 插件 MCP 集成、作用域命名 |
-| `src/utils/plugins/schemas.ts` | ~700 | 插件清单 Schema（含 Channel 声明） |
-| `src/bootstrap/state.ts` | - | 全局 Channel 白名单状态 |
-| `src/main.tsx` | ~3850 | CLI 参数注册和解析 |
+| File | Lines | Responsibility |
+|------|-------|---------------|
+| `src/services/mcp/channelNotification.ts` | ~320 | Gating, message wrapping, allowlist integration |
+| `src/services/mcp/channelPermissions.ts` | ~240 | Permission relay, request ID generation |
+| `src/services/mcp/channelAllowlist.ts` | ~80 | GrowthBook allowlist queries |
+| `src/services/mcp/useManageMCPConnections.ts` | — | Connection management, notification handler registration |
+| `src/components/messages/UserChannelMessage.tsx` | ~140 | Terminal rendering of Channel messages |
+| `src/components/DevChannelsDialog.tsx` | ~105 | Development mode confirmation dialog |
+| `src/components/LogoV2/ChannelsNotice.tsx` | — | Startup status notifications |
+| `src/utils/plugins/mcpPluginIntegration.ts` | — | Plugin MCP integration, scoped naming |
+| `src/utils/plugins/schemas.ts` | ~700 | Plugin manifest schema (incl. Channel declarations) |
+| `src/bootstrap/state.ts` | — | Global Channel allowlist state |
+| `src/main.tsx` | ~3850 | CLI argument registration and parsing |

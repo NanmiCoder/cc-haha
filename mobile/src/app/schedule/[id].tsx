@@ -2,7 +2,7 @@ import { useLocalSearchParams } from 'expo-router'
 import { useApp } from '../../state/AppContext'
 import { ScheduleDetail } from '../../ui/schedules/ScheduleDetail'
 
-/** /schedule/[id]?host —— 一个定时任务的详情。 */
+/** /schedule/[id]?host — Details of one scheduled task. */
 export default function ScheduleDetailRoute() {
   const { id, host } = useLocalSearchParams<{ id: string; host?: string }>()
   const { registry } = useApp()

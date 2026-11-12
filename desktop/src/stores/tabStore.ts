@@ -131,7 +131,7 @@ function getPersistentSpecialTabType(tab: { sessionId: string; type?: string }):
 
 /**
  * Rewrites the retired Trace tabs: the list tab is dropped and a per-session
- * trace tab becomes that session's chat tab (where the 轨迹 view now lives).
+ * trace tab becomes that session's chat tab (where the Trajectory view now lives).
  */
 function normalizeLegacyPersistedTab(tab: PersistedTab): PersistedTab | null {
   if (tab.sessionId === LEGACY_TRACE_LIST_TAB_ID || tab.type === 'traces') return null

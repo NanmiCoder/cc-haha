@@ -16,7 +16,7 @@ import {
   useColors,
 } from '../kit'
 
-/** 新会话必须明确项目：最近项目或手动输入电脑路径。 */
+/** A new session must have an explicit project: a recent project or a manually entered computer path. */
 export function ProjectPickerSheet({
   visible,
   value,
@@ -44,7 +44,7 @@ export function ProjectPickerSheet({
     if (path) onPick(path)
   }
   return (
-    <Sheet visible={visible} onClose={onClose} title="选择项目">
+    <Sheet visible={visible} onClose={onClose} title="Choose project">
       <Group>
         {projects.map((project, index) => (
           <View key={project.realPath}>
@@ -65,10 +65,10 @@ export function ProjectPickerSheet({
       </Group>
       {loading && <Loading />}
       <InlineError text={error} />
-      <SectionHeader title="手动输入路径" style={{ paddingTop: 10, paddingBottom: 0 }} />
+      <SectionHeader title="Enter path manually" style={{ paddingTop: 10, paddingBottom: 0 }} />
       <Group>
         <FieldRow
-          label="路径"
+          label="Path"
           mono
           value={manual}
           onChangeText={setManual}
@@ -78,7 +78,7 @@ export function ProjectPickerSheet({
         />
       </Group>
       <Button
-        title="使用这个路径"
+        title="Use this path"
         variant="secondary"
         disabled={!manual.trim()}
         onPress={applyManual}

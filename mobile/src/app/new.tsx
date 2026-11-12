@@ -251,7 +251,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const failure =
     connectionError ||
     error ||
-    (repo?.state === 'missing_workdir' ? '这个目录不存在，请重新选择。' : '')
+    (repo?.state === 'missing_workdir' ? 'This directory does not exist; please choose again.' : '')
   const run = runCapsule({
     mode,
     model: runtime?.name,
@@ -276,7 +276,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
           }}
         >
           <View style={{ paddingHorizontal: 10 }}>
-            <TextButton title="取消" onPress={goBack} />
+            <TextButton title="Cancel" onPress={goBack} />
           </View>
           <Text
             accessibilityRole="header"
@@ -289,7 +289,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
               color: colors.ink,
             }}
           >
-            新任务
+            New task
           </Text>
           <View style={{ width: 60 }} />
         </View>
@@ -347,8 +347,8 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
           }))
         }}
         lean={lean}
-        disabled={busy ? { mode: '正在创建任务。', runtime: '正在创建任务。' } : undefined}
-        profile={{ value: profile, onChange: changeProfile, disabled: busy ? '正在创建任务。' : undefined }}
+        disabled={busy ? { mode: 'Creating task.', runtime: 'Creating task.' } : undefined}
+        profile={{ value: profile, onChange: changeProfile, disabled: busy ? 'Creating task.' : undefined }}
         workDir={path || undefined}
       />
 

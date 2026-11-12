@@ -194,7 +194,7 @@ function escapeHtml(value: string): string {
  * or a file reference.
  *
  * `codespan` runs before `url` in marked's inline loop, so a very common
- * assistant phrasing — "访问 `http://localhost:3000`" — produced a `<code>` that
+ * assistant phrasing — "visit `http://localhost:3000`" written in Chinese — produced a `<code>` that
  * could not be clicked at all. Wrapping the chip in an anchor keeps the code
  * styling while routing the click through the normal preview-link handler.
  *

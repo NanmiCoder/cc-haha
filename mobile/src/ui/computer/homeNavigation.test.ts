@@ -2,9 +2,9 @@ import { execFileSync } from 'node:child_process'
 import { expect, test } from 'bun:test'
 
 /**
- * 选电脑、加电脑、移除电脑之后要退回栈里已有的首页。原来用 router.replace('/')，每次都在栈上
- * 多压一个首页（真机上 5000 个会话时每个首页约 2300 个原生视图），跟着每 3 秒的列表刷新重新渲染。
- * 这里跑真实页面和真实的 goHome，只把 expo-router 换成记录调用的替身。
+ * After choosing, adding or removing a computer go back to the home already in the stack. It used router.replace('/'), which pushed
+ * an extra home on the stack every time (with 5000 sessions on a real device each home has about 2300 native views), rerendering with every 3-second list refresh.
+ * This runs the real page and the real goHome, only replacing expo-router with a stand-in that records calls.
  */
 function run(body: string) {
   const script = `
@@ -37,11 +37,11 @@ function run(body: string) {
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/h5'))}, () => ({ isH5: false }))
-    const host = { id: 'desk', name: '书房电脑', url: 'http://192.168.1.5:3456', auth: 'lan' }
+    const host = { id: 'desk', name: 'Study computer', url: 'http://192.168.1.5:3456', auth: 'lan' }
     const selected = [], removed = [], added = []
     mock.module(${JSON.stringify(import.meta.resolve('../../state/AppContext'))}, () => ({
       useApp: () => ({
-        registry: { hosts: [host, { ...host, id: 'lab', name: '实验室' }], selectedId: 'lab' },
+        registry: { hosts: [host, { ...host, id: 'lab', name: 'Lab' }], selectedId: 'lab' },
         select: async id => { selected.push(id) },
         remove: async id => { removed.push(id) },
         add: async next => { added.push(next.id) },
@@ -76,10 +76,10 @@ function run(body: string) {
   }
 }
 
-// expo-router 的 dismissTo：栈里有这个页面就一路退回去，没有才替换当前页（node_modules/expo-router 58 的 POP_TO）。
+// expo-router dismissTo: if the page is in the stack go back all the way, otherwise replace the current page (POP_TO in node_modules/expo-router 58).
 const backToExistingHome = [['dismissTo', '/']]
 
-test('在「你的电脑」里选一台电脑后退回原来的首页，不再压一个新首页', () => {
+test('After choosing a computer in “Your computers” go back to the original home without pushing a new home', () => {
   const result = run(`
     mock.module(${JSON.stringify(import.meta.resolve('../home/homeModel'))}, () => ({ hostCheckBadge() {}, hostCheckLine() {} }))
     mock.module(${JSON.stringify(import.meta.resolve('../home/parts'))}, () => ({ StatusDot: 'StatusDot', useNow() {}, useToneColor() {} }))
@@ -96,9 +96,9 @@ test('在「你的电脑」里选一台电脑后退回原来的首页，不再�
   expect(result.navigation).toEqual(backToExistingHome)
 })
 
-test('在电脑设置页移除这台电脑后退回原来的首页', () => {
+test('After removing this computer on the computer settings page go back to the original home', () => {
   const result = run(`
-    // 渲染时用到的展示模型都和导航无关，统一给一个取什么都不报错的占位。
+    // Display models used in rendering are unrelated to navigation, so provide one placeholder that never errors on any access.
     const any = new Proxy(function () {}, { get: (_, key) => (key === Symbol.toPrimitive ? () => '' : any), apply: () => any })
     const stub = names => () => Object.fromEntries(names.map(name => [name, any]))
     mock.module(${JSON.stringify(import.meta.resolve('../modes'))}, stub(['modeName', 'effortName']))
@@ -112,12 +112,12 @@ test('在电脑设置页移除这台电脑后退回原来的首页', () => {
     mock.module(${JSON.stringify(import.meta.resolve('./useComputerValues'))}, () => ({ useComputerValues: () => ({ values: { errors: {} }, patch() {} }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./computerModel'))}, () => ({
       ...stub(['computerStatus', 'connectionAddress', 'connectionMethod', 'defaultsFootnote', 'desktopOnlyText', 'permissionAccess', 'remoteAuthLine'])(),
-      removeConfirmText: () => ({ title: '移除', message: '' }),
+      removeConfirmText: () => ({ title: 'Remove', message: '' }),
     }))
     const { default: Computer } = require(${JSON.stringify(import.meta.resolve('../../app/computer'))})
     const route = Computer()
     const page = route.type(route.props)
-    const button = find(page, node => String(node.props?.accessibilityLabel ?? '').startsWith('从这台手机移除'))
+    const button = find(page, node => String(node.props?.accessibilityLabel ?? '').startsWith('Remove from this phone'))
     button.props.onPress()
     alerts.at(-1).find(action => action.style === 'destructive').onPress()
     await tick()
@@ -126,7 +126,7 @@ test('在电脑设置页移除这台电脑后退回原来的首页', () => {
   expect(result.navigation).toEqual(backToExistingHome)
 })
 
-test('在连接页加一台电脑、验证通过后退回原来的首页', () => {
+test('Add a computer on the connect page, and after verification go back to the original home', () => {
   const result = run(`
     mock.module('expo-clipboard', () => ({ getStringAsync: async () => '' }))
     mock.module('expo-crypto', () => ({ randomUUID: () => 'new-desk' }))

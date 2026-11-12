@@ -284,7 +284,7 @@ function RowContent({ row, hiddenTools, terms, running }: {
   switch (row.kind) {
     case 'system': {
       const details = [
-        row.snapshot?.sysChars ? t('trajectory.system.chars', { count: row.snapshot.sysChars.toLocaleString() }) : null,
+        row.snapshot?.sysChars ? t('trajectory.system.chars', { count: row.snapshot.sysChars.toLocaleString('en-US') }) : null,
         row.snapshot?.toolCount ? t('trajectory.table.toolCount', { count: row.snapshot.toolCount }) : null,
         row.snapshot?.scope && row.snapshot.scope !== 'main' ? row.snapshot.scope : null,
       ].filter(Boolean).join(' · ')

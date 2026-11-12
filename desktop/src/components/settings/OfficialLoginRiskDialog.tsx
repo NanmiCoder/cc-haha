@@ -1,6 +1,6 @@
 // desktop/src/components/settings/OfficialLoginRiskDialog.tsx
 //
-// 官方模型 OAuth 登录前的风险确认。各官方登录入口共用,只有风险等级和正文不同。
+// Risk confirmation before an official-model OAuth login. Shared by every official login entry; only the risk level and body differ.
 
 import { Badge, type Tone } from '@/components/ui/Badge'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'

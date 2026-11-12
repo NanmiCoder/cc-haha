@@ -5,7 +5,7 @@ export function planResize(w: number, h: number, maxEdge: number): { width: numb
   return { width: Math.round(w * scale), height: Math.round(h * scale) }
 }
 
-/** 浏览器内：把 dataUrl 缩放到 maxEdge 内并以 quality 重新编码。 */
+/** In the browser: scale a dataUrl to fit maxEdge and re-encode it at quality. */
 export async function compressDataUrl(dataUrl: string, maxEdge = 1600, quality = 0.85): Promise<string> {
   const img = new Image()
   await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error('load')); img.src = dataUrl })

@@ -28,7 +28,7 @@ test('phone totals include cache and old days while the recent chart zero fills 
   expect(model.recent[0]).toEqual({ date: '2026-09-29', tokens: 0 })
   expect(model.recent.at(-1)).toEqual({ date: '2026-10-28', tokens: 500 })
   expect(model.peak).toBe(500)
-  expect(model.longestTask).toBe('1 小时 30 分')
+  expect(model.longestTask).toBe('1 h 30 min')
 })
 
 test('empty data has no invented cache rate, duration or model usage', () => {
@@ -50,11 +50,11 @@ test('compact activity calendar aligns Monday columns and excludes future dates'
   expect(model.recent.at(-1)?.date).toBe('2026-10-28')
 })
 
-test('Chinese token units match the desktop at rounding boundaries', () => {
-  expect(tokenAmount(30e9)).toBe('300亿')
-  expect(tokenAmount(12345)).toBe('1.2万')
-  expect(tokenAmount(11500)).toBe('1.2万')
-  expect(tokenAmount(99995000)).toBe('1亿')
+test('token units round like the desktop at unit boundaries', () => {
+  expect(tokenAmount(30e9)).toBe('30B')
+  expect(tokenAmount(12345)).toBe('12.3K')
+  expect(tokenAmount(11500)).toBe('11.5K')
+  expect(tokenAmount(999950)).toBe('1M')
   expect(tokenAmount(0)).toBe('0')
 })
 
@@ -66,6 +66,6 @@ test('zero-duration single-message tasks do not invent a minute of work', () => 
 test('profile subtitles only open ordinary web links', () => {
   expect(subtitleLink('github.com/NanmiCoder/cc-haha')).toBe('https://github.com/NanmiCoder/cc-haha')
   expect(subtitleLink('https://example.com')).toBe('https://example.com/')
-  for (const value of ['javascript:alert(1)', 'file:///tmp/private', 'https://user:password@example.com', '我的日常记录'])
+  for (const value of ['javascript:alert(1)', 'file:///tmp/private', 'https://user:password@example.com', 'My daily log'])
     expect(subtitleLink(value)).toBeNull()
 })

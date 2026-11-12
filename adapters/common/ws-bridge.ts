@@ -2,8 +2,8 @@ import { adapterMigrationLifecycle } from './migration-lifecycle.js'
 /**
  * WebSocket Bridge
  *
- * 封装与 Claude Code Desktop 服务端 /ws/:sessionId 的通信。
- * 管理 chatId → sessionId 映射，自动重连，心跳。
+ * Wraps communication with the Claude Code Desktop server /ws/:sessionId.
+ * Manages chatId → sessionId mapping, auto-reconnect, heartbeat.
  */
 
 import WebSocket from 'ws'
@@ -489,7 +489,7 @@ export class WsBridge {
       })
       const finished = this.deliverMessage(chatId, session, {
         type: 'error', code: 'ADAPTER_CONNECTION_LOST',
-        message: '与桌面端的连接已中断，自动重连失败。请检查连接后重试，原会话已保留。',
+        message: 'Connection to the desktop app was lost and auto-reconnect failed. Check the connection and try again; the original session is preserved.',
       })
       void finished.then(() => {
         if (this.sessions.get(chatId) !== session) return

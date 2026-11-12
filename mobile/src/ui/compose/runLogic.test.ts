@@ -34,14 +34,14 @@ describe('run capsule', () => {
   })
 
   test('label is the model, followed by the thinking effort when one is set', () => {
-    expect(runLabel('Sonnet 4.5', 'high')).toBe('Sonnet 4.5 · 高')
+    expect(runLabel('Sonnet 4.5', 'high')).toBe('Sonnet 4.5 · High')
     expect(runLabel('Sonnet 4.5')).toBe('Sonnet 4.5')
-    expect(runLabel('  ', null)).toBe('电脑默认模型')
-    expect(runLabel(undefined, 'xhigh')).toBe('电脑默认模型 · 超高')
+    expect(runLabel('  ', null)).toBe('Computer default model')
+    expect(runLabel(undefined, 'xhigh')).toBe('Computer default model · Max')
   })
 
   test('only flags that are on appear on the capsule', () => {
-    expect(runCapsule({ mode: 'bypassPermissions', model: 'M', effort: 'low' })).toEqual({ label: 'M · 低', risk: 'danger' })
+    expect(runCapsule({ mode: 'bypassPermissions', model: 'M', effort: 'low' })).toEqual({ label: 'M · Low', risk: 'danger' })
     expect(runCapsule({ model: 'M', locked: true, disabled: true })).toEqual({
       label: 'M',
       risk: 'normal',
@@ -51,25 +51,25 @@ describe('run capsule', () => {
   })
 
   test('the spoken label carries risk and lock, not only color', () => {
-    expect(runCapsuleA11y({ label: 'M · 高', risk: 'normal' })).toBe('运行方式：M · 高')
-    expect(runCapsuleA11y({ label: 'M', risk: 'danger' })).toContain('有风险')
-    expect(runCapsuleA11y({ label: 'M', risk: 'attention' })).toContain('需要留意')
-    expect(runCapsuleA11y({ label: 'M', risk: 'normal', locked: true })).toContain('运行中不可改')
+    expect(runCapsuleA11y({ label: 'M · High', risk: 'normal' })).toBe('Run mode: M · High')
+    expect(runCapsuleA11y({ label: 'M', risk: 'danger' })).toContain('risky')
+    expect(runCapsuleA11y({ label: 'M', risk: 'attention' })).toContain('needs attention')
+    expect(runCapsuleA11y({ label: 'M', risk: 'normal', locked: true })).toContain('cannot change while running')
   })
 })
 
 describe('send slot', () => {
   test('an empty box is a greyed arrow, and a stop key only while running with a stop handler', () => {
-    expect(sendSlot(idle)).toEqual({ kind: 'idle', enabled: false, label: '发送' })
+    expect(sendSlot(idle)).toEqual({ kind: 'idle', enabled: false, label: 'Send' })
     expect(sendSlot({ ...idle, busy: true })).toMatchObject({ kind: 'idle', enabled: false })
-    expect(sendSlot({ ...idle, busy: true, canStop: true })).toEqual({ kind: 'stop', enabled: true, label: '停止' })
+    expect(sendSlot({ ...idle, busy: true, canStop: true })).toEqual({ kind: 'stop', enabled: true, label: 'Stop' })
     expect(sendSlot({ ...idle, canStop: true })).toMatchObject({ kind: 'idle' })
   })
 
   test('approved team members still working after the turn: an empty box stops them, content sends right away', () => {
-    expect(sendSlot({ ...idle, background: true, canStop: true })).toEqual({ kind: 'stop', enabled: true, label: '停止' })
+    expect(sendSlot({ ...idle, background: true, canStop: true })).toEqual({ kind: 'stop', enabled: true, label: 'Stop' })
     expect(sendSlot({ ...idle, background: true })).toMatchObject({ kind: 'idle' })
-    expect(sendSlot({ ...idle, background: true, canStop: true, hasContent: true })).toEqual({ kind: 'send', enabled: true, label: '发送' })
+    expect(sendSlot({ ...idle, background: true, canStop: true, hasContent: true })).toEqual({ kind: 'send', enabled: true, label: 'Send' })
   })
 
   test('stopping stays available even when the composer itself is locked', () => {
@@ -77,12 +77,12 @@ describe('send slot', () => {
   })
 
   test('content sends, or queues while a turn is running', () => {
-    expect(sendSlot({ ...idle, hasContent: true })).toEqual({ kind: 'send', enabled: true, label: '发送' })
-    expect(sendSlot({ ...idle, hasContent: true, starting: true }).label).toBe('开始任务')
+    expect(sendSlot({ ...idle, hasContent: true })).toEqual({ kind: 'send', enabled: true, label: 'Send' })
+    expect(sendSlot({ ...idle, hasContent: true, starting: true }).label).toBe('Start task')
     expect(sendSlot({ ...idle, hasContent: true, busy: true, queueing: true, canStop: true })).toEqual({
       kind: 'queue',
       enabled: true,
-      label: '排队发送',
+      label: 'Queue to send',
     })
   })
 
@@ -98,9 +98,9 @@ describe('send slot', () => {
 
 describe('composer text', () => {
   test('placeholder tells the user what happens to the message', () => {
-    expect(composerPlaceholder({ queueing: true, empty: false })).toContain('自动发送')
-    expect(composerPlaceholder({ queueing: false, empty: true })).toBe('说说你想做什么…')
-    expect(composerPlaceholder({ queueing: false, empty: false })).toBe('接着说…')
+    expect(composerPlaceholder({ queueing: true, empty: false })).toContain('sends automatically')
+    expect(composerPlaceholder({ queueing: false, empty: true })).toBe('Describe what you want to do…')
+    expect(composerPlaceholder({ queueing: false, empty: false })).toBe('Continue…')
   })
 
   test('/model and /permissions open the run sheet only when nothing else is attached', () => {
@@ -120,8 +120,8 @@ describe('run sheet reasons', () => {
 
   test('lean profile blocks plan mode and teams with its own wording', () => {
     expect(runSheetReasons({ lean: true, teams: 'on' })).toEqual({
-      plan: '轻量档位不支持计划模式',
-      team: '轻量档位不支持团队',
+      plan: 'The light tier does not support plan mode',
+      team: 'The light tier does not support teams',
     })
   })
 
@@ -129,39 +129,39 @@ describe('run sheet reasons', () => {
     const reasons = runSheetReasons({
       lean: true,
       teams: 'off',
-      disabled: { mode: '这一轮结束后才能切换。', runtime: '运行中不能换模型', team: '运行中不能改团队' },
+      disabled: { mode: 'Can switch only after this turn ends.', runtime: 'Cannot change model while running', team: 'Cannot change team while running' },
     })
-    expect(reasons.mode).toBe('这一轮结束后才能切换。')
-    expect(reasons.runtime).toBe('运行中不能换模型')
-    expect(reasons.team).toBe('运行中不能改团队')
+    expect(reasons.mode).toBe('Can switch only after this turn ends.')
+    expect(reasons.runtime).toBe('Cannot change model while running')
+    expect(reasons.team).toBe('Cannot change team while running')
   })
 
   test('teams turned off on the computer explain themselves; an unreadable setting is not mistaken for off', () => {
-    expect(runSheetReasons({ lean: false, teams: 'off' }).team).toBe('请先在电脑设置中启用团队')
-    expect(runSheetReasons({ lean: false, teams: 'error' }).team).toBe('暂时读不到电脑上的团队设置')
+    expect(runSheetReasons({ lean: false, teams: 'off' }).team).toBe('Enable teams in the computer settings first')
+    expect(runSheetReasons({ lean: false, teams: 'error' }).team).toBe('Cannot read team settings from the computer right now')
   })
 
   test('switch captions show the reason instead of the usual note', () => {
-    expect(teamNote()).toBe('只对下一条消息生效')
-    expect(teamNote('请先在电脑设置中启用团队')).toBe('请先在电脑设置中启用团队')
-    expect(computerNote({ supported: true })).toBe('允许 Agent 操作这台电脑的屏幕和应用')
-    expect(computerNote({ supported: null })).toBe('允许 Agent 操作这台电脑的屏幕和应用')
-    expect(computerNote({ supported: false })).toBe('这台电脑暂不支持')
-    expect(computerNote({ supported: true, reason: '稍后再试' })).toBe('稍后再试')
+    expect(teamNote()).toBe('Applies only to the next message')
+    expect(teamNote('Enable teams in the computer settings first')).toBe('Enable teams in the computer settings first')
+    expect(computerNote({ supported: true })).toBe('Allow the agent to operate this computer’s screen and apps')
+    expect(computerNote({ supported: null })).toBe('Allow the agent to operate this computer’s screen and apps')
+    expect(computerNote({ supported: false })).toBe('Not supported on this computer yet')
+    expect(computerNote({ supported: true, reason: 'Try again later' })).toBe('Try again later')
   })
 
   test('model row names the source and model, whichever is known', () => {
-    expect(modelRowLabel({ source: 'Claude 官方', model: 'Sonnet 4.5' })).toBe('Claude 官方 · Sonnet 4.5')
+    expect(modelRowLabel({ source: 'Claude Official', model: 'Sonnet 4.5' })).toBe('Claude Official · Sonnet 4.5')
     expect(modelRowLabel({ model: 'deepseek-flash' })).toBe('deepseek-flash')
-    expect(modelRowLabel({ source: ' ', model: '' })).toBe('电脑默认模型')
+    expect(modelRowLabel({ source: ' ', model: '' })).toBe('Computer default model')
   })
 
   test('effort segments appear only when the account can set them and the source is ready', () => {
     const efforts = ['low', 'medium', 'high']
     expect(effortSegments({ canSetEffort: true, authReady: true, efforts })).toEqual([
-      { value: 'low', label: '低' },
-      { value: 'medium', label: '中' },
-      { value: 'high', label: '高' },
+      { value: 'low', label: 'Low' },
+      { value: 'medium', label: 'Medium' },
+      { value: 'high', label: 'High' },
     ])
     expect(effortSegments({ canSetEffort: false, authReady: true, efforts })).toEqual([])
     expect(effortSegments({ canSetEffort: true, authReady: false, efforts })).toEqual([])
@@ -172,16 +172,16 @@ describe('run sheet reasons', () => {
 describe('nextChosenModel', () => {
   const sonnet = { id: 'sonnet', name: 'Sonnet 4.5' }
   const opus = { id: 'opus', name: 'Opus' }
-  test('只改思考强度（没带 model）、模型没变时，保留已选模型', () => {
+  test('When only thinking effort changes (no model passed) and the model is unchanged, keep the selected model', () => {
     expect(nextChosenModel({ appliedModelId: 'sonnet', currentModelId: 'sonnet', chosen: sonnet })).toBe(sonnet)
   })
-  test('选了新模型就用新的', () => {
+  test('Use the new model when one is chosen', () => {
     expect(nextChosenModel({ picked: opus, appliedModelId: 'opus', currentModelId: 'sonnet', chosen: sonnet })).toBe(opus)
   })
-  test('换了模型却没带 model，旧的显示名和窗口不能留着', () => {
+  test('When the model changed without passing model, the old display name and window must not remain', () => {
     expect(nextChosenModel({ appliedModelId: 'opus', currentModelId: 'sonnet', chosen: sonnet })).toBeNull()
   })
-  test('原来就没有已选模型时保持为空', () => {
+  test('Stays empty when there was no selected model', () => {
     expect(nextChosenModel({ appliedModelId: 'sonnet', currentModelId: 'sonnet', chosen: null })).toBeNull()
   })
 })
@@ -192,7 +192,7 @@ describe('switching permission mode', () => {
     expect(modeChange('auto', 'default')).toBe('confirm')
     expect(modeChange('auto', 'bypassPermissions')).toBe('confirm')
     expect(modeChange('acceptEdits', 'default')).toBe('apply')
-    // 从全权限、自动退回来不用确认。
+    // Going back from full access or auto needs no confirmation.
     expect(modeChange('default', 'bypassPermissions')).toBe('apply')
     expect(modeChange('plan', 'auto')).toBe('apply')
   })
@@ -205,16 +205,16 @@ describe('switching permission mode', () => {
 
   test('full access confirmation names what it allows and where', () => {
     const copy = modeConfirmation('bypassPermissions', '/Users/me/project')
-    expect(copy).toMatchObject({ title: '启用全权限？', confirm: '启用全权限', destructive: true })
-    expect(copy.message).toContain('执行任意 Shell 命令')
-    expect(copy.message).toContain('目录：/Users/me/project')
-    expect(modeConfirmation('bypassPermissions').message).not.toContain('目录：')
+    expect(copy).toMatchObject({ title: 'Enable full access?', confirm: 'Enable full access', destructive: true })
+    expect(copy.message).toContain('Run any shell command')
+    expect(copy.message).toContain('Directory: /Users/me/project')
+    expect(modeConfirmation('bypassPermissions').message).not.toContain('Directory: ')
   })
 
   test('auto confirmation warns it is not guaranteed safe', () => {
     const copy = modeConfirmation('auto', '/Users/me/project')
-    expect(copy).toMatchObject({ title: '启用自动模式？', confirm: '启用自动模式', destructive: false })
-    expect(copy.message).toContain('不能保证绝对安全')
+    expect(copy).toMatchObject({ title: 'Enable auto mode?', confirm: 'Enable auto mode', destructive: false })
+    expect(copy.message).toContain('cannot guarantee complete safety')
   })
 })
 
@@ -257,6 +257,6 @@ describe('committing effort when the run sheet closes', () => {
   })
 
   test('a draft is dropped once effort can no longer be changed', () => {
-    expect(effortToCommit({ runtime, draft: 'high', blocked: '这一轮结束后才能切换。' })).toBeNull()
+    expect(effortToCommit({ runtime, draft: 'high', blocked: 'Can switch only after this turn ends.' })).toBeNull()
   })
 })

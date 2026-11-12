@@ -311,7 +311,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       // provider switch.
       set({
         permissionMode: mode,
-        // 服务端响应异常可能缺 models 字段,兜底为空数组防止下游渲染崩溃
+        // A malformed server response may lack models; default to an empty array so rendering does not crash
         availableModels: modelsRes.models ?? [],
         activeProviderName: modelsRes.provider?.name ?? null,
         currentModel: model,
@@ -324,7 +324,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
-        // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
+        // Upgrade on read: old settings or invalid values normalize to unlimited without rewriting the user's JSON.
         maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
           ? userSettings.maxConcurrentSubagents
           : null,

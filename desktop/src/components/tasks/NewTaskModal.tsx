@@ -101,7 +101,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
       : zonedDateTimeToIso(runAt, timeZone)
     : null
   let zoneValid = true
-  try { new Intl.DateTimeFormat(undefined, { timeZone }).format() } catch { zoneValid = false }
+  try { new Intl.DateTimeFormat('en-US', { timeZone }).format() } catch { zoneValid = false }
   const onceValid = !!runAtIso && (Date.parse(runAtIso) > Date.now() || (editTask?.schedule?.kind === 'once' && editTask.schedule.runAt === runAtIso))
 
   // Enhanced scheduling state
@@ -290,7 +290,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
         {needsWorkspace ? <p role="alert" className="text-xs text-[var(--color-error)]">{t('scheduledChat.workspaceRequired')}</p> : null}
 
         {/* Frequency, with the time of day beside it — the handoff pairs
-            「每天」and「09:00」on one line because they are one sentence.
+            "Daily" and "09:00" on one line because they are one sentence.
             The selects are `SelectField` rather than bare `<select>`: all seven
             native selects in the app shipped nameless, and the hand-rolled
             chevron needed `appearance-none` plus an absolutely positioned icon
@@ -306,7 +306,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
 
           {/* Time picker — shown for daily, weekdays, specificDays, monthly.
               Named by `aria-label` rather than a visible label: the handoff puts
-              one「频率」heading over both controls, and a second caption here
+              one "Frequency" heading over both controls, and a second caption here
               would break that pairing. Same treatment `SelectField` gives its
               own `labelHidden` fields. */}
           {showTime && (

@@ -8,15 +8,15 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
 
 function controls() {
-  const input = screen.getByRole('textbox', { name: '普通 SubAgent 并发上限' })
+  const input = screen.getByRole('textbox', { name: 'Ordinary SubAgent concurrency limit' })
   const row = input.closest('[data-testid="subagent-concurrency-setting"]') as HTMLElement
-  return { input, save: within(row).getByRole('button', { name: '保存' }) }
+  return { input, save: within(row).getByRole('button', { name: 'Save' }) }
 }
 
 describe('General settings ordinary SubAgent concurrency', () => {
   beforeEach(() => {
     useSettingsStore.setState({
-      locale: 'zh',
+      locale: 'en',
       maxConcurrentSubagents: null,
       fetchOutputStyles: async () => {},
       fetchAppMode: async () => {},
@@ -38,9 +38,9 @@ describe('General settings ordinary SubAgent concurrency', () => {
     const { input, save } = controls()
     expect(input).toHaveValue('')
     expect(input).toHaveAttribute('inputmode', 'numeric')
-    expect(input).toHaveAttribute('placeholder', '不限（默认）')
-    expect(screen.getByText(/限制同一会话的普通前台和后台 SubAgent/)).toHaveTextContent('达到上限时拒绝新启动，等已有任务完成后再启动')
-    expect(screen.getByText(/主 Agent、智能体团队、Workflow 不计入/)).toHaveTextContent('运行中的会话也会生效，无需重启')
+    expect(input).toHaveAttribute('placeholder', 'Unlimited (default)')
+    expect(screen.getByText(/Limits ordinary foreground and background SubAgents in the same session/)).toHaveTextContent('New starts are rejected at the limit; start them after existing tasks finish')
+    expect(screen.getByText(/The main Agent, Agent Teams, and Workflow do not count/)).toHaveTextContent('Applies to running sessions without a restart')
 
     fireEvent.change(input, { target: { value: '37' } })
     expect(settingsApi.updateUser).not.toHaveBeenCalled()
@@ -75,9 +75,9 @@ describe('General settings ordinary SubAgent concurrency', () => {
     fireEvent.click(save)
 
     expect(input).toHaveValue(invalid)
-    expect(screen.getByRole('alert')).toHaveTextContent('请输入正安全整数，或留空表示不限。')
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a positive safe integer, or leave blank for unlimited.')
     expect(input).toHaveAttribute('aria-invalid', 'true')
-    expect(input).toHaveAccessibleDescription('请输入正安全整数，或留空表示不限。')
+    expect(input).toHaveAccessibleDescription('Enter a positive safe integer, or leave blank for unlimited.')
     expect(settingsApi.updateUser).not.toHaveBeenCalled()
     expect(useSettingsStore.getState().maxConcurrentSubagents).toBe(6)
 
@@ -91,7 +91,7 @@ describe('General settings ordinary SubAgent concurrency', () => {
     const { input, save } = controls()
     fireEvent.change(input, { target: { value: 'abc' } })
     fireEvent.click(save)
-    expect(screen.getByRole('alert')).toHaveTextContent('请输入正安全整数，或留空表示不限。')
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a positive safe integer, or leave blank for unlimited.')
     expect(settingsApi.updateUser).not.toHaveBeenCalled()
     expect(input).toHaveValue('abc')
     expect(useSettingsStore.getState().maxConcurrentSubagents).toBe(2)
@@ -116,7 +116,7 @@ describe('General settings ordinary SubAgent concurrency', () => {
     expect(save).toBeDisabled()
     reject(new Error('fixture write failed'))
 
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('SubAgent 并发上限保存失败，请重试。'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Failed to save the SubAgent concurrency limit. Please try again.'))
     expect(useSettingsStore.getState().maxConcurrentSubagents).toBe(4)
     expect(input).not.toBeDisabled()
     expect(save).not.toBeDisabled()

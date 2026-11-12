@@ -21,17 +21,11 @@ import { buildDailyModelSeries, rankModels } from '../features/tokenUsage/usageM
 
 const STREAM_DAYS = 90
 
-function formatTaskDuration(duration: number | undefined, locale: Locale, t: ReturnType<typeof useTranslation>) {
+function formatTaskDuration(duration: number | undefined, _locale: Locale, t: ReturnType<typeof useTranslation>) {
   if (!duration || duration <= 0) return t('settings.activity.noDuration')
   const totalMinutes = Math.max(1, Math.round(duration / 60_000))
   const hours = Math.floor(totalMinutes / 60)
   const minutes = totalMinutes % 60
-
-  if (locale === 'zh') {
-    if (hours > 0 && minutes > 0) return `${hours} 小时 ${minutes} 分钟`
-    if (hours > 0) return `${hours} 小时`
-    return `${minutes} 分钟`
-  }
 
   if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`
   if (hours > 0) return `${hours}h`

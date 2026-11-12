@@ -102,7 +102,7 @@ describe('turn meta line', () => {
     { id: 'a1', type: 'assistant', text: 'done', model: 'claude-sonnet-4-5', timestamp: '2026-10-25T14:32:12' },
   ]
   test('history uses message timestamps of the last turn', () => {
-    expect(turnMeta({ items: history })).toBe('14:32 · 用时 6:12 · claude-sonnet-4-5')
+    expect(turnMeta({ items: history })).toBe('14:32 · took 6:12 · claude-sonnet-4-5')
   })
 
   test('a turn watched live uses the locally recorded start and end', () => {
@@ -113,7 +113,7 @@ describe('turn meta line', () => {
     ]
     const startedAt = at('2026-10-25T15:00:00')
     expect(turnMeta({ items, local: { startedAt, endedAt: startedAt + 75_000 } })).toBe(
-      '15:01 · 用时 1:15 · deepseek-v4-flash'
+      '15:01 · took 1:15 · deepseek-v4-flash'
     )
   })
 
@@ -131,7 +131,7 @@ describe('turn meta line', () => {
       { id: 'u', type: 'user', text: 'x' },
       { id: 'a', type: 'assistant', text: 'y', timestamp: '2026-10-25T10:02:00' },
     ]
-    expect(turnMeta({ items, checkpoint: checkpoint(0, 1, at('2026-10-25T10:00:30')) })).toBe('10:02 · 用时 1:30')
+    expect(turnMeta({ items, checkpoint: checkpoint(0, 1, at('2026-10-25T10:00:30')) })).toBe('10:02 · took 1:30')
     // An older turn's checkpoint is not this turn's start.
     expect(turnMeta({ items, checkpoint: checkpoint(0, 2, at('2026-10-25T10:00:30')) })).toBe('10:02')
   })
@@ -150,5 +150,5 @@ test('a turn shorter than a second shows no duration instead of 0:00', () => {
     { id: 'u', type: 'user', text: 'hi', timestamp: '2026-10-25T10:00:00.000Z' },
     { id: 'a', type: 'assistant', text: 'ok', timestamp: '2026-10-25T10:00:00.400Z', model: 'm' },
   ] as never
-  expect(turnMeta({ items })).not.toContain('用时')
+  expect(turnMeta({ items })).not.toContain('Took')
 })

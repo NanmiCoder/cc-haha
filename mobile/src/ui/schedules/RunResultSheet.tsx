@@ -4,7 +4,7 @@ import { dayTimeLabel } from '../../core/schedulesView'
 import { InlineError, Mono, Sheet, type, useColors } from '../kit'
 import { Text } from '../Text'
 
-/** 没有关联会话的运行结果：错误只在红色提示里出现一次，输出单独显示。 */
+/** Run results without an associated session: the error appears only once in the red hint, and the output is shown separately. */
 export function RunResultSheet({ run, onClose }: { run: TaskRun | null; onClose(): void }) {
   const colors = useColors()
   const { height } = useWindowDimensions()
@@ -13,7 +13,7 @@ export function RunResultSheet({ run, onClose }: { run: TaskRun | null; onClose(
       {run && (
         <View style={{ gap: 12 }}>
           <View style={{ alignItems: 'center', gap: 2, paddingTop: 6, paddingBottom: 4 }}>
-            <Text style={[type.nav, { color: colors.ink }]}>执行结果</Text>
+            <Text style={[type.nav, { color: colors.ink }]}>Run result</Text>
             <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>
               {[run.taskName, dayTimeLabel(run.startedAt)].filter(Boolean).join(' · ')}
             </Text>
@@ -30,7 +30,7 @@ export function RunResultSheet({ run, onClose }: { run: TaskRun | null; onClose(
             </ScrollView>
           ) : !run.error ? (
             <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink3, textAlign: 'center', paddingVertical: 12 }}>
-              电脑尚未记录输出。
+              The computer has not recorded output yet.
             </Text>
           ) : null}
         </View>

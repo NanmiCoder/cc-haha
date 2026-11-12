@@ -11,7 +11,7 @@ export type SkillCommand = {
   description: string
   kind?: 'skill' | 'command' | 'plugin' | 'agent'
   argumentHint?: string
-  /** 命令来自哪里：用户、项目、插件……（电脑给什么就是什么）。 */
+  /** Where a command comes from: user, project, plugin… (whatever the computer gives). */
   source?: string
 }
 const teamBlock =
@@ -110,7 +110,7 @@ export function buildComposerMessage(
 ): Extract<ClientMessage, { type: 'user_message' }> {
   const content = text.trim()
   if (!content && !attachments.length)
-    throw new Error('请先写下消息或添加材料。')
+    throw new Error('Please write a message or add materials first.')
   return {
     type: 'user_message',
     content: team ? `${teamBlock}${content ? `\n\n${content}` : ''}` : content,
@@ -129,7 +129,7 @@ export function buildComposerMessage(
       : {}),
   }
 }
-/** 一条消息（含附件）的上限：局域网 8 MB，公网中继 1 MB。 */
+/** Limit for one message (incl. attachments): 8 MB on LAN, 1 MB over public relay. */
 export const MESSAGE_LIMIT_BYTES: Record<Host['auth'], number> = {
   lan: 8 * 1024 * 1024,
   remote: 1024 * 1024,
@@ -143,8 +143,8 @@ export function validateMessageSize(
   if (bytes >= limit)
     throw new Error(
       auth === 'remote'
-        ? '材料超过远程连接的 1 MB 限制，请减少附件或改用局域网。'
-        : '材料总量超过 8 MB，请拆分发送。'
+        ? 'Materials exceed the 1 MB remote connection limit; reduce attachments or use LAN.'
+        : 'Total materials exceed 8 MB; please send in parts.'
     )
 }
 export function attachmentFromBase64(input: {
@@ -155,7 +155,7 @@ export function attachmentFromBase64(input: {
 }): ComposerAttachment {
   const data = input.base64.replace(/^data:[^;,]*;base64,/, '')
   if (!data || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-    throw new Error('没有读取到有效的附件内容，请重新选择。')
+    throw new Error('No valid attachment content was read; please choose again.')
   const image = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(
     input.mimeType
   )
@@ -178,26 +178,26 @@ export function persistedMessageId(item: ChatItem): string | null {
 }
 export function withSkill(text: string, skill: SkillCommand): string {
   if (!skill.name.trim() || /[\r\n\s]/.test(skill.name))
-    throw new Error('电脑返回的技能名称无效。')
+    throw new Error('The skill name returned by the computer is invalid.')
   return `/${skill.name.replace(/^\//, '')}${text.trim() ? ` ${text.trim()}` : ' '}`
 }
 
-/** 附件大小：1 MB 以上保留一位小数，以下按 KB 向上取整。 */
+/** Attachment size: one decimal above 1 MB, otherwise KB rounded up. */
 export function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB'
   if (bytes >= 1024 * 1024)
     return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, '')} MB`
   return `${Math.max(1, Math.ceil(bytes / 1024))} KB`
 }
-/** 草稿以“/技能名 ”开头时，这个技能就是这条消息正在用的。 */
+/** When the draft starts with "/skill-name ", that skill is the one this message uses. */
 export function draftSkill(text: string): string | null {
   const match = text.match(/^\/([^\s/]+)(?:\s|$)/)
   return match ? match[1] : null
 }
-/** 选图时压缩到的长边，以及单个文件的上限（chatMaterials 使用同一组数值）。 */
+/** Long edge to compress chosen images to, and per-file limit (chatMaterials uses the same values). */
 export const IMAGE_MAX_EDGE = 1280
 export const FILE_MAX_BYTES = 6 * 1024 * 1024
-/** 材料面板脚注，数值全部来自真实上限。 */
+/** Materials panel footnote; all values come from the real limits. */
 export function materialsFootnote() {
-  return `图片会压缩到长边 ${IMAGE_MAX_EDGE}，单个文件不超过 ${formatBytes(FILE_MAX_BYTES)}。这条消息在局域网下最多 ${formatBytes(MESSAGE_LIMIT_BYTES.lan)}，公网 ${formatBytes(MESSAGE_LIMIT_BYTES.remote)}。`
+  return `Images are compressed to a long edge of ${IMAGE_MAX_EDGE}, each file up to ${formatBytes(FILE_MAX_BYTES)}. This message can be up to ${formatBytes(MESSAGE_LIMIT_BYTES.lan)} on LAN, ${formatBytes(MESSAGE_LIMIT_BYTES.remote)} over public network.`
 }

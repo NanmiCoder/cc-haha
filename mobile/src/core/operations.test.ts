@@ -112,7 +112,7 @@ test('simple scheduler uses computer local cron and newest real run only', () =>
   expect(dailyCron('0:00', true)).toBe('0 0 * * 1-5')
   for (const bad of ['24:00', '10:60', '-1:00', '09:0', '* * * * *'])
     expect(() => dailyCron(bad, false)).toThrow()
-  expect(scheduleLabel('5 9 * * 1-5')).toBe('工作日 09:05')
+  expect(scheduleLabel('5 9 * * 1-5')).toBe('Weekdays 09:05')
   expect(scheduleLabel('*/15 * * * *')).toBe('*/15 * * * *')
   const make = (id: string, date: string): TaskRun => ({
     id,
@@ -152,15 +152,15 @@ test('shell task output uses the selected host and exact IDs while agents keep t
 })
 
 test('missing, empty, failed and unsupported task output remain distinguishable', async () => {
-  expect(shellOutputText({ ...shellOutput, state: 'empty', text: '' })).toBe('任务尚未写入输出。')
-  expect(shellOutputText({ ...shellOutput, state: 'missing', text: '' })).toBe('电脑上的任务日志暂未生成或已被清理。')
+  expect(shellOutputText({ ...shellOutput, state: 'empty', text: '' })).toBe('The task has not written output yet.')
+  expect(shellOutputText({ ...shellOutput, state: 'missing', text: '' })).toBe('Task logs on the computer have not been generated yet or were cleaned up.')
   expect(shellOutputText(shellOutput)).toBe('server listening\n')
   let calls = 0
   const client = new ApiClient({ id: 'a', name: 'A', url: 'http://192.168.1.2:3456', auth: 'lan' }, 'fixture-a', { fetch: async (url) => {
     calls++
     return { ok: false, status: 403, url, redirected: false, text: async () => JSON.stringify({ message: 'Output access denied' }) }
   } })
-  expect(await loadTaskOutput(client, 'session', { ...shellTask, taskType: 'local_workflow' }, new AbortController().signal)).toEqual({ kind: 'notice', text: '电脑暂不提供此类任务的日志读取。' })
+  expect(await loadTaskOutput(client, 'session', { ...shellTask, taskType: 'local_workflow' }, new AbortController().signal)).toEqual({ kind: 'notice', text: 'The computer does not provide logs for this kind of task yet.' })
   expect(calls).toBe(0)
   await expect(loadTaskOutput(client, 'session', shellTask, new AbortController().signal)).rejects.toMatchObject({ status: 403 })
 })

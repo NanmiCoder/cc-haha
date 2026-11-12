@@ -23,11 +23,11 @@ type Deps = {
 type BubblePointer = { x: number; y: number }
 
 const DEFAULT_COPY: EditBubbleCopy = {
-  cancel: '取消',
-  send: '发送',
-  queueAndContinue: '添加并继续',
-  add: '添加',
-  descriptionPlaceholder: '描述这些更改…',
+  cancel: 'Cancel',
+  send: 'Send',
+  queueAndContinue: 'Add & continue',
+  add: 'Add',
+  descriptionPlaceholder: 'Describe these changes…',
 }
 
 const VIEWPORT_MARGIN = 8
@@ -38,10 +38,10 @@ const BUBBLE_MIN_HEIGHT = 160
 const TEXT_AREA_MAX_HEIGHT = 96
 
 const FONT_PRESETS: Array<{ label: string; value: string }> = [
-  { label: '系统默认', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' },
-  { label: '无衬线', value: '"Helvetica Neue", Helvetica, Arial, "PingFang SC", sans-serif' },
-  { label: '衬线', value: 'Georgia, "Times New Roman", "Songti SC", serif' },
-  { label: '等宽', value: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
+  { label: 'System default', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif' },
+  { label: 'Sans-serif', value: '"Helvetica Neue", Helvetica, Arial, "PingFang SC", sans-serif' },
+  { label: 'Serif', value: 'Georgia, "Times New Roman", "Songti SC", serif' },
+  { label: 'Monospace', value: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
 ]
 
 const STYLE = `
@@ -176,7 +176,7 @@ const STYLE = `
   display: flex; align-items: center; justify-content: flex-end; gap: 8px;
   padding: 9px 14px; margin-top: 8px; border-top: 1px solid var(--border);
 }
-/* 内容被压缩到需要滚动时，给页脚一道投影，提示上方还有没看完的行 */
+/* When content is squeezed enough to scroll, the footer gets a shadow hinting at unread rows above */
 .bubble[data-scrollable="true"] .footer { box-shadow: 0 -7px 12px -8px rgba(15, 18, 25, .45); }
 .btn { border: none; border-radius: 999px; font: inherit; font-size: 12.5px; cursor: pointer; transition: background .12s ease, color .12s ease; }
 .btn-ghost { margin-right: auto; padding: 7px 14px; background: transparent; color: var(--muted); }
@@ -198,7 +198,7 @@ export function snapshotEditableStyles(el: HTMLElement): EditableSnapshot {
   }
 }
 
-/** 颜色框把 rgb() 显示成 hex，所以比较必须按语义走，否则「选了同一个颜色」会变成一条假变更。 */
+/** The color box shows rgb() as hex, so comparison must be semantic, or "picked the same color" becomes a fake change. */
 function sameColorValue(a: string, b: string): boolean {
   if (a === b) return true
   const left = parseCssColor(a)
@@ -265,7 +265,7 @@ function computeBubbleLayout(rect: DOMRect, contentHeight: number, pointer?: Bub
   return { top, left, maxHeight }
 }
 
-/** Constructable stylesheet 走 CSSOM，不会被页面的 style-src CSP 拦掉；不支持时回落 <style>。 */
+/** A constructable stylesheet goes through CSSOM, so the page's style-src CSP cannot block it; falls back to <style> when unsupported. */
 function adoptStyles(shadow: ShadowRoot, css: string): void {
   const SheetCtor = (globalThis as { CSSStyleSheet?: typeof CSSStyleSheet }).CSSStyleSheet
   if (SheetCtor && typeof SheetCtor.prototype.replaceSync === 'function') {
@@ -275,7 +275,7 @@ function adoptStyles(shadow: ShadowRoot, css: string): void {
       shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet]
       return
     } catch {
-      // 环境不支持构造式样式表，落到 <style>
+      // No constructable stylesheet support; fall back to <style>
     }
   }
   const style = document.createElement('style')
@@ -296,7 +296,7 @@ function autoGrow(area: HTMLTextAreaElement, maxHeight: number): void {
 
 function primaryFontLabel(fontFamily: string): string {
   const first = fontFamily.split(',')[0]?.trim().replace(/^["']|["']$/g, '') ?? ''
-  return first || '当前'
+  return first || 'Current'
 }
 
 function toPercent(opacity: string): number {
@@ -346,7 +346,7 @@ function buildColorRow(
   reflect(initial)
 
   value.addEventListener('input', () => { reflect(value.value); onCommit(value.value) })
-  // 取色器只给得出实色，所以选色即视为「不透明」——想要透明仍可在右侧手输 transparent
+  // The picker only yields solid colors, so picking one means "opaque"; for transparency type transparent on the right
   swatch.addEventListener('input', () => { value.value = swatch.value; slot.dataset.transparent = 'false'; onCommit(swatch.value) })
 
   slot.appendChild(swatch)
@@ -356,17 +356,17 @@ function buildColorRow(
 }
 
 function buildOpacityRow(initial: string, onCommit: (value: string) => void): HTMLElement {
-  const { row, control } = buildRow('不透明度')
+  const { row, control } = buildRow('Opacity')
   const slider = el('input', 'slider')
   slider.type = 'range'
   slider.min = '0'
   slider.max = '100'
   slider.step = '1'
   slider.setAttribute('data-field', 'opacity')
-  slider.setAttribute('aria-label', '不透明度')
+  slider.setAttribute('aria-label', 'Opacity')
   const readout = el('span', 'readout')
 
-  // 原生 range 没法给已走过的轨道上色，用渐变背景补出进度反馈
+  // A native range cannot color the filled track, so a gradient background provides progress feedback
   const paintTrack = (percent: number) => {
     slider.style.setProperty(
       'background',
@@ -392,15 +392,15 @@ function buildOpacityRow(initial: string, onCommit: (value: string) => void): HT
 }
 
 function buildFontRow(initial: string, onCommit: (value: string) => void): HTMLElement {
-  const { row, control } = buildRow('字体')
+  const { row, control } = buildRow('Font')
   const slot = el('div', 'select-slot')
   const select = el('select', 'input select')
   select.setAttribute('data-field', 'fontFamily')
-  select.setAttribute('aria-label', '字体')
+  select.setAttribute('aria-label', 'Font')
 
   const currentOption = el('option')
   currentOption.value = initial
-  currentOption.textContent = `当前 · ${primaryFontLabel(initial)}`
+  currentOption.textContent = `Current · ${primaryFontLabel(initial)}`
   select.appendChild(currentOption)
   for (const preset of FONT_PRESETS) {
     const option = el('option')
@@ -430,7 +430,7 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
 
   const host = el('div')
   const rect = target.getBoundingClientRect()
-  // 用 CSSOM 而非 style 属性，页面的 style-src CSP 才拦不住浮层定位
+  // Use CSSOM rather than the style attribute so the page's style-src CSP cannot block overlay positioning
   host.style.setProperty('position', 'fixed')
   host.style.setProperty('top', '0')
   host.style.setProperty('left', '0')
@@ -467,7 +467,7 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
   }
 
   if (canEditText(target)) {
-    const { row, control } = buildRow('文本')
+    const { row, control } = buildRow('Text')
     row.classList.add('row-text')
     const area = el('textarea', 'input text-area')
     area.setAttribute('data-field', 'text')
@@ -482,8 +482,8 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
     body.appendChild(row)
   }
 
-  body.appendChild(buildColorRow('文字颜色', 'color', original.color, (value) => commit('color', value)))
-  body.appendChild(buildColorRow('背景', 'background', original.background, (value) => commit('background', value)))
+  body.appendChild(buildColorRow('Text color', 'color', original.color, (value) => commit('color', value)))
+  body.appendChild(buildColorRow('Background', 'background', original.background, (value) => commit('background', value)))
   body.appendChild(buildOpacityRow(original.opacity, (value) => commit('opacity', value)))
   body.appendChild(buildFontRow(original.fontFamily, (value) => commit('fontFamily', value)))
 
@@ -509,7 +509,7 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
   queueBtn.addEventListener('click', queue)
   confirmBtn.addEventListener('click', confirm)
 
-  // 键盘快捷键就地消化，避免漏给页面自己的监听器造成误触
+  // Swallow keyboard shortcuts here so they do not leak to the page's own listeners
   wrap.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); return }
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
@@ -541,7 +541,7 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
   host.style.setProperty('visibility', 'visible')
   wrap.style.setProperty('max-height', `${layout.maxHeight}px`)
   refreshScrollHint()
-  describe.focus({ preventScroll: true })   // 页面不该因为浮层拿焦点而跳位
+  describe.focus({ preventScroll: true })   // The page should not jump because the overlay takes focus
 
   return {
     host,

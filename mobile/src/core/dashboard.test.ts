@@ -76,7 +76,7 @@ test('elapsed and relative labels never invent running durations or future negat
   ).toBe('12:04')
   expect(
     relativeLabel('2026-10-24T10:00:00', new Date('2026-10-24T10:03:00'))
-  ).toBe('3 分钟')
+  ).toBe('3 Minutes')
 })
 
 test('durations roll into hours and never pad the leading unit', () => {
@@ -93,11 +93,11 @@ test('durations roll into hours and never pad the leading unit', () => {
 
 test('relative labels follow the list wording: minutes, hours today, yesterday, then month/day', () => {
   const now = new Date('2026-10-24T12:30:00')
-  expect(relativeLabel('2026-10-24T12:29:40', now)).toBe('刚刚')
-  expect(relativeLabel('2026-10-24T12:31:00', now)).toBe('刚刚')
-  expect(relativeLabel('2026-10-24T11:50:00', now)).toBe('40 分钟')
-  expect(relativeLabel('2026-10-24T11:20:00', now)).toBe('1 小时')
-  expect(relativeLabel('2026-10-24T00:10:00', now)).toBe('12 小时')
-  expect(relativeLabel('2026-10-23T23:10:00', now)).toBe('昨天')
+  expect(relativeLabel('2026-10-24T12:29:40', now)).toBe('Just now')
+  expect(relativeLabel('2026-10-24T12:31:00', now)).toBe('Just now')
+  expect(relativeLabel('2026-10-24T11:50:00', now)).toBe('40 Minutes')
+  expect(relativeLabel('2026-10-24T11:20:00', now)).toBe('1 h')
+  expect(relativeLabel('2026-10-24T00:10:00', now)).toBe('12 h')
+  expect(relativeLabel('2026-10-23T23:10:00', now)).toBe('Yesterday')
   expect(relativeLabel('2026-10-21T09:00:00', now)).toBe('10/21')
 })

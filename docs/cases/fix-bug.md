@@ -1,48 +1,48 @@
 ---
-title: 修复 Bug 并检查回归
-nav_title: 修复 Bug
-description: 把复现步骤交给 Claude，要求先定位原因与测试，再审阅最小修复。
+title: Fix a bug and check for regressions
+nav_title: Fix a bug
+description: Give Claude reproduction steps, ask it to identify the cause and add a test, then review a focused fix.
 order: 2
 ---
 
-# 修复 Bug 并检查回归
+# Fix a bug and check for regressions
 
-“按钮坏了”很难验证；“点提交后列表出现两条相同记录”就能复现。把输入、预期与实际结果写清楚，才能判断修复是否真的有效。
+“The button is broken” is hard to verify. “Saving once creates two identical records” is reproducible. Give the input, expected behavior, and actual result so you can tell whether the fix works.
 
-## 准备
+## Before you start
 
-- 使用有 Git 的项目，先记录已有改动；本案例选**询问权限**，逐次审阅编辑和命令。
-- 手动复现一次错误，记下操作步骤、错误信息，以及发生在哪个页面或命令。
-- 如果只是想先看方案，先用[计划模式](../desktop/sessions.md)调查，再另开一轮实施。
+- Use a Git project and note any changes already present. Select **Ask permissions** so you can review edits and commands.
+- Reproduce the issue once yourself. Write down the steps, error message, and affected page or command.
+- If you only want a proposal first, investigate in [Plan mode](../desktop/sessions.md), then start an implementation turn.
 
-## 操作
+## Steps
 
-1. 新建会话，选择出错的项目目录。把下面方括号中的内容替换成自己的真实现象。
+1. Start a session in the affected project. Replace the bracketed text with your actual observations.
 
 ```text
-修复这个可复现的问题：
-操作：[例如打开任务列表，连续点击一次“保存”]
-预期：[例如只新增一条任务]
-实际：[例如出现两条相同任务]
-环境或报错：[浏览器、系统、日志；没有就写“暂无”]
+Fix this reproducible issue:
+Steps: [for example, open the task list and click Save once]
+Expected: [for example, exactly one task is added]
+Actual: [for example, two identical tasks appear]
+Environment or error: [browser, OS, log; write “none yet” if unknown]
 
-先定位原因并告诉我证据。然后添加一个能复现这个问题的回归测试，再做范围尽量小的修复。
-不要顺手重构无关文件。需要运行命令时说明用途。
-完成后列出改动文件、实际运行的测试及结果、尚未验证的风险。
+First identify the cause and show me the evidence. Then add a regression test that reproduces this issue and make the smallest practical fix.
+Do not refactor unrelated files. Explain the purpose of any command you need to run.
+When done, list changed files, tests actually run and their results, and any remaining unverified risk.
 ```
 
-2. 看工具调用卡和权限询问卡。确认它读的是目标项目、准备改的是相关文件，再放行。看不懂的命令先点“显示完整输入”。
-3. 一轮结束后打开右侧**工作区 → 已更改文件**，逐个看 Diff；必要时点具体行写评论，例如“这里还要覆盖空输入”。评论会带着位置回到输入框。
-4. 在本机复做原来的操作，并运行项目对应的测试命令。再核对 `git status`、`git diff`，确认没有额外改动。
+2. Read the tool cards and permission prompts. Confirm Claude is reading the right project and changing relevant files before allowing an action. Open **Show full input** for a command you do not understand.
+3. After the turn, open **Workspace → Changed files** and inspect every diff. Add a line comment if needed, such as “Cover empty input here”; the comment and its location go back to the composer.
+4. Reproduce the original steps locally and run the project's relevant tests. Check `git status` and `git diff` for unrelated changes.
 
-## 应看到什么
+## Expected result
 
-Claude 应能给出问题原因、对应证据、一个覆盖原问题的测试，以及修复后的测试结果。测试是否运行由它的命令记录证明；只有“测试应该通过”的文字不算运行过。
+Claude should show the cause and supporting evidence, a test covering the original problem, and the result after the fix. A statement that a test “should pass” is not evidence it ran; check the command record.
 
-## 验收与常见卡点
+## Acceptance and common snags
 
-- 原来的步骤现在得到预期结果；回归测试在修复后通过，并且只检查相关行为。
-- 项目没有测试框架时，让它先说明现有验证方式，选一个与项目相称的检查；不要为了小修复硬加一整套框架。
-- 会话“撤销”只能恢复通过编辑工具记录的文件；Shell 生成或修改的文件可能不会被还原。用 Git 复核磁盘上的最终状态。详见[会话回滚说明](../desktop/sessions.md)。
+- The original steps now produce the expected behavior; the regression test passes after the fix and targets the affected behavior.
+- No test framework? Ask for the project's existing verification method. Avoid adding a whole framework for a small fix without good reason.
+- Session rollback only restores files captured through editing tools; files generated or changed by shell commands might remain. Verify the final disk state with Git. See [session rollback](../desktop/sessions.md).
 
-下一步试试[实现功能并预览页面](./ship-feature.md)。
+Next, try [building and previewing a feature](./ship-feature.md).

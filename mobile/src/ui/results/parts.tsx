@@ -14,8 +14,9 @@ import {
   type FileStatus,
 } from '../kit'
 import { splitPath } from '../../core/changesView'
+import { plural } from '../../core/plural'
 
-/** 改动文件行：状态徽标 · 文件名 / 目录 · 增删统计 · 箭头。改动页和项目文件的改动栏共用。 */
+/** Changed file row: status badge · file name / directory · line stats · chevron. Shared by the changes page and the changes tab of project files. */
 export function FileChangeRow({
   path,
   status,
@@ -33,14 +34,14 @@ export function FileChangeRow({
 }) {
   const colors = useColors()
   const { name, dir } = splitPath(path)
-  const stats = [added ? `增加 ${added} 行` : '', removed ? `删除 ${removed} 行` : '']
+  const stats = [added ? `${plural(added, 'line')} added` : '', removed ? `${plural(removed, 'line')} deleted` : '']
     .filter(Boolean)
-    .join('，')
+    .join(', ')
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={[path, detail, stats].filter(Boolean).join('，')}
-      accessibilityHint="查看差异"
+      accessibilityLabel={[path, detail, stats].filter(Boolean).join(', ')}
+      accessibilityHint="View diff"
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 58,
@@ -74,7 +75,7 @@ export function FileChangeRow({
   )
 }
 
-/** 实心文件夹（lucide folder 轮廓填色），颜色用 faint。 */
+/** Solid folder (lucide folder outline filled), colored faint. */
 export function FolderGlyph({ size = 20, color }: { size?: number; color?: string }) {
   const colors = useColors()
   return (
@@ -87,7 +88,7 @@ export function FolderGlyph({ size = 20, color }: { size?: number; color?: strin
   )
 }
 
-/** 目录浏览行：文件夹带箭头；文件可带改动徽标和右侧大小。 */
+/** Directory browse row: folders have a chevron; files may have a change badge and size on the right. */
 export function TreeRow({
   name,
   directory,
@@ -107,7 +108,7 @@ export function TreeRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${name}，${directory ? '文件夹' : image ? '图片' : '文件'}`}
+      accessibilityLabel={`${name}, ${directory ? 'Folder' : image ? 'Image' : 'Files'}`}
       onPress={onPress}
       style={({ pressed }) => ({
         height: 50,
@@ -137,7 +138,7 @@ export function TreeRow({
   )
 }
 
-/** 白底阅读页（差异、文件预览）：材质顶栏到状态栏，正文白底，底部可接工具栏。 */
+/** White reading page (diffs, file preview): material header up to the status bar, white body, with an optional toolbar at the bottom. */
 export function ReaderScreen({
   title,
   subtitle,
@@ -167,7 +168,7 @@ export function ReaderScreen({
   )
 }
 
-/** 阅读页副标题的一行：12/16 ink3，内容可混排等宽片段。 */
+/** A subtitle line on reading pages: 12/16 ink3, content may mix monospace segments. */
 export function SubtitleLine({ children }: React.PropsWithChildren) {
   const colors = useColors()
   return (

@@ -84,9 +84,9 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
   // single caption. Dates sit in tabular mono so they line up down the list;
   // the labels and the free-text description stay in the UI face.
   const meta: Array<{ key: string; label?: string; value: string; mono: boolean }> = [
-    { key: 'created', label: t('tasks.createdAt'), value: new Date(task.createdAt).toLocaleDateString(), mono: true },
+    { key: 'created', label: t('tasks.createdAt'), value: new Date(task.createdAt).toLocaleDateString('en-US'), mono: true },
     ...(task.lastFiredAt
-      ? [{ key: 'last', label: t('tasks.lastRunAt'), value: new Date(task.lastFiredAt).toLocaleDateString(), mono: true }]
+      ? [{ key: 'last', label: t('tasks.lastRunAt'), value: new Date(task.lastFiredAt).toLocaleDateString('en-US'), mono: true }]
       : []),
     ...(task.description ? [{ key: 'desc', value: task.description, mono: false }] : []),
   ]

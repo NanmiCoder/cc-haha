@@ -7,8 +7,8 @@ import { SessionAttentionMark } from './SessionAttentionMark'
 import { isWorktreeSession, type SidebarTaskGroup, type SidebarTaskGroupId } from './sidebarTaskGroups'
 
 /**
- * 显式的 key 表，不用模板字符串拼 —— `desktop/AGENTS.md` 点名过：只扫字面量的
- * i18n 检查看不见 `t(\`a.${id}\`)`，五份文案里漏一个不会有人发现。
+ * An explicit key table rather than template strings: as `desktop/AGENTS.md` notes, an i18n
+ * check that only scans literals cannot see `t(\`a.${id}\`)`, so a missing string would go unnoticed.
  */
 const GROUP_TITLE_KEYS: Record<SidebarTaskGroupId, TranslationKey> = {
   running: 'sidebar.taskGroup.running',
@@ -25,7 +25,7 @@ export type SidebarTaskListProps = {
   groups: SidebarTaskGroup[]
   activeTabId: string | null
   runningSessionIds: ReadonlySet<string>
-  /** 停在权限请求上的会话：还没结束，但在等你，不是在干活。 */
+  /** Sessions stopped on a permission request: not finished, but waiting for you rather than working. */
   attentionSessionIds: ReadonlySet<string>
   selectedSessionIds: ReadonlySet<string>
   isBatchMode: boolean
@@ -65,8 +65,8 @@ export function SidebarTaskList({
           data-testid={`sidebar-task-group-${group.id}`}
           className="mb-3"
         >
-          {/* `--color-text-tertiary` 在四个纸系主题下压到 4.31:1，够不上本项目
-              4.5 的线。它在别处标的是相对时间那类装饰，这里却是分段本身。 */}
+          {/* `--color-text-tertiary` drops to 4.31:1 on the four paper themes, below this project's
+              4.5 bar. Elsewhere it marks decoration such as relative times; here it is the section itself. */}
           <div className="flex h-7 items-center px-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
             {t(GROUP_TITLE_KEYS[group.id])}
           </div>
@@ -174,7 +174,7 @@ function SidebarTaskRow({
         <span className="ml-auto flex h-4 flex-shrink-0 items-center justify-end">
           {needsAttention ? (
             <span className="inline-flex h-4 w-4 items-center justify-center">
-              {/* 与 tab 栏、项目视图共用同一个标志；名字与 title 都在它自己身上。 */}
+              {/* Same mark as the tab bar and project view; its name and title live on the mark itself. */}
               <SessionAttentionMark label={t('sidebar.sessionNeedsAttention')} />
             </span>
           ) : isRunning ? (
@@ -183,14 +183,14 @@ function SidebarTaskRow({
               aria-label={t('sidebar.sessionRunning')}
               title={t('sidebar.sessionRunning')}
             >
-              {/* 外层已经带名字了，spinner 本身保持静默。 */}
+              {/* The wrapper already carries the name, so the spinner stays silent. */}
               <Spinner size={12} />
             </span>
           ) : null}
         </span>
       </span>
-      {/* 所属目录是这个视图存在的理由（分组视图里恰恰是它被折叠掉了），不是
-          装饰文字，所以用能过 4.5 的 secondary，层级交给字号和字重。 */}
+      {/* The folder is why this view exists (the grouped view is exactly where it gets folded away), not
+          decoration, so it uses secondary, which passes 4.5, and leaves hierarchy to size and weight. */}
       <span className="mt-0.5 flex min-w-0 items-center gap-1 pl-0.5 text-[11px] text-[var(--color-text-secondary)]">
         {isWorktree ? (
           <GitBranch size={12} strokeWidth={2} className="flex-shrink-0" aria-hidden="true" />

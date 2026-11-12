@@ -38,9 +38,9 @@ import {
   planSource,
 } from './planText'
 
-const NOT_SENT = '操作尚未发出。请等待会话同步完成，或核对当前任务状态。'
+const NOT_SENT = 'Action not sent yet. Wait for the session to finish syncing, or check the current task state.'
 
-/** ExitPlanMode：底部紧凑卡 + 挂载即弹出的全屏计划页。 */
+/** ExitPlanMode: a compact card at the bottom + a full-screen plan page that pops up on mount. */
 export function PlanDecision({
   input,
   ready,
@@ -67,13 +67,13 @@ export function PlanDecision({
   const [sheetOpen, setSheetOpen] = useState(true)
   const [mode, setMode] = useState<PlanExecutionMode>('acceptEdits')
   const [executionRuntime, setExecutionRuntime] = useState<RuntimeConfig>()
-  // RuntimeSheet 回传所选模型时用它的显示名；沿用当前模型时只有 modelId。
+  // RuntimeSheet Use the display name when passing back the chosen model; when keeping the current model there is only modelId.
   const [executionModelName, setExecutionModelName] = useState<string>()
   const [runtimeOpen, setRuntimeOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [notSent, setNotSent] = useState(false)
-  // 打开前就存在的错误属于别的操作，计划页里只显示之后出现的错误。
+  // Errors existing before opening belong to other actions; the plan page only shows errors that appear afterwards.
   const [initialError] = useState(serverError)
   const text = planSource(input)
   const path = planFilePath(input)
@@ -81,7 +81,7 @@ export function PlanDecision({
   const execution = executionRuntime ?? runtime
   const executionLabel = execution
     ? (executionRuntime && executionModelName) || execution.modelId
-    : '沿用当前模型'
+    : 'Keep current model'
   const sheetError = notSent
     ? NOT_SENT
     : serverError && serverError !== initialError
@@ -94,22 +94,22 @@ export function PlanDecision({
   }
 
   return (
-    <DecisionSurface label="批准计划">
-      <DecisionHeader title="计划写好了，等你确认" position={position} />
+    <DecisionSurface label="Approve plan">
+      <DecisionHeader title="Plan is ready, waiting for your confirmation" position={position} />
       <Text numberOfLines={2} style={{ fontSize: 14, lineHeight: 21, color: colors.ink2 }}>
         {text ? planExcerpt(text) : MISSING_PLAN_TEXT}
       </Text>
       {sent ? (
         <SubmittedRow />
       ) : (
-        <Button title="看完整计划" size="lg" onPress={() => setSheetOpen(true)} />
+        <Button title="See full plan" size="lg" onPress={() => setSheetOpen(true)} />
       )}
       <PageSheet
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
-        title="计划"
+        title="plan"
         background={colors.card}
-        left={<TextButton title="稍后" onPress={() => setSheetOpen(false)} />}
+        left={<TextButton title="Later" onPress={() => setSheetOpen(false)} />}
       >
         <KeyboardViewport style={{ flex: 1 }}>
           <ScrollView
@@ -141,10 +141,10 @@ export function PlanDecision({
             }}
           >
             <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: '600', color: colors.ink3 }}>
-              批准后怎么执行
+              How to run after approval
             </Text>
             <Segmented<PlanExecutionMode>
-              label="执行权限"
+              label="Execution permission"
               options={planExecutionModes.map((option) => ({
                 label: option.title,
                 value: option.id as PlanExecutionMode,
@@ -154,11 +154,11 @@ export function PlanDecision({
               disabled={locked}
             />
             {mode === 'bypassPermissions' ? (
-              <Callout>执行时跳过所有工具审批，只在你信任的项目里用。</Callout>
+              <Callout>Skips all tool approvals during execution; use only in projects you trust.</Callout>
             ) : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`执行模型：${executionLabel}，点按更换`}
+              accessibilityLabel={`Execution model: ${executionLabel}, tap to change`}
               accessibilityState={{ disabled: locked || !client }}
               disabled={locked || !client}
               onPress={() => setRuntimeOpen(true)}
@@ -170,7 +170,7 @@ export function PlanDecision({
                 opacity: locked || !client ? 0.45 : pressed ? 0.6 : 1,
               })}
             >
-              <Text style={{ flex: 1, fontSize: 15, color: colors.ink2 }}>执行模型</Text>
+              <Text style={{ flex: 1, fontSize: 15, color: colors.ink2 }}>Execution model</Text>
               <Text numberOfLines={1} style={{ flexShrink: 1, maxWidth: '70%', fontSize: 15, color: colors.ink }}>
                 {executionLabel}
               </Text>
@@ -181,10 +181,10 @@ export function PlanDecision({
             </View>
             {feedbackOpen ? (
               <View style={{ gap: 6 }}>
-                <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>需要调整的地方</Text>
+                <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>What needs adjusting</Text>
                 <NoteInput
-                  accessibilityLabel="需要调整的地方"
-                  placeholder="把修改意见告诉它"
+                  accessibilityLabel="What needs adjusting"
+                  placeholder="Tell it your feedback"
                   autoFocus
                   minHeight={80}
                   value={feedback}
@@ -199,7 +199,7 @@ export function PlanDecision({
             ) : (
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <Button
-                  title={feedbackOpen ? '继续规划' : '提意见'}
+                  title={feedbackOpen ? 'Keep planning' : 'Give feedback'}
                   variant="secondary"
                   size="lg"
                   style={{ flex: 1 }}
@@ -210,7 +210,7 @@ export function PlanDecision({
                   }}
                 />
                 <Button
-                  title="批准并执行"
+                  title="Approve and run"
                   size="lg"
                   style={{ flex: 1.4 }}
                   disabled={!ready}
@@ -230,7 +230,7 @@ export function PlanDecision({
         <RuntimeSheet
           visible={runtimeOpen}
           onClose={() => setRuntimeOpen(false)}
-          title="执行模型"
+          title="Execution model"
           client={client}
           initial={execution}
           onApply={(value, model) => {

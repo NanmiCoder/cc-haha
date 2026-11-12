@@ -1,11 +1,11 @@
 /**
- * cardkit.ts 单元测试
+ * cardkit.ts unit tests
  *
- * 不调用真实的 Lark API —— 用 mock client 捕获调用参数，验证:
- * - 每个函数构造的 payload 结构
- * - 非零 code 响应抛出 CardKitApiError（可被 card-errors 识别）
- * - 缺失关键字段时抛错
- * - sequence 正确传递
+ * Does not call the real Lark API —— uses a mock client to capture call arguments and verify:
+ * - the payload structure built by each function
+ * - non-zero code responses throw CardKitApiError (recognizable by card-errors)
+ * - errors are thrown when key fields are missing
+ * - sequence is passed correctly
  */
 
 import { describe, it, expect } from 'bun:test'
@@ -66,7 +66,7 @@ function makeMockClient(responses: Record<string, any>) {
 // ---------------------------------------------------------------------------
 
 describe('createCardEntity', () => {
-  it('构造 card_json payload 并返回 card_id', async () => {
+  it('builds card_json payload and returns card_id', async () => {
     const { client, calls } = makeMockClient({
       'card.create': {
         code: 0,
@@ -80,11 +80,11 @@ describe('createCardEntity', () => {
     expect(calls.length).toBe(1)
     expect(calls[0]!.api).toBe('cardkit.v1.card.create')
     expect(calls[0]!.args.data.type).toBe('card_json')
-    // data.data 应当是 card 的 JSON 字符串
+    // data.data should be the card's JSON string
     expect(calls[0]!.args.data.data).toBe(JSON.stringify(card))
   })
 
-  it('兼容顶层 card_id（某些 SDK 包装层）', async () => {
+  it('handles top-level card_id (some SDK wrapper layers)', async () => {
     const { client } = makeMockClient({
       'card.create': { code: 0, card_id: 'top_level_id' },
     })
@@ -92,14 +92,14 @@ describe('createCardEntity', () => {
     expect(id).toBe('top_level_id')
   })
 
-  it('non-zero code 抛 CardKitApiError', async () => {
+  it('non-zero code throws CardKitApiError', async () => {
     const { client } = makeMockClient({
       'card.create': { code: 230099, msg: 'something failed' },
     })
     await expect(createCardEntity(client, {})).rejects.toThrow(CardKitApiError)
   })
 
-  it('code=0 但缺 card_id 抛错', async () => {
+  it('throws when code=0 but card_id is missing', async () => {
     const { client } = makeMockClient({
       'card.create': { code: 0, data: {} },
     })
@@ -112,7 +112,7 @@ describe('createCardEntity', () => {
 // ---------------------------------------------------------------------------
 
 describe('sendCardAsMessage', () => {
-  it('无 replyTo: 走 im.message.create 使用 chat_id', async () => {
+  it('no replyTo: uses im.message.create with chat_id', async () => {
     const { client, calls } = makeMockClient({
       'im.message.create': { data: { message_id: 'om_new_msg_1' } },
     })
@@ -123,12 +123,12 @@ describe('sendCardAsMessage', () => {
     expect(calls[0]!.args.params.receive_id_type).toBe('chat_id')
     expect(calls[0]!.args.data.receive_id).toBe('oc_chat_123')
     expect(calls[0]!.args.data.msg_type).toBe('interactive')
-    // content 格式: {"type":"card","data":{"card_id":"xxx"}}
+    // content format: {"type":"card","data":{"card_id":"xxx"}}
     const parsed = JSON.parse(calls[0]!.args.data.content)
     expect(parsed).toEqual({ type: 'card', data: { card_id: 'ck_id_xyz' } })
   })
 
-  it('有 replyTo: 走 im.message.reply', async () => {
+  it('with replyTo: uses im.message.reply', async () => {
     const { client, calls } = makeMockClient({
       'im.message.reply': { data: { message_id: 'om_reply_1' } },
     })
@@ -141,7 +141,7 @@ describe('sendCardAsMessage', () => {
     expect(parsed.data.card_id).toBe('ck_id_xyz')
   })
 
-  it('缺 message_id 抛错', async () => {
+  it('throws when message_id is missing', async () => {
     const { client } = makeMockClient({
       'im.message.create': { data: {} },
     })
@@ -156,7 +156,7 @@ describe('sendCardAsMessage', () => {
 // ---------------------------------------------------------------------------
 
 describe('streamCardContent', () => {
-  it('构造 content + sequence payload，path 包含 card_id + element_id', async () => {
+  it('builds content + sequence payload; path contains card_id + element_id', async () => {
     const { client, calls } = makeMockClient({
       'cardElement.content': { code: 0 },
     })
@@ -171,11 +171,11 @@ describe('streamCardContent', () => {
     })
   })
 
-  it('STREAMING_ELEMENT_ID 常量 = "streaming_content"', () => {
+  it('STREAMING_ELEMENT_ID constant = "streaming_content"', () => {
     expect(STREAMING_ELEMENT_ID).toBe('streaming_content')
   })
 
-  it('230020 响应可被 isCardRateLimitError 识别', async () => {
+  it('230020 response is recognized by isCardRateLimitError', async () => {
     const { client } = makeMockClient({
       'cardElement.content': { code: 230020, msg: 'rate limited' },
     })
@@ -188,7 +188,7 @@ describe('streamCardContent', () => {
     }
   })
 
-  it('230099 + table limit msg 可被 isCardTableLimitError 识别', async () => {
+  it('230099 + table limit msg is recognized by isCardTableLimitError', async () => {
     const { client } = makeMockClient({
       'cardElement.content': {
         code: 230099,
@@ -210,7 +210,7 @@ describe('streamCardContent', () => {
 // ---------------------------------------------------------------------------
 
 describe('setCardStreamingMode', () => {
-  it('streaming_mode=false + sequence 正确传递', async () => {
+  it('streaming_mode=false + sequence passed correctly', async () => {
     const { client, calls } = makeMockClient({
       'card.settings': { code: 0 },
     })
@@ -220,12 +220,12 @@ describe('setCardStreamingMode', () => {
     expect(calls[0]!.api).toBe('cardkit.v1.card.settings')
     expect(calls[0]!.args.path).toEqual({ card_id: 'ck_xxx' })
     expect(calls[0]!.args.data.sequence).toBe(99)
-    // settings 是 JSON 字符串
+    // settings is a JSON string
     const settings = JSON.parse(calls[0]!.args.data.settings)
     expect(settings).toEqual({ streaming_mode: false })
   })
 
-  it('streaming_mode=true 也能工作', async () => {
+  it('streaming_mode=true also works', async () => {
     const { client, calls } = makeMockClient({
       'card.settings': { code: 0 },
     })
@@ -240,7 +240,7 @@ describe('setCardStreamingMode', () => {
 // ---------------------------------------------------------------------------
 
 describe('updateCardKitCard', () => {
-  it('把 card 包装成 card_json payload + sequence', async () => {
+  it('wraps card into card_json payload + sequence', async () => {
     const { client, calls } = makeMockClient({
       'card.update': { code: 0 },
     })
@@ -255,7 +255,7 @@ describe('updateCardKitCard', () => {
     expect(calls[0]!.args.data.card.data).toBe(JSON.stringify(card))
   })
 
-  it('非零 code 抛 CardKitApiError', async () => {
+  it('non-zero code throws CardKitApiError', async () => {
     const { client } = makeMockClient({
       'card.update': { code: -1, msg: 'bad card' },
     })
@@ -268,7 +268,7 @@ describe('updateCardKitCard', () => {
 // ---------------------------------------------------------------------------
 
 describe('CardKitApiError', () => {
-  it('携带 code 和 msg，可被 parseCardApiError 识别', () => {
+  it('carries code and msg, recognizable by parseCardApiError', () => {
     const err = new CardKitApiError({
       api: 'card.update',
       code: 230020,
@@ -281,7 +281,7 @@ describe('CardKitApiError', () => {
     expect(isCardRateLimitError(err)).toBe(true)
   })
 
-  it('消息包含 api 名和 context', () => {
+  it('message includes api name and context', () => {
     const err = new CardKitApiError({
       api: 'cardElement.content',
       code: 230099,

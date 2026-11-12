@@ -144,7 +144,7 @@ export type TaskOutput =
   | { kind: 'notice'; text: string }
 export const isAgent = (task: BackgroundTask) =>
   task.taskType === 'local_agent' || task.taskType === 'remote_agent'
-/** 子 Agent 的只读 transcript；taskId 用来在同一个 toolUseId 下区分多次运行。 */
+/** Read-only transcript of a subagent; taskId distinguishes multiple runs under the same toolUseId. */
 export function loadSubagentRun(
   client: ApiClient,
   sessionId: string,
@@ -180,13 +180,13 @@ export async function loadTaskOutput(
   return {
     kind: 'notice',
     text:
-      task.result || task.summary || '电脑暂不提供此类任务的日志读取。',
+      task.result || task.summary || 'The computer does not provide logs for this kind of task yet.',
   }
 }
 export function shellOutputText(output: BackgroundOutput) {
   if (output.state === 'missing')
-    return '电脑上的任务日志暂未生成或已被清理。'
-  if (output.state === 'empty') return '任务尚未写入输出。'
+    return 'Task logs on the computer have not been generated yet or were cleaned up.'
+  if (output.state === 'empty') return 'The task has not written output yet.'
   return output.text
 }
 export function activityFromEvent(
@@ -293,12 +293,12 @@ export function latestRuns(runs: TaskRun[]) {
 export function dailyCron(time: string, weekdays: boolean) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim())
   if (!match || Number(match[1]) > 23 || Number(match[2]) > 59)
-    throw new Error('请输入有效时间，例如 09:00')
+    throw new Error('Please enter a valid time, e.g. 09:00')
   return `${Number(match[2])} ${Number(match[1])} * * ${weekdays ? '1-5' : '*'}`
 }
 export function scheduleLabel(cron: string) {
   const match = /^(\d+) (\d+) \* \* (\*|1-5)$/.exec(cron)
   return match
-    ? `${match[3] === '*' ? '每天' : '工作日'} ${match[2]!.padStart(2, '0')}:${match[1]!.padStart(2, '0')}`
+    ? `${match[3] === '*' ? 'Daily' : 'Weekdays'} ${match[2]!.padStart(2, '0')}:${match[1]!.padStart(2, '0')}`
     : cron
 }

@@ -1,5 +1,5 @@
 /**
- * Wire contract for the per-session trajectory (轨迹) view.
+ * Wire contract for the per-session trajectory view.
  *
  * Mirrors `src/server/services/trajectoryTypes.ts`; keep the two in sync.
  */

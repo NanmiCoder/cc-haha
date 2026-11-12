@@ -676,13 +676,13 @@ describe('Electron preview service', () => {
       },
     })
 
-    // 页面确认时的真实顺序：selection 先走，picker-exited 只在取消路径出现。
+    // The real order on confirm: selection goes first; picker-exited only appears on the cancel path.
     await service.message({ v: 1, type: 'enter-picker' })
     await service.sendMessageToRenderer(view.webContents, selection, renderer)
     expect(renderer.sent).toHaveLength(1)
     expect(renderer.sent[0]!.payload).toMatchObject({ type: 'selection' })
 
-    // selection 已消费掉授权，随后的重放（无论是否夹着 picker-exited）都进不来。
+    // selection has consumed the grant, so any later replay (with or without picker-exited) is rejected.
     await service.sendMessageToRenderer(view.webContents, JSON.stringify({ v: 1, type: 'picker-exited' }), renderer)
     await service.sendMessageToRenderer(view.webContents, selection, renderer)
     expect(renderer.sent).toHaveLength(2)

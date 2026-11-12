@@ -16,7 +16,7 @@ describe('extractAssistantOutputTargets', () => {
 
   it('extracts markdown links for workspace html, markdown, and images', () => {
     const content = [
-      '已完成：',
+      'Done:',
       '- [index.html](/Users/nanmi/project/demo/index.html)',
       '- [notes](docs/result.md)',
       '- [preview](assets/hero.png)',
@@ -81,7 +81,7 @@ describe('extractAssistantOutputTargets', () => {
 
   it('extracts office documents as resources while source references stay inline', () => {
     const targets = extractAssistantOutputTargets(
-      '交付物见 [合同](reports/brief.docx)，实现位于 src/main.ts。',
+      'Deliverable: [Contract](reports/brief.docx); implementation in src/main.ts.',
       { workDir },
     )
 
@@ -169,10 +169,10 @@ describe('extractAssistantOutputTargets', () => {
   it('ignores localhost URLs printed inside fenced log output', () => {
     const targets = extractAssistantOutputTargets(
       [
-        '日志前 50 行：',
+        'First 50 log lines:',
         '```log',
-        '[08:29:36][INFO] 代理服务已启动: 127.0.0.1:15721',
-        '[08:29:36][INFO] Claude Live 配置已接管，代理地址: http://127.0.0.1:15721',
+        '[08:29:36][INFO] proxy service started: 127.0.0.1:15721',
+        '[08:29:36][INFO] Claude Live config taken over, proxy address: http://127.0.0.1:15721',
         '```',
       ].join('\n'),
       { workDir },
@@ -183,7 +183,7 @@ describe('extractAssistantOutputTargets', () => {
 
   it('ignores markdown links printed inside fenced code blocks', () => {
     const targets = extractAssistantOutputTargets(
-      ['```md', '调试输出: [preview](http://localhost:5173/) [page](index.html)', '```'].join('\n'),
+      ['```md', 'Debug output: [preview](http://localhost:5173/) [page](index.html)', '```'].join('\n'),
       { workDir },
     )
 
@@ -237,11 +237,11 @@ describe('extractAssistantOutputTargets', () => {
   it('extracts files from absolute-root directory trees inside code blocks', () => {
     const targets = extractAssistantOutputTargets(
       [
-        '目录结构',
+        'Directory layout',
         '```',
         '/Users/nanmi/project/demo/generated/',
-        '├── README.md                    # Markdown 说明文件',
-        '├── index.html                   # 静态页面',
+        '├── README.md                    # Markdown readme',
+        '├── index.html                   # Static page',
         '└── todo-app/',
         '    └── index.html',
         '```',
@@ -352,7 +352,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('surfaces a generated office artifact even when the assistant forgot to name it', () => {
-    const targets = extractAssistantOutputTargets('已经生成完成。', {
+    const targets = extractAssistantOutputTargets('Generation finished.', {
       workDir: '/work',
       changedFiles: ['/work/reports/brief.docx', '/work/src/main.ts'],
     })
@@ -369,7 +369,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('reconciles mentioned paths without sweeping unmentioned artifacts for a non-owner reply', () => {
-    const targets = extractAssistantOutputTargets('正在处理 `index.html`。', {
+    const targets = extractAssistantOutputTargets('Processing `index.html`.', {
       workDir: '/work',
       changedFiles: ['/work/app/index.html', '/work/reports/brief.docx'],
       includeChangedFileFallback: false,
@@ -389,7 +389,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
     // The reported bug: the model writes /private/tmp/todo-app/index.html but the
     // prose only says `index.html`, so the chip used to point at the (missing)
     // workdir-root index.html. With the turn's real changed files it is corrected.
-    const targets = extractAssistantOutputTargets('已创建 `index.html`，直接用浏览器打开。', {
+    const targets = extractAssistantOutputTargets('Created `index.html`; open it in a browser.', {
       workDir: '/private/tmp',
       changedFiles: [
         '/private/tmp/todo-app/index.html',
@@ -408,7 +408,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('drops a mentioned file that the turn never changed', () => {
-    const targets = extractAssistantOutputTargets('参考旧文件 old-report.html 和新结果 result.html', {
+    const targets = extractAssistantOutputTargets('See the old file old-report.html and the new result result.html', {
       workDir: '/work',
       changedFiles: ['/work/out/result.html'],
     })
@@ -417,7 +417,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('keeps localhost url chips untouched while reconciling files', () => {
-    const targets = extractAssistantOutputTargets('启动后访问 http://localhost:5173/ ，源码见 index.html', {
+    const targets = extractAssistantOutputTargets('After starting, visit http://localhost:5173/ , source in index.html', {
       workDir: '/work',
       changedFiles: ['/work/app/index.html'],
     })
@@ -428,7 +428,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('applies the limit after dropping stale file mentions', () => {
-    const targets = extractAssistantOutputTargets('旧文件 old.html，服务在 http://localhost:5173/', {
+    const targets = extractAssistantOutputTargets('Old file old.html, server at http://localhost:5173/', {
       workDir: '/work',
       changedFiles: [],
       limit: 1,
@@ -440,7 +440,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('rewrites a changed file outside the workdir to its absolute posix path', () => {
-    const targets = extractAssistantOutputTargets('已创建 todo.html', {
+    const targets = extractAssistantOutputTargets('Created todo.html', {
       workDir: 'C:/Users/me/tmp/session',
       changedFiles: ['D:\\workspace\\demo\\todo.html'],
     })
@@ -596,7 +596,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
     // Two candidate directories is no evidence at all, and picking one would give
     // the same dead card less predictably.
     const targets = extractAssistantOutputTargets(
-      '产出：`report.docx`',
+      'Output: `report.docx`',
       { workDir: '/w', changedFiles: ['/w/a/make.py', '/w/b/other.py'] },
     )
 
@@ -605,7 +605,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
 
   it('does not re-anchor a deliverable that already carries a directory', () => {
     const targets = extractAssistantOutputTargets(
-      '产出：`out/report.docx`',
+      'Output: `out/report.docx`',
       { workDir: '/w', changedFiles: ['/w/scripts/make.py'] },
     )
 
@@ -616,7 +616,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
     // Markdown is a deliverable *and* the format this product reads all day, so a
     // mention of one carries no evidence that the turn produced it.
     const targets = extractAssistantOutputTargets(
-      '我正准备查看 test123.md',
+      'About to look at test123.md',
       { workDir: '/w', changedFiles: ['/w/src/first.ts'] },
     )
 
@@ -625,7 +625,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
 
   it('still drops an unmatched source file, so reconciliation keeps doing its job', () => {
     const targets = extractAssistantOutputTargets(
-      '改了 plan.md，也看了 src/helper.ts',
+      'Edited plan.md and also read src/helper.ts',
       { workDir: '/w', changedFiles: ['/w/plan.md'] },
     )
 
@@ -645,7 +645,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
 
   it('drops file mentions when changedFiles explicitly confirms no files changed', () => {
     const targets = extractAssistantOutputTargets(
-      '我正准备查看 test123.md，服务地址是 http://localhost:5173/',
+      'About to look at test123.md, server address http://localhost:5173/',
       {
         workDir: '/private/tmp',
         changedFiles: [],
@@ -659,7 +659,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('falls back to text-only behavior when changedFiles is unavailable', () => {
-    const targets = extractAssistantOutputTargets('已创建 `index.html`', {
+    const targets = extractAssistantOutputTargets('Created `index.html`', {
       workDir: '/private/tmp',
     })
 
@@ -667,7 +667,7 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
   })
 
   it('does not correct when the basename is ambiguous across changed files', () => {
-    const targets = extractAssistantOutputTargets('见 index.html', {
+    const targets = extractAssistantOutputTargets('See index.html', {
       workDir: '/work',
       changedFiles: ['/work/a/index.html', '/work/b/index.html'],
     })
@@ -695,7 +695,7 @@ describe('explicit output path identity', () => {
   })
 
   it('does not replace an explicit absolute file with another same-named checkpoint file', () => {
-    const targets = extractAssistantOutputTargets('报告 `/external/report.pdf`', {
+    const targets = extractAssistantOutputTargets('Report `/external/report.pdf`', {
       workDir: '/session', changedFiles: ['/session/report.pdf'], includeChangedFileFallback: false,
     })
     expect(targets.map((target) => target.href)).toEqual(['/external/report.pdf'])
@@ -716,7 +716,7 @@ describe('outputs a turn produced', () => {
   // "file not found": being mentioned is not being produced.
   const quoted = [
     '正文和行内代码里的 `开题报告2.docx`、`D:/资料/测试文档1.docx` 被截成 1.docx 的问题',
-    '预览见 http://localhost:5173/',
+    'Preview at http://localhost:5173/',
   ].join('\n')
 
   it('drops every quoted file when the turn could not have written one unseen', () => {
@@ -734,7 +734,7 @@ describe('outputs a turn produced', () => {
 
   it('keeps what the turn wrote, by relative or absolute name, with nothing left to prove', () => {
     const targets = extractAssistantOutputTargets(
-      '报告在 out/report.docx，副本在 `/Users/me/backup/report.docx`',
+      'Report at out/report.docx, copy at `/Users/me/backup/report.docx`',
       {
         workDir: '/w',
         changedFiles: ['/w/out/report.docx', '/Users/me/backup/report.docx', '/w/out/summary.pdf'],

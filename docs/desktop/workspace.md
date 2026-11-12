@@ -1,92 +1,92 @@
 ---
-title: 工作区
-nav_title: 工作区
-description: 右侧工作区：看改了哪些文件、逐行评审 Diff、在应用里预览网页。
+title: Workspace
+nav_title: Workspace
+description: The right-hand panel — see what changed, review the diff line by line, preview a page in-app.
 order: 2
 ---
 
-# 工作区
+# Workspace
 
-对话告诉你 Claude 说了什么，工作区告诉你它真的改了什么。它是右侧一块可以随时拉出来的面板，和对话并排，不用切窗口。
+The conversation tells you what Claude said. The workspace tells you what it actually changed. It's a panel on the right that you can pull out next to the conversation, so you never have to switch windows.
 
-## 打开工作区
+## Opening it
 
-点标签栏右侧的「显示工作区」按钮。再点一次收起。面板左边界可以拖动改宽窄。
+Click **Show Workspace** on the right of the tab bar. Click it again to collapse. Drag the panel's left edge to resize.
 
-空面板里可以打开「侧边聊天」「审查」「终端」「浏览器」或「文件」。每种工具都有独立标签；之后也可以点顶部的 `+` 添加标签，在它们之间切换。
+The empty panel offers **Side chat**, **Review**, **Terminal**, **Browser**, and **Files**. Each opens in its own tab. Use the `+` at the top to add more tabs and switch between tools.
 
-## 审查：选择比较范围
+## Review: choose a comparison
 
-![审查标签的变更文件树：列出所选 HEAD 提交中的文件和增删行数](../images/app/zh-CN/workspace-changes.webp)
+![The Review file tree showing changed files and line counts in the selected HEAD commit (Chinese interface)](../images/app/en/workspace-changes.webp)
 
-打开「审查」，先在工具栏的「比较范围」里选择要看的改动：
+Open **Review** and use **Comparison** in the toolbar to choose the changes you want to inspect:
 
-- **未暂存 / 已暂存 / 全部未提交** — 查看当前工作目录中对应范围的改动。
-- **分支 / 比较分支…** — 查看与所选分支的差异。
-- **查看提交…** — 输入提交引用，查看某一次提交的改动。
+- **Unstaged / Staged / All uncommitted** — the corresponding changes in the current working directory.
+- **Branch / Compare branch…** — differences against the selected branch.
+- **View commit…** — enter a commit reference to inspect that commit's changes.
 
-点「显示/隐藏文件树」可以展开所选比较范围的变更文件列表。每行显示文件状态和增删行数，点文件查看对应 Diff。本页的审查截图通过「查看提交…」打开已有的 `HEAD` 提交，是只读查看。
+Use **Toggle file tree** to show the files changed in the selected comparison. Each row includes a status and line counts; select a file to see its diff. The Review screenshots on this page use **View commit…** to inspect the existing `HEAD` commit in read-only mode.
 
-不是 Git 仓库时，「审查」入口会说明原因。
+If the folder is not a Git repository, the **Review** entry explains why it is unavailable.
 
-## 文件标签
+## Files tabs
 
-「文件」是独立标签，用来浏览项目目录和预览单个文件。搜索框可以筛选文件名；也可以从审查里的「在文件标签页中打开」进入对应文件。打开的标签可以像编辑器一样切换。
+**Files** is a separate tab for browsing the project directory and previewing individual files. Use its search box to filter file names, or choose **Open file in tab** from a review. Open tabs work like editor tabs: switch between them as needed.
 
-任何文件都可以右键复制路径，或者点「添加到聊天」把它作为上下文塞回输入框。
+Any file can have its path copied, or be pushed back into the composer as context with **Add to chat**.
 
-### 预览 PDF、Word、Excel 和图片
+### Previewing PDFs, Word, Excel, and images
 
-Claude 生成的报告、论文、数据表不必再切到别的软件去看。在文件标签里选中它们，或者点对话里指向它们的链接和文件卡片，就会直接在工作区里打开：
+Reports, papers, and spreadsheets Claude produces no longer need another app to read. Select one in a Files tab, or click a link or file card that points at it in the conversation, and it opens right in the workspace:
 
-- **PDF** — 连续滚动，可以缩放，文字能选中复制。默认适应宽度。
-- **Word（`.docx`）** — 显示文字和基本排版。公式和部分形状不会出现，预览上方会有提示；需要精确排版时，用「用系统程序打开」打开原文件。
-- **Excel（`.xlsx`、`.xlsm`、`.xls`）** — 每个工作表一个标签页，单元格按 Excel 中的显示格式呈现。图表、图片和公式不显示；每张表最多显示前 5000 行、100 列，超出时会说明。
-- **图片** — 适应窗口显示，可以缩放和拖动；按住 `⌘` / `Ctrl` 滚动滚轮或在触控板上捏合来缩放，双击在「适应窗口」和 100% 之间切换。
+- **PDF** — scrolls continuously and zooms, with selectable text. It opens fitted to the panel width.
+- **Word (`.docx`)** — shows the text and basic layout. Equations and some shapes do not appear, and a note above the preview says so; when you need the exact layout, use **Open in system app** to open the original.
+- **Excel (`.xlsx`, `.xlsm`, `.xls`)** — one tab per worksheet, with each cell shown as Excel formats it. Charts, images, and formulas are not shown. A sheet shows at most its first 5,000 rows and 100 columns, and says so when it is cut off.
+- **Images** — fitted to the window, with zoom and drag. Hold `⌘` / `Ctrl` and scroll, or pinch on a trackpad, to zoom; double-click to switch between **Fit to window** and 100%.
 
-预览区顶部的「用系统程序打开」会把原文件交给系统默认程序。太大的文件（PDF 超过 100 MB，Word / Excel 超过 30 MB）和已加密的 PDF 不会预览，同样可以用系统程序打开。工作区之外的文档也一样，直接交给系统程序。
+**Open in system app** at the top of the preview hands the original file to your system's default program. Files that are too large (PDFs over 100 MB, Word or Excel over 30 MB) and password-protected PDFs are not previewed; open them with the system app the same way. So are documents outside the workspace.
 
-Claude 重新写入正在预览的文件时，预览会在原位置刷新；文件恰好写到一半、读不出来时，会继续显示上一次的内容并提示刷新失败。
+When Claude rewrites a file you are previewing, the preview refreshes in place. If the file is caught half-written and cannot be read, the last good version stays on screen with a note that the refresh failed.
 
-## Diff 评审：给某一行留话
+## Diff review: leaving a note on a line
 
-![工作区只读查看 HEAD 提交：变更行与语法高亮 Diff](../images/app/zh-CN/workspace-diff.webp)
+![A read-only review of the HEAD commit with syntax-highlighted diff lines (Chinese interface)](../images/app/en/workspace-diff.webp)
 
-Diff 保留旧行和新行，带语法高亮。工具栏可以切换「统一 Diff / 并排 Diff」、开启自动换行；看完一个文件，还可以「标记为已查看」。需要反馈时，可以使用行级评论：
+The diff keeps old and new lines with syntax highlighting. The toolbar lets you switch between **Unified diff** and **Split diff** and enable word wrap. When you finish a file, use **Mark as viewed**. To leave feedback, use line-level comments:
 
-1. 点某一行，右边出现评论框。
-2. 想评一段而不是一行，按住 `Shift` 点起止行——只能选同一侧、同一变更块里的连续行。
-3. 写下你希望这里怎么改，点「提交」。
-4. 评论会连同文件路径、行号和那几行代码一起回到输入框，直接发给 Claude。
+1. Click a line — a comment box opens beside it.
+2. To comment on a range, hold `Shift` and click the first and last line. The selection must stay on one side of the diff and inside one hunk.
+3. Describe what you want changed there and click **Submit**.
+4. The comment goes back into the composer along with the file path, line numbers, and the code itself, ready to send.
 
-这比在对话里描述「那个函数里判断空值那行」准确得多。
+This is far more precise than describing "the null check in that one function" in prose.
 
-如果你在写评论的过程中 Claude 又改了这个文件，界面会提示差异已更新，需要重新选行——这是防止评论落到错误的位置。
+If Claude changes the file while you're writing a comment, the panel tells you the diff has updated and asks you to reselect — that's there to stop a comment from landing on the wrong lines.
 
 :::tip
-被拒绝的工具调用不会写盘，也就不会形成待审查的文件改动。交付前还是建议自己再过一遍 `git diff`。
+Denied tool calls never reach disk, so they do not create file changes to review. Even so, give `git diff` one last read before you ship.
 :::
 
-## 独立工作树：把试验关在笼子里
+## Isolated worktree: keeping experiments caged
 
-在输入框的运行位置里可以选「独立工作树」。选了以后，这条会话会拿到一个隔离的 Git worktree，Claude 的所有改动都发生在那里，你当前分支和工作目录一个字都不会动。
+The **Location** control in the composer offers **Isolated worktree**. Turn it on and the session gets its own Git worktree; everything Claude does happens there, and your current branch and working directory are untouched.
 
-什么时候用它：
+When it earns its keep:
 
-- 想让 Claude 大改一版，但不确定要不要留。
-- 当前目录有未提交的改动，直接切分支会被 Git 拦住。
-- 目标分支已经在别的工作树里检出了。
+- You want Claude to attempt a big rewrite you may not keep.
+- Your working directory has uncommitted changes, so Git would block a branch switch.
+- The branch you want is already checked out in another worktree.
 
-会话结束后临时工作区会被清理，历史记录仍然可以看，但那时想继续就得回原项目新建会话——界面会提示你。
+The temporary worktree is cleaned up when you're done. History stays readable, but to continue you'll need a new session in the original project — the app tells you when that's the case.
 
-## 内置浏览器
+## Built-in browser
 
-![内置浏览器预览刚改完的页面](../images/app/zh-CN/workspace-preview.webp)
+![The built-in browser previewing a page that was just edited (Chinese interface)](../images/app/en/workspace-preview.webp)
 
-在工作区的空面板或顶部 `+` 菜单里打开「浏览器」标签，地址栏里填本地开发地址或者任意网址就能预览。它与「文件」「审查」分别保留在独立标签中。这里有三个专门为「让 Claude 看见」设计的按钮：
+Open a **Browser** tab from the empty workspace panel or the `+` menu at the top, then type a local dev address or any URL. It stays in its own tab alongside **Files** and **Review**. Three buttons here exist specifically so Claude can see what you see:
 
-- **截图** — 把当前页面画面带回会话，Claude 就能看到渲染结果。
-- **选择元素** — 在页面上点一个元素，它的选择器、位置和截图会一起作为上下文交给 Claude。改样式时特别省事。
-- **缩放** — 调预览比例，看响应式布局。
+- **Capture** — send the current rendering back into the conversation.
+- **Pick element** — click an element on the page; its selector, position, and a screenshot go to Claude as context. This saves an enormous amount of back-and-forth on styling.
+- **Zoom** — change the preview scale to check responsive layouts.
 
-浏览器里的登录态和 Cookie 和普通浏览器一样是真实的。做公开演示或者截图发出去之前，请换成不需要登录的页面。
+Logins and cookies in this browser are real, same as any browser. Before you demo or screenshot anything publicly, switch to a page that doesn't require signing in.

@@ -29,7 +29,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-// 受控流，同时模拟转后台时对前台迭代器的清理。
+// Controlled stream that also simulates cleanup of the foreground iterator when moving to background.
 function controlledStream() {
   const terminal = deferred<Error | undefined>()
   const started = deferred<void>()
@@ -66,7 +66,7 @@ let context: ToolUseContext
 let backgroundSignals: Map<string, () => void>
 
 function setLimit(limit?: number | null) {
-  // 刻意不清缓存：桌面设置写入来自另一个进程。
+  // Deliberately not clearing the cache: desktop settings writes come from another process.
   writeFileSync(join(configDir, 'settings.json'), JSON.stringify(limit === undefined ? {} : { maxConcurrentSubagents: limit }))
 }
 
@@ -255,7 +255,7 @@ describe('ordinary AgentTool process concurrency', () => {
   })
 
   test.each(['complete', 'error', 'cancel'] as const)('foreground to background transfers the pending native iterator until %s without restarting', async outcome => {
-    // 使用真实任务注册和原生 generator：pending next 时 return 不会立即结束。
+    // Uses real task registration and a native generator: return during a pending next does not finish immediately.
     spyOn(tasks, 'registerAgentForeground').mockRestore()
     spyOn(tasks, 'unregisterAgentForeground').mockRestore()
     const terminal = deferred<Error | undefined>()
@@ -282,7 +282,7 @@ describe('ordinary AgentTool process concurrency', () => {
       const taskId = Object.keys(context.getAppState().tasks)[0]!
       expect(tasks.backgroundAgentTask(taskId, context.getAppState, context.setAppState)).toBe(true)
       expect((await running).data.status).toBe('async_launched')
-      // 必须跨过旧实现的 1 秒 timeout，不能仅检查刚转后台的一瞬间。
+      // Must cross the old implementation's 1-second timeout, not just check the instant right after backgrounding.
       await Bun.sleep(1100)
       expect(runnerSpy).toHaveBeenCalledTimes(1)
       context.abortController.abort()
@@ -441,7 +441,7 @@ describe('SendMessageTool ordinary worker resume concurrency', () => {
   const restoredAgentId = asAgentId('fixture-restored-worker')
 
   function prepareResumeFixture() {
-    // 只替换历史输入和模型流，保留 SendMessage → resume → lifecycle 的真实调用链。
+    // Replace only the history input and model stream, keeping the real SendMessage → resume → lifecycle call chain.
     const history = [
       createUserMessage({ content: 'Complete the original fixture task.' }),
       createAssistantMessage({ content: 'Original fixture task completed.' }),

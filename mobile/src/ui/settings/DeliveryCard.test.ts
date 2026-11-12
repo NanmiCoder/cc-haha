@@ -35,7 +35,7 @@ test('notification diagnostics open on demand and preserve actions, feedback and
     let guide = 0
     const props = {
       delivery: deliveryStatus(base), busy: null,
-      note: '只测试手机通知，未验证电脑推送。', error: '',
+      note: 'Only phone notifications were tested; computer push was not verified.', error: '',
       onAction: kind => actions.push(kind), onGuide: () => guide++,
     }
     const flatten = node => {
@@ -53,17 +53,17 @@ test('notification diagnostics open on demand and preserve actions, feedback and
     tree = nodes()
     assert.equal(header(tree).props.accessibilityState.expanded, true)
     assert.ok(tree.some(node => node.props.children === props.note))
-    const testButton = tree.find(node => node.type === 'Button' && node.props.title === '测试通知')
+    const testButton = tree.find(node => node.type === 'Button' && node.props.title === 'Test notification')
     assert.ok(testButton)
     testButton.props.onPress()
     assert.deepEqual(actions, ['test'])
-    tree.find(node => node.props.accessibilityLabel === '推送设置说明').props.onPress()
+    tree.find(node => node.props.accessibilityLabel === 'Push setup guide').props.onPress()
     assert.equal(guide, 1)
     props.busy = 'test'
     tree = nodes()
     assert.ok(tree.filter(node => node.type === 'Button').every(node => node.props.disabled))
     assert.ok(tree.find(node => node.type === 'Button').props.busy)
-    props.error = '测试未完成，请重试。'
+    props.error = 'Test did not finish; please retry.'
     assert.ok(nodes().some(node => node.type === 'InlineError' && node.props.text === props.error))
     header(tree).props.onPress()
     assert.equal(nodes().some(node => node.type === 'Button'), false)

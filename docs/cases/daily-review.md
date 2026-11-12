@@ -1,46 +1,46 @@
 ---
-title: 建立每日代码审查
-nav_title: 每日审查
-description: 创建一条只报告问题的定时任务，立即试跑并从日志检查结果。
+title: Set up a daily code review
+nav_title: Daily review
+description: Create a scheduled task that reports findings, run it immediately, and inspect the result in the logs.
 order: 4
 ---
 
-# 建立每日代码审查
+# Set up a daily code review
 
-每天打开电脑后想知道昨天的改动有没有明显问题，可以把审查提示词存成定时任务。先手动跑通，再让它按工作日重复。
+If you want a quick look at yesterday's changes when you open your computer, save a review prompt as a scheduled task. Run it manually first, then let it repeat on workdays.
 
-## 准备
+## Before you start
 
-- 完成模型配置，并有一个自己能查看 Git 历史的项目。
-- 桌面应用需要保持打开，电脑保持唤醒。[定时任务](../desktop/schedule.md)是本机功能；新任务恢复运行时最多补执行一次，不逐个重放错过的周期。旧独立 Cron 任务保持不补跑的行为。
-- 在目标项目中打开一个会话，确认模型、工作目录和权限设置。本例选择**继续已有会话**，沿用该会话的设置，不自动提升权限。
+- Connect a model and choose a project whose Git history you can inspect.
+- The desktop app must be open and the computer awake. [Scheduled tasks](../desktop/schedule.md) run locally. New tasks catch up once after resuming, rather than replaying every missed interval. Older independent cron tasks retain their no-catch-up behavior.
+- Open a chat in the target project and check its model, workspace, and permission settings. This example uses **Continue a chat**, inheriting those settings without granting additional permissions.
 
-## 操作
+## Steps
 
-1. 点左侧**定时任务 → ＋ 新建任务**。名称填 `daily-code-review`，描述填“工作日审查最近 24 小时的提交”。
-2. 执行方式选**继续已有会话**，在「运行于」选择刚才的项目会话。把重复设为**工作日**，核对时间和时区。通知可先关闭；跑通后再选择「重要更新」及桌面或 IM 渠道。
-3. 提示词填入下面内容。第一次可把“最近 24 小时”改成一个确有提交的时间范围。
+1. Open **Scheduled → + New task** in the sidebar. Name it `daily-code-review` and describe it as “Review commits from the last 24 hours on workdays.”
+2. Choose **Continue a chat** and select that project chat under **Run in**. Set the repeat frequency to **workdays**, and check the time and time zone. Leave notifications off for the first run; afterwards, choose **Important updates** and desktop or messaging channels.
+3. Paste the prompt. For the first trial, you can change “last 24 hours” to a range you know contains a commit.
 
 ```text
-只审查这个仓库最近 24 小时内的提交，不修改文件、不提交代码、不安装依赖。
-先列出实际查到的提交；没有提交就明确写“没有待审提交”。
-对每个可能的问题给出：文件与行号、触发条件、影响、验证方法。没有证据的问题不要列。
-最后用三行总结：审查范围、发现数、最需要我处理的事。
-如果无法读取 Git 历史或运行检查，写出失败原因；不要把未执行的检查写成“通过”。
+Review only commits in this repository from the last 24 hours. Do not edit files, commit code, or install dependencies.
+List the commits you actually found first. If there are none, say “no commits to review.”
+For each possible issue give the file and line, the trigger, the impact, and a way to verify it. Do not list issues without evidence.
+End with three lines: scope reviewed, number of findings, and the one thing I should handle first.
+If you cannot read Git history or run a check, state why. Never call a check “passed” if you did not run it.
 ```
 
-4. 保存后点任务卡片的**立即执行**。在**日志**里看状态、摘要，再点“查看完整对话”核对实际命令和结论。
-5. 若结果太空泛，编辑提示词，明确需要检查的目录或风险，再立即执行一次。确认有用后让任务保持启用。
+4. Save and click **Run now** on the task card. Open **Logs**, read the status and summary, then use **View full conversation** to verify the actual commands and findings.
+5. If the report is vague, edit the prompt to name the directories or risks that matter, and run it again. Leave the task enabled once the result is useful.
 
-## 应看到什么
+## Expected result
 
-首次运行在日志里留下状态和结果，并在原会话显示「由定时任务触发」的开篇。报告要么列出可追溯的问题，要么明确说没有待审提交或没有发现；不能只给“代码质量良好”这种无法核对的判断。
+The first run leaves a status and result in the logs, and a **Sent by scheduled task** introduction in the original chat. The report should cite traceable findings, explicitly say there were no commits, or say it found no issues. “Code quality looks good” alone is not verifiable.
 
-也可以在该会话直接说“每个工作日上午 9 点按上述要求审查，继续在这里运行”来创建任务。成功后会出现可编辑卡片，侧栏会话有时钟标记。之后问“查看 daily-code-review 最近一次的结果”，助手会读取实际执行记录；不需要自己翻找日志。
+You can also create the task directly in that chat: “Review using the instructions above every weekday at 9 am, continuing here.” Successful creation produces an editable card and a sidebar clock. Later, ask “Read the latest result for daily-code-review” to retrieve the actual execution record without finding the log yourself.
 
-## 验收与常见卡点
+## Acceptance and common snags
 
-- 核对报告中的提交是否在目标仓库、目标时间范围里；随机打开一处引用文件，确认行号与问题吻合。
-- 如果任务没有触发，先检查应用是否打开、电脑是否唤醒、任务是否启用、时间设置是否符合预期。
-- 提示词中的“只审查”是任务要求，不是权限隔离。继续已有会话时沿用会话权限；旧独立任务保留原来的「所有权限」。工作目录不是安全沙箱，首次运行应核对实际工具调用。
-- 频率太密会增加模型用量；从每天一次开始。[定时任务设置详解](../desktop/schedule.md)列出所有字段和日志操作。
+- Check that cited commits belong to the intended repo and time range. Open one cited file to verify the location and finding.
+- If nothing runs, check that the app is open, the computer awake, the task enabled, and the scheduled time correct.
+- “Review only” is a prompt instruction, not a permission boundary. Continuing a chat preserves its permissions; older independent tasks retain their previous full-permissions mode. A working directory is not a security sandbox. Inspect the actual tool calls on the first run.
+- Frequent runs increase model use; start with once a day. The [scheduled task reference](../desktop/schedule.md) explains every field and log action.

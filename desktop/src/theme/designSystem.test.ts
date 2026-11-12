@@ -4,7 +4,7 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * The 「素 Porcelain」 system, enforced.
+ * The "Su" / Porcelain system, enforced.
  *
  * The UI felt subtly off because nothing constrained it: 36 font sizes
  * including 12.5 / 13.5 / 11.5px, 41 corner radii, two icon sets with 20 icon
@@ -62,7 +62,7 @@ function violations(pattern: RegExp, accept?: (match: RegExpMatchArray, line: st
 /** 11 / 12 / 13 / 14 / 15 / 18 / 22 / 26 — the whole type scale. */
 const TYPE_SCALE = new Set([11, 12, 13, 14, 15, 18, 22, 26])
 
-describe('「素」 design system', () => {
+describe('"Su" design system', () => {
   it('uses only the type scale for arbitrary font sizes', () => {
     expect(violations(/\btext-\[(\d+(?:\.\d+)?)px\]/g, (m) => TYPE_SCALE.has(Number(m[1])))).toEqual([])
   })

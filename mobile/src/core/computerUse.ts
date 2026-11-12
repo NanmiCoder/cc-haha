@@ -6,8 +6,8 @@ export const computerUseReference: ComposerReference = {
   kind: 'skill',
   id: 'computer-use',
   name: 'computer-use',
-  displayName: '操作电脑',
-  description: '这条消息使用操作电脑',
+  displayName: 'Computer use',
+  description: 'This message uses computer use',
   source: 'bundled',
   modelText: 'Use the Skill tool with skill: "computer-use" for this request.',
 }

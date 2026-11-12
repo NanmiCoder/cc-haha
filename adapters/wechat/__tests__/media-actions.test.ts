@@ -30,7 +30,7 @@ async function fixture() {
     notice: async (_chat: string, text: string) => { notices.push(text) },
     transcribe: async () => 'hello from the audio track',
     synthesize: async () => ({ path: audio, mimeType: 'audio/wav' as const, fileName: 'reply.wav', cleanup: async () => { cleanups++ } }),
-    processVideo: async () => ({ frames: [{ path: frame, timestampMs: 500 }], audioPath: audio, durationMs: 1000, coverageNote: '采样 1 帧', cleanup: async () => { cleanups++ } }),
+    processVideo: async () => ({ frames: [{ path: frame, timestampMs: 500 }], audioPath: audio, durationMs: 1000, coverageNote: 'sampled 1 frame', cleanup: async () => { cleanups++ } }),
   }
   return { root, file, deps, sent, notices, revoke: () => { allowed = false }, switchSession: () => { sessionId = 'session-2' }, cleanups: () => cleanups }
 }
@@ -92,7 +92,7 @@ describe('WeChat media conversation boundary', () => {
     expect(f.sent[0].kind).toBe('video')
     expect(cleanup).toBe(true)
     f.revoke()
-    await expect(actions.command('chat', '/transcode report.txt')).rejects.toThrow('配对')
+    await expect(actions.command('chat', '/transcode report.txt')).rejects.toThrow('Pair first')
   })
   it('sends explicit project files and completed deliverables without uploading source citations', async () => {
     const f = await fixture()
@@ -145,7 +145,7 @@ describe('WeChat media conversation boundary', () => {
     const actions = new WechatMediaActions(f.deps)
     await expect(actions.command('chat', '/send ../not-a-project-file')).rejects.toThrow()
     f.revoke()
-    await expect(actions.command('chat', '/send report.txt')).rejects.toThrow('配对')
+    await expect(actions.command('chat', '/send report.txt')).rejects.toThrow('Pair first')
     expect(f.sent).toHaveLength(0)
   })
   it('reports uncertain upload failure once and never regenerates or retries it', async () => {
@@ -156,7 +156,7 @@ describe('WeChat media conversation boundary', () => {
     await actions.finish('chat')
     await actions.finish('chat')
     expect(attempts).toBe(1)
-    expect(f.notices.join(' ')).toContain('不会自动重发')
+    expect(f.notices.join(' ')).toContain('will not be resent automatically')
   })
   it('prepares sampled images and actual audio transcript, cleaning intermediate files', async () => {
     const f = await fixture()
@@ -165,7 +165,7 @@ describe('WeChat media conversation boundary', () => {
     expect(result.attachments[0]).toMatchObject({ type: 'image', name: 'video-500ms.jpg', mimeType: 'image/jpeg' })
     expect(result.context).toContain('0.50s')
     expect(result.context).toContain('hello from the audio track')
-    expect(result.context).toContain('采样限制')
+    expect(result.context).toContain('sampling limitation')
     expect(result.context).toContain('video.mp4')
     expect(result.context).toContain('ffmpeg')
     expect(result.context).toContain('file:')
@@ -176,7 +176,7 @@ describe('WeChat media conversation boundary', () => {
     const actions = new WechatMediaActions({ ...f.deps, transcribe: async () => { throw new Error('not ready') } })
     const result = await actions.analyzeVideo('chat', 'video.mp4')
     expect(result.attachments).toHaveLength(1)
-    expect(result.context).toContain('仅分析采样画面')
+    expect(result.context).toContain('only sampled frames are analyzed')
     expect(result.context).toContain('not ready')
   })
   it('exposes configured portable tools to the model even when they are outside PATH', async () => {
@@ -192,7 +192,7 @@ describe('WeChat media conversation boundary', () => {
       expect(result.context).toContain(JSON.stringify(ffmpeg))
       expect(result.context).toContain(JSON.stringify(ffprobe))
       expect(result.context).toContain('uploaded.mp4')
-      expect(result.context).toContain('临时处理文件会清理')
+      expect(result.context).toContain('files are cleaned up')
     } finally {
       if (originalFfmpeg === undefined) delete process.env.WECHAT_FFMPEG_PATH
       else process.env.WECHAT_FFMPEG_PATH = originalFfmpeg

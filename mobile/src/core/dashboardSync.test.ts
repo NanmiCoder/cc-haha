@@ -250,7 +250,7 @@ test('freshness expires while a refresh is stalled and a late old snapshot is ne
   delayed.resolve(snapshot('a', 3000))
   await flush()
   expect(observed.state.fresh).toBe(false)
-  expect(observed.state.error).toContain('耗时较长')
+  expect(observed.state.error).toContain('taking longer')
   poller.stop()
 })
 
@@ -332,7 +332,7 @@ test('one network blip after a good snapshot is a retry, not offline; two in a r
     time,
     async () => {
       const outcome = outcomes[calls++] ?? 'ok'
-      if (outcome === 'down') throw new ApiError('无法连接服务器', 0, 'NETWORK_ERROR')
+      if (outcome === 'down') throw new ApiError('Cannot connect to the server', 0, 'NETWORK_ERROR')
       if (outcome === 'auth') throw new ApiError('Unauthorized', 401)
       return snapshot('a', time.now())
     }
@@ -376,10 +376,10 @@ test('stopping a host poller prevents its delayed response from replacing a newl
 
 test('failures are classified so the home can tell offline from revoked access and bad responses', () => {
   expect(
-    classifyDashboardError(new ApiError('无法连接服务器', 0, 'NETWORK_ERROR'))
+    classifyDashboardError(new ApiError('Cannot connect to the server', 0, 'NETWORK_ERROR'))
   ).toBe('offline')
   expect(
-    classifyDashboardError(new ApiError('连接超时', 0, 'TIMEOUT'))
+    classifyDashboardError(new ApiError('Connection timed out', 0, 'TIMEOUT'))
   ).toBe('offline')
   expect(classifyDashboardError(new ApiError('Bad gateway', 502))).toBe(
     'offline'
@@ -392,12 +392,12 @@ test('failures are classified so the home can tell offline from revoked access a
   )
   expect(
     classifyDashboardError(
-      new ApiError('需要重新配对这台电脑', 401, 'PAIRING_REQUIRED')
+      new ApiError('This computer needs to be paired again', 401, 'PAIRING_REQUIRED')
     )
   ).toBe('unauthorized')
   expect(
     classifyDashboardError(
-      new ApiError('电脑返回的会话分页无效', 0, 'INVALID_RESPONSE')
+      new ApiError('The computer returned an invalid session page', 0, 'INVALID_RESPONSE')
     )
   ).toBe('failed')
   expect(classifyDashboardError(new ApiError('Server error', 500))).toBe(
@@ -424,7 +424,7 @@ test('the poller reports the failure kind with the message and clears it on reco
     async () => {
       calls++
       if (calls === 1)
-        throw new ApiError('无法连接服务器', 0, 'NETWORK_ERROR')
+        throw new ApiError('Cannot connect to the server', 0, 'NETWORK_ERROR')
       if (calls === 2) throw new ApiError('Unauthorized', 401)
       if (calls === 3) return snapshot('a', time.now() - 20000)
       return snapshot('a', time.now())

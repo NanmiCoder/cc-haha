@@ -292,7 +292,7 @@ describe('sessionStore', () => {
     listMock.mockReturnValue(refresh.promise)
 
     await useSessionStore.getState().createSession('/workspace/project')
-    useSessionStore.getState().updateSessionTitle('session-title-1', '开始优化UI')
+    useSessionStore.getState().updateSessionTitle('session-title-1', 'Start optimizing the UI')
 
     refresh.resolve({
       sessions: [{
@@ -310,7 +310,7 @@ describe('sessionStore', () => {
     await refresh.promise
     await delay(0)
 
-    expect(useSessionStore.getState().sessions[0]?.title).toBe('开始优化UI')
+    expect(useSessionStore.getState().sessions[0]?.title).toBe('Start optimizing the UI')
   })
 
   it.each(['off', 'building'] as const)('keeps an init directory through stale %s list refreshes until persistence catches up', async indexMode => {
@@ -337,7 +337,7 @@ describe('sessionStore', () => {
   })
 
   it('applies a collaboration title that arrives before the indexed session row', async () => {
-    useSessionStore.getState().updateSessionTitle('session-late-index', '安全相关更新分析')
+    useSessionStore.getState().updateSessionTitle('session-late-index', 'Security update analysis')
     listMock.mockResolvedValue({
       sessions: [{
         ...makeSession('session-late-index', '2026-09-22T00:00:01.000Z'),
@@ -348,7 +348,7 @@ describe('sessionStore', () => {
 
     await useSessionStore.getState().fetchSessions()
 
-    expect(useSessionStore.getState().sessions[0]?.title).toBe('安全相关更新分析')
+    expect(useSessionStore.getState().sessions[0]?.title).toBe('Security update analysis')
   })
 
   it('syncs refreshed session titles into already-open tabs', async () => {
@@ -356,7 +356,7 @@ describe('sessionStore', () => {
     listMock.mockResolvedValue({
       sessions: [{
         id: 'session-title-2',
-        title: '使用bash写一个shell，随便写点什么东西',
+        title: 'Write a shell script in bash, anything at all',
         createdAt: '2026-05-07T00:00:00.000Z',
         modifiedAt: '2026-05-07T00:00:01.000Z',
         messageCount: 3,
@@ -369,7 +369,7 @@ describe('sessionStore', () => {
 
     await useSessionStore.getState().fetchSessions()
 
-    expect(useTabStore.getState().tabs[0]?.title).toBe('使用bash写一个shell，随便写点什么东西')
+    expect(useTabStore.getState().tabs[0]?.title).toBe('Write a shell script in bash, anything at all')
   })
 
   it('syncs transcript runtime metadata before a session is opened from the sidebar', async () => {

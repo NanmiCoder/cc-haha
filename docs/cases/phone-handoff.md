@@ -1,42 +1,42 @@
 ---
-title: 用手机接力当前会话
-nav_title: 手机接力
-description: 从手机连接入口开启浏览器访问，在同一 Wi-Fi 下用手机查看电脑上的任务并继续回复。
+title: Continue a session on your phone
+nav_title: Phone handoff
+description: Open Phone connection and use a browser on the same Wi-Fi to continue a task running on your computer.
 order: 5
 ---
 
-# 用手机接力当前会话
+# Continue a session on your phone
 
-电脑上有一条长任务正在跑，你要离开桌面一会儿。点击桌面左侧 **手机连接**，用手机浏览器扫码，就能看到同一条会话、回复问题和处理权限请求；任务仍在电脑上执行。
+A long task is running on your computer and you need to step away. Open **Phone connection** in the desktop's left sidebar and scan with your phone browser to see the same session, answer questions, and respond to permission requests. The work still runs on the computer.
 
-也可以安装 cc-haha 手机 App：Android 在 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) 下载 APK，iPhone 通过 [TestFlight 公开链接](https://testflight.apple.com/join/Nd49JrWZ)安装，需要桌面端 v0.7.6 或更新版本。下面以手机浏览器为例，无需安装 App；同一 Wi-Fi 可直接连接，外出连接由桌面管理 Cloudflare 隧道，无需手机 VPN。
+You can also install the cc-haha mobile app: download the APK from [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) on Android, or join through the [TestFlight public link](https://testflight.apple.com/join/Nd49JrWZ) on iPhone. It needs desktop v0.7.6 or later. The steps below use the phone browser, with no app installation required. Connect directly on the same Wi-Fi, or use the desktop-managed Cloudflare tunnel while away; no phone VPN is needed.
 
-## 准备
+## Before you start
 
-- 电脑和手机连接你信任的同一局域网；桌面应用保持打开，电脑不要休眠。
-- 在桌面端已有一条会话。第一次练习建议用无敏感信息的项目，并先发送一个只读问题，例如“读一下 README，列出三件我该先知道的事”。
-- 浏览器连接默认关闭。[手机 App、H5 与 IM 接力](../desktop/remote.md)说明 App 安装状态、访问令牌与外出连接方法。
+- Connect phone and computer to the same trusted local network. Keep the desktop app open and the computer awake.
+- Have an existing desktop session. For the first trial, use a project without sensitive data and ask a read-only question such as “Read the README and list the first three things I should know.”
+- Browser access is off by default. [Mobile App, H5, and IM](../desktop/remote.md) explains app availability, access tokens, and connecting away from home.
 
-## 操作
+## Steps
 
-1. 在电脑上点击左侧 **手机连接**（也可从 **设置 → 手机连接** 进入），再点击「先用浏览器连接」或选择 **同一 Wi-Fi**。这一步只选择连接方式，需要继续主动开启连接。
-2. 打开「开启局域网连接」并确认提示，页面会给出二维码与链接。如果旧配置缺少访问令牌，先点「生成令牌」。
-3. 用手机相机扫码，在常用的系统浏览器里打开。第一次验证成功后，浏览器会保存连接信息；如果连不上，核对「访问主机 / IP」是否为电脑在当前网络中的地址。
-4. 在手机的会话列表里打开刚才的会话，确认能看到电脑上已经出现的回复。继续发送：
+1. On the computer, open **Phone connection** in the left sidebar, or go to **Settings → Phone connection**. Select **Use phone browser**, or choose **Same Wi-Fi**. This selects the connection method; you still need to enable it yourself.
+2. Turn on **Enable local connection** and confirm the notice to show a QR code and link. If an older configuration has no access token, click **Generate token** first.
+3. Scan the code with your phone camera and open it in your usual system browser. After the first successful verification, the browser remembers the connection. If it cannot connect, check that **Access host / IP** is your computer's address on this network.
+4. Open the existing session from the phone's session list and verify that you see the replies already shown on the computer. Send:
 
 ```text
-把刚才的结论压缩成三条：现在我应该先做什么、有什么未确认、下一步需要我提供什么信息？只总结，不改文件。
+Summarize the previous answer in three points: what should I do first, what is unconfirmed, and what information do you need from me next? Summarize only; do not edit files.
 ```
 
-5. 回到电脑查看同一条会话，确认手机发出的消息和回复也出现在桌面。练习结束后，如果短期内不再使用，就回到 **手机连接 → 同一 Wi-Fi** 关闭「开启局域网连接」。
+5. Return to the computer and confirm that the phone message and reply appear in the same desktop session. When the trial is over, turn off **Enable local connection** under **Phone connection → Same Wi-Fi** if you will not be using it for now.
 
-## 应看到什么
+## Expected result
 
-手机与桌面显示同一条会话；手机消息会进入桌面正在运行的会话，回复也会同步。手机锁屏或短暂断线时，已开始的任务可在电脑上继续，重连后查看结果。
+Phone and desktop show the same session. A message sent from the phone appears in the desktop session and the reply syncs back. A task already running on the computer can continue during a brief phone disconnect or lock; reconnect to see its result.
 
-## 验收与常见卡点
+## Acceptance and common snags
 
-- 手机一直连不上时，先确认桌面应用仍在运行、电脑未休眠、两台设备网络可互通，再检查设置里显示的 IP 和端口。换 Wi-Fi 后地址可能变化。
-- 二维码和链接包含访问凭据，不要发进群聊或公开截图。怀疑泄露时在桌面**重新生成令牌**，旧链接随即失效。
-- H5 有会话与部分设置能力，但没有桌面工作区、内嵌终端和 Computer Use 授权界面；要评审 Diff 或操作桌面专用功能，回到电脑上做。
-- 外出或改用蜂窝网络时，按 [Cloudflare 外出连接说明](../desktop/remote.md#cloudflare-外出连接)开启桌面隧道并完成手机配对；局域网链接仅供可信局域网使用。
+- If the phone cannot connect, check that the app is still running, the computer is awake, and the devices can reach each other. Then check the IP and port shown in Settings. Changing Wi-Fi may change the address.
+- The QR code and link contain access credentials. Do not post them in chats or public screenshots. If exposed, **regenerate the token** on the desktop; the old link stops working.
+- H5 supports sessions and some settings, but not the desktop workspace, embedded terminal, or Computer Use authorization UI. Review diffs and use desktop-only controls back on the computer.
+- Away from home or on cellular data, follow [Cloudflare remote connection](../desktop/remote.md#cloudflare-remote-connection) to enable the desktop tunnel and pair your phone. Keep the local-network link within your trusted LAN.

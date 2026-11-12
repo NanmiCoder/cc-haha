@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 const desktopLogos = join(import.meta.dir, '..', '..', '..', 'desktop', 'public', 'connectors')
 const assets = join(import.meta.dir, '..', '..', 'assets', 'connectors')
-// 索引里是 require('….png')，bun test 不处理图片，所以按文本读键名。
+// The index contains require('….png'), and bun test does not handle images, so read the key names as text.
 const indexed = [...readFileSync(join(import.meta.dir, 'connectorIconSources.ts'), 'utf8').matchAll(/^\s*"([^"]+)": require\(/gm)]
   .map((match) => match[1])
   .sort()
@@ -14,7 +14,7 @@ test('every connector logo the desktop ships has a bundled phone icon', () => {
     .filter((file) => file.endsWith('.svg'))
     .map((file) => file.slice(0, -4))
     .sort()
-  // 桌面新增或更换 logo 后，运行 `bun scripts/connector-icons.ts` 重新生成。
+  // After the desktop adds or changes a logo, run `bun scripts/connector-icons.ts` to regenerate.
   expect(indexed).toEqual(ids)
 })
 

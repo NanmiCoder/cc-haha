@@ -20,8 +20,8 @@ export function applyTheme(theme) {
 }
 
 /**
- * 深浅色跟随系统，用户手动切过之后以用户的选择为准。
- * 首帧的主题由 index.html 里的引导脚本设置，避免闪白。
+ * Light/dark follows the system until the user toggles it manually; after that the user's choice wins.
+ * The first-frame theme is set by the bootstrap script in index.html to avoid a white flash.
  */
 export function useTheme() {
   const [theme, setTheme] = useState(() =>
@@ -50,7 +50,7 @@ export function useTheme() {
       try {
         localStorage.setItem(STORAGE_KEY, next)
       } catch {
-        /* 隐私模式下写不进去，忽略即可 */
+        /* Can't write in private mode; ignore */
       }
       return next
     })

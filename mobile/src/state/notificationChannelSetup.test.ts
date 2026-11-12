@@ -19,7 +19,7 @@ test('importance numbers match the installed expo-notifications AndroidImportanc
     Number(new RegExp(`\\b${name} = (\\d+)`).exec(text)?.[1])
   expect(IMPORTANCE_DEFAULT).toBe(value('DEFAULT'))
   expect(IMPORTANCE_HIGH).toBe(value('HIGH'))
-  // 3 / 4 是 MIN / LOW：渠道会变成无横幅的静默，曾经写错过。
+  // 3 / 4 is MIN / LOW: the channel becomes a silent one without banners; this was gotten wrong once.
   expect(value('MIN')).toBe(3)
   expect(value('LOW')).toBe(4)
 })
@@ -45,23 +45,23 @@ test('Android creates the three split channels with fixed names and importance, 
   ])
   const byId = Object.fromEntries(calls.map((call) => [call.id, call.config]))
   expect(byId[CHANNEL_IDS.decisions]).toMatchObject({
-    name: '要我做决定',
+    name: 'Needs my decision',
     importance: IMPORTANCE_HIGH,
   })
-  // 不能传 sound: 'default'：expo-notifications 会当成自定义声音文件去找，
-  // 在真机上报 "Custom sound 'default' not found"（2026-10-28 在 OnePlus 9 上撞到）。
+  // Do not pass sound: 'default': expo-notifications treats it as a custom sound file to look up, 
+  // and real devices report "Custom sound 'default' not found" (hit on a OnePlus 9 on 2026-10-28).
   for (const call of calls) expect(call.config).not.toHaveProperty('sound')
   expect(byId[CHANNEL_IDS.decisions]!.vibrationPattern).toBeDefined()
   expect(byId[CHANNEL_IDS.completed]).toMatchObject({
-    name: '任务完成',
+    name: 'Task finished',
     importance: IMPORTANCE_DEFAULT,
   })
   expect(byId[CHANNEL_IDS.errors]).toMatchObject({
-    name: '出错或卡住',
+    name: 'Error or stuck',
     importance: IMPORTANCE_HIGH,
   })
   expect(byId[LEGACY_CHANNEL_ID]).toMatchObject({
-    name: '任务与审批',
+    name: 'Tasks and approvals',
     importance: IMPORTANCE_HIGH,
   })
 })

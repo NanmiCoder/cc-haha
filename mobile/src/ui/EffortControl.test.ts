@@ -25,18 +25,18 @@ test('effort control distinguishes unavailable sources and applies only effort t
     assert.deepEqual(applied,{...runtime,effortLevel:'high'})
     choice.source.auth='missing'
     assert.equal(all(render(),'ChoiceRow').length,0)
-    assert.ok(JSON.stringify(render()).includes('请先在电脑上登录'))
-    assert.ok(all(render(),'TextButton').some(row=>row.props.title==='重新读取'))
+    assert.ok(JSON.stringify(render()).includes('Please sign in on the computer first'))
+    assert.ok(all(render(),'TextButton').some(row=>row.props.title==='Reload'))
     choice.source.auth='error'
-    assert.ok(JSON.stringify(render()).includes('尚未确认此供应商的授权状态'))
-    // 当前模型不在列表里：和桌面端一样给通用档位（不含「超高」），不再要求先重选模型。
+    assert.ok(JSON.stringify(render()).includes('Authorization status of this provider is not confirmed yet'))
+    // Current model not in the list: like desktop, give generic tiers (without "Max") instead of requiring a model reselect first.
     choice.source.auth='ready'; choice.models=[]
     assert.deepEqual(all(render(),'ChoiceRow').map(row=>row.key),['low','medium','high','max'])
     all(render(),'ChoiceRow')[3].props.onPress()
     assert.deepEqual(applied,{...runtime,effortLevel:'max'})
     choice.models=[{id:'reasoner',name:'Plain',supportedReasoningEfforts:[]}]
     assert.equal(all(render(),'ChoiceRow').length,0)
-    assert.ok(JSON.stringify(render()).includes('当前模型没有可调的思考强度'))
+    assert.ok(JSON.stringify(render()).includes('The current model has no adjustable thinking effort'))
   `
   expect(() => execFileSync(process.execPath, ['-e', script], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })).not.toThrow()
 })

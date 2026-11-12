@@ -1,21 +1,21 @@
 /**
- * 飞书 CardKit API 薄封装
+ * Thin wrapper over the Feishu CardKit API
  *
- * 这是生产路径的核心：openclaw-lark 的 CardKit 主路径等价实现。
+ * This is the core of the production path: equivalent to openclaw-lark's main CardKit path.
  *
- * 五步流程：
- *   1. createCardEntity()    —— 创建卡片实体，返回 card_id
- *   2. sendCardAsMessage()   —— 通过 IM 消息把卡片挂到聊天窗，返回 message_id
- *   3. streamCardContent()   —— 循环调用，按 element_id 增量追加文本
- *   4. setCardStreamingMode() —— 关闭流式模式（收尾前必须做）
- *   5. updateCardKitCard()   —— 全量替换卡片为最终态
+ * Five-step flow:
+ *   1. createCardEntity()    —— create the card entity, returns card_id
+ *   2. sendCardAsMessage()   —— attach the card to the chat via an IM message, returns message_id
+ *   3. streamCardContent()   —— called in a loop, appends text incrementally by element_id
+ *   4. setCardStreamingMode() —— turn off streaming mode (required before finishing)
+ *   5. updateCardKitCard()   —— replace the whole card with its final state
  *
- * 关键约束：
- * - 每次 3/4/5 类调用必须携带**单调递增**的 sequence，否则飞书拒绝
- * - streamCardContent 传的是**完整累计文本**，不是 delta
- * - 必须关闭 streaming_mode 后卡片才能被用户交互
+ * Key constraints:
+ * - Every step 3/4/5 call must carry a **monotonically increasing** sequence, or Feishu rejects it
+ * - streamCardContent takes the **full accumulated text**, not a delta
+ * - streaming_mode must be turned off before users can interact with the card
  *
- * 参考实现: openclaw-lark/src/card/cardkit.ts
+ * Reference implementation: openclaw-lark/src/card/cardkit.ts
  */
 
 import type * as Lark from '@larksuiteoapi/node-sdk'
@@ -24,8 +24,8 @@ import type * as Lark from '@larksuiteoapi/node-sdk'
 // Constants
 // ---------------------------------------------------------------------------
 
-/** 流式 markdown 元素的固定 element_id。卡片 JSON 里用这个 id 标记要被
- *  `cardElement.content()` 更新的那一个 markdown 元素。 */
+/** Fixed element_id of the streaming markdown element. The card JSON uses this id to mark
+ *  the one markdown element updated by `cardElement.content()`. */
 export const STREAMING_ELEMENT_ID = 'streaming_content'
 
 // ---------------------------------------------------------------------------
@@ -33,9 +33,9 @@ export const STREAMING_ELEMENT_ID = 'streaming_content'
 // ---------------------------------------------------------------------------
 
 /**
- * SDK 返回的通用响应结构。
- * SDK 的 TypeScript 类型不完整，运行时实际返回 { code, msg, data }。
- * 我们统一当成 CardKitResponse 处理以免到处 `as any`。
+ * Generic response shape returned by the SDK.
+ * The SDK's TypeScript types are incomplete; at runtime it returns { code, msg, data }.
+ * We treat it uniformly as CardKitResponse to avoid `as any` everywhere.
  */
 type CardKitResponse = {
   code?: number
@@ -44,8 +44,8 @@ type CardKitResponse = {
   [key: string]: unknown
 }
 
-/** 非零 code 时抛出的结构化错误。字段与 Lark SDK 的标准错误对齐，
- *  可被 card-errors.ts 的 parseCardApiError 识别。 */
+/** Structured error thrown on a non-zero code. Fields align with the Lark SDK's standard error,
+ *  so card-errors.ts parseCardApiError can recognize it. */
 export class CardKitApiError extends Error {
   readonly code: number
   readonly msg: string
@@ -97,10 +97,10 @@ export async function withImCardRequestTimeout<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * 检查 CardKit 响应的 body-level code。非 0 → 抛 CardKitApiError。
+ * Check the body-level code of a CardKit response. Non-zero → throw CardKitApiError.
  *
- * Fail-fast 策略: 让 streaming-card 用 try/catch 配合 card-errors 统一
- * 判断是速率限制还是真错误。
+ * Fail-fast strategy: streaming-card uses try/catch with card-errors to decide
+ * uniformly whether it is a rate limit or a real error.
  */
 function assertCardKitOk(params: {
   resp: CardKitResponse
@@ -124,19 +124,19 @@ function assertCardKitOk(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * 创建一张 CardKit 卡片实体，返回 card_id。
+ * Create a CardKit card entity and return its card_id.
  *
- * 此时卡片还没挂到任何聊天窗。需要再调 sendCardAsMessage 才能显示。
+ * The card is not attached to any chat yet; call sendCardAsMessage to display it.
  *
  * @param client  Lark SDK client
- * @param card    Schema 2.0 格式的卡片 JSON
- * @returns       飞书分配的 card_id（失败时抛错）
+ * @param card    Card JSON in Schema 2.0 format
+ * @returns       card_id assigned by Feishu (throws on failure)
  */
 export async function createCardEntity(
   client: LarkClient,
   card: Record<string, unknown>,
 ): Promise<string> {
-  // SDK 返回类型不完整，cast 到运行时实际结构
+  // SDK return type is incomplete; cast to the actual runtime shape
   const resp = (await withImCardRequestTimeout('card.create', () =>
     client.cardkit.v1.card.create({
       data: {
@@ -152,7 +152,7 @@ export async function createCardEntity(
     context: `cardLen=${JSON.stringify(card).length}`,
   })
 
-  // 兼容不同 SDK 包装层：data.card_id 优先，回退顶层 card_id
+  // Handle different SDK wrapper layers: prefer data.card_id, fall back to top-level card_id
   const cardId =
     (resp.data?.card_id as string | undefined) ??
     (resp.card_id as string | undefined)
@@ -173,16 +173,16 @@ export async function createCardEntity(
 // ---------------------------------------------------------------------------
 
 /**
- * 把 CardKit 卡片通过 IM 消息挂到聊天窗。
+ * Attach a CardKit card to a chat via an IM message.
  *
- * content 格式: `{"type":"card","data":{"card_id":"xxx"}}`
- * msg_type 固定为 `interactive`。
+ * content format: `{"type":"card","data":{"card_id":"xxx"}}`
+ * msg_type is always `interactive`.
  *
  * @param client            Lark SDK client
- * @param chatId            目标 chat_id
- * @param cardId            CardKit card_id（由 createCardEntity 产生）
- * @param replyToMessageId  可选。如果提供，走 im.message.reply；否则 im.message.create
- * @returns                 飞书分配的 message_id
+ * @param chatId            target chat_id
+ * @param cardId            CardKit card_id (produced by createCardEntity)
+ * @param replyToMessageId  optional. If provided, uses im.message.reply; otherwise im.message.create
+ * @returns                 message_id assigned by Feishu
  */
 export async function sendCardAsMessage(
   client: LarkClient,
@@ -243,17 +243,17 @@ export async function sendCardAsMessage(
 // ---------------------------------------------------------------------------
 
 /**
- * 流式更新指定 element 的内容。飞书自动对比旧内容做 diff，在客户端
- * 渲染打字机效果。
+ * Stream-update the content of the given element. Feishu diffs against the old content
+ * and renders a typewriter effect on the client.
  *
- * **重要**: `content` 必须传**完整累计文本**，不是 delta。
- * sequence 必须**单调递增**，否则飞书拒绝。
+ * **Important**: `content` must be the **full accumulated text**, not a delta.
+ * sequence must be **monotonically increasing**, or Feishu rejects it.
  *
  * @param client     Lark SDK client
  * @param cardId     CardKit card_id
- * @param elementId  要更新的元素 id（通常是 STREAMING_ELEMENT_ID）
- * @param content    完整累计文本
- * @param sequence   单调递增序列号
+ * @param elementId  id of the element to update (usually STREAMING_ELEMENT_ID)
+ * @param content    full accumulated text
+ * @param sequence   monotonically increasing sequence number
  */
 export async function streamCardContent(
   client: LarkClient,
@@ -281,8 +281,8 @@ export async function streamCardContent(
 // ---------------------------------------------------------------------------
 
 /**
- * 开/关卡片的流式模式。收尾前必须调用 `streamingMode: false`，
- * 否则卡片会保持"只读"状态，用户点按钮没反应。
+ * Turn the card's streaming mode on/off. Must call with `streamingMode: false` before finishing,
+ * otherwise the card stays "read-only" and buttons do nothing.
  */
 export async function setCardStreamingMode(
   client: LarkClient,
@@ -312,8 +312,8 @@ export async function setCardStreamingMode(
 // ---------------------------------------------------------------------------
 
 /**
- * 全量替换卡片为新的 JSON。用于流式结束后把卡片切换成最终态
- * （加 header template、footer、完成样式等）。
+ * Replace the whole card with new JSON. Used after streaming ends to switch the card to its final state
+ * (header template, footer, completed style, etc.).
  */
 export async function updateCardKitCard(
   client: LarkClient,

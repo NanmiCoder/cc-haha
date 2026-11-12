@@ -30,7 +30,7 @@ test('iOS builds carry the time-sensitive notification entitlement through app.c
   expect(app.expo.ios.entitlements[key]).toBe(true)
   const resolved = appConfig({ config: app.expo } as never)
   expect(resolved.ios?.entitlements?.[key]).toBe(true)
-  // 加 entitlement 不能顶掉原有的 iOS 配置。
+  // Adding the entitlement must not overwrite the existing iOS config.
   expect(resolved.ios?.bundleIdentifier).toBe('com.yunce.cchaha.mobile')
   expect(resolved.ios?.infoPlist).toEqual(app.expo.ios.infoPlist)
 })

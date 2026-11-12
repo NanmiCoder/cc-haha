@@ -5,8 +5,8 @@ import { Text } from '../Text'
 import { outputPreview, taskGlyph, taskSubline, taskTitle } from './taskLabels'
 
 /**
- * 后台任务一行（Activity 稿）：状态 · 标题 · 副行 ·（运行中）停止胶囊；
- * 运行中的命令下方两行输出预览。点主体打开输出，整机模式只读、点行进会话。
+ * One background task row (Activity design): status · title · subline · (while running) stop capsule; 
+ * two lines of output preview under running commands. Tap the body to open output; whole-computer mode is read-only and tapping a row enters the session.
  */
 export function TaskRow({
   task,
@@ -19,7 +19,7 @@ export function TaskRow({
   task: BackgroundTask
   now: number
   onOpen?(): void
-  /** 不传时只读：不出现停止按钮。 */
+  /** When omitted it is read-only: no stop button. */
   onStop?(): void
   stopDisabled?: boolean
   stopping?: boolean
@@ -87,7 +87,7 @@ export function TaskRow({
         {onOpen ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`查看 ${title} 输出`}
+            accessibilityLabel={`View output of ${title}`}
             onPress={onOpen}
             style={({ pressed }) => ({
               flex: 1,
@@ -108,7 +108,7 @@ export function TaskRow({
         {showStop && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`停止 ${title}`}
+            accessibilityLabel={`Stop ${title}`}
             accessibilityState={{ disabled: stopDisabled, busy: stopping }}
             disabled={stopDisabled}
             onPress={onStop}
@@ -124,7 +124,7 @@ export function TaskRow({
             })}
           >
             <Text style={{ fontSize: 14, fontWeight: '600', color: colors.err }}>
-              {stopping ? '停止中' : '停止'}
+              {stopping ? 'Stopping' : 'Stop'}
             </Text>
           </Pressable>
         )}
@@ -134,7 +134,7 @@ export function TaskRow({
   )
 }
 
-/** 运行中命令的两行输出预览；只读模式下不可点。 */
+/** Two-line output preview of a running command; not tappable in read-only mode. */
 function OutputPreview({
   lines,
   title,
@@ -161,7 +161,7 @@ function OutputPreview({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`查看 ${title} 完整输出`}
+      accessibilityLabel={`View full output of ${title}`}
       onPress={onOpen}
       style={({ pressed }) => [box, { opacity: pressed ? 0.7 : 1 }]}
     >

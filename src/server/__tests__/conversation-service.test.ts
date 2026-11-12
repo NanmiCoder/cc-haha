@@ -549,7 +549,7 @@ describe('ConversationService', () => {
       const service = new ConversationService() as any
       const env = (await service.buildChildEnv('/tmp')) as Record<string, string>
 
-      // The user's "请求超时" must reach the first-token watchdog, not only the
+      // The user's "Request timeout" must reach the first-token watchdog, not only the
       // SDK client timeout (which on a stream is cleared the moment response
       // headers arrive). Otherwise a local/3P model that needs minutes to emit
       // its first token gets killed by the 240s idle watchdog no matter how high
@@ -576,7 +576,7 @@ describe('ConversationService', () => {
 
       // The overall cap is NOT reset by incoming chunks, so a local model that
       // keeps streaming thinking_delta events past it is killed mid-response.
-      // Raising "请求超时" must therefore extend the cap too — otherwise the
+      // Raising "Request timeout" must therefore extend the cap too — otherwise the
       // user's timeout setting is silently capped at 600s (#1307).
       expect(env.API_TIMEOUT_MS).toBe(String(timeoutMs))
       expect(env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS).toBe(String(timeoutMs))
@@ -1898,10 +1898,10 @@ describe('ConversationService', () => {
     }])
   })
 
-  // CLI 的 WebSocketTransport 每次重连成功都会把整个发送缓冲区重放一遍，并假定
-  // 「The server deduplicates by UUID」。以前 server 没实现这个契约：笔记本睡醒后
-  // CLI 重连，一整轮早已结束的对话会被重新推上来，前端当成实时输出再渲染一遍
-  // （表现为满屏「已思考」）。
+  // The CLI's WebSocketTransport replays its whole send buffer after every successful reconnect, and assumes
+  // "The server deduplicates by UUID". The server used not to implement this contract: after a laptop woke up
+  // and the CLI reconnected, a long-finished turn was pushed again and the frontend re-rendered it as live output
+  // (showing a screen full of "Thought").
   test('drops SDK messages replayed by the CLI after a reconnect', () => {
     const service = new ConversationService() as any
     const forwarded: any[] = []
@@ -1923,16 +1923,16 @@ describe('ConversationService', () => {
     service.handleSdkPayload('replay-dedupe', payload)
     expect(forwarded).toHaveLength(3)
 
-    // 重连后 CLI 把同一批消息从缓冲区头部重放 —— 一条都不该再转发出去。
+    // After reconnecting the CLI replays the same batch from the head of its buffer —— none of it should be forwarded again.
     service.handleSdkPayload('replay-dedupe', payload)
     service.handleSdkPayload('replay-dedupe', payload)
     expect(forwarded).toHaveLength(3)
   })
 
-  // 真机日志（cli-diagnostics.jsonl.58975）显示重放的 858 条里绝大多数是 stream_event：
-  // 桌面端固定传 --include-partial-messages，CLI 为每个 thinking_delta 单独产一条
-  // stream_event 并现铸 uuid（QueryEngine.ts:846），所以重放到达前端时是 delta 碎片，
-  // 而不是整块 thinking。渲染侧的逐字比对挡不住碎片，只有这里的 uuid 判重挡得住。
+  // Real-device logs (cli-diagnostics.jsonl.58975) show most of the 858 replayed messages were stream_event:
+  // the desktop always passes --include-partial-messages, so the CLI emits one stream_event per thinking_delta
+  // and mints a uuid on the spot (QueryEngine.ts:846); the replay reaches the frontend as delta fragments,
+  // not whole thinking blocks. Character-level comparison on the render side can't catch fragments; only uuid dedup here can.
   test('drops replayed partial-message stream events, not just whole assistant blocks', () => {
     const service = new ConversationService() as any
     const forwarded: any[] = []
@@ -1977,7 +1977,7 @@ describe('ConversationService', () => {
       pendingPermissionRequests: new Map(),
     })
 
-    // 没有 uuid 的消息不会进 CLI 的重放缓冲，所以也不该被判重丢弃。
+    // Messages without a uuid never enter the CLI's replay buffer, so they must not be dropped as duplicates either.
     const payload = JSON.stringify({ type: 'result', subtype: 'success', is_error: false })
     service.handleSdkPayload('no-uuid', payload)
     service.handleSdkPayload('no-uuid', payload)
@@ -1988,7 +1988,7 @@ describe('ConversationService', () => {
   test('tolerates sessions created without the replay-dedupe bookkeeping', () => {
     const service = new ConversationService() as any
     const forwarded: any[] = []
-    // 故意不带 seenSdkMessageUuids，模拟别处构造出来的会话对象。
+    // Deliberately without seenSdkMessageUuids, simulating a session object constructed elsewhere.
     service.sessions.set('legacy-shape', {
       outputCallbacks: [(message: any) => forwarded.push(message)],
       sdkMessages: [],
@@ -2018,7 +2018,7 @@ describe('ConversationService', () => {
       pendingPermissionRequests: new Map(),
     })
 
-    // CLI 侧缓冲上限是 1000 条，整个缓冲区被重放时每一条都必须还认得出来。
+    // The CLI-side buffer holds up to 1000 messages; every one must still be recognized when the whole buffer is replayed.
     const CLI_REPLAY_BUFFER_SIZE = 1000
     const payload = Array.from({ length: CLI_REPLAY_BUFFER_SIZE }, (_unused, index) =>
       JSON.stringify({ type: 'assistant', uuid: `uuid-${index}`, message: { content: [] } }),

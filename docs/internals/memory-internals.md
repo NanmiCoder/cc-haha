@@ -1,54 +1,54 @@
 ---
-title: 记忆系统实现原理
-nav_title: 记忆系统实现
-description: 路径解析、提示词注入、自动提取、智能检索与团队记忆同步。
+title: Memory System Internals
+nav_title: Memory Internals
+description: Path resolution, prompt injection, auto-extraction, retrieval, and team memory sync.
 order: 10
 ---
 
-# 记忆系统实现原理
+# Memory System Internals
 
-从系统提示词注入到后台自动提取，拆解记忆系统的每一个技术细节。
+From system prompt injection to background auto-extraction, dissecting every technical detail of the memory system.
 
-![实现架构总览](./images/05-architecture-overview.png)
+![Implementation Architecture Overview](./images/05-architecture-overview.png)
 
-## 整体架构
+## Overall Architecture
 
-记忆系统由 5 个核心模块协作完成：
+The memory system is powered by 5 core modules working in concert:
 
-| 模块 | 源码位置 | 职责 |
-|------|----------|------|
-| **路径解析** | `src/memdir/paths.ts` | 计算记忆存储目录，处理覆盖和安全校验 |
-| **提示词构建** | `src/memdir/memdir.ts` | 将记忆指令注入系统提示词 |
-| **记忆扫描** | `src/memdir/memoryScan.ts` | 扫描目录、解析 frontmatter、排序 |
-| **智能检索** | `src/memdir/findRelevantMemories.ts` | 用 Sonnet 选择与当前查询相关的记忆 |
-| **自动提取** | `src/services/extractMemories/` | 后台分叉 Agent，从对话中提取记忆 |
+| Module | Source Location | Responsibility |
+|--------|----------------|----------------|
+| **Path Resolution** | `src/memdir/paths.ts` | Computes memory storage directory, handles overrides and security validation |
+| **Prompt Construction** | `src/memdir/memdir.ts` | Injects memory instructions into the system prompt |
+| **Memory Scanning** | `src/memdir/memoryScan.ts` | Scans directories, parses frontmatter, sorts entries |
+| **Intelligent Retrieval** | `src/memdir/findRelevantMemories.ts` | Uses Sonnet to select memories relevant to the current query |
+| **Auto-Extraction** | `src/services/extractMemories/` | Background forked agent that extracts memories from conversations |
 
-辅助模块：
+Auxiliary modules:
 
-| 模块 | 源码位置 | 职责 |
-|------|----------|------|
-| **AutoDream** | `src/services/autoDream/` | 后台记忆整合（"做梦"），详见 [AutoDream](./autodream.md) |
-| **类型定义** | `src/memdir/memoryTypes.ts` | 四种记忆类型的分类法和提示词模板 |
-| **新鲜度** | `src/memdir/memoryAge.ts` | 计算记忆年龄、生成陈旧警告 |
-| **文件检测** | `src/utils/memoryFileDetection.ts` | 判断路径是否属于记忆系统 |
-| **Agent 记忆** | `src/tools/AgentTool/agentMemory.ts` | 子 Agent 专属的三级记忆目录 |
-| **团队同步** | `src/services/teamMemorySync/` | 记忆的远程上传/下载 |
+| Module | Source Location | Responsibility |
+|--------|----------------|----------------|
+| **AutoDream** | `src/services/autoDream/` | Background memory consolidation ("dreaming"); see [AutoDream](./autodream.md) |
+| **Type Definitions** | `src/memdir/memoryTypes.ts` | Taxonomy and prompt templates for the four memory types |
+| **Freshness** | `src/memdir/memoryAge.ts` | Calculates memory age, generates stale warnings |
+| **File Detection** | `src/utils/memoryFileDetection.ts` | Determines whether a path belongs to the memory system |
+| **Agent Memory** | `src/tools/AgentTool/agentMemory.ts` | Three-level memory directories exclusive to subagents |
+| **Team Sync** | `src/services/teamMemorySync/` | Remote upload/download of memories |
 
-## 路径解析系统
+## Path Resolution System
 
-![路径解析流程](./images/06-path-resolution.png)
+![Path Resolution Flow](./images/06-path-resolution.png)
 
-### 核心函数：`getAutoMemPath()`
+### Core Function: `getAutoMemPath()`
 
 ```
-路径解析优先级（从高到低）：
+Path resolution priority (highest to lowest):
 
-1. CLAUDE_COWORK_MEMORY_PATH_OVERRIDE  ← Cowork 环境变量（完整路径）
-2. settings.json → autoMemoryDirectory  ← 用户设置（支持 ~/ 展开）
-3. {memoryBase}/projects/{sanitized-git-root}/memory/  ← 默认计算路径
+1. CLAUDE_COWORK_MEMORY_PATH_OVERRIDE  <- Cowork environment variable (full path)
+2. settings.json -> autoMemoryDirectory <- User setting (supports ~/ expansion)
+3. {memoryBase}/projects/{sanitized-git-root}/memory/  <- Default computed path
 ```
 
-**关键源码** `src/memdir/paths.ts:223`：
+**Key source** `src/memdir/paths.ts:223`:
 
 ```typescript
 export const getAutoMemPath = memoize(
@@ -58,246 +58,246 @@ export const getAutoMemPath = memoize(
     const projectsDir = join(getMemoryBaseDir(), 'projects')
     return join(projectsDir, sanitizePath(getAutoMemBase()), AUTO_MEM_DIRNAME) + sep
   },
-  () => getProjectRoot(),  // 缓存 key = 项目根目录
+  () => getProjectRoot(),  // Cache key = project root
 )
 ```
 
-### 路径安全校验
+### Path Security Validation
 
-`validateMemoryPath()` 拒绝危险路径：
+`validateMemoryPath()` rejects dangerous paths:
 
-| 被拒路径 | 原因 |
-|----------|------|
-| `../foo` | 相对路径，CWD 相关 |
-| `/` 或 `/a` | 根路径或过短路径 |
-| `C:\` | Windows 驱动器根目录 |
-| `\\server\share` | UNC 网络路径 |
-| 含 `\0` | 空字节，可在系统调用中截断 |
+| Rejected Path | Reason |
+|---------------|--------|
+| `../foo` | Relative path, CWD-dependent |
+| `/` or `/a` | Root path or too-short path |
+| `C:\` | Windows drive root |
+| `\\server\share` | UNC network path |
+| Contains `\0` | Null byte, can truncate in system calls |
 
-**安全限制**：项目级 `.claude/settings.json` **不允许**设置 `autoMemoryDirectory`，防止恶意仓库通过此项获取对 `~/.ssh` 等敏感目录的写权限。
+**Security restriction**: Project-level `.claude/settings.json` is **not allowed** to set `autoMemoryDirectory`, preventing malicious repositories from gaining write access to sensitive directories like `~/.ssh`.
 
-### 启用条件
+### Enable Conditions
 
-`isAutoMemoryEnabled()` 的判断链：
+The `isAutoMemoryEnabled()` check chain:
 
 ```
-CLAUDE_CODE_DISABLE_AUTO_MEMORY=1  → 关闭
-CLAUDE_CODE_SIMPLE (--bare)        → 关闭
-远程模式 且 无 REMOTE_MEMORY_DIR   → 关闭
-settings.json autoMemoryEnabled    → 跟随设置
-默认                               → 开启
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1  -> Disabled
+CLAUDE_CODE_SIMPLE (--bare)        -> Disabled
+Remote mode without REMOTE_MEMORY_DIR -> Disabled
+settings.json autoMemoryEnabled    -> Follows setting
+Default                            -> Enabled
 ```
 
-## 系统提示词注入
+## System Prompt Injection
 
-![提示词注入流程](./images/07-prompt-injection.png)
+![Prompt Injection Flow](./images/07-prompt-injection.png)
 
-### 入口：`loadMemoryPrompt()`
+### Entry Point: `loadMemoryPrompt()`
 
-这是记忆系统与系统提示词的接口。启动时调用一次（通过 `systemPromptSection` 缓存）。
+This is the interface between the memory system and the system prompt. It is called once at startup (cached via `systemPromptSection`).
 
 ```
 loadMemoryPrompt()
-  ├─ KAIROS 模式？→ buildAssistantDailyLogPrompt()  [日志追加模式]
-  ├─ TEAMMEM 开启？→ buildCombinedMemoryPrompt()    [个人+团队双目录]
-  ├─ 正常模式 → buildMemoryLines()                   [单目录]
-  └─ 禁用 → return null
+  |-- KAIROS mode?    -> buildAssistantDailyLogPrompt()  [log append mode]
+  |-- TEAMMEM enabled? -> buildCombinedMemoryPrompt()    [personal + team dual directory]
+  |-- Normal mode     -> buildMemoryLines()               [single directory]
+  |-- Disabled        -> return null
 ```
 
-### `buildMemoryLines()` 构建的提示词结构
+### Prompt Structure Built by `buildMemoryLines()`
 
 ```
 # auto memory
 
-你有一个持久化的文件记忆系统，位于 `{memoryDir}`...
+You have a persistent file-based memory system located at `{memoryDir}`...
 
-## Types of memory          ← 四种类型的定义和示例
-## What NOT to save         ← 排除规则
-## How to save memories     ← 两步保存流程
-## When to access memories  ← 何时查阅
-## Before recommending      ← 引用前验证
-## Memory and other forms   ← 与 Plan/Task 的区别
+## Types of memory          <- Definitions and examples for all four types
+## What NOT to save         <- Exclusion rules
+## How to save memories     <- Two-step saving process
+## When to access memories  <- When to consult
+## Before recommending      <- Verify before citing
+## Memory and other forms   <- Distinction from Plan/Task
 
-## MEMORY.md                ← 索引内容（或"当前为空"）
+## MEMORY.md                <- Index content (or "currently empty")
 ```
 
-### MEMORY.md 截断策略
+### MEMORY.md Truncation Strategy
 
-`truncateEntrypointContent()` 执行双重限制：
+`truncateEntrypointContent()` applies dual limits:
 
 ```typescript
-// 先截断行数
-if (lineCount > 200) → 截断到 200 行
+// First truncate by line count
+if (lineCount > 200) -> Truncate to 200 lines
 
-// 再截断字节数（处理超长行）
-if (bytes > 25,000) → 在最后一个换行符处截断
+// Then truncate by byte size (handles extra-long lines)
+if (bytes > 25,000) -> Truncate at last newline character
 
-// 附加警告
+// Append warning
 "WARNING: MEMORY.md is {reason}. Only part of it was loaded."
 ```
 
-### 目录自动创建
+### Automatic Directory Creation
 
-`ensureMemoryDirExists()` 在加载提示词时确保目录存在：
-- 递归创建 `mkdir`（处理整个父链）
-- 吞掉 `EEXIST`（幂等）
-- 真正的权限错误只记日志不中断（Write 工具会显示真实错误）
+`ensureMemoryDirExists()` ensures the directory exists when loading the prompt:
+- Recursively creates with `mkdir` (handles the entire parent chain)
+- Swallows `EEXIST` (idempotent)
+- Genuine permission errors are only logged, not thrown (the Write tool will surface the real error)
 
-提示词中明确告知模型目录已存在，避免浪费 turn 执行 `ls` 或 `mkdir`。
+The prompt explicitly tells the model the directory already exists, avoiding wasted turns on `ls` or `mkdir`.
 
-## 自动记忆提取
+## Automatic Memory Extraction
 
-![自动提取流程](./images/08-auto-extraction.png)
+![Auto-Extraction Flow](./images/08-auto-extraction.png)
 
-### 触发时机
+### Trigger Timing
 
-在 `handleStopHooks` 中，当模型产生最终响应（无工具调用）时触发。
+Triggered in `handleStopHooks` when the model produces a final response (no tool calls).
 
-**关键源码** `src/services/extractMemories/extractMemories.ts`
+**Key source**: `src/services/extractMemories/extractMemories.ts`
 
-### 完整提取流程
+### Complete Extraction Flow
 
 ```
-1. 模型完成回复（无 tool_use）
-   ↓
-2. executeExtractMemories() 被调用
-   ↓
-3. 守卫检查：
-   - 是主代理？（子代理不提取）
-   - 功能门控开启？
-   - 自动记忆启用？
-   - 非远程模式？
-   - 没有并行提取在进行？
-   ↓
-4. 频率控制：
+1. Model finishes response (no tool_use)
+   |
+2. executeExtractMemories() is called
+   |
+3. Guard checks:
+   - Is this the main agent? (sub-agents don't extract)
+   - Feature gate enabled?
+   - Auto-memory enabled?
+   - Not in remote mode?
+   - No parallel extraction in progress?
+   |
+4. Frequency control:
    turnsSinceLastExtraction++
-   if < tengu_bramble_lintel → 跳过
-   ↓
-5. 互斥检查：
-   主代理自己写了记忆？→ 跳过，推进游标
-   ↓
-6. 扫描现有记忆目录（scanMemoryFiles）
-   生成清单（formatMemoryManifest）
-   ↓
-7. 构建提取提示词（buildExtractAutoOnlyPrompt）
-   ↓
-8. 运行分叉代理（runForkedAgent）
-   - 共享父会话的提示词缓存
-   - 最多 5 个 turn
-   - 限制工具权限
-   ↓
-9. 提取写入的文件路径
-   推进游标到最新消息
-   ↓
-10. 通知用户："Memory updated in ..."
+   if < tengu_bramble_lintel -> skip
+   |
+5. Mutual exclusion check:
+   Main agent wrote memory itself? -> skip, advance cursor
+   |
+6. Scan existing memory directory (scanMemoryFiles)
+   Generate manifest (formatMemoryManifest)
+   |
+7. Build extraction prompt (buildExtractAutoOnlyPrompt)
+   |
+8. Run forked agent (runForkedAgent)
+   - Shares parent session's prompt cache
+   - Max 5 turns
+   - Restricted tool permissions
+   |
+9. Extract written file paths
+   Advance cursor to latest message
+   |
+10. Notify user: "Memory updated in ..."
 ```
 
-### 分叉 Agent（Forked Agent）
+### Forked Agent
 
-自动提取使用 `runForkedAgent` — 这是对主会话的完美分叉：
+Auto-extraction uses `runForkedAgent` -- a perfect fork of the main session:
 
-- **共享提示词缓存**：避免重复的 API 缓存创建费用
-- **隔离执行**：不影响主会话的消息历史
-- **受限工具**：只允许 Read、Grep、Glob、只读 Bash、以及对记忆目录的 Edit/Write
-- **不记录转录**：防止与主线程的竞争条件
+- **Shared prompt cache**: Avoids duplicate API cache creation costs
+- **Isolated execution**: Does not affect the main session's message history
+- **Restricted tools**: Only allows Read, Grep, Glob, read-only Bash, and Edit/Write within the memory directory
+- **No transcript recording**: Prevents race conditions with the main thread
 
-### 工具权限（`createAutoMemCanUseTool`）
+### Tool Permissions (`createAutoMemCanUseTool`)
 
 ```
-允许：Read, Grep, Glob（无限制）
-允许：Bash（仅只读命令：ls, find, grep, cat, stat...）
-允许：Edit/Write（仅 auto-memory 目录内）
-拒绝：MCP, Agent, 非只读 Bash, 其他写操作
+Allowed: Read, Grep, Glob (unrestricted)
+Allowed: Bash (read-only commands only: ls, find, grep, cat, stat...)
+Allowed: Edit/Write (only within auto-memory directory)
+Denied: MCP, Agent, non-read-only Bash, other write operations
 ```
 
-### 互斥机制
+### Mutual Exclusion Mechanism
 
-主 Agent 和提取 Agent 是**互斥的**：
+The main agent and the extraction agent are **mutually exclusive**:
 
 ```typescript
 function hasMemoryWritesSince(messages, sinceUuid): boolean {
-  // 扫描 sinceUuid 之后的所有 assistant 消息
-  // 如果有任何 Edit/Write 的 tool_use 指向 auto-memory 目录
-  // → return true（跳过提取，推进游标）
+  // Scan all assistant messages after sinceUuid
+  // If any Edit/Write tool_use targets the auto-memory directory
+  // -> return true (skip extraction, advance cursor)
 }
 ```
 
-这避免了重复保存：主 Agent 已经写了记忆时，后台提取直接跳过。
+This prevents duplicate saves: when the main agent has already written a memory, the background extraction is skipped.
 
-### 合并机制
+### Merge Mechanism
 
-如果前一次提取还在运行：
-1. 新的上下文被暂存（`pendingContext`）
-2. 旧提取完成后，立即启动一次**尾部提取**
-3. 尾部提取只处理两次调用之间新增的消息
+If a previous extraction is still running:
+1. The new context is queued (`pendingContext`)
+2. After the old extraction completes, a **tail extraction** is immediately launched
+3. The tail extraction only processes messages added between the two calls
 
-## 智能记忆检索
+## Intelligent Memory Retrieval
 
-![记忆检索流程](./images/09-memory-retrieval.png)
+![Memory Retrieval Flow](./images/09-memory-retrieval.png)
 
-### 工作原理
+### How It Works
 
-每次用户发送查询时，`findRelevantMemories()` 被触发：
+Each time the user sends a query, `findRelevantMemories()` is triggered:
 
 ```
 1. scanMemoryFiles(memoryDir)
-   - 递归读取所有 .md 文件（排除 MEMORY.md）
-   - 解析 frontmatter（前 30 行）
-   - 按修改时间降序排序
-   - 最多 200 个文件
-   ↓
-2. 过滤已展示过的记忆（alreadySurfaced）
-   ↓
-3. 格式化清单（formatMemoryManifest）
+   - Recursively reads all .md files (excludes MEMORY.md)
+   - Parses frontmatter (first 30 lines)
+   - Sorts by modification time in descending order
+   - Max 200 files
+   |
+2. Filter out previously surfaced memories (alreadySurfaced)
+   |
+3. Format manifest (formatMemoryManifest)
    - [type] filename (ISO timestamp): description
-   ↓
-4. Sonnet 模型选择（sideQuery）
-   - 系统提示：你是记忆选择器...
-   - 用户消息：Query + Available memories + Recently used tools
-   - 输出：JSON { selected_memories: string[] }
-   - 最多选 5 个
-   ↓
-5. 返回选中记忆的 { path, mtimeMs }
+   |
+4. Sonnet model selection (sideQuery)
+   - System prompt: You are a memory selector...
+   - User message: Query + Available memories + Recently used tools
+   - Output: JSON { selected_memories: string[] }
+   - Max 5 selections
+   |
+5. Return selected memories as { path, mtimeMs }
 ```
 
-### Sonnet 选择器的提示词
+### Sonnet Selector Prompt
 
 ```
-你正在选择对 Claude Code 处理用户查询有用的记忆。
-你将收到用户查询和可用记忆文件列表（含文件名和描述）。
+You are selecting memories useful for Claude Code to handle the user's query.
+You'll receive the user's query and a list of available memory files (with filenames and descriptions).
 
-返回最多 5 个明确有用的记忆文件名。
-- 不确定是否有用就不要选
-- 没有明确有用的就返回空列表
-- 如果提供了最近使用的工具列表，不要选这些工具的使用文档
-  （但 DO 选择关于这些工具的警告/陷阱/已知问题）
+Return at most 5 memory filenames that are clearly useful.
+- If uncertain whether something is useful, don't select it
+- If nothing is clearly useful, return an empty list
+- If a list of recently used tools is provided, don't select usage docs for those tools
+  (but DO select warnings/gotchas/known issues about those tools)
 ```
 
-### 新鲜度警告
+### Freshness Warning
 
-选中的记忆在注入上下文时会附带新鲜度信息：
+Selected memories are injected into the context with freshness information:
 
 ```typescript
 function memoryFreshnessText(mtimeMs: number): string {
   const d = memoryAgeDays(mtimeMs)
-  if (d <= 1) return ''  // 今天/昨天：无警告
+  if (d <= 1) return ''  // Today/yesterday: no warning
   return `This memory is ${d} days old. Memories are point-in-time observations...
           Verify against current code before asserting as fact.`
 }
 ```
 
-## 记忆扫描详解
+## Memory Scanning in Detail
 
 ### `scanMemoryFiles()`
 
-**关键设计**：单次遍历（read-then-sort），避免双重 stat 系统调用。
+**Key design**: Single-pass (read-then-sort) to avoid double stat system calls.
 
 ```typescript
 async function scanMemoryFiles(memoryDir, signal): Promise<MemoryHeader[]> {
   const entries = await readdir(memoryDir, { recursive: true })
   const mdFiles = entries.filter(f => f.endsWith('.md') && basename(f) !== 'MEMORY.md')
 
-  // 并行读取所有文件的 frontmatter（前 30 行）
+  // Read all files' frontmatter in parallel (first 30 lines)
   const headerResults = await Promise.allSettled(
     mdFiles.map(async (relativePath) => {
       const { content, mtimeMs } = await readFileInRange(filePath, 0, 30)
@@ -306,150 +306,158 @@ async function scanMemoryFiles(memoryDir, signal): Promise<MemoryHeader[]> {
     })
   )
 
-  // 过滤成功的、按时间降序排序、取前 200
+  // Filter successful results, sort by time descending, take first 200
   return fulfilled.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 200)
 }
 ```
 
 ### `formatMemoryManifest()`
 
-生成供 Sonnet 或提取 Agent 消费的清单格式：
+Generates a manifest consumed by Sonnet or the extraction agent:
 
 ```
-- [feedback] testing_policy.md (2026-03-15T10:30:00.000Z): 集成测试用真实数据库
-- [user] role.md (2026-03-14T08:00:00.000Z): 数据科学家，关注日志
-- [project] freeze.md (2026-03-10T15:00:00.000Z): 3/5 起合并冻结
+- [feedback] testing_policy.md (2026-03-15T10:30:00.000Z): Integration tests use real DB
+- [user] role.md (2026-03-14T08:00:00.000Z): Data scientist, focused on logging
+- [project] freeze.md (2026-03-10T15:00:00.000Z): Merge freeze starting 3/5
 ```
 
-## Agent 记忆（Agent Memory）
+## Agent Memory
 
-![Agent 记忆三级作用域](./images/10-agent-memory.png)
+![Agent Memory Three-Level Scoping](./images/10-agent-memory.png)
 
-子 Agent（通过 Agent 工具启动的）有独立的三级记忆系统：
+Subagents (launched via the Agent tool) have an independent three-level memory system:
 
-| 作用域 | 路径 | 说明 |
-|--------|------|------|
-| **user** | `~/.claude/agent-memory/{agentType}/` | 全局用户级 |
-| **project** | `.claude/agent-memory/{agentType}/` | 项目级（提交到 VCS） |
-| **local** | `.claude/agent-memory-local/{agentType}/` | 本地级（不提交） |
+| Scope | Path | Description |
+|-------|------|-------------|
+| **user** | `~/.claude/agent-memory/{agentType}/` | Global user-level |
+| **project** | `.claude/agent-memory/{agentType}/` | Project-level (committed to VCS) |
+| **local** | `.claude/agent-memory-local/{agentType}/` | Local-level (not committed) |
 
-Agent 记忆与主记忆的差异：
-- 无 MEMORY.md 索引步骤（`skipIndex = true`）
-- 直接写文件即可，无需两步操作
-- 各代理类型隔离（explorer、planner 等各有各的目录）
+Differences from main memory:
+- No MEMORY.md index step (`skipIndex = true`)
+- Files can be written directly without the two-step process
+- Each agent type is isolated (explorer, planner, etc. each have their own directory)
 
-## 团队记忆同步
+## Team Memory Sync
 
-当 `TEAMMEM` feature flag 开启时：
+When the `TEAMMEM` feature flag is enabled:
 
-### 目录结构
+### Directory Structure
 
 ```
 ~/.claude/projects/{hash}/memory/
-├── MEMORY.md           ← 个人记忆索引
-├── user_*.md           ← 个人记忆
-└── team/               ← 团队共享目录
-    ├── MEMORY.md       ← 团队记忆索引
-    └── *.md            ← 团队记忆
+├── MEMORY.md           <- Personal memory index
+├── user_*.md           <- Personal memories
+└── team/               <- Team shared directory
+    ├── MEMORY.md       <- Team memory index
+    └── *.md            <- Team memories
 ```
 
-### 同步 API
+### Sync API
 
 ```
-GET  /api/claude_code/team_memory?repo={owner/repo}  ← 拉取
-PUT  /api/claude_code/team_memory?repo={owner/repo}  ← 推送
+GET  /api/claude_code/team_memory?repo={owner/repo}  <- Pull
+PUT  /api/claude_code/team_memory?repo={owner/repo}  <- Push
 ```
 
-### 同步语义
+### Sync Semantics
 
-- **Pull**：服务器内容覆盖本地文件
-- **Push**：仅上传内容哈希不同的键（delta 上传）
-- **删除不传播**：本地删除不会删除远程
-- **限制**：单文件最大 250KB，上传体最大 200KB（分批）
+- **Pull**: Server content overwrites local files
+- **Push**: Only uploads keys with different content hashes (delta upload)
+- **Deletes don't propagate**: Local deletions do not delete remote entries
+- **Limits**: Single file max 250KB, upload body max 200KB (batched)
 
-### 团队 vs 个人的路由规则
+### Team vs. Personal Routing Rules
 
-在 `memoryTypes.ts` 中，每种类型有 `<scope>` 指导：
+In `memoryTypes.ts`, each type has a `<scope>` directive:
 
-| 类型 | 默认作用域 |
-|------|-----------|
-| user | 始终个人 |
-| feedback | 默认个人，项目级规范放团队 |
-| project | 偏向团队 |
-| reference | 通常团队 |
+| Type | Default Scope |
+|------|---------------|
+| user | Always personal |
+| feedback | Personal by default; project-level conventions go to team |
+| project | Leans toward team |
+| reference | Usually team |
 
-## 关键常量速查
+## Key Constants Quick Reference
 
 ```typescript
-// 索引文件
+// Index file
 ENTRYPOINT_NAME = 'MEMORY.md'
 MAX_ENTRYPOINT_LINES = 200
 MAX_ENTRYPOINT_BYTES = 25_000
 
-// 扫描
+// Scanning
 MAX_MEMORY_FILES = 200
 FRONTMATTER_MAX_LINES = 30
 
-// 路径
+// Path
 AUTO_MEM_DIRNAME = 'memory'
 
-// 提取
-maxTurns = 5  // 分叉代理最多 5 个 turn
+// Extraction
+maxTurns = 5  // Forked agent max 5 turns
 
-// 检索
-最多返回 5 个相关记忆
+// Retrieval
+Max 5 relevant memories returned
 ```
 
-## 数据流总览
+## Data Flow Overview
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   会话启动                           │
+│                  Session Startup                     │
 │                                                      │
 │  loadMemoryPrompt()                                  │
-│    → ensureMemoryDirExists()                        │
-│    → buildMemoryLines() + MEMORY.md 内容             │
-│    → 注入系统提示词                                   │
+│    -> ensureMemoryDirExists()                        │
+│    -> buildMemoryLines() + MEMORY.md content         │
+│    -> Inject into system prompt                      │
 └────────────────────────┬────────────────────────────┘
-                         ↓
+                         |
 ┌─────────────────────────────────────────────────────┐
-│                   用户提问                           │
+│                    User Query                        │
 │                                                      │
 │  findRelevantMemories()                              │
-│    → scanMemoryFiles() [扫描 + frontmatter]          │
-│    → Sonnet 选择最多 5 个相关记忆                     │
-│    → 注入对话上下文 + 新鲜度警告                      │
+│    -> scanMemoryFiles() [scan + frontmatter]         │
+│    -> Sonnet selects up to 5 relevant memories       │
+│    -> Inject into conversation context               │
+│       + freshness warnings                           │
 └────────────────────────┬────────────────────────────┘
-                         ↓
+                         |
 ┌─────────────────────────────────────────────────────┐
-│                   Claude 回复                        │
+│                  Claude's Response                    │
 │                                                      │
-│  模型可能直接写记忆（遵循系统提示词指导）              │
-│  或者不写 → 触发后台提取                              │
+│  Model may write memories directly                   │
+│  (following system prompt guidance)                  │
+│  Or not -> triggers background extraction            │
 └────────────────────────┬────────────────────────────┘
-                         ↓
+                         |
 ┌─────────────────────────────────────────────────────┐
-│              后台自动提取                             │
+│            Background Auto-Extraction                │
 │                                                      │
 │  executeExtractMemories()                            │
-│    → 互斥检查（主代理已写？跳过）                     │
-│    → 构建提取提示词 + 记忆清单                        │
-│    → runForkedAgent() [共享缓存, 限制工具, 5 turns]   │
-│    → 写入新记忆文件 + 更新 MEMORY.md                  │
-│    → 通知用户                                        │
+│    -> Mutual exclusion check                         │
+│       (main agent already wrote? skip)               │
+│    -> Build extraction prompt + memory manifest      │
+│    -> runForkedAgent()                               │
+│       [shared cache, restricted tools, 5 turns]      │
+│    -> Write new memory files + update MEMORY.md      │
+│    -> Notify user                                    │
 └────────────────────────┬────────────────────────────┘
-                         ↓
+                         |
 ┌─────────────────────────────────────────────────────┐
-│           后台记忆整合（AutoDream）                    │
+│       Background Memory Consolidation (AutoDream)    │
 │                                                      │
-│  executeAutoDream() [每 24h + 5个会话触发]            │
-│    → 五重门控检查（开关/时间/节流/会话/锁）            │
-│    → buildConsolidationPrompt()                      │
-│    → runForkedAgent() [只读 Bash, 仅记忆目录写入]     │
-│    → 四阶段：定向 → 收集 → 整合 → 修剪               │
-│    → 合并重复 / 修正过时 / 压缩索引                   │
-│    → 通知用户："Improved N memories"                  │
+│  executeAutoDream()                                  │
+│  [triggers every 24h + 5 sessions]                   │
+│    -> Five-gate check                                │
+│       (toggle/time/throttle/session/lock)            │
+│    -> buildConsolidationPrompt()                     │
+│    -> runForkedAgent()                               │
+│       [read-only Bash, memory-dir writes only]       │
+│    -> Four phases:                                   │
+│       Orient -> Gather -> Consolidate -> Prune       │
+│    -> Merge duplicates / fix stale / compress index  │
+│    -> Notify user: "Improved N memories"             │
 │                                                      │
-│  详见 autodream.md                                   │
+│  See autodream.md for details                        │
 └─────────────────────────────────────────────────────┘
 ```

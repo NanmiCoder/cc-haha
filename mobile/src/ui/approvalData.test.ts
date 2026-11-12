@@ -11,28 +11,28 @@ import {
 } from './approvalData'
 
 test('recommended option badge is display-only and leaves submitted answer labels intact', () => {
-  expect(questionOptionPresentation('保留兼容（推荐）')).toEqual({
-    label: '保留兼容',
+  expect(questionOptionPresentation('Keep compatibility (recommended)')).toEqual({
+    label: 'Keep compatibility',
     recommended: true,
   })
   expect(questionOptionPresentation('Keep fields (Recommended)')).toEqual({
     label: 'Keep fields',
     recommended: true,
   })
-  expect(questionOptionPresentation('推荐策略（保留）')).toEqual({
-    label: '推荐策略（保留）',
+  expect(questionOptionPresentation('Recommended strategy (keep)')).toEqual({
+    label: 'Recommended strategy (keep)',
     recommended: false,
   })
   const input = {
     questions: [
-      { question: '如何迁移？', options: [{ label: '保留兼容（推荐）' }] },
+      { question: 'How to migrate?', options: [{ label: 'Keep compatibility (recommended)' }] },
     ],
   }
   expect(
     questionAnswerInput(input, {
-      '如何迁移？': input.questions[0]!.options[0]!.label,
-    }).answers['如何迁移？']
-  ).toBe('保留兼容（推荐）')
+      'How to migrate?': input.questions[0]!.options[0]!.label,
+    }).answers['How to migrate?']
+  ).toBe('Keep compatibility (recommended)')
 })
 
 test('manual answers preserve exact question keys, options and unrelated metadata', () => {
@@ -99,9 +99,9 @@ test('custom answers override selected options and multi-select joins with comma
     questionAnswerValues(
       questions,
       { A: ['x', 'y'], B: ['z'] },
-      { B: '  我自己说  ', C: '   ' }
+      { B: '  I will say it myself  ', C: '   ' }
     )
-  ).toEqual({ A: 'x, y', B: '我自己说', C: '' })
+  ).toEqual({ A: 'x, y', B: 'I will say it myself', C: '' })
 })
 
 test('AI auto-answer chip counts down, shows takeover after local activity and expiry at zero', () => {
@@ -129,14 +129,14 @@ test('permission responses: deny carries only an optional note for every tool', 
         input: { allowedPrompts: [{ tool: 'Bash', prompt: 'x' }] },
         allowed: false,
         remember: true,
-        note: '  用 mock 那组  ',
+        note: '  Use the mock set  ',
         plan: { mode: 'bypassPermissions' },
       })
     ).toEqual({
       type: 'permission_response',
       requestId: 'r',
       allowed: false,
-      denyMessage: '用 mock 那组',
+      denyMessage: 'Use the mock set',
     })
   expect(
     decisionResponse({ requestId: 'r', toolName: 'Bash', input: {}, allowed: false, note: ' ' })
@@ -181,7 +181,7 @@ test('permission responses: allow keeps question, plan, remember and accept-edit
   expect(
     decisionResponse({ requestId: 'b', toolName: 'Bash', input: {}, allowed: true, remember: true })
   ).toEqual({ type: 'permission_response', requestId: 'b', allowed: true, rule: 'always' })
-  // 文件修改和命令一样用 rule:'always'：由电脑套用 CLI 的建议，自动模式不会被降级成自动接受编辑。
+  // File edits use rule:'always' like commands: the computer applies the CLI suggestion, and auto mode is not downgraded to auto-accept edits.
   expect(
     decisionResponse({ requestId: 'e', toolName: 'Edit', input: {}, allowed: true, remember: true })
   ).toEqual({ type: 'permission_response', requestId: 'e', allowed: true, rule: 'always' })

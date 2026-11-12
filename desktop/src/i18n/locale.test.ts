@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   initializeLocale,
+  readStoredLocale,
   resolveSupportedLocale,
   subscribeLocaleChanges,
 } from './locale'
@@ -10,108 +11,82 @@ function mockBrowserLanguages(languages: string[], language = languages[0] ?? ''
   vi.spyOn(window.navigator, 'language', 'get').mockReturnValue(language)
 }
 
+function host(overrides: Partial<Parameters<typeof initializeLocale>[0]> = {}) {
+  return {
+    getLocalePreference: vi.fn().mockResolvedValue(null),
+    getPreferredSystemLanguages: vi.fn().mockResolvedValue(['en-US']),
+    setLocalePreference: vi.fn().mockResolvedValue(undefined),
+    onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
+    ...overrides,
+  }
+}
+
 describe('locale detection', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     window.localStorage.clear()
-    document.documentElement.lang = 'en'
+    document.documentElement.lang = 'fr'
   })
 
-  it('normalizes BCP 47 tags and selects the first supported language', () => {
-    expect(resolveSupportedLocale(['fr-FR', 'zh_Hant_HK', 'en-US'])).toBe('zh-TW')
-    expect(resolveSupportedLocale(['zh-Hans-HK'])).toBe('zh')
+  it('resolves every language tag to English', () => {
+    expect(resolveSupportedLocale(['fr-FR', 'zh_Hant_HK', 'en-US'])).toBe('en')
+    expect(resolveSupportedLocale(['ja-JP'])).toBe('en')
+    expect(resolveSupportedLocale([])).toBe('en')
   })
 
-  it('uses Electron preferred system languages before the renderer fallback', async () => {
-    mockBrowserLanguages(['en-US'])
-    const host = {
-      getLocalePreference: vi.fn().mockResolvedValue(null),
-      getPreferredSystemLanguages: vi.fn().mockResolvedValue(['fr-FR', 'ko-KR']),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
-      onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
-    }
-
-    await expect(initializeLocale(host)).resolves.toBe('kr')
-
-    expect(document.documentElement.lang).toBe('ko')
-  })
-
-  it('falls back to renderer languages when the native lookup fails', async () => {
+  it('uses English whatever the system languages are', async () => {
     mockBrowserLanguages(['ja-JP'])
 
-    await expect(initializeLocale({
+    await expect(initializeLocale(host({
+      getPreferredSystemLanguages: vi.fn().mockResolvedValue(['fr-FR', 'ko-KR']),
+    }))).resolves.toBe('en')
+
+    expect(document.documentElement.lang).toBe('en')
+  })
+
+  it('falls back to English when the native lookup fails', async () => {
+    await expect(initializeLocale(host({
       getLocalePreference: () => Promise.reject(new Error('IPC unavailable')),
       getPreferredSystemLanguages: () => Promise.reject(new Error('IPC unavailable')),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
-      onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
-    })).resolves.toBe('jp')
-
-    expect(document.documentElement.lang).toBe('ja')
+    }))).resolves.toBe('en')
   })
 
-  it('migrates a stored main-window choice without consulting the system again', async () => {
+  it('ignores a locale stored by an older build', async () => {
     window.localStorage.setItem('cc-haha-locale', 'zh-TW')
-    const host = {
-      getLocalePreference: vi.fn().mockResolvedValue(null),
-      getPreferredSystemLanguages: vi.fn().mockResolvedValue(['en-US']),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
-      onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
-    }
+    expect(readStoredLocale()).toBeNull()
 
-    await expect(initializeLocale(host)).resolves.toBe('zh-TW')
+    const runtime = host({ getLocalePreference: vi.fn().mockResolvedValue('jp') })
+    await expect(initializeLocale(runtime)).resolves.toBe('en')
 
-    expect(host.setLocalePreference).toHaveBeenCalledWith('zh-TW')
-    expect(host.getLocalePreference).not.toHaveBeenCalled()
-    expect(host.getPreferredSystemLanguages).not.toHaveBeenCalled()
-    expect(document.documentElement.lang).toBe('zh-TW')
+    expect(runtime.setLocalePreference).not.toHaveBeenCalled()
+    expect(document.documentElement.lang).toBe('en')
   })
 
-  it('uses the app-level manual preference in an isolated companion partition', async () => {
-    mockBrowserLanguages(['zh-CN'])
+  it('migrates a stored English choice to the app-level preference', async () => {
+    window.localStorage.setItem('cc-haha-locale', 'en')
+    const runtime = host()
 
-    await expect(initializeLocale({
-      getLocalePreference: vi.fn().mockResolvedValue('jp'),
-      getPreferredSystemLanguages: vi.fn().mockResolvedValue(['zh-CN']),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
-      onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
-    })).resolves.toBe('jp')
+    await expect(initializeLocale(runtime)).resolves.toBe('en')
 
-    expect(document.documentElement.lang).toBe('ja')
+    expect(runtime.setLocalePreference).toHaveBeenCalledWith('en')
+    expect(runtime.getPreferredSystemLanguages).not.toHaveBeenCalled()
   })
 
   it('applies app-level locale changes to an already running companion window', async () => {
-    let onLocaleChanged: ((locale: 'kr') => void) | undefined
+    let onLocaleChanged: ((locale: 'en') => void) | undefined
     const listener = vi.fn()
     const unsubscribe = subscribeLocaleChanges(listener)
 
-    await initializeLocale({
-      getLocalePreference: vi.fn().mockResolvedValue('en'),
-      getPreferredSystemLanguages: vi.fn().mockResolvedValue(['en-US']),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
+    await initializeLocale(host({
       onLocaleChanged: vi.fn(async (handler) => {
         onLocaleChanged = handler
         return () => {}
       }),
-    })
+    }))
 
-    onLocaleChanged?.('kr')
+    onLocaleChanged?.('en')
 
-    expect(listener).toHaveBeenLastCalledWith('kr')
-    expect(document.documentElement.lang).toBe('ko')
+    expect(listener).toHaveBeenLastCalledWith('en')
     unsubscribe()
-  })
-
-  it('uses navigator.language when navigator.languages is unavailable', async () => {
-    vi.spyOn(window.navigator, 'languages', 'get').mockImplementation(() => {
-      throw new Error('languages unavailable')
-    })
-    vi.spyOn(window.navigator, 'language', 'get').mockReturnValue('ja-JP')
-
-    await expect(initializeLocale({
-      getLocalePreference: vi.fn().mockResolvedValue(null),
-      getPreferredSystemLanguages: vi.fn().mockRejectedValue(new Error('IPC unavailable')),
-      setLocalePreference: vi.fn().mockResolvedValue(undefined),
-      onLocaleChanged: vi.fn().mockResolvedValue(() => {}),
-    })).resolves.toBe('jp')
   })
 })

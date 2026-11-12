@@ -14,8 +14,8 @@ import { errorText } from '../theme'
 import { quietHint, validateQuietHours, type QuietHours } from './settingsModel'
 
 /**
- * 勿扰时段：开关和起止时间都是草稿，点「完成」统一校验后一次写入；
- * 取消或下滑关闭不改已保存的设置。调用方每次打开时换 key，让草稿从已保存的值开始。
+ * Quiet hours: the toggle and start/end times are drafts, validated together and written once on "Done"; 
+ * canceling or swiping down does not change saved settings. The caller changes the key on each open so the draft starts from the saved values.
  */
 export function QuietHoursSheet({
   visible,
@@ -58,16 +58,16 @@ export function QuietHoursSheet({
       visible={visible}
       onClose={onClose}
       dismissable={!saving}
-      title="勿扰时段"
-      left={<TextButton title="取消" disabled={saving} onPress={onClose} />}
-      right={<TextButton title="完成" strong disabled={saving} onPress={() => void done()} />}
+      title="Quiet hours"
+      left={<TextButton title="Cancel" disabled={saving} onPress={onClose} />}
+      right={<TextButton title="Done" strong disabled={saving} onPress={() => void done()} />}
     >
       <Group style={{ marginTop: 4 }}>
         <ListRow
-          title="启用"
+          title="Enabled"
           trailing={
             <Switch
-              label="启用勿扰时段"
+              label="Enable quiet hours"
               value={draft.enabled}
               disabled={saving}
               onValueChange={(enabled) => set({ enabled })}
@@ -76,7 +76,7 @@ export function QuietHoursSheet({
         />
         <Separator />
         <FieldRow
-          label="开始"
+          label="Start"
           mono
           value={draft.start}
           onChangeText={(start) => set({ start })}
@@ -88,7 +88,7 @@ export function QuietHoursSheet({
         />
         <Separator />
         <FieldRow
-          label="结束"
+          label="End"
           mono
           value={draft.end}
           onChangeText={(end) => set({ end })}
@@ -104,7 +104,7 @@ export function QuietHoursSheet({
         <InlineError text={error} />
       ) : (
         <Footnote style={{ paddingTop: 0 }}>
-          {hint || '这段时间里不推送通知。时间用 24 小时制，比如 23:00。'}
+          {hint || 'No notifications are pushed during this period. Use 24-hour time, e.g. 23:00.'}
         </Footnote>
       )}
     </Sheet>

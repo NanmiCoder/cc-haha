@@ -254,8 +254,8 @@ describe('useScheduledTaskDesktopNotifications', () => {
 
     expect(notifyDesktopMock).toHaveBeenCalledWith({
       dedupeKey: 'scheduled-task:run-new-task',
-      title: '定时任务 New task',
-      body: '完成: done',
+      title: 'Scheduled task New task',
+      body: 'Completed: done',
       target: { type: 'scheduled' },
     })
   })
@@ -431,8 +431,8 @@ describe('useScheduledTaskDesktopNotifications', () => {
     await vi.waitFor(() => expect(notifyDesktopMock).toHaveBeenCalledTimes(1))
     expect(notifyDesktopMock).toHaveBeenCalledWith({
       dedupeKey: 'scheduled-task:run-new',
-      title: '定时任务 Daily review',
-      body: '失败: provider timeout',
+      title: 'Scheduled task Daily review',
+      body: 'Failed: provider timeout',
       target: { type: 'scheduled' },
     })
   })
@@ -475,8 +475,8 @@ describe('useScheduledTaskDesktopNotifications', () => {
     await vi.waitFor(() => expect(notifyDesktopMock).toHaveBeenCalledTimes(1))
     expect(notifyDesktopMock).toHaveBeenCalledWith({
       dedupeKey: 'scheduled-task:run-new',
-      title: '定时任务 Daily review',
-      body: '完成: done',
+      title: 'Scheduled task Daily review',
+      body: 'Completed: done',
       target: {
         type: 'session',
         sessionId: 'session-task-run',
@@ -615,7 +615,7 @@ describe('useScheduledTaskDesktopNotifications', () => {
     expect(getRecentRunsMock).toHaveBeenCalledWith(50, { summaryOnly: true })
     expect(notifyDesktopMock).toHaveBeenCalledWith(expect.objectContaining({
       dedupeKey: 'scheduled-task:run-after-legacy-baseline',
-      body: '完成: summary result',
+      body: 'Completed: summary result',
     }))
 
     await vi.advanceTimersByTimeAsync(30_000)
@@ -1297,8 +1297,8 @@ describe('useScheduledTaskDesktopNotifications', () => {
     render(<Harness />)
     await vi.waitFor(() => expect(notifyDesktopMock).toHaveBeenCalledWith(expect.objectContaining({
       dedupeKey: 'scheduled-task:fresh-after-legacy-store',
-      title: '定时任务 Daily review',
-      body: '状态: 完成',
+      title: 'Scheduled task Daily review',
+      body: 'Status: Completed',
     })))
   })
 

@@ -36,10 +36,10 @@ export async function loadPersonalProfile(client: ApiClient, signal?: AbortSigna
 function readError(error: unknown, part: 'profile' | 'stats') {
   if (error instanceof ApiError && [403, 404, 405].includes(error.status))
     return part === 'profile'
-      ? '这台电脑暂不支持同步个人资料，请更新电脑端。'
-      : '这台电脑暂不支持查看用量，请更新电脑端。'
-  if (error instanceof ApiError && error.status === 401) return '连接已失效，请重新连接这台电脑。'
-  return part === 'profile' ? '个人资料读取失败，请检查连接后重试。' : '用量读取失败，请检查电脑是否在线后重试。'
+      ? 'This computer does not support profile sync yet; please update the desktop app.'
+      : 'This computer does not support viewing usage yet; please update the desktop app.'
+  if (error instanceof ApiError && error.status === 401) return 'Connection is no longer valid; please reconnect this computer.'
+  return part === 'profile' ? 'Failed to load profile; check the connection and retry.' : 'Failed to load usage; check that the computer is online and retry.'
 }
 
 /** A missing profile on an older computer must not hide otherwise available usage. */

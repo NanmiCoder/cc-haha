@@ -18,12 +18,13 @@ import {
   type StepState,
 } from './steps'
 import { ToolImageStrip } from './ToolImages'
+import { plural } from '../../core/plural'
 
 export type StepContext = {
   workDir?: string | null
-  /** 正在等审批的工具调用。 */
+  /** Tool call waiting for approval. */
   waiting: ReadonlySet<string>
-  /** 仍在后台运行的子 Agent / 命令对应的工具调用。 */
+  /** Tool calls of subagents / commands still running in background. */
   background: ReadonlySet<string>
   activeThinkingId?: string
   turnActive: boolean
@@ -32,9 +33,9 @@ export type StepContext = {
 export type StepUi = {
   expanded: ReadonlySet<string>
   open: ReadonlySet<string>
-  /** 手动收起的运行中步骤组，不随下一步的流式更新重新展开。 */
+  /** A running step group collapsed manually does not re-expand with the next step's streaming update. */
   closed: ReadonlySet<string>
-  /** 不再使用（摘要行取代了“前面还有 N 步”）；保留字段让聊天页的 state 形状不变。 */
+  /** No longer used (summary rows replaced "N earlier steps"); field kept so the chat page state shape is unchanged. */
   revealed: ReadonlySet<string>
 }
 
@@ -45,7 +46,7 @@ function stepState(item: ChatItem, live: boolean, context: StepContext): StepSta
   if (item.toolUseId && context.waiting.has(item.toolUseId)) return 'waiting'
   if (item.isError) return 'error'
   if (item.toolUseId && context.background.has(item.toolUseId)) return 'background'
-  // 中途打开的会话里，历史记录中的进行中工具没有 pending 标记，只是还没有结果。
+  // In sessions opened midway, in-progress tools in history have no pending flag; they just have no result yet.
   const unfinished = item.pending || item.result === undefined
   if (unfinished && live && context.turnActive) return 'running'
   return unfinished ? 'missing' : 'done'
@@ -95,11 +96,11 @@ function Marker({ state }: { state: StepState }) {
 function Trailing({ item, state, label }: { item: ChatItem; state: StepState; label: ReturnType<typeof describeStep> }) {
   const colors = useColors()
   if (state === 'waiting')
-    return <Text style={{ fontSize: 12.5, color: colors.attn, flexShrink: 0 }}>等你批准</Text>
+    return <Text style={{ fontSize: 12.5, color: colors.attn, flexShrink: 0 }}>Waiting for your approval</Text>
   if (state === 'error')
-    return <Text style={{ fontSize: 12.5, color: colors.err, flexShrink: 0 }}>失败</Text>
+    return <Text style={{ fontSize: 12.5, color: colors.err, flexShrink: 0 }}>Failed</Text>
   if (state === 'background')
-    return <Text style={{ fontSize: 12.5, color: colors.run, flexShrink: 0 }}>后台进行中</Text>
+    return <Text style={{ fontSize: 12.5, color: colors.run, flexShrink: 0 }}>Running in background</Text>
   if (item.type === 'tool' && (label.added || label.removed))
     return (
       <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
@@ -149,7 +150,7 @@ function StepRow({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={[label.verb, label.object].filter(Boolean).join(' ')}
-      accessibilityHint="展开这一步的详情"
+      accessibilityHint="Expand details of this step"
       onPress={() => onToggle(item.id)}
       style={({ pressed }) => ({
         height: 32,
@@ -191,7 +192,7 @@ function Omitted({ count, after }: { count: number; after?: boolean }) {
   if (!count) return null
   return (
     <Mono style={{ color: colors.ink3 }}>
-      {after ? `\n… 还有 ${count} 行` : `… 前面省略 ${count} 行\n`}
+      {after ? `\n… ${plural(count, 'more line')}` : `… ${plural(count, 'earlier line')} omitted\n`}
     </Mono>
   )
 }
@@ -211,7 +212,7 @@ function StepDetail({ item, state }: { item: ChatItem; state: StepState }) {
   const name = item.toolName ?? ''
   const output = outputTail(item.text ?? '')
   const empty =
-    state === 'running' ? '正在运行…' : state === 'missing' ? '没有拿到结果' : '（没有输出）'
+    state === 'running' ? 'Running…' : state === 'missing' ? 'No result received' : '(no output)'
   if (name === 'Bash' || name === 'PowerShell') {
     const command = typeof input?.command === 'string' ? input.command : ''
     return (
@@ -241,7 +242,7 @@ function StepDetail({ item, state }: { item: ChatItem; state: StepState }) {
             numbers="single"
             lines={
               lines.length > shown.length
-                ? [...shown, { kind: 'meta', text: `… 还有 ${lines.length - shown.length} 行` }]
+                ? [...shown, { kind: 'meta', text: `… ${plural(lines.length - shown.length, 'more line')}` }]
                 : shown
             }
           />
@@ -294,7 +295,7 @@ function StepCard({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={[label.verb, label.object].filter(Boolean).join(' ')}
-        accessibilityHint="收起详情"
+        accessibilityHint="Collapse details"
         accessibilityState={{ expanded: true }}
         onPress={() => onToggle(item.id)}
         style={({ pressed }) => ({
@@ -332,7 +333,7 @@ function StepCard({
   )
 }
 
-/** 一轮结束后的“用时 3 分 12 秒 ›”：点开看这一轮的摘要行。 */
+/** "Took 3 min 12 sec ›" after a turn ends: tap to see this turn's summary rows. */
 export const TurnFold = memo(function TurnFold({
   label,
   open,
@@ -342,14 +343,14 @@ export const TurnFold = memo(function TurnFold({
   label: string
   open: boolean
   onToggle(): void
-  /** 收起时仍要看得到的图片（让电脑截图发过来，就是为了看这张图）。 */
+  /** Images that must stay visible when collapsed (the point of asking the computer to send a screenshot is to see it). */
   images?: NamedToolImage[]
 }) {
   const colors = useColors()
   const fold = (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={open ? '收起处理过程' : `展开处理过程，${label}`}
+      accessibilityLabel={open ? 'Collapse process' : `Expand process, ${label}`}
       accessibilityState={{ expanded: open }}
       onPress={onToggle}
       hitSlop={6}
@@ -377,8 +378,8 @@ export const TurnFold = memo(function TurnFold({
 })
 
 /**
- * 运行中在消息流里展开完整步骤时间线，包含正在执行的一步；读者仍可手动收起。
- * 结束后的历史组默认折成“已读 3 个文件 · 运行 2 条命令 ›”，点一下在原地展开。
+ * While running, the full step timeline expands in the message stream, including the step in progress; readers can still collapse it manually.
+ * After finishing, history groups collapse by default into "Read 3 files · Ran 2 commands ›", expanding in place on tap.
  */
 export const StepGroup = memo(function StepGroup({
   row,
@@ -392,7 +393,7 @@ export const StepGroup = memo(function StepGroup({
   ui: StepUi
   onToggleStep(id: string): void
   onToggleOpen(key: string, live?: boolean): void
-  /** @deprecated 不再需要“前面还有 N 步”；保留是为了聊天页接线不变。 */
+  /** @deprecated "N earlier steps" is no longer needed; kept so chat page wiring stays unchanged. */
   onReveal?(key: string): void
 }) {
   const colors = useColors()
@@ -407,14 +408,14 @@ export const StepGroup = memo(function StepGroup({
   ) : null
   if (!shown.length) return divider
   const tailColor = tail?.tone === 'err' ? colors.err : tail?.tone === 'run' ? colors.run : colors.attn
-  // 和桌面一致：展开时图挂在对应步骤下，收起后集中放在摘要行下方。
+  // Same as desktop: when expanded images hang under their steps; when collapsed they gather under the summary row.
   const folded = open ? [] : shown.flatMap(stepImages)
   return (
     <View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={[label, tail?.text].filter(Boolean).join('，')}
-        accessibilityHint={open ? '收起步骤' : '展开步骤'}
+        accessibilityLabel={[label, tail?.text].filter(Boolean).join(', ')}
+        accessibilityHint={open ? 'Collapse steps' : 'Expand steps'}
         accessibilityState={{ expanded: open }}
         onPress={() => onToggleOpen(row.key, row.live)}
         hitSlop={4}

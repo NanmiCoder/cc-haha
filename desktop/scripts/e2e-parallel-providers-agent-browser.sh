@@ -285,9 +285,9 @@ click_run_js="
       const text = node.textContent || '';
       const title = node.getAttribute('title') || '';
       return !node.disabled && (
-        text.includes('运行') ||
         text.includes('Run') ||
-        title.includes('运行') ||
+        text.includes('Run') ||
+        title.includes('Run') ||
         title.includes('Run')
       );
     })

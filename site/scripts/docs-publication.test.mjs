@@ -58,10 +58,10 @@ test('internal Computer Use notes stay unpublished while their old URLs remain u
     const { default: search } = await server.ssrLoadModule('/src/generated/search-index.js')
 
     for (const name of internalNames) {
-      await t.test(`old ${name} URL redirects in both languages`, () => {
+      await t.test(`old ${name} URL redirects, with or without the retired /en prefix`, () => {
         for (const prefix of ['', '/en']) {
           const oldRoute = `${prefix}/internals/${name}`
-          const destination = `${prefix}/internals/computer-use`
+          const destination = '/internals/computer-use'
           assert.equal(routes.resolveLegacyRoute(oldRoute), destination)
           assert.equal(routes.resolveLegacyRoute(`${oldRoute}/`), destination)
           assert.equal(routes.resolveLegacyRoute(`${oldRoute}.md`), destination)
@@ -78,25 +78,27 @@ test('internal Computer Use notes stay unpublished while their old URLs remain u
           assert.equal(await routes.loadDocContent(route), null)
           assert.ok(!routes.docsIndex.some((doc) => doc.path === route))
           assert.ok(!search.some((entry) => entry.p === route))
-          assert.ok(!routes.getDocNavigation(prefix ? 'en' : 'zh').some((section) => section.items.some((item) => item.route === route)))
+          assert.ok(!routes.getDocNavigation().some((section) => section.items.some((item) => item.route === route)))
         }
         assert.equal(await exists(path.join(fixtureSite, 'src/generated/content', `internals-${name}.js`)), false)
       }
     })
 
-    await t.test('all formal pages retain metadata and a matching language version', () => {
+    await t.test('all formal pages retain metadata', () => {
       assert.ok(records.length > 0)
-      assert.equal(records.filter((record) => record.locale === 'zh').length, records.filter((record) => record.locale === 'en').length)
       for (const record of records) {
         const frontmatter = record.content.match(/^---\n([\s\S]*?)\n---\n/)?.[1] || ''
         for (const key of ['title', 'nav_title', 'description', 'order']) {
           assert.match(frontmatter, new RegExp(`^${key}:\\s*.+$`, 'm'), record.sourcePath)
         }
-        const other = record.locale === 'en'
-          ? record.sourcePath.replace('docs/en/', 'docs/')
-          : record.sourcePath.replace('docs/', 'docs/en/')
-        assert.ok(records.some((candidate) => candidate.sourcePath === other), other)
       }
+    })
+
+    await t.test('retired /en URLs redirect to the unprefixed page', () => {
+      assert.equal(routes.resolveLegacyRoute('/en'), '/')
+      assert.equal(routes.resolveLegacyRoute('/en/start/install'), '/start/install')
+      assert.equal(routes.resolveLegacyRoute('/en/docs'), '/start')
+      assert.equal(routes.resolveLegacyRoute('/en/not-a-page'), null)
     })
 
     const output = spawnSync(process.execPath, [path.join(fixtureSite, 'scripts/prepare-static-output.mjs')], { encoding: 'utf8' })
@@ -110,18 +112,18 @@ test('internal Computer Use notes stay unpublished while their old URLs remain u
           assert.ok(!sitemap.includes(`https://cchaha.ai${route}<`))
         }
       }
-      for (const prefix of ['', '/en']) {
-        const route = `${prefix}/internals/computer-use`
-        const page = await fs.readFile(path.join(fixtureSite, 'dist', route, 'index.html'), 'utf8')
-        assert.ok(page.includes(`https://cchaha.ai${route}`))
-        assert.ok(sitemap.includes(`https://cchaha.ai${route}<`))
-      }
+      const route = '/internals/computer-use'
+      const page = await fs.readFile(path.join(fixtureSite, 'dist', route, 'index.html'), 'utf8')
+      assert.ok(page.includes(`https://cchaha.ai${route}`))
+      assert.ok(sitemap.includes(`https://cchaha.ai${route}<`))
+      assert.ok(!sitemap.includes('https://cchaha.ai/en'))
+      assert.equal(await fs.readFile(path.join(fixtureSite, 'dist/en/internals/computer-use/index.html'), 'utf8'), shell)
       assert.deepEqual(await Promise.all(internalNames.map((name) => digest(path.join(directory, 'docs/internals', `${name}.md`)))), sourceHashes)
     })
 
     await t.test('existing redirects still work and unrelated URLs remain unknown', async () => {
       for (const prefix of ['', '/en']) {
-        assert.equal(routes.resolveLegacyRoute(`${prefix}/features/computer-use-architecture`), `${prefix}/internals/computer-use`)
+        assert.equal(routes.resolveLegacyRoute(`${prefix}/features/computer-use-architecture`), '/internals/computer-use')
         assert.equal(await exists(path.join(fixtureSite, 'dist', prefix, 'features/computer-use-architecture/index.html')), true)
         const unknown = `${prefix}/internals/computer-use-unknown-design`
         assert.equal(routes.findDoc(unknown), null)

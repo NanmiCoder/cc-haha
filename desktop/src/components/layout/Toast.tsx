@@ -5,7 +5,7 @@ import { useTranslation } from '../../i18n'
 
 // The tone lives in the leading glyph rather than a tinted body or a coloured
 // rule: on paper a filled banner fights the surrounding surface layering, and
-// the glyph is what carries the state in every other 「素」 surface.
+// the glyph is what carries the state in every other "Su" spec surface.
 const TONE: Record<ToastType['type'], { icon: LucideIcon; color: string }> = {
   success: { icon: CircleCheck, color: 'text-[var(--color-success)]' },
   error: { icon: CircleX, color: 'text-[var(--color-error)]' },

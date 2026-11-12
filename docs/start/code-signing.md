@@ -1,56 +1,56 @@
 ---
 title: Code signing policy
-nav_title: 签名政策
-description: cc-haha 正式发布包的签名范围、责任角色、审批、验证与撤销规则。
+nav_title: Signing policy
+description: Signing scope, responsible roles, approval, verification, and revocation rules for official cc-haha releases.
 order: 5
 ---
 
 # Code signing policy
 
-本政策适用于 cc-haha 的正式 Windows 发布包。项目正在申请 SignPath Foundation 免费代码签名；接入完成前，Windows 下载页会继续明确标注安装包尚未签名。接入完成后，只有符合本政策的构建产物才会提交签名。
+This policy applies to official Windows releases of cc-haha. The project is applying for free code signing through the SignPath Foundation. Until onboarding is complete, the Windows download page will continue to identify installers as unsigned. After onboarding, only artifacts that comply with this policy will be submitted for signing.
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
-服务由 [SignPath.io](https://about.signpath.io) 和 [SignPath Foundation](https://signpath.org) 提供。
+The service is provided by [SignPath.io](https://about.signpath.io) and the [SignPath Foundation](https://signpath.org).
 
-## 签名范围
+## Signing scope
 
-签名仅用于本项目拥有并从 [NanmiCoder/cc-haha](https://github.com/NanmiCoder/cc-haha) 源码构建的 Windows 桌面程序、项目自有 sidecar，以及最终的 x64 和 ARM64 NSIS 安装包。
+Signing is limited to the Windows desktop application, project-owned sidecars, and final x64 and ARM64 NSIS installers built from source owned by this project in [NanmiCoder/cc-haha](https://github.com/NanmiCoder/cc-haha).
 
-发布包可能包含在各自许可证下分发的第三方或上游开源组件。这些组件可以原样打包，但不会以 cc-haha 自有二进制的身份签名。证书不会用于其他项目、个人构建、调试构建或来源不明的文件。
+Release packages may include third-party or upstream open-source components distributed under their respective licenses. Those components may be bundled unchanged, but they will not be signed as binaries owned by cc-haha. The certificate will not be used for other projects, personal builds, debug builds, or files of unknown origin.
 
-## 可信来源与构建
+## Trusted source and build
 
-- 唯一可信源码来源是公开 GitHub 仓库的受保护发布提交或标签。
-- 正式 Windows 产物由仓库内受版本控制的 GitHub Actions 工作流在 GitHub 托管的运行器上构建。
-- 签名请求必须能追溯到具体提交、发布标签、工作流运行和构建产物。
-- 签名失败、来源不明或元数据不一致的产物不得发布。
+- The only trusted source is a protected release commit or tag in the public GitHub repository.
+- Official Windows artifacts are built by version-controlled GitHub Actions workflows on GitHub-hosted runners.
+- Every signing request must be traceable to a specific commit, release tag, workflow run, and build artifact.
+- An artifact must not be published if signing fails, its origin is unclear, or its metadata does not match the release.
 
-## 责任角色
+## Responsible roles
 
-- **Authors / Committers：** [@NanmiCoder](https://github.com/NanmiCoder)，以及提交经审核贡献的外部贡献者。
-- **Reviewers：** [@NanmiCoder](https://github.com/NanmiCoder)；外部贡献必须经过维护者审核后才能进入正式发布提交。
-- **Approvers：** [@NanmiCoder](https://github.com/NanmiCoder)。
+- **Authors / Committers:** [@NanmiCoder](https://github.com/NanmiCoder), plus external contributors whose changes have been reviewed and accepted.
+- **Reviewers:** [@NanmiCoder](https://github.com/NanmiCoder); external contributions require maintainer review before entering an official release commit.
+- **Approvers:** [@NanmiCoder](https://github.com/NanmiCoder).
 
-团队成员必须为 GitHub 和 SignPath 账户启用多因素认证。角色或成员发生变化时，本页会同步更新。
+Team members must enable multi-factor authentication for their GitHub and SignPath accounts. This page will be updated when roles or members change.
 
-## 审批与发布
+## Approval and release
 
-每一次正式发布的签名请求都必须由 Approver 手动审批，不允许自动批准或绕过审批。批准前需要核对提交或标签、构建工作流、目标架构、文件名、产品名称、版本和发布说明。审批完成并验证签名后，产物才可以上传到 GitHub Releases。
+Every signing request for an official release requires manual approval by an Approver. Automatic approval and approval bypasses are not permitted. Before approval, the commit or tag, build workflow, target architecture, file name, product name, version, and release notes must be checked. An artifact may be uploaded to GitHub Releases only after approval and signature verification.
 
-## 用户验证
+## User verification
 
-接入完成后，可以在 PowerShell 中检查 Windows 安装包：
+After onboarding is complete, a Windows installer can be inspected in PowerShell:
 
 ```powershell
 Get-AuthenticodeSignature ".\Claude-Code-Haha-<version>-Windows-x64-Setup.exe" |
   Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 
-只在 `Status` 为 `Valid`、产品与版本符合预期且文件来自本项目 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases) 时继续安装。
+Continue with installation only when `Status` is `Valid`, the product and version are expected, and the file came from this project's [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases).
 
-## 安全事件与撤销
+## Security incidents and revocation
 
-如发现证书、签名账户、构建流程或发布产物可能被滥用，请通过 [GitHub 私密安全报告](https://github.com/NanmiCoder/cc-haha/security/advisories/new) 或发送邮件至 [relakkes@gmail.com](mailto:relakkes@gmail.com) 报告。维护者会暂停相关发布和签名请求、移除受影响的下载、调查来源，并在需要时联系 SignPath Foundation 撤销证书或签名。
+Report suspected misuse of the certificate, signing accounts, build process, or release artifacts through a [private GitHub security advisory](https://github.com/NanmiCoder/cc-haha/security/advisories/new) or by email to [relakkes@gmail.com](mailto:relakkes@gmail.com). The maintainer will pause affected releases and signing requests, remove affected downloads, investigate the source, and ask the SignPath Foundation to revoke the certificate or signature when necessary.
 
-软件联网与本地数据处理方式见[隐私与联网说明](./privacy.md)。
+See [Privacy and network access](./privacy.md) for the software's network and local-data behavior.

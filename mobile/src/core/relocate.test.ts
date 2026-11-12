@@ -31,7 +31,7 @@ describe('hashes and MACs match node:crypto', () => {
     const inputs = [
       new Uint8Array(0),
       new TextEncoder().encode('abc'),
-      new TextEncoder().encode('电脑地址已更新 · cc-haha'),
+      new TextEncoder().encode('Computer address updated · cc-haha'),
       ...[55, 56, 63, 64, 65, 119, 120, 127, 128, 1000].map((size) => new Uint8Array(randomBytes(size))),
     ]
     for (const input of inputs)

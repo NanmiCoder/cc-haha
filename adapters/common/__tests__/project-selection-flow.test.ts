@@ -151,7 +151,7 @@ describe('IM project selection flow', () => {
 
     const created = await controller.handleInput('chat-1', '/new')
     expect(created).toEqual({ kind: 'created' })
-    expect(formatProjectSelectionOutcome(created!)).toBe('✅ 已新建会话，可以开始对话了。')
+    expect(formatProjectSelectionOutcome(created!)).toBe('✅ New session created. You can start chatting now.')
     expect(createdWorkDirs).toEqual(['/allowed/default'])
 
     const errored = await controller.handleInput('chat-1', '/new express')
@@ -260,7 +260,7 @@ describe('IM project selection flow', () => {
           'express-web',
         ])
         const prompt = formatProjectSelectionOutcome(outcome) ?? ''
-        expect(prompt).toContain('/new <更完整名称或路径>')
+        expect(prompt).toContain('/new <more complete name or path>')
         expect(prompt).toContain(`**express-api** — ${canonicalExpressApiDir}`)
         expect(prompt).toContain(`**express-web** — ${canonicalExpressWebDir}`)
       }
@@ -277,7 +277,7 @@ describe('IM project selection flow', () => {
             transport.extractText(`/new ${query}`),
           )
           expect(outcome).toEqual({ kind: 'not_found', query })
-          expect(formatProjectSelectionOutcome(outcome!)).toContain(`未找到匹配 "${query}"`)
+          expect(formatProjectSelectionOutcome(outcome!)).toContain(`No project matching "${query}"`)
         }
       }
 

@@ -15,28 +15,24 @@ Internal process artefacts (migration task lists, validation checklists, design 
 
 Six top-level sections: `start/`, `cases/`, `desktop/`, `im/`, `cli/`, `internals/`. Register any added section in the `sections` array of `site/scripts/generate-docs-manifest.mjs`.
 
-`docs/en/` mirrors the Chinese tree file for file. Keep Chinese pages and their `docs/en/` counterparts aligned.
+The docs are English only. Do not add translated copies or a `docs/<locale>/` mirror.
 
 ## Frontmatter (required on every page)
 
 ```yaml
 ---
-title: 连接模型服务
-nav_title: 连接模型      # sidebar label, ≤12 CJK characters
-description: 一句话说明这篇讲什么。       # feeds search and SEO meta
+title: Connect a model provider
+nav_title: Connect a model   # sidebar label, keep it short
+description: One sentence on what this page covers.   # feeds search and SEO meta
 order: 2                # position inside the section; index.md uses 0
 ---
 ```
 
 The site renders the first paragraph after the H1 as a lede — write it as a normal paragraph, not a blockquote.
 
-## Chinese typography
-
-Put a space between Chinese characters and adjacent Latin letters or digits: 「一枚 6 位码」, 「回填 App ID」. Nothing in the render pipeline inserts it for you, so it has to be in the source. Punctuation needs no space.
-
 ## Screenshots
 
-Product screenshots live in `docs/images/app/` as WebP at 2000px wide, captured from a real build. Never ship a screenshot from an older UI generation; re-capture instead. Redact tokens, QR codes, API keys and paired account names before committing. Cap feature pages at roughly three screenshots.
+Product screenshots live in `docs/images/app/en/` as WebP at 2000px wide, captured from a real build. Never ship a screenshot from an older UI generation; re-capture instead. Redact tokens, QR codes, API keys and paired account names before committing. Cap feature pages at roughly three screenshots.
 
 Step-by-step setup walkthroughs are the exception: `docs/im/` embeds console screenshots from `docs/images/im/<platform>/` and needs one per step. Judge those by whether a reader could follow along without them.
 

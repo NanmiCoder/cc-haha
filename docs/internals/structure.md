@@ -1,63 +1,63 @@
 ---
-title: 项目结构
-nav_title: 项目结构
-description: 仓库的目录职责边界：CLI、Server、桌面端、Adapter 与文档站。
+title: Project Structure
+nav_title: Structure
+description: Responsibility boundaries across the CLI, server, desktop app, adapters, and docs site.
 order: 3
 ---
 
-# 项目结构
+# Project Structure
 
-本项目包含 CLI/TUI、本地 Server、Electron 桌面端、IM Adapter 和文档站。下面只列稳定的职责边界；具体文件以当前源码为准。
+The repository contains the CLI/TUI, local Server, Electron desktop app, IM adapters, and documentation site. This map lists stable responsibility boundaries rather than every file.
 
 ```text
 .
 ├── bin/
-│   └── claude-haha                 # CLI 启动脚本
-├── preload.ts                      # Bun preload 与构建期兼容入口
-├── package.json                    # 根项目脚本和依赖
+│   └── claude-haha                 # CLI launcher
+├── preload.ts                      # Bun preload and build compatibility entry
+├── package.json                    # Root scripts and dependencies
 ├── src/
 │   ├── entrypoints/
-│   │   └── cli.tsx                 # CLI 主入口
-│   ├── main.tsx                    # TUI 主流程
-│   ├── setup.ts                    # 启动初始化
-│   ├── screens/                    # REPL 等终端界面
-│   ├── components/                 # Ink UI 组件
-│   ├── tools/                      # Bash、Edit、Grep 等 Agent 工具
-│   ├── commands/                   # 斜杠命令
-│   ├── services/                   # Provider、MCP、OAuth 等共享服务
-│   ├── utils/                      # 运行时工具与 Computer Use 集成
-│   ├── vendor/                     # 受控的 vendored 实现
+│   │   └── cli.tsx                 # Main CLI entry
+│   ├── main.tsx                    # TUI flow
+│   ├── setup.ts                    # Startup initialization
+│   ├── screens/                    # REPL and other terminal screens
+│   ├── components/                 # Ink UI components
+│   ├── tools/                      # Agent tools such as Bash, Edit, and Grep
+│   ├── commands/                   # Slash commands
+│   ├── services/                   # Shared Provider, MCP, and OAuth services
+│   ├── utils/                      # Runtime utilities and Computer Use integration
+│   ├── vendor/                     # Controlled vendored implementations
 │   └── server/
-│       ├── index.ts                # Bun.serve HTTP/WebSocket 入口
-│       ├── router.ts               # REST 资源路由
-│       ├── api/                    # API 边界
-│       ├── services/               # 会话、Provider、索引、诊断等服务
-│       ├── ws/                     # WebSocket 协议和生命周期
-│       ├── proxy/                  # Provider 协议转换
-│       ├── middleware/             # Auth 与 CORS
-│       └── config/                 # Provider 预设
+│       ├── index.ts                # Bun.serve HTTP/WebSocket entry
+│       ├── router.ts               # REST resource routing
+│       ├── api/                    # API boundaries
+│       ├── services/               # Session, Provider, index, and diagnostics services
+│       ├── ws/                     # WebSocket protocol and lifecycle
+│       ├── proxy/                  # Provider protocol conversion
+│       ├── middleware/             # Auth and CORS
+│       └── config/                 # Provider presets
 ├── desktop/
 │   ├── src/                        # React Renderer
-│   │   ├── api/                    # Server API / WebSocket 客户端
-│   │   ├── components/             # Chat、Workspace、Browser、布局组件
-│   │   ├── features/               # Pets 等独立功能
-│   │   ├── pages/                  # 会话、设置、任务、诊断等页面
-│   │   ├── stores/                 # Zustand 状态
-│   │   ├── i18n/                   # 桌面多语言
-│   │   └── lib/                    # Renderer 运行时工具
+│   │   ├── api/                    # Server API and WebSocket clients
+│   │   ├── components/             # Chat, Workspace, Browser, and layout
+│   │   ├── features/               # Isolated features such as Pets
+│   │   ├── pages/                  # Sessions, Settings, tasks, diagnostics
+│   │   ├── stores/                 # Zustand state
+│   │   ├── i18n/                   # Desktop locales
+│   │   └── lib/                    # Renderer runtime utilities
 │   ├── electron/
-│   │   ├── main.ts                 # Electron main 入口
-│   │   ├── preload.ts              # 主窗口 Host bridge
-│   │   ├── preview-preload.ts      # 原生预览 bridge
-│   │   ├── pet-preload.ts          # 宠物窗口 bridge
-│   │   ├── ipc/                    # IPC channel 与校验
-│   │   └── services/               # Sidecar、终端、更新、预览等服务
+│   │   ├── main.ts                 # Electron main entry
+│   │   ├── preload.ts              # Main-window Host bridge
+│   │   ├── preview-preload.ts      # Native preview bridge
+│   │   ├── pet-preload.ts          # Pet-window bridge
+│   │   ├── ipc/                    # IPC channels and validation
+│   │   └── services/               # Sidecar, terminal, updater, and preview services
 │   ├── sidecars/
-│   │   └── claude-sidecar.ts       # server / cli / adapters 统一入口
-│   ├── scripts/                    # 构建、打包和资源准备
-│   └── src-tauri/                  # 历史代码及现用打包资源；非当前 Host
+│   │   └── claude-sidecar.ts       # Unified server / cli / adapters entry
+│   ├── scripts/                    # Build, packaging, and resource preparation
+│   └── src-tauri/                  # Historical code and current package resources; not the Host
 ├── adapters/
-│   ├── common/                     # 配置、配对、消息与 WS 共享层
+│   ├── common/                     # Shared config, pairing, messaging, and WS bridge
 │   ├── telegram/
 │   ├── feishu/
 │   ├── wechat/
@@ -68,21 +68,21 @@ order: 3
 │   ├── win_helper.py               # Windows Computer Use helper
 │   ├── requirements.txt
 │   └── requirements-win.txt
-├── scripts/                        # 根项目质量门禁、发布与维护脚本
-├── tests/                          # 跨模块测试与测试资源
-├── site/                           # React 文档站、内容索引与静态构建
-└── docs/                           # 中英文 Markdown 文档内容
+├── scripts/                        # Root quality, release, and maintenance scripts
+├── tests/                          # Cross-module tests and fixtures
+├── site/                           # React docs site, content index, and static build
+└── docs/                           # Chinese and English Markdown content
 ```
 
-## 运行边界
+## Runtime boundaries
 
-| 入口 | 运行时 | 说明 |
+| Entry | Runtime | Responsibility |
 |---|---|---|
-| `src/entrypoints/cli.tsx` | Bun | CLI/TUI 与 Agent 工具 |
-| `src/server/index.ts` | Bun / `Bun.serve` | 本地 HTTP、WebSocket 与 H5 |
-| `desktop/electron/main.ts` | Electron main | 原生桌面 Host |
-| `desktop/src/` | Chromium Renderer | React 桌面 UI |
-| `desktop/sidecars/claude-sidecar.ts` | Bun 编译 Sidecar | 打包后的 Server、CLI 与 Adapter 入口 |
-| `adapters/<platform>/` | Bun Sidecar | 平台消息接入 |
+| `src/entrypoints/cli.tsx` | Bun | CLI/TUI and Agent tools |
+| `src/server/index.ts` | Bun / `Bun.serve` | Local HTTP, WebSocket, and H5 |
+| `desktop/electron/main.ts` | Electron main | Native desktop Host |
+| `desktop/src/` | Chromium Renderer | React desktop UI |
+| `desktop/sidecars/claude-sidecar.ts` | Bun-compiled Sidecar | Packaged Server, CLI, and Adapter entry |
+| `adapters/<platform>/` | Bun Sidecar | Platform messaging integration |
 
-新增代码时应放在拥有该职责的边界内：桌面原生能力进入 `desktop/electron/`，共享业务 API 进入 `src/server/`，IM 平台差异进入 `adapters/<platform>/`，不要在 Renderer 中绕过这些边界。
+Place new code at the boundary that owns the responsibility: native desktop capabilities belong in `desktop/electron/`, shared business APIs in `src/server/`, and platform-specific messaging behavior in `adapters/<platform>/`. The Renderer should not bypass these boundaries.

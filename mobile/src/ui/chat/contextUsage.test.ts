@@ -35,7 +35,7 @@ describe('parseContextInspection', () => {
       ],
     },
   }
-  test('实时上下文：窗口取 rawMaxTokens，去掉延迟加载项和坏条目', () => {
+  test('Live context: window from rawMaxTokens, dropping deferred items and bad entries', () => {
     expect(parseContextInspection(live)).toEqual({
       used: 76_123,
       window: 200_000,
@@ -47,15 +47,15 @@ describe('parseContextInspection', () => {
       estimate: false,
     })
   })
-  test('rawMaxTokens 缺失时退回 maxTokens', () => {
+  test('rawMaxTokens falls back when missing to maxTokens', () => {
     expect(parseContextInspection({ context: { totalTokens: 10, maxTokens: 50 } })?.window).toBe(50)
   })
-  test('只有 transcript 估算时标为 estimate；实时和估算同时有以实时为准', () => {
+  test('Marked estimate when there is only a transcript estimate; when both live and estimate exist live wins', () => {
     expect(parseContextInspection({ contextEstimate: { totalTokens: 5, rawMaxTokens: 100 } })?.estimate).toBe(true)
     const both = parseContextInspection({ ...live, contextEstimate: { totalTokens: 1, rawMaxTokens: 1 } })
     expect(both).toMatchObject({ used: 76_123, estimate: false })
   })
-  test('没有可用数据或数字非法返回 null', () => {
+  test('Returns when there is no usable data or numbers are invalid null', () => {
     expect(parseContextInspection(null)).toBeNull()
     expect(parseContextInspection({})).toBeNull()
     expect(parseContextInspection({ context: { totalTokens: 'many' } })).toBeNull()
@@ -65,7 +65,7 @@ describe('parseContextInspection', () => {
 })
 
 describe('parseSessionUsage', () => {
-  test('速度按输出 token ÷ API 时长，命中率按提示侧计算', () => {
+  test('Speed is output tokens ÷ API duration, hit rate is computed on the prompt side', () => {
     const stats = parseSessionUsage({
       usage: {
         totalInputTokens: 100,
@@ -78,7 +78,7 @@ describe('parseSessionUsage', () => {
     })
     expect(stats).toEqual({ tokensPerSecond: 50, cacheHitRate: 0.6, cost: '$0.42' })
   })
-  test('没有 API 时长不编速度；什么都没产生返回 null', () => {
+  test('No speed is made up without API duration; returns when nothing was produced null', () => {
     expect(parseSessionUsage({ usage: { totalInputTokens: 10, totalOutputTokens: 5 } })?.tokensPerSecond).toBeNull()
     expect(parseSessionUsage({ usage: { totalInputTokens: 0, totalOutputTokens: 0 } })).toBeNull()
     expect(parseSessionUsage({})).toBeNull()
@@ -95,7 +95,7 @@ describe('fetchContextInspection', () => {
       },
     }) as unknown as Pick<ApiClient, 'get'>
 
-  test('两路请求各取各的，路径带会话 id 并转义', async () => {
+  test('The two requests each take their own data, with the session id escaped in the path', async () => {
     const paths: string[] = []
     const result = await fetchContextInspection(
       clientWith((path) => {
@@ -114,7 +114,7 @@ describe('fetchContextInspection', () => {
     expect(result.stats).not.toBeNull()
     expect(result.failed).toBe(false)
   })
-  test('一路失败不影响另一路；两路都失败才标 failed', async () => {
+  test('One path failing does not affect the other; only when both fail mark failed', async () => {
     const half = await fetchContextInspection(
       clientWith((path) => (path.includes('usageOnly') ? new Error('boom') : { context: { totalTokens: 3 } })),
       's'
@@ -128,59 +128,59 @@ describe('fetchContextInspection', () => {
 })
 
 describe('contextSummary', () => {
-  test('实时数据：已用 / 窗口（百分比），tone ok', () => {
+  test('Live data: used / window (percentage), tone ok', () => {
     const summary = contextSummary({ snapshot: snapshot() })
     expect(summary).toMatchObject({
       source: 'live',
       percent: 38,
       percentLabel: '38%',
-      headline: '已用 76k / 200k（38%）',
-      menuLabel: '上下文 38%',
+      headline: 'Used 76k / 200k (38%)',
+      menuLabel: 'Context 38%',
       tone: 'ok',
       approximate: false,
     })
     expect(summary.fill).toBeCloseTo(0.38)
     expect(summary.notice).toBeUndefined()
   })
-  test('窗口未知：只显示已用 token，不显示百分比', () => {
+  test('Unknown window: show only used tokens, no percentage', () => {
     const summary = contextSummary({ snapshot: snapshot({ window: undefined }) })
-    expect(summary).toMatchObject({ headline: '已用 76k', menuLabel: '上下文用量', tone: 'unknown', fill: 0 })
+    expect(summary).toMatchObject({ headline: 'Used 76k', menuLabel: 'Context usage', tone: 'unknown', fill: 0 })
     expect(summary.percent).toBeUndefined()
     expect(summary.percentLabel).toBeUndefined()
   })
-  test('快照没给窗口时用模型目录推出的窗口', () => {
+  test('When the snapshot gives no window use the one derived from the model catalog', () => {
     expect(contextSummary({ snapshot: snapshot({ window: undefined }), window: 100_000 }).percent).toBe(76)
   })
-  test('tone 阈值：79 ok / 80 warn / 94 warn / 95 full', () => {
+  test('tone Thresholds: 79 ok / 80 warn / 94 warn / 95 full', () => {
     const at = (percent: number) => contextSummary({ snapshot: snapshot({ used: percent * 1000, window: 100_000 }) })
     expect(at(79).tone).toBe('ok')
     expect(at(80).tone).toBe('warn')
     expect(at(94).tone).toBe('warn')
     expect(at(95).tone).toBe('full')
   })
-  test('按四舍五入后的百分比判 tone，标签与颜色一致', () => {
+  test('Decide tone by the rounded percentage, so label and color agree', () => {
     const summary = contextSummary({ snapshot: snapshot({ used: 79_600, window: 100_000 }) })
     expect(summary.percentLabel).toBe('80%')
     expect(summary.tone).toBe('warn')
   })
-  test('警告文案带百分比，已满时换措辞', () => {
+  test('Warning text includes the percentage, with different wording when full', () => {
     expect(contextSummary({ snapshot: snapshot({ used: 85_000, window: 100_000 }) }).notice).toContain('85%')
-    expect(contextSummary({ snapshot: snapshot({ used: 97_000, window: 100_000 }) }).notice).toContain('几乎已满')
+    expect(contextSummary({ snapshot: snapshot({ used: 97_000, window: 100_000 }) }).notice).toContain('almost full')
   })
-  test('超过窗口：百分比如实显示，进度条只填满，tone 为 full', () => {
+  test('Over the window: percentage shown as is, the progress bar just fills up, tone is full', () => {
     const summary = contextSummary({ snapshot: snapshot({ used: 250_000, window: 200_000 }) })
-    expect(summary).toMatchObject({ percent: 125, tone: 'full', fill: 1, headline: '已用 250k / 200k（125%）' })
+    expect(summary).toMatchObject({ percent: 125, tone: 'full', fill: 1, headline: 'Used 250k / 200k (125%)' })
   })
-  test('0 用量：0%，不报警；极小用量写 <1%', () => {
+  test('0 Usage: 0% does not warn; tiny usage is written as <1%', () => {
     expect(contextSummary({ snapshot: snapshot({ used: 0 }) })).toMatchObject({ percent: 0, percentLabel: '0%', tone: 'ok', fill: 0 })
-    expect(contextSummary({ snapshot: snapshot({ used: 300 }) })).toMatchObject({ percentLabel: '<1%', headline: '已用 300 / 200k（<1%）' })
+    expect(contextSummary({ snapshot: snapshot({ used: 300 }) })).toMatchObject({ percentLabel: '<1%', headline: 'Used 300 / 200k (<1%)' })
   })
-  test('transcript 估算标为近似，仍然可以报警', () => {
+  test('transcript Estimates are marked approximate and can still warn', () => {
     const summary = contextSummary({ snapshot: snapshot({ estimate: true, used: 90_000, window: 100_000 }) })
-    expect(summary).toMatchObject({ source: 'estimate', approximate: true, tone: 'warn', menuLabel: '上下文约 90%' })
-    expect(summary.headline).toBe('已用约 90k / 100k（90%）')
+    expect(summary).toMatchObject({ source: 'estimate', approximate: true, tone: 'warn', menuLabel: 'Context about 90%' })
+    expect(summary.headline).toBe('Used about 90k / 100k (90%)')
   })
-  test('没有快照退回最近一轮 usage：近似、封顶 100%、永不报警', () => {
+  test('Without a snapshot fall back to the last turn’s usage: approximate, capped at 100%, never warns', () => {
     const summary = contextSummary({
       usage: { input_tokens: 2000, output_tokens: 10, cache_read_tokens: 500_000, cache_creation_tokens: 1000 },
       window: 200_000,
@@ -189,7 +189,7 @@ describe('contextSummary', () => {
     expect(summary.notice).toBeUndefined()
     expect(summary.used).toBe(503_000)
   })
-  test('快照优先于 usage', () => {
+  test('Snapshot takes priority over usage', () => {
     const summary = contextSummary({
       snapshot: snapshot(),
       usage: { input_tokens: 1, output_tokens: 1 },
@@ -197,40 +197,40 @@ describe('contextSummary', () => {
     expect(summary.source).toBe('live')
     expect(summary.used).toBe(76_000)
   })
-  test('什么数据都没有：暂无数据，菜单只写“上下文用量”', () => {
-    expect(contextSummary({})).toMatchObject({ source: null, headline: '暂无数据', menuLabel: '上下文用量', tone: 'unknown' })
+  test('No data at all: no data yet, and the menu only says “Context usage”', () => {
+    expect(contextSummary({})).toMatchObject({ source: null, headline: 'No data yet', menuLabel: 'Context usage', tone: 'unknown' })
     expect(contextSummary({ usage: { input_tokens: 0, output_tokens: 20 }, window: 1000 }).source).toBeNull()
   })
 })
 
 describe('menuContextLine', () => {
-  test('模型名 · 上下文 N%', () => {
-    expect(menuContextLine('DeepSeek V4', contextSummary({ snapshot: snapshot() }))).toBe('DeepSeek V4 · 上下文 38%')
+  test('Model name · context N%', () => {
+    expect(menuContextLine('DeepSeek V4', contextSummary({ snapshot: snapshot() }))).toBe('DeepSeek V4 · Context 38%')
   })
-  test('模型名取不到时只有上下文', () => {
-    expect(menuContextLine('  ', contextSummary({ snapshot: snapshot() }))).toBe('上下文 38%')
-    expect(menuContextLine(undefined, contextSummary({}))).toBe('上下文用量')
+  test('When the model name is unavailable only context is shown', () => {
+    expect(menuContextLine('  ', contextSummary({ snapshot: snapshot() }))).toBe('Context 38%')
+    expect(menuContextLine(undefined, contextSummary({}))).toBe('Context usage')
   })
 })
 
 describe('usageRows', () => {
-  test('有哪个字段显示哪个，缓存字段没给就不列', () => {
+  test('Show whichever fields exist; cache fields are not listed if absent', () => {
     expect(usageRows({ input_tokens: 1200, output_tokens: 340 })).toEqual([
-      { key: 'input', label: '输入', value: '1.2k' },
-      { key: 'output', label: '输出', value: '340' },
+      { key: 'input', label: 'Input', value: '1.2k' },
+      { key: 'output', label: 'Output', value: '340' },
     ])
     expect(
       usageRows({ input_tokens: 10, output_tokens: 20, cache_read_tokens: 30_000, cache_creation_tokens: 400 }).map((row) => row.key)
     ).toEqual(['input', 'output', 'cache_read', 'cache_creation'])
   })
-  test('没有 usage 或字段非法返回空', () => {
+  test('Returns empty without usage or with invalid fields', () => {
     expect(usageRows(undefined)).toEqual([])
     expect(usageRows({ input_tokens: Number.NaN, output_tokens: -1 })).toEqual([])
   })
 })
 
 describe('categoryRows', () => {
-  test('按占用排序，去掉占位项和 0，限制条数，名称有中文映射', () => {
+  test('Sorted by usage, dropping placeholders and zeros, capped in count, with names mapped to readable labels', () => {
     const rows = categoryRows(
       snapshot({
         categories: [
@@ -243,24 +243,24 @@ describe('categoryRows', () => {
         ],
       })
     )
-    expect(rows.map((row) => row.label)).toEqual(['对话消息', '技能', 'Something new'])
+    expect(rows.map((row) => row.label)).toEqual(['Messages', 'Skills', 'Something new'])
     expect(rows[0]).toMatchObject({ value: '50k' })
     expect(rows[0].fill).toBeCloseTo(0.25)
     expect(rows[2].fill).toBeGreaterThan(0)
   })
-  test('窗口未知时占比相对总量；没有快照为空', () => {
+  test('With an unknown window shares are relative to the total; empty without a snapshot', () => {
     const rows = categoryRows(snapshot({ window: undefined, used: 100, categories: [{ name: 'Messages', tokens: 50 }] }))
     expect(rows[0].fill).toBe(0.5)
     expect(categoryRows(null)).toEqual([])
   })
-  test('条数上限', () => {
+  test('Count cap', () => {
     const categories = Array.from({ length: 10 }, (_, i) => ({ name: `c${i}`, tokens: i + 1 }))
     expect(categoryRows(snapshot({ categories }), 3)).toHaveLength(3)
   })
 })
 
 describe('formatCacheHit', () => {
-  test('99.96% 不会被写成 100%', () => {
+  test('99.96% is not written as 100%', () => {
     expect(formatCacheHit(0.9996)).toBe('99.9%')
     expect(formatCacheHit(1)).toBe('100%')
     expect(formatCacheHit(0.6)).toBe('60%')

@@ -114,7 +114,7 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
   /**
    * The box is driven from a local draft so an IME composition can show its
    * in-progress text without becoming a query: pinyin like "wendang" would
-   * otherwise search the catalog for each Latin keystroke on the way to 文档.
+   * otherwise search the catalog for each Latin keystroke on the way to a CJK word such as 文档 ("document").
    * The composed text is committed once, on `compositionend`.
    */
   const [draft, setDraft] = useState(query)

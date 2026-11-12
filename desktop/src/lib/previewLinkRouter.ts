@@ -33,7 +33,7 @@ function extOf(p: string): string {
 }
 
 /**
- * A link destination is URL-encoded: `[笔记](docs/My%20Notes.md)` is how
+ * A link destination is URL-encoded: `[Notes](docs/My%20Notes.md)` is how
  * CommonMark spells a space, and the file on disk is `My Notes.md` (#1556).
  * Malformed escapes (`100%.md`) can only be the name as written.
  */

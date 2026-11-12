@@ -10,20 +10,20 @@ import {
   toolVerb,
 } from './toolCallPresentation'
 
-const zh = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate('zh', key, params)
+const en = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate('en', key, params)
 
 describe('toolVerb', () => {
   it('leads a row with a verb, never the raw tool name', () => {
-    expect(toolVerb('Grep', zh)).toBe('搜索')
-    expect(toolVerb('Read', zh)).toBe('读取')
-    expect(toolVerb('Bash', zh)).toBe('运行')
-    expect(toolVerb('TodoWrite', zh)).toBe('更新任务清单')
-    expect(toolVerb('TodoWrite', zh)).not.toContain('TodoWrite')
+    expect(toolVerb('Grep', en)).toBe('Search')
+    expect(toolVerb('Read', en)).toBe('Read')
+    expect(toolVerb('Bash', en)).toBe('Run')
+    expect(toolVerb('TodoWrite', en)).toBe('Update todos')
+    expect(toolVerb('TodoWrite', en)).not.toContain('TodoWrite')
   })
 
   it('keeps an unknown tool its own name, since that is all that says what it is', () => {
     expect(hasToolVerb('mcp__linear__create_issue')).toBe(false)
-    expect(toolVerb('mcp__linear__create_issue', zh)).toBe('mcp__linear__create_issue')
+    expect(toolVerb('mcp__linear__create_issue', en)).toBe('mcp__linear__create_issue')
   })
 })
 

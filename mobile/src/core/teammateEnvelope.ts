@@ -1,7 +1,7 @@
 /**
- * Agent 团队成员之间（含队长）的消息以 `<teammate-message teammate_id="…">` 信封写进对方的
- * transcript。和桌面端一致：队长的主对话不把它当成用户发言；成员页才显示里面的正文，
- * 生命周期通知（空闲、请求关停等）的 JSON 不显示。
+ * Agent Messages between team members (including the lead) are written into the recipient's
+ * transcriptas a `<teammate-message teammate_id="…">` envelope. Same as desktop: the lead's main conversation does not treat it as user speech; only the member page shows the body, 
+ * JSON of lifecycle notifications (idle, shutdown request etc) is not shown.
  */
 const ENVELOPE = /<teammate-message\s+teammate_id="([^"]+)"[^>]*>\n?([\s\S]*?)\n?<\/teammate-message>/g
 const LIFECYCLE = new Set([
@@ -12,12 +12,12 @@ const LIFECYCLE = new Set([
   'idle_notification',
 ])
 
-/** 只看完整的开闭标签：用户贴代码或讨论协议时提到标签名不算。 */
+/** Only count complete open/close tags: mentioning the tag name when pasting code or discussing the protocol does not count. */
 export function isTeammateEnvelope(text: string) {
   return text.includes('<teammate-message') && text.includes('</teammate-message>')
 }
 
-/** 信封里给人看的消息；不是信封返回 null，全是生命周期通知返回空数组。 */
+/** The human-facing message inside the envelope; returns null if not an envelope, and an empty array if all are lifecycle notifications. */
 export function teammateMessages(text: string): { from: string; text: string }[] | null {
   if (!isTeammateEnvelope(text)) return null
   const messages: { from: string; text: string }[] = []
@@ -29,7 +29,7 @@ export function teammateMessages(text: string): { from: string; text: string }[]
         const body = JSON.parse(content) as { type?: unknown }
         if (typeof body.type === 'string' && LIFECYCLE.has(body.type)) continue
       } catch {
-        // 长得像 JSON 的普通文字照常显示。
+        // and plain text that looks like JSON is shown as usual.
       }
     }
     messages.push({ from: match[1] ?? '', text: content })
@@ -37,5 +37,5 @@ export function teammateMessages(text: string): { from: string; text: string }[]
   return messages
 }
 
-/** team-lead 是队长；其余就是成员名。 */
-export const teammateLabel = (from: string) => (from === 'team-lead' || from.startsWith('team-lead@') ? '队长' : from.split('@')[0] || from)
+/** team-lead is the lead; everything else is a member name. */
+export const teammateLabel = (from: string) => (from === 'team-lead' || from.startsWith('team-lead@') ? 'Lead' : from.split('@')[0] || from)

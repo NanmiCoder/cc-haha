@@ -11,7 +11,7 @@ afterEach(cleanup)
 
 function renderActive(content: string) {
   const result = render(<ThinkingBlock content={content} isActive />)
-  fireEvent.click(screen.getByRole('button', { name: /思考中|Thinking/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Thinking/ }))
   return result
 }
 

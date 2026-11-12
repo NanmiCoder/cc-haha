@@ -1,26 +1,24 @@
 ---
-title: 桌面端架构
-nav_title: 桌面端架构
-description: Electron 主进程、Server Sidecar、CLI 子进程与 IM Adapter 的进程边界。
+title: Desktop Architecture
+nav_title: Desktop
+description: Process boundaries between the Electron main process, server sidecar, CLI subprocesses, and IM adapters.
 order: 1
 ---
 
-# 桌面端架构
+# Desktop Architecture
 
-桌面端不是把 CLI 直接嵌进 React，而是四类进程协作跑起来的。维护时踩的坑，多半来自跨过了本该关死的那道边界。
+The desktop app does not embed the CLI inside React. It is four kinds of processes cooperating, and most maintenance mistakes come from crossing a boundary that was meant to stay closed.
 
-## 进程分布
-
-四类进程各自的位置：
+## Process map
 
 ```text
 Electron main
-├── Chromium renderer（React UI）
+├── Chromium renderer (React UI)
 ├── claude-sidecar server
 │   ├── Bun.serve HTTP API
-│   ├── Bun WebSocket 会话网关
-│   └── 按会话启动 CLI 子进程
-└── claude-sidecar adapters（按平台独立启动）
+│   ├── Bun WebSocket session gateway
+│   └── CLI subprocess per session
+└── claude-sidecar adapters (launched per platform)
     ├── Telegram
     ├── Feishu
     ├── WeChat
@@ -28,60 +26,58 @@ Electron main
     └── WhatsApp
 ```
 
-- **Electron main** 负责窗口、系统对话框、更新、终端、原生预览、宠物窗口和 Sidecar 生命周期。
-- **Renderer** 只负责界面，通过 preload 暴露的 `window.desktopHost` 使用原生能力。
-- **Server Sidecar** 是桌面端和 H5 共用的本地服务，提供 REST、WebSocket、Provider 代理和会话管理。
-- **CLI 子进程** 执行模型请求、工具调用和 Agent 编排。
-- **Adapter Sidecar** 把 IM 平台消息桥接到同一套 Server/CLI 会话。
+- **Electron main** owns windows, native dialogs, updates, terminals, native preview, pet windows, and the sidecar lifecycle.
+- **Renderer** owns the interface only. It reaches native capabilities through `window.desktopHost`, exposed by preload.
+- **Server sidecar** is the local service shared by the desktop app and the H5 client: REST, WebSocket, provider proxy, and session management.
+- **CLI subprocess** executes model requests, tool calls, and agent orchestration.
+- **Adapter sidecar** bridges IM platform messages into the same server and CLI sessions.
 
-`desktop/src-tauri/` 目前只是保留打包资源和历史代码的位置，不是桌面运行时。当前桌面 Host 是 Electron。
+`desktop/src-tauri/` now only holds packaging assets and historical code. It is not the desktop runtime; Electron is the current host.
 
-## 当前技术栈
+## Current stack
 
-| 层 | 主要技术 | 用途 |
+| Layer | Main technologies | Purpose |
 |---|---|---|
-| Renderer | React 18、Vite 8、TypeScript、Zustand 5 | 桌面 UI 与状态管理 |
-| 样式与内容 | Tailwind CSS 4、Marked、DOMPurify、Shiki 4、Mermaid、KaTeX | 布局、Markdown、代码和图表 |
-| Diff | `react-diff-viewer-continued` | 对话和工作区中的 Diff 展示 |
-| Electron Host | Electron、electron-builder、electron-updater | 原生窗口、打包和更新 |
-| 终端 | node-pty、xterm.js | 原生 PTY 与终端渲染 |
-| 本地服务 | Bun、`Bun.serve` | HTTP API 与 WebSocket |
+| Renderer | React 18, Vite 8, TypeScript, Zustand 5 | Desktop UI and state |
+| Styling and content | Tailwind CSS 4, Marked, DOMPurify, Shiki 4, Mermaid, KaTeX | Layout, Markdown, code, diagrams |
+| Diff | `react-diff-viewer-continued` | Diffs in chat and workspace |
+| Electron host | Electron, electron-builder, electron-updater | Native windows, packaging, updates |
+| Terminal | node-pty, xterm.js | Native PTY and terminal rendering |
+| Local service | Bun, `Bun.serve` | HTTP API and WebSocket |
 
-版本以 `desktop/package.json` 为准。本页只列会影响架构理解的主版本，避免复制完整依赖清单。
+Versions follow `desktop/package.json`. This page lists only the majors that change how the architecture reads, not the full dependency list.
 
-## Electron Host
+## Electron host
 
-核心入口与边界：
-
-| 路径 | 职责 |
+| Path | Responsibility |
 |---|---|
-| `desktop/electron/main.ts` | Electron main 入口、窗口与 IPC 注册 |
-| `desktop/electron/preload.ts` | 向主 renderer 暴露类型化 Host API |
-| `desktop/electron/preview-preload.ts` | 原生网页预览的隔离桥接 |
-| `desktop/electron/pet-preload.ts` | 宠物窗口的最小能力桥接 |
-| `desktop/electron/ipc/` | IPC channel 注册和 payload 校验 |
-| `desktop/electron/services/` | Sidecar、更新、终端、预览、窗口、代理等系统服务 |
+| `desktop/electron/main.ts` | Electron main entry, windows, IPC registration |
+| `desktop/electron/preload.ts` | Typed host API exposed to the main renderer |
+| `desktop/electron/preview-preload.ts` | Isolated bridge for native web preview |
+| `desktop/electron/pet-preload.ts` | Minimal bridge for pet windows |
+| `desktop/electron/ipc/` | IPC channel registration and payload validation |
+| `desktop/electron/services/` | Sidecar, update, terminal, preview, window, and proxy services |
 
-Renderer 不应直接导入 Electron，也不应自行拼接任意 IPC channel。新增原生能力时，应同时更新 Host contract、main 侧校验和相关测试。
+The renderer must not import Electron directly, and must not assemble arbitrary IPC channel names. A new native capability means updating the host contract, the main-side validation, and the related tests together.
 
-### 启动流程
+### Startup sequence
 
-1. Electron 解析默认或便携存储模式，并准备应用配置目录。
-2. Host 选择可用端口，启动统一的 `claude-sidecar server` 二进制。
-3. Sidecar 从 `src/server/index.ts` 进入 `startServer()`，使用 `Bun.serve` 同时承载 HTTP 和 WebSocket。
-4. 健康检查通过后，Renderer 获取 loopback Server URL 并加载会话与设置。
-5. Host 根据已配置的平台启动对应 Adapter Sidecar。
-6. Server 在用户开始会话时按需启动 CLI 子进程。
+1. Electron resolves the default or portable storage mode and prepares the app config directory.
+2. The host picks a free port and starts the unified `claude-sidecar server` binary.
+3. The sidecar enters `startServer()` from `src/server/index.ts` and serves HTTP and WebSocket from one `Bun.serve`.
+4. Once the health check passes, the renderer takes the loopback server URL and loads sessions and settings.
+5. The host starts adapter sidecars for the platforms that are configured.
+6. The server starts a CLI subprocess on demand when a session begins.
 
-Server 可绑定局域网可访问地址以支持 H5，但桌面 Renderer 使用 loopback 控制地址。H5、远程访问和宠物窗口分别经过其对应的 Token 与能力限制，不能因为本地 Server 已启动就假定所有来源都可信。
+The server can bind a LAN-reachable address for H5, but the desktop renderer always talks to the loopback control address. H5, remote access, and pet windows each pass their own token and capability limits. A running local server does not make every caller trusted.
 
-健康检查是 `/health` 轮询，总超时 30 秒。超时不会杀掉 sidecar：进程仍由 `startingServer` 持有，下一次 `getServerUrl()`（例如用户点「重试」或渲染进程的恢复请求）会继续探测**同一个**进程，而不是重新 spawn。这样本地索引重建或事件循环繁忙导致的慢启动可以一直跑完，不会每次超时都把进度清零。只有两种情况会结束它：退出或停止应用（`stopAll` / `stopAllAndWait`），或子进程自己 exit；后一种情况下，下一次重试会启动新的进程。一直不健康的 sidecar 会在每次重试时被重新探测，直到应用退出。
+The health check polls `/health` with a 30-second total timeout. A timeout no longer kills the sidecar: the process stays owned by `startingServer`, so the next `getServerUrl()` call (a user retry, or the renderer's recovery request) keeps probing **the same** process instead of spawning a new one. A slow start caused by a local index rebuild or a busy event loop can therefore finish; each timeout would otherwise reset that progress. Only two things end it: quitting or stopping the app (`stopAll` / `stopAllAndWait`), or the child exiting on its own, in which case the next retry spawns a fresh process. A sidecar that never becomes healthy is re-probed on every retry until the app quits.
 
-超时文案区分两种状态：端口未监听（`never started listening on <host>:<port>`，多半还在初始化索引）与端口已监听但 `/health` 未应答（`is listening on <host>:<port> but did not answer`，事件循环被长任务阻塞）。两者都会附加最后一次探测的具体错误，但都不包含 `Recent server logs:` 标记，因此会完整显示在启动失败弹窗的正文里。
+Timeout messages distinguish two states: a port that never started listening (`never started listening on <host>:<port>`, usually still initializing the index) and a port that is listening but does not answer `/health` (`is listening on <host>:<port> but did not answer`, event loop blocked by long work). Both append the last probe error, and neither contains the `Recent server logs:` marker, so they render as the message body of the startup-failure dialog.
 
-### Sidecar 入口
+### Sidecar entry point
 
-`desktop/sidecars/claude-sidecar.ts` 是统一入口：
+`desktop/sidecars/claude-sidecar.ts` is the single entry point:
 
 ```text
 claude-sidecar server   --app-root <path> --host <host> --port <port>
@@ -89,95 +85,95 @@ claude-sidecar cli      --app-root <path> [CLI arguments]
 claude-sidecar adapters --app-root <path> --telegram|--feishu|--wechat|--dingtalk|--whatsapp|--wecom|--qq|--slack
 ```
 
-Sidecar 在导入业务模块前设置 `CLAUDE_APP_ROOT`、`CALLER_DIR` 和启动参数，因为 Server、CLI 与 Adapter 的顶层模块会读取这些值。
+The sidecar sets `CLAUDE_APP_ROOT`, `CALLER_DIR`, and the launch arguments before importing any business module, because the top-level modules of the server, CLI, and adapters read those values at import time.
 
-## Server Sidecar
+## Server sidecar
 
-真实 Server 入口是 `src/server/index.ts`，不是单独的 `server.ts` 包装层。
+The real server entry is `src/server/index.ts`, not a separate `server.ts` wrapper.
 
 ```text
 src/server/
-├── index.ts          # Bun.serve、鉴权、CORS、升级和静态 H5
-├── router.ts         # REST 资源路由
-├── api/              # API 边界
-├── services/         # 会话、Provider、索引、诊断等业务服务
-├── ws/               # WebSocket 协议与会话生命周期
-├── proxy/            # Provider 协议与流式响应转换
-├── middleware/       # Auth、CORS 和错误边界
-└── config/           # Provider 预设
+├── index.ts          # Bun.serve, auth, CORS, upgrades, static H5
+├── router.ts         # REST resource routes
+├── api/              # API boundary
+├── services/         # Sessions, providers, indexing, diagnostics
+├── ws/               # WebSocket protocol and session lifecycle
+├── proxy/            # Provider protocol and streaming translation
+├── middleware/       # Auth, CORS, error boundary
+└── config/           # Provider presets
 ```
 
-`Bun.serve` 的同一个 `fetch` 边界处理：
+A single `Bun.serve` `fetch` boundary handles:
 
-- `/api/*` REST 请求
-- `/ws/:sessionId` 桌面、H5 和宠物客户端连接
-- `/sdk/:sessionId` CLI 内部连接
-- OAuth 回调
-- 受限的预览与本地文件访问
-- 打包后的 H5 静态资源
+- `/api/*` REST requests
+- `/ws/:sessionId` for desktop, H5, and pet clients
+- `/sdk/:sessionId` for internal CLI connections
+- OAuth callbacks
+- Restricted preview and local file access
+- Bundled H5 static assets
 
-鉴权规则按客户端能力区分。新增路由时，必须先确定它属于本地桌面、H5、宠物、内部 SDK 还是公开静态资源，再放进对应的认证和 CORS 边界。
+Auth rules differ by client capability. Before adding a route, decide whether it belongs to the local desktop, H5, pets, the internal SDK, or public static assets, then place it inside the matching auth and CORS boundary.
 
-## WebSocket 语义
+## WebSocket semantics
 
-Renderer 为每个会话维护一条连接：
+The renderer keeps one connection per session:
 
 ```text
 ws://<server>/ws/<sessionId>
 ```
 
-如果 Server 启用了认证，客户端会把 Token 放在连接查询参数中。连接成功后，Server 会发送当前会话标识、尚未处理的权限请求快照和运行状态。
+If the server has auth enabled, the client passes the token as a connection query parameter. After the connection opens, the server sends the current session identity, a snapshot of pending permission requests, and the running state.
 
-### 心跳与重连
+### Heartbeat and reconnect
 
-当前 `desktop/src/api/websocket.ts` 的行为是：
+Current behavior in `desktop/src/api/websocket.ts`:
 
-- 连接后每 30 秒发送一次 `ping`。
-- 10 秒内没有收到 `pong`，客户端主动关闭连接并进入重连。
-- 重连延迟从 1 秒开始指数增长，最高封顶 30 秒。
-- 自动重连没有固定的最大尝试次数；显式关闭会话才停止。
-- 断线期间发送的消息进入内存队列。
-- 重连成功后先发送队列中的消息，再发送 `sync_state` 获取 Server 的权威运行状态。
+- Send `ping` every 30 seconds after connecting.
+- If no `pong` arrives within 10 seconds, the client closes the connection and reconnects.
+- Reconnect delay grows exponentially from 1 second, capped at 30 seconds.
+- Automatic reconnect has no fixed retry ceiling; only closing the session stops it.
+- Messages sent while offline are queued in memory.
+- After reconnecting, queued messages are flushed first, then `sync_state` fetches the server's authoritative run state.
 
-如果你在别处读到过“最多重试 10 次”，那是过期说法，以上面这几条为准。
+If you have read "at most 10 retries" somewhere, that wording is stale — the list above is current.
 
-### 客户端断开不等于停止任务
+### A disconnected client does not stop the work
 
-最后一个客户端断开后：
+After the last client disconnects:
 
-- 正在运行的前台回合或后台任务继续执行。
-- 工作结束后才进入空闲宽限期。
-- 客户端在宽限期内重连会取消清理。
-- 超过宽限期且没有客户端，Server 才停止对应 CLI。
-- 等待权限的会话有独立的有界清理策略，避免永久占用进程。
+- Foreground turns and background tasks keep running.
+- The idle grace period starts only after the work finishes.
+- A client reconnecting inside the grace period cancels the cleanup.
+- The server stops the CLI only once the grace period passes with no clients.
+- Sessions waiting on a permission request have their own bounded cleanup policy so they cannot hold a process forever.
 
-这让手机锁屏、Renderer 刷新或短暂网络切换不会直接中断正在运行的任务。
+That is why locking a phone, refreshing the renderer, or a brief network switch does not interrupt a running task.
 
-## CLI 与 Provider 代理
+## CLI and provider proxy
 
-Server 按会话启动 CLI，并通过内部协议转发输出、权限请求、工具结果和后台任务状态。会话的 Provider、模型、effort 和权限模式由 Server/CLI 共同维护，Renderer 不是唯一真相来源。
+The server starts a CLI per session and forwards output, permission requests, tool results, and background task state over an internal protocol. Provider, model, effort, and permission mode are maintained jointly by the server and the CLI; the renderer is not the single source of truth.
 
-`src/server/proxy/` 处理支持的 Provider 协议：
+`src/server/proxy/` handles the supported provider protocols:
 
 - Anthropic Messages
 - OpenAI Chat Completions
 - OpenAI Responses
 
-Provider 的模型映射、认证方式和上下文设置以实际 Provider 配置为准，不应在架构文档中硬编码厂商清单。
+Model mapping, authentication style, and context settings follow the actual provider configuration. Do not hardcode a vendor list in architecture docs.
 
-## IM Adapter
+## IM adapters
 
-每个平台使用独立 Adapter Sidecar，避免一个平台的凭据或启动失败拖垮其他平台。
+Each platform runs its own adapter sidecar, so one platform's bad credentials or failed startup cannot take the others down.
 
 ```text
-IM 平台
+IM platform
   → adapters/<platform>
   → adapters/common WebSocket bridge
-  → Server Sidecar
-  → CLI 会话
+  → server sidecar
+  → CLI session
 ```
 
-共享层位于 `adapters/common/`，负责配置、配对、会话映射、消息缓冲、去重、附件和 Server WebSocket 桥接。当前平台目录包括：
+The shared layer in `adapters/common/` handles configuration, pairing, session mapping, message buffering, deduplication, attachments, and the server WebSocket bridge. Current platform directories:
 
 - `adapters/telegram/`
 - `adapters/feishu/`
@@ -185,23 +181,23 @@ IM 平台
 - `adapters/dingtalk/`
 - `adapters/whatsapp/`
 
-## 持久化边界
+## Persistence boundaries
 
-不同数据不共享同一个存储：
+Different data does not share one store:
 
-| 数据 | 主要边界 |
+| Data | Primary boundary |
 |---|---|
-| Renderer UI 偏好与打开标签 | 浏览器存储及其迁移 |
-| 会话与消息 | Server/CLI 管理的本地会话数据 |
-| Provider、H5、Computer Use 等设置 | Server 管理的配置文件 |
-| Electron 窗口和原生状态 | Electron user data / 应用模式目录 |
-| IM 配置和配对状态 | Adapter 配置与各平台状态目录 |
+| Renderer UI preferences and open tabs | Browser storage and its migrations |
+| Sessions and messages | Local session data managed by the server and CLI |
+| Provider, H5, Computer Use, and other settings | Config files managed by the server |
+| Electron window and native state | Electron user data / app mode directory |
+| IM configuration and pairing state | Adapter config and per-platform state directories |
 
-任何 JSON、`localStorage` 或应用配置形状变化都必须带前向迁移和旧数据回归测试。不要直接覆盖用户的共享 Claude 配置，也不要在测试中读取真实用户目录。
+Any change to a JSON shape, a `localStorage` key, or the app config layout needs a forward migration plus a regression test against old data. Never overwrite the user's shared Claude configuration, and never read the real user directory from tests.
 
-## 构建与验证
+## Build and verification
 
-桌面构建由 `desktop/package.json` 的脚本编排：
+Desktop builds are orchestrated by scripts in `desktop/package.json`:
 
 ```bash
 cd desktop
@@ -210,6 +206,6 @@ bun run build
 bun run build:electron
 ```
 
-`bun run build` 在 Vite 构建后运行 `build:h5-mobile`，把 `mobile/` 导出成手机浏览器用的 H5（`dist/m`），因此需要先安装 `mobile/` 的依赖（Node 22）。`dist/m/assets/node_modules/**` 在 electron-builder 的 `files` 里显式放回，否则会被它默认排除。
+After Vite, `bun run build` runs `build:h5-mobile`, which exports `mobile/` as the H5 for phone browsers (`dist/m`); install the `mobile/` dependencies (Node 22) first. `dist/m/assets/node_modules/**` is listed again in electron-builder's `files`, which would otherwise exclude it.
 
-`electron:package` 在此基础上运行 electron-builder。打包产物验证只能证明资源和安装包结构正确；涉及窗口、权限、终端、预览、更新或 Computer Use 的用户流程，还需要真实桌面 Smoke 验证。
+`electron:package` runs electron-builder on top of that. Verifying a packaged artifact only proves the asset and installer structure is correct. User flows that touch windows, permissions, terminals, preview, updates, or Computer Use still need a real desktop smoke test.

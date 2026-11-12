@@ -22,8 +22,8 @@ test('Git warnings reflect actual checkout changes rather than all dirty reposit
   expect(gitLaunchWarning(repo, null, false)).toBeNull()
   expect(gitLaunchWarning(repo, 'main', false)).toBeNull()
   expect(gitLaunchWarning(repo, 'same', false)).toBeNull()
-  expect(gitLaunchWarning(repo, 'feature', false)).toContain('未提交')
-  expect(gitLaunchWarning(repo, 'other', false)).toContain('另一个工作树')
+  expect(gitLaunchWarning(repo, 'feature', false)).toContain('uncommitted')
+  expect(gitLaunchWarning(repo, 'other', false)).toContain('another worktree')
   expect(gitLaunchWarning(repo, 'feature', true)).toBeNull()
 })
 test('branch search includes remote refs, and non-Git folders show no irrelevant options', () => {

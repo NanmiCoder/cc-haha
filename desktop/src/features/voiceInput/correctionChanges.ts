@@ -113,7 +113,7 @@ export function markRanges(text: string, ranges: readonly TextRange[]): Array<{ 
 
 /**
  * Only a term (something with Latin letters, like `Codex` or `cc-haha`) is
- * worth keeping in the vocabulary; a fixed homophone such as 除 → 熟 is not.
+ * worth keeping in the vocabulary; a fixed homophone (one character swapped for a same-sounding one) is not.
  * Same rule the server uses when it records vocabulary suggestions.
  */
 export function isVocabularyCandidate(to: string): boolean {

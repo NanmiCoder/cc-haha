@@ -47,10 +47,10 @@ test('a service-account key or mismatched client never silently produces an unus
     },
   ]) {
     expect(() => withGoogleServicesFile(config, fixture(value))).toThrow(
-      'Firebase 客户端'
+      'Firebase client'
     )
   }
   expect(() =>
     withGoogleServicesFile(config, '/fixture-missing-services.json')
-  ).toThrow('可读取')
+  ).toThrow('readable')
 })

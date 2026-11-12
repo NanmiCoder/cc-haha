@@ -19,7 +19,7 @@ test('profile shows uploaded identity, while missing identity is explained besid
       return [node, ...flatten(node.props?.children)]
     }
     const avatarDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT3cAAAAASUVORK5CYII='
-    const profile = { displayName: '上传头像的用户', subtitle: 'github.com/example/profile', avatarDataUrl }
+    const profile = { displayName: 'User with uploaded avatar', subtitle: 'github.com/example/profile', avatarDataUrl }
     let retries = 0
     const props = { overview: { profile, stats: null, profileError: '', statsError: '' }, onRetry: () => retries++ }
     let nodes = flatten(ProfileContent(props))
@@ -27,12 +27,12 @@ test('profile shows uploaded identity, while missing identity is explained besid
     assert.ok(nodes.some(node => node.props.children === profile.displayName))
     assert.equal(nodes.some(node => node.type === 'Logo'), false)
     props.overview.profile = null
-    props.overview.profileError = '请更新电脑端以同步头像和昵称。'
+    props.overview.profileError = 'Please update the desktop app to sync avatar and nickname.'
     nodes = flatten(ProfileContent(props))
-    assert.ok(nodes.some(node => node.props.children === '资料未同步'))
+    assert.ok(nodes.some(node => node.props.children === 'Profile not synced'))
     assert.ok(nodes.some(node => node.props.children === props.overview.profileError || node.props.text === props.overview.profileError))
     assert.equal(nodes.some(node => node.type === 'Logo'), false)
-    nodes.find(node => node.type === 'Button' && node.props.title === '重新同步').props.onPress()
+    nodes.find(node => node.type === 'Button' && node.props.title === 'Resync').props.onPress()
     assert.equal(retries, 1)
   `
   execFileSync(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })

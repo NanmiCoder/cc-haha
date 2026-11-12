@@ -1,65 +1,61 @@
 ---
-name: 使用问题咨询
-about: 咨询桌面端或 CLI 使用过程中遇到的问题
-title: '[问题] '
+name: Usage question
+about: Ask about a problem you hit while using the desktop app or CLI
+title: '[Question] '
 labels: question
 assignees: ''
 ---
 
-> **更快得到帮助**：社群里的响应通常更快。使用中的疑问可以先到用户交流群（企业微信，二维码见 README）提问，这里适合沉淀可复用的、需要留档的问题。
+> **Get help faster**: The community usually responds sooner. Ask everyday usage questions in the user group first (WeCom; QR code in the README). Issues here are best for reusable questions worth keeping on record.
 
-## 提交前确认
-<!-- 请确认以下事项 -->
+## Before submitting
+<!-- Please confirm the following -->
 
-- [ ] 我已经阅读了 [README 常见问题](https://github.com/NanmiCoder/cc-haha#常见问题)
-- [ ] 我已经阅读了[第三方模型使用指南](https://github.com/NanmiCoder/cc-haha/blob/main/docs/guide/third-party-models.md)（如使用第三方 provider）
-- [ ] 我已经搜索过[现有 issues](https://github.com/NanmiCoder/cc-haha/issues)，确认没有重复问题
-- [ ] 我已经隐藏截图和日志中的 API Key、Token、Cookie 等敏感信息
+- [ ] I have read the [troubleshooting guide](https://github.com/NanmiCoder/cc-haha/blob/main/docs/start/troubleshooting.md)
+- [ ] I have read the [model setup guide](https://github.com/NanmiCoder/cc-haha/blob/main/docs/start/models.md) (if using a third-party provider)
+- [ ] I have searched [existing issues](https://github.com/NanmiCoder/cc-haha/issues) and found no duplicate
+- [ ] I have hidden API keys, tokens, cookies, and other sensitive information in screenshots and logs
 
-## 问题描述
-<!-- 清晰简洁地描述你想做什么、现在卡在哪里 -->
+## Description
+<!-- Clearly and briefly describe what you're trying to do and where you're stuck -->
 
+## Environment
+<!-- For desktop issues, fill in the first 4 items first; for CLI issues, also add Bun / Node info -->
 
-## 使用环境
-<!-- 桌面端问题请优先填写前 4 项；CLI 问题再补充 Bun / Node 信息 -->
+- Usage: Desktop / CLI / Other:
+- Operating system: Windows / macOS / Linux:
+- OS version: e.g. Windows 11 23H2 / macOS 15.4:
+- Desktop version: e.g. v0.1.8 (see Settings -> About):
+- Install source: GitHub Release / local build from source / Other:
+- Bun version (CLI issues, `bun --version`):
+- Node version (CLI issues, `node --version`):
 
-- 使用方式: 桌面端 / CLI / 其他:
-- 操作系统: Windows / macOS / Linux:
-- 系统版本: 例如 Windows 11 23H2 / macOS 15.4:
-- 桌面端版本: 例如 v0.1.8（设置页 -> 关于 中可查看）:
-- 安装来源: GitHub Release / 源码本地构建 / 其他:
-- Bun 版本（CLI 问题填写，`bun --version`）:
-- Node 版本（CLI 问题填写，`node --version`）:
+## Usage scenario
+<!-- Describe which feature you were using when you hit the problem -->
 
-## 使用场景
-<!-- 描述你在使用哪个功能时遇到的问题 -->
+- Feature: e.g. session chat / provider configuration / model calls / MCP / Skills / remote control:
+- API provider: e.g. Anthropic official / OpenRouter / MiniMax / Kimi / Ollama:
+- Model used:
 
-- 使用功能: 例如会话对话 / Provider 配置 / 模型调用 / MCP / Skills / 远程控制:
-- API 提供商: 例如 Anthropic 官方 / OpenRouter / MiniMax / Kimi / Ollama:
-- 使用的模型:
+## Configuration screenshots
+<!-- Please include screenshots of provider / model / Base URL and related configuration if possible; be sure to hide API keys, tokens, and other sensitive information -->
 
-## 配置截图
-<!-- 请尽量提供 Provider / 模型 / Base URL 等相关配置截图；务必隐藏 API Key、Token 等敏感信息 -->
-
-
-## 操作步骤
-<!-- 请说明你是怎么操作到这个问题的 -->
+## Steps
+<!-- Explain how you got to this problem -->
 
 1.
 2.
 3.
 
-## 错误信息与日志
-<!-- 如果页面、弹窗或终端里有错误，请粘贴完整内容 -->
+## Error messages and logs
+<!-- If there is an error on the page, in a dialog, or in the terminal, paste the full content -->
 
 ```shell
-在此粘贴错误信息和日志
+Paste error messages and logs here
 ```
 
-## 截图或录屏
-<!-- 如有，请提供截图或录屏；截图前请隐藏敏感信息 -->
-
+## Screenshots or screen recording
+<!-- If available, provide screenshots or a recording; hide sensitive information before capturing -->
 
 ---
-
 

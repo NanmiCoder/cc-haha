@@ -29,7 +29,7 @@ export async function readPhotosStatus(): Promise<MediaPermission> {
   return ImagePicker.getMediaLibraryPermissionsAsync()
 }
 
-/** 打开 cc-haha 的系统通知设置；打不开具体页面时退回到 App 设置首页。 */
+/** Open the cc-haha system notification settings; fall back to the app settings home when the specific page cannot be opened. */
 export async function openNotificationSettings() {
   try {
     if (Platform.OS === 'ios') await Linking.openURL('app-settings:notifications')
@@ -45,7 +45,7 @@ export async function openNotificationSettings() {
   }
 }
 
-/** 读 Android 通知渠道当前的重要程度和声音（用户在系统里改过的也算）；非 Android 或读不到返回 null。 */
+/** Read the current importance and sound of the Android notification channel (including user changes in the system); returns null on non-Android or when unreadable. */
 export async function readChannel(kind: ChannelKind) {
   if (Platform.OS !== 'android') return null
   try {
@@ -56,7 +56,7 @@ export async function readChannel(kind: ChannelKind) {
   }
 }
 
-/** 打开某个渠道在系统里的设置页（声音、震动、横幅）；打不开就退回 App 设置首页。 */
+/** Open a channel's settings page in the system (sound, vibration, banner); fall back to the app settings home if it cannot be opened. */
 export async function openChannelSettings(kind: ChannelKind) {
   try {
     await Linking.sendIntent('android.settings.CHANNEL_NOTIFICATION_SETTINGS', [
@@ -74,8 +74,8 @@ export async function openChannelSettings(kind: ChannelKind) {
 export const openAppSettings = () => Linking.openSettings()
 
 /**
- * 只发一条本地通知，验证系统权限和横幅；它不经过电脑，不能证明远程推送可用。
- * 延迟几秒发出：App 在前台时不弹横幅，需要先回到主屏幕。
+ * Send only a local notification to verify system permission and banners; it does not go through the computer and cannot prove remote push works.
+ * Sent after a few seconds' delay: no banner shows while the app is in the foreground, so go back to the home screen first.
  */
 export async function scheduleTestNotification() {
   await Notifications.scheduleNotificationAsync({
