@@ -142,9 +142,9 @@ function getCcHahaSettingsEnv(): Record<string, string> {
   try {
     const ccHahaSettings = join(configDir, 'cc-haha', 'settings.json')
     const raw = readFileSync(ccHahaSettings, 'utf-8')
-    const parsed = JSON.parse(raw) as { env?: Record<string, string> }
+    const parsed = JSON.parse(raw) as { env?: Record<string, string>; providerEnvOwner?: unknown }
     const settingsEnv = normalizeLegacyDeepSeekManagedEnv(parsed.env ?? {}).env
-    return mergeActiveProviderManagedEnv(settingsEnv, configDir, { serverPort })
+    return mergeActiveProviderManagedEnv(settingsEnv, configDir, { serverPort, settingsProviderId: parsed.providerEnvOwner })
   } catch {
     return mergeActiveProviderManagedEnv({}, configDir, { serverPort })
   }
