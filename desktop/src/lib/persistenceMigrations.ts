@@ -282,7 +282,13 @@ function migrateWorkspaceState(storage: StorageLike, report: DesktopMigrationRep
       sessions[sessionId] = { ...value, tabs }
     }
 
-    if (Object.keys(sessions).length === 0) {
+    // Closing the last tab still leaves a valid document owning the user's
+    // panel sizes. The hydrator applies the readable bounds when restoring it.
+    const hasStoredSizes = typeof parsed.sideWidth === 'number' &&
+      Number.isFinite(parsed.sideWidth) && parsed.sideWidth > 0 &&
+      typeof parsed.bottomHeight === 'number' &&
+      Number.isFinite(parsed.bottomHeight) && parsed.bottomHeight > 0
+    if (Object.keys(sessions).length === 0 && !hasStoredSizes) {
       storage.removeItem(WORKSPACE_STORAGE_KEY)
       report.migratedKeys.push(WORKSPACE_STORAGE_KEY)
       return
