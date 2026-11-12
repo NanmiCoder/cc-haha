@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'bun:test'
 
 /** Isolated process: native modules are mocked before AppContext can load them. */
-function runCase(body: string) {
+function runCase(body: string, options: { mutates?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'mobile-credential-recovery-'))
   const script = `
     import { mock } from 'bun:test'
@@ -18,6 +18,7 @@ function runCase(body: string) {
       ...React, default: React,
       createContext(value) { const context = { value, Provider: null }; const Provider = () => null; Provider.context = context; context.Provider = Provider; return context },
       useContext: context => context.value,
+      useCallback: callback => callback,
       useState(initial) { const id = cursor++; if (!(id in slots)) slots[id] = typeof initial === 'function' ? initial() : initial; const owner = slots; return [slots[id], next => { owner[id] = typeof next === 'function' ? next(owner[id]) : next }] },
       useMemo(make, deps) { const id = cursor++; if (!slots[id] || !same(slots[id].deps, deps)) slots[id] = { deps, value: make() }; return slots[id].value },
       useEffect(effect, deps) {
@@ -71,7 +72,13 @@ function runCase(body: string) {
     mock.module(${JSON.stringify(import.meta.resolve('./backgroundDuty'))}, () => ({ BackgroundDuty: class { setAppActive() {} retain() {} } }))
     mock.module(${JSON.stringify(import.meta.resolve('./devicePushToken'))}, () => ({ getDevicePushToken() {}, getExpoPushToken() {} }))
     mock.module(${JSON.stringify(import.meta.resolve('./h5'))}, () => ({ isH5: false, h5Location: () => null }))
-    mock.module(${JSON.stringify(import.meta.resolve('./api'))}, () => ({ createApiClient: (host, credential) => ({ host, credential }) }))
+    let attached
+    const retained = []
+    const hostRelocator = {
+      attach: target => { attached = target; return () => { if (attached === target) attached = undefined } },
+      retain: async ids => { retained.push(ids) },
+    }
+    mock.module(${JSON.stringify(import.meta.resolve('./api'))}, () => ({ createApiClient: (host, credential) => ({ host, credential }), hostRelocator }))
     const module = await import(${JSON.stringify(import.meta.resolve('./AppContext'))})
     const flushEffects = async () => { const pending = effects; effects = []; pending.forEach(effect => effect()); await flush() }
     let context
@@ -98,8 +105,10 @@ function runCase(body: string) {
     ${body}
     unmount()
     assert.equal(timers.size, 0, 'unmount cancels retry timers')
-    assert.equal(writes.length, 0, 'recovery must not mutate metadata or secrets')
-    assert.equal(metadata.get('cc-haha.hosts'), originalMetadata)
+    if (!${JSON.stringify(!!options.mutates)}) {
+      assert.equal(writes.length, 0, 'recovery must not mutate metadata or secrets')
+      assert.equal(metadata.get('cc-haha.hosts'), originalMetadata)
+    }
   `
   try {
     const path = join(directory, 'recovery.ts')
@@ -247,4 +256,38 @@ test('a failed reread cannot reuse a previous credential for the same host', () 
     assert.equal(connection.credential, undefined)
     assert.equal(connection.credentialIssue, 'unavailable')
   `)
+})
+
+test('a moved computer drops its cached link before the new address is published, and clients rebuild with it', () => {
+  runCase(`
+    const { hostLinks } = await import(${JSON.stringify(import.meta.resolve('../core/hostLink'))})
+    const NEW = 'https://new-tunnel.trycloudflare.com'
+    await render()
+    assert.equal(connection.client.host.url, hostA.url)
+    // The link cached for this computer and credential (what createApiClient reuses).
+    let publishedAtDispose
+    hostLinks.for(hostA, 'native_fake-a', () => ({
+      credential: 'native_fake-a',
+      dispose() { publishedAtDispose = providerSlots[0].hosts.find(host => host.id === hostA.id).url },
+    }))
+    // The registry is attached to the relocator, and it asks through the same action.
+    assert.deepEqual(attached.host(hostA.id), hostA)
+    assert.equal(attached.relocate, context.value.relocate)
+    assert.deepEqual(retained.at(-1), [hostA.id, hostB.id])
+    await context.value.relocate(hostA.id, NEW + '/')
+    assert.equal(publishedAtDispose, hostA.url, 'the old link must be gone before anyone sees the new address')
+    assert.equal(hostLinks.get(hostA), undefined)
+    await renderProvider()
+    assert.equal(attached.host(hostA.id).url, NEW)
+    await render()
+    assert.equal(connection.host.url, NEW)
+    assert.equal(connection.client.host.url, NEW)
+    assert.equal(connection.client.credential, 'native_fake-a')
+    const stored = JSON.parse(metadata.get('cc-haha.hosts'))
+    assert.deepEqual(stored, { version: 1, hosts: [{ ...hostA, url: NEW }, hostB], selectedId: hostA.id })
+    assert.deepEqual(writes, [['metadata-set', 'cc-haha.hosts']], 'credentials are not touched')
+    // The same address again changes nothing.
+    await context.value.relocate(hostA.id, NEW)
+    assert.equal(writes.length, 1)
+  `, { mutates: true })
 })

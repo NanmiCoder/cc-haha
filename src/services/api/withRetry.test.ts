@@ -3,6 +3,8 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk'
 import { clearFastModeCooldown, getFastModeRuntimeState } from '../../utils/fastMode.js'
 import { _resetKeepAliveForTesting, getProxyFetchOptions } from '../../utils/proxy.js'
+import { withAgentProviderRoute, withRequestProviderRoute } from '../../utils/model/providerEnvScope.js'
+import * as auth from '../../utils/auth.js'
 import { StreamEndedEarlyError } from './streamFallback.js'
 import { createStreamWatchdogState } from './streamWatchdog.js'
 import {
@@ -20,6 +22,141 @@ import {
   RetriableStreamError,
   withRetry,
 } from './withRetry.js'
+
+describe('withRetry invalid saved provider key', () => {
+  test.each(['ordinary', 'remote', 'vertex'])('stops a marked local proxy key error before %s auth refresh', async mode => {
+    const keys = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_REMOTE', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] as const
+    const previous = keys.map(key => process.env[key])
+    Object.assign(process.env, {
+      ANTHROPIC_BASE_URL: 'http://127.0.0.1:4567/proxy/providers/fixture',
+      ANTHROPIC_API_KEY: 'proxy-managed',
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1',
+      CLAUDE_CODE_REMOTE: mode === 'remote' ? '1' : '',
+      CLAUDE_CODE_USE_VERTEX: mode === 'vertex' ? '1' : '',
+    })
+    const error = new APIError(401, { error: { message: 'Invalid credential' } }, undefined,
+      new Headers({ 'x-cc-haha-invalid-provider-key': 'true', 'x-should-retry': 'false' }))
+    let attempts = 0
+    const generator = withRetry(async () => ({} as Anthropic), async () => { attempts++; throw error },
+      { model: 'fixture', thinkingConfig: { type: 'disabled' }, maxRetries: 1 })
+    try {
+      let caught: unknown
+      try { await generator.next() } catch (cause) { caught = cause }
+      expect(caught).toBeInstanceOf(CannotRetryError)
+      expect((caught as CannotRetryError).originalError).toBe(error)
+      expect(attempts).toBe(1)
+    } finally {
+      await generator.return(undefined as never)
+      keys.forEach((key, index) => previous[index] === undefined ? delete process.env[key] : process.env[key] = previous[index])
+    }
+  })
+
+  test('uses the current Agent route when recognizing a marked proxy error', async () => {
+    const error = new APIError(401, { error: { message: 'Invalid credential' } }, undefined,
+      new Headers({ 'x-cc-haha-invalid-provider-key': 'true', 'x-should-retry': 'false' }))
+    let attempts = 0
+    const route = {
+      providerId: 'fixture', providerName: 'Fixture', model: 'fixture-model',
+      env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:4567/proxy/providers/fixture', ANTHROPIC_API_KEY: 'proxy-managed' },
+    }
+    const generator = withAgentProviderRoute(route, (async function* () {
+      return yield* withRequestProviderRoute('fixture-model', withRetry(
+        async () => ({} as Anthropic), async () => { attempts++; throw error },
+        { model: 'fixture-model', thinkingConfig: { type: 'disabled' }, maxRetries: 1 },
+      ))
+    })())
+    let caught: unknown
+    try { await generator.next() } catch (cause) { caught = cause }
+    finally { await generator.return(undefined as never) }
+    expect(caught).toBeInstanceOf(CannotRetryError)
+    expect(attempts).toBe(1)
+  })
+
+  test.each([
+    { baseUrl: 'https://api.example.test/proxy', apiKey: 'proxy-managed', managed: '1' },
+    { baseUrl: 'https://localhost/proxy/providers/fixture', apiKey: 'proxy-managed', managed: '1' },
+    { baseUrl: 'http://127.0.0.1:4567/proxy/unrelated', apiKey: 'proxy-managed', managed: '1' },
+    { baseUrl: 'http://127.0.0.1:4567/proxy/providers/fixture?other=1', apiKey: 'proxy-managed', managed: '1' },
+    { baseUrl: 'http://127.0.0.1:4567/proxy/providers/fixture', apiKey: 'other-key', managed: '1' },
+    { baseUrl: 'http://127.0.0.1:4567/proxy/providers/fixture', apiKey: 'proxy-managed', managed: '' },
+  ])('does not trust the marker for an unowned route: $baseUrl', async ({ baseUrl, apiKey, managed }) => {
+    const keys = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_REMOTE', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] as const
+    const previous = keys.map(key => process.env[key])
+    Object.assign(process.env, { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_API_KEY: apiKey, CLAUDE_CODE_REMOTE: '', CLAUDE_CODE_USE_VERTEX: '', CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: managed })
+    const generator = withRetry(async () => ({} as Anthropic), async () => {
+      throw new APIError(401, { error: { message: 'token expired' } }, undefined, new Headers({ 'x-cc-haha-invalid-provider-key': 'true' }))
+    }, { model: 'fixture', thinkingConfig: { type: 'disabled' }, maxRetries: 1 })
+    try {
+      expect((await generator.next()).done).toBe(false)
+    } finally {
+      await generator.return(undefined as never)
+      keys.forEach((key, index) => previous[index] === undefined ? delete process.env[key] : process.env[key] = previous[index])
+    }
+  })
+
+  test('keeps a direct OAuth-style 401 eligible for credential refresh', async () => {
+    const keys = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_REMOTE', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] as const
+    const previous = keys.map(key => process.env[key])
+    Object.assign(process.env, { ANTHROPIC_BASE_URL: 'https://api.example.test', ANTHROPIC_API_KEY: '', CLAUDE_CODE_REMOTE: '', CLAUDE_CODE_USE_VERTEX: '', CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '' })
+    const token = spyOn(auth, 'getClaudeAIOAuthTokens').mockReturnValue({ accessToken: 'fixture-oauth-token' } as ReturnType<typeof auth.getClaudeAIOAuthTokens>)
+    const refresh = spyOn(auth, 'handleOAuth401Error').mockResolvedValue(true)
+    let attempts = 0
+    let clients = 0
+    const generator = withRetry(async () => { clients++; return {} as Anthropic }, async () => {
+      if (++attempts === 1) throw new APIError(401, { error: { message: 'token expired' } }, undefined,
+        new Headers({ 'x-cc-haha-invalid-provider-key': 'true', 'retry-after': '0' }))
+      return 'refreshed'
+    }, { model: 'fixture', thinkingConfig: { type: 'disabled' }, maxRetries: 1 })
+    try {
+      expect((await generator.next()).done).toBe(false)
+      expect(await generator.next()).toEqual({ done: true, value: 'refreshed' })
+      expect(attempts).toBe(2)
+      expect(clients).toBe(2)
+      expect(refresh).toHaveBeenCalledWith('fixture-oauth-token')
+    } finally {
+      await generator.return(undefined as never)
+      token.mockRestore()
+      refresh.mockRestore()
+      keys.forEach((key, index) => previous[index] === undefined ? delete process.env[key] : process.env[key] = previous[index])
+    }
+  })
+})
+
+describe('withRetry provider quota', () => {
+  test.each([false, true])('does not retry a monthly quota with fast mode %s, even with a retry header', async fastMode => {
+    let attempts = 0
+    const upstream = { type: 'error', error: { type: 'GoUsageLimitError', message: 'Go usage limit exceeded' }, metadata: { limitName: 'monthly' } }
+    const detail = `Upstream returned HTTP 429: ${JSON.stringify(upstream)}`
+    const quota = APIError.generate(429, { type: 'error', error: { type: 'api_error', message: detail } }, undefined, new Headers({ 'x-should-retry': 'true', 'retry-after': '0' }))
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => { attempts++; throw quota },
+      { model: 'fixture', thinkingConfig: { type: 'disabled' }, fastMode, maxRetries: 2 },
+    )
+    let caught: unknown
+    try { await generator.next() } catch (error) { caught = error }
+    finally { await generator.return(undefined as never) }
+    expect(caught).toBeInstanceOf(CannotRetryError)
+    expect((caught as CannotRetryError).originalError).toBe(quota)
+    expect(attempts).toBe(1)
+  })
+
+  test('retries a temporary 429 and succeeds', async () => {
+    let attempts = 0
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => {
+        if (++attempts === 1) throw new APIError(429, { error: { type: 'rate_limit_error', message: 'requests per minute exceeded' } }, undefined, new Headers({ 'retry-after': '0' }))
+        return 'recovered'
+      },
+      { model: 'fixture', thinkingConfig: { type: 'disabled' }, maxRetries: 1 },
+    )
+    const first = await generator.next()
+    expect(first.done).toBe(false)
+    expect(await generator.next()).toEqual({ done: true, value: 'recovered' })
+    expect(attempts).toBe(2)
+  })
+})
 
 describe('withRetry stale connections', () => {
   test('disables keep-alive before retrying ECONNRESET connection failures', async () => {

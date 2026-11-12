@@ -610,6 +610,31 @@ describe('composer attachment tray', () => {
       })
     }
 
+    it('reveals the last image when an empty composer mounts a large first batch, then respects manual scrolling', () => {
+      const images = Array.from({ length: 30 }, (_, index) => ({
+        id: `image-${index}`,
+        type: 'image' as const,
+        name: `image-${index}.png`,
+        data: 'data:image/png;base64,AAAA',
+      }))
+      const onRemove = vi.fn()
+      const composer = (attachments: typeof images) => attachments.length > 0
+        ? <AttachmentGallery variant="composer" onRemove={onRemove} attachments={attachments} />
+        : null
+      const view = render(composer([]))
+
+      // Both composer entry points mount the gallery only after the first add.
+      view.rerender(composer(images))
+      const tray = view.getByTestId('composer-attachment-tray')
+      const lastCard = within(tray).getByRole('button', { name: 'Open image-29.png' }).parentElement!
+      expect(tray.scrollTop).toBeGreaterThan(0)
+      expect(lastCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(tray.getBoundingClientRect().bottom)
+
+      tray.scrollTop = 0
+      view.rerender(composer([...images]))
+      expect(tray.scrollTop).toBe(0)
+    })
+
     it('scrolls a card added below the fold into view, and leaves the tray alone otherwise', () => {
       const attachments = selections(7)
       const view = render(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={attachments.slice(0, 2)} />)
@@ -657,6 +682,36 @@ describe('composer attachment tray', () => {
       view.rerender(<AttachmentGallery variant="composer" onRemove={vi.fn()} attachments={[...references.slice(1), references[0]!]} />)
 
       expect(tray.scrollTop).toBe(36)
+    })
+
+    it('preserves manual position for edits and removals, then reveals a re-added diff among mixed cards', () => {
+      const onRemove = vi.fn()
+      const mixed = [
+        { id: 'image', type: 'image' as const, name: 'shot.png', data: 'data:image/png;base64,AAAA' },
+        { id: 'file', type: 'file' as const, name: 'notes.md', path: '/repo/notes.md' },
+        { id: 'text', type: 'file' as const, name: 'AI reply', referenceKind: 'chat-selection' as const, quote: 'Original text' },
+        { id: 'selection', type: 'file' as const, name: 'App.tsx', path: 'src/App.tsx', lineStart: 5, quote: 'selected code' },
+        { id: 'file-2', type: 'file' as const, name: 'index.ts', path: 'src/index.ts' },
+        { id: 'diff', type: 'file' as const, name: 'diff.ts', path: 'src/diff.ts', diffSide: 'new' as const, note: 'Review this' },
+      ]
+      const view = render(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={mixed} />)
+      const tray = view.getByTestId('composer-attachment-tray')
+      trackScrollTop(tray)
+
+      const edited = mixed.map((item) => item.id === 'text' ? { ...item, quote: 'Updated text' } : item)
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited} />)
+      expect(within(tray).getByText('Updated text')).toBeInTheDocument()
+      expect(tray.scrollTop).toBe(0)
+
+      fireEvent.click(within(tray).getByRole('button', { name: 'Remove diff.ts' }))
+      expect(onRemove).toHaveBeenCalledWith('diff')
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited.slice(0, -1)} />)
+      expect(tray.scrollTop).toBe(0)
+
+      view.rerender(<AttachmentGallery variant="composer" onRemove={onRemove} attachments={edited} />)
+      const diff = within(tray).getByTestId('diff-comment-card')
+      expect(tray.scrollTop).toBe(36)
+      expect(diff.getBoundingClientRect().bottom).toBeLessThanOrEqual(tray.getBoundingClientRect().bottom)
     })
   })
 })

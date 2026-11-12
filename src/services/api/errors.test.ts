@@ -513,3 +513,62 @@ describe('quoted retry credentials', () => {
     )
   })
 })
+
+describe('provider usage limits reported as 401/403 (#1208)', () => {
+  const MODEL = 'kimi-for-coding'
+  // Kimi Code's reply once a plan's quota is used up, as the SDK reports it.
+  const KIMI_USAGE_LIMIT =
+    "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/code/#pricing"
+  const apiError = (status: number, type: string, message: string) =>
+    new APIError(status, { type: 'error', error: { type, message } }, message, undefined)
+  const textOf = (msg: ReturnType<typeof getAssistantMessageFromError>) => {
+    const block = msg.message.content[0]
+    return block && block.type === 'text' ? block.text : ''
+  }
+
+  test.each([
+    [403, 'The aiplatform.googleapis.com API requires a quota project, which is not set by default.'],
+    [401, 'Invalid API key. Check quota and billing cycle settings in your account.'],
+    [403, 'The access token is invalid. Review your usage limit settings.'],
+  ])('preserves %i permission or credential failures that mention quota setup', (status, message) => {
+    const error = APIError.generate(status, { error: { code: status, message, status: 'PERMISSION_DENIED' } }, undefined, new Headers())
+    expect(getAssistantMessageFromError(error, MODEL).error).toBe('authentication_failed')
+  })
+
+  test('shows a used-up plan as a billing error in the provider\'s words, never as a login problem', () => {
+    const original = getIsInteractive()
+    try {
+      for (const interactive of [true, false]) {
+        setIsInteractive(interactive)
+        const msg = getAssistantMessageFromError(apiError(403, 'permission_error', KIMI_USAGE_LIMIT), MODEL)
+
+        expect(msg.isApiErrorMessage).toBe(true)
+        expect(msg.error).toBe('billing_error')
+        expect(textOf(msg)).toBe(`API Error: 403 ${KIMI_USAGE_LIMIT}`)
+        expect(textOf(msg)).not.toContain('Failed to authenticate')
+        expect(textOf(msg)).not.toContain('/login')
+      }
+    } finally {
+      setIsInteractive(original)
+    }
+  })
+
+  test.each([
+    [401, 'authentication_error', 'Insufficient balance, please recharge your account'],
+    [403, 'permission_error', 'You exceeded your current quota, please check your plan and billing details.'],
+    [403, 'insufficient_quota', 'insufficient_quota: monthly token quota exhausted'],
+  ])('reads %i "%s" with a quota or balance wording as a billing error', (status, type, message) => {
+    expect(getAssistantMessageFromError(apiError(status, type, message), MODEL).error).toBe('billing_error')
+  })
+
+  test('keeps genuine credential and permission rejections as authentication failures', () => {
+    for (const [status, message] of [
+      [401, 'Invalid bearer token'],
+      [401, 'The API key you provided has expired'],
+      [403, 'Your API key does not have permission to use the specified resource.'],
+    ] as const) {
+      const msg = getAssistantMessageFromError(apiError(status, 'authentication_error', message), MODEL)
+      expect(msg.error).toBe('authentication_failed')
+    }
+  })
+})

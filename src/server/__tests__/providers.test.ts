@@ -22,6 +22,7 @@ import {
 import type { CreateProviderInput } from '../types/provider.js'
 import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
 import { GROK_MODEL_CATALOG, setGrokRuntimeModelCatalog } from '../../services/grokAuth/models.js'
+import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -712,7 +713,7 @@ describe('ProviderService', () => {
         expect(typeof env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBe('string')
         expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toEqual({
           'gpt-6-sol': 258_400,
-          'gpt-6.1-sol': 258_400,
+          'gpt-6.1-sol': 475_000,
           'gpt-6.1-terra': 475_000,
           'gpt-6-luna': 258_400,
           'gpt-5.6-sol': 353_400,
@@ -4327,7 +4328,7 @@ describe('Providers API', () => {
       putRequest.segments,
     )
     expect(updated.status).toBe(200)
-    expect(await updated.json()).toEqual({ models: configured })
+    expect(await updated.json()).toEqual({ models: configured, modelContextWindows: {} })
   })
 
   test('PUT /api/providers/:id/models rejects saved providers', async () => {
@@ -4362,6 +4363,149 @@ describe('Providers API', () => {
     const res = await handleProvidersApi(req, url, segments)
 
     expect(res.status).toBe(405)
+  })
+})
+
+describe('ChatGPT Official context window overrides', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const mapping = {
+    main: 'gpt-6-astra',
+    haiku: 'gpt-6.1-terra',
+    sonnet: 'gpt-6.1-terra',
+    opus: 'gpt-6-sol',
+  }
+
+  async function putModels(id: string, body: Record<string, unknown>) {
+    const request = makeRequest('PUT', `/api/providers/${id}/models`, body)
+    return handleProvidersApi(request.req, request.url, request.segments)
+  }
+
+  function runtimeWindows(env: Record<string, string> | null | undefined): Record<string, number> {
+    return JSON.parse(env![MODEL_CONTEXT_WINDOWS_ENV_KEY]!)
+  }
+
+  test('a saved window overrides that model in the next session\'s env and leaves the others on their defaults', async () => {
+    const svc = new ProviderService()
+    const response = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    await svc.activateProvider('openai-official')
+
+    const windows = runtimeWindows(readActiveProviderManagedEnv(tmpDir))
+    expect(windows['gpt-6-astra']).toBe(600_000)
+    expect(windows['gpt-6-sol']).toBe(258_400)
+    expect(windows['gpt-6.1-terra']).toBe(475_000)
+    // The managed settings file and the saved-provider view carry the same map.
+    expect(runtimeWindows((await readSettings()).env as Record<string, string>)['gpt-6-astra']).toBe(600_000)
+    expect((await svc.getProvider('openai-official')).modelContextWindows?.['gpt-6-astra']).toBe(600_000)
+    expect(runtimeWindows(await svc.getProviderRuntimeEnv('openai-official'))['gpt-6-astra']).toBe(600_000)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+  })
+
+  test('saving the mapping without windows keeps them, and an empty map clears them', async () => {
+    const svc = new ProviderService()
+    await svc.activateProvider('openai-official')
+    await putModels('openai-official', { models: mapping, modelContextWindows: { 'gpt-6-astra': 600_000 } })
+
+    // The provider is already active, so a save has to rewrite the managed settings itself.
+    const settingsWindows = async () =>
+      runtimeWindows((await readSettings()).env as Record<string, string>)['gpt-6-astra']
+    expect(await settingsWindows()).toBe(600_000)
+
+    const kept = await putModels('openai-official', { models: { ...mapping, main: 'gpt-6-sol' } })
+    expect((await kept.json()).modelContextWindows).toEqual({ 'gpt-6-astra': 600_000 })
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['gpt-6-astra']).toBe(600_000)
+    expect(await settingsWindows()).toBe(600_000)
+
+    const cleared = await putModels('openai-official', { models: mapping, modelContextWindows: {} })
+    expect((await cleared.json()).modelContextWindows).toEqual({})
+    expect(runtimeWindows(readActiveProviderManagedEnv(tmpDir))['gpt-6-astra']).toBe(258_400)
+    expect(await settingsWindows()).toBe(258_400)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({})
+  })
+
+  test('keeps saved windows when an API-key provider is added and removed', async () => {
+    const svc = new ProviderService()
+    const response = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 600_000 },
+    })
+    expect(response.status).toBe(200)
+
+    const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat' }))
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+
+    await svc.deleteProvider(provider.id)
+    expect((await readProvidersConfig()).officialProviderContextWindows).toEqual({
+      'openai-official': { 'gpt-6-astra': 600_000 },
+    })
+    expect(await new ProviderService().getOfficialProviderContextWindows('openai-official'))
+      .toEqual({ 'gpt-6-astra': 600_000 })
+  })
+
+  test('a window above the model\'s Codex limit is rejected and nothing is saved', async () => {
+    // 872,000 x 95%: the most Codex lets a GPT-6 model's window be raised to.
+    const accepted = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 828_400 },
+    })
+    expect(accepted.status).toBe(200)
+
+    const tooHigh = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 828_401 },
+    })
+    expect(tooHigh.status).toBe(400)
+    // gpt-5.5 cannot be raised past its own default.
+    const fixedModel = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-5.5': 300_000 },
+    })
+    expect(fixedModel.status).toBe(400)
+    expect(await new ProviderService().getOfficialProviderContextWindows('openai-official'))
+      .toEqual({ 'gpt-6-astra': 828_400 })
+  })
+
+  test('a model the catalog states no limit for is accepted, and the schema range still applies', async () => {
+    const future = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-future': 2_000_000 },
+    })
+    expect(future.status).toBe(200)
+    const tooSmall = await putModels('openai-official', {
+      models: mapping,
+      modelContextWindows: { 'gpt-6-astra': 15_999 },
+    })
+    expect(tooSmall.status).toBe(400)
+  })
+
+  test('only ChatGPT Official accepts window overrides', async () => {
+    for (const id of ['grok-official', 'claude-official', 'deepseek-account']) {
+      const response = await putModels(id, { models: mapping, modelContextWindows: { 'some-model': 300_000 } })
+      expect(response.status).toBe(400)
+    }
+    // An empty map is a no-op everywhere, so a shared client can always send it.
+    const empty = await putModels('grok-official', { models: mapping, modelContextWindows: {} })
+    expect(empty.status).toBe(200)
+  })
+
+  test('GET returns the saved overrides next to the mapping', async () => {
+    await putModels('openai-official', { models: mapping, modelContextWindows: { 'gpt-6-sol': 300_000 } })
+    const request = makeRequest('GET', '/api/providers/openai-official/models')
+    const response = await handleProvidersApi(request.req, request.url, request.segments)
+    expect(await response.json()).toEqual({ models: mapping, modelContextWindows: { 'gpt-6-sol': 300_000 } })
   })
 })
 
@@ -4643,13 +4787,14 @@ describe('OpenCode Go preset request contract', () => {
     return preset!
   }
 
-  async function createProvider(overrides?: { presetId?: string; apiFormat?: string }) {
+  async function createProvider(overrides?: { presetId?: string; apiFormat?: string; authStrategy?: string }) {
     const preset = await loadPreset()
     const { req, url, segments } = makeRequest('POST', '/api/providers', {
       presetId: overrides?.presetId ?? preset.id,
       name: preset.name,
       baseUrl: preset.baseUrl,
       apiFormat: overrides?.apiFormat ?? preset.apiFormat,
+      ...(overrides?.authStrategy && { authStrategy: overrides.authStrategy }),
       apiKey,
       models: preset.defaultModels,
     })
@@ -4718,6 +4863,132 @@ describe('OpenCode Go preset request contract', () => {
     })
     return handleProxyRequest(req, new URL(req.url))
   }
+
+  test('marks invalid OpenCode Go keys across its model protocol routes', async () => {
+    const { provider } = await createProvider()
+    const originalFetch = globalThis.fetch
+    const upstream = { error: { type: 'authentication_error', message: 'Invalid credential' } }
+    const paths: string[] = []
+    try {
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        paths.push(new URL(String(input)).pathname)
+        return Response.json(upstream, { status: 401 })
+      }) as typeof fetch
+      for (const model of ['deepseek-v4.1-flash[1m]', 'gpt-fixture', 'minimax-fixture', 'gemini-4-argon[1m]']) {
+        const response = await proxy(provider.id, { model, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(response.status).toBe(401)
+        expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBe('true')
+        expect(response.headers.get('x-should-retry')).toBe('false')
+        expect(await response.text()).toContain('Invalid credential')
+      }
+      expect(paths[0]).toEndWith('/chat/completions')
+      expect(paths[1]).toEndWith('/responses')
+      expect(paths[2]).toEndWith('/messages')
+      expect(paths[3]).toContain('/models/gemini-4-argon:generateContent')
+      const tokenProvider = (await createProvider({ authStrategy: 'auth_token' })).provider
+      for (const model of ['minimax-fixture', 'gemini-4-argon[1m]']) {
+        const response = await proxy(tokenProvider.id, { model, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBeNull()
+        expect(response.headers.get('x-should-retry')).toBeNull()
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  for (const apiFormat of ['openai_chat', 'openai_responses'] as const) {
+    test(`${apiFormat} marks only explicit invalid saved keys as final`, async () => {
+      const { provider } = await createProvider({ presetId: 'custom', apiFormat, authStrategy: 'api_key' })
+      const originalFetch = globalThis.fetch
+      try {
+        for (const sample of [
+          { status: 401, body: { error: { type: 'authentication_error', message: 'Invalid credential' } }, final: true },
+          { status: 401, body: { error: { code: 'invalid_api_key', message: 'Check your account' } }, final: true },
+          { status: 401, body: { padding: 'x'.repeat(65_000), error: { type: 'authentication_error', message: 'Invalid credential' } }, final: true },
+          { status: 401, body: { error: { message: 'x'.repeat(65_000), code: 'invalid_api_key' } }, final: true },
+          { status: 401, body: { error: { type: 'authentication_error', message: 'Authentication service unavailable' } }, final: false },
+          { status: 401, body: { error: { code: 'invalid_token', message: 'Invalid bearer token' } }, final: false },
+          { status: 401, body: { error: { type: 'authentication_error', code: 'invalid_token', message: 'Invalid credential' } }, final: false },
+          { status: 429, body: { error: { type: 'authentication_error', message: 'Invalid credential' } }, final: false },
+        ]) {
+          globalThis.fetch = (async () => Response.json(sample.body, { status: sample.status })) as typeof fetch
+          const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+          const body = await response.json() as { error: { message: string } }
+          expect(response.status).toBe(sample.status)
+          expect(response.headers.get('x-cc-haha-invalid-provider-key')).toBe(sample.final ? 'true' : null)
+          expect(response.headers.get('x-should-retry')).toBe(sample.final ? 'false' : null)
+          expect(body.error.message).toContain(JSON.stringify(sample.body))
+        }
+        const tokenProvider = (await createProvider({ presetId: 'custom', apiFormat, authStrategy: 'auth_token' })).provider
+        globalThis.fetch = (async () => Response.json({ error: { type: 'authentication_error', message: 'Invalid credential' } }, { status: 401 })) as typeof fetch
+        const tokenResponse = await proxy(tokenProvider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        expect(tokenResponse.headers.get('x-cc-haha-invalid-provider-key')).toBeNull()
+        expect(tokenResponse.headers.get('x-should-retry')).toBeNull()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test(`${apiFormat} keeps long explicit quota errors intact for the CLI`, async () => {
+      const { provider } = await createProvider({ presetId: 'custom', apiFormat })
+      const originalFetch = globalThis.fetch
+      try {
+        for (const upstream of [
+          { type: 'error', error: { type: 'GoUsageLimitError', message: `Go usage limit exceeded ${'x'.repeat(600)}` }, metadata: { workspace: 'fixture', limitName: 'monthly' } },
+          { error: { message: `Check your plan ${'x'.repeat(600)}`, type: 'insufficient_quota', code: 'insufficient_quota' } },
+        ]) {
+          globalThis.fetch = (async () => Response.json(upstream, { status: 429 })) as typeof fetch
+          const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+          const body = await response.json() as { error: { message: string } }
+          expect(response.status).toBe(429)
+          expect(body.error.message).toContain(JSON.stringify(upstream))
+        }
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+  }
+
+  test('keeps an invalid key as authentication through the OpenAI proxy and SDK', async () => {
+    const { APIError } = await import('@anthropic-ai/sdk')
+    const { getAssistantMessageFromError } = await import('../../services/api/errors.js')
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'openai_chat' })
+    const originalFetch = globalThis.fetch
+    try {
+      for (const upstream of [
+        { error: { type: 'authentication_error', message: 'Invalid bearer token. Your monthly quota was exceeded.' } },
+        { error: { message: `Your quota has been exhausted. ${'x'.repeat(600)}`, type: 'authentication_error', code: 'invalid_api_key' } },
+      ]) {
+        globalThis.fetch = (async () => Response.json(upstream, { status: 401 })) as typeof fetch
+        const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        const error = APIError.generate(response.status, await response.json(), undefined, response.headers)
+        const message = getAssistantMessageFromError(error, 'fixture-model')
+        expect(message.error).toBe('authentication_failed')
+        expect(JSON.stringify(message.message.content)).toContain(upstream.error.message)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('does not turn a long temporary 429 into a billing failure after proxy truncation', async () => {
+    const { APIError } = await import('@anthropic-ai/sdk')
+    const { classifyAPIError, getAssistantMessageFromError } = await import('../../services/api/errors.js')
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'openai_chat' })
+    const originalFetch = globalThis.fetch
+    try {
+      for (const length of [600, 65_000]) {
+        const upstream = { error: { type: 'rate_limit_error', message: `Quota exceeded for this plan. ${'x'.repeat(length)} requests/minute; retry in 30 seconds.` } }
+        globalThis.fetch = (async () => Response.json(upstream, { status: 429 })) as typeof fetch
+        const response = await proxy(provider.id, { model: 'fixture-model', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] })
+        const error = APIError.generate(response.status, await response.json(), undefined, response.headers)
+        expect(getAssistantMessageFromError(error, 'fixture-model').error).not.toBe('billing_error')
+        expect(classifyAPIError(error)).toBe('rate_limit')
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 
   test('routes each model family to the endpoint the gateway serves it on, with that endpoint credential', async () => {
     const { provider } = await createProvider()

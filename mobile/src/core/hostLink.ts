@@ -1,7 +1,7 @@
 import { ApiError, ApiClient, type FetchAdapter } from './client'
 import type { SocketFactory } from './sessionTransport'
 import type { Host } from './types'
-import { P2PPeer, P2PUnavailable, type RtcFactory, type Signaling } from './p2p/peer'
+import { P2PPeer, P2PUnavailable, type P2PInfo, type RtcFactory, type Signaling } from './p2p/peer'
 import { Tunnel } from './p2p/tunnel'
 
 /** cf：经 Cloudflare；lan：同一局域网直连；direct：跨网直连。 */
@@ -23,10 +23,17 @@ export const COOLDOWN_MS = [5_000, 15_000, 60_000, 300_000]
 export const UNAVAILABLE_RECHECK_MS = 60_000
 /** 旧电脑没有直连接口：这次运行内不再问。 */
 export const UNSUPPORTED_MS = 24 * 3600_000
-/** 离开超过这么久，直连多半已被系统掐断：回来先走 Cloudflare，再重新协商。 */
+/**
+ * 离开超过这么久，直连可能已被系统或网络掐断：回来先在旧直连上问一声
+ * （限时 FOREGROUND_PROBE_MS），通就接着用；不通才退回 Cloudflare、马上重新协商。
+ */
 export const STALE_AFTER_BACKGROUND_MS = 10_000
+/** 回前台问旧直连的时限：直连往返通常一百毫秒内，Cloudflare 一个请求就要半秒以上。 */
+export const FOREGROUND_PROBE_MS = 1500
 /** 在后台待满这么久就主动关掉直连，省电省资源。 */
 export const BACKGROUND_CLOSE_MS = 60_000
+/** 电脑上的直连宿主不在（开关关了、刚启动还没起来）时，offer 的答复码（见 src/server/p2p/broker.ts）。 */
+const P2P_UNAVAILABLE_CODE = 'P2P_UNAVAILABLE'
 
 /**
  * 到一台远程电脑的连接路径。始终先走 Cloudflare（马上能用），后台尝试升级成
@@ -38,6 +45,13 @@ export class HostLink {
   #peer?: P2PPeer
   #tunnel?: Tunnel
   #negotiating = false
+  /** 回前台正在确认还通不通的直连（见 `foreground`）。 */
+  #checking?: P2PPeer
+  /**
+   * 上次问到的直连信息（STUN 服务器是电脑的固定配置）：这次运行内记住，再协商时
+   * 直接发 offer，省一趟经 Cloudflare 的往返。电脑答复直连没开、不支持时作废。
+   */
+  #info?: P2PInfo
   #failures = 0
   #notBefore = 0
   /** 眼下的冷却从哪来：只有「连不上」会被回前台、切网提前结束。 */
@@ -80,16 +94,24 @@ export class HostLink {
       this.#schedule()
       return this.options.cfFetch(input, init)
     }
+    const resendable = init.method === 'GET' || init.method === 'HEAD'
+    // 回前台正在确认直连还通不通（最多 FOREGROUND_PROBE_MS）：不能重发的请求先走 Cloudflare，
+    // 免得落在一条已经断了的路上又没法换路重发。GET 照走直连，路不通时到点断开、改走 Cloudflare。
+    if (this.#checking && !resendable) return this.options.cfFetch(input, init)
     try {
       // 直连在收到答复头时就交回；正文路上断了由读正文时报错，不在这里重发。
       return await tunnel.fetch(input, init)
     } catch (error) {
       // 直连在答复头到之前断了：GET 没有副作用，改走 Cloudflare 再试；别的请求不重发。
-      if (init.signal.aborted || (init.method !== 'GET' && init.method !== 'HEAD')) throw error
+      if (init.signal.aborted || !resendable) throw error
       return this.options.cfFetch(input, init)
     }
   }
 
+  /**
+   * 回前台确认期间新开的套接字也走直连：路不通时到点断开，按网络断开收尾、经 Cloudflare
+   * 续传接回；改走 Cloudflare 的话确认通过后路径没变，它就一直留在 Cloudflare 上。
+   */
   socketFactory: SocketFactory = (options) => {
     const tunnel = this.#tunnel
     if (tunnel && !tunnel.closed) return tunnel.socket(options.url, options.headers)
@@ -120,8 +142,9 @@ export class HostLink {
     this.#timers.clear(this.#backgroundTimer)
     const away = this.#hiddenAt === undefined ? 0 : this.#now() - this.#hiddenAt
     this.#hiddenAt = undefined
-    if (away >= STALE_AFTER_BACKGROUND_MS && this.path !== 'cf') this.#peer?.close()
-    if (this.path === 'cf') this.#retryNow()
+    const peer = this.#peer
+    if (away >= STALE_AFTER_BACKGROUND_MS && this.path !== 'cf' && peer) void this.#check(peer)
+    else if (this.path === 'cf') this.#retryNow()
   }
 
   dispose() {
@@ -130,6 +153,18 @@ export class HostLink {
     this.#timers.clear(this.#backgroundTimer)
     this.#peer?.close()
     this.#listeners.clear()
+  }
+
+  /** 离开得久了，先在旧直连上问一声：通就接着用，不重新协商；不通再断开、马上重新协商。 */
+  async #check(peer: P2PPeer) {
+    if (this.#checking === peer) return
+    this.#checking = peer
+    const alive = await peer.check(FOREGROUND_PROBE_MS)
+    if (this.#checking === peer) this.#checking = undefined
+    if (alive || this.#disposed) return
+    // 关掉它会把路径退回 Cloudflare，直连上的套接字按网络断开收尾、经 Cloudflare 续传接回。
+    peer.close()
+    if (this.path === 'cf') this.#retryNow()
   }
 
   #retryNow() {
@@ -202,9 +237,11 @@ export class HostLink {
 
   #cooldown(error: unknown) {
     if (error instanceof ApiError && error.status === 404) {
+      this.#info = undefined
       this.#notBefore = this.#now() + UNSUPPORTED_MS
       this.#cooling = 'unsupported'
     } else if (error instanceof P2PUnavailable) {
+      this.#info = undefined
       this.#notBefore = this.#now() + UNAVAILABLE_RECHECK_MS
       this.#cooling = 'unavailable'
     } else {
@@ -223,8 +260,20 @@ export class HostLink {
   #signaling(): Signaling {
     const api = new ApiClient(this.options.host, this.options.credential, { fetch: this.options.cfFetch })
     return {
-      info: () => api.get('/api/public-access/p2p'),
-      offer: (body) => api.post('/api/public-access/p2p/offer', body),
+      info: async () => {
+        if (this.#info) return this.#info
+        const info = await api.get<P2PInfo>('/api/public-access/p2p')
+        // 只记「开着」：没开的一分钟后还要重新问。
+        if (info.available) this.#info = info
+        return info
+      },
+      offer: (body) =>
+        api.post<Awaited<ReturnType<Signaling['offer']>>>('/api/public-access/p2p/offer', body).catch((error: unknown) => {
+          // 跳过了信息接口时，电脑没开直连要从 offer 的答复里看出来：和信息接口答「没开」一样处理。
+          if (error instanceof ApiError && error.status === 503 && error.code === P2P_UNAVAILABLE_CODE)
+            throw new P2PUnavailable(error.message)
+          throw error
+        }),
       candidates: (body) => api.post('/api/public-access/p2p/candidates', body, { timeoutMs: 6000 }),
     }
   }

@@ -48,6 +48,7 @@ import {
   getSlashCommands,
   listLiveSessionActivity,
   assertSessionCanArchive,
+  runSessionRewind,
 } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
@@ -1734,7 +1735,7 @@ async function rewindSession(req: Request, sessionId: string): Promise<Response>
   const mode = parseSessionRewindMode(body.mode)
   const result = body.dryRun
     ? await previewSessionRewind(sessionId, body)
-    : await executeSessionRewind(sessionId, body, mode)
+    : await runSessionRewind(sessionId, stopRuntime => executeSessionRewind(sessionId, body, mode, stopRuntime))
 
   return Response.json(result)
 }

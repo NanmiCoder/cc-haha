@@ -215,6 +215,22 @@ describe('sessionsApi', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('starts a fresh Git request after a directory change and keeps it when the old request settles', async () => {
+    const resolvers: Array<(response: Response) => void> = []
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(resolve => resolvers.push(resolve)))
+    const old = sessionsApi.getGitInfo('switching-session')
+    sessionsApi.invalidateGitInfo('switching-session')
+    const fresh = sessionsApi.getGitInfo('switching-session')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolvers[0]!(new Response(JSON.stringify({ workDir: '/repo', worktree: null })))
+    await old
+    const concurrent = sessionsApi.getGitInfo('switching-session')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    resolvers[1]!(new Response(JSON.stringify({ workDir: '/repo/worktree', worktree: { enabled: true } })))
+    expect(await fresh).toEqual(await concurrent)
+    expect((await fresh).workDir).toBe('/repo/worktree')
+  })
+
   it('fetches a single trace call from the call detail endpoint', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({

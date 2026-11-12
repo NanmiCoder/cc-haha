@@ -44,7 +44,18 @@ type RemoteModelInfo = {
   supported_reasoning_levels?: unknown
   visibility?: unknown
   context_window?: unknown
+  max_context_window?: unknown
   effective_context_window_percent?: unknown
+}
+
+/** A catalog window scaled by the effective-context percent, or undefined when absent. */
+function effectiveWindow(window: unknown, percent: unknown): number | undefined {
+  if (typeof window !== 'number' || !Number.isFinite(window)) return undefined
+  return Math.floor(
+    window *
+      (typeof percent === 'number' ? percent : OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
+      100,
+  )
 }
 
 function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry | null {
@@ -69,15 +80,11 @@ function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry |
     ? model.default_reasoning_level
     : fallback?.defaultReasoningEffort ?? supportedReasoningEfforts[0] ?? 'medium'
   const contextWindow =
-    typeof model.context_window === 'number' && Number.isFinite(model.context_window)
-      ? Math.floor(
-          model.context_window *
-            (typeof model.effective_context_window_percent === 'number'
-              ? model.effective_context_window_percent
-              : OPENAI_CODEX_EFFECTIVE_CONTEXT_PERCENT) /
-            100,
-        )
-      : fallback?.contextWindow
+    effectiveWindow(model.context_window, model.effective_context_window_percent)
+    ?? fallback?.contextWindow
+  const maxContextWindow =
+    effectiveWindow(model.max_context_window, model.effective_context_window_percent)
+    ?? fallback?.maxContextWindow
 
   return {
     value: model.slug,
@@ -95,6 +102,7 @@ function normalizeRemoteModel(model: RemoteModelInfo): OpenAIModelCatalogEntry |
         ? supportedReasoningEfforts
         : fallback?.supportedReasoningEfforts ?? ['low', 'medium', 'high'],
     ...(contextWindow ? { contextWindow } : {}),
+    ...(maxContextWindow ? { maxContextWindow } : {}),
   }
 }
 

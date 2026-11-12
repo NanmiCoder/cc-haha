@@ -1024,6 +1024,14 @@ describe('Models API', () => {
     const body = await res.json()
     expect(body.models).toEqual([
       {
+        id: 'claude-fable-5-2',
+        name: 'Fable 5.2',
+        description: 'Highest capability for long-running tasks',
+        context: '1m',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+      {
         id: 'claude-fable-5-1',
         name: 'Fable 5.1',
         description: 'Highest capability for long-running tasks',
@@ -1323,6 +1331,7 @@ describe('Models API', () => {
     )
     const listBody = await listResponse.json()
     expect(listBody.models.map((model: { id: string }) => model.id)).toEqual([
+      'claude-fable-5-2',
       'claude-fable-5-1',
       'claude-fable-5',
       'claude-opus-5-5',
@@ -1516,7 +1525,8 @@ describe('Models API', () => {
     })
     expect(body.models.find(model => model.id === 'gpt-6.1-sol')).toMatchObject({
       id: 'gpt-6.1-sol',
-      context: '258400',
+      // Codex's default for GPT-6.1 Sol is 500K, at 95%.
+      context: '475000',
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
@@ -1889,11 +1899,19 @@ describe('Model Options', () => {
     expect(getModelOptions().find(option => option.value === 'opus[1m]')?.description)
       .toContain('Opus 5')
 
+    // The Fable alias now resolves to 5.2, so an older pinned Fable is offered the upgrade.
     process.env.ANTHROPIC_MODEL = 'claude-fable-5'
     expect(getModelOptions()).toContainEqual(expect.objectContaining({
       value: 'claude-fable-5',
       label: 'Fable 5',
-      description: 'claude-fable-5',
+      description: 'Newer version available · select Fable for Fable 5.2',
+    }))
+
+    process.env.ANTHROPIC_MODEL = 'claude-fable-5-2'
+    expect(getModelOptions()).toContainEqual(expect.objectContaining({
+      value: 'claude-fable-5-2',
+      label: 'Fable 5.2',
+      description: 'claude-fable-5-2',
     }))
   })
 

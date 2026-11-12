@@ -55,11 +55,12 @@ describe('openai auth model resolution', () => {
       label: 'GPT-6.1-Sol',
       defaultReasoningEffort: 'low',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
-      contextWindow: 258_400,
+      // Codex's default for GPT-6.1 Sol is 500K (up from 272K), at 95%.
+      contextWindow: 475_000,
     })
     expect(resolveOpenAICodexModel('gpt-6.1-sol')).toBe('gpt-6.1-sol')
     expect(getOpenAIModelDisplayName('gpt-6.1-sol')).toBe('GPT-6.1-Sol')
-    expect(getOpenAICodexContextWindowForModel('gpt-6.1-sol')).toBe(258_400)
+    expect(getOpenAICodexContextWindowForModel('gpt-6.1-sol')).toBe(475_000)
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', undefined)).toBe('low')
     expect(resolveOpenAIReasoningEffort('gpt-6.1-sol', 'max')).toBe('max')
 
@@ -74,6 +75,27 @@ describe('openai auth model resolution', () => {
     expect(getOpenAICodexContextWindowForModel('gpt-6.1-terra')).toBe(475_000)
     expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', undefined)).toBe('low')
     expect(resolveOpenAIReasoningEffort('gpt-6.1-terra', 'max')).toBe('max')
+  })
+
+  test('records the highest window Codex allows only where its catalog states one', () => {
+    // openai/codex models.json: max_context_window 872,000 for these, at 95%.
+    for (const slug of [
+      'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-terra',
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
+    ]) {
+      expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === slug)?.maxContextWindow).toBe(828_400)
+    }
+    // gpt-5.5's maximum equals its default, so it cannot be raised at all.
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-5.5')?.maxContextWindow)
+      .toBe(OPENAI_CODEX_STANDARD_EFFECTIVE_CONTEXT_WINDOW)
+    // Nothing is claimed for a model whose limit was not verified.
+    expect(OPENAI_CODEX_MODEL_CATALOG.find(model => model.value === 'gpt-5.4')?.maxContextWindow).toBeUndefined()
+    // A default window can never sit above its own ceiling.
+    for (const model of OPENAI_CODEX_MODEL_CATALOG) {
+      if (model.maxContextWindow !== undefined && model.contextWindow !== undefined) {
+        expect(model.contextWindow).toBeLessThanOrEqual(model.maxContextWindow)
+      }
+    }
   })
 
   test('provides Astra fallback metadata and effective Codex OAuth context', () => {

@@ -63,6 +63,7 @@ vi.mock('../../api/sessions', () => ({
     list: mocks.list,
     getMessages: mocks.getMessages,
     getGitInfo: mocks.getGitInfo,
+    invalidateGitInfo: vi.fn(),
     getSlashCommands: mocks.getSlashCommands,
     getRepositoryContext: mocks.getRepositoryContext,
     createRepositoryBranch: mocks.createRepositoryBranch,
@@ -1536,6 +1537,25 @@ describe('ChatInput file mentions', () => {
     expect(screen.getByTestId('chat-input-panel')).toContainElement(chip)
     expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Location/ })).not.toBeInTheDocument()
+  })
+
+  it('refreshes the composer worktree after a cwd notification and ignores an older Git response', async () => {
+    const oldInfo = { branch: 'main', repoName: 'repo', workDir: '/repo', changedFiles: 0, worktree: null }
+    let resolveOld!: (info: typeof oldInfo) => void
+    const oldRequest = new Promise<typeof oldInfo>(resolve => { resolveOld = resolve })
+    mocks.getGitInfo.mockReturnValue(oldRequest)
+    render(<ChatInput />)
+    await waitFor(() => expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId))
+    const worktreePath = '/repo/.claude/worktrees/entered'
+    mocks.getGitInfo.mockResolvedValue({ ...oldInfo, workDir: worktreePath,
+      worktree: { enabled: true, path: worktreePath, plannedPath: null, sourceWorkDir: '/repo', slug: 'entered', branch: 'worktree-entered' },
+    })
+    act(() => useSessionStore.getState().updateSessionWorkDir(sessionId, worktreePath))
+    expect(await screen.findByTestId('worktree-details-trigger')).toBeInTheDocument()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); resolveOld(oldInfo); await oldRequest })
+    expect(screen.getByTestId('worktree-details-trigger')).toBeInTheDocument()
+    fireEvent.mouseEnter(screen.getByTestId('worktree-details-trigger'))
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(worktreePath)
   })
 
   it('reactively uses the active session project root display name while retaining the active worktree path in context', async () => {

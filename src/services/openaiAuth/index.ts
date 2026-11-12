@@ -1,3 +1,4 @@
+import { coordinateOAuthRefresh } from '../oauth/refresh-coordinator.js'
 import { openBrowser } from '../../utils/browser.js'
 import { AuthCodeListener } from '../oauth/auth-code-listener.js'
 import {
@@ -16,6 +17,9 @@ import {
   clearOpenAIOAuthTokenCache,
   deleteOpenAIOAuthTokens,
   getOpenAIOAuthTokensAsync,
+  getOpenAIOAuthTokens,
+  getOpenAIOAuthAuthority,
+  getOpenAIOAuthTokensForRefresh,
   saveOpenAIOAuthTokens,
 } from './storage.js'
 import type { OpenAIOAuthTokens } from './types.js'
@@ -158,24 +162,12 @@ export class OpenAIOAuthService {
   }
 
   async ensureFreshTokens(): Promise<OpenAIOAuthTokens | null> {
-    clearOpenAIOAuthTokenCache()
-    const tokens = await getOpenAIOAuthTokensAsync()
-    if (!tokens) return null
-    if (!isOpenAITokenExpired(tokens.expiresAt)) return tokens
-
-    const refreshed = await refreshOpenAITokens(tokens.refreshToken)
-    const updated = withRefreshedAccessToken(tokens, refreshed)
-    const storage = saveOpenAIOAuthTokens(updated)
-    if (!storage.success) {
-      throw new Error(storage.warning ?? 'Failed to persist refreshed OpenAI tokens')
-    }
-
-    return updated
+    return ensureFreshOpenAITokens()
   }
 
   async ensureFreshAccessToken(): Promise<string | null> {
-  const tokens = await this.ensureFreshTokens()
-  return tokens?.accessToken ?? null
+    const tokens = await this.ensureFreshTokens()
+    return tokens?.accessToken ?? null
   }
 
   logout(): boolean {
@@ -192,20 +184,36 @@ export class OpenAIOAuthService {
 }
 
 export async function ensureFreshOpenAITokens(): Promise<OpenAIOAuthTokens | null> {
+  const authority = getOpenAIOAuthAuthority()
   clearOpenAIOAuthTokenCache()
   const tokens = await getOpenAIOAuthTokensAsync()
+  if (getOpenAIOAuthAuthority() !== authority) throw new Error('OpenAI credential store changed during refresh; retry the request')
   if (!tokens) return null
   if (!isOpenAITokenExpired(tokens.expiresAt)) return tokens
 
-  try {
+  clearOpenAIOAuthTokenCache()
+  const latest = getOpenAIOAuthTokens()
+  // An async file read may complete after another refresh already persisted.
+  if (latest && !isOpenAITokenExpired(latest.expiresAt)) return latest
+  if (JSON.stringify(latest) !== JSON.stringify(tokens)) throw new Error('OpenAI credentials changed during refresh; retry the request')
+
+  await coordinateOAuthRefresh('openai', authority, tokens, async (assertOwnership) => {
+    if (getOpenAIOAuthAuthority() !== authority) throw new Error('OpenAI credential store changed during refresh; retry the request')
+    const current = getOpenAIOAuthTokensForRefresh()
+    if (current && !isOpenAITokenExpired(current.expiresAt)) return
+    if (JSON.stringify(current) !== JSON.stringify(tokens)) throw new Error("OpenAI credentials changed during refresh; retry the request")
     const refreshed = await refreshOpenAITokens(tokens.refreshToken)
+    if (getOpenAIOAuthAuthority() !== authority || JSON.stringify(getOpenAIOAuthTokensForRefresh()) !== JSON.stringify(tokens)) {
+      throw new Error('OpenAI credentials changed during refresh; retry the request')
+    }
     const updated = withRefreshedAccessToken(tokens, refreshed)
+    assertOwnership()
     const storage = saveOpenAIOAuthTokens(updated)
     if (!storage.success) {
       throw new Error(storage.warning ?? 'Failed to persist refreshed OpenAI tokens')
     }
-    return updated
-  } catch {
-    return null
-  }
+  })
+  if (getOpenAIOAuthAuthority() !== authority) throw new Error('OpenAI credential store changed during refresh; retry the request')
+  clearOpenAIOAuthTokenCache()
+  return getOpenAIOAuthTokens()
 }

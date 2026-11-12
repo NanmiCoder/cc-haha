@@ -1,6 +1,6 @@
 // Test doubles for the WebRTC surface the P2P code uses (tests only).
 import type { RtcChannel, RtcFactory, RtcPeer } from './peer'
-import type { P2PChannel } from './frames'
+import { decodeFrame, encodeFrame, type P2PChannel } from './frames'
 
 export class FakeTimers {
   now = 0
@@ -30,10 +30,13 @@ export class FakeChannel implements RtcChannel {
   readyState = 'connecting'
   sent: string[] = []
   listeners: Record<string, ((data?: unknown) => void)[]> = {}
+  /** What the far end does with a frame once it is sent. */
+  onSend?: (text: string) => void
   constructor(readonly label: P2PChannel) {}
   send(text: string) {
     if (this.readyState !== 'open') throw new Error('closed')
     this.sent.push(text)
+    this.onSend?.(text)
   }
   close() {
     this.readyState = 'closed'
@@ -59,7 +62,14 @@ export type FakePeer = RtcPeer & {
   openChannels(): void
 }
 
-export function fakeRtc(options: { path?: 'lan' | 'direct'; openOnAnswer?: boolean } = {}) {
+export function fakeRtc(
+  options: {
+    path?: 'lan' | 'direct'
+    openOnAnswer?: boolean
+    /** The computer answers pings (a moment later, like a real round trip) while this says so. */
+    answerPings?: () => boolean
+  } = {}
+) {
   const peers: FakePeer[] = []
   const factory: RtcFactory = (config) => {
     const candidateListeners: ((candidate: string | null) => void)[] = []
@@ -72,6 +82,14 @@ export function fakeRtc(options: { path?: 'lan' | 'direct'; openOnAnswer?: boole
       closed: false,
       createChannel(label) {
         const channel = new FakeChannel(label)
+        const answerPings = options.answerPings
+        if (label === 'ctl' && answerPings) {
+          channel.onSend = (text) => {
+            const header = decodeFrame(text)?.header
+            if (header?.t === 'ping' && answerPings())
+              queueMicrotask(() => channel.fire('message', encodeFrame({ t: 'pong', n: header.n })))
+          }
+        }
         peer.channels[label] = channel
         return channel
       },

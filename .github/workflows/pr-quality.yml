@@ -299,6 +299,11 @@ jobs:
           bun-version-file: package.json
       - name: Install root dependencies
         run: bun install --frozen-lockfile
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          rg --version
       - name: Run the agent loop against a mock LLM and recorded traffic
         run: bun run check:agent-e2e
       - name: Upload agent e2e artifacts

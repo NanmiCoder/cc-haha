@@ -118,6 +118,11 @@ export function ChatGPTOfficialLogin() {
             ? t('settings.chatgptOfficialLogin.logoutProcessing')
             : t('settings.chatgptOfficialLogin.logoutButton')}
         </Button>
+        {error && (
+          <div role="alert" className="basis-full text-xs text-[var(--color-error)]">
+            {t('settings.chatgptOfficialLogin.errorPrefix')}{error}
+          </div>
+        )}
       </div>
     )
   }

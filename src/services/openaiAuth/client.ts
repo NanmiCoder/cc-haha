@@ -134,16 +134,45 @@ export async function refreshOpenAITokens(
   return (await response.json()) as OpenAIOAuthTokenResponse
 }
 
+export class OpenAITokenHttpError extends Error {
+  constructor(
+    readonly operation: 'exchange' | 'refresh',
+    readonly status: number,
+    sanitizedDetails: string,
+    readonly oauthErrorCode?: string,
+  ) {
+    super(`OpenAI token ${operation} failed: ${status}${sanitizedDetails ? `: ${sanitizedDetails}` : ''}`)
+    this.name = 'OpenAITokenHttpError'
+    // Keep structured metadata restricted to known protocol codes as well;
+    // an arbitrary upstream error string must not become an extra secret field.
+    this.oauthErrorCode = ['invalid_grant', 'invalid_token', 'refresh_token_expired',
+      'refresh_token_reused', 'refresh_token_invalid', 'invalid_client',
+      'unauthorized_client', 'access_denied', 'temporarily_unavailable', 'server_error',
+    ].includes(oauthErrorCode ?? '') ? oauthErrorCode : undefined
+  }
+
+  get requiresReauthentication(): boolean {
+    if (this.operation !== 'refresh') return false
+    if (this.status === 401) return true
+    return this.status === 400 && ['invalid_grant', 'invalid_token',
+      'refresh_token_expired', 'refresh_token_reused', 'refresh_token_invalid',
+    ].includes(this.oauthErrorCode ?? '')
+  }
+}
+
 async function buildOpenAITokenHttpError(
   operation: 'exchange' | 'refresh',
   response: Response,
 ): Promise<Error> {
   const body = await response.text().catch(() => '')
   const sanitizedBody = sanitizeOpenAITokenErrorBody(body)
-  const bodySuffix = sanitizedBody ? `: ${sanitizedBody}` : ''
-  return new Error(
-    `OpenAI token ${operation} failed: ${response.status}${bodySuffix}`,
-  )
+  let oauthErrorCode: string | undefined
+  try {
+    const parsed = JSON.parse(body)
+    const code = typeof parsed?.error === 'string' ? parsed.error : parsed?.error?.code
+    if (typeof code === 'string') oauthErrorCode = code
+  } catch { /* Non-JSON responses are still HTTP errors, not revoked grants. */ }
+  return new OpenAITokenHttpError(operation, response.status, sanitizedBody, oauthErrorCode)
 }
 
 function sanitizeOpenAITokenErrorBody(body: string): string {

@@ -104,6 +104,52 @@ describe('direct connection to the computer', () => {
     expect(f.closes()).toBe(1)
   })
 
+  test('a check counts only its own pong: frames buffered while the phone slept do not prove the path is alive now', async () => {
+    const f = setup()
+    const connected = f.peer.connect()
+    await flush()
+    await connected
+    const ctl = f.rtc.peers[0]!.channels.ctl!
+    // A heartbeat ping went out just before the phone was suspended.
+    f.timers.advance(P2P_HEALTH_MS)
+    const before = decodeFrame(ctl.sent.at(-1))!.header as { t: string; n: number }
+    let settled: boolean | undefined
+    const checked = f.peer.check(P2P_PONG_MS)
+    void checked.then((alive) => { settled = alive })
+    const ping = decodeFrame(ctl.sent.at(-1))!.header as { t: string; n: number }
+    expect(ping.t).toBe('ping')
+    expect(ping.n).not.toBe(before.n)
+    // What was waiting in the buffers arrives first on wake-up.
+    ctl.fire('message', encodeFrame({ t: 'pong', n: before.n }))
+    ctl.fire('message', encodeFrame({ t: 'wsm', s: 1, fin: true }, 'buffered while asleep'))
+    await flush()
+    expect(settled).toBeUndefined()
+    ctl.fire('message', encodeFrame({ t: 'pong', n: ping.n }))
+    expect(await checked).toBe(true)
+  })
+
+  test('a check with no answer in time fails without closing; a closed connection fails it at once', async () => {
+    const f = setup()
+    const connected = f.peer.connect()
+    await flush()
+    await connected
+    let settled: boolean | undefined
+    const silent = f.peer.check(P2P_PONG_MS)
+    void silent.then((alive) => { settled = alive })
+    f.timers.advance(P2P_PONG_MS - 1)
+    await flush()
+    expect(settled).toBeUndefined()
+    f.timers.advance(1)
+    expect(await silent).toBe(false)
+    // What to do about it is the caller's decision.
+    expect(f.closes()).toBe(0)
+    expect(f.peer.open).toBe(true)
+    const cut = f.peer.check(P2P_PONG_MS)
+    f.peer.close()
+    expect(await cut).toBe(false)
+    expect(await f.peer.check(P2P_PONG_MS)).toBe(false)
+  })
+
   test('an ICE failure closes the connection', async () => {
     const f = setup()
     const connected = f.peer.connect()

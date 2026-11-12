@@ -67,6 +67,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       stop: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessStop),
       setAutoStart: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, enabled),
       setP2PEnabled: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetP2PEnabled, enabled),
+      setKeepAwake: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetKeepAwake, enabled),
     },
     kind: 'electron',
     isDesktop: true,
@@ -245,7 +246,7 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       },
     },
     adapters: {
-      restartSidecar: () => invoke(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar),
+      restartSidecar: (target) => invoke(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, target ? { target } : undefined),
     },
     zoom: {
       set: level => invoke(ELECTRON_IPC_CHANNELS.zoomSet, level),

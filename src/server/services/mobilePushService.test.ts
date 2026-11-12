@@ -694,3 +694,20 @@ test('explicit push test reports notConfigured and failures without credentials'
   expect(await invalid.sendTest(input().token, undefined, {})).toEqual({ status: 'noRegistration' })
   void broken.stop(); void invalid.stop()
 })
+
+test('a changed public address goes to remotely paired phones that do not pull from the old one, signed per pairing', async () => {
+  const f = relayFixture()
+  f.service.register(input({ provider: 'expo', token: expoToken, hostId: 'host-on-phone-a', hostName: 'Studio Mac' }), { remoteDeviceId: 'phone-a' })
+  f.service.register(input({ provider: 'expo', token: 'ExponentPushToken[fixture-device-b]', hostId: 'host-on-phone-b' }), { remoteDeviceId: 'phone-revoked' })
+  f.service.register(input({ provider: 'desktop', platform: 'android', token: pullToken, hostId: 'host-pulling' }), { remoteDeviceId: 'phone-a' })
+  f.service.register(input({ provider: 'expo', token: 'ExponentPushToken[fixture-lan-phone]', hostId: 'host-on-lan' }), {})
+  await f.service.notifyAddressChanged('https://new-name.trycloudflare.com', id => id === 'phone-a' ? 'mac-for-phone-a' : undefined)
+  expect(f.sent.map(delivery => ({ provider: delivery.provider, token: delivery.token, payload: delivery.payload }))).toEqual([{
+    provider: 'expo', token: expoToken,
+    payload: {
+      title: '电脑地址已更新 · cc-haha', body: 'Studio Mac重新建立了外出连接，打开 App 会自动换到新地址。',
+      data: { hostId: 'host-on-phone-a', eventType: 'hostUrl', url: 'https://new-name.trycloudflare.com', mac: 'mac-for-phone-a' },
+      categoryId: 'cchahaResult', sound: 'default', priority: 'high', ttl: 300,
+    },
+  }])
+})
