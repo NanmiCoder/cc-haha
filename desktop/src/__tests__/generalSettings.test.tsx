@@ -113,7 +113,9 @@ vi.mock('qrcode', () => ({
 }))
 
 vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
-  ClaudeOfficialLogin: () => <div data-testid="claude-official-login" />,
+  ClaudeOfficialLogin: ({ usageOnly }: { usageOnly?: boolean }) => (
+    <div data-testid={usageOnly ? 'claude-official-usage' : 'claude-official-login'} />
+  ),
 }))
 
 vi.mock('../components/settings/ChatGPTOfficialLogin', () => ({
@@ -2469,6 +2471,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Official sign-in/ }))
 
     expect(screen.getByTestId('claude-official-login')).toBeInTheDocument()
+    expect(screen.queryByTestId('claude-official-usage')).not.toBeInTheDocument()
   })
 
   it('shows ChatGPT Official as the active built-in provider', () => {
@@ -2483,6 +2486,7 @@ describe('Settings > Providers tab', () => {
     expect(within(openAIProvider).getByText('Default')).toBeInTheDocument()
     expect(screen.getByTestId('chatgpt-official-login')).toBeInTheDocument()
     expect(screen.queryByTestId('claude-official-login')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('claude-official-provider')).getByTestId('claude-official-usage')).toBeInTheDocument()
   })
 
   it('shows Grok Official as the active built-in provider', () => {
