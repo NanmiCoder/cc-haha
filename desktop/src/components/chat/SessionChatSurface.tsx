@@ -108,6 +108,7 @@ export function SessionChatSurface({
       data-testid="session-chat-surface"
       data-session-chat-kind={surfaceKind}
       data-agent-run-kind={agentRunKind}
+      data-wallpaper-surface="background"
       className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-on-surface"
     >
       <div data-testid={contentRowTestId} className="flex min-h-0 min-w-0 flex-1">

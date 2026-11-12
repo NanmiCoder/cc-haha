@@ -128,6 +128,28 @@ describe('mobile preferences forward migration', () => {
     expect(migratePreferences('{"liveActivity":"bogus"}').liveActivity).toBe('running')
     expect(migratePreferences('{"timeSensitive":false}').timeSensitive).toBe(false)
   })
+  test('drops the retired wallpaper field on load and keeps other settings', async () => {
+    const raw = '{"version":1,"appearance":"light","wallpaper":{"enabled":true,"uri":"file:///a.jpg"},"extension":"keep"}'
+
+    const migrated = migratePreferences(raw)
+    expect('wallpaper' in migrated).toBe(false)
+    expect(migrated.appearance).toBe('light')
+    expect(migrated.extension).toBe('keep')
+
+    const values = new Map([[preferencesKey, raw]])
+    const repository = new PreferencesRepository({
+      getItem: async (key) => values.get(key) ?? null,
+      setItem: async (key, value) => {
+        values.set(key, value)
+      },
+      removeItem: async (key) => {
+        values.delete(key)
+      },
+    })
+    await repository.load()
+    expect(JSON.parse(values.get(preferencesKey) ?? '{}')).not.toHaveProperty('wallpaper')
+  })
+
   test('updating one new field does not disturb the others', async () => {
     const values = new Map<string, string>()
     const repository = new PreferencesRepository({

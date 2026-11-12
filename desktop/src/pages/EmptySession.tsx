@@ -1218,7 +1218,10 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     // which puts it just above the middle of the page. On a phone it stays
     // docked to the bottom edge, above the keyboard, and the project sits at
     // the top, where the keyboard cannot cover it and it is read before Send.
-    <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
+    <div
+      className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]"
+      data-wallpaper-surface="surface"
+    >
       {isMobileComposer && (
         <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
             <RepositoryLaunchControls

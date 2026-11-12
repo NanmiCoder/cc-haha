@@ -1,7 +1,12 @@
 import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
 import { configureP2PSessionPermissions, P2P_PARTITION, p2pEndpointUrl, p2pHostWanted, P2PTerminator } from './services/p2pTerminator'
-import type { DesktopPublicAccessConfiguration, DesktopPublicAccessStatus } from '../src/lib/desktopHost/types'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
+import type {
+  DesktopDynamicWallpaperPickOptions,
+  DesktopDynamicWallpaperUpdate,
+  DesktopPublicAccessConfiguration,
+  DesktopPublicAccessStatus,
+} from '../src/lib/desktopHost/types'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, protocol, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
@@ -17,6 +22,20 @@ import { areStorageWritesFrozen, setStorageWritesFrozen } from './services/stora
 import { resolveRelocatedAttachmentPath } from '../../src/utils/storageRelocations'
 import { appendHostDiagnostic, electronHostDiagnosticsFile, sanitizeHostDiagnostic } from './services/sidecarManager'
 import { openDialog, saveDialog } from './services/dialogs'
+import {
+  clearDynamicWallpaperSource,
+  pickVideoWallpaper,
+  pickWebWallpaper,
+  readDynamicWallpaperPreferences,
+  reloadDynamicWallpaper,
+  resolveDynamicWallpaperStatus,
+  updateDynamicWallpaperPreferences,
+  VIDEO_WALLPAPER_EXTENSIONS,
+} from './services/dynamicWallpaper'
+import {
+  handleWallpaperRequest,
+  WALLPAPER_SCHEME,
+} from './services/wallpaperProtocol'
 import { openExternalUrl, openSystemPath, openSystemSettingsUrl } from './services/shell'
 import {
   notificationPermissionState,
@@ -569,6 +588,9 @@ function registerHandler<T>(
     if (channel.startsWith('desktop:public-access:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Public access management requires the main desktop window')
     }
+    if (channel.startsWith('desktop:wallpaper:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
+      throw new Error('Wallpaper settings require the main desktop window')
+    }
     if (
       petWindowController?.owns(senderWindow) &&
       !isElectronIpcChannelAllowedForPetWindow(channel)
@@ -981,6 +1003,38 @@ function registerIpcHandlers() {
     app.relaunch()
     app.quit()
   })
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperGet, () => resolveDynamicWallpaperStatus(app))
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperUpdate, (_event, payload) =>
+    updateDynamicWallpaperPreferences(app, payload as DesktopDynamicWallpaperUpdate))
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperPickVideo, async (_event, payload) => {
+    const options = payload as DesktopDynamicWallpaperPickOptions | undefined
+    const picked = await openDialog(mainWindow, {
+      title: options?.dialogTitle,
+      filters: [{
+        name: options?.dialogFilterName?.trim() || 'Video',
+        extensions: VIDEO_WALLPAPER_EXTENSIONS.map(extension => extension.slice(1)),
+      }],
+    })
+    if (typeof picked !== 'string') {
+      return { canceled: true, status: resolveDynamicWallpaperStatus(app), error: null }
+    }
+    const status = pickVideoWallpaper(app, picked)
+    if (!status) throw new Error('Unsupported wallpaper video format')
+    return { canceled: false, status, error: null }
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperPickWeb, async (_event, payload) => {
+    const options = payload as DesktopDynamicWallpaperPickOptions | undefined
+    const picked = await openDialog(mainWindow, {
+      title: options?.dialogTitle,
+      directory: true,
+    })
+    if (typeof picked !== 'string') {
+      return { canceled: true, status: resolveDynamicWallpaperStatus(app), error: null }
+    }
+    return { canceled: false, ...pickWebWallpaper(app, picked) }
+  })
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperClear, () => clearDynamicWallpaperSource(app))
+  registerHandler(ELECTRON_IPC_CHANNELS.wallpaperReload, () => reloadDynamicWallpaper(app))
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, (_event, payload) => getServerRuntime().restartAdaptersSidecars((payload as { target?: 'wechat' } | undefined)?.target))
   registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
     const window = currentWindow(event)
@@ -1126,7 +1180,16 @@ if (!acquireSingleInstanceLock(app, () => mainWindow)) {
 
 registerIpcHandlers()
 
+// Must run before the app is ready. The scheme is only reachable from inside
+// the app, and the handler below serves exactly one video or one pack folder.
+protocol.registerSchemesAsPrivileged([{
+  scheme: WALLPAPER_SCHEME,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+}])
+
 app.whenReady().then(async () => {
+  protocol.handle(WALLPAPER_SCHEME, request =>
+    handleWallpaperRequest(request, () => readDynamicWallpaperPreferences(app)))
   applyWindowsAppUserModelId(app)
   clearAppManagedPortableEnv()
   let validation = false

@@ -26,6 +26,9 @@ import {
   captureProjectDisplayNameHydrationRevision,
   hydrateProjectDisplayNames,
 } from '../../stores/projectDisplayNameStore'
+import { useWallpaperStore } from '../../stores/wallpaperStore'
+import { useDynamicWallpaperStore } from '../../stores/dynamicWallpaperStore'
+import { WallpaperLayer } from './WallpaperLayer'
 import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
 import { TabBar } from './TabBar'
 import { WorkspaceHeaderProvider } from './WorkspaceHeaderContext'
@@ -136,6 +139,8 @@ export function AppShell() {
               preferences.projectDisplayNames ?? {},
               displayNameHydrationRevision,
             )
+            void useWallpaperStore.getState().hydrate(preferences.wallpaper)
+            void useDynamicWallpaperStore.getState().hydrate()
             if (desktopRuntime && preferences.pet.enabled) {
               return getDesktopHost().pets.show()
             }
@@ -280,6 +285,7 @@ export function AppShell() {
           <ContentRouter />
         </WorkspaceHeaderProvider>
       </main>
+      <WallpaperLayer />
       <ToastContainer />
       <UpdateChecker />
       <TaskEditorHost />

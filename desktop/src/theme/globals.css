@@ -831,6 +831,7 @@
   --cc-shadow-overlay: 0 2px 6px rgba(28, 25, 23, 0.05), 0 16px 40px rgba(28, 25, 23, 0.12);
 
   --cc-bg-rgb: 255, 255, 255;
+  --cc-s0-rgb: 247, 247, 246;
   --cc-s1-rgb: 241, 240, 238;
   --cc-t1-rgb: 26, 25, 23;
   --cc-t2-rgb: 73, 70, 64;
@@ -915,6 +916,7 @@
   --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
 
   --cc-bg-rgb: 251, 249, 244;
+  --cc-s0-rgb: 243, 239, 229;
   --cc-s1-rgb: 236, 230, 216;
   --cc-t1-rgb: 35, 29, 18;
   --cc-t2-rgb: 110, 99, 80;
@@ -999,6 +1001,7 @@
   --cc-shadow-overlay: 0 8px 24px rgba(64, 49, 26, 0.12), 0 24px 64px rgba(64, 49, 26, 0.16);
 
   --cc-bg-rgb: 246, 240, 225;
+  --cc-s0-rgb: 237, 229, 209;
   --cc-s1-rgb: 229, 219, 195;
   --cc-t1-rgb: 37, 30, 17;
   --cc-t2-rgb: 110, 97, 70;
@@ -1083,6 +1086,7 @@
   --cc-shadow-overlay: 0 8px 24px rgba(28, 42, 32, 0.10), 0 24px 64px rgba(28, 42, 32, 0.15);
 
   --cc-bg-rgb: 245, 248, 245;
+  --cc-s0-rgb: 234, 240, 235;
   --cc-s1-rgb: 224, 233, 226;
   --cc-t1-rgb: 28, 35, 29;
   --cc-t2-rgb: 93, 107, 96;
@@ -1171,6 +1175,7 @@
   --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
 
   --cc-bg-rgb: 32, 29, 23;
+  --cc-s0-rgb: 26, 24, 19;
   --cc-s1-rgb: 43, 39, 31;
   --cc-t1-rgb: 242, 238, 230;
   --cc-t2-rgb: 196, 187, 169;
@@ -1257,6 +1262,7 @@
   --cc-shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.50), 0 24px 64px rgba(0, 0, 0, 0.55);
 
   --cc-bg-rgb: 26, 29, 36;
+  --cc-s0-rgb: 21, 24, 30;
   --cc-s1-rgb: 37, 42, 53;
   --cc-t1-rgb: 232, 234, 240;
   --cc-t2-rgb: 154, 161, 178;
@@ -3407,4 +3413,104 @@ html[data-theme='ink-blue'] .pet-panel-toggle:hover {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ─── Wallpaper ──────────────────────────────────────────────────
+
+   `applyWallpaper` publishes the image and its controls on the
+   document root and sets data-wallpaper="on". The wallpaper paints on a
+   fixed layer behind everything; the theme colour dims it rather than
+   black so contrast tracks the active palette. Only large page surfaces
+   opt in with data-wallpaper-surface — cards, dialogs, sheets, and
+   dropdowns keep their opaque backgrounds. */
+html[data-wallpaper="on"],
+html[data-wallpaper="on"] body,
+html[data-wallpaper="on"] #root {
+  background-color: transparent;
+}
+
+/* Video and web-pack wallpapers paint their own layer instead of the
+   pseudo-element. */
+html[data-wallpaper-source="video"] body::before,
+html[data-wallpaper-source="web"] body::before {
+  display: none;
+}
+
+.wallpaper-media-layer {
+  position: fixed;
+  inset: -64px;
+  z-index: -2;
+  overflow: hidden;
+  pointer-events: none;
+  /* The negative inset gives blur and zoom room so their edges never show. */
+}
+
+.wallpaper-media-layer .wallpaper-media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  filter: blur(var(--wallpaper-blur, 0px));
+  transform: scale(calc(var(--wallpaper-zoom, 1) * 1.03));
+  transform-origin: var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 50%);
+  pointer-events: none;
+}
+
+.wallpaper-media-layer video.wallpaper-media {
+  object-fit: cover;
+}
+
+html[data-wallpaper="on"] body::before {
+  content: '';
+  position: fixed;
+  inset: -64px;
+  z-index: -2;
+  pointer-events: none;
+  background-image: var(--wallpaper-image);
+  background-position: var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 50%);
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: blur(var(--wallpaper-blur, 0px));
+  /* Zoom around the chosen focal point so it stays put while magnifying;
+     the extra 1.03 hides the blurred edge. */
+  transform: scale(calc(var(--wallpaper-zoom, 1) * 1.03));
+  transform-origin: var(--wallpaper-focus-x, 50%) var(--wallpaper-focus-y, 50%);
+}
+
+html[data-wallpaper="on"] .app-shell.app-shell-viewport {
+  background-color: transparent !important;
+}
+
+/* The dock paints its own sidebar surface, so it needs the same opt-in as the
+   large page panels — otherwise it alone stays opaque over the wallpaper. */
+html[data-wallpaper="on"] .sidebar-settings-dock {
+  background-color: rgba(var(--cc-s0-rgb), var(--wallpaper-panel-alpha, 0.88));
+  background-image: none;
+}
+
+html[data-wallpaper="on"] [data-wallpaper-surface="surface"] {
+  background-color: rgba(var(--cc-bg-rgb), var(--wallpaper-panel-alpha, 0.88));
+}
+
+html[data-wallpaper="on"] [data-wallpaper-surface="sidebar"] {
+  background-color: rgba(var(--cc-s0-rgb), var(--wallpaper-panel-alpha, 0.88));
+}
+
+html[data-wallpaper="on"] [data-wallpaper-surface="background"] {
+  background-color: rgba(var(--cc-bg-rgb), var(--wallpaper-panel-alpha, 0.88));
+}
+
+/* The docked composer's shell spans the full column width, so its opaque
+   surface painted two bars either side of the floating card and hid the
+   wallpaper. Keep the card itself; let the gutters show the image through. */
+html[data-wallpaper="on"] [data-testid="chat-input-shell"] {
+  background-color: transparent;
+}
+
+/* The fade dissolves the transcript into the shell's old ground; with the
+   shell transparent it would paint a visible band over the wallpaper. */
+html[data-wallpaper="on"] .composer-fade::before {
+  display: none;
 }

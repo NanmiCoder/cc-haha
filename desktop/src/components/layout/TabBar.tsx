@@ -624,6 +624,7 @@ export function TabBar() {
         the content below it, and a rule across the whole strip cuts through it.
       */
       className="flex min-h-[52px] items-stretch bg-[var(--color-surface-sidebar)] select-none"
+      data-wallpaper-surface="sidebar"
     >
 
       <div data-testid="workspace-session-header" className={hasWorkspaceHeader ? 'flex min-w-0 flex-1 overflow-hidden' : 'contents'}>
@@ -708,6 +709,7 @@ export function TabBar() {
       */}
       <div
         data-testid="workspace-header-frame"
+        data-wallpaper-surface={hasWorkspaceHeader ? 'sidebar' : undefined}
         style={hasWorkspaceHeader ? { width: workspaceHeader.width, maxWidth: '100%' } : undefined}
         className={`flex min-w-0 shrink-0 items-stretch ${hasWorkspaceHeader ? 'bg-[var(--color-surface-sidebar)]' : ''}`}
       >

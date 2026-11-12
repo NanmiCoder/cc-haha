@@ -326,6 +326,45 @@ const localePreference: Validator = value =>
   || value === 'jp'
   || value === 'kr'
 
+const wallpaperPickOptions: Validator = value => {
+  if (value === undefined) return true
+  if (!isRecord(value) || !hasOnlyKeys(value, ['dialogTitle', 'dialogFilterName'])) return false
+  return (value.dialogTitle === undefined || isSafeUiLabel(value.dialogTitle))
+    && (value.dialogFilterName === undefined || isSafeUiLabel(value.dialogFilterName))
+}
+
+const percentInRange = (value: unknown, min: number, max: number) =>
+  typeof value === 'number'
+  && Number.isInteger(value)
+  && value >= min
+  && value <= max
+
+const DYNAMIC_WALLPAPER_KEYS = [
+  'kind',
+  'enabled',
+  'focusX',
+  'focusY',
+  'zoom',
+  'blur',
+  'panelOpacity',
+] as const
+
+const dynamicWallpaperUpdate: Validator = value =>
+  isRecord(value)
+  && hasOnlyKeys(value, [...DYNAMIC_WALLPAPER_KEYS])
+  && (
+    value.kind === undefined
+    || value.kind === 'image'
+    || value.kind === 'video'
+    || value.kind === 'web'
+  )
+  && (value.enabled === undefined || typeof value.enabled === 'boolean')
+  && (value.focusX === undefined || percentInRange(value.focusX, 0, 100))
+  && (value.focusY === undefined || percentInRange(value.focusY, 0, 100))
+  && (value.zoom === undefined || percentInRange(value.zoom, 100, 300))
+  && (value.blur === undefined || percentInRange(value.blur, 0, 40))
+  && (value.panelOpacity === undefined || percentInRange(value.panelOpacity, 60, 100))
+
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
   [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning]: booleanPayload,
@@ -421,6 +460,12 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.migrationStart]: migrationIdentity,
   [ELECTRON_IPC_CHANNELS.migrationStatus]: noPayload,
   [ELECTRON_IPC_CHANNELS.migrationCancel]: migrationIdentity,
+  [ELECTRON_IPC_CHANNELS.wallpaperGet]: noPayload,
+  [ELECTRON_IPC_CHANNELS.wallpaperUpdate]: dynamicWallpaperUpdate,
+  [ELECTRON_IPC_CHANNELS.wallpaperPickVideo]: wallpaperPickOptions,
+  [ELECTRON_IPC_CHANNELS.wallpaperPickWeb]: wallpaperPickOptions,
+  [ELECTRON_IPC_CHANNELS.wallpaperClear]: noPayload,
+  [ELECTRON_IPC_CHANNELS.wallpaperReload]: noPayload,
   [ELECTRON_IPC_CHANNELS.adaptersRestartSidecar]: value => value === undefined || (isRecord(value) && hasOnlyKeys(value, ['target']) && value.target === 'wechat'),
   [ELECTRON_IPC_CHANNELS.zoomSet]: zoomPayload,
   [ELECTRON_IPC_CHANNELS.appearanceSetApplied]: appliedAppearance,

@@ -9,7 +9,7 @@ import { normalizeVoicePreferences } from './voice/preferences.js'
 import { normalizeProjectAdditionalDirectories, resolveProjectDirectories, validateProjectAdditionalDirectories, type ProjectAdditionalDirectories, type ProjectDirectories } from './projectDirectories.js'
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from './voice/types.js'
 
-const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 7
+const CURRENT_DESKTOP_UI_PREFERENCES_SCHEMA_VERSION = 11
 const MAX_PROJECT_PREFERENCE_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_ENTRIES = 2_000
 const MAX_PROJECT_DISPLAY_NAME_KEY_LENGTH = 4_096
@@ -17,6 +17,7 @@ const MAX_PROJECT_DISPLAY_NAME_LENGTH = 80
 const MAX_PROFILE_DISPLAY_NAME_LENGTH = 80
 const MAX_PROFILE_SUBTITLE_LENGTH = 160
 const MAX_PROFILE_AVATAR_BYTES = 2_000_000
+const MAX_WALLPAPER_BYTES = 8_000_000
 const MAX_PET_ID_LENGTH = 80
 const MIN_PET_SIZE = 96
 const MAX_PET_SIZE = 192
@@ -30,6 +31,22 @@ const AVATAR_CONTENT_TYPES = {
   'image/jpeg': { extension: 'jpg', mediaType: 'image/jpeg' },
   'image/webp': { extension: 'webp', mediaType: 'image/webp' },
 } as const
+
+const WALLPAPER_FILE_PATTERN = /^wallpaper\.(jpg|png|webp)$/
+
+export type DesktopWallpaperPreferences = {
+  enabled: boolean
+  /** Horizontal focal point, 0 (left) to 100 (right). */
+  focusX: number
+  /** Vertical focal point, 0 (top) to 100 (bottom). */
+  focusY: number
+  /** Magnification on top of the cover fit, 100 (native) to 300 (3×). */
+  zoom: number
+  blur: number
+  panelOpacity: number
+  file: string | null
+  updatedAt: string | null
+}
 
 export type SidebarProjectPreferences = {
   projectOrder: string[]
@@ -72,6 +89,7 @@ export type DesktopUiPreferences = {
   sidebar: SidebarProjectPreferences
   profile: DesktopProfilePreferences
   pet: DesktopPetPreferences
+  wallpaper: DesktopWallpaperPreferences
   voiceInput: DesktopVoiceInputPreferences
   projectDisplayNames: ProjectDisplayNames
   projectAdditionalDirectories: ProjectAdditionalDirectories
@@ -108,6 +126,17 @@ const DEFAULT_PET_PREFERENCES: DesktopPetPreferences = {
   lastSessionId: null,
 }
 
+const DEFAULT_WALLPAPER_PREFERENCES: DesktopWallpaperPreferences = {
+  enabled: false,
+  focusX: 50,
+  focusY: 50,
+  zoom: 100,
+  blur: 8,
+  panelOpacity: 88,
+  file: null,
+  updatedAt: null,
+}
+
 function createProjectDisplayNames(): ProjectDisplayNames {
   return Object.fromEntries([]) as ProjectDisplayNames
 }
@@ -118,6 +147,7 @@ function defaultPreferences(): DesktopUiPreferences {
     sidebar: { ...DEFAULT_SIDEBAR_PROJECT_PREFERENCES },
     profile: { ...DEFAULT_PROFILE_PREFERENCES },
     pet: { ...DEFAULT_PET_PREFERENCES },
+    wallpaper: { ...DEFAULT_WALLPAPER_PREFERENCES },
     voiceInput: { ...DEFAULT_VOICE_PREFERENCES },
     projectDisplayNames: createProjectDisplayNames(),
     projectAdditionalDirectories: {},
@@ -333,6 +363,75 @@ export function normalizeDesktopPetPreferences(value: unknown): DesktopPetPrefer
   }
 }
 
+function normalizeBoundedInteger(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+function normalizeWallpaperFileName(value: unknown): string | null {
+  return typeof value === 'string' && WALLPAPER_FILE_PATTERN.test(value) ? value : null
+}
+
+export function normalizeWallpaperPreferences(value: unknown): DesktopWallpaperPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ...DEFAULT_WALLPAPER_PREFERENCES }
+  }
+
+  const record = { ...(value as Record<string, unknown>) }
+  // Schema 10 replaced the dim mask with a focal point; the image always
+  // covers the window now, so a stored `fit` is retired too. Drop both so
+  // they do not linger in rewritten files as unknown properties.
+  delete record.dim
+  delete record.fit
+  const file = normalizeWallpaperFileName(record.file)
+  return {
+    ...record,
+    enabled: file !== null && record.enabled === true,
+    focusX: normalizeBoundedInteger(record.focusX, 0, 100, DEFAULT_WALLPAPER_PREFERENCES.focusX),
+    focusY: normalizeBoundedInteger(record.focusY, 0, 100, DEFAULT_WALLPAPER_PREFERENCES.focusY),
+    zoom: normalizeBoundedInteger(record.zoom, 100, 300, DEFAULT_WALLPAPER_PREFERENCES.zoom),
+    blur: normalizeBoundedInteger(record.blur, 0, 40, DEFAULT_WALLPAPER_PREFERENCES.blur),
+    panelOpacity: normalizeBoundedInteger(
+      record.panelOpacity,
+      60,
+      100,
+      DEFAULT_WALLPAPER_PREFERENCES.panelOpacity,
+    ),
+    file,
+    updatedAt: file !== null && typeof record.updatedAt === 'string' ? record.updatedAt : null,
+  }
+}
+
+function validateWallpaperPreferencesPatch(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw ApiError.badRequest('Wallpaper preferences must be an object')
+  }
+
+  const patch = value as Record<string, unknown>
+  if (Object.prototype.hasOwnProperty.call(patch, 'enabled') && typeof patch.enabled !== 'boolean') {
+    throw ApiError.badRequest('enabled must be a boolean')
+  }
+  for (const [field, min, max] of [
+    ['focusX', 0, 100],
+    ['focusY', 0, 100],
+    ['zoom', 100, 300],
+    ['blur', 0, 40],
+    ['panelOpacity', 60, 100],
+  ] as const) {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) continue
+    const candidate = patch[field]
+    if (
+      typeof candidate !== 'number' ||
+      !Number.isFinite(candidate) ||
+      candidate < min ||
+      candidate > max
+    ) {
+      throw ApiError.badRequest(`${field} must be a number between ${min} and ${max}`)
+    }
+  }
+  return patch
+}
+
 function normalizeProjectOrganization(value: unknown): SidebarProjectPreferences['projectOrganization'] {
   return value === 'project' || value === 'recentProject' || value === 'time' ? value : 'recentProject'
 }
@@ -348,6 +447,7 @@ function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | n
 
   const record = value as Record<string, unknown>
   const sourceSchemaVersion = record.schemaVersion
+  const wallpaper = normalizeWallpaperPreferences(record.wallpaper)
   return {
     ...record,
     schemaVersion: typeof sourceSchemaVersion === 'number'
@@ -358,6 +458,7 @@ function normalizeDesktopUiPreferences(value: unknown): DesktopUiPreferences | n
     sidebar: normalizeSidebarProjectPreferences(record.sidebar),
     profile: normalizeProfilePreferences(record.profile),
     pet: normalizeDesktopPetPreferences(record.pet),
+    wallpaper,
     voiceInput: normalizeVoicePreferences(record.voiceInput),
     projectDisplayNames: normalizeProjectDisplayNames(record.projectDisplayNames),
     projectAdditionalDirectories: normalizeProjectAdditionalDirectories(record.projectAdditionalDirectories),
@@ -383,6 +484,18 @@ export class DesktopUiPreferencesService {
 
   private getProfileDir(): string {
     return path.join(this.getConfigDir(), 'cc-haha', 'profile')
+  }
+
+  private getWallpaperDir(): string {
+    return path.join(this.getConfigDir(), 'cc-haha', 'wallpaper')
+  }
+
+  private getWallpaperPath(file: string): string {
+    const normalized = normalizeWallpaperFileName(file)
+    if (!normalized) {
+      throw ApiError.badRequest('Invalid wallpaper file path')
+    }
+    return path.join(this.getWallpaperDir(), normalized)
   }
 
   private getProfileAvatarPath(avatarFile: string): string {
@@ -473,6 +586,7 @@ export class DesktopUiPreferencesService {
         }),
         profile: normalizeProfilePreferences(preferences.profile),
         pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
       }
@@ -507,6 +621,7 @@ export class DesktopUiPreferencesService {
           avatarUpdatedAt: currentProfile.avatarUpdatedAt,
         },
         pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
       }
@@ -568,6 +683,7 @@ export class DesktopUiPreferencesService {
         sidebar: normalizeSidebarProjectPreferences(preferences.sidebar),
         profile: normalizeProfilePreferences(preferences.profile),
         pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames,
       }
@@ -594,6 +710,7 @@ export class DesktopUiPreferencesService {
           ...currentPet,
           ...patch,
         }),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
       }
@@ -672,6 +789,7 @@ export class DesktopUiPreferencesService {
           avatarUpdatedAt: new Date().toISOString(),
         },
         pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
       }
@@ -700,6 +818,149 @@ export class DesktopUiPreferencesService {
           avatarUpdatedAt: null,
         },
         pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences(preferences.wallpaper),
+        voiceInput: normalizeVoicePreferences(preferences.voiceInput),
+        projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
+      }
+
+      await this.writePreferences(nextPreferences)
+      return nextPreferences
+    })
+  }
+
+  async updateWallpaperPreferences(wallpaper: unknown): Promise<DesktopUiPreferences> {
+    const filePath = this.getPreferencesPath()
+    return this.withWriteLock(filePath, async () => {
+      const { preferences } = await this.readPreferences()
+      const current = normalizeWallpaperPreferences(preferences.wallpaper)
+      const patch = validateWallpaperPreferencesPatch(wallpaper)
+      const has = (field: string) => Object.prototype.hasOwnProperty.call(patch, field)
+      const nextPreferences: DesktopUiPreferences = {
+        ...preferences,
+        schemaVersion: preferences.schemaVersion,
+        sidebar: normalizeSidebarProjectPreferences(preferences.sidebar),
+        profile: normalizeProfilePreferences(preferences.profile),
+        pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences({
+          ...current,
+          enabled: has('enabled') ? patch.enabled : current.enabled,
+          focusX: has('focusX') ? patch.focusX : current.focusX,
+          focusY: has('focusY') ? patch.focusY : current.focusY,
+          zoom: has('zoom') ? patch.zoom : current.zoom,
+          blur: has('blur') ? patch.blur : current.blur,
+          panelOpacity: has('panelOpacity') ? patch.panelOpacity : current.panelOpacity,
+          file: current.file,
+          updatedAt: current.updatedAt,
+        }),
+        voiceInput: normalizeVoicePreferences(preferences.voiceInput),
+        projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
+      }
+
+      await this.writePreferences(nextPreferences)
+      return nextPreferences
+    })
+  }
+
+  async updateWallpaperImage(bytes: Uint8Array, contentType: string | null): Promise<DesktopUiPreferences> {
+    const type = contentType?.split(';')[0]?.trim().toLowerCase()
+    const wallpaperType = type ? AVATAR_CONTENT_TYPES[type as keyof typeof AVATAR_CONTENT_TYPES] : undefined
+    if (!wallpaperType) {
+      throw ApiError.badRequest('Unsupported wallpaper type')
+    }
+    if (bytes.byteLength > MAX_WALLPAPER_BYTES) {
+      throw ApiError.badRequest('Wallpaper image is too large')
+    }
+
+    const filePath = this.getPreferencesPath()
+    return this.withWriteLock(filePath, async () => {
+      const { preferences } = await this.readPreferences()
+      const wallpaperDir = this.getWallpaperDir()
+      const wallpaperFile = `wallpaper.${wallpaperType.extension}`
+      const wallpaperPath = this.getWallpaperPath(wallpaperFile)
+      const tmpFile = `${wallpaperPath}.tmp.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}`
+
+      await fs.mkdir(wallpaperDir, { recursive: true })
+      try {
+        await fs.writeFile(tmpFile, bytes)
+        await fs.rename(tmpFile, wallpaperPath)
+      } catch (error) {
+        await fs.unlink(tmpFile).catch(() => {})
+        throw ApiError.internal(`Failed to write wallpaper image: ${error}`)
+      }
+
+      await Promise.all(
+        Object.values(AVATAR_CONTENT_TYPES)
+          .filter((candidate) => candidate.extension !== wallpaperType.extension)
+          .map((candidate) => fs.unlink(path.join(wallpaperDir, `wallpaper.${candidate.extension}`)).catch(() => {})),
+      )
+
+      const current = normalizeWallpaperPreferences(preferences.wallpaper)
+      const nextPreferences: DesktopUiPreferences = {
+        ...preferences,
+        schemaVersion: preferences.schemaVersion,
+        sidebar: normalizeSidebarProjectPreferences(preferences.sidebar),
+        profile: normalizeProfilePreferences(preferences.profile),
+        pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences({
+          ...current,
+          // A new image starts from the default framing so the previous
+          // picture's pan and zoom never crop it unexpectedly.
+          focusX: DEFAULT_WALLPAPER_PREFERENCES.focusX,
+          focusY: DEFAULT_WALLPAPER_PREFERENCES.focusY,
+          zoom: DEFAULT_WALLPAPER_PREFERENCES.zoom,
+          file: wallpaperFile,
+          updatedAt: new Date().toISOString(),
+        }),
+        voiceInput: normalizeVoicePreferences(preferences.voiceInput),
+        projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
+      }
+
+      await this.writePreferences(nextPreferences)
+      return nextPreferences
+    })
+  }
+
+  async readWallpaperImage(): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+    const { preferences } = await this.readPreferences()
+    const file = normalizeWallpaperFileName(preferences.wallpaper.file)
+    if (!file) return null
+
+    const extension = path.extname(file).slice(1)
+    const contentType = Object.values(AVATAR_CONTENT_TYPES).find((candidate) => candidate.extension === extension)?.mediaType
+    if (!contentType) return null
+
+    try {
+      return {
+        bytes: await fs.readFile(this.getWallpaperPath(file)),
+        contentType,
+      }
+    } catch (error) {
+      if (errnoCode(error) === 'ENOENT') return null
+      throw ApiError.internal(`Failed to read wallpaper image: ${error}`)
+    }
+  }
+
+  async clearWallpaper(): Promise<DesktopUiPreferences> {
+    const filePath = this.getPreferencesPath()
+    return this.withWriteLock(filePath, async () => {
+      const { preferences } = await this.readPreferences()
+      const wallpaperDir = this.getWallpaperDir()
+      await Promise.all(
+        Object.values(AVATAR_CONTENT_TYPES)
+          .map((candidate) => fs.unlink(path.join(wallpaperDir, `wallpaper.${candidate.extension}`)).catch(() => {})),
+      )
+      const nextPreferences: DesktopUiPreferences = {
+        ...preferences,
+        schemaVersion: preferences.schemaVersion,
+        sidebar: normalizeSidebarProjectPreferences(preferences.sidebar),
+        profile: normalizeProfilePreferences(preferences.profile),
+        pet: normalizeDesktopPetPreferences(preferences.pet),
+        wallpaper: normalizeWallpaperPreferences({
+          ...normalizeWallpaperPreferences(preferences.wallpaper),
+          enabled: false,
+          file: null,
+          updatedAt: null,
+        }),
         voiceInput: normalizeVoicePreferences(preferences.voiceInput),
         projectDisplayNames: normalizeProjectDisplayNames(preferences.projectDisplayNames),
       }
