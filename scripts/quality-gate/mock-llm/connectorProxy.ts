@@ -8,6 +8,7 @@ import { startMockLlmServer } from './server'
 import { toolResultsSentUpstream } from './scenarios'
 import { searchTransportBunOptions } from './searchTransportOptions'
 import type { MockReply, MockRequest } from './scriptedModel'
+import { connectorActionFailure } from './connectorProxyFixture'
 
 const SCENARIO = 'mock-connector-proxy'
 const MARKER = 'CONNECTOR_PROXY_CALL'
@@ -70,7 +71,11 @@ export async function runConnectorProxyScenario(rootDir: string, artifactDir: st
           const connectorUrl = `${ctx.baseUrl}/api/connectors/huggingface`
           async function action(kind: string, body: object = {}) {
             const response = await fetch(`${connectorUrl}/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-            assert.equal(response.status, 202)
+            if (response.status !== 202) {
+              const failure = connectorActionFailure(kind, response.status, await response.json().catch(() => null))
+              evidence.actionFailure = failure
+              assert.equal(response.status, 202, JSON.stringify(failure))
+            }
             const deadline = Date.now() + 30_000
             while (Date.now() < deadline) {
               const current = await fetch(connectorUrl)

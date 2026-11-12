@@ -1,17 +1,13 @@
 import { mock } from 'bun:test'
 import { join, resolve } from 'node:path'
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { getRemoteRecipe } from '../../../src/services/connectors/remoteCatalog'
+import { configureConnectorProxyFixture } from './connectorProxyFixture'
 
-// Only this offline scenario replaces the catalog endpoint. Installation,
-// plugin files, credential substitution and CLI reload remain production code.
-if (process.env.MOCK_CONNECTOR_ENDPOINT !== 'https://mcp.blocked.test/mcp') {
-  throw new Error('Connector fixture requires its reserved HTTPS endpoint')
-}
-const recipe = getRemoteRecipe('huggingface')
-if (!recipe) throw new Error('Missing Hugging Face connector recipe')
-recipe.endpoint = process.env.MOCK_CONNECTOR_ENDPOINT
-if (process.env.MOCK_CONNECTOR_TRACE) appendFileSync(process.env.MOCK_CONNECTOR_TRACE, JSON.stringify({ pid: process.pid, stage: 'preload', endpoint: recipe.endpoint, argv: process.argv.slice(0, 3) }) + '\n')
+// Only this offline fixture replaces its endpoint and supports the runner's
+// platform. Installation, plugin files, credentials and reload use production code.
+const platform = `${process.platform}-${process.arch}`
+const recipe = configureConnectorProxyFixture(process.env.MOCK_CONNECTOR_ENDPOINT, platform)
+if (process.env.MOCK_CONNECTOR_TRACE) appendFileSync(process.env.MOCK_CONNECTOR_TRACE, JSON.stringify({ pid: process.pid, stage: 'preload', endpoint: recipe.endpoint, platform, argv: process.argv.slice(0, 3) }) + '\n')
 
 // Separate CLI processes must read the fake key saved by the real API. Keep
 // their substitute credential store inside this run's disposable config.
