@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
+import { ErrorCode, ListToolsResultSchema, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { classifyMcpConnectionError, getMcpConnectionError, McpConnectionError, McpConnectionErrorContext, setMcpConnectionError, type McpConnectionErrorKind } from './connectionErrors.js'
 
 const secret = 'https://fixture.invalid/mcp?key=fake-private-key Authorization: Bearer fake-header-secret'
@@ -49,6 +49,39 @@ describe('safe transient MCP connection errors', () => {
     expect(context.classify(new Error(`OAuth discovery failed ${secret}`)).kind).toBe('authentication')
     context.reset()
     expect(context.classify(new Error(secret)).kind).toBe('discovery')
+  })
+
+  test('successful MCP retry clears stale authentication before tool-schema validation, but auxiliary successes do not', async () => {
+    const context = new McpConnectionErrorContext()
+    const endpoint = 'https://fixture.invalid/mcp'
+    const request = { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/list' }) }
+    const auxiliaryRequests = [
+      ['https://fixture.invalid/.well-known/oauth-authorization-server', { method: 'GET' }],
+      ['https://fixture.invalid/token', { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'fake-refresh-token' }) }],
+      ['https://fixture.invalid/register', { method: 'POST', body: JSON.stringify({ client_name: 'fixture' }) }],
+      [endpoint, { method: 'GET' }],
+      [endpoint, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) }],
+      [endpoint, { method: 'POST', body: '{invalid JSON' }],
+    ] satisfies Array<[string, RequestInit]>
+    const recovered = Response.json({ jsonrpc: '2.0', id: 4, result: { tools: secret } })
+    const responses = [new Response(null, { status: 401 }), ...auxiliaryRequests.map(() => Response.json({})), recovered]
+    const fetch = context.wrapFetch(async () => responses.shift()!)
+    await fetch(endpoint, request)
+    for (const [url, init] of auxiliaryRequests) {
+      await fetch(url, init)
+      expect(context.classify(new Error(secret)).kind).toBe('authentication')
+    }
+    const response = await fetch(endpoint, request)
+    expect(response).toBe(recovered)
+    expect(response.bodyUsed).toBe(false)
+    const parsed = ListToolsResultSchema.safeParse((await response.json()).result)
+    expect(parsed.success).toBe(false)
+    if (parsed.success) throw new Error('Fixture must fail tool-schema validation')
+    const error = context.classify(parsed.error)
+    expect(error.kind).toBe('discovery')
+    expect(error.message).toBe(new McpConnectionError('discovery').message)
+    expect(`${error}${JSON.stringify(error)}`).not.toContain('fake-private-key')
+    expect(error).not.toHaveProperty('cause')
   })
 
   test.each([403, 407, 408, 500, 504])('retains safe HTTP %i classification even when the SDK drops its status', async status => {

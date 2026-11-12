@@ -1,6 +1,6 @@
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js'
+import { ErrorCode, isJSONRPCRequest, McpError } from '@modelcontextprotocol/sdk/types.js'
 
 export type McpConnectionErrorKind = 'network' | 'proxy' | 'timeout' | 'authentication' | 'permission' | 'discovery'
 
@@ -32,6 +32,12 @@ function httpFailureKind(status: unknown): McpConnectionErrorKind | undefined {
 
 const timeoutCodes = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'])
 const networkCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'EPIPE', 'ERR_NETWORK', 'ERR_SOCKET_CLOSED'])
+
+function isMcpRequest(init?: RequestInit): boolean {
+  if (init?.method?.toUpperCase() !== 'POST' || typeof init.body !== 'string') return false
+  try { return isJSONRPCRequest(JSON.parse(init.body)) }
+  catch { return false }
+}
 
 function structuredFailureKind(error: unknown): McpConnectionErrorKind | undefined {
   // Fetch errors can carry the system error in cause. Bound traversal also
@@ -91,6 +97,11 @@ export class McpConnectionErrorContext {
         const response = await baseFetch(url, init)
         const kind = httpFailureKind(response.status)
         if (kind) this.failureKind = kind
+        // A successful MCP request has recovered from the prior HTTP failure.
+        // OAuth metadata/token responses, notifications and stream GETs do not
+        // prove recovery. Inspect only the structured request, never the body
+        // of the response the SDK still needs to validate or stream.
+        else if (response.ok && this.failureKind && isMcpRequest(init)) this.reset()
         return response
       } catch (error) {
         const reason = init?.signal?.aborted ? init.signal.reason : undefined
