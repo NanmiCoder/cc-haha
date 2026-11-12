@@ -130,6 +130,7 @@ describe('provider settings isolation', () => {
 
     expect(response.status).toBe(200)
     expect(await readCcHahaSettings()).toEqual({
+      providerEnvOwner: provider.id,
       futureSetting: { keep: true }, env: { CUSTOM_ENV: 'keep' }, skipWebFetchPreflight: false,
     })
     const index = JSON.parse(await fs.readFile(path.join(tmpDir, 'cc-haha', 'providers.json'), 'utf-8'))

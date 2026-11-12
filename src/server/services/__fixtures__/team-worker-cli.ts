@@ -2,6 +2,11 @@ import { mkdir, appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sanitizePath } from '../../../utils/sessionStoragePortable.js'
 // Deterministic worker protocol fixture. Never contacts anything except loopback.
+if (process.env.FIXTURE_LOAD_MANAGED_ENV === '1') {
+  const { applyConfigEnvironmentVariables, applySafeConfigEnvironmentVariables } = await import('../../../utils/managedEnv.js')
+  applySafeConfigEnvironmentVariables()
+  applyConfigEnvironmentVariables()
+}
 const args = process.argv.slice(2)
 const arg = (name: string) => {
   const index = args.indexOf(name)
