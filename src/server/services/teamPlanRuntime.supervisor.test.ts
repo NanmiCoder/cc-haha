@@ -401,6 +401,7 @@ test('a Stop while a member is restarting leaves that member stopped', async () 
     await h.service.stopSessionAndWait(sessionId)
     const start = h.service.startSession.bind(h.service)
     let stopped = false
+    let restartSettled = false
     const spy = spyOn(h.service, 'startSession').mockImplementation(async (...args: Parameters<typeof start>) => {
       // The user presses Stop after the restart began but before its process
       // exists, so Stop's kill pass cannot see it.
@@ -408,15 +409,24 @@ test('a Stop while a member is restarting leaves that member stopped', async () 
         stopped = true
         h.service.sendInterrupt(h.parentId)
       }
-      return start(...args)
+      try {
+        return await start(...args)
+      } finally {
+        if (args[0] === sessionId) restartSettled = true
+      }
     })
     try {
+      const before = h.requests.length
       await messageMember(h, 'reader', 'team-lead', 'Check one more file')
       await h.waitFor(() => stopped, 'restart to begin')
       await h.service.waitForTeamWorkersStopped(h.parentId)
-      await new Promise(resolve => setTimeout(resolve, 800))
+      // Stop's first kill pass runs before the restarting process exists. Wait
+      // for that start to settle before checking its eventual cleanup.
+      await h.waitFor(() => restartSettled, 'restarting process to settle')
+      await h.waitFor(async () => !h.service.hasSession(sessionId) && (await h.teamMember('reader'))?.terminated === true, 'restarted member to stop')
       expect(h.service.hasSession(sessionId)).toBe(false)
       expect((await h.teamMember('reader'))?.terminated).toBe(true)
+      expect(h.requests.length).toBe(before)
     } finally {
       spy.mockRestore()
     }
