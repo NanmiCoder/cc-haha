@@ -19,6 +19,7 @@ import {
 import { resolveMcpHostProxy } from '../../services/mcp/hostProxy.js'
 import { SettingsService } from '../services/settingsService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
+import { getProxyFetchOptions, getWebSocketProxyUrl } from '../../utils/proxy.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -278,6 +279,34 @@ describe('network settings', () => {
       NO_PROXY: '.corp.local,10.0.0.0/8,localhost,127.0.0.1,::1',
       no_proxy: '.corp.local,10.0.0.0/8,localhost,127.0.0.1,::1',
     })
+  })
+
+  it.each([
+    ['manual', 'NO_PROXY', '*'],
+    ['system', 'no_proxy', ' * '],
+    ['manual', 'no_proxy', 'localhost,*,.corp.local'],
+    ['system', 'NO_PROXY', '* localhost'],
+  ] as const)('preserves wildcard bypass when launching a %s proxy with %s=%s', (mode, key, value) => {
+    const proxyUrl = 'http://127.0.0.1:7890'
+    const settings = normalizeNetworkSettings({
+      network: { proxy: { mode, url: mode === 'manual' ? proxyUrl : '' } },
+    })
+    const launchedEnv = buildNetworkEnvironment(settings, {
+      [key]: value,
+      [SYSTEM_PROXY_URL_ENV]: proxyUrl,
+    })
+
+    // Exercise the same environment consumers used by the launched CLI.
+    for (const envKey of PROXY_ENV_KEYS) {
+      if (launchedEnv[envKey] !== undefined) process.env[envKey] = launchedEnv[envKey]
+    }
+    expect(getWebSocketProxyUrl('wss://remote.test/mcp')).toBeUndefined()
+    expect(getProxyFetchOptions({ targetUrl: 'https://remote.test/v1/messages' }).proxy).toBeUndefined()
+    expect(launchedEnv).toMatchObject({ NO_PROXY: '*', no_proxy: '*' })
+    expect(buildNetworkEnvironment(settings, {
+      ...launchedEnv,
+      [SYSTEM_PROXY_URL_ENV]: proxyUrl,
+    })).toMatchObject({ NO_PROXY: '*', no_proxy: '*' })
   })
 
   it('preserves authenticated manual proxy URLs for provider requests', () => {
