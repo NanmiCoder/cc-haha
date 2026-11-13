@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
-import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
+import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, pinnedNsisResources, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
 import { profileFixtureSources, profileOnlyPacketSources, runWindowsInstallerProfileChecks, validateProfileOnlyPreflightResult, validateStageAResult } from './run-windows-installer-profile-checks'
 import { createHash } from 'node:crypto'
@@ -579,7 +579,17 @@ describe('Windows installer lane preparation and isolation', () => {
         mkdirSync(join(templates, 'include'), { recursive: true })
         writeFileSync(compiler, 'fixture compiler; never executed')
         writeFileSync(join(templates, 'include/getProcessInfo.nsh'), '; fixture')
-        return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: createHash('sha256').update('fixture compiler; never executed').digest('hex') }
+        const resources = join(dependencyRoot, 'nsis-resources')
+        mkdirSync(join(resources, 'plugins/x86-unicode'), { recursive: true })
+        const pluginsSha256: Record<string, string> = {}
+        for (const name of pinnedNsisResources.plugins) {
+          const bytes = `fixture ${name}; never loaded`
+          writeFileSync(join(resources, 'plugins/x86-unicode', name), bytes)
+          pluginsSha256[name] = createHash('sha256').update(bytes).digest('hex')
+        }
+        return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: createHash('sha256').update('fixture compiler; never executed').digest('hex'), resources: {
+          directory: resources, version: pinnedNsisResources.version, archiveSha512: pinnedNsisResources.archiveSha512, pluginsSha256,
+        } }
       },
       download: async (url: string, file: string) => {
         expect(url).toBe(expected.url)
@@ -617,6 +627,11 @@ describe('Windows installer lane preparation and isolation', () => {
       assetId: 730495182, bytes: 230611497,
       sha256: 'dca6bb82f4d0fbee8d43c91912e4d50e7dcea69a7cb22c51cdd9cb265767c7e7',
     })
+    expect(pinnedNsisResources).toEqual({
+      version: '3.4.1',
+      archiveSha512: 'Dqd6g+2buwwvoG1Vyf6BHR1b+25QMmPcwZx40atOT57gH27rkjOei1L0JTldxZu4NFoEmW4kJgZ3DlSWVON3+Q==',
+      plugins: ['StdUtils.dll', 'UAC.dll', 'WinShell.dll', 'nsProcess.dll'],
+    })
   })
 
   test('verifies the whole fixture and records extraction without approving old-version compatibility', async () => {
@@ -631,6 +646,9 @@ describe('Windows installer lane preparation and isolation', () => {
       expect(prepared.compatibilityProfile).toBe('not_proven')
       expect(prepared.oldExit22BeforeMutation).toBe('not_run')
       expect(prepared.removalEquivalence).toBe('not_run')
+      for (const name of pinnedNsisResources.plugins) {
+        expect(prepared.tools!.resources.pluginsSha256[name]).toBe(createHash('sha256').update(readFileSync(join(prepared.tools!.resources.directory, 'plugins/x86-unicode', name))).digest('hex'))
+      }
       assertOutsideSourceGit(prepared.tempRoot, f.sourceRoot)
       cleanupPreparedWindowsInstallerTests(prepared, f)
       expect(existsSync(prepared.tempRoot)).toBe(false)
@@ -724,9 +742,14 @@ describe('Windows installer lane preparation and isolation', () => {
           expect(command).toContain('--no-orphans')
           expect(command).toContain('./scripts/pr/windows-installer-process-check.test.ts')
           expect(command).toContain('./scripts/pr/windows-installer-recovery.test.ts')
+          expect(command).toContain('./scripts/pr/windows-installer-guarded-removal.test.ts')
+          expect(command).toContain('./scripts/pr/windows-installer-member-proof.test.ts')
+          expect(command.filter(file => file.endsWith('windows-installer-guarded-removal.test.ts'))).toHaveLength(1)
+          expect(command.some(file => file.includes('windows-installer-etw-calibration'))).toBe(false)
           expect(options.cwd).toBe(realpathSync(f.sourceRoot))
           expect(options.env.CC_HAHA_TEST_MAKENSIS).toBe(prepared.tools!.compiler)
           expect(options.env.CC_HAHA_TEST_NSIS_TEMPLATES).toBe(prepared.tools!.templates)
+          expect(options.env.CC_HAHA_TEST_NSIS_RESOURCES).toBe(prepared.tools!.resources.directory)
           for (const variable of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'CODEX_HOME', 'GH_CONFIG_DIR', 'TEMP', 'TMP']) {
             expect(options.env[variable]).not.toBe(process.env[variable])
             assertOutsideSourceGit(options.env[variable], f.sourceRoot)
@@ -781,6 +804,84 @@ describe('Windows installer lane preparation and isolation', () => {
         run: async () => { ran = true; return 0 },
       })).rejects.toThrow('compiler identity changed')
       expect(ran).toBe(false)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test.each(pinnedNsisResources.plugins.flatMap(name => [
+    { name, mutation: 'missing' }, { name, mutation: 'changed' },
+  ]))('rejects $mutation prepared $name before invoking a compiler', async ({ name, mutation }) => {
+    const f = fixture()
+    let ran = false
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      const plugin = join(prepared.tools!.resources.directory, 'plugins/x86-unicode', name)
+      if (mutation === 'missing') rmSync(plugin)
+      else writeFileSync(plugin, 'changed fixture plugin; never loaded')
+      await expect(runWindowsInstallerChecks({ platform: 'win32', sourceRoot: f.sourceRoot,
+        manifestFile: f.manifestFile, tempParent: f.tempParent,
+        run: async () => { ran = true; return 0 },
+      })).rejects.toThrow('resources identity changed')
+      expect(ran).toBe(false)
+      cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test.each(['missing', 'version', 'archive', 'missing-pin', 'extra-pin', 'directory-escape', 'plugin-link-escape'] as const)(
+    'rejects %s prepared resources before invoking a compiler', async kind => {
+      const f = fixture()
+      let ran = false
+      try {
+        const prepared = await prepareWindowsInstallerTests(f.options)
+        const resources = prepared.tools!.resources
+        if (kind === 'missing') delete (prepared.tools as { resources?: unknown }).resources
+        if (kind === 'version') resources.version = 'unreviewed'
+        if (kind === 'archive') resources.archiveSha512 = 'unreviewed'
+        if (kind === 'missing-pin') delete resources.pluginsSha256['StdUtils.dll']
+        if (kind === 'extra-pin') resources.pluginsSha256['unexpected.dll'] = '0'.repeat(64)
+        if (kind === 'directory-escape' || kind === 'plugin-link-escape') {
+          const external = join(f.root, 'outside-dependency')
+          const externalPlugins = join(external, 'plugins/x86-unicode')
+          mkdirSync(externalPlugins, { recursive: true })
+          for (const name of pinnedNsisResources.plugins) {
+            writeFileSync(join(externalPlugins, name), readFileSync(join(resources.directory, 'plugins/x86-unicode', name)))
+          }
+          if (kind === 'directory-escape') resources.directory = external
+          else {
+            const plugins = join(resources.directory, 'plugins/x86-unicode')
+            rmSync(plugins, { recursive: true })
+            symlinkSync(externalPlugins, plugins, process.platform === 'win32' ? 'junction' : 'dir')
+          }
+        }
+        writeFileSync(f.manifestFile, JSON.stringify(prepared))
+        await expect(runWindowsInstallerChecks({ platform: 'win32', sourceRoot: f.sourceRoot,
+          manifestFile: f.manifestFile, tempParent: f.tempParent,
+          run: async () => { ran = true; return 0 },
+        })).rejects.toThrow('resources identity changed')
+        expect(ran).toBe(false)
+        cleanupPreparedWindowsInstallerTests(prepared, f)
+      } finally {
+        rmSync(f.root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test.each(['owner', 'parent'] as const)('rejects changed prepared %s before starting a native harness', async kind => {
+    const f = fixture()
+    let ran = false
+    try {
+      const prepared = await prepareWindowsInstallerTests(f.options)
+      writeFileSync(f.manifestFile, JSON.stringify({ ...prepared, ...(kind === 'owner' ? { owner: 'wrong-owner' } : { tempParent: f.root }) }))
+      await expect(runWindowsInstallerChecks({ platform: 'win32', sourceRoot: f.sourceRoot,
+        manifestFile: f.manifestFile, tempParent: f.tempParent,
+        run: async () => { ran = true; return 0 },
+      })).rejects.toThrow('unowned')
+      expect(ran).toBe(false)
+      expect(existsSync(prepared.tempRoot)).toBe(true)
       cleanupPreparedWindowsInstallerTests(prepared, f)
     } finally {
       rmSync(f.root, { recursive: true, force: true })

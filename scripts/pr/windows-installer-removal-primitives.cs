@@ -40,7 +40,7 @@ internal static class RemovalPrimitiveProbe
   private static byte[] OutsideMarkerBytes, CalibrationBuffer;
   private static string OutsideInventory;
   private static readonly List<ReparseLease> ReparseLeases = new List<ReparseLease>();
-  private const string ChosenPrimitive = "NtRename+readonly-share3+relative-NtCreate-sentinel+same-handle-byID-prune";
+  private const string ChosenPrimitive = "NtRename+readonly-share3+relative-NtCreate-sentinel+same-handle-named-prune";
 
   [StructLayout(LayoutKind.Sequential)]
   private struct FileTime { public uint Low; public uint High; }
@@ -170,6 +170,7 @@ internal static class RemovalPrimitiveProbe
     public bool Close()
     {
       if (Value == IntPtr.Zero || Value == Invalid) return true;
+      if (PendingNativeIo) { UnsafeCleanup = true; return false; }
       bool success = CloseHandle(Value);
       int error = Marshal.GetLastWin32Error();
       Observe("CloseHandle", Name, success, error, new { handle = Value.ToInt64(), access = Access, share = Share });
@@ -292,8 +293,9 @@ internal static class RemovalPrimitiveProbe
       try
       {
         for (int i = 0; i < ioBytes; i++) Marshal.WriteByte(io, i, 0);
-        Marshal.WriteInt32(io, unchecked((int)0xc0000001)); // unchanged IO status cannot look successful
+        Marshal.WriteInt32(io, 0x103); // unchanged IOSB is not a terminal completion
         int status = NtSetInformationFile(file.Value, io, request.Value, (uint)request.Bytes, 10);
+        completed = status != 0x103;
         object waitDetail = null;
         uint wait = 0;
         if (status == 0x103) // STATUS_PENDING is not completed success
@@ -303,10 +305,10 @@ internal static class RemovalPrimitiveProbe
           // owned fixture process. No path monitoring or retry is involved.
           wait = WaitForSingleObject(file.Value, 0xffffffff);
           int waitError = Marshal.GetLastWin32Error();
-          completed = wait == 0;
           waitDetail = new { result = wait, win32Error = waitError, errorAuthoritative = wait == 0xffffffff };
         }
         IoStatusBlock final = (IoStatusBlock)Marshal.PtrToStructure(io, typeof(IoStatusBlock));
+        if (status == 0x103) completed = wait == 0 && final.Result.Status != 0x103;
         bool callSucceeded = status == 0x103 ? completed : status >= 0;
         bool ioSucceeded = completed && final.Result.Status >= 0 && final.Result.Status != 0x103;
         bool success = callSucceeded && ioSucceeded;
@@ -324,7 +326,7 @@ internal static class RemovalPrimitiveProbe
       finally
       {
         if (completed) Marshal.FreeHGlobal(io);
-        else { PendingNativeIo = true; request.RetainUntilProcessExit = true; } // pending I/O still owns both buffers
+        else { PendingNativeIo = true; UnsafeCleanup = true; request.RetainUntilProcessExit = true; } // pending I/O still owns both buffers
       }
     }
   }
@@ -447,6 +449,22 @@ internal static class RemovalPrimitiveProbe
 
   // No flag fallback. Pending requests retain all native memory until completion.
   private static CreateResult CreateRelative(OwnedHandle parent, string leaf, uint access, uint share, bool directory, string label)
+  { return Relative(parent, leaf, access, share, directory, true, label); }
+  private static CreateResult OpenRelative(OwnedHandle parent, string leaf, uint access, uint share, bool directory, string label)
+  { return Relative(parent, leaf, access, share, directory, false, label); }
+  private static bool RelativeSucceeded(bool create, int status, int ioStatus, bool completed, ulong information, IntPtr handle)
+  {
+    return (status == 0x103 ? completed : status >= 0) && completed && ioStatus >= 0 && ioStatus != 0x103 &&
+      information == (create ? 2ul : 1ul) && handle != IntPtr.Zero && handle != Invalid;
+  }
+  private static bool ReparseRefused(bool success, bool completed, int status, IntPtr handle)
+  {
+    // On a failed syscall, its returned NTSTATUS is authoritative. The IOSB
+    // unchanged IOSB does not turn a terminal syscall failure into queued I/O.
+    return !success && completed && handle == IntPtr.Zero &&
+      (status == unchecked((int)0xc0000280) || status == unchecked((int)0xc000050b));
+  }
+  private static CreateResult Relative(OwnedHandle parent, string leaf, uint access, uint share, bool directory, bool create, string label)
   {
     Require(label + "-literal-single-leaf", ValidLeaf(leaf), new { leaf = leaf });
     byte[] name = Encoding.Unicode.GetBytes(leaf + "\0");
@@ -460,26 +478,27 @@ internal static class RemovalPrimitiveProbe
       Marshal.StructureToPtr(new ObjectAttributes { Length = (uint)Marshal.SizeOf(typeof(ObjectAttributes)),
         RootDirectory = parent.Value, ObjectName = unicode, Attributes = 0x1040 }, attributes, false);
       for (int i = 0; i < Marshal.SizeOf(typeof(IoStatusBlock)); i++) Marshal.WriteByte(io, i, 0);
-      Marshal.WriteInt32(io, unchecked((int)0xc0000001));
+      Marshal.WriteInt32(io, 0x103);
       uint options = directory ? 0x200021u : 0x200060u;
       IntPtr value;
       int status = NtCreateFile(out value, access, attributes, io, IntPtr.Zero, directory ? 0x10u : 0x80u,
-        share, 2, options, IntPtr.Zero, 0);
+        share, create ? 2u : 1u, options, IntPtr.Zero, 0);
+      completed = status != 0x103;
+      OwnedHandle owned = new OwnedHandle(value, label, access, share);
       uint wait = 0;
       if (status == 0x103)
       {
         wait = value == IntPtr.Zero || value == Invalid ? 0xffffffff : WaitForSingleObject(value, 0xffffffff);
-        completed = wait == 0;
       }
       IoStatusBlock final = (IoStatusBlock)Marshal.PtrToStructure(io, typeof(IoStatusBlock));
-      bool success = (status == 0x103 ? completed : status >= 0) && completed && final.Result.Status >= 0 &&
-        final.Result.Status != 0x103 && final.Information.ToUInt64() == 2 && value != IntPtr.Zero && value != Invalid;
-      Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = "NtCreateFile(FILE_CREATE)", name = label,
+      if (status == 0x103) completed = wait == 0 && final.Result.Status != 0x103;
+      bool success = RelativeSucceeded(create, status, final.Result.Status, completed, final.Information.ToUInt64(), value);
+      Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = create ? "NtCreateFile(FILE_CREATE)" : "NtCreateFile(FILE_OPEN)", name = label,
         success = success, callNtStatus = unchecked((uint)status).ToString("x8"), ioNtStatus = unchecked((uint)final.Result.Status).ToString("x8"),
         completed = completed, wait = wait, ioInformation = final.Information.ToUInt64(), rootDirectoryHandle = parent.Value.ToInt64(),
-        handle = value.ToInt64(), leaf = leaf, access = access, share = share, objectAttributes = 0x1040, createDisposition = 2,
+        handle = value.ToInt64(), leaf = leaf, access = access, share = share, objectAttributes = 0x1040, createDisposition = create ? 2 : 1,
         createOptions = options, directory = directory, securityDescriptorNull = true, fallback = false });
-      return new CreateResult { Handle = new OwnedHandle(value, label, access, share), Status = status, IoStatus = final.Result.Status,
+      return new CreateResult { Handle = owned, Status = status, IoStatus = final.Result.Status,
         Information = final.Information.ToUInt64(), Completed = completed, Success = success };
     }
     finally
@@ -741,10 +760,11 @@ internal static class RemovalPrimitiveProbe
     bool active = QueryJunction(lease, label + "-after");
     Require(label + "-plain-original-restored", !active && !lease.Unknown, null);
   }
-  private static void PrepareCalibrationTarget(out ProtectedDirectory target, out ReparseLease lease, string label)
+  private static void PrepareCalibrationTarget(out ProtectedDirectory target, out ReparseLease lease, string label, Action<ProtectedDirectory> beforeSet = null)
   {
     // No sentinel: this separate owned target intentionally permits the attack.
     target = NewDirectory(FixtureBoundary, NewLeaf(label), false, label);
+    if (beforeSet != null) beforeSet(target);
     lease = WriterFor(target, label + "-writer");
     int error;
     Require(label + "-real-set-succeeded", SetJunction(lease, label + "-set", out error), new { win32Error = error });
@@ -755,8 +775,17 @@ internal static class RemovalPrimitiveProbe
   {
     ProtectedDirectory target;
     ReparseLease lease;
-    PrepareCalibrationTarget(out target, out lease, "pre-junction");
     string leaf = NewLeaf("sentinel");
+    PrepareCalibrationTarget(out target, out lease, "pre-junction", delegate(ProtectedDirectory ordinary) {
+      CreateResult paired = CreateRelative(ordinary.Weak, leaf, 0x110080, ShareRead, false, "pre-junction-positive-sentinel");
+      Require("pre-junction-paired-ordinary-create-succeeded", paired.Success, null);
+      DirectoryBinding created = ReadDirectoryBinding(paired.Handle, "pre-junction-positive-binding");
+      Require("pre-junction-paired-ordinary-create-bound", !created.Directory && !created.Reparse && !created.DeletePending &&
+        created.Volume == ordinary.Binding.Volume && EntryMatches(Entries(ordinary.Weak, "pre-junction-positive-entries"), leaf, created), null);
+      Require("pre-junction-paired-own-file-disposition", Disposition(paired.Handle, true, "pre-junction-positive-disposition"), null);
+      Require("pre-junction-paired-own-file-close", paired.Handle.Close(), null);
+      Require("pre-junction-paired-target-empty-before-set", Entries(ordinary.Weak, "pre-junction-positive-empty").Count == 0, null);
+    });
     CreateResult result;
     try { result = CreateRelative(target.Weak, leaf, 0x110080, ShareRead, false, "hostile-root-sentinel"); }
     catch (Exception) { UnsafeCleanup = true; throw; }
@@ -765,7 +794,7 @@ internal static class RemovalPrimitiveProbe
       SameBytes(ReadOwnedBytes(OutsideMarker, OutsideMarkerBytes.Length, "pre-junction-marker"), OutsideMarkerBytes);
     if (!outsideSame) UnsafeCleanup = true;
     Require("pre-junction-create-no-outside-effect", outsideSame, new { leaf = leaf, checkedBeforeCleanup = true });
-    bool rejected = result.Completed && result.Status == unchecked((int)0xc000050b);
+    bool rejected = ReparseRefused(result.Success, result.Completed, result.Status, result.Handle.Value);
     bool originalOnly = false;
     if (result.Success)
     {
@@ -776,7 +805,8 @@ internal static class RemovalPrimitiveProbe
     Require("pre-junction-create-rejected-or-original-only", rejected || originalOnly,
       new { rejectedReparse = rejected, createdInOriginalObject = originalOnly, admissionGranted = false });
     DirectoryBinding root = ReadDirectoryBinding(target.Weak, "hostile-root-admission");
-    Require("pre-junction-root-admission-still-rejected", root.Reparse && root.FileId == target.Binding.FileId,
+    Require("pre-junction-root-admission-still-rejected", root.Reparse && root.Directory && !root.DeletePending &&
+      root.FileId == target.Binding.FileId && root.Volume == target.Binding.Volume && root.Canonical == target.Binding.Canonical,
       new { admissionGranted = false });
     if (result.Success)
     {
@@ -798,22 +828,154 @@ internal static class RemovalPrimitiveProbe
     ValidateProtected(target, "protected-set-sentinel-retained");
     RequireOutsideUnchanged("protected-set-final");
   }
+  private static string NamedPruneReason(DirectoryBinding actual, DirectoryBinding weak, DirectoryBinding expected,
+    DirectoryBinding parent, string leaf)
+  {
+    if (expected == null || !expected.Directory || expected.Reparse || expected.DeletePending || parent == null ||
+      String.IsNullOrEmpty(parent.Canonical) || !ValidLeaf(leaf) || !parent.Directory || parent.Reparse || parent.DeletePending ||
+      parent.FileId == 0 || parent.Volume != expected.Volume || expected.Canonical != parent.Canonical.TrimEnd('\\') + "\\" + leaf)
+      return "parent-or-request-mismatch";
+    if (weak == null || weak.Volume != expected.Volume || weak.FileId != expected.FileId || expected.FileId == 0) return "weak-identity-mismatch";
+    if (weak.Reparse || (actual != null && actual.Reparse)) return "reparse";
+    if (!weak.Directory || weak.DeletePending || (actual != null && (!actual.Directory || actual.DeletePending))) return "not-directory-or-pending";
+    if (actual != null && actual.Volume != expected.Volume) return "volume-mismatch";
+    if (actual != null && actual.FileId != expected.FileId) return "id-mismatch";
+    if (weak.Canonical != expected.Canonical || (actual != null && actual.Canonical != expected.Canonical)) return "canonical-drift";
+    return actual == null ? "named-open-failed" : "matched";
+  }
+  private static OwnedHandle TryNamedPrune(ProtectedDirectory parent, OwnedHandle guard, OwnedHandle weak, DirectoryBinding expected,
+    string leaf, Action afterGuardClose, string label, out string reason)
+  {
+    ValidateProtected(parent, label + "-parent-before");
+    Require(label + "-exact-original-parent-leaf", ValidLeaf(leaf) && expected.Canonical == parent.Binding.Canonical.TrimEnd('\\') + "\\" + leaf, null);
+    Require(label + "-original-weak-retained", SameBinding(ReadDirectoryBinding(weak, label + "-weak-before"), expected, true), null);
+    Require(label + "-close-readonly-guard", guard.Close(), null);
+    if (afterGuardClose != null) afterGuardClose(); // controlled negative fixture barrier; never a retry
+    ValidateProtected(parent, label + "-parent-before-open");
+    CreateResult opened = OpenRelative(parent.Guard, leaf, 0x1100a1, ShareRead, true, label + "-delete-pin");
+    if (!opened.Completed) { reason = "completion-unknown"; return null; }
+    DirectoryBinding actual = opened.Success ? ReadDirectoryBinding(opened.Handle, label + "-candidate") : null;
+    DirectoryBinding currentWeak = ReadDirectoryBinding(weak, label + "-weak");
+    ValidateProtected(parent, label + "-parent-after-open");
+    reason = NamedPruneReason(actual, currentWeak, expected, parent.Binding, leaf);
+    Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = "ValidateNamedPruneCandidate", name = label,
+      success = reason == "matched", reason = reason, actual = actual == null ? null : BindingDetail(actual), expected = BindingDetail(expected),
+      weak = BindingDetail(currentWeak), parent = BindingDetail(parent.Binding), candidateOpened = opened.Success,
+      pinHandle = opened.Handle.Value.ToInt64(), weakHandle = weak.Value.ToInt64(), removalMutationPerformed = false, fallback = false });
+    if (reason != "matched") { opened.Handle.Close(); return null; }
+    return opened.Handle;
+  }
   private static OwnedHandle AcquirePrune(ProtectedDirectory directory, string label)
   {
     ValidateProtected(directory, label + "-before");
-    Require(label + "-close-readonly-guard", directory.Guard.Close(), null);
-    OwnedHandle pin = ById(directory.Binding, 0x10081, ShareReadWrite, label + "-delete-pin");
-    DirectoryBinding actual = ReadDirectoryBinding(pin, label + "-candidate"), weak = ReadDirectoryBinding(directory.Weak, label + "-weak");
-    bool matches = SameBinding(actual, directory.Binding, true) && SameBinding(weak, directory.Binding, true);
-    Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = "ValidateSentinelPruneCandidate", name = label,
-      success = matches, actual = BindingDetail(actual), expected = BindingDetail(directory.Binding), weak = BindingDetail(weak),
-      pinHandle = pin.Value.ToInt64(), weakHandle = directory.Weak.Value.ToInt64(), removalMutationPerformed = false });
-    Require(label + "-same-original-directory", matches, null);
+    string reason;
+    OwnedHandle pin = TryNamedPrune(directory.Parent, directory.Guard, directory.Weak, directory.Binding,
+      directory.Leaf, null, label, out reason);
+    Require(label + "-same-original-directory", pin != null, new { reason = reason });
     List<DirectoryEntry> entries = Entries(pin, label + "-only-sentinel-entries");
     Require(label + "-only-owned-sentinel", entries.Count == 1 && EntryMatches(entries, directory.SentinelLeaf, directory.SentinelBinding),
       new { entries = entries.Count, sentinelId = directory.SentinelBinding.FileId.ToString("x16") });
     Require(label + "-close-weak-after-validation", directory.Weak.Close(), null);
     return pin;
+  }
+  private static DirectoryBinding CopyBinding(DirectoryBinding value)
+  {
+    return new DirectoryBinding { Volume = value.Volume, FileId = value.FileId, Canonical = value.Canonical,
+      Directory = value.Directory, Reparse = value.Reparse, DeletePending = value.DeletePending };
+  }
+  private static int ManagedContracts()
+  {
+    int count = 0;
+    Action<bool> expect = delegate(bool value) { Require("managed-relative-contract-" + count, value, null); count++; };
+    foreach (bool create in new bool[] { false, true })
+    {
+      expect(RelativeSucceeded(create, 0, 0, true, create ? 2ul : 1ul, new IntPtr(4)));
+      expect(!RelativeSucceeded(create, 0, 0, true, create ? 1ul : 2ul, new IntPtr(4)));
+      expect(!RelativeSucceeded(create, 0, 0, true, create ? 2ul : 1ul, IntPtr.Zero));
+      expect(!RelativeSucceeded(create, 0x103, 0, false, create ? 2ul : 1ul, new IntPtr(4)));
+      expect(!RelativeSucceeded(create, 0, 0x103, true, create ? 2ul : 1ul, new IntPtr(4)));
+    }
+    foreach (int status in new int[] { unchecked((int)0xc0000280), unchecked((int)0xc000050b) })
+    {
+      expect(ReparseRefused(false, true, status, IntPtr.Zero));
+      expect(!ReparseRefused(false, false, status, IntPtr.Zero));
+      expect(!ReparseRefused(false, true, status, new IntPtr(4)));
+      expect(!ReparseRefused(true, true, status, IntPtr.Zero));
+    }
+    foreach (int status in new int[] { 0, 0x103, 5, 32, 87, unchecked((int)0xc0000043), unchecked((int)0xc0000022) })
+      expect(!ReparseRefused(false, true, status, IntPtr.Zero));
+    var parent = new DirectoryBinding { Volume = 7, FileId = 99, Canonical = "\\\\?\\C:\\owned", Directory = true };
+    var expected = new DirectoryBinding { Volume = 7, FileId = 100, Canonical = parent.Canonical + "\\child", Directory = true };
+    expect(NamedPruneReason(CopyBinding(expected), CopyBinding(expected), expected, parent, "child") == "matched");
+    expect(NamedPruneReason(null, CopyBinding(expected), expected, parent, "child") == "named-open-failed");
+    foreach (int field in new int[] { 0, 1, 2, 3, 4, 5 })
+    {
+      DirectoryBinding actual = CopyBinding(expected);
+      if (field == 0) actual.FileId++;
+      if (field == 1) actual.Volume++;
+      if (field == 2) actual.Canonical += "-drift";
+      if (field == 3) actual.Reparse = true;
+      if (field == 4) actual.DeletePending = true;
+      if (field == 5) actual.Directory = false;
+      expect(NamedPruneReason(actual, CopyBinding(expected), expected, parent, "child") != "matched");
+    }
+    DirectoryBinding weak = CopyBinding(expected); weak.Canonical += "-moved";
+    expect(NamedPruneReason(null, weak, expected, parent, "child") == "canonical-drift");
+    weak = CopyBinding(expected); weak.FileId++;
+    expect(NamedPruneReason(CopyBinding(expected), weak, expected, parent, "child") == "weak-identity-mismatch");
+    expect(NamedPruneReason(CopyBinding(expected), CopyBinding(expected), expected, parent, "other") == "parent-or-request-mismatch");
+    expect(NamedPruneReason(CopyBinding(expected), CopyBinding(expected), expected, parent, "../child") == "parent-or-request-mismatch");
+    DirectoryBinding badParent = CopyBinding(parent); badParent.Reparse = true;
+    expect(NamedPruneReason(CopyBinding(expected), CopyBinding(expected), expected, badParent, "child") == "parent-or-request-mismatch");
+    return count;
+  }
+  private static void OrdinaryNamedPrune()
+  {
+    ProtectedDirectory target = NewDirectory(FixtureBoundary, NewLeaf("ordinary-named-prune"), true, "ordinary-named-prune");
+    PruneSentinelDirectory(target, "ordinary-named-prune");
+    RequireOutsideUnchanged("ordinary-named-prune-final");
+  }
+  private static void RejectedNamedTransition(string kind)
+  {
+    ProtectedDirectory parent = NewDirectory(FixtureBoundary, NewLeaf("named-rejection"), true, "named-rejection-parent");
+    ProtectedDirectory target = NewDirectory(parent, "original", false, "named-rejection-original");
+    ProtectedDirectory other = kind == "id-mismatch" ? NewDirectory(parent, "other", false, "named-rejection-other") : null;
+    byte[] bytes = Encoding.UTF8.GetBytes("owned named transition marker");
+    if (kind != "reparse") NewFile(target, "marker.bin", bytes, "named-original-marker").Close();
+    if (other != null) NewFile(other, "marker.bin", bytes, "named-other-marker").Close();
+    ReparseLease lease = kind == "reparse" ? WriterFor(target, "named-rejection-writer") : null;
+    Action barrier = delegate {
+      if (kind == "reparse")
+      {
+        int error;
+        Require("named-rejection-junction-set-succeeded", SetJunction(lease, "named-rejection-set", out error), new { win32Error = error });
+        Require("named-rejection-junction-get-confirmed", QueryJunction(lease, "named-rejection-get"), null);
+        return;
+      }
+      string original = parent.Binding.Canonical + "\\original", moved = parent.Binding.Canonical + "\\moved";
+      bool renamed = MoveFileExW(original, moved, 0); int renameError = Marshal.GetLastWin32Error();
+      Observe("MoveFileExW(owned-fixture-barrier)", "named-rejection-original-moved", renamed, renameError, null);
+      Require("named-rejection-real-rename-injected", renamed, new { win32Error = renameError });
+      if (other != null)
+      {
+        Require("named-rejection-release-other-guard", other.Guard.Close(), null);
+        bool replaced = MoveFileExW(parent.Binding.Canonical + "\\other", original, 0); int replaceError = Marshal.GetLastWin32Error();
+        Observe("MoveFileExW(owned-fixture-barrier)", "named-rejection-entry-replaced", replaced, replaceError, null);
+        Require("named-rejection-real-entry-replacement-injected", replaced, new { win32Error = replaceError });
+      }
+    };
+    string reason;
+    OwnedHandle pin = TryNamedPrune(parent, target.Guard, target.Weak, target.Binding, "original", barrier, "named-rejection", out reason);
+    Require("named-rejection-specific-reason", pin == null && reason == kind, new { reason = reason, removalMutationPerformed = false });
+    DirectoryBinding retained = ReadDirectoryBinding(target.Weak, "named-rejection-retained-original");
+    Require("named-rejection-original-weak-retained", target.Weak.Value != IntPtr.Zero && retained.FileId == target.Binding.FileId && retained.Volume == target.Binding.Volume, null);
+    if (kind == "reparse") ClearJunction(lease, "named-rejection-clear");
+    else
+    {
+      CreateResult marker = OpenRelative(target.Weak, "marker.bin", 0x100081, ShareAll, false, "named-rejection-retained-marker");
+      Require("named-rejection-marker-opened-on-original", marker.Success && SameBytes(ReadOwnedBytes(marker.Handle, bytes.Length, "named-rejection-marker"), bytes), null);
+    }
+    RequireOutsideUnchanged("named-rejection-final");
   }
   private static void RemoveSentinel(ProtectedDirectory directory, string label)
   {
@@ -1315,6 +1477,7 @@ internal static class RemovalPrimitiveProbe
         Marshal.OffsetOf(typeof(DirectoryEntryLayout), "Id").ToInt32() == 96, null);
       Require("owned-empty-fixture-root", Directory.Exists(root) && Directory.GetFileSystemEntries(root).Length == 0 &&
         (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0, null);
+      Require("named-prune-managed-contracts", ManagedContracts() == 38, new { pureCases = 38, windowsApiInvoked = false });
       EstablishBoundary(root, output);
       RunCase("sharing", false, delegate { Sharing(root); });
       RunCase("control-win32-strong-original-buffer", true, delegate { Win32ForwardControl(root, false); });
@@ -1325,14 +1488,18 @@ internal static class RemovalPrimitiveProbe
       bool noEscape = RunCase("pre-junction-relative-create", false, PreJunctionCreate);
       RunCase("control-nt-no-sentinel-pre-junction", true, UnprotectedRenameDiagnostic);
       bool nonempty = RunCase("sentinel-blocks-junction", false, SentinelBlocksJunction);
+      bool named = RunCase("ordinary-named-prune", false, OrdinaryNamedPrune);
       bool disposition = RunCase("last-sentinel-junction-disposition", false, delegate { LastSentinelDisposition(false); });
       bool lateChild = RunCase("last-sentinel-new-child-rejected", false, delegate { LastSentinelDisposition(true); });
       ChosenRoundtripPassed = RunCase("chosen-sentinel-share3-roundtrip", false, delegate {
-        Require("controlled-reparse-prerequisites-passed", noEscape && nonempty && disposition && lateChild, null);
+        Require("controlled-reparse-prerequisites-passed", noEscape && nonempty && named && disposition && lateChild, null);
         SentinelRoundtrip();
       });
       RunCase("byid-reject-canonical-drift", false, delegate { RejectedByIdTransition(root, true); });
       RunCase("byid-reject-id-mismatch", false, delegate { RejectedByIdTransition(root, false); });
+      RunCase("named-prune-reject-canonical-drift", false, delegate { RejectedNamedTransition("canonical-drift"); });
+      RunCase("named-prune-reject-id-mismatch", false, delegate { RejectedNamedTransition("id-mismatch"); });
+      RunCase("named-prune-reject-reparse", false, delegate { RejectedNamedTransition("reparse"); });
       RunCase("weak-lifetime", false, delegate { WeakLifetime(root, false); });
       RunCase("shared-reader-lifetime", false, delegate { WeakLifetime(root, true); });
     }
@@ -1353,6 +1520,7 @@ internal static class RemovalPrimitiveProbe
       oldWin32Scheme = "diagnostic only; 930 x86/x64 observed FALSE 87, not granted chosen capability",
       oldStrongNtScheme = "diagnostic only; fd452 x86/x64 observed c0000043 / derived DOS32, nonpending; not granted chosen capability",
       oldReadonlyShare1Scheme = "diagnostic only; e5a7 x86/x64 observed c0000043 / derived DOS32; not granted chosen capability",
+      oldByIdPruneScheme = "historical c899 x86/x64 disposition FALSE87; cause unknown; no by-ID deletion fallback",
       controlledThreatBoundary = "fresh private sandbox only; not installed ancestry to volume root",
       sandboxBinding = SandboxBoundary == null ? null : BindingDetail(SandboxBoundary.Binding),
       fixtureBinding = FixtureBoundary == null ? null : BindingDetail(FixtureBoundary.Binding),

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bootstrapFullSevenZip, historicalUninstallerMember, parseSevenZipListing, pinnedFullSevenZip, proveNsisMember, selectLiteralMember, type SevenZipRunner } from './windows-installer-member-proof'
-import { cleanupPreparedWindowsInstallerTests, pinnedNsisCompiler, prepareWindowsInstallerTests } from './prepare-windows-installer-tests'
+import { cleanupPreparedWindowsInstallerTests, pinnedNsisCompiler, pinnedNsisResources, prepareWindowsInstallerTests } from './prepare-windows-installer-tests'
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
 
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
@@ -221,7 +221,17 @@ describe('member proof preparation boundary', () => {
           mkdirSync(join(templates, 'include'), { recursive: true })
           writeFileSync(compiler, 'owned compiler; never executed')
           writeFileSync(join(templates, 'include/getProcessInfo.nsh'), '; fixture')
-          return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: sha('owned compiler; never executed') }
+          const resources = join(dependencyRoot, 'nsis-resources')
+          mkdirSync(join(resources, 'plugins/x86-unicode'), { recursive: true })
+          const pluginsSha256: Record<string, string> = {}
+          for (const name of pinnedNsisResources.plugins) {
+            const bytes = `owned ${name}; never loaded`
+            writeFileSync(join(resources, 'plugins/x86-unicode', name), bytes)
+            pluginsSha256[name] = sha(bytes)
+          }
+          return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: sha('owned compiler; never executed'), resources: {
+            directory: resources, version: pinnedNsisResources.version, archiveSha512: pinnedNsisResources.archiveSha512, pluginsSha256,
+          } }
         },
         download: async (_url, file) => writeFileSync(file, setupBytes),
         extract: async (_source, installer, directory) => {
@@ -245,8 +255,9 @@ describe('member proof preparation boundary', () => {
         expect(prepared.oldExit22BeforeMutation).toBe('not_run')
         expect(prepared.removalEquivalence).toBe('not_run')
         expect(await runWindowsInstallerChecks({ platform: 'win32', sourceRoot, tempParent, manifestFile,
-          run: async command => {
+          run: async (command, options) => {
             expect(command).toContain('./scripts/pr/windows-installer-member-proof.test.ts')
+            expect(options.env.CC_HAHA_TEST_NSIS_RESOURCES).toBe(prepared.tools!.resources.directory)
             return 0
           },
         })).toEqual({ status: 'passed', exitCode: 0 })

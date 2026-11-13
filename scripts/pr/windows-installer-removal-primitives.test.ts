@@ -8,6 +8,108 @@ import { createSandboxedTestEnvironment } from './test-environment'
 
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
+// Only replace native declarations and allocation accounting in a disposable
+// compiled copy. Relative/RenameNt/RunCase and their cleanup remain unchanged.
+function withNativeIoStubs(source: string) {
+  const replacements: Record<string, string> = {
+    NtCreateFile: 'private static int NtCreateFile(out IntPtr handle, uint access, IntPtr attributes, IntPtr io, IntPtr allocation, uint fileAttributes, uint share, uint disposition, uint options, IntPtr ea, uint eaBytes) { return PrimitiveIoStubs.Create(out handle, access, attributes, io, allocation, fileAttributes, share, disposition, options, ea, eaBytes); }',
+    NtSetInformationFile: 'private static int NtSetInformationFile(IntPtr handle, IntPtr io, IntPtr information, uint bytes, int kind) { return PrimitiveIoStubs.Rename(handle, io, information, bytes, kind); }',
+    WaitForSingleObject: 'private static uint WaitForSingleObject(IntPtr handle, uint milliseconds) { return PrimitiveIoStubs.Wait(handle, milliseconds); }',
+    CloseHandle: 'private static bool CloseHandle(IntPtr handle) { return PrimitiveIoStubs.Close(handle); }',
+    RtlNtStatusToDosError: 'private static uint RtlNtStatusToDosError(int status) { return unchecked((uint)status); }',
+  }
+  for (const [name, replacement] of Object.entries(replacements)) {
+    const declaration = new RegExp(`\\[DllImport\\([^\\n]+\\)\\]\\s*private static extern [^;]+?\\b${name}\\([^;]+;`, 'g')
+    if ([...source.matchAll(declaration)].length !== 1) throw new Error(`Expected one native declaration: ${name}`)
+    source = source.replace(declaration, replacement)
+  }
+  return source.replaceAll('Marshal.AllocHGlobal(', 'PrimitiveIoStubs.Allocate(').replaceAll('Marshal.FreeHGlobal(', 'PrimitiveIoStubs.Free(') + primitiveIoStub
+}
+
+const primitiveIoStub = String.raw`
+internal static class PrimitiveIoStubs
+{
+  private static int Mode, Frees, Closes;
+  private static IntPtr Io;
+  private static readonly List<IntPtr> Allocations = new List<IntPtr>();
+  public static IntPtr Allocate(int bytes) { IntPtr value = Marshal.AllocHGlobal(bytes); Allocations.Add(value); return value; }
+  public static void Free(IntPtr value) { if (!Allocations.Remove(value)) throw new Exception("untracked-free"); Frees++; Marshal.FreeHGlobal(value); }
+  public static bool Close(IntPtr value) { Closes++; return true; }
+  private static int Call(IntPtr io)
+  {
+    Io = io;
+    if (Mode == 0) Marshal.WriteInt32(io, 0x103);
+    if (Mode == 6) { Marshal.WriteInt32(io, 0); Marshal.WriteIntPtr(io, IntPtr.Size, new IntPtr(1)); return 0; }
+    return Mode == 3 ? unchecked((int)0xc0000022) : 0x103;
+  }
+  public static int Create(out IntPtr handle, uint access, IntPtr attributes, IntPtr io, IntPtr allocation, uint fileAttributes,
+    uint share, uint disposition, uint options, IntPtr ea, uint eaBytes) { handle = new IntPtr(16); return Call(io); }
+  public static int Rename(IntPtr handle, IntPtr io, IntPtr information, uint bytes, int kind) { return Call(io); }
+  public static uint Wait(IntPtr handle, uint milliseconds)
+  {
+    if (Mode == 2 || Mode == 4 || Mode == 5) { Marshal.WriteInt32(Io, Mode == 2 ? unchecked((int)0xc0000022) : 0); Marshal.WriteIntPtr(Io, IntPtr.Size, new IntPtr(1)); }
+    return Mode == 5 ? 0xffffffffu : 0u;
+  }
+  private static readonly Type Probe = typeof(RemovalPrimitiveProbe);
+  private const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+  private static object Invoke(string method, params object[] args) { return Probe.GetMethod(method, Static).Invoke(null, args); }
+  private static bool Flag(string field) { return (bool)Probe.GetField(field, Static).GetValue(null); }
+  private static void Set(string field, bool value) { Probe.GetField(field, Static).SetValue(null, value); }
+  private static object Handle(int value)
+  {
+    return Activator.CreateInstance(Probe.GetNestedType("OwnedHandle", BindingFlags.NonPublic),
+      BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new object[] { new IntPtr(value), "stub", 0u, 0u }, CultureInfo.InvariantCulture);
+  }
+  private static void Assert(bool value, string name) { if (!value) throw new Exception("pending-control-" + name); }
+  public static string Run()
+  {
+    int cases = 0;
+    foreach (bool relative in new bool[] { true, false }) for (Mode = 0; Mode < 7; Mode++)
+    {
+      foreach (string flag in new string[] { "PendingNativeIo", "UnsafeCleanup", "Failed", "CurrentCaseFailed" }) Set(flag, false);
+      foreach (string list in new string[] { "Handles", "Checks", "DiagnosticChecks", "CaseResults", "Observations", "ReparseLeases" })
+        ((IList)Probe.GetField(list, Static).GetValue(null)).Clear();
+      Frees = Closes = 0;
+      object file = null;
+      bool result = (bool)Invoke("RunCase", "pending-stub", false, (Action)delegate {
+        object parent = Handle(4); file = Handle(8);
+        bool success;
+        if (relative)
+        {
+          object opened = Invoke("OpenRelative", parent, "child", 0x1100a1u, 1u, true, "stub-open");
+          success = (bool)opened.GetType().GetField("Success").GetValue(opened);
+        }
+        else success = (bool)Invoke("RenameNt", file, parent, "child", "stub-rename");
+        if (!success) throw new InvalidOperationException("expected-stub-failure");
+      });
+      bool unresolved = Mode < 2 || Mode == 5;
+      Assert(Flag("PendingNativeIo") == unresolved && Flag("UnsafeCleanup") == unresolved, "flags");
+      Assert(result == (Mode == 4 || Mode == 6), "result");
+      Assert(Frees == (unresolved ? 0 : relative ? 4 : 2), "free-accounting");
+      Assert(Allocations.Count == (unresolved ? relative ? 4 : 2 : 0), "retained-buffer-count");
+      Assert(Closes == (unresolved ? 0 : relative ? 3 : 2), "case-finally-closes");
+      if (unresolved)
+      {
+        Assert(!(bool)file.GetType().GetMethod("Close").Invoke(file, null), "explicit-close-refused");
+        Assert(Closes == 0, "no-pending-close");
+      }
+      // These allocations never reached an OS request; drain only the test
+      // stubs after checking the production lifetime decisions.
+      foreach (IntPtr retained in Allocations) Marshal.FreeHGlobal(retained);
+      Allocations.Clear(); cases++;
+    }
+    return "pending-control-pass:" + cases.ToString(CultureInfo.InvariantCulture);
+  }
+  private static int Main() { Console.WriteLine(Run()); return 0; }
+}
+`
+
+test('native pending regression stubs only replace declarations and allocation accounting', () => {
+  const injected = withNativeIoStubs(readFileSync(resolve('scripts/pr/windows-installer-removal-primitives.cs'), 'utf8'))
+  expect(injected).toContain('PrimitiveIoStubs.Rename(')
+  expect(injected).toContain('PrimitiveIoStubs.Allocate(')
+})
+
 function mayCleanOwnedSandbox(nativeStarted: boolean, native: Record<string, any> | undefined) {
   return !nativeStarted || (native?.version === 4 && native.safeForControllerCleanup === true &&
     native.cleanupState?.rootInitiallyVerified === true && native.cleanupState?.allHandlesClosed === true &&
@@ -114,7 +216,7 @@ function inspectToolchain(env: Record<string, string>) {
 }
 
 for (const architecture of ['x86', 'x64'] as const) {
-  test.skipIf(process.platform !== 'win32')(`probes ${architecture} readonly MOVE guards and by-ID PRUNE using owned temp only`, () => {
+  test.skipIf(process.platform !== 'win32')(`probes ${architecture} readonly MOVE guards and parent-relative named PRUNE using owned temp only`, () => {
     if (process.env.CI !== 'true') throw new Error('Run this owned primitive probe only on a disposable Windows CI runner')
     const sandbox = mkdtempSync(join(tmpdir(), `cc-haha-removal-primitives-${architecture}-`))
     const env = createSandboxedTestEnvironment(join(sandbox, 'home'))
@@ -151,6 +253,19 @@ for (const architecture of ['x86', 'x64'] as const) {
       writeFileSync(join(evidence, 'compile.log'), `${compile.stdout ?? ''}${compile.stderr ?? ''}${compile.error ?? ''}`)
       expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
       expect(compile.status, compile.stderr || compile.stdout).toBe(0)
+      const stubSource = join(sandbox, 'pending-stubbed.cs'), stubExecutable = join(sandbox, 'pending-stubs.exe')
+      writeFileSync(stubSource, withNativeIoStubs(readFileSync(source, 'utf8')))
+      const stubCompile = spawnSync(compiler, ['/nologo', '/langversion:5', '/target:exe', `/platform:${architecture}`,
+        '/checked+', '/warnaserror+', '/main:PrimitiveIoStubs', `/out:${stubExecutable}`, stubSource],
+      { env, encoding: 'utf8', timeout: 30_000, windowsHide: true, maxBuffer: 1024 * 1024 })
+      writeFileSync(join(evidence, 'pending-stubs-compile.log'), `${stubCompile.stdout ?? ''}${stubCompile.stderr ?? ''}${stubCompile.error ?? ''}`)
+      expect(stubCompile.error).toBeUndefined()
+      expect(stubCompile.status, stubCompile.stderr || stubCompile.stdout).toBe(0)
+      const stubRun = spawnSync(stubExecutable, [], { env, encoding: 'utf8', timeout: 15_000, windowsHide: true, maxBuffer: 1024 * 1024 })
+      report.pendingControlFlow = { status: stubRun.status, stdout: stubRun.stdout, stderr: stubRun.stderr, nativeApiCalled: false }
+      expect(stubRun.error).toBeUndefined()
+      expect(stubRun.status, stubRun.stderr).toBe(0)
+      expect(stubRun.stdout.trim()).toBe('pending-control-pass:14')
       const bytes = readFileSync(executable)
       expect(bytes.readUInt16LE(bytes.readUInt32LE(0x3c) + 4)).toBe(architecture === 'x86' ? 0x14c : 0x8664)
       report.executable = fileEvidence(executable)
@@ -170,7 +285,7 @@ for (const architecture of ['x86', 'x64'] as const) {
       expect(run.status, JSON.stringify({ status: native.status, failedChecks: native.checks.filter((item: any) => item.status === 'failed'), cleanup: native.cleanupState })).toBe(0)
       expect(native.version).toBe(4)
       expect(native.status).toBe('passed')
-      expect(native.chosenPrimitive).toBe('NtRename+readonly-share3+relative-NtCreate-sentinel+same-handle-byID-prune')
+      expect(native.chosenPrimitive).toBe('NtRename+readonly-share3+relative-NtCreate-sentinel+same-handle-named-prune')
       expect(native.chosenPrimitiveStatus).toBe('passed')
       expect(native.processPointerBytes).toBe(architecture === 'x86' ? 4 : 8)
       expect(native.renameNameOffset).toBe(architecture === 'x86' ? 12 : 20)
@@ -303,8 +418,8 @@ for (const architecture of ['x86', 'x64'] as const) {
         const name = `prune-${kind}`
         const position = (api: string, label: string) => chosenObservations.findIndex((item: { api: string; name: string }) => item.api === api && item.name === label)
         const closeGuard = position('CloseHandle', `move-${kind}-readonly-guard`)
-        const open = position('OpenFileById', `${name}-delete-pin`)
-        const validate = position('ValidateSentinelPruneCandidate', name)
+        const open = position('NtCreateFile(FILE_OPEN)', `${name}-delete-pin`)
+        const validate = position('ValidateNamedPruneCandidate', name)
         const closeWeak = position('CloseHandle', `move-${kind}-directory`)
         const deleteSentinel = position('SetFileInformationByHandle(FileDispositionInfo)', `${name}-sentinel-disposition`)
         const closeSentinel = position('CloseHandle', `move-${kind}-sentinel`)
@@ -315,27 +430,35 @@ for (const architecture of ['x86', 'x64'] as const) {
           [deleteSentinel, closeSentinel], [closeSentinel, deleteDirectory], [deleteDirectory, closePin]]) expect(later).toBeGreaterThan(earlier)
         const acquired = chosenObservations[open]
         expect(acquired.success).toBe(true)
-        expect(acquired.detail.access).toBe(0x10081)
-        expect(acquired.detail.share).toBe(3)
-        expect(acquired.detail.flags).toBe(0x02200000)
-        expect(acquired.detail.descriptorSize).toBe(24)
-        expect(acquired.detail.descriptorType).toBe(0)
+        expect(acquired.access).toBe(0x1100a1)
+        expect(acquired.share).toBe(1)
+        expect(acquired.objectAttributes).toBe(0x1040)
+        expect(acquired.createDisposition).toBe(1)
+        expect(acquired.createOptions).toBe(0x200021)
+        expect(acquired.ioInformation).toBe(1)
+        expect(acquired.completed && !acquired.fallback).toBe(true)
         const validated = chosenObservations[validate]
         expect(validated.success).toBe(true)
         expect(validated.removalMutationPerformed).toBe(false)
         expect(validated.actual).toEqual(validated.expected)
         expect(validated.weak).toEqual(validated.expected)
-        expect(chosenObservations[deleteDirectory].detail.handle).toBe(acquired.detail.handle)
+        expect(chosenObservations[deleteDirectory].detail.handle).toBe(acquired.handle)
         expect(chosenObservations[deleteDirectory].success && chosenObservations[closePin].success).toBe(true)
         expect(chosenObservations.slice(deleteSentinel, deleteDirectory).some((item: { api: string }) =>
           /CreateFile|CreateDirectory|Rename/.test(item.api))).toBe(false)
       }
-      const barrierCases = ['pre-junction-relative-create', 'sentinel-blocks-junction', 'last-sentinel-junction-disposition', 'last-sentinel-new-child-rejected']
+      const barrierCases = ['pre-junction-relative-create', 'sentinel-blocks-junction', 'ordinary-named-prune', 'last-sentinel-junction-disposition', 'last-sentinel-new-child-rejected']
       for (const name of barrierCases) {
         const result = native.caseResults.find((item: { name: string }) => item.name === name)
         expect(result.role).toBe('required')
         expect(result.completed && result.capabilityCredit).toBe(true)
       }
+      const ordinaryNamed = native.observations.find((item: any) => item.api === 'NtCreateFile(FILE_OPEN)' && item.name === 'ordinary-named-prune-delete-pin')
+      expect(ordinaryNamed.success && ordinaryNamed.completed).toBe(true)
+      expect(ordinaryNamed.createDisposition).toBe(1)
+      expect(ordinaryNamed.ioInformation).toBe(1)
+      expect(ordinaryNamed.access).toBe(0x1100a1)
+      expect(ordinaryNamed.share).toBe(1)
       const sets = native.observations.filter((item: { api: string }) => item.api === 'DeviceIoControl(FSCTL_SET_REPARSE_POINT)')
       expect(sets.length).toBeGreaterThanOrEqual(4)
       expect(new Set(sets.map((item: any) => item.detail.bufferBase64)).size).toBe(1)
@@ -358,13 +481,29 @@ for (const architecture of ['x86', 'x64'] as const) {
       expect(hostile.createOptions).toBe(0x200060)
       expect(hostile.access).toBe(0x110080)
       expect(hostile.share).toBe(1)
+      expect(hostile.completed).toBe(true)
+      if (!hostile.success) {
+        expect(hostile.handle).toBe(0)
+        expect(['c0000280', 'c000050b']).toContain(hostile.callNtStatus)
+        expect(hostile.callNtStatus).not.toBe('00000103')
+      }
+      const ordinaryPair = native.observations.find((item: any) => item.api === 'NtCreateFile(FILE_CREATE)' && item.name === 'pre-junction-positive-sentinel')
+      expect(ordinaryPair.success && ordinaryPair.completed).toBe(true)
+      expect(ordinaryPair.ioInformation).toBe(2)
+      for (const key of ['rootDirectoryHandle', 'leaf', 'access', 'share', 'objectAttributes', 'createDisposition', 'createOptions']) {
+        expect(ordinaryPair[key]).toBe(hostile[key])
+      }
+      expect(native.checks.find((item: any) => item.name === 'pre-junction-paired-target-empty-before-set').status).toBe('passed')
+      expect(native.checks.find((item: any) => item.name === 'named-prune-managed-contracts').detail.pureCases).toBe(38)
+      expect(chosenObservations.filter((item: any) => item.api === 'NtCreateFile(FILE_OPEN)')).toHaveLength(2)
+      expect(chosenObservations.some((item: any) => item.api === 'OpenFileById' && (item.detail.access & 0x10000) !== 0)).toBe(false)
       expect(native.checks.find((item: any) => item.name === 'pre-junction-create-no-outside-effect').status).toBe('passed')
       expect(native.checks.find((item: any) => item.name === 'pre-junction-root-admission-still-rejected').detail.admissionGranted).toBe(false)
       const finalCase = native.observations.filter((item: any) => item.caseName === 'last-sentinel-junction-disposition')
-      const finalPin = finalCase.find((item: any) => item.api === 'OpenFileById' && item.name === 'last-sentinel-delete-pin')
+      const finalPin = finalCase.find((item: any) => item.api === 'NtCreateFile(FILE_OPEN)' && item.name === 'last-sentinel-delete-pin')
       const finalDisposition = finalCase.find((item: any) => item.api === 'SetFileInformationByHandle(FileDispositionInfo)' && item.name === 'last-sentinel-directory-disposition')
       expect(finalDisposition.success).toBe(true)
-      expect(finalDisposition.detail.handle).toBe(finalPin.detail.handle)
+      expect(finalDisposition.detail.handle).toBe(finalPin.handle)
       const lateChild = native.observations.find((item: any) => item.name === 'late-child-directory-disposition' && item.api === 'SetFileInformationByHandle(FileDispositionInfo)')
       expect(lateChild.success).toBe(false)
       expect(lateChild.win32Error).toBe(145)
@@ -391,6 +530,38 @@ for (const architecture of ['x86', 'x64'] as const) {
         expect(observations.some((item: { api: string }) => item.api === 'SetFileInformationByHandle(FileDispositionInfo)')).toBe(false)
         expect(native.checks.some((check: { caseName: string; name: string; status: string }) =>
           check.caseName === caseName && check.name === 'rejection-keeps-owned-sentinels' && check.status === 'passed')).toBe(true)
+      }
+      for (const reason of ['canonical-drift', 'id-mismatch', 'reparse']) {
+        const caseName = `named-prune-reject-${reason}`
+        const result = native.caseResults.find((item: any) => item.name === caseName)
+        expect(result.role).toBe('required')
+        expect(result.completed).toBe(true)
+        const calls = native.observations.filter((item: any) => item.caseName === caseName)
+        const named = calls.filter((item: any) => item.api === 'NtCreateFile(FILE_OPEN)' && item.name === 'named-rejection-delete-pin')
+        expect(named).toHaveLength(1)
+        expect(named[0].createDisposition).toBe(1)
+        expect(named[0].access).toBe(0x1100a1)
+        expect(named[0].share).toBe(1)
+        const validation = calls.find((item: any) => item.api === 'ValidateNamedPruneCandidate')
+        expect(validation.success).toBe(false)
+        expect(validation.reason).toBe(reason)
+        expect(validation.removalMutationPerformed || validation.fallback).toBe(false)
+        expect(validation.weak.fileId).toBe(validation.expected.fileId)
+        expect(calls.some((item: any) => item.api === 'SetFileInformationByHandle(FileDispositionInfo)')).toBe(false)
+        if (reason === 'reparse') {
+          expect(calls.find((item: any) => item.name === 'named-rejection-set').success).toBe(true)
+          expect(calls.find((item: any) => item.name === 'named-rejection-get').detail.exactTarget).toBe(true)
+        } else {
+          const moves = calls.filter((item: any) => item.api === 'MoveFileExW(owned-fixture-barrier)')
+          expect(moves).toHaveLength(reason === 'id-mismatch' ? 2 : 1)
+          expect(moves.every((item: any) => item.success)).toBe(true)
+          expect(validation.weak.canonical).not.toBe(validation.expected.canonical)
+          if (reason === 'id-mismatch') {
+            expect(named[0].success && named[0].completed).toBe(true)
+            expect(named[0].ioInformation).toBe(1)
+            expect(validation.actual.fileId).not.toBe(validation.expected.fileId)
+          }
+        }
       }
       for (const caseName of ['weak-lifetime', 'shared-reader-lifetime']) {
         expect(native.checks.some((check: { caseName?: string; name: string; status: string }) =>

@@ -23,6 +23,11 @@ export const pinnedNsisCompiler = {
   version: '3.0.4.1',
   archiveSha512: 'VKMiizYdmNdJOWpRGz4trl4lD++BvYP2irAXpMilheUP0pc93iKlWAoP843Vlraj8YG19CVn0j+dCo/hURz9+Q==',
 } as const
+export const pinnedNsisResources = {
+  version: '3.4.1',
+  archiveSha512: 'Dqd6g+2buwwvoG1Vyf6BHR1b+25QMmPcwZx40atOT57gH27rkjOei1L0JTldxZu4NFoEmW4kJgZ3DlSWVON3+Q==',
+  plugins: ['StdUtils.dll', 'UAC.dll', 'WinShell.dll', 'nsProcess.dll'],
+} as const
 const tempPrefix = 'cc-haha-nsis-'
 const ownershipFile = '.cc-haha-installer-test-owner'
 
@@ -32,6 +37,12 @@ export type PreparedNsisTools = {
   version: string
   archiveSha512: string
   compilerSha256: string
+  resources: {
+    directory: string
+    version: string
+    archiveSha512: string
+    pluginsSha256: Record<string, string>
+  }
   fullSevenZip?: SevenZipExtractor
 }
 
@@ -112,14 +123,24 @@ async function acquirePinnedNsisTools(sourceRoot: string, tempRoot: string): Pro
   const nsis = require('app-builder-lib/out/targets/nsis/nsisUtil.js') as {
     NsisTargetOptions: { resolve(options: object): void }
     NSIS_PATH(): Promise<string>
+    NSIS_RESOURCES_PATH(): Promise<string>
   }
   nsis.NsisTargetOptions.resolve({})
   const binaryRoot = await nsis.NSIS_PATH()
+  const resources = await nsis.NSIS_RESOURCES_PATH()
   assertOutsideSourceGit(binaryRoot, sourceRoot)
+  assertOutsideSourceGit(resources, sourceRoot)
   const compiler = join(binaryRoot, 'Bin/makensis.exe')
   const templates = dirname(require.resolve('app-builder-lib/templates/nsis/installer.nsi'))
   if (!existsSync(compiler) || !existsSync(join(templates, 'include/getProcessInfo.nsh'))) {
     throw new Error('Pinned NSIS compiler or electron-builder templates are missing')
+  }
+  if (!isInsideDirectory(tempRoot, resources)) throw new Error('Pinned NSIS resources escaped the private dependency directory')
+  const pluginsSha256: Record<string, string> = {}
+  for (const name of pinnedNsisResources.plugins) {
+    const file = join(resources, 'plugins/x86-unicode', name)
+    if (!isInsideDirectory(tempRoot, file)) throw new Error('Pinned NSIS resources escaped the private dependency directory')
+    pluginsSha256[name] = await sha256File(file)
   }
   const appRequire = createRequire(require.resolve('app-builder-lib/package.json'))
   const builderRequire = createRequire(appRequire.resolve('builder-util/package.json'))
@@ -135,7 +156,9 @@ async function acquirePinnedNsisTools(sourceRoot: string, tempRoot: string): Pro
   await verifyInstallerFixture(archive, pinnedFullSevenZip)
   const fullSevenZip = bootstrapFullSevenZip({ archive, bootstrap, directory: join(tempRoot, 'full-seven-zip'),
     evidenceDirectory: join(sourceRoot, 'artifacts/windows-installer/member-proof/tools') })
-  return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: await sha256File(compiler), fullSevenZip }
+  return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: await sha256File(compiler), resources: {
+    directory: resources, version: pinnedNsisResources.version, archiveSha512: pinnedNsisResources.archiveSha512, pluginsSha256,
+  }, fullSevenZip }
 }
 
 export async function downloadPinnedInstaller(url: string, target: string) {

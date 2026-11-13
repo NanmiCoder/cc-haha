@@ -1,6 +1,7 @@
 !include "LogicLib.nsh"
 !include "getProcessInfo.nsh"
 !include "${BUILD_RESOURCES_DIR}\check-install-processes.nsh"
+!include "${BUILD_RESOURCES_DIR}\guarded-removal-launch.nsh"
 !define /ifndef INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
 !define /ifndef UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
 Var pid
@@ -421,6 +422,10 @@ FunctionEnd
                 StrCpy $R9 "$R9 $R5 (PID $R4, path identity unavailable);"
               ${ElseIf} $R6 == $0
                 StrCpy $R9 "$R9 $R5 (PID $R4);"
+              !ifdef CC_HAHA_LEGACY_COMPAT_TEMPLATE
+              ${Else}
+                StrCpy $ccHahaCompatExternalMatch 1
+              !endif
               ${EndIf}
             ${EndIf}
           ${EndIf}
@@ -462,7 +467,7 @@ FunctionEnd
   Pop ${_OUTPUT}
 !macroend
 
-!macro CcHahaVerifyFallbackRemainder _FILE _RETURN
+!macro CcHahaVerifyFallbackRemainder _FILE _RETURN _CMD
   Push $R1
   Push $R2
   Push $R3
@@ -491,7 +496,7 @@ FunctionEnd
     ${If} $R2 == 0
       Delete "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
       ${IfNot} ${FileExists} "$PLUGINSDIR\cc-haha-fallback-unattributed.csv"
-        nsExec::Exec /TIMEOUT=30000 '"$CmdPath" /D /C ""$SYSDIR\findstr.exe" /V /R /I /G:"$PLUGINSDIR\cc-haha-fallback-allowed.txt" "$PLUGINSDIR\cc-haha-processes.csv" > "$PLUGINSDIR\cc-haha-fallback-unattributed.csv""'
+        nsExec::Exec /TIMEOUT=30000 '"${_CMD}" /D /C ""$SYSDIR\findstr.exe" /V /R /I /G:"$PLUGINSDIR\cc-haha-fallback-allowed.txt" "$PLUGINSDIR\cc-haha-processes.csv" > "$PLUGINSDIR\cc-haha-fallback-unattributed.csv""'
         Pop $R2
         ; tasklist also contains System rows, so a successful exclusion leaves
         ; output and returns 0. Any other result, including timeout/error or a
@@ -555,7 +560,7 @@ FunctionEnd
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path, possibly in another user's session. Close it manually."
         !insertmacro CcHahaAttributeFallbackMatches "${_FILE}" ${_RETURN}
         ${If} ${_RETURN} == 1
-          !insertmacro CcHahaVerifyFallbackRemainder "${_FILE}" ${_RETURN}
+          !insertmacro CcHahaVerifyFallbackRemainder "${_FILE}" ${_RETURN} "$CmdPath"
         ${EndIf}
       ${ElseIf} ${_RETURN} == 1
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; exact-image fallback found no main app, known sidecar, or bundled terminal/search helper. Differently named child processes cannot be attributed without path data."
@@ -591,6 +596,9 @@ FunctionEnd
 !macroend
 
 !macro customCheckAppRunning
+  !ifdef BUILD_UNINSTALLER
+    !insertmacro CcHahaGuardCheckUninstallerEntry cc_haha_guarded_process_check_done
+  !endif
   InitPluginsDir
   !insertmacro CcHahaUseDefaultPowerShellModulePath
   !insertmacro IS_POWERSHELL_AVAILABLE
@@ -660,10 +668,80 @@ FunctionEnd
   ${EndIf}
   !ifndef BUILD_UNINSTALLER
     !insertmacro CcHahaRunLegacyRecovery
+  !else
+    cc_haha_guarded_process_check_done:
   !endif
 !macroend
 
 !ifndef BUILD_UNINSTALLER
+!include "${BUILD_RESOURCES_DIR}\legacy-uninstaller-compat.nsh"
+!endif
+
+; Both !system and !execute use a shell on the pinned Mac compiler. Encode
+; before command parsing, including ~ first so decoding is exactly one pass.
+; The fixed Node program receives only data and never evaluates a path as JS.
+!macro CcHahaEncodeBuildArgument _OUT _VALUE
+  !searchreplace ${_OUT} "${_VALUE}" "~" "~7e"
+  !searchreplace ${_OUT} "${${_OUT}}" "'" "~27"
+  !searchreplace ${_OUT} "${${_OUT}}" "\" "~5c"
+  !searchreplace ${_OUT} "${${_OUT}}" "$" "~24"
+  !searchreplace ${_OUT} "${${_OUT}}" "`" "~60"
+  !searchreplace ${_OUT} "${${_OUT}}" "%" "~25"
+  !searchreplace ${_OUT} "${${_OUT}}" "!" "~21"
+  !searchreplace ${_OUT} "${${_OUT}}" "^" "~5e"
+!macroend
+
+!macro CcHahaRunBuildHelper _MODE _ARG1 _ARG2
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_SCRIPT "${BUILD_RESOURCES_DIR}/../scripts/nsis-legacy-compat.cjs"
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_ARG1 "${_ARG1}"
+  !insertmacro CcHahaEncodeBuildArgument CC_HAHA_BUILD_ARG2 "${_ARG2}"
+  !execute "$\"node$\" -e $\"const d=s=>s.replace(/~([0-9a-f]{2})/gi,(_,h)=>String.fromCharCode(parseInt(h,16)));require(d(process.argv[1])).run(process.argv[2],process.argv.slice(3).map(d))$\" $\"${CC_HAHA_BUILD_SCRIPT}$\" ${_MODE} $\"${CC_HAHA_BUILD_ARG1}$\" $\"${CC_HAHA_BUILD_ARG2}$\"" = 0
+  !undef CC_HAHA_BUILD_SCRIPT
+  !undef CC_HAHA_BUILD_ARG1
+  !undef CC_HAHA_BUILD_ARG2
+!macroend
+
+; This supported header runs before installer.nsi includes installUtil.nsh.
+; Only installUtil is adapted, in a private per-compilation directory. The
+; uninstaller uses the official customRemoveFiles hook and a byte-identical
+; pinned default block. Default script selection and signIf remain intact.
+!macro customHeader
+  !ifdef BUILD_UNINSTALLER
+    !tempfile CC_HAHA_NSIS_GUARDED_BOOTSTRAP
+    !insertmacro CcHahaRunBuildHelper prepare-guarded "${BUILD_RESOURCES_DIR}/guarded-removal.cs" "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !include "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !delfile "${CC_HAHA_NSIS_GUARDED_BOOTSTRAP}"
+    !undef CC_HAHA_NSIS_GUARDED_BOOTSTRAP
+    !insertmacro CcHahaGuardFunctions
+    !insertmacro CcHahaGuardUninstallerFunctions
+  !else
+  !tempfile CC_HAHA_NSIS_COMPAT_BOOTSTRAP
+  !insertmacro CcHahaRunBuildHelper prepare "${UNINSTALLER_OUT_FILE}" "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !include "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !delfile "${CC_HAHA_NSIS_COMPAT_BOOTSTRAP}"
+  !undef CC_HAHA_NSIS_COMPAT_BOOTSTRAP
+  !insertmacro CcHahaGuardFunctions
+  !insertmacro CcHahaLegacyCompatFunctions
+  !endif
+!macroend
+
+!ifdef BUILD_UNINSTALLER
+!macro customUnInit
+  Call un.CcHahaGuardReceive
+  ${If} $ccHahaGuardMode == "invalid"
+    SetErrorLevel 22
+    Quit
+  ${EndIf}
+!macroend
+
+!macro customUnInstallSection
+  !insertmacro CcHahaRunBuildHelper cleanup "${CC_HAHA_NSIS_GUARDED_DIRECTORY}" "${CC_HAHA_NSIS_GUARDED_OWNER}"
+!macroend
+!else
+!macro customInstall
+  !insertmacro CcHahaRunBuildHelper cleanup "${CC_HAHA_NSIS_COMPAT_DIRECTORY}" "${CC_HAHA_NSIS_COMPAT_OWNER}"
+!macroend
+
 !macro customPageAfterChangeDir
   Function CcHahaRecoveryBeforeInstall
     ${If} ${UAC_IsInnerInstance}
@@ -678,9 +756,12 @@ FunctionEnd
 ; `File`, so a security tool that blocks the .ps1 write makes them abort in
 ; un.onInit before touching any file (#1486). electron-builder would then quit
 ; and strand the user on the old version. Only when this installer saw the
-; same block itself, install over the old files; exit code 22 (the old
-; uninstaller found the app running) and every other failure stay fatal.
+; same block itself, install over the old files. Apart from the separately
+; verified v0.7.8 trusted-removal path, exit 22 and other failures stay fatal.
 !macro CcHahaHandleOldUninstallerResult
+  !ifdef CC_HAHA_LEGACY_COMPAT_TEMPLATE
+    Call CcHahaTryTrustedLegacyRemoval
+  !endif
   ${If} $R0 != 0
   ${AndIf} $R0 != 22
   ${AndIf} $ccHahaProcessHelperWriteBlocked == "1"
