@@ -1,6 +1,11 @@
 import type { TranslationKey } from './en'
 
 export const zh: Record<TranslationKey, string> = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'OAuth 应用每周额度',
+  'settings.claudeOfficialLogin.usageUnavailableValue': '用量不可用',
+  'settings.claudeOfficialLogin.usageResetNotProvided': '未提供重置时间',
+  'settings.claudeOfficialLogin.usageUnlimited': '不限额',
+  'settings.providers.officialUsageNotIntegrated': '此服务的额度查询尚未接入，请前往其官方页面查看。',
   'settings.adapters.wechatHealthStopped': "消息通道已停止",
   'settings.adapters.wechatHealthStarting': "正在连接消息通道",
   'settings.adapters.wechatHealthOnline': "消息通道在线",
@@ -1648,6 +1653,20 @@ export const zh: Record<TranslationKey, string> = {
   'settings.claudeOfficialLogin.subTypeUnknown': '未知',
   'settings.claudeOfficialLogin.errorPrefix': '错误:',
   'settings.claudeOfficialLogin.openBrowserFailed': '无法打开浏览器,请手动访问授权链接。',
+  'settings.claudeOfficialLogin.usageTitle': '用量额度',
+  'settings.claudeOfficialLogin.usageRefresh': '刷新',
+  'settings.claudeOfficialLogin.usageUpdatedAt': '更新于 {time}',
+  'settings.claudeOfficialLogin.usageFiveHour': '5 小时额度',
+  'settings.claudeOfficialLogin.usageSevenDay': '每周额度',
+  'settings.claudeOfficialLogin.usageSevenDayOpus': '每周额度（Opus）',
+  'settings.claudeOfficialLogin.usageSevenDaySonnet': '每周额度（Sonnet）',
+  'settings.claudeOfficialLogin.usageExtra': '额外用量',
+  'settings.claudeOfficialLogin.usageUsed': '已用 {percent}%',
+  'settings.claudeOfficialLogin.usageResetsAt': '{time} 重置',
+  'settings.claudeOfficialLogin.usageNoData': '官方账号没有返回用量额度。',
+  'settings.claudeOfficialLogin.usageMissingScope': '当前登录没有读取用量的权限，退出后重新登录即可。',
+  'settings.claudeOfficialLogin.usageUnavailable': '暂时获取不到用量。',
+  'settings.claudeOfficialLogin.usageUnavailableStatus': '暂时获取不到用量（HTTP {status}）。',
 
   // Settings > ChatGPT Official Login
   'settings.chatgptOfficialLogin.intro': '登录 ChatGPT 后,就可以在桌面端会话里使用 GPT 模型。',
