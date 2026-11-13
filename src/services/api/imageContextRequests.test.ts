@@ -25,7 +25,7 @@ if (!fixture) {
         new Response(child.stdout).text(), new Response(child.stderr).text()])
       expect(code, stdout + stderr).toBe(0)
       expect(stderr).toContain('0 fail')
-      expect(stderr).toContain('3 pass')
+      expect(stderr).toContain('4 pass')
       process.stdout.write(stdout)
     } finally {
       clearTimeout(timer)
@@ -116,6 +116,7 @@ function sentImages(body = requests.at(-1)!) {
 }
 
 async function send(messages: Message[]) {
+  requests = []
   const errors: unknown[] = []
   for await (const message of queryModelWithStreaming({
     messages, systemPrompt: asSystemPrompt([]), thinkingConfig: { type: 'disabled' }, tools: [],
@@ -127,6 +128,51 @@ async function send(messages: Message[]) {
   expect(errors).toEqual([])
   return requests.at(-1)!
 }
+
+fixtureTest('actual request preparation protects merged user images and releases them after a later text input', async () => {
+  const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).jpeg({ quality: 90 }).toBuffer()
+  const data = Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64')
+  const current: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }
+  const fresh: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: header.toString('base64') } }
+  const input = [{ type: 'text' as const, text: 'CURRENT HUMAN INPUT' }, ...Array.from({ length: 30 }, () => current)]
+  const tool = (id: string) => createAssistantMessage({ content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: '/fresh.png' } }] })
+  const result = (id: string) => createUserMessage({ content: [{ type: 'tool_result', tool_use_id: id, content: [fresh] }] })
+  const attachment = (value: unknown) => ({ type: 'attachment', attachment: value,
+    uuid: crypto.randomUUID(), timestamp: new Date().toISOString() }) as Message
+  for (const kind of ['meta', 'queued', 'file attachments', 'next text', 'next text after whitespace',
+    'next text before Read', 'next text after whitespace before Read'] as const) {
+    const readRound = !kind.includes('before Read')
+    const messages = kind === 'queued' ? [createUserMessage({ content: 'Initial task' }), tool('previous-read'), result('previous-read'),
+      attachment({ type: 'queued_command', prompt: input, source_uuid: '10000000-0000-4000-8000-000000001888', commandMode: 'prompt' }),
+      tool('current-read'), result('current-read'),
+    ] : kind === 'file attachments' ? [createUserMessage({ content: 'CURRENT HUMAN INPUT' }),
+      ...Array.from({ length: 30 }, (_, index) => attachment({ type: 'file', filename: `/fixtures/input-${index}.jpg`,
+        content: { type: 'image', file: { base64: data, type: 'image/jpeg', originalSize: Buffer.from(data, 'base64').length } } })),
+      tool('current-read'), result('current-read'),
+    ] : [createUserMessage({ content: input }),
+      ...(kind === 'meta' ? [] : [createAssistantMessage({ content: [{ type: 'text', text: kind.includes('whitespace') ? ' \n' : 'old task complete' }] }),
+        createUserMessage({ content: 'New text-only task' })]),
+      attachment({ type: 'opened_file_in_ide', filename: '/fixtures/example.ts' }),
+      ...(readRound ? [tool('current-read'), result('current-read')] : []),
+    ]
+    const before = JSON.stringify(messages)
+    const body = await send(messages)
+    const images = sentImages(body)
+    const currentImages = images.filter(image => image.source!.data === data)
+    if (kind === 'meta' || kind === 'queued' || kind === 'file attachments') expect(currentImages).toHaveLength(30)
+    else {
+      expect(currentImages.length).toBeGreaterThan(0)
+      expect(currentImages.length).toBeLessThan(30)
+      expect(images.reduce((sum, image) => sum + image.source!.data.length, 0)).toBeLessThanOrEqual(24 * 1024 * 1024)
+    }
+    if (readRound) {
+      const toolResult = body.messages.flatMap(message => Array.isArray(message.content) ? message.content : [])
+        .find(block => block.type === 'tool_result' && (block as Block & { tool_use_id: string }).tool_use_id === 'current-read')!
+      expect(imagesIn(toolResult.content!)).toHaveLength(1)
+    }
+    expect(JSON.stringify(messages)).toBe(before)
+  }
+})
 
 fixtureTest('legacy tool image history is optimized on the actual request and survives Chat/Responses serialization', async () => {
   const history: Message[] = [createUserMessage({ content: 'Inspect each frame, preserving the captions.' })]
@@ -203,7 +249,8 @@ fixtureTest('Azure request applies the same image optimization before producing 
     return Response.json({ id: 'response_fixture', output_text: 'accepted', usage: { input_tokens: 1, output_tokens: 1 } })
   })
   try {
-    const messages = [createUserMessage({ content: [image] }),
+    const messages = [{ type: 'attachment', attachment: { type: 'opened_file_in_ide', filename: '/fixture.ts' } } as Message,
+      createUserMessage({ content: [image] }),
       createAssistantMessage({ content: [{ type: 'tool_use', id: 'azure-read', name: 'Read', input: {} }] }),
       createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'azure-read', content: [image] }] })]
     const before = JSON.stringify(messages)

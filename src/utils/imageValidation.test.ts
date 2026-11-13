@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import sharp from 'sharp'
-import { normalizeImagesForAPI } from './imageValidation.js'
+import { createImageInputProtection, normalizeImagesForAPI } from './imageValidation.js'
 import * as imageResizer from './imageResizer.js'
 import * as imageProcessor from '../tools/FileReadTool/imageProcessor.js'
 import { createContextImage } from './fixtures/contextImages.js'
 import { IMAGE_REQUEST_BASE64_BUDGET } from '../constants/apiLimits.js'
+import { createAssistantMessage, createUserMessage, normalizeMessagesForAPI } from './messages.js'
+import type { Message } from '../types/message.js'
+import type { ImageBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 
 let processor: ReturnType<typeof spyOn>
 beforeEach(() => {
@@ -42,7 +45,7 @@ test('59 repeated screenshots count every occurrence against the encoded request
 
 test('distinct screenshot payloads keep their identities while sharing the cumulative budget', async () => {
   const inputs = await Promise.all([1, 2, 3].map(async seed => ({ type: 'image', source: {
-    type: 'base64', media_type: 'image/png', data: (await createContextImage({ seed })).toString('base64'),
+    type: 'base64', media_type: 'image/png', data: (await createContextImage({ seed, width: 1024, height: 576 })).toString('base64'),
   } })))
   const messages = [{ message: { content: Array.from({ length: 60 }, (_, index) => inputs[index % 3]!) } }]
   const output = await normalizeImagesForAPI(messages)
@@ -50,7 +53,7 @@ test('distinct screenshot payloads keep their identities while sharing the cumul
   expect(images.reduce((sum, item) => sum + item.source.data.length, 0)).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
   expect(new Set(images.map(image => image.source.data)).size).toBe(3)
   for (const image of images) expect(await sharp(Buffer.from(image.source.data, 'base64')).metadata())
-    .toMatchObject({ width: 1568, height: 882 })
+    .toMatchObject({ width: 1024, height: 576 })
 })
 
 test('only older nested images become explicit notes after bounded compression cannot reach the soft budget', async () => {
@@ -103,6 +106,125 @@ test('a current multi-image input over the soft budget retains every hard-limit-
   expect(inlineImages(output[0]!.message.content).reduce((sum, item) => sum + item.source.data.length, 0))
     .toBeGreaterThan(IMAGE_REQUEST_BASE64_BUDGET)
   expect(output[0]).toBe(messages[0])
+})
+
+test('the current multi-image input remains protected across an assistant Read tool round', async () => {
+  processor.mockRejectedValue(new Error('fixture processor unavailable'))
+  const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).png().toBuffer()
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png',
+    data: Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64') } }
+  const fresh = { ...image, source: { ...image.source, data: header.toString('base64') } }
+  const messages = [
+    { type: 'user', message: { role: 'user', content: Array.from({ length: 30 }, () => image) } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', id: 'current-read', input: { file_path: '/fresh.png' } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'current-read', content: [fresh] }] } },
+  ]
+  const output = await normalizeImagesForAPI(messages)
+  expect(inlineImages(output[0]!.message.content)).toHaveLength(30)
+  expect(output[0]).toBe(messages[0])
+  expect(inlineImages(output[2]!.message.content)).toHaveLength(1)
+})
+
+for (const kind of ['meta attachment', 'queued command', 'file attachment'] as const) {
+  test(`current images merged with a ${kind} survive the real two-stage request normalization`, async () => {
+    const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).jpeg({ quality: 90 }).toBuffer()
+    const data = Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64')
+    const image: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } }
+    const fresh: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: header.toString('base64') } }
+    const input = [{ type: 'text' as const, text: 'CURRENT HUMAN INPUT' }, ...Array.from({ length: 30 }, () => image)]
+    const tool = (id: string) => createAssistantMessage({ content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: '/fresh.png' } }] })
+    const result = (id: string) => createUserMessage({ content: [{ type: 'tool_result', tool_use_id: id, content: [fresh] }] })
+    const attachment = (value: unknown) => ({ type: 'attachment', attachment: value,
+      uuid: crypto.randomUUID(), timestamp: new Date().toISOString() }) as Message
+    const messages = kind === 'meta attachment' ? [
+      createUserMessage({ content: 'Initial task' }), createAssistantMessage({ content: [{ type: 'text', text: 'ready' }] }),
+      createUserMessage({ content: input }), attachment({ type: 'opened_file_in_ide', filename: '/fixtures/example.ts' }),
+      tool('current-read'), result('current-read'),
+    ] : kind === 'queued command' ? [
+      createUserMessage({ content: 'Initial task' }), tool('previous-read'), result('previous-read'),
+      attachment({ type: 'queued_command', prompt: input, source_uuid: '10000000-0000-4000-8000-000000001888', commandMode: 'prompt' }),
+      tool('current-read'), result('current-read'),
+    ] : [
+      createUserMessage({ content: 'Initial task' }), createAssistantMessage({ content: [{ type: 'text', text: 'ready' }] }),
+      createUserMessage({ content: 'CURRENT HUMAN INPUT' }),
+      ...Array.from({ length: 30 }, (_, index) => attachment({ type: 'file', filename: `/fixtures/input-${index}.jpg`,
+        content: { type: 'image', file: { base64: data, type: 'image/jpeg', originalSize: Buffer.from(data, 'base64').length } } })),
+      tool('current-read'), result('current-read'),
+    ]
+    const inputProtection = createImageInputProtection(messages)
+    const normalized = normalizeMessagesForAPI(messages, [], undefined, inputProtection.mapMessage)
+    const before = JSON.stringify(normalized)
+    const output = await normalizeImagesForAPI(normalized, { protectedInputImages: inputProtection.images })
+    const images = output.flatMap(message => inlineImages(message.message.content))
+    expect(images.filter(image => image.source.data === data)).toHaveLength(30)
+    expect(JSON.stringify(output)).toContain('current-read')
+    expect(JSON.stringify(normalized)).toBe(before)
+  })
+}
+
+for (const whitespace of [false, true]) for (const readRound of [false, true]) {
+  test(`a later text input with meta lets old images use the budget after ${whitespace ? 'whitespace' : 'ordinary'} assistant normalization ${readRound ? 'with' : 'without'} a Read round`, async () => {
+    const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).jpeg({ quality: 90 }).toBuffer()
+    const image: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg',
+      data: Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64') } }
+    const fresh: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: header.toString('base64') } }
+    const messages = [createUserMessage({ content: Array.from({ length: 30 }, () => image) }),
+      createAssistantMessage({ content: [{ type: 'text', text: whitespace ? '  \n' : 'previous image task complete' }] }),
+      createUserMessage({ content: 'New text-only task' }),
+      { type: 'attachment', attachment: { type: 'opened_file_in_ide', filename: '/fixtures/example.ts' },
+        uuid: crypto.randomUUID(), timestamp: new Date().toISOString() } as Message,
+      ...(readRound ? [createAssistantMessage({ content: [{ type: 'tool_use', id: 'current-read', name: 'Read', input: { file_path: '/fresh.png' } }] }),
+        createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'current-read', content: [fresh] }] })] : []),
+    ]
+    const before = JSON.stringify(messages)
+    const inputProtection = createImageInputProtection(messages)
+    const normalized = normalizeMessagesForAPI(messages, [], undefined, inputProtection.mapMessage)
+    const output = await normalizeImagesForAPI(normalized, { protectedInputImages: inputProtection.images })
+    const images = output.flatMap(message => inlineImages(message.message.content))
+    expect(images.filter(item => item.source.data === image.source.data).length).toBeGreaterThan(0)
+    expect(images.filter(item => item.source.data === image.source.data).length).toBeLessThan(30)
+    expect(images.reduce((sum, item) => sum + item.source.data.length, 0)).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
+    expect(images.some(item => item.source.data === fresh.source.data)).toBe(readRound)
+    expect(JSON.stringify(output)).toContain('New text-only task')
+    expect(JSON.stringify(output)).toContain('[Image omitted from this request')
+    expect(JSON.stringify(messages)).toBe(before)
+  })
+}
+
+for (const readRound of [false, true]) test(`current input provenance protects only its occurrence when old history shares the same image object ${readRound ? 'with' : 'without'} a Read round`, async () => {
+  const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).jpeg({ quality: 90 }).toBuffer()
+  const image: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg',
+    data: Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64') } }
+  const messages = [createUserMessage({ content: Array.from({ length: 30 }, () => image) }),
+    createAssistantMessage({ content: [{ type: 'text', text: ' \n' }] }),
+    createUserMessage({ content: [{ type: 'text', text: 'CURRENT HUMAN INPUT' }, image] }),
+    ...(readRound ? [createAssistantMessage({ content: [{ type: 'tool_use', id: 'current-read', name: 'Read', input: {} }] }),
+      createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'current-read', content: 'ready' }] })] : []),
+  ]
+  const inputProtection = createImageInputProtection(messages)
+  const normalized = normalizeMessagesForAPI(messages, [], undefined, inputProtection.mapMessage)
+  expect(inputProtection.images.has(image)).toBe(false)
+  const output = await normalizeImagesForAPI(normalized, { protectedInputImages: inputProtection.images })
+  expect(inlineImages(output[0]!.message.content).length).toBeLessThan(30)
+  const current = output.find(message => JSON.stringify(message.message.content).includes('CURRENT HUMAN INPUT'))!
+  expect(inlineImages(current.message.content).filter(image => inputProtection.images.has(image))).toHaveLength(1)
+})
+
+test('request-local input protection survives MIME repair and repeated snapshot normalization', async () => {
+  const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).jpeg({ quality: 90 }).toBuffer()
+  const image: ImageBlockParam = { type: 'image', source: { type: 'base64', media_type: 'image/png',
+    data: Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64') } }
+  const messages = [createUserMessage({ content: Array.from({ length: 30 }, () => image) }),
+    createAssistantMessage({ content: [{ type: 'tool_use', id: 'current-read', name: 'Read', input: {} }] }),
+    createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'current-read', content: 'ready' }] }),
+  ]
+  const inputProtection = createImageInputProtection(messages)
+  const normalized = normalizeMessagesForAPI(messages, [], undefined, inputProtection.mapMessage)
+  const output = await normalizeImagesForAPI(normalized, { protectedInputImages: inputProtection.images })
+  expect(inlineImages(output[0]!.message.content)).toHaveLength(30)
+  const repeated = await normalizeImagesForAPI(output, { protectedInputImages: inputProtection.images })
+  expect(inlineImages(repeated[0]!.message.content)).toHaveLength(30)
+  expect(JSON.stringify(repeated)).toBe(JSON.stringify(output))
 })
 
 async function largeImage() {

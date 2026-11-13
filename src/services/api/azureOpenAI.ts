@@ -521,7 +521,9 @@ export async function requestAzureOpenAI(params: {
     model: params.model,
   })
 
-  const input = buildAzureOpenAIInput(await normalizeImagesForAPI(params.messages))
+  // Match the serializer's existing non-message filtering before normalization.
+  const messages = params.messages.filter(message => message.type === 'user' || message.type === 'assistant')
+  const input = buildAzureOpenAIInput(await normalizeImagesForAPI(messages))
 
   const body: Record<string, unknown> = {
     model: deployment,
