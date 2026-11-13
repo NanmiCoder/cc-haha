@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { beforeEach, afterEach, describe, expect, it } from 'vitest'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DARK_THEME_MODES,
@@ -159,6 +159,19 @@ describe('index.html pre-hydration theme script', () => {
     const bare = /(?:^|\n)\s*html\s*\{\s*background:\s*(#[0-9A-Fa-f]{6})\s*;/.exec(html)
     expect(bare, 'index.html lost its themeless background fallback').not.toBeNull()
     expect(bare![1]!.toUpperCase()).toBe(THEME_BACKGROUNDS.white.toUpperCase())
+  })
+
+  it('keeps neutral dark when browser chrome painting throws after resolution', () => {
+    seedStorage({ theme: 'neutral-dark', follow: '0' })
+    const query = vi.spyOn(document, 'querySelector').mockImplementation(() => { throw new Error('browser chrome unavailable') })
+    try {
+      // eslint-disable-next-line no-new-func -- exercise the shipped catch path
+      new Function(bootstrapScript)()
+      expect(document.documentElement.getAttribute('data-theme')).toBe('neutral-dark')
+      expect(document.documentElement.style.colorScheme).toBe('dark')
+    } finally {
+      query.mockRestore()
+    }
   })
 
   // Dirty values are reachable, not hypothetical: the inline script runs
