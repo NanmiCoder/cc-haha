@@ -4,6 +4,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 import { releaseWorkspaceBrowserTab } from '../lib/workspace/browserHost'
 import { useWorkspaceBrowserStore } from './workspaceBrowserStore'
+import { clampWorkspaceSideWidth, WORKSPACE_SIDE_DEFAULT_WIDTH } from '../lib/workspace/sidePanelSize'
 import {
   DEFAULT_REVIEW_SOURCE,
   basenameOf,
@@ -23,9 +24,7 @@ import {
   type WorkspaceTerminalTabStatus,
 } from '../lib/workspace/types'
 
-export const WORKSPACE_SIDE_DEFAULT_WIDTH = 860
-export const WORKSPACE_SIDE_MIN_WIDTH = 420
-export const WORKSPACE_SIDE_MAX_WIDTH = 1120
+export { clampWorkspaceSideWidth, WORKSPACE_SIDE_DEFAULT_WIDTH, WORKSPACE_SIDE_MIN_WIDTH } from '../lib/workspace/sidePanelSize'
 
 export const WORKSPACE_BOTTOM_DEFAULT_HEIGHT = 420
 export const WORKSPACE_BOTTOM_MIN_HEIGHT = 260
@@ -159,11 +158,6 @@ export function __resetWorkspaceIdCounterForTest() {
 }
 
 let focusNonce = 0
-
-export function clampWorkspaceSideWidth(width: number) {
-  if (!Number.isFinite(width)) return WORKSPACE_SIDE_DEFAULT_WIDTH
-  return Math.min(WORKSPACE_SIDE_MAX_WIDTH, Math.max(WORKSPACE_SIDE_MIN_WIDTH, Math.round(width)))
-}
 
 export function clampWorkspaceBottomHeight(height: number) {
   if (!Number.isFinite(height)) return WORKSPACE_BOTTOM_DEFAULT_HEIGHT
