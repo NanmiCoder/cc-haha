@@ -43,6 +43,52 @@ namespace CcHahaInstallerProfile
     private FileIdentity originalControllerImageIdentity;
     private string originalControllerImagePath;
     private readonly List<string> tokenProbeDiagnostics = new List<string>();
+    private PrivateDesktopCreator desktopCreator;
+
+    // CreateDesktop attaches its caller to the new desktop. Keep that caller
+    // separate from the long-lived STA which may already own COM windows.
+    internal sealed class PrivateDesktopCreator
+    {
+      private readonly Thread thread;
+      private Exception failure;
+      private bool started;
+      internal bool IsAlive { get { return thread.IsAlive; } }
+
+      internal PrivateDesktopCreator(Action create)
+      {
+        thread = new Thread(delegate() {
+          try { create(); }
+          catch (Exception error) { failure = error; }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(ApartmentState.MTA);
+      }
+
+      internal void Start()
+      {
+        CorePolicy.Require(!started, "Private desktop creator already started");
+        thread.Start();
+        started = true;
+      }
+
+      internal void WaitForExit(int timeoutMilliseconds)
+      {
+        CorePolicy.Require(started && timeoutMilliseconds > 0 && timeoutMilliseconds <= 5000, "Invalid private desktop creator wait");
+        Stopwatch deadline = Stopwatch.StartNew();
+        // Join/WaitHandle on an STA can pump COM/messages while the process
+        // station is temporarily changed. Sleep does not pump either queue.
+        while (thread.IsAlive)
+        {
+          int remaining = timeoutMilliseconds - checked((int)Math.Min(deadline.ElapsedMilliseconds, Int32.MaxValue));
+          CorePolicy.Require(remaining > 0, "Private desktop creator timed out");
+          Thread.Sleep(Math.Min(10, remaining));
+        }
+        CorePolicy.Require(deadline.ElapsedMilliseconds <= timeoutMilliseconds, "Private desktop creator exceeded its deadline");
+        CorePolicy.Require(thread.Join(0), "Private desktop creator has not exited");
+      }
+
+      internal void ThrowIfFailed() { if (failure != null) throw failure; }
+    }
 
     private sealed class TokenInformationFailure : InvalidOperationException
     {
@@ -197,7 +243,6 @@ namespace CcHahaInstallerProfile
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessWindowStation(IntPtr station);
     [DllImport("user32.dll")] private static extern IntPtr GetProcessWindowStation();
     [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
-    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetThreadDesktop(IntPtr desktop);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(IntPtr desktop);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseWindowStation(IntPtr station);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value, uint length, out uint needed);
@@ -971,31 +1016,32 @@ namespace CcHahaInstallerProfile
 
     public override void CreatePrivateDesktop(FixtureState state)
     {
-      CorePolicy.Require(Thread.CurrentThread.ManagedThreadId == ownerManagedThread, "Private station must use the dedicated console Controller thread");
+      CorePolicy.Require(Thread.CurrentThread.ManagedThreadId == ownerManagedThread, "Private station request requires its Controller thread");
       uint currentThread = GetCurrentThreadId();
       if (ownerNativeThread == 0) ownerNativeThread = currentThread;
       CorePolicy.Require(currentThread == ownerNativeThread, "Private station native thread changed");
-      CorePolicy.Require(state.station == IntPtr.Zero && state.desktop == IntPtr.Zero, "Private UI objects already exist");
+      CorePolicy.Require(state.station == IntPtr.Zero && state.desktop == IntPtr.Zero && desktopCreator == null, "Private UI objects already exist");
       string sid = state.account == null ? state.runnerSid : state.account.sid;
       CorePolicy.Require(!String.IsNullOrEmpty(sid) && state.targetIdentity != null, "Private desktop lacks a bound token");
       string logonSid = state.targetIdentity.groups.FirstOrDefault(group => group.StartsWith("S-1-5-5-", StringComparison.Ordinal));
       if (state.account != null) { Real(state); CorePolicy.Require(logonSid != null, "Target token has no logon SID"); }
       string stationName = "CcHaha1879-" + Guid.NewGuid().ToString("N");
       string descriptor = "D:P(A;;GA;;;SY)(A;;GA;;;" + state.runnerSid + ")(A;;GA;;;" + (logonSid ?? sid) + ")";
-      IntPtr security;
-      uint securitySize;
-      Win(ConvertStringSecurityDescriptorToSecurityDescriptorW(descriptor, 1, out security, out securitySize), "Private station security descriptor");
-      try
-      {
-        SecurityAttributes attributes = new SecurityAttributes { length = Marshal.SizeOf(typeof(SecurityAttributes)), descriptor = security, inherit = false };
-        state.originalStation = GetProcessWindowStation();
-        state.originalDesktop = GetThreadDesktop(GetCurrentThreadId());
-        CorePolicy.Require(state.originalStation != IntPtr.Zero && state.originalDesktop != IntPtr.Zero, "Original UI handles were not available");
-        // CWF_CREATE_ONLY: never open an object created by another process.
-        state.station = CreateWindowStationW(stationName, 1, 0x000f037f, ref attributes);
-        Win(state.station != IntPtr.Zero, "CreateWindowStationW");
+      state.originalStation = GetProcessWindowStation();
+      state.originalDesktop = GetThreadDesktop(GetCurrentThreadId());
+      CorePolicy.Require(state.originalStation != IntPtr.Zero && state.originalDesktop != IntPtr.Zero, "Original UI handles were not available");
+      desktopCreator = new PrivateDesktopCreator(delegate {
+        // This worker owns the descriptor until its native calls return, even
+        // if the Controller's bounded wait expires. No caller-side free races it.
+        IntPtr security = IntPtr.Zero;
         try
         {
+          uint securitySize;
+          Win(ConvertStringSecurityDescriptorToSecurityDescriptorW(descriptor, 1, out security, out securitySize), "Private station security descriptor");
+          SecurityAttributes attributes = new SecurityAttributes { length = Marshal.SizeOf(typeof(SecurityAttributes)), descriptor = security, inherit = false };
+          // CWF_CREATE_ONLY: never open an object created by another process.
+          state.station = CreateWindowStationW(stationName, 1, 0x000f037f, ref attributes);
+          Win(state.station != IntPtr.Zero, "CreateWindowStationW");
           Win(SetProcessWindowStation(state.station), "SetProcessWindowStation private");
           state.desktop = CreateDesktopW("fixture", IntPtr.Zero, IntPtr.Zero, 0, 0x000f01ff, ref attributes);
           Win(state.desktop != IntPtr.Zero, "CreateDesktopW");
@@ -1003,11 +1049,29 @@ namespace CcHahaInstallerProfile
         }
         finally
         {
-          Win(SetProcessWindowStation(state.originalStation), "Restore process window station");
-          Win(SetThreadDesktop(state.originalDesktop), "Restore thread desktop");
+          try
+          {
+            if (GetProcessWindowStation() != state.originalStation)
+              Win(SetProcessWindowStation(state.originalStation), "Restore process window station");
+            CorePolicy.Require(GetProcessWindowStation() == state.originalStation, "Original process station was not restored");
+          }
+          finally { if (security != IntPtr.Zero) LocalFree(security); }
         }
-      }
-      finally { LocalFree(security); }
+      });
+      desktopCreator.Start();
+      desktopCreator.WaitForExit(5000);
+      desktopCreator.ThrowIfFailed();
+      AssertOriginalUi(state);
+    }
+
+    private void AssertOriginalUi(FixtureState state)
+    {
+      CorePolicy.Require(Thread.CurrentThread.ManagedThreadId == ownerManagedThread &&
+        (ownerNativeThread == 0 || GetCurrentThreadId() == ownerNativeThread), "Original UI verification requires its Controller thread");
+      if (state.originalStation != IntPtr.Zero)
+        CorePolicy.Require(GetProcessWindowStation() == state.originalStation, "Original process station changed");
+      if (state.originalDesktop != IntPtr.Zero)
+        CorePolicy.Require(GetThreadDesktop(GetCurrentThreadId()) == state.originalDesktop, "Original Controller desktop changed");
     }
 
     private static IntPtr EnvironmentBytes(Dictionary<string, string> environment)
@@ -1622,8 +1686,14 @@ namespace CcHahaInstallerProfile
       if (state.subject != null) { CloseChild(state.subject); state.subject = null; }
       if (state.job != IntPtr.Zero) { Win(CloseHandle(state.job), "Close Controller-owned Job"); state.job = IntPtr.Zero; }
       if (state.environment != IntPtr.Zero) { Win(DestroyEnvironmentBlock(state.environment), "DestroyEnvironmentBlock"); state.environment = IntPtr.Zero; }
-      if (state.originalStation != IntPtr.Zero) Win(SetProcessWindowStation(state.originalStation), "Restore original station for cleanup");
-      if (state.originalDesktop != IntPtr.Zero) Win(SetThreadDesktop(state.originalDesktop), "Restore original desktop for cleanup");
+      if (desktopCreator != null)
+      {
+        desktopCreator.WaitForExit(5000);
+        desktopCreator = null;
+      }
+      if (state.originalStation != IntPtr.Zero && GetProcessWindowStation() != state.originalStation)
+        Win(SetProcessWindowStation(state.originalStation), "Restore original station for cleanup");
+      AssertOriginalUi(state);
       if (state.desktop != IntPtr.Zero) { Win(CloseDesktop(state.desktop), "Close owned Desktop"); state.desktop = IntPtr.Zero; }
       if (state.station != IntPtr.Zero) { Win(CloseWindowStation(state.station), "Close owned WindowStation"); state.station = IntPtr.Zero; }
       // GetProcessWindowStation / GetThreadDesktop returned borrowed handles.
@@ -1870,6 +1940,8 @@ namespace CcHahaInstallerProfile
       FileIdentity rootIdentity = null;
       NativePipeChannel pipe = null;
       bool cleaned = false;
+      IntPtr originalStation = GetProcessWindowStation();
+      IntPtr originalDesktop = GetThreadDesktop(GetCurrentThreadId());
       try
       {
         AbiOperatingSystem();
@@ -1909,6 +1981,11 @@ namespace CcHahaInstallerProfile
         platform.CreatePrivateDesktop(state);
         report.Check("private-station-desktop", state.station != IntPtr.Zero && state.desktop != IntPtr.Zero &&
           !state.desktopName.StartsWith("winsta0\\", StringComparison.OrdinalIgnoreCase), "Created private noninteractive UI objects; shared UI DACLs untouched");
+        report.Check("creator-exited-original-ui-unchanged", platform.desktopCreator != null && !platform.desktopCreator.IsAlive &&
+          originalStation != IntPtr.Zero && originalDesktop != IntPtr.Zero && GetProcessWindowStation() == originalStation &&
+          GetThreadDesktop(GetCurrentThreadId()) == originalDesktop,
+          "Dedicated MTA creator exited; original Controller station and STA desktop were never reassigned");
+        CorePolicy.Require(report.checks.All(check => check.status == "passed"), "Private desktop creator lifecycle failed");
         string binary = Path.Combine(root, "fixture.exe");
         File.Copy(CorePolicy.BinaryPath, binary, false);
         string binaryHash = CorePolicy.HashFile(CorePolicy.BinaryPath);
@@ -1987,7 +2064,9 @@ namespace CcHahaInstallerProfile
           platform.CloseRuntimeResources(state);
           platform.CloseTokenAndPrivileges(state);
           CorePolicy.Require(state.subject == null && state.job == IntPtr.Zero && state.station == IntPtr.Zero &&
-            state.desktop == IntPtr.Zero && state.environment == IntPtr.Zero && state.token == IntPtr.Zero,
+            state.desktop == IntPtr.Zero && state.environment == IntPtr.Zero && state.token == IntPtr.Zero &&
+            platform.desktopCreator == null && GetProcessWindowStation() == originalStation &&
+            GetThreadDesktop(GetCurrentThreadId()) == originalDesktop,
             "ABI native resources remain");
           if (state.controllerRootOwned) RemoveAbiRoot(root, rootIdentity, platform);
           cleaned = true;

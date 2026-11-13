@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace CcHahaInstallerProfile
 {
@@ -91,6 +92,53 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-private-desktop-creator-is-separate-mta-and-exits", delegate {
+        int caller = Thread.CurrentThread.ManagedThreadId, worker = caller;
+        ApartmentState apartment = ApartmentState.Unknown;
+        NativePlatform.PrivateDesktopCreator creator = new NativePlatform.PrivateDesktopCreator(delegate {
+          worker = Thread.CurrentThread.ManagedThreadId; apartment = Thread.CurrentThread.GetApartmentState();
+        });
+        Reject(delegate { creator.WaitForExit(1); }, "an unstarted creator is not a completed UI lease");
+        creator.Start();
+        Reject(delegate { creator.Start(); }, "creator cannot run twice");
+        creator.WaitForExit(5000); creator.ThrowIfFailed();
+        Assert(worker != caller && apartment == ApartmentState.MTA && !creator.IsAlive, "creator must leave the original STA thread untouched and really terminate");
+      });
+
+      Case(report, "fake-private-desktop-creator-propagates-failure-after-exit", delegate {
+        bool released = false;
+        NativePlatform.PrivateDesktopCreator creator = new NativePlatform.PrivateDesktopCreator(delegate {
+          try { throw new FixtureFailure("fake-private-desktop-create-failure"); }
+          finally { released = true; }
+        });
+        creator.Start(); creator.WaitForExit(5000);
+        Reject(delegate { creator.ThrowIfFailed(); }, "native creation failure must reach the Controller");
+        Assert(released && !creator.IsAlive, "failure must not masquerade as a live or successful creator");
+      });
+
+      Case(report, "fake-private-desktop-creator-timeout-retains-resource-lease", delegate {
+        using (ManualResetEvent entered = new ManualResetEvent(false))
+        using (ManualResetEvent release = new ManualResetEvent(false))
+        {
+          bool held = false;
+          NativePlatform.PrivateDesktopCreator creator = new NativePlatform.PrivateDesktopCreator(delegate {
+            held = true; entered.Set();
+            try { release.WaitOne(); }
+            finally { held = false; }
+          });
+          creator.Start();
+          try
+          {
+            Assert(entered.WaitOne(5000), "fake creator must reach its held lease");
+            Reject(delegate { creator.WaitForExit(1); }, "timeout cannot claim the creator exited");
+            Assert(creator.IsAlive && held, "caller timeout must not free a live creator's resources");
+          }
+          finally { release.Set(); creator.WaitForExit(5000); }
+          creator.ThrowIfFailed();
+          Assert(!held && !creator.IsAlive, "only the terminated worker releases its own lease");
+        }
+      });
+
       Case(report, "fake-token-fixed-elevation-and-exact-fill-contract", delegate {
         Assert(NativePlatform.FixedTokenCapacity(20) == 4, "TOKEN_ELEVATION is a known DWORD queried with a real four-byte buffer");
         foreach (int infoClass in new int[] { 1, 2, 3, 8, 10, 12, 18, 25 })
