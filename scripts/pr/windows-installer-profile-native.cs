@@ -309,6 +309,20 @@ namespace CcHahaInstallerProfile
         (error == 122 || (infoClass == 12 && error == 24 && requiredBytes == sizeof(uint)));
     }
 
+    internal static int FixedTokenCapacity(int infoClass)
+    {
+      // TOKEN_ELEVATION is exactly one DWORD. Query that structure directly;
+      // do not interpret its observed ERROR_BAD_LENGTH size probe as success.
+      return infoClass == 20 ? sizeof(uint) : 0;
+    }
+
+    internal static bool AcceptTokenFill(int infoClass, bool success, int capacity, int observedLength)
+    {
+      bool scalar = infoClass == 8 || infoClass == 12 || infoClass == 18 || infoClass == 20;
+      return success && capacity > 0 && capacity <= 1048576 && observedLength > 0 && observedLength <= capacity
+        && (!scalar || (capacity == sizeof(uint) && observedLength == sizeof(uint)));
+    }
+
     private string TokenDiagnostic(string phase, int infoClass, bool success, int error,
       int seedLength, int capacity, int observedLength)
     {
@@ -321,16 +335,22 @@ namespace CcHahaInstallerProfile
 
     private IntPtr TokenBuffer(IntPtr token, int infoClass)
     {
-      // Framework WindowsIdentity seeds a DWORD for TokenSessionId. A 24
-      // response need not prove that native code wrote ReturnLength, so retain
-      // the seed separately in diagnostics and require a successful exact fill.
-      int seedLength = infoClass == 12 ? sizeof(uint) : 0;
-      int size = seedLength;
-      bool first = GetTokenInformation(token, infoClass, IntPtr.Zero, 0, out size);
-      int sizeError = Marshal.GetLastWin32Error();
-      string probe = TokenDiagnostic("size", infoClass, first, sizeError, seedLength, 0, size);
-      if (!AcceptTokenSizeProbe(infoClass, first, sizeError, size)) throw new TokenInformationFailure(probe);
-      int capacity = size;
+      int capacity = FixedTokenCapacity(infoClass);
+      if (capacity == 0)
+      {
+        // Framework WindowsIdentity seeds a DWORD for TokenSessionId. A 24
+        // response need not prove that native code wrote ReturnLength, so retain
+        // the seed separately and require a successful exact scalar fill.
+        int seedLength = infoClass == 12 ? sizeof(uint) : 0;
+        int size = seedLength;
+        bool first = GetTokenInformation(token, infoClass, IntPtr.Zero, 0, out size);
+        int sizeError = Marshal.GetLastWin32Error();
+        string probe = TokenDiagnostic("size", infoClass, first, sizeError, seedLength, 0, size);
+        if (!AcceptTokenSizeProbe(infoClass, first, sizeError, size)) throw new TokenInformationFailure(probe);
+        capacity = size;
+      }
+      else if (tokenProbeDiagnostics.Count < 64)
+        tokenProbeDiagnostics.Add("GetTokenInformation fixed-capacity class=20 capacity=4 source=TOKEN_ELEVATION-DWORD; no size probe");
       IntPtr data = Marshal.AllocHGlobal(capacity);
       try
       {
@@ -340,8 +360,7 @@ namespace CcHahaInstallerProfile
         string fill = TokenDiagnostic("fill", infoClass, filled, fillError, 0, capacity, observedLength);
         // Last-error can be stale on Framework after success. It is evidence,
         // not a reason to reject an otherwise successful, bounded fill.
-        if (!filled || observedLength <= 0 || observedLength > capacity ||
-          (infoClass == 12 && (capacity != sizeof(uint) || observedLength != sizeof(uint))))
+        if (!AcceptTokenFill(infoClass, filled, capacity, observedLength))
           throw new TokenInformationFailure(fill);
         return data;
       }

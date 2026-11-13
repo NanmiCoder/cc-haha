@@ -91,6 +91,25 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-token-fixed-elevation-and-exact-fill-contract", delegate {
+        Assert(NativePlatform.FixedTokenCapacity(20) == 4, "TOKEN_ELEVATION is a known DWORD queried with a real four-byte buffer");
+        foreach (int infoClass in new int[] { 1, 2, 3, 8, 10, 12, 18, 25 })
+          Assert(NativePlatform.FixedTokenCapacity(infoClass) == 0, "other information classes retain their bounded size probe");
+        Assert(!NativePlatform.AcceptTokenSizeProbe(20, false, 24, 4), "class20 BAD_LENGTH is still a failure, never an accepted size result");
+        foreach (int infoClass in new int[] { 8, 12, 18, 20 })
+        {
+          Assert(NativePlatform.AcceptTokenFill(infoClass, true, 4, 4), "actual successful DWORD fill is required");
+          Assert(!NativePlatform.AcceptTokenFill(infoClass, false, 4, 4), "failure cannot be promoted by an expected length");
+          foreach (int length in new int[] { -1, 0, 3, 5 })
+            Assert(!NativePlatform.AcceptTokenFill(infoClass, true, 4, length), "scalar fill rejects absent, short or oversized actual length");
+          Assert(!NativePlatform.AcceptTokenFill(infoClass, true, 8, 4), "scalar capacity must also be exact");
+        }
+        Assert(NativePlatform.AcceptTokenFill(1, true, 44, 44), "variable-sized token user remains supported");
+        Assert(!NativePlatform.AcceptTokenFill(1, true, 0, 0)
+          && !NativePlatform.AcceptTokenFill(1, true, 1048577, 44)
+          && !NativePlatform.AcceptTokenFill(1, true, 44, 45), "all other fills remain bounded");
+      });
+
       Case(report, "fake-token-size-probe-exact-session-id-contract", delegate {
         Assert(NativePlatform.AcceptTokenSizeProbe(12, false, 24, 4), "TokenSessionId ERROR_BAD_LENGTH requires exactly DWORD bytes");
         Assert(NativePlatform.AcceptTokenSizeProbe(1, false, 122, 32), "normal insufficient-buffer probe remains supported");
