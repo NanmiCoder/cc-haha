@@ -213,6 +213,7 @@ describe('evaluateChangePolicy', () => {
     'scripts/pr/windows-installer-profile-fixture.cs',
     'scripts/pr/windows-installer-profile-native.cs',
     'scripts/pr/windows-installer-profile-fixture-tests.cs',
+    'scripts/pr/windows-installer-profile-only/argv-env-plan.json',
     'scripts/pr/windows-installer-profile-review.ts',
     'scripts/pr/windows-installer-profile-review.test.ts',
     '.github/workflows/windows-installer-profile-review.yml',

@@ -185,8 +185,19 @@ namespace CcHahaInstallerProfile
     private struct UserFlags { public uint flags; }
     [StructLayout(LayoutKind.Sequential)]
     private struct LocalGroupMember { public IntPtr sid; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceStatusProcess
+    {
+      public uint type; public uint state; public uint controls; public uint win32Exit;
+      public uint serviceExit; public uint checkpoint; public uint waitHint; public uint pid; public uint flags;
+    }
 
     [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentThread();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetModuleHandleExW(uint flags, string module, out IntPtr handle);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint GetModuleFileNameW(IntPtr module, StringBuilder path, uint characters);
+    [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)] private static extern IntPtr GetProcAddress(IntPtr module, string name);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool FreeLibrary(IntPtr module);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessId(IntPtr process);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
@@ -213,6 +224,11 @@ namespace CcHahaInstallerProfile
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessW(string application, StringBuilder commandLine, IntPtr processSecurity, IntPtr threadSecurity, bool inherit, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool CreateProcessWithTokenW(IntPtr token, uint logonFlags, string application, StringBuilder commandLine, uint flags, IntPtr environment, string cwd, ref StartupInfo startup, out ProcessInformation process);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool OpenThreadToken(IntPtr thread, uint access, bool openAsSelf, out IntPtr token);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenSCManagerW(string machine, string database, uint access);
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenServiceW(IntPtr manager, string service, uint access);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool QueryServiceStatusEx(IntPtr service, int level, out ServiceStatusProcess status, uint bytes, out uint needed);
+    [DllImport("advapi32.dll", SetLastError = true)] private static extern bool CloseServiceHandle(IntPtr handle);
     [DllImport("advapi32.dll", SetLastError = true)] private static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr buffer, int length, out int needed);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool LookupPrivilegeNameW(string system, ref Luid luid, StringBuilder name, ref uint length);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool LookupPrivilegeValueW(string system, string name, out Luid luid);
@@ -292,6 +308,13 @@ namespace CcHahaInstallerProfile
     private void Real(FixtureState state)
     {
       CorePolicy.Require(state != null && Object.ReferenceEquals(state.spec, controllerContext), "Native Controller adapter is not bound");
+      if (state.spec.mode == "createprofile-only-controller") CorePolicy.ValidateProfileOnlySpec(state.spec);
+      else StageBIdentity(state.spec, "historical-v078-controller");
+    }
+
+    private void HistoricalController(FixtureState state)
+    {
+      Real(state);
       StageBIdentity(state.spec, "historical-v078-controller");
     }
 
@@ -310,6 +333,16 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8 &&
         String.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase), "Controller binding requires Windows x64 CI");
       CorePolicy.ValidateBindings(spec, this);
+      controllerContext = spec;
+    }
+
+    internal void BindProfileOnlyContext(FixtureSpec spec)
+    {
+      CorePolicy.Require(controllerContext == null && subjectContext == null, "Native adapter was already bound");
+      CorePolicy.ValidateProfileOnlySpec(spec);
+      CorePolicy.Require(Environment.OSVersion.Platform == PlatformID.Win32NT && IntPtr.Size == 8 &&
+        String.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase), "Profile-only binding requires Windows x64 CI");
+      CorePolicy.ValidateProfileOnlyBindings(spec, this);
       controllerContext = spec;
     }
 
@@ -601,20 +634,219 @@ namespace CcHahaInstallerProfile
     public override void CreateFreshProfile(FixtureState state)
     {
       VerifyOwnedAccount(state, true);
-      CorePolicy.Require(!state.profileCreated && state.account.groups.Count == 1 && state.account.groups[0] == UsersSid, "Profile creation precondition failed");
+      CorePolicy.Require(state.accountBound && state.accountCreated && state.accountDisabled && !state.profileCreated
+        && state.profileCreationAttempts == 1 && state.profileCreationUncertain && !state.profileOwnershipProven
+        && state.account.groups.Count == 1 && state.account.groups[0] == UsersSid, "Profile creation precondition failed");
       StringBuilder path = new StringBuilder(32768);
+      RecordCreateProfileDiagnostics(state, path, "before");
+      CorePolicy.Require(!OwnProfileRegistration(state, false) && HivesAbsent(state) && !HasOwnedSidProcesses(state),
+        "Fresh SID already has profile state or a process");
       Real(state);
-      int status = CreateProfile(state.account.sid, state.sam, path, (uint)path.Capacity);
+      // Allocation and P/Invoke ABI stay unchanged. 260 is the one-factor
+      // diagnostic candidate, not a claimed documented CreateProfile limit.
+      // Controller durably armed uncertainty before entering this method.
+      state.profileCreationUncertain = true;
+      state.report.trace.Add("CreateProfile call-entered; calls=1; UTC=" + DateTime.UtcNow.ToString("o"));
+      int status = CreateProfile(state.account.sid, state.sam, path, 260u);
+      state.report.trace.Add("CreateProfile returned HRESULT=" + status.ToString(CultureInfo.InvariantCulture)
+        + "; hex=" + unchecked((uint)status).ToString("x8", CultureInfo.InvariantCulture) + "; UTC=" + DateTime.UtcNow.ToString("o")
+        + "; outputLength=" + path.Length.ToString(CultureInfo.InvariantCulture) + "; outputSha256=" + CorePolicy.HashText(path.ToString()));
+      if (status == 0)
+      {
+        state.profileCreated = true;
+        if (state.report != null) state.report.realProfilesCreated++;
+      }
+      try { OwnProfileRegistration(state, false); RecordCreateProfileDiagnostics(state, path, "after"); }
+      catch (Exception error)
+      {
+        state.report.trace.Add("CreateProfile after-diagnostics failed: " + SafeFailure(error));
+        if (status == 0) throw;
+      }
       CorePolicy.Require(status == 0, "CreateProfile failed (HRESULT " + status.ToString(CultureInfo.InvariantCulture) + ")");
-      state.profileCreated = true;
+      CorePolicy.Require(path.Length > 0 && path.Length < 260, "CreateProfile returned an unbounded path");
       state.profilePath = path.ToString();
-      if (state.report != null) state.report.realProfilesCreated++;
+      CorePolicy.ValidateAbsolutePath(state.profilePath);
       state.profileIdentity = IdentifyPath(state.profilePath, true);
-      CorePolicy.Require(!state.profileIdentity.reparse && !CorePolicy.IsInside(state.spec.gitRoot, state.profilePath), "Fresh profile identity is outside the allowed boundary");
+      AssertOwnedProfileMetadata(state);
+      CorePolicy.Require(OwnProfileRegistration(state, true) && HivesAbsent(state) && !HasOwnedSidProcesses(state),
+        "Created profile SID path hive or process boundary is unproven");
+      VerifyOwnedAccount(state, true);
+      state.profileOwnershipProven = true;
+      state.profileCreationUncertain = false;
+      state.report.trace.Add("CreateProfile owner-path-hive-process-boundary=proven; no profile lease was loaded");
+    }
+
+    private static void ProfileTrace(FixtureState state, string text)
+    {
+      CorePolicy.Require(state.report != null && text != null && text.Length <= 1800
+        && text.IndexOfAny(new char[] { '\0', '\r', '\n' }) < 0, "Bounded CreateProfile diagnostic row required");
+      state.report.trace.Add("CreateProfile diagnostic " + text);
+    }
+
+    private void RecordProfileModule(FixtureState state, string name, string expectedPath, bool exports)
+    {
+      CorePolicy.Require(new FileInfo(expectedPath).Length <= 64 * 1024 * 1024, "Bounded system module diagnostic required");
+      FileIdentity expected = IdentifyPath(expectedPath, false);
+      FileVersionInfo version = FileVersionInfo.GetVersionInfo(expected.canonicalPath);
+      ProfileTrace(state, "module=" + name + "; systemPath=" + expected.canonicalPath + "; sha256=" + expected.sha256
+        + "; version=" + version.FileMajorPart + "." + version.FileMinorPart + "." + version.FileBuildPart + "." + version.FilePrivatePart);
+      IntPtr module;
+      if (!GetModuleHandleExW(0, expectedPath, out module))
+      {
+        int error = Marshal.GetLastWin32Error();
+        CorePolicy.Require(error == 126, "Loaded module metadata query failed");
+        ProfileTrace(state, "module=" + name + "; loaded=false; export-candidates=not_observed");
+        return;
+      }
+      try
+      {
+        StringBuilder actual = new StringBuilder(32768);
+        uint length = GetModuleFileNameW(module, actual, (uint)actual.Capacity);
+        Win(length > 0 && length < actual.Capacity, "GetModuleFileNameW profile diagnostics");
+        FileIdentity loaded = IdentifyPath(actual.ToString(), false);
+        CorePolicy.Require(!loaded.reparse && loaded.fileId == expected.fileId && loaded.volumePath == expected.volumePath
+          && loaded.sha256 == expected.sha256 && CorePolicy.SamePath(loaded.canonicalPath, expected.canonicalPath), "Loaded profile module identity differs from system file");
+        ProfileTrace(state, "module=" + name + "; loaded=true; exact-system-file=true");
+        if (exports)
+          ProfileTrace(state, "module=userenv; CreateProfile-present=" + (GetProcAddress(module, "CreateProfile") != IntPtr.Zero)
+            + "; CreateProfileW-present=" + (GetProcAddress(module, "CreateProfileW") != IntPtr.Zero)
+            + "; actual-marshalling-stub-target=not_observed");
+      }
+      finally { Win(FreeLibrary(module), "Release existing profile module reference"); }
+    }
+
+    private void RecordProfileToken(FixtureState state, IntPtr token, string kind)
+    {
+      TokenIdentity identity = InspectToken(token);
+      ProfileTrace(state, "token=" + kind + "; sidSha256=" + CorePolicy.HashText(identity.sid) + "; type=" + identity.tokenType
+        + "; integrityRid=" + identity.integrityRid + "; elevated=" + identity.elevated + "; elevationType=" + identity.elevationType
+        + "; session=" + identity.sessionId + "; authenticationIdSha256=" + CorePolicy.HashText(identity.authenticationId));
+      IntPtr buffer = TokenBuffer(token, 3);
+      try
+      {
+        int count = Marshal.ReadInt32(buffer);
+        CorePolicy.Require(count >= 0 && count < 4096, "Bounded profile token privilege count required");
+        Dictionary<string, uint> attributes = new Dictionary<string, uint>(StringComparer.Ordinal);
+        int offset = Marshal.OffsetOf(typeof(TokenPrivilegesOne), "Privilege").ToInt32();
+        int stride = Marshal.SizeOf(typeof(LuidAttributes));
+        for (int i = 0; i < count; i++)
+        {
+          LuidAttributes value = (LuidAttributes)Marshal.PtrToStructure(IntPtr.Add(buffer, offset + i * stride), typeof(LuidAttributes));
+          StringBuilder name = new StringBuilder(256); uint characters = 256;
+          Win(LookupPrivilegeNameW(null, ref value.Luid, name, ref characters), "LookupPrivilegeNameW profile diagnostics");
+          if (name.ToString() == "SeBackupPrivilege" || name.ToString() == "SeRestorePrivilege" || name.ToString() == "SeImpersonatePrivilege")
+            attributes.Add(name.ToString(), value.Attributes);
+        }
+        foreach (string name in new string[] { "SeBackupPrivilege", "SeRestorePrivilege", "SeImpersonatePrivilege" })
+          ProfileTrace(state, "token=" + kind + "; privilege=" + name + "; attributes="
+            + (attributes.ContainsKey(name) ? attributes[name].ToString(CultureInfo.InvariantCulture) : "absent"));
+      }
+      finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private void RecordCreateProfileDiagnostics(FixtureState state, StringBuilder path, string phase)
+    {
+      Real(state);
+      ProfileTrace(state, "phase=" + phase + "; os=" + Environment.OSVersion.Version + "; clr=" + Environment.Version
+        + "; runtime=" + RuntimeEnvironment.GetSystemVersion() + "; processBits=" + (IntPtr.Size * 8)
+        + "; os64=" + Environment.Is64BitOperatingSystem);
+      foreach (string name in new string[] { "ImageOS", "ImageVersion" })
+      {
+        string value = Environment.GetEnvironmentVariable(name);
+        CorePolicy.Require(value == null || value.Length <= 256, "Bounded image diagnostic required");
+        ProfileTrace(state, "imageField=" + name + "; length=" + (value == null ? 0 : value.Length)
+          + "; sha256=" + (value == null ? "absent" : CorePolicy.HashText(value)));
+      }
+      RecordProfileModule(state, "userenv", Path.Combine(Environment.SystemDirectory, "userenv.dll"), true);
+      RecordProfileModule(state, "clr", Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "clr.dll"), false);
+      RecordProfileModule(state, "mscorlib", typeof(object).Module.FullyQualifiedName, false);
+      IntPtr token;
+      Win(OpenProcessToken(GetCurrentProcess(), TokenQuery, out token), "OpenProcessToken profile diagnostics");
+      try { RecordProfileToken(state, token, "process"); }
+      finally { Win(CloseHandle(token), "Close process diagnostic token"); }
+      bool threadToken = OpenThreadToken(GetCurrentThread(), TokenQuery, true, out token);
+      int threadError = threadToken ? 0 : Marshal.GetLastWin32Error();
+      if (threadToken)
+      {
+        try { RecordProfileToken(state, token, "thread"); }
+        finally { Win(CloseHandle(token), "Close thread diagnostic token"); }
+      }
+      else
+      {
+        ProfileTrace(state, "token=thread; present=false; Win32=" + threadError);
+        CorePolicy.Require(threadError == 1008, "Thread token state is unknown");
+      }
+      IntPtr manager = OpenSCManagerW(null, null, 1);
+      Win(manager != IntPtr.Zero, "OpenSCManagerW read-only profile diagnostics");
+      try
+      {
+        IntPtr service = OpenServiceW(manager, "ProfSvc", 4);
+        Win(service != IntPtr.Zero, "OpenServiceW read-only profile diagnostics");
+        try
+        {
+          ServiceStatusProcess status; uint needed;
+          Win(QueryServiceStatusEx(service, 0, out status, (uint)Marshal.SizeOf(typeof(ServiceStatusProcess)), out needed), "QueryServiceStatusEx profile diagnostics");
+          ProfileTrace(state, "service=ProfSvc; state=" + status.state + "; win32Exit=" + status.win32Exit
+            + "; serviceExit=" + status.serviceExit + "; checkpoint=" + status.checkpoint + "; waitHint=" + status.waitHint);
+        }
+        finally { Win(CloseServiceHandle(service), "Close queried profile service"); }
+      }
+      finally { Win(CloseServiceHandle(manager), "Close queried service manager"); }
+      CorePolicy.Require(state.account.sid.IndexOf('\0') < 0 && state.sam.IndexOf('\0') < 0, "CreateProfile input contains NUL");
+      ProfileTrace(state, "sidLength=" + state.account.sid.Length + "; sidSha256=" + CorePolicy.HashText(state.account.sid)
+        + "; samLength=" + state.sam.Length + "; samSha256=" + CorePolicy.HashText(state.sam) + "; inputsNoNul=true"
+        + "; StringBuilderLength=" + path.Length + "; StringBuilderCapacity=" + path.Capacity + "; passedCch=260");
+    }
+
+    private bool OwnProfileRegistration(FixtureState state, bool match)
+    {
+      Real(state); bool present = false;
+      foreach (RegistryView view in new RegistryView[] { RegistryView.Registry32, RegistryView.Registry64 })
+      using (RegistryKey machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+      using (RegistryKey key = machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + state.account.sid, false))
+      {
+        ProfileTrace(state, "ownSID-ProfileList; view=" + (int)view + "; present=" + (key != null));
+        if (key == null) continue;
+        present = true;
+        object raw = key.GetValue("ProfileImagePath", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+        string registered = raw as string;
+        ProfileTrace(state, "ownSID-ProfileList; view=" + (int)view + "; pathString=" + (registered != null)
+          + "; pathLength=" + (registered == null ? 0 : registered.Length)
+          + "; pathSha256=" + (registered == null || registered.Length >= 800 ? "unproven" : CorePolicy.HashText(registered)));
+        if (!match) continue;
+        CorePolicy.Require(registered != null && registered.Length < 800 && registered.IndexOf('%') < 0, "Own SID profile registration path is unproven");
+        CorePolicy.ValidateAbsolutePath(registered);
+        FileIdentity identity = IdentifyPath(registered, true);
+        CorePolicy.Require(state.profileIdentity != null && !identity.reparse && identity.fileId == state.profileIdentity.fileId
+          && identity.volumePath == state.profileIdentity.volumePath
+          && CorePolicy.SamePath(identity.canonicalPath, state.profileIdentity.canonicalPath), "Own SID profile registration differs from returned profile");
+        ProfileTrace(state, "ownSID-ProfileList; view=" + (int)view + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath)
+          + "; exact-returned-file-identity=true");
+      }
+      return present;
+    }
+
+    private void AssertOwnedProfileMetadata(FixtureState state)
+    {
+      FileIdentity identity = state.profileIdentity;
+      CorePolicy.Require(identity != null && identity.directory && !identity.reparse && !String.IsNullOrEmpty(identity.fileId)
+        && !String.IsNullOrEmpty(identity.volumePath), "Fresh profile canonical identity is unproven");
+      string leaf = Path.GetFileName(identity.canonicalPath.TrimEnd('\\'));
+      CorePolicy.Require(String.Equals(leaf, state.sam, StringComparison.OrdinalIgnoreCase)
+        || leaf.StartsWith(state.sam + ".", StringComparison.OrdinalIgnoreCase), "Fresh profile path lacks the owned unpredictable account basename");
+      foreach (string forbidden in new string[] { state.spec.gitRoot, state.spec.sourceRoot, state.spec.controllerRoot })
+        CorePolicy.Require(!CorePolicy.SamePath(identity.canonicalPath, forbidden) && !CorePolicy.IsInside(forbidden, identity.canonicalPath)
+          && !CorePolicy.IsInside(identity.canonicalPath, forbidden), "Fresh profile intersects another fixture boundary");
+      string owner = Directory.GetAccessControl(identity.canonicalPath, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)).Value;
+      CorePolicy.Require(owner == state.account.sid || owner == "S-1-5-18", "Fresh profile owner is not the bound SID or SYSTEM");
+      ProfileTrace(state, "profile-fileIdSha256=" + CorePolicy.HashText(identity.volumePath + "\n" + identity.fileId)
+        + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath) + "; ownerSidSha256=" + CorePolicy.HashText(owner)
+        + "; bound-owner-or-system=true; reparse=false");
     }
 
     public override void SetOwnedAccountDisabled(FixtureState state, bool disabled)
     {
+      if (!disabled) HistoricalController(state);
       VerifyOwnedAccount(state, state.accountDisabled);
       UserFlags flags = new UserFlags { flags = disabled ? state.account.flags | AccountDisabled : state.account.flags & ~AccountDisabled };
       uint parameter;
@@ -626,6 +858,7 @@ namespace CcHahaInstallerProfile
 
     public override void Logon(FixtureState state, SecretBuffer password)
     {
+      HistoricalController(state);
       VerifyOwnedAccount(state, false);
       CorePolicy.Require(state.profileCreated && state.token == IntPtr.Zero && password.Pointer != IntPtr.Zero, "Logon precondition failed");
       IntPtr token;
@@ -757,6 +990,7 @@ namespace CcHahaInstallerProfile
 
     public override void LoadProfile(FixtureState state)
     {
+      HistoricalController(state);
       VerifyOwnedAccount(state, false);
       CorePolicy.Require(state.profileCreated && !state.profileLoaded && state.token != IntPtr.Zero && state.profile == IntPtr.Zero, "Profile load precondition failed");
       CorePolicy.AssertStandard(InspectToken(state.token), state.account.sid);
@@ -825,6 +1059,7 @@ namespace CcHahaInstallerProfile
 
     public override Dictionary<string, string> TargetEnvironment(FixtureState state)
     {
+      HistoricalController(state);
       CorePolicy.Require(state.token != IntPtr.Zero && state.environment == IntPtr.Zero, "Target environment lifecycle error");
       Win(CreateEnvironmentBlock(out state.environment, state.token, false), "CreateEnvironmentBlock");
       Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -854,7 +1089,7 @@ namespace CcHahaInstallerProfile
 
     public override void WriteHiveChallenge(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.accountBound && state.profileLoaded && state.profile != IntPtr.Zero && state.account.sid == state.spec.expectedSid, "Target hive is not owned and loaded");
       ValidateHiveKey(state.spec);
       using (RegistryKey root = RegistryKey.FromHandle(new SafeRegistryHandle(state.profile, false), RegistryView.Registry64))
@@ -895,7 +1130,7 @@ namespace CcHahaInstallerProfile
 
     public override bool VerifyHiveResponse(FixtureState state, string response)
     {
-      Real(state);
+      HistoricalController(state);
       ValidateHiveKey(state.spec);
       if (!state.accountBound || !state.profileLoaded || state.profile == IntPtr.Zero ||
           response != HiveResponse(state.spec, state.account.sid)) return false;
@@ -969,7 +1204,7 @@ namespace CcHahaInstallerProfile
 
     public override void PrepareSubjectAccess(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.controllerRootOwned && state.accountBound && state.profileLoaded, "Subject input ownership is incomplete");
       VerifyOwnedAccount(state, false);
       string input = Path.Combine(state.spec.controllerRoot, "subject-input");
@@ -1016,6 +1251,7 @@ namespace CcHahaInstallerProfile
 
     public override void CreatePrivateDesktop(FixtureState state)
     {
+      if (controllerContext != null && controllerContext.mode == "createprofile-only-controller") HistoricalController(state);
       CorePolicy.Require(Thread.CurrentThread.ManagedThreadId == ownerManagedThread, "Private station request requires its Controller thread");
       uint currentThread = GetCurrentThreadId();
       if (ownerNativeThread == 0) ownerNativeThread = currentThread;
@@ -1024,7 +1260,7 @@ namespace CcHahaInstallerProfile
       string sid = state.account == null ? state.runnerSid : state.account.sid;
       CorePolicy.Require(!String.IsNullOrEmpty(sid) && state.targetIdentity != null, "Private desktop lacks a bound token");
       string logonSid = state.targetIdentity.groups.FirstOrDefault(group => group.StartsWith("S-1-5-5-", StringComparison.Ordinal));
-      if (state.account != null) { Real(state); CorePolicy.Require(logonSid != null, "Target token has no logon SID"); }
+      if (state.account != null) { HistoricalController(state); CorePolicy.Require(logonSid != null, "Target token has no logon SID"); }
       string stationName = "CcHaha1879-" + Guid.NewGuid().ToString("N");
       string descriptor = "D:P(A;;GA;;;SY)(A;;GA;;;" + state.runnerSid + ")(A;;GA;;;" + (logonSid ?? sid) + ")";
       state.originalStation = GetProcessWindowStation();
@@ -1169,7 +1405,7 @@ namespace CcHahaInstallerProfile
 
     public override void CreateSubjectSuspended(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.subject == null && state.token != IntPtr.Zero && state.targetEnvironment != null &&
         state.desktop != IntPtr.Zero && !String.IsNullOrEmpty(state.desktopName) && state.spec.subjectSpecPath != null &&
         state.subjectBinaryPath != null, "Suspended subject preconditions failed");
@@ -1197,7 +1433,7 @@ namespace CcHahaInstallerProfile
 
     public override void AssignSubjectToOwnedJob(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.subject != null && !state.subject.resumed && !state.subject.assigned && state.job == IntPtr.Zero, "Subject Job assignment order failed");
       state.job = NewJob();
       Win(AssignProcessToJobObject(state.job, state.subject.process), "AssignProcessToJobObject subject");
@@ -1206,7 +1442,7 @@ namespace CcHahaInstallerProfile
 
     public override void VerifySubject(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.subject != null && state.subject.assigned && !state.subject.resumed, "Subject must still be suspended");
       CheckHeldProcess(state.subject, state.account.sid, state.subjectBinaryPath, state.spec.expectedBinarySha256, state.job);
       TokenIdentity identity = ProcessToken(state.subject.process);
@@ -1224,7 +1460,7 @@ namespace CcHahaInstallerProfile
 
     public override int WaitSubjectExit(FixtureState state, int timeoutMilliseconds)
     {
-      Real(state);
+      HistoricalController(state);
       OwnedProcess subject = state.subject;
       CorePolicy.Require(timeoutMilliseconds > 0 && timeoutMilliseconds <= 30000 && state.acknowledged &&
         subject != null && subject.process != IntPtr.Zero && subject.pid > 0 && subject.assigned && subject.resumed &&
@@ -1582,7 +1818,7 @@ namespace CcHahaInstallerProfile
 
     public override FixtureChannel CreateControllerChannel(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.accountBound && state.profileLoaded && state.channel == null, "Controller channel ownership is incomplete");
       return NativePipeChannel.Server(state.spec.pipeName, state.runnerSid, state.account.sid);
     }
@@ -1710,7 +1946,7 @@ namespace CcHahaInstallerProfile
 
     public override void UnloadProfile(FixtureState state)
     {
-      Real(state);
+      HistoricalController(state);
       CorePolicy.Require(state.accountBound && state.profileLoaded && state.profile != IntPtr.Zero &&
         state.token != IntPtr.Zero && state.jobsEmpty, "Paired profile unload precondition failed");
       VerifyOwnedAccount(state, true);
@@ -1737,21 +1973,26 @@ namespace CcHahaInstallerProfile
     public override void DeleteOwnedProfile(FixtureState state)
     {
       VerifyOwnedAccount(state, true);
-      CorePolicy.Require(state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero &&
+      CorePolicy.Require(state.profileCreationAttempts == 1 && state.profileOwnershipProven && !state.profileCreationUncertain
+        && state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero &&
         state.jobsEmpty && HivesAbsent(state) && !HasOwnedSidProcesses(state) && state.profileIdentity != null, "Owned profile cannot yet be deleted");
       FileIdentity identity = IdentifyPath(state.profilePath, true);
       CorePolicy.Require(!identity.reparse && identity.fileId == state.profileIdentity.fileId &&
         identity.volumePath == state.profileIdentity.volumePath && CorePolicy.SamePath(identity.canonicalPath, state.profileIdentity.canonicalPath), "Owned profile directory identity changed");
+      AssertOwnedProfileMetadata(state);
+      CorePolicy.Require(OwnProfileRegistration(state, true), "Owned profile registration disappeared before deletion");
       Real(state);
       Win(DeleteProfileW(state.account.sid, state.profilePath, null), "DeleteProfileW");
       CorePolicy.Require(!Directory.Exists(state.profilePath) && HivesAbsent(state), "Userenv did not remove the owned profile");
+      CorePolicy.Require(!OwnProfileRegistration(state, false), "Userenv left owned profile registration behind");
       state.profileCreated = false;
     }
 
     public override void DeleteOwnedAccount(FixtureState state)
     {
       VerifyOwnedAccount(state, true);
-      CorePolicy.Require(!state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero &&
+      CorePolicy.Require(!state.profileCreationUncertain && (state.profileCreationAttempts == 0 || state.profileOwnershipProven)
+        && !state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero &&
         state.jobsEmpty && HivesAbsent(state) && !HasOwnedSidProcesses(state), "Owned account cannot yet be deleted");
       Real(state);
       Net(NetUserDel(null, state.sam), "NetUserDel");

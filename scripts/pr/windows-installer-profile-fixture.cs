@@ -190,6 +190,11 @@ namespace CcHahaInstallerProfile
     public bool accountEverCreated;
     public bool accountBound;
     public bool profileCreated;
+    // Runtime-only uncertainty, armed before the single CreateProfile attempt.
+    // The existing ledger.stage records the durable armed/proven boundary.
+    public int profileCreationAttempts;
+    public bool profileCreationUncertain;
+    public bool profileOwnershipProven;
     public bool profileEverCreated;
     public bool profileLoaded;
     public bool accountDisabled = true;
@@ -416,6 +421,8 @@ namespace CcHahaInstallerProfile
     public const string ProductGuid = "f01cf2f0-8fe7-55b9-af4b-027bcf9c2cfe";
     public const string PlanHash = "71bd11ce0f76cd98de7dbbe429f00269782e8c9e64156a2d0b493578c93a5376";
     public const string EnvironmentPlanHash = "c43a2ecd835e2c090a2058dc54f83cc0c2df06fafc087e8d6ef26a4061fb4e5f";
+    public const string ProfileOnlyPlanHash = "60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672";
+    public const string ProfileOnlyEnvironmentPlanHash = "d2e740b8d48b87b3e34a53cec9f9400bd08797b17538ab8cb1f0cc548736451a";
     public const string BadClr = "v0.0.0-test-invalid-clr";
     public static readonly string[] SourceNames = {
       "windows-installer-profile-fixture.cs", "windows-installer-profile-native.cs", "windows-installer-profile-fixture-tests.cs"
@@ -590,7 +597,28 @@ namespace CcHahaInstallerProfile
       Require(spec.runId == "52f4ce19-5ded-4b27-8268-a2840809e0ca" && spec.generation == 1
         && spec.owner == "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c", "original-owner-generation");
       Require(spec.frozenPlanManifestSha256 == PlanHash && spec.argvEnvPlanSha256 == EnvironmentPlanHash, "frozen-plan-binding");
-      foreach (string path in new string[] { spec.gitRoot, spec.sourceRoot, spec.controllerRoot, spec.output, spec.setupPath }) ValidateAbsolutePath(path);
+      ValidateControllerPathsAndPins(spec);
+      ValidateAbsolutePath(spec.setupPath);
+    }
+
+    public static void ValidateProfileOnlySpec(FixtureSpec spec)
+    {
+      Require(spec != null && spec.version == 1 && spec.mode == "createprofile-only-controller"
+        && spec.executionStage == "profile-only" && spec.realExecutionAdmitted, "explicit-profile-only-admission");
+      Require(spec.runId == "52f4ce19-5ded-4b27-8268-a2840809e0ca" && spec.generation == 1
+        && spec.owner == "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c", "profile-only-original-owner-generation");
+      Require(spec.frozenPlanManifestSha256 == ProfileOnlyPlanHash
+        && spec.argvEnvPlanSha256 == ProfileOnlyEnvironmentPlanHash, "profile-only-frozen-plan-binding");
+      ValidateControllerPathsAndPins(spec);
+      Require(!SamePath(spec.controllerRoot, spec.sourceRoot) && !IsInside(spec.sourceRoot, spec.controllerRoot)
+        && !IsInside(spec.gitRoot, spec.sourceRoot), "profile-only-separate-private-inputs");
+      // setupPath and historical subject fields are not consumed in this mode.
+      // Identity is always created from a new nonce in Controller.NewState.
+    }
+
+    private static void ValidateControllerPathsAndPins(FixtureSpec spec)
+    {
+      foreach (string path in new string[] { spec.gitRoot, spec.sourceRoot, spec.controllerRoot, spec.output }) ValidateAbsolutePath(path);
       Require(!SamePath(spec.controllerRoot, spec.gitRoot) && !IsInside(spec.gitRoot, spec.controllerRoot)
         && IsInside(spec.controllerRoot, spec.output) && !IsInside(spec.controllerRoot, spec.sourceRoot), "controller-root-boundaries");
       Require(spec.expectedBinarySha256 != null && spec.expectedBinarySha256.Length == 64, "binary-pin-required");
@@ -601,6 +629,19 @@ namespace CcHahaInstallerProfile
 
     public static void ValidateBindings(FixtureSpec spec, ProfilePlatform platform)
     {
+      ValidateFixtureBindings(spec, platform);
+      FileIdentity setup = platform.IdentifyPath(spec.setupPath, false);
+      Require(!setup.reparse && setup.bytes == SetupBytes && setup.sha256 == SetupHash, "exact-full-setup");
+    }
+
+    public static void ValidateProfileOnlyBindings(FixtureSpec spec, ProfilePlatform platform)
+    {
+      ValidateProfileOnlySpec(spec);
+      ValidateFixtureBindings(spec, platform);
+    }
+
+    private static void ValidateFixtureBindings(FixtureSpec spec, ProfilePlatform platform)
+    {
       Require(HashFile(BinaryPath) == spec.expectedBinarySha256, "exact-fixture-binary");
       foreach (SourcePin pin in spec.sourcePins)
       {
@@ -608,8 +649,6 @@ namespace CcHahaInstallerProfile
         FileIdentity identity = platform.IdentifyPath(file, false);
         Require(!identity.reparse && identity.sha256 == pin.sha256, "exact-compiled-source");
       }
-      FileIdentity setup = platform.IdentifyPath(spec.setupPath, false);
-      Require(!setup.reparse && setup.bytes == SetupBytes && setup.sha256 == SetupHash, "exact-full-setup");
     }
 
     public static void ValidateSubjectSpec(FixtureSpec spec)
@@ -675,6 +714,7 @@ namespace CcHahaInstallerProfile
 
     public static FixtureReport Run(FixtureState state, ProfilePlatform api)
     {
+      if (state.spec.mode == "createprofile-only-controller") return RunProfileOnly(state, api);
       PositiveProcessObserver observer = null;
       Dictionary<string, string> hostBefore = null;
       try
@@ -689,15 +729,7 @@ namespace CcHahaInstallerProfile
         Stage(state, "creation-intent-ledger", delegate { Ledger(state, api); });
         using (SecretBuffer password = new SecretBuffer())
         {
-          Stage(state, "create-disabled-account", delegate { api.CreateDisabledAccount(state, password); });
-          CorePolicy.Require(state.accountCreated && state.account != null && state.account.marker == state.marker
-            && state.account.sam == state.sam && state.account.sid != state.runnerSid
-            && state.account.sid != null && state.account.sid.StartsWith("S-1-5-21-", StringComparison.Ordinal), "actual-created-sid");
-          Stage(state, "sid-marker-ledger", delegate { Ledger(state, api); });
-          state.accountBound = true;
-          Ledger(state, api);
-          Stage(state, "users-only-membership", delegate { api.AddUsersOnly(state); api.VerifyOwnedAccount(state, true); });
-          Stage(state, "create-fresh-profile", delegate { api.CreateFreshProfile(state); Ledger(state, api); });
+          CreateOwnedProfileOnce(state, api, password);
           Stage(state, "enable-bound-account", delegate { api.SetOwnedAccountDisabled(state, false); Ledger(state, api); });
           Stage(state, "interactive-logon", delegate { api.Logon(state, password); });
         }
@@ -729,19 +761,7 @@ namespace CcHahaInstallerProfile
           FixtureSpec subject = CoreJson.Deserialize<FixtureSpec>(CoreJson.Serialize(state.spec));
           subject.mode = "historical-v078-subject"; subject.controllerSpecSha256 = state.report.specSha256;
           subject.output = Path.Combine(subject.fixtureRoot, "subject-result.json");
-          if (!api.IsFake)
-          {
-            CoreJson.Write(state.spec.subjectSpecPath, subject);
-            System.Security.AccessControl.FileSecurity security = new System.Security.AccessControl.FileSecurity();
-            security.SetAccessRuleProtection(true, false);
-            foreach (string sid in new string[] { state.runnerSid, "S-1-5-18" })
-              security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(sid),
-                System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
-            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(state.account.sid),
-              System.Security.AccessControl.FileSystemRights.ReadAndExecute, System.Security.AccessControl.AccessControlType.Allow));
-            File.SetAccessControl(state.spec.subjectSpecPath, security);
-            state.spec.subjectSpecSha256 = CorePolicy.HashFile(state.spec.subjectSpecPath);
-          }
+          if (!api.IsFake) PersistReadonlySubjectSpec(state, subject);
         });
         Stage(state, "private-authenticated-pipe", delegate { state.channel = api.CreateControllerChannel(state); });
         Stage(state, "suspended-subject", delegate { api.CreateSubjectSuspended(state); });
@@ -777,6 +797,79 @@ namespace CcHahaInstallerProfile
       {
         try { if (observer != null) observer.Dispose(); }
         catch (Exception error) { state.report.Check("cleanup-owned-observer", false, NativePlatform.SafeFailure(error)); }
+        Cleanup(state, api);
+        state.report.realAccountsCreated = !api.IsFake && state.accountEverCreated ? 1 : 0;
+        state.report.realProfilesCreated = !api.IsFake && state.profileEverCreated ? 1 : 0;
+        state.report.finishedAtUtc = DateTime.UtcNow.ToString("o");
+      }
+      return state.report;
+    }
+
+    private static void PersistReadonlySubjectSpec(FixtureState state, FixtureSpec subject)
+    {
+      // Keep Windows-only ACL methods outside FakeAPI's JIT-compiled delegates.
+      CoreJson.Write(state.spec.subjectSpecPath, subject);
+      System.Security.AccessControl.FileSecurity security = new System.Security.AccessControl.FileSecurity();
+      security.SetAccessRuleProtection(true, false);
+      foreach (string sid in new string[] { state.runnerSid, "S-1-5-18" })
+        security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(sid),
+          System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+      security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(state.account.sid),
+        System.Security.AccessControl.FileSystemRights.ReadAndExecute, System.Security.AccessControl.AccessControlType.Allow));
+      File.SetAccessControl(state.spec.subjectSpecPath, security);
+      state.spec.subjectSpecSha256 = CorePolicy.HashFile(state.spec.subjectSpecPath);
+    }
+
+    private static void CreateOwnedProfileOnce(FixtureState state, ProfilePlatform api, SecretBuffer password)
+    {
+      Stage(state, "create-disabled-account", delegate { api.CreateDisabledAccount(state, password); });
+      CorePolicy.Require(state.accountCreated && state.account != null && state.account.marker == state.marker
+        && state.account.sam == state.sam && state.account.sid != state.runnerSid
+        && state.account.sid != null && state.account.sid.StartsWith("S-1-5-21-", StringComparison.Ordinal), "actual-created-sid");
+      Stage(state, "sid-marker-ledger", delegate { Ledger(state, api); });
+      state.accountBound = true;
+      Ledger(state, api);
+      Stage(state, "users-only-membership", delegate { api.AddUsersOnly(state); api.VerifyOwnedAccount(state, true); });
+      Stage(state, "create-fresh-profile", delegate {
+        CorePolicy.Require(state.profileCreationAttempts == 0 && !state.profileCreated && !state.profileOwnershipProven,
+          "single-fresh-createprofile-attempt");
+        state.profileCreationAttempts = 1; state.profileCreationUncertain = true;
+        state.stage = "createprofile-call-armed"; state.report.trace.Add(state.stage); Ledger(state, api);
+        state.stage = "create-fresh-profile";
+        api.CreateFreshProfile(state);
+        CorePolicy.Require(state.profileCreated && state.profileOwnershipProven && !state.profileCreationUncertain,
+          "createprofile-owner-path-hive-lease-unproven");
+        state.stage = "createprofile-owner-proven"; state.report.trace.Add(state.stage); Ledger(state, api);
+      });
+    }
+
+    private static FixtureReport RunProfileOnly(FixtureState state, ProfilePlatform api)
+    {
+      state.report.mode = "profile-only";
+      try
+      {
+        CorePolicy.ValidateProfileOnlySpec(state.spec);
+        if (!api.IsFake) CorePolicy.ValidateProfileOnlyBindings(state.spec, api);
+        Stage(state, "controller-preflight", delegate { api.PreflightController(state); });
+        Stage(state, "creation-intent-ledger", delegate { Ledger(state, api); });
+        using (SecretBuffer password = new SecretBuffer()) CreateOwnedProfileOnce(state, api, password);
+        CorePolicy.Require(state.accountDisabled && state.token == IntPtr.Zero && !state.profileLoaded && state.profile == IntPtr.Zero
+          && state.subject == null && !state.acknowledged, "profile-only-no-historical-continuation");
+        CorePolicy.Require(!state.report.releasedPeExecuted && !state.report.releasedPeMayHaveExecuted
+          && state.report.releasedPeExecutionStatus == "not_run" && !state.report.compatibilityEnabled
+          && state.report.oldExit22Policy == "fatal" && state.report.member_proven == "not_run"
+          && state.report.installed_bytes_equal == "not_run" && state.report.old22_before_protected_mutation == "not_run"
+          && state.report.removal_equivalence == "not_run" && state.report.full_old_to_new == "not_run", "profile-only-no-historical-evidence-claim");
+        state.report.Check("profile-only-createprofile", true, "One owned disabled SID and one CreateProfile call; no logon, profile load or historical product execution.");
+        state.report.status = "passed";
+      }
+      catch (Exception error)
+      {
+        state.report.failedStage = state.stage ?? "profile-only-source-binding";
+        state.report.Check(state.report.failedStage, false, NativePlatform.SafeFailure(error));
+      }
+      finally
+      {
         Cleanup(state, api);
         state.report.realAccountsCreated = !api.IsFake && state.accountEverCreated ? 1 : 0;
         state.report.realProfilesCreated = !api.IsFake && state.profileEverCreated ? 1 : 0;
@@ -921,6 +1014,11 @@ namespace CcHahaInstallerProfile
         {
           Stage(state, "cleanup-unload-profile", delegate { api.UnloadProfile(state); });
           CorePolicy.Require(!state.profileLoaded, "profile-unload-confirmed");
+        }
+        if (state.profileCreationUncertain || (state.profileCreationAttempts != 0 && !state.profileOwnershipProven))
+        {
+          state.report.trace.Add("partial-profile-state=unknown; account-disabled-if-bound; profile-and-account-retained");
+          throw new FixtureFailure("CreateProfile partial state unknown; destructive cleanup forbidden");
         }
         if (state.profileCreated)
         {
@@ -1666,7 +1764,7 @@ namespace CcHahaInstallerProfile
           return NativePlatform.RunAbiChild(Path.GetFullPath(arguments[2]));
         }
         CorePolicy.Require(arguments.Length == 4 && arguments[0] == "--role" && arguments[2] == "--spec"
-          && (arguments[1] == "controller" || arguments[1] == "subject"), "explicit-role-required-no-default-execution");
+          && (arguments[1] == "controller" || arguments[1] == "subject" || arguments[1] == "profile-only"), "explicit-role-required-no-default-execution");
         string specFile = Path.GetFullPath(arguments[3]);
         FixtureSpec spec = CoreJson.Read<FixtureSpec>(specFile);
         NativePlatform native = new NativePlatform();
@@ -1676,10 +1774,11 @@ namespace CcHahaInstallerProfile
           FixtureReport result = Subject.Run(spec, native);
           return result.status == "passed" ? 0 : 1;
         }
-        CorePolicy.Require(Environment.GetEnvironmentVariable("CI") == "true", "historical-disposable-ci-only");
-        CorePolicy.ValidateControllerSpec(spec);
-        native.BindControllerContext(spec);
-        report = new FixtureReport { mode = "controller", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
+        bool profileOnly = arguments[1] == "profile-only";
+        CorePolicy.Require(Environment.GetEnvironmentVariable("CI") == "true", "controller-disposable-ci-only");
+        if (profileOnly) { CorePolicy.ValidateProfileOnlySpec(spec); native.BindProfileOnlyContext(spec); }
+        else { CorePolicy.ValidateControllerSpec(spec); native.BindControllerContext(spec); }
+        report = new FixtureReport { mode = profileOnly ? "profile-only" : "controller", binarySha256 = CorePolicy.HashFile(CorePolicy.BinaryPath),
           specSha256 = CorePolicy.HashFile(specFile) };
         FixtureState state = Controller.NewState(spec, report);
         Controller.Run(state, native);

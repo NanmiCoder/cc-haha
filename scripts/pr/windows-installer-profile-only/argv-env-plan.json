@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "kind": "profile-only source-preparation contract; not live execution authorization",
+  "role": "profile-only",
+  "specMode": "createprofile-only-controller",
+  "executionStage": "profile-only",
+  "rootAdmission": "New exact source/spec/StageA-PE/head packet and specific root admission required; consumed historical B is not reusable",
+  "identity": {
+    "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+    "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+    "generation": 1,
+    "account": "one newly generated nonce/SAM and independently queried ownedSID, initially disabled and Users-only"
+  },
+  "argv": [
+    "<new StageA pinned profile-fixture.exe>",
+    "--role",
+    "profile-only",
+    "--spec",
+    "<new exact reviewed profile-only spec.json>"
+  ],
+  "cwd": "fresh owned Controller parent outside Git; input and Controller roots are siblings",
+  "stdio": "closed stdin; bounded separate stdout/stderr in owned stage directory",
+  "environment": {
+    "base": "clear inherited child environment; reconstruct explicit allowlist only",
+    "systemNames": [
+      "SystemRoot",
+      "WINDIR",
+      "SystemDrive",
+      "OS",
+      "ComSpec",
+      "PROCESSOR_ARCHITECTURE",
+      "PROCESSOR_ARCHITEW6432",
+      "NUMBER_OF_PROCESSORS"
+    ],
+    "privateNames": {
+      "HOME": "<owned private runner home>",
+      "USERPROFILE": "<owned private runner home>",
+      "APPDATA": "<owned private runner home>/AppData/Roaming",
+      "LOCALAPPDATA": "<owned private runner home>/AppData/Local",
+      "TEMP": "<owned private runner temp>",
+      "TMP": "<owned private runner temp>",
+      "TMPDIR": "<owned private runner temp>",
+      "PATH": "<SystemRoot>/System32;<SystemRoot>;<SystemRoot>/System32/Wbem",
+      "CI": "true"
+    },
+    "diagnosticNames": [
+      "ImageOS",
+      "ImageVersion"
+    ],
+    "omitted": "all unlisted variables, credentials, Actions/GitHub tokens, provider/config overrides and COMPLUS overrides; no inherited target profile environment"
+  },
+  "CreateProfile": {
+    "maximumCalls": 1,
+    "allocationCharacters": 32768,
+    "passedCchCharacters": 260,
+    "encoding": "UTF-16 from unchanged PInvoke declaration",
+    "resultChannel": "HRESULT; not a GetLastError inference"
+  },
+  "stopBefore": [
+    "enable-owned-account",
+    "LogonUserW",
+    "LoadUserProfileW",
+    "Subject launch",
+    "released setup or uninstaller",
+    "historical installer phases"
+  ],
+  "observability": {
+    "readOnly": "bounded OS/CLR/userenv/export/token/privilege/service metadata and input lengths/hashes; own SID ProfileList and owned candidate profile metadata only",
+    "forbidden": "passwords, full environment/profile contents, global audit, service mutation or retries"
+  },
+  "cleanup": {
+    "required": "exact owned SID/SAM/fullmarker/runner and established path/hive/lease/handle identities",
+    "partialFailure": "arm uncertainty before API; unproven partial profile must remain failed/unknown, never blind profile/registry/account deletion or globally-cleaned claim",
+    "accountDisable": "only exactly bound own account; no password change; unknown remains unknown",
+    "no": "Debug privilege, ancestor/global ACL changes, unknown process kills, profile unload without original lease, retry or manual repair"
+  },
+  "historicalFacts": "all five remain not_run, released product PE not executed, compatibility disabled, old22 fatal; profile-only is not B/F1 proof"
+}

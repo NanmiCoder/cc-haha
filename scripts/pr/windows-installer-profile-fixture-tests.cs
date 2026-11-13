@@ -80,6 +80,16 @@ namespace CcHahaInstallerProfile
       return state;
     }
 
+    private static FixtureSpec ProfileOnlySpec()
+    {
+      FixtureSpec spec = Spec();
+      spec.mode = "createprofile-only-controller"; spec.executionStage = "profile-only";
+      spec.frozenPlanManifestSha256 = CorePolicy.ProfileOnlyPlanHash;
+      spec.argvEnvPlanSha256 = CorePolicy.ProfileOnlyEnvironmentPlanHash;
+      spec.setupPath = null;
+      return spec;
+    }
+
     private static void AssertNoNativePromotion(FixtureState state)
     {
       Assert(!state.report.compatibilityEnabled && state.report.oldExit22Policy == "fatal", "compatibility must remain disabled");
@@ -92,6 +102,7 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      RunProfileBoundaryTests(report);
       Case(report, "fake-abi-system-context-preserves-parent-presence-and-redacts-observations", delegate {
         Dictionary<string, string> parentSystem = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
           { "SystemRoot", @"C:\Windows" }, { "WINDIR", @"C:\Windows" }, { "OS", "Windows_NT" },
@@ -496,6 +507,109 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    // Also callable by a temporary managed-only entry point on non-Windows.
+    // This subset never constructs NativePlatform or invokes a Windows API.
+    internal static void RunProfileBoundaryTests(FixtureReport report)
+    {
+      Case(report, "fake-profile-only-stops-before-account-enable-and-logon", delegate {
+        FakePlatform api = new FakePlatform();
+        FixtureSpec spec = ProfileOnlySpec();
+        FixtureState state = Execute(api, spec);
+        Assert(state.report.status == "passed" && state.report.cleanup == "cleaned", "profile-only must complete its own bounded operation and cleanup");
+        Assert(api.Calls.Count(name => name == "CreateFreshProfile") == 1, "one fresh SID receives exactly one CreateProfile attempt");
+        foreach (string forbidden in new string[] { "EnableAccount", "Logon", "LoadProfile", "WriteHiveChallenge", "CreatePrivateDesktop", "PrepareSubjectAccess", "CreateSubjectSuspended" })
+          Assert(!api.Calls.Contains(forbidden), "profile-only cannot enter a historical continuation: " + forbidden);
+        Assert(api.Calls.Contains("DeleteOwnedProfile") && api.Calls.Contains("DeleteOwnedAccount"), "a proven successful profile receives ordered cleanup");
+        AssertNoNativePromotion(state);
+      });
+      Case(report, "fake-profile-only-failure-is-single-attempt-and-retained-unknown", delegate {
+        FakePlatform api = new FakePlatform { Fault = "profile-partial-after-success" };
+        FixtureState state = Execute(api, ProfileOnlySpec());
+        Assert(state.report.mode == "profile-only" && state.report.status == "failed" && state.report.cleanup == "failed",
+          "profile-only partial failure cannot be called a successful or clean historical execution");
+        Assert(state.profileCreationAttempts == 1 && state.profileCreationUncertain && !state.profileOwnershipProven
+          && api.Calls.Count(name => name == "CreateFreshProfile") == 1, "one attempt remains uncertain without a retry");
+        Assert(!api.Calls.Contains("EnableAccount") && !api.Calls.Contains("Logon") && !api.Calls.Contains("LoadProfile")
+          && !api.Calls.Contains("DeleteOwnedProfile") && !api.Calls.Contains("DeleteOwnedAccount"), "partial failure stops every continuation and destructive cleanup");
+        Assert(state.report.trace.IndexOf("createprofile-call-armed") < state.report.trace.IndexOf("cleanup-owned-jobs"), "uncertainty must be armed before cleanup");
+        AssertNoNativePromotion(state);
+      });
+      Case(report, "fake-profile-only-rejects-historical-and-crossed-plan-admission", delegate {
+        Reject(delegate { CorePolicy.ValidateProfileOnlySpec(Spec()); }, "historical admission cannot authorize profile-only");
+        Reject(delegate { CorePolicy.ValidateControllerSpec(ProfileOnlySpec()); }, "profile-only admission cannot authorize historical B");
+        foreach (string field in new string[] { "mode", "executionStage", "realExecutionAdmitted", "runId", "owner", "generation", "frozenPlanManifestSha256", "argvEnvPlanSha256" })
+        {
+          FixtureSpec spec = ProfileOnlySpec();
+          switch (field)
+          {
+            case "mode": spec.mode = "historical-v078-controller"; break;
+            case "executionStage": spec.executionStage = "B"; break;
+            case "realExecutionAdmitted": spec.realExecutionAdmitted = false; break;
+            case "runId": spec.runId = "unbound-run"; break;
+            case "owner": spec.owner = "unbound-owner"; break;
+            case "generation": spec.generation++; break;
+            case "frozenPlanManifestSha256": spec.frozenPlanManifestSha256 = CorePolicy.PlanHash; break;
+            case "argvEnvPlanSha256": spec.argvEnvPlanSha256 = CorePolicy.EnvironmentPlanHash; break;
+          }
+          Reject(delegate { CorePolicy.ValidateProfileOnlySpec(spec); }, "profile-only must reject crossed admission field " + field);
+        }
+      });
+      Case(report, "fake-profile-only-binds-three-sources-and-never-reads-setup", delegate {
+        FixtureSpec spec = ProfileOnlySpec();
+        spec.setupPath = "not-an-executable-path-and-never-consumed";
+        FakePlatform api = new FakePlatform();
+        CorePolicy.ValidateProfileOnlyBindings(spec, api);
+        Assert(api.IdentifiedPaths.Count == 3 && api.IdentifiedPaths.All(path => path.EndsWith(".cs", StringComparison.Ordinal)),
+          "profile-only source binding may identify exactly the three compiled sources, never historical setup");
+        foreach (string fault in new string[] { "source-reparse", "source-hash" })
+          Reject(delegate { CorePolicy.ValidateProfileOnlyBindings(spec, new FakePlatform { Fault = fault }); }, "source binding remains exact");
+        spec.expectedBinarySha256 = new String('0', 64);
+        Reject(delegate { CorePolicy.ValidateProfileOnlyBindings(spec, api); }, "new fixture binary pin cannot be bypassed");
+      });
+      Case(report, "fake-profile-only-generates-fresh-nonce-and-preserves-old-report-shape", delegate {
+        FixtureSpec spec = ProfileOnlySpec();
+        FixtureState first = Controller.NewState(spec, new FixtureReport());
+        FixtureState second = Controller.NewState(spec, new FixtureReport());
+        Assert(first.sam != second.sam && first.marker != second.marker && first.sam.StartsWith("c1879_", StringComparison.Ordinal),
+          "each invocation generates a fresh unpredictable account intent");
+        FixtureReport old = CoreJson.Deserialize<FixtureReport>(CoreJson.Serialize(new FixtureReport { mode = "controller" }));
+        Assert(old.version == 1 && old.mode == "controller" && old.cleanup == "not_run" && old.oldExit22Policy == "fatal"
+          && old.trace.Count == 0 && old.member_proven == "not_run" && old.full_old_to_new == "not_run", "version1 report roundtrip retains existing fields");
+      });
+      Case(report, "fake-createprofile-failure-preserves-partial-unknown", delegate {
+        FakePlatform api = new FakePlatform { Fault = "create-fresh-profile" };
+        FixtureState state = Execute(api, Spec());
+        Assert(state.report.status == "failed" && state.report.cleanup == "failed", "a failing CreateProfile may have partial side effects");
+        Assert(api.Calls.Contains("DisableAccount") && !api.Calls.Contains("DeleteOwnedProfile") && !api.Calls.Contains("DeleteOwnedAccount"), "only the exactly bound account may be disabled; unknown profile/account cannot be deleted");
+        Assert(state.accountCreated && state.accountDisabled, "unknown cleanup preserves the disabled owned account");
+        AssertNoNativePromotion(state);
+      });
+      Case(report, "fake-createprofile-partial-success-without-identity-is-unknown", delegate {
+        FakePlatform api = new FakePlatform { Fault = "profile-partial-after-success" };
+        FixtureState state = Execute(api, Spec());
+        Assert(state.report.status == "failed" && state.report.cleanup == "failed", "a returned path without proven identity is insufficient for deletion");
+        Assert(!api.Calls.Contains("DeleteOwnedProfile") && !api.Calls.Contains("DeleteOwnedAccount"), "partial state cannot authorize destructive cleanup");
+        AssertNoNativePromotion(state);
+      });
+      Case(report, "fake-historical-controller-retains-version1-input", delegate {
+        FixtureSpec original = Spec();
+        FixtureSpec roundTrip = CoreJson.Deserialize<FixtureSpec>(CoreJson.Serialize(original));
+        CorePolicy.ValidateControllerSpec(roundTrip);
+        Assert(roundTrip.mode == "historical-v078-controller" && roundTrip.executionStage == "B"
+          && roundTrip.frozenPlanManifestSha256 == CorePolicy.PlanHash && roundTrip.setupPath == original.setupPath,
+          "old version1 input keeps its independent historical admission and setup binding");
+      });
+      Case(report, "fake-historical-controller-keeps-full-continuation-after-profile-proof", delegate {
+        FakePlatform api = new FakePlatform();
+        FixtureState state = Execute(api, CoreJson.Deserialize<FixtureSpec>(CoreJson.Serialize(Spec())));
+        Assert(state.report.status == "passed" && state.report.cleanup == "cleaned", "historical FakeAPI continuation must remain successful");
+        Assert(state.profileCreationAttempts == 1 && state.profileOwnershipProven && !state.profileCreationUncertain
+          && api.Calls.Contains("EnableAccount") && api.Calls.Contains("Logon") && api.Calls.Contains("LoadProfile")
+          && api.Calls.Contains("CreateSubjectSuspended") && api.Calls.Contains("WaitSubjectExit"), "historical admission retains the full post-profile path");
+        AssertNoNativePromotion(state);
+      });
+    }
+
     private sealed class ProtocolTestChannel : FixtureChannel
     {
       public readonly List<string> Messages = new List<string>();
@@ -561,6 +675,7 @@ namespace CcHahaInstallerProfile
       public string Fault;
       public FixtureSpec Specification;
       public readonly List<string> Calls = new List<string>();
+      public readonly List<string> IdentifiedPaths = new List<string>();
       public FakeChannel Channel;
       public SecretBuffer LastPassword;
       private FixtureState current;
@@ -580,7 +695,9 @@ namespace CcHahaInstallerProfile
 
       public override void PreflightController(FixtureState state)
       {
-        Gate(state, "PreflightController"); Specification = state.spec; CorePolicy.ValidateControllerSpec(state.spec);
+        Gate(state, "PreflightController"); Specification = state.spec;
+        if (state.spec.mode == "createprofile-only-controller") CorePolicy.ValidateProfileOnlySpec(state.spec);
+        else CorePolicy.ValidateControllerSpec(state.spec);
         state.controllerRootOwned = true; state.runnerSid = RunnerSid; state.runnerPid = 42; state.runnerCreationTime = "controller-creation";
       }
       public override void CreateDisabledAccount(FixtureState state, SecretBuffer password)
@@ -602,7 +719,9 @@ namespace CcHahaInstallerProfile
       public override void CreateFreshProfile(FixtureState state)
       {
         Gate(state, "CreateFreshProfile"); state.profilePath = Paths().profile; state.profileCreated = true;
+        if (Fault == "profile-partial-after-success") throw new FixtureFailure("fake-profile-side-effect-before-identity");
         state.profileIdentity = new FileIdentity { canonicalPath = state.profilePath, directory = true, volumePath = @"\\?\Volume{fixture}\", fileId = "profile-file" };
+        state.profileOwnershipProven = true; state.profileCreationUncertain = false;
       }
       public override void SetOwnedAccountDisabled(FixtureState state, bool disabled)
       {
@@ -656,6 +775,7 @@ namespace CcHahaInstallerProfile
       }
       public override FileIdentity IdentifyPath(string path, bool directory)
       {
+        IdentifiedPaths.Add(path);
         bool source = path.EndsWith(".cs", StringComparison.Ordinal);
         return new FileIdentity { canonicalPath = path, directory = directory, fileId = "fake-identity", volumePath = @"\\?\Volume{fixture}\",
           bytes = source ? 10 : CorePolicy.SetupBytes + (Fault == "setup-size" ? 1 : 0),

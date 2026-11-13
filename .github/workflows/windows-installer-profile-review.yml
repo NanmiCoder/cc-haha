@@ -1,8 +1,8 @@
 name: Windows historical profile review
 run-name: ${{ github.event.label.name == format('p1879b-{0}', github.event.pull_request.head.sha) && format('profile1879-b:{0}', github.event.pull_request.head.sha) || 'inactive-profile-review' }}
 
-# This never runs Stage B on a push/synchronize/ready event. A coordinator must
-# first review the exact committed head and separately authorize its SHA label.
+# Historical admission was consumed by run43380589124 on head9578. Keep its
+# original payloads for audit; no future head or new run may reuse this trigger.
 on:
   pull_request:
     types: [labeled]
@@ -17,6 +17,8 @@ jobs:
   historical-profile:
     if: >-
       github.event.action == 'labeled' &&
+      github.event.pull_request.head.sha == '9578b040d3f41060fc9b1e0a16fab2233939287c' &&
+      github.run_id == '43380589124' &&
       github.event.pull_request.number == 1883 &&
       github.event.pull_request.base.ref == 'main' &&
       github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&

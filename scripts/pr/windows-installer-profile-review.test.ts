@@ -3,9 +3,9 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateReviewInvocation } from './windows-installer-profile-review'
+import { canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
 
-const head = 'a'.repeat(40)
+const head = profileReview.admittedHead
 function context() {
   return {
     event: { action: 'labeled', number: 1883, label: { name: profileReview.labelPrefix + head }, sender: { login: 'NanmiCoder' }, repository: { full_name: profileReview.repository }, pull_request: { number: 1883, base: { ref: 'main' }, head: { sha: head, ref: profileReview.branch, repo: { full_name: profileReview.headRepository } } } },
@@ -49,6 +49,13 @@ describe('explicit historical profile review admission', () => {
 
   test('missing fork event payload fails closed', () => {
     expect(() => validateReviewInvocation({}, context().env)).toThrow()
+  })
+
+  test('a correctly labeled future head cannot reuse the consumed historical admission', () => {
+    const { event, env } = context()
+    event.pull_request.head.sha = 'b'.repeat(40)
+    event.label.name = profileReview.labelPrefix + event.pull_request.head.sha
+    expect(() => validateReviewInvocation(event, env)).toThrow('Historical admission cannot be reused')
   })
 
   test('uses workflow run_number, rather than assuming run_id ordering', () => {
@@ -110,8 +117,19 @@ describe('reviewed bytes and bounded evidence', () => {
     const files = normalizedReviewedFiles(resolve('scripts/pr/windows-installer-profile-review'))
     expect(files).toHaveLength(4)
     for (const file of files) expect(reviewHash(file.bytes)).toBe(profileReview.files[file.name as keyof typeof profileReview.files])
-    for (const pin of profileReview.sources) expect(reviewHash(canonicalReviewBytes(readFileSync(join('scripts/pr', pin.file))))).toBe(pin.canonical)
+    // The current fixture evolves after the historical admission was consumed.
+    // Its frozen A pins remain enforced by the input validator, not rewritten
+    // to make a new fixture look like the original PE.
   })
+
+  test('new fixture source cannot substitute for an original A raw source', () => temporary(root => {
+    const source = join(root, 'source')
+    const stageA = join(root, 'stage-a')
+    mkdirSync(source)
+    mkdirSync(stageA)
+    writeFileSync(join(stageA, profileReview.sources[0].file), 'new source; not the frozen historical A input')
+    expect(() => validateOriginalAInputs(source, stageA, join(root, 'not-a-setup.exe'))).toThrow('Original A raw source changed')
+  }))
 
   test('detects script edits even when checkout line endings differ', () => temporary(root => {
     for (const name of Object.keys(profileReview.files)) {
@@ -216,12 +234,14 @@ describe('reviewed bytes and bounded evidence', () => {
   }))
 })
 
-test('manual workflow stays inactive by default and preserves serial fail-closed execution', () => {
+test('consumed workflow cannot serve a new head or run and preserves its historical serial record', () => {
   const workflow = parse(readFileSync('.github/workflows/windows-installer-profile-review.yml', 'utf8'))
   expect(workflow.on).toEqual({ pull_request: { types: ['labeled'] } })
   expect(workflow.permissions).toEqual({})
   expect(workflow.concurrency['cancel-in-progress']).toBe(false)
   const job = workflow.jobs['historical-profile']
+  expect(job.if).toContain(`github.event.pull_request.head.sha == '${profileReview.admittedHead}'`)
+  expect(job.if).toContain(`github.run_id == '${profileReview.consumedRunId}'`)
   expect(job.if).toContain("github.actor == 'NanmiCoder'")
   expect(job.if).toContain("github.run_attempt == 1")
   expect(job.if).toContain("format('p1879b-{0}', github.event.pull_request.head.sha)")

@@ -11,6 +11,8 @@ export const profileReview = {
   number: 1883,
   headRepository: 'toBerlinWay/cc-haha',
   branch: 'fix/installer-fallback-foreign-helpers',
+  admittedHead: '9578b040d3f41060fc9b1e0a16fab2233939287c',
+  consumedRunId: 43380589124,
   runNamePrefix: 'profile1879-b:',
   labelPrefix: 'p1879b-',
   runId: '52f4ce19-5ded-4b27-8268-a2840809e0ca',
@@ -71,6 +73,7 @@ export function validateReviewInvocation(event: ReviewEvent, env: Record<string,
   requireReview(event.pull_request.base?.ref === 'main', 'Original main target required')
   requireReview(env.GITHUB_ACTOR === profileReview.actor && event.sender?.login === profileReview.actor, 'Only the reviewed coordinator actor may activate this run')
   requireReview(typeof head === 'string' && /^[0-9a-f]{40}$/.test(head), 'Exact PR head required')
+  requireReview(head === profileReview.admittedHead, 'Historical admission cannot be reused for a new fixture head')
   requireReview(event.pull_request?.head?.repo?.full_name === profileReview.headRepository && event.pull_request.head.ref === profileReview.branch, 'Original fork and branch required')
   requireReview(event.label?.name === profileReview.labelPrefix + head, 'Label must bind this exact PR head')
   requireReview(env.GITHUB_RUN_ATTEMPT === '1', 'Reruns are forbidden, including after failure')

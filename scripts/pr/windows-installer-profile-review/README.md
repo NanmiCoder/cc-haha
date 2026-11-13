@@ -1,15 +1,31 @@
 # Explicit historical Windows profile review
 
+The one historical admission was consumed by run43380589124 at head9578. It
+failed during CreateProfile. Its outer cleanup remains unknown; the native
+cleanup report and serial reconciliation result must stay separate. The
+workflow is now bound to that exact past head/run, so it cannot activate for a
+new fixture or head. The original four reviewed payloads and A pins below are
+retained unchanged as historical evidence.
+
+The separately prepared `--role profile-only --spec <file>` fixture mode uses
+`createprofile-only-controller` / `profile-only` admission, makes at most one
+CreateProfile call with cch260 while keeping the32768-character allocation, and
+stops before enabling/logging on the account or starting an installer. Ordinary
+Stage A never forwards that role. A new profile-only source/Stage A/PE/spec
+packet and distinct root admission are required before any live invocation;
+this historical workflow, label and PE are not that authorization. The cch
+candidate is a hypothesis, not an established failure cause or F1 fix.
+
 This is inactive on ordinary pushes and PR synchronization. The source-integration
 grant does not authorize Stage B, new accounts/profiles, released setup/uninstaller
 execution, or the emergency account-disable operation.
 
-After the coordinator reviews the exact committed integration and grants one
-isolated invocation, the authenticated `NanmiCoder` **user** adds
-`p1879b-<full current PR head SHA>` (47 characters) to original PR #1883. An Actions
-`GITHUB_TOKEN` label update does not trigger this workflow. Do not add/remove/readd
-the label, rerun jobs, or retry after failure without a new reviewed admission.
-No label is created or applied by these files.
+The consumed historical activation used the authenticated `NanmiCoder` **user**
+and `p1879b-<full historical head SHA>` (47 characters) on original PR #1883. An
+Actions `GITHUB_TOKEN` label update does not trigger it. Do not recreate, remove,
+readd or reuse that label, rerun jobs, or retry this admission. No label is created
+or applied by these files. A future profile-only test needs its own packet and
+activation, rather than a new `p1879b-` label.
 
 The separate `pull_request: labeled` workflow requires the original fork/branch,
 main target, actor, exact SHA label, and attempt 1. It checks out that exact head.

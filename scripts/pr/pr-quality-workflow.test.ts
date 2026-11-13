@@ -853,6 +853,26 @@ describe('Windows profile fixture Stage A', () => {
     expect(steps[profile]['continue-on-error']).not.toBe(true)
     expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('--role controller')
     expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('--role subject')
+    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('--role profile-only')
+  })
+
+  test('binds the separate profile-only argv/environment plan without installer or historical admission', () => {
+    const bytes = readFileSync('scripts/pr/windows-installer-profile-only/argv-env-plan.json', 'utf8').replace(/\r\n/g, '\n')
+    const plan = JSON.parse(bytes)
+    const core = readFileSync('scripts/pr/windows-installer-profile-fixture.cs', 'utf8')
+    const boundHash = /ProfileOnlyEnvironmentPlanHash = "([0-9a-f]{64})"/.exec(core)?.[1]
+    expect(boundHash).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(plan.role).toBe('profile-only')
+    expect(plan.specMode).toBe('createprofile-only-controller')
+    expect(plan.executionStage).toBe('profile-only')
+    expect(plan.argv.slice(1, 4)).toEqual(['--role', 'profile-only', '--spec'])
+    expect(plan.CreateProfile.maximumCalls).toBe(1)
+    expect(plan.CreateProfile.allocationCharacters).toBe(32768)
+    expect(plan.CreateProfile.passedCchCharacters).toBe(260)
+    expect(plan.stopBefore).toContain('LogonUserW')
+    expect(plan.stopBefore).toContain('released setup or uninstaller')
+    expect(plan.environment.base).toContain('clear inherited')
+    expect(plan.rootAdmission).toContain('New exact source/spec/StageA-PE/head packet')
   })
 
   test('does not acquire a compiler or run a fixture on another OS', async () => {
@@ -861,12 +881,12 @@ describe('Windows profile fixture Stage A', () => {
     expect(result).toEqual({ status: 'not_run', exitCode: 0 })
   })
 
-  test('rejects real-execution arguments at the actual CI entry point', () => {
+  test.each(['controller', 'profile-only'])('rejects %s real-execution arguments at the actual Stage A entry point', role => {
     const root = mkdtempSync(join(tmpdir(), 'cc-haha-profile-cli-'))
     try {
       const env = createSandboxedTestEnvironment(join(root, 'home'))
       const result = spawnSync(process.execPath, ['--no-env-file', 'scripts/pr/run-windows-installer-profile-checks.ts',
-        '--role', 'controller', '--spec', join(root, 'not-an-admission.json')], { env, encoding: 'utf8', timeout: 10_000 })
+        '--role', role, '--spec', join(root, 'not-an-admission.json')], { env, encoding: 'utf8', timeout: 10_000 })
       expect(result.error).toBeUndefined()
       expect(result.status).toBe(1)
       expect(result.stderr).toContain('Stage A accepts no account/profile execution arguments')
