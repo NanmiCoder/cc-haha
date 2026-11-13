@@ -105,8 +105,8 @@ function Assert-FrozenPacket([string]$PinsHash, [string]$SpecHash, [string]$Admi
   }
   Require-True ($spec.version -eq 1 -and $spec.mode -ceq 'createprofile-only-controller' -and $spec.executionStage -ceq 'profile-only' -and $spec.realExecutionAdmitted -is [bool] -and $spec.realExecutionAdmitted) 'profile_only_role_not_admitted'
   Require-True ($null -eq $spec.setupPath -and $spec.frozenPlanManifestSha256 -ceq '60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672' -and $spec.argvEnvPlanSha256 -ceq 'd2e740b8d48b87b3e34a53cec9f9400bd08797b17538ab8cb1f0cc548736451a') 'profile_only_scope_changed'
-  Require-True ($pins.binarySha256 -ceq 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312' -and $pins.binaryBytes -eq 225792 -and $spec.expectedBinarySha256 -ceq $pins.binarySha256) 'original_new_stage_a_pe_changed'
-  Require-True ($pins.stageA.status -ceq 'passed' -and $pins.stageA.head -ceq '1482440377d9de67f5222a3fc3db2758f03c5297' -and $pins.stageA.runId -eq 43420260030 -and $pins.stageA.artifactId -eq 14034096259) 'new_stage_a_binding_changed'
+  Require-True ($pins.binarySha256 -ceq '973f1d1b24f238f83482a6de0f1480c385d2a989a36c84d3d6926a2134048d9e' -and $pins.binaryBytes -eq 238080 -and $spec.expectedBinarySha256 -ceq $pins.binarySha256) 'original_new_stage_a_pe_changed'
+  Require-True ($pins.stageA.status -ceq 'passed' -and $pins.candidateSourceCommit -ceq '96bbcdf2a863f015202107790466411f1ac6b4b8' -and $pins.stageA.head -ceq $pins.candidateSourceCommit -and $pins.stageA.runId -eq 43458800075 -and $pins.stageA.artifactId -eq 14054648898) 'new_stage_a_binding_changed'
   Require-True ($pins.sourcePins.Count -eq 3 -and $spec.sourcePins.Count -eq 3) 'exact_raw_sources_required'
   $expectedNames = @('windows-installer-profile-fixture.cs','windows-installer-profile-native.cs','windows-installer-profile-fixture-tests.cs')
   foreach ($name in $expectedNames) {

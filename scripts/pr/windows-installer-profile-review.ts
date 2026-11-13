@@ -48,11 +48,11 @@ export const profileOnlyReview = {
   workflowPath: '.github/workflows/pr-quality.yml',
   runNamePrefix: 'profile1879-p:',
   labelPrefix: 'p1879p-',
-  sourceHead: '1482440377d9de67f5222a3fc3db2758f03c5297',
-  sourceRun: 43420260030,
-  artifact: { id: 14034096259, name: 'windows-installer-evidence', size: 271066, digest: 'sha256:1a5c9346812366a385f1356e44ec9e970cfc36e91db48041d45e1d03f0a2afa8' },
-  binarySha256: 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312',
-  binaryBytes: 225792,
+  sourceHead: '96bbcdf2a863f015202107790466411f1ac6b4b8',
+  sourceRun: 43458800075,
+  artifact: { id: 14054648898, name: 'windows-installer-evidence', size: 282975, digest: 'sha256:6ca549e26cf3cc9b2faec891af33afb3cdadbe7977a989cdf284e7e47f173c28' },
+  binarySha256: '973f1d1b24f238f83482a6de0f1480c385d2a989a36c84d3d6926a2134048d9e',
+  binaryBytes: 238080,
 } as const
 
 function requireReview(value: unknown, message: string): asserts value {
@@ -371,7 +371,7 @@ export function prepareProfileOnlyPacket(workspace: string, invocation: ReviewIn
   const spec = read('profile-only-spec.proposed.json')
   const admission = read('root-admission.proposed.json')
   requireReview(pins.status === 'DRAFT_NOT_READY' && pins.admissionStatus === 'not_admitted' && pins.activationHead === null && spec.realExecutionAdmitted === false && admission.status === 'not_admitted', 'Only unadmitted profile-only templates accepted')
-  requireReview(pins.binarySha256 === profileOnlyReview.binarySha256 && pins.binaryBytes === profileOnlyReview.binaryBytes && spec.expectedBinarySha256 === pins.binarySha256 && pins.stageA.head === profileOnlyReview.sourceHead && pins.stageA.runId === profileOnlyReview.sourceRun && pins.stageA.artifactId === profileOnlyReview.artifact.id, 'Profile-only template A binding changed')
+  requireReview(pins.candidateSourceCommit === profileOnlyReview.sourceHead && pins.binarySha256 === profileOnlyReview.binarySha256 && pins.binaryBytes === profileOnlyReview.binaryBytes && spec.expectedBinarySha256 === pins.binarySha256 && pins.stageA.head === profileOnlyReview.sourceHead && pins.stageA.runId === profileOnlyReview.sourceRun && pins.stageA.artifactId === profileOnlyReview.artifact.id, 'Profile-only template A binding changed')
   const paths = profileOnlyPaths(invocation.head)
   const files: { name: string; bytes: Buffer }[] = profileOnlyTemplateNames.map(name => ({ name, bytes: canonicalReviewBytes(ordinaryFile(join(root, name), 65536)) }))
   const hash = (name: string) => reviewHash(files.find(file => file.name === name)!.bytes)

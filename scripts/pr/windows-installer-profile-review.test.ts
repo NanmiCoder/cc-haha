@@ -396,12 +396,23 @@ describe('separate profile-only review', () => {
   })
 
   describe('runtime profile-only packet, without account or Profile execution', () => {
-    test('binds new activation separately from unchanged Stage A source/PE and all exact hashes', () => {
+    test('binds a new activation separately from the verified owner-diagnostic Stage A source/PE', () => {
       const prepared = packet()
       expect(prepared.pins.activationHead).toBe(head)
-      expect(prepared.pins.stageA.head).toBe(profileOnlyReview.sourceHead)
+      expect(profileOnlyReview.sourceHead).toBe('96bbcdf2a863f015202107790466411f1ac6b4b8')
+      expect(prepared.pins.candidateSourceCommit).toBe(profileOnlyReview.sourceHead)
+      expect(prepared.pins.stageA.head).toBe(prepared.pins.candidateSourceCommit)
+      expect(prepared.pins.stageA.head).not.toBe(prepared.pins.activationHead)
       expect(prepared.pins.binarySha256).toBe(profileOnlyReview.binarySha256)
-      expect(prepared.pins.stageA.artifactId).toBe(14034096259)
+      expect(prepared.spec.expectedBinarySha256).toBe('973f1d1b24f238f83482a6de0f1480c385d2a989a36c84d3d6926a2134048d9e')
+      expect(prepared.pins.binaryBytes).toBe(238080)
+      expect(prepared.pins.stageA.artifactId).toBe(14054648898)
+      expect(prepared.pins.stageA.runId).toBe(43458800075)
+      expect(prepared.pins.stageA.zipBytes).toBe(profileOnlyReview.artifact.size)
+      expect(`sha256:${prepared.pins.stageA.zipSha256}`).toBe(profileOnlyReview.artifact.digest)
+      expect(prepared.pins.stageA.selfTestChecks).toBe(102)
+      expect(prepared.pins.stageA.selfTestSha256).toBe('765a7eaf921b66ef4306caaae927598efb3f0a6e40f354f90f3b129c33900222')
+      expect(prepared.spec.sourcePins).toEqual(prepared.pins.sourcePins.map(({ file, sha256 }: { file: string; sha256: string }) => ({ file, sha256 })))
       expect(prepared.spec.setupPath).toBeNull()
       expect(prepared.spec.mode).toBe('createprofile-only-controller')
       expect(prepared.spec.executionStage).toBe('profile-only')
@@ -417,9 +428,36 @@ describe('separate profile-only review', () => {
       for (const [key, name] of [['pins', 'pins.proposed.json'], ['spec', 'profile-only-spec.proposed.json'], ['admission', 'root-admission.proposed.json']] as const) expect(prepared.hashes[key]).toBe(reviewHash(prepared.files.find(file => file.name === name)!.bytes))
       expect(prepared.pins.launcherSha256).toBe(reviewHash(prepared.files.find(file => file.name.startsWith('launch-'))!.bytes))
       expect(prepared.pins.reconcileSha256).toBe(reviewHash(prepared.files.find(file => file.name.startsWith('reconcile-'))!.bytes))
+      for (const name of ['launch', 'reconcile']) {
+        const source = readFileSync(`scripts/pr/windows-installer-profile-only/fixtures/${name}-profile-only.proposed.ps1`, 'utf8')
+        expect(source).toContain(`$pins.binarySha256 -ceq '${profileOnlyReview.binarySha256}'`)
+        expect(source).toContain(`$pins.binaryBytes -eq ${profileOnlyReview.binaryBytes}`)
+        expect(source).toContain(`$pins.candidateSourceCommit -ceq '${profileOnlyReview.sourceHead}'`)
+        expect(source).toContain('$pins.stageA.head -ceq $pins.candidateSourceCommit')
+      }
       expect(JSON.parse(readFileSync('scripts/pr/windows-installer-profile-only/fixtures/profile-only-spec.proposed.json', 'utf8')).realExecutionAdmitted).toBe(false)
       expect(JSON.parse(readFileSync('scripts/pr/windows-installer-profile-only/fixtures/pins.proposed.json', 'utf8')).activationHead).toBeNull()
     })
+
+    test.each(['candidate-source', 'stage-a-head', 'stage-a-run', 'stage-a-artifact', 'binary', 'binary-bytes', 'spec-binary'])('refuses the old148 %s identity before preparing new diagnostic inputs', fault => temporary(root => {
+      const templates = join(root, 'scripts/pr/windows-installer-profile-only/fixtures')
+      mkdirSync(templates, { recursive: true })
+      writeFileSync(join(root, 'scripts/pr/windows-installer-profile-review.ts'), readFileSync('scripts/pr/windows-installer-profile-review.ts'))
+      for (const name of ['pins.proposed.json', 'profile-only-spec.proposed.json', 'root-admission.proposed.json']) {
+        const value = JSON.parse(readFileSync(join('scripts/pr/windows-installer-profile-only/fixtures', name), 'utf8'))
+        if (name === 'pins.proposed.json') {
+          if (fault === 'candidate-source') value.candidateSourceCommit = '1482440377d9de67f5222a3fc3db2758f03c5297'
+          if (fault === 'stage-a-head') value.stageA.head = '1482440377d9de67f5222a3fc3db2758f03c5297'
+          if (fault === 'stage-a-run') value.stageA.runId = 43420260030
+          if (fault === 'stage-a-artifact') value.stageA.artifactId = 14034096259
+          if (fault === 'binary') value.binarySha256 = 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312'
+          if (fault === 'binary-bytes') value.binaryBytes = 225792
+        }
+        if (name === 'profile-only-spec.proposed.json' && fault === 'spec-binary') value.expectedBinarySha256 = 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312'
+        writeFileSync(join(templates, name), JSON.stringify(value))
+      }
+      expect(() => prepareProfileOnlyPacket(root, invocation(), claim())).toThrow('Profile-only template A binding changed')
+    }))
 
     test('denies a changed claimant and a changed raw A source before bootstrap', () => temporary(root => {
       expect(() => prepareProfileOnlyPacket(workspace, invocation(), { ...claim(), claimantSourceSha256: '0'.repeat(64) })).toThrow()
@@ -510,8 +548,8 @@ describe('separate profile-only review', () => {
     const steps = job.steps as { uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> }[]
     const download = steps.filter(step => step.uses === 'actions/download-artifact@v4')
     expect(download).toHaveLength(1)
-    expect(download[0].with?.['artifact-ids']).toBe('14034096259')
-    expect(download[0].with?.['run-id']).toBe('43420260030')
+    expect(download[0].with?.['artifact-ids']).toBe('14054648898')
+    expect(download[0].with?.['run-id']).toBe('43458800075')
     expect(steps.filter(step => step.env?.PROFILE_REVIEW_TOKEN)).toHaveLength(1)
     const commands = steps.map(step => step.run ?? '').join('\n')
     expect(commands).toContain('--profile-only-claim')
