@@ -3,6 +3,7 @@ import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import {
   estimateFallbackFixedContextTokens,
   getAutoCompactThreshold,
+  getAutoCompactTokenCount,
   getEffectiveContextWindowSize,
   getPostCompactPromptTokens,
   getRapidRefillDecision,
@@ -77,6 +78,38 @@ afterEach(() => {
 })
 
 describe('model context window resolution', () => {
+  test('shares snip savings and fixed-prefix fallback without double-counting provider input', () => {
+    const messages = [{ type: 'user', message: { content: '中'.repeat(1_000) } }] as never
+    expect(getAutoCompactTokenCount(messages, 100, 2_000)).toBe(2_900)
+    const providerMessages = [{
+      type: 'assistant',
+      message: {
+        id: 'usage-anchor', model: 'deepseek-flash', content: [{ type: 'text', text: 'done' }],
+        usage: { input_tokens: 10_000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    }] as never
+    expect(getAutoCompactTokenCount(providerMessages, 1_000, 2_000)).toBe(9_100)
+  })
+
+  test('checks the current prompt without reading payloads before its usage anchor', async () => {
+    const historical = {
+      type: 'assistant',
+      message: {
+        id: 'old-qwen', model: 'qwen4.0-max-preview',
+        get content() { throw new Error('Historical payload must not be recounted') },
+        usage: { input_tokens: 990_000, output_tokens: 100 },
+      },
+    }
+    const current = {
+      type: 'assistant',
+      message: {
+        id: 'current-deepseek', model: 'deepseek-flash', content: [{ type: 'text', text: 'done' }],
+        usage: { input_tokens: 235, cache_read_input_tokens: 815_232, output_tokens: 937 },
+      },
+    }
+    expect(await shouldAutoCompact([historical, current] as never, 'deepseek-flash')).toBe(false)
+  })
+
   test('uses built-in windows for current third-party coding models', () => {
     expect(getContextWindowForModel('deepseek-v4-pro')).toBe(1_000_000)
     expect(getContextWindowForModel('MiniMax-M2.7')).toBe(204_800)

@@ -211,6 +211,7 @@ export const SDKControlGetContextUsageRequestSchema = lazySchema(() =>
     .object({
       subtype: z.literal('get_context_usage'),
       estimateOnly: z.boolean().optional(),
+      summaryOnly: z.boolean().optional(),
     })
     .describe(
       'Requests a breakdown of current context window usage by category.',
@@ -283,6 +284,7 @@ export const SDKControlGetContextUsageResponseSchema = lazySchema(() =>
   z
     .object({
       categories: z.array(ContextCategorySchema()),
+      summaryOnly: z.boolean().optional(),
       totalTokens: z.number(),
       maxTokens: z.number(),
       rawMaxTokens: z.number(),

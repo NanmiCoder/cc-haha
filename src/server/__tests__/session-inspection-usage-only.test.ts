@@ -1,10 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { handleSessionsApi } from '../api/sessions.js'
 import { conversationService } from '../services/conversationService.js'
 import { __resetWebSocketHandlerStateForTests } from '../ws/handler.js'
+import { sessionService } from '../services/sessionService.js'
+import * as skills from '../api/skills.js'
+import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 
 /**
  * `usageOnly` exists so the context panel can poll a live session's totals without paying for
@@ -19,6 +22,7 @@ const SESSION_ID = 'session-usage-only'
 let tempRoot: string
 let workDir: string
 let requestedSubtypes: string[]
+const originalEnv = { ...process.env }
 let original: {
   hasSession: typeof conversationService.hasSession
   getSessionWorkDir: typeof conversationService.getSessionWorkDir
@@ -59,6 +63,9 @@ async function inspect(query: string): Promise<Record<string, unknown>> {
 
 beforeEach(async () => {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-haha-usage-only-'))
+  const fixtureEnv = createSandboxedTestEnvironment(tempRoot)
+  for (const key of Object.keys(process.env)) delete process.env[key]
+  Object.assign(process.env, fixtureEnv)
   workDir = path.join(tempRoot, 'project')
   await fs.mkdir(workDir, { recursive: true })
   __resetWebSocketHandlerStateForTests()
@@ -107,6 +114,8 @@ afterEach(async () => {
   conversationService.getRecentSdkMessages = original.getRecentSdkMessages
   conversationService.requestControl = original.requestControl
   __resetWebSocketHandlerStateForTests()
+  for (const key of Object.keys(process.env)) delete process.env[key]
+  Object.assign(process.env, originalEnv)
   await fs.rm(tempRoot, { recursive: true, force: true })
 })
 
@@ -153,5 +162,66 @@ describe('session inspection: usageOnly', () => {
     // mode exists to avoid; the panel keeps its last good numbers and retries instead.
     expect(body.usage).toBeUndefined()
     expect((body.errors as Record<string, string>)?.usage).toContain('CLI control timed out')
+  })
+})
+
+describe('session inspection: fast context summary', () => {
+  it('forwards summaryOnly through one control without scanning skills or transcript metadata', async () => {
+    const skillScan = spyOn(skills, 'listSkillSlashCommands').mockImplementation(async () => {
+      throw new Error('A context meter must not scan skill directories')
+    })
+    const transcript = spyOn(sessionService, 'getInspectionTranscriptSnapshot').mockImplementation(async () => {
+      throw new Error('A live context meter must not read the transcript')
+    })
+    const requests: unknown[] = []
+    conversationService.getSessionInitMessage = (() => undefined) as typeof conversationService.getSessionInitMessage
+    conversationService.requestControl = (async (_id: string, request: unknown) => {
+      requests.push(request)
+      return { totalTokens: 816_404, rawMaxTokens: 1_000_000, percentage: 82 }
+    }) as typeof conversationService.requestControl
+    try {
+      const body = await inspect('?includeContext=1&contextOnly=1&summaryOnly=1')
+      expect(requests).toEqual([{ subtype: 'get_context_usage', estimateOnly: true, summaryOnly: true }])
+      expect(body.context).toMatchObject({ totalTokens: 816_404, percentage: 82 })
+      expect(skillScan).not.toHaveBeenCalled()
+      expect(transcript).not.toHaveBeenCalled()
+    } finally {
+      skillScan.mockRestore()
+      transcript.mockRestore()
+    }
+  })
+
+  it('keeps a failed fast read cheap so the client can retain its last confirmed number', async () => {
+    const skillScan = spyOn(skills, 'listSkillSlashCommands').mockImplementation(async () => {
+      throw new Error('Unexpected skill scan')
+    })
+    const transcript = spyOn(sessionService, 'getInspectionTranscriptSnapshot').mockImplementation(async () => {
+      throw new Error('Unexpected transcript fallback')
+    })
+    conversationService.requestControl = (async () => { throw new Error('CLI busy') }) as typeof conversationService.requestControl
+    try {
+      const body = await inspect('?includeContext=1&contextOnly=1&summaryOnly=1')
+      expect(body.context).toBeUndefined()
+      expect(body.contextEstimate).toBeUndefined()
+      expect(body.errors).toMatchObject({ context: 'CLI busy' })
+      expect(skillScan).not.toHaveBeenCalled()
+      expect(transcript).not.toHaveBeenCalled()
+    } finally {
+      skillScan.mockRestore()
+      transcript.mockRestore()
+    }
+  })
+
+  it('skips skill scans even when explicitly requesting the context breakdown', async () => {
+    const skillScan = spyOn(skills, 'listSkillSlashCommands').mockImplementation(async () => {
+      throw new Error('Context breakdown does not need the slash-command list')
+    })
+    try {
+      await inspect('?includeContext=1&contextOnly=1')
+      expect(requestedSubtypes).toEqual(['get_context_usage'])
+      expect(skillScan).not.toHaveBeenCalled()
+    } finally {
+      skillScan.mockRestore()
+    }
   })
 })
