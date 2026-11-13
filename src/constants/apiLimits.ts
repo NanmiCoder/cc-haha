@@ -28,6 +28,12 @@ export const API_IMAGE_MAX_BASE64_SIZE = 5 * 1024 * 1024 // 5 MB
  */
 export const IMAGE_TARGET_RAW_SIZE = (API_IMAGE_MAX_BASE64_SIZE * 3) / 4 // 3.75 MB
 
+// Optimization targets, separate from the per-image API rejection limits.
+export const IMAGE_CONTEXT_TARGET_BYTES = 512 * 1024
+// Internal soft budget for encoded inline images, not a provider request limit.
+// Text, tools, PDFs and serialization overhead are additional request bytes.
+export const IMAGE_REQUEST_BASE64_BUDGET = 24 * 1024 * 1024
+
 /**
  * API-enforced maximum dimensions for image inputs.
  *
