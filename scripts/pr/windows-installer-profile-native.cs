@@ -1931,6 +1931,60 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(!Directory.Exists(root), "ABI directory cleanup incomplete");
     }
 
+    internal static bool CheckAbiHello(FixtureReport report, ProtocolMessage hello, int peerPid, ProtocolMessage expected)
+    {
+      CorePolicy.Require(expected != null && expected.pid > 0 && expected.version == 1 && expected.kind == "abi-hello", "Invalid expected ABI hello");
+      ProtocolMessage actual = hello ?? new ProtocolMessage();
+      report.Check("abi-hello-frame", hello != null && actual.version == 1 && actual.kind == "abi-hello", "Requires a nonempty v1 abi-hello frame");
+      report.Check("abi-hello-endpoint-pid", peerPid == expected.pid,
+        "Expected held PID=" + expected.pid.ToString(CultureInfo.InvariantCulture) + "; actual pipe peer PID=" + peerPid.ToString(CultureInfo.InvariantCulture));
+      report.Check("abi-hello-message-pid", actual.pid == expected.pid,
+        "Expected held PID=" + expected.pid.ToString(CultureInfo.InvariantCulture) + "; message PID=" + actual.pid.ToString(CultureInfo.InvariantCulture));
+      string[] labels = { "nonce", "creation", "sid", "binary", "spec" };
+      string[] actualValues = { actual.nonce, actual.creationTime, actual.sid, actual.binarySha256, actual.specSha256 };
+      string[] expectedValues = { expected.nonce, expected.creationTime, expected.sid, expected.binarySha256, expected.specSha256 };
+      for (int i = 0; i < labels.Length; i++)
+        report.Check("abi-hello-" + labels[i], actualValues[i] != null && actualValues[i] == expectedValues[i],
+          "Expected SHA256=" + CorePolicy.HashText(expectedValues[i] ?? "") + "; observed SHA256=" + CorePolicy.HashText(actualValues[i] ?? ""));
+      KnownPaths observed = actual.knownPaths ?? new KnownPaths(), paths = expected.knownPaths ?? new KnownPaths();
+      string[] folders = { "profile", "roaming", "local", "desktop", "programs", "startMenu", "userPrograms" };
+      string[] observedPaths = { observed.profile, observed.roaming, observed.local, observed.desktop, observed.programs, observed.startMenu, observed.userPrograms };
+      string[] expectedPaths = { paths.profile, paths.roaming, paths.local, paths.desktop, paths.programs, paths.startMenu, paths.userPrograms };
+      for (int i = 0; i < folders.Length; i++)
+        report.Check("abi-hello-folder-" + folders[i], CorePolicy.SamePath(observedPaths[i], expectedPaths[i]),
+          "Expected path SHA256=" + CorePolicy.HashText(expectedPaths[i] ?? "") + "; observed path SHA256=" + CorePolicy.HashText(observedPaths[i] ?? ""));
+      return report.checks.All(check => check.status == "passed");
+    }
+
+    private static void RecordAbiRootInventory(FixtureReport report, string phase, string root, FileIdentity expected, NativePlatform platform)
+    {
+      try
+      {
+        if (root == null || expected == null) return;
+        FileIdentity actual = platform.IdentifyPath(root, true);
+        CorePolicy.Require(!actual.reparse && actual.fileId == expected.fileId && actual.volumePath == expected.volumePath, "ABI inventory root changed");
+        string[] expectedNames = { "fixture.exe", "child-spec.json", "child.json", "owner.txt" };
+        int count = 0;
+        // Only inspect the immediate owned-root entries. Never traverse an
+        // unknown directory or reparse point to obtain diagnostic evidence.
+        foreach (string entry in Directory.EnumerateFileSystemEntries(root).Take(33))
+        {
+          if (count++ >= 32) { report.trace.Add("ABI diagnostic inventory truncated at32 phase=" + phase); break; }
+          FileAttributes attributes = File.GetAttributes(entry);
+          bool reparse = (attributes & FileAttributes.ReparsePoint) != 0, folder = (attributes & FileAttributes.Directory) != 0;
+          string name = Path.GetFileName(entry);
+          string label = expectedNames.Concat(new string[] { "Microsoft", "CLR_v4.0", "UsageLogs", "fixture.exe.log" })
+            .Contains(name, StringComparer.Ordinal) ? name : "other";
+          report.trace.Add("ABI diagnostic entry phase=" + phase + "; label=" + label + "; nameSHA256=" + CorePolicy.HashText(name) +
+            "; expectedBaseName=" + (expectedNames.Contains(name, StringComparer.Ordinal) ? "1" : "0") +
+            "; type=" + (folder ? "directory" : "file") + "; reparse=" + (reparse ? "1" : "0") +
+            "; attributes=" + ((int)attributes).ToString(CultureInfo.InvariantCulture));
+        }
+      }
+      catch (Exception error) { report.trace.Add("ABI diagnostic inventory failed phase=" + phase + ": " + SafeFailure(error)); }
+      // Inventory is read-only evidence. It does not authorize any extra delete.
+    }
+
     internal static FixtureReport RunAbiHarness(string outputPath)
     {
       FixtureReport report = new FixtureReport { mode = "abi-harness" };
@@ -1984,7 +2038,7 @@ namespace CcHahaInstallerProfile
         report.Check("creator-exited-original-ui-unchanged", platform.desktopCreator != null && !platform.desktopCreator.IsAlive &&
           originalStation != IntPtr.Zero && originalDesktop != IntPtr.Zero && GetProcessWindowStation() == originalStation &&
           GetThreadDesktop(GetCurrentThreadId()) == originalDesktop,
-          "Dedicated MTA creator exited; original Controller station and STA desktop were never reassigned");
+          "Dedicated MTA creator exited; original process station restored and Controller STA desktop unchanged");
         CorePolicy.Require(report.checks.All(check => check.status == "passed"), "Private desktop creator lifecycle failed");
         string binary = Path.Combine(root, "fixture.exe");
         File.Copy(CorePolicy.BinaryPath, binary, false);
@@ -2021,13 +2075,14 @@ namespace CcHahaInstallerProfile
         platform.VerifyChild(state.subject, state.runnerSid, binary, binaryHash);
         report.Check("suspended-child-job-identity", state.subject.assigned && !state.subject.resumed &&
           state.subject.identity.sid == state.runnerSid, "Created only this fixture child; assigned owned no-breakaway Job before resume");
+        RecordAbiRootInventory(report, "before-resume", root, rootIdentity, platform);
         platform.ResumeChild(state.subject);
         ProtocolMessage hello = CoreJson.Deserialize<ProtocolMessage>(pipe.ReadLine(10000));
-        CorePolicy.Require(pipe.PeerProcessId == state.subject.pid && hello != null && hello.version == 1 &&
-          hello.kind == "abi-hello" && hello.nonce == nonce && hello.pid == state.subject.pid &&
-          hello.creationTime == state.subject.creationTime && hello.sid == state.runnerSid &&
-          hello.binarySha256 == binaryHash && hello.specSha256 == CorePolicy.HashFile(specPath) &&
-          CorePolicy.SamePaths(hello.knownPaths, state.paths), "ABI authenticated child response failed");
+        RecordAbiRootInventory(report, "after-hello", root, rootIdentity, platform);
+        CorePolicy.Require(CheckAbiHello(report, hello, pipe.PeerProcessId, new ProtocolMessage {
+          kind = "abi-hello", nonce = nonce, pid = state.subject.pid, creationTime = state.subject.creationTime,
+          sid = state.runnerSid, binarySha256 = binaryHash, specSha256 = CorePolicy.HashFile(specPath), knownPaths = state.paths
+        }), "ABI authenticated child response failed");
         pipe.WriteLine(CoreJson.Serialize(new ProtocolMessage {
           kind = "abi-ack", nonce = nonce, binarySha256 = binaryHash, specSha256 = hello.specSha256
         }));
@@ -2068,7 +2123,11 @@ namespace CcHahaInstallerProfile
             platform.desktopCreator == null && GetProcessWindowStation() == originalStation &&
             GetThreadDesktop(GetCurrentThreadId()) == originalDesktop,
             "ABI native resources remain");
-          if (state.controllerRootOwned) RemoveAbiRoot(root, rootIdentity, platform);
+          if (state.controllerRootOwned)
+          {
+            RecordAbiRootInventory(report, "before-root-cleanup", root, rootIdentity, platform);
+            RemoveAbiRoot(root, rootIdentity, platform);
+          }
           cleaned = true;
           report.cleanup = "passed";
           report.Check("owned-native-cleanup", true, "Owned processes/Job/thread/UI/IPC/environment/token handles closed and private ABI files removed");

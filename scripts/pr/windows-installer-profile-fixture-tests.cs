@@ -92,6 +92,41 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-abi-hello-preserves-every-binding-and-redacts-values", delegate {
+        string[] abiFaults = { "none", "null", "frame", "endpoint-pid", "message-pid", "nonce", "creation", "sid", "binary", "spec",
+          "profile", "roaming", "local", "desktop", "programs", "startMenu", "userPrograms" };
+        foreach (string fault in abiFaults)
+        {
+          ProtocolMessage expected = new ProtocolMessage { kind = "abi-hello", nonce = "private-fixture-nonce",
+            pid = 4242, creationTime = "123456", sid = TargetSid, binarySha256 = new String('a', 64),
+            specSha256 = new String('b', 64), knownPaths = Paths() };
+          ProtocolMessage hello = CoreJson.Deserialize<ProtocolMessage>(CoreJson.Serialize(expected));
+          int peer = expected.pid;
+          if (fault == "null") hello = null;
+          else if (fault == "frame") hello.version = 2;
+          else if (fault == "endpoint-pid") peer++;
+          else if (fault == "message-pid") hello.pid++;
+          else if (fault == "nonce") hello.nonce = "wrong";
+          else if (fault == "creation") hello.creationTime = "wrong";
+          else if (fault == "sid") hello.sid = RunnerSid;
+          else if (fault == "binary") hello.binarySha256 = new String('0', 64);
+          else if (fault == "spec") hello.specSha256 = new String('0', 64);
+          else if (fault == "profile") hello.knownPaths.profile += "-wrong";
+          else if (fault == "roaming") hello.knownPaths.roaming += "-wrong";
+          else if (fault == "local") hello.knownPaths.local += "-wrong";
+          else if (fault == "desktop") hello.knownPaths.desktop += "-wrong";
+          else if (fault == "programs") hello.knownPaths.programs += "-wrong";
+          else if (fault == "startMenu") hello.knownPaths.startMenu += "-wrong";
+          else if (fault == "userPrograms") hello.knownPaths.userPrograms += "-wrong";
+          FixtureReport simulated = new FixtureReport { status = "passed" };
+          bool matches = NativePlatform.CheckAbiHello(simulated, hello, peer, expected);
+          Assert(matches == (fault == "none") && simulated.checks.Count == 15, "each ABI binding remains mandatory with separate diagnostics: " + fault);
+          Assert(simulated.status == (fault == "none" ? "passed" : "failed"), "diagnostics cannot turn a mismatched response into success");
+          string serialized = CoreJson.Serialize(simulated);
+          Assert(!serialized.Contains(expected.nonce) && !serialized.Contains(TargetSid) && !serialized.Contains("fixture-owned"), "binding diagnostics must not expose nonce, SID or raw known paths");
+        }
+      });
+
       Case(report, "fake-private-desktop-creator-is-separate-mta-and-exits", delegate {
         int caller = Thread.CurrentThread.ManagedThreadId, worker = caller;
         ApartmentState apartment = ApartmentState.Unknown;
