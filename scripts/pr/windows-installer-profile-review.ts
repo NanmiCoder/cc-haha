@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, win32 } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 
 // This entry point only claims/stages/collects evidence. It never starts the
 // native fixture, a product executable, or the account-disable proposal.
@@ -252,6 +252,7 @@ export function collectProfileReviewEvidence(stageBase: string, destination: str
 }
 
 async function main() {
+  if (process.argv[2] === '--profile-only-bootstrap-preflight') return profileOnlyBootstrapPreflight()
   if (process.argv[2]?.startsWith('--profile-only-')) return profileOnlyMain()
   requireReview(process.argv.length === 3 && ['--claim', '--prepare', '--collect'].includes(process.argv[2]), 'Explicit claim/prepare/collect mode required; no native execution mode exists')
   const paths = runnerPaths()
@@ -480,13 +481,57 @@ async function profileOnlyMain() {
   mkdirSync(evidence, { recursive: true })
   for (const [name, value] of Object.entries({ 'activation.json': { ...invocation, sourceHead: profileOnlyReview.sourceHead, sourceRun: profileOnlyReview.sourceRun, compatibilityEnabled: false, oldExit22Policy: 'fatal', fullF1: 'not_proven' }, 'pins.json': packet.pins, 'spec.json': packet.spec, 'root-admission.json': packet.admission, 'claim.json': claim })) writeFileSync(join(evidence, name), jsonBytes(value), { flag: 'wx' })
   const bootstrap = join(paths.workspace, 'scripts/pr/windows-installer-profile-only/bootstrap.ps1')
-  execFileSync('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', bootstrap, '-PrepareReviewedProfileOnly', '-PlanPath', planPath, '-ApprovedPlanSha256', reviewHash(planBytes)], { stdio: 'inherit', timeout: 120000 })
+  execFileSync(profileOnlyPowerShell51, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', bootstrap, '-PrepareReviewedProfileOnly', '-PlanPath', planPath, '-ApprovedPlanSha256', reviewHash(planBytes)], { stdio: 'inherit', timeout: 120000, env: profileOnlyBootstrapEnvironment(process.env) })
   output('package_dir', packet.paths.packageDirectory)
   output('stage_a_dir', packet.paths.stageAInputDirectory)
   output('claim_file', packet.paths.claimFile)
   output('pins_sha256', packet.hashes.pins)
   output('spec_sha256', packet.hashes.spec)
   output('admission_sha256', packet.hashes.admission)
+}
+
+export const profileOnlyPowerShell51 = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+
+export function profileOnlyBootstrapEnvironment(env: Record<string, string | undefined>) {
+  const child: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() !== 'PSMODULEPATH') child[key] = value
+  }
+  child.PSModulePath = win32.join(win32.dirname(profileOnlyPowerShell51), 'Modules')
+  return child
+}
+
+// Ordinary zero-account fixture: use the same Core -> Bun -> fixed 5.1 child
+// boundary as preparation. No Actions claim or profile role is manufactured.
+function profileOnlyBootstrapPreflight() {
+  requireReview(process.argv.length === 3, 'Bootstrap preflight accepts no role or live arguments')
+  const paths = runnerPaths()
+  requireReview(process.env.CC1879_PREFLIGHT_PARENT_PSHOME === 'C:\\Program Files\\PowerShell\\7', 'Real parent PowerShell Core 7 required')
+  const evidence = join(paths.workspace, 'artifacts/windows-installer')
+  mkdirSync(evidence, { recursive: true })
+  const fixture = join(paths.workspace, 'scripts/pr/windows-installer-profile-only/bootstrap.test.ps1')
+  const invoke = (name: string, extra: string[], parent: Record<string, string | undefined>) => {
+    const childEnv = profileOnlyBootstrapEnvironment(parent)
+    const result = spawnSync(profileOnlyPowerShell51, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixture, ...extra], { env: childEnv, timeout: 120000, maxBuffer: 1048576 })
+    writeFileSync(join(evidence, `profile-only-bootstrap-${name}.stdout.raw.log`), result.stdout ?? Buffer.alloc(0), { flag: 'wx' })
+    writeFileSync(join(evidence, `profile-only-bootstrap-${name}.stderr.raw.log`), result.stderr ?? Buffer.alloc(0), { flag: 'wx' })
+    requireReview(!result.error && result.status === 0 && result.signal === null, 'Fixed WindowsPS5.1 bootstrap fixture failed')
+    return new TextDecoder('utf-8', { fatal: true }).decode(result.stdout)
+  }
+  const cases = []
+  for (const mode of ['missing', 'polluted']) {
+    const parent = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'))
+    if (mode === 'polluted') parent.PSModulePath = 'Z:\\cc1879-fixture-core-only-missing-modules'
+    const text = invoke(mode, ['-StartupProbeOnly'], parent)
+    const prefix = 'CC1879_PROBE_JSON='
+    const row = text.split(/\r?\n/).find(line => line.startsWith(prefix))
+    requireReview(row, 'WindowsPS5.1 startup diagnostic is missing')
+    const probe = JSON.parse(row.slice(prefix.length))
+    requireReview(probe.status === 'passed' && typeof probe.psHome === 'string' && probe.psHome.toLowerCase() === win32.dirname(profileOnlyPowerShell51).toLowerCase() && probe.engine === 'WindowsPowerShell5.1-Desktop' && probe.commands.length === 8 && probe.safeModulePaths.length === 1 && probe.safeModulePaths[0].toLowerCase() === win32.join(win32.dirname(profileOnlyPowerShell51), 'Modules').toLowerCase(), 'Wrong startup engine or command-source evidence')
+    cases.push({ parentModulePath: mode, probe })
+  }
+  writeFileSync(join(evidence, 'profile-only-bootstrap-startup.raw.json'), jsonBytes({ version: 1, status: 'passed', parentPSHome: process.env.CC1879_PREFLIGHT_PARENT_PSHOME, cases, realAccountsCreated: 0, realProfilesCreated: 0, nativeProfileExecution: 'not_run' }), { flag: 'wx' })
+  invoke('producer', ['-OutputPath', join(evidence, 'profile-only-bootstrap.raw.json')], process.env)
 }
 
 if (import.meta.main) {

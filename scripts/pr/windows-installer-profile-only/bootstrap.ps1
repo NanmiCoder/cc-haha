@@ -62,14 +62,6 @@ try{
 $native=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.StringConstantType -eq [Management.Automation.Language.StringConstantType]::SingleQuotedHereString -and $node.Value.Contains('namespace CcHaha1879ProfileOnlyLaunchV1')},$true))
 Require-Bootstrap ($native.Count -eq 1 -and $null -eq ('CcHaha1879ProfileOnlyLaunchV1.Native' -as [type])) 'one_fresh_native_declaration_required'
 Add-Type -TypeDefinition $native[0].Value -Language CSharp -ReferencedAssemblies @('System.dll') -ErrorAction Stop
-$roots=@()
-foreach($directory in @($plan.paths.privateBootstrapRoot,$plan.paths.packageDirectory,$plan.paths.stageAInputDirectory)){
-  Assert-OrdinaryPath ([IO.Path]::GetDirectoryName([string]$directory)) $true
-  $record=[CcHaha1879ProfileOnlyLaunchV1.Native]::CreateOwnedDirectory($directory,$runnerSid)
-  Require-Bootstrap (Same-Path $record.Path $directory) 'created_directory_identity_changed'
-  Assert-PrivateAcl (Get-Acl -LiteralPath $directory) $runnerSid $true $true $false
-  $roots+=@{path=$record.Path;fileIdentity=$record.Id}
-}
 function Write-OwnedNew([string]$Path,[byte[]]$Bytes,[bool]$ReadOnly){
   $stream=[IO.FileStream]::new($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
   try{$stream.Write($Bytes,0,$Bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
@@ -86,20 +78,32 @@ function Write-OwnedNew([string]$Path,[byte[]]$Bytes,[bool]$ReadOnly){
   Assert-PrivateAcl (Get-Acl -LiteralPath $Path) $runnerSid $true $true $ReadOnly
   Require-Bootstrap ((File-Hash $Path) -ceq (Hash-Bytes $Bytes)) 'created_file_hash_changed'
 }
-Write-OwnedNew $plan.paths.claimFile $claimBytes $false
-foreach($name in $expectedNames){Write-OwnedNew (Join-Path $plan.paths.packageDirectory $name) $decoded[$name] $true}
-$expectedA=@('profile-fixture.exe','windows-installer-profile-fixture.cs','windows-installer-profile-native.cs','windows-installer-profile-fixture-tests.cs','checks.json','self-test.raw.json','abi-harness.raw.json','profile-only-preflight.raw.json')
-Require-Bootstrap ($plan.aInputs.Count -eq 8 -and @($plan.aInputs.file|Sort-Object -Unique).Count -eq 8) 'exact_a_inputs_required'
-foreach($inputFile in $plan.aInputs){
-  Require-Bootstrap ($expectedA -ccontains $inputFile.file -and $inputFile.bytes -gt 0 -and $inputFile.bytes -le 1048576) 'unexpected_a_input'
-  $from=Join-Path $plan.stageA $inputFile.file
-  Assert-OrdinaryPath $from $false
-  $bytes=[IO.File]::ReadAllBytes($from)
-  Require-Bootstrap ($bytes.Length -eq $inputFile.bytes -and (Hash-Bytes $bytes) -ceq $inputFile.sha256) 'downloaded_a_input_changed'
-  Write-OwnedNew (Join-Path $plan.paths.stageAInputDirectory $inputFile.file) $bytes $true
+function Prepare-OwnedBootstrapFiles($Plan,[hashtable]$Decoded,[byte[]]$ClaimBytes,[string]$RunnerSid,[string[]]$PacketNames,[string]$PlanHash){
+  $roots=@()
+  foreach($directory in @($plan.paths.privateBootstrapRoot,$plan.paths.packageDirectory,$plan.paths.stageAInputDirectory)){
+    Assert-OrdinaryPath ([IO.Path]::GetDirectoryName([string]$directory)) $true
+    $record=[CcHaha1879ProfileOnlyLaunchV1.Native]::CreateOwnedDirectory($directory,$runnerSid)
+    Require-Bootstrap (Same-Path $record.Path $directory) 'created_directory_identity_changed'
+    Assert-PrivateAcl (Get-Acl -LiteralPath $directory) $runnerSid $true $true $false
+    $roots+=@{path=$record.Path;fileIdentity=$record.Id}
+  }
+  Write-OwnedNew $plan.paths.claimFile $claimBytes $false
+  foreach($name in $PacketNames){Write-OwnedNew (Join-Path $plan.paths.packageDirectory $name) $decoded[$name] $true}
+  $expectedA=@('profile-fixture.exe','windows-installer-profile-fixture.cs','windows-installer-profile-native.cs','windows-installer-profile-fixture-tests.cs','checks.json','self-test.raw.json','abi-harness.raw.json','profile-only-preflight.raw.json')
+  Require-Bootstrap ($plan.aInputs.Count -eq 8 -and @($plan.aInputs.file|Sort-Object -Unique).Count -eq 8) 'exact_a_inputs_required'
+  foreach($inputFile in $plan.aInputs){
+    Require-Bootstrap ($expectedA -ccontains $inputFile.file -and $inputFile.bytes -gt 0 -and $inputFile.bytes -le 1048576) 'unexpected_a_input'
+    $from=Join-Path $plan.stageA $inputFile.file
+    Assert-OrdinaryPath $from $false
+    $bytes=[IO.File]::ReadAllBytes($from)
+    Require-Bootstrap ($bytes.Length -eq $inputFile.bytes -and (Hash-Bytes $bytes) -ceq $inputFile.sha256) 'downloaded_a_input_changed'
+    Write-OwnedNew (Join-Path $plan.paths.stageAInputDirectory $inputFile.file) $bytes $true
+  }
+  $receipt=[ordered]@{version=1;status='prepared_no_native_execution';activationHead=$Plan.invocation.head;actionsRunId=$env:GITHUB_RUN_ID;runnerSid=$runnerSid;planSha256=$PlanHash;claimSha256=(Hash-Bytes $claimBytes);roots=$roots;accountApi='not_run';nativeExecution='not_run';cleanup='not_run'}
+  Write-OwnedNew (Join-Path $plan.paths.privateBootstrapRoot 'bootstrap-receipt.json') ([Text.UTF8Encoding]::new($false).GetBytes(($receipt|ConvertTo-Json -Depth 8)+"`n")) $false
+  return $receipt
 }
-$receipt=[ordered]@{version=1;status='prepared_no_native_execution';activationHead=$head;actionsRunId=$env:GITHUB_RUN_ID;runnerSid=$runnerSid;planSha256=$ApprovedPlanSha256;claimSha256=(Hash-Bytes $claimBytes);roots=$roots;accountApi='not_run';nativeExecution='not_run';cleanup='not_run'}
-Write-OwnedNew (Join-Path $plan.paths.privateBootstrapRoot 'bootstrap-receipt.json') ([Text.UTF8Encoding]::new($false).GetBytes(($receipt|ConvertTo-Json -Depth 8)+"`n")) $false
+$receipt=Prepare-OwnedBootstrapFiles $plan $decoded $claimBytes $runnerSid $expectedNames $ApprovedPlanSha256
 $receipt|ConvertTo-Json -Depth 8
 # Retain these exact evidence roots. Never delete native/controller/account or
 # profile state here, including after any partial preparation failure.

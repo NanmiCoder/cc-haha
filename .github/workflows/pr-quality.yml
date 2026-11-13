@@ -411,9 +411,9 @@ jobs:
       - name: Compile and test the owned profile fixture (Stage A only)
         run: bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts
       - name: Test the profile-only bootstrap producer without accounts or profiles
-        shell: powershell
         run: |
-          & scripts/pr/windows-installer-profile-only/bootstrap.test.ps1 -OutputPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts/windows-installer/profile-only-bootstrap.raw.json')
+          $env:CC1879_PREFLIGHT_PARENT_PSHOME = $PSHOME
+          bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-bootstrap-preflight
       - name: Upload Windows installer evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -488,6 +488,7 @@ jobs:
           PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
           PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
           PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
         run: |
           & (Join-Path $env:PROFILE_PACKAGE 'launch-profile-only.proposed.ps1') -ExecuteReviewedProfileOnly -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM -StageAInputDirectory $env:PROFILE_A
       # A separate serial process. Its own gates require launcher/Controller
@@ -501,6 +502,7 @@ jobs:
           PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
           PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
           PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
         run: |
           & (Join-Path $env:PROFILE_PACKAGE 'reconcile-profile-only.proposed.ps1') -DisableReviewedProfileOnlyOwnedAccount -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM
       - name: Collect bounded original profile-only reports

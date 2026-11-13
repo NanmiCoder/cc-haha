@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
+import { profileOnlyBootstrapEnvironment, profileOnlyPowerShell51, claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
 
 const head = profileReview.admittedHead
 function context() {
@@ -261,6 +261,23 @@ test('consumed workflow cannot serve a new head or run and preserves its histori
 
 
 describe('separate profile-only review', () => {
+  test.each(['missing', 'Core7', 'uppercase', 'duplicate-casing'])('binds fresh 5.1 module discovery independently of %s parent paths', mode => {
+    const parent: Record<string, string | undefined> = { GITHUB_RUN_ID: '43434043080', GITHUB_EVENT_PATH: 'D:\\a\\event.json', SystemRoot: 'C:\\Windows', PATH: 'kept' }
+    if (mode === 'Core7') parent.PSModulePath = 'C:\\Program Files\\PowerShell\\7\\Modules'
+    if (mode === 'uppercase') parent.PSMODULEPATH = 'Z:\\untrusted-parent-modules'
+    if (mode === 'duplicate-casing') { parent.PSModulePath = 'bad-one'; parent.psmodulepath = 'bad-two' }
+    const before = { ...parent }
+    const child = profileOnlyBootstrapEnvironment(parent)
+    expect(child.PSModulePath).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules')
+    expect(Object.keys(child).filter(key => key.toUpperCase() === 'PSMODULEPATH')).toEqual(['PSModulePath'])
+    expect(child.GITHUB_RUN_ID).toBe(parent.GITHUB_RUN_ID)
+    expect(child.GITHUB_EVENT_PATH).toBe(parent.GITHUB_EVENT_PATH)
+    expect(child.SystemRoot).toBe(parent.SystemRoot)
+    expect(child.PATH).toBe(parent.PATH)
+    expect(parent).toEqual(before)
+    expect(profileOnlyPowerShell51).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+  })
+
   const workspace = resolve('.')
   const head = 'a'.repeat(40)
   const claimantHash = reviewHash(canonicalReviewBytes(readFileSync('scripts/pr/windows-installer-profile-review.ts')))
@@ -467,9 +484,13 @@ describe('separate profile-only review', () => {
     expect(workflow.concurrency.group).toContain("format('profile1879-p-{0}-{1}'")
     expect(workflow.concurrency['cancel-in-progress']).toStartWith("${{ github.event_name == 'pull_request' && !(")
     expect(job.permissions).toEqual({ contents: 'read', actions: 'read' })
+    const moduleSteps = job.steps.filter((step: { shell?: string }) => step.shell === 'powershell')
+    expect(moduleSteps).toHaveLength(2)
+    for (const step of moduleSteps) expect(step.env.PSModulePath).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\Modules')
     expect(workflow.jobs['pr-quality-gate'].needs).not.toContain('windows-profile-only-review')
     const ordinaryCommands = workflow.jobs['windows-installer-checks'].steps.map((step: { run?: string }) => step.run ?? '').join('\n')
-    expect(ordinaryCommands).toContain('bootstrap.test.ps1')
+    expect(ordinaryCommands).toContain('--profile-only-bootstrap-preflight')
+    expect(ordinaryCommands).toContain('$env:CC1879_PREFLIGHT_PARENT_PSHOME = $PSHOME')
     expect(ordinaryCommands).not.toContain('-PrepareReviewedProfileOnly')
     const steps = job.steps as { uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> }[]
     const download = steps.filter(step => step.uses === 'actions/download-artifact@v4')

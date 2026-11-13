@@ -1,12 +1,40 @@
 # Ordinary CI fixture only. Imports declarations, never either script body.
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$OutputPath)
+param([string]$OutputPath,[switch]$StartupProbeOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+if($StartupProbeOnly){
+  # .NET-only diagnostics precede the first module command, so a failed
+  # lookup still leaves actual engine context without dumping user paths.
+  [Console]::WriteLine('CC1879_PSHOME='+$PSHOME)
+  [Console]::WriteLine('CC1879_OWN_SYSTEM_MODULES='+[IO.Path]::Combine($PSHOME,'Modules'))
+}
+# Keep this the first module command in the fresh Bun -> 5.1 process. Loading
+# Add-Type/ConvertFrom-Json first could hide a broken Utility discovery path.
+$startupHash=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1 -or $PSVersionTable.PSEdition -cne 'Desktop'){throw 'Windows x64 PowerShell 5.1 Desktop required'}
+if($StartupProbeOnly){
+  $moduleRoot=[IO.Path]::Combine($PSHOME,'Modules')
+  $commands=@()
+  foreach($name in @('Get-FileHash','Get-Item','Get-Content','ConvertFrom-Json','Get-Acl','Join-Path','Sort-Object','Add-Type')){
+    $command=Get-Command $name -ErrorAction Stop
+    $path=[string]$command.Module.Path
+    if(-not $path.StartsWith($PSHOME+'\',[StringComparison]::OrdinalIgnoreCase)){throw ('Non-system module source for '+$name)}
+    $commands+=@{name=$name;source=$command.Source;modulePath=$path;commandType=$command.CommandType.ToString()}
+  }
+  $safePaths=@();$otherPaths=0
+  foreach($path in $env:PSModulePath.Split(';')){
+    if([string]::Equals($path,$moduleRoot,[StringComparison]::OrdinalIgnoreCase)){$safePaths+=$path}else{$otherPaths++}
+  }
+  if($safePaths.Count -ne 1){throw 'Own system module path was not bound exactly once'}
+  $probe=[ordered]@{version=1;status='passed';engine='WindowsPowerShell5.1-Desktop';psHome=$PSHOME;ownSystemModuleRoot=$moduleRoot;safeModulePaths=$safePaths;otherModulePathEntriesRedacted=$otherPaths;startupFileSha256=$startupHash;commands=$commands}
+  [Console]::WriteLine('CC1879_PROBE_JSON='+($probe|ConvertTo-Json -Depth 6 -Compress))
+  exit 0
+}
+if(-not $OutputPath){throw 'Ordinary fixture output path required'}
 $report=[ordered]@{version=1;mode='profile-only-bootstrap-preflight';status='failed';engine='WindowsPowerShell5.1-Desktop';checks=@();realAccountsCreated=0;realProfilesCreated=0;releasedPeExecuted=$false;releasedPeMayHaveExecuted=$false;compatibilityEnabled=$false;oldExit22Policy='fatal';cleanup='not_created'}
 $root=Join-Path $env:RUNNER_TEMP ('cc1879-bootstrap-fixture-'+[Guid]::NewGuid().ToString('N'))
-$rootIdentity=$null;$ownedFiles=@();$held=[Collections.Generic.List[IDisposable]]::new()
+$rootIdentity=$null;$ownedFiles=@();$ownedDirectories=@();$held=[Collections.Generic.List[IDisposable]]::new()
 function Check([string]$Name,[bool]$Passed){$report.checks+=@{name=$Name;status=$(if($Passed){'passed'}else{'failed'})};if(-not $Passed){throw ('Bootstrap preflight failed: '+$Name)}}
 function Import-Function($Ast,[string]$Name){
   $functions=@($Ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $Name},$true))
@@ -15,6 +43,7 @@ function Import-Function($Ast,[string]$Name){
   return [ScriptBlock]::Create($functions[0].Extent.Text)
 }
 try{
+  Check 'startup-first-get-filehash' ($startupHash -cmatch '\A[0-9a-f]{64}\z')
   $asts=@{}
   foreach($name in @('bootstrap.ps1','fixtures\launch-profile-only.proposed.ps1')){
     $tokens=$null;$errors=$null
@@ -29,7 +58,7 @@ try{
   try{& (Join-Path $PSScriptRoot 'bootstrap.ps1') -PrepareReviewedProfileOnly|Out-Null}catch{$denied=$true}
   Check 'bootstrap-missing-plan-denied' $denied
   foreach($name in @('Require-True','Is-Sha','Hash-Bytes','Same-Path','Assert-LocalPath','Assert-OrdinaryPath','Assert-PrivateAcl','File-Hash','Lock-HashedFile','Copy-ReadonlyInput')){. (Import-Function $launcherAst $name)}
-  foreach($name in @('Require-Bootstrap','Write-OwnedNew')){. (Import-Function $bootstrapAst $name)}
+  foreach($name in @('Require-Bootstrap','Write-OwnedNew','Prepare-OwnedBootstrapFiles')){. (Import-Function $bootstrapAst $name)}
   $native=@($launcherAst.FindAll({param($node) $node -is [Management.Automation.Language.StringConstantExpressionAst] -and $node.StringConstantType -eq [Management.Automation.Language.StringConstantType]::SingleQuotedHereString -and $node.Value.Contains('namespace CcHaha1879ProfileOnlyLaunchV1')},$true))
   Check 'one-bootstrap-native-declaration' ($native.Count -eq 1)
   Add-Type -TypeDefinition $native[0].Value -Language CSharp -ReferencedAssemblies @('System.dll') -ErrorAction Stop
@@ -57,6 +86,30 @@ try{
   $rejected=$false
   try{Write-OwnedNew $claimPath ([Text.Encoding]::UTF8.GetBytes('overwrite forbidden')) $false}catch{$rejected=$true}
   Check 'bootstrap-existing-claim-rejected' ($rejected -and (File-Hash $claimPath) -ceq (Hash-Bytes $claimBytes))
+  # Exercise the complete shared filesystem producer with explicitly
+  # unadmitted fixture data. No live claim or Actions event is fabricated.
+  $sourceRoot=Join-Path $root 'fixture-source'
+  $created=[CcHaha1879ProfileOnlyLaunchV1.Native]::CreateOwnedDirectory($sourceRoot,$runnerSid)
+  $ownedDirectories+=@{path=$created.Path;id=$created.Id}
+  $names=@('launch-profile-only.proposed.ps1','reconcile-profile-only.proposed.ps1','argv-env-plan.json','pins.proposed.json','profile-only-spec.proposed.json','root-admission.proposed.json')
+  $decoded=@{}
+  foreach($name in $names){$decoded[$name]=[IO.File]::ReadAllBytes((Join-Path (Join-Path $PSScriptRoot 'fixtures') $name))}
+  $aInputs=@()
+  foreach($name in @('profile-fixture.exe','windows-installer-profile-fixture.cs','windows-installer-profile-native.cs','windows-installer-profile-fixture-tests.cs','checks.json','self-test.raw.json','abi-harness.raw.json','profile-only-preflight.raw.json')){
+    $bytes=[Text.Encoding]::UTF8.GetBytes('unadmitted text fixture only; never an executable: '+$name)
+    Write-OwnedNew (Join-Path $sourceRoot $name) $bytes $false
+    $ownedFiles+=@{path=(Join-Path $sourceRoot $name);hash=(Hash-Bytes $bytes)}
+    $aInputs+=@{file=$name;bytes=$bytes.Length;sha256=(Hash-Bytes $bytes)}
+  }
+  $fixtureBootstrap=Join-Path $root 'fixture-bootstrap';$fixtureA=Join-Path $root 'fixture-A'
+  $fixturePlan=[pscustomobject]@{invocation=@{head='unadmitted-fixture'};stageA=$sourceRoot;aInputs=$aInputs;paths=@{privateBootstrapRoot=$fixtureBootstrap;packageDirectory=(Join-Path $fixtureBootstrap 'packet');stageAInputDirectory=$fixtureA;claimFile=(Join-Path $fixtureBootstrap 'claim.json')}}
+  $fixtureClaim=[Text.Encoding]::UTF8.GetBytes('{"fixture":"not-a-live-claim; no admission"}')
+  $prepared=Prepare-OwnedBootstrapFiles $fixturePlan $decoded $fixtureClaim $runnerSid $names ('0'*64)
+  foreach($record in $prepared.roots){$ownedDirectories+=@{path=$record.path;id=$record.fileIdentity}}
+  foreach($path in @($fixturePlan.paths.claimFile,(Join-Path $fixtureBootstrap 'bootstrap-receipt.json'))){$ownedFiles+=@{path=$path;hash=(File-Hash $path)}}
+  foreach($name in $names){$ownedFiles+=@{path=(Join-Path $fixturePlan.paths.packageDirectory $name);hash=(Hash-Bytes $decoded[$name])}}
+  foreach($inputFile in $aInputs){$ownedFiles+=@{path=(Join-Path $fixtureA $inputFile.file);hash=$inputFile.sha256}}
+  Check 'bootstrap-complete-filesystem-producer-unadmitted' ($prepared.status -ceq 'prepared_no_native_execution' -and $prepared.roots.Count -eq 3 -and $prepared.accountApi -ceq 'not_run' -and $prepared.nativeExecution -ceq 'not_run' -and (File-Hash $fixturePlan.paths.claimFile) -ceq (Hash-Bytes $fixtureClaim))
   $report.status='passed'
 }catch{$report.error=$_.Exception.Message}finally{
   foreach($stream in $held){$stream.Dispose()}
@@ -64,8 +117,12 @@ try{
     try{
       $actual=[CcHaha1879ProfileOnlyLaunchV1.Native]::Identity($root,$true)
       if($actual.Id -cne $rootIdentity.Id -or $actual.Path -cne $rootIdentity.Path){throw 'Fixture root identity changed'}
-      $children=@(Get-ChildItem -LiteralPath $root -Force)
-      if($children.Count -ne $ownedFiles.Count){throw 'Unknown fixture entry; no recursive cleanup'}
+      $children=@(Get-ChildItem -LiteralPath $root -Force -Recurse)
+      if($children.Count -ne ($ownedFiles.Count+$ownedDirectories.Count)){throw 'Unknown fixture entry; no recursive cleanup'}
+      foreach($directory in $ownedDirectories){
+        $actual=[CcHaha1879ProfileOnlyLaunchV1.Native]::Identity($directory.path,$true)
+        if($actual.Id -cne $directory.id -or $actual.Path -cne $directory.path){throw 'Fixture child directory identity changed'}
+      }
       foreach($file in $ownedFiles){
         Assert-OrdinaryPath $file.path $false
         if((File-Hash $file.path) -cne $file.hash){throw 'Fixture bytes changed; no cleanup'}
@@ -77,6 +134,7 @@ try{
         [IO.File]::SetAttributes($file.path,[IO.FileAttributes]::Normal)
         [IO.File]::Delete($file.path)
       }
+      foreach($directory in @($ownedDirectories|Sort-Object { $_.path.Length } -Descending)){[IO.Directory]::Delete($directory.path,$false)}
       [IO.Directory]::Delete($root,$false)
       $report.cleanup='passed'
     }catch{$report.cleanup='failed';$report.status='failed';$report.cleanupError=$_.Exception.Message}
