@@ -394,7 +394,17 @@ export class HahaOAuthService {
 
     const refresh = (async () => {
       try {
-        return await this.refreshStoredTokens(tokens)
+        // A stale file read can finish after an earlier refresh has saved and
+        // cleared its pending entry. Recheck the generation inside this flight,
+        // including renewals that preserve the access token itself.
+        const currentTokens = await this.loadTokens()
+        if (!currentTokens) return null
+        if (
+          currentTokens.accessToken !== tokens.accessToken ||
+          currentTokens.refreshToken !== tokens.refreshToken ||
+          currentTokens.expiresAt !== tokens.expiresAt
+        ) return currentTokens
+        return await this.refreshStoredTokens(currentTokens)
       } catch (err) {
         logTokenRefreshFailure('[HahaOAuthService]', err)
         return null
