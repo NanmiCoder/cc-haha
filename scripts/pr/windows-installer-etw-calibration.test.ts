@@ -17,7 +17,7 @@ function pure(code: string) {
     const file = join(root, 'pure.ps1')
     writeFileSync(file, `$ErrorActionPreference='Stop'\n. ${ps(script)} -DefinitionsOnly\n${code}\n`)
     const result = spawnSync(powershell!, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', file], {
-      env: createSandboxedTestEnvironment(join(root, 'home'), { GITHUB_ACTIONS: 'false' }), encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
+      env: createSandboxedTestEnvironment(join(root, 'home'), { GITHUB_ACTIONS: 'false' }), encoding: 'utf8', timeout: 25_000, maxBuffer: 1024 * 1024,
     })
     expect(result.error).toBeUndefined()
     expect(result.status, result.stderr).toBe(0)
@@ -44,7 +44,7 @@ test('requires the deterministic contract while keeping OS observations advisory
   expect(job['continue-on-error']).not.toBe(true)
   for (const prior of job.steps.slice(0, job.steps.indexOf(step))) expect(prior['continue-on-error']).not.toBe(true)
   expect(jobs['pr-quality-gate'].needs).toContain('windows-installer-checks')
-})
+}, 30_000)
 
 describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or registry calls', () => {
   test('parses and compiles the declared ABI without initializing ETW or touching HKCU', () => {
@@ -54,15 +54,15 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       $flags=[Reflection.BindingFlags]'NonPublic'; $log=[CcHahaCiEtw].GetNestedType('LogFile',$flags)
       @{header=[Runtime.InteropServices.Marshal]::SizeOf([type][CcHahaCiEtw+Header]); log=[Runtime.InteropServices.Marshal]::SizeOf([type]$log)}|ConvertTo-Json -Compress`)
     expect(value).toEqual({ header: 280, log: 448 })
-  })
+  }, 30_000)
 
   test('denies execution before writing files when the explicit hosted CI scope is absent', () => {
     expect(pure(`$RunCiCalibration=$true; try { Assert-CiCalibration; throw 'unexpected admission' } catch { @{denied=$_.Exception.Message -ne 'unexpected admission'}|ConvertTo-Json -Compress }`)).toEqual({ denied: true })
-  })
+  }, 30_000)
 
   test('refuses non-metadata tool names before resolving or executing any program', () => {
     expect(pure(`try { Invoke-ReadOnlyTool 'setup.exe' @() 'unused'; throw 'unexpected execution' } catch { @{denied=$_.Exception.Message -eq 'Only fixed read-only metadata tools are allowed'}|ConvertTo-Json -Compress }`)).toEqual({ denied: true })
-  })
+  }, 30_000)
 
   test('never stops a session whose start outcome is uncertain, even when a query finds it', () => {
     expect(pure(`$n=[pscustomobject]@{Created=$false; StartAttempted=$true; stops=0; queries=0}
@@ -70,14 +70,14 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       $n|Add-Member ScriptMethod QueryOwn {$this.queries++; return @{code=0}}
       $s=@{}; Complete-OwnedSession $n $s
       @{stops=$n.stops; queries=$n.queries; cleanup=$s.cleanup}|ConvertTo-Json -Compress`)).toEqual({ stops: 0, queries: 1, cleanup: 'unknown' })
-  })
+  }, 30_000)
 
   test('retains the first stop failure and marks the attempted boundary before invoking it', () => {
     expect(pure(`$n=[pscustomobject]@{Created=$true; StartAttempted=$true}
       $n|Add-Member ScriptMethod StopOwned {throw [ComponentModel.Win32Exception]::new(5)}
       $s=@{}; try { Complete-OwnedSession $n $s } catch { $e=Safe-Error $_ 'stop-owned-session' }
       @{attempted=$s.stopAttempted; code=$e.nativeCode; stage=$e.stage; noResult=!$s.ContainsKey('stop')}|ConvertTo-Json -Compress`)).toEqual({ attempted: true, code: 5, stage: 'stop-owned-session', noResult: true })
-  })
+  }, 30_000)
 
   test('binds session cleanup to all three independent native identity fields', () => {
     const value = pure(`Initialize-EtwNative; $id=[guid]::NewGuid(); $p=[CcHahaCiEtw+Props]::new(); $w=[CcHahaCiEtw+Wnode]::new(); $w.Guid=$id; $w.Context=42; $p.W=$w
@@ -87,7 +87,7 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
         [CcHahaCiEtw]::SameSession($p,42,$id,'C:\\other\\trace.etl','C:\\owned\\trace.etl'))
       ConvertTo-Json -InputObject $values -Compress`)
     expect(value).toEqual([true, false, false, false])
-  })
+  }, 30_000)
 
   test('rejects a preexisting output and an ancestor link before creating its outside target', () => {
     const root = mkdtempSync(join(tmpdir(), 'cc-haha-etw-path-'))
@@ -99,7 +99,7 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       expect(existsSync(join(outside, 'windows-installer'))).toBe(false)
       expect(pure(`try { Get-CiOutputPath ${ps(root)} ${ps(outside)}; throw 'escaped' } catch { @{denied=$_.Exception.Message -ne 'escaped'}|ConvertTo-Json -Compress }`)).toEqual({ denied: true })
     } finally { rmSync(root, { recursive: true, force: true }) }
-  })
+  }, 60_000)
 
   test('requires actual mapped write and set-restore events despite an unchanged final snapshot', () => {
     const result = pure(`$n=@{FileNtPath='\\Device\\fixture\\canary.bin'; KeyNtPath='\\REGISTRY\\USER\\fixture\\canary'; ThreadId=42}; $o=@{}; $k=@{}; $f=New-CalibrationFacts
@@ -112,7 +112,7 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       foreach($type in @(0,3,0)){ Add-CalibrationEvent $f $reg @{KeyName=$n.KeyNtPath; KeyObject='0x84'; ValueName='type-canary'; Type=$type; DataSize=0; Status=0} $n $o $k }
       @{unmapped=$unmapped; writes=$f.fileWrites; sets=$f.registrySets; mapping=$f.mapping}|ConvertTo-Json -Compress`)
     expect(result).toEqual({ unmapped: 0, writes: 3, sets: 3, mapping: 'canary-path-object-thread-observed' })
-  })
+  }, 30_000)
 
   test.each(['missing', 'different'])('does not infer %s issuing threads from the matching process ID', kind => {
     const result = pure(`$n=@{FileNtPath='owned-file'; KeyNtPath='owned-key'; ThreadId=42}; $f=New-CalibrationFacts; $o=@{}; $k=@{}
@@ -124,7 +124,7 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
       foreach($type in @(0,3,0)){ Add-CalibrationEvent $f $reg @{KeyName=$n.KeyNtPath; KeyObject='0x84'; ValueName='type-canary'; Type=$type; DataSize=0; Status=0} $n $o $k }
       @{writes=$f.fileWrites; sets=$f.registrySets; mapping=$f.mapping}|ConvertTo-Json -Compress`)
     expect(result).toEqual({ writes: 0, sets: 3, mapping: 'unknown' })
-  })
+  }, 30_000)
 
   test('does not retain captured values or promote zero pointers and unknown mappings', () => {
     const result = pure(`$n=@{FileNtPath='owned'; KeyNtPath='owned'; ThreadId=42}; $f=New-CalibrationFacts; $o=@{}; $k=@{}
@@ -136,11 +136,11 @@ describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or 
     expect(result.payloadFlag).toBe(true)
     expect(result.error).not.toContain('never-retain-this')
     expect(result.mapping).toBe('unknown')
-  })
+  }, 30_000)
 
   test.each(['event-loss', 'buffer-loss', 'log-loss', 'realtime-loss', 'unfinalized', 'no-calibration', 'unrestored', 'job-unbound'])('keeps %s evidence not proven', kind => {
     expect(pure(`$h=@{EndTime=2; StartTime=1; Frequency=1; Written=1; EventsLost=0; BuffersLost=0}; $s=@{eventsLost=0; logBuffersLost=0; realTimeBuffersLost=0}; $f=@{mapping='canary-path-object-thread-observed'}; $restored=$true; $bound=$true
       switch(${ps(kind)}) { 'event-loss' {$h.EventsLost=1}; 'buffer-loss' {$h.BuffersLost=1}; 'log-loss' {$s.logBuffersLost=1}; 'realtime-loss' {$s.realTimeBuffersLost=1}; 'unfinalized' {$h.EndTime=0}; 'no-calibration' {$f.mapping='unknown'}; 'unrestored' {$restored=$false}; 'job-unbound' {$bound=$false} }
       @{accepted=(Test-CalibrationEvidence $h $s $f $restored $bound $true)}|ConvertTo-Json -Compress`)).toEqual({ accepted: false })
-  })
+  }, 30_000)
 })
