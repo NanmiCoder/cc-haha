@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, win32 } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
 // This entry point only claims/stages/collects evidence. It never starts the
@@ -41,6 +41,20 @@ export const profileReview = {
   ],
 } as const
 
+// A separate, profile-only activation. These are the already successful A
+// inputs, not an admission to repeat historical B or execute a released PE.
+export const profileOnlyReview = {
+  workflowId: 269753168,
+  workflowPath: '.github/workflows/pr-quality.yml',
+  runNamePrefix: 'profile1879-p:',
+  labelPrefix: 'p1879p-',
+  sourceHead: '1482440377d9de67f5222a3fc3db2758f03c5297',
+  sourceRun: 43420260030,
+  artifact: { id: 14034096259, name: 'windows-installer-evidence', size: 271066, digest: 'sha256:1a5c9346812366a385f1356e44ec9e970cfc36e91db48041d45e1d03f0a2afa8' },
+  binarySha256: 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312',
+  binaryBytes: 225792,
+} as const
+
 function requireReview(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message)
 }
@@ -65,7 +79,7 @@ type ReviewEvent = {
   pull_request?: { number?: number; base?: { ref?: string }; head?: { sha?: string; ref?: string; repo?: { full_name?: string } } }
 }
 
-export function validateReviewInvocation(event: ReviewEvent, env: Record<string, string | undefined>): ReviewInvocation {
+export function validateReviewInvocation(event: ReviewEvent, env: Record<string, string | undefined>, kind: 'historical' | 'profile-only' = 'historical'): ReviewInvocation {
   const head = event.pull_request?.head?.sha
   requireReview(env.CI === 'true' && env.GITHUB_ACTIONS === 'true' && env.GITHUB_EVENT_NAME === 'pull_request', 'Explicit Actions pull_request context required')
   requireReview(env.GITHUB_REPOSITORY === profileReview.repository && event.repository?.full_name === profileReview.repository, 'Wrong repository')
@@ -73,9 +87,10 @@ export function validateReviewInvocation(event: ReviewEvent, env: Record<string,
   requireReview(event.pull_request.base?.ref === 'main', 'Original main target required')
   requireReview(env.GITHUB_ACTOR === profileReview.actor && event.sender?.login === profileReview.actor, 'Only the reviewed coordinator actor may activate this run')
   requireReview(typeof head === 'string' && /^[0-9a-f]{40}$/.test(head), 'Exact PR head required')
-  requireReview(head === profileReview.admittedHead, 'Historical admission cannot be reused for a new fixture head')
+  if (kind === 'historical') requireReview(head === profileReview.admittedHead, 'Historical admission cannot be reused for a new fixture head')
+  else requireReview(head !== profileReview.admittedHead, 'Consumed historical head cannot activate profile-only')
   requireReview(event.pull_request?.head?.repo?.full_name === profileReview.headRepository && event.pull_request.head.ref === profileReview.branch, 'Original fork and branch required')
-  requireReview(event.label?.name === profileReview.labelPrefix + head, 'Label must bind this exact PR head')
+  requireReview(event.label?.name === (kind === 'historical' ? profileReview : profileOnlyReview).labelPrefix + head, 'Label must bind this exact PR head')
   requireReview(env.GITHUB_RUN_ATTEMPT === '1', 'Reruns are forbidden, including after failure')
   const runId = Number(env.GITHUB_RUN_ID)
   const runNumber = Number(env.GITHUB_RUN_NUMBER)
@@ -237,6 +252,7 @@ export function collectProfileReviewEvidence(stageBase: string, destination: str
 }
 
 async function main() {
+  if (process.argv[2]?.startsWith('--profile-only-')) return profileOnlyMain()
   requireReview(process.argv.length === 3 && ['--claim', '--prepare', '--collect'].includes(process.argv[2]), 'Explicit claim/prepare/collect mode required; no native execution mode exists')
   const paths = runnerPaths()
   const invocation = invocationFromEnvironment()
@@ -272,6 +288,205 @@ async function main() {
   output('package_dir', staged)
   output('stage_a_dir', stageA)
   output('setup_path', setup)
+}
+
+export type ProfileOnlyClaim = ReviewInvocation & {
+  version: 1
+  status: 'first_matching_run_claimed'
+  repository: string
+  runAttempt: 1
+  workflowId: number
+  displayTitle: string
+  minimumMatchingRunNumber: number
+  minimumMatchingRunId: number
+  completePagination: true
+  claimantSourceSha256: string
+}
+
+export async function claimProfileOnlyReview(invocation: ReviewInvocation, get: GitHubRead, claimantSourceSha256: string): Promise<ProfileOnlyClaim> {
+  requireReview(/^[0-9a-f]{64}$/.test(claimantSourceSha256), 'Exact claimant source required')
+  const current = await get(`/actions/runs/${invocation.runId}`) as ReviewRun
+  const title = profileOnlyReview.runNamePrefix + invocation.head
+  requireReview(current?.workflow_id === profileOnlyReview.workflowId && current.id === invocation.runId && current.run_number === invocation.runNumber && current.run_attempt === 1 && current.head_sha === invocation.head && current.event === 'pull_request' && current.display_title === title && current.actor?.login === profileReview.actor, 'Current profile-only run does not match admission')
+  const rows: ReviewRun[] = []
+  let total: number | undefined
+  for (let page = 1; ; page++) {
+    const history = await get(`/actions/workflows/${profileOnlyReview.workflowId}/runs?head_sha=${invocation.head}&event=pull_request&per_page=100&page=${page}`) as { total_count: number; workflow_runs: ReviewRun[] }
+    // The filtered Actions endpoint exposes at most 1000 rows. Never call that
+    // truncated result complete, nor accept a changing total between pages.
+    requireReview(Number.isSafeInteger(history?.total_count) && history.total_count > 0 && history.total_count <= 1000 && Array.isArray(history.workflow_runs) && (total === undefined || total === history.total_count), 'Incomplete or changing profile-only workflow history')
+    total = history.total_count
+    requireReview(history.workflow_runs.length === Math.min(100, total - rows.length), 'Incomplete profile-only history page')
+    rows.push(...history.workflow_runs)
+    if (rows.length === total) break
+  }
+  const ids = new Set<number>()
+  const numbers = new Set<number>()
+  for (const run of rows) {
+    requireReview(run && Number.isSafeInteger(run.id) && run.id > 0 && Number.isSafeInteger(run.run_number) && run.run_number > 0 && Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 && run.workflow_id === current.workflow_id && run.head_sha === invocation.head && run.event === 'pull_request' && typeof run.display_title === 'string' && run.display_title.length > 0 && typeof run.actor?.login === 'string' && run.actor.login.length > 0, 'Unassociated profile-only history row')
+    requireReview(!ids.has(run.id) && !numbers.has(run.run_number), 'Duplicate profile-only history identity')
+    ids.add(run.id)
+    numbers.add(run.run_number)
+    if (run.id === current.id) requireReview(JSON.stringify(runIdentity(run)) === JSON.stringify(runIdentity(current)), 'Current profile-only history row changed')
+  }
+  const matching = rows.filter(run => run.display_title === title)
+  requireReview(matching.some(run => run.id === current.id) && matching.every(run => run.actor.login === profileReview.actor && run.run_number >= current.run_number), 'Profile-only head already consumed or current run absent; no retry')
+  const pin = profileOnlyReview.artifact
+  const artifact = await get(`/actions/artifacts/${pin.id}`) as { id: number; name: string; size_in_bytes: number; digest: string; expired: boolean; workflow_run?: { id: number; head_sha: string } }
+  requireReview(artifact?.id === pin.id && artifact.name === pin.name && artifact.size_in_bytes === pin.size && artifact.digest === pin.digest && artifact.expired === false && artifact.workflow_run?.id === profileOnlyReview.sourceRun && artifact.workflow_run.head_sha === profileOnlyReview.sourceHead, 'Successful profile-only A artifact is missing, expired or changed')
+  return { version: 1, status: 'first_matching_run_claimed', repository: profileReview.repository, ...invocation, runAttempt: 1, workflowId: current.workflow_id, displayTitle: title, minimumMatchingRunNumber: current.run_number, minimumMatchingRunId: current.id, completePagination: true, claimantSourceSha256 }
+}
+
+function runIdentity(run: ReviewRun) {
+  return [run.id, run.workflow_id, run.run_number, run.run_attempt, run.head_sha, run.event, run.display_title, run.actor.login]
+}
+
+export function validateProfileOnlyClaim(claim: ProfileOnlyClaim, invocation: ReviewInvocation, claimantSourceSha256: string) {
+  requireReview(claim?.version === 1 && claim.status === 'first_matching_run_claimed' && claim.repository === profileReview.repository && claim.head === invocation.head && claim.runId === invocation.runId && claim.runNumber === invocation.runNumber && claim.runAttempt === 1 && claim.workflowId === profileOnlyReview.workflowId && claim.displayTitle === profileOnlyReview.runNamePrefix + invocation.head && claim.minimumMatchingRunNumber === invocation.runNumber && claim.minimumMatchingRunId === invocation.runId && claim.completePagination === true && claim.claimantSourceSha256 === claimantSourceSha256, 'Complete profile-only claim missing or changed')
+}
+
+export function profileOnlyPaths(head: string) {
+  requireReview(/^[0-9a-f]{40}$/.test(head) && head !== profileReview.admittedHead, 'New exact activation head required')
+  const stageBase = `D:\\a\\_temp\\cc-haha-1879-p-${head}-52f4ce19-g1`
+  const privateBootstrapRoot = stageBase + '-bootstrap'
+  return { stageBase, privateBootstrapRoot, stageAInputDirectory: stageBase + '-A', claimFile: win32.join(privateBootstrapRoot, 'claim.json'), packageDirectory: win32.join(privateBootstrapRoot, 'packet') }
+}
+
+const profileOnlyTemplateNames = ['launch-profile-only.proposed.ps1', 'reconcile-profile-only.proposed.ps1', 'argv-env-plan.json'] as const
+function sourceHash(workspace: string, path: string) {
+  return reviewHash(canonicalReviewBytes(ordinaryFile(join(workspace, path), 262144)))
+}
+function jsonBytes(value: unknown) { return Buffer.from(`${JSON.stringify(value, null, 2)}\n`) }
+
+// Pure packet production is shared by contract tests and the Actions prepare
+// step. Only the separately applied exact-head coordinator label is admission.
+// Checked-in JSON stays unadmitted; previewing/preparing source grants nothing.
+export function prepareProfileOnlyPacket(workspace: string, invocation: ReviewInvocation, claim: ProfileOnlyClaim) {
+  const claimantSourceSha256 = sourceHash(workspace, 'scripts/pr/windows-installer-profile-review.ts')
+  validateProfileOnlyClaim(claim, invocation, claimantSourceSha256)
+  const root = join(workspace, 'scripts/pr/windows-installer-profile-only/fixtures')
+  const read = (name: string) => JSON.parse(canonicalReviewBytes(ordinaryFile(join(root, name), 65536)).toString('utf8'))
+  const pins = read('pins.proposed.json')
+  const spec = read('profile-only-spec.proposed.json')
+  const admission = read('root-admission.proposed.json')
+  requireReview(pins.status === 'DRAFT_NOT_READY' && pins.admissionStatus === 'not_admitted' && pins.activationHead === null && spec.realExecutionAdmitted === false && admission.status === 'not_admitted', 'Only unadmitted profile-only templates accepted')
+  requireReview(pins.binarySha256 === profileOnlyReview.binarySha256 && pins.binaryBytes === profileOnlyReview.binaryBytes && spec.expectedBinarySha256 === pins.binarySha256 && pins.stageA.head === profileOnlyReview.sourceHead && pins.stageA.runId === profileOnlyReview.sourceRun && pins.stageA.artifactId === profileOnlyReview.artifact.id, 'Profile-only template A binding changed')
+  const paths = profileOnlyPaths(invocation.head)
+  const files: { name: string; bytes: Buffer }[] = profileOnlyTemplateNames.map(name => ({ name, bytes: canonicalReviewBytes(ordinaryFile(join(root, name), 65536)) }))
+  const hash = (name: string) => reviewHash(files.find(file => file.name === name)!.bytes)
+  Object.assign(spec, { realExecutionAdmitted: true, sourceRoot: win32.join(paths.stageBase, 'input'), controllerRoot: win32.join(paths.stageBase, 'controller'), output: win32.join(paths.stageBase, 'controller/profile-only-report.json') })
+  const specBytes = jsonBytes(spec)
+  Object.assign(pins, paths, { status: 'FROZEN_PROFILE_ONLY_INPUTS', admissionStatus: 'external_root_grant_required', activationHead: invocation.head, specSha256: reviewHash(specBytes), launcherSha256: hash(profileOnlyTemplateNames[0]), reconcileSha256: hash(profileOnlyTemplateNames[1]), workflow: { path: profileOnlyReview.workflowPath, sha256: sourceHash(workspace, profileOnlyReview.workflowPath), workflowId: profileOnlyReview.workflowId, claimantSourceSha256 } })
+  const pinsBytes = jsonBytes(pins)
+  Object.assign(admission, { status: 'admitted_profile_only_once', scope: 'Exact-head coordinator label, first matching invocation only; profile-only diagnostic, no F1 admission', activationHead: invocation.head, pinsSha256: reviewHash(pinsBytes), specSha256: pins.specSha256, launcherSha256: pins.launcherSha256, reconcileSha256: pins.reconcileSha256, newTriggerLabel: profileOnlyReview.labelPrefix + invocation.head, allowedWorkflowId: profileOnlyReview.workflowId, stageBase: paths.stageBase, privateBootstrapRoot: paths.privateBootstrapRoot, rootReportReference: `https://github.com/${profileReview.repository}/actions/runs/${invocation.runId}`, runAuthorization: 'first_exact_head_once_no_rerun', claimantSourceSha256 })
+  files.push({ name: 'profile-only-spec.proposed.json', bytes: specBytes }, { name: 'pins.proposed.json', bytes: pinsBytes }, { name: 'root-admission.proposed.json', bytes: jsonBytes(admission) })
+  return { invocation, paths, claim, pins, spec, admission, files, hashes: { pins: reviewHash(pinsBytes), spec: pins.specSha256 as string, admission: reviewHash(jsonBytes(admission)) } }
+}
+
+export function validateProfileOnlyAInputs(workspace: string, stageA: string, pins: ReturnType<typeof prepareProfileOnlyPacket>['pins']) {
+  requireReview(pins.sourcePins.length === 3, 'Exactly three reviewed A sources required')
+  for (const pin of pins.sourcePins) {
+    requireReview(profileReview.sources.some(source => source.file === pin.file), 'Unexpected A source')
+    const raw = ordinaryFile(join(stageA, pin.file), 262144)
+    requireReview(raw.length === pin.bytes && reviewHash(raw) === pin.sha256 && sourceHash(workspace, `scripts/pr/${pin.file}`) === pin.canonicalSha256, 'Current source or original raw A source changed')
+  }
+  const binary = ordinaryFile(join(stageA, 'profile-fixture.exe'), profileOnlyReview.binaryBytes)
+  requireReview(binary.length === profileOnlyReview.binaryBytes && reviewHash(binary) === profileOnlyReview.binarySha256, 'Profile-only original PE changed; rebuilding forbidden')
+  for (const [name, hash] of Object.entries({ 'checks.json': pins.stageA.checksSha256, 'self-test.raw.json': pins.stageA.selfTestSha256, 'abi-harness.raw.json': pins.stageA.abiHarnessSha256, 'profile-only-preflight.raw.json': pins.stageA.preflightSha256 })) {
+    requireReview(reviewHash(ordinaryFile(join(stageA, name), 1048576)) === hash, 'Profile-only A report changed')
+  }
+}
+
+export function collectProfileOnlyEvidence(packet: ReturnType<typeof prepareProfileOnlyPacket>, destination: string, launcherOutcome: string) {
+  mkdirSync(destination, { recursive: true })
+  const names = ['bootstrap-receipt.json', 'launch-receipt.json', 'controller.stdout.raw.log', 'controller.stderr.raw.log', 'reconcile-receipt.json', 'controller/profile-only-report.json', 'controller/ledger.json']
+  const files: { name: string; bytes: number; sha256: string }[] = []
+  const errors: string[] = []
+  for (const name of names) {
+    const path = join(name === 'bootstrap-receipt.json' ? packet.paths.privateBootstrapRoot : packet.paths.stageBase, name)
+    if (!existsSync(path)) continue
+    try {
+      const bytes = ordinaryFile(path, 1048576)
+      const target = join(destination, name)
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, bytes, { flag: 'wx' })
+      files.push({ name, bytes: bytes.length, sha256: reviewHash(bytes) })
+    } catch { errors.push(`Profile-only evidence unavailable or unsafe: ${name}`) }
+  }
+  if (launcherOutcome === 'success') {
+    for (const name of names.filter(name => name !== 'reconcile-receipt.json')) if (!files.some(file => file.name === name)) errors.push(`Successful profile-only evidence missing: ${name}`)
+    if (errors.length === 0) {
+      try {
+        const json = (name: string) => JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(ordinaryFile(join(destination, name), 1048576)))
+        const launch = json('launch-receipt.json')
+        const bootstrap = json('bootstrap-receipt.json')
+        const native = json('controller/profile-only-report.json')
+        const ledger = json('controller/ledger.json')
+        const bound = (value: Record<string, unknown>) => value.runId === profileReview.runId && value.owner === profileReview.owner && value.generation === 1 && value.specSha256 === packet.hashes.spec
+        requireReview(bound(launch) && bound(ledger), 'Profile-only ownership binding changed')
+        requireReview(bootstrap.version === 1 && bootstrap.status === 'prepared_no_native_execution' && bootstrap.activationHead === packet.invocation.head && String(bootstrap.actionsRunId) === String(packet.invocation.runId) && bootstrap.runnerSid === launch.runnerSid && bootstrap.claimSha256 === reviewHash(jsonBytes(packet.claim)) && bootstrap.accountApi === 'not_run' && bootstrap.nativeExecution === 'not_run' && Array.isArray(bootstrap.roots) && bootstrap.roots.length === 3 && [packet.paths.privateBootstrapRoot, packet.paths.packageDirectory, packet.paths.stageAInputDirectory].every(path => bootstrap.roots.filter((root: { path: string; fileIdentity: string }) => root.path === path && /^[0-9a-f]{8}:[0-9a-f]{16}$/.test(root.fileIdentity)).length === 1), 'Profile-only atomic bootstrap evidence missing')
+        requireReview(typeof launch.runnerSid === 'string' && /^S-1-5-(?:[0-9]+-)*[0-9]+$/.test(launch.runnerSid) && Number.isSafeInteger(launch.controllerPid) && launch.controllerPid > 4 && typeof launch.controllerBirthUtc === 'string' && launch.controllerBirthUtc.endsWith('Z') && Number.isFinite(Date.parse(launch.controllerBirthUtc)) && launch.stdoutComplete === true && launch.stderrComplete === true && launch.rawLogOverflow === false && launch.binarySha256 === profileOnlyReview.binarySha256 && launch.binaryBytes === profileOnlyReview.binaryBytes, 'Profile-only held-process receipt missing')
+        requireReview(launch.status === 'native_profile_only_passed_and_cleaned_no_F1_claim' && launch.activationHead === packet.invocation.head && String(launch.actionsRunId) === String(packet.invocation.runId) && launch.pinsSha256 === packet.hashes.pins && launch.rootAdmissionSha256 === packet.hashes.admission && launch.stageBase === packet.paths.stageBase && launch.claimFile === packet.paths.claimFile && launch.claimSha256 === reviewHash(jsonBytes(packet.claim)) && launch.nativeExitCode === 0 && launch.nativeCleanup === 'cleaned' && launch.controllerStartAttempted === true && launch.controllerStarted === true && launch.controllerIdentityVerified === true, 'Profile-only launch binding changed')
+        requireReview(native.version === 1 && native.mode === 'profile-only' && native.status === 'passed' && native.cleanup === 'cleaned' && native.binarySha256 === profileOnlyReview.binarySha256 && native.specSha256 === packet.hashes.spec && native.realAccountsCreated === 1 && native.realProfilesCreated === 1 && Array.isArray(native.checks) && native.checks.length > 0 && native.checks.every((check: { status: string }) => check.status === 'passed'), 'Profile-only native terminal binding changed')
+        requireReview(files.find(file => file.name === 'controller/profile-only-report.json')!.sha256 === launch.terminalReportSha256, 'Profile-only terminal report hash changed')
+        const marker = /^CcHaha1879:52f4ce19-5ded-4b27-8268-a2840809e0ca:([0-9a-f]{32})$/.exec(ledger.marker)
+        requireReview(ledger.version === 1 && ledger.accountBound === true && ledger.accountCreated === true && ledger.account?.sid !== launch.runnerSid && /^S-1-5-21-[0-9]+-[0-9]+-[0-9]+-[0-9]+$/.test(ledger.account?.sid ?? '') && marker && ledger.account.marker === ledger.marker && ledger.intentSam === `c1879_${marker[1].slice(0, 12)}` && ledger.account.sam === ledger.intentSam, 'Profile-only fresh owned ledger changed')
+        for (const value of [launch, native]) {
+          requireReview(value.releasedPeExecuted === false && value.releasedPeMayHaveExecuted === false && value.releasedPeExecutionStatus === 'not_run' && value.compatibilityEnabled === false && value.oldExit22Policy === 'fatal', 'Profile-only effect scope changed')
+          for (const key of ['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new']) requireReview(value[key] === 'not_run', 'Profile-only F1 overclaim')
+        }
+      } catch { errors.push('Profile-only terminal binding failed; preserve originals, cleanup remains unknown') }
+    }
+  }
+  const report = { kind: 'profile-only-evidence-collection', launcherOutcome, activationHead: packet.invocation.head, stageASourceHead: profileOnlyReview.sourceHead, files, errors, compatibilityEnabled: false, oldExit22Policy: 'fatal', fullF1: 'not_proven', retryAllowed: false }
+  writeFileSync(join(destination, 'collection.json'), jsonBytes(report), { flag: 'wx' })
+  requireReview(errors.length === 0, 'Profile-only evidence collection failed')
+  return report
+}
+
+async function profileOnlyMain() {
+  const mode = process.argv[2]
+  requireReview(process.argv.length === 3 && ['--profile-only-claim', '--profile-only-prepare', '--profile-only-collect'].includes(mode), 'Explicit profile-only claim/prepare/collect required')
+  const paths = runnerPaths()
+  requireReview(process.env.GITHUB_EVENT_PATH, 'Actions event required')
+  const invocation = validateReviewInvocation(JSON.parse(ordinaryFile(process.env.GITHUB_EVENT_PATH, 1048576).toString('utf8')), process.env, 'profile-only')
+  requireReview(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: paths.workspace, encoding: 'utf8' }).trim() === invocation.head, 'Profile-only exact-head checkout required')
+  const receipt = join(paths.temporary, `cc-haha-1879-p-claim-transfer-${invocation.runId}.json`)
+  const claimantHash = sourceHash(paths.workspace, 'scripts/pr/windows-installer-profile-review.ts')
+  if (mode === '--profile-only-claim') {
+    requireReview(process.env.PROFILE_REVIEW_TOKEN, 'Read-only Actions token missing')
+    const get: GitHubRead = async path => {
+      const response = await fetch(`https://api.github.com/repos/${profileReview.repository}${path}`, { headers: { Authorization: `Bearer ${process.env.PROFILE_REVIEW_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } })
+      requireReview(response.ok, `GitHub read failed (${response.status})`)
+      return response.json()
+    }
+    const claim = await claimProfileOnlyReview(invocation, get, claimantHash)
+    writeFileSync(receipt, jsonBytes(claim), { flag: 'wx' })
+    return
+  }
+  const claim = JSON.parse(ordinaryFile(receipt, 65536).toString('utf8')) as ProfileOnlyClaim
+  const packet = prepareProfileOnlyPacket(paths.workspace, invocation, claim)
+  const evidence = join(paths.workspace, 'artifacts/windows-installer-profile-only')
+  if (mode === '--profile-only-collect') {
+    collectProfileOnlyEvidence(packet, evidence, process.env.PROFILE_LAUNCHER_OUTCOME ?? 'unknown')
+    return
+  }
+  const stageA = join(paths.temporary, 'cc-haha-1879-profile-only-download/profile-stage-a')
+  validateProfileOnlyAInputs(paths.workspace, stageA, packet.pins)
+  const plan = { version: 1, invocation, claim, claimBase64: jsonBytes(claim).toString('base64'), paths: packet.paths, hashes: packet.hashes, stageA, files: packet.files.map(file => ({ name: file.name, base64: file.bytes.toString('base64'), sha256: reviewHash(file.bytes) })), aInputs: [{ file: 'profile-fixture.exe', bytes: profileOnlyReview.binaryBytes, sha256: profileOnlyReview.binarySha256 }, ...packet.pins.sourcePins, ...Object.entries({ 'checks.json': packet.pins.stageA.checksSha256, 'self-test.raw.json': packet.pins.stageA.selfTestSha256, 'abi-harness.raw.json': packet.pins.stageA.abiHarnessSha256, 'profile-only-preflight.raw.json': packet.pins.stageA.preflightSha256 }).map(([file, sha256]) => ({ file, sha256, bytes: ordinaryFile(join(stageA, file), 1048576).length }))] }
+  const planPath = join(paths.temporary, `cc-haha-1879-p-prepare-${invocation.runId}.json`)
+  const planBytes = jsonBytes(plan)
+  writeFileSync(planPath, planBytes, { flag: 'wx' })
+  mkdirSync(evidence, { recursive: true })
+  for (const [name, value] of Object.entries({ 'activation.json': { ...invocation, sourceHead: profileOnlyReview.sourceHead, sourceRun: profileOnlyReview.sourceRun, compatibilityEnabled: false, oldExit22Policy: 'fatal', fullF1: 'not_proven' }, 'pins.json': packet.pins, 'spec.json': packet.spec, 'root-admission.json': packet.admission, 'claim.json': claim })) writeFileSync(join(evidence, name), jsonBytes(value), { flag: 'wx' })
+  const bootstrap = join(paths.workspace, 'scripts/pr/windows-installer-profile-only/bootstrap.ps1')
+  execFileSync('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', bootstrap, '-PrepareReviewedProfileOnly', '-PlanPath', planPath, '-ApprovedPlanSha256', reviewHash(planBytes)], { stdio: 'inherit', timeout: 120000 })
+  output('package_dir', packet.paths.packageDirectory)
+  output('stage_a_dir', packet.paths.stageAInputDirectory)
+  output('claim_file', packet.paths.claimFile)
+  output('pins_sha256', packet.hashes.pins)
+  output('spec_sha256', packet.hashes.spec)
+  output('admission_sha256', packet.hashes.admission)
 }
 
 if (import.meta.main) {

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
+import { claimProfileOnlyReview, collectProfileOnlyEvidence, prepareProfileOnlyPacket, profileOnlyPaths, profileOnlyReview, validateProfileOnlyAInputs, validateProfileOnlyClaim, type ProfileOnlyClaim, canonicalReviewBytes, claimProfileReview, collectProfileReviewEvidence, normalizedReviewedFiles, profileReview, reviewHash, validateFirstReviewRun, validateOriginalAInputs, validateReviewInvocation } from './windows-installer-profile-review'
 
 const head = profileReview.admittedHead
 function context() {
@@ -257,4 +257,233 @@ test('consumed workflow cannot serve a new head or run and preserves its histori
   expect(steps[reconcile].if).toContain("steps.historical.outcome != 'success'")
   for (const step of steps) expect(step['continue-on-error']).toBeUndefined()
   expect(steps.filter((step: { uses?: string }) => step.uses === 'actions/download-artifact@v4').map((step: { with: Record<string, unknown> }) => step.with['artifact-ids'])).toEqual(['14008657574', '14007544990'])
+})
+
+
+describe('separate profile-only review', () => {
+  const workspace = resolve('.')
+  const head = 'a'.repeat(40)
+  const claimantHash = reviewHash(canonicalReviewBytes(readFileSync('scripts/pr/windows-installer-profile-review.ts')))
+  function context() {
+    return {
+      event: { action: 'labeled', number: 1883, label: { name: profileOnlyReview.labelPrefix + head }, sender: { login: 'NanmiCoder' }, repository: { full_name: profileReview.repository }, pull_request: { number: 1883, base: { ref: 'main' }, head: { sha: head, ref: profileReview.branch, repo: { full_name: profileReview.headRepository } } } },
+      env: { CI: 'true', GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'pull_request', GITHUB_REPOSITORY: profileReview.repository, GITHUB_ACTOR: 'NanmiCoder', GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: '501', GITHUB_RUN_NUMBER: '117' },
+    }
+  }
+  function invocation() { return validateReviewInvocation(context().event, context().env, 'profile-only') }
+  function current() { return { id: 501, workflow_id: profileOnlyReview.workflowId, run_number: 117, run_attempt: 1, head_sha: head, event: 'pull_request', display_title: profileOnlyReview.runNamePrefix + head, actor: { login: profileReview.actor } } }
+  function artifact() { const pin = profileOnlyReview.artifact; return { id: pin.id, name: pin.name, size_in_bytes: pin.size, digest: pin.digest, expired: false, workflow_run: { id: profileOnlyReview.sourceRun, head_sha: profileOnlyReview.sourceHead } } }
+  function claim(): ProfileOnlyClaim { return { version: 1, status: 'first_matching_run_claimed', repository: profileReview.repository, ...invocation(), runAttempt: 1, workflowId: profileOnlyReview.workflowId, displayTitle: current().display_title, minimumMatchingRunNumber: 117, minimumMatchingRunId: 501, completePagination: true, claimantSourceSha256: claimantHash } }
+  function packet() { return prepareProfileOnlyPacket(workspace, invocation(), claim()) }
+  function temporary<T>(run: (root: string) => T) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'profile-only-contract-')))
+    try { return run(root) } finally { rmSync(root, { recursive: true, force: true }) }
+  }
+
+  describe('separate profile-only activation and complete first invocation claim', () => {
+    test('accepts the new exact-head coordinator label while historical admission still refuses it', () => {
+      expect(invocation()).toEqual({ head, runId: 501, runNumber: 117 })
+      expect(() => validateReviewInvocation(context().event, context().env)).toThrow('Historical admission cannot be reused')
+    })
+
+    test.each(['ordinary-push', 'synchronize', 'old-label', 'old-head', 'actor', 'sender', 'number', 'base', 'fork', 'branch', 'repository', 'attempt', 'head', 'run-id'])('denies %s before a request or write', fault => {
+      const { event, env } = context()
+      if (fault === 'ordinary-push') env.GITHUB_EVENT_NAME = 'push'
+      if (fault === 'synchronize') event.action = 'synchronize'
+      if (fault === 'old-label') event.label.name = profileReview.labelPrefix + head
+      if (fault === 'old-head') { event.pull_request.head.sha = profileReview.admittedHead; event.label.name = profileOnlyReview.labelPrefix + profileReview.admittedHead }
+      if (fault === 'actor') env.GITHUB_ACTOR = 'other'
+      if (fault === 'sender') event.sender.login = 'other'
+      if (fault === 'number') event.pull_request.number = 1879
+      if (fault === 'base') event.pull_request.base.ref = 'other'
+      if (fault === 'fork') event.pull_request.head.repo.full_name = 'other/repo'
+      if (fault === 'branch') event.pull_request.head.ref = 'other'
+      if (fault === 'repository') event.repository.full_name = 'other/repo'
+      if (fault === 'attempt') env.GITHUB_RUN_ATTEMPT = '2'
+      if (fault === 'head') event.pull_request.head.sha = 'merge-ref'
+      if (fault === 'run-id') env.GITHUB_RUN_ID = '../fake'
+      expect(() => validateReviewInvocation(event, env, 'profile-only')).toThrow()
+    })
+
+    test('fully paginates ordinary PR runs and claims only the earliest matching invocation', async () => {
+      const ordinary = Array.from({ length: 100 }, (_, index) => ({ ...current(), id: 1000 + index, run_number: index + 1, display_title: 'ordinary PR title', actor: { login: 'contributor' } }))
+      const calls: string[] = []
+      const result = await claimProfileOnlyReview(invocation(), async path => {
+        calls.push(path)
+        if (path === '/actions/runs/501') return current()
+        if (path === `/actions/artifacts/${profileOnlyReview.artifact.id}`) return artifact()
+        return { total_count: 101, workflow_runs: path.endsWith('page=1') ? ordinary : [current()] }
+      }, claimantHash)
+      expect(result).toEqual(claim())
+      expect(calls).toHaveLength(4)
+      expect(calls[2]).toEndWith('per_page=100&page=2')
+    })
+
+  test('an earlier consumed invocation on a later page still forbids a new activation', async () => {
+    const first = [current(), ...Array.from({ length: 99 }, (_, index) => ({ ...current(), id: 2000 + index, run_number: 17 + index, display_title: 'ordinary PR title' }))]
+    let artifactRequested = false
+    await expect(claimProfileOnlyReview(invocation(), async path => {
+      if (path === '/actions/runs/501') return current()
+      if (path.startsWith('/actions/artifacts/')) { artifactRequested = true; return artifact() }
+      return { total_count: 101, workflow_runs: path.endsWith('page=1') ? first : [{ ...current(), id: 9999, run_number: 16 }] }
+    }, claimantHash)).rejects.toThrow('already consumed')
+    expect(artifactRequested).toBe(false)
+  })
+
+    test.each(['earlier-failed-invocation', 'duplicate-id', 'duplicate-number', 'changed-total', 'short-page', 'API-truncation', 'unassociated-row', 'wrong-title', 'current-rerun', 'wrong-workflow', 'artifact-expired', 'artifact-digest', 'artifact-run', 'artifact-head'])('rejects %s without treating history as complete', async fault => {
+      const run = current()
+      const previous = { ...current(), id: 9999, run_number: 116 }
+      const pin = artifact()
+      if (fault === 'wrong-title') run.display_title = 'ordinary PR title'
+      if (fault === 'current-rerun') run.run_attempt = 2
+      if (fault === 'wrong-workflow') run.workflow_id++
+      if (fault === 'artifact-expired') pin.expired = true
+      if (fault === 'artifact-digest') pin.digest = 'sha256:' + '0'.repeat(64)
+      if (fault === 'artifact-run') pin.workflow_run.id++
+      if (fault === 'artifact-head') pin.workflow_run.head_sha = 'b'.repeat(40)
+      await expect(claimProfileOnlyReview(invocation(), async path => {
+        if (path === '/actions/runs/501') return run
+        if (path.startsWith('/actions/artifacts/')) return pin
+        if (fault === 'API-truncation') return { total_count: 1001, workflow_runs: [run] }
+        if (fault === 'short-page') return { total_count: 2, workflow_runs: [run] }
+        if (fault === 'changed-total') return { total_count: path.endsWith('page=1') ? 101 : 102, workflow_runs: Array.from({ length: 100 }, (_, index) => ({ ...run, id: 2000 + index, run_number: index + 1, display_title: 'ordinary' })) }
+        if (fault === 'earlier-failed-invocation') return { total_count: 2, workflow_runs: [run, previous] }
+        if (fault === 'duplicate-id') return { total_count: 2, workflow_runs: [run, { ...previous, id: run.id }] }
+        if (fault === 'duplicate-number') return { total_count: 2, workflow_runs: [run, { ...previous, run_number: run.run_number }] }
+        if (fault === 'unassociated-row') return { total_count: 2, workflow_runs: [run, { ...previous, head_sha: 'c'.repeat(40) }] }
+        return { total_count: 1, workflow_runs: [run] }
+      }, claimantHash)).rejects.toThrow()
+    })
+
+    test('a historical three-field receipt and changed complete fields cannot become a protected claim', () => {
+      expect(() => validateProfileOnlyClaim(invocation() as ProfileOnlyClaim, invocation(), claimantHash)).toThrow('Complete profile-only claim')
+      for (const [key, value] of Object.entries({ runAttempt: 2, workflowId: 90, displayTitle: profileReview.runNamePrefix + head, completePagination: false, minimumMatchingRunNumber: 116, minimumMatchingRunId: 7, claimantSourceSha256: '0'.repeat(64) })) {
+        expect(() => validateProfileOnlyClaim({ ...claim(), [key]: value }, invocation(), claimantHash)).toThrow()
+      }
+    })
+  })
+
+  describe('runtime profile-only packet, without account or Profile execution', () => {
+    test('binds new activation separately from unchanged Stage A source/PE and all exact hashes', () => {
+      const prepared = packet()
+      expect(prepared.pins.activationHead).toBe(head)
+      expect(prepared.pins.stageA.head).toBe(profileOnlyReview.sourceHead)
+      expect(prepared.pins.binarySha256).toBe(profileOnlyReview.binarySha256)
+      expect(prepared.pins.stageA.artifactId).toBe(14034096259)
+      expect(prepared.spec.setupPath).toBeNull()
+      expect(prepared.spec.mode).toBe('createprofile-only-controller')
+      expect(prepared.spec.executionStage).toBe('profile-only')
+      expect(prepared.spec.realExecutionAdmitted).toBe(true)
+      expect(prepared.paths).toEqual(profileOnlyPaths(head))
+      expect(prepared.spec.sourceRoot).toBe(prepared.paths.stageBase + '\\input')
+      expect(prepared.spec.controllerRoot).toBe(prepared.paths.stageBase + '\\controller')
+      expect(prepared.admission.allowedRunId).toBeNull()
+      expect(prepared.admission.allowedWorkflowId).toBe(profileOnlyReview.workflowId)
+      expect(prepared.admission.maximumControllerStarts).toBe(1)
+      expect(prepared.admission.maximumCreateProfileCalls).toBe(1)
+      expect(prepared.admission.maximumFreshOwnedSids).toBe(1)
+      for (const [key, name] of [['pins', 'pins.proposed.json'], ['spec', 'profile-only-spec.proposed.json'], ['admission', 'root-admission.proposed.json']] as const) expect(prepared.hashes[key]).toBe(reviewHash(prepared.files.find(file => file.name === name)!.bytes))
+      expect(prepared.pins.launcherSha256).toBe(reviewHash(prepared.files.find(file => file.name.startsWith('launch-'))!.bytes))
+      expect(prepared.pins.reconcileSha256).toBe(reviewHash(prepared.files.find(file => file.name.startsWith('reconcile-'))!.bytes))
+      expect(JSON.parse(readFileSync('scripts/pr/windows-installer-profile-only/fixtures/profile-only-spec.proposed.json', 'utf8')).realExecutionAdmitted).toBe(false)
+      expect(JSON.parse(readFileSync('scripts/pr/windows-installer-profile-only/fixtures/pins.proposed.json', 'utf8')).activationHead).toBeNull()
+    })
+
+    test('denies a changed claimant and a changed raw A source before bootstrap', () => temporary(root => {
+      expect(() => prepareProfileOnlyPacket(workspace, invocation(), { ...claim(), claimantSourceSha256: '0'.repeat(64) })).toThrow()
+      mkdirSync(join(root, 'A'))
+      writeFileSync(join(root, 'A/windows-installer-profile-fixture.cs'), 'changed')
+      expect(() => validateProfileOnlyAInputs(workspace, join(root, 'A'), packet().pins)).toThrow('Current source or original raw A source changed')
+    }))
+
+    test('failure collection leaves missing/unknown state unknown, and never calls it a pass', () => temporary(root => {
+      const prepared = packet()
+      prepared.paths.stageBase = join(root, 'absent')
+      const report = collectProfileOnlyEvidence(prepared, join(root, 'evidence'), 'failure')
+      expect(report.files).toEqual([])
+      expect(report.fullF1).toBe('not_proven')
+      expect(report.compatibilityEnabled).toBe(false)
+      expect(report.oldExit22Policy).toBe('fatal')
+      expect(report.retryAllowed).toBe(false)
+      expect(() => collectProfileOnlyEvidence(prepared, join(root, 'success-evidence'), 'success')).toThrow()
+    }))
+
+    test('default bootstrap has no compilation or filesystem effect and imports declarations only after its admission gate', () => {
+      const source = readFileSync('scripts/pr/windows-installer-profile-only/bootstrap.ps1', 'utf8')
+      expect(source.indexOf('if(-not $PrepareReviewedProfileOnly)')).toBeLessThan(source.indexOf('Get-FileHash'))
+      expect(source.indexOf("'specific_profile_only_label_required'")).toBeLessThan(source.indexOf('WindowsIdentity'))
+      expect(source).toContain('::CreateOwnedDirectory($directory,$runnerSid)')
+      expect(source).toContain('[IO.FileMode]::CreateNew')
+      expect(source).toContain('Assert-PrivateAcl (Get-Acl -LiteralPath $Path) $runnerSid $true $true $ReadOnly')
+      expect(source.indexOf('SetAttributes($Path')).toBeLessThan(source.indexOf('SetAccessControl($Path'))
+      expect(source).not.toMatch(/CreateProfile\(|NetUser(Add|Del)|LoadUserProfile\(|LogonUser\(|::Start\(|Remove-Item|Directory\]::Delete/)
+      const launch = readFileSync('scripts/pr/windows-installer-profile-only/fixtures/launch-profile-only.proposed.ps1', 'utf8')
+      expect(launch.indexOf('SetAttributes($To')).toBeLessThan(launch.indexOf('SetAccessControl($To'))
+    })
+
+    test.each(['valid', 'claim', 'activation-head', 'bootstrap', 'ledger', 'report-mode', 'binary', 'cleanup', 'F1', 'log'])('collects bounded profile-only mock evidence and rejects %s substitutions', fault => temporary(root => {
+      const prepared = packet()
+      Object.assign(prepared.paths, { stageBase: join(root, 'stage'), privateBootstrapRoot: join(root, 'bootstrap'), packageDirectory: join(root, 'bootstrap/packet'), stageAInputDirectory: join(root, 'A'), claimFile: join(root, 'bootstrap/claim.json') })
+      mkdirSync(join(root, 'stage/controller'), { recursive: true })
+      mkdirSync(join(root, 'bootstrap'))
+      const bytes = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`)
+      const binding = { runId: profileReview.runId, owner: profileReview.owner, generation: 1, specSha256: prepared.hashes.spec }
+      const scope = { releasedPeExecuted: false, releasedPeMayHaveExecuted: false, releasedPeExecutionStatus: 'not_run', compatibilityEnabled: false, oldExit22Policy: 'fatal', member_proven: 'not_run', installed_bytes_equal: 'not_run', old22_before_protected_mutation: 'not_run', removal_equivalence: 'not_run', full_old_to_new: 'not_run' }
+      const native = { ...scope, version: 1, mode: fault === 'report-mode' ? 'A' : 'profile-only', status: 'passed', cleanup: fault === 'cleanup' ? 'unknown' : 'cleaned', binarySha256: fault === 'binary' ? '0'.repeat(64) : profileOnlyReview.binarySha256, specSha256: prepared.hashes.spec, realAccountsCreated: 1, realProfilesCreated: 1, checks: [{ name: 'mock-profile-only', status: 'passed' }] }
+      if (fault === 'F1') native.full_old_to_new = 'passed'
+      writeFileSync(join(root, 'stage/controller/profile-only-report.json'), bytes(native))
+      const marker = `CcHaha1879:${profileReview.runId}:${'a'.repeat(32)}`
+      const ledger = { ...binding, version: 1, accountBound: true, accountCreated: true, marker, intentSam: 'c1879_aaaaaaaaaaaa', account: { sid: 'S-1-5-21-1-2-3-1002', marker, sam: 'c1879_aaaaaaaaaaaa' } }
+      if (fault === 'ledger') ledger.account.sid = 'S-1-5-21-1-2-3-1001'
+      writeFileSync(join(root, 'stage/controller/ledger.json'), bytes(ledger))
+      const claimSha256 = reviewHash(bytes(prepared.claim))
+      const launch = { ...scope, ...binding, version: 1, mode: 'profile-only-launch', status: 'native_profile_only_passed_and_cleaned_no_F1_claim', activationHead: fault === 'activation-head' ? profileOnlyReview.sourceHead : head, actionsRunId: 501, pinsSha256: prepared.hashes.pins, rootAdmissionSha256: prepared.hashes.admission, stageBase: prepared.paths.stageBase, claimFile: prepared.paths.claimFile, claimSha256: fault === 'claim' ? '0'.repeat(64) : claimSha256, nativeExitCode: 0, nativeCleanup: 'cleaned', controllerStartAttempted: true, controllerStarted: true, controllerIdentityVerified: true, controllerPid: 777, controllerBirthUtc: '2026-11-13T00:00:00.0000000Z', runnerSid: 'S-1-5-21-1-2-3-1001', stdoutComplete: true, stderrComplete: true, rawLogOverflow: false, binarySha256: profileOnlyReview.binarySha256, binaryBytes: profileOnlyReview.binaryBytes, terminalReportSha256: reviewHash(bytes(native)) }
+      writeFileSync(join(root, 'stage/launch-receipt.json'), bytes(launch))
+      const bootstrap = { version: 1, status: 'prepared_no_native_execution', activationHead: head, actionsRunId: 501, runnerSid: launch.runnerSid, claimSha256, accountApi: 'not_run', nativeExecution: 'not_run', roots: [prepared.paths.privateBootstrapRoot, prepared.paths.packageDirectory, prepared.paths.stageAInputDirectory].map(path => ({ path, fileIdentity: '12345678:1234567890abcdef' })) }
+      if (fault === 'bootstrap') bootstrap.roots.pop()
+      writeFileSync(join(root, 'bootstrap/bootstrap-receipt.json'), bytes(bootstrap))
+      if (fault !== 'log') writeFileSync(join(root, 'stage/controller.stdout.raw.log'), 'mock stdout')
+      writeFileSync(join(root, 'stage/controller.stderr.raw.log'), '')
+      if (fault === 'valid') expect(collectProfileOnlyEvidence(prepared, join(root, 'evidence'), 'success').files).toHaveLength(6)
+      else expect(() => collectProfileOnlyEvidence(prepared, join(root, 'evidence'), 'success')).toThrow()
+    }))
+  })
+
+  test('existing PR Quality contains an isolated, least-permission, exact-head activation job and leaves B frozen', () => {
+    const workflow = parse(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const job = workflow.jobs['windows-profile-only-review']
+    for (const condition of ["github.event_name == 'pull_request'", "github.event.action == 'labeled'", 'github.event.pull_request.number == 1883', "github.actor == 'NanmiCoder'", "format('p1879p-{0}', github.event.pull_request.head.sha)", "github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha'"]) {
+      expect(job.if).toContain(condition)
+      expect(workflow['run-name']).toContain(condition)
+      expect(workflow.concurrency.group).toContain(condition)
+      expect(workflow.concurrency['cancel-in-progress']).toContain(condition)
+    }
+    expect(job.if).toContain('github.run_attempt == 1')
+    // A forbidden rerun must keep the original title/group in history, so a
+    // later label application cannot make the first consumed run disappear.
+    expect(workflow['run-name']).not.toContain('github.run_attempt')
+    expect(workflow.concurrency.group).not.toContain('github.run_attempt')
+    expect(workflow['run-name']).toContain("format('profile1879-p:{0}', github.event.pull_request.head.sha)")
+    expect(workflow.concurrency.group).toContain("format('profile1879-p-{0}-{1}'")
+    expect(workflow.concurrency['cancel-in-progress']).toStartWith("${{ github.event_name == 'pull_request' && !(")
+    expect(job.permissions).toEqual({ contents: 'read', actions: 'read' })
+    expect(workflow.jobs['pr-quality-gate'].needs).not.toContain('windows-profile-only-review')
+    const ordinaryCommands = workflow.jobs['windows-installer-checks'].steps.map((step: { run?: string }) => step.run ?? '').join('\n')
+    expect(ordinaryCommands).toContain('bootstrap.test.ps1')
+    expect(ordinaryCommands).not.toContain('-PrepareReviewedProfileOnly')
+    const steps = job.steps as { uses?: string; run?: string; with?: Record<string, unknown>; env?: Record<string, unknown> }[]
+    const download = steps.filter(step => step.uses === 'actions/download-artifact@v4')
+    expect(download).toHaveLength(1)
+    expect(download[0].with?.['artifact-ids']).toBe('14034096259')
+    expect(download[0].with?.['run-id']).toBe('43420260030')
+    expect(steps.filter(step => step.env?.PROFILE_REVIEW_TOKEN)).toHaveLength(1)
+    const commands = steps.map(step => step.run ?? '').join('\n')
+    expect(commands).toContain('--profile-only-claim')
+    expect(commands).toContain('--profile-only-prepare')
+    expect(commands).toContain('--profile-only-collect')
+    expect(commands).not.toMatch(/--role controller|--ExecuteReviewedStageB|setup\.exe|csc\.exe|--self-test/)
+    const historical = readFileSync('.github/workflows/windows-installer-profile-review.yml', 'utf8')
+    expect(historical).toContain("github.run_id == '43380589124'")
+    expect(historical).toContain("github.event.pull_request.head.sha == '9578b040d3f41060fc9b1e0a16fab2233939287c'")
+  })
 })

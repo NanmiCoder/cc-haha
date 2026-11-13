@@ -11,7 +11,7 @@
   "controllerRoot": null,
   "output": null,
   "setupPath": null,
-  "expectedBinarySha256": "d2f6714802aa36cbdf7205a109a922c672ffff360b3ea1298261525cca80066e",
+  "expectedBinarySha256": "be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312",
   "sourcePins": [
     {
       "file": "windows-installer-profile-fixture.cs",

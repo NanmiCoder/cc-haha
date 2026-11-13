@@ -106,8 +106,8 @@ function Assert-FrozenPacket([string]$PinsHash, [string]$SpecHash, [string]$Admi
   }
   Require-True ($spec.version -eq 1 -and $spec.mode -ceq 'createprofile-only-controller' -and $spec.executionStage -ceq 'profile-only' -and $spec.realExecutionAdmitted -is [bool] -and $spec.realExecutionAdmitted) 'profile_only_role_not_admitted'
   Require-True ($null -eq $spec.setupPath -and $spec.frozenPlanManifestSha256 -ceq '60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672' -and $spec.argvEnvPlanSha256 -ceq 'd2e740b8d48b87b3e34a53cec9f9400bd08797b17538ab8cb1f0cc548736451a') 'profile_only_scope_changed'
-  Require-True ($pins.binarySha256 -ceq 'd2f6714802aa36cbdf7205a109a922c672ffff360b3ea1298261525cca80066e' -and $pins.binaryBytes -eq 225792 -and $spec.expectedBinarySha256 -ceq $pins.binarySha256) 'original_new_stage_a_pe_changed'
-  Require-True ($pins.stageA.status -ceq 'passed' -and $pins.stageA.head -ceq '34cbe8bf682eb330e33224f2ef589dfc108af0b3' -and $pins.stageA.runId -eq 43400575669 -and $pins.stageA.artifactId -eq 14025425797) 'new_stage_a_binding_changed'
+  Require-True ($pins.binarySha256 -ceq 'be48adb570326e5fd23161e2f51a6af2cf4aa7f0316e6dbd85fe8a09b99fc312' -and $pins.binaryBytes -eq 225792 -and $spec.expectedBinarySha256 -ceq $pins.binarySha256) 'original_new_stage_a_pe_changed'
+  Require-True ($pins.stageA.status -ceq 'passed' -and $pins.stageA.head -ceq '1482440377d9de67f5222a3fc3db2758f03c5297' -and $pins.stageA.runId -eq 43420260030 -and $pins.stageA.artifactId -eq 14034096259) 'new_stage_a_binding_changed'
   Require-True ($pins.sourcePins.Count -eq 3 -and $spec.sourcePins.Count -eq 3) 'exact_raw_sources_required'
   $expectedNames = @('windows-installer-profile-fixture.cs','windows-installer-profile-native.cs','windows-installer-profile-fixture-tests.cs')
   foreach ($name in $expectedNames) {
@@ -120,7 +120,11 @@ function Assert-FrozenPacket([string]$PinsHash, [string]$SpecHash, [string]$Admi
   Require-True ((Inside-Path $pins.runnerTemp $pins.stageBase) -and (Inside-Path $pins.runnerTemp $pins.privateBootstrapRoot) -and -not (Same-Path $pins.stageBase $pins.privateBootstrapRoot) -and -not (Inside-Path $pins.stageBase $pins.privateBootstrapRoot) -and -not (Inside-Path $pins.privateBootstrapRoot $pins.stageBase)) 'private_bootstrap_or_stage_boundary'
   Require-True ($spec.gitRoot -ceq $pins.workspace -and $spec.sourceRoot -ceq (Join-Path $pins.stageBase 'input') -and $spec.controllerRoot -ceq (Join-Path $pins.stageBase 'controller') -and $spec.output -ceq (Join-Path $spec.controllerRoot 'profile-only-report.json')) 'sibling_input_controller_layout'
   Require-True (-not (Inside-Path $spec.gitRoot $pins.stageBase) -and -not (Same-Path $spec.gitRoot $pins.stageBase) -and -not (Inside-Path $spec.gitRoot $pins.privateBootstrapRoot)) 'git_boundary'
-  Require-True ((Is-Sha $pins.workflow.sha256) -and (Is-Sha $pins.workflow.claimantSourceSha256) -and $admission.claimantSourceSha256 -ceq $pins.workflow.claimantSourceSha256 -and $pins.workflow.workflowId -gt 0 -and $admission.allowedWorkflowId -eq $pins.workflow.workflowId -and $null -eq $admission.allowedRunId) 'future_workflow_claimant_not_frozen'
+  Require-True ((Is-Sha $pins.workflow.sha256) -and (Is-Sha $pins.workflow.claimantSourceSha256) -and $admission.claimantSourceSha256 -ceq $pins.workflow.claimantSourceSha256 -and $pins.workflow.workflowId -eq 269753168 -and $pins.workflow.path -ceq '.github/workflows/pr-quality.yml' -and $admission.allowedWorkflowId -eq $pins.workflow.workflowId -and $null -eq $admission.allowedRunId) 'future_workflow_claimant_not_frozen'
+  foreach ($binding in @(@($pins.workflow.path,$pins.workflow.sha256),@('scripts/pr/windows-installer-profile-review.ts',$pins.workflow.claimantSourceSha256))) {
+    $path=Join-Path $pins.workspace $binding[0]; Assert-OrdinaryPath $path $false
+    Require-True ((Hash-Text ([IO.File]::ReadAllText($path).Replace("`r`n","`n"))) -ceq $binding[1]) 'activation_workflow_or_claimant_source_changed'
+  }
 }
 function Assert-ActionsContext([string]$ClaimFile, [string]$RunnerSid) {
   Require-True ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and [Environment]::Is64BitProcess) 'windows_x64_required'
@@ -172,6 +176,7 @@ try {
   Lock-HashedFile $ClaimFile $claim.Sha256
   Require-True ($StageAInputDirectory -ceq $pins.stageAInputDirectory) 'exact_new_artifact_directory_required'
   Assert-OrdinaryPath $StageAInputDirectory $true
+  Assert-PrivateAcl (Get-Acl -LiteralPath $StageAInputDirectory) $runnerSid $true $true $false
   Lock-HashedFile (Join-Path $StageAInputDirectory 'profile-fixture.exe') $pins.binarySha256 $pins.binaryBytes
   foreach ($pin in $pins.sourcePins) { Lock-HashedFile (Join-Path $StageAInputDirectory $pin.file) $pin.sha256 $pin.bytes }
   foreach ($proof in @(@('checks.json',$pins.stageA.checksSha256),@('self-test.raw.json',$pins.stageA.selfTestSha256),@('abi-harness.raw.json',$pins.stageA.abiHarnessSha256))) {
@@ -325,8 +330,14 @@ namespace CcHaha1879ProfileOnlyLaunchV1 {
   }
   Require-True (-not (Test-Path -LiteralPath $spec.controllerRoot)) 'native_controller_root_must_not_exist'
   function Copy-ReadonlyInput([string]$From,[string]$To,[string]$Hash,[long]$Bytes=-1) {
-    # File.Copy(overwrite=false) never accepts an existing destination.
-    [IO.File]::Copy($From,$To,$false)
+    # CreateNew under the owned writable root before applying the exact final
+    # ACL. Do not inherit source file attributes/security through File.Copy.
+    $source = [IO.FileStream]::new($From,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    try {
+      Require-True ($source.Length -gt 0 -and $source.Length -le 1048576 -and ($Bytes -lt 0 -or $source.Length -eq $Bytes)) 'bounded_readonly_input_required'
+      $target = [IO.FileStream]::new($To,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+      try { $source.CopyTo($target); $target.Flush($true) } finally { $target.Dispose() }
+    } finally { $source.Dispose() }
     $acl = [Security.AccessControl.FileSecurity]::new()
     $acl.SetAccessRuleProtection($true,$false)
     $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($runnerSid))
@@ -334,8 +345,8 @@ namespace CcHaha1879ProfileOnlyLaunchV1 {
     foreach ($sid in @($runnerSid,'S-1-5-18','S-1-5-32-544')) {
       $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),$readonlyRights,[Security.AccessControl.AccessControlType]::Allow))
     }
-    [IO.File]::SetAccessControl($To,$acl)
     [IO.File]::SetAttributes($To,[IO.File]::GetAttributes($To) -bor [IO.FileAttributes]::ReadOnly)
+    [IO.File]::SetAccessControl($To,$acl)
     Lock-HashedFile $To $Hash $Bytes
     Assert-PrivateAcl (Get-Acl -LiteralPath $To) $runnerSid $false $true $true
   }

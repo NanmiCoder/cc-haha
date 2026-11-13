@@ -438,7 +438,7 @@ describe('PR quality workflow', () => {
     expect(parsed.on.push?.branches).toEqual(['main'])
     expect(collect).toContain('git diff --name-only -z "$PUSH_BEFORE" "$PUSH_AFTER"')
     // Pushes to main must not cancel one another: each merge gets its own verdict.
-    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}")
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' && !(")
     // Label exceptions live on the pull request; main must not re-block on them.
     expect(enforce.indexOf('"$EVENT_NAME" != "pull_request"')).toBeLessThan(enforce.indexOf('"$BLOCKED" = "true"'))
   })

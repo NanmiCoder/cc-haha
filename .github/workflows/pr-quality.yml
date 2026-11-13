@@ -1,4 +1,5 @@
 name: PR Quality
+run-name: ${{ github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha) && format('profile1879-p:{0}', github.event.pull_request.head.sha) || github.event.pull_request.title || github.event.head_commit.message || 'PR Quality' }}
 
 # Also runs after every merge to main, scoped to what that push changed. A gate
 # that only ever looks at pull requests lets main drift red unnoticed, and then
@@ -14,8 +15,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: pr-quality-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # An admitted diagnostic is never in an ordinary PR cancellation group.
+  group: ${{ github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha) && format('profile1879-p-{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || format('pr-quality-{0}', github.event.pull_request.number || github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'NanmiCoder/cc-haha' && github.event.action == 'labeled' && github.event.pull_request.number == 1883 && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' && github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' && github.actor == 'NanmiCoder' && github.event.sender.login == 'NanmiCoder' && github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha)) }}
 
 jobs:
   scope-plan:
@@ -408,6 +410,10 @@ jobs:
         run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts
       - name: Compile and test the owned profile fixture (Stage A only)
         run: bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts
+      - name: Test the profile-only bootstrap producer without accounts or profiles
+        shell: powershell
+        run: |
+          & scripts/pr/windows-installer-profile-only/bootstrap.test.ps1 -OutputPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts/windows-installer/profile-only-bootstrap.raw.json')
       - name: Upload Windows installer evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -427,6 +433,89 @@ jobs:
       - name: Clean Windows installer temporary directories
         if: always()
         run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts --cleanup-prepared
+
+  # Diagnostic only. Applying the exact-head label is a separate coordinator
+  # admission after review and ordinary CI; no normal push/label runs this job.
+  windows-profile-only-review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.repository == 'NanmiCoder/cc-haha' &&
+      github.event.sender.login == 'NanmiCoder' &&
+      github.event.action == 'labeled' &&
+      github.event.pull_request.number == 1883 &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == 'toBerlinWay/cc-haha' &&
+      github.event.pull_request.head.ref == 'fix/installer-fallback-foreign-helpers' &&
+      github.actor == 'NanmiCoder' &&
+      github.run_attempt == 1 &&
+      github.event.label.name == format('p1879p-{0}', github.event.pull_request.head.sha)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Claim the first exact-head profile-only invocation with complete history
+        env:
+          PROFILE_REVIEW_TOKEN: ${{ github.token }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-claim
+      - name: Download only the verified Stage A fixture without rebuilding
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '14034096259'
+          merge-multiple: true
+          run-id: '43420260030'
+          repository: NanmiCoder/cc-haha
+          github-token: ${{ github.token }}
+          path: D:\a\_temp\cc-haha-1879-profile-only-download
+      - name: Atomically prepare private bootstrap, protected claim and A inputs
+        id: profile-prepare
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-prepare
+      - name: Run the separately admitted disabled-SID CreateProfile diagnostic once
+        id: profile-only
+        shell: powershell
+        env:
+          PROFILE_PACKAGE: ${{ steps.profile-prepare.outputs.package_dir }}
+          PROFILE_A: ${{ steps.profile-prepare.outputs.stage_a_dir }}
+          PROFILE_CLAIM: ${{ steps.profile-prepare.outputs.claim_file }}
+          PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
+          PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
+          PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+        run: |
+          & (Join-Path $env:PROFILE_PACKAGE 'launch-profile-only.proposed.ps1') -ExecuteReviewedProfileOnly -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM -StageAInputDirectory $env:PROFILE_A
+      # A separate serial process. Its own gates require launcher/Controller
+      # gone, and it never kills, unloads, deletes or reports cleanup success.
+      - name: Reconcile only the bound disabled account after an uncertain result
+        if: ${{ always() && steps.profile-prepare.outcome == 'success' && steps.profile-only.outcome != 'success' && steps.profile-only.outcome != 'skipped' }}
+        shell: powershell
+        env:
+          PROFILE_PACKAGE: ${{ steps.profile-prepare.outputs.package_dir }}
+          PROFILE_CLAIM: ${{ steps.profile-prepare.outputs.claim_file }}
+          PROFILE_PINS_SHA: ${{ steps.profile-prepare.outputs.pins_sha256 }}
+          PROFILE_SPEC_SHA: ${{ steps.profile-prepare.outputs.spec_sha256 }}
+          PROFILE_ADMISSION_SHA: ${{ steps.profile-prepare.outputs.admission_sha256 }}
+        run: |
+          & (Join-Path $env:PROFILE_PACKAGE 'reconcile-profile-only.proposed.ps1') -DisableReviewedProfileOnlyOwnedAccount -ApprovedPinsSha256 $env:PROFILE_PINS_SHA -ApprovedSpecSha256 $env:PROFILE_SPEC_SHA -ApprovedAdmissionSha256 $env:PROFILE_ADMISSION_SHA -ClaimFile $env:PROFILE_CLAIM
+      - name: Collect bounded original profile-only reports
+        if: ${{ always() && steps.profile-prepare.outcome == 'success' }}
+        env:
+          PROFILE_LAUNCHER_OUTCOME: ${{ steps.profile-only.outcome }}
+        run: bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-collect
+      - name: Preserve profile-only evidence and uncertainty
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-only-review-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}
+          path: artifacts/windows-installer-profile-only/
+          if-no-files-found: warn
+          retention-days: 7
 
   macos-swift-checks:
     name: macos-swift-checks
