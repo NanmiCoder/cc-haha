@@ -96,6 +96,144 @@ describe('ContextUsageIndicator request behavior', () => {
     })
   })
 
+  it('updates the closed meter within three seconds without stacking slow requests or polling idle and hidden sessions', async () => {
+    vi.useFakeTimers()
+    try {
+      const slow = deferred<typeof baseInspection>()
+      sessionsApiMock.getInspection
+        .mockResolvedValueOnce(baseInspection)
+        .mockReturnValueOnce(slow.promise)
+        .mockResolvedValue(baseInspection)
+      const { rerender } = render(<ContextUsageIndicator sessionId="session-1" chatState="thinking" messageCount={1} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(sessionsApiMock.getInspection).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ summaryOnly: true }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+      await act(async () => { await vi.advanceTimersByTimeAsync(9_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        slow.resolve({ ...baseInspection, context: { ...baseInspection.context, totalTokens: 44_000, percentage: 22 } })
+        await slow.promise
+      })
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('22%')
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      await act(async () => { await vi.advanceTimersByTimeAsync(9_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(2)
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+      rerender(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const callsAfterCompletion = sessionsApiMock.getInspection.mock.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(9_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(callsAfterCompletion)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('loads full details once while the open panel keeps polling cheap summaries', async () => {
+    vi.useFakeTimers()
+    try {
+      sessionsApiMock.getInspection.mockResolvedValue(baseInspection)
+      render(<ContextUsageIndicator sessionId="session-1" chatState="thinking" messageCount={1} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(sessionsApiMock.getInspection).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ summaryOnly: true }))
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(sessionsApiMock.getInspection).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ summaryOnly: false }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ summaryOnly: true }))
+      expect(sessionsApiMock.getInspection.mock.calls.filter(([, options]) => !options.summaryOnly)).toHaveLength(1)
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(sessionsApiMock.getInspection).toHaveBeenLastCalledWith('session-1', expect.objectContaining({ summaryOnly: true }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refreshes an open panel while its full breakdown is slow, keeps its newest headline and cancels details on close', async () => {
+    vi.useFakeTimers()
+    try {
+      const full = deferred<typeof baseInspection>()
+      const reopenedFull = deferred<typeof baseInspection>()
+      let summaries = 0
+      let details = 0
+      sessionsApiMock.getInspection.mockImplementation((_id, options) => {
+        if (!options.summaryOnly) return ++details === 1 ? full.promise : reopenedFull.promise
+        const totalTokens = 40_000 + ++summaries * 2_000
+        return Promise.resolve({ ...baseInspection, context: {
+          ...baseInspection.context, summaryOnly: true, categories: [],
+          totalTokens, percentage: totalTokens / 2_000,
+        } })
+      })
+      render(<ContextUsageIndicator sessionId="session-1" chatState="thinking" messageCount={1} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const initialSummaries = summaries
+      await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+      expect(summaries).toBe(initialSummaries + 2)
+      expect(details).toBe(1)
+      const newestPercent = (40_000 + summaries * 2_000) / 2_000
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent(`${newestPercent}%`)
+      const fullSignal = sessionsApiMock.getInspection.mock.calls.find(([, options]) => !options.summaryOnly)?.[1].signal
+      expect(fullSignal?.aborted).toBe(false)
+      await act(async () => {
+        full.resolve({ ...baseInspection, context: { ...baseInspection.context, categories: [
+          { name: 'System prompt', tokens: 6_000, color: '#888888' },
+          { name: 'Messages', tokens: 36_000, color: '#888888' },
+        ] } })
+        await full.promise
+      })
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent(`${newestPercent}%`)
+      fireEvent.click(screen.getByTestId('context-breakdown-toggle'))
+      expect(screen.getByText('System prompt')).toBeInTheDocument()
+      expect(screen.getByText(new Intl.NumberFormat().format(40_000 + summaries * 2_000 - 6_000))).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      const reopenedSignal = sessionsApiMock.getInspection.mock.calls.filter(([, options]) => !options.summaryOnly)[1]?.[1].signal
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      expect(reopenedSignal?.aborted).toBe(true)
+      const beforeClosedPoll = summaries
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      expect(summaries).toBe(beforeClosedPoll + 1)
+      expect(details).toBe(2)
+      await act(async () => { reopenedFull.resolve(baseInspection); await reopenedFull.promise })
+      expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent(`${(40_000 + summaries * 2_000) / 2_000}%`)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('bounds cached category estimates when a newer summary is smaller than the fixed context estimate', async () => {
+    vi.useFakeTimers()
+    try {
+      let totalTokens = 42_000
+      sessionsApiMock.getInspection.mockImplementation(async (_id, options) => ({
+        ...baseInspection,
+        context: { ...baseInspection.context, totalTokens, percentage: totalTokens / 2_000,
+          categories: options.summaryOnly ? [] : [
+            { name: 'System prompt', tokens: 10_000, color: '#888888' },
+            { name: 'Messages', tokens: 32_000, color: '#888888' },
+          ],
+        },
+      }))
+      render(<ContextUsageIndicator sessionId="session-1" chatState="thinking" messageCount={1} />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      fireEvent.click(screen.getByTestId('context-usage-indicator'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      totalTokens = 5_000
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+      fireEvent.click(screen.getByTestId('context-breakdown-toggle'))
+      expect(screen.getByText('System prompt').parentElement).toHaveTextContent('5,000')
+      expect(screen.queryByText('Messages')).not.toBeInTheDocument()
+      expect(screen.getByTestId('context-usage-fill')).toHaveStyle({ width: '2.5%' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not auto-fetch context while the document is hidden', async () => {
     sessionsApiMock.getInspection.mockResolvedValue(baseInspection)
     Object.defineProperty(document, 'visibilityState', {
@@ -132,7 +270,9 @@ describe('ContextUsageIndicator request behavior', () => {
     expect(sessionsApiMock.getInspection).toHaveBeenCalledWith('session-1', {
       includeContext: true,
       contextOnly: true,
-      timeout: 30_000,
+      summaryOnly: true,
+      timeout: 6_000,
+      signal: expect.any(AbortSignal),
     })
   })
 
@@ -407,6 +547,7 @@ describe('ContextUsageIndicator request behavior', () => {
     sessionsApiMock.getInspection
       .mockResolvedValueOnce(baseInspection)
       .mockReturnValueOnce(nextInspection.promise)
+      .mockReturnValueOnce(nextInspection.promise)
 
     const { rerender } = render(
       <ContextUsageIndicator
@@ -622,16 +763,15 @@ describe('ContextUsageIndicator request behavior', () => {
   })
 
   it('does not show context retained from a different session', async () => {
-    sessionsApiMock.getInspection
-      .mockResolvedValueOnce(baseInspection)
-      .mockResolvedValueOnce({
+    sessionsApiMock.getInspection.mockImplementation(async (sessionId: string) => sessionId === 'session-2'
+      ? {
         ...baseInspection,
         status: { ...baseInspection.status, sessionId: 'session-2' },
         context: {
           ...baseInspection.context,
           percentage: 7,
         },
-      })
+      } : baseInspection)
 
     const { rerender } = render(
       <ContextUsageIndicator
@@ -770,7 +910,12 @@ describe('ContextUsageIndicator request behavior', () => {
         sessionsApiMock.getInspection
           .mockResolvedValueOnce(baseInspection)
           .mockReturnValueOnce(failed.promise)
-          .mockResolvedValueOnce({ ...baseInspection, context: { ...baseInspection.context, percentage: 5 } })
+        // The active meter now retries after three seconds as well. Keep
+        // that poll unavailable so this still exercises the boundary retry.
+        if (change === 'streaming state') sessionsApiMock.getInspection.mockResolvedValueOnce({
+          active: true, status: baseInspection.status, errors: { context: 'CLI still settling' },
+        })
+        sessionsApiMock.getInspection.mockResolvedValueOnce({ ...baseInspection, context: { ...baseInspection.context, percentage: 5 } })
         const initialState = change === 'history rows' ? 'idle' as const : 'thinking' as const
         const { rerender } = render(
           <ContextUsageIndicator sessionId="session-1" chatState={initialState} messageCount={1} refreshNonce={0} />,
@@ -792,7 +937,7 @@ describe('ContextUsageIndicator request behavior', () => {
           await failed.promise
           await vi.advanceTimersByTimeAsync(5_000)
         })
-        expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(3)
+        expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(change === 'streaming state' ? 4 : 3)
         expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('5%')
       } finally {
         vi.useRealTimers()

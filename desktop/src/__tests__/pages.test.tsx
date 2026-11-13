@@ -789,6 +789,13 @@ describe('Content-only pages render without errors', () => {
 
     const indicator = await screen.findByLabelText('Context usage 42%')
     expect(indicator).toBeInTheDocument()
+    expect(vi.mocked(sessionsApi.getInspection)).toHaveBeenCalledWith(SESSION_ID, {
+      includeContext: true,
+      contextOnly: true,
+      summaryOnly: true,
+      timeout: 6_000,
+      signal: expect.any(AbortSignal),
+    })
     fireEvent.click(indicator)
     // Desktop non-compact: details live in a body portal, not the chat column.
     const popover = await screen.findByTestId('context-usage-popover')
@@ -796,7 +803,9 @@ describe('Content-only pages render without errors', () => {
     expect(vi.mocked(sessionsApi.getInspection)).toHaveBeenCalledWith(SESSION_ID, {
       includeContext: true,
       contextOnly: true,
+      summaryOnly: false,
       timeout: 30_000,
+      signal: expect.any(AbortSignal),
     })
 
     resetPageStores()
