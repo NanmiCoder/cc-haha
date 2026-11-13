@@ -61,6 +61,16 @@ describe('SDKControlRequestSchema agent continuation', () => {
 })
 
 describe('SDK team runtime controls', () => {
+  test('requires a durable human-intent identity for team resume', () => {
+    const request = { subtype: 'team_runtime_resume', team_name: 'reviewed', created_at: 123, incarnation_id: 'incarnation', epoch: 2, request_id: 'human-resume' }
+    const parse = (request: unknown) => SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'control-resume', request })
+    expect(parse(request).success).toBe(true)
+    for (const key of ['team_name', 'created_at', 'incarnation_id', 'epoch', 'request_id']) {
+      const incomplete = { ...request } as Record<string, unknown>
+      delete incomplete[key]
+      expect(parse(incomplete).success).toBe(false)
+    }
+  })
   test('requires a generation on structured team snapshots', () => {
     expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'snapshot', request: { subtype: 'team_runtime_snapshot', team_name: 'reviewed', created_at: 123 } }).success).toBe(true)
     expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'snapshot', request: { subtype: 'team_runtime_snapshot', team_name: 'reviewed' } }).success).toBe(false)

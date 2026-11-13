@@ -34,7 +34,9 @@ test('a failed model control and a late acknowledgement from a replaced process 
 
 test('strict shutdown rejects an unconfirmed kill and retains the process for retry', async () => {
   const { service, session, sessions } = fixture()
-  Object.assign(session, { proc: { exited: new Promise(() => {}), exitCode: null } })
+  const pendingOutbound = ['queued before Stop']
+  const pendingPermissionRequests = new Map([['permission', { toolName: 'Bash', input: {} }]])
+  Object.assign(session, { proc: { exited: new Promise(() => {}), exitCode: null }, pendingOutbound, pendingPermissionRequests })
   const internals = service as unknown as { killProcess: (...args: unknown[]) => void; waitForProcessOutputDrain: (...args: unknown[]) => Promise<void>; cancelPendingControlRequests: (...args: unknown[]) => void; clearSessionAutoAnswerWaits: (...args: unknown[]) => void }
   spyOn(internals, 'killProcess').mockImplementation(() => {})
   spyOn(internals, 'waitForProcessOutputDrain').mockResolvedValue(undefined)
@@ -43,5 +45,7 @@ test('strict shutdown rejects an unconfirmed kill and retains the process for re
   spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => { queueMicrotask(callback); return 1 }) as typeof setTimeout)
   await expect(service.stopSessionAndWait('worker', 1, { requireExit: true })).rejects.toThrow('did not confirm exit')
   expect(sessions.get('worker')).toBe(session)
+  expect(pendingOutbound).toEqual([])
+  expect(pendingPermissionRequests.size).toBe(0)
   expect(internals.waitForProcessOutputDrain).not.toHaveBeenCalled()
 })

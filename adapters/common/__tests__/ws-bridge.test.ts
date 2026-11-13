@@ -116,16 +116,22 @@ describe('WsBridge: handler serialization', () => {
   })
 
   afterEach(async () => {
-    // Forcibly kill any server-side sockets (not graceful close) so
-    // WebSocketServer.close() doesn't wait for client FIN.
-    for (const ws of connections) {
-      try { ws.terminate() } catch {}
+    const fixtureServer = server
+    const fixtureConnections = [...connections]
+    for (const ws of fixtureConnections) {
+      try { ws.close(1000, 'fixture teardown') } catch {}
     }
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => resolve(), 500) // hard cap
-      server.close(() => {
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => {
+        for (const ws of fixtureConnections) {
+          try { ws.terminate() } catch {}
+        }
+        reject(new Error('WebSocket fixture did not finish closing within 500ms'))
+      }, 500)
+      fixtureServer.close((error) => {
         clearTimeout(t)
-        resolve()
+        if (error) reject(error)
+        else resolve()
       })
     })
   })

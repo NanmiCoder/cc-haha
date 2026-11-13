@@ -658,6 +658,7 @@ export const SDKControlRequestInnerSchema = lazySchema(() =>
     z.object({ subtype: z.literal('team_runtime_snapshot'), team_name: z.string().min(1), created_at: z.number() }),
     z.object({ subtype: z.literal('team_runtime_ended'), team_name: z.string().min(1) }),
     z.object({ subtype: z.literal('team_plan_pause') }),
+    z.object({ subtype: z.literal('team_runtime_resume'), team_name: z.string().min(1), created_at: z.number(), incarnation_id: z.string().min(1), epoch: z.number().int().positive(), request_id: z.string().min(1) }),
     sessionMessageInputSchema,
     scheduledTaskMessageInputSchema,
     SDKControlInterruptRequestSchema(),

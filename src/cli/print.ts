@@ -378,6 +378,7 @@ import { formatTeamFinishedPrompt, SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/t
 import {
   readUnreadMessages,
   claimMailboxMessages,
+  returnClaimedMailboxMessages,
   formatTeammateMessages,
   isShutdownApproved,
   type TeammateMessage,
@@ -389,7 +390,7 @@ import {
 import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath, unregisterTeamForSessionCleanup } from '../utils/swarm/teamHelpers.js'
 import { clearLeaderTeamName, setLeaderTeamName } from '../utils/tasks.js'
 import { clearTeammateColors } from '../utils/swarm/teammateLayoutManager.js'
-import { buildTeamRuntimeSnapshot } from '../utils/swarm/teamRuntimeSnapshot.js'
+import { buildTeamRuntimeSnapshot, confirmTeamRuntimeResume, teamRuntimeSnapshotHoldsMail } from '../utils/swarm/teamRuntimeSnapshot.js'
 import { getCanonicalTeamTaskListId, listTasks, unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
@@ -453,6 +454,7 @@ export function createShutdownTeamPrompt(): QueuedCommand {
 export const MAX_LEAD_MAILBOX_ACK_FAILURES = 5
 
 export type LeadMailboxPollState = {
+  revision: number
   /** The unread mail left once the last teammate went away was drained. */
   finalDrainDone: boolean
   /** Consecutive polls whose batch could not be acknowledged. */
@@ -465,7 +467,18 @@ export type LeadMailboxPollState = {
 }
 
 export function createLeadMailboxPollState(): LeadMailboxPollState {
-  return { finalDrainDone: false, consecutiveAckFailures: 0, held: false }
+  return { revision: 0, finalDrainDone: false, consecutiveAckFailures: 0, held: false }
+}
+
+/** A confirmed human intent also restarts a poll that already returned. */
+export function resumeLeadMailboxPoll(state: LeadMailboxPollState, run: () => Promise<void>): void {
+  Object.assign(state, createLeadMailboxPollState(), { revision: state.revision + 1 })
+  void run()
+}
+
+export function pauseLeadMailboxPoll(state: LeadMailboxPollState): void {
+  state.held = true
+  state.revision++
 }
 
 export type LeadMailboxPollStep =
@@ -487,8 +500,11 @@ export async function takeLeadMailboxBatch(
   options: { teamName: string | undefined; hasActiveTeammates: boolean },
 ): Promise<LeadMailboxPollStep> {
   const { teamName, hasActiveTeammates } = options
-  if (state.held) return { kind: 'held' }
+  const revision = state.revision
+  const fresh = () => !state.held && state.revision === revision
+  if (!fresh()) return { kind: 'held' }
   const unread = await readUnreadMessages(TEAM_LEAD_NAME, teamName)
+  if (!fresh()) return { kind: 'held' }
 
   if (!hasActiveTeammates) {
     if (
@@ -497,7 +513,7 @@ export async function takeLeadMailboxBatch(
       state.consecutiveAckFailures >= MAX_LEAD_MAILBOX_ACK_FAILURES
     ) {
       if (unread.length === 0) {
-        Object.assign(state, createLeadMailboxPollState())
+        Object.assign(state, createLeadMailboxPollState(), { revision })
       }
       return { kind: 'stop' }
     }
@@ -511,7 +527,11 @@ export async function takeLeadMailboxBatch(
     return { kind: 'idle' }
   }
 
-  const claimed = await claimMailboxMessages(TEAM_LEAD_NAME, teamName, unread)
+  const claimed = await claimMailboxMessages(TEAM_LEAD_NAME, teamName, unread, fresh)
+  if (!fresh()) {
+    if (claimed) await returnClaimedMailboxMessages(TEAM_LEAD_NAME, teamName, claimed)
+    return { kind: 'held' }
+  }
   if (claimed) {
     state.consecutiveAckFailures = 0
     if (claimed.length === 0) {
@@ -2785,6 +2805,7 @@ function runHeadlessStreaming(
           const teamName = refreshedState.teamContext?.teamName
           // Claims exactly the batch it read before handing it out, and
           // drains leftover mail once after the last teammate is gone.
+          const pollRevision = leadMailboxPoll.revision
           const step = await takeLeadMailboxBatch(leadMailboxPoll, {
             teamName,
             hasActiveTeammates: hasTeammatesRequiringShutdown(refreshedState),
@@ -2799,6 +2820,7 @@ function runHeadlessStreaming(
           }
 
           if (step.kind === 'held') {
+            if (!leadMailboxPoll.held) { void run(); return }
             logForDebugging(
               '[print.ts] Team paused by the host; teammate mail waits for the next user message',
             )
@@ -2902,6 +2924,11 @@ function runHeadlessStreaming(
             // Permission requests stay out of the model context.
             const formatted = formatTeammateMessages(partitioned.remaining)
 
+            if (leadMailboxPoll.held || leadMailboxPoll.revision !== pollRevision) {
+              await returnClaimedMailboxMessages(TEAM_LEAD_NAME, teamName, partitioned.remaining)
+              if (!leadMailboxPoll.held) { void run(); return }
+              break
+            }
             // Enqueue and process
             enqueue({
               mode: 'prompt',
@@ -3148,10 +3175,20 @@ function runHeadlessStreaming(
           }
         } else if (message.request.subtype === 'team_runtime_snapshot') {
           try {
-            const teamContext = buildTeamRuntimeSnapshot(readTeamFile(message.request.team_name), message.request.created_at, getSessionId(), getTeamFilePath(message.request.team_name))
+            const team = readTeamFile(message.request.team_name)
+            const teamContext = buildTeamRuntimeSnapshot(team, message.request.created_at, getSessionId(), getTeamFilePath(message.request.team_name))
+            if (team && teamRuntimeSnapshotHoldsMail(team)) pauseLeadMailboxPoll(leadMailboxPoll)
             setLeaderTeamName(teamContext.teamName)
             setAppState(prev => ({ ...prev, teamContext }))
             sendControlResponseSuccess(message)
+          } catch (error) {
+            sendControlResponseError(message, error instanceof Error ? error.message : String(error))
+          }
+        } else if (message.request.subtype === 'team_runtime_resume') {
+          try {
+            const acknowledgement = confirmTeamRuntimeResume(readTeamFile(message.request.team_name), getSessionId(), message.request)
+            sendControlResponseSuccess(message, acknowledgement)
+            resumeLeadMailboxPoll(leadMailboxPoll, run)
           } catch (error) {
             sendControlResponseError(message, error instanceof Error ? error.message : String(error))
           }
@@ -3169,7 +3206,7 @@ function runHeadlessStreaming(
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'interrupt' || message.request.subtype === 'team_plan_pause') {
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
-          if (message.request.subtype === 'team_plan_pause') leadMailboxPoll.held = true
+          if (message.request.subtype === 'team_plan_pause') pauseLeadMailboxPoll(leadMailboxPoll)
           // Track escapes for attribution (ant-only feature)
           if (feature('COMMIT_ATTRIBUTION')) {
             setAppState(prev => ({
@@ -4635,6 +4672,7 @@ function runHeadlessStreaming(
       // The user speaking again ends a host pause: mail held since then reaches
       // the lead after this turn, alongside whatever the user now wants.
       leadMailboxPoll.held = false
+      leadMailboxPoll.revision++
       enqueue({
         mode: 'prompt' as const,
         // file_attachments rides the protobuf catchall from the web composer.

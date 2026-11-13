@@ -14,11 +14,37 @@ const arg = (name: string) => {
 }
 // A restarted worker resumes its own transcript instead of starting a new one.
 const sessionId = arg('--session-id') ?? arg('--resume')
+async function recordRuntimeControl(event: Record<string, unknown>) {
+  const path = process.env.FIXTURE_TEAM_RUNTIME_CONTROL_EVENTS
+  if (!path) return
+  await appendFile(path, JSON.stringify({ timestamp: Date.now(), pid: process.pid, sessionId, agent: arg('--agent-name'), ...event }) + '\n')
+}
+await recordRuntimeControl({ type: 'process-start', resumed: arg('--resume') ?? null, model: arg('--model') })
 const sdk = new WebSocket(arg('--sdk-url')!)
 sdk.onmessage = async event => {
   for (const line of String(event.data).trim().split('\n')) {
     const message = JSON.parse(line)
     if (message.type === 'control_request') {
+      if (message.request?.subtype === 'team_runtime_resume') {
+        await recordRuntimeControl({ type: 'resume-received', request: message.request })
+        try {
+          const delay = Number(process.env.FIXTURE_TEAM_RUNTIME_RESUME_DELAY_MS ?? 0)
+          if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
+          const { confirmTeamRuntimeResume } = await import('../../../utils/swarm/teamRuntimeSnapshot.js')
+          const { readTeamFile } = await import('../../../utils/swarm/teamHelpers.js')
+          // Use the same durable identity/epoch/request check as the real lead.
+          const acknowledgement = confirmTeamRuntimeResume(readTeamFile(message.request.team_name), sessionId!, message.request)
+          if (process.env.FIXTURE_TEAM_RUNTIME_RESUME_REJECT === '1') throw new Error('Fixture lead refused to release held team mail')
+          if (sdk.readyState !== WebSocket.OPEN) continue
+          await recordRuntimeControl({ type: 'resume-acknowledged', request: message.request, acknowledgement })
+          sdk.send(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: acknowledgement } }))
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          await recordRuntimeControl({ type: 'resume-rejected', request: message.request, error: reason })
+          if (sdk.readyState === WebSocket.OPEN) sdk.send(JSON.stringify({ type: 'control_response', response: { subtype: 'error', request_id: message.request_id, error: reason } }))
+        }
+        continue
+      }
       // A member can die while it starts, as a crashing CLI does: a reason on stderr, no answer.
       if (message.request?.subtype === 'set_model' && arg('--agent-name') === process.env.FIXTURE_EXIT_ON_SET_MODEL) {
         process.stderr.write('Error: fixture member could not load its settings\n', () => process.exit(2))

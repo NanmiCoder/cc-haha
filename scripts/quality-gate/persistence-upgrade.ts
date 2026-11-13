@@ -66,6 +66,10 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/utils/swarm/teamPlanStore.test.ts', './src/server/services/teamPlanService.test.ts'],
   },
   {
+    title: 'Agent Teams incarnation runtime gate migration, original backups and forward fields',
+    command: ['bun', 'test', './src/utils/swarm/teamRuntimeControlStore.test.ts'],
+  },
+  {
     title: 'Agent Teams legacy mailbox migration to unread inbox plus history',
     command: ['bun', 'test', './src/utils/teammateMailbox.test.ts', '--test-name-pattern', 'legacy inbox files'],
   },
