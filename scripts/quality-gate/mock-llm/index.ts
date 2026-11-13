@@ -23,6 +23,7 @@ import { runLeanNotificationProvenanceScenario, runLeanProfileScenario } from '.
 import { runAgentModelRoutingScenario } from './agentModelRouting'
 import { runAgentProviderRoutingScenario } from './agentProviderRouting'
 import { runTeamReviewScenario } from './teamReview'
+import { runTeamRuntimeControlsScenario } from './teamRuntimeControls'
 import { runProviderMediaScenario } from './providerMedia'
 import { runComputerUseRefreshScenario } from './computerUseRefresh'
 import { runComputerUseAgentDesktopScenario } from './computerUseAgentDesktop'
@@ -37,6 +38,7 @@ const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 const COMPUTER_USE_SCENARIO = 'mock-computer-use-hot-enable'
 const AGENT_DESKTOP_SCENARIO = 'mock-computer-use-agent-desktop'
 const TEAM_REVIEW_SCENARIO = 'mock-team-review'
+const TEAM_RUNTIME_SCENARIO = 'mock-team-runtime-controls'
 
 function listArg(argv: string[], name: string) {
   const index = argv.indexOf(name)
@@ -55,6 +57,7 @@ async function main() {
     console.log(`  ${COMPUTER_USE_SCENARIO.padEnd(32)} Existing CLI refreshes authorized Computer Use tools at the next turn`)
     console.log(`  ${AGENT_DESKTOP_SCENARIO.padEnd(32)} Native desktop ref actions, errors, interruption and cursor cleanup through the real CLI`)
     console.log(`  ${TEAM_REVIEW_SCENARIO.padEnd(32)} Initial team and running-team additions wait for human review before workers start`)
+    console.log(`  ${TEAM_RUNTIME_SCENARIO.padEnd(32)} Main Stop, paused runtime edits and explicit Resume Team survive a real application server restart`)
     for (const scenario of MOCK_AGENT_SCENARIOS) console.log(`  ${scenario.id.padEnd(32)} ${scenario.title}`)
     return
   }
@@ -70,13 +73,18 @@ async function main() {
   const runComputerUse = only.length === 0 || only.includes(COMPUTER_USE_SCENARIO)
   const runAgentDesktop = only.length === 0 || only.includes(AGENT_DESKTOP_SCENARIO)
   const runTeamReview = only.length === 0 || only.includes(TEAM_REVIEW_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runTeamReview) {
+  const runTeamRuntime = only.length === 0 || only.includes(TEAM_RUNTIME_SCENARIO)
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderRouting && !runProviderMedia && !runComputerUse && !runAgentDesktop && !runTeamReview && !runTeamRuntime) {
     throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
   }
 
   const rootDir = resolve(import.meta.dir, '../../..')
   const artifactDir = join(rootDir, 'artifacts', 'agent-e2e')
   mkdirSync(artifactDir, { recursive: true })
+  if (runTeamRuntime) {
+    await runTeamRuntimeControlsScenario(rootDir, join(artifactDir, 'team-runtime-controls'))
+    console.log(`[agent-e2e] PASS ${TEAM_RUNTIME_SCENARIO}`)
+  }
   if (runTeamReview) {
     await runTeamReviewScenario(rootDir, join(artifactDir, 'team-review'))
     console.log(`[agent-e2e] PASS ${TEAM_REVIEW_SCENARIO}`)

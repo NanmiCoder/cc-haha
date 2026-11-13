@@ -25,6 +25,37 @@ afterEach(async () => {
 
 const worker = { parentSessionId: 'parent', teamName: 'approved', memberId: 'research', name: 'researcher', systemPrompt: 'Read only research', tools: ['Read'], agentDefinition: { disallowedTools: ['Bash'], maxTurns: 3 } }
 
+test('a physical worker stop revokes late permissions and stays pending until exit confirmation', async () => {
+  const service = new ConversationService() as any
+  let finish!: () => void
+  let stops = 0
+  const sdk: string[] = []
+  const stopped = new Promise<void>(resolve => { finish = resolve })
+  const pending = new Map([['late-permission', { toolName: 'Read', input: {} }]])
+  service.sessions.set('child', { teamWorker: worker, sdkToken: 'fake-token', pendingOutbound: [JSON.stringify({ type: 'user', message: { role: 'user', content: 'queued before Stop' } })], sdkMessages: [], sdkMessagesBytes: 0, outputCallbacks: [], pendingPermissionRequests: pending, pendingControlRequests: new Map(), sdkSocket: { send: (value: string) => sdk.push(value) } })
+  service.stopProcessAndWait = async (_id: string, _session: unknown, _timeout: number, requireExit: boolean) => {
+    expect(requireExit).toBe(true)
+    stops++
+    await stopped
+  }
+  const first = service.stopSessionAndWait('child', 1000, { requireExit: true })
+  const repeated = service.stopSessionAndWait('child', 1000, { requireExit: true })
+  expect(service.hasSession('child')).toBe(true)
+  expect(pending.size).toBe(0)
+  service.handleSdkPayload('child', JSON.stringify({ type: 'control_request', request_id: 'arrived-after-stop', request: { subtype: 'can_use_tool', tool_name: 'Read', input: {} } }))
+  expect(pending.size).toBe(0)
+  expect(service.respondToPermission('parent', 'late-permission', true)).toBe(false)
+  expect(service.sendSdkMessage('child', { type: 'user', content: 'late admission' })).toBe(false)
+  expect(sdk).toEqual([])
+  expect(service.authorizeSdkConnection('child', 'fake-token')).toBe(false)
+  expect(service.attachSdkConnection('child', { send: (value: string) => sdk.push(value) })).toBe(false)
+  expect(sdk).toEqual([])
+  expect(stops).toBe(1)
+  finish()
+  await Promise.all([first, repeated])
+  expect(service.hasSession('child')).toBe(false)
+})
+
 test('worker CLI has its own SDK identity and applies the approved preset and model', () => {
   const service = new ConversationService() as any
   service.resolveCliArgs = (args: string[]) => args
