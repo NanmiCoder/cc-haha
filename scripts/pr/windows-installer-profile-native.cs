@@ -30,6 +30,12 @@ namespace CcHahaInstallerProfile
     private const uint AccountDisabled = 0x0002;
     private const uint NormalAccount = 0x0200;
     private const string UsersSid = "S-1-5-32-545";
+    // Microsoft WindowsAppSDK ApplicationData spec 3.4.1 identifies this
+    // service SID. It is never a fresh-profile owner or a general writer.
+    internal const string TrustedInstallerSid = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+    private const uint KnownProfileFileRights = 0xf01f01ffu;
+    private const uint ProfileMutationMask = 0x500d0156u;
+    private const uint ParentMutationMask = 0x500d0152u;
     private const string SetupSha = "dca6bb82f4d0fbee8d43c91912e4d50e7dcea69a7cb22c51cdd9cb265767c7e7";
     private const long SetupBytes = 230611497;
     private readonly int ownerManagedThread = Thread.CurrentThread.ManagedThreadId;
@@ -844,6 +850,7 @@ namespace CcHahaInstallerProfile
         + "; sidSha256=" + (String.IsNullOrEmpty(owner) ? "absent" : CorePolicy.HashText(owner))
         + "; equalsBoundSid=" + (!String.IsNullOrEmpty(owner) && owner == boundSid)
         + "; equalsSystem=" + (owner == "S-1-5-18") + "; equalsAdministrators=" + (owner == "S-1-5-32-544")
+        + "; equalsTrustedInstaller=" + (owner == TrustedInstallerSid)
         + "; equalsCallTokenOwner=" + (!String.IsNullOrEmpty(owner) && owner == callTokenOwner)
         + "; equalsRunner=" + (!String.IsNullOrEmpty(owner) && owner == runnerSid) + "; observation-only=true";
     }
@@ -882,25 +889,50 @@ namespace CcHahaInstallerProfile
 
     internal static void RequireTrustedProfileDacl(ProfileDirectoryMetadata metadata, string boundSid, bool parent)
     {
+      RequireTrustedProfileDaclCore(metadata, boundSid, parent, null);
+    }
+
+    internal static void RequireTrustedProfileAncestorDacl(ProfileDirectoryMetadata metadata, string boundSid,
+      string profilesDirectory, string directory, FileIdentity profilesIdentity)
+    {
+      CorePolicy.Require(metadata != null && metadata.identity != null && profilesIdentity != null
+        && profilesIdentity.directory && !profilesIdentity.reparse && !String.IsNullOrEmpty(profilesIdentity.fileId)
+        && !String.IsNullOrEmpty(profilesIdentity.volumePath)
+        && CorePolicy.SamePath(profilesIdentity.canonicalPath, profilesDirectory), "OS ProfilesDirectory identity is unproven");
+      CorePolicy.ValidateProfileAncestorPath(metadata.identity.canonicalPath, profilesDirectory, directory);
+      CorePolicy.Require(metadata.identity.directory && !metadata.identity.reparse && !String.IsNullOrEmpty(metadata.identity.fileId)
+        && metadata.identity.volumePath == profilesIdentity.volumePath, "Profile ancestor identity or volume is unproven");
+      RequireTrustedProfileDaclCore(metadata, boundSid, true, profilesIdentity);
+    }
+
+    private static void RequireTrustedProfileDaclCore(ProfileDirectoryMetadata metadata, string boundSid, bool parent, FileIdentity profilesIdentity)
+    {
       CorePolicy.Require(metadata != null && metadata.daclPresent && metadata.aces != null
         && metadata.aces.Count > 0 && metadata.aces.Count <= 128 && (metadata.aclRevision == 2 || metadata.aclRevision == 4)
         && (parent || metadata.protectedDacl), "Profile DACL is absent unprotected or unbounded");
-      const uint knownFileRights = 0xf01f01ff;
+      // Only the ancestor entry point supplies a real OS ProfilesDirectory
+      // identity. A profile pin or ordinary DACL check has no such role.
+      bool trustedInstallerRoot = parent && profilesIdentity != null && metadata.identity != null
+        && metadata.ownerSid == TrustedInstallerSid && metadata.identity.canonicalPath != null
+        && metadata.identity.canonicalPath.Length == 3
+        && CorePolicy.SamePath(metadata.identity.canonicalPath, profilesIdentity.canonicalPath.Substring(0, 3))
+        && metadata.identity.volumePath == profilesIdentity.volumePath;
       // A parent may grant creation of a different subdirectory (APPEND_DATA),
       // but cannot grant replacement/rename, metadata or permission mutation.
-      uint mutations = parent ? 0x500d0152u : 0x500d0156u;
+      uint mutations = parent ? ParentMutationMask : ProfileMutationMask;
       foreach (ProfileDiagnosticAce ace in metadata.aces)
       {
-        CorePolicy.Require(ace != null && !String.IsNullOrEmpty(ace.sid) && !ace.unclassified && (unchecked((uint)ace.accessMask) & ~knownFileRights) == 0,
+        CorePolicy.Require(ace != null && !String.IsNullOrEmpty(ace.sid) && !ace.unclassified && (unchecked((uint)ace.accessMask) & ~KnownProfileFileRights) == 0,
           "Profile DACL has an unknown ACE or access mask");
-        bool trusted = ace.sid == boundSid || ace.sid == "S-1-5-18" || ace.sid == "S-1-5-32-544";
+        bool trusted = ace.sid == boundSid || ace.sid == "S-1-5-18" || ace.sid == "S-1-5-32-544"
+          || (trustedInstallerRoot && ace.sid == TrustedInstallerSid);
         // Inherit-only writes remain dangerous inside the profile. They do not
         // grant rights on this parent itself; the profile DACL is protected.
         CorePolicy.Require(!ace.allow || trusted || (parent && ace.inheritOnly)
           || (unchecked((uint)ace.accessMask) & mutations) == 0, "Profile path has a nontrusted mutation allow ACE");
       }
       if (parent) CorePolicy.Require(metadata.ownerSid == boundSid || metadata.ownerSid == "S-1-5-18"
-        || metadata.ownerSid == "S-1-5-32-544", "Profile parent has a nontrusted owner");
+        || metadata.ownerSid == "S-1-5-32-544" || trustedInstallerRoot, "Profile parent has a nontrusted owner");
     }
 
     internal static void RequireFreshProfileOwner(string owner, string boundSid, string creationTokenOwner,
@@ -918,6 +950,7 @@ namespace CcHahaInstallerProfile
     {
       private IntPtr handle;
       private readonly string path;
+      private readonly string ancestorProfilesDirectory, ancestorDirectory;
       internal readonly ProfileDirectoryMetadata initial;
 
       internal ProfileDirectoryPin(string path) : this(path, null, null) { }
@@ -932,6 +965,7 @@ namespace CcHahaInstallerProfile
         if (profilesDirectory == null) CorePolicy.ValidateAbsolutePath(path);
         else CorePolicy.ValidateProfileAncestorPath(path, profilesDirectory, directory);
         this.path = path;
+        ancestorProfilesDirectory = profilesDirectory; ancestorDirectory = directory;
         CorePolicy.Require(!HasReparseComponent(path), "Profile pin ancestor is a reparse point");
         handle = CreateFileW(path, 0x20081, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
         CorePolicy.Require(handle != new IntPtr(-1), "Open noninherited no-follow profile pin failed");
@@ -989,6 +1023,12 @@ namespace CcHahaInstallerProfile
         RequireSameProfileMetadata(initial, current);
       }
 
+      internal void RequireTrustedParentDacl(string boundSid, FileIdentity profilesIdentity)
+      {
+        CorePolicy.Require(ancestorProfilesDirectory != null && ancestorDirectory != null, "Profile pin has no readonly ancestor role");
+        RequireTrustedProfileAncestorDacl(initial, boundSid, ancestorProfilesDirectory, ancestorDirectory, profilesIdentity);
+      }
+
       public void Dispose()
       {
         IntPtr close = handle; handle = IntPtr.Zero;
@@ -1017,13 +1057,17 @@ namespace CcHahaInstallerProfile
       string profiles = ReadProfilesDirectory();
       string directory = Path.GetDirectoryName(state.profileCreationIdentity.canonicalPath);
       string[] parents = CorePolicy.ProfileParentPaths(profiles, directory);
-      foreach (string parent in parents)
+      using (ProfileDirectoryPin profilesPin = ProfileDirectoryPin.OpenAncestor(profiles, profiles, profiles))
       {
-        using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parent, profiles, directory))
+        foreach (string parent in parents)
         {
-          RequireTrustedProfileDacl(pin.initial, state.account.sid, true);
-          pin.VerifyUnchanged();
+          using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parent, profiles, directory))
+          {
+            pin.RequireTrustedParentDacl(state.account.sid, profilesPin.initial.identity);
+            pin.VerifyUnchanged();
+          }
         }
+        profilesPin.VerifyUnchanged();
       }
       ProfileTrace(state, "profile-parent-mutation-boundary=proven; depth=" + parents.Length);
     }
@@ -1042,12 +1086,41 @@ namespace CcHahaInstallerProfile
         // Deny/inherit-only/callback ACEs cannot establish a cleanup lease.
         bool trustedWriter = ace != null && !String.IsNullOrEmpty(ace.sid)
           && (ace.sid == boundSid || ace.sid == "S-1-5-18" || ace.sid == "S-1-5-32-544");
-        if (ace != null && ace.allow && (ace.accessMask & 0x500d0156) != 0 && !trustedWriter) nontrustedWrites++;
+        if (ace != null && ace.allow && (unchecked((uint)ace.accessMask) & ProfileMutationMask) != 0 && !trustedWriter) nontrustedWrites++;
       }
       return prefix + "; scan=bounded; nontrustedAllowWrite=" + nontrustedWrites.ToString(CultureInfo.InvariantCulture)
         + "; unclassifiedAces=" + unclassified.ToString(CultureInfo.InvariantCulture)
         + "; writeClassification=" + (unclassified != 0 ? "unproven" : nontrustedWrites != 0 ? "nontrusted-allow-present" : "no-nontrusted-allow-observed")
         + "; writerClassification=bound-system-administrators; observation-only=true";
+    }
+
+    internal static IList<string> ProfileAceObservations(ProfileDirectoryMetadata metadata, string boundSid)
+    {
+      List<string> rows = new List<string>();
+      if (metadata == null || metadata.aces == null || metadata.aces.Count > 128)
+      {
+        rows.Add("ace-scan=unproven; unknown=true");
+        return rows;
+      }
+      for (int index = 0; index < metadata.aces.Count; index++)
+      {
+        ProfileDiagnosticAce ace = metadata.aces[index];
+        string sid = ace == null ? null : ace.sid;
+        bool boundedSid = !String.IsNullOrEmpty(sid) && sid.Length <= 184;
+        string sidClass = !boundedSid ? "unknown" : sid == boundSid ? "bound" : sid == "S-1-5-18" ? "system"
+          : sid == "S-1-5-32-544" ? "administrators" : sid == TrustedInstallerSid ? "trusted-installer" : "other";
+        uint mask = ace == null ? 0u : unchecked((uint)ace.accessMask);
+        bool unknown = ace == null || !boundedSid || ace.unclassified || (mask & ~KnownProfileFileRights) != 0;
+        rows.Add("ace=" + index.ToString(CultureInfo.InvariantCulture)
+          + "; sidSha256=" + (boundedSid ? CorePolicy.HashText(sid) : "unproven") + "; class=" + sidClass
+          + "; mask=" + mask.ToString("x8", CultureInfo.InvariantCulture)
+          + "; kind=" + (ace == null || ace.unclassified ? "unknown" : ace.allow ? "allow" : "deny")
+          + "; inheritOnly=" + (ace != null && ace.inheritOnly)
+          + "; parentMutation=" + (mask & ParentMutationMask).ToString("x8", CultureInfo.InvariantCulture)
+          + "; profileMutation=" + (mask & ProfileMutationMask).ToString("x8", CultureInfo.InvariantCulture)
+          + "; parentApplies=" + (ace != null && ace.allow && !ace.inheritOnly) + "; unknown=" + unknown);
+      }
+      return rows;
     }
 
     private void RecordFreshProfileMetadata(FixtureState state, ProfileDirectoryMetadata metadata, string callTokenOwner)
@@ -2740,20 +2813,38 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(!String.IsNullOrEmpty(runnerSid) && syntheticBoundSid != runnerSid, "Synthetic ABI bound SID must differ from runner");
       string profiles = ReadProfilesDirectory();
       string[] parents = CorePolicy.ProfileParentPaths(profiles, profiles);
-      bool allTrusted = true;
-      for (int index = 0; index < parents.Length; index++)
+      bool allTrusted = true; int aceDiagnosticCharacters = 0;
+      using (ProfileDirectoryPin profilesPin = ProfileDirectoryPin.OpenAncestor(profiles, profiles, profiles))
       {
-        using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parents[index], profiles, profiles))
+        for (int index = 0; index < parents.Length; index++)
         {
-          bool trusted = false;
-          try { RequireTrustedProfileDacl(pin.initial, syntheticBoundSid, true); trusted = true; }
-          catch (FixtureFailure) { allTrusted = false; }
-          pin.VerifyUnchanged();
-          report.trace.Add("ABI readonly ProfilesDirectory ancestor index=" + index.ToString(CultureInfo.InvariantCulture)
-            + "; pathSha256=" + CorePolicy.HashText(parents[index]) + "; policyPassed=" + trusted + "; leaseGranted=false");
-          report.trace.Add(ProfileOwnerObservation(pin.initial.ownerSid, syntheticBoundSid, null, null));
-          report.trace.Add(ProfileDaclObservation(pin.initial.daclPresent, pin.initial.protectedDacl, pin.initial.aces, syntheticBoundSid));
+          using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parents[index], profiles, profiles))
+          {
+            // Record structured read-only facts before the strict policy can
+            // refuse them. These strings never enter an authorization branch.
+            report.trace.Add("ABI readonly ProfilesDirectory ancestor index=" + index.ToString(CultureInfo.InvariantCulture)
+              + "; pathSha256=" + CorePolicy.HashText(parents[index]) + "; leaseGranted=false");
+            report.trace.Add(ProfileOwnerObservation(pin.initial.ownerSid, syntheticBoundSid, null, null));
+            report.trace.Add(ProfileDaclObservation(pin.initial.daclPresent, pin.initial.protectedDacl, pin.initial.aces, syntheticBoundSid));
+            foreach (string row in ProfileAceObservations(pin.initial, syntheticBoundSid))
+            {
+              if (aceDiagnosticCharacters + row.Length > 262144)
+              {
+                report.trace.Add("ABI readonly ACE diagnostic budget exhausted; remaining ACE observations unknown; leaseGranted=false");
+                break;
+              }
+              report.trace.Add("ABI readonly ancestor=" + index.ToString(CultureInfo.InvariantCulture) + "; " + row);
+              aceDiagnosticCharacters += row.Length;
+            }
+            bool trusted = false;
+            try { pin.RequireTrustedParentDacl(syntheticBoundSid, profilesPin.initial.identity); trusted = true; }
+            catch (FixtureFailure) { allTrusted = false; }
+            pin.VerifyUnchanged();
+            report.trace.Add("ABI readonly ProfilesDirectory parent-policy index=" + index.ToString(CultureInfo.InvariantCulture)
+              + "; policyPassed=" + trusted + "; leaseGranted=false");
+          }
         }
+        profilesPin.VerifyUnchanged();
       }
       report.Check("readonly-profiles-parent-chain", allTrusted,
         "Complete actual ProfilesDirectory-to-volume-root chain used production no-follow metadata pins and parent policy with a fixed synthetic SID; no account or profile API, child enumeration, mutation or lease.");

@@ -113,6 +113,19 @@ namespace CcHahaInstallerProfile
       };
     }
 
+    private static FileIdentity ProfilesDirectoryIdentity()
+    {
+      return new FileIdentity { canonicalPath = @"C:\Users", directory = true, fileId = "profiles-directory", volumePath = @"\\?\Volume{fixture}\" };
+    }
+
+    private static NativePlatform.ProfileDirectoryMetadata VolumeRootMetadata()
+    {
+      NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata(NativePlatform.TrustedInstallerSid);
+      metadata.identity.canonicalPath = @"C:\"; metadata.identity.fileId = "volume-root"; metadata.protectedDacl = false;
+      metadata.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = NativePlatform.TrustedInstallerSid, accessMask = 0x1f01ff, allow = true });
+      return metadata;
+    }
+
     private static void RunProfileLeasePolicyTests(FixtureReport report)
     {
       Case(report, "managed-readonly-profile-parent-chain-includes-only-its-exact-volume-root", delegate {
@@ -133,6 +146,86 @@ namespace CcHahaInstallerProfile
         Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\Users", @"C:\elsewhere"); }, "unrelated directory cannot select a root");
         Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\", @"C:\Users"); }, "volume root cannot become ProfilesDirectory");
         Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\Users", @"C:\Users" + String.Concat(Enumerable.Repeat(@"\x", 33))); }, "parent chain remains bounded");
+      });
+      Case(report, "fake-trustedinstaller-is-only-an-exact-os-profiles-volume-root-ancestor", delegate {
+        Assert(CorePolicy.HashText(NativePlatform.TrustedInstallerSid) == "b7dbc3c7788501b28d8487f2f34b21755e7c55868ed055d96ac262b6d49faad4", "fixed official TI SID must match the original readonly observation");
+        FileIdentity profiles = ProfilesDirectoryIdentity();
+        NativePlatform.ProfileDirectoryMetadata root = VolumeRootMetadata();
+        root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 4, allow = true });
+        root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 2, allow = true, inheritOnly = true });
+        NativePlatform.RequireTrustedProfileAncestorDacl(root, TargetSid, profiles.canonicalPath, profiles.canonicalPath, profiles);
+        Reject(delegate { NativePlatform.RequireTrustedProfileDacl(root, TargetSid, true); }, "ordinary parent checks have no OS ancestor role");
+        NativePlatform.ProfileDirectoryMetadata profile = ProfileMetadata(NativePlatform.TrustedInstallerSid);
+        Reject(delegate { NativePlatform.RequireFreshProfileOwner(profile.ownerSid, TargetSid); }, "TI is never a strict profile owner");
+        Reject(delegate { NativePlatform.RequireFreshProfileOwner(profile.ownerSid, TargetSid, NativePlatform.TrustedInstallerSid, true, profile); }, "TI TokenOwner cannot become the Admin creation branch");
+        root.protectedDacl = true;
+        Reject(delegate { NativePlatform.RequireTrustedProfileDacl(root, TargetSid, false); }, "the profile DACL entry point cannot trust TI mutation ACEs");
+        foreach (string fault in new string[] { "nonroot", "other-root", "other-path", "root-owner", "missing-context", "missing-file", "context-path", "context-reparse", "context-volume", "root-volume", "root-reparse", "root-file", "root-type" })
+        {
+          NativePlatform.ProfileDirectoryMetadata candidate = VolumeRootMetadata(); FileIdentity context = ProfilesDirectoryIdentity();
+          if (fault == "nonroot") candidate.identity.canonicalPath = context.canonicalPath;
+          if (fault == "other-root") candidate.identity.canonicalPath = @"D:\";
+          if (fault == "other-path") candidate.identity.canonicalPath = @"C:\elsewhere";
+          if (fault == "root-owner") candidate.ownerSid = "S-1-5-18";
+          if (fault == "missing-context") context = null;
+          if (fault == "missing-file") context.fileId = null;
+          if (fault == "context-path") context.canonicalPath = @"C:\elsewhere";
+          if (fault == "context-reparse") context.reparse = true;
+          if (fault == "context-volume") context.volumePath += "-changed";
+          if (fault == "root-volume") candidate.identity.volumePath += "-changed";
+          if (fault == "root-reparse") candidate.identity.reparse = true;
+          if (fault == "root-file") candidate.identity.fileId = null;
+          if (fault == "root-type") candidate.identity.directory = false;
+          Reject(delegate { NativePlatform.RequireTrustedProfileAncestorDacl(candidate, TargetSid, @"C:\Users", @"C:\Users", context); }, "root proof cannot be inferred from owner or an arbitrary path: " + fault);
+        }
+      });
+      Case(report, "fake-trustedinstaller-volume-root-still-refuses-unsafe-or-unknown-dacl", delegate {
+        FileIdentity profiles = ProfilesDirectoryIdentity();
+        foreach (int mask in new int[] { 2, 16, 64, 256, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000 })
+        {
+          NativePlatform.ProfileDirectoryMetadata root = VolumeRootMetadata();
+          root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = false });
+          root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = true });
+          Reject(delegate { NativePlatform.RequireTrustedProfileAncestorDacl(root, TargetSid, @"C:\Users", @"C:\Users", profiles); }, "TI owner never masks a nontrusted mutation Allow");
+        }
+        foreach (string fault in new string[] { "missing", "null", "empty", "large", "revision", "unknown-ace", "missing-sid", "unknown-mask", "ti-unknown-ace", "ti-unknown-mask" })
+        {
+          NativePlatform.ProfileDirectoryMetadata root = VolumeRootMetadata();
+          if (fault == "missing") root.daclPresent = false;
+          if (fault == "null") root.aces = null;
+          if (fault == "empty") root.aces.Clear();
+          if (fault == "large") while (root.aces.Count <= 128) root.aces.Add(root.aces[0]);
+          if (fault == "revision") root.aclRevision = 255;
+          if (fault == "unknown-ace") root.aces[0].unclassified = true;
+          if (fault == "missing-sid") root.aces[0].sid = null;
+          if (fault == "unknown-mask") root.aces[0].accessMask = 0x2000000;
+          if (fault == "ti-unknown-ace") root.aces.Last().unclassified = true;
+          if (fault == "ti-unknown-mask") root.aces.Last().accessMask = 0x2000000;
+          Reject(delegate { NativePlatform.RequireTrustedProfileAncestorDacl(root, TargetSid, @"C:\Users", @"C:\Users", profiles); }, "TI root keeps structured DACL refusal: " + fault);
+        }
+      });
+      Case(report, "fake-ace-observations-separate-parent-creation-and-profile-inherit-only-writes", delegate {
+        NativePlatform.ProfileDirectoryMetadata parent = ProfileMetadata("S-1-5-18"); parent.protectedDacl = false;
+        parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 4, allow = true });
+        parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 2, allow = true, inheritOnly = true });
+        parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 2, allow = false });
+        NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, true);
+        IList<string> rows = NativePlatform.ProfileAceObservations(parent, TargetSid);
+        Assert(rows[3].Contains("parentMutation=00000000") && rows[3].Contains("profileMutation=00000004") && rows[3].Contains("parentApplies=True"), "create-only mask is not parent replacement permission");
+        Assert(rows[4].Contains("parentMutation=00000002") && rows[4].Contains("inheritOnly=True") && rows[4].Contains("parentApplies=False"), "inherit-only does not apply to the parent itself");
+        Assert(rows[5].Contains("kind=deny") && rows[5].Contains("parentApplies=False"), "deny masks are observable but do not grant mutation");
+        parent.protectedDacl = true;
+        Reject(delegate { NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, false); }, "create-only and inherit-only writes remain dangerous inside a profile");
+        NativePlatform.ProfileDirectoryMetadata root = VolumeRootMetadata();
+        root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 0x2000000, allow = true });
+        root.aces.Add(null);
+        root.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = new String('x', 185), unclassified = true });
+        rows = NativePlatform.ProfileAceObservations(root, TargetSid);
+        Assert(rows[3].Contains("class=trusted-installer") && rows[3].Contains("sidSha256=b7dbc3c7788501b28d8487f2f34b21755e7c55868ed055d96ac262b6d49faad4"), "fixed SID class and hash are read-only facts");
+        Assert(rows[4].Contains("unknown=True") && rows[5].Contains("unknown=True") && rows[6].Contains("sidSha256=unproven"), "unknown masks ACEs and unbounded SIDs stay unknown");
+        foreach (string row in rows) Assert(row.Length < 512 && row.IndexOf('\n') < 0 && !row.Contains("S-1-") && !row.Contains(new String('x', 185)), "bounded diagnostics cannot dump SID ACL text or arbitrary values");
+        while (root.aces.Count <= 128) root.aces.Add(root.aces[0]);
+        Assert(NativePlatform.ProfileAceObservations(root, TargetSid).Single() == "ace-scan=unproven; unknown=true", "unbounded ACL diagnostics refuse rather than enumerate");
       });
       Case(report, "fake-admin-owner-requires-original-successful-creation-context", delegate {
         NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
@@ -760,9 +853,9 @@ namespace CcHahaInstallerProfile
           "pin does not cross profile API boundary and owned deletion remains ordered");
         AssertNoNativePromotion(state);
       });
-      foreach (string fault in new string[] { "token-query", "token-missing", "token-different", "create-failed", "owner-missing", "owner-other",
+      foreach (string fault in new string[] { "token-query", "token-missing", "token-different", "create-failed", "owner-missing", "owner-other", "owner-trustedinstaller",
         "dacl-null", "dacl-unprotected", "dacl-unknown", "dacl-write", "parent-owner", "parent-replace", "view32", "view64",
-        "reparse", "file-drift", "volume-drift", "hive", "process", "pin-close" })
+        "reparse", "file-drift", "volume-drift", "hive", "process", "pin-close", "parent-trustedinstaller" })
         Case(report, "fake-admin-profile-refusal-keeps-unknown-" + fault, delegate {
           FakePlatform api = new FakePlatform { Fault = "profile-admin-" + fault };
           FixtureState state = Execute(api, ProfileOnlySpec());
@@ -1047,6 +1140,7 @@ namespace CcHahaInstallerProfile
           NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
           if (Fault == "profile-admin-owner-missing") metadata.ownerSid = null;
           if (Fault == "profile-admin-owner-other") metadata.ownerSid = RunnerSid;
+          if (Fault == "profile-admin-owner-trustedinstaller") metadata.ownerSid = NativePlatform.TrustedInstallerSid;
           if (Fault == "profile-admin-dacl-null") metadata.aces = null;
           if (Fault == "profile-admin-dacl-unprotected") metadata.protectedDacl = false;
           if (Fault == "profile-admin-dacl-unknown") metadata.aces[0].unclassified = true;
@@ -1058,6 +1152,7 @@ namespace CcHahaInstallerProfile
           CorePolicy.Require(NativePlatform.FreshProfileIdentityRelation(state.profileCreationIdentity, metadata.identity) == "same-identity", "fake-same-object-identity-unproven");
           NativePlatform.ProfileDirectoryMetadata parent = ProfileMetadata("S-1-5-18");
           if (Fault == "profile-admin-parent-owner") parent.ownerSid = RunnerSid;
+          if (Fault == "profile-admin-parent-trustedinstaller") parent.ownerSid = NativePlatform.TrustedInstallerSid;
           if (Fault == "profile-admin-parent-replace") parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 64, allow = true });
           NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, true);
           NativePlatform.RequireBothProfileMappings(Fault == "profile-admin-view32" ? 2 : Fault == "profile-admin-view64" ? 1 : 3);

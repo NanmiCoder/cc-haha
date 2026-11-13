@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { release, tmpdir, version } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createSandboxedTestEnvironment } from './test-environment'
 
@@ -52,7 +52,7 @@ function inspectToolchain(env: Record<string, string>) {
 }
 
 for (const architecture of ['x86', 'x64'] as const) {
-  test.skipIf(process.platform !== 'win32')(`probes ${architecture} sharing, bound RenameInfo and weak-release prune/restore using owned temp only`, () => {
+  test.skipIf(process.platform !== 'win32')(`probes ${architecture} fixed Nt metadata-alias rename and independent Win32 controls using owned temp only`, () => {
     if (process.env.CI !== 'true') throw new Error('Run this owned primitive probe only on a disposable Windows CI runner')
     const sandbox = mkdtempSync(join(tmpdir(), `cc-haha-removal-primitives-${architecture}-`))
     const env = createSandboxedTestEnvironment(join(sandbox, 'home'))
@@ -68,8 +68,9 @@ for (const architecture of ['x86', 'x64'] as const) {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows'
     const framework = join(systemRoot, architecture === 'x86' ? 'Microsoft.NET/Framework/v4.0.30319' : 'Microsoft.NET/Framework64/v4.0.30319')
     const compiler = join(framework, 'csc.exe')
-    const compileCommand = [compiler, '/nologo', '/target:exe', `/platform:${architecture}`, '/optimize+', `/out:${executable}`, copiedSource]
-    const report: Record<string, unknown> = { version: 1, status: 'starting', platform: process.platform,
+    const compileCommand = [compiler, '/nologo', '/langversion:5', '/target:exe', `/platform:${architecture}`, '/optimize+', `/out:${executable}`, copiedSource]
+    const report: Record<string, unknown> = { version: 2, status: 'starting', platform: process.platform,
+      operatingSystem: { release: release(), version: version() },
       architecture, source: fileEvidence(source), compiler: fileEvidence(compiler),
       compileCommand, sandbox, ownedFixtureRoot: fixture, officialOldPeExecuted: false, productPeExecuted: false,
       realAccountsCreated: 0, realProfilesCreated: 0, crossProcessPinnedAck: 'not_run', junctionRaces: 'not_run',
@@ -100,15 +101,104 @@ for (const architecture of ['x86', 'x64'] as const) {
       const native = JSON.parse(readFileSync(raw, 'utf8'))
       report.native = native
       expect(run.status, JSON.stringify(native, null, 2)).toBe(0)
+      expect(native.version).toBe(2)
       expect(native.status).toBe('passed')
+      expect(native.chosenPrimitive).toBe('NtSetInformationFile(FileRenameInformation=10)+independent-metadata-target-alias')
+      expect(native.chosenPrimitiveStatus).toBe('passed')
       expect(native.processPointerBytes).toBe(architecture === 'x86' ? 4 : 8)
       expect(native.renameNameOffset).toBe(architecture === 'x86' ? 12 : 20)
       expect(native.renameInformationBytes).toBe(architecture === 'x86' ? 16 : 24)
+      expect(native.ioStatusBlockBytes).toBe(architecture === 'x86' ? 8 : 16)
+      expect(native.ioInformationOffset).toBe(architecture === 'x86' ? 4 : 8)
       expect(native.ownedFixtureRoot.toLowerCase()).toBe(resolve(fixture).toLowerCase())
       expect(native.executable.toLowerCase()).toBe(resolve(executable).toLowerCase())
-      for (const name of ['weak-and-strong-same-object', 'preopened-writer-denies-strong', 'preopened-deleter-denies-strong',
-        'relative-forward-existing-file-handle', 'prune-parent-after-weak-release', 'relative-restore-after-prune']) {
+      for (const name of ['weak-and-strong-same-object', 'preopened-writer-denies-strong', 'preopened-deleter-denies-strong']) {
         expect(native.checks.some((check: { name: string; status: string }) => check.name === name && check.status === 'passed')).toBe(true)
+      }
+      const chosen = 'chosen-nt-metadata-roundtrip'
+      expect(native.caseResults.find((item: { name: string }) => item.name === chosen)).toEqual({
+        name: chosen, role: 'required', completed: true, capabilityCredit: true, fullRoundtrip: true,
+      })
+      for (const name of ['relative-forward-existing-file-handle', 'rename-kept-source-object', 'prune-child-after-weak-release',
+        'prune-parent-after-weak-release', 'relative-restore-after-prune', 'restore-kept-source-object', 'restore-preserved-owned-payload-bytes']) {
+        expect(native.checks.some((check: { caseName: string; name: string; status: string }) =>
+          check.caseName === chosen && check.name === name && check.status === 'passed')).toBe(true)
+      }
+      const diagnostics = ['control-win32-strong-original-buffer', 'control-win32-metadata-original-buffer', 'control-win32-metadata-contract-roundtrip']
+      for (const name of diagnostics) {
+        const result = native.caseResults.find((item: { name: string }) => item.name === name)
+        expect(result.role).toBe('diagnostic')
+        expect(result.capabilityCredit).toBe(false)
+        const calls = native.observations.filter((item: { caseName: string; api: string }) => item.caseName === name && item.api === 'SetFileInformationByHandle(FileRenameInfo)')
+        expect(calls.length).toBeGreaterThan(0)
+        for (const call of calls) expect(call.diagnosticOnly).toBe(true)
+      }
+      for (const name of diagnostics.slice(0, 2)) {
+        const calls = native.observations.filter((item: { caseName: string; api: string }) =>
+          item.caseName === name && item.api === 'SetFileInformationByHandle(FileRenameInfo)')
+        expect(calls).toHaveLength(1)
+        expect(calls[0].detail.contractLength).toBe(false)
+        expect(calls[0].detail.nameBytesExcludingNul).toBe(22)
+        expect(calls[0].detail.bufferBytesIncludingNul).toBe(architecture === 'x86' ? 36 : 44)
+        const aliases = native.observations.filter((item: { caseName: string; api: string; name: string }) =>
+          item.caseName === name && item.api === 'CreateFileW' && item.name === 'control-metadata-alias')
+        expect(aliases).toHaveLength(name === diagnostics[0] ? 0 : 1)
+      }
+      const win32Roundtrip = native.caseResults.find((item: { name: string }) => item.name === 'control-win32-metadata-contract-roundtrip')
+      for (const call of native.observations.filter((item: { caseName: string; api: string }) =>
+        item.caseName === win32Roundtrip.name && item.api === 'SetFileInformationByHandle(FileRenameInfo)')) {
+        expect(call.detail.contractLength).toBe(true)
+        expect(call.detail.bufferBytesIncludingNul).toBe(architecture === 'x86' ? 38 : 46)
+      }
+      if (win32Roundtrip.completed) {
+        expect(win32Roundtrip.fullRoundtrip).toBe(true)
+        for (const name of ['relative-forward-existing-file-handle', 'prune-parent-after-weak-release', 'relative-restore-after-prune', 'restore-preserved-owned-payload-bytes']) {
+          expect(native.diagnosticChecks.some((check: { caseName: string; name: string; status: string; capabilityCredit: boolean }) =>
+            check.caseName === win32Roundtrip.name && check.name === name && check.status === 'observed-true' && check.capabilityCredit === false)).toBe(true)
+        }
+      }
+      const ntCalls = native.observations.filter((item: { api: string }) => item.api === 'NtSetInformationFile(FileRenameInformation)')
+      expect(ntCalls).toHaveLength(2)
+      expect(native.observations.filter((item: { caseName: string; api: string }) =>
+        item.caseName === chosen && item.api === 'SetFileInformationByHandle(FileRenameInfo)')).toHaveLength(0)
+      for (const call of ntCalls) {
+        expect(call.caseName).toBe(chosen)
+        expect(call.diagnosticOnly).toBe(false)
+        expect(call.informationClass).toBe(10)
+        expect(call.success && call.callSucceeded && call.ioSucceeded && call.completed).toBe(true)
+        expect(Number.parseInt(call.ioNtStatus, 16)).toBeLessThan(0x80000000)
+        expect(call.ioNtStatus).not.toBe('00000103')
+        if (call.callWasPending) expect(call.wait.result).toBe(0)
+        else {
+          expect(Number.parseInt(call.callNtStatus, 16)).toBeLessThan(0x80000000)
+          expect(call.callNtStatus).not.toBe('00000103')
+        }
+        expect(call.errorSource).toContain('derived')
+        expect(call.detail.contractLength).toBe(true)
+        expect(call.detail.bufferBytesIncludingNul).toBe(architecture === 'x86' ? 38 : 46)
+      }
+      const aliases = native.observations.filter((item: { caseName: string; api: string; name: string }) =>
+        item.caseName === chosen && item.api === 'CreateFileW' && item.name.endsWith('metadata-alias'))
+      expect(aliases).toHaveLength(2)
+      for (const alias of aliases) {
+        expect(alias.success).toBe(true)
+        expect(alias.detail.access).toBe(0xa0)
+        expect(alias.detail.share).toBe(7)
+      }
+      const aliasIdentities = native.checks.filter((item: { caseName: string; name: string }) =>
+        item.caseName === chosen && item.name === 'independent-metadata-alias-same-object')
+      expect(aliasIdentities).toHaveLength(2)
+      for (const check of aliasIdentities) {
+        expect(check.status).toBe('passed')
+        expect(check.detail.independentCreateFile).toBe(true)
+        expect(check.detail.duplicateHandle).toBe(false)
+      }
+      const strongDirectories = native.observations.filter((item: { api: string; name: string }) => item.api === 'CreateFileW' &&
+        /(?:^|-)strong-(?:parent|child|stage)$|^restored-(?:parent|child)$/.test(item.name))
+      expect(strongDirectories.length).toBeGreaterThan(0)
+      for (const call of strongDirectories) {
+        expect(call.detail.access).toBe(0x10087)
+        expect(call.detail.share).toBe(1)
       }
       for (const caseName of ['weak-lifetime', 'shared-reader-lifetime']) {
         expect(native.checks.some((check: { caseName?: string; name: string; status: string }) =>

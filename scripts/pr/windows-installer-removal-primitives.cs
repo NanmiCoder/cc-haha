@@ -12,6 +12,7 @@ using System.Text;
 internal static class RemovalPrimitiveProbe
 {
   private const uint ReadAttributes = 0x80;
+  private const uint Traverse = 0x20;
   private const uint DeleteAccess = 0x10000;
   private const uint DirectoryAccess = DeleteAccess | ReadAttributes | 1 | 2 | 4;
   private const uint ShareRead = 1;
@@ -22,8 +23,14 @@ internal static class RemovalPrimitiveProbe
   private static readonly List<OwnedHandle> Handles = new List<OwnedHandle>();
   private static readonly List<object> Observations = new List<object>();
   private static readonly List<object> Checks = new List<object>();
+  private static readonly List<object> DiagnosticChecks = new List<object>();
+  private static readonly List<object> CaseResults = new List<object>();
   private static bool Failed;
   private static string CurrentCase;
+  private static bool CurrentDiagnostic;
+  private static bool CurrentCaseFailed;
+  private static bool ChosenRoundtripPassed;
+  private const string ChosenPrimitive = "NtSetInformationFile(FileRenameInformation=10)+independent-metadata-target-alias";
 
   [StructLayout(LayoutKind.Sequential)]
   private struct FileTime { public uint Low; public uint High; }
@@ -58,6 +65,18 @@ internal static class RemovalPrimitiveProbe
     public uint FileNameLength;
     public char FileName;
   }
+  [StructLayout(LayoutKind.Explicit)]
+  private struct IoStatusUnion
+  {
+    [FieldOffset(0)] public int Status;
+    [FieldOffset(0)] public IntPtr Pointer;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct IoStatusBlock
+  {
+    public IoStatusUnion Result;
+    public UIntPtr Information;
+  }
 
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
@@ -71,6 +90,12 @@ internal static class RemovalPrimitiveProbe
   private static extern bool SetFileInformationByHandle(IntPtr handle, int informationClass, IntPtr information, uint length);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool CreateDirectoryW(string name, IntPtr security);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+  [DllImport("ntdll.dll", ExactSpelling = true)]
+  private static extern int NtSetInformationFile(IntPtr handle, IntPtr ioStatusBlock, IntPtr information, uint length, int informationClass);
+  [DllImport("ntdll.dll", ExactSpelling = true)]
+  private static extern uint RtlNtStatusToDosError(int status);
 
   private sealed class OwnedHandle
   {
@@ -84,19 +109,20 @@ internal static class RemovalPrimitiveProbe
       int error = Marshal.GetLastWin32Error();
       Observe("CloseHandle", Name, success, error, null);
       Value = IntPtr.Zero;
-      if (!success) Failed = true;
+      if (!success) { Failed = true; CurrentCaseFailed = true; }
     }
   }
 
   private static void Observe(string api, string name, bool success, long error, object detail)
   {
-    Observations.Add(new { caseName = CurrentCase, api = api, name = name, success = success, win32Error = error,
+    Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = api, name = name, success = success, win32Error = error,
       errorAuthoritative = !success, errorSource = "GetLastWin32Error", detail = detail });
   }
   private static void Check(string name, bool passed, object detail)
   {
-    Checks.Add(new { caseName = CurrentCase, name = name, status = passed ? "passed" : "failed", detail = detail });
-    if (!passed) Failed = true;
+    if (CurrentDiagnostic) DiagnosticChecks.Add(new { caseName = CurrentCase, name = name, status = passed ? "observed-true" : "observed-false", capabilityCredit = false, detail = detail });
+    else Checks.Add(new { caseName = CurrentCase, name = name, status = passed ? "passed" : "failed", detail = detail });
+    if (!passed) { CurrentCaseFailed = true; if (!CurrentDiagnostic) Failed = true; }
   }
   private static void Require(string name, bool passed, object detail)
   {
@@ -135,29 +161,115 @@ internal static class RemovalPrimitiveProbe
     }
     finally { Marshal.FreeHGlobal(buffer); }
   }
-  private static bool Rename(OwnedHandle file, OwnedHandle targetParent, string leaf, string label)
+  private sealed class RenameBuffer : IDisposable
   {
-    byte[] name = Encoding.Unicode.GetBytes(leaf);
-    int rootOffset = Marshal.OffsetOf(typeof(RenameInformation), "RootDirectory").ToInt32();
-    int lengthOffset = Marshal.OffsetOf(typeof(RenameInformation), "FileNameLength").ToInt32();
-    int offset = Marshal.OffsetOf(typeof(RenameInformation), "FileName").ToInt32();
-    int bytes = Math.Max(Marshal.SizeOf(typeof(RenameInformation)), offset + name.Length + 2);
-    IntPtr buffer = Marshal.AllocHGlobal(bytes);
-    try
+    public readonly IntPtr Value;
+    public readonly int Bytes;
+    public readonly int RootOffset;
+    public readonly int LengthOffset;
+    public readonly int NameOffset;
+    public readonly int NameBytes;
+    public readonly bool ContractLength;
+    public bool RetainUntilProcessExit;
+    public RenameBuffer(OwnedHandle parent, string leaf, bool contractLength)
     {
-      for (int i = 0; i < bytes; i++) Marshal.WriteByte(buffer, i, 0);
-      Marshal.WriteIntPtr(buffer, rootOffset, targetParent.Value);
-      Marshal.WriteInt32(buffer, lengthOffset, name.Length);
-      Marshal.Copy(name, 0, IntPtr.Add(buffer, offset), name.Length);
-      bool result = SetFileInformationByHandle(file.Value, 3, buffer, (uint)bytes);
-      int lastError = Marshal.GetLastWin32Error();
-      Observe("SetFileInformationByHandle(FileRenameInfo)", label, result, lastError,
-        new { rootDirectoryHandle = targetParent.Value.ToInt64(), replaceIfExists = false, leaf = leaf,
-          rootOffset = rootOffset, lengthOffset = lengthOffset, nameOffset = offset, nameBytesExcludingNul = name.Length, bufferBytesIncludingNul = bytes });
+      byte[] name = Encoding.Unicode.GetBytes(leaf);
+      RootOffset = Marshal.OffsetOf(typeof(RenameInformation), "RootDirectory").ToInt32();
+      LengthOffset = Marshal.OffsetOf(typeof(RenameInformation), "FileNameLength").ToInt32();
+      NameOffset = Marshal.OffsetOf(typeof(RenameInformation), "FileName").ToInt32();
+      NameBytes = name.Length;
+      ContractLength = contractLength;
+      Bytes = Math.Max(Marshal.SizeOf(typeof(RenameInformation)), NameOffset + name.Length + 2);
+      // The Native contract also requires sizeof(struct) + name bytes. The
+      // original Win32-sized buffer remains a separate diagnostic control.
+      if (contractLength) Bytes = Math.Max(Bytes, Marshal.SizeOf(typeof(RenameInformation)) + name.Length);
+      Value = Marshal.AllocHGlobal(Bytes);
+      for (int i = 0; i < Bytes; i++) Marshal.WriteByte(Value, i, 0);
+      Marshal.WriteIntPtr(Value, RootOffset, parent.Value);
+      Marshal.WriteInt32(Value, LengthOffset, name.Length);
+      Marshal.Copy(name, 0, IntPtr.Add(Value, NameOffset), name.Length);
+    }
+    public object Detail(OwnedHandle parent, string leaf)
+    {
+      return new { rootDirectoryHandle = parent.Value.ToInt64(), replaceIfExists = false, leaf = leaf,
+        rootOffset = RootOffset, lengthOffset = LengthOffset, nameOffset = NameOffset,
+        nameBytesExcludingNul = NameBytes, bufferBytesIncludingNul = Bytes, contractLength = ContractLength };
+    }
+    public void Dispose() { if (!RetainUntilProcessExit) Marshal.FreeHGlobal(Value); }
+  }
+
+  private static bool RenameWin32(OwnedHandle file, OwnedHandle parent, string leaf, string label, bool contractLength)
+  {
+    using (var request = new RenameBuffer(parent, leaf, contractLength))
+    {
+      bool result = SetFileInformationByHandle(file.Value, 3, request.Value, (uint)request.Bytes);
+      int error = Marshal.GetLastWin32Error();
+      Observe("SetFileInformationByHandle(FileRenameInfo)", label, result, error, request.Detail(parent, leaf));
       return result;
     }
-    finally { Marshal.FreeHGlobal(buffer); }
   }
+
+  // Fixed chosen primitive, never a fallback after a failed Win32 call.
+  // Official contracts (Microsoft Learn / windows-hardware/drivers/ddi):
+  // ntifs/nf-ntifs-ntsetinformationfile (class 10, source DELETE access)
+  // ntifs/ns-ntifs-_file_rename_information (target metadata access, length)
+  // wdm/ns-wdm-_io_status_block (pointer-sized union + ULONG_PTR).
+  private static bool RenameNt(OwnedHandle file, OwnedHandle parent, string leaf, string label)
+  {
+    using (var request = new RenameBuffer(parent, leaf, true))
+    {
+      int ioBytes = Marshal.SizeOf(typeof(IoStatusBlock));
+      IntPtr io = Marshal.AllocHGlobal(ioBytes);
+      bool completed = true;
+      try
+      {
+        for (int i = 0; i < ioBytes; i++) Marshal.WriteByte(io, i, 0);
+        Marshal.WriteInt32(io, unchecked((int)0xc0000001)); // unchanged IO status cannot look successful
+        int status = NtSetInformationFile(file.Value, io, request.Value, (uint)request.Bytes, 10);
+        object waitDetail = null;
+        uint wait = 0;
+        if (status == 0x103) // STATUS_PENDING is not completed success
+        {
+          // CreateFileW opened a synchronous handle (no OVERLAPPED). Keep both
+          // unmanaged buffers alive until completion; the parent bounds this
+          // owned fixture process. No path monitoring or retry is involved.
+          wait = WaitForSingleObject(file.Value, 0xffffffff);
+          int waitError = Marshal.GetLastWin32Error();
+          completed = wait == 0;
+          waitDetail = new { result = wait, win32Error = waitError, errorAuthoritative = wait == 0xffffffff };
+        }
+        IoStatusBlock final = (IoStatusBlock)Marshal.PtrToStructure(io, typeof(IoStatusBlock));
+        bool callSucceeded = status == 0x103 ? completed : status >= 0;
+        bool ioSucceeded = completed && final.Result.Status >= 0 && final.Result.Status != 0x103;
+        bool success = callSucceeded && ioSucceeded;
+        Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic,
+          api = "NtSetInformationFile(FileRenameInformation)", informationClass = 10, name = label, success = success,
+          callNtStatus = unchecked((uint)status).ToString("x8"), callDosError = RtlNtStatusToDosError(status),
+          callWasPending = status == 0x103, callSucceeded = callSucceeded,
+          ioNtStatus = unchecked((uint)final.Result.Status).ToString("x8"), ioDosError = RtlNtStatusToDosError(final.Result.Status),
+          ioSucceeded = ioSucceeded, ioInformation = final.Information.ToUInt64(), completed = completed, wait = waitDetail,
+          errorSource = "NTSTATUS; DOS errors are derived RtlNtStatusToDosError mappings, not GetLastError",
+          ioStatusBlockBytes = ioBytes, ioInformationOffset = Marshal.OffsetOf(typeof(IoStatusBlock), "Information").ToInt32(),
+          detail = request.Detail(parent, leaf) });
+        return success;
+      }
+      finally
+      {
+        if (completed) Marshal.FreeHGlobal(io);
+        else request.RetainUntilProcessExit = true; // do not free buffers still owned by pending I/O
+      }
+    }
+  }
+
+  private static OwnedHandle MetadataAlias(string path, OwnedHandle strong, string label)
+  {
+    OwnedHandle alias = Open(path, ReadAttributes | Traverse, ShareAll, label, true);
+    Require("independent-metadata-alias-same-object", alias.Value != strong.Value && Identity(alias) == Identity(strong),
+      new { independentCreateFile = true, duplicateHandle = false, requestedAccess = ReadAttributes | Traverse, share = ShareAll,
+        strongShare = ShareRead, strongAccess = DirectoryAccess });
+    return alias;
+  }
+
   private static void CreateOwnedDirectory(string path, string label)
   {
     bool success = CreateDirectoryW(path, IntPtr.Zero);
@@ -190,8 +302,43 @@ internal static class RemovalPrimitiveProbe
     Require("sharing-probe-preserved-bytes", File.ReadAllText(file) == bytes, null);
   }
 
-  private static void Roundtrip(string root)
+  private static bool SameBytes(byte[] first, byte[] second)
   {
+    if (first.Length != second.Length) return false;
+    for (int i = 0; i < first.Length; i++) if (first[i] != second[i]) return false;
+    return true;
+  }
+
+  private static void Win32ForwardControl(string fixtureRoot, bool metadataAlias)
+  {
+    string root = Path.Combine(fixtureRoot, CurrentCase);
+    CreateOwnedDirectory(root, "create-control-root");
+    string source = Path.Combine(root, "source");
+    string child = Path.Combine(source, "nested");
+    string stage = Path.Combine(root, "stage");
+    CreateOwnedDirectory(source, "create-control-source");
+    CreateOwnedDirectory(child, "create-control-child");
+    CreateOwnedDirectory(stage, "create-control-stage");
+    string original = Path.Combine(child, "payload.bin");
+    File.WriteAllText(original, "owned diagnostic payload");
+    Open(source, ReadAttributes, ShareAll, "control-weak-parent", true);
+    Open(child, ReadAttributes, ShareAll, "control-weak-child", true);
+    Open(original, ReadAttributes, ShareAll, "control-weak-payload", true);
+    Open(source, DirectoryAccess, ShareRead, "control-strong-parent", true);
+    Open(child, DirectoryAccess, ShareRead, "control-strong-child", true);
+    OwnedHandle file = Open(original, ReadAttributes | DeleteAccess, ShareRead, "control-strong-payload", true);
+    OwnedHandle target = Open(stage, DirectoryAccess, ShareRead, "control-strong-stage", true);
+    if (metadataAlias) target = MetadataAlias(stage, target, "control-metadata-alias");
+    string identity = Identity(file);
+    bool moved = RenameWin32(file, target, "payload.bin", "relative-forward-original-buffer", false);
+    Require("diagnostic-relative-forward", moved, new { selectedPrimitive = false, original930BufferLength = true, metadataAlias = metadataAlias });
+    Require("diagnostic-source-object-unchanged", Identity(file) == identity, null);
+  }
+
+  private static void Roundtrip(string fixtureRoot, bool useNt)
+  {
+    string root = Path.Combine(fixtureRoot, CurrentCase);
+    CreateOwnedDirectory(root, "create-roundtrip-root");
     string source = Path.Combine(root, "source");
     string child = Path.Combine(source, "nested");
     string stage = Path.Combine(root, "stage");
@@ -201,6 +348,7 @@ internal static class RemovalPrimitiveProbe
     string original = Path.Combine(child, "payload.bin");
     const string bytes = "owned rename/prune/restore sentinel";
     File.WriteAllText(original, bytes);
+    byte[] expectedBytes = File.ReadAllBytes(original);
     OwnedHandle weakParent = Open(source, ReadAttributes, ShareAll, "weak-parent", true);
     OwnedHandle weakChild = Open(child, ReadAttributes, ShareAll, "weak-child", true);
     OwnedHandle weakFile = Open(original, ReadAttributes, ShareAll, "weak-payload", true);
@@ -211,7 +359,10 @@ internal static class RemovalPrimitiveProbe
     string identity = Identity(file);
     Require("weak-and-strong-directories-coexist", Identity(weakParent) == Identity(parent) && Identity(weakChild) == Identity(nested), null);
 
-    Require("relative-forward-existing-file-handle", Rename(file, staging, "payload.bin", "relative-forward"), null);
+    OwnedHandle targetAlias = MetadataAlias(stage, staging, "stage-metadata-alias");
+    bool forward = useNt ? RenameNt(file, targetAlias, "payload.bin", "relative-forward") :
+      RenameWin32(file, targetAlias, "payload.bin", "relative-forward", true);
+    Require("relative-forward-existing-file-handle", forward, new { chosen = useNt, targetAlias = true });
     Require("rename-kept-source-object", Identity(file) == identity, null);
 
     Require("mark-empty-child-delete-pending", Disposition(nested, true, "child-pending-with-weak"), null);
@@ -234,10 +385,15 @@ internal static class RemovalPrimitiveProbe
     CreateOwnedDirectory(child, "restore-child-name-after-prune");
     OwnedHandle restoredParent = Open(source, DirectoryAccess, ShareRead, "restored-parent", true);
     OwnedHandle restoredChild = Open(child, DirectoryAccess, ShareRead, "restored-child", true);
-    Require("relative-restore-after-prune", Rename(file, restoredChild, "payload.bin", "relative-restore"), null);
+    OwnedHandle restoreAlias = MetadataAlias(child, restoredChild, "restore-metadata-alias");
+    bool restored = useNt ? RenameNt(file, restoreAlias, "payload.bin", "relative-restore") :
+      RenameWin32(file, restoreAlias, "payload.bin", "relative-restore", true);
+    Require("relative-restore-after-prune", restored, new { chosen = useNt, targetAlias = true });
     Require("restore-kept-source-object", Identity(file) == identity, null);
-    file.Close(); restoredChild.Close(); restoredParent.Close(); staging.Close();
-    Require("restore-preserved-owned-payload-bytes", File.ReadAllText(original) == bytes && !File.Exists(Path.Combine(stage, "payload.bin")), null);
+    file.Close(); restoreAlias.Close(); restoredChild.Close(); restoredParent.Close(); targetAlias.Close(); staging.Close();
+    byte[] observedBytes = File.ReadAllBytes(original);
+    Require("restore-preserved-owned-payload-bytes", SameBytes(expectedBytes, observedBytes) && !File.Exists(Path.Combine(stage, "payload.bin")),
+      new { expectedBase64 = Convert.ToBase64String(expectedBytes), restoredBase64 = Convert.ToBase64String(observedBytes) });
   }
 
   private static void WeakLifetime(string root, bool extraReader)
@@ -270,12 +426,26 @@ internal static class RemovalPrimitiveProbe
     CreateOwnedDirectory(childPath, "lifetime-child-name-reusable");
   }
 
-  private static void RunCase(string name, Action action)
+  private static bool RunCase(string name, bool diagnostic, Action action)
   {
     CurrentCase = name;
+    CurrentDiagnostic = diagnostic;
+    CurrentCaseFailed = false;
+    int firstHandle = Handles.Count;
     try { action(); }
-    catch (Exception error) { Failed = true; Checks.Add(new { name = name + "-exception", status = "failed", detail = error.ToString() }); }
-    finally { CurrentCase = null; }
+    catch (Exception error)
+    {
+      CurrentCaseFailed = true;
+      if (diagnostic) DiagnosticChecks.Add(new { caseName = name, name = "exception", status = "observed-incomplete", capabilityCredit = false, detail = error.ToString() });
+      else { Failed = true; Checks.Add(new { caseName = name, name = name + "-exception", status = "failed", detail = error.ToString() }); }
+    }
+    finally { for (int i = Handles.Count - 1; i >= firstHandle; i--) Handles[i].Close(); }
+    bool completed = !CurrentCaseFailed;
+    CaseResults.Add(new { name = name, role = diagnostic ? "diagnostic" : "required", completed = completed,
+      capabilityCredit = !diagnostic && completed, fullRoundtrip = name.IndexOf("roundtrip", StringComparison.Ordinal) >= 0 && completed });
+    CurrentCase = null;
+    CurrentDiagnostic = false;
+    return completed;
   }
 
   private static object ToolVersions(string input)
@@ -340,12 +510,18 @@ internal static class RemovalPrimitiveProbe
         Marshal.OffsetOf(typeof(RenameInformation), "FileNameLength").ToInt32() == (IntPtr.Size == 4 ? 8 : 16) &&
         Marshal.OffsetOf(typeof(RenameInformation), "FileName").ToInt32() == (IntPtr.Size == 4 ? 12 : 20) &&
         Marshal.SizeOf(typeof(RenameInformation)) == (IntPtr.Size == 4 ? 16 : 24), null);
+      Require("io-status-block-layout", Marshal.SizeOf(typeof(IoStatusUnion)) == IntPtr.Size &&
+        Marshal.SizeOf(typeof(IoStatusBlock)) == IntPtr.Size * 2 &&
+        Marshal.OffsetOf(typeof(IoStatusBlock), "Information").ToInt32() == IntPtr.Size, null);
       Require("owned-empty-fixture-root", Directory.Exists(root) && Directory.GetFileSystemEntries(root).Length == 0 &&
         (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0, null);
-      RunCase("sharing", delegate { Sharing(root); });
-      RunCase("roundtrip", delegate { Roundtrip(root); });
-      RunCase("weak-lifetime", delegate { WeakLifetime(root, false); });
-      RunCase("shared-reader-lifetime", delegate { WeakLifetime(root, true); });
+      RunCase("sharing", false, delegate { Sharing(root); });
+      RunCase("control-win32-strong-original-buffer", true, delegate { Win32ForwardControl(root, false); });
+      RunCase("control-win32-metadata-original-buffer", true, delegate { Win32ForwardControl(root, true); });
+      RunCase("control-win32-metadata-contract-roundtrip", true, delegate { Roundtrip(root, false); });
+      ChosenRoundtripPassed = RunCase("chosen-nt-metadata-roundtrip", false, delegate { Roundtrip(root, true); });
+      RunCase("weak-lifetime", false, delegate { WeakLifetime(root, false); });
+      RunCase("shared-reader-lifetime", false, delegate { WeakLifetime(root, true); });
     }
     catch (Exception error)
     {
@@ -354,12 +530,16 @@ internal static class RemovalPrimitiveProbe
     }
     finally { for (int i = Handles.Count - 1; i >= 0; i--) Handles[i].Close(); }
     var report = new {
-      version = 1, status = Failed ? "failed" : "passed", processPointerBytes = IntPtr.Size,
+      version = 2, status = Failed ? "failed" : "passed", processPointerBytes = IntPtr.Size,
+      chosenPrimitive = ChosenPrimitive, chosenPrimitiveStatus = ChosenRoundtripPassed ? "passed" : "failed",
+      oldWin32Scheme = "diagnostic only; 930 x86/x64 observed FALSE 87, not granted chosen capability",
       ownedFixtureRoot = root, executable = System.Reflection.Assembly.GetExecutingAssembly().Location,
       renameNameOffset = Marshal.OffsetOf(typeof(RenameInformation), "FileName").ToInt32(),
       renameInformationBytes = Marshal.SizeOf(typeof(RenameInformation)), fileInformationBytes = Marshal.SizeOf(typeof(FileInformation)),
       standardInformationBytes = Marshal.SizeOf(typeof(StandardInformation)),
-      checks = Checks, observations = Observations,
+      ioStatusBlockBytes = Marshal.SizeOf(typeof(IoStatusBlock)),
+      ioInformationOffset = Marshal.OffsetOf(typeof(IoStatusBlock), "Information").ToInt32(),
+      checks = Checks, diagnosticChecks = DiagnosticChecks, caseResults = CaseResults, observations = Observations,
       toolFileVersions = ToolVersions(args.Length == 3 ? args[2] : null),
       realAccountsCreated = 0, realProfilesCreated = 0, officialOldPeExecuted = false, productPeExecuted = false,
       fixtureKind = "owned-temp-native-api-only", crossProcessPinnedAck = "not_run", junctionRaces = "not_run",
