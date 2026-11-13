@@ -1,3 +1,4 @@
+import pMap from 'p-map'
 import {
   API_IMAGE_MAX_BASE64_SIZE,
   API_MANY_IMAGE_MAX_DIMENSION,
@@ -299,8 +300,10 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
     }
   }
   let optimizedBytes = 0
-  for (const [data, count] of occurrences) {
-    const image = await normalizeImage(data)
+  const normalizedImages = await pMap(occurrences, async ([data, count]) => ({
+    data, count, image: await normalizeImage(data),
+  }), { concurrency: 2 })
+  for (const { data, count, image } of normalizedImages) {
     resized.set(data, image)
     if (!('omitted' in image)) optimizedBytes += image.data.length * count
   }
