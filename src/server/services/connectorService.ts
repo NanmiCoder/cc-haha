@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename, join } from 'node:path'
 import type { ConnectorAction, ConnectorActionOptions, ConnectorAdapter, ConnectorDefinition, ConnectorDto, ConnectorInstallation } from '../../services/connectors/types.js'
+import { classifyMcpConnectionError, McpConnectionError } from '../../services/mcp/connectionErrors.js'
 import { ConnectorsPersistence, type ConnectorRecord } from './connectorsPersistence.js'
 
 export class ConnectorServiceError extends Error {
@@ -186,7 +187,8 @@ export class ConnectorService {
         }
         this.patch(id, { lastCheckedAt: new Date().toISOString(), accountLabel: checked.accountLabel, verification: checked.verification })
         if (!checked.authenticated) {
-          this.patch(id, { connection: 'needs-auth', runtime: 'missing', enabled: false, status: 'needs-auth' })
+          this.patch(id, { connection: 'needs-auth', runtime: 'missing', enabled: false, status: 'needs-auth',
+            error: def.transport === 'mcp' && checked.verification === 'remote' ? new McpConnectionError('authentication').message : undefined })
         } else {
           this.patch(id, { connection: 'connected', sharedCredentialsAcknowledged: def.credentialMode === 'shared' ? true : undefined })
           progress('enabling-plugin')
@@ -216,11 +218,14 @@ export class ConnectorService {
           this.patch(id, { installed: false, installedVersion: undefined, installation: undefined, sharedCredentialsAcknowledged: false, connection: 'disconnected', status: 'not-installed', accountLabel: undefined, lastCheckedAt: undefined })
         }
       }
-    } catch {
+    } catch (error) {
       const cancelled = signal.aborted
       // A persistence failure stays a failure even when it also aborted the
       // operation; it is never reported as a user cancellation.
       const persistenceFailed = this.storageFailures.has(id)
+      const setupError = !persistenceFailed && error instanceof McpConnectionError
+        ? classifyMcpConnectionError(error).message
+        : 'Connector setup failed. Retry or check the connection.'
       const failedPhase = persistenceFailed ? 'persistence' : this.get(id).operation?.phase ?? action
       // Never surface CLI output here: it can contain tokens or credential material.
       const rollbackNeeded = action === 'prepare' && !!previous.installed && !!previous.installation
@@ -263,7 +268,7 @@ export class ConnectorService {
         }
       } else {
         this.patch(id, { ...(action === 'prepare' ? previous : {}), enabled: restored ? previous.enabled ?? false : false, runtime: 'error', status: 'error', failedPhase,
-          error: cancelled ? 'Operation cancelled. Check the connector before using it.' : 'Connector setup failed. Retry or check the connection.' })
+          error: cancelled ? 'Operation cancelled. Check the connector before using it.' : setupError })
       }
     } finally {
       this.patch(id, { operation: undefined })
