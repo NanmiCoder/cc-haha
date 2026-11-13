@@ -406,6 +406,8 @@ jobs:
         run: bun --no-env-file scripts/pr/prepare-windows-installer-tests.ts
       - name: Run offline native installer regressions
         run: bun --no-env-file scripts/pr/run-windows-installer-checks.ts
+      - name: Compile and test the owned profile fixture (Stage A only)
+        run: bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts
       - name: Upload Windows installer evidence
         if: always()
         uses: actions/upload-artifact@v4

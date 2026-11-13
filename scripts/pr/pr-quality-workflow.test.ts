@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
+import { profileFixtureSources, runWindowsInstallerProfileChecks, validateStageAResult } from './run-windows-installer-profile-checks'
 import { createHash } from 'node:crypto'
 
 type WorkflowJob = {
@@ -20,6 +21,7 @@ type WorkflowJob = {
     run?: string
     uses?: string
     if?: string
+    'continue-on-error'?: boolean
     with?: Record<string, unknown>
     'working-directory'?: string
   }>
@@ -793,6 +795,193 @@ describe('Windows installer lane preparation and isolation', () => {
       expect(() => cleanupPreparedWindowsInstallerTests(prepared, { ...f, tempParent: f.root })).toThrow('unowned')
       expect(existsSync(prepared.tempRoot)).toBe(true)
       cleanupPreparedWindowsInstallerTests(prepared, f)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Windows profile fixture Stage A', () => {
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-profile-unit-'))
+    const sourceRoot = join(root, 'source')
+    const tempParent = join(root, 'private-temp')
+    mkdirSync(tempParent)
+    for (const file of profileFixtureSources) {
+      mkdirSync(dirname(join(sourceRoot, file)), { recursive: true })
+      writeFileSync(join(sourceRoot, file), '// deterministic C# source\r\n')
+    }
+    const compiler = join(root, 'csc.exe')
+    writeFileSync(compiler, 'fake compiler; never executed')
+    const evidenceRoot = join(sourceRoot, 'artifacts/windows-installer/profile-stage-a')
+    const result = (mode: string) => ({ version: 1, mode, status: 'passed',
+      binarySha256: createHash('sha256').update('MZ-owned-fixture-double').digest('hex'),
+      cleanup: mode === 'abi-harness' ? 'passed' : 'not_run',
+      checks: [{ name: 'fixture-case', status: 'passed' }], realAccountsCreated: 0, realProfilesCreated: 0,
+      releasedPeExecuted: false, compatibilityEnabled: false, oldExit22Policy: 'fatal',
+      releasedPeMayHaveExecuted: false, releasedPeExecutionStatus: 'not_run',
+      member_proven: 'not_run', installed_bytes_equal: 'not_run', old22_before_protected_mutation: 'not_run',
+      removal_equivalence: 'not_run', full_old_to_new: 'not_run' })
+    const calls: string[][] = []
+    const run: NonNullable<Parameters<typeof runWindowsInstallerProfileChecks>[0]>['run'] = async (command, options) => {
+      calls.push(command)
+      expect(options.env.GITHUB_TOKEN).toBeUndefined()
+      expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
+      assertOutsideSourceGit(options.env.HOME!, sourceRoot)
+      expect(options.timeoutMs).toBeGreaterThan(0)
+      if (command[0] === compiler) {
+        const target = command.find(arg => arg.startsWith('/out:'))!.slice(5)
+        writeFileSync(target, 'MZ-owned-fixture-double')
+      } else {
+        const output = command[command.indexOf('--output') + 1]!
+        writeFileSync(output, JSON.stringify(result(command[1]!.slice(2))))
+      }
+      return { exitCode: 0, stdout: 'owned fixture test double', stderr: '' }
+    }
+    return { root, sourceRoot, tempParent, compiler, evidenceRoot, calls, run, result,
+      options: { platform: 'win32' as const, sourceRoot, tempParent, compiler, run } }
+  }
+
+  test('wires compile/self-test/owned ABI only, before always-upload, without a Stage B switch', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const steps = jobs['windows-installer-checks'].steps ?? []
+    const checks = steps.findIndex(step => step.run === 'bun --no-env-file scripts/pr/run-windows-installer-checks.ts')
+    const profile = steps.findIndex(step => step.run === 'bun --no-env-file scripts/pr/run-windows-installer-profile-checks.ts')
+    const upload = steps.findIndex(step => step.uses === 'actions/upload-artifact@v4')
+    expect(profile).toBeGreaterThan(checks)
+    expect(profile).toBeLessThan(upload)
+    expect(steps[profile]['continue-on-error']).not.toBe(true)
+    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('--role controller')
+    expect(steps.map(step => step.run ?? '').join('\n')).not.toContain('--role subject')
+  })
+
+  test('does not acquire a compiler or run a fixture on another OS', async () => {
+    const result = await runWindowsInstallerProfileChecks({ platform: 'darwin', compiler: '/not-present',
+      run: async () => { throw new Error('must not execute') } })
+    expect(result).toEqual({ status: 'not_run', exitCode: 0 })
+  })
+
+  test('rejects real-execution arguments at the actual CI entry point', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-profile-cli-'))
+    try {
+      const env = createSandboxedTestEnvironment(join(root, 'home'))
+      const result = spawnSync(process.execPath, ['--no-env-file', 'scripts/pr/run-windows-installer-profile-checks.ts',
+        '--role', 'controller', '--spec', join(root, 'not-an-admission.json')], { env, encoding: 'utf8', timeout: 10_000 })
+      expect(result.error).toBeUndefined()
+      expect(result.status).toBe(1)
+      expect(result.stderr).toContain('Stage A accepts no account/profile execution arguments')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('compiles private frozen source bytes and runs both modes with the same binary before cleanup', async () => {
+    const f = fixture()
+    try {
+      expect(await runWindowsInstallerProfileChecks(f.options)).toEqual({ status: 'passed', exitCode: 0 })
+      expect(f.calls).toHaveLength(3)
+      expect(f.calls[0]).toContain('/platform:x64')
+      expect(f.calls[0]).toContain('/r:System.Management.dll')
+      expect(f.calls[0]!.filter(arg => arg.endsWith('.cs'))).toHaveLength(3)
+      expect(f.calls[1]![0]).toBe(f.calls[2]![0])
+      expect(f.calls[1]![1]).toBe('--self-test')
+      expect(f.calls[2]![1]).toBe('--abi-harness')
+      expect(f.calls.flat()).not.toContain('--role')
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      expect(report.runner).toBe('test-double')
+      expect(report.status).toBe('passed')
+      expect(report.realAccountsCreated).toBe(0)
+      expect(report.full_old_to_new).toBe('not_run')
+      expect(report.privateRootRemoved).toBe(true)
+      expect(existsSync(report.temporaryRoot)).toBe(false)
+      expect(report.sources[0].sha256).not.toBe(report.sources[0].canonicalSha256)
+      expect(report.executableSha256).toBe(createHash('sha256').update('MZ-owned-fixture-double').digest('hex'))
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test.each(['compile', 'self-test', 'abi-harness'])('propagates a failing %s and never runs the following phase', async phase => {
+    const f = fixture()
+    try {
+      const result = await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        const name = command[0] === f.compiler ? 'compile' : command[1]!.slice(2)
+        if (name === phase) {
+          f.calls.push(command)
+          if (phase !== 'compile') {
+            const output = command[command.indexOf('--output') + 1]!
+            writeFileSync(output, JSON.stringify({ ...f.result(phase), status: 'failed', failedStage: 'owned-API' }))
+          }
+          return { exitCode: 7, stdout: '', stderr: 'fixture failure' }
+        }
+        return f.run!(command, options)
+      } })
+      expect(result).toEqual({ status: 'failed', exitCode: 1 })
+      expect(f.calls).toHaveLength(['compile', 'self-test', 'abi-harness'].indexOf(phase) + 1)
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      expect(report.error).toContain(`${phase} failed`)
+      expect(report.realAccountsCreated).toBe('not_proven')
+      expect(report.privateRootRemoved).toBe(true)
+      if (phase !== 'compile') {
+        expect(JSON.parse(readFileSync(join(f.evidenceRoot, `${phase}.raw.json`), 'utf8')).failedStage).toBe('owned-API')
+      }
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test.each(['missing-result', 'empty-checks', 'real-account', 'promoted-profile', 'binary-changed', 'binary-report-mismatch', 'timeout'])('rejects false success from %s', async fault => {
+    const f = fixture()
+    try {
+      const result = await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        if (command[1] !== '--self-test') return f.run!(command, options)
+        f.calls.push(command)
+        const output = command[command.indexOf('--output') + 1]!
+        const result = f.result('self-test')
+        if (fault === 'empty-checks') result.checks = []
+        if (fault === 'real-account') result.realAccountsCreated = 1
+        if (fault === 'promoted-profile') result.full_old_to_new = 'passed'
+        if (fault === 'binary-report-mismatch') result.binarySha256 = '0'.repeat(64)
+        if (fault !== 'missing-result') writeFileSync(output, JSON.stringify(result))
+        if (fault === 'binary-changed') writeFileSync(command[0]!, 'MZ-changed')
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: fault === 'timeout' }
+      } })
+      expect(result).toEqual({ status: 'failed', exitCode: 1 })
+      expect(f.calls).toHaveLength(2)
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      expect(report.status).toBe('failed')
+      expect(report.privateRootRemoved).toBe(true)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('rejects profile claims and a temporary root inside source before invoking a compiler', async () => {
+    const f = fixture()
+    try {
+      expect(() => validateStageAResult({ ...f.result('abi-harness'), realProfilesCreated: 1 }, 'abi-harness')).toThrow('Stage B')
+      await expect(runWindowsInstallerProfileChecks({ ...f.options, tempParent: f.sourceRoot })).rejects.toThrow('outside source')
+      expect(f.calls).toHaveLength(0)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  test('fails an exit-zero ABI report when cleanup failed', async () => {
+    const f = fixture()
+    try {
+      const result = await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+        const result = await f.run!(command, options)
+        if (command[1] === '--abi-harness') {
+          const output = command[command.indexOf('--output') + 1]!
+          writeFileSync(output, JSON.stringify({ ...f.result('abi-harness'), cleanup: 'failed' }))
+        }
+        return result
+      } })
+      expect(result).toEqual({ status: 'failed', exitCode: 1 })
+      const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+      expect(report.error).toContain('ABI cleanup')
+      expect(report.privateRootRemoved).toBe(true)
     } finally {
       rmSync(f.root, { recursive: true, force: true })
     }
