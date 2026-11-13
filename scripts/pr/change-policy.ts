@@ -86,6 +86,9 @@ const desktopNativeExactPaths = new Set([
   'scripts/pr/windows-installer-profile-fixture.cs',
   'scripts/pr/windows-installer-profile-native.cs',
   'scripts/pr/windows-installer-profile-fixture-tests.cs',
+  'scripts/pr/windows-installer-profile-review.ts',
+  'scripts/pr/windows-installer-profile-review.test.ts',
+  '.github/workflows/windows-installer-profile-review.yml',
   'scripts/pr/windows-installer-process-check.test.ts',
   'scripts/pr/windows-installer-recovery.test.ts',
   'scripts/pr/windows-installer-native-fixtures.ts',
@@ -426,6 +429,7 @@ export function evaluateChangePolicy(
     file.startsWith('desktop/electron/') ||
     file.startsWith('desktop/scripts/') ||
     file.startsWith('desktop/src-tauri/') ||
+    file.startsWith('scripts/pr/windows-installer-profile-review/') ||
     desktopNativeExactPaths.has(file)
   ))
   const touchesProviderContract = selectionFiles.some((file) => startsWithAny(file, providerContractPrefixes))
