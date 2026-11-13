@@ -37,6 +37,7 @@ namespace CcHahaInstallerProfile
     private readonly Dictionary<int, string> preexistingProcesses = new Dictionary<int, string>();
     private FixtureSpec controllerContext;
     private FixtureSpec subjectContext;
+    private FixtureState abiEnvironmentContext;
     private bool subjectPeerAuthenticated;
     private bool subjectProductsAllowed;
     private FileSecurity originalControllerImageSecurity;
@@ -1060,6 +1061,36 @@ namespace CcHahaInstallerProfile
     public override Dictionary<string, string> TargetEnvironment(FixtureState state)
     {
       HistoricalController(state);
+      return ReadTokenEnvironmentBlock(state);
+    }
+
+    internal static void RequireAbiEnvironmentRead(FixtureState state, FixtureState ownedAbiState,
+      bool historicalContextBound, bool productsAllowed)
+    {
+      CorePolicy.Require(state != null && Object.ReferenceEquals(state, ownedAbiState)
+        && !historicalContextBound && !productsAllowed, "ABI environment requires its exact owned harness state");
+      CorePolicy.Require(state.spec != null && state.spec.version == 1 && state.spec.mode == "abi-harness"
+        && !state.spec.realExecutionAdmitted && String.IsNullOrEmpty(state.spec.executionStage), "ABI environment has no live execution admission");
+      CorePolicy.Require(state.controllerRootOwned && !String.IsNullOrEmpty(state.spec.controllerRoot)
+        && state.runnerPid > 0 && !String.IsNullOrEmpty(state.runnerCreationTime) && !String.IsNullOrEmpty(state.runnerSid)
+        && state.targetIdentity != null && state.targetIdentity.sid == state.runnerSid && state.targetIdentity.tokenType == 1
+        && state.paths != null && CorePolicy.SamePath(state.paths.profile, state.profilePath), "ABI environment lacks its owned root and current-token observations");
+      CorePolicy.Require(state.account == null && !state.accountCreated && !state.accountBound
+        && !state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero
+        && state.token != IntPtr.Zero && state.environment == IntPtr.Zero, "ABI environment cannot use account or profile state");
+    }
+
+    private Dictionary<string, string> ReadAbiTokenEnvironment(FixtureState state)
+    {
+      RequireAbiEnvironmentRead(state, abiEnvironmentContext,
+        controllerContext != null || subjectContext != null, subjectProductsAllowed);
+      return ReadTokenEnvironmentBlock(state);
+    }
+
+    // Both callers establish their own authorization before this read-only
+    // token operation. This core never enables account/profile/product APIs.
+    private static Dictionary<string, string> ReadTokenEnvironmentBlock(FixtureState state)
+    {
       CorePolicy.Require(state.token != IntPtr.Zero && state.environment == IntPtr.Zero, "Target environment lifecycle error");
       Win(CreateEnvironmentBlock(out state.environment, state.token, false), "CreateEnvironmentBlock");
       Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -2368,7 +2399,13 @@ namespace CcHahaInstallerProfile
         state.spec.controllerRoot = root;
         state.profilePath = state.paths.profile;
         Win(OpenProcessToken(GetCurrentProcess(), TokenQuery | 0x0002 | 0x0004, out state.token), "Open ABI token");
-        Dictionary<string, string> environment = platform.AbiEnvironment(platform.TargetEnvironment(state), root);
+        // Only this internal harness owns the lease, after AbiOperatingSystem,
+        // atomic private-root creation and OpenProcessToken(current process).
+        // Do not route Stage A through the historical Controller admission.
+        Dictionary<string, string> environment;
+        platform.abiEnvironmentContext = state;
+        try { environment = platform.AbiEnvironment(platform.ReadAbiTokenEnvironment(state), root); }
+        finally { platform.abiEnvironmentContext = null; }
         report.Check("private-runtime-context-bound", true,
           "Parent and child share the verified compiler sandbox home/config/local/tmp paths; environment is not SID/profile evidence");
         platform.CreatePrivateDesktop(state);

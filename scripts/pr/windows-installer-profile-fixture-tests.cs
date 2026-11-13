@@ -511,6 +511,42 @@ namespace CcHahaInstallerProfile
     // This subset never constructs NativePlatform or invokes a Windows API.
     internal static void RunProfileBoundaryTests(FixtureReport report)
     {
+      Case(report, "fake-abi-environment-is-owned-readonly-and-does-not-require-historical-admission", delegate {
+        FixtureState state = AbiEnvironmentState();
+        NativePlatform.RequireAbiEnvironmentRead(state, state, false, false);
+        Assert(!state.spec.realExecutionAdmitted && state.account == null && !state.profileCreated && !state.profileLoaded,
+          "an owned ABI current-token environment read must remain possible without a live Controller binding");
+      });
+      Case(report, "fake-abi-environment-rejects-profile-only-and-unowned-or-live-state", delegate {
+        foreach (string fault in new string[] { "not-owned", "historical-context", "products", "profile-only", "historical",
+          "live-admission", "live-stage", "no-root", "wrong-sid", "nonprimary", "no-birth", "account", "account-created",
+          "account-bound", "profile-created", "profile-loaded", "profile-lease", "no-token", "environment-already-owned" })
+        {
+          FixtureState state = AbiEnvironmentState();
+          switch (fault)
+          {
+            case "profile-only": state.spec = ProfileOnlySpec(); break;
+            case "historical": state.spec = Spec(); break;
+            case "live-admission": state.spec.realExecutionAdmitted = true; break;
+            case "live-stage": state.spec.executionStage = "B"; break;
+            case "no-root": state.controllerRootOwned = false; break;
+            case "wrong-sid": state.targetIdentity.sid = TargetSid; break;
+            case "nonprimary": state.targetIdentity.tokenType = 2; break;
+            case "no-birth": state.runnerCreationTime = null; break;
+            case "account": state.account = new AccountRecord(); break;
+            case "account-created": state.accountCreated = true; break;
+            case "account-bound": state.accountBound = true; break;
+            case "profile-created": state.profileCreated = true; break;
+            case "profile-loaded": state.profileLoaded = true; break;
+            case "profile-lease": state.profile = new IntPtr(123); break;
+            case "no-token": state.token = IntPtr.Zero; break;
+            case "environment-already-owned": state.environment = new IntPtr(456); break;
+          }
+          Reject(delegate { NativePlatform.RequireAbiEnvironmentRead(state, fault == "not-owned" ? AbiEnvironmentState() : state,
+            fault == "historical-context", fault == "products"); }, "ABI readonly entry must reject " + fault);
+        }
+        Reject(delegate { NativePlatform.RequireAbiEnvironmentRead(null, null, false, false); }, "an absent harness state is not authorization");
+      });
       Case(report, "fake-profile-only-stops-before-account-enable-and-logon", delegate {
         FakePlatform api = new FakePlatform();
         FixtureSpec spec = ProfileOnlySpec();
@@ -608,6 +644,16 @@ namespace CcHahaInstallerProfile
           && api.Calls.Contains("CreateSubjectSuspended") && api.Calls.Contains("WaitSubjectExit"), "historical admission retains the full post-profile path");
         AssertNoNativePromotion(state);
       });
+    }
+
+    private static FixtureState AbiEnvironmentState()
+    {
+      return new FixtureState {
+        spec = new FixtureSpec { version = 1, mode = "abi-harness", controllerRoot = @"C:\FixturePrivate\owned-abi" },
+        controllerRootOwned = true, runnerPid = 42, runnerCreationTime = "owned-current-process-creation", runnerSid = RunnerSid,
+        targetIdentity = new TokenIdentity { sid = RunnerSid, tokenType = 1 }, paths = Paths(), profilePath = Paths().profile,
+        token = new IntPtr(101)
+      };
     }
 
     private sealed class ProtocolTestChannel : FixtureChannel
