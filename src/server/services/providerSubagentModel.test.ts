@@ -9,7 +9,7 @@ import { handleProvidersApi } from '../api/providers.js'
 import { ConversationService } from './conversationService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import { ProviderService } from './providerService.js'
-import { ensurePersistentStorageUpgraded, resetPersistentStorageMigrationsForTests } from './persistentStorageMigrations.js'
+import { CURRENT_PROVIDER_INDEX_SCHEMA_VERSION, ensurePersistentStorageUpgraded, resetPersistentStorageMigrationsForTests } from './persistentStorageMigrations.js'
 
 const originalEnv = { ...process.env }
 let home: string
@@ -198,7 +198,7 @@ test('legacy provider settings upgrade ownership with a backup and preserve the 
   const backup = files.find(name => name.startsWith('settings.json.bak-before-migration-'))
   expect(backup).toBeDefined()
   expect(JSON.parse(await readFile(join(managedDir, backup!), 'utf8'))).toEqual(legacy)
-  expect(JSON.parse(await readFile(join(managedDir, 'providers.json'), 'utf8'))).toMatchObject({ schemaVersion: 10, futureIndex: { keep: true } })
+  expect(JSON.parse(await readFile(join(managedDir, 'providers.json'), 'utf8'))).toMatchObject({ schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION, futureIndex: { keep: true } })
   resetPersistentStorageMigrationsForTests()
   expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
   expect(await readFile(join(configDir, 'settings.json'), 'utf8')).toBe(originalUser)

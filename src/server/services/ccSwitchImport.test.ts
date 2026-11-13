@@ -14,7 +14,7 @@ import { handleProvidersApi } from '../api/providers.js'
 import { ProviderService } from './providerService.js'
 import { readCcSwitchProviders, scanCcSwitchProviders } from './ccSwitchImport.js'
 import type { CcSwitchCandidate } from './ccSwitchImport.js'
-import type { CreateProviderInput, SavedProvider } from '../types/provider.js'
+import type { CreateProviderInput, ProviderUsageScript, SavedProvider } from '../types/provider.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -324,6 +324,28 @@ function claudeEnv(overrides?: Record<string, unknown>): Record<string, unknown>
     ANTHROPIC_BASE_URL: 'https://api.example.com',
     ANTHROPIC_AUTH_TOKEN: FULL_KEY,
     ANTHROPIC_MODEL: 'model-main',
+    ...overrides,
+  }
+}
+
+const USAGE_SCRIPT_TOKEN = 'usage-access-token-0123456789abcdef'
+const USAGE_SCRIPT_CODE =
+  '({ request: { url: "{{baseUrl}}/api/user/self", method: "GET" }, extractor: (r) => ({ remaining: r.data.quota / 500000, unit: "USD" }) })'
+
+/** A New API style `meta.usage_script`, as cc-switch saves it. */
+function usageScriptFixture(overrides?: Partial<ProviderUsageScript>): ProviderUsageScript {
+  return {
+    enabled: true,
+    language: 'javascript',
+    code: USAGE_SCRIPT_CODE,
+    timeout: 10,
+    templateType: 'newapi',
+    baseUrl: 'https://relay.example.com',
+    accessToken: USAGE_SCRIPT_TOKEN,
+    userId: '42',
+    autoQueryInterval: 15,
+    // A cc-switch template field cc-haha does not model.
+    codingPlanProvider: 'kimi',
     ...overrides,
   }
 }
@@ -1590,6 +1612,81 @@ describe('cc-switch candidate mapping', () => {
 // REST API
 // =============================================================================
 
+describe('cc-switch usage scripts', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  test('carries meta.usage_script from the SQLite store as written, unknown fields included', async () => {
+    const script = usageScriptFixture()
+    await writeFixtureDb([{
+      id: 'relay',
+      name: 'Relay',
+      meta: JSON.stringify({ apiFormat: 'anthropic', usage_script: script }),
+      env: claudeEnv(),
+    }])
+
+    const [entry] = (await readCcSwitchProviders()).entries
+
+    expect(entry.createInput?.usageScript).toEqual(script)
+  })
+
+  test('reads meta.usage_script from the legacy JSON store, where meta is an object', async () => {
+    const script = usageScriptFixture({ enabled: false })
+    await writeLegacyConfig({
+      claude: {
+        providers: {
+          legacy: { id: 'legacy', name: 'Legacy', settingsConfig: { env: claudeEnv() }, meta: { usage_script: script } },
+        },
+      },
+    })
+
+    const scan = await readCcSwitchProviders()
+
+    expect(scan.source).toBe('json')
+    expect(scan.entries[0].createInput?.usageScript).toEqual(script)
+  })
+
+  test('imports the provider without a usage script that does not have cc-switch\'s shape', async () => {
+    await writeFixtureDb([
+      { id: 'wrong-types', sortIndex: 1, meta: JSON.stringify({ usage_script: { enabled: 'yes', code: 42 } }), env: claudeEnv() },
+      { id: 'not-an-object', sortIndex: 2, meta: JSON.stringify({ usage_script: 'return 1' }), env: claudeEnv() },
+      { id: 'no-script', sortIndex: 3, meta: JSON.stringify({ apiFormat: 'anthropic' }), env: claudeEnv() },
+      { id: 'no-meta', sortIndex: 4, env: claudeEnv() },
+    ])
+
+    const { entries } = await readCcSwitchProviders()
+
+    expect(entries.map((entry) => entry.candidate.sourceId)).toEqual([
+      'claude:wrong-types',
+      'claude:not-an-object',
+      'claude:no-script',
+      'claude:no-meta',
+    ])
+    for (const entry of entries) {
+      expect(entry.candidate.importable).toBe(true)
+      expect(entry.createInput).not.toBeNull()
+      expect(entry.createInput).not.toHaveProperty('usageScript')
+    }
+  })
+
+  test('the scan route never returns the usage script or its credentials', async () => {
+    await writeFixtureDb([{
+      id: 'relay',
+      name: 'Relay',
+      meta: JSON.stringify({ usage_script: usageScriptFixture() }),
+      env: claudeEnv(),
+    }])
+
+    const { status, body } = await callProvidersApi('GET', '/api/providers/cc-switch/scan')
+
+    expect(status).toBe(200)
+    const serialized = JSON.stringify(body)
+    expect(serialized).not.toContain(USAGE_SCRIPT_TOKEN)
+    expect(serialized).not.toContain('/api/user/self')
+    expect((body.candidates as CcSwitchCandidate[]).some((candidate) => 'usageScript' in candidate)).toBe(false)
+  })
+})
+
 describe('cc-switch REST routes', () => {
   beforeEach(setup)
   afterEach(teardown)
@@ -1717,6 +1814,53 @@ describe('cc-switch REST routes', () => {
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+
+  test('POST import persists the provider\'s usage script and keeps it through a later edit', async () => {
+    const script = usageScriptFixture()
+    await writeFixtureDb([
+      { id: 'scripted', sortIndex: 1, name: 'Scripted', meta: JSON.stringify({ usage_script: script }), env: claudeEnv() },
+      {
+        id: 'plain',
+        sortIndex: 2,
+        name: 'Plain',
+        env: claudeEnv({ ANTHROPIC_BASE_URL: 'https://api.plain.com' }),
+      },
+    ])
+
+    const { status, body } = await callProvidersApi('POST', '/api/providers/cc-switch/import', {
+      sourceIds: ['claude:scripted', 'claude:plain'],
+    })
+
+    expect(status).toBe(200)
+    const [scripted, plain] = body.imported as SavedProvider[]
+    expect(scripted.usageScript).toEqual(script)
+    expect(plain).not.toHaveProperty('usageScript')
+
+    // An edit from the provider form does not send the script, and must not drop it.
+    const edit = await callProvidersApi('PUT', `/api/providers/${scripted.id}`, { name: 'Renamed' })
+    expect(edit.status).toBe(200)
+    const persisted = (await readProvidersConfig()).providers as SavedProvider[]
+    expect(persisted.find((provider) => provider.id === scripted.id)).toMatchObject({
+      name: 'Renamed',
+      usageScript: script,
+    })
+    expect(persisted.find((provider) => provider.id === plain.id)).not.toHaveProperty('usageScript')
+  })
+
+  test('the public create route does not accept a usage script', async () => {
+    const { status, body } = await callProvidersApi('POST', '/api/providers', {
+      ...sampleProviderInput({ name: 'Created' }),
+      usageScript: usageScriptFixture(),
+    })
+
+    expect(status).toBe(201)
+    const created = body.provider as SavedProvider
+    expect(created.name).toBe('Created')
+    expect(created).not.toHaveProperty('usageScript')
+    const persisted = (await readProvidersConfig()).providers as SavedProvider[]
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]).not.toHaveProperty('usageScript')
   })
 
   test('POST /api/providers/cc-switch/import keeps previously saved providers', async () => {

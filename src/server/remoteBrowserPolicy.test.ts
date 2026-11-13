@@ -39,6 +39,23 @@ test('remote provider proxy settings expose the mode without any saved URL or au
   }
 })
 
+test('remote providers never carry an imported usage script or its credentials', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'scripted', presetId: 'custom', name: 'Scripted', apiKey: 'fake-model-key',
+    baseUrl: 'https://relay.example.test', models: { main: 'model', haiku: '', sonnet: '', opus: '' },
+    usageScript: {
+      enabled: true, code: 'fake-usage-script-body', templateType: 'newapi',
+      accessToken: 'fake-usage-token', secretAccessKey: 'fake-signing-secret',
+    },
+  })
+  expect(provider.usageScript?.secretAccessKey).toBe('fake-signing-secret')
+  const projected = projectRemoteProvider(provider)
+  expect(projected).not.toHaveProperty('usageScript')
+  for (const secret of ['fake-usage-script-body', 'fake-usage-token', 'fake-signing-secret']) {
+    expect(JSON.stringify(projected)).not.toContain(secret)
+  }
+})
+
 test('remote settings boundary permits only intended provider routes and General fields', () => {
   const parts = (pathname: string) => pathname.split('/').filter(Boolean)
   expect(remoteProviderRouteAllowed(parts('/api//providers/settings/'), 'GET')).toBe(false)
