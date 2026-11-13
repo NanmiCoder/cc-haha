@@ -22,6 +22,11 @@ const checks: Check[] = [
     cwd: 'desktop',
   },
   {
+    title: 'Desktop native appearance caches preserve old fixtures and both ground preferences',
+    command: ['bun', 'run', 'test', '--', '--run', 'electron/services/nativeAppearance.test.ts'],
+    cwd: 'desktop',
+  },
+  {
     title: 'Session archive metadata migration and transcript-preserving restart recovery',
     command: ['bun', 'test', './src/server/__tests__/session-archive.test.ts', './src/utils/cleanup.sessionArchive.test.ts'],
   },
