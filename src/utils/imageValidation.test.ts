@@ -56,6 +56,66 @@ test('distinct screenshot payloads keep their identities while sharing the cumul
     .toMatchObject({ width: 1024, height: 576 })
 })
 
+test('distinct image normalization uses two slots while deduplicating payloads and retaining content order', async () => {
+  const payloads = Array.from({ length: 4 }, (_, index) => Buffer.from(`fixture ${index}`).toString('base64'))
+  const messages = [{ message: { content: [0, 1, 2, 3, 0].map((index, occurrence) => ({
+    type: 'tool_result', tool_use_id: `read-${occurrence}`, content: [
+      { type: 'text', text: `caption ${occurrence}` },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: payloads[index]! } },
+    ],
+  })) } }]
+  const before = JSON.stringify(messages)
+  const started: number[] = []
+  const releases = new Map<number, () => void>()
+  let releaseAll = false
+  let active = 0
+  let peak = 0
+  const optimize = spyOn(imageResizer, 'optimizeImageForContext').mockImplementation(async buffer => {
+    const index = payloads.indexOf(buffer.toString('base64'))
+    started.push(index)
+    peak = Math.max(peak, ++active)
+    if (!releaseAll) await new Promise<void>(resolve => releases.set(index, resolve))
+    active--
+    if (index === 2) throw new Error('fixture codec failure')
+    return { buffer, mediaType: 'jpeg' }
+  })
+  const normalized = normalizeImagesForAPI(messages)
+  // Drain queued work without making an assertion about wall-clock speed.
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+  try {
+    await turn()
+    expect(started).toEqual([0, 1])
+    releases.get(1)!()
+    await turn()
+    expect(started).toEqual([0, 1, 2])
+    releases.get(2)!()
+    await turn()
+    expect(started).toEqual([0, 1, 2, 3])
+    releases.get(3)!()
+    releases.get(0)!()
+    const output = await normalized
+    expect(peak).toBe(2)
+    expect(optimize).toHaveBeenCalledTimes(4)
+    for (const [occurrence, tool] of output[0]!.message.content.entries()) {
+      expect(tool.tool_use_id).toBe(`read-${occurrence}`)
+      expect(tool.content[0]).toEqual({ type: 'text', text: `caption ${occurrence}` })
+      if (occurrence === 2) {
+        expect(tool.content[1]).toEqual({ type: 'text', text: '[Image omitted from this request: fixture codec failure]' })
+      } else {
+        expect(tool.content[1]).toEqual({ type: 'image', source: {
+          type: 'base64', media_type: 'image/jpeg', data: payloads[occurrence === 4 ? 0 : occurrence]!,
+        } })
+      }
+    }
+    expect(JSON.stringify(messages)).toBe(before)
+  } finally {
+    releaseAll = true
+    for (const release of releases.values()) release()
+    await normalized
+    optimize.mockRestore()
+  }
+})
+
 test('only older nested images become explicit notes after bounded compression cannot reach the soft budget', async () => {
   processor.mockRejectedValue(new Error('fixture processor unavailable'))
   const header = await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#336699' } }).png().toBuffer()
