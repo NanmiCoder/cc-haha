@@ -85,8 +85,15 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
   const toolContext = context()
   let originalBytes = 0
   let readBytes = 0
+  const started = performance.now()
+  let fixtureMs = 0
+  let readMs = 0
+  let normalizationMs = 0
+  let verificationMs = 0
+  const readFormats: Record<string, number> = {}
   try {
     for (let index = 0; index < 59; index++) {
+      const fixtureStarted = performance.now()
       const source = await createContextImage({
         width: 1024, height: 576, seed: 1888 + index,
         marker: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
@@ -100,11 +107,15 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
       await writeFile(path, source)
       originals.push({ path, hash: hash(source) })
       originalBytes += source.length
+      fixtureMs += performance.now() - fixtureStarted
+      const readStarted = performance.now()
       const { data } = await FileReadTool.call({ file_path: path }, toolContext)
       if (data.type !== 'image') throw new Error(`Read ${index} did not return an image`)
       const encoded = Buffer.from(data.file.base64, 'base64')
       expect(encoded.length).toBeLessThanOrEqual(512 * 1024)
       expect(await sharp(encoded).metadata()).toMatchObject({ width: 1024, height: 576 })
+      readMs += performance.now() - readStarted
+      readFormats[data.file.type] = (readFormats[data.file.type] ?? 0) + 1
       readBytes += encoded.length
       readImages.add(hash(encoded))
       const tool = FileReadTool.mapToolResultToToolResultBlockParam(data, `read-sequential-${index}`)
@@ -114,7 +125,13 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
     }
     expect(readImages.size).toBe(59)
     const before = hash(JSON.stringify(messages))
+    console.info(JSON.stringify({ stage: 'before request normalization', fixtureMs, readMs,
+      images: originals.length, originalBytes, readBytes, readFormats, elapsedMs: performance.now() - started }))
+    const normalizationStarted = performance.now()
     const normalized = await normalizeImagesForAPI(messages)
+    normalizationMs = performance.now() - normalizationStarted
+    console.info(JSON.stringify({ stage: 'after request normalization', normalizationMs, elapsedMs: performance.now() - started }))
+    const verificationStarted = performance.now()
     expect(normalized).toHaveLength(59)
     let requestEncodedBytes = 0
     const sentImages = new Set<string>()
@@ -141,12 +158,17 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
     expect(sentImages.size).toBe(59)
     expect(requestEncodedBytes).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
     expect(hash(JSON.stringify(messages))).toBe(before)
+    verificationMs = performance.now() - verificationStarted
     console.info(JSON.stringify({ scenario: '59 sequential distinct Read screenshots',
       images: originals.length, originalBytes, readBytes, requestEncodedBytes,
       requestJsonBytes: Buffer.byteLength(JSON.stringify(normalized)),
       originalFilesUnchanged: true, distinctImagesRetained: sentImages.size,
+      fixtureMs, readMs, normalizationMs, verificationMs, elapsedMs: performance.now() - started,
     }))
   } finally {
+    const cleanupStarted = performance.now()
     await rm(directory, { recursive: true, force: true })
+    console.info(JSON.stringify({ stage: 'cleanup', cleanupMs: performance.now() - cleanupStarted,
+      elapsedMs: performance.now() - started }))
   }
 }, 90_000)
