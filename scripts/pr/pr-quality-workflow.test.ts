@@ -7,7 +7,7 @@ import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
 import { assertOutsideSourceGit, cleanupPreparedWindowsInstallerTests, downloadPinnedInstaller, historicalInstallerFixture, pinnedNsisCompiler, prepareWindowsInstallerTests, verifyInstallerFixture } from './prepare-windows-installer-tests'
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
-import { profileFixtureSources, runWindowsInstallerProfileChecks, validateStageAResult } from './run-windows-installer-profile-checks'
+import { profileFixtureSources, profileOnlyPacketSources, runWindowsInstallerProfileChecks, validateProfileOnlyPreflightResult, validateStageAResult } from './run-windows-installer-profile-checks'
 import { createHash } from 'node:crypto'
 
 type WorkflowJob = {
@@ -811,17 +811,38 @@ describe('Windows profile fixture Stage A', () => {
       mkdirSync(dirname(join(sourceRoot, file)), { recursive: true })
       writeFileSync(join(sourceRoot, file), '// deterministic C# source\r\n')
     }
+    for (const file of profileOnlyPacketSources) {
+      const target = join(sourceRoot, 'scripts/pr/windows-installer-profile-only', file)
+      mkdirSync(dirname(target), { recursive: true })
+      writeFileSync(target, readFileSync(join('scripts/pr/windows-installer-profile-only', file)))
+    }
     const compiler = join(root, 'csc.exe')
     writeFileSync(compiler, 'fake compiler; never executed')
+    const powershell = join(root, 'powershell.exe')
+    writeFileSync(powershell, 'fake PowerShell; never executed')
     const evidenceRoot = join(sourceRoot, 'artifacts/windows-installer/profile-stage-a')
-    const result = (mode: string) => ({ version: 1, mode, status: 'passed',
+    const result = (mode: string) => mode === 'profile-only-preflight' ? {
+      version: 1, mode, status: 'passed', engine: 'WindowsPowerShell5.1-Desktop',
+      checks: [
+        'packet-explicitly-unadmitted',
+        ...['launch-profile-only.proposed.ps1', 'reconcile-profile-only.proposed.ps1'].flatMap(name =>
+          ['parse', 'no-automatic-variable-assignment', 'default', 'pending-denial', 'one-embedded-source', 'compile'].map(check => `${check}-${name}`)),
+        'atomic-private-root-acl', 'existing-root-rejected', 'readonly-allow-synchronize-roundtrip',
+        'readonly-extra-write-rejected', 'readonly-extra-principal-rejected', 'packet-source-unchanged',
+      ].map(name => ({ name, status: 'passed' })),
+      realAccountsCreated: 0, realProfilesCreated: 0, releasedPeExecuted: false, releasedPeMayHaveExecuted: false,
+      compatibilityEnabled: false, oldExit22Policy: 'fatal', cleanup: 'passed', packetUnchanged: true,
+      packetHashes: Object.fromEntries(profileOnlyPacketSources.filter(file => file !== 'preflight.ps1')
+        .map(file => [file.split('/').at(-1)!, createHash('sha256')
+          .update(readFileSync(join(sourceRoot, 'scripts/pr/windows-installer-profile-only', file))).digest('hex')])),
+    } : { version: 1, mode, status: 'passed',
       binarySha256: createHash('sha256').update('MZ-owned-fixture-double').digest('hex'),
       cleanup: mode === 'abi-harness' ? 'passed' : 'not_run',
       checks: [{ name: 'fixture-case', status: 'passed' }], realAccountsCreated: 0, realProfilesCreated: 0,
       releasedPeExecuted: false, compatibilityEnabled: false, oldExit22Policy: 'fatal',
       releasedPeMayHaveExecuted: false, releasedPeExecutionStatus: 'not_run',
       member_proven: 'not_run', installed_bytes_equal: 'not_run', old22_before_protected_mutation: 'not_run',
-      removal_equivalence: 'not_run', full_old_to_new: 'not_run' })
+      removal_equivalence: 'not_run', full_old_to_new: 'not_run' }
     const calls: string[][] = []
     const run: NonNullable<Parameters<typeof runWindowsInstallerProfileChecks>[0]>['run'] = async (command, options) => {
       calls.push(command)
@@ -832,14 +853,18 @@ describe('Windows profile fixture Stage A', () => {
       if (command[0] === compiler) {
         const target = command.find(arg => arg.startsWith('/out:'))!.slice(5)
         writeFileSync(target, 'MZ-owned-fixture-double')
+      } else if (command[0] === powershell) {
+        expect(command).toContain('-NoProfile')
+        const output = command[command.indexOf('-OutputPath') + 1]!
+        writeFileSync(output, JSON.stringify(result('profile-only-preflight')))
       } else {
         const output = command[command.indexOf('--output') + 1]!
         writeFileSync(output, JSON.stringify(result(command[1]!.slice(2))))
       }
       return { exitCode: 0, stdout: 'owned fixture test double', stderr: '' }
     }
-    return { root, sourceRoot, tempParent, compiler, evidenceRoot, calls, run, result,
-      options: { platform: 'win32' as const, sourceRoot, tempParent, compiler, run } }
+    return { root, sourceRoot, tempParent, compiler, powershell, evidenceRoot, calls, run, result,
+      options: { platform: 'win32' as const, sourceRoot, tempParent, compiler, powershell, run } }
   }
 
   test('wires compile/self-test/owned ABI only, before always-upload, without a Stage B switch', () => {
@@ -899,13 +924,15 @@ describe('Windows profile fixture Stage A', () => {
     const f = fixture()
     try {
       expect(await runWindowsInstallerProfileChecks(f.options)).toEqual({ status: 'passed', exitCode: 0 })
-      expect(f.calls).toHaveLength(3)
+      expect(f.calls).toHaveLength(4)
       expect(f.calls[0]).toContain('/platform:x64')
       expect(f.calls[0]).toContain('/r:System.Management.dll')
       expect(f.calls[0]!.filter(arg => arg.endsWith('.cs'))).toHaveLength(3)
       expect(f.calls[1]![0]).toBe(f.calls[2]![0])
       expect(f.calls[1]![1]).toBe('--self-test')
       expect(f.calls[2]![1]).toBe('--abi-harness')
+      expect(f.calls[3]![0]).toBe(f.powershell)
+      expect(f.calls[3]).toContain('-PacketDirectory')
       expect(f.calls.flat()).not.toContain('--role')
       const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
       expect(report.runner).toBe('test-double')
@@ -916,20 +943,21 @@ describe('Windows profile fixture Stage A', () => {
       expect(existsSync(report.temporaryRoot)).toBe(false)
       expect(report.sources[0].sha256).not.toBe(report.sources[0].canonicalSha256)
       expect(report.executableSha256).toBe(createHash('sha256').update('MZ-owned-fixture-double').digest('hex'))
+      expect(JSON.parse(readFileSync(join(f.evidenceRoot, 'profile-only-preflight.raw.json'), 'utf8')).checks).toHaveLength(19)
     } finally {
       rmSync(f.root, { recursive: true, force: true })
     }
   })
 
-  test.each(['compile', 'self-test', 'abi-harness'])('propagates a failing %s and never runs the following phase', async phase => {
+  test.each(['compile', 'self-test', 'abi-harness', 'profile-only-preflight'])('propagates a failing %s and never runs the following phase', async phase => {
     const f = fixture()
     try {
       const result = await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
-        const name = command[0] === f.compiler ? 'compile' : command[1]!.slice(2)
+        const name = command[0] === f.compiler ? 'compile' : command[0] === f.powershell ? 'profile-only-preflight' : command[1]!.slice(2)
         if (name === phase) {
           f.calls.push(command)
           if (phase !== 'compile') {
-            const output = command[command.indexOf('--output') + 1]!
+            const output = command[command.indexOf(phase === 'profile-only-preflight' ? '-OutputPath' : '--output') + 1]!
             writeFileSync(output, JSON.stringify({ ...f.result(phase), status: 'failed', failedStage: 'owned-API' }))
           }
           return { exitCode: 7, stdout: '', stderr: 'fixture failure' }
@@ -937,7 +965,7 @@ describe('Windows profile fixture Stage A', () => {
         return f.run!(command, options)
       } })
       expect(result).toEqual({ status: 'failed', exitCode: 1 })
-      expect(f.calls).toHaveLength(['compile', 'self-test', 'abi-harness'].indexOf(phase) + 1)
+      expect(f.calls).toHaveLength(['compile', 'self-test', 'abi-harness', 'profile-only-preflight'].indexOf(phase) + 1)
       const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
       expect(report.error).toContain(`${phase} failed`)
       expect(report.realAccountsCreated).toBe('not_proven')
@@ -1005,6 +1033,36 @@ describe('Windows profile fixture Stage A', () => {
     } finally {
       rmSync(f.root, { recursive: true, force: true })
     }
+  })
+
+  test.each(['engine', 'missing-check', 'real-account', 'cleanup', 'source-pin'])(
+    'rejects an exit-zero PowerShell preflight with invalid %s evidence', async fault => {
+      const f = fixture()
+      try {
+        const result = await runWindowsInstallerProfileChecks({ ...f.options, run: async (command, options) => {
+          if (command[0] !== f.powershell) return f.run!(command, options)
+          const value = f.result('profile-only-preflight')
+          if (fault === 'engine') value.engine = 'PowerShell7-Core'
+          if (fault === 'missing-check') value.checks.pop()
+          if (fault === 'real-account') value.realAccountsCreated = 1
+          if (fault === 'cleanup') value.cleanup = 'failed'
+          if (fault === 'source-pin') value.packetHashes!['pins.proposed.json'] = '0'.repeat(64)
+          writeFileSync(command[command.indexOf('-OutputPath') + 1]!, JSON.stringify(value))
+          return { exitCode: 0, stdout: '', stderr: '' }
+        } })
+        expect(result).toEqual({ status: 'failed', exitCode: 1 })
+        const report = JSON.parse(readFileSync(join(f.evidenceRoot, 'checks.json'), 'utf8'))
+        expect(report.status).toBe('failed')
+        expect(report.privateRootRemoved).toBe(true)
+        expect(report.realAccountsCreated).toBe('not_proven')
+      } finally {
+        rmSync(f.root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('does not accept a summary-only preflight success', () => {
+    expect(() => validateProfileOnlyPreflightResult({ version: 1, status: 'passed' })).toThrow('preflight')
   })
 })
 

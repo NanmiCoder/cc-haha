@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "packetKind": "profile-only",
+  "status": "DRAFT_NOT_READY",
+  "admissionStatus": "not_admitted",
+  "candidateSourceCommit": "34cbe8bf682eb330e33224f2ef589dfc108af0b3",
+  "activationHead": null,
+  "repository": "NanmiCoder/cc-haha",
+  "pullRequest": 1883,
+  "actor": "NanmiCoder",
+  "headRepository": "toBerlinWay/cc-haha",
+  "headRef": "fix/installer-fallback-foreign-helpers",
+  "baseRef": "main",
+  "runnerTemp": "D:\\a\\_temp",
+  "workspace": "D:\\a\\cc-haha\\cc-haha",
+  "runId": "52f4ce19-5ded-4b27-8268-a2840809e0ca",
+  "owner": "codex:local:01a1c9a5-381e-7b33-9648-c8968b61de4c",
+  "generation": 1,
+  "stageBase": null,
+  "privateBootstrapRoot": null,
+  "specSha256": null,
+  "launcherSha256": "932bcaff918f9f94caea4a6ec1846c3d47bbc818e9d3d151c0d652dc9b3cbb3d",
+  "reconcileSha256": "447adcea2e7f630b227d6d88a42baf7960d1a32bda8f4255600471ffc45fca2d",
+  "argvEnvPlanSha256": "d2e740b8d48b87b3e34a53cec9f9400bd08797b17538ab8cb1f0cc548736451a",
+  "frozenPlanManifestSha256": "60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672",
+  "controllerTimeoutMilliseconds": 180000,
+  "binaryFile": "profile-fixture.exe",
+  "binarySha256": "d2f6714802aa36cbdf7205a109a922c672ffff360b3ea1298261525cca80066e",
+  "binaryBytes": 225792,
+  "sourcePins": [
+    {
+      "file": "windows-installer-profile-fixture.cs",
+      "sha256": "31a6a154f2ef2fa166f487df74df81184100d358484e5ed15c271c66d40cdf48",
+      "bytes": 101621,
+      "canonicalSha256": "d353145405045794a7b1a9c15409b19b3bb326283b3541d107648026bb82d37d"
+    },
+    {
+      "file": "windows-installer-profile-native.cs",
+      "sha256": "fd9526021885680629ca0da45791dbed6031c69cb154957e4c14ff49f3d8aa57",
+      "bytes": 157707,
+      "canonicalSha256": "4e95dd46399172fb4f8143e5ff6fb082c7f3cad0be86bf9cb20f126b0157a515"
+    },
+    {
+      "file": "windows-installer-profile-fixture-tests.cs",
+      "sha256": "c28cb36262c1908c8b4ab6a48a524ab35939ff718d46e36439f82a0743444d61",
+      "bytes": 62387,
+      "canonicalSha256": "406005158d592023be4f031287532c1e64e5ab45a2a9c5bc8f2da41506efbe43"
+    }
+  ],
+  "stageA": {
+    "status": "passed",
+    "head": "34cbe8bf682eb330e33224f2ef589dfc108af0b3",
+    "runId": 43400575669,
+    "jobId": 131802247285,
+    "artifactId": 14025425797,
+    "zipBytes": 268482,
+    "zipSha256": "fb5ca3de1413aabafdba46d6572064c800fb8cffeffa994d5eb0d2b0db2a31f8",
+    "checksSha256": "794e2a9a964a56a69e6d63c5b674a420a554957daf6a550b3a73e697a0b7dee2",
+    "selfTestSha256": "9876adc4fc8e2d9ae5edc3b03051d037037c25477b128ee21e7d7522c11c58ed",
+    "abiHarnessSha256": "eaa1b07c97a41332d46995bebaaafeb9f6249b84b16fb777e60158549f9f8d14",
+    "selfTestChecks": 93,
+    "abiChecks": 26,
+    "abiCleanup": "passed",
+    "compilerSha256": "46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00",
+    "sourceSetSha256": "d8296ad8d31658f8e125cc9c4c2d194d6e6f04bca1f4f6a2479e8be8a098bb78",
+    "bindingReceiptSha256": "cd43ea5649d076380be6ab89e0c9c1d9abca255d27105c1027648b6fde055daf"
+  },
+  "workflow": {
+    "path": ".github/workflows/windows-installer-profile-only-review.yml",
+    "sha256": null,
+    "workflowId": null,
+    "claimantSourceSha256": null
+  },
+  "stageAInputDirectory": null
+}

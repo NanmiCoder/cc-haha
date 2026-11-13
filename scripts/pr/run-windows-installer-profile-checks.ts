@@ -13,6 +13,39 @@ export const profileFixtureSources = [
   'scripts/pr/windows-installer-profile-fixture-tests.cs',
 ] as const
 
+export const profileOnlyPacketSources = [
+  'preflight.ps1',
+  'fixtures/launch-profile-only.proposed.ps1',
+  'fixtures/reconcile-profile-only.proposed.ps1',
+  'fixtures/pins.proposed.json',
+  'fixtures/profile-only-spec.proposed.json',
+  'fixtures/root-admission.proposed.json',
+  'fixtures/argv-env-plan.json',
+] as const
+
+const preflightChecks = [
+  'packet-explicitly-unadmitted',
+  ...['launch-profile-only.proposed.ps1', 'reconcile-profile-only.proposed.ps1'].flatMap(name =>
+    ['parse', 'no-automatic-variable-assignment', 'default', 'pending-denial', 'one-embedded-source', 'compile'].map(check => `${check}-${name}`)),
+  'atomic-private-root-acl', 'existing-root-rejected', 'readonly-allow-synchronize-roundtrip',
+  'readonly-extra-write-rejected', 'readonly-extra-principal-rejected', 'packet-source-unchanged',
+] as const
+
+export function validateProfileOnlyPreflightResult(value: unknown) {
+  const report = value as Record<string, unknown> | null
+  const checks = report?.checks as Array<{ name: string; status: string }> | undefined
+  if (!report || report.version !== 1 || report.mode !== 'profile-only-preflight' || report.status !== 'passed' ||
+      report.engine !== 'WindowsPowerShell5.1-Desktop' || report.realAccountsCreated !== 0 || report.realProfilesCreated !== 0 ||
+      report.releasedPeExecuted !== false || report.releasedPeMayHaveExecuted !== false || report.compatibilityEnabled !== false ||
+      report.oldExit22Policy !== 'fatal' || report.cleanup !== 'passed' || report.packetUnchanged !== true ||
+      !Array.isArray(checks) || checks.length !== preflightChecks.length ||
+      checks.some(check => !check || check.status !== 'passed') ||
+      preflightChecks.some(name => checks.filter(check => check.name === name).length !== 1)) {
+    throw new Error('Invalid profile-only PowerShell preflight result or forbidden live effect')
+  }
+  return report
+}
+
 const evidenceFields = ['member_proven', 'installed_bytes_equal', 'old22_before_protected_mutation', 'removal_equivalence', 'full_old_to_new'] as const
 type StageAMode = 'self-test' | 'abi-harness'
 type CommandResult = { exitCode: number; stdout: string; stderr: string; timedOut?: boolean }
@@ -67,6 +100,7 @@ export async function runWindowsInstallerProfileChecks(options: {
   sourceRoot?: string
   tempParent?: string
   compiler?: string
+  powershell?: string
   run?: FixtureRunner
 } = {}) {
   const platform = options.platform ?? process.platform
@@ -76,12 +110,16 @@ export async function runWindowsInstallerProfileChecks(options: {
   }
   if (!options.run && process.env.CI !== 'true') throw new Error('Profile fixture checks require a disposable Windows CI runner')
   if (options.compiler && !options.run) throw new Error('A compiler override is only valid with a fake runner')
+  if (options.powershell && !options.run) throw new Error('A PowerShell override is only valid with a fake runner')
   const sourceRoot = realpathSync(options.sourceRoot ?? resolve(import.meta.dir, '../..'))
   const tempParent = realpathSync(options.tempParent ?? process.env.RUNNER_TEMP ?? tmpdir())
   assertOutsideSourceGit(tempParent, sourceRoot)
   const compiler = realpathSync(options.compiler ?? join(process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows',
     'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'))
   if (!lstatSync(compiler).isFile()) throw new Error('The system x64 Framework compiler is missing')
+  const powershell = realpathSync(options.powershell ?? join(process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))
+  if (!lstatSync(powershell).isFile()) throw new Error('The system Windows PowerShell 5.1 is missing')
   const sourceBytes = new Map<string, Buffer>()
   const sources = profileFixtureSources.map(path => {
     const file = join(sourceRoot, path)
@@ -92,6 +130,14 @@ export async function runWindowsInstallerProfileChecks(options: {
       canonicalSha256: createHash('sha256').update(bytes.toString('utf8').replace(/\r\n/g, '\n')).digest('hex') }
   })
   const sourceSetSha256 = createHash('sha256').update(JSON.stringify(sources.map(({ path, canonicalSha256 }) => ({ path, canonicalSha256 })))).digest('hex')
+  const packetSources = profileOnlyPacketSources.map(path => {
+    const file = join(sourceRoot, 'scripts/pr/windows-installer-profile-only', path)
+    assertRegularFile(file, sourceRoot)
+    const bytes = readFileSync(file)
+    if (bytes.length > 1_048_576) throw new Error('Profile-only preflight source exceeded its bound')
+    sourceBytes.set(path, bytes)
+    return { path, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+  })
   const sandbox = mkdtempSync(join(tempParent, 'cc-haha-profile-stage-a-'))
   assertOutsideSourceGit(sandbox, sourceRoot)
   const executable = join(sandbox, 'profile-fixture.exe')
@@ -103,7 +149,7 @@ export async function runWindowsInstallerProfileChecks(options: {
   const report: Record<string, unknown> = {
     version: 1, stage: 'A', status: 'failed', platform, sourceRoot, sources, sourceSetSha256,
     runner: options.run ? 'test-double' : 'native-windows-system-compiler',
-    compiler, compilerSha256: await sha256File(compiler), temporaryRoot: sandbox,
+    compiler, compilerSha256: await sha256File(compiler), powershell, packetSources, temporaryRoot: sandbox,
     realAccountsCreated: 'not_proven', realProfilesCreated: 'not_proven', releasedPeExecuted: 'not_proven',
     releasedPeMayHaveExecuted: 'not_proven', releasedPeExecutionStatus: 'not_proven',
     compatibilityEnabled: false, oldExit22Policy: 'fatal',
@@ -154,6 +200,31 @@ export async function runWindowsInstallerProfileChecks(options: {
       if (result.binarySha256 !== report.executableSha256) throw new Error('Harness result does not identify the compiled fixture binary')
       writeFileSync(join(evidenceRoot, `${mode}.json`), `${JSON.stringify(result, null, 2)}\n`)
     }
+    const packetRoot = join(sandbox, 'profile-only-packet')
+    mkdirSync(packetRoot)
+    for (const source of packetSources) {
+      const target = source.path === 'preflight.ps1' ? join(sandbox, source.path) : join(packetRoot, source.path.split('/').at(-1)!)
+      writeFileSync(target, sourceBytes.get(source.path)!)
+    }
+    const preflightOutput = join(env.TEMP!, 'profile-only-preflight.json')
+    try {
+      await invoke('profile-only-preflight', [powershell, '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', join(sandbox, 'preflight.ps1'), '-PacketDirectory', packetRoot,
+        '-FixtureRoot', join(sandbox, 'preflight-owned-acl'), '-OutputPath', preflightOutput], 120_000)
+    } finally {
+      if (existsSync(preflightOutput)) {
+        assertRegularFile(preflightOutput, sandbox)
+        if (lstatSync(preflightOutput).size > 1_000_000) throw new Error('Preflight result exceeded its evidence bound')
+        copyFileSync(preflightOutput, join(evidenceRoot, 'profile-only-preflight.raw.json'))
+      }
+    }
+    const preflight = validateProfileOnlyPreflightResult(JSON.parse(readFileSync(preflightOutput, 'utf8').replace(/^\uFEFF/, '')))
+    const hashes = preflight.packetHashes as Record<string, string>
+    if (!hashes || packetSources.filter(source => source.path !== 'preflight.ps1')
+      .some(source => hashes[source.path.split('/').at(-1)!] !== source.sha256)) {
+      throw new Error('Preflight packet source binding changed')
+    }
+    writeFileSync(join(evidenceRoot, 'profile-only-preflight.json'), `${JSON.stringify(preflight, null, 2)}\n`)
     exitCode = 0
     report.status = 'passed'
     report.realAccountsCreated = 0

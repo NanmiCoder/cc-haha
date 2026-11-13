@@ -1,5 +1,16 @@
 # Profile-only preparation
 
+`fixtures/` preserves the reviewed, unadmitted source packet for deterministic
+Stage A checks. `preflight.ps1` requires Windows PowerShell 5.1 Desktop, parses
+both scripts, runs their default summary and pending-admission denial paths,
+compiles their embedded C# declarations, and exercises the launcher's exact ACL
+predicate against a fresh temporary directory and file. It tests the readonly
+Allow/Synchronize roundtrip, rejects extra write rights/principals and an
+existing root, and confirms the input packet did not change. These checks never
+invoke account/Profile, reconciliation, Subject, setup or uninstaller methods.
+The fixture spec remains `realExecutionAdmitted: false`; this is not an active
+workflow or a live execution packet.
+
 This directory records the separate profile-only argv/environment contract.
 Source preparation does not authorize a native invocation. A new exact reviewed
 source/spec/Stage A PE/head packet and a specific root admission are required.
