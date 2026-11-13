@@ -900,6 +900,25 @@ describe('Windows profile fixture Stage A', () => {
     expect(plan.rootAdmission).toContain('New exact source/spec/StageA-PE/head packet')
   })
 
+  test('records fresh profile metadata before strict owner rejection without granting a cleanup lease', () => {
+    const native = readFileSync('scripts/pr/windows-installer-profile-native.cs', 'utf8')
+    const create = native.slice(native.indexOf('public override void CreateFreshProfile('), native.indexOf('private static void ProfileTrace('))
+    expect(create).toContain('string callTokenOwner = RecordCreateProfileDiagnostics(state, path, "before")')
+    expect(create.indexOf('string callTokenOwner = RecordCreateProfileDiagnostics(state, path, "before")')).toBeLessThan(create.indexOf('int status = CreateProfile('))
+    expect(create).toContain('AssertOwnedProfileMetadata(state, callTokenOwner)')
+    const metadata = native.slice(native.indexOf('private void AssertOwnedProfileMetadata('), native.indexOf('public override void SetOwnedAccountDisabled('))
+    expect(metadata.indexOf('RecordFreshProfileMetadata(state, owner, callTokenOwner)')).toBeGreaterThan(-1)
+    expect(metadata.indexOf('RecordFreshProfileMetadata(state, owner, callTokenOwner)')).toBeLessThan(metadata.indexOf('RequireFreshProfileOwner(owner, state.account.sid)'))
+    const diagnostics = native.slice(native.indexOf('private void RecordFreshProfileMetadata('), native.indexOf('private bool OwnProfileRegistration('))
+    expect(diagnostics).toContain('OwnProfileRegistration(state, true)')
+    expect(diagnostics).toContain('AccessControlSections.Access')
+    expect(diagnostics).toContain('leaseGranted=false')
+    expect(diagnostics).not.toMatch(/NetUser|DeleteProfile|SetAccessControl|SetOwner|profileOwnershipProven\s*=|profileCreationUncertain\s*=|error\.Message/)
+    expect(native).toContain('TokenBuffer(token, 4); // TOKEN_OWNER, not TokenUser.')
+    expect(native).toContain('(owner == boundSid || owner == "S-1-5-18")')
+    expect(native).toContain('CorePolicy.Require(state.profileCreationAttempts == 1 && state.profileOwnershipProven && !state.profileCreationUncertain')
+  })
+
   test('does not acquire a compiler or run a fixture on another OS', async () => {
     const result = await runWindowsInstallerProfileChecks({ platform: 'darwin', compiler: '/not-present',
       run: async () => { throw new Error('must not execute') } })

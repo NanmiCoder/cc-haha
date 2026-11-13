@@ -570,6 +570,69 @@ namespace CcHahaInstallerProfile
         Assert(state.report.trace.IndexOf("createprofile-call-armed") < state.report.trace.IndexOf("cleanup-owned-jobs"), "uncertainty must be armed before cleanup");
         AssertNoNativePromotion(state);
       });
+      Case(report, "fake-profile-owner-observations-do-not-expand-strict-owner-policy", delegate {
+        foreach (string owner in new string[] { TargetSid, "S-1-5-18", "S-1-5-32-544", RunnerSid, "S-1-5-21-7-8-9-1010", null })
+        {
+          string row = NativePlatform.ProfileOwnerObservation(owner, TargetSid, "S-1-5-32-544", RunnerSid);
+          Assert(row.Length < 1800 && row.Contains("observation-only=true")
+            && !row.Contains("S-1-") && !row.Contains(Paths().profile), "owner diagnostics must contain only bounded hashes and relations");
+          Assert(row.Contains("sidSha256=" + (owner == null ? "absent" : CorePolicy.HashText(owner))), "owner hash is available before rejection");
+          if (owner == TargetSid || owner == "S-1-5-18") NativePlatform.RequireFreshProfileOwner(owner, TargetSid);
+          else Reject(delegate { NativePlatform.RequireFreshProfileOwner(owner, TargetSid); }, "observing an owner must not admit it");
+          if (owner == "S-1-5-32-544") Assert(row.Contains("equalsAdministrators=True") && row.Contains("equalsCallTokenOwner=True"),
+            "matching effective TokenOwner and Administrators is still diagnostic only");
+        }
+        Reject(delegate { NativePlatform.ProfileOwnerObservation(new String('x', 185), TargetSid, null, RunnerSid); }, "unbounded owner input");
+      });
+      Case(report, "fake-profile-dacl-diagnostics-conservatively-classify-allow-writes", delegate {
+        List<NativePlatform.ProfileDiagnosticAce> aces = new List<NativePlatform.ProfileDiagnosticAce>();
+        foreach (string sid in new string[] { TargetSid, "S-1-5-18", "S-1-5-32-544" })
+          aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = sid, accessMask = 0x10000000, allow = true });
+        aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 0x120089, allow = true });
+        string row = NativePlatform.ProfileDaclObservation(true, true, aces, TargetSid);
+        Assert(row.Contains("aceCount=4") && row.Contains("protected=True") && row.Contains("nontrustedAllowWrite=0"), "trusted writes and unrelated readonly ACEs");
+        foreach (int mask in new int[] { 2, 4, 16, 64, 256, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000 })
+        {
+          aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = true, unclassified = true });
+          row = NativePlatform.ProfileDaclObservation(true, false, aces, TargetSid);
+          Assert(row.Contains("nontrustedAllowWrite=1") && row.Contains("unclassifiedAces=1") && !row.Contains(RunnerSid), "all modifying rights remain redacted and conservatively classified");
+          aces.RemoveAt(aces.Count - 1);
+        }
+        aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 0x10000000, allow = false });
+        Assert(NativePlatform.ProfileDaclObservation(true, false, aces, TargetSid).Contains("nontrustedAllowWrite=0"), "deny ACE is not a write grant");
+        Assert(NativePlatform.ProfileDaclObservation(false, false, null, TargetSid).Contains("nontrustedAllowWrite=unknown"), "missing/null DACL cannot be classified safe");
+        while (aces.Count <= 128) aces.Add(new NativePlatform.ProfileDiagnosticAce());
+        Assert(NativePlatform.ProfileDaclObservation(true, false, aces, TargetSid).Contains("scan=unproven"), "large ACLs are not partially presented as proven");
+      });
+      Case(report, "fake-profile-directory-mapping-diagnostics-distinguish-identity-failures", delegate {
+        FileIdentity expected = new FileIdentity { canonicalPath = Paths().profile, directory = true, fileId = "owned-profile", volumePath = "fixture-volume" };
+        foreach (string fault in new string[] { "none", "missing", "reparse", "not-directory", "file-id", "volume", "path" })
+        {
+          FileIdentity actual = new FileIdentity { canonicalPath = expected.canonicalPath, directory = true, fileId = expected.fileId, volumePath = expected.volumePath };
+          switch (fault)
+          {
+            case "missing": actual = null; break;
+            case "reparse": actual.reparse = true; break;
+            case "not-directory": actual.directory = false; break;
+            case "file-id": actual.fileId += "-changed"; break;
+            case "volume": actual.volumePath += "-changed"; break;
+            case "path": actual.canonicalPath += "-sibling"; break;
+          }
+          Assert((NativePlatform.FreshProfileIdentityRelation(expected, actual) == "same-identity") == (fault == "none"), "mapping diagnostic must distinguish " + fault);
+        }
+      });
+      foreach (string fault in new string[] { "owner-administrators", "owner-unknown", "owner-missing", "mapping", "reparse", "identity-drift" })
+        Case(report, "fake-profile-diagnostic-failure-retains-unknown-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = "profile-diagnostic-" + fault };
+          FixtureState state = Execute(api, ProfileOnlySpec());
+          Assert(state.report.status == "failed" && state.report.cleanup == "failed" && state.profileCreationUncertain
+            && !state.profileOwnershipProven && state.profileCreationAttempts == 1, "diagnostics cannot establish an ownership lease");
+          Assert(state.report.trace.Any(row => row.Contains("profile-owner;")) && state.report.trace.Any(row => row.Contains("identityRelation=")), "rejection must retain redacted metadata observations");
+          Assert(api.Calls.Count(name => name == "CreateFreshProfile") == 1 && state.accountDisabled, "one call, disabled account");
+          foreach (string forbidden in new string[] { "EnableAccount", "Logon", "LoadProfile", "DeleteOwnedProfile", "DeleteOwnedAccount" })
+            Assert(!api.Calls.Contains(forbidden), "uncertain diagnostics cannot reach native deletion or continuation: " + forbidden);
+          AssertNoNativePromotion(state);
+        });
       Case(report, "fake-profile-only-rejects-historical-and-crossed-plan-admission", delegate {
         Reject(delegate { CorePolicy.ValidateProfileOnlySpec(Spec()); }, "historical admission cannot authorize profile-only");
         Reject(delegate { CorePolicy.ValidateControllerSpec(ProfileOnlySpec()); }, "profile-only admission cannot authorize historical B");
@@ -767,6 +830,21 @@ namespace CcHahaInstallerProfile
         Gate(state, "CreateFreshProfile"); state.profilePath = Paths().profile; state.profileCreated = true;
         if (Fault == "profile-partial-after-success") throw new FixtureFailure("fake-profile-side-effect-before-identity");
         state.profileIdentity = new FileIdentity { canonicalPath = state.profilePath, directory = true, volumePath = @"\\?\Volume{fixture}\", fileId = "profile-file" };
+        if (Fault != null && Fault.StartsWith("profile-diagnostic-", StringComparison.Ordinal))
+        {
+          string owner = Fault == "profile-diagnostic-owner-administrators" ? "S-1-5-32-544"
+            : Fault == "profile-diagnostic-owner-unknown" ? RunnerSid : Fault == "profile-diagnostic-owner-missing" ? null : TargetSid;
+          FileIdentity mapped = new FileIdentity { canonicalPath = state.profilePath, directory = true,
+            volumePath = state.profileIdentity.volumePath, fileId = state.profileIdentity.fileId };
+          if (Fault == "profile-diagnostic-mapping") mapped.canonicalPath += "-sibling";
+          if (Fault == "profile-diagnostic-reparse") mapped.reparse = true;
+          if (Fault == "profile-diagnostic-identity-drift") mapped.fileId += "-changed";
+          state.report.trace.Add(NativePlatform.ProfileOwnerObservation(owner, TargetSid, "S-1-5-32-544", RunnerSid));
+          string relation = NativePlatform.FreshProfileIdentityRelation(state.profileIdentity, mapped);
+          state.report.trace.Add("ownSID-ProfileList; identityRelation=" + relation + "; leaseGranted=false");
+          NativePlatform.RequireFreshProfileOwner(owner, TargetSid);
+          CorePolicy.Require(relation == "same-identity", "Own SID profile registration differs from returned profile");
+        }
         state.profileOwnershipProven = true; state.profileCreationUncertain = false;
       }
       public override void SetOwnedAccountDisabled(FixtureState state, bool disabled)

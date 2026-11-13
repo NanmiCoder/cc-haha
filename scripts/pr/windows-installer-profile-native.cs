@@ -639,7 +639,7 @@ namespace CcHahaInstallerProfile
         && state.profileCreationAttempts == 1 && state.profileCreationUncertain && !state.profileOwnershipProven
         && state.account.groups.Count == 1 && state.account.groups[0] == UsersSid, "Profile creation precondition failed");
       StringBuilder path = new StringBuilder(32768);
-      RecordCreateProfileDiagnostics(state, path, "before");
+      string callTokenOwner = RecordCreateProfileDiagnostics(state, path, "before");
       CorePolicy.Require(!OwnProfileRegistration(state, false) && HivesAbsent(state) && !HasOwnedSidProcesses(state),
         "Fresh SID already has profile state or a process");
       Real(state);
@@ -668,7 +668,7 @@ namespace CcHahaInstallerProfile
       state.profilePath = path.ToString();
       CorePolicy.ValidateAbsolutePath(state.profilePath);
       state.profileIdentity = IdentifyPath(state.profilePath, true);
-      AssertOwnedProfileMetadata(state);
+      AssertOwnedProfileMetadata(state, callTokenOwner);
       CorePolicy.Require(OwnProfileRegistration(state, true) && HivesAbsent(state) && !HasOwnedSidProcesses(state),
         "Created profile SID path hive or process boundary is unproven");
       VerifyOwnedAccount(state, true);
@@ -716,12 +716,17 @@ namespace CcHahaInstallerProfile
       finally { Win(FreeLibrary(module), "Release existing profile module reference"); }
     }
 
-    private void RecordProfileToken(FixtureState state, IntPtr token, string kind)
+    private string RecordProfileToken(FixtureState state, IntPtr token, string kind)
     {
       TokenIdentity identity = InspectToken(token);
+      IntPtr ownerBuffer = TokenBuffer(token, 4); // TOKEN_OWNER, not TokenUser.
+      string owner;
+      try { owner = Sid(Marshal.ReadIntPtr(ownerBuffer)); }
+      finally { Marshal.FreeHGlobal(ownerBuffer); }
       ProfileTrace(state, "token=" + kind + "; sidSha256=" + CorePolicy.HashText(identity.sid) + "; type=" + identity.tokenType
         + "; integrityRid=" + identity.integrityRid + "; elevated=" + identity.elevated + "; elevationType=" + identity.elevationType
-        + "; session=" + identity.sessionId + "; authenticationIdSha256=" + CorePolicy.HashText(identity.authenticationId));
+        + "; session=" + identity.sessionId + "; authenticationIdSha256=" + CorePolicy.HashText(identity.authenticationId)
+        + "; ownerSidSha256=" + CorePolicy.HashText(owner) + "; ownerEqualsTokenUser=" + (owner == identity.sid));
       IntPtr buffer = TokenBuffer(token, 3);
       try
       {
@@ -743,9 +748,10 @@ namespace CcHahaInstallerProfile
             + (attributes.ContainsKey(name) ? attributes[name].ToString(CultureInfo.InvariantCulture) : "absent"));
       }
       finally { Marshal.FreeHGlobal(buffer); }
+      return owner;
     }
 
-    private void RecordCreateProfileDiagnostics(FixtureState state, StringBuilder path, string phase)
+    private string RecordCreateProfileDiagnostics(FixtureState state, StringBuilder path, string phase)
     {
       Real(state);
       ProfileTrace(state, "phase=" + phase + "; os=" + Environment.OSVersion.Version + "; clr=" + Environment.Version
@@ -763,13 +769,14 @@ namespace CcHahaInstallerProfile
       RecordProfileModule(state, "mscorlib", typeof(object).Module.FullyQualifiedName, false);
       IntPtr token;
       Win(OpenProcessToken(GetCurrentProcess(), TokenQuery, out token), "OpenProcessToken profile diagnostics");
-      try { RecordProfileToken(state, token, "process"); }
+      string effectiveOwner, effectiveSource = "process";
+      try { effectiveOwner = RecordProfileToken(state, token, "process"); }
       finally { Win(CloseHandle(token), "Close process diagnostic token"); }
       bool threadToken = OpenThreadToken(GetCurrentThread(), TokenQuery, true, out token);
       int threadError = threadToken ? 0 : Marshal.GetLastWin32Error();
       if (threadToken)
       {
-        try { RecordProfileToken(state, token, "thread"); }
+        try { effectiveOwner = RecordProfileToken(state, token, "thread"); effectiveSource = "thread"; }
         finally { Win(CloseHandle(token), "Close thread diagnostic token"); }
       }
       else
@@ -777,6 +784,8 @@ namespace CcHahaInstallerProfile
         ProfileTrace(state, "token=thread; present=false; Win32=" + threadError);
         CorePolicy.Require(threadError == 1008, "Thread token state is unknown");
       }
+      ProfileTrace(state, "effective-token-owner; phase=" + phase + "; source=" + effectiveSource
+        + "; sidSha256=" + CorePolicy.HashText(effectiveOwner) + "; observation-only=true");
       IntPtr manager = OpenSCManagerW(null, null, 1);
       Win(manager != IntPtr.Zero, "OpenSCManagerW read-only profile diagnostics");
       try
@@ -797,6 +806,99 @@ namespace CcHahaInstallerProfile
       ProfileTrace(state, "sidLength=" + state.account.sid.Length + "; sidSha256=" + CorePolicy.HashText(state.account.sid)
         + "; samLength=" + state.sam.Length + "; samSha256=" + CorePolicy.HashText(state.sam) + "; inputsNoNul=true"
         + "; StringBuilderLength=" + path.Length + "; StringBuilderCapacity=" + path.Capacity + "; passedCch=260");
+      return effectiveOwner;
+    }
+
+    internal static string FreshProfileIdentityRelation(FileIdentity expected, FileIdentity observed)
+    {
+      if (expected == null || observed == null) return "missing";
+      if (expected.reparse || observed.reparse) return "reparse";
+      if (!expected.directory || !observed.directory) return "not-directory";
+      if (String.IsNullOrEmpty(expected.fileId) || String.IsNullOrEmpty(expected.volumePath)) return "unproven";
+      if (expected.fileId != observed.fileId) return "file-id-differs";
+      if (expected.volumePath != observed.volumePath) return "volume-differs";
+      return CorePolicy.SamePath(expected.canonicalPath, observed.canonicalPath) ? "same-identity" : "canonical-path-differs";
+    }
+
+    internal static string ProfileOwnerObservation(string owner, string boundSid, string callTokenOwner, string runnerSid)
+    {
+      CorePolicy.Require(owner == null || owner.Length <= 184, "Bounded profile owner diagnostic required");
+      return "profile-owner; present=" + !String.IsNullOrEmpty(owner)
+        + "; sidSha256=" + (String.IsNullOrEmpty(owner) ? "absent" : CorePolicy.HashText(owner))
+        + "; equalsBoundSid=" + (!String.IsNullOrEmpty(owner) && owner == boundSid)
+        + "; equalsSystem=" + (owner == "S-1-5-18") + "; equalsAdministrators=" + (owner == "S-1-5-32-544")
+        + "; equalsCallTokenOwner=" + (!String.IsNullOrEmpty(owner) && owner == callTokenOwner)
+        + "; equalsRunner=" + (!String.IsNullOrEmpty(owner) && owner == runnerSid) + "; observation-only=true";
+    }
+
+    internal static void RequireFreshProfileOwner(string owner, string boundSid)
+    {
+      CorePolicy.Require(!String.IsNullOrEmpty(boundSid) && (owner == boundSid || owner == "S-1-5-18"),
+        "Fresh profile owner is not the bound SID or SYSTEM");
+    }
+
+    internal sealed class ProfileDiagnosticAce
+    {
+      internal string sid;
+      internal int accessMask;
+      internal bool allow, unclassified;
+    }
+
+    internal static string ProfileDaclObservation(bool present, bool protectedDacl, IList<ProfileDiagnosticAce> aces, string boundSid)
+    {
+      string prefix = "profile-dacl; present=" + present + "; protected=" + protectedDacl
+        + "; aceCount=" + (aces == null ? "null" : aces.Count.ToString(CultureInfo.InvariantCulture));
+      if (!present || aces == null || aces.Count > 128)
+        return prefix + "; scan=unproven; nontrustedAllowWrite=unknown; observation-only=true";
+      int nontrustedWrites = 0, unclassified = 0;
+      foreach (ProfileDiagnosticAce ace in aces)
+      {
+        if (ace == null || ace.unclassified) unclassified++;
+        // Conservative allow-ACE classification, not an effective access check.
+        // Deny/inherit-only/callback ACEs cannot establish a cleanup lease.
+        bool trustedWriter = ace != null && !String.IsNullOrEmpty(ace.sid)
+          && (ace.sid == boundSid || ace.sid == "S-1-5-18" || ace.sid == "S-1-5-32-544");
+        if (ace != null && ace.allow && (ace.accessMask & 0x500d0156) != 0 && !trustedWriter) nontrustedWrites++;
+      }
+      return prefix + "; scan=bounded; nontrustedAllowWrite=" + nontrustedWrites.ToString(CultureInfo.InvariantCulture)
+        + "; unclassifiedAces=" + unclassified.ToString(CultureInfo.InvariantCulture)
+        + "; writeClassification=" + (unclassified != 0 ? "unproven" : nontrustedWrites != 0 ? "nontrusted-allow-present" : "no-nontrusted-allow-observed")
+        + "; writerClassification=bound-system-administrators; observation-only=true";
+    }
+
+    private void RecordFreshProfileMetadata(FixtureState state, string owner, string callTokenOwner)
+    {
+      ProfileTrace(state, ProfileOwnerObservation(owner, state.account.sid, callTokenOwner, state.runnerSid));
+      try
+      {
+        DirectorySecurity security = Directory.GetAccessControl(state.profilePath, AccessControlSections.Access);
+        RawSecurityDescriptor descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
+        RawAcl dacl = descriptor.DiscretionaryAcl;
+        List<ProfileDiagnosticAce> aces = dacl == null ? null : new List<ProfileDiagnosticAce>();
+        if (dacl != null && dacl.Count <= 128)
+          foreach (GenericAce raw in dacl)
+          {
+            QualifiedAce ace = raw as QualifiedAce;
+            aces.Add(new ProfileDiagnosticAce { sid = ace == null ? null : ace.SecurityIdentifier.Value,
+              accessMask = ace == null ? 0 : ace.AccessMask, allow = ace != null && ace.AceQualifier == AceQualifier.AccessAllowed,
+              unclassified = !(raw is CommonAce) || ace == null || ace.IsCallback });
+          }
+        if (dacl != null && dacl.Count > 128)
+          ProfileTrace(state, "profile-dacl; present=" + ((descriptor.ControlFlags & ControlFlags.DiscretionaryAclPresent) != 0)
+            + "; protected=" + security.AreAccessRulesProtected + "; aceCount=" + dacl.Count
+            + "; scan=unproven; nontrustedAllowWrite=unknown; observation-only=true");
+        else ProfileTrace(state, ProfileDaclObservation((descriptor.ControlFlags & ControlFlags.DiscretionaryAclPresent) != 0,
+          security.AreAccessRulesProtected, aces, state.account.sid));
+      }
+      catch (Exception error) { ProfileTrace(state, "profile-dacl; observation=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
+      try
+      {
+        bool present = OwnProfileRegistration(state, true);
+        ProfileTrace(state, "ownSID-mapping-observation; present=" + present + "; leaseGranted=false");
+      }
+      catch (Exception error) { ProfileTrace(state, "ownSID-mapping-observation; identity=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
+      try { ProfileTrace(state, "profile-metadata-identity; relation=" + FreshProfileIdentityRelation(state.profileIdentity, IdentifyPath(state.profilePath, true)) + "; leaseGranted=false"); }
+      catch (Exception error) { ProfileTrace(state, "profile-metadata-identity; relation=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
     }
 
     private bool OwnProfileRegistration(FixtureState state, bool match)
@@ -818,16 +920,15 @@ namespace CcHahaInstallerProfile
         CorePolicy.Require(registered != null && registered.Length < 800 && registered.IndexOf('%') < 0, "Own SID profile registration path is unproven");
         CorePolicy.ValidateAbsolutePath(registered);
         FileIdentity identity = IdentifyPath(registered, true);
-        CorePolicy.Require(state.profileIdentity != null && !identity.reparse && identity.fileId == state.profileIdentity.fileId
-          && identity.volumePath == state.profileIdentity.volumePath
-          && CorePolicy.SamePath(identity.canonicalPath, state.profileIdentity.canonicalPath), "Own SID profile registration differs from returned profile");
+        string relation = FreshProfileIdentityRelation(state.profileIdentity, identity);
         ProfileTrace(state, "ownSID-ProfileList; view=" + (int)view + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath)
-          + "; exact-returned-file-identity=true");
+          + "; identityRelation=" + relation + "; exact-returned-file-identity=" + (relation == "same-identity"));
+        CorePolicy.Require(relation == "same-identity", "Own SID profile registration differs from returned profile");
       }
       return present;
     }
 
-    private void AssertOwnedProfileMetadata(FixtureState state)
+    private void AssertOwnedProfileMetadata(FixtureState state, string callTokenOwner = null)
     {
       FileIdentity identity = state.profileIdentity;
       CorePolicy.Require(identity != null && identity.directory && !identity.reparse && !String.IsNullOrEmpty(identity.fileId)
@@ -839,7 +940,8 @@ namespace CcHahaInstallerProfile
         CorePolicy.Require(!CorePolicy.SamePath(identity.canonicalPath, forbidden) && !CorePolicy.IsInside(forbidden, identity.canonicalPath)
           && !CorePolicy.IsInside(identity.canonicalPath, forbidden), "Fresh profile intersects another fixture boundary");
       string owner = Directory.GetAccessControl(identity.canonicalPath, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)).Value;
-      CorePolicy.Require(owner == state.account.sid || owner == "S-1-5-18", "Fresh profile owner is not the bound SID or SYSTEM");
+      if (callTokenOwner != null) RecordFreshProfileMetadata(state, owner, callTokenOwner);
+      RequireFreshProfileOwner(owner, state.account.sid);
       ProfileTrace(state, "profile-fileIdSha256=" + CorePolicy.HashText(identity.volumePath + "\n" + identity.fileId)
         + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath) + "; ownerSidSha256=" + CorePolicy.HashText(owner)
         + "; bound-owner-or-system=true; reparse=false");
