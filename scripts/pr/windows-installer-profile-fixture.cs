@@ -299,6 +299,7 @@ namespace CcHahaInstallerProfile
     public abstract void AssignSubjectToOwnedJob(FixtureState state);
     public abstract void VerifySubject(FixtureState state);
     public abstract void ResumeSubject(FixtureState state);
+    public abstract int WaitSubjectExit(FixtureState state, int timeoutMilliseconds);
     public abstract FileIdentity IdentifyPath(string path, bool directory);
     public abstract void StartChild(OwnedProcess child, CommandPlan command, Dictionary<string, string> environment, string cwd, string desktopName);
     public abstract void VerifyChild(OwnedProcess child, string expectedSid, string expectedPath, string expectedSha256);
@@ -784,6 +785,19 @@ namespace CcHahaInstallerProfile
       return state.report;
     }
 
+    internal static void SendPhaseAck(FixtureReport report, FixtureChannel channel, string nonce, string phase, bool native)
+    {
+      if (native && (phase == "fresh-install" || phase == "old22-negative" || phase == "old-normal-removal-positive"))
+      {
+        // A complete ACK may reach the subject even when the local async write
+        // later fails or times out. Record uncertainty before attempting it.
+        report.releasedPeMayHaveExecuted = true;
+        report.releasedPeExecutionStatus = report.releasedPeExecuted
+          ? "prior_resume_confirmed;latest_ack_attempted_resume_unknown" : "ack_attempted;resume_unconfirmed";
+      }
+      channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "phase-ack", nonce = nonce, phase = phase }));
+    }
+
     private static void ReceivePhases(FixtureState state, ProfilePlatform api, PositiveProcessObserver observer)
     {
       HashSet<string> phases = new HashSet<string>(StringComparer.Ordinal);
@@ -808,13 +822,7 @@ namespace CcHahaInstallerProfile
           api.VerifyReportedPhase(state, message);
           if (observer != null) observer.Arm(message.phase, message.pid, message.creationTime);
           active = message.phase;
-          state.channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "phase-ack", nonce = state.spec.nonce, phase = message.phase }));
-          if (!api.IsFake && (active == "fresh-install" || active == "old22-negative" || active == "old-normal-removal-positive"))
-          {
-            state.report.releasedPeMayHaveExecuted = true;
-            state.report.releasedPeExecutionStatus = state.report.releasedPeExecuted
-              ? "prior_resume_confirmed;latest_phase_acked" : "phase_acked;resume_unconfirmed";
-          }
+          SendPhaseAck(state.report, state.channel, state.spec.nonce, message.phase, !api.IsFake);
         }
         else if (message.kind == "phase-end")
         {
@@ -865,7 +873,11 @@ namespace CcHahaInstallerProfile
         else if (message.kind == "complete")
         {
           CorePolicy.Require(active == null && message.report != null && message.report.status == "passed"
-            && message.report.compatibilityEnabled == false && message.report.oldExit22Policy == "fatal", "subject-complete");
+            && message.report.cleanup == "passed" && message.report.compatibilityEnabled == false
+            && message.report.oldExit22Policy == "fatal", "subject-complete");
+          Stage(state, "subject-natural-exit", delegate {
+            CorePolicy.Require(api.WaitSubjectExit(state, 30000) == 0, "subject-natural-exit-zero");
+          });
           if (!api.IsFake)
           {
             CorePolicy.Require(phases.Contains("observer-calibration") && phases.Contains("fresh-install")
@@ -1236,32 +1248,50 @@ namespace CcHahaInstallerProfile
         api.AllowSubjectProducts(spec, acknowledgement);
         subject = new Subject(spec, api, channel, report);
         subject.HistoricalProfile();
-        CoreJson.Write(spec.output, report);
-        channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "complete", nonce = spec.nonce, report = report }));
       }
       catch (Exception error)
       {
         report.status = "failed"; report.Check("historical-subject", false, NativePlatform.SafeFailure(error));
-        if (channel != null)
-        {
-          try { channel.WriteLine(CoreJson.Serialize(new ProtocolMessage { kind = "failed", nonce = spec.nonce, report = report })); }
-          catch { }
-        }
       }
       finally
       {
-        if (subject != null)
-        {
-          foreach (OwnedProcess process in subject.owned)
-          {
-            try { api.StopChild(process); api.CloseChild(process); }
-            catch (Exception error) { report.Check("subject-owned-child-cleanup", false, NativePlatform.SafeFailure(error)); report.status = "failed"; }
-          }
-        }
-        if (channel != null) channel.Dispose();
-        report.finishedAtUtc = DateTime.UtcNow.ToString("o");
+        Finish(api, subject == null ? new List<OwnedProcess>() : subject.owned, channel, report, spec.nonce,
+          subject == null ? null : (Action)delegate { CoreJson.Write(spec.output, report); });
       }
       return report;
+    }
+
+    internal static void Finish(ProfilePlatform api, IEnumerable<OwnedProcess> owned, FixtureChannel channel,
+      FixtureReport report, string nonce, Action persist)
+    {
+      bool cleaned = true;
+      foreach (OwnedProcess process in owned)
+      {
+        try { api.StopChild(process); }
+        catch (Exception error) { cleaned = false; report.Check("subject-owned-child-stop", false, NativePlatform.SafeFailure(error)); }
+        try { api.CloseChild(process); }
+        catch (Exception error) { cleaned = false; report.Check("subject-owned-child-close", false, NativePlatform.SafeFailure(error)); }
+      }
+      report.cleanup = cleaned ? "passed" : "failed";
+      report.finishedAtUtc = DateTime.UtcNow.ToString("o");
+      try { if (persist != null) persist(); }
+      catch (Exception error) { report.Check("subject-terminal-report", false, NativePlatform.SafeFailure(error)); }
+      if (channel == null) return;
+      try
+      {
+        // Completion describes the cleanup result, never the pre-finally state.
+        channel.WriteLine(CoreJson.Serialize(new ProtocolMessage {
+          kind = report.status == "passed" ? "complete" : "failed", nonce = nonce, report = report
+        }));
+      }
+      catch (Exception error) { report.Check("subject-terminal-message", false, NativePlatform.SafeFailure(error)); }
+      finally
+      {
+        try { channel.Dispose(); }
+        catch (Exception error) { report.Check("subject-channel-close", false, NativePlatform.SafeFailure(error)); }
+      }
+      // A disposal/write failure after delivery still returns failed/exit1.
+      // Controller must independently wait for the retained subject's exit0.
     }
 
     private CommandPlan Command(string phase, string application, string commandLine, int expectedExit, int timeout)

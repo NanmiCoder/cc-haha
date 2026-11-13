@@ -42,6 +42,12 @@ namespace CcHahaInstallerProfile
     private FileSecurity originalControllerImageSecurity;
     private FileIdentity originalControllerImageIdentity;
     private string originalControllerImagePath;
+    private readonly List<string> tokenProbeDiagnostics = new List<string>();
+
+    private sealed class TokenInformationFailure : InvalidOperationException
+    {
+      internal TokenInformationFailure(string diagnostic) : base(diagnostic) { }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Luid { public uint Low; public int High; }
@@ -136,6 +142,7 @@ namespace CcHahaInstallerProfile
 
     [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
     [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessId(IntPtr process);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
@@ -212,6 +219,7 @@ namespace CcHahaInstallerProfile
     internal static string SafeFailure(Exception error)
     {
       if (error == null) return "Native operation failed (UnknownException)";
+      if (error is TokenInformationFailure) return error.Message;
       string message = error.Message;
       // FixtureFailure is reserved for our constant stage/assertion labels.
       // Do not allow even that type to carry paths, quoted data or multiline text.
@@ -295,13 +303,48 @@ namespace CcHahaInstallerProfile
       return buffer;
     }
 
-    private static IntPtr TokenBuffer(IntPtr token, int infoClass)
+    internal static bool AcceptTokenSizeProbe(int infoClass, bool success, int error, int requiredBytes)
     {
-      int size;
+      return !success && requiredBytes > 0 && requiredBytes <= 1048576 &&
+        (error == 122 || (infoClass == 12 && error == 24 && requiredBytes == sizeof(uint)));
+    }
+
+    private string TokenDiagnostic(string phase, int infoClass, bool success, int error,
+      int seedLength, int capacity, int observedLength)
+    {
+      string diagnostic = String.Format(CultureInfo.InvariantCulture,
+        "GetTokenInformation {0} class={1} success={2} error={3} seedLength={4} capacity={5} observedLength={6}",
+        phase, infoClass, success ? 1 : 0, error, seedLength, capacity, observedLength);
+      if (tokenProbeDiagnostics.Count < 64) tokenProbeDiagnostics.Add(diagnostic);
+      return diagnostic;
+    }
+
+    private IntPtr TokenBuffer(IntPtr token, int infoClass)
+    {
+      // Framework WindowsIdentity seeds a DWORD for TokenSessionId. A 24
+      // response need not prove that native code wrote ReturnLength, so retain
+      // the seed separately in diagnostics and require a successful exact fill.
+      int seedLength = infoClass == 12 ? sizeof(uint) : 0;
+      int size = seedLength;
       bool first = GetTokenInformation(token, infoClass, IntPtr.Zero, 0, out size);
-      CorePolicy.Require(!first && Marshal.GetLastWin32Error() == 122 && size > 0 && size <= 1048576, "Token information size query failed");
-      IntPtr data = Marshal.AllocHGlobal(size);
-      try { Win(GetTokenInformation(token, infoClass, data, size, out size), "GetTokenInformation"); return data; }
+      int sizeError = Marshal.GetLastWin32Error();
+      string probe = TokenDiagnostic("size", infoClass, first, sizeError, seedLength, 0, size);
+      if (!AcceptTokenSizeProbe(infoClass, first, sizeError, size)) throw new TokenInformationFailure(probe);
+      int capacity = size;
+      IntPtr data = Marshal.AllocHGlobal(capacity);
+      try
+      {
+        int observedLength = 0;
+        bool filled = GetTokenInformation(token, infoClass, data, capacity, out observedLength);
+        int fillError = Marshal.GetLastWin32Error();
+        string fill = TokenDiagnostic("fill", infoClass, filled, fillError, 0, capacity, observedLength);
+        // Last-error can be stale on Framework after success. It is evidence,
+        // not a reason to reject an otherwise successful, bounded fill.
+        if (!filled || observedLength <= 0 || observedLength > capacity ||
+          (infoClass == 12 && (capacity != sizeof(uint) || observedLength != sizeof(uint))))
+          throw new TokenInformationFailure(fill);
+        return data;
+      }
       catch { Marshal.FreeHGlobal(data); throw; }
     }
 
@@ -1094,6 +1137,47 @@ namespace CcHahaInstallerProfile
       VerifySubject(state);
       Win(ResumeThread(state.subject.thread) != Infinite, "ResumeThread subject");
       state.subject.resumed = true;
+    }
+
+    public override int WaitSubjectExit(FixtureState state, int timeoutMilliseconds)
+    {
+      Real(state);
+      OwnedProcess subject = state.subject;
+      CorePolicy.Require(timeoutMilliseconds > 0 && timeoutMilliseconds <= 30000 && state.acknowledged &&
+        subject != null && subject.process != IntPtr.Zero && subject.pid > 0 && subject.assigned && subject.resumed &&
+        subject.job == IntPtr.Zero && state.job != IntPtr.Zero && state.account != null &&
+        subject.identity != null && subject.image != null && state.targetIdentity != null,
+        "Invalid bounded subject natural-exit wait");
+      Stopwatch deadline = Stopwatch.StartNew();
+      // These identities were captured from this held process while suspended
+      // and verified again before resume/ACK. An exited process may no longer
+      // expose its token/image, so retain that evidence rather than reopen a PID.
+      uint heldPid = GetProcessId(subject.process);
+      Win(heldPid != 0, "GetProcessId held subject");
+      CorePolicy.Require(heldPid == (uint)subject.pid && ProcessCreation(subject.process) == subject.creationTime &&
+        subject.identity.sid == state.account.sid &&
+        subject.identity.authenticationId == state.targetIdentity.authenticationId && !subject.image.reparse &&
+        CorePolicy.SamePath(subject.image.canonicalPath, state.subjectBinaryPath) &&
+        subject.image.sha256 == state.spec.expectedBinarySha256 && !String.IsNullOrEmpty(subject.image.fileId),
+        "Held subject natural-exit identity changed");
+      CorePolicy.AssertStandard(subject.identity, state.account.sid);
+      int remaining = timeoutMilliseconds - checked((int)Math.Min(deadline.ElapsedMilliseconds, Int32.MaxValue));
+      CorePolicy.Require(remaining > 0, "Subject natural-exit deadline expired");
+      uint wait = WaitForSingleObject(subject.process, (uint)remaining);
+      int waitError = Marshal.GetLastWin32Error();
+      if (wait == Infinite) throw new InvalidOperationException("WaitForSingleObject subject failed (Win32 " + waitError.ToString(CultureInfo.InvariantCulture) + ")");
+      CorePolicy.Require(wait == 0, wait == 258 ? "Subject natural exit timed out" : "Subject natural-exit wait returned an unknown status");
+      while (JobActive(state.job) != 0)
+      {
+        remaining = timeoutMilliseconds - checked((int)Math.Min(deadline.ElapsedMilliseconds, Int32.MaxValue));
+        CorePolicy.Require(remaining > 0, "Subject descendants exceeded the natural-exit deadline");
+        Thread.Sleep(Math.Min(25, remaining));
+      }
+      CorePolicy.Require(deadline.ElapsedMilliseconds <= timeoutMilliseconds, "Subject natural-exit deadline expired");
+      uint exit;
+      Win(GetExitCodeProcess(subject.process, out exit), "GetExitCodeProcess subject");
+      subject.exited = true;
+      return unchecked((int)exit);
     }
 
     private void StartChildInternal(OwnedProcess child, CommandPlan command, Dictionary<string, string> environment,
@@ -1898,6 +1982,7 @@ namespace CcHahaInstallerProfile
         }
       }
       report.finishedAtUtc = DateTime.UtcNow.ToString("o");
+      report.trace.AddRange(platform.tokenProbeDiagnostics);
       report.status = cleaned && report.checks.Count > 0 && report.checks.All(check => check.status == "passed") ? "passed" : "failed";
       return report;
     }

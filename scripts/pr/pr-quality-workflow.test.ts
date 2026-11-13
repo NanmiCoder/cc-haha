@@ -803,7 +803,7 @@ describe('Windows installer lane preparation and isolation', () => {
 
 describe('Windows profile fixture Stage A', () => {
   function fixture() {
-    const root = mkdtempSync(join(tmpdir(), 'cc-haha-profile-unit-'))
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'cc-haha-profile-unit-')))
     const sourceRoot = join(root, 'source')
     const tempParent = join(root, 'private-temp')
     mkdirSync(tempParent)

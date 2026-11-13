@@ -91,6 +91,21 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-token-size-probe-exact-session-id-contract", delegate {
+        Assert(NativePlatform.AcceptTokenSizeProbe(12, false, 24, 4), "TokenSessionId ERROR_BAD_LENGTH requires exactly DWORD bytes");
+        Assert(NativePlatform.AcceptTokenSizeProbe(1, false, 122, 32), "normal insufficient-buffer probe remains supported");
+        Assert(NativePlatform.AcceptTokenSizeProbe(12, false, 122, 4), "session-id normal insufficient-buffer probe remains supported");
+        foreach (int infoClass in new int[] { 1, 8, 18, 20, 25 })
+          Assert(!NativePlatform.AcceptTokenSizeProbe(infoClass, false, 24, 4), "BAD_LENGTH is not accepted for other information classes");
+        foreach (int size in new int[] { -1, 0, 3, 5, 1048577 })
+          Assert(!NativePlatform.AcceptTokenSizeProbe(12, false, 24, size), "session-id BAD_LENGTH cannot change the scalar size");
+        foreach (int error in new int[] { 0, 5, 87 })
+          Assert(!NativePlatform.AcceptTokenSizeProbe(12, false, error, 4), "other native errors remain fatal");
+        Assert(!NativePlatform.AcceptTokenSizeProbe(12, true, 24, 4), "unexpected probe success is rejected");
+        Assert(!NativePlatform.AcceptTokenSizeProbe(1, false, 122, 0)
+          && !NativePlatform.AcceptTokenSizeProbe(1, false, 122, 1048577), "all allocations remain bounded");
+      });
+
       Case(report, "fake-controller-complete-order-and-resource-lifecycle", delegate {
         FakePlatform api = new FakePlatform();
         FixtureState state = Execute(api, Spec());
@@ -98,7 +113,7 @@ namespace CcHahaInstallerProfile
         string[] order = { "PreflightController", "CreateDisabledAccount", "AddUsersOnly", "CreateFreshProfile", "EnableAccount",
           "Logon", "InspectToken", "LoadProfile", "QueryKnownPaths", "WriteHiveChallenge", "CreatePrivateDesktop",
           "PrepareSubjectAccess", "CreateSubjectSuspended", "AssignSubjectToOwnedJob", "VerifySubject", "ResumeSubject",
-          "VerifyHiveResponse", "StopOwnedJobs", "CloseRuntimeResources", "DisableAccount", "UnloadProfile", "HivesAbsent",
+          "VerifyHiveResponse", "WaitSubjectExit", "StopOwnedJobs", "CloseRuntimeResources", "DisableAccount", "UnloadProfile", "HivesAbsent",
           "DeleteOwnedProfile", "DeleteOwnedAccount", "CloseTokenAndPrivileges" };
         int previous = -1;
         foreach (string operation in order)
@@ -114,6 +129,65 @@ namespace CcHahaInstallerProfile
         Assert(api.LastPassword != null && api.LastPassword.Pointer == IntPtr.Zero, "credential buffer disposed after logon");
         AssertNoNativePromotion(state);
       });
+
+      foreach (string failure in new string[] { "subject-exit-nonzero", "subject-exit-timeout" })
+      {
+        string fault = failure;
+        Case(report, "fake-complete-requires-natural-exit-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = fault };
+          FixtureState state = Execute(api, Spec());
+          Assert(state.report.status == "failed" && state.report.failedStage == "subject-natural-exit", "complete message alone cannot pass");
+          Assert(api.Calls.IndexOf("WaitSubjectExit") < api.Calls.IndexOf("StopOwnedJobs"), "wait must precede forced cleanup");
+          AssertNoNativePromotion(state);
+        });
+      }
+
+      foreach (string phase in new string[] { "fresh-install", "old22-negative", "old-normal-removal-positive" })
+      {
+        string releasedPhase = phase;
+        Case(report, "fake-ack-write-uncertainty-" + releasedPhase, delegate {
+          FixtureReport simulated = new FixtureReport { mode = "fake-protocol-accounting" };
+          ProtocolTestChannel channel = new ProtocolTestChannel { FailWrite = true };
+          Reject(delegate { Controller.SendPhaseAck(simulated, channel, "nonce", releasedPhase, true); }, "delivered-then-failed ACK must propagate failure");
+          Assert(channel.Messages.Count == 1, "fake models complete delivery before local failure");
+          Assert(simulated.releasedPeMayHaveExecuted && !simulated.releasedPeExecuted
+            && simulated.releasedPeExecutionStatus == "ack_attempted;resume_unconfirmed", "uncertain delivery cannot claim not_run or execution success");
+          simulated.releasedPeExecuted = true;
+          Reject(delegate { Controller.SendPhaseAck(simulated, channel, "nonce", releasedPhase, true); }, "later ACK failure must propagate");
+          Assert(simulated.releasedPeExecuted && simulated.releasedPeExecutionStatus == "prior_resume_confirmed;latest_ack_attempted_resume_unknown", "prior execution proof survives a later uncertain ACK");
+        });
+      }
+
+      Case(report, "fake-nonreleased-and-fake-ack-do-not-promote", delegate {
+        FixtureReport simulated = new FixtureReport(); ProtocolTestChannel channel = new ProtocolTestChannel();
+        Controller.SendPhaseAck(simulated, channel, "nonce", "observer-calibration", true);
+        Controller.SendPhaseAck(simulated, channel, "nonce", "fresh-install", false);
+        Assert(!simulated.releasedPeMayHaveExecuted && !simulated.releasedPeExecuted && simulated.releasedPeExecutionStatus == "not_run", "nonreleased/FakeAPI paths remain not_run");
+      });
+
+      foreach (string failure in new string[] { "none", "subject-child-stop", "subject-child-close", "persist", "write", "dispose" })
+      {
+        string fault = failure;
+        Case(report, "fake-subject-terminal-after-cleanup-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = fault };
+          FixtureReport simulated = new FixtureReport { status = "passed" };
+          ProtocolTestChannel channel = new ProtocolTestChannel { FailWrite = fault == "write", FailDispose = fault == "dispose" };
+          bool persisted = false;
+          Subject.Finish(api, new List<OwnedProcess> { new OwnedProcess() }, channel, simulated, "nonce", delegate {
+            Assert(api.Calls.Contains("StopChild") && api.Calls.Contains("CloseChild"), "persist must follow every owned cleanup attempt");
+            Assert(!String.IsNullOrEmpty(simulated.finishedAtUtc), "terminal report needs final UTC");
+            if (fault == "persist") throw new FixtureFailure("fake-persist-failure");
+            persisted = true;
+          });
+          Assert(simulated.status == (fault == "none" ? "passed" : "failed"), "late errors must force subject exit1");
+          Assert(channel.Disposed && channel.Messages.Count == 1, "terminal channel must always close");
+          ProtocolMessage terminal = CoreJson.Deserialize<ProtocolMessage>(channel.Messages[0]);
+          bool beforeDeliveryFailure = fault == "subject-child-stop" || fault == "subject-child-close" || fault == "persist";
+          Assert(terminal.kind == (beforeDeliveryFailure ? "failed" : "complete"), "cleanup failure must never send complete");
+          Assert(terminal.report.cleanup == (fault.StartsWith("subject-child-", StringComparison.Ordinal) ? "failed" : "passed"), "cleanup facts precede terminal serialization");
+          Assert(persisted == (fault != "persist"), "persistence result is not invented");
+        });
+      }
 
       Case(report, "fake-native-error-code-survives-redacted-report", delegate {
         FixtureState state = Execute(new FakePlatform { Fault = "native-error" }, Spec());
@@ -172,7 +246,7 @@ namespace CcHahaInstallerProfile
         });
       }
 
-      foreach (string failure in new string[] { "hello-nonce", "hello-pid", "hello-peer", "hello-creation", "hello-binary", "hello-spec", "hello-admin", "hello-path", "hive-response", "complete-nonce", "complete-failed" })
+      foreach (string failure in new string[] { "hello-nonce", "hello-pid", "hello-peer", "hello-creation", "hello-binary", "hello-spec", "hello-admin", "hello-path", "hive-response", "complete-nonce", "complete-failed", "complete-cleanup-failed" })
       {
         string fault = failure;
         Case(report, "fake-authentication-reject-" + fault, delegate {
@@ -271,6 +345,26 @@ namespace CcHahaInstallerProfile
       });
     }
 
+    private sealed class ProtocolTestChannel : FixtureChannel
+    {
+      public readonly List<string> Messages = new List<string>();
+      public bool FailWrite;
+      public bool FailDispose;
+      public bool Disposed;
+      public override int PeerProcessId { get { return 0; } }
+      public override string ReadLine(int timeoutMilliseconds) { throw new FixtureFailure("fake-protocol-read-unavailable"); }
+      public override void WriteLine(string line)
+      {
+        Messages.Add(line);
+        if (FailWrite) throw new FixtureFailure("fake-delivered-write-failure");
+      }
+      public override void Dispose()
+      {
+        Disposed = true;
+        if (FailDispose) throw new FixtureFailure("fake-dispose-failure");
+      }
+    }
+
     private sealed class FakeChannel : FixtureChannel
     {
       private readonly FakePlatform api;
@@ -299,7 +393,8 @@ namespace CcHahaInstallerProfile
         }
         Assert(Acknowledged, "subject cannot send product completion before ACK");
         return CoreJson.Serialize(new ProtocolMessage { kind = "complete", nonce = api.Fault == "complete-nonce" ? "wrong" : state.spec.nonce,
-          report = new FixtureReport { status = api.Fault == "complete-failed" ? "failed" : "passed" } });
+          report = new FixtureReport { status = api.Fault == "complete-failed" ? "failed" : "passed",
+            cleanup = api.Fault == "complete-cleanup-failed" ? "failed" : "passed" } });
       }
       public override void WriteLine(string line)
       {
@@ -400,6 +495,14 @@ namespace CcHahaInstallerProfile
       public override void AssignSubjectToOwnedJob(FixtureState state) { Gate(state, "AssignSubjectToOwnedJob"); state.job = new IntPtr(501); state.subject.assigned = true; }
       public override void VerifySubject(FixtureState state) { Gate(state, "VerifySubject"); Assert(state.subject.assigned && !state.subject.resumed, "must inspect suspended assigned process"); }
       public override void ResumeSubject(FixtureState state) { Gate(state, "ResumeSubject"); Assert(state.subject.assigned, "no resume before job assignment"); state.subject.resumed = true; }
+      public override int WaitSubjectExit(FixtureState state, int timeoutMilliseconds)
+      {
+        Gate(state, "WaitSubjectExit");
+        Assert(state.subject.assigned && state.subject.resumed && !state.subject.exited && !state.jobsEmpty && timeoutMilliseconds == 30000, "wait must retain the live subject and precede cleanup");
+        if (Fault == "subject-exit-timeout") throw new FixtureFailure("fake-subject-exit-timeout");
+        state.subject.exited = true;
+        return Fault == "subject-exit-nonzero" ? 1 : 0;
+      }
       public override FileIdentity IdentifyPath(string path, bool directory)
       {
         bool source = path.EndsWith(".cs", StringComparison.Ordinal);
@@ -413,8 +516,18 @@ namespace CcHahaInstallerProfile
       public override void VerifyChild(OwnedProcess child, string expectedSid, string expectedPath, string expectedSha256) { throw new FixtureFailure("no-real-child-in-fake-controller"); }
       public override void ResumeChild(OwnedProcess child) { throw new FixtureFailure("no-real-child-in-fake-controller"); }
       public override int WaitChild(OwnedProcess child, int timeoutMilliseconds) { throw new FixtureFailure("no-real-child-in-fake-controller"); }
-      public override void StopChild(OwnedProcess child) { throw new FixtureFailure("no-real-child-in-fake-controller"); }
-      public override void CloseChild(OwnedProcess child) { throw new FixtureFailure("no-real-child-in-fake-controller"); }
+      public override void StopChild(OwnedProcess child)
+      {
+        Gate(null, "StopChild");
+        if (Fault == "subject-child-stop") throw new FixtureFailure("fake-child-stop-failure");
+        child.exited = true;
+      }
+      public override void CloseChild(OwnedProcess child)
+      {
+        Gate(null, "CloseChild");
+        if (Fault == "subject-child-close") throw new FixtureFailure("fake-child-close-failure");
+        child.process = IntPtr.Zero; child.thread = IntPtr.Zero; child.job = IntPtr.Zero;
+      }
       public override void VerifyReportedPhase(FixtureState state, ProtocolMessage message) { Gate(state, "VerifyReportedPhase"); }
       public override void StopOwnedJobs(FixtureState state) { Gate(state, "StopOwnedJobs"); state.jobsEmpty = true; if (state.subject != null) state.subject.exited = true; }
       public override bool HasOwnedSidProcesses(FixtureState state) { Gate(state, "HasOwnedSidProcesses"); return Fault == "unknown-sid-process"; }
