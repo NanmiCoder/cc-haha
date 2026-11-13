@@ -417,6 +417,19 @@ jobs:
       - name: Probe owned removal primitives without accounts or profiles
         if: always() && steps.prepare.outcome == 'success'
         run: bun --no-env-file test --parallel=1 --max-concurrency=1 --no-orphans ./scripts/pr/windows-installer-removal-primitives.test.ts
+      - name: Validate the owned ETW calibration contract
+        if: always() && steps.prepare.outcome == 'success'
+        run: bun --no-env-file test ./scripts/pr/windows-installer-etw-calibration.test.ts
+      # Advisory capability evidence only; unknown ETW support never weakens an existing check.
+      - name: Collect owned ETW calibration without accounts or profiles (advisory)
+        if: always() && steps.prepare.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: powershell
+        env:
+          PSModulePath: C:\Windows\System32\WindowsPowerShell\v1.0\Modules
+        run: |
+          & .\scripts\pr\windows-installer-etw-calibration.ps1 -RunCiCalibration -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE 'artifacts\windows-installer\etw-calibration')
       - name: Upload Windows installer evidence
         if: always()
         uses: actions/upload-artifact@v4
