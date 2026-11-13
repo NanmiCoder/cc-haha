@@ -5,18 +5,18 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypa
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type ReasoningEffortLevel = EffortLevel
 /**
- * The six 「纸 · 墨 · 印」 palettes, in the order the appearance picker shows
- * them: four paper grounds, then two ink ones. Each name matches a
+ * The palettes, in the order the appearance picker shows them: four light
+ * grounds, then three dark ones. Each name matches a
  * `[data-theme]` block in theme/globals.css.
  *
  * `light` was the pre-redesign key for the warm workspace; it migrates to
  * `warm-classic` (see lib/persistenceMigrations.ts).
  */
-export const THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue'] as const
+export const THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue', 'neutral-dark'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
 
-/** The two themes on a dark ground. Drives `color-scheme` and Mermaid. */
-export const DARK_THEME_MODES = ['dark', 'ink-blue'] as const
+/** The themes on a dark ground. Drives `color-scheme` and Mermaid. */
+export const DARK_THEME_MODES = ['dark', 'ink-blue', 'neutral-dark'] as const
 export type DarkThemeMode = (typeof DARK_THEME_MODES)[number]
 
 /**
@@ -29,7 +29,7 @@ export type LightThemeMode = (typeof LIGHT_THEME_MODES)[number]
 
 /**
  * Every palette belongs to exactly one half. This fails to compile if a
- * seventh theme is added without deciding which ground it sits on — the
+ * new theme is added without deciding which ground it sits on — the
  * appearance switch would otherwise silently never resolve to it.
  */
 const _everyThemeHasAGround: ThemeMode extends LightThemeMode | DarkThemeMode ? true : never = true

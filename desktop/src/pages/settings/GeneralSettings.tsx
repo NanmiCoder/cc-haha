@@ -347,6 +347,7 @@ export function GeneralSettings() {
     { value: 'celadon', label: t('settings.general.appearance.celadon') },
     { value: 'dark', label: t('settings.general.appearance.dark') },
     { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
+    { value: 'neutral-dark', label: t('settings.general.appearance.neutralDark') },
   ]
   // Split by ground, in the order THEMES already lists them, so the two rows
   // shown while following the system stay consistent with the flat picker.
@@ -894,7 +895,7 @@ export function GeneralSettings() {
         </div>
       )}
 
-      {/* Theme. The six palettes stay, drawn as cards; following the system
+      {/* Theme palettes, drawn as cards; following the system
           splits them into the ground each OS mode returns to. */}
       <SettingsSection title={t('settings.general.appearanceTitle')} description={t('settings.general.appearanceDescription')}>
         <SettingsGroup>

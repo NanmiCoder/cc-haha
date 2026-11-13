@@ -134,8 +134,9 @@ describe('ShareImageDialog', () => {
 
     const select = screen.getByLabelText('Image theme') as HTMLSelectElement
     expect(Array.from(select.options).map((option) => option.value)).toEqual([
-      'current', 'white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue',
+      'current', 'white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue', 'neutral-dark',
     ])
+    expect(screen.getByRole('option', { name: 'Neutral Dark' })).toHaveValue('neutral-dark')
     expect(select.value).toBe('current')
   })
 

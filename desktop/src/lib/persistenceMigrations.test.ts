@@ -279,6 +279,23 @@ describe('desktop persistence migrations', () => {
     }
   })
 
+  test.each([undefined, '4', '6', String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION)])('preserves neutral dark with schema %s and keeps migration idempotent', (schema) => {
+    if (schema !== undefined) localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, schema)
+    localStorage.setItem('cc-haha-theme', 'neutral-dark')
+    localStorage.setItem('cc-haha-follow-system-theme', '1')
+    localStorage.setItem('cc-haha-light-theme', 'light')
+    localStorage.setItem('cc-haha-dark-theme', 'neutral-dark')
+    localStorage.setItem('unrelated-user-key', 'keep')
+    runDesktopPersistenceMigrations()
+
+    expect(localStorage.getItem('cc-haha-theme')).toBe('neutral-dark')
+    expect(localStorage.getItem('cc-haha-follow-system-theme')).toBe('1')
+    expect(localStorage.getItem('cc-haha-light-theme')).toBe('warm-classic')
+    expect(localStorage.getItem('cc-haha-dark-theme')).toBe('neutral-dark')
+    expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(runDesktopPersistenceMigrations().migratedKeys).toEqual([])
+  })
+
   test('drops a malformed follow-the-system flag rather than reading it as opted in', () => {
     // Anything but 0/1 has to go: an unset flag is how a fresh install is
     // recognised, and a junk value would make that inference unpredictable.
