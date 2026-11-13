@@ -1803,7 +1803,26 @@ namespace CcHahaInstallerProfile
       }
     }
 
-    private static Dictionary<string, string> AbiEnvironment(Dictionary<string, string> actual, string root)
+    internal static Dictionary<string, string> BindAbiRuntimeEnvironment(string binaryDirectory, Dictionary<string, string> inherited)
+    {
+      CorePolicy.ValidateAbsolutePath(binaryDirectory);
+      CorePolicy.Require(inherited != null, "ABI private runtime environment is missing");
+      string home = Path.Combine(binaryDirectory, "home"), temporary = Path.Combine(home, "tmp");
+      Dictionary<string, string> expected = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+        { "HOME", home }, { "USERPROFILE", home }, { "APPDATA", Path.Combine(home, ".config") },
+        { "LOCALAPPDATA", Path.Combine(home, ".local") }, { "TEMP", temporary }, { "TMP", temporary }, { "TMPDIR", temporary }
+      };
+      foreach (KeyValuePair<string, string> path in expected)
+      {
+        string value;
+        CorePolicy.Require(inherited.TryGetValue(path.Key, out value), "ABI private runtime path is missing");
+        CorePolicy.ValidateAbsolutePath(value);
+        CorePolicy.Require(CorePolicy.SamePath(value, path.Value) && CorePolicy.IsInside(binaryDirectory, value), "ABI private runtime path binding failed");
+      }
+      return expected; // Never copy provider credentials or arbitrary parent env.
+    }
+
+    private Dictionary<string, string> AbiEnvironment(Dictionary<string, string> actual, string root)
     {
       string[] allowed = {
         "SystemRoot", "WINDIR", "SystemDrive", "ComSpec", "OS", "PROCESSOR_ARCHITECTURE",
@@ -1817,11 +1836,23 @@ namespace CcHahaInstallerProfile
       }
       CorePolicy.Require(result.ContainsKey("SystemRoot"), "ABI target environment lacks SystemRoot");
       result["CI"] = "true";
-      result["TEMP"] = root; result["TMP"] = root; result["TMPDIR"] = root;
-      // These paths only contain potential runtime scratch state. They are not
-      // identity evidence; child known folders are queried from its real token.
-      result["HOME"] = root; result["USERPROFILE"] = root;
-      result["APPDATA"] = root; result["LOCALAPPDATA"] = root;
+      string binaryDirectory = Path.GetDirectoryName(CorePolicy.BinaryPath);
+      Dictionary<string, string> inherited = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+      foreach (string name in new string[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR" })
+        inherited[name] = Environment.GetEnvironmentVariable(name);
+      Dictionary<string, string> runtime = BindAbiRuntimeEnvironment(binaryDirectory, inherited);
+      FileIdentity binaryRoot = IdentifyPath(binaryDirectory, true);
+      CorePolicy.Require(!binaryRoot.reparse && CorePolicy.SamePath(Path.GetDirectoryName(root), runtime["TEMP"]), "ABI protocol root is not a private temporary child");
+      foreach (string path in runtime.Values.Distinct(StringComparer.OrdinalIgnoreCase))
+      {
+        FileIdentity directory = IdentifyPath(path, true);
+        CorePolicy.Require(!directory.reparse && directory.volumePath == binaryRoot.volumePath
+          && CorePolicy.IsInside(binaryRoot.canonicalPath, directory.canonicalPath), "ABI runtime directory escaped its compiler sandbox");
+      }
+      // Reuse the parent's verified private scratch context, not the protocol
+      // root or the real token's profile environment. Identity still comes from
+      // native token/known-folder queries and every existing hello comparison.
+      foreach (KeyValuePair<string, string> path in runtime) result[path.Key] = path.Value;
       result["PATH"] = Path.Combine(result["SystemRoot"], "System32") + ";" + result["SystemRoot"];
       return result;
     }
@@ -2031,7 +2062,9 @@ namespace CcHahaInstallerProfile
         state.spec.controllerRoot = root;
         state.profilePath = state.paths.profile;
         Win(OpenProcessToken(GetCurrentProcess(), TokenQuery | 0x0002 | 0x0004, out state.token), "Open ABI token");
-        Dictionary<string, string> environment = AbiEnvironment(platform.TargetEnvironment(state), root);
+        Dictionary<string, string> environment = platform.AbiEnvironment(platform.TargetEnvironment(state), root);
+        report.Check("private-runtime-context-bound", true,
+          "Parent and child share the verified compiler sandbox home/config/local/tmp paths; environment is not SID/profile evidence");
         platform.CreatePrivateDesktop(state);
         report.Check("private-station-desktop", state.station != IntPtr.Zero && state.desktop != IntPtr.Zero &&
           !state.desktopName.StartsWith("winsta0\\", StringComparison.OrdinalIgnoreCase), "Created private noninteractive UI objects; shared UI DACLs untouched");

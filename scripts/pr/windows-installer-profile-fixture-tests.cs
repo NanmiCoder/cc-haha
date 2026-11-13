@@ -92,6 +92,32 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-abi-runtime-context-rejects-missing-and-escaping-paths", delegate {
+        string imageDirectory = @"D:\Fixture Compiler\private-stage-a";
+        string privateHome = Path.Combine(imageDirectory, "home"), privateTemp = Path.Combine(privateHome, "tmp");
+        Dictionary<string, string> inherited = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+          { "HOME", privateHome }, { "USERPROFILE", privateHome }, { "APPDATA", Path.Combine(privateHome, ".config") },
+          { "LOCALAPPDATA", Path.Combine(privateHome, ".local") }, { "TEMP", privateTemp }, { "TMP", privateTemp }, { "TMPDIR", privateTemp },
+          { "GITHUB_TOKEN", "fake-must-not-be-copied" }
+        };
+        Dictionary<string, string> bound = NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, inherited);
+        Assert(bound.Count == 7 && !bound.ContainsKey("GITHUB_TOKEN"), "only seven exact private runtime paths may be copied");
+        foreach (string key in bound.Keys)
+        {
+          Dictionary<string, string> missing = new Dictionary<string, string>(inherited, StringComparer.OrdinalIgnoreCase);
+          missing.Remove(key);
+          Reject(delegate { NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, missing); }, "missing private path must fail");
+          Dictionary<string, string> escaped = new Dictionary<string, string>(inherited, StringComparer.OrdinalIgnoreCase);
+          escaped[key] = @"C:\Users\unrelated-profile";
+          Reject(delegate { NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, escaped); }, "real or unrelated user paths must fail");
+          escaped[key] = privateHome + @"-sibling\tmp";
+          Reject(delegate { NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, escaped); }, "a sibling-prefix cannot count as the fixed private home");
+          escaped[key] = privateHome + @"\..\outside";
+          Reject(delegate { NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, escaped); }, "dot-segment escapes must fail");
+        }
+        Reject(delegate { NativePlatform.BindAbiRuntimeEnvironment(imageDirectory, null); }, "no caller environment fallback is allowed");
+      });
+
       Case(report, "fake-abi-hello-preserves-every-binding-and-redacts-values", delegate {
         string[] abiFaults = { "none", "null", "frame", "endpoint-pid", "message-pid", "nonce", "creation", "sid", "binary", "spec",
           "profile", "roaming", "local", "desktop", "programs", "startMenu", "userPrograms" };
