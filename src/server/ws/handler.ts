@@ -37,7 +37,7 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
-import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage, waitForTeamRuntimeLeadReady } from '../services/teamPlanRuntime.js'
 import { powerActivityClock } from '../services/powerActivityClock.js'
 import { releasePowerActivityLease } from '../services/powerActivityLease.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
@@ -1351,6 +1351,7 @@ async function handleUserMessage(
     // permission request that arrives after the disconnect.
     refreshDisconnectedTurnCleanupWatcher(sessionId)
 
+    await waitForTeamRuntimeLeadReady(sessionId)
     activeTurn.sendStarted = true
     const sent = delivery
       ? await (async () => {
@@ -2866,9 +2867,12 @@ function handleStopGeneration(
         removePendingInterruptedTurnResult(sessionId)
       }
     }
-  } else if (!stoppedTurn && conversationService.hasSession(sessionId)) {
-    // The leader can already be idle while approved process teammates still
-    // run or await readiness. Both UI and programmatic Stop revoke those workers.
+  } else if (stoppedTurn?.interruptBoundaryPending && conversationService.hasSession(sessionId)) {
+    conversationService.pauseTeamWorkers(sessionId)
+  } else {
+    // Team ownership outlives its lead process. Stop must reach the runtime
+    // while that process is absent or starting too; an idle UI is not proof
+    // that the independent member processes have stopped.
     conversationService.sendInterrupt(sessionId)
   }
 

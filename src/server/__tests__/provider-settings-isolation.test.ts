@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -104,17 +104,27 @@ describe('provider settings isolation', () => {
       return { settings, result: undefined }
     })
     await locked
+    let changed!: () => void
+    const changedIndex = new Promise<void>((resolve) => { changed = resolve })
+    const indexPath = path.join(tmpDir, 'cc-haha', 'providers.json')
+    const rename = fs.rename
+    const indexWrite = spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      await rename(from, to)
+      if (to === indexPath) changed()
+    })
     const saving = service.updateManagedSettings(draft, provider.id)
     const switching = service.activateOfficial()
+    const settled = Promise.allSettled([saving, switching, blockingWrite])
     try {
-      for (let attempt = 0; (await service.listProviders()).activeId !== null && attempt < 100; attempt += 1) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
+      // Observe the real index rename while the settings queue stays blocked.
+      await Promise.race([changedIndex, switching])
       expect((await service.listProviders()).activeId).toBeNull()
     } finally {
       release()
+      await settled
+      indexWrite.mockRestore()
     }
-    const [saveResult, switchResult, blockingResult] = await Promise.allSettled([saving, switching, blockingWrite])
+    const [saveResult, switchResult, blockingResult] = await settled
     expect(saveResult).toMatchObject({ status: 'rejected', reason: { statusCode: 409 } })
     expect(switchResult.status).toBe('fulfilled')
     expect(blockingResult.status).toBe('fulfilled')

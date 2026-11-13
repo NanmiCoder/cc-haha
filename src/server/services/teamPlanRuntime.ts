@@ -13,7 +13,7 @@ import { getModelReasoningCapabilityOverride, isModelReasoningEffort, normalizeM
 import { getPresetDefaultEnv, getPresetReasoningProviderKind } from './providerRuntimeEnv.js'
 import { validateTeamPlanPresetSource } from '../../utils/swarm/teamPlanPresetSource.js'
 import { readTeamPlan, findTeamPlanForSession, mutateTeamPlan, setRunningMemberRuntime, TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
-import { cleanupTeamDirectories, getTeamDir, mutateTeamFileAsync, readTeamFile, writeTeamFileAsync, type TeamFile } from '../../utils/swarm/teamHelpers.js'
+import { cleanupTeamDirectories, getTeamDir, mutateTeamFileAsync, readTeamFile, type TeamFile } from '../../utils/swarm/teamHelpers.js'
 import { getTeamsDir as getTeamsDirectory } from '../../utils/envUtils.js'
 import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
 import { createTask, deleteTask, listTasks, updateTask, withTaskListLifecycleLock, getCanonicalTeamTaskListId, type Task } from '../../utils/tasks.js'
@@ -24,6 +24,8 @@ import { getClaudeAgentModelFamily } from '../../utils/model/agentModelRouting.j
 import { getCanonicalName } from '../../utils/model/model.js'
 import { powerActivityClock } from './powerActivityClock.js'
 import { teamService } from './teamService.js'
+import { ensureTeamRuntimeControl, mutateTeamRuntimeControl, readTeamRuntimeControl, teamControlIdentity } from '../../utils/swarm/teamRuntimeControlStore.js'
+import type { TeamMemberRuntimeIdentity } from '../../shared/teamRuntimeControl.js'
 
 const providerService = new ProviderService()
 const essentialTools = ['SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate']
@@ -47,7 +49,12 @@ export function setTeamRuntimeTimingForTests(overrides: Partial<typeof timing> |
 const RESULT_TEXT_LIMIT = 4_000
 const FAILURE_REASON_LIMIT = 200
 
-type WorkerRuntime = {
+export type WorkerRuntime = {
+  processGeneration?: number
+  explicitResumeDeliveredAt?: number
+  explicitResumeKey?: string
+  controlHoldAt?: number
+  controlHoldError?: boolean
   member: TeamPlanMember
   sessionId: string
   released: boolean
@@ -83,7 +90,14 @@ type WorkerRuntime = {
   commandTurnPending?: boolean
 }
 
-type TeamLaunch = {
+export type TeamLaunch = {
+  controlSequence?: number
+  controlResuming?: boolean
+  controlError?: string
+  pausePending?: boolean
+  lastUserIntentAt?: number
+  explicitResumeAt?: number
+  explicitResumeKey?: string
   parentId: string
   plan: TeamPlanRecord
   createdAt: number
@@ -109,7 +123,19 @@ type TeamLaunch = {
 }
 
 const launches = new Map<string, TeamLaunch>()
+export const teamRuntimeOwnerId = randomUUID()
 const stoppingOperations = new Set<Promise<void>>()
+const leadRestorations = new Map<string, Promise<void>>()
+const failedLeadRestorations = new Set<string>()
+const leadStopRevisions = new Map<string, number>()
+
+export function getTeamRuntimeLaunches(parentId: string, teamName?: string): TeamLaunch[] {
+  return [...launches.values()].filter(launch => launch.parentId === parentId && !launch.stopped && (!teamName || launch.plan.teamName === teamName))
+}
+
+function admissionOpen(launch: TeamLaunch, sequence = launch.controlSequence ?? 0): boolean {
+  return !launch.stopped && launch.pausedAt === undefined && (launch.controlSequence ?? 0) === sequence
+}
 
 /** Keep async handoffs owned after a retry timer fires and before a roster write. */
 function trackWorkerPowerOperation<T>(worker: WorkerRuntime, operation: () => Promise<T>): Promise<T> {
@@ -287,10 +313,11 @@ function firstLine(text: string): string {
 
 type MemberEntry = TeamFile['members'][number]
 
-async function updateWorkerEntry(launch: TeamLaunch, worker: WorkerRuntime, update: (entry: MemberEntry) => MemberEntry): Promise<void> {
+async function updateWorkerEntry(launch: TeamLaunch, worker: WorkerRuntime, update: (entry: MemberEntry) => MemberEntry, expected = { sequence: launch.controlSequence ?? 0, generation: worker.processGeneration ?? 0 }): Promise<void> {
   try {
     await mutateTeamFileAsync(launch.plan.teamName, team => {
-      if (team.createdAt !== launch.createdAt) return
+      if (expected && ((launch.controlSequence ?? 0) !== expected.sequence || (worker.processGeneration ?? 0) !== expected.generation)) return
+      if (incarnationOf(team) !== launch.plan.incarnationId) return
       const index = team.members.findIndex(entry => entry.sessionId === worker.sessionId)
       if (index === -1) return
       const members = [...team.members]
@@ -332,6 +359,7 @@ function workerSdkUrl(sessionId: string): string {
 }
 
 async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, resume: boolean): Promise<void> {
+  const generation = worker.processGeneration = (worker.processGeneration ?? 0) + 1
   const { member } = worker
   const snapshot = member.agentSnapshot
   if (!snapshot) throw new Error(`Missing approved preset for ${member.name}`)
@@ -356,10 +384,11 @@ async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, res
     })
     await conversationService.requestControl(worker.sessionId, { subtype: 'set_model', model: member.runtime.modelId }, 30_000)
   } catch (error) {
-    await conversationService.stopSessionAndWait(worker.sessionId)
+    await conversationService.stopSessionAndWait(worker.sessionId, undefined, { requireExit: true })
     throw error
   }
   conversationService.onOutput(worker.sessionId, message => {
+    if (worker.processGeneration !== generation) return
     if (message?.type !== 'result' || message.parent_tool_use_id) return
     const completed = worker.powerTurnPending && message.is_error === false && (!message.subtype || message.subtype === 'success')
     worker.powerTurnPending = false
@@ -374,7 +403,10 @@ async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, res
  * Restart a member whose process is gone by resuming its own transcript, so a
  * crash, a lead restart or the user's Stop never costs the member its work.
  */
-async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 'message' | 'user'): Promise<boolean> {
+async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 'message' | 'user', canStart?: () => boolean): Promise<boolean> {
+  const sequence = launch.controlSequence ?? 0
+  canStart ??= () => admissionOpen(launch, sequence) && !launch.pausePending
+  if (!canStart()) return false
   if (worker.starting) return worker.starting
   const now = Date.now()
   worker.restartHistory = worker.restartHistory.filter(at => now - at < WORKER_RESTART_WINDOW_MS)
@@ -398,11 +430,12 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
       // roster that still called it stopped would let the lead end the team
       // (TeamDelete only waits for running members) under the restart.
       await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: true, terminated: false }))
+      if (!canStart()) return false
       await startWorkerProcess(launch, worker, true)
       // The team was ended, or the user pressed Stop while this process was
       // starting and Stop's kill pass could not see it yet.
-      if (launch.stopped || worker.stoppedByUser) {
-        await conversationService.stopSessionAndWait(worker.sessionId)
+      if (launch.stopped || worker.stoppedByUser || !canStart()) {
+        await conversationService.stopSessionAndWait(worker.sessionId, undefined, { requireExit: true })
         if (!launch.stopped) await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, terminated: true }))
         return false
       }
@@ -410,6 +443,7 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
       await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false, terminated: false }))
       return true
     } catch (error) {
+      if (!canStart()) return false
       const message = error instanceof Error ? error.message : String(error)
       console.error(`[TeamPlanRuntime] cannot restart ${worker.member.name}:`, message)
       await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, terminated: true, lastError: firstLine(`Restart failed: ${message}`) }))
@@ -436,15 +470,18 @@ function autoContinuePrompt(reason: string, attempt: number): string {
 async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: string, attempt: number): Promise<void> {
   if (migrationMaintenance.isActive) return
   worker.autoContinueTimer = undefined
-  if (launch.stopped || launch.pausedAt || !conversationService.hasSession(worker.sessionId)) return
+  const sequence = launch.controlSequence ?? 0
+  const fresh = () => admissionOpen(launch, sequence) && !launch.controlResuming && !launch.pausePending
+  if (launch.stopped || launch.pausedAt || launch.controlResuming || !conversationService.hasSession(worker.sessionId)) return
   // Queued mail resumes the member anyway, with the newer context.
-  if ((await readUnreadMessages(worker.member.name, launch.plan.teamName)).length > 0) return
+  if ((await readUnreadMessages(worker.member.name, launch.plan.teamName)).length > 0 || !fresh()) return
   const entry = readTeamFile(launch.plan.teamName)?.members.find(member => member.sessionId === worker.sessionId)
   if (entry?.isActive) return
   await updateWorkerEntry(launch, worker, current => ({ ...current, isActive: true }))
   worker.powerTurnPending = true
-  const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt))
-  if (sent) return
+  if (!fresh()) return
+  const sent = await conversationService.sendMessage(worker.sessionId, autoContinuePrompt(reason, attempt), undefined, { canSend: fresh })
+  if (sent || !fresh()) return
   // No retry is scheduled any more: report the failure instead of leaving a
   // stale countdown that also keeps a /goal lead waiting on this member.
   await updateWorkerEntry(launch, worker, current => {
@@ -456,6 +493,9 @@ async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, rea
 
 async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, message: { is_error?: boolean; result?: unknown }): Promise<void> {
   if (launch.stopped) return
+  const expected = { sequence: launch.controlSequence ?? 0, generation: worker.processGeneration ?? 0 }
+  const fresh = () => (launch.controlSequence ?? 0) === expected.sequence && (worker.processGeneration ?? 0) === expected.generation
+  const updateEntry = (update: (entry: MemberEntry) => MemberEntry) => updateWorkerEntry(launch, worker, update, expected)
   worker.lastResultAt = Date.now()
   const alive = conversationService.hasSession(worker.sessionId)
   const text = typeof message.result === 'string' ? message.result : ''
@@ -468,7 +508,7 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     // failure it was run for; the member then waits for its next message.
     worker.commandTurnPending = false
     if (failed) {
-      await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: firstLine(text || 'The command failed') }))
+      await updateEntry(entry => ({ ...entry, isActive: false, lastError: firstLine(text || 'The command failed') }))
       return
     }
     worker.autoContinueAttempts = 0
@@ -477,32 +517,35 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     // work. Whatever stopped it (an error, the user's Stop, a restart) stays
     // on record, so the lead still hears with the user's next message that
     // this member waits to be woken.
-    await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false }))
+    await updateEntry(entry => withoutFailure({ ...entry, isActive: false }))
     return
   }
   worker.commandTurnPending = false
   if (launch.pausedAt) {
     // The user's Stop already accounted for this turn; a burst of failure
     // notices would only make the lead restart members the user just halted.
-    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, ...(alive ? {} : { terminated: true }) }))
+    await updateEntry(entry => ({ ...entry, isActive: false, ...(alive ? {} : { terminated: true }) }))
     return
   }
   if (!failed) {
     worker.autoContinueAttempts = 0
     clearFailure(worker)
     cancelAutoContinue(worker)
-    await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false }))
+    await updateEntry(entry => withoutFailure({ ...entry, isActive: false }))
+    if (!fresh()) return
     await notifyLead(launch, worker, { idleReason: 'available', ...(text ? { result: text } : {}) })
     return
   }
-  if (!alive && await approvedShutdown(launch, worker)) {
+  const shutdownApproved = !alive && await approvedShutdown(launch, worker)
+  if (!fresh()) return
+  if (shutdownApproved) {
     // It left because the lead asked it to and it agreed. Every process exit
     // arrives here as an error result; recording this one as a failure showed
     // a finished team as broken and told the lead its members had crashed.
     worker.autoContinueAttempts = 0
     clearFailure(worker)
     cancelAutoContinue(worker)
-    await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false, terminated: true }))
+    await updateEntry(entry => withoutFailure({ ...entry, isActive: false, terminated: true }))
     return
   }
   const reason = firstLine(text || 'The member process exited')
@@ -513,8 +556,9 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     // the team instead of waiting on a member that can never reply.
     worker.shutdownRequestedAt = undefined
     cancelAutoContinue(worker)
-    await conversationService.stopSessionAndWait(worker.sessionId)
-    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, terminated: true, lastError: reason }))
+    await conversationService.stopSessionAndWait(worker.sessionId, undefined, { requireExit: true })
+    await updateEntry(entry => ({ ...entry, isActive: false, terminated: true, lastError: reason }))
+    if (!fresh()) return
     await notifyFailure(launch, worker, `${worker.member.name} could not answer the shutdown request (${reason}), so the team runtime stopped it. Its conversation is kept.`)
     return
   }
@@ -526,14 +570,15 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
       void migrationMaintenance.track(trackWorkerPowerOperation(worker, () => autoContinueWorker(launch, worker, reason, attempt))).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
     }, delay)
     worker.autoContinueTimer.unref?.()
-    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
+    await updateEntry(entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
     return
   }
   const exhausted = alive && isTransientWorkerFailure(text)
-  await updateWorkerEntry(launch, worker, entry => {
+  await updateEntry(entry => {
     const { autoRetry: _autoRetry, ...rest } = entry as MemberEntry & { autoRetry?: unknown }
     return { ...rest, isActive: false, lastError: reason, ...(alive ? {} : { terminated: true }) }
   })
+  if (!fresh()) return
   await notifyFailure(launch, worker, alive
     ? exhausted ? `${reason} (automatic retries exhausted; message ${worker.member.name} to continue)` : reason
     : `${worker.member.name}'s process exited (${reason}). Messaging it restarts it from its saved conversation.`)
@@ -585,11 +630,13 @@ function clearFailure(worker: WorkerRuntime): void {
 
 // ── Supervisor ──────────────────────────────────────────────────────────────
 
-async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
+async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<boolean> {
   return trackWorkerPowerOperation(worker, () => deliverToWorkerOnce(launch, worker, messages))
 }
 
-async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<void> {
+async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, messages: TeammateMessage[]): Promise<boolean> {
+  const sequence = launch.controlSequence ?? 0
+  if (!admissionOpen(launch, sequence)) return false
   cancelAutoContinue(worker)
   // A new instruction starts a fresh retry budget: the lead or the user has
   // looked at the failure and decided the member should go on.
@@ -598,6 +645,7 @@ async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, me
   // the turn it starts records its own outcome.
   worker.stoppedByUser = false
   await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: true, terminated: false }))
+  if (!admissionOpen(launch, sequence)) return false
   // A member that has not started yet gets its approved instructions with the
   // first thing it is told, unless that is only to shut down.
   const starts = worker.brief !== undefined && !messages.every(message => isShutdownRequest(message.text))
@@ -607,11 +655,12 @@ async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, me
   }
   const text = formatTeammateMessages(messages)
   worker.powerTurnPending = true
-  const accepted = await conversationService.sendMessage(worker.sessionId, starts ? `${worker.brief}\n\n${text}` : text)
+  const accepted = await conversationService.sendMessage(worker.sessionId, starts ? `${worker.brief}\n\n${text}` : text, undefined, { canSend: () => admissionOpen(launch, sequence) })
   if (!accepted) {
-    await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
-    return
+    if (admissionOpen(launch, sequence)) await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
+    return false
   }
+  if (!admissionOpen(launch, sequence)) return true
   clearFailure(worker)
   if (starts) {
     worker.brief = undefined
@@ -620,6 +669,7 @@ async function deliverToWorkerOnce(launch: TeamLaunch, worker: WorkerRuntime, me
   const ids = new Set(messages.map(message => message.id).filter(Boolean))
   const legacy = new Set(messages.filter(message => !message.id).map(message => JSON.stringify([message.from, message.timestamp, message.text])))
   await markMessagesAsReadByPredicate(worker.member.name, message => message.id ? ids.has(message.id) : legacy.has(JSON.stringify([message.from, message.timestamp, message.text])), launch.plan.teamName)
+  return true
 }
 
 /**
@@ -645,6 +695,8 @@ async function wakeForReadyTask(launch: TeamLaunch, worker: WorkerRuntime, entry
 
 /** The user's slash command, sent as typed so the member's own CLI runs it. */
 async function deliverCommandToWorker(launch: TeamLaunch, worker: WorkerRuntime, command: TeammateMessage, entry: MemberEntry | undefined): Promise<void> {
+  const sequence = launch.controlSequence ?? 0
+  const fresh = () => !launch.stopped && !launch.pausePending && (launch.controlSequence ?? 0) === sequence
   return trackWorkerPowerOperation(worker, async () => {
     if (worker.autoContinueTimer) {
       // A retry was pending; the command takes that turn instead. Like any
@@ -655,8 +707,10 @@ async function deliverCommandToWorker(launch: TeamLaunch, worker: WorkerRuntime,
     }
     cancelAutoContinue(worker)
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: true, terminated: false }))
+    if (!fresh()) return
     worker.commandTurnPending = true
-    const accepted = await conversationService.sendMessage(worker.sessionId, command.text.trim())
+    const accepted = await conversationService.sendMessage(worker.sessionId, command.text.trim(), undefined, { canSend: fresh })
+    if (!fresh()) return
     if (!accepted) {
       worker.commandTurnPending = false
       await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
@@ -686,7 +740,8 @@ function isHeldThisPass(launch: TeamLaunch, worker: WorkerRuntime, messages: Tea
  */
 async function restartForCommand(launch: TeamLaunch, worker: WorkerRuntime): Promise<void> {
   const stoppedByUser = worker.stoppedByUser === true
-  const started = await restartWorker(launch, worker, 'user')
+  const sequence = launch.controlSequence ?? 0
+  const started = await restartWorker(launch, worker, 'user', () => !launch.stopped && !launch.pausePending && (launch.controlSequence ?? 0) === sequence)
   if (started && stoppedByUser) worker.stoppedByUser = true
 }
 
@@ -735,9 +790,10 @@ function hasPausedLaunchResumeMessage(launch: TeamLaunch, messages: TeammateMess
 }
 
 async function superviseLaunch(launch: TeamLaunch): Promise<void> {
-  if (migrationMaintenance.isActive) return
+  if (migrationMaintenance.isActive || launch.pausePending || launch.controlResuming) return
+  const passSequence = launch.controlSequence ?? 0
   const team = readTeamFile(launch.plan.teamName)
-  if (!team || team.createdAt !== launch.createdAt) {
+  if (!team || incarnationOf(team) !== launch.plan.incarnationId) {
     await stopTeamPlanRuntime(launch.plan.planId)
     return
   }
@@ -759,12 +815,13 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
     // would never reach the lead.
     if (worker.commandTurnPending) continue
     const unread = await readUnreadMessages(worker.member.name, launch.plan.teamName)
+    if ((launch.controlSequence ?? 0) !== passSequence || launch.pausePending || launch.controlResuming) return
     // The command runs on the member's next idle turn, after what is ahead of
     // it in the inbox unless this pass holds that back anyway (a stopped team,
     // a member waiting on its dependencies, a stopped member without a lead).
     // It acts on this member's context and resumes nothing; what follows it
     // waits its turn.
-    const commandAt = unread.findIndex(isUserCommand)
+    const commandAt = unread.findIndex(message => isUserCommand(message) && (launch.pausedAt === undefined || Date.parse(message.timestamp) >= launch.pausedAt))
     if (commandAt !== -1 && (commandAt === 0 || isHeldThisPass(launch, worker, unread.slice(0, commandAt), leadAlive))) {
       if (!conversationService.hasSession(worker.sessionId)) {
         void migrationMaintenance.track(restartForCommand(launch, worker))
@@ -779,9 +836,29 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
       // Only a new instruction resumes a paused team: the user's own message to
       // a member, or the lead's once the user has spoken to it again.
       if (!hasPausedLaunchResumeMessage(launch, messages)) continue
+      const sequence = launch.controlSequence ?? 0
+      await markSelectiveTeamResume(launch)
+      if ((launch.controlSequence ?? 0) !== sequence || launch.pausePending) return
       launch.pausedAt = undefined
       launch.resumeAllowedAt = undefined
       powerActivityClock.changed()
+    }
+    if (launch.explicitResumeAt && worker.explicitResumeDeliveredAt !== launch.explicitResumeAt && !worker.controlHoldError && leadAlive) {
+      tasks ??= await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [])
+      if (readyTasksOf(worker.member.name, tasks).length > 0) {
+        if (entry?.isActive) continue
+        await resumeDeferredTeamMember(launch, worker, passSequence)
+        continue
+      }
+    }
+    if (worker.controlHoldAt) {
+      const freshInstruction = messages.some(message => {
+        const at = Date.parse(message.timestamp)
+        return message.from === 'user' ? at >= worker.controlHoldAt! : message.from === TEAM_LEAD_NAME && (launch.lastUserIntentAt ?? 0) > worker.controlHoldAt! && at >= launch.lastUserIntentAt!
+      })
+      if (!freshInstruction) continue
+      worker.controlHoldAt = undefined
+      worker.controlHoldError = false
     }
     // A member that waits on dependencies is started by its tasks, or by the
     // user writing to it. What the lead or a teammate sends it meanwhile (a
@@ -827,28 +904,54 @@ async function sendTeamSnapshot(parentId: string, teamName: string, createdAt: n
 
 /** The user's Stop: every member stops now, nothing is lost, the next instruction resumes. */
 function pauseLaunchesForLead(parentSessionId: string): boolean {
+  leadStopRevisions.set(parentSessionId, (leadStopRevisions.get(parentSessionId) ?? 0) + 1)
   let paused = false
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped || !launch.running) continue
     paused = true
-    launch.pausedAt = Date.now()
-    powerActivityClock.changed()
-    launch.resumeAllowedAt = undefined
-    for (const worker of launch.workers.values()) {
-      cancelAutoContinue(worker)
-      worker.stoppedByUser = true
-      worker.wakeNoticePending = true
-    }
+    holdTeamRuntimeLaunch(launch)
     // No notice goes to the lead's mailbox: delivering it would start a lead
     // turn right after the user stopped everything. The user's next message
     // carries it instead (noteLeadUserMessage).
     void migrationMaintenance.track(mutateTeamFileAsync(launch.plan.teamName, team => {
-      if (team.createdAt !== launch.createdAt) return
+      if (incarnationOf(team) !== launch.plan.incarnationId) return
       const sessions = new Set([...launch.workers.values()].map(worker => worker.sessionId))
-      return { ...team, members: team.members.map(entry => entry.sessionId && sessions.has(entry.sessionId) ? { ...entry, isActive: false, terminated: true } : entry) }
+      return { ...team, members: team.members.map(entry => entry.sessionId && sessions.has(entry.sessionId) ? { ...entry, isActive: false, ...(!conversationService.hasSession(entry.sessionId) ? { terminated: true } : {}) } : entry) }
     })).catch(error => console.error('[TeamPlanRuntime] cannot record the paused team', error))
   }
   return paused
+}
+
+function restoreTeamRuntimeForLead(parentId: string): Promise<void> {
+  const previous = leadRestorations.get(parentId)
+  const restoration = (async () => {
+    await previous?.catch(() => {})
+    const ownedLaunch = () => getTeamRuntimeLaunches(parentId).find(launch => launch.running)
+    if (!ownedLaunch()) await rehydrateTeamPlanRuntimesForSession(parentId)
+    const launch = ownedLaunch()
+    if (launch) await sendTeamSnapshot(parentId, launch.plan.teamName, launch.createdAt)
+  })()
+  leadRestorations.set(parentId, restoration)
+  void migrationMaintenance.track(restoration)
+    .then(() => { if (leadRestorations.get(parentId) === restoration) failedLeadRestorations.delete(parentId) })
+    .catch(error => {
+      if (leadRestorations.get(parentId) === restoration) failedLeadRestorations.add(parentId)
+      console.error('[TeamPlanRuntime] cannot restore the team after a lead start', error)
+    })
+    .finally(() => { if (leadRestorations.get(parentId) === restoration) leadRestorations.delete(parentId) })
+  return restoration
+}
+
+/** Restore and acknowledge the roster before a fresh user frame can release mail. */
+export async function waitForTeamRuntimeLeadReady(parentId: string): Promise<void> {
+  let pending = leadRestorations.get(parentId)
+  if (!pending && failedLeadRestorations.has(parentId) && conversationService.hasSession(parentId)) pending = restoreTeamRuntimeForLead(parentId)
+  while (pending) {
+    await pending
+    const current = leadRestorations.get(parentId)
+    if (current === pending) return
+    pending = current
+  }
 }
 
 /**
@@ -864,28 +967,39 @@ function pauseLaunchesForLead(parentSessionId: string): boolean {
  * otherwise take the team it proposed for one that is running.
  */
 export async function noteLeadUserMessage(parentSessionId: string): Promise<void> {
+  const intentAt = Date.now()
+  const stopRevision = leadStopRevisions.get(parentSessionId) ?? 0
+  const parentFresh = () => (leadStopRevisions.get(parentSessionId) ?? 0) === stopRevision
+  await waitForTeamRuntimeLeadReady(parentSessionId)
+  if (!parentFresh()) return
   const plan = await findTeamPlanForSession(parentSessionId).catch(() => null)
+  if (!parentFresh()) return
   if (plan?.state === 'launch_failed' && !failedLaunchesNoticed.has(`${plan.planId}:${plan.revision}`)) {
     failedLaunchesNoticed.add(`${plan.planId}:${plan.revision}`)
     const error = plan.launch?.error?.trim()
     const failure = error && error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error
-    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure), undefined, { synthetic: true })
+    const accepted = await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure), undefined, { synthetic: true, canSend: parentFresh })
+    if (!accepted || !parentFresh()) failedLaunchesNoticed.delete(`${plan.planId}:${plan.revision}`)
   }
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped) continue
-    if (launch.pausedAt) launch.resumeAllowedAt = Date.now()
+    const sequence = launch.controlSequence ?? 0
+    const fresh = () => parentFresh() && !launch.stopped && (launch.controlSequence ?? 0) === sequence
+    if (!fresh()) continue
+    launch.lastUserIntentAt = intentAt
+    if (launch.pausedAt) launch.resumeAllowedAt = intentAt
     const waiting = [...launch.workers.values()].filter(worker => worker.released && worker.wakeNoticePending)
     if (waiting.length === 0) continue
-    for (const worker of waiting) worker.wakeNoticePending = false
     const stoppedByUser = waiting.some(worker => worker.stoppedByUser)
     const stoppedByRestart = !stoppedByUser && waiting.every(worker => worker.stoppedByRestart && !worker.failure)
     const tasks = await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [] as Task[])
+    if (!fresh()) continue
+    for (const worker of waiting) worker.wakeNoticePending = false
     const unresolved = unresolvedTaskIds(tasks)
     const lines = waiting.map(worker => {
       const open = tasks.filter(task => task.owner === worker.member.name && task.status !== 'completed')
       const label = worker.failure ? `${worker.member.name} (stopped on an error: ${worker.failure})`
         : worker.stoppedByRestart && !stoppedByRestart ? `${worker.member.name} (stopped when the app restarted)` : worker.member.name
-      worker.stoppedByRestart = false
       // A member whose start failed is reported like any other failure.
       if (worker.brief !== undefined && !worker.failure) {
         const ready = readyTasksOf(worker.member.name, tasks)
@@ -898,13 +1012,117 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
         ? `- ${label}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
         : `- ${label}: no unfinished task`
     })
-    await conversationService.sendMessage(
+    const accepted = await conversationService.sendMessage(
       parentSessionId,
       teamStoppedNotice(launch.plan.teamName, stoppedByUser ? 'user' : stoppedByRestart ? 'restart' : 'error', lines),
       undefined,
-      { synthetic: true },
+      { synthetic: true, canSend: fresh },
     )
+    if (fresh()) for (const worker of waiting) {
+      if (accepted) worker.stoppedByRestart = false
+      else worker.wakeNoticePending = true
+    }
   }
+}
+
+/** Ordinary new messages retain selective wake semantics; they never run bulk resume. */
+async function markSelectiveTeamResume(launch: TeamLaunch): Promise<void> {
+  const identity = { leadSessionId: launch.parentId, incarnationId: launch.plan.incarnationId }
+  const current = await readTeamRuntimeControl(launch.plan.teamName, identity)
+  if (!current || current.status === 'pausing' || current.status === 'resuming') throw new TeamPlanError('Team is still stopping or resuming')
+  await mutateTeamRuntimeControl(launch.plan.teamName, { ...identity, expectedEpoch: current.epoch }, control => ({
+    ...control, status: 'partial', epoch: control.epoch + 1, error: undefined,
+  }))
+}
+
+export function holdTeamRuntimeLaunch(launch: TeamLaunch): void {
+  if (launch.stopped) return
+  launch.controlSequence = (launch.controlSequence ?? 0) + 1
+  launch.pausedAt = Date.now()
+  launch.pausePending = true
+  launch.controlError = undefined
+  launch.controlResuming = false
+  launch.explicitResumeAt = undefined
+  launch.explicitResumeKey = undefined
+  launch.resumeAllowedAt = undefined
+  for (const worker of launch.workers.values()) {
+    cancelAutoContinue(worker)
+    worker.stoppedByUser = true
+    worker.wakeNoticePending = true
+    worker.controlHoldAt = undefined
+    worker.controlHoldError = false
+    worker.commandTurnPending = false
+    worker.shutdownTurnPending = false
+    worker.shutdownRequestedAt = undefined
+    worker.powerTurnPending = false
+  }
+  powerActivityClock.changed()
+}
+
+export async function validateTeamRuntimeMember(worker: WorkerRuntime): Promise<void> {
+  await resolveMemberRuntime(worker.member)
+}
+
+/** An explicit human resume starts only a ready, unfinished member, once. */
+export async function resumeTeamRuntimeMember(launch: TeamLaunch, worker: WorkerRuntime, fresh: () => boolean): Promise<boolean> {
+  if (!fresh()) throw new TeamPlanError('Team control changed before member resume')
+  if (launch.explicitResumeKey && worker.explicitResumeKey === launch.explicitResumeKey) return false
+  const tasks = await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName))
+  const ready = readyTasksOf(worker.member.name, tasks)
+  if (!fresh()) throw new TeamPlanError('Team control changed before member resume')
+  if (ready.length === 0) return false
+  const entry = readTeamFile(launch.plan.teamName)?.members.find(member => member.sessionId === worker.sessionId)
+  if (entry?.isActive && conversationService.hasSession(worker.sessionId)) return false
+  const held = await readUnreadMessages(worker.member.name, launch.plan.teamName)
+  if (worker.commandTurnPending || held.some(isUserCommand)) throw new TeamPlanError(`${worker.member.name} has a command waiting; let it finish before resuming work`)
+  if (!conversationService.hasSession(worker.sessionId) && !await restartWorker(launch, worker, 'user', fresh)) throw new TeamPlanError(`${worker.member.name} could not restart`)
+  if (!fresh()) throw new TeamPlanError('Team control changed during member startup')
+  worker.controlHoldAt = undefined
+  worker.controlHoldError = false
+  const accepted = await deliverToWorker(launch, worker, [...held, {
+    from: 'team-runtime', timestamp: new Date().toISOString(),
+    text: `[Team runtime notice] The user explicitly resumed this team. Continue only your unfinished ready tasks (${ready.map(task => `#${task.id} ${task.subject}`).join('; ')}). Keep previous work and do not repeat completed tasks. Report results to the team lead.`,
+  }])
+  if (!accepted || !fresh()) throw new TeamPlanError(`${worker.member.name} did not accept the resume instruction`)
+  worker.explicitResumeDeliveredAt = launch.explicitResumeAt
+  worker.explicitResumeKey = launch.explicitResumeKey
+  return true
+}
+
+/** A newly ready dependency belongs to the same explicit human resume intent. */
+async function resumeDeferredTeamMember(launch: TeamLaunch, worker: WorkerRuntime, sequence: number): Promise<void> {
+  const fresh = () => admissionOpen(launch, sequence) && !launch.pausePending && !launch.controlResuming
+  const identity = { leadSessionId: launch.parentId, incarnationId: launch.plan.incarnationId }
+  const control = await readTeamRuntimeControl(launch.plan.teamName, identity)
+  const key = control?.resume && JSON.stringify([identity.incarnationId, control.epoch, control.resume.requestId])
+  if (!fresh() || !control?.resume || key !== launch.explicitResumeKey || control.resume.epoch !== control.epoch) return
+  try {
+    await mutateTeamRuntimeControl(launch.plan.teamName, { ...identity, expectedEpoch: control.epoch }, current => ({
+      ...current, resume: { ...current.resume!, eligibleSessionIds: [...new Set([...current.resume!.eligibleSessionIds, worker.sessionId])] },
+    }))
+    if (!fresh()) return
+    await validateTeamRuntimeMember(worker)
+    if (!await resumeTeamRuntimeMember(launch, worker, fresh) || !fresh()) return
+    await mutateTeamRuntimeControl(launch.plan.teamName, { ...identity, expectedEpoch: control.epoch }, current => ({
+      ...current, resume: { ...current.resume!, startedSessionIds: [...new Set([...current.resume!.startedSessionIds, worker.sessionId])] },
+    }))
+  } catch (error) {
+    if (!fresh()) return
+    const message = error instanceof Error ? error.message : String(error)
+    // Once delivered, retry only its receipt on an explicit retry. Re-sending
+    // automatically could run the same task twice after a storage failure.
+    if (worker.explicitResumeKey !== key) await recordTeamRuntimeMemberFailure(launch, worker, message)
+    await mutateTeamRuntimeControl(launch.plan.teamName, { ...identity, expectedEpoch: control.epoch }, current => ({
+      ...current, status: 'partial', error: `Some members could not resume: ${worker.member.name}: ${message}`,
+      ...(worker.explicitResumeKey === key ? {} : { memberErrors: { ...current.memberErrors, [worker.sessionId]: message } }),
+    }))
+  }
+}
+
+export async function recordTeamRuntimeMemberFailure(launch: TeamLaunch, worker: WorkerRuntime, error: string): Promise<void> {
+  worker.controlHoldAt = Date.now()
+  worker.controlHoldError = true
+  await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: error, ...(!conversationService.hasSession(worker.sessionId) ? { terminated: true } : {}) }))
 }
 
 let hooksInstalled = false
@@ -920,11 +1138,7 @@ function ensureRuntimeHooks(): void {
       const ownedLaunch = () => [...launches.values()].find(item => item.parentId === sessionId && item.running && !item.stopped)
       // Workers never lead a team; skip the disk scan a re-own needs.
       if (!ownedLaunch() && isTeamWorker) return
-      void migrationMaintenance.track((async () => {
-        if (!ownedLaunch()) await rehydrateTeamPlanRuntimesForSession(sessionId)
-        const launch = ownedLaunch()
-        if (launch) await sendTeamSnapshot(sessionId, launch.plan.teamName, launch.createdAt)
-      })()).catch(error => console.error('[TeamPlanRuntime] cannot restore the team after a lead start', error))
+      void restoreTeamRuntimeForLead(sessionId)
     },
   })
 }
@@ -933,73 +1147,52 @@ function ensureRuntimeHooks(): void {
 
 export type TeamMemberRuntimeChange = { providerId: string | null; modelId: string; effortLevel?: string }
 
-/**
- * The user switched a running member to another model from its conversation.
- * The change is recorded where a restart rebuilds the member from, and applied
- * to the live process: a model on the same provider switches in place (the
- * same control a start sends); another provider or effort needs the process
- * environment rebuilt, so an idle member restarts from its own transcript and
- * a busy one is refused rather than cut off mid-turn.
- */
-export async function changeTeamMemberRuntime(teamName: string, agentId: string, change: TeamMemberRuntimeChange): Promise<{ agentId: string; name: string; model: string; providerId: string | null; providerName: string }> {
+/** Saving a paused member changes its approved runtime, never its process. */
+export async function changeTeamMemberRuntime(
+  teamName: string,
+  agentId: string,
+  change: TeamMemberRuntimeChange,
+  identity: TeamMemberRuntimeIdentity,
+): Promise<{ agentId: string; name: string; model: string; providerId: string | null; providerName: string }> {
+  const team = readTeamFile(teamName)
+  const actual = team && teamControlIdentity(team)
+  if (!team || actual?.leadSessionId !== identity.leadSessionId || actual.incarnationId !== identity.incarnationId) throw new TeamPlanError('Team identity changed; refresh before saving')
+  await rehydrateTeamPlanRuntimesForSession(identity.leadSessionId)
   const name = agentId.includes('@') ? agentId.slice(0, agentId.lastIndexOf('@')) : agentId
-  let launch: TeamLaunch | undefined
-  let worker: WorkerRuntime | undefined
-  for (const candidate of launches.values()) {
-    if (candidate.stopped || candidate.plan.teamName !== teamName) continue
-    const match = [...candidate.workers.values()].find(item => item.member.name === name)
-    if (match) { launch = candidate; worker = match }
-  }
-  if (!launch || !worker) throw new TeamPlanError(`${name} is not a member of a running team`, 404)
-  if (worker.starting) throw new TeamPlanError(`${name} is starting; change its model once it is up`)
-  const previous = worker.member.runtime
-  const requested = { ...previous, providerId: change.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID, modelId: change.modelId.trim() }
+  if (agentId.includes('@') && agentId !== `${name}@${teamName}`) throw new TeamPlanError('Member identity changed')
+  const owners = getTeamRuntimeLaunches(identity.leadSessionId, teamName).filter(owner => owner.running && owner.plan.incarnationId === identity.incarnationId)
+  const launch = owners.find(owner => [...owner.workers.values()].some(worker => worker.member.name === name && worker.sessionId === identity.sessionId))
+  const worker = launch && [...launch.workers.values()].find(worker => worker.member.name === name && worker.sessionId === identity.sessionId)
+  if (!launch || !worker) throw new TeamPlanError('Member identity changed; refresh before saving')
+  const requested = { ...worker.member.runtime, providerId: change.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID, modelId: change.modelId.trim() }
   if (change.effortLevel === undefined) delete requested.effortLevel
   else requested.effortLevel = change.effortLevel
   let resolved: Awaited<ReturnType<typeof resolveMemberRuntime>>
-  try {
-    resolved = await resolveMemberRuntime({ ...worker.member, runtime: requested })
-  } catch (error) {
-    throw new TeamPlanError(error instanceof Error ? error.message : String(error), 400)
-  }
-  const providerChanged = resolved.runtime.providerId !== previous.providerId
-  const inPlace = !providerChanged && resolved.runtime.effortLevel === previous.effortLevel
-  const running = conversationService.hasSession(worker.sessionId)
-  const entry = readTeamFile(teamName)?.members.find(member => member.sessionId === worker!.sessionId)
-  if (running && !inPlace && entry?.isActive) throw new TeamPlanError(`${name} is working; change its ${providerChanged ? 'provider' : 'reasoning effort'} once it is idle`)
-  // The live process switches first, so a switch it refuses changes nothing.
-  if (running && inPlace) {
-    try {
-      await conversationService.requestControl(worker.sessionId, { subtype: 'set_model', model: resolved.runtime.modelId }, 30_000)
-    } catch (error) {
-      throw new TeamPlanError(`Could not switch ${name} to ${resolved.runtime.modelId}: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-  const member = worker.member
-  const record = async (runtime: TeamPlanMember['runtime'], providerName: string) => {
-    launch!.plan = await setRunningMemberRuntime(teamName, launch!.plan.planId, member.id, runtime, providerName)
-    worker!.member = { ...worker!.member, runtime, providerName }
-    // The roster carries what the desktop shows, written the way a launch writes it.
-    await updateWorkerEntry(launch!, worker!, current => {
-      const next = { ...current, model: runtime.modelId, providerId: runtime.providerId, providerName } as MemberEntry & { providerId?: string; providerName?: string; effortLevel?: string }
-      if (runtime.effortLevel === undefined) delete next.effortLevel
-      else next.effortLevel = runtime.effortLevel
-      return next
+  try { resolved = await resolveMemberRuntime({ ...worker.member, runtime: requested }) }
+  catch (error) { throw new TeamPlanError(error instanceof Error ? error.message : String(error), 400) }
+  await withTaskListLifecycleLock(getCanonicalTeamTaskListId(teamName), async () => {
+    const entry = readTeamFile(teamName)?.members.find(member => member.name === name && member.sessionId === identity.sessionId && member.planMemberId === worker.member.id)
+    const control = await readTeamRuntimeControl(teamName, identity)
+    if (!entry || !control || control.revision !== identity.expectedRevision) throw new TeamPlanError('Team control changed; refresh before saving')
+    if (control.status !== 'paused' || owners.some(owner => owner.pausePending || owner.controlResuming || [...owner.workers.values()].some(member => member.starting || conversationService.hasSession(member.sessionId)))) throw new TeamPlanError('Pause the team and wait for every member to stop before changing a model')
+    // Reserve the revision before writing either snapshot. A failed/interrupted
+    // save cannot leave an old client revision valid for a second mutation.
+    await mutateTeamRuntimeControl(teamName, { ...identity, expectedRevision: control.revision }, current => ({ ...current }))
+    launch.plan = await setRunningMemberRuntime(teamName, launch.plan.planId, worker.member.id, resolved.runtime, resolved.providerName)
+    worker.member = { ...worker.member, runtime: resolved.runtime, providerName: resolved.providerName }
+    await mutateTeamFileAsync(teamName, current => {
+      if (teamControlIdentity(current).incarnationId !== identity.incarnationId) throw new TeamPlanError('Team identity changed during save')
+      const index = current.members.findIndex(member => member.sessionId === identity.sessionId && member.planMemberId === worker.member.id)
+      if (index === -1) throw new TeamPlanError('Member identity changed during save')
+      const members = [...current.members]
+      const next = { ...members[index]!, model: resolved.runtime.modelId, providerId: resolved.runtime.providerId, providerName: resolved.providerName }
+      if (resolved.runtime.effortLevel === undefined) delete next.effortLevel
+      else next.effortLevel = resolved.runtime.effortLevel
+      members[index] = next
+      return { ...current, members }
     })
-  }
-  await record(resolved.runtime, resolved.providerName)
-  if (running && !inPlace) {
-    await conversationService.stopSessionAndWait(worker.sessionId)
-    if (!(await restartWorker(launch, worker, 'user'))) {
-      // It could not start on the new provider: keep the one it ran on, which
-      // its next message starts it on again, and say why.
-      const failure = (readTeamFile(teamName)?.members.find(item => item.sessionId === worker!.sessionId) as { lastError?: unknown } | undefined)?.lastError
-      await record(previous, typeof member.providerName === 'string' ? member.providerName : resolved.providerName)
-      throw new TeamPlanError(`${name} could not start on ${resolved.providerName}${typeof failure === 'string' ? ` (${failure})` : ''}; it keeps its previous model`)
-    }
-  }
-  const providerId = resolved.runtime.providerId === CLAUDE_OFFICIAL_PROVIDER_ID ? null : resolved.runtime.providerId
-  return { agentId, name, model: resolved.runtime.modelId, providerId, providerName: resolved.providerName }
+  })
+  return { agentId, name, model: resolved.runtime.modelId, providerId: resolved.runtime.providerId === CLAUDE_OFFICIAL_PROVIDER_ID ? null : resolved.runtime.providerId, providerName: resolved.providerName }
 }
 
 export function stopTeamPlanRuntime(planId: string): Promise<void> {
@@ -1026,11 +1219,13 @@ async function stopTeamPlanRuntimeOnce(planId: string): Promise<void> {
   await withTaskListLifecycleLock(getCanonicalTeamTaskListId(plan.teamName), async () => {
     const team = readTeamFile(plan.teamName)
     if (!team || incarnationOf(team) !== plan.incarnationId) return
-    team.members = team.members.flatMap(member => {
-      if (!member.sessionId || !launch.children.includes(member.sessionId)) return [member]
-      return launch.released ? [{ ...member, isActive: false, terminated: true }] : []
+    await mutateTeamFileAsync(plan.teamName, current => {
+      if (incarnationOf(current) !== plan.incarnationId) return
+      return { ...current, members: current.members.flatMap(member => {
+        if (!member.sessionId || !launch.children.includes(member.sessionId)) return [member]
+        return launch.released ? [{ ...member, isActive: false, terminated: true }] : []
+      }) }
     })
-    await writeTeamFileAsync(plan.teamName, team)
     if (launch.released) return
     // Nothing started, so the team goes back to how it was before approval.
     // Tasks left behind read as work in progress, and a plan revised before it
@@ -1072,9 +1267,13 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     await withTaskListLifecycleLock(getCanonicalTeamTaskListId(plan.teamName), async () => {
       const team = readTeamFile(plan.teamName)
       if (!team || team.leadSessionId !== plan.sessionId || incarnationOf(team) !== plan.incarnationId) throw new Error('Team generation no longer exists')
-      team.reviewRequired = true
-      launch.createdAt = team.createdAt
-      await writeTeamFileAsync(plan.teamName, team)
+      const control = await ensureTeamRuntimeControl(plan.teamName, teamControlIdentity(team), teamRuntimeOwnerId, { approvedLaunch: true })
+      if (control.status !== 'running') throw new TeamPlanError('Resume the paused team before adding members')
+      await mutateTeamFileAsync(plan.teamName, current => {
+        if (incarnationOf(current) !== plan.incarnationId) throw new TeamPlanError('Team generation changed during launch')
+        launch.createdAt = current.createdAt
+        return { ...current, reviewRequired: true }
+      })
     })
     taskMapping = await materializeTasks(plan, launch.createdTaskIds)
     // Every member's process starts now, but one whose tasks all wait on other
@@ -1099,17 +1298,18 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
       // All processes are ready by the time the first release is reached.
       if (member === members[0]) {
         await withTaskListLifecycleLock(getCanonicalTeamTaskListId(plan.teamName), async () => {
-          const team = readTeamFile(plan.teamName)
-          if (!team || team.createdAt !== launch.createdAt) throw new Error('Team generation changed during launch')
-          for (const entry of members) {
-            if (team.members.some(old => old.name === entry.name)) throw new Error(`Member already exists: ${entry.name}`)
-            team.members.push({ agentId: `${entry.name}@${plan.teamName}`, name: entry.name, agentType: entry.agentType,
-              model: entry.runtime.modelId, providerId: entry.runtime.providerId, providerName: typeof entry.providerName === 'string' ? entry.providerName : undefined, effortLevel: entry.runtime.effortLevel,
-              planMemberId: entry.id, joinedAt: Date.now(), tmuxPaneId: '', cwd: plan.workDir, subscriptions: [],
-              sessionId: memberIds[entry.id], backendType: 'process',
-              ...(waiting.has(entry.id) ? { isActive: false, awaitingDependencies: true } : { isActive: true }) })
-          }
-          await writeTeamFileAsync(plan.teamName, team)
+          await mutateTeamFileAsync(plan.teamName, team => {
+            if (incarnationOf(team) !== plan.incarnationId) throw new Error('Team generation changed during launch')
+            for (const entry of members) {
+              if (team.members.some(old => old.name === entry.name)) throw new Error(`Member already exists: ${entry.name}`)
+              team.members.push({ agentId: `${entry.name}@${plan.teamName}`, name: entry.name, agentType: entry.agentType,
+                model: entry.runtime.modelId, providerId: entry.runtime.providerId, providerName: typeof entry.providerName === 'string' ? entry.providerName : undefined, effortLevel: entry.runtime.effortLevel,
+                planMemberId: entry.id, joinedAt: Date.now(), tmuxPaneId: '', cwd: plan.workDir, subscriptions: [],
+                sessionId: memberIds[entry.id], backendType: 'process',
+                ...(waiting.has(entry.id) ? { isActive: false, awaitingDependencies: true } : { isActive: true }) })
+            }
+            return team
+          })
         })
         await sendTeamSnapshot(plan.sessionId, plan.teamName, launch.createdAt).catch(error => {
           throw new Error(`The team lead did not take over the team: ${error instanceof Error ? error.message : String(error)}`)
@@ -1203,6 +1403,10 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
   if (plan.state !== 'running' || !plan.approvedSnapshot || launches.has(plan.planId)) return launches.has(plan.planId)
   const team = readTeamFile(plan.teamName)
   if (!team || team.leadSessionId !== plan.sessionId || incarnationOf(team) !== plan.incarnationId) return false
+  const hasOwner = getTeamRuntimeLaunches(plan.sessionId, plan.teamName).some(owner => owner.running)
+  const priorControl = await readTeamRuntimeControl(plan.teamName, teamControlIdentity(team))
+  const pausedByUser = priorControl?.status === 'paused' || priorControl?.status === 'pausing'
+  const control = await ensureTeamRuntimeControl(plan.teamName, teamControlIdentity(team), teamRuntimeOwnerId, { recoverOwner: !hasOwner })
   const memberIds = plan.launch?.memberIds ?? {}
   const workers = new Map<string, WorkerRuntime>()
   let taskMapping: Record<string, string> | undefined
@@ -1211,7 +1415,7 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
     if (!sessionId) continue
     const entry = team.members.find(candidate => candidate.sessionId === sessionId)
     if (!entry) continue
-    const worker: WorkerRuntime = { member, sessionId, released: true, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() }
+    const worker: WorkerRuntime = { member, sessionId, stoppedByUser: pausedByUser, released: true, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() }
     // The restart ended a member that was still at work. Nothing wakes it by
     // itself, and the lead would wait for its report: the user's next message
     // tells the lead to wake it (noteLeadUserMessage).
@@ -1234,14 +1438,20 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
   ensureRuntimeHooks()
   const launch: TeamLaunch = {
     parentId: plan.sessionId, plan, createdAt: team.createdAt, released: true, running: true,
+    ...(control.status !== 'running' ? { pausedAt: control.pausedAt ?? Date.now() } : {}),
     children: [...workers.values()].map(worker => worker.sessionId), workers, supervising: false, stopped: false,
     permissionMode: conversationService.getSessionPermissionMode(plan.sessionId), createdTaskIds: [],
   }
   launches.set(plan.planId, launch)
   await mutateTeamFileAsync(plan.teamName, current => {
-    if (current.createdAt !== team.createdAt) return
+    if (incarnationOf(current) !== plan.incarnationId) return
     const sessions = new Set(launch.children)
-    return { ...current, members: current.members.map(entry => entry.sessionId && sessions.has(entry.sessionId) && !conversationService.hasSession(entry.sessionId) ? { ...entry, isActive: false, terminated: true } : entry) }
+    return { ...current, members: current.members.map(entry => {
+      if (!entry.sessionId || !sessions.has(entry.sessionId)) return entry
+      const member = [...workers.values()].find(worker => worker.sessionId === entry.sessionId)!.member
+      const next = { ...entry, model: member.runtime.modelId, providerId: member.runtime.providerId, providerName: member.providerName, effortLevel: member.runtime.effortLevel }
+      return !conversationService.hasSession(entry.sessionId) ? { ...next, isActive: false, terminated: true } : next
+    }) }
   }).catch(() => undefined)
   startSupervisor(launch)
   return true
@@ -1354,6 +1564,10 @@ export async function hasPendingTeamPowerWork(): Promise<boolean> {
  * finished starting is still revoked.
  */
 export async function stopTeamPlanRuntimesForParent(parentSessionId: string, options: { pauseReleased?: boolean } = {}): Promise<void> {
+  if (options.pauseReleased) {
+    const { pauseReviewedTeamsForParent } = await import('./teamRuntimeControlService.js')
+    await pauseReviewedTeamsForParent(parentSessionId)
+  }
   const owned = () => [...launches.entries()].filter(([, launch]) => launch.parentId === parentSessionId && !(options.pauseReleased && launch.running))
   const stopOwned = () => Promise.all(owned().map(([planId]) => stopTeamPlanRuntime(planId)))
   const hadReleasedWork = owned().some(([, launch]) => launch.released)
