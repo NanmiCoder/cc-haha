@@ -1944,6 +1944,11 @@ namespace CcHahaInstallerProfile
       try
       {
         AbiOperatingSystem();
+        // Match the parent's read-only native snapshot before managed spec
+        // deserialization can initialize per-process folder/configuration state.
+        // The untrusted spec still gates every output, pipe, and launch action.
+        TokenIdentity identity = platform.InspectCurrentToken();
+        KnownPaths paths = platform.QueryKnownPaths(IntPtr.Zero);
         CorePolicy.ValidateAbsolutePath(specPath);
         AbiSpec spec = CoreJson.Read<AbiSpec>(specPath);
         ValidateAbiRoot(spec, platform);
@@ -1951,9 +1956,7 @@ namespace CcHahaInstallerProfile
           CorePolicy.SamePath(CorePolicy.BinaryPath, Path.Combine(spec.root, "fixture.exe")) &&
           CorePolicy.HashFile(CorePolicy.BinaryPath) == spec.binarySha256, "ABI same-binary spec binding failed");
         verifiedOutput = spec.output;
-        TokenIdentity identity = platform.InspectCurrentToken();
         CorePolicy.Require(identity.sid == spec.expectedSid && identity.tokenType == 1, "ABI child identity changed");
-        KnownPaths paths = platform.QueryKnownPaths(IntPtr.Zero);
         CorePolicy.Require(platform.CurrentPrivateDesktopName() == spec.desktopName, "ABI child did not use the private desktop");
         channel = NativePipeChannel.Client(spec.pipeName);
         CorePolicy.Require(channel.PeerProcessId == spec.parentPid && spec.parentPid > 0, "ABI pipe server is not its parent");
