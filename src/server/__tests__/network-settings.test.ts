@@ -10,11 +10,13 @@ import {
   SYSTEM_PROXY_URL_ENV,
   getManualNetworkProxyUrl,
   buildNetworkEnvironment,
+  configureMcpHostProxy,
   getNetworkProxyFetchOptions,
   getNetworkProxyUrl,
   loadNetworkSettings,
   normalizeNetworkSettings,
 } from '../services/networkSettings.js'
+import { resolveMcpHostProxy } from '../../services/mcp/hostProxy.js'
 import { SettingsService } from '../services/settingsService.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 
@@ -302,6 +304,56 @@ describe('network settings', () => {
     process.env[SYSTEM_PROXY_URL_ENV] = 'http://system.example:8080'
     expect(getNetworkProxyFetchOptions(settings, 'https://api.example.com/v1/messages').proxy)
       .toBe('https://user:p%40ss@proxy.example.com:8443')
+  })
+
+  it('bypasses a failed system bridge for loopback while remote requests still fail closed', () => {
+    process.env[SYSTEM_PROXY_ERROR_ENV] = 'fixture bridge unavailable'
+    const settings = normalizeNetworkSettings({})
+    for (const target of ['http://127.0.0.1:3000/mcp', 'http://localhost:3000/mcp', 'http://[::1]:3000/mcp']) {
+      expect(() => getNetworkProxyFetchOptions(settings, target)).not.toThrow()
+    }
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://remote.test/mcp')).toThrow('fixture bridge unavailable')
+  })
+
+  it('does not require a healthy bridge for explicitly bypassed targets', () => {
+    process.env[SYSTEM_PROXY_ERROR_ENV] = 'fixture bridge unavailable'
+    process.env.NO_PROXY = 'mcp.blocked.test:443,.internal.test'
+    const settings = normalizeNetworkSettings({})
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://mcp.blocked.test/mcp')).not.toThrow()
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://api.internal.test/mcp')).not.toThrow()
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://mcp.blocked.test:8443/mcp')).toThrow('fixture bridge unavailable')
+    process.env.NO_PROXY = '*'
+    expect(() => getNetworkProxyFetchOptions(settings, 'https://remote.test/mcp')).not.toThrow()
+  })
+
+  it('routes the MCP connections the server opens itself by the saved network setting', async () => {
+    const saveProxy = (proxy: Record<string, string>) => fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ network: { proxy } }),
+      'utf-8',
+    )
+    process.env[SYSTEM_PROXY_URL_ENV] = 'http://127.0.0.1:7897'
+    const dispose = configureMcpHostProxy()
+    try {
+      // Default system mode uses the desktop host's bridge, not HTTPS_PROXY.
+      expect((await resolveMcpHostProxy('https://huggingface.co/mcp'))?.proxy).toBe('http://127.0.0.1:7897')
+      // A host decision of "direct" is still a decision: options without a proxy.
+      const loopback = await resolveMcpHostProxy('http://127.0.0.1:3000/mcp')
+      expect(loopback).toBeDefined()
+      expect(loopback?.proxy).toBe(false)
+
+      await saveProxy({ mode: 'manual', url: 'http://127.0.0.1:7890' })
+      expect((await resolveMcpHostProxy('https://huggingface.co/mcp'))?.proxy).toBe('http://127.0.0.1:7890')
+
+      await saveProxy({ mode: 'direct', url: '' })
+      const direct = await resolveMcpHostProxy('https://huggingface.co/mcp')
+      expect(direct).toBeDefined()
+      expect(direct?.proxy).toBe(false)
+    } finally {
+      dispose()
+    }
+    // Disposing restores the environment proxy of a plain CLI process.
+    expect(await resolveMcpHostProxy('https://huggingface.co/mcp')).toBeUndefined()
   })
 
   it('fails closed to direct when a corrupted manual setting has no URL', () => {
