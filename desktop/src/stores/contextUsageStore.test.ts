@@ -21,8 +21,8 @@ const inspection: SessionInspectionResponse = {
   },
 }
 
-const refresh = (nextRevision = revision, mode: 'restore' | 'auto' | 'manual' | 'force' = 'restore', visible = true) =>
-  useContextUsageStore.getState().refresh('session', nextRevision, mode, visible)
+const refresh = (nextRevision = revision, mode: 'restore' | 'auto' | 'manual' | 'force' = 'restore', visible = true, includeDetails = mode === 'manual') =>
+  useContextUsageStore.getState().refresh('session', nextRevision, mode, visible, includeDetails)
 
 describe('context usage session cache', () => {
   beforeEach(() => {
@@ -45,7 +45,7 @@ describe('context usage session cache', () => {
     vi.useFakeTimers()
     const running = { ...revision, chatState: 'thinking' as const }
     await refresh(running)
-    vi.advanceTimersByTime(29_999)
+    vi.advanceTimersByTime(2_999)
     await refresh(running)
     expect(sessionsApi.getInspection).toHaveBeenCalledTimes(1)
     vi.advanceTimersByTime(1)
@@ -60,9 +60,70 @@ describe('context usage session cache', () => {
     expect(sessionsApi.getInspection).toHaveBeenCalledTimes(1)
     await refresh(revision, 'manual')
     expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
-    vi.advanceTimersByTime(10_000)
+    vi.advanceTimersByTime(1_000)
     await refresh(revision, 'auto')
     expect(sessionsApi.getInspection).toHaveBeenCalledTimes(3)
+  })
+
+  it('requests a cheap summary until the caller asks for the breakdown', async () => {
+    await refresh()
+    expect(sessionsApi.getInspection).toHaveBeenLastCalledWith('session', expect.objectContaining({ summaryOnly: true }))
+    await refresh(revision, 'manual')
+    expect(sessionsApi.getInspection).toHaveBeenLastCalledWith('session', expect.objectContaining({ summaryOnly: false }))
+  })
+
+  it.each(['summary to details', 'details to summary'] as const)('keeps independent %s requests without rolling the headline backwards', async (direction) => {
+    let resolve!: (value: SessionInspectionResponse) => void
+    vi.mocked(sessionsApi.getInspection)
+      .mockReturnValueOnce(new Promise((done) => { resolve = done }))
+      .mockResolvedValueOnce({ ...inspection, context: { ...inspection.context!, percentage: 30 } })
+    const firstDetails = direction === 'details to summary'
+    const first = refresh(revision, firstDetails ? 'manual' : 'restore', true, firstDetails)
+    const firstSignal = vi.mocked(sessionsApi.getInspection).mock.calls[0]?.[1]?.signal
+    const replacement = refresh(revision, firstDetails ? 'auto' : 'manual', true, !firstDetails)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    expect(firstSignal?.aborted).toBe(false)
+    await replacement
+    resolve(inspection)
+    expect(await first).toBe(true)
+    // A late summary remains authoritative. A late full response only fills
+    // details after a newer summary has settled.
+    expect(useContextUsageStore.getState().bySession.session?.context?.percentage).toBe(firstDetails ? 30 : 20)
+    expect(useContextUsageStore.getState().bySession.session?.detailContext).not.toBeNull()
+  })
+
+  it.each(['runtime', 'compact', 'completed turn'] as const)('cancels pending details across a %s boundary', async (boundary) => {
+    let resolve!: (value: SessionInspectionResponse) => void
+    vi.mocked(sessionsApi.getInspection).mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const running = { ...revision, chatState: 'thinking' as const }
+    const pending = refresh(running, 'manual')
+    const signal = vi.mocked(sessionsApi.getInspection).mock.calls[0]?.[1]?.signal
+    const next = {
+      ...running,
+      runtimeSelectionKey: boundary === 'runtime' ? 'replacement:model' : running.runtimeSelectionKey,
+      refreshNonce: boundary === 'compact' ? 1 : 0,
+      chatState: boundary === 'completed turn' ? 'idle' as const : running.chatState,
+    }
+    await refresh(next, 'force')
+    resolve(inspection)
+    expect(await pending).toBe(false)
+    expect(signal?.aborted).toBe(true)
+    expect(useContextUsageStore.getState().bySession.session?.detailContext).toBeNull()
+  })
+
+  it('shares slow summary polls instead of stacking requests every second', async () => {
+    vi.useFakeTimers()
+    let resolve!: (value: SessionInspectionResponse) => void
+    vi.mocked(sessionsApi.getInspection).mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const running = { ...revision, chatState: 'thinking' as const }
+    const first = refresh(running)
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(3_000)
+      expect(refresh(running, 'auto')).toBe(first)
+    }
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(1)
+    resolve(inspection)
+    await first
   })
 
   it('keeps the last confirmed model with an estimate and retries a failed replacement', async () => {
