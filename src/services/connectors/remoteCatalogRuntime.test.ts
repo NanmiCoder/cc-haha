@@ -7,6 +7,7 @@ import * as optionStorage from '../../utils/plugins/pluginOptionsStorage.js'
 import { extractMcpServersFromPlugins, getPluginMcpServers } from '../../utils/plugins/mcpPluginIntegration.js'
 import { REMOTE_RECIPES } from './remoteCatalog.js'
 import { buildRemotePlugin, createRemoteConnectorBridge, saveRemoteApiKey, type RemoteConnectorDependencies, type RemoteConnectorRecipe } from './remoteConnector.js'
+import { McpConnectionError } from '../mcp/connectionErrors.js'
 
 type Call = { kind: string, name: string, config?: unknown }
 const signal = () => new AbortController().signal
@@ -143,10 +144,10 @@ function runtimeContract(recipe: RemoteConnectorRecipe) {
     expect(await bridge.check(signal())).toEqual({ authenticated: false, verification: 'remote', toolCount: 0 })
     for (const status of ['connected', 'failed', 'disabled'] as const) {
       f.dependencies.probe = async () => ({ status, toolCount: 0 })
-      await expect(bridge.check(signal())).rejects.toThrow('Unable to connect')
+      await expect(bridge.check(signal())).rejects.toThrow(new McpConnectionError('discovery').message)
     }
     f.dependencies.probe = async () => { throw new Error('transport failed: fake-private-key') }
-    await expect(bridge.check(signal())).rejects.toThrow('Remote connector connection or tool discovery failed')
+    await expect(bridge.check(signal())).rejects.toThrow(new McpConnectionError('discovery').message)
     const count = f.calls.length
     const controller = new AbortController()
     controller.abort()
