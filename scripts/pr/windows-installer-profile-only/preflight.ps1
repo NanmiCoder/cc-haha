@@ -94,9 +94,12 @@ try {
   $rejected=$false
   try {[CcHaha1879ProfileOnlyLaunchV1.Native]::CreateOwnedDirectory($FixtureRoot,$runnerSid)|Out-Null}catch{$rejected=$true}
   Check 'existing-root-rejected' $rejected
-  $file=Join-Path $FixtureRoot 'readonly-input.txt'
-  [IO.File]::WriteAllText($file,'owned preflight input',[Text.UTF8Encoding]::new($false))
-  function Set-FixtureAcl([string]$ExtraSid,[bool]$ExtraWrite) {
+  function Set-FixtureAcl([string]$Name,[string]$ExtraSid,[bool]$ExtraWrite) {
+    # Each ACL case starts with its own newly created writable file. Rewriting
+    # the owner of an already-readonly case would require WRITE_OWNER.
+    $caseFile=Join-Path $FixtureRoot $Name
+    $stream=[IO.FileStream]::new($caseFile,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    $stream.Dispose()
     $acl=[Security.AccessControl.FileSecurity]::new()
     $acl.SetAccessRuleProtection($true,$false)
     $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($runnerSid))
@@ -104,16 +107,17 @@ try {
     foreach($sid in @($runnerSid,'S-1-5-18','S-1-5-32-544')) {$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),$rights,[Security.AccessControl.AccessControlType]::Allow))}
     if($ExtraSid){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($ExtraSid),$rights,[Security.AccessControl.AccessControlType]::Allow))}
     if($ExtraWrite){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($runnerSid),[Security.AccessControl.FileSystemRights]::WriteData,[Security.AccessControl.AccessControlType]::Allow))}
-    [IO.File]::SetAccessControl($file,$acl)
+    [IO.File]::SetAccessControl($caseFile,$acl)
+    return $caseFile
   }
-  Set-FixtureAcl '' $false
+  $file=Set-FixtureAcl 'readonly-input.txt' '' $false
   Assert-PrivateAcl (Get-Acl -LiteralPath $file) $runnerSid $false $true $true
   Check 'readonly-allow-synchronize-roundtrip' $true
-  Set-FixtureAcl '' $true
+  $file=Set-FixtureAcl 'extra-write-input.txt' '' $true
   $rejected=$false
   try {Assert-PrivateAcl (Get-Acl -LiteralPath $file) $runnerSid $false $true $true}catch{$rejected=$true}
   Check 'readonly-extra-write-rejected' $rejected
-  Set-FixtureAcl 'S-1-5-32-545' $false
+  $file=Set-FixtureAcl 'extra-principal-input.txt' 'S-1-5-32-545' $false
   $rejected=$false
   try {Assert-PrivateAcl (Get-Acl -LiteralPath $file) $runnerSid $false $true $true}catch{$rejected=$true}
   Check 'readonly-extra-principal-rejected' $rejected
