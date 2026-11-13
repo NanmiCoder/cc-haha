@@ -1,6 +1,11 @@
 import type { TranslationKey } from './en'
 
 export const kr: Record<TranslationKey, string> = {
+  'settings.claudeOfficialLogin.usageSevenDayOauthApps': 'OAuth 앱 주간 한도',
+  'settings.claudeOfficialLogin.usageUnavailableValue': '사용량 확인 불가',
+  'settings.claudeOfficialLogin.usageResetNotProvided': '초기화 시간 미제공',
+  'settings.claudeOfficialLogin.usageUnlimited': '한도 없음',
+  'settings.providers.officialUsageNotIntegrated': '이 서비스의 사용량 조회는 아직 연동되지 않았습니다. 공식 웹사이트에서 확인하세요.',
   'settings.adapters.wechatHealthStopped': "메시지 연결 중지됨",
   'settings.adapters.wechatHealthStarting': "메시지 연결 중",
   'settings.adapters.wechatHealthOnline': "메시지 연결 온라인",
@@ -1652,6 +1657,20 @@ export const kr: Record<TranslationKey, string> = {
   'settings.claudeOfficialLogin.subTypeUnknown': '알 수 없음',
   'settings.claudeOfficialLogin.errorPrefix': '오류: ',
   'settings.claudeOfficialLogin.openBrowserFailed': '브라우저를 열지 못했습니다. 승인 URL에 수동으로 접속하세요.',
+  'settings.claudeOfficialLogin.usageTitle': '사용량',
+  'settings.claudeOfficialLogin.usageRefresh': '새로고침',
+  'settings.claudeOfficialLogin.usageUpdatedAt': '{time} 업데이트',
+  'settings.claudeOfficialLogin.usageFiveHour': '5시간 한도',
+  'settings.claudeOfficialLogin.usageSevenDay': '주간 한도',
+  'settings.claudeOfficialLogin.usageSevenDayOpus': '주간 한도 (Opus)',
+  'settings.claudeOfficialLogin.usageSevenDaySonnet': '주간 한도 (Sonnet)',
+  'settings.claudeOfficialLogin.usageExtra': '추가 사용량',
+  'settings.claudeOfficialLogin.usageUsed': '{percent}% 사용',
+  'settings.claudeOfficialLogin.usageResetsAt': '{time} 초기화',
+  'settings.claudeOfficialLogin.usageNoData': '계정에서 사용량 한도를 반환하지 않았습니다.',
+  'settings.claudeOfficialLogin.usageMissingScope': '현재 로그인으로는 사용량을 읽을 수 없습니다. 로그아웃한 뒤 다시 로그인하세요.',
+  'settings.claudeOfficialLogin.usageUnavailable': '지금은 사용량을 가져올 수 없습니다.',
+  'settings.claudeOfficialLogin.usageUnavailableStatus': '지금은 사용량을 가져올 수 없습니다 (HTTP {status}).',
 
   // Settings > ChatGPT Official Login
   'settings.chatgptOfficialLogin.intro': '데스크톱 세션에서 GPT 모델을 사용하려면 ChatGPT로 로그인하세요.',
