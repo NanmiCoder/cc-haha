@@ -430,6 +430,7 @@ export function evaluateChangePolicy(
     file.startsWith('desktop/electron/') ||
     file.startsWith('desktop/scripts/') ||
     file.startsWith('desktop/src-tauri/') ||
+    file.startsWith('scripts/pr/windows-installer-profile-only/') ||
     file.startsWith('scripts/pr/windows-installer-profile-review/') ||
     desktopNativeExactPaths.has(file)
   ))
