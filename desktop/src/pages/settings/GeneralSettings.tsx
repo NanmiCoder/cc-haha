@@ -95,6 +95,8 @@ export function GeneralSettings() {
     setWorkflowKeywordTriggerEnabled,
     nextPromptSuggestionsEnabled,
     setNextPromptSuggestionsEnabled,
+    maxOutputTokensEscalationMode,
+    setMaxOutputTokensEscalationMode,
     agentTeamsEnabled,
     setAgentTeamsEnabled,
     maxConcurrentSubagents,
@@ -1164,6 +1166,23 @@ export function GeneralSettings() {
             }}
             disabled={agentTeamsSaving}
           />
+          <SettingsRow
+            title={t('settings.general.maxOutputTokensEscalationTitle')}
+            description={t('settings.general.maxOutputTokensEscalationDescription')}
+            data-testid="max-output-tokens-escalation-setting"
+          >
+            <SegmentedControl
+              label={t('settings.general.maxOutputTokensEscalationTitle')}
+              items={[
+                { value: 'auto', label: t('settings.general.maxOutputTokensEscalationAuto') },
+                { value: 'enabled', label: t('settings.general.maxOutputTokensEscalationEnabled') },
+                { value: 'disabled', label: t('settings.general.maxOutputTokensEscalationDisabled') },
+              ]}
+              value={maxOutputTokensEscalationMode}
+              onChange={(mode) => void setMaxOutputTokensEscalationMode(mode)}
+              size="sm"
+            />
+          </SettingsRow>
           <SettingsRow
             title={t('settings.general.subagentConcurrencyTitle')}
             description={t('settings.general.subagentConcurrencyDescription')}

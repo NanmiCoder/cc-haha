@@ -196,6 +196,7 @@ import {
   resolveOpenAICodexFirstTokenTimeoutMs,
 } from "src/services/openaiAuth/streamPolicy.js";
 import { endQueryProfile, queryCheckpoint } from "src/utils/queryProfiler.js";
+import { getSettings_DEPRECATED } from "src/utils/settings/settings.js";
 import {
   modelSupportsAdaptiveThinking,
   modelUsesBoundThinking,
@@ -4112,7 +4113,10 @@ export function adjustParamsForNonStreaming<
   };
 }
 
-function isMaxTokensCapEnabled(): boolean {
+export function isMaxTokensCapEnabled(): boolean {
+  const mode = getSettings_DEPRECATED().maxOutputTokensEscalationMode;
+  if (mode === "enabled") return true;
+  if (mode === "disabled") return false;
   // 3P default: false (not validated on Bedrock/Vertex)
   return getFeatureValue_CACHED_MAY_BE_STALE("tengu_otk_slot_v1", false);
 }

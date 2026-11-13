@@ -190,6 +190,8 @@ export type UserSettings = {
   desktopTerminal?: Partial<DesktopTerminalSettings>
   /** Days to keep transcripts. 0 disables session persistence entirely. */
   cleanupPeriodDays?: number
+  /** Max output tokens escalation mode; absent means 'auto' (follow GrowthBook). */
+  maxOutputTokensEscalationMode?: 'auto' | 'enabled' | 'disabled'
   [key: string]: unknown
 }
 

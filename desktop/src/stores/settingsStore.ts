@@ -69,6 +69,7 @@ type SettingsStore = {
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
   nextPromptSuggestionsEnabled: boolean
+  maxOutputTokensEscalationMode: 'auto' | 'enabled' | 'disabled'
   leanModeEnabled: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
@@ -119,6 +120,7 @@ type SettingsStore = {
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setNextPromptSuggestionsEnabled: (enabled: boolean) => Promise<void>
+  setMaxOutputTokensEscalationMode: (mode: 'auto' | 'enabled' | 'disabled') => Promise<void>
   setLeanModeEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
@@ -227,6 +229,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
   nextPromptSuggestionsEnabled: false,
+  maxOutputTokensEscalationMode: 'auto',
   leanModeEnabled: false,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
@@ -320,6 +323,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         // Opt-in: every suggestion is an extra model request.
         nextPromptSuggestionsEnabled: userSettings.nextPromptSuggestionsEnabled === true,
+        maxOutputTokensEscalationMode:
+          userSettings.maxOutputTokensEscalationMode === 'enabled' || userSettings.maxOutputTokensEscalationMode === 'disabled'
+            ? userSettings.maxOutputTokensEscalationMode
+            : 'auto',
         // Forward read migration: older settings leave the experiment disabled.
         leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
           ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
@@ -421,6 +428,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ nextPromptSuggestionsEnabled: enabled })
     } catch (error) {
       set({ nextPromptSuggestionsEnabled: prev })
+      throw error
+    }
+  },
+
+  setMaxOutputTokensEscalationMode: async (mode) => {
+    const prev = get().maxOutputTokensEscalationMode
+    set({ maxOutputTokensEscalationMode: mode })
+    try {
+      await settingsApi.updateUser({ maxOutputTokensEscalationMode: mode })
+    } catch (error) {
+      set({ maxOutputTokensEscalationMode: prev })
       throw error
     }
   },

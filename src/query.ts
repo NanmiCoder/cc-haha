@@ -101,7 +101,7 @@ import {
   tokenCountWithEstimation,
 } from './utils/tokens.js'
 import { ESCALATED_MAX_TOKENS } from './utils/context.js'
-import { getFeatureValue_CACHED_MAY_BE_STALE } from './services/analytics/growthbook.js'
+import { isMaxTokensCapEnabled } from './services/api/claude.js'
 import { SLEEP_TOOL_NAME } from './tools/SleepTool/prompt.js'
 import { executePostSamplingHooks } from './utils/hooks/postSamplingHooks.js'
 import { executeStopFailureHooks } from './utils/hooks.js'
@@ -1357,11 +1357,7 @@ async function* queryLoop(
         // multi-turn dance. This fires once per turn (guarded by the
         // override check), then falls through to multi-turn recovery if
         // 64k also hits the cap.
-        // 3P default: false (not validated on Bedrock/Vertex)
-        const capEnabled = getFeatureValue_CACHED_MAY_BE_STALE(
-          'tengu_otk_slot_v1',
-          false,
-        )
+        const capEnabled = isMaxTokensCapEnabled()
         if (
           capEnabled &&
           maxOutputTokensOverride === undefined &&

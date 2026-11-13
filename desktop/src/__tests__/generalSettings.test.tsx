@@ -262,6 +262,7 @@ describe('Settings > General tab', () => {
       thinkingEnabled: true,
       workflowKeywordTriggerEnabled: true,
       agentTeamsEnabled: true,
+      maxOutputTokensEscalationMode: 'auto',
       autoDreamEnabled: false,
       skipWebFetchPreflight: true,
       desktopNotificationsEnabled: true,
@@ -1441,6 +1442,34 @@ describe('Settings > General tab', () => {
         type: 'error',
         message: 'Failed to save Agent Teams settings. Please try again.',
       })
+    } finally {
+      updateUser.mockRestore()
+    }
+  })
+
+  it('renders and saves the max output tokens escalation mode tri-state', async () => {
+    const updateUser = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
+    try {
+      render(<Settings />)
+      fireEvent.click(screen.getByText('General'))
+
+      // Default is Auto
+      expect(screen.getByTestId('max-output-tokens-escalation-setting')).toBeVisible()
+      const radiogroup = screen.getByRole('radiogroup', { name: 'Max output tokens escalation' })
+      const autoBtn = within(radiogroup).getByRole('radio', { name: 'Auto' })
+      const enabledBtn = within(radiogroup).getByRole('radio', { name: 'Enabled' })
+      const disabledBtn = within(radiogroup).getByRole('radio', { name: 'Disabled' })
+      expect(autoBtn).toHaveAttribute('aria-checked', 'true')
+
+      // Switch to Enabled
+      fireEvent.click(enabledBtn)
+      expect(enabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'enabled' })
+
+      // Switch to Disabled
+      fireEvent.click(disabledBtn)
+      expect(disabledBtn).toHaveAttribute('aria-checked', 'true')
+      expect(updateUser).toHaveBeenLastCalledWith({ maxOutputTokensEscalationMode: 'disabled' })
     } finally {
       updateUser.mockRestore()
     }
