@@ -32,8 +32,11 @@ import type {
   OAuthTokenExchangeResponse,
   SubscriptionType,
 } from '../../services/oauth/types.js'
-import { CLAUDE_AI_PROFILE_SCOPE } from '../../constants/oauth.js'
+import { CLAUDE_AI_PROFILE_SCOPE, getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import { getOauthProfileFromOauthToken } from '../../services/oauth/getOauthProfile.js'
+import type { Utilization } from '../../services/api/usage.js'
+import { getAxiosProxyOptions } from '../../utils/proxy.js'
+import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getNetworkProxyUrl, loadNetworkSettings } from './networkSettings.js'
 
 export type StoredOAuthTokens = {
@@ -75,6 +78,51 @@ type FetchAccountUuidFn = (
   opts?: { proxyUrl?: string | null },
 ) => Promise<string | null>
 
+type FetchPlanUsageFn = (
+  accessToken: string,
+  opts?: { proxyUrl?: string | null },
+) => Promise<Utilization>
+
+/**
+ * The Claude subscription's usage limits as the official account reports them
+ * (the same data `/usage` shows in the terminal). `fetchedAt` is when this server
+ * asked, so the desktop can say how fresh the numbers are.
+ */
+export type ClaudePlanUsageResult =
+  | { available: true; fetchedAt: string; usage: Utilization }
+  | {
+      available: false
+      fetchedAt: string
+      reason: 'not_logged_in' | 'missing_scope' | 'request_failed'
+      status?: number
+    }
+
+const PLAN_USAGE_TIMEOUT_MS = 5_000
+
+export async function fetchClaudePlanUsage(
+  accessToken: string,
+  opts: { proxyUrl?: string | null } = {},
+): Promise<Utilization> {
+  const response = await axios.get<Utilization>(
+    `${getOauthConfig().BASE_API_URL}/api/oauth/usage`,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': getClaudeCodeUserAgent(),
+        Authorization: `Bearer ${accessToken}`,
+        'anthropic-beta': OAUTH_BETA_HEADER,
+      },
+      timeout: PLAN_USAGE_TIMEOUT_MS,
+      ...getAxiosProxyOptions(opts.proxyUrl),
+    },
+  )
+  return response.data ?? {}
+}
+
+function httpStatusOf(error: unknown): number | undefined {
+  return axios.isAxiosError(error) ? error.response?.status : undefined
+}
+
 const SESSION_TTL_MS = 5 * 60 * 1000
 const ACCOUNT_UUID_LOOKUP_TIMEOUT_MS = 3_000
 const ACCOUNT_UUID_RETRY_BACKOFF_MS = 60_000
@@ -96,6 +144,45 @@ export class HahaOAuthService {
   private exchangeFn: ExchangeFn = exchangeCodeForTokens
   private fetchProfileFn: FetchProfileFn = fetchProfileInfo
   private fetchAccountUuidFn: FetchAccountUuidFn = fetchAccountUuid
+  private fetchPlanUsageFn: FetchPlanUsageFn = fetchClaudePlanUsage
+
+  setFetchPlanUsageFn(fn: FetchPlanUsageFn = fetchClaudePlanUsage): void {
+    this.fetchPlanUsageFn = fn
+  }
+
+  /**
+   * Read the logged-in Claude subscription's usage limits. Never throws: the
+   * desktop shows why the numbers are unavailable instead of an error dialog.
+   */
+  async getPlanUsage(): Promise<ClaudePlanUsageResult> {
+    const fetchedAt = new Date().toISOString()
+    let tokens = await this.ensureFreshTokens().catch(() => null)
+    if (!tokens) return { available: false, fetchedAt, reason: 'not_logged_in' }
+    // The usage endpoint needs the profile scope, which tokens issued before
+    // it was requested do not carry; logging in again grants it.
+    if (!tokens.scopes.includes(CLAUDE_AI_PROFILE_SCOPE)) {
+      return { available: false, fetchedAt, reason: 'missing_scope' }
+    }
+    const proxyUrl = getNetworkProxyUrl(await loadNetworkSettings())
+    try {
+      return { available: true, fetchedAt, usage: await this.fetchPlanUsageFn(tokens.accessToken, { proxyUrl }) }
+    } catch (error) {
+      let status = httpStatusOf(error)
+      // A token revoked or rotated elsewhere: refresh once, as sessions do.
+      if (status === 401) {
+        const refreshed = await this.recoverFromUnauthorized(tokens.accessToken).catch(() => null)
+        if (refreshed && refreshed.accessToken !== tokens.accessToken) {
+          tokens = refreshed
+          try {
+            return { available: true, fetchedAt, usage: await this.fetchPlanUsageFn(tokens.accessToken, { proxyUrl }) }
+          } catch (retryError) {
+            status = httpStatusOf(retryError)
+          }
+        }
+      }
+      return { available: false, fetchedAt, reason: 'request_failed', ...(status ? { status } : {}) }
+    }
+  }
 
   setFetchAccountUuidFn(fn: FetchAccountUuidFn = fetchAccountUuid): void {
     this.fetchAccountUuidFn = fn

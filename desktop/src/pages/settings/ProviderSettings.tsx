@@ -474,10 +474,17 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           badges={isActive ? (
             <Badge tone="brand">{t('settings.providers.default')}</Badge>
           ) : null}
-          details={!browserMode && isActive ? (
-            <div className="flex flex-col">
-              <official.Login />
-              <OfficialProviderModelSettings providerId={item.id} />
+          details={!browserMode ? (
+            <div className="flex flex-col gap-3">
+              {isActive ? (
+                <>
+                  <official.Login />
+                  <OfficialProviderModelSettings providerId={item.id} />
+                </>
+              ) : item.kind === 'claude-official' ? <ClaudeOfficialLogin usageOnly /> : null}
+              {item.kind !== 'claude-official' && (
+                <p className="text-xs text-[var(--color-text-secondary)]">{t('settings.providers.officialUsageNotIntegrated')}</p>
+              )}
             </div>
           ) : null}
         />
