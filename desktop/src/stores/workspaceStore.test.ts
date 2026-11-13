@@ -25,7 +25,7 @@ vi.mock('../lib/workspace/browserHost', () => ({
 }))
 
 import {
-  WORKSPACE_SIDE_MAX_WIDTH,
+  WORKSPACE_SIDE_DEFAULT_WIDTH,
   WORKSPACE_SIDE_MIN_WIDTH,
   useWorkspaceStore,
   workspaceTabTitle,
@@ -108,7 +108,19 @@ describe('layout', () => {
     store().setSideWidth(10)
     expect(store().sideWidth).toBe(WORKSPACE_SIDE_MIN_WIDTH)
     store().setSideWidth(99999)
-    expect(store().sideWidth).toBe(WORKSPACE_SIDE_MAX_WIDTH)
+    expect(store().sideWidth).toBe(99999)
+    store().setSideWidth(Number.POSITIVE_INFINITY)
+    expect(store().sideWidth).toBe(WORKSPACE_SIDE_DEFAULT_WIDTH)
+  })
+
+  it('remembers wide-screen pixel widths without the old 1120px ceiling', () => {
+    store().setSideWidth(1680)
+    expect(store().sideWidth).toBe(1680)
+    store().toggleWorkspace(SESSION)
+    store().toggleWorkspace(SESSION)
+    openFile('other.ts')
+    store().openTarget(OTHER, { kind: 'file', path: 'another.ts' })
+    expect(store().sideWidth).toBe(1680)
   })
 })
 
