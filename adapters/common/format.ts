@@ -40,7 +40,10 @@ const IM_HELP_LINES = [
   '权限审批：/allow <id>、/always <id>、/deny <id>',
 ]
 
-/** Split text into chunks that fit within a character limit, respecting paragraph/sentence boundaries. */
+/**
+ * Split text within a UTF-16 code-unit limit, respecting paragraph/sentence boundaries.
+ * Surrogate pairs stay intact; with limit=1, a single pair needs a two-unit chunk.
+ */
 export function splitMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text]
 
@@ -60,7 +63,13 @@ export function splitMessage(text: string, limit: number): string[] {
     if (splitAt <= 0) splitAt = limit
 
     // Include the delimiter for paragraph/sentence breaks
-    if (remaining[splitAt] === '\n' || remaining[splitAt] === '.') splitAt += 1
+    if (splitAt < limit && (remaining[splitAt] === '\n' || remaining[splitAt] === '.')) splitAt += 1
+
+    // A UTF-16 slice can otherwise send two replacement characters over UTF-8.
+    const preceding = remaining.charCodeAt(splitAt - 1)
+    if (isLowSurrogate(remaining.charCodeAt(splitAt)) && preceding >= 0xd800 && preceding <= 0xdbff) {
+      splitAt = splitAt === 1 ? 2 : splitAt - 1
+    }
 
     chunks.push(remaining.slice(0, splitAt).trimEnd())
     remaining = remaining.slice(splitAt).trimStart()

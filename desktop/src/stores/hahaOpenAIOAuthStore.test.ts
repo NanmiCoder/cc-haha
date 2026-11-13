@@ -94,4 +94,24 @@ describe('hahaOpenAIOAuthStore', () => {
     expect(useHahaOpenAIOAuthStore.getState().status).toEqual({ loggedIn: false })
     expect(useHahaOpenAIOAuthStore.getState().isPolling).toBe(false)
   })
+
+  it('preserves the signed-in account during a transient refresh error and clears the error after retry', async () => {
+    const status = { loggedIn: true as const, expiresAt: 1, email: 'user@example.com', accountId: 'acct_123' }
+    useHahaOpenAIOAuthStore.setState({ status })
+    statusMock.mockRejectedValueOnce(new Error('Unable to verify OpenAI sign-in status right now. Please retry.'))
+      .mockResolvedValueOnce({ ...status, expiresAt: 100_000 })
+    await useHahaOpenAIOAuthStore.getState().fetchStatus()
+    expect(useHahaOpenAIOAuthStore.getState().status).toEqual(status)
+    expect(useHahaOpenAIOAuthStore.getState().error).toContain('Please retry')
+    await useHahaOpenAIOAuthStore.getState().fetchStatus()
+    expect(useHahaOpenAIOAuthStore.getState().status).toMatchObject({ loggedIn: true, expiresAt: 100_000 })
+    expect(useHahaOpenAIOAuthStore.getState().error).toBeNull()
+  })
+
+  it('keeps first-load refresh failure unknown instead of treating it as signed out', async () => {
+    statusMock.mockRejectedValueOnce(new Error('Please retry'))
+    await useHahaOpenAIOAuthStore.getState().fetchStatus()
+    expect(useHahaOpenAIOAuthStore.getState().status).toBeNull()
+    expect(useHahaOpenAIOAuthStore.getState().error).toBe('Please retry')
+  })
 })

@@ -249,8 +249,9 @@ async function requestGrokImages(
     : buildGrokRequestBody(input)
   let response = await postImages(fetchImpl, url, tokens.accessToken, body, signal)
   if (response.status === 401) {
-    tokens = await forceRefreshGrokTokens().catch(() => null)
-    if (tokens) {
+    const refreshed = await forceRefreshGrokTokens({}, tokens.accessToken)
+    if (refreshed) {
+      tokens = refreshed
       response = await postImages(fetchImpl, url, tokens.accessToken, body, signal)
     }
   }

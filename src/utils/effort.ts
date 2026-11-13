@@ -444,10 +444,11 @@ export function getDefaultEffortForModel(
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
 
-  // Claude Code runs Opus 5.5, Sonnet 5.5 and Haiku 5.5 at medium; the API
-  // default for Sonnet 5.5 is high, so it must be sent explicitly.
+  // Claude Code runs Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.2 at medium; the
+  // API default for Sonnet 5.5 and Fable 5.2 is high, so it must be sent explicitly.
   const canonicalModel = getCanonicalName(model)
   if (
+    canonicalModel === 'claude-fable-5-2' ||
     canonicalModel === 'claude-opus-5-5' ||
     canonicalModel === 'claude-sonnet-5-5' ||
     canonicalModel === 'claude-haiku-5-5'

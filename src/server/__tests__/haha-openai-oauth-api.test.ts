@@ -11,6 +11,7 @@ import { handleHahaOpenAIOAuthApi } from '../api/haha-openai-oauth.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { ProviderService } from '../services/providerService.js'
+import { OpenAITokenHttpError, refreshOpenAITokens } from '../../services/openaiAuth/client.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -24,6 +25,7 @@ async function setup() {
 }
 
 async function teardown() {
+  hahaOpenAIOAuthService.setRefreshFn(refreshOpenAITokens)
   hahaOpenAIOAuthService.dispose()
   hahaOpenAIOAuthService.resetCallbackPortForTests()
   if (originalConfigDir === undefined) {
@@ -146,7 +148,7 @@ describe('GET /api/haha-openai-oauth', () => {
     expect(JSON.stringify(data)).not.toContain('openai-refresh-token')
   })
 
-  test('returns loggedIn=false when stored token is expired and refresh fails', async () => {
+  test('returns loggedIn=false when the refresh grant is explicitly revoked', async () => {
     await hahaOpenAIOAuthService.saveTokens({
       accessToken: 'expired-token',
       refreshToken: 'revoked-refresh-token',
@@ -155,7 +157,7 @@ describe('GET /api/haha-openai-oauth', () => {
       accountId: 'acct_123',
     })
     hahaOpenAIOAuthService.setRefreshFn(async () => {
-      throw new Error('refresh revoked')
+      throw new OpenAITokenHttpError('refresh', 400, 'revoked-refresh-token', 'invalid_grant')
     })
 
     const { req, url, segments } = buildReq('GET', '/api/haha-openai-oauth')
@@ -163,6 +165,30 @@ describe('GET /api/haha-openai-oauth', () => {
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ loggedIn: false })
+    expect((await hahaOpenAIOAuthService.loadTokens())?.refreshToken).toBe('revoked-refresh-token')
+  })
+
+  for (const failure of [
+    new TypeError('network failed; secret-access secret-refresh'),
+    new OpenAITokenHttpError('refresh', 503, 'secret-access secret-refresh', 'invalid_grant'),
+    new OpenAITokenHttpError('refresh', 429, 'secret-access secret-refresh'),
+    new Error('proxy unavailable 401: secret-access secret-refresh'),
+  ]) test(`keeps transient refresh failure distinct from signed out: ${failure.name} ${failure instanceof OpenAITokenHttpError ? failure.status : 'transport'}`, async () => {
+    const saved = { accessToken: 'secret-access', refreshToken: 'secret-refresh', expiresAt: 1, email: null, accountId: null }
+    await hahaOpenAIOAuthService.saveTokens(saved)
+    hahaOpenAIOAuthService.setRefreshFn(async () => { throw failure })
+    const { req, url, segments } = buildReq('GET', '/api/haha-openai-oauth')
+    const response = await handleHahaOpenAIOAuthApi(req, url, segments)
+    expect(response.status).toBe(503)
+    const result = await response.json()
+    expect(result.error).toBe('OAUTH_REFRESH_UNAVAILABLE')
+    expect(result.loggedIn).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain('secret-')
+    expect(await hahaOpenAIOAuthService.loadTokens()).toEqual(saved)
+    hahaOpenAIOAuthService.setRefreshFn(async () => ({ access_token: 'fresh', expires_in: 3600 }))
+    const retry = await handleHahaOpenAIOAuthApi(req, url, segments)
+    expect(retry.status).toBe(200)
+    expect((await retry.json()).loggedIn).toBe(true)
   })
 })
 

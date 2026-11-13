@@ -590,7 +590,7 @@ export type DesktopHost = {
     }
   }
   adapters: {
-    restartSidecar(): Promise<void>
+    restartSidecar(target?: 'wechat'): Promise<void>
   }
   zoom: {
     set(level: number): Promise<void>

@@ -21,6 +21,7 @@ describe('Claude model pricing tables', () => {
 
   // https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-29), $ per MTok.
   it.each([
+    ['claude-fable-5-2', 8, 40, 0.2],
     ['claude-fable-5-1', 10, 50, 0.25],
     ['claude-fable-5', 10, 50, 1],
     ['claude-opus-5-5', 4, 20, 0.2],
