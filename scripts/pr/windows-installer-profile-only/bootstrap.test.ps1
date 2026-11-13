@@ -45,7 +45,7 @@ function Import-Function($Ast,[string]$Name){
 try{
   Check 'startup-first-get-filehash' ($startupHash -cmatch '\A[0-9a-f]{64}\z')
   $asts=@{}
-  foreach($name in @('bootstrap.ps1','fixtures\launch-profile-only.proposed.ps1')){
+  foreach($name in @('bootstrap.ps1','fixtures\launch-profile-only.proposed.ps1','fixtures\reconcile-profile-only.proposed.ps1')){
     $tokens=$null;$errors=$null
     $asts[$name]=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name),[ref]$tokens,[ref]$errors)
     Check ('parse-'+$name) (@($errors).Count -eq 0)
@@ -67,6 +67,27 @@ try{
   $rootIdentity=[CcHaha1879ProfileOnlyLaunchV1.Native]::CreateOwnedDirectory($root,$runnerSid)
   Assert-PrivateAcl (Get-Acl -LiteralPath $root) $runnerSid $true $true $false
   Check 'bootstrap-atomic-owned-root' ($rootIdentity.Path -ceq $root)
+  # Run the actual receipt writers, not a fixture reimplementation. These
+  # JSONs cannot satisfy a live claim or launch receipt contract.
+  foreach($name in @('launch-profile-only.proposed.ps1','reconcile-profile-only.proposed.ps1')){
+    $receiptAst=$asts['fixtures\'+$name]
+    foreach($function in @('Save-AtomicJson','Get-SafeFailure')){. (Import-Function $receiptAst $function)}
+    $atomicPath=Join-Path $root ($name+'.fixture-receipt.json')
+    $fixtureReceipt=[ordered]@{fixture='unadmitted-no-native';status='prepared';errorInfo=$null}
+    Save-AtomicJson $atomicPath $fixtureReceipt
+    Check ('receipt-create-'+$name) ((Get-Content -Raw -LiteralPath $atomicPath|ConvertFrom-Json).status -ceq 'prepared')
+    $fixtureReceipt.status='armed-fixture-only'
+    Save-AtomicJson $atomicPath $fixtureReceipt
+    Check ('receipt-replace-'+$name) ((Get-Content -Raw -LiteralPath $atomicPath|ConvertFrom-Json).status -ceq 'armed-fixture-only')
+    try{throw [InvalidOperationException]::new('CC1879_FAKE_SECRET_DO_NOT_EMIT')}catch{
+      $fixtureReceipt.status='failed-fixture-only';$fixtureReceipt.errorInfo=Get-SafeFailure $_
+      Save-AtomicJson $atomicPath $fixtureReceipt
+    }
+    $text=[IO.File]::ReadAllText($atomicPath);$saved=$text|ConvertFrom-Json
+    Check ('receipt-catch-save-'+$name) ($saved.status -ceq 'failed-fixture-only')
+    Check ('receipt-safe-error-'+$name) (-not $text.Contains('CC1879_FAKE_SECRET_DO_NOT_EMIT') -and $saved.errorInfo.type -is [string] -and ($saved.errorInfo.hResult -is [int] -or $saved.errorInfo.hResult -is [long]) -and $saved.errorInfo.sourceLine -gt 0 -and ((@($saved.errorInfo.PSObject.Properties.Name|Sort-Object) -join '|') -ceq 'hResult|innerHResult|innerType|sourceLine|type'))
+    $ownedFiles+=@{path=$atomicPath;hash=(File-Hash $atomicPath)}
+  }
   $claimPath=Join-Path $root 'claim.json';$inputPath=Join-Path $root 'input.txt'
   $claimBytes=[Text.Encoding]::UTF8.GetBytes('{"fixture":"complete-claim-bytes-preserved"}')
   Write-OwnedNew $claimPath $claimBytes $false

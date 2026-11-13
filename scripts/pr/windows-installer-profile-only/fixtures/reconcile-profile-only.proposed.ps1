@@ -139,12 +139,23 @@ function Assert-ActionsContext([string]$ClaimFile, [string]$RunnerSid) {
   Require-True ($claim.version -eq 1 -and $claim.status -ceq 'first_matching_run_claimed' -and $claim.repository -ceq $pins.repository -and $claim.head -ceq $pins.activationHead -and $claim.runId.ToString() -ceq $env:GITHUB_RUN_ID -and $claim.runAttempt -eq 1 -and $claim.workflowId -eq $pins.workflow.workflowId -and $claim.displayTitle -ceq ('profile1879-p:' + $pins.activationHead) -and $claim.runNumber.ToString() -ceq $env:GITHUB_RUN_NUMBER -and $claim.minimumMatchingRunNumber -eq $claim.runNumber -and $claim.minimumMatchingRunId.ToString() -ceq $env:GITHUB_RUN_ID -and $claim.completePagination -is [bool] -and $claim.completePagination -and $claim.claimantSourceSha256 -ceq $pins.workflow.claimantSourceSha256) 'first_run_claim_missing_or_unbound'
   return [pscustomobject]@{ Value = $claim; Sha256 = (File-Hash $ClaimFile) }
 }
+function Get-SafeFailure([Management.Automation.ErrorRecord]$Record) {
+  $errorObject=$Record.Exception; $inner=$errorObject.InnerException
+  $type=$errorObject.GetType().FullName
+  $innerType=if($null -eq $inner){$null}else{$inner.GetType().FullName}
+  if($type.Length -gt 160 -or $type -cnotmatch '\A[A-Za-z0-9_.+`]+\z'){$type='unavailable'}
+  if($null -ne $innerType -and ($innerType.Length -gt 160 -or $innerType -cnotmatch '\A[A-Za-z0-9_.+`]+\z')){$innerType='unavailable'}
+  $line=$null
+  if($null -ne $Record.InvocationInfo){$candidate=[int]$Record.InvocationInfo.ScriptLineNumber;if($candidate -gt 0 -and $candidate -le 10000){$line=$candidate}}
+  # Never emit Message, ScriptStackTrace, paths, invocation text or environment.
+  return [ordered]@{type=$type;innerType=$innerType;hResult=[int]$errorObject.HResult;innerHResult=$(if($null -eq $inner){$null}else{[int]$inner.HResult});sourceLine=$line}
+}
 function Save-AtomicJson([string]$Path, $Value) {
   $temporary = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
   $bytes = [Text.UTF8Encoding]::new($false, $true).GetBytes(($Value | ConvertTo-Json -Depth 12) + "`n")
   $stream = [IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
   try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary,$Path,$null) } else { [IO.File]::Move($temporary,$Path) }
+  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value) } else { [IO.File]::Move($temporary,$Path) }
 }
 
 $held=[Collections.Generic.List[IDisposable]]::new(); $savedScratch=@{}
@@ -210,8 +221,10 @@ try{
   Require-True ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT -and [Environment]::Is64BitProcess -and $PSVersionTable.PSVersion.Major -eq 5 -and $PSVersionTable.PSVersion.Minor -eq 1 -and $PSVersionTable.PSEdition -ceq 'Desktop') 'windows_x64_powershell51_required'
   $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
   try{$runnerSid=$identity.User.Value;Require-True ([Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) 'existing_admin_required'}finally{$identity.Dispose()}
+  $stage='protected-bootstrap-and-claim'
   Assert-OrdinaryPath $pins.privateBootstrapRoot $true;Assert-PrivateAcl (Get-Acl -LiteralPath $pins.privateBootstrapRoot) $runnerSid $true $true $false
   $claim=Assert-ActionsContext $ClaimFile $runnerSid
+  $stage='owned-stage-controller-layout'
   Assert-OrdinaryPath $pins.stageBase $true;Assert-PrivateAcl (Get-Acl -LiteralPath $pins.stageBase) $runnerSid $true $true $false
   Assert-OrdinaryPath $spec.controllerRoot $true;Assert-PrivateAcl (Get-Acl -LiteralPath $spec.controllerRoot) $runnerSid $true $false $false
   $launchPath=Join-Path $pins.stageBase 'launch-receipt.json';$ledgerPath=Join-Path $spec.controllerRoot 'ledger.json'
@@ -427,7 +440,7 @@ namespace CcHaha1879ProfileOnlyDisableV1
     ledgerSha256=$ledgerHeld.Sha256;launchReceiptSha256=$launchHeld.Sha256;markerSha256=(Hash-Text $marker);accountSidSha256=(Hash-Text $accountSid)
     launcherPid=$launcherPid;launcherBirthFileTime=$launcherBirth.ToString();launcherState=$launcherGone;controllerPid=$controllerPid;controllerBirthFileTime=$controllerBirth.ToString();controllerState=$controllerGone
     accountQueryAttempted=$false;disableMayHaveOccurred=$false;disabledVerified=$false;flagsBefore=$null;flagsAfter=$null
-    originalProfileLease='not_available';profileAndHiveState='unknown_not_mutated';ownedJobs='unknown_not_mutated';failedStage=$null;diagnostic=$null
+    originalProfileLease='not_available';profileAndHiveState='unknown_not_mutated';ownedJobs='unknown_not_mutated';failedStage=$null;diagnostic=$null;errorInfo=$null;receiptWriteError=$null
     member_proven='not_run';installed_bytes_equal='not_run';old22_before_protected_mutation='not_run';removal_equivalence='not_run';full_old_to_new='not_run';compatibilityEnabled=$false;oldExit22Policy='fatal'
   }
   Save-Reconciliation
@@ -438,12 +451,13 @@ namespace CcHaha1879ProfileOnlyDisableV1
   $reconciliation.status='disabled_remaining_unknown';Save-Reconciliation
   $reconciliation|ConvertTo-Json -Depth 10
 }catch{
+  $failureInfo=Get-SafeFailure $_
   $diagnostic='precondition_or_managed_operation_failed';$errorObject=$_.Exception
   for($depth=0;$null -ne $errorObject -and $depth -lt 6;$depth++){
     if($errorObject.GetType().FullName -ceq 'CcHaha1879ProfileOnlyDisableV1.Failure'){$diagnostic='native_operation='+$errorObject.Operation+';code='+$errorObject.Code+';parameter='+$errorObject.Parameter;break};$errorObject=$errorObject.InnerException
   }
-  if($null -ne $reconciliation){$reconciliation.status='stopped_unknown_requires_root_reconciliation';$reconciliation.failedStage=$stage;$reconciliation.diagnostic=$diagnostic;try{Save-Reconciliation}catch{};$reconciliation|ConvertTo-Json -Depth 10}
-  else{[ordered]@{version=1;status='stopped_unknown_requires_root_reconciliation';failedStage=$stage;diagnostic=$diagnostic;accountApi='not_run';cleanup='failed';remaining='unknown';retryAllowed=$false}|ConvertTo-Json}
+  if($null -ne $reconciliation){$reconciliation.status='stopped_unknown_requires_root_reconciliation';$reconciliation.failedStage=$stage;$reconciliation.diagnostic=$diagnostic;$reconciliation.errorInfo=$failureInfo;try{Save-Reconciliation}catch{$reconciliation.receiptWriteError=Get-SafeFailure $_};$reconciliation|ConvertTo-Json -Depth 10}
+  else{[ordered]@{version=1;status='stopped_unknown_requires_root_reconciliation';failedStage=$stage;diagnostic=$diagnostic;errorInfo=$failureInfo;accountApi='not_run';cleanup='failed';remaining='unknown';retryAllowed=$false}|ConvertTo-Json}
 }finally{
   if($null -ne $receiptStream){$receiptStream.Dispose()};foreach($stream in $held){$stream.Dispose()};foreach($name in $savedScratch.Keys){[Environment]::SetEnvironmentVariable($name,$savedScratch[$name],'Process')}
 }

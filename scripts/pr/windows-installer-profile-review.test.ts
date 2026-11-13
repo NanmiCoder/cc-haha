@@ -278,6 +278,21 @@ describe('separate profile-only review', () => {
     expect(profileOnlyPowerShell51).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
   })
 
+  test('persists armed intent before the sole native Start and retains bounded failure metadata', () => {
+    const launch = readFileSync('scripts/pr/windows-installer-profile-only/fixtures/launch-profile-only.proposed.ps1', 'utf8')
+    expect(launch.indexOf("$stage='persist-arm-before-start'")).toBeLessThan(launch.indexOf("$stage='process-start'"))
+    expect(launch.indexOf("$stage='process-start'")).toBeLessThan(launch.indexOf('Require-True ($process.Start())'))
+    expect(launch.match(/\$process\.Start\(\)/g)).toHaveLength(1)
+    for (const name of ['launch', 'reconcile']) {
+      const source = readFileSync(`scripts/pr/windows-installer-profile-only/fixtures/${name}-profile-only.proposed.ps1`, 'utf8')
+      expect(source).toContain('[IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value)')
+      expect(source).not.toContain('[IO.File]::Replace($temporary,$Path,$null)')
+      expect(source).toContain('Get-SafeFailure $_')
+      expect(source).toContain('receiptWriteError=Get-SafeFailure $_')
+      expect(source).toContain("$type='unavailable'")
+    }
+  })
+
   const workspace = resolve('.')
   const head = 'a'.repeat(40)
   const claimantHash = reviewHash(canonicalReviewBytes(readFileSync('scripts/pr/windows-installer-profile-review.ts')))

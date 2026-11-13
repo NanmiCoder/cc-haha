@@ -140,12 +140,23 @@ function Assert-ActionsContext([string]$ClaimFile, [string]$RunnerSid) {
   Require-True ($claim.version -eq 1 -and $claim.status -ceq 'first_matching_run_claimed' -and $claim.repository -ceq $pins.repository -and $claim.head -ceq $pins.activationHead -and $claim.runId.ToString() -ceq $env:GITHUB_RUN_ID -and $claim.runAttempt -eq 1 -and $claim.workflowId -eq $pins.workflow.workflowId -and $claim.displayTitle -ceq ('profile1879-p:' + $pins.activationHead) -and $claim.runNumber.ToString() -ceq $env:GITHUB_RUN_NUMBER -and $claim.minimumMatchingRunNumber -eq $claim.runNumber -and $claim.minimumMatchingRunId.ToString() -ceq $env:GITHUB_RUN_ID -and $claim.completePagination -is [bool] -and $claim.completePagination -and $claim.claimantSourceSha256 -ceq $pins.workflow.claimantSourceSha256) 'first_run_claim_missing_or_unbound'
   return [pscustomobject]@{ Value = $claim; Sha256 = (File-Hash $ClaimFile) }
 }
+function Get-SafeFailure([Management.Automation.ErrorRecord]$Record) {
+  $errorObject=$Record.Exception; $inner=$errorObject.InnerException
+  $type=$errorObject.GetType().FullName
+  $innerType=if($null -eq $inner){$null}else{$inner.GetType().FullName}
+  if($type.Length -gt 160 -or $type -cnotmatch '\A[A-Za-z0-9_.+`]+\z'){$type='unavailable'}
+  if($null -ne $innerType -and ($innerType.Length -gt 160 -or $innerType -cnotmatch '\A[A-Za-z0-9_.+`]+\z')){$innerType='unavailable'}
+  $line=$null
+  if($null -ne $Record.InvocationInfo){$candidate=[int]$Record.InvocationInfo.ScriptLineNumber;if($candidate -gt 0 -and $candidate -le 10000){$line=$candidate}}
+  # Never emit Message, ScriptStackTrace, paths, invocation text or environment.
+  return [ordered]@{type=$type;innerType=$innerType;hResult=[int]$errorObject.HResult;innerHResult=$(if($null -eq $inner){$null}else{[int]$inner.HResult});sourceLine=$line}
+}
 function Save-AtomicJson([string]$Path, $Value) {
   $temporary = $Path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
   $bytes = [Text.UTF8Encoding]::new($false, $true).GetBytes(($Value | ConvertTo-Json -Depth 12) + "`n")
   $stream = [IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
   try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary,$Path,$null) } else { [IO.File]::Move($temporary,$Path) }
+  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary,$Path,[System.Management.Automation.Language.NullString]::Value) } else { [IO.File]::Move($temporary,$Path) }
 }
 
 $held = [Collections.Generic.List[IDisposable]]::new()
@@ -399,18 +410,24 @@ namespace CcHaha1879ProfileOnlyLaunchV1 {
     nativeExitCode=$null; nativeCleanup='not_run'; nativeCleanupReported=$null; terminalReportSha256=$null
     releasedPeExecuted=$false; releasedPeMayHaveExecuted=$false; releasedPeExecutionStatus='not_run'; compatibilityEnabled=$false; oldExit22Policy='fatal'
     member_proven='not_run'; installed_bytes_equal='not_run'; old22_before_protected_mutation='not_run'; removal_equivalence='not_run'; full_old_to_new='not_run'
-    stdoutComplete=$false; stderrComplete=$false; rawLogOverflow=$false; failedStage=$null; diagnostic=$null; retryAllowed=$false
+    stdoutComplete=$false; stderrComplete=$false; rawLogOverflow=$false; failedStage=$null; diagnostic=$null; errorInfo=$null; receiptWriteError=$null; retryAllowed=$false
   }
   $receiptPath = Join-Path $pins.stageBase 'launch-receipt.json'
+  $stage='persist-prepared-receipt'
   Save-AtomicJson $receiptPath $receipt
   $process = [Diagnostics.Process]::new(); $process.StartInfo=$start
-  $stage='arm-before-start'
+  $stage='persist-arm-before-start'
   $receipt.controllerStartAttempted=$true; $receipt.controllerMayHaveExecuted=$true; $receipt.nativeCleanup='unknown'; $receipt.status='controller_start_attempt_in_progress'
   Save-AtomicJson $receiptPath $receipt
+  $stage='process-start'
   Require-True ($process.Start()) 'controller_start_failed_unknown'
+  $stage='close-controller-stdin'
   $process.StandardInput.Close()
+  $stage='capture-controller-stdout'
   $stdout=[CcHaha1879ProfileOnlyLaunchV1.RawCapture]::new($process.StandardOutput.BaseStream,(Join-Path $pins.stageBase 'controller.stdout.raw.log'),1048576)
+  $stage='capture-controller-stderr'
   $stderr=[CcHaha1879ProfileOnlyLaunchV1.RawCapture]::new($process.StandardError.BaseStream,(Join-Path $pins.stageBase 'controller.stderr.raw.log'),1048576)
+  $stage='capture-controller-identity'
   $receipt.controllerStarted=$true; $receipt.controllerPid=$process.Id
   # Keep the held Process object. No PID-only reopening authorizes success.
   $receipt.controllerBirthUtc=$process.StartTime.ToUniversalTime().ToString('o',[Globalization.CultureInfo]::InvariantCulture)
@@ -447,12 +464,13 @@ namespace CcHaha1879ProfileOnlyLaunchV1 {
   Save-AtomicJson $receiptPath $receipt
   $receipt | ConvertTo-Json -Depth 10
 } catch {
+  $failureInfo=Get-SafeFailure $_
   if ($null -ne $receipt) {
     if ($receipt.status -cne 'timeout_unknown_requires_serial_reconciliation') { $receipt.status='failed_requires_serial_reconciliation' }
-    $receipt.nativeCleanup='unknown'; $receipt.failedStage=$stage; $receipt.diagnostic='bounded_precondition_or_operation_failure'
-    try { Save-AtomicJson $receiptPath $receipt } catch { }
+    $receipt.nativeCleanup='unknown'; $receipt.failedStage=$stage; $receipt.diagnostic='bounded_precondition_or_operation_failure'; $receipt.errorInfo=$failureInfo
+    try { Save-AtomicJson $receiptPath $receipt } catch { $receipt.receiptWriteError=Get-SafeFailure $_ }
     $receipt | ConvertTo-Json -Depth 10
-  } else { [ordered]@{version=1;status='stopped_before_controller_start';stage=$stage;cleanup='not_run';accountApi='not_run';readiness='NOT_READY_OR_PRECONDITION_FAILED'} | ConvertTo-Json }
+  } else { [ordered]@{version=1;status='stopped_before_controller_start';stage=$stage;cleanup='not_run';accountApi='not_run';readiness='NOT_READY_OR_PRECONDITION_FAILED';errorInfo=$failureInfo} | ConvertTo-Json }
   exit 1
 } finally {
   if ($null -ne $process) { $process.Dispose() }
