@@ -150,7 +150,8 @@ async function extractHistoricalUninstaller(sourceRoot: string, installer: strin
   if (!extractor) return { status: 'not_proven', method, diagnostics: ['A pinned full NSIS extractor was not prepared'] }
   const { proof, evidenceFile } = proveNsisMember({
     setup: { file: installer, bytes: historicalInstallerFixture.bytes, sha256: historicalInstallerFixture.sha256 },
-    extractor, member: historicalUninstallerMember, output: join(directory, historicalUninstallerMember.path),
+    // The fixed local output is independent of the archive's virtual $R0 directory.
+    extractor, member: historicalUninstallerMember, output: join(directory, 'Uninstall Claude Code Haha.exe'),
     evidenceDirectory: join(sourceRoot, 'artifacts/windows-installer/member-proof/historical'),
   })
   return { status: proof.status === 'member_proven' ? 'extracted' : 'not_proven', method,

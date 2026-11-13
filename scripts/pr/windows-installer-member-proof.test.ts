@@ -8,6 +8,9 @@ import { cleanupPreparedWindowsInstallerTests, pinnedNsisCompiler, prepareWindow
 import { runWindowsInstallerChecks } from './run-windows-installer-checks'
 
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+const releasedListingFixture = JSON.parse(readFileSync(new URL('./fixtures/windows-installer-v078-nsis-list.slt.json', import.meta.url), 'utf8')) as { sha256: string; text: string }
+const releasedListing = releasedListingFixture.text
+const releasedLiteral = '$R0\\Uninstall Claude Code Haha.exe'
 function listing(archive: string, members: string[], type = 'Nsis') {
   return `7-Zip 26.06 (x64)\n\n--\nPath = ${archive}\nType = ${type}\nPhysical Size = 1234\n\n----------\n${members.join('\n\n')}\n`
 }
@@ -48,8 +51,57 @@ describe('static NSIS member proof', () => {
   test('locks the official tool and member identity without granting F1 compatibility', () => {
     expect(pinnedFullSevenZip).toMatchObject({ version: '26.06', assetId: 720544254, bytes: 1659704,
       sha256: '9b697f65ecc2d9b0152f5ee96d72dde522a7827690349d9307935dacf40f42ec' })
-    expect(historicalUninstallerMember).toEqual({ path: 'Uninstall Claude Code Haha.exe', bytes: 174881,
+    expect(historicalUninstallerMember).toEqual({ path: '$R0\\Uninstall Claude Code Haha.exe', bytes: 174881,
       sha256: 'b0242b31b839cc8bf40ba4ac492004629bcf8ed28f8648d8c46b1797f7befb60' })
+  })
+
+  test('selects the full virtual-directory literal from the recorded official setup listing', () => {
+    // Original Windows 26.06 listing, with CRLF normalized to LF only.
+    expect(sha(releasedListing)).toBe('6b8fc6badbceee41b2e22a14bd23064e46bc526a1e739fd7065fa231a4fdfce9')
+    expect(sha(releasedListing)).toBe(releasedListingFixture.sha256)
+    const parsed = parseSevenZipListing(releasedListing, 'Nsis')
+    expect(parsed.archive['Physical Size']).toBe('230611497')
+    expect(() => selectLiteralMember(parsed, { ...historicalUninstallerMember, path: 'Uninstall Claude Code Haha.exe' })).toThrow('absent or ambiguous')
+    expect(historicalUninstallerMember.path).toBe(releasedLiteral)
+    expect(selectLiteralMember(parsed, historicalUninstallerMember)).toMatchObject({ Path: releasedLiteral, Size: '', 'Packed Size': '153855', Offset: '230342792' })
+  })
+
+  test('proves the recorded listing with one exact -spd selector and no virtual-directory output path', () => {
+    const f = fixture()
+    try {
+      const source = releasedListing.replace(/^Path = .+$/m, `Path = ${f.setupFile}`)
+      const old = proveNsisMember({ ...f.options, member: { ...f.options.member, path: 'Uninstall Claude Code Haha.exe' },
+        output: join(f.root, 'old-output.exe'), evidenceDirectory: join(f.root, 'old-evidence'), run: f.run({ list: source }) }).proof
+      expect(old.status).toBe('not_proven')
+      expect(f.calls.map(call => call.argv[0])).toEqual(['i', 'l'])
+      f.calls.length = 0
+      const { proof } = proveNsisMember({ ...f.options, run: f.run({ list: source }) })
+      expect(proof.status).toBe('member_proven')
+      expect(proof.literalMember).toBe(releasedLiteral)
+      expect(proof.member?.['Packed Size']).toBe('153855')
+      expect(f.calls[2]!.argv).toEqual(['e', '-tNsis', '-spd', '-so', '-bso0', '-bse2', '-bsp0', '--', f.setupFile, releasedLiteral])
+      expect(readFileSync(f.options.output)).toEqual(f.outputBytes)
+      expect(proof.peExecuted).toBe(false)
+    } finally { f.cleanup() }
+  })
+
+  test.each(['duplicate', 'case-duplicate', 'separator-alias', 'basename-only', 'different-register', 'traversal', 'ADS', 'wildcard'])('refuses %s changes to the recorded listing before extraction', kind => {
+    const f = fixture()
+    try {
+      let source = releasedListing.replace(/^Path = .+$/m, `Path = ${f.setupFile}`)
+      if (kind === 'duplicate') source += `\n${member(releasedLiteral)}\n`
+      if (kind === 'case-duplicate') source += `\n${member(releasedLiteral.toLowerCase())}\n`
+      if (kind === 'separator-alias') source += `\n${member('$R0/Uninstall Claude Code Haha.exe')}\n`
+      if (kind === 'basename-only') source = source.replace(releasedLiteral, 'Uninstall Claude Code Haha.exe')
+      if (kind === 'different-register') source = source.replace(releasedLiteral, '$R1\\Uninstall Claude Code Haha.exe')
+      if (kind === 'traversal') source += `\n${member('$R0\\..\\unexpected.exe')}\n`
+      if (kind === 'ADS') source += `\n${member('$R0\\unexpected.exe:stream')}\n`
+      const expected = kind === 'wildcard' ? { ...f.options.member, path: '$R0\\*Uninstall*.exe' } : f.options.member
+      const { proof } = proveNsisMember({ ...f.options, member: expected, run: f.run({ list: source }) })
+      expect(proof.status).toBe('not_proven')
+      expect(f.calls.map(call => call.argv[0])).toEqual(['i', 'l'])
+      expect(existsSync(f.options.output)).toBe(false)
+    } finally { f.cleanup() }
   })
 
   test('allows unknown listing size and same-offset aliases while selecting one exact literal member', () => {

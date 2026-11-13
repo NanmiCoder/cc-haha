@@ -17,7 +17,9 @@ export const pinnedFullSevenZip = {
   },
 } as const
 export const historicalUninstallerMember = {
-  path: 'Uninstall Claude Code Haha.exe',
+  // This is the literal NSIS member name in the hash-pinned v0.7.8 setup,
+  // including its virtual register directory; never strip or expand $R0.
+  path: '$R0\\Uninstall Claude Code Haha.exe',
   bytes: 174881,
   sha256: 'b0242b31b839cc8bf40ba4ac492004629bcf8ed28f8648d8c46b1797f7befb60',
 } as const
