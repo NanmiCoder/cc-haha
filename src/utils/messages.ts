@@ -2103,6 +2103,7 @@ export function normalizeMessagesForAPI(
   messages: Message[],
   tools: Tools = [],
   currentModel?: string,
+  mapImageInput?: (source: Message, message: UserMessage) => UserMessage,
 ): (UserMessage | AssistantMessage)[] {
   // Build set of available tool names for filtering unavailable tool references
   const availableToolNames = new Set(tools.map(t => t.name))
@@ -2355,6 +2356,8 @@ export function normalizeMessagesForAPI(
             }
           }
 
+          normalizedMessage = mapImageInput?.(message, normalizedMessage) ?? normalizedMessage
+
           // If the last message is also a user message, merge them
           const lastMessage = last(result)
           if (lastMessage?.type === 'user') {
@@ -2468,11 +2471,12 @@ export function normalizeMessagesForAPI(
           const keptAttachmentMessage = mediaStripped.has(message)
             ? rawAttachmentMessage.map(m => replaceMediaWithPlaceholders(m))
             : rawAttachmentMessage
-          const attachmentMessage = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
+          let attachmentMessage = checkStatsigFeatureGate_CACHED_MAY_BE_STALE(
             'tengu_chair_sermon',
           )
             ? keptAttachmentMessage.map(ensureSystemReminderWrap)
             : keptAttachmentMessage
+          if (mapImageInput) attachmentMessage = attachmentMessage.map(m => mapImageInput(message, m))
 
           // If the last message is also a user message, merge them
           const lastMessage = last(result)
