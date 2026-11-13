@@ -702,7 +702,7 @@ describe('MemorySettings', () => {
       ? new Promise((resolve) => { finishOther = resolve })
       : Promise.resolve({ file: { path, content: '# Current revision', updatedAt: '2026-05-01T00:02:00.000Z', bytes: 18 } }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Manual' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Manual' }))
     fireEvent.click(screen.getByRole('button', { name: 'MEMORY.md' }))
     await waitFor(() => expect(screen.getByTestId('markdown-preview')).toHaveTextContent('Current revision'))
     await act(async () => finishOther({ file: {

@@ -5,6 +5,12 @@ import {
   runDesktopPersistenceMigrations,
 } from './persistenceMigrations'
 import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
+import {
+  hydrateWorkspace,
+  readWorkspaceStorage,
+  serializeWorkspace,
+  writeWorkspaceStorage,
+} from './workspace/persistence'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
 
@@ -417,6 +423,112 @@ describe('desktop persistence migrations', () => {
     // newer build is still using.
     expect(report.migratedKeys).not.toContain('cc-haha.workspace')
     expect(window.localStorage.getItem('cc-haha.workspace')).toBe(future)
+  })
+
+  test('preserves a frozen size-only workspace through startup migration, hydration and writing', () => {
+    // Closing the last workspace tab writes this valid v2 document. Startup
+    // used to delete it before the persistence bridge could restore its sizes.
+    const frozen = JSON.stringify({
+      version: 2,
+      sideWidth: 972,
+      bottomHeight: 356,
+      sessions: {},
+      futureMetadata: { keep: true },
+    })
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+    localStorage.setItem('cc-haha.workspace', frozen)
+
+    const migration = runDesktopPersistenceMigrations()
+
+    expect(migration.migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(frozen)
+    const restored = hydrateWorkspace(readWorkspaceStorage(localStorage), (prefix) => `${prefix}-restored`)
+    expect(restored).toEqual({ bySession: {}, sideWidth: 972, bottomHeight: 356 })
+
+    writeWorkspaceStorage(localStorage, serializeWorkspace(restored.bySession, restored))
+    const written = localStorage.getItem('cc-haha.workspace')
+    expect(JSON.parse(written!)).toEqual({
+      version: WORKSPACE_STORAGE_VERSION,
+      sideWidth: 972,
+      bottomHeight: 356,
+      sessions: {},
+    })
+    // A second startup must retain the same preference even with no tabs.
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(written)
+  })
+
+  test('keeps workspace sizes when startup removes the last stale host-resource tab', () => {
+    localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: 2,
+      sideWidth: 980,
+      bottomHeight: 360,
+      futureMetadata: { keep: true },
+      sessions: {
+        s1: {
+          tabs: [{ kind: 'terminal', id: 't1', runtimeId: 'stale-pty', cwd: '/fixture' }],
+        },
+      },
+    }))
+
+    const migration = runDesktopPersistenceMigrations()
+
+    expect(migration.migratedKeys).toContain('cc-haha.workspace')
+    expect(readWorkspaceStorage(localStorage)).toEqual({
+      version: WORKSPACE_STORAGE_VERSION,
+      sideWidth: 980,
+      bottomHeight: 360,
+      futureMetadata: { keep: true },
+      sessions: {},
+    })
+    const restored = hydrateWorkspace(readWorkspaceStorage(localStorage), (prefix) => `${prefix}-restored`)
+    expect(restored).toEqual({ bySession: {}, sideWidth: 980, bottomHeight: 360 })
+    writeWorkspaceStorage(localStorage, serializeWorkspace(restored.bySession, restored))
+    const written = localStorage.getItem('cc-haha.workspace')
+    runDesktopPersistenceMigrations()
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(written)
+  })
+
+  test.each([
+    { sideWidth: '972', bottomHeight: 356 },
+    { sideWidth: null, bottomHeight: 356 },
+    { sideWidth: 972, bottomHeight: null },
+    { sideWidth: 0, bottomHeight: 356 },
+    { sideWidth: -972, bottomHeight: 356 },
+    { sideWidth: 972, bottomHeight: -356 },
+    {},
+  ])('removes an empty workspace without valid stored sizes: %j', (sizes) => {
+    localStorage.setItem('cc-haha.workspace', JSON.stringify({
+      version: WORKSPACE_STORAGE_VERSION,
+      sessions: {},
+      ...sizes,
+    }))
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test.each([
+    '{"version":2,"sideWidth":1e999,"bottomHeight":356,"sessions":{}}',
+    '{"version":2,"sideWidth":972,"bottomHeight":1e999,"sessions":{}}',
+  ])('removes an empty workspace with a non-finite JSON number: %s', (raw) => {
+    localStorage.setItem('cc-haha.workspace', raw)
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBeNull()
+  })
+
+  test('leaves a future size-only workspace untouched even when its size format is unknown', () => {
+    const future = JSON.stringify({
+      version: WORKSPACE_STORAGE_VERSION + 1,
+      sessions: {},
+      sideWidth: { futureUnit: 70 },
+      bottomHeight: 'future-format',
+    })
+    localStorage.setItem('cc-haha.workspace', future)
+
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain('cc-haha.workspace')
+    expect(localStorage.getItem('cc-haha.workspace')).toBe(future)
   })
 
   test('upgrades workspace v1 without losing the Files launcher, turns, or unknown metadata', () => {
