@@ -3,13 +3,15 @@ import {
   API_MANY_IMAGE_MAX_DIMENSION,
   API_MANY_IMAGE_THRESHOLD,
   IMAGE_MAX_WIDTH,
+  IMAGE_CONTEXT_TARGET_BYTES,
+  IMAGE_REQUEST_BASE64_BUDGET,
 } from '../constants/apiLimits.js'
 import { logEvent } from '../services/analytics/index.js'
 import { getImageProcessor } from '../tools/FileReadTool/imageProcessor.js'
 import { logForDebugging } from './debug.js'
 import { errorMessage } from './errors.js'
 import { formatFileSize } from './format.js'
-import { ImageResizeError, maybeResizeAndDownsampleImageBuffer, type ImageDimensions } from './imageResizer.js'
+import { ImageResizeError, optimizeImageForContext, type ImageDimensions } from './imageResizer.js'
 
 /**
  * Information about an oversized image.
@@ -140,12 +142,26 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
   options: { countDocuments?: boolean } = {},
 ): Promise<T[]> {
   let imageCount = 0
+  const occurrences = new Map<string, number>()
+  let encodedBytes = 0
+  let inlineCount = 0
+  const sources = new Map<string, string>()
   function count(content: unknown): void {
     if (!Array.isArray(content)) return
     for (const value of content) {
       const block = asRecord(value)
       if (!block) continue
+      if (block.type === 'tool_use' && block.name === 'Read' && typeof block.id === 'string') {
+        const path = asRecord(block.input)?.file_path
+        if (typeof path === 'string') sources.set(block.id, path)
+      }
       if (block.type === 'image' || (options.countDocuments && block.type === 'document')) imageCount++
+      if (isBase64ImageBlock(block)) {
+        const data = block.source.data
+        occurrences.set(data, (occurrences.get(data) ?? 0) + 1)
+        encodedBytes += data.length
+        inlineCount++
+      }
       count(nestedContent(block))
     }
   }
@@ -153,14 +169,25 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
   if (imageCount === 0) return messages
   const dimensionLimit = imageCount > API_MANY_IMAGE_THRESHOLD
     ? API_MANY_IMAGE_MAX_DIMENSION : IMAGE_MAX_WIDTH
+  // Repeated payloads share encoding work, but consume bytes on every occurrence.
+  const targetBytes = encodedBytes > IMAGE_REQUEST_BASE64_BUDGET
+    ? Math.min(IMAGE_CONTEXT_TARGET_BYTES, Math.floor(IMAGE_REQUEST_BASE64_BUDGET / 4 / inlineCount) * 3)
+    : IMAGE_CONTEXT_TARGET_BYTES
+  // The newest input group can contain several user/attachment/tool-result
+  // messages. Preserve all of it, including every image in a multi-image turn.
+  const isAssistant = (message: T) => asRecord(message)?.type === 'assistant' || asRecord(message.message)?.role === 'assistant'
+  let lastInput = messages.length - 1
+  while (lastInput >= 0 && isAssistant(messages[lastInput]!)) lastInput--
+  let protectedStart = lastInput
+  while (protectedStart > 0 && !isAssistant(messages[protectedStart - 1]!)) protectedStart--
   // Bound concurrency and reuse identical payloads only within this request.
   // A cross-request cache would need the count-dependent dimension limit too.
   const resized = new Map<string, NormalizedImage>()
   async function normalizeImage(data: string): Promise<NormalizedImage> {
     const buffer = Buffer.from(data, 'base64')
     try {
-      const result = await maybeResizeAndDownsampleImageBuffer(
-        buffer, buffer.length, '', dimensionLimit,
+      const result = await optimizeImageForContext(
+        buffer, buffer.length, '', dimensionLimit, targetBytes,
       )
       let dimensions = result.dimensions
       if (result.buffer !== buffer) {
@@ -187,7 +214,14 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
       return { omitted: `[Image omitted from this request: ${reason}]` }
     }
   }
-  async function normalize(content: unknown): Promise<unknown> {
+  let optimizedBytes = 0
+  for (const [data, count] of occurrences) {
+    const image = await normalizeImage(data)
+    resized.set(data, image)
+    if (!('omitted' in image)) optimizedBytes += image.data.length * count
+  }
+  let excessBytes = optimizedBytes - IMAGE_REQUEST_BASE64_BUDGET
+  async function normalize(content: unknown, protectedInput: boolean, sourcePath?: string): Promise<unknown> {
     if (!Array.isArray(content)) return content
     let changed = false
     const result: unknown[] = []
@@ -196,10 +230,12 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
       let next = value
       if (block && isBase64ImageBlock(block)) {
         const data = block.source.data
-        let image = resized.get(data)
-        if (!image) {
-          image = await normalizeImage(data)
-          resized.set(data, image)
+        let image = resized.get(data)!
+        if (!('omitted' in image) && !protectedInput && excessBytes > 0) {
+          excessBytes -= image.data.length
+          image = { omitted: '[Image omitted from this request to keep older image data within the context budget.' +
+            (sourcePath ? ` Original source: ${JSON.stringify(sourcePath)}.` : '') +
+            ' Read the original image again if needed.]' }
         }
         if ('omitted' in image) {
           next = { type: 'text', text: image.omitted,
@@ -224,7 +260,8 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
         }
       } else if (block) {
         const nested = nestedContent(block)
-        const normalized = await normalize(nested)
+        const hint = typeof block.tool_use_id === 'string' ? sources.get(block.tool_use_id) : undefined
+        const normalized = await normalize(nested, protectedInput, hint ?? sourcePath)
         if (normalized !== nested) {
           next = block.type === 'document'
             ? { ...block, source: { ...asRecord(block.source), content: normalized } }
@@ -237,8 +274,8 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
     return changed ? result : content
   }
   const result: T[] = []
-  for (const message of messages) {
-    const content = await normalize(message.message.content)
+  for (const [index, message] of messages.entries()) {
+    const content = await normalize(message.message.content, index >= protectedStart)
     result.push(content === message.message.content ? message
       : { ...message, message: { ...message.message, content } })
   }

@@ -10,6 +10,7 @@ import { getModelStrings } from 'src/utils/model/modelStrings.js'
 import { isEnvTruthy } from 'src/utils/envUtils.js'
 import { toolToAPISchema } from 'src/utils/api.js'
 import type { AgentDefinition } from 'src/tools/AgentTool/loadAgentsDir.js'
+import { normalizeImagesForAPI } from 'src/utils/imageValidation.js'
 
 const DEFAULT_API_VERSION = '2025-04-01-preview'
 
@@ -520,7 +521,7 @@ export async function requestAzureOpenAI(params: {
     model: params.model,
   })
 
-  const input = buildAzureOpenAIInput(params.messages)
+  const input = buildAzureOpenAIInput(await normalizeImagesForAPI(params.messages))
 
   const body: Record<string, unknown> = {
     model: deployment,

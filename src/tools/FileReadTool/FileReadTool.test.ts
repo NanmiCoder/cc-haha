@@ -83,7 +83,7 @@ test('uses the shared image processor for the final image compression fallback',
     width: 4, height: 3, channels: 3, background: { r: 20, g: 40, b: 60 },
   } }).png().toBuffer()
   await writeFile(filePath, image)
-  const resize = spyOn(imageResizer, 'maybeResizeAndDownsampleImageBuffer').mockResolvedValue({
+  const resize = spyOn(imageResizer, 'optimizeImageForContext').mockResolvedValue({
     buffer: image, mediaType: 'png', dimensions: { originalWidth: 1000, originalHeight: 1000, displayWidth: 1000, displayHeight: 1000 },
   })
   const downsample = spyOn(imageResizer, 'downsampleImageBufferToVisionTokenBudget')

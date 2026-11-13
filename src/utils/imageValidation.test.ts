@@ -3,6 +3,8 @@ import sharp from 'sharp'
 import { normalizeImagesForAPI } from './imageValidation.js'
 import * as imageResizer from './imageResizer.js'
 import * as imageProcessor from '../tools/FileReadTool/imageProcessor.js'
+import { createContextImage } from './fixtures/contextImages.js'
+import { IMAGE_REQUEST_BASE64_BUDGET } from '../constants/apiLimits.js'
 
 let processor: ReturnType<typeof spyOn>
 beforeEach(() => {
@@ -11,6 +13,97 @@ beforeEach(() => {
   processor = spyOn(imageProcessor, 'getImageProcessor').mockResolvedValue(sharp)
 })
 afterEach(() => processor.mockRestore())
+
+function inlineImages(content: unknown): Array<{ type: string; source: { data: string } }> {
+  if (!Array.isArray(content)) return []
+  return content.flatMap(block => block.type === 'image' && block.source?.type === 'base64' ? [block]
+    : block.type === 'tool_result' || block.type === 'mcp_tool_result' ? inlineImages(block.content)
+    : block.type === 'document' && block.source?.type === 'content' ? inlineImages(block.source.content) : [])
+}
+
+test('59 repeated screenshots count every occurrence against the encoded request budget', async () => {
+  const bytes = await createContextImage()
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes.toString('base64') } }
+  const messages = [{ message: { content: Array.from({ length: 59 }, (_, index) => ({
+    type: 'tool_result', tool_use_id: `read-${index}`, content: [{ type: 'text', text: `frame ${index}` }, image],
+  })) } }]
+  const output = await normalizeImagesForAPI(messages)
+  const images = inlineImages(output[0]!.message.content)
+  expect(images.length).toBeGreaterThan(0)
+  expect(images.reduce((sum, item) => sum + item.source.data.length, 0)).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
+  expect(JSON.stringify(output).length).toBeLessThan(32 * 1024 * 1024)
+  expect(output[0]!.message.content.at(-1)!.tool_use_id).toBe('read-58')
+  expect(inlineImages(output[0]!.message.content.at(-1)!.content)).toHaveLength(1)
+  for (let index = 0; index < 59; index++) {
+    expect(output[0]!.message.content[index]!.content[0]).toEqual({ type: 'text', text: `frame ${index}` })
+    expect(messages[0]!.message.content[index]!.content[1]).toBe(image)
+  }
+})
+
+test('distinct screenshot payloads keep their identities while sharing the cumulative budget', async () => {
+  const inputs = await Promise.all([1, 2, 3].map(async seed => ({ type: 'image', source: {
+    type: 'base64', media_type: 'image/png', data: (await createContextImage({ seed })).toString('base64'),
+  } })))
+  const messages = [{ message: { content: Array.from({ length: 60 }, (_, index) => inputs[index % 3]!) } }]
+  const output = await normalizeImagesForAPI(messages)
+  const images = inlineImages(output[0]!.message.content)
+  expect(images.reduce((sum, item) => sum + item.source.data.length, 0)).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
+  expect(new Set(images.map(image => image.source.data)).size).toBe(3)
+  for (const image of images) expect(await sharp(Buffer.from(image.source.data, 'base64')).metadata())
+    .toMatchObject({ width: 1568, height: 882 })
+})
+
+test('only older nested images become explicit notes after bounded compression cannot reach the soft budget', async () => {
+  processor.mockRejectedValue(new Error('fixture processor unavailable'))
+  const header = await sharp({ create: { width: 1600, height: 900, channels: 3, background: '#336699' } }).png().toBuffer()
+  const bytes = Buffer.concat([header, Buffer.alloc(800 * 1024)])
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes.toString('base64') } }
+  const messages = [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'old-read', name: 'Read', input: { file_path: '/fixtures/old.png' } }] } },
+    { type: 'user', message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'old-read', content: [
+        { type: 'text', text: 'old caption' }, image,
+        { type: 'document', source: { type: 'content', content: [image, { type: 'text', text: 'document caption' }] } },
+        { type: 'mcp_tool_result', content: Array.from({ length: 27 }, () => image) },
+      ] },
+    ] } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ready for current input' }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'current caption' }, image, image] } },
+    { type: 'user', message: { role: 'user', content: [image] } },
+  ]
+  const original = JSON.stringify(messages)
+  const optimize = spyOn(imageResizer, 'optimizeImageForContext')
+  try {
+    const output = await normalizeImagesForAPI(messages)
+    expect(optimize).toHaveBeenCalledTimes(1)
+    const old = output[1]!.message.content[0] as { tool_use_id: string; content: Array<{ type: string; text?: string }> }
+    expect(old.tool_use_id).toBe('old-read')
+    expect(old.content[0]).toEqual({ type: 'text', text: 'old caption' })
+    expect(old.content[1]!.text).toContain('omitted from this request')
+    expect(old.content[1]!.text).toContain('/fixtures/old.png')
+    expect(old.content[1]!.text).toContain('Read the original image again')
+    expect(inlineImages(old.content).length).toBeGreaterThan(0)
+    expect(output[3]).toBe(messages[3])
+    expect(output[4]).toBe(messages[4])
+    const remaining = output.flatMap(message => inlineImages(message.message.content))
+    expect(remaining.reduce((sum, image) => sum + image.source.data.length, 0)).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
+    expect(JSON.stringify(await normalizeImagesForAPI(output))).toBe(JSON.stringify(output))
+    expect(JSON.stringify(messages)).toBe(original)
+  } finally { optimize.mockRestore() }
+})
+
+test('a current multi-image input over the soft budget retains every hard-limit-valid image', async () => {
+  processor.mockRejectedValue(new Error('fixture processor unavailable'))
+  const header = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#998855' } }).png().toBuffer()
+  const data = Buffer.concat([header, Buffer.alloc(800 * 1024)]).toString('base64')
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data } }
+  const messages = [{ type: 'user', message: { role: 'user', content: Array.from({ length: 30 }, () => image) } }]
+  const output = await normalizeImagesForAPI(messages)
+  expect(inlineImages(output[0]!.message.content)).toHaveLength(30)
+  expect(inlineImages(output[0]!.message.content).reduce((sum, item) => sum + item.source.data.length, 0))
+    .toBeGreaterThan(IMAGE_REQUEST_BASE64_BUDGET)
+  expect(output[0]).toBe(messages[0])
+})
 
 async function largeImage() {
   const buffer = await sharp({ create: { width: 3000, height: 60, channels: 3, background: '#339966' } }).png().toBuffer()
@@ -136,7 +229,7 @@ test('ambiguous old grids keep their prior mapping instead of guessing an image 
     data: (await sharp(Buffer.from(first.source.data, 'base64')).negate().png().toBuffer()).toString('base64'),
   } }
   // Model the encoder's smaller byte-budget fallback on only one image.
-  const resize = spyOn(imageResizer, 'maybeResizeAndDownsampleImageBuffer').mockImplementation(async buffer => {
+  const resize = spyOn(imageResizer, 'optimizeImageForContext').mockImplementation(async buffer => {
     const width = buffer.toString('base64') === first.source.data ? 2000 : 1568
     const height = Math.round(width / 50)
     return { buffer: await sharp(buffer).resize(width, height).png().toBuffer(), mediaType: 'png',
