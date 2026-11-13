@@ -2,13 +2,13 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { spawnSync } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import { bootstrapFullSevenZip, historicalUninstallerMember, pinnedFullSevenZip, proveNsisMember, type NsisMemberProof, type SevenZipExtractor } from './windows-installer-member-proof'
 
 export const historicalInstallerFixture = {
   tag: 'v0.7.8',
@@ -32,6 +32,7 @@ export type PreparedNsisTools = {
   version: string
   archiveSha512: string
   compilerSha256: string
+  fullSevenZip?: SevenZipExtractor
 }
 
 export type PreparedWindowsInstallerTests = {
@@ -58,6 +59,8 @@ export type PreparedWindowsInstallerTests = {
     file?: string
     bytes?: number
     sha256?: string
+    memberProof?: NsisMemberProof
+    memberProofEvidenceFile?: string
   }
   compatibilityProfile: 'not_proven'
   oldExit22BeforeMutation: 'not_run'
@@ -118,7 +121,21 @@ async function acquirePinnedNsisTools(sourceRoot: string, tempRoot: string): Pro
   if (!existsSync(compiler) || !existsSync(join(templates, 'include/getProcessInfo.nsh'))) {
     throw new Error('Pinned NSIS compiler or electron-builder templates are missing')
   }
-  return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: await sha256File(compiler) }
+  const appRequire = createRequire(require.resolve('app-builder-lib/package.json'))
+  const builderRequire = createRequire(appRequire.resolve('builder-util/package.json'))
+  const sevenZipPackage = builderRequire('7zip-bin/package.json') as { version: string }
+  if (sevenZipPackage.version !== '5.2.0') throw new Error('Review the pinned 7zip-bin@5.2.0 bootstrap before changing it')
+  // Do not honor USE_SYSTEM_7ZA or resolve an unknown executable from PATH.
+  const bootstrap = join(dirname(builderRequire.resolve('7zip-bin/package.json')), 'win/x64/7za.exe')
+  if (await sha256File(bootstrap) !== 'b0cfdeaf429f5cc53f85123dd8f5a5feb92c19d31aa34df257edf9a26be05f95') {
+    throw new Error('Pinned 7zip-bin Windows bootstrap identity changed')
+  }
+  const archive = join(tempRoot, '7z2606-x64.exe')
+  await downloadPinnedInstaller(pinnedFullSevenZip.url, archive)
+  await verifyInstallerFixture(archive, pinnedFullSevenZip)
+  const fullSevenZip = bootstrapFullSevenZip({ archive, bootstrap, directory: join(tempRoot, 'full-seven-zip'),
+    evidenceDirectory: join(sourceRoot, 'artifacts/windows-installer/member-proof/tools') })
+  return { compiler, templates, ...pinnedNsisCompiler, compilerSha256: await sha256File(compiler), fullSevenZip }
 }
 
 export async function downloadPinnedInstaller(url: string, target: string) {
@@ -127,47 +144,18 @@ export async function downloadPinnedInstaller(url: string, target: string) {
   await pipeline(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream), createWriteStream(target, { flags: 'wx' }))
 }
 
-function executableCandidates(directory: string): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const file = join(directory, entry.name)
-    if (entry.isSymbolicLink()) throw new Error('Historical extraction contains an unexpected symbolic link')
-    if (entry.isDirectory()) return executableCandidates(file)
-    return entry.isFile() && /uninstall.*\.exe$/i.test(entry.name) ? [file] : []
+type HistoricalExtraction = NonNullable<PreparedWindowsInstallerTests['extraction']>
+async function extractHistoricalUninstaller(sourceRoot: string, installer: string, directory: string, extractor?: SevenZipExtractor): Promise<HistoricalExtraction> {
+  const method = '7-Zip 26.06 forced NSIS literal-member proof'
+  if (!extractor) return { status: 'not_proven', method, diagnostics: ['A pinned full NSIS extractor was not prepared'] }
+  const { proof, evidenceFile } = proveNsisMember({
+    setup: { file: installer, bytes: historicalInstallerFixture.bytes, sha256: historicalInstallerFixture.sha256 },
+    extractor, member: historicalUninstallerMember, output: join(directory, historicalUninstallerMember.path),
+    evidenceDirectory: join(sourceRoot, 'artifacts/windows-installer/member-proof/historical'),
   })
-}
-
-async function extractHistoricalUninstaller(sourceRoot: string, installer: string, directory: string) {
-  const require = desktopRequire(sourceRoot)
-  const diagnostics: string[] = []
-  const output = join(directory, 'Uninstall Claude Code Haha.exe')
-  const { UninstallerReader } = require('app-builder-lib/out/targets/nsis/nsisUtil.js') as {
-    UninstallerReader: { exec(installer: string, output: string): Promise<void> }
-  }
-  try {
-    await UninstallerReader.exec(installer, output)
-    return { status: 'extracted' as const, method: 'app-builder-lib@26.8.1 UninstallerReader', diagnostics, file: output }
-  } catch (error) {
-    rmSync(output, { force: true })
-    diagnostics.push(`UninstallerReader: ${String(error)}`)
-  }
-
-  // Only extract selected bytes. Neither the public setup nor the extracted
-  // uninstaller is executed; their deletion semantics remain unproved.
-  const appRequire = createRequire(require.resolve('app-builder-lib/package.json'))
-  const builderRequire = createRequire(appRequire.resolve('builder-util/package.json'))
-  const sevenZipPackage = builderRequire('7zip-bin/package.json') as { version: string }
-  if (sevenZipPackage.version !== '5.2.0') throw new Error('Review the pinned 7zip-bin@5.2.0 extractor before changing it')
-  const sevenZip = (builderRequire('7zip-bin') as { path7za: string }).path7za
-  const extract = spawnSync(sevenZip, ['x', '-y', `-o${directory}`, installer, '*uninstall*', '-r'], {
-    encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
-  })
-  diagnostics.push(`7zip-bin@5.2.0 exit=${extract.status}; ${extract.stdout ?? ''}${extract.stderr ?? ''}${extract.error ?? ''}`)
-  const candidates = executableCandidates(directory)
-  if (extract.status === 0 && candidates.length === 1) {
-    return { status: 'extracted' as const, method: '7zip-bin@5.2.0 NSIS read-only extraction', diagnostics, file: candidates[0] }
-  }
-  diagnostics.push(`Unambiguous uninstaller candidates: ${candidates.length}`)
-  return { status: 'not_proven' as const, method: 'static extraction unavailable', diagnostics }
+  return { status: proof.status === 'member_proven' ? 'extracted' : 'not_proven', method,
+    diagnostics: proof.error ? [proof.error] : [], memberProof: proof, memberProofEvidenceFile: evidenceFile,
+    ...(proof.output ? { file: proof.output.file, bytes: proof.output.bytes, sha256: proof.output.sha256 } : {}) }
 }
 
 export async function prepareWindowsInstallerTests(options: {
@@ -178,7 +166,7 @@ export async function prepareWindowsInstallerTests(options: {
   fixture?: { tag: string; assetId: number; fileName: string; url: string; bytes: number; sha256: string }
   acquireTools?: typeof acquirePinnedNsisTools
   download?: typeof downloadPinnedInstaller
-  extract?: typeof extractHistoricalUninstaller
+  extract?: (sourceRoot: string, installer: string, directory: string) => Promise<HistoricalExtraction>
 } = {}) {
   if ((options.platform ?? process.platform) !== 'win32') throw new Error('Windows installer dependency preparation is Windows-only')
   if ((!options.acquireTools || !options.download || !options.extract) && (process.platform !== 'win32' || process.env.CI !== 'true')) {
@@ -212,14 +200,24 @@ export async function prepareWindowsInstallerTests(options: {
     manifest.historicalInstaller = { tag: fixture.tag, assetId: fixture.assetId, file: installer, bytes: fixture.bytes, sha256: digest, verified: true }
     const extractionDirectory = join(fixtureDirectory, 'extracted')
     mkdirSync(extractionDirectory)
-    const extraction = await (options.extract ?? extractHistoricalUninstaller)(sourceRoot, installer, extractionDirectory)
+    const extraction = options.extract
+      ? await options.extract(sourceRoot, installer, extractionDirectory)
+      : await extractHistoricalUninstaller(sourceRoot, installer, extractionDirectory, manifest.tools.fullSevenZip)
     manifest.extraction = extraction
     if (extraction.status === 'extracted' && extraction.file) {
       const file = realpathSync(extraction.file)
       if (isInsideDirectory(extractionDirectory, file)) {
         const header = readFileSync(file).subarray(0, 2)
         if (!header.equals(Buffer.from('MZ'))) throw new Error('Extracted uninstaller is not a PE executable')
-        manifest.extraction = { ...extraction, file, bytes: statSync(file).size, sha256: await sha256File(file) }
+        const bytes = statSync(file).size
+        const sha256 = await sha256File(file)
+        if (extraction.memberProof && (extraction.memberProof.status !== 'member_proven' ||
+            extraction.memberProof.setup.file !== installer || extraction.memberProof.setup.bytes !== fixture.bytes ||
+            extraction.memberProof.setup.sha256 !== fixture.sha256 || extraction.memberProof.output?.file !== file ||
+            extraction.memberProof.output.bytes !== bytes || extraction.memberProof.output.sha256 !== sha256)) {
+          throw new Error('Extracted file no longer matches its static member proof')
+        }
+        manifest.extraction = { ...extraction, file, bytes, sha256 }
       } else throw new Error('Extracted uninstaller escaped its private fixture directory')
     }
     manifest.status = 'prepared'

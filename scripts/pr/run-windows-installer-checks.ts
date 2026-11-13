@@ -46,7 +46,8 @@ export async function runWindowsInstallerChecks(options: {
     return child.exited
   })
   const command = [process.execPath, '--no-env-file', 'test', '--parallel=1', '--max-concurrency=1', '--no-orphans',
-    './scripts/pr/windows-installer-process-check.test.ts', './scripts/pr/windows-installer-recovery.test.ts']
+    './scripts/pr/windows-installer-process-check.test.ts', './scripts/pr/windows-installer-recovery.test.ts',
+    './scripts/pr/windows-installer-member-proof.test.ts']
   try {
     const env = createSandboxedTestEnvironment(join(sandbox, 'home'), {
       CC_HAHA_TEST_MAKENSIS: prepared.tools.compiler,

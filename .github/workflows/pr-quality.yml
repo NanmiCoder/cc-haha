@@ -472,9 +472,9 @@ jobs:
       - name: Download only the verified Stage A fixture without rebuilding
         uses: actions/download-artifact@v4
         with:
-          artifact-ids: '14054648898'
+          artifact-ids: '14070542178'
           merge-multiple: true
-          run-id: '43458800075'
+          run-id: '43492838022'
           repository: NanmiCoder/cc-haha
           github-token: ${{ github.token }}
           path: D:\a\_temp\cc-haha-1879-profile-only-download

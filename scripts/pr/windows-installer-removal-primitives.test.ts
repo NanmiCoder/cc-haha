@@ -52,7 +52,7 @@ function inspectToolchain(env: Record<string, string>) {
 }
 
 for (const architecture of ['x86', 'x64'] as const) {
-  test.skipIf(process.platform !== 'win32')(`probes ${architecture} fixed Nt metadata-alias rename and independent Win32 controls using owned temp only`, () => {
+  test.skipIf(process.platform !== 'win32')(`probes ${architecture} readonly MOVE guards and by-ID PRUNE using owned temp only`, () => {
     if (process.env.CI !== 'true') throw new Error('Run this owned primitive probe only on a disposable Windows CI runner')
     const sandbox = mkdtempSync(join(tmpdir(), `cc-haha-removal-primitives-${architecture}-`))
     const env = createSandboxedTestEnvironment(join(sandbox, 'home'))
@@ -69,7 +69,7 @@ for (const architecture of ['x86', 'x64'] as const) {
     const framework = join(systemRoot, architecture === 'x86' ? 'Microsoft.NET/Framework/v4.0.30319' : 'Microsoft.NET/Framework64/v4.0.30319')
     const compiler = join(framework, 'csc.exe')
     const compileCommand = [compiler, '/nologo', '/langversion:5', '/target:exe', `/platform:${architecture}`, '/optimize+', `/out:${executable}`, copiedSource]
-    const report: Record<string, unknown> = { version: 2, status: 'starting', platform: process.platform,
+    const report: Record<string, unknown> = { version: 3, status: 'starting', platform: process.platform,
       operatingSystem: { release: release(), version: version() },
       architecture, source: fileEvidence(source), compiler: fileEvidence(compiler),
       compileCommand, sandbox, ownedFixtureRoot: fixture, officialOldPeExecuted: false, productPeExecuted: false,
@@ -101,29 +101,41 @@ for (const architecture of ['x86', 'x64'] as const) {
       const native = JSON.parse(readFileSync(raw, 'utf8'))
       report.native = native
       expect(run.status, JSON.stringify(native, null, 2)).toBe(0)
-      expect(native.version).toBe(2)
+      expect(native.version).toBe(3)
       expect(native.status).toBe('passed')
-      expect(native.chosenPrimitive).toBe('NtSetInformationFile(FileRenameInformation=10)+independent-metadata-target-alias')
+      expect(native.chosenPrimitive).toBe('NtSetInformationFile(FileRenameInformation=10)+readonly-directory-guards+metadata-target-alias+OpenFileById-prune')
       expect(native.chosenPrimitiveStatus).toBe('passed')
       expect(native.processPointerBytes).toBe(architecture === 'x86' ? 4 : 8)
       expect(native.renameNameOffset).toBe(architecture === 'x86' ? 12 : 20)
       expect(native.renameInformationBytes).toBe(architecture === 'x86' ? 16 : 24)
       expect(native.ioStatusBlockBytes).toBe(architecture === 'x86' ? 8 : 16)
       expect(native.ioInformationOffset).toBe(architecture === 'x86' ? 4 : 8)
+      expect(native.fileIdDescriptorBytes).toBe(24)
+      expect(native.fileIdDescriptorUnionOffset).toBe(8)
       expect(native.ownedFixtureRoot.toLowerCase()).toBe(resolve(fixture).toLowerCase())
       expect(native.executable.toLowerCase()).toBe(resolve(executable).toLowerCase())
       for (const name of ['weak-and-strong-same-object', 'preopened-writer-denies-strong', 'preopened-deleter-denies-strong']) {
         expect(native.checks.some((check: { name: string; status: string }) => check.name === name && check.status === 'passed')).toBe(true)
       }
-      const chosen = 'chosen-nt-metadata-roundtrip'
+      const chosen = 'chosen-nt-readonly-byid-roundtrip'
       expect(native.caseResults.find((item: { name: string }) => item.name === chosen)).toEqual({
         name: chosen, role: 'required', completed: true, capabilityCredit: true, fullRoundtrip: true,
       })
-      for (const name of ['relative-forward-existing-file-handle', 'rename-kept-source-object', 'prune-child-after-weak-release',
-        'prune-parent-after-weak-release', 'relative-restore-after-prune', 'restore-kept-source-object', 'restore-preserved-owned-payload-bytes']) {
+      for (const name of ['relative-forward-existing-file-handle', 'rename-kept-source-object', 'prune-child-byid-same-handle-disposition',
+        'prune-parent-byid-same-handle-disposition', 'relative-restore-after-prune', 'restore-kept-source-object', 'restore-preserved-owned-payload-bytes']) {
         expect(native.checks.some((check: { caseName: string; name: string; status: string }) =>
           check.caseName === chosen && check.name === name && check.status === 'passed')).toBe(true)
       }
+      expect(native.checks.some((check: { name: string; status: string }) =>
+        check.name === 'file-id-descriptor-sdk-layout' && check.status === 'passed')).toBe(true)
+      const oldNt = 'control-nt-strong-metadata-roundtrip'
+      const oldNtResult = native.caseResults.find((item: { name: string }) => item.name === oldNt)
+      expect(oldNtResult.role).toBe('diagnostic')
+      expect(oldNtResult.capabilityCredit).toBe(false)
+      const oldNtCalls = native.observations.filter((item: { caseName: string; api: string }) =>
+        item.caseName === oldNt && item.api === 'NtSetInformationFile(FileRenameInformation)')
+      expect(oldNtCalls.length).toBeGreaterThan(0)
+      for (const call of oldNtCalls) expect(call.diagnosticOnly).toBe(true)
       const diagnostics = ['control-win32-strong-original-buffer', 'control-win32-metadata-original-buffer', 'control-win32-metadata-contract-roundtrip']
       for (const name of diagnostics) {
         const result = native.caseResults.find((item: { name: string }) => item.name === name)
@@ -157,8 +169,11 @@ for (const architecture of ['x86', 'x64'] as const) {
             check.caseName === win32Roundtrip.name && check.name === name && check.status === 'observed-true' && check.capabilityCredit === false)).toBe(true)
         }
       }
-      const ntCalls = native.observations.filter((item: { api: string }) => item.api === 'NtSetInformationFile(FileRenameInformation)')
+      const ntCalls = native.observations.filter((item: { caseName: string; api: string }) =>
+        item.caseName === chosen && item.api === 'NtSetInformationFile(FileRenameInformation)')
       expect(ntCalls).toHaveLength(2)
+      expect(native.observations.filter((item: { caseName: string; api: string }) =>
+        item.api === 'NtSetInformationFile(FileRenameInformation)' && item.caseName !== chosen && item.caseName !== oldNt)).toHaveLength(0)
       expect(native.observations.filter((item: { caseName: string; api: string }) =>
         item.caseName === chosen && item.api === 'SetFileInformationByHandle(FileRenameInfo)')).toHaveLength(0)
       for (const call of ntCalls) {
@@ -192,6 +207,8 @@ for (const architecture of ['x86', 'x64'] as const) {
         expect(check.status).toBe('passed')
         expect(check.detail.independentCreateFile).toBe(true)
         expect(check.detail.duplicateHandle).toBe(false)
+        expect(check.detail.strongAccess).toBe(0xa1)
+        expect(check.detail.strongShare).toBe(1)
       }
       const strongDirectories = native.observations.filter((item: { api: string; name: string }) => item.api === 'CreateFileW' &&
         /(?:^|-)strong-(?:parent|child|stage)$|^restored-(?:parent|child)$/.test(item.name))
@@ -199,6 +216,91 @@ for (const architecture of ['x86', 'x64'] as const) {
       for (const call of strongDirectories) {
         expect(call.detail.access).toBe(0x10087)
         expect(call.detail.share).toBe(1)
+      }
+      const readonlyGuards = native.observations.filter((item: { api: string; name: string }) => item.api === 'CreateFileW' &&
+        /^(?:move|restore)-guard-/.test(item.name))
+      expect(readonlyGuards.length).toBeGreaterThan(0)
+      for (const call of readonlyGuards) {
+        expect(call.success).toBe(true)
+        expect(call.detail.access).toBe(0xa1)
+        expect(call.detail.share).toBe(1)
+      }
+      const chosenObservations = native.observations.filter((item: { caseName: string }) => item.caseName === chosen)
+      expect(chosenObservations.filter((item: { api: string }) => item.api === 'OpenFileById')).toHaveLength(2)
+      expect(chosenObservations.filter((item: { api: string }) => item.api === 'SetFileInformationByHandle(FileDispositionInfo)')).toHaveLength(2)
+      const volume = chosenObservations.find((item: { api: string }) => item.api === 'GetVolumeInformationByHandleW')
+      expect(volume.success).toBe(true)
+      expect(volume.detail.fileSystem).toBe('NTFS')
+      for (const kind of ['child', 'parent']) {
+        const name = `prune-${kind}-byid`
+        const openIndex = chosenObservations.findIndex((item: { api: string; name: string }) => item.api === 'OpenFileById' && item.name === name)
+        const validationIndex = chosenObservations.findIndex((item: { api: string; name: string }) =>
+          item.api === 'ValidateByIdPruneCandidate' && item.name === name)
+        const guardCloseIndex = chosenObservations.findIndex((item: { api: string; name: string }) =>
+          item.api === 'CloseHandle' && item.name === `move-guard-${kind}`)
+        const weakCloseIndex = chosenObservations.findIndex((item: { api: string; name: string }) =>
+          item.api === 'CloseHandle' && item.name === `weak-${kind}`)
+        const dispositionIndex = chosenObservations.findIndex((item: { api: string; name: string }) =>
+          item.api === 'SetFileInformationByHandle(FileDispositionInfo)' && item.name === `${name}-disposition`)
+        expect(guardCloseIndex).toBeGreaterThan(-1)
+        expect(openIndex).toBeGreaterThan(guardCloseIndex)
+        expect(validationIndex).toBeGreaterThan(openIndex)
+        expect(weakCloseIndex).toBeGreaterThan(validationIndex)
+        expect(dispositionIndex).toBeGreaterThan(weakCloseIndex)
+        const open = chosenObservations[openIndex]
+        expect(open.success).toBe(true)
+        expect(open.detail.access).toBe(0x10080)
+        expect(open.detail.share).toBe(1)
+        expect(open.detail.flags).toBe(0x02200000)
+        expect(open.detail.descriptorSize).toBe(24)
+        expect(open.detail.descriptorType).toBe(0)
+        expect(open.detail.securityAttributesNull && open.detail.guardClosed).toBe(true)
+        const validated = chosenObservations[validationIndex]
+        expect(validated.success && validated.weakStillLive && validated.weakSameIdentity && validated.noReparse && validated.directory).toBe(true)
+        expect(validated.deletePending).toBe(false)
+        expect(validated.reason).toBe('matched')
+        expect(validated.actualId).toBe(validated.expectedId)
+        expect(validated.actualVolume).toBe(validated.expectedVolume)
+        expect(validated.actualVolume).toBe(volume.detail.serial)
+        expect(validated.actualCanonical).toBe(validated.expectedCanonical)
+        expect(validated.weakId).toBe(validated.actualId)
+        expect(validated.weakVolume).toBe(validated.actualVolume)
+        expect(validated.weakCanonical).toBe(validated.actualCanonical)
+        expect(chosenObservations[weakCloseIndex].detail.handle).toBe(open.detail.weakHandle)
+        expect(chosenObservations[weakCloseIndex].success).toBe(true)
+        const disposition = chosenObservations[dispositionIndex]
+        expect(disposition.success).toBe(true)
+        expect(disposition.detail.handle).toBe(open.detail.handle)
+        expect(disposition.detail.bytes).toBe(1)
+        expect(disposition.detail.delete).toBe(true)
+        expect(chosenObservations.slice(guardCloseIndex, dispositionIndex).some((item: { api: string }) => item.api === 'CreateFileW')).toBe(false)
+      }
+      const childDispositionIndex = chosenObservations.findIndex((item: { api: string; name: string }) =>
+        item.api === 'SetFileInformationByHandle(FileDispositionInfo)' && item.name === 'prune-child-byid-disposition')
+      for (const name of ['move-guard-parent', 'move-guard-stage', 'move-guard-case-root', 'move-guard-fixture-root']) {
+        expect(chosenObservations.findIndex((item: { api: string; name: string }) => item.api === 'CloseHandle' && item.name === name))
+          .toBeGreaterThan(childDispositionIndex)
+      }
+      for (const [caseName, reason] of [['byid-reject-canonical-drift', 'canonical-drift'], ['byid-reject-id-mismatch', 'id-mismatch']]) {
+        const result = native.caseResults.find((item: { name: string }) => item.name === caseName)
+        expect(result.role).toBe('required')
+        expect(result.completed).toBe(true)
+        const observations = native.observations.filter((item: { caseName: string }) => item.caseName === caseName)
+        expect(observations.filter((item: { api: string }) => item.api === 'OpenFileById')).toHaveLength(1)
+        const validation = observations.find((item: { api: string }) => item.api === 'ValidateByIdPruneCandidate')
+        expect(validation.success).toBe(false)
+        expect(validation.reason).toBe(reason)
+        expect(validation.weakStillLive).toBe(true)
+        expect(validation.removalMutationPerformed).toBe(false)
+        if (reason === 'canonical-drift') {
+          expect(validation.actualId).toBe(validation.expectedId)
+          expect(validation.actualCanonical).not.toBe(validation.expectedCanonical)
+          expect(observations.some((item: { api: string; success: boolean }) =>
+            item.api === 'MoveFileExW(owned-fixture-barrier)' && item.success)).toBe(true)
+        } else expect(validation.actualId).not.toBe(validation.expectedId)
+        expect(observations.some((item: { api: string }) => item.api === 'SetFileInformationByHandle(FileDispositionInfo)')).toBe(false)
+        expect(native.checks.some((check: { caseName: string; name: string; status: string }) =>
+          check.caseName === caseName && check.name === 'rejection-keeps-owned-sentinels' && check.status === 'passed')).toBe(true)
       }
       for (const caseName of ['weak-lifetime', 'shared-reader-lifetime']) {
         expect(native.checks.some((check: { caseName?: string; name: string; status: string }) =>

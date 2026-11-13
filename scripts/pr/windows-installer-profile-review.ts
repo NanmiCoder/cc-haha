@@ -41,18 +41,19 @@ export const profileReview = {
   ],
 } as const
 
-// A separate, profile-only activation. These are the already successful A
-// inputs, not an admission to repeat historical B or execute a released PE.
+// Only the fd452 Stage A component passed. Its Windows job failed the separate
+// removal primitive probe. These A inputs admit no profile action, historical
+// B repetition or released PE execution; a new exact-head grant is separate.
 export const profileOnlyReview = {
   workflowId: 269753168,
   workflowPath: '.github/workflows/pr-quality.yml',
   runNamePrefix: 'profile1879-p:',
   labelPrefix: 'p1879p-',
-  sourceHead: '96bbcdf2a863f015202107790466411f1ac6b4b8',
-  sourceRun: 43458800075,
-  artifact: { id: 14054648898, name: 'windows-installer-evidence', size: 282975, digest: 'sha256:6ca549e26cf3cc9b2faec891af33afb3cdadbe7977a989cdf284e7e47f173c28' },
-  binarySha256: '973f1d1b24f238f83482a6de0f1480c385d2a989a36c84d3d6926a2134048d9e',
-  binaryBytes: 238080,
+  sourceHead: 'fd452cd919d1f2c79eecc3e4b7697862b3ed5a8c',
+  sourceRun: 43492838022,
+  artifact: { id: 14070542178, name: 'windows-installer-evidence', size: 347574, digest: 'sha256:9c6331357c6ad3693ca4c589ce20750bbd01e0e76dd9dad47f0270643a8474af' },
+  binarySha256: '9c03e5b01b25503cbae216854d70991a7f781020ef8262c356dc75eea0acb782',
+  binaryBytes: 283136,
 } as const
 
 function requireReview(value: unknown, message: string): asserts value {

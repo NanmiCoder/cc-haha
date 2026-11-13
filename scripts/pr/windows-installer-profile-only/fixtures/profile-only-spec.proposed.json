@@ -11,19 +11,19 @@
   "controllerRoot": null,
   "output": null,
   "setupPath": null,
-  "expectedBinarySha256": "973f1d1b24f238f83482a6de0f1480c385d2a989a36c84d3d6926a2134048d9e",
+  "expectedBinarySha256": "9c03e5b01b25503cbae216854d70991a7f781020ef8262c356dc75eea0acb782",
   "sourcePins": [
     {
       "file": "windows-installer-profile-fixture.cs",
-      "sha256": "31a6a154f2ef2fa166f487df74df81184100d358484e5ed15c271c66d40cdf48"
+      "sha256": "b388d5d94c4fea11f9abedf81a6c9ece43c5b9c0020866f4e8e70d9fb0cec898"
     },
     {
       "file": "windows-installer-profile-native.cs",
-      "sha256": "7e61623875cd0cc04bc350260ef61d2c2887608391873041fa673185c041a760"
+      "sha256": "d02ef7cedeafa8ff1a9df53190ae2ec93520372acb8133591ba73b35a48e164f"
     },
     {
       "file": "windows-installer-profile-fixture-tests.cs",
-      "sha256": "75bdcc27fff3a9d91fdf56f661c7136f4c1840f44b08293f5e0964a8a29262d1"
+      "sha256": "5d8e2d05da1ce90ddeaa6bd552dbecaa919698a98bbeda8cbf8358f7751c5b86"
     }
   ],
   "frozenPlanManifestSha256": "60e087a037ab8cd6ff9115615f9426b01f261236ccaa267c955677eeb4d6e672",
