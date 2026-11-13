@@ -1822,19 +1822,38 @@ namespace CcHahaInstallerProfile
       return expected; // Never copy provider credentials or arbitrary parent env.
     }
 
-    private Dictionary<string, string> AbiEnvironment(Dictionary<string, string> actual, string root)
+    private static readonly string[] AbiSystemNames = {
+      "SystemRoot", "WINDIR", "SystemDrive", "ComSpec", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS"
+    };
+
+    internal static Dictionary<string, string> BindAbiSystemEnvironment(Dictionary<string, string> inherited, Dictionary<string, string> tokenEnvironment)
     {
-      string[] allowed = {
-        "SystemRoot", "WINDIR", "SystemDrive", "ComSpec", "OS", "PROCESSOR_ARCHITECTURE",
-        "PROCESSOR_ARCHITEW6432", "NUMBER_OF_PROCESSORS"
-      };
+      CorePolicy.Require(inherited != null && tokenEnvironment != null, "ABI system environment is missing");
+      string root, tokenRoot;
+      CorePolicy.Require(inherited.TryGetValue("SystemRoot", out root) && tokenEnvironment.TryGetValue("SystemRoot", out tokenRoot)
+        && CorePolicy.SamePath(root, tokenRoot), "ABI system root identity differs");
+      CorePolicy.ValidateAbsolutePath(root);
       Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-      foreach (string name in allowed)
+      foreach (string name in AbiSystemNames)
       {
         string value;
-        if (actual.TryGetValue(name, out value)) result[name] = value;
+        if (inherited.TryGetValue(name, out value) && !String.IsNullOrEmpty(value)) result[name] = value;
       }
-      CorePolicy.Require(result.ContainsKey("SystemRoot"), "ABI target environment lacks SystemRoot");
+      string windows;
+      if (result.TryGetValue("WINDIR", out windows))
+        CorePolicy.Require(CorePolicy.SamePath(windows, root), "ABI Windows directory differs from system root");
+      return result;
+    }
+
+    private Dictionary<string, string> AbiEnvironment(Dictionary<string, string> actual, string root)
+    {
+      Dictionary<string, string> parentSystem = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+      foreach (string name in AbiSystemNames)
+      {
+        string value = Environment.GetEnvironmentVariable(name);
+        if (value != null) parentSystem[name] = value;
+      }
+      Dictionary<string, string> result = BindAbiSystemEnvironment(parentSystem, actual);
       result["CI"] = "true";
       string binaryDirectory = Path.GetDirectoryName(CorePolicy.BinaryPath);
       Dictionary<string, string> inherited = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1855,6 +1874,47 @@ namespace CcHahaInstallerProfile
       foreach (KeyValuePair<string, string> path in runtime) result[path.Key] = path.Value;
       result["PATH"] = Path.Combine(result["SystemRoot"], "System32") + ";" + result["SystemRoot"];
       return result;
+    }
+
+    internal static bool IsAbiObservation(string row)
+    {
+      return row != null && row.Length <= 128 && System.Text.RegularExpressions.Regex.IsMatch(row,
+        @"\A(?:env-(?:HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|TMPDIR|SystemRoot|WINDIR|SystemDrive|ComSpec|OS|PROCESSOR_ARCHITECTURE|PROCESSOR_ARCHITEW6432|NUMBER_OF_PROCESSORS|PATH)|token-core|roaming-explicit|roaming-current|roaming-current-error|roaming-is-profile-default|roaming-is-private-default|roaming-is-appdata)=(?:[0-9a-f]{64}|[01]|none)\z",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    }
+
+    private static string TokenCoreHash(TokenIdentity identity)
+    {
+      if (identity == null) return CorePolicy.HashText("missing");
+      return CorePolicy.HashText(String.Format(CultureInfo.InvariantCulture, "{0}|{1}|{2}|{3}|{4}|{5}|{6}",
+        identity.sid, identity.tokenType, identity.integrityRid, identity.elevated ? 1 : 0,
+        identity.elevationType, identity.sessionId, identity.authenticationId));
+    }
+
+    private static List<string> AbiObservations(KnownPaths paths, TokenIdentity identity)
+    {
+      List<string> rows = new List<string>();
+      foreach (string name in new string[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR" }.Concat(AbiSystemNames).Concat(new string[] { "PATH" }))
+      {
+        string value = Environment.GetEnvironmentVariable(name);
+        rows.Add("env-" + name + "=" + (value == null ? "none" : CorePolicy.HashText(CorePolicy.NormalizePath(value).ToUpperInvariant())));
+      }
+      rows.Add("token-core=" + TokenCoreHash(identity));
+      rows.Add("roaming-explicit=" + CorePolicy.HashText(paths.roaming));
+      try { rows.Add("roaming-current=" + CorePolicy.HashText(KnownFolder("3EB685DB-65F9-4CF6-A03A-E3EF65729F3D", IntPtr.Zero))); }
+      catch (Exception error) { rows.Add("roaming-current-error=" + CorePolicy.HashText(SafeFailure(error))); }
+      string privateProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+      rows.Add("roaming-is-profile-default=" + (CorePolicy.SamePath(paths.roaming, Path.Combine(paths.profile, "AppData", "Roaming")) ? "1" : "0"));
+      rows.Add("roaming-is-private-default=" + (privateProfile != null && CorePolicy.SamePath(paths.roaming, Path.Combine(privateProfile, "AppData", "Roaming")) ? "1" : "0"));
+      rows.Add("roaming-is-appdata=" + (CorePolicy.SamePath(paths.roaming, Environment.GetEnvironmentVariable("APPDATA")) ? "1" : "0"));
+      return rows;
+    }
+
+    private static void RecordAbiObservations(FixtureReport report, string role, IEnumerable<string> rows)
+    {
+      if (rows == null) { report.trace.Add("ABI observation missing role=" + role); return; }
+      foreach (string row in rows.Take(32))
+        report.trace.Add(IsAbiObservation(row) ? "ABI observation role=" + role + "; " + row : "ABI observation rejected role=" + role);
     }
 
     private static void ValidateAbiRoot(AbiSpec spec, NativePlatform platform)
@@ -1909,7 +1969,8 @@ namespace CcHahaInstallerProfile
         ProtocolMessage hello = new ProtocolMessage {
           kind = "abi-hello", nonce = spec.nonce, specSha256 = CorePolicy.HashFile(specPath),
           binarySha256 = spec.binarySha256, pid = checked((int)GetCurrentProcessId()),
-          creationTime = ProcessCreation(GetCurrentProcess()), sid = identity.sid, identity = identity, knownPaths = paths
+          creationTime = ProcessCreation(GetCurrentProcess()), sid = identity.sid, identity = identity, knownPaths = paths,
+          report = new FixtureReport { mode = "abi-readonly-observations", trace = AbiObservations(paths, identity) }
         };
         channel.WriteLine(CoreJson.Serialize(hello));
         ProtocolMessage ack = CoreJson.Deserialize<ProtocolMessage>(channel.ReadLine(10000));
@@ -2050,6 +2111,7 @@ namespace CcHahaInstallerProfile
           "Actual current token queried; integrity RID=" + state.targetIdentity.integrityRid.ToString(CultureInfo.InvariantCulture) +
           ", elevated=" + state.targetIdentity.elevated.ToString() + "; this is not a new standard SID/profile claim");
         state.paths = platform.QueryKnownPaths(IntPtr.Zero);
+        RecordAbiObservations(report, "parent-before", AbiObservations(state.paths, state.targetIdentity));
         report.Check("current-known-folders-readonly", state.paths != null && !String.IsNullOrEmpty(state.paths.profile),
           "Actual token known folders queried with DONT_VERIFY; no profile or folder created");
         root = Path.Combine(parent, "cc-haha-native-abi-" + Guid.NewGuid().ToString("N"));
@@ -2112,6 +2174,9 @@ namespace CcHahaInstallerProfile
         platform.ResumeChild(state.subject);
         ProtocolMessage hello = CoreJson.Deserialize<ProtocolMessage>(pipe.ReadLine(10000));
         RecordAbiRootInventory(report, "after-hello", root, rootIdentity, platform);
+        RecordAbiObservations(report, "held-before-resume", new string[] { "token-core=" + TokenCoreHash(state.subject.identity) });
+        RecordAbiObservations(report, "child", hello != null && hello.report != null && hello.report.mode == "abi-readonly-observations" ? hello.report.trace : null);
+        RecordAbiObservations(report, "parent-after", AbiObservations(platform.QueryKnownPaths(IntPtr.Zero), platform.InspectCurrentToken()));
         CorePolicy.Require(CheckAbiHello(report, hello, pipe.PeerProcessId, new ProtocolMessage {
           kind = "abi-hello", nonce = nonce, pid = state.subject.pid, creationTime = state.subject.creationTime,
           sid = state.runnerSid, binarySha256 = binaryHash, specSha256 = CorePolicy.HashFile(specPath), knownPaths = state.paths

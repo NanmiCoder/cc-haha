@@ -92,6 +92,29 @@ namespace CcHahaInstallerProfile
 
     public static void Run(FixtureReport report)
     {
+      Case(report, "fake-abi-system-context-preserves-parent-presence-and-redacts-observations", delegate {
+        Dictionary<string, string> parentSystem = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+          { "SystemRoot", @"C:\Windows" }, { "WINDIR", @"C:\Windows" }, { "OS", "Windows_NT" },
+          { "PROCESSOR_ARCHITECTURE", "AMD64" }, { "GITHUB_TOKEN", "fake-do-not-copy" }
+        };
+        Dictionary<string, string> tokenSystem = new Dictionary<string, string>(parentSystem, StringComparer.OrdinalIgnoreCase) {
+          { "SystemDrive", "C:" }, { "PROCESSOR_ARCHITEW6432", "AMD64" }
+        };
+        Dictionary<string, string> boundSystem = NativePlatform.BindAbiSystemEnvironment(parentSystem, tokenSystem);
+        Assert(boundSystem.Count == 4 && !boundSystem.ContainsKey("GITHUB_TOKEN") && !boundSystem.ContainsKey("SystemDrive")
+          && !boundSystem.ContainsKey("PROCESSOR_ARCHITEW6432"), "a token environment must not inject variables absent from the parent");
+        parentSystem["SystemRoot"] = @"D:\WrongWindows";
+        Reject(delegate { NativePlatform.BindAbiSystemEnvironment(parentSystem, tokenSystem); }, "system root mismatch must fail");
+        parentSystem["SystemRoot"] = @"C:\Windows"; parentSystem["WINDIR"] = @"D:\WrongWindows";
+        Reject(delegate { NativePlatform.BindAbiSystemEnvironment(parentSystem, tokenSystem); }, "WINDIR mismatch must fail");
+        Assert(NativePlatform.IsAbiObservation("env-HOME=" + new String('a', 64))
+          && NativePlatform.IsAbiObservation("env-SystemDrive=none")
+          && NativePlatform.IsAbiObservation("roaming-is-profile-default=1"), "bounded hashes/presence/relations remain observable");
+        foreach (string unsafeRow in new string[] { "env-HOME=" + Paths().profile, "env-GITHUB_TOKEN=" + new String('a', 64),
+          "token-core=" + TargetSid, "env-HOME=" + new String('a', 64) + "\nsecret", new String('a', 129), null })
+          Assert(!NativePlatform.IsAbiObservation(unsafeRow), "untrusted observation rows must not echo raw paths, SID or secrets");
+      });
+
       Case(report, "fake-abi-runtime-context-rejects-missing-and-escaping-paths", delegate {
         string imageDirectory = @"D:\Fixture Compiler\private-stage-a";
         string privateHome = Path.Combine(imageDirectory, "home"), privateTemp = Path.Combine(privateHome, "tmp");
