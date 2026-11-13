@@ -3,13 +3,15 @@ import {
   API_MANY_IMAGE_MAX_DIMENSION,
   API_MANY_IMAGE_THRESHOLD,
   IMAGE_MAX_WIDTH,
+  IMAGE_CONTEXT_TARGET_BYTES,
+  IMAGE_REQUEST_BASE64_BUDGET,
 } from '../constants/apiLimits.js'
 import { logEvent } from '../services/analytics/index.js'
 import { getImageProcessor } from '../tools/FileReadTool/imageProcessor.js'
 import { logForDebugging } from './debug.js'
 import { errorMessage } from './errors.js'
 import { formatFileSize } from './format.js'
-import { ImageResizeError, maybeResizeAndDownsampleImageBuffer, type ImageDimensions } from './imageResizer.js'
+import { ImageResizeError, optimizeImageForContext, type ImageDimensions } from './imageResizer.js'
 
 /**
  * Information about an oversized image.
@@ -129,6 +131,89 @@ function nestedContent(block: Record<string, unknown>): unknown {
   if (block.type === 'document' && source?.type === 'content') return source.content
 }
 
+function isAssistantMessage(value: unknown): boolean {
+  const message = asRecord(value)
+  return message?.type === 'assistant' || asRecord(message?.message)?.role === 'assistant'
+}
+
+function hasToolResult(content: unknown): boolean {
+  return Array.isArray(content) && content.some(value =>
+    ['tool_result', 'mcp_tool_result'].includes(String(asRecord(value)?.type)))
+}
+
+// Read the original input, before API normalization merges human and meta/tool
+// messages. An input group includes its adjacent attachments, but not tool output.
+function currentInputRange(messages: unknown[]): [number, number] {
+  const current = messages.findLastIndex(value => {
+    const message = asRecord(value)
+    if (!message || isAssistantMessage(message) || message.isVirtual) return false
+    const attachment = asRecord(message.attachment)
+    if (message.type === 'attachment') {
+      const origin = asRecord(attachment?.origin)
+      return attachment?.type === 'queued_command' && !attachment.isMeta && !attachment.isSynthetic &&
+        attachment.commandMode !== 'task-notification' && (!origin || origin.kind === 'human')
+    }
+    if (message.type !== undefined && message.type !== 'user') return false
+    const content = asRecord(message.message)?.content
+    return !message.isMeta && message.toolUseResult === undefined && !hasToolResult(content) &&
+      (typeof content === 'string' ? content.length > 0 : Array.isArray(content) && content.length > 0)
+  })
+  if (current < 0) return [-1, -1]
+  let start = current
+  let end = current + 1
+  while (start > 0 && !isAssistantMessage(messages[start - 1])) start--
+  while (end < messages.length && !isAssistantMessage(messages[end])) end++
+  return [start, end]
+}
+
+/** Request-local provenance; no fields are added to messages or transcripts. */
+export function createImageInputProtection(messages: unknown[]) {
+  const [start, end] = currentInputRange(messages)
+  const sources = new Set(start < 0 ? [] : messages.slice(start, end).filter(value => {
+    const message = asRecord(value)
+    return message?.toolUseResult === undefined && !hasToolResult(asRecord(message?.message)?.content)
+  }))
+  // Capture the most recent tool-result/input group before filters can remove
+  // an assistant and merge it with older history into one API message.
+  let recentEnd = messages.length
+  while (recentEnd > 0 && isAssistantMessage(messages[recentEnd - 1])) recentEnd--
+  let recentStart = recentEnd
+  while (recentStart > 0 && !isAssistantMessage(messages[recentStart - 1])) recentStart--
+  for (const source of messages.slice(recentStart, recentEnd)) sources.add(source)
+  const images = new WeakSet<object>()
+  function protect(content: unknown): unknown {
+    if (!Array.isArray(content)) return content
+    let changed = false
+    const result = content.map(value => {
+      const block = asRecord(value)
+      if (!block) return value
+      if (block.type === 'image') {
+        // Clone each occurrence: the same object can also occur in old history.
+        const image = { ...block }
+        images.add(image)
+        changed = true
+        return image
+      }
+      const nested = nestedContent(block)
+      const next = protect(nested)
+      if (next === nested) return value
+      changed = true
+      return block.type === 'document'
+        ? { ...block, source: { ...asRecord(block.source), content: next } }
+        : { ...block, content: next }
+    })
+    return changed ? result : content
+  }
+  return {
+    images,
+    mapMessage<T extends { message: { content: unknown } }>(source: unknown, message: T): T {
+      if (!sources.has(source)) return message
+      const content = protect(message.message.content)
+      return content === message.message.content ? message : { ...message, message: { ...message.message, content } }
+    },
+  }
+}
+
 /**
  * Normalize the outbound snapshot after media stripping. Every request must
  * recount history: an image accepted last turn can exceed this turn's limit.
@@ -137,15 +222,29 @@ function nestedContent(block: Record<string, unknown>): unknown {
  */
 export async function normalizeImagesForAPI<T extends { message: { content: unknown } }>(
   messages: T[],
-  options: { countDocuments?: boolean } = {},
+  options: { countDocuments?: boolean; protectedInputImages?: WeakSet<object> } = {},
 ): Promise<T[]> {
   let imageCount = 0
+  const occurrences = new Map<string, number>()
+  let encodedBytes = 0
+  let inlineCount = 0
+  const sources = new Map<string, string>()
   function count(content: unknown): void {
     if (!Array.isArray(content)) return
     for (const value of content) {
       const block = asRecord(value)
       if (!block) continue
+      if (block.type === 'tool_use' && block.name === 'Read' && typeof block.id === 'string') {
+        const path = asRecord(block.input)?.file_path
+        if (typeof path === 'string') sources.set(block.id, path)
+      }
       if (block.type === 'image' || (options.countDocuments && block.type === 'document')) imageCount++
+      if (isBase64ImageBlock(block)) {
+        const data = block.source.data
+        occurrences.set(data, (occurrences.get(data) ?? 0) + 1)
+        encodedBytes += data.length
+        inlineCount++
+      }
       count(nestedContent(block))
     }
   }
@@ -153,14 +252,26 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
   if (imageCount === 0) return messages
   const dimensionLimit = imageCount > API_MANY_IMAGE_THRESHOLD
     ? API_MANY_IMAGE_MAX_DIMENSION : IMAGE_MAX_WIDTH
+  // Repeated payloads share encoding work, but consume bytes on every occurrence.
+  const targetBytes = encodedBytes > IMAGE_REQUEST_BASE64_BUDGET
+    ? Math.min(IMAGE_CONTEXT_TARGET_BYTES, Math.floor(IMAGE_REQUEST_BASE64_BUDGET / 4 / inlineCount) * 3)
+    : IMAGE_CONTEXT_TARGET_BYTES
+  // The newest input group can contain several user/attachment/tool-result
+  // messages. Preserve all of it, including every image in a multi-image turn.
+  let lastInput = messages.length - 1
+  while (lastInput >= 0 && isAssistantMessage(messages[lastInput])) lastInput--
+  let protectedStart = lastInput
+  while (protectedStart > 0 && !isAssistantMessage(messages[protectedStart - 1])) protectedStart--
+  // Callers that merge messages supply block provenance captured before merging.
+  const [currentStart, currentEnd] = options.protectedInputImages ? [-1, -1] : currentInputRange(messages)
   // Bound concurrency and reuse identical payloads only within this request.
   // A cross-request cache would need the count-dependent dimension limit too.
   const resized = new Map<string, NormalizedImage>()
   async function normalizeImage(data: string): Promise<NormalizedImage> {
     const buffer = Buffer.from(data, 'base64')
     try {
-      const result = await maybeResizeAndDownsampleImageBuffer(
-        buffer, buffer.length, '', dimensionLimit,
+      const result = await optimizeImageForContext(
+        buffer, buffer.length, '', dimensionLimit, targetBytes,
       )
       let dimensions = result.dimensions
       if (result.buffer !== buffer) {
@@ -187,7 +298,14 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
       return { omitted: `[Image omitted from this request: ${reason}]` }
     }
   }
-  async function normalize(content: unknown): Promise<unknown> {
+  let optimizedBytes = 0
+  for (const [data, count] of occurrences) {
+    const image = await normalizeImage(data)
+    resized.set(data, image)
+    if (!('omitted' in image)) optimizedBytes += image.data.length * count
+  }
+  let excessBytes = optimizedBytes - IMAGE_REQUEST_BASE64_BUDGET
+  async function normalize(content: unknown, protectedInput: boolean, sourcePath?: string): Promise<unknown> {
     if (!Array.isArray(content)) return content
     let changed = false
     const result: unknown[] = []
@@ -196,16 +314,19 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
       let next = value
       if (block && isBase64ImageBlock(block)) {
         const data = block.source.data
-        let image = resized.get(data)
-        if (!image) {
-          image = await normalizeImage(data)
-          resized.set(data, image)
+        let image = resized.get(data)!
+        if (!('omitted' in image) && !protectedInput && !options.protectedInputImages?.has(block) && excessBytes > 0) {
+          excessBytes -= image.data.length
+          image = { omitted: '[Image omitted from this request to keep older image data within the context budget.' +
+            (sourcePath ? ` Original source: ${JSON.stringify(sourcePath)}.` : '') +
+            ' Read the original image again if needed.]' }
         }
         if ('omitted' in image) {
           next = { type: 'text', text: image.omitted,
             ...(block.cache_control ? { cache_control: block.cache_control } : {}) }
         } else if (image.data !== data || asRecord(block.source)?.media_type !== image.media_type) {
           next = { ...block, source: { ...block.source, data: image.data, media_type: image.media_type } }
+          if (options.protectedInputImages?.has(block)) options.protectedInputImages.add(next as object)
         }
         const dims = 'omitted' in image ? undefined : image.dimensions
         if (dims?.originalWidth && dims.originalHeight && dims.displayWidth && dims.displayHeight &&
@@ -224,7 +345,8 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
         }
       } else if (block) {
         const nested = nestedContent(block)
-        const normalized = await normalize(nested)
+        const hint = typeof block.tool_use_id === 'string' ? sources.get(block.tool_use_id) : undefined
+        const normalized = await normalize(nested, protectedInput, hint ?? sourcePath)
         if (normalized !== nested) {
           next = block.type === 'document'
             ? { ...block, source: { ...asRecord(block.source), content: normalized } }
@@ -237,8 +359,10 @@ export async function normalizeImagesForAPI<T extends { message: { content: unkn
     return changed ? result : content
   }
   const result: T[] = []
-  for (const message of messages) {
-    const content = await normalize(message.message.content)
+  for (const [index, message] of messages.entries()) {
+    const content = await normalize(message.message.content,
+      !options.protectedInputImages &&
+        (index >= protectedStart || (currentStart >= 0 && index >= currentStart && index < currentEnd)))
     result.push(content === message.message.content ? message
       : { ...message, message: { ...message.message, content } })
   }
