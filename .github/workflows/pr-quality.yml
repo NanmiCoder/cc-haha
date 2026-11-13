@@ -414,6 +414,9 @@ jobs:
         run: |
           $env:CC1879_PREFLIGHT_PARENT_PSHOME = $PSHOME
           bun --no-env-file scripts/pr/windows-installer-profile-review.ts --profile-only-bootstrap-preflight
+      - name: Probe owned removal primitives without accounts or profiles
+        if: always() && steps.prepare.outcome == 'success'
+        run: bun --no-env-file test --parallel=1 --max-concurrency=1 --no-orphans ./scripts/pr/windows-installer-removal-primitives.test.ts
       - name: Upload Windows installer evidence
         if: always()
         uses: actions/upload-artifact@v4

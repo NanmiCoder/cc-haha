@@ -203,6 +203,7 @@ namespace CcHahaInstallerProfile
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint GetProcessId(IntPtr process);
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetHandleInformation(IntPtr handle, out uint flags);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessTimes(IntPtr process, out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetExitCodeProcess(IntPtr process, out uint code);
@@ -239,12 +240,15 @@ namespace CcHahaInstallerProfile
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool LookupAccountSidW(string system, IntPtr sid, StringBuilder name, ref uint nameChars, StringBuilder domain, ref uint domainChars, out int use);
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string descriptor, uint revision, out IntPtr security, out uint size);
     [DllImport("advapi32.dll")] private static extern uint GetSecurityInfo(IntPtr handle, int type, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+    [DllImport("advapi32.dll")] private static extern bool IsValidSecurityDescriptor(IntPtr descriptor);
+    [DllImport("advapi32.dll")] private static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
     [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode)] private static extern int CreateProfile(string sid, string name, StringBuilder path, uint characters);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool LoadUserProfileW(IntPtr token, ref ProfileInfo profile);
     [DllImport("userenv.dll", SetLastError = true)] private static extern bool UnloadUserProfile(IntPtr token, IntPtr profile);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool DeleteProfileW(string sid, string path, string computer);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetUserProfileDirectoryW(IntPtr token, StringBuilder path, ref uint characters);
+    [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetProfilesDirectoryW(StringBuilder path, ref uint characters);
     [DllImport("userenv.dll", SetLastError = true)] private static extern bool CreateEnvironmentBlock(out IntPtr environment, IntPtr token, bool inherit);
     [DllImport("userenv.dll", SetLastError = true)] private static extern bool DestroyEnvironmentBlock(IntPtr environment);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
@@ -637,6 +641,8 @@ namespace CcHahaInstallerProfile
       VerifyOwnedAccount(state, true);
       CorePolicy.Require(state.accountBound && state.accountCreated && state.accountDisabled && !state.profileCreated
         && state.profileCreationAttempts == 1 && state.profileCreationUncertain && !state.profileOwnershipProven
+        && state.profileCreationTokenOwner == null && state.profileCreationIdentity == null && state.profileCreationPin == null
+        && !state.profileCreationSucceeded
         && state.account.groups.Count == 1 && state.account.groups[0] == UsersSid, "Profile creation precondition failed");
       StringBuilder path = new StringBuilder(32768);
       string callTokenOwner = RecordCreateProfileDiagnostics(state, path, "before");
@@ -647,6 +653,7 @@ namespace CcHahaInstallerProfile
       // diagnostic candidate, not a claimed documented CreateProfile limit.
       // Controller durably armed uncertainty before entering this method.
       state.profileCreationUncertain = true;
+      state.profileCreationTokenOwner = callTokenOwner;
       state.report.trace.Add("CreateProfile call-entered; calls=1; UTC=" + DateTime.UtcNow.ToString("o"));
       int status = CreateProfile(state.account.sid, state.sam, path, 260u);
       state.report.trace.Add("CreateProfile returned HRESULT=" + status.ToString(CultureInfo.InvariantCulture)
@@ -655,6 +662,7 @@ namespace CcHahaInstallerProfile
       if (status == 0)
       {
         state.profileCreated = true;
+        state.profileCreationSucceeded = true;
         if (state.report != null) state.report.realProfilesCreated++;
       }
       try { OwnProfileRegistration(state, false); RecordCreateProfileDiagnostics(state, path, "after"); }
@@ -667,11 +675,15 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(path.Length > 0 && path.Length < 260, "CreateProfile returned an unbounded path");
       state.profilePath = path.ToString();
       CorePolicy.ValidateAbsolutePath(state.profilePath);
-      state.profileIdentity = IdentifyPath(state.profilePath, true);
-      AssertOwnedProfileMetadata(state, callTokenOwner);
-      CorePolicy.Require(OwnProfileRegistration(state, true) && HivesAbsent(state) && !HasOwnedSidProcesses(state),
+      ProfileDirectoryPin pin = new ProfileDirectoryPin(state.profilePath);
+      state.profileCreationPin = pin;
+      state.profileIdentity = CopyProfileIdentity(pin.initial.identity);
+      state.profileCreationIdentity = CopyProfileIdentity(pin.initial.identity);
+      AssertOwnedProfileMetadata(state, pin);
+      CorePolicy.Require(OwnProfileRegistration(state, true, pin.initial.ownerSid == "S-1-5-32-544") && HivesAbsent(state) && !HasOwnedSidProcesses(state),
         "Created profile SID path hive or process boundary is unproven");
       VerifyOwnedAccount(state, true);
+      pin.VerifyUnchanged();
       state.profileOwnershipProven = true;
       state.profileCreationUncertain = false;
       state.report.trace.Add("CreateProfile owner-path-hive-process-boundary=proven; no profile lease was loaded");
@@ -820,6 +832,11 @@ namespace CcHahaInstallerProfile
       return CorePolicy.SamePath(expected.canonicalPath, observed.canonicalPath) ? "same-identity" : "canonical-path-differs";
     }
 
+    internal static void RequireBothProfileMappings(int matchedViews)
+    {
+      CorePolicy.Require(matchedViews == 3, "Both own SID profile registrations must match");
+    }
+
     internal static string ProfileOwnerObservation(string owner, string boundSid, string callTokenOwner, string runnerSid)
     {
       CorePolicy.Require(owner == null || owner.Length <= 184, "Bounded profile owner diagnostic required");
@@ -842,6 +859,173 @@ namespace CcHahaInstallerProfile
       internal string sid;
       internal int accessMask;
       internal bool allow, unclassified;
+      internal bool inheritOnly;
+    }
+
+    internal sealed class ProfileDirectoryMetadata
+    {
+      internal FileIdentity identity;
+      internal string ownerSid, descriptorSha256;
+      internal bool daclPresent, protectedDacl;
+      internal int aclRevision;
+      internal IList<ProfileDiagnosticAce> aces;
+    }
+
+    internal static void RequireSameProfileMetadata(ProfileDirectoryMetadata expected, ProfileDirectoryMetadata current)
+    {
+      CorePolicy.Require(expected != null && current != null
+        && FreshProfileIdentityRelation(expected.identity, current.identity) == "same-identity"
+        && !String.IsNullOrEmpty(expected.ownerSid) && expected.ownerSid == current.ownerSid
+        && expected.descriptorSha256 != null && expected.descriptorSha256.Length == 64
+        && expected.descriptorSha256 == current.descriptorSha256, "Profile same-handle identity owner or DACL changed");
+    }
+
+    internal static void RequireTrustedProfileDacl(ProfileDirectoryMetadata metadata, string boundSid, bool parent)
+    {
+      CorePolicy.Require(metadata != null && metadata.daclPresent && metadata.aces != null
+        && metadata.aces.Count > 0 && metadata.aces.Count <= 128 && (metadata.aclRevision == 2 || metadata.aclRevision == 4)
+        && (parent || metadata.protectedDacl), "Profile DACL is absent unprotected or unbounded");
+      const uint knownFileRights = 0xf01f01ff;
+      // A parent may grant creation of a different subdirectory (APPEND_DATA),
+      // but cannot grant replacement/rename, metadata or permission mutation.
+      uint mutations = parent ? 0x500d0152u : 0x500d0156u;
+      foreach (ProfileDiagnosticAce ace in metadata.aces)
+      {
+        CorePolicy.Require(ace != null && !String.IsNullOrEmpty(ace.sid) && !ace.unclassified && (unchecked((uint)ace.accessMask) & ~knownFileRights) == 0,
+          "Profile DACL has an unknown ACE or access mask");
+        bool trusted = ace.sid == boundSid || ace.sid == "S-1-5-18" || ace.sid == "S-1-5-32-544";
+        // Inherit-only writes remain dangerous inside the profile. They do not
+        // grant rights on this parent itself; the profile DACL is protected.
+        CorePolicy.Require(!ace.allow || trusted || (parent && ace.inheritOnly)
+          || (unchecked((uint)ace.accessMask) & mutations) == 0, "Profile path has a nontrusted mutation allow ACE");
+      }
+      if (parent) CorePolicy.Require(metadata.ownerSid == boundSid || metadata.ownerSid == "S-1-5-18"
+        || metadata.ownerSid == "S-1-5-32-544", "Profile parent has a nontrusted owner");
+    }
+
+    internal static void RequireFreshProfileOwner(string owner, string boundSid, string creationTokenOwner,
+      bool creationSucceeded, ProfileDirectoryMetadata metadata)
+    {
+      CorePolicy.Require(!String.IsNullOrEmpty(boundSid) && metadata != null && metadata.ownerSid == owner,
+        "Profile owner security descriptor binding is missing");
+      if (owner == boundSid || owner == "S-1-5-18") { RequireFreshProfileOwner(owner, boundSid); return; }
+      CorePolicy.Require(owner == "S-1-5-32-544" && creationTokenOwner == "S-1-5-32-544" && creationSucceeded,
+        "Fresh profile owner is not the bound SID SYSTEM or proven creation TokenOwner");
+      RequireTrustedProfileDacl(metadata, boundSid, false);
+    }
+
+    private sealed class ProfileDirectoryPin : IDisposable
+    {
+      private IntPtr handle;
+      private readonly string path;
+      internal readonly ProfileDirectoryMetadata initial;
+
+      internal ProfileDirectoryPin(string path) : this(path, null, null) { }
+
+      internal static ProfileDirectoryPin OpenAncestor(string path, string profilesDirectory, string directory)
+      {
+        return new ProfileDirectoryPin(path, profilesDirectory, directory);
+      }
+
+      private ProfileDirectoryPin(string path, string profilesDirectory, string directory)
+      {
+        if (profilesDirectory == null) CorePolicy.ValidateAbsolutePath(path);
+        else CorePolicy.ValidateProfileAncestorPath(path, profilesDirectory, directory);
+        this.path = path;
+        CorePolicy.Require(!HasReparseComponent(path), "Profile pin ancestor is a reparse point");
+        handle = CreateFileW(path, 0x20081, 3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+        CorePolicy.Require(handle != new IntPtr(-1), "Open noninherited no-follow profile pin failed");
+        try
+        {
+          uint flags; Win(GetHandleInformation(handle, out flags), "Get profile pin flags");
+          CorePolicy.Require((flags & 1) == 0, "Profile pin is inheritable");
+          initial = Read();
+        }
+        catch { Dispose(); throw; }
+      }
+
+      private ProfileDirectoryMetadata Read()
+      {
+        CorePolicy.Require(handle != IntPtr.Zero && handle != new IntPtr(-1), "Profile pin is closed");
+        FileIdentity identity = ReadHandleIdentity(handle, true, HasReparseComponent(path));
+        CorePolicy.Require(!identity.reparse && CorePolicy.SamePath(identity.canonicalPath, path), "Profile pin path or reparse boundary changed");
+        IntPtr owner, group, dacl, sacl, descriptor = IntPtr.Zero;
+        uint status = GetSecurityInfo(handle, 1, 5, out owner, out group, out dacl, out sacl, out descriptor);
+        try
+        {
+          CorePolicy.Require(status == 0 && descriptor != IntPtr.Zero && IsValidSecurityDescriptor(descriptor), "Profile GetSecurityInfo descriptor is unproven");
+          uint length = GetSecurityDescriptorLength(descriptor);
+          CorePolicy.Require(length >= 20 && length <= 65536, "Profile security descriptor is unbounded");
+          byte[] bytes = new byte[(int)length]; Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+          RawSecurityDescriptor security = new RawSecurityDescriptor(bytes, 0);
+          CorePolicy.Require((security.ControlFlags & ControlFlags.SelfRelative) != 0 && security.Owner != null, "Profile descriptor owner or format is missing");
+          RawAcl acl = security.DiscretionaryAcl;
+          CorePolicy.Require(acl == null || acl.Count <= 128, "Profile DACL ACE count is unbounded");
+          List<ProfileDiagnosticAce> aces = acl == null ? null : new List<ProfileDiagnosticAce>();
+          if (acl != null) foreach (GenericAce raw in acl)
+          {
+            QualifiedAce ace = raw as QualifiedAce;
+            aces.Add(new ProfileDiagnosticAce { sid = ace == null ? null : ace.SecurityIdentifier.Value,
+              accessMask = ace == null ? 0 : ace.AccessMask, allow = ace != null && ace.AceQualifier == AceQualifier.AccessAllowed,
+              inheritOnly = (raw.AceFlags & AceFlags.InheritOnly) != 0,
+              unclassified = !(raw is CommonAce) || ace == null || ace.IsCallback
+                || (ace.AceQualifier != AceQualifier.AccessAllowed && ace.AceQualifier != AceQualifier.AccessDenied)
+                || (unchecked((uint)raw.AceFlags) & ~0x1fu) != 0 });
+          }
+          byte[] canonical = new byte[security.BinaryLength]; security.GetBinaryForm(canonical, 0);
+          string hash;
+          using (System.Security.Cryptography.SHA256 algorithm = System.Security.Cryptography.SHA256.Create()) hash = CorePolicy.Hex(algorithm.ComputeHash(canonical));
+          return new ProfileDirectoryMetadata { identity = identity, ownerSid = security.Owner.Value,
+            descriptorSha256 = hash, daclPresent = (security.ControlFlags & ControlFlags.DiscretionaryAclPresent) != 0,
+            protectedDacl = (security.ControlFlags & ControlFlags.DiscretionaryAclProtected) != 0,
+            aclRevision = acl == null ? 0 : acl.Revision, aces = aces };
+        }
+        finally { if (descriptor != IntPtr.Zero) CorePolicy.Require(LocalFree(descriptor) == IntPtr.Zero, "Release profile security descriptor failed"); }
+      }
+
+      internal void VerifyUnchanged()
+      {
+        ProfileDirectoryMetadata current = Read();
+        RequireSameProfileMetadata(initial, current);
+      }
+
+      public void Dispose()
+      {
+        IntPtr close = handle; handle = IntPtr.Zero;
+        if (close != IntPtr.Zero && close != new IntPtr(-1)) Win(CloseHandle(close), "Close profile metadata pin");
+      }
+    }
+
+    private static FileIdentity CopyProfileIdentity(FileIdentity identity)
+    {
+      return new FileIdentity { canonicalPath = identity.canonicalPath, volumePath = identity.volumePath,
+        fileId = identity.fileId, directory = identity.directory, reparse = identity.reparse, bytes = identity.bytes, sha256 = identity.sha256 };
+    }
+
+    private static string ReadProfilesDirectory()
+    {
+      uint characters = 32768; StringBuilder path = new StringBuilder((int)characters);
+      Win(GetProfilesDirectoryW(path, ref characters), "GetProfilesDirectoryW");
+      string directory = path.ToString();
+      CorePolicy.Require(characters > 0 && characters <= path.Capacity, "ProfilesDirectory query is unbounded");
+      CorePolicy.ValidateAbsolutePath(directory);
+      return directory;
+    }
+
+    private void RequireTrustedProfileParents(FixtureState state)
+    {
+      string profiles = ReadProfilesDirectory();
+      string directory = Path.GetDirectoryName(state.profileCreationIdentity.canonicalPath);
+      string[] parents = CorePolicy.ProfileParentPaths(profiles, directory);
+      foreach (string parent in parents)
+      {
+        using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parent, profiles, directory))
+        {
+          RequireTrustedProfileDacl(pin.initial, state.account.sid, true);
+          pin.VerifyUnchanged();
+        }
+      }
+      ProfileTrace(state, "profile-parent-mutation-boundary=proven; depth=" + parents.Length);
     }
 
     internal static string ProfileDaclObservation(bool present, bool protectedDacl, IList<ProfileDiagnosticAce> aces, string boundSid)
@@ -866,44 +1050,23 @@ namespace CcHahaInstallerProfile
         + "; writerClassification=bound-system-administrators; observation-only=true";
     }
 
-    private void RecordFreshProfileMetadata(FixtureState state, string owner, string callTokenOwner)
+    private void RecordFreshProfileMetadata(FixtureState state, ProfileDirectoryMetadata metadata, string callTokenOwner)
     {
-      ProfileTrace(state, ProfileOwnerObservation(owner, state.account.sid, callTokenOwner, state.runnerSid));
-      try
-      {
-        DirectorySecurity security = Directory.GetAccessControl(state.profilePath, AccessControlSections.Access);
-        RawSecurityDescriptor descriptor = new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0);
-        RawAcl dacl = descriptor.DiscretionaryAcl;
-        List<ProfileDiagnosticAce> aces = dacl == null ? null : new List<ProfileDiagnosticAce>();
-        if (dacl != null && dacl.Count <= 128)
-          foreach (GenericAce raw in dacl)
-          {
-            QualifiedAce ace = raw as QualifiedAce;
-            aces.Add(new ProfileDiagnosticAce { sid = ace == null ? null : ace.SecurityIdentifier.Value,
-              accessMask = ace == null ? 0 : ace.AccessMask, allow = ace != null && ace.AceQualifier == AceQualifier.AccessAllowed,
-              unclassified = !(raw is CommonAce) || ace == null || ace.IsCallback });
-          }
-        if (dacl != null && dacl.Count > 128)
-          ProfileTrace(state, "profile-dacl; present=" + ((descriptor.ControlFlags & ControlFlags.DiscretionaryAclPresent) != 0)
-            + "; protected=" + security.AreAccessRulesProtected + "; aceCount=" + dacl.Count
-            + "; scan=unproven; nontrustedAllowWrite=unknown; observation-only=true");
-        else ProfileTrace(state, ProfileDaclObservation((descriptor.ControlFlags & ControlFlags.DiscretionaryAclPresent) != 0,
-          security.AreAccessRulesProtected, aces, state.account.sid));
-      }
-      catch (Exception error) { ProfileTrace(state, "profile-dacl; observation=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
+      ProfileTrace(state, ProfileOwnerObservation(metadata.ownerSid, state.account.sid, callTokenOwner, state.runnerSid));
+      ProfileTrace(state, ProfileDaclObservation(metadata.daclPresent, metadata.protectedDacl, metadata.aces, state.account.sid));
       try
       {
         bool present = OwnProfileRegistration(state, true);
         ProfileTrace(state, "ownSID-mapping-observation; present=" + present + "; leaseGranted=false");
       }
       catch (Exception error) { ProfileTrace(state, "ownSID-mapping-observation; identity=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
-      try { ProfileTrace(state, "profile-metadata-identity; relation=" + FreshProfileIdentityRelation(state.profileIdentity, IdentifyPath(state.profilePath, true)) + "; leaseGranted=false"); }
-      catch (Exception error) { ProfileTrace(state, "profile-metadata-identity; relation=unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture)); }
+      ProfileTrace(state, "profile-metadata-identity; relation=" + FreshProfileIdentityRelation(state.profileCreationIdentity, metadata.identity) + "; leaseGranted=false");
     }
 
-    private bool OwnProfileRegistration(FixtureState state, bool match)
+    private bool OwnProfileRegistration(FixtureState state, bool match, bool requireBoth = false)
     {
-      Real(state); bool present = false;
+      Real(state); bool present = false; int matchedViews = 0;
+      CorePolicy.Require(!requireBoth || match, "Dual profile registration proof requires identities");
       foreach (RegistryView view in new RegistryView[] { RegistryView.Registry32, RegistryView.Registry64 })
       using (RegistryKey machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
       using (RegistryKey key = machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + state.account.sid, false))
@@ -919,18 +1082,29 @@ namespace CcHahaInstallerProfile
         if (!match) continue;
         CorePolicy.Require(registered != null && registered.Length < 800 && registered.IndexOf('%') < 0, "Own SID profile registration path is unproven");
         CorePolicy.ValidateAbsolutePath(registered);
-        FileIdentity identity = IdentifyPath(registered, true);
+        FileIdentity identity;
+        if (requireBoth) using (ProfileDirectoryPin mapping = new ProfileDirectoryPin(registered))
+        {
+          identity = CopyProfileIdentity(mapping.initial.identity);
+          mapping.VerifyUnchanged();
+        }
+        else identity = IdentifyPath(registered, true);
         string relation = FreshProfileIdentityRelation(state.profileIdentity, identity);
         ProfileTrace(state, "ownSID-ProfileList; view=" + (int)view + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath)
           + "; identityRelation=" + relation + "; exact-returned-file-identity=" + (relation == "same-identity"));
         CorePolicy.Require(relation == "same-identity", "Own SID profile registration differs from returned profile");
+        matchedViews |= view == RegistryView.Registry32 ? 1 : 2;
       }
+      if (requireBoth) RequireBothProfileMappings(matchedViews);
       return present;
     }
 
-    private void AssertOwnedProfileMetadata(FixtureState state, string callTokenOwner = null)
+    private void AssertOwnedProfileMetadata(FixtureState state, ProfileDirectoryPin pin)
     {
-      FileIdentity identity = state.profileIdentity;
+      FileIdentity identity = pin.initial.identity;
+      CorePolicy.Require(state.profileCreationSucceeded && state.profileCreationIdentity != null
+        && FreshProfileIdentityRelation(state.profileCreationIdentity, identity) == "same-identity"
+        && FreshProfileIdentityRelation(state.profileIdentity, identity) == "same-identity", "Original created profile identity is unproven");
       CorePolicy.Require(identity != null && identity.directory && !identity.reparse && !String.IsNullOrEmpty(identity.fileId)
         && !String.IsNullOrEmpty(identity.volumePath), "Fresh profile canonical identity is unproven");
       string leaf = Path.GetFileName(identity.canonicalPath.TrimEnd('\\'));
@@ -939,12 +1113,18 @@ namespace CcHahaInstallerProfile
       foreach (string forbidden in new string[] { state.spec.gitRoot, state.spec.sourceRoot, state.spec.controllerRoot })
         CorePolicy.Require(!CorePolicy.SamePath(identity.canonicalPath, forbidden) && !CorePolicy.IsInside(forbidden, identity.canonicalPath)
           && !CorePolicy.IsInside(identity.canonicalPath, forbidden), "Fresh profile intersects another fixture boundary");
-      string owner = Directory.GetAccessControl(identity.canonicalPath, AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)).Value;
-      if (callTokenOwner != null) RecordFreshProfileMetadata(state, owner, callTokenOwner);
-      RequireFreshProfileOwner(owner, state.account.sid);
+      string owner = pin.initial.ownerSid;
+      RecordFreshProfileMetadata(state, pin.initial, state.profileCreationTokenOwner);
+      RequireFreshProfileOwner(owner, state.account.sid, state.profileCreationTokenOwner, state.profileCreationSucceeded, pin.initial);
+      if (owner == "S-1-5-32-544")
+      {
+        RequireTrustedProfileParents(state);
+        CorePolicy.Require(OwnProfileRegistration(state, true, true), "Both own SID profile registrations are unproven");
+      }
+      pin.VerifyUnchanged();
       ProfileTrace(state, "profile-fileIdSha256=" + CorePolicy.HashText(identity.volumePath + "\n" + identity.fileId)
         + "; pathSha256=" + CorePolicy.HashText(identity.canonicalPath) + "; ownerSidSha256=" + CorePolicy.HashText(owner)
-        + "; bound-owner-or-system=true; reparse=false");
+        + "; owner-proof=" + (owner == "S-1-5-32-544" ? "creation-token-administrators" : "bound-or-system") + "; reparse=false");
     }
 
     public override void SetOwnedAccountDisabled(FixtureState state, bool disabled)
@@ -1095,13 +1275,36 @@ namespace CcHahaInstallerProfile
     {
       HistoricalController(state);
       VerifyOwnedAccount(state, false);
-      CorePolicy.Require(state.profileCreated && !state.profileLoaded && state.token != IntPtr.Zero && state.profile == IntPtr.Zero, "Profile load precondition failed");
+      CorePolicy.Require(state.profileCreated && state.profileOwnershipProven && !state.profileCreationUncertain
+        && !state.profileLoadAttempted && state.profileCreationPin == null && !state.profileLoaded
+        && state.token != IntPtr.Zero && state.profile == IntPtr.Zero, "Profile load precondition failed");
       CorePolicy.AssertStandard(InspectToken(state.token), state.account.sid);
       ProfileInfo profile = new ProfileInfo { size = (uint)Marshal.SizeOf(typeof(ProfileInfo)), flags = 1, userName = state.sam };
-      Real(state);
-      Win(LoadUserProfileW(state.token, ref profile), "LoadUserProfileW");
-      state.profile = profile.profile;
-      state.profileLoaded = true;
+      state.profileCreationUncertain = true;
+      using (ProfileDirectoryPin pin = new ProfileDirectoryPin(state.profilePath))
+      {
+        AssertOwnedProfileMetadata(state, pin);
+        pin.VerifyUnchanged();
+        Real(state);
+      }
+      state.profileLoadAttempted = true;
+      bool loaded = LoadUserProfileW(state.token, ref profile);
+      int loadError = Marshal.GetLastWin32Error();
+      if (loaded) { state.profile = profile.profile; state.profileLoaded = true; }
+      try
+      {
+        using (ProfileDirectoryPin pin = new ProfileDirectoryPin(state.profilePath)) AssertOwnedProfileMetadata(state, pin);
+      }
+      catch (Exception error)
+      {
+        if (!loaded)
+        {
+          ProfileTrace(state, "Load-failure metadata readback unproven; hResult=" + error.HResult.ToString(CultureInfo.InvariantCulture));
+          throw new Win32Exception(loadError, "LoadUserProfileW");
+        }
+        throw;
+      }
+      if (!loaded) throw new Win32Exception(loadError, "LoadUserProfileW");
       CorePolicy.Require(state.profile != IntPtr.Zero, "LoadUserProfile returned no hive handle");
       KnownPaths paths = QueryKnownPaths(state.token);
       CorePolicy.Require(CorePolicy.SamePath(paths.profile, state.profilePath), "Loaded profile is not the created profile");
@@ -1111,6 +1314,7 @@ namespace CcHahaInstallerProfile
         CorePolicy.Require(mapping != null && CorePolicy.SamePath(Environment.ExpandEnvironmentVariables((string)mapping.GetValue("ProfileImagePath", "", RegistryValueOptions.DoNotExpandEnvironmentNames)), state.profilePath),
           "OS profile registration disagrees with the created profile");
       }
+      state.profileCreationUncertain = false;
     }
 
     private static string KnownFolder(string value, IntPtr token)
@@ -1301,6 +1505,25 @@ namespace CcHahaInstallerProfile
       return IdentifyPathCore(path, directory, true);
     }
 
+    private static FileIdentity ReadHandleIdentity(IntPtr file, bool directory, bool reparse)
+    {
+      FileInformation info;
+      Win(GetFileInformationByHandle(file, out info), "GetFileInformationByHandle");
+      string final = HandlePath(file, 0), volume = HandlePath(file, 1);
+      CorePolicy.Require(final.StartsWith(@"\\?\", StringComparison.Ordinal) && !final.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)
+        && volume.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase), "Unexpected identity namespace");
+      int end = volume.IndexOf(@"}\", StringComparison.Ordinal);
+      CorePolicy.Require(end > 0, "Volume GUID identity is incomplete");
+      FileIdentity identity = new FileIdentity {
+        canonicalPath = final.Substring(4), volumePath = volume.Substring(0, end + 2),
+        fileId = info.VolumeSerial.ToString("x8") + ":" + info.IndexHigh.ToString("x8") + info.IndexLow.ToString("x8"),
+        bytes = checked((long)(((ulong)info.SizeHigh << 32) | info.SizeLow)),
+        directory = (info.Attributes & 0x10) != 0, reparse = reparse || (info.Attributes & 0x400) != 0
+      };
+      CorePolicy.Require(identity.directory == directory, "File identity type changed");
+      return identity;
+    }
+
     private FileIdentity IdentifyPathCore(string path, bool directory, bool inspectAncestors)
     {
       CorePolicy.ValidateAbsolutePath(path);
@@ -1309,20 +1532,7 @@ namespace CcHahaInstallerProfile
       CorePolicy.Require(file != new IntPtr(-1), "Native identity file open failed (Win32 " + Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture) + ")");
       try
       {
-        FileInformation info;
-        Win(GetFileInformationByHandle(file, out info), "GetFileInformationByHandle");
-        string final = HandlePath(file, 0), volume = HandlePath(file, 1);
-        CorePolicy.Require(final.StartsWith(@"\\?\", StringComparison.Ordinal) && !final.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase) &&
-          volume.StartsWith(@"\\?\Volume{", StringComparison.OrdinalIgnoreCase), "Unexpected identity namespace");
-        int end = volume.IndexOf(@"}\", StringComparison.Ordinal);
-        CorePolicy.Require(end > 0, "Volume GUID identity is incomplete");
-        FileIdentity identity = new FileIdentity {
-          canonicalPath = final.Substring(4), volumePath = volume.Substring(0, end + 2),
-          fileId = info.VolumeSerial.ToString("x8") + ":" + info.IndexHigh.ToString("x8") + info.IndexLow.ToString("x8"),
-          bytes = checked((long)(((ulong)info.SizeHigh << 32) | info.SizeLow)),
-          directory = (info.Attributes & 0x10) != 0, reparse = reparse || (info.Attributes & 0x400) != 0
-        };
-        CorePolicy.Require(identity.directory == directory, "File identity type changed");
+        FileIdentity identity = ReadHandleIdentity(file, directory, reparse);
         if (!directory)
         {
           using (SafeFileHandle borrowed = new SafeFileHandle(file, false))
@@ -2107,18 +2317,35 @@ namespace CcHahaInstallerProfile
     {
       VerifyOwnedAccount(state, true);
       CorePolicy.Require(state.profileCreationAttempts == 1 && state.profileOwnershipProven && !state.profileCreationUncertain
+        && state.profileCreationSucceeded && state.profileCreationIdentity != null && state.profileCreationPin == null && !state.profileDeleteAttempted
         && state.profileCreated && !state.profileLoaded && state.profile == IntPtr.Zero &&
         state.jobsEmpty && HivesAbsent(state) && !HasOwnedSidProcesses(state) && state.profileIdentity != null, "Owned profile cannot yet be deleted");
-      FileIdentity identity = IdentifyPath(state.profilePath, true);
-      CorePolicy.Require(!identity.reparse && identity.fileId == state.profileIdentity.fileId &&
-        identity.volumePath == state.profileIdentity.volumePath && CorePolicy.SamePath(identity.canonicalPath, state.profileIdentity.canonicalPath), "Owned profile directory identity changed");
-      AssertOwnedProfileMetadata(state);
-      CorePolicy.Require(OwnProfileRegistration(state, true), "Owned profile registration disappeared before deletion");
-      Real(state);
-      Win(DeleteProfileW(state.account.sid, state.profilePath, null), "DeleteProfileW");
-      CorePolicy.Require(!Directory.Exists(state.profilePath) && HivesAbsent(state), "Userenv did not remove the owned profile");
+      state.profileCreationUncertain = true;
+      using (ProfileDirectoryPin pin = new ProfileDirectoryPin(state.profilePath))
+      {
+        AssertOwnedProfileMetadata(state, pin);
+        CorePolicy.Require(OwnProfileRegistration(state, true, pin.initial.ownerSid == "S-1-5-32-544"), "Owned profile registration disappeared before deletion");
+        pin.VerifyUnchanged();
+        Real(state);
+      }
+      state.profileDeleteAttempted = true;
+      bool deleted = DeleteProfileW(state.account.sid, state.profilePath, null);
+      int deleteError = Marshal.GetLastWin32Error();
+      ProfileTrace(state, "DeleteProfile terminal; success=" + deleted + "; Win32=" + deleteError);
+      bool absent = ProfileDirectoryAbsent(state.profilePath);
+      if (!absent) using (ProfileDirectoryPin pin = new ProfileDirectoryPin(state.profilePath)) AssertOwnedProfileMetadata(state, pin);
+      if (!deleted) throw new InvalidOperationException("DeleteProfileW failed (Win32 " + deleteError.ToString(CultureInfo.InvariantCulture) + ")");
+      CorePolicy.Require(absent && HivesAbsent(state) && !HasOwnedSidProcesses(state), "Userenv did not remove the owned profile");
       CorePolicy.Require(!OwnProfileRegistration(state, false), "Userenv left owned profile registration behind");
       state.profileCreated = false;
+      state.profileCreationUncertain = false;
+    }
+
+    private static bool ProfileDirectoryAbsent(string path)
+    {
+      try { File.GetAttributes(path); return false; }
+      catch (FileNotFoundException) { return true; }
+      catch (DirectoryNotFoundException) { return true; }
     }
 
     public override void DeleteOwnedAccount(FixtureState state)
@@ -2454,6 +2681,84 @@ namespace CcHahaInstallerProfile
       // Inventory is read-only evidence. It does not authorize any extra delete.
     }
 
+    private static void RunOwnedProfilePinProbe(NativePlatform platform, FixtureState state, string root, FixtureReport report)
+    {
+      string path = Path.Combine(root, "profile-pin-probe"), renamed = path + "-renamed";
+      FileIdentity expected = null; bool created = false;
+      CorePolicy.Require(!Directory.Exists(path) && !File.Exists(path) && !Directory.Exists(renamed) && !File.Exists(renamed), "ABI profile pin probe collision");
+      try
+      {
+        int error; created = CreatePrivateDirectoryAtomically(path, state.runnerSid, null, out error);
+        CorePolicy.Require(created, "ABI profile pin probe creation failed");
+        using (ProfileDirectoryPin pin = new ProfileDirectoryPin(path))
+        {
+          expected = CopyProfileIdentity(pin.initial.identity);
+          RequireTrustedProfileDacl(pin.initial, state.runnerSid, false);
+          CorePolicy.Require(pin.initial.ownerSid == state.runnerSid && pin.initial.descriptorSha256.Length == 64, "ABI same-handle metadata binding failed");
+          pin.VerifyUnchanged();
+          report.Check("owned-profile-metadata-same-handle", true, "No-follow noninherited directory handle supplied identity and bounded GetSecurityInfo owner/DACL; no account/profile context.");
+          bool renameDenied = false, deleteDenied = false;
+          try { Directory.Move(path, renamed); }
+          catch (IOException) { renameDenied = true; }
+          catch (UnauthorizedAccessException) { renameDenied = true; }
+          CorePolicy.Require(renameDenied && Directory.Exists(path) && !Directory.Exists(renamed), "Profile pin did not reject owned rename");
+          try { Directory.Delete(path); }
+          catch (IOException) { deleteDenied = true; }
+          catch (UnauthorizedAccessException) { deleteDenied = true; }
+          CorePolicy.Require(deleteDenied && Directory.Exists(path), "Profile pin did not reject owned deletion");
+          pin.VerifyUnchanged();
+          report.Check("owned-profile-pin-rename-delete-refused", true, "READ|WRITE share without DELETE refused rename and deletion of the exact empty owned directory.");
+        }
+        Directory.Move(path, renamed);
+        FileIdentity moved = platform.IdentifyPath(renamed, true);
+        CorePolicy.Require(!moved.reparse && moved.fileId == expected.fileId && moved.volumePath == expected.volumePath, "Released ABI pin probe identity changed");
+        Directory.Move(renamed, path);
+        CorePolicy.Require(FreshProfileIdentityRelation(expected, platform.IdentifyPath(path, true)) == "same-identity", "Released ABI pin probe path changed");
+        Directory.Delete(path);
+        CorePolicy.Require(ProfileDirectoryAbsent(path) && ProfileDirectoryAbsent(renamed), "Released ABI pin probe remained");
+        report.Check("owned-profile-pin-release-restores-operations", true, "After explicit close the same owned directory could be renamed and deleted; no userenv API invoked.");
+      }
+      finally
+      {
+        if (created && expected != null)
+          foreach (string candidate in new string[] { path, renamed })
+            if (!ProfileDirectoryAbsent(candidate))
+            {
+              FileIdentity remaining = platform.IdentifyPath(candidate, true);
+              CorePolicy.Require(!remaining.reparse && remaining.fileId == expected.fileId && remaining.volumePath == expected.volumePath
+                && Directory.GetFileSystemEntries(candidate).Length == 0, "ABI profile pin cleanup ownership is unknown");
+              Directory.Delete(candidate);
+            }
+      }
+    }
+
+    private static void RunProfilesParentProbe(FixtureReport report, string runnerSid)
+    {
+      // This SID is a fixed synthetic fixture value, never derived from a
+      // queried machine/domain SID. Only read the namespace, not user entries.
+      const string syntheticBoundSid = "S-1-5-21-1879-1879-1879-4242";
+      CorePolicy.Require(!String.IsNullOrEmpty(runnerSid) && syntheticBoundSid != runnerSid, "Synthetic ABI bound SID must differ from runner");
+      string profiles = ReadProfilesDirectory();
+      string[] parents = CorePolicy.ProfileParentPaths(profiles, profiles);
+      bool allTrusted = true;
+      for (int index = 0; index < parents.Length; index++)
+      {
+        using (ProfileDirectoryPin pin = ProfileDirectoryPin.OpenAncestor(parents[index], profiles, profiles))
+        {
+          bool trusted = false;
+          try { RequireTrustedProfileDacl(pin.initial, syntheticBoundSid, true); trusted = true; }
+          catch (FixtureFailure) { allTrusted = false; }
+          pin.VerifyUnchanged();
+          report.trace.Add("ABI readonly ProfilesDirectory ancestor index=" + index.ToString(CultureInfo.InvariantCulture)
+            + "; pathSha256=" + CorePolicy.HashText(parents[index]) + "; policyPassed=" + trusted + "; leaseGranted=false");
+          report.trace.Add(ProfileOwnerObservation(pin.initial.ownerSid, syntheticBoundSid, null, null));
+          report.trace.Add(ProfileDaclObservation(pin.initial.daclPresent, pin.initial.protectedDacl, pin.initial.aces, syntheticBoundSid));
+        }
+      }
+      report.Check("readonly-profiles-parent-chain", allTrusted,
+        "Complete actual ProfilesDirectory-to-volume-root chain used production no-follow metadata pins and parent policy with a fixed synthetic SID; no account or profile API, child enumeration, mutation or lease.");
+    }
+
     internal static FixtureReport RunAbiHarness(string outputPath)
     {
       FixtureReport report = new FixtureReport { mode = "abi-harness" };
@@ -2498,6 +2803,8 @@ namespace CcHahaInstallerProfile
         if (!created) throw new InvalidOperationException("CreateDirectoryW owned ABI root failed (Win32 " + createError.ToString(CultureInfo.InvariantCulture) + ")");
         state.controllerRootOwned = true;
         rootIdentity = platform.IdentifyPath(root, true);
+        RunOwnedProfilePinProbe(platform, state, root, report);
+        RunProfilesParentProbe(report, state.runnerSid);
         state.spec.controllerRoot = root;
         state.profilePath = state.paths.profile;
         Win(OpenProcessToken(GetCurrentProcess(), TokenQuery | 0x0002 | 0x0004, out state.token), "Open ABI token");

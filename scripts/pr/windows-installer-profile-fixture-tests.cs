@@ -100,9 +100,123 @@ namespace CcHahaInstallerProfile
         && state.report.full_old_to_new == "not_run", "five evidence fields must remain not_run");
     }
 
+    private static NativePlatform.ProfileDirectoryMetadata ProfileMetadata(string owner)
+    {
+      return new NativePlatform.ProfileDirectoryMetadata {
+        identity = new FileIdentity { canonicalPath = Paths().profile, directory = true, fileId = "profile-file", volumePath = @"\\?\Volume{fixture}\" },
+        ownerSid = owner, daclPresent = true, protectedDacl = true, aclRevision = 2, descriptorSha256 = new String('a', 64),
+        aces = new List<NativePlatform.ProfileDiagnosticAce> {
+          new NativePlatform.ProfileDiagnosticAce { sid = TargetSid, accessMask = 0x1f01ff, allow = true },
+          new NativePlatform.ProfileDiagnosticAce { sid = "S-1-5-18", accessMask = 0x1f01ff, allow = true },
+          new NativePlatform.ProfileDiagnosticAce { sid = "S-1-5-32-544", accessMask = 0x1f01ff, allow = true }
+        }
+      };
+    }
+
+    private static void RunProfileLeasePolicyTests(FixtureReport report)
+    {
+      Case(report, "managed-readonly-profile-parent-chain-includes-only-its-exact-volume-root", delegate {
+        string[][] chains = {
+          new string[] { @"C:\Users", @"C:\" },
+          new string[] { @"D:\Data\Profiles\nested", @"D:\Data\Profiles", @"D:\Data", @"D:\" }
+        };
+        foreach (string[] expected in chains)
+        {
+          string profiles = expected.Length == 2 ? expected[0] : expected[1];
+          string[] actual = CorePolicy.ProfileParentPaths(profiles, expected[0]);
+          Assert(actual.SequenceEqual(expected), "real managed enumeration must reach the exact volume root");
+          foreach (string path in actual) CorePolicy.ValidateProfileAncestorPath(path, profiles, expected[0]);
+          Reject(delegate { CorePolicy.ValidateAbsolutePath(actual.Last()); }, "volume root remains forbidden for owned or destructive operations");
+          foreach (string path in new string[] { @"E:\", @"C:", @"\\host\share", profiles + @"\not-on-chain", profiles + @"\.." })
+            Reject(delegate { CorePolicy.ValidateProfileAncestorPath(path, profiles, expected[0]); }, "read-only pin must not escape the exact chain");
+        }
+        Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\Users", @"C:\elsewhere"); }, "unrelated directory cannot select a root");
+        Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\", @"C:\Users"); }, "volume root cannot become ProfilesDirectory");
+        Reject(delegate { CorePolicy.ProfileParentPaths(@"C:\Users", @"C:\Users" + String.Concat(Enumerable.Repeat(@"\x", 33))); }, "parent chain remains bounded");
+      });
+      Case(report, "fake-admin-owner-requires-original-successful-creation-context", delegate {
+        NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
+        NativePlatform.RequireFreshProfileOwner(metadata.ownerSid, TargetSid, "S-1-5-32-544", true, metadata);
+        foreach (string before in new string[] { null, TargetSid, RunnerSid, "S-1-5-18" })
+          Reject(delegate { NativePlatform.RequireFreshProfileOwner(metadata.ownerSid, TargetSid, before, true, metadata); }, "only original Admin TokenOwner admits Admin owner");
+        Reject(delegate { NativePlatform.RequireFreshProfileOwner(metadata.ownerSid, TargetSid, "S-1-5-32-544", false, metadata); }, "failed or unobserved creation is not a lease");
+        foreach (string owner in new string[] { null, RunnerSid, "S-1-5-21-7-8-9-1001" })
+        {
+          metadata.ownerSid = owner;
+          Reject(delegate { NativePlatform.RequireFreshProfileOwner(owner, TargetSid, owner, true, metadata); }, "other owner cannot become trusted by equaling a token/runner");
+        }
+        foreach (string owner in new string[] { TargetSid, "S-1-5-18" })
+        {
+          metadata.ownerSid = owner; NativePlatform.RequireFreshProfileOwner(owner, TargetSid, null, true, metadata);
+        }
+        Reject(delegate { NativePlatform.RequireFreshProfileOwner(TargetSid, TargetSid, null, true, ProfileMetadata("S-1-5-32-544")); }, "owner and SD from different objects");
+      });
+      Case(report, "fake-admin-dacl-rejects-mutation-unknown-and-inherit-only-writes", delegate {
+        foreach (int mask in new int[] { 2, 4, 16, 64, 256, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000 })
+          foreach (bool inheritOnly in new bool[] { false, true })
+          {
+            NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
+            metadata.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = false });
+            metadata.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = true, inheritOnly = inheritOnly });
+            Reject(delegate { NativePlatform.RequireTrustedProfileDacl(metadata, TargetSid, false); }, "Deny cannot cancel a mutation Allow, even inherit-only");
+          }
+        foreach (string fault in new string[] { "missing", "null", "empty", "unprotected", "large", "revision", "unknown-ace", "missing-sid", "unknown-mask" })
+        {
+          NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
+          if (fault == "missing") metadata.daclPresent = false;
+          if (fault == "null") metadata.aces = null;
+          if (fault == "empty") metadata.aces.Clear();
+          if (fault == "unprotected") metadata.protectedDacl = false;
+          if (fault == "large") while (metadata.aces.Count <= 128) metadata.aces.Add(metadata.aces[0]);
+          if (fault == "revision") metadata.aclRevision = 255;
+          if (fault == "unknown-ace") metadata.aces[0].unclassified = true;
+          if (fault == "missing-sid") metadata.aces[0].sid = null;
+          if (fault == "unknown-mask") metadata.aces[0].accessMask = 0x2000000;
+          Reject(delegate { NativePlatform.RequireTrustedProfileDacl(metadata, TargetSid, false); }, "DACL unknown must fail: " + fault);
+        }
+      });
+      Case(report, "fake-admin-parent-rejects-replacement-and-permission-mutation", delegate {
+        foreach (int mask in new int[] { 2, 16, 64, 256, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000 })
+        {
+          NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-18"); metadata.protectedDacl = false;
+          metadata.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = mask, allow = true });
+          Reject(delegate { NativePlatform.RequireTrustedProfileDacl(metadata, TargetSid, true); }, "parent permits nontrusted replacement or mutation");
+        }
+        NativePlatform.ProfileDirectoryMetadata parent = ProfileMetadata("S-1-5-18"); parent.protectedDacl = false;
+        parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 4, allow = true });
+        parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 0x1f01ff, allow = true, inheritOnly = true });
+        NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, true);
+        parent.ownerSid = RunnerSid;
+        Reject(delegate { NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, true); }, "parent owner can rewrite permissions");
+      });
+      Case(report, "fake-admin-profile-mapping-requires-both-exact-views", delegate {
+        NativePlatform.RequireBothProfileMappings(3);
+        foreach (int views in new int[] { 0, 1, 2, 4, 7 })
+          Reject(delegate { NativePlatform.RequireBothProfileMappings(views); }, "OR of views is not an exact two-view proof");
+      });
+      Case(report, "fake-profile-snapshot-rejects-object-owner-or-dacl-drift", delegate {
+        NativePlatform.ProfileDirectoryMetadata expected = ProfileMetadata("S-1-5-32-544");
+        NativePlatform.RequireSameProfileMetadata(expected, ProfileMetadata(expected.ownerSid));
+        foreach (string fault in new string[] { "missing", "owner", "dacl", "missing-hash", "file", "volume", "path", "reparse" })
+        {
+          NativePlatform.ProfileDirectoryMetadata current = ProfileMetadata(expected.ownerSid);
+          if (fault == "missing") current = null;
+          if (fault == "owner") current.ownerSid = TargetSid;
+          if (fault == "dacl") current.descriptorSha256 = new String('b', 64);
+          if (fault == "missing-hash") current.descriptorSha256 = null;
+          if (fault == "file") current.identity.fileId += "-different";
+          if (fault == "volume") current.identity.volumePath += "-different";
+          if (fault == "path") current.identity.canonicalPath += "-sibling";
+          if (fault == "reparse") current.identity.reparse = true;
+          Reject(delegate { NativePlatform.RequireSameProfileMetadata(expected, current); }, "metadata must remain the same object: " + fault);
+        }
+      });
+    }
+
     public static void Run(FixtureReport report)
     {
       RunProfileBoundaryTests(report);
+      RunProfileLeasePolicyTests(report);
       Case(report, "fake-abi-system-context-preserves-parent-presence-and-redacts-observations", delegate {
         Dictionary<string, string> parentSystem = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
           { "SystemRoot", @"C:\Windows" }, { "WINDIR", @"C:\Windows" }, { "OS", "Windows_NT" },
@@ -633,6 +747,82 @@ namespace CcHahaInstallerProfile
             Assert(!api.Calls.Contains(forbidden), "uncertain diagnostics cannot reach native deletion or continuation: " + forbidden);
           AssertNoNativePromotion(state);
         });
+      Case(report, "fake-admin-profile-lease-keeps-creation-context-through-ledger-and-cleanup", delegate {
+        FakePlatform api = new FakePlatform { Fault = "profile-admin-valid" };
+        FixtureState state = Execute(api, ProfileOnlySpec());
+        Assert(state.report.status == "passed" && state.report.cleanup == "cleaned", "complete fresh Admin proof may clean only its own new resources");
+        Assert(state.profileCreationTokenOwner == "S-1-5-32-544" && state.profileCreationIdentity != null && state.profileCreationSucceeded,
+          "original creation context survives cleanup without a new token query");
+        Assert(state.profileCreationPin == null && api.Calls.Count(name => name == "ReleaseProfileCreationPin") == 1,
+          "creation pin released once, after the proven ledger");
+        Assert(api.Calls.IndexOf("ReleaseProfileCreationPin") < api.Calls.IndexOf("CloseRuntimeResources")
+          && api.Calls.Count(name => name == "DeleteProfileCall") == 1 && api.Calls.Count(name => name == "NetUserDelCall") == 1,
+          "pin does not cross profile API boundary and owned deletion remains ordered");
+        AssertNoNativePromotion(state);
+      });
+      foreach (string fault in new string[] { "token-query", "token-missing", "token-different", "create-failed", "owner-missing", "owner-other",
+        "dacl-null", "dacl-unprotected", "dacl-unknown", "dacl-write", "parent-owner", "parent-replace", "view32", "view64",
+        "reparse", "file-drift", "volume-drift", "hive", "process", "pin-close" })
+        Case(report, "fake-admin-profile-refusal-keeps-unknown-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = "profile-admin-" + fault };
+          FixtureState state = Execute(api, ProfileOnlySpec());
+          Assert(state.report.status == "failed" && state.report.cleanup == "failed" && state.profileCreationUncertain
+            && !state.profileOwnershipProven && state.profileCreationAttempts == 1 && state.accountDisabled,
+            "unknown or failed proof cannot become an ownership lease");
+          Assert(!api.Calls.Contains("DeleteProfileCall") && !api.Calls.Contains("NetUserDelCall")
+            && !api.Calls.Contains("EnableAccount") && !api.Calls.Contains("Logon") && !api.Calls.Contains("LoadProfile"), "failure cannot delete or continue");
+          Assert(api.Calls.Count(name => name == "FakeCreateProfileCall") == (fault == "token-query" ? 0 : 1), "no profile API retry");
+          Assert(state.profileCreationPin == null && api.Calls.Count(name => name == "ReleaseProfileCreationPin") <= 1,
+            "every assigned pin is released even on refusal or close failure");
+          AssertNoNativePromotion(state);
+        });
+      foreach (string fault in new string[] { "cleanup-context", "cleanup-drift", "delete-failed" })
+        Case(report, "fake-admin-cleanup-refuses-drift-or-uncertain-api-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = "profile-admin-" + fault };
+          FixtureState state = Execute(api, ProfileOnlySpec());
+          Assert(state.report.status == "failed" && state.report.cleanup == "failed" && state.profileCreationUncertain
+            && state.profileCreated && !api.Calls.Contains("NetUserDelCall"), "cleanup failure must preserve account and unknown profile");
+          int calls = api.Calls.Count(name => name == "DeleteProfileCall");
+          Assert(calls == (fault == "delete-failed" ? 1 : 0), "pre-API refusal versus one uncertain Delete call");
+          Controller.Cleanup(state, api);
+          Assert(api.Calls.Count(name => name == "DeleteProfileCall") == calls && !api.Calls.Contains("NetUserDelCall"), "uncertain cleanup cannot retry Delete or advance to NetUserDel");
+          AssertNoNativePromotion(state);
+        });
+      Case(report, "fake-admin-creation-pin-does-not-cross-original-load-boundary", delegate {
+        FakePlatform api = new FakePlatform { Fault = "profile-admin-valid" };
+        FixtureState state = Execute(api, Spec());
+        Assert(state.report.status == "passed" && api.Calls.IndexOf("ReleaseProfileCreationPin") < api.Calls.IndexOf("LoadProfile"), "original controller retains one released creation context before Load");
+        AssertNoNativePromotion(state);
+      });
+      foreach (string fault in new string[] { "load-failed", "load-drift", "load-failed-drift" })
+        Case(report, "fake-admin-load-boundary-failure-remains-unknown-" + fault, delegate {
+          FakePlatform api = new FakePlatform { Fault = "profile-admin-" + fault };
+          FixtureState state = Execute(api, Spec());
+          Assert(state.report.status == "failed" && state.report.cleanup == "failed" && state.profileCreationUncertain
+            && state.profileCreationPin == null && !api.Calls.Contains("DeleteProfileCall") && !api.Calls.Contains("NetUserDelCall"), "failed Load boundary cannot authorize cleanup deletion");
+          Assert(api.Calls.Count(name => name == "LoadUserProfileCall") == 1, "one simulated userenv boundary");
+          Assert(api.Calls.IndexOf("PostLoadMetadataReadback") > api.Calls.IndexOf("LoadUserProfileCall"), "both BOOL results must reach read-only metadata validation");
+          if (fault.StartsWith("load-failed", StringComparison.Ordinal))
+          {
+            Assert(!state.profileLoaded && state.profile == IntPtr.Zero, "failed BOOL and any returned hive handle cannot authorize unload or cleanup");
+            Assert(state.report.checks.Any(check => check.name == "load-user-profile" && check.detail.Contains("Win32 5")), "readback failure must not replace the cached Load error");
+          }
+          Reject(delegate { api.LoadProfile(state); }, "uncertain Load cannot be retried");
+          Assert(api.Calls.Count(name => name == "LoadUserProfileCall") == 1, "no repeated API after pin release");
+          AssertNoNativePromotion(state);
+        });
+      Case(report, "fake-old-ledger-booleans-cannot-reconstruct-admin-creation-context", delegate {
+        FakePlatform api = new FakePlatform { Fault = "profile-admin-valid" };
+        FixtureState state = Controller.NewState(ProfileOnlySpec(), new FixtureReport());
+        state.account = new AccountRecord { sam = state.sam, sid = TargetSid, marker = state.marker, flags = 515, groups = new List<string> { "S-1-5-32-545" } };
+        state.accountCreated = true; state.accountBound = true; state.profileCreated = true;
+        state.profileCreationAttempts = 1; state.profileOwnershipProven = true;
+        state.profileIdentity = ProfileMetadata("S-1-5-32-544").identity;
+        state.report.trace.Add("old-report-owner-equals-token-owner=true");
+        Controller.Cleanup(state, api);
+        Assert(state.report.cleanup == "failed" && state.profileCreationTokenOwner == null && !state.profileCreationSucceeded
+          && !api.Calls.Contains("DeleteProfileCall") && !api.Calls.Contains("NetUserDelCall"), "disk/report observations are never an original in-memory creation proof");
+      });
       Case(report, "fake-profile-only-rejects-historical-and-crossed-plan-admission", delegate {
         Reject(delegate { CorePolicy.ValidateProfileOnlySpec(Spec()); }, "historical admission cannot authorize profile-only");
         Reject(delegate { CorePolicy.ValidateControllerSpec(ProfileOnlySpec()); }, "profile-only admission cannot authorize historical B");
@@ -778,6 +968,21 @@ namespace CcHahaInstallerProfile
       public override void Dispose() { Disposed = true; }
     }
 
+    private sealed class FakeProfilePin : IDisposable
+    {
+      private readonly FakePlatform api;
+      private readonly FixtureState state;
+      internal bool disposed;
+      internal FakeProfilePin(FakePlatform api, FixtureState state) { this.api = api; this.state = state; }
+      public void Dispose()
+      {
+        Assert(!disposed, "pin cannot be released twice"); disposed = true;
+        api.Calls.Add("ReleaseProfileCreationPin");
+        if (state.profileOwnershipProven) Assert(state.report.trace.Last() == "ledger-durable", "creation pin must survive the proven ledger");
+        if (api.Fault == "profile-admin-pin-close") throw new FixtureFailure("fake-profile-pin-close-failed");
+      }
+    }
+
     private sealed class FakePlatform : ProfilePlatform
     {
       public override bool IsFake { get { return true; } }
@@ -827,9 +1032,37 @@ namespace CcHahaInstallerProfile
       public override void AddUsersOnly(FixtureState state) { Gate(state, "AddUsersOnly"); state.account.groups.Add("S-1-5-32-545"); }
       public override void CreateFreshProfile(FixtureState state)
       {
-        Gate(state, "CreateFreshProfile"); state.profilePath = Paths().profile; state.profileCreated = true;
+        Gate(state, "CreateFreshProfile");
+        if (Fault == "profile-admin-token-query") throw new FixtureFailure("fake-original-TokenOwner-query-failed");
+        state.profileCreationTokenOwner = Fault == "profile-admin-token-missing" ? null : Fault == "profile-admin-token-different" ? RunnerSid : "S-1-5-32-544";
+        Calls.Add("FakeCreateProfileCall");
+        state.profilePath = Paths().profile; state.profileCreated = true;
+        state.profileCreationSucceeded = Fault != "profile-admin-create-failed";
         if (Fault == "profile-partial-after-success") throw new FixtureFailure("fake-profile-side-effect-before-identity");
         state.profileIdentity = new FileIdentity { canonicalPath = state.profilePath, directory = true, volumePath = @"\\?\Volume{fixture}\", fileId = "profile-file" };
+        state.profileCreationIdentity = new FileIdentity { canonicalPath = state.profilePath, directory = true, volumePath = state.profileIdentity.volumePath, fileId = state.profileIdentity.fileId };
+        state.profileCreationPin = new FakeProfilePin(this, state);
+        if (Fault != null && Fault.StartsWith("profile-admin-", StringComparison.Ordinal))
+        {
+          NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
+          if (Fault == "profile-admin-owner-missing") metadata.ownerSid = null;
+          if (Fault == "profile-admin-owner-other") metadata.ownerSid = RunnerSid;
+          if (Fault == "profile-admin-dacl-null") metadata.aces = null;
+          if (Fault == "profile-admin-dacl-unprotected") metadata.protectedDacl = false;
+          if (Fault == "profile-admin-dacl-unknown") metadata.aces[0].unclassified = true;
+          if (Fault == "profile-admin-dacl-write") metadata.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 64, allow = true });
+          if (Fault == "profile-admin-reparse") metadata.identity.reparse = true;
+          if (Fault == "profile-admin-file-drift") metadata.identity.fileId += "-changed";
+          if (Fault == "profile-admin-volume-drift") metadata.identity.volumePath += "-changed";
+          NativePlatform.RequireFreshProfileOwner(metadata.ownerSid, TargetSid, state.profileCreationTokenOwner, state.profileCreationSucceeded, metadata);
+          CorePolicy.Require(NativePlatform.FreshProfileIdentityRelation(state.profileCreationIdentity, metadata.identity) == "same-identity", "fake-same-object-identity-unproven");
+          NativePlatform.ProfileDirectoryMetadata parent = ProfileMetadata("S-1-5-18");
+          if (Fault == "profile-admin-parent-owner") parent.ownerSid = RunnerSid;
+          if (Fault == "profile-admin-parent-replace") parent.aces.Add(new NativePlatform.ProfileDiagnosticAce { sid = RunnerSid, accessMask = 64, allow = true });
+          NativePlatform.RequireTrustedProfileDacl(parent, TargetSid, true);
+          NativePlatform.RequireBothProfileMappings(Fault == "profile-admin-view32" ? 2 : Fault == "profile-admin-view64" ? 1 : 3);
+          CorePolicy.Require(HivesAbsent(state) && !HasOwnedSidProcesses(state), "fake-post-create-hive-process-unproven");
+        }
         if (Fault != null && Fault.StartsWith("profile-diagnostic-", StringComparison.Ordinal))
         {
           string owner = Fault == "profile-diagnostic-owner-administrators" ? "S-1-5-32-544"
@@ -859,7 +1092,20 @@ namespace CcHahaInstallerProfile
       public override TokenIdentity InspectToken(IntPtr token) { Gate(null, "InspectToken"); return Standard(); }
       public override TokenIdentity InspectCurrentToken() { return new TokenIdentity { sid = RunnerSid }; }
       public override KnownPaths QueryKnownPaths(IntPtr token) { Gate(null, "QueryKnownPaths"); return Paths(); }
-      public override void LoadProfile(FixtureState state) { Gate(state, "LoadProfile"); state.profileLoaded = true; state.profile = new IntPtr(201); }
+      public override void LoadProfile(FixtureState state)
+      {
+        Gate(state, "LoadProfile"); Assert(state.profileCreationPin == null, "no restrictive pin may cross Load");
+        CorePolicy.Require(!state.profileLoadAttempted && !state.profileCreationUncertain, "fake-Load-cannot-retry");
+        state.profileCreationUncertain = true;
+        state.profileLoadAttempted = true; Calls.Add("LoadUserProfileCall");
+        bool loaded = Fault != "profile-admin-load-failed" && Fault != "profile-admin-load-failed-drift";
+        if (loaded) { state.profileLoaded = true; state.profile = new IntPtr(201); }
+        Calls.Add("PostLoadMetadataReadback");
+        try { CorePolicy.Require(Fault != "profile-admin-load-drift" && Fault != "profile-admin-load-failed-drift", "fake-after-Load-drift"); }
+        catch { if (!loaded) throw new System.ComponentModel.Win32Exception(5, "LoadUserProfileW"); throw; }
+        if (!loaded) throw new System.ComponentModel.Win32Exception(5, "LoadUserProfileW");
+        state.profileCreationUncertain = false;
+      }
       public Dictionary<string, string> Environment()
       {
         KnownPaths paths = Paths();
@@ -925,7 +1171,7 @@ namespace CcHahaInstallerProfile
       }
       public override void VerifyReportedPhase(FixtureState state, ProtocolMessage message) { Gate(state, "VerifyReportedPhase"); }
       public override void StopOwnedJobs(FixtureState state) { Gate(state, "StopOwnedJobs"); state.jobsEmpty = true; if (state.subject != null) state.subject.exited = true; }
-      public override bool HasOwnedSidProcesses(FixtureState state) { Gate(state, "HasOwnedSidProcesses"); return Fault == "unknown-sid-process"; }
+      public override bool HasOwnedSidProcesses(FixtureState state) { Gate(state, "HasOwnedSidProcesses"); return Fault == "unknown-sid-process" || Fault == "profile-admin-process"; }
       public override void CloseRuntimeResources(FixtureState state)
       {
         Gate(state, "CloseRuntimeResources"); if (state.channel != null) state.channel.Dispose();
@@ -937,9 +1183,23 @@ namespace CcHahaInstallerProfile
         Gate(state, "UnloadProfile"); Assert(state.profileLoaded && state.profile != IntPtr.Zero, "unload only paired loaded hive");
         if (Fault != "unload-not-confirmed") { state.profileLoaded = false; state.profile = IntPtr.Zero; }
       }
-      public override bool HivesAbsent(FixtureState state) { Gate(state, "HivesAbsent"); return Fault != "hive-still-mounted"; }
-      public override void DeleteOwnedProfile(FixtureState state) { Gate(state, "DeleteOwnedProfile"); Assert(!state.profileLoaded, "do not delete loaded profile"); if (Fault != "delete-not-confirmed") state.profileCreated = false; }
-      public override void DeleteOwnedAccount(FixtureState state) { Gate(state, "DeleteOwnedAccount"); VerifyOwnedAccount(state, true); Assert(!state.profileCreated, "do not delete account before profile"); state.accountCreated = false; }
+      public override bool HivesAbsent(FixtureState state) { Gate(state, "HivesAbsent"); return Fault != "hive-still-mounted" && Fault != "profile-admin-hive"; }
+      public override void DeleteOwnedProfile(FixtureState state)
+      {
+        Gate(state, "DeleteOwnedProfile"); Assert(!state.profileLoaded && state.profileCreationPin == null, "no loaded hive or restrictive pin crosses Delete");
+        if (Fault != null && Fault.StartsWith("profile-admin-", StringComparison.Ordinal))
+        {
+          state.profileCreationUncertain = true;
+          if (Fault == "profile-admin-cleanup-context") state.profileCreationTokenOwner = null;
+          NativePlatform.ProfileDirectoryMetadata metadata = ProfileMetadata("S-1-5-32-544");
+          NativePlatform.RequireFreshProfileOwner(metadata.ownerSid, TargetSid, state.profileCreationTokenOwner, state.profileCreationSucceeded, metadata);
+          if (Fault == "profile-admin-cleanup-drift") throw new FixtureFailure("fake-cleanup-object-drift");
+        }
+        Assert(!state.profileDeleteAttempted, "Delete cannot retry"); state.profileDeleteAttempted = true; Calls.Add("DeleteProfileCall");
+        if (Fault == "profile-admin-delete-failed") { state.profileCreationUncertain = true; throw new FixtureFailure("fake-DeleteProfile-failed"); }
+        if (Fault != "delete-not-confirmed") { state.profileCreated = false; state.profileCreationUncertain = false; }
+      }
+      public override void DeleteOwnedAccount(FixtureState state) { Gate(state, "DeleteOwnedAccount"); VerifyOwnedAccount(state, true); Assert(!state.profileCreated, "do not delete account before profile"); Calls.Add("NetUserDelCall"); state.accountCreated = false; }
       public override void CloseTokenAndPrivileges(FixtureState state) { Gate(state, "CloseTokenAndPrivileges"); state.token = IntPtr.Zero; }
     }
   }

@@ -195,6 +195,14 @@ namespace CcHahaInstallerProfile
     public int profileCreationAttempts;
     public bool profileCreationUncertain;
     public bool profileOwnershipProven;
+    // Only this process's successful creation may supply an ownership context.
+    // These fields/pin are never recovered from the ledger or a prior report.
+    public string profileCreationTokenOwner;
+    public FileIdentity profileCreationIdentity;
+    public IDisposable profileCreationPin;
+    public bool profileCreationSucceeded;
+    public bool profileLoadAttempted;
+    public bool profileDeleteAttempted;
     public bool profileEverCreated;
     public bool profileLoaded;
     public bool accountDisabled = true;
@@ -485,6 +493,32 @@ namespace CcHahaInstallerProfile
       Require(path.Length > 3 && Char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/'), "local-absolute-path");
       Require(!path.Split(new char[] { '\\', '/' }).Any(part => part == "." || part == ".."), "path-components");
       Require(path.IndexOf(':', 2) < 0 && !path.EndsWith(" ", StringComparison.Ordinal), "path-stream-or-tail");
+    }
+
+    // Read-only namespace metadata only. The owned/destructive path validator
+    // above deliberately continues to reject a volume root.
+    internal static string[] ProfileParentPaths(string profilesDirectory, string directory)
+    {
+      ValidateAbsolutePath(profilesDirectory); ValidateAbsolutePath(directory);
+      string profiles = NormalizePath(profilesDirectory), current = NormalizePath(directory);
+      Require(SamePath(profiles, current) || IsInside(profiles, current), "Profile parent is outside verified ProfilesDirectory");
+      List<string> parents = new List<string>();
+      while (true)
+      {
+        Require(parents.Count < 32, "Profile parent chain is unbounded");
+        parents.Add(current);
+        if (current.Length == 3) break;
+        int separator = current.LastIndexOf('\\');
+        Require(separator >= 2, "Profile parent chain lacks its local volume root");
+        current = separator == 2 ? current.Substring(0, 3) : current.Substring(0, separator);
+      }
+      return parents.ToArray();
+    }
+
+    internal static void ValidateProfileAncestorPath(string path, string profilesDirectory, string directory)
+    {
+      Require(ProfileParentPaths(profilesDirectory, directory).Contains(path, StringComparer.OrdinalIgnoreCase),
+        "Read-only ancestor pin is not on the verified ProfilesDirectory chain");
     }
 
     public static void AssertStandard(TokenIdentity identity, string expectedSid)
@@ -836,11 +870,27 @@ namespace CcHahaInstallerProfile
         state.profileCreationAttempts = 1; state.profileCreationUncertain = true;
         state.stage = "createprofile-call-armed"; state.report.trace.Add(state.stage); Ledger(state, api);
         state.stage = "create-fresh-profile";
-        api.CreateFreshProfile(state);
-        CorePolicy.Require(state.profileCreated && state.profileOwnershipProven && !state.profileCreationUncertain,
-          "createprofile-owner-path-hive-lease-unproven");
-        state.stage = "createprofile-owner-proven"; state.report.trace.Add(state.stage); Ledger(state, api);
+        try
+        {
+          api.CreateFreshProfile(state);
+          CorePolicy.Require(state.profileCreated && state.profileOwnershipProven && !state.profileCreationUncertain,
+            "createprofile-owner-path-hive-lease-unproven");
+          state.stage = "createprofile-owner-proven"; state.report.trace.Add(state.stage); Ledger(state, api);
+          ReleaseProfileCreationPin(state);
+        }
+        catch
+        {
+          state.profileOwnershipProven = false; state.profileCreationUncertain = true;
+          throw;
+        }
       });
+    }
+
+    private static void ReleaseProfileCreationPin(FixtureState state)
+    {
+      IDisposable pin = state.profileCreationPin;
+      state.profileCreationPin = null;
+      if (pin != null) pin.Dispose();
     }
 
     private static FixtureReport RunProfileOnly(FixtureState state, ProfilePlatform api)
@@ -1036,6 +1086,9 @@ namespace CcHahaInstallerProfile
       }
       finally
       {
+        try { ReleaseProfileCreationPin(state); }
+        catch (Exception error) { clean = false; state.profileOwnershipProven = false; state.profileCreationUncertain = true;
+          state.report.cleanup = "failed"; state.report.Check("cleanup-profile-pin", false, NativePlatform.SafeFailure(error)); }
         try { api.CloseTokenAndPrivileges(state); }
         catch (Exception error) { clean = false; state.report.cleanup = "failed"; state.report.Check("cleanup-token-handles", false, NativePlatform.SafeFailure(error)); }
         if (!clean) state.report.status = "failed";
