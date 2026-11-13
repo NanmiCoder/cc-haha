@@ -3,7 +3,7 @@ import { createRequire } from 'node:module'
 import { isInBundledMode } from '../../utils/bundledMode.js'
 
 export type SharpInstance = {
-  metadata(): Promise<{ width: number; height: number; format: string; orientation?: number }>
+  metadata(): Promise<{ width: number; height: number; format: string; orientation?: number; hasAlpha?: boolean; pages?: number }>
   autoOrient?(): SharpInstance
   resize(
     width: number,

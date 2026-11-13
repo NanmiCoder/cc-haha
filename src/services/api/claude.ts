@@ -74,7 +74,7 @@ import { resolveAppliedEffort } from "../../utils/effort.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { errorMessage } from "../../utils/errors.js";
 import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
-import { normalizeImagesForAPI } from '../../utils/imageValidation.js'
+import { createImageInputProtection, normalizeImagesForAPI } from '../../utils/imageValidation.js'
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createSystemStreamingFallbackMessage,
@@ -1442,10 +1442,13 @@ async function* queryModel(
   queryCheckpoint("query_message_normalization_start");
   // Every caller replays history through here (main loop, compaction, away
   // summary), so another model's signed thinking is dropped at this boundary.
+  const messagesToNormalize = stripSignatureBlocksAfterModelChange(messages, options.model)
+  const imageInput = createImageInputProtection(messagesToNormalize)
   let messagesForAPI = normalizeMessagesForAPI(
-    stripSignatureBlocksAfterModelChange(messages, options.model),
+    messagesToNormalize,
     filteredTools,
     options.model,
+    imageInput.mapMessage,
   );
   queryCheckpoint("query_message_normalization_end");
 
@@ -1500,6 +1503,7 @@ async function* queryModel(
   const provider = getAPIProvider()
   messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
     countDocuments: provider === 'bedrock' || provider === 'vertex',
+    protectedInputImages: imageInput.images,
   })
 
   // A model that recently refused images and then accepted the same request
