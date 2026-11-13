@@ -85,12 +85,16 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
   const toolContext = context()
   let originalBytes = 0
   let readBytes = 0
+  let readEncodedBytes = 0
   try {
     for (let index = 0; index < 59; index++) {
-      const source = await sharp(await createContextImage({ width: 1024, height: 576, seed: 1888 + index }))
+      // Sparse noise lets Read use lossless PNG compression instead of doing
+      // costly WebP searches for every fixture. Low input compression keeps
+      // each source above the soft limit; the batch must still exceed its budget.
+      const source = await sharp(await createContextImage({ width: 1024, height: 576, seed: 1888 + index, noiseStride: 2 }))
         .composite([{ input: { create: { width: 64, height: 64, channels: 3,
           background: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
-        } }, left: 32, top: 32 }]).png().toBuffer()
+        } }, left: 32, top: 32 }]).png({ compressionLevel: 1 }).toBuffer()
       expect(source.length).toBeGreaterThan(512 * 1024)
       expect(source.length).toBeLessThan(3.75 * 1024 * 1024)
       if (index === 0) {
@@ -106,6 +110,7 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
       expect(encoded.length).toBeLessThanOrEqual(512 * 1024)
       expect(await sharp(encoded).metadata()).toMatchObject({ width: 1024, height: 576 })
       readBytes += encoded.length
+      readEncodedBytes += data.file.base64.length
       readImages.add(hash(encoded))
       const tool = FileReadTool.mapToolResultToToolResultBlockParam(data, `read-sequential-${index}`)
       messages.push({ message: { content: [
@@ -113,6 +118,7 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
       ] } })
     }
     expect(readImages.size).toBe(59)
+    expect(readEncodedBytes).toBeGreaterThan(IMAGE_REQUEST_BASE64_BUDGET)
     const before = hash(JSON.stringify(messages))
     const normalized = await normalizeImagesForAPI(messages)
     expect(normalized).toHaveLength(59)
@@ -142,7 +148,7 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
     expect(requestEncodedBytes).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
     expect(hash(JSON.stringify(messages))).toBe(before)
     console.info(JSON.stringify({ scenario: '59 sequential distinct Read screenshots',
-      images: originals.length, originalBytes, readBytes, requestEncodedBytes,
+      images: originals.length, originalBytes, readBytes, readEncodedBytes, requestEncodedBytes,
       requestJsonBytes: Buffer.byteLength(JSON.stringify(normalized)),
       originalFilesUnchanged: true, distinctImagesRetained: sentImages.size,
     }))

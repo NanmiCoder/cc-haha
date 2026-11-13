@@ -6,15 +6,16 @@ export async function createContextImage(options: {
   height?: number
   alpha?: boolean
   seed?: number
+  noiseStride?: number
 } = {}): Promise<Buffer> {
-  const { width = 1600, height = 900, alpha = false } = options
+  const { width = 1600, height = 900, alpha = false, noiseStride = 1 } = options
   const channels = alpha ? 4 : 3
   const pixels = Buffer.alloc(width * height * channels)
   let seed = options.seed ?? 1888
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
-      const noise = (seed >>> 27) - 16
+      const noise = x % noiseStride === 0 && y % noiseStride === 0 ? (seed >>> 27) - 16 : 0
       const offset = (y * width + x) * channels
       pixels[offset] = Math.round(40 + x / width * 80 + noise)
       pixels[offset + 1] = Math.round(60 + y / height * 80 + noise)
