@@ -87,10 +87,10 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
   let readBytes = 0
   try {
     for (let index = 0; index < 59; index++) {
-      const source = await sharp(await createContextImage({ width: 1024, height: 576, seed: 1888 + index }))
-        .composite([{ input: { create: { width: 64, height: 64, channels: 3,
-          background: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
-        } }, left: 32, top: 32 }]).png().toBuffer()
+      const source = await createContextImage({
+        width: 1024, height: 576, seed: 1888 + index,
+        marker: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
+      })
       expect(source.length).toBeGreaterThan(512 * 1024)
       expect(source.length).toBeLessThan(3.75 * 1024 * 1024)
       if (index === 0) {
