@@ -26,6 +26,7 @@ import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { teamRuntimeControlKey, teamRuntimeScope, useTeamRuntimeControlStore } from '@/stores/teamRuntimeControlStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { isTouchH5Document } from '../../lib/touchH5'
 import {
@@ -311,6 +312,17 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
+  const memberTeam = useTeamStore((s) => activeTabId ? s.getTeamByMemberSessionId(activeTabId) : null)
+  const memberRuntimeReadOnly = useTeamStore((s) => {
+    const leadId = memberTeam?.leadSessionId
+    const timeline = leadId ? s.workbenchesBySession[leadId] : undefined
+    const historyIndex = leadId ? s.workbenchHistoryIndexBySession[leadId] : null
+    return Boolean(
+      (activeTabId && s.memberSnapshotBySession[activeTabId]?.deletedAt) ||
+      timeline?.source === 'archive' || timeline?.source === 'transcript' ||
+      (historyIndex !== null && historyIndex !== undefined),
+    )
+  })
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null)
   const gitInfoRequest = useRef(0)
   const workspaceReferences = useWorkspaceChatContextStore(
@@ -381,6 +393,23 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const memberRuntimeKey = memberRuntimeSelection
     ? `${memberRuntimeSelection.providerId ?? 'official'}:${memberRuntimeSelection.modelId}:${memberRuntimeSelection.effortLevel ?? 'auto'}`
     : undefined
+  const memberTeamName = memberTeam?.name
+  const memberLeadId = memberTeam?.leadSessionId
+  const memberIncarnationId = memberTeam?.incarnationId
+  const memberScope = useMemo(() => memberTeamName
+    ? teamRuntimeScope({ name: memberTeamName, leadSessionId: memberLeadId, incarnationId: memberIncarnationId })
+    : null, [memberTeamName, memberLeadId, memberIncarnationId])
+  const memberControlKey = memberScope ? teamRuntimeControlKey(memberScope) : null
+  const memberControlEntry = useTeamRuntimeControlStore(state => memberControlKey ? state.byTeam[memberControlKey] : undefined)
+  const memberRuntimeEditable = !memberRuntimeReadOnly && memberControlEntry?.control?.status === 'paused' &&
+    !memberControlEntry.busy && !memberControlEntry.pauseRequested && !memberControlEntry.error &&
+    memberControlEntry.control.members.some(member => member.agentId === memberInfo?.agentId && member.sessionId === memberCliSessionId)
+  useEffect(() => {
+    if (!memberScope || !memberCliSessionId || memberRuntimeReadOnly) return
+    void useTeamRuntimeControlStore.getState().refresh(memberScope)
+    const timer = window.setInterval(() => void useTeamRuntimeControlStore.getState().refresh(memberScope), 1500)
+    return () => window.clearInterval(timer)
+  }, [memberScope, memberCliSessionId, memberRuntimeReadOnly])
   const memberContextFull = memberInfo?.status === 'error' && memberHitContextLimit(memberInfo)
   const isActive = chatState !== 'idle'
   const resolvedPermissionMode = useResolvedPermissionMode(activeTabId ?? undefined)
@@ -1509,7 +1538,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // same member. The session runtime path (`setSessionRuntime`) would restart
   // it as an ordinary chat and lose who it is, so the picker never takes it.
   const handleMemberRuntimeChange = (picked: RuntimeSelection) => {
-    if (!activeTabId || !memberRuntimeSelection) return
+    if (!activeTabId || !memberRuntimeSelection || !memberRuntimeEditable) return
     const sameModel = picked.providerId === memberRuntimeSelection.providerId &&
       picked.modelId === memberRuntimeSelection.modelId
     if (sameModel && picked.effortLevel === memberRuntimeSelection.effortLevel) return
@@ -2080,7 +2109,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   runtimeSelection={memberRuntimeSelection}
                   onRuntimeSelectionChange={handleMemberRuntimeChange}
                   effortEditable
-                  disabled={isActive || memberRuntimeSaving}
+                  disabled={isActive || memberRuntimeSaving || !memberRuntimeEditable}
                   compact={useCompactControls}
                   fluid={isMobileComposer}
                 />
@@ -2142,6 +2171,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           </div>
 
         </div>
+
+        {memberRuntimeSelection && <div className="mt-2 space-y-1 px-1 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
+          <p role="status">{t(memberRuntimeReadOnly ? 'agentTeams.runtime.historyReadOnly' : memberRuntimeEditable ? 'agentTeams.runtime.saveHint' : 'agentTeams.runtime.pauseToEdit')}</p>
+          <p>{t('agentTeams.runtime.memberMessageHint')}</p>
+        </div>}
 
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
 

@@ -13,7 +13,7 @@
  * the real `~/.claude` once and never writes to it.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -158,6 +158,10 @@ export type LiveContext = {
   createSession(): Promise<string>
   openSocket(sessionId: string): Promise<SessionSocket>
   pinRuntime(socket: SessionSocket): void
+  /** Only for verifying the parent of a disposable scenario's CLI before signalling it. */
+  readonly serverProcessId?: number
+  /** Restart this harness's server process with the same disposable config and port. */
+  restartServer?(): Promise<void>
 }
 
 export type LiveScenarioRunner = (ctx: LiveContext) => Promise<void>
@@ -466,13 +470,36 @@ export async function executeAgentFlowAgainstProvider(
   const serverArgs = options.serverPreload
     ? ['--no-env-file', '--preload', options.serverPreload, 'src/server/index.ts']
     : ['run', 'src/server/index.ts']
-  const server = Bun.spawn(['bun', ...serverArgs, '--host', '127.0.0.1', '--port', String(port)], {
-    cwd: rootDir,
-    stdout: 'pipe',
-    stderr: 'pipe',
-    env: { ...sandbox.env, SERVER_PORT: String(port) },
-  })
-  const pumps = [pipeToFile(server.stdout, serverLogPath), pipeToFile(server.stderr, serverLogPath)]
+  const startServer = () => {
+    const process = Bun.spawn(['bun', ...serverArgs, '--host', '127.0.0.1', '--port', String(port)], {
+      cwd: rootDir,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...sandbox.env, SERVER_PORT: String(port) },
+    })
+    return { process, pumps: [pipeToFile(process.stdout, serverLogPath), pipeToFile(process.stderr, serverLogPath)] }
+  }
+  let ownedServer = startServer()
+  const stopServer = async () => {
+    const { process, pumps } = ownedServer
+    const waitForExit = async (timeoutMs: number) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        return await Promise.race([
+          process.exited.then(() => true),
+          new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs) }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    if (process.exitCode === null) process.kill()
+    if (!await waitForExit(15_000)) {
+      process.kill('SIGKILL')
+      if (!await waitForExit(5_000)) throw new Error(`Owned server ${process.pid} did not exit`)
+    }
+    await Promise.allSettled(pumps)
+  }
 
   const results: LiveAgentFlowResult[] = []
   try {
@@ -486,6 +513,7 @@ export async function executeAgentFlowAgainstProvider(
       artifactDir,
       target,
       stepTimeoutMs: options.stepTimeoutMs,
+      get serverProcessId() { return ownedServer.process.pid },
       async createSession() {
         const response = await fetch(`${baseUrl}/api/sessions`, {
           method: 'POST',
@@ -509,6 +537,16 @@ export async function executeAgentFlowAgainstProvider(
           ...(target.effortLevel ? { effortLevel: target.effortLevel } : {}),
         })
       },
+      async restartServer() {
+        const previousPid = ownedServer.process.pid
+        await stopServer()
+        const stillServing = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1_000) }).then(() => true, () => false)
+        if (stillServing) throw new Error('The previous server still accepts HTTP after its owned process exited')
+        appendFileSync(serverLogPath, `\n[agent-flow] Restarting server after pid ${previousPid} exited\n`)
+        ownedServer = startServer()
+        appendFileSync(serverLogPath, `[agent-flow] New server pid ${ownedServer.process.pid}, same sandbox and port\n`)
+        await waitForHttp(`${baseUrl}/health`, 60_000)
+      },
     }
 
     for (const scenario of options.scenarios) {
@@ -529,8 +567,7 @@ export async function executeAgentFlowAgainstProvider(
       }
     }
   } finally {
-    server.kill()
-    await Promise.allSettled(pumps)
+    await stopServer()
     // Checked before teardown: a run that wrote to the real config dir has to be loud,
     // not quietly cleaned up.
     const mutations = sandbox.detectUserStateMutations()

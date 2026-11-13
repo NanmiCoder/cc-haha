@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   getWorkbench: vi.fn(),
   sendMemberMessage: vi.fn(),
   updateMemberRuntime: vi.fn(),
+  getRuntimeControl: vi.fn(),
+  resumeRuntime: vi.fn(),
   listReferences: vi.fn(),
   listAgents: vi.fn(),
   wsSend: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock('../../api/teams', () => ({
     getWorkbench: mocks.getWorkbench,
     sendMemberMessage: mocks.sendMemberMessage,
     updateMemberRuntime: mocks.updateMemberRuntime,
+    getRuntimeControl: mocks.getRuntimeControl,
+    resumeRuntime: mocks.resumeRuntime,
     getWorkbenchForSession: vi.fn(),
     get: vi.fn(),
     list: vi.fn(),
@@ -90,6 +94,7 @@ import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import { memberSessionId, useTeamStore } from '../../stores/teamStore'
+import { useTeamRuntimeControlStore } from '../../stores/teamRuntimeControlStore'
 import { useUIStore } from '../../stores/uiStore'
 import type { TeamMember, TeamWorkbenchSnapshot } from '../../types/team'
 
@@ -149,6 +154,14 @@ const baseMember: TeamMember = {
   providerName: 'Zhipu',
 }
 
+function runtimeControl(status: 'running' | 'paused' = 'paused', revision = 5) {
+  return {
+    schemaVersion: 1, teamName: TEAM, leadSessionId: 'lead-session', incarnationId: INCARNATION,
+    revision, epoch: 2, status, updatedAt: 1, resumeEligibleCount: 1,
+    members: [{ agentId: AGENT_ID, sessionId: MEMBER_CLI_SESSION, planId: 'member-plan', memberId: 'reviewer', name: 'reviewer', status: 'paused' }],
+  }
+}
+
 let restoreRangeGeometry: () => void = () => {}
 
 /** Opens the member's conversation the way the workbench does and mounts its composer. */
@@ -167,6 +180,9 @@ async function renderMemberComposer(member: TeamMember = baseMember) {
   expect(useTabStore.getState().activeTabId).toBe(tabId)
   await waitFor(() => expect(useChatStore.getState().sessions[tabId]?.messages.length).toBe(1))
   render(<ChatInput />)
+  await act(async () => {
+    await useTeamRuntimeControlStore.getState().refresh({ teamName: TEAM, leadSessionId: 'lead-session', incarnationId: INCARNATION })
+  })
   return tabId
 }
 
@@ -209,10 +225,12 @@ describe('ChatInput in a team member conversation', () => {
     mocks.listReferences.mockResolvedValue({ plugins: [], skills: [] })
     mocks.listAgents.mockResolvedValue({ activeAgents: [] })
     mocks.sendMemberMessage.mockResolvedValue({ ok: true })
+    mocks.getRuntimeControl.mockResolvedValue({ control: runtimeControl() })
     mocks.getWorkbench.mockImplementation(async () => snapshotWith({ ...baseMember, model: 'glm-5.1' }))
     mocks.updateMemberRuntime.mockResolvedValue({
       ok: true,
       member: { agentId: AGENT_ID, name: 'reviewer', model: 'glm-5.1', providerId: 'zhipu', providerName: 'Zhipu' },
+      control: runtimeControl('paused', 6),
     })
   })
 
@@ -311,6 +329,15 @@ describe('ChatInput in a team member conversation', () => {
     await waitFor(() => expect(useContextUsageStore.getState().bySession[MEMBER_CLI_SESSION]?.context?.percentage).toBe(95))
   })
 
+  it('requires a confirmed team pause before changing a member model', async () => {
+    mocks.getRuntimeControl.mockResolvedValue({ control: runtimeControl('running') })
+    await renderMemberComposer()
+
+    // Idle in the composer is not evidence that every team process stopped.
+    // Editing stays unavailable until the durable control reports paused.
+    expect(screen.getByRole('button', { name: 'glm-5.3, Zhipu' })).toBeDisabled()
+  })
+
   it('switches the member model through the team runtime, never the session runtime', async () => {
     const setSessionRuntime = vi.fn()
     useChatStore.setState({ setSessionRuntime })
@@ -322,7 +349,10 @@ describe('ChatInput in a team member conversation', () => {
 
     await waitFor(() => expect(mocks.updateMemberRuntime).toHaveBeenCalledTimes(1))
     // The member had no effort of its own, so the composer-wide "low" stays off it.
-    expect(mocks.updateMemberRuntime).toHaveBeenCalledWith(TEAM, AGENT_ID, { providerId: 'zhipu', modelId: 'glm-5.1' })
+    expect(mocks.updateMemberRuntime).toHaveBeenCalledWith(TEAM, AGENT_ID, {
+      providerId: 'zhipu', modelId: 'glm-5.1', leadSessionId: 'lead-session',
+      incarnationId: INCARNATION, expectedRevision: 5, sessionId: MEMBER_CLI_SESSION,
+    })
     expect(setSessionRuntime).not.toHaveBeenCalled()
     expect(mocks.wsSend).not.toHaveBeenCalled()
     expect(useSessionRuntimeStore.getState().selections[tabId]).toBeUndefined()
@@ -356,5 +386,14 @@ describe('ChatInput in a team member conversation', () => {
       'data-placeholder',
       'Its context is full. Type /compact to compact it, then send a message to let it continue',
     )
+  })
+
+  it('does not turn an ordinary member message into resume-all', async () => {
+    await renderMemberComposer()
+    setComposerText('continue this conversation', 26)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    await waitFor(() => expect(mocks.sendMemberMessage).toHaveBeenCalledWith(TEAM, AGENT_ID, 'continue this conversation'))
+    expect(mocks.resumeRuntime).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalled()
   })
 })
