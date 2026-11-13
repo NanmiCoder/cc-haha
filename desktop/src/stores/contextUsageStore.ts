@@ -25,7 +25,8 @@ type ContextUsageEntry = {
   detailsInFlight: Promise<boolean> | null
   abortController: AbortController | null
   detailsAbortController: AbortController | null
-  headerVersion: number
+  requestSequence: number
+  appliedHeaderSequence: number
   lastAutoRefreshAt: number
 }
 
@@ -94,7 +95,8 @@ export const useContextUsageStore = create<ContextUsageStore>((set, get) => {
           detailsInFlight: null,
           abortController: null,
           detailsAbortController: null,
-          headerVersion: 0,
+          requestSequence: 0,
+          appliedHeaderSequence: 0,
           lastAutoRefreshAt: 0,
         }
         update(sessionId, entry)
@@ -142,7 +144,7 @@ export const useContextUsageStore = create<ContextUsageStore>((set, get) => {
       if (includeDetails) entry.detailsAbortController?.abort()
       else entry.abortController?.abort()
       const controller = new AbortController()
-      const headerVersionAtStart = entry.headerVersion
+      const requestSequence = entry.requestSequence + 1
       const isCurrent = (current: ContextUsageEntry | undefined) =>
         current !== undefined && (includeDetails ? current.detailsInFlight : current.inFlight) === request
       const request = sessionsApi.getInspection(sessionId, {
@@ -156,13 +158,17 @@ export const useContextUsageStore = create<ContextUsageStore>((set, get) => {
         if (!isCurrent(current) || !current) return false
         const context = inspection.context ?? inspection.contextEstimate ?? null
         if (!context) {
-          if (!includeDetails) update(sessionId, { ...current, error: inspection.errors?.context ?? null })
+          if (!includeDetails && requestSequence > current.appliedHeaderSequence) {
+            update(sessionId, { ...current, error: inspection.errors?.context ?? null })
+          }
           return false
         }
         const usageModel = inspection.usage?.models.find((model) => model.displayName?.trim() || model.model?.trim())
         const model = [context.model, inspection.status?.model, usageModel?.displayName, usageModel?.model]
           .find((value) => value?.trim())?.trim() ?? null
-        const updateHeader = !includeDetails || current.headerVersion === headerVersionAtStart
+        // Summary and full replies share one ordering. A response may finish
+        // later while still describing an older request's context snapshot.
+        const updateHeader = requestSequence > current.appliedHeaderSequence
         update(sessionId, {
           ...current,
           ...(includeDetails ? { detailContext: context } : {}),
@@ -173,14 +179,16 @@ export const useContextUsageStore = create<ContextUsageStore>((set, get) => {
             updatedAt: Date.now(),
             error: null,
             snapshotRevision: revision,
-            headerVersion: current.headerVersion + 1,
+            appliedHeaderSequence: requestSequence,
           } : {}),
         })
         return true
       }).catch((error) => {
         const current = get().bySession[sessionId]
         if (!isCurrent(current) || !current) return false
-        if (!includeDetails) update(sessionId, { ...current, error: error instanceof Error ? error.message : String(error) })
+        if (!includeDetails && requestSequence > current.appliedHeaderSequence) {
+          update(sessionId, { ...current, error: error instanceof Error ? error.message : String(error) })
+        }
         return false
       }).finally(() => {
         const current = get().bySession[sessionId]
@@ -194,6 +202,7 @@ export const useContextUsageStore = create<ContextUsageStore>((set, get) => {
       update(sessionId, {
         ...entry,
         requestRevision: revision,
+        requestSequence,
         ...(includeDetails
           ? { detailsInFlight: request, detailsAbortController: controller }
           : { inFlight: request, abortController: controller, error: null }),

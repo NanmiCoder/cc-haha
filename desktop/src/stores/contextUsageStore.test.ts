@@ -72,30 +72,77 @@ describe('context usage session cache', () => {
     expect(sessionsApi.getInspection).toHaveBeenLastCalledWith('session', expect.objectContaining({ summaryOnly: false }))
   })
 
-  it.each(['summary to details', 'details to summary'] as const)('keeps independent %s requests without rolling the headline backwards', async (direction) => {
+  it.each([
+    ['summary', 'first request first'],
+    ['summary', 'newer request first'],
+    ['details', 'first request first'],
+    ['details', 'newer request first'],
+  ] as const)('keeps the newest headline when %s starts first and %s settles', async (firstKind, completion) => {
+    const resolvers: Array<(value: SessionInspectionResponse) => void> = []
+    vi.mocked(sessionsApi.getInspection).mockImplementation(() => new Promise((done) => { resolvers.push(done) }))
+    const firstDetails = firstKind === 'details'
+    const first = refresh(revision, firstDetails ? 'manual' : 'restore', true, firstDetails)
+    const newer = refresh(revision, firstDetails ? 'auto' : 'manual', true, !firstDetails)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(sessionsApi.getInspection).mock.calls[0]?.[1]?.signal?.aborted).toBe(false)
+    const newerInspection = { ...inspection, context: { ...inspection.context!, totalTokens: 30_000, percentage: 30 } }
+    if (completion === 'first request first') {
+      resolvers[0]!(inspection)
+      expect(await first).toBe(true)
+      expect(useContextUsageStore.getState().bySession.session?.context?.totalTokens).toBe(20_000)
+      resolvers[1]!(newerInspection)
+      expect(await newer).toBe(true)
+    } else {
+      resolvers[1]!(newerInspection)
+      expect(await newer).toBe(true)
+      expect(useContextUsageStore.getState().bySession.session?.context?.totalTokens).toBe(30_000)
+      resolvers[0]!(inspection)
+      expect(await first).toBe(true)
+    }
+    const cached = useContextUsageStore.getState().bySession.session
+    expect(cached?.context?.totalTokens).toBe(30_000)
+    expect(cached?.context?.percentage).toBe(30)
+    expect(cached?.detailContext?.totalTokens).toBe(firstDetails ? 20_000 : 30_000)
+  })
+
+  it('accepts a newer lower reading while an older full reply can still supply details', async () => {
     let resolve!: (value: SessionInspectionResponse) => void
     vi.mocked(sessionsApi.getInspection)
       .mockReturnValueOnce(new Promise((done) => { resolve = done }))
-      .mockResolvedValueOnce({ ...inspection, context: { ...inspection.context!, percentage: 30 } })
-    const firstDetails = direction === 'details to summary'
-    const first = refresh(revision, firstDetails ? 'manual' : 'restore', true, firstDetails)
-    const firstSignal = vi.mocked(sessionsApi.getInspection).mock.calls[0]?.[1]?.signal
-    const replacement = refresh(revision, firstDetails ? 'auto' : 'manual', true, !firstDetails)
-    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
-    expect(firstSignal?.aborted).toBe(false)
-    await replacement
+      .mockResolvedValueOnce({ ...inspection, context: { ...inspection.context!, totalTokens: 10_000, percentage: 10 } })
+    const oldDetails = refresh(revision, 'manual')
+    await refresh(revision, 'auto')
     resolve(inspection)
-    expect(await first).toBe(true)
-    // A late summary remains authoritative. A late full response only fills
-    // details after a newer summary has settled.
-    expect(useContextUsageStore.getState().bySession.session?.context?.percentage).toBe(firstDetails ? 30 : 20)
-    expect(useContextUsageStore.getState().bySession.session?.detailContext).not.toBeNull()
+    await oldDetails
+    expect(useContextUsageStore.getState().bySession.session).toMatchObject({
+      context: { totalTokens: 10_000, percentage: 10 },
+      detailContext: { totalTokens: 20_000, percentage: 20 },
+    })
+  })
+
+  it.each(['missing context', 'rejection'] as const)('does not let an older summary %s replace the status of a newer full reading', async (failure) => {
+    let resolve!: (value: SessionInspectionResponse) => void
+    let reject!: (error: Error) => void
+    vi.mocked(sessionsApi.getInspection)
+      .mockReturnValueOnce(new Promise((done, fail) => { resolve = done; reject = fail }))
+      .mockResolvedValueOnce({ ...inspection, context: { ...inspection.context!, totalTokens: 30_000, percentage: 30 } })
+    const oldSummary = refresh()
+    await refresh(revision, 'manual')
+    if (failure === 'rejection') reject(new Error('Old summary timed out'))
+    else resolve({ ...inspection, context: undefined, errors: { context: 'Old summary unavailable' } })
+    expect(await oldSummary).toBe(false)
+    expect(useContextUsageStore.getState().bySession.session).toMatchObject({
+      context: { totalTokens: 30_000, percentage: 30 }, error: null,
+    })
   })
 
   it.each(['runtime', 'compact', 'completed turn'] as const)('cancels pending details across a %s boundary', async (boundary) => {
-    let resolve!: (value: SessionInspectionResponse) => void
-    vi.mocked(sessionsApi.getInspection).mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const resolvers: Array<(value: SessionInspectionResponse) => void> = []
+    vi.mocked(sessionsApi.getInspection)
+      .mockImplementationOnce(() => new Promise((done) => { resolvers.push(done) }))
+      .mockImplementationOnce(() => new Promise((done) => { resolvers.push(done) }))
     const running = { ...revision, chatState: 'thinking' as const }
+    const summary = refresh(running)
     const pending = refresh(running, 'manual')
     const signal = vi.mocked(sessionsApi.getInspection).mock.calls[0]?.[1]?.signal
     const next = {
@@ -105,9 +152,27 @@ describe('context usage session cache', () => {
       chatState: boundary === 'completed turn' ? 'idle' as const : running.chatState,
     }
     await refresh(next, 'force')
-    resolve(inspection)
+    resolvers.forEach(resolve => resolve({ ...inspection, context: { ...inspection.context!, totalTokens: 90_000 } }))
     expect(await pending).toBe(false)
+    expect(await summary).toBe(false)
     expect(signal?.aborted).toBe(true)
+    expect(useContextUsageStore.getState().bySession.session?.detailContext).toBeNull()
+    expect(useContextUsageStore.getState().bySession.session?.context?.totalTokens).toBe(20_000)
+  })
+
+  it('does not revive either request after clearing and recreating a session cache', async () => {
+    const resolvers: Array<(value: SessionInspectionResponse) => void> = []
+    vi.mocked(sessionsApi.getInspection)
+      .mockImplementationOnce(() => new Promise((done) => { resolvers.push(done) }))
+      .mockImplementationOnce(() => new Promise((done) => { resolvers.push(done) }))
+    const oldSummary = refresh()
+    const oldDetails = refresh(revision, 'manual')
+    useContextUsageStore.getState().clearSession('session')
+    await refresh()
+    resolvers.forEach(resolve => resolve({ ...inspection, context: { ...inspection.context!, totalTokens: 90_000 } }))
+    expect(await oldSummary).toBe(false)
+    expect(await oldDetails).toBe(false)
+    expect(useContextUsageStore.getState().bySession.session?.context?.totalTokens).toBe(20_000)
     expect(useContextUsageStore.getState().bySession.session?.detailContext).toBeNull()
   })
 
