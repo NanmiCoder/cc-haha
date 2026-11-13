@@ -18,6 +18,7 @@ internal static class RemovalPrimitiveProbe
   private const uint ReadonlyDirectoryAccess = ReadAttributes | Traverse | 1;
   private const uint PruneAccess = DeleteAccess | ReadAttributes;
   private const uint ShareRead = 1;
+  private const uint ShareReadWrite = 3;
   private const uint ShareAll = 7;
   private const uint OpenExisting = 3;
   private const uint NoFollow = 0x02200000; // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
@@ -32,7 +33,14 @@ internal static class RemovalPrimitiveProbe
   private static bool CurrentDiagnostic;
   private static bool CurrentCaseFailed;
   private static bool ChosenRoundtripPassed;
-  private const string ChosenPrimitive = "NtSetInformationFile(FileRenameInformation=10)+readonly-directory-guards+metadata-target-alias+OpenFileById-prune";
+  private static int LastDispositionError;
+  private static bool RootInitiallyVerified, PendingNativeIo, UnsafeCleanup;
+  private static ProtectedDirectory FixtureBoundary, SandboxBoundary, Outside;
+  private static OwnedHandle OutsideMarker;
+  private static byte[] OutsideMarkerBytes, CalibrationBuffer;
+  private static string OutsideInventory;
+  private static readonly List<ReparseLease> ReparseLeases = new List<ReparseLease>();
+  private const string ChosenPrimitive = "NtRename+readonly-share3+relative-NtCreate-sentinel+same-handle-byID-prune";
 
   [StructLayout(LayoutKind.Sequential)]
   private struct FileTime { public uint Low; public uint High; }
@@ -88,6 +96,26 @@ internal static class RemovalPrimitiveProbe
     [FieldOffset(4)] public int Type;
     [FieldOffset(8)] public long FileId;
   }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct UnicodeString { public ushort Length, MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct ObjectAttributes
+  {
+    public uint Length;
+    public IntPtr RootDirectory, ObjectName;
+    public uint Attributes;
+    public IntPtr SecurityDescriptor, SecurityQualityOfService;
+  }
+  // FILE_ID_BOTH_DIR_INFO is explicitly 8-byte aligned on both architectures.
+  [StructLayout(LayoutKind.Explicit, Size = 112)]
+  private struct DirectoryEntryLayout
+  {
+    [FieldOffset(0)] public uint Next;
+    [FieldOffset(56)] public uint Attributes;
+    [FieldOffset(60)] public uint NameBytes;
+    [FieldOffset(96)] public long Id;
+    [FieldOffset(104)] public char Name;
+  }
 
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
@@ -97,6 +125,8 @@ internal static class RemovalPrimitiveProbe
   private static extern bool GetFileInformationByHandle(IntPtr handle, out FileInformation information);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool GetFileInformationByHandleEx(IntPtr handle, int informationClass, out StandardInformation information, uint length);
+  [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetFileInformationByHandleEx")]
+  private static extern bool QueryDirectory(IntPtr handle, int informationClass, IntPtr information, uint length);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool SetFileInformationByHandle(IntPtr handle, int informationClass, IntPtr information, uint length);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -116,6 +146,18 @@ internal static class RemovalPrimitiveProbe
   private static extern int NtSetInformationFile(IntPtr handle, IntPtr ioStatusBlock, IntPtr information, uint length, int informationClass);
   [DllImport("ntdll.dll", ExactSpelling = true)]
   private static extern uint RtlNtStatusToDosError(int status);
+  [DllImport("ntdll.dll", ExactSpelling = true)]
+  private static extern int NtCreateFile(out IntPtr handle, uint access, IntPtr objectAttributes, IntPtr ioStatusBlock,
+    IntPtr allocationSize, uint attributes, uint share, uint disposition, uint options, IntPtr ea, uint eaLength);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool DeviceIoControl(IntPtr handle, uint control, byte[] input, uint inputBytes,
+    byte[] output, uint outputBytes, out uint returned, IntPtr overlapped);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool WriteFile(IntPtr handle, byte[] bytes, uint count, out uint written, IntPtr overlapped);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool ReadFile(IntPtr handle, byte[] bytes, uint count, out uint read, IntPtr overlapped);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool SetFilePointerEx(IntPtr handle, long distance, out long position, uint origin);
 
   private sealed class OwnedHandle
   {
@@ -180,6 +222,7 @@ internal static class RemovalPrimitiveProbe
       Marshal.WriteByte(buffer, delete ? (byte)1 : (byte)0);
       bool success = SetFileInformationByHandle(handle.Value, 4, buffer, 1);
       int error = Marshal.GetLastWin32Error();
+      LastDispositionError = error;
       Observe("SetFileInformationByHandle(FileDispositionInfo)", label, success, error,
         new { handle = handle.Value.ToInt64(), access = handle.Access, share = handle.Share, delete = delete, bytes = 1 });
       return success;
@@ -281,7 +324,7 @@ internal static class RemovalPrimitiveProbe
       finally
       {
         if (completed) Marshal.FreeHGlobal(io);
-        else request.RetainUntilProcessExit = true; // do not free buffers still owned by pending I/O
+        else { PendingNativeIo = true; request.RetainUntilProcessExit = true; } // pending I/O still owns both buffers
       }
     }
   }
@@ -353,6 +396,544 @@ internal static class RemovalPrimitiveProbe
     // This probe does not silently change identifier kinds or reopen a volume.
     Require("byid-probe-is-ntfs", queried && fileSystem.ToString() == "NTFS", new { win32Error = error });
     return serial;
+  }
+
+  // This is an owned-sandbox experiment, not an installed-path ancestor policy.
+  // All name anchors stay pinned; possibly empty targets also keep a sentinel.
+  private sealed class ProtectedDirectory
+  {
+    public OwnedHandle Weak, Guard, Sentinel;
+    public DirectoryBinding Binding, SentinelBinding;
+    public ProtectedDirectory Parent;
+    public string Leaf, SentinelLeaf;
+  }
+  private sealed class DirectoryEntry
+  {
+    public string Name;
+    public ulong Id;
+    public uint Attributes;
+  }
+  private sealed class ReparseLease
+  {
+    public OwnedHandle Writer;
+    public DirectoryBinding Original;
+    public bool Active, Unknown;
+  }
+  private sealed class CreateResult
+  {
+    public OwnedHandle Handle;
+    public int Status, IoStatus;
+    public bool Success, Completed;
+    public ulong Information;
+  }
+  private static object BindingDetail(DirectoryBinding value)
+  {
+    return new { volume = value.Volume, fileId = value.FileId.ToString("x16"), canonical = value.Canonical,
+      directory = value.Directory, reparse = value.Reparse, deletePending = value.DeletePending };
+  }
+  private static bool SameBinding(DirectoryBinding actual, DirectoryBinding expected, bool directory)
+  {
+    return actual.Volume == expected.Volume && actual.FileId == expected.FileId && actual.FileId != 0 &&
+      actual.Directory == directory && !actual.Reparse && !actual.DeletePending &&
+      String.Equals(actual.Canonical, expected.Canonical, StringComparison.Ordinal);
+  }
+  private static bool ValidLeaf(string leaf)
+  {
+    if (String.IsNullOrEmpty(leaf) || leaf.Length > 80 || leaf == "." || leaf == "..") return false;
+    foreach (char c in leaf) if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.')) return false;
+    return leaf[leaf.Length - 1] != '.';
+  }
+  private static string NewLeaf(string prefix) { return prefix + "-" + Guid.NewGuid().ToString("N"); }
+
+  // No flag fallback. Pending requests retain all native memory until completion.
+  private static CreateResult CreateRelative(OwnedHandle parent, string leaf, uint access, uint share, bool directory, string label)
+  {
+    Require(label + "-literal-single-leaf", ValidLeaf(leaf), new { leaf = leaf });
+    byte[] name = Encoding.Unicode.GetBytes(leaf + "\0");
+    IntPtr text = Marshal.AllocHGlobal(name.Length), unicode = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString))),
+      attributes = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ObjectAttributes))), io = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(IoStatusBlock)));
+    bool completed = true;
+    try
+    {
+      Marshal.Copy(name, 0, text, name.Length);
+      Marshal.StructureToPtr(new UnicodeString { Length = (ushort)(name.Length - 2), MaximumLength = (ushort)name.Length, Buffer = text }, unicode, false);
+      Marshal.StructureToPtr(new ObjectAttributes { Length = (uint)Marshal.SizeOf(typeof(ObjectAttributes)),
+        RootDirectory = parent.Value, ObjectName = unicode, Attributes = 0x1040 }, attributes, false);
+      for (int i = 0; i < Marshal.SizeOf(typeof(IoStatusBlock)); i++) Marshal.WriteByte(io, i, 0);
+      Marshal.WriteInt32(io, unchecked((int)0xc0000001));
+      uint options = directory ? 0x200021u : 0x200060u;
+      IntPtr value;
+      int status = NtCreateFile(out value, access, attributes, io, IntPtr.Zero, directory ? 0x10u : 0x80u,
+        share, 2, options, IntPtr.Zero, 0);
+      uint wait = 0;
+      if (status == 0x103)
+      {
+        wait = value == IntPtr.Zero || value == Invalid ? 0xffffffff : WaitForSingleObject(value, 0xffffffff);
+        completed = wait == 0;
+      }
+      IoStatusBlock final = (IoStatusBlock)Marshal.PtrToStructure(io, typeof(IoStatusBlock));
+      bool success = (status == 0x103 ? completed : status >= 0) && completed && final.Result.Status >= 0 &&
+        final.Result.Status != 0x103 && final.Information.ToUInt64() == 2 && value != IntPtr.Zero && value != Invalid;
+      Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = "NtCreateFile(FILE_CREATE)", name = label,
+        success = success, callNtStatus = unchecked((uint)status).ToString("x8"), ioNtStatus = unchecked((uint)final.Result.Status).ToString("x8"),
+        completed = completed, wait = wait, ioInformation = final.Information.ToUInt64(), rootDirectoryHandle = parent.Value.ToInt64(),
+        handle = value.ToInt64(), leaf = leaf, access = access, share = share, objectAttributes = 0x1040, createDisposition = 2,
+        createOptions = options, directory = directory, securityDescriptorNull = true, fallback = false });
+      return new CreateResult { Handle = new OwnedHandle(value, label, access, share), Status = status, IoStatus = final.Result.Status,
+        Information = final.Information.ToUInt64(), Completed = completed, Success = success };
+    }
+    finally
+    {
+      if (completed) { Marshal.FreeHGlobal(io); Marshal.FreeHGlobal(attributes); Marshal.FreeHGlobal(unicode); Marshal.FreeHGlobal(text); }
+      else { PendingNativeIo = true; UnsafeCleanup = true; }
+    }
+  }
+  private static OwnedHandle ById(DirectoryBinding expected, uint access, uint share, string label)
+  {
+    var descriptor = new FileIdDescriptor { Size = 24, Type = 0, FileId = unchecked((long)expected.FileId) };
+    IntPtr value = OpenFileById(SandboxBoundary.Guard.Value, ref descriptor, access, share, IntPtr.Zero, NoFollow);
+    int error = Marshal.GetLastWin32Error();
+    Observe("OpenFileById", label, value != Invalid && value != IntPtr.Zero, error,
+      new { handle = value.ToInt64(), access = access, share = share, flags = NoFollow, fileId = expected.FileId.ToString("x16"),
+        descriptorSize = 24, descriptorType = 0, volumeHint = SandboxBoundary.Guard.Value.ToInt64(), securityAttributesNull = true });
+    Require(label + "-opened", value != Invalid && value != IntPtr.Zero, new { win32Error = error });
+    return new OwnedHandle(value, label, access, share);
+  }
+  private static List<DirectoryEntry> Entries(OwnedHandle directory, string label)
+  {
+    const int capacity = 65536;
+    IntPtr buffer = Marshal.AllocHGlobal(capacity);
+    var entries = new List<DirectoryEntry>();
+    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    try
+    {
+      for (int page = 0; page < 32; page++)
+      {
+        for (int n = 0; n < capacity; n++) Marshal.WriteByte(buffer, n, 0);
+        bool success = QueryDirectory(directory.Value, page == 0 ? 11 : 10, buffer, capacity);
+        int error = Marshal.GetLastWin32Error();
+        Observe("GetFileInformationByHandleEx(FileIdBothDirectoryInfo)", label, success, error,
+          new { handle = directory.Value.ToInt64(), informationClass = page == 0 ? 11 : 10, capacity = capacity, page = page });
+        if (!success && error == 18) return entries; // ERROR_NO_MORE_FILES is an enumeration terminator only
+        Require(label + "-enumeration-completed", success, new { win32Error = error });
+        int offset = 0;
+        for (int count = 0; count < 256; count++)
+        {
+          Require(label + "-entry-header-bounded", offset >= 0 && offset <= capacity - 104, null);
+          uint next = unchecked((uint)Marshal.ReadInt32(buffer, offset)), bytes = unchecked((uint)Marshal.ReadInt32(buffer, offset + 60));
+          Require(label + "-entry-name-bounded", bytes > 0 && bytes <= 510 && bytes % 2 == 0 && offset + 104 + bytes <= capacity &&
+            (next == 0 || (next % 8 == 0 && next >= 104 + bytes && offset + next <= capacity - 104)), null);
+          string name = Marshal.PtrToStringUni(IntPtr.Add(buffer, offset + 104), (int)bytes / 2);
+          if (name != "." && name != "..")
+          {
+            Require(label + "-unique-bounded-entry", names.Add(name) && entries.Count < 128, null);
+            entries.Add(new DirectoryEntry { Name = name, Id = unchecked((ulong)Marshal.ReadInt64(buffer, offset + 96)),
+              Attributes = unchecked((uint)Marshal.ReadInt32(buffer, offset + 56)) });
+          }
+          if (next == 0) break;
+          offset += (int)next;
+          Require(label + "-page-entry-limit", count < 255, null);
+        }
+      }
+      throw new InvalidOperationException(label + "-page-limit");
+    }
+    finally { Marshal.FreeHGlobal(buffer); }
+  }
+  private static bool EntryMatches(List<DirectoryEntry> entries, string leaf, DirectoryBinding expected)
+  {
+    foreach (DirectoryEntry entry in entries)
+      if (entry.Name == leaf) return entry.Id == expected.FileId && (entry.Attributes & 0x410) == (expected.Directory ? 0x10u : 0u);
+    return false;
+  }
+  private static bool EntryAbsent(ProtectedDirectory parent, string leaf, string label)
+  {
+    foreach (DirectoryEntry entry in Entries(parent.Guard, label)) if (String.Equals(entry.Name, leaf, StringComparison.OrdinalIgnoreCase)) return false;
+    return true;
+  }
+  private static void AddSentinel(ProtectedDirectory directory, string label)
+  {
+    directory.SentinelLeaf = NewLeaf("sentinel");
+    CreateResult result = CreateRelative(directory.Weak, directory.SentinelLeaf, 0x110080, ShareRead, false, label + "-sentinel");
+    Require(label + "-sentinel-created", result.Success, null);
+    directory.Sentinel = result.Handle;
+    directory.SentinelBinding = ReadDirectoryBinding(result.Handle, label + "-sentinel-binding");
+    Require(label + "-sentinel-object", directory.SentinelBinding.Volume == directory.Binding.Volume &&
+      !directory.SentinelBinding.Directory && !directory.SentinelBinding.Reparse && !directory.SentinelBinding.DeletePending, null);
+  }
+  private static void ValidateProtected(ProtectedDirectory directory, string label)
+  {
+    DirectoryBinding guard = ReadDirectoryBinding(directory.Guard, label + "-guard"), weak = ReadDirectoryBinding(directory.Weak, label + "-weak");
+    Require(label + "-same-id-path-no-reparse", SameBinding(guard, directory.Binding, true) && SameBinding(weak, directory.Binding, true),
+      new { expected = BindingDetail(directory.Binding), actual = BindingDetail(guard), weak = BindingDetail(weak) });
+    if (directory.Sentinel != null)
+    {
+      DirectoryBinding sentinel = ReadDirectoryBinding(directory.Sentinel, label + "-sentinel");
+      Require(label + "-sentinel-bound-in-directory", SameBinding(sentinel, directory.SentinelBinding, false) &&
+        EntryMatches(Entries(directory.Guard, label + "-entries"), directory.SentinelLeaf, sentinel), BindingDetail(sentinel));
+    }
+  }
+  private static ProtectedDirectory NewDirectory(ProtectedDirectory parent, string leaf, bool sentinel, string label)
+  {
+    ValidateProtected(parent, label + "-parent-before-create");
+    CreateResult created = CreateRelative(parent.Guard, leaf, 0x1000a1, ShareAll, true, label + "-directory");
+    Require(label + "-directory-created", created.Success, null);
+    DirectoryBinding binding = ReadDirectoryBinding(created.Handle, label + "-initial-binding");
+    Require(label + "-child-bound-to-parent", binding.Directory && !binding.Reparse && !binding.DeletePending && binding.Volume == parent.Binding.Volume &&
+      binding.Canonical == parent.Binding.Canonical.TrimEnd('\\') + "\\" + leaf && EntryMatches(Entries(parent.Guard, label + "-parent-entries"), leaf, binding),
+      BindingDetail(binding));
+    var directory = new ProtectedDirectory { Weak = created.Handle, Binding = binding, Parent = parent, Leaf = leaf };
+    if (sentinel) AddSentinel(directory, label);
+    directory.Guard = ById(binding, ReadonlyDirectoryAccess, ShareReadWrite, label + "-readonly-guard");
+    ValidateProtected(directory, label + "-admission");
+    return directory;
+  }
+  private static OwnedHandle NewFile(ProtectedDirectory parent, string leaf, byte[] bytes, string label)
+  {
+    ValidateProtected(parent, label + "-parent");
+    CreateResult created = CreateRelative(parent.Guard, leaf, 0x110083, ShareRead, false, label);
+    Require(label + "-created", created.Success, null);
+    DirectoryBinding binding = ReadDirectoryBinding(created.Handle, label + "-binding");
+    Require(label + "-same-parent-file", !binding.Directory && !binding.Reparse && !binding.DeletePending && binding.Volume == parent.Binding.Volume &&
+      EntryMatches(Entries(parent.Guard, label + "-entries"), leaf, binding), BindingDetail(binding));
+    uint written;
+    bool success = WriteFile(created.Handle.Value, bytes, (uint)bytes.Length, out written, IntPtr.Zero);
+    int error = Marshal.GetLastWin32Error();
+    Observe("WriteFile", label, success, error, new { bytes = bytes.Length, written = written });
+    Require(label + "-written", success && written == bytes.Length, null);
+    return created.Handle;
+  }
+  private static byte[] ReadOwnedBytes(OwnedHandle file, int expectedLength, string label)
+  {
+    long position;
+    bool seek = SetFilePointerEx(file.Value, 0, out position, 0);
+    int seekError = Marshal.GetLastWin32Error();
+    Observe("SetFilePointerEx", label, seek, seekError, new { position = position });
+    Require(label + "-seek", seek && position == 0, null);
+    byte[] bytes = new byte[expectedLength + 1];
+    uint read;
+    bool success = ReadFile(file.Value, bytes, (uint)bytes.Length, out read, IntPtr.Zero);
+    int error = Marshal.GetLastWin32Error();
+    Observe("ReadFile", label, success, error, new { read = read, expected = expectedLength });
+    Require(label + "-length", success && read == expectedLength, null);
+    Array.Resize(ref bytes, (int)read);
+    return bytes;
+  }
+
+  private static void EstablishBoundary(string root, string output)
+  {
+    string sandbox = Path.GetDirectoryName(root);
+    Require("owned-sandbox-output-sibling", Path.GetDirectoryName(output) == sandbox && Path.GetFileName(root) == "fixture", null);
+    OwnedHandle sandboxGuard = Open(sandbox, ReadonlyDirectoryAccess, ShareReadWrite, "sandbox-boundary-guard", true);
+    DirectoryBinding sandboxBinding = ReadDirectoryBinding(sandboxGuard, "sandbox-boundary");
+    Require("sandbox-plain-directory", sandboxBinding.Directory && !sandboxBinding.Reparse && !sandboxBinding.DeletePending, BindingDetail(sandboxBinding));
+    SandboxBoundary = new ProtectedDirectory { Weak = sandboxGuard, Guard = sandboxGuard, Binding = sandboxBinding };
+    Require("owned-sandbox-ntfs-volume", RequireNtfs(sandboxGuard) == sandboxBinding.Volume, null);
+    OwnedHandle weak = Open(root, ReadonlyDirectoryAccess, ShareAll, "fixture-boundary-weak", true);
+    DirectoryBinding binding = ReadDirectoryBinding(weak, "fixture-boundary");
+    Require("fixture-is-exact-sandbox-child", binding.Directory && !binding.Reparse && !binding.DeletePending && binding.Volume == sandboxBinding.Volume &&
+      binding.Canonical == sandboxBinding.Canonical.TrimEnd('\\') + "\\fixture", BindingDetail(binding));
+    FixtureBoundary = new ProtectedDirectory { Weak = weak, Binding = binding, Parent = SandboxBoundary, Leaf = "fixture" };
+    AddSentinel(FixtureBoundary, "fixture-boundary");
+    FixtureBoundary.Guard = ById(binding, ReadonlyDirectoryAccess, ShareReadWrite, "fixture-boundary-guard");
+    ValidateProtected(FixtureBoundary, "fixture-boundary-admission");
+    RootInitiallyVerified = true;
+    Outside = NewDirectory(FixtureBoundary, "outside", true, "outside");
+    OutsideMarkerBytes = Encoding.UTF8.GetBytes("owned outside marker: " + Guid.NewGuid().ToString("N"));
+    OutsideMarker = NewFile(Outside, "marker.bin", OutsideMarkerBytes, "outside-marker");
+    OutsideInventory = Inventory(Outside);
+    CalibrationBuffer = MountPointBuffer(Outside.Binding.Canonical);
+  }
+
+  private static string Inventory(ProtectedDirectory directory)
+  {
+    var values = new List<string>();
+    foreach (DirectoryEntry entry in Entries(directory.Guard, "outside-inventory"))
+      values.Add(entry.Name + ":" + entry.Id.ToString("x16") + ":" + entry.Attributes.ToString("x8"));
+    values.Sort(StringComparer.Ordinal);
+    return String.Join("|", values.ToArray());
+  }
+  private static void RequireOutsideUnchanged(string label)
+  {
+    ValidateProtected(Outside, label + "-outside");
+    Require(label + "-outside-unchanged", Inventory(Outside) == OutsideInventory &&
+      SameBytes(ReadOwnedBytes(OutsideMarker, OutsideMarkerBytes.Length, label + "-marker"), OutsideMarkerBytes),
+      new { originalEntries = OutsideInventory, currentEntries = Inventory(Outside), markerIdentity = Identity(OutsideMarker) });
+  }
+  private static byte[] MountPointBuffer(string canonical)
+  {
+    if (!canonical.StartsWith("\\\\?\\", StringComparison.Ordinal) || canonical.Length < 8 || canonical[5] != ':')
+      throw new InvalidOperationException("mount-point-local-dos-target-required");
+    string print = canonical.Substring(4), substitute = "\\??\\" + print;
+    byte[] first = Encoding.Unicode.GetBytes(substitute + "\0"), second = Encoding.Unicode.GetBytes(print + "\0");
+    byte[] buffer = new byte[16 + first.Length + second.Length];
+    if (buffer.Length > 16384) throw new InvalidOperationException("mount-point-buffer-bound");
+    Array.Copy(BitConverter.GetBytes(0xa0000003u), 0, buffer, 0, 4);
+    Array.Copy(BitConverter.GetBytes((ushort)(buffer.Length - 8)), 0, buffer, 4, 2);
+    Array.Copy(BitConverter.GetBytes((ushort)(first.Length - 2)), 0, buffer, 10, 2);
+    Array.Copy(BitConverter.GetBytes((ushort)first.Length), 0, buffer, 12, 2);
+    Array.Copy(BitConverter.GetBytes((ushort)(second.Length - 2)), 0, buffer, 14, 2);
+    Array.Copy(first, 0, buffer, 16, first.Length);
+    Array.Copy(second, 0, buffer, 16 + first.Length, second.Length);
+    return buffer;
+  }
+  private static bool ExactMountPoint(byte[] buffer, uint returned)
+  {
+    if (returned != CalibrationBuffer.Length || returned < 16 || returned > buffer.Length) return false;
+    byte[] actual = new byte[returned];
+    Array.Copy(buffer, actual, actual.Length);
+    return SameBytes(actual, CalibrationBuffer);
+  }
+  private static ReparseLease WriterFor(ProtectedDirectory directory, string label)
+  {
+    OwnedHandle writer = Open(directory.Binding.Canonical, 0x180, ShareAll, label, true);
+    DirectoryBinding actual = ReadDirectoryBinding(writer, label + "-binding");
+    Require(label + "-same-id-before-fsctl", SameBinding(actual, directory.Binding, true), BindingDetail(actual));
+    var lease = new ReparseLease { Writer = writer, Original = directory.Binding };
+    ReparseLeases.Add(lease);
+    return lease;
+  }
+  private static bool SetJunction(ReparseLease lease, string label, out int error)
+  {
+    DirectoryBinding before = ReadDirectoryBinding(lease.Writer, label + "-before");
+    Require(label + "-writer-still-original", before.Volume == lease.Original.Volume && before.FileId == lease.Original.FileId &&
+      before.Directory && !before.Reparse && !before.DeletePending && before.Canonical == lease.Original.Canonical, BindingDetail(before));
+    lease.Unknown = true; // retain unknown on any failure before an authoritative GET
+    uint returned;
+    bool success = DeviceIoControl(lease.Writer.Value, 0x900a4, CalibrationBuffer, (uint)CalibrationBuffer.Length,
+      null, 0, out returned, IntPtr.Zero);
+    error = Marshal.GetLastWin32Error();
+    Observe("DeviceIoControl(FSCTL_SET_REPARSE_POINT)", label, success, error,
+      new { handle = lease.Writer.Value.ToInt64(), access = lease.Writer.Access, share = lease.Writer.Share,
+        synchronous = true, bytesReturnedPointerNonNull = true, bytesReturned = returned, bufferBase64 = Convert.ToBase64String(CalibrationBuffer),
+        original = BindingDetail(lease.Original) });
+    if (!success && error == 997) { PendingNativeIo = true; UnsafeCleanup = true; }
+    return success;
+  }
+  private static bool QueryJunction(ReparseLease lease, string label)
+  {
+    byte[] buffer = new byte[16384];
+    uint returned;
+    bool success = DeviceIoControl(lease.Writer.Value, 0x900a8, null, 0, buffer, (uint)buffer.Length, out returned, IntPtr.Zero);
+    int error = Marshal.GetLastWin32Error();
+    DirectoryBinding current = ReadDirectoryBinding(lease.Writer, label + "-object");
+    bool same = current.Volume == lease.Original.Volume && current.FileId == lease.Original.FileId && current.Directory;
+    bool active = success && ExactMountPoint(buffer, returned) && same && current.Reparse;
+    bool plain = !success && error == 4390 && same && !current.Reparse; // ERROR_NOT_A_REPARSE_POINT
+    Observe("DeviceIoControl(FSCTL_GET_REPARSE_POINT)", label, success, error,
+      new { handle = lease.Writer.Value.ToInt64(), bytesReturned = returned, exactTarget = active, plain = plain, sameIdentity = same,
+        reparseTag = success && returned >= 4 ? BitConverter.ToUInt32(buffer, 0).ToString("x8") : null });
+    lease.Active = active;
+    lease.Unknown = !active && !plain;
+    if (lease.Unknown) UnsafeCleanup = true;
+    return active;
+  }
+  private static void ClearJunction(ReparseLease lease, string label)
+  {
+    Require(label + "-original-owned-junction", QueryJunction(lease, label + "-before"), null);
+    byte[] buffer = new byte[8];
+    Array.Copy(BitConverter.GetBytes(0xa0000003u), buffer, 4);
+    uint returned;
+    bool success = DeviceIoControl(lease.Writer.Value, 0x900ac, buffer, 8, null, 0, out returned, IntPtr.Zero);
+    int error = Marshal.GetLastWin32Error();
+    Observe("DeviceIoControl(FSCTL_DELETE_REPARSE_POINT)", label, success, error,
+      new { handle = lease.Writer.Value.ToInt64(), bytesReturned = returned, originalHandleOnly = true });
+    Require(label + "-delete-tag-completed", success, new { win32Error = error });
+    bool active = QueryJunction(lease, label + "-after");
+    Require(label + "-plain-original-restored", !active && !lease.Unknown, null);
+  }
+  private static void PrepareCalibrationTarget(out ProtectedDirectory target, out ReparseLease lease, string label)
+  {
+    // No sentinel: this separate owned target intentionally permits the attack.
+    target = NewDirectory(FixtureBoundary, NewLeaf(label), false, label);
+    lease = WriterFor(target, label + "-writer");
+    int error;
+    Require(label + "-real-set-succeeded", SetJunction(lease, label + "-set", out error), new { win32Error = error });
+    Require(label + "-real-get-confirmed", QueryJunction(lease, label + "-get"), null);
+    RequireOutsideUnchanged(label + "-calibration");
+  }
+  private static void PreJunctionCreate()
+  {
+    ProtectedDirectory target;
+    ReparseLease lease;
+    PrepareCalibrationTarget(out target, out lease, "pre-junction");
+    string leaf = NewLeaf("sentinel");
+    CreateResult result;
+    try { result = CreateRelative(target.Weak, leaf, 0x110080, ShareRead, false, "hostile-root-sentinel"); }
+    catch (Exception) { UnsafeCleanup = true; throw; }
+    // First inspect outside, before clearing the injected junction or any cleanup.
+    bool outsideSame = Inventory(Outside) == OutsideInventory &&
+      SameBytes(ReadOwnedBytes(OutsideMarker, OutsideMarkerBytes.Length, "pre-junction-marker"), OutsideMarkerBytes);
+    if (!outsideSame) UnsafeCleanup = true;
+    Require("pre-junction-create-no-outside-effect", outsideSame, new { leaf = leaf, checkedBeforeCleanup = true });
+    bool rejected = result.Completed && result.Status == unchecked((int)0xc000050b);
+    bool originalOnly = false;
+    if (result.Success)
+    {
+      DirectoryBinding sentinel = ReadDirectoryBinding(result.Handle, "hostile-root-created-object");
+      originalOnly = !sentinel.Directory && !sentinel.Reparse && !sentinel.DeletePending && sentinel.Volume == target.Binding.Volume &&
+        EntryMatches(Entries(target.Weak, "hostile-root-original-entries"), leaf, sentinel);
+    }
+    Require("pre-junction-create-rejected-or-original-only", rejected || originalOnly,
+      new { rejectedReparse = rejected, createdInOriginalObject = originalOnly, admissionGranted = false });
+    DirectoryBinding root = ReadDirectoryBinding(target.Weak, "hostile-root-admission");
+    Require("pre-junction-root-admission-still-rejected", root.Reparse && root.FileId == target.Binding.FileId,
+      new { admissionGranted = false });
+    if (result.Success)
+    {
+      Require("pre-junction-own-sentinel-disposition", Disposition(result.Handle, true, "hostile-sentinel-disposition"), null);
+      Require("pre-junction-own-sentinel-close", result.Handle.Close(), null);
+    }
+    ClearJunction(lease, "pre-junction-clear");
+    RequireOutsideUnchanged("pre-junction-final");
+  }
+  private static void SentinelBlocksJunction()
+  {
+    ProtectedDirectory target = NewDirectory(FixtureBoundary, NewLeaf("protected-set"), true, "protected-set");
+    ReparseLease lease = WriterFor(target, "protected-set-writer");
+    int error;
+    bool set = SetJunction(lease, "protected-set-attempt", out error);
+    bool active = QueryJunction(lease, "protected-set-after");
+    Require("sentinel-set-exact-directory-not-empty", !set && error == 145 && !active && !lease.Unknown,
+      new { win32Error = error, writerOpened = true, writerAccess = 0x180, writerShare = 7, actualFsctlExecuted = true });
+    ValidateProtected(target, "protected-set-sentinel-retained");
+    RequireOutsideUnchanged("protected-set-final");
+  }
+  private static OwnedHandle AcquirePrune(ProtectedDirectory directory, string label)
+  {
+    ValidateProtected(directory, label + "-before");
+    Require(label + "-close-readonly-guard", directory.Guard.Close(), null);
+    OwnedHandle pin = ById(directory.Binding, 0x10081, ShareReadWrite, label + "-delete-pin");
+    DirectoryBinding actual = ReadDirectoryBinding(pin, label + "-candidate"), weak = ReadDirectoryBinding(directory.Weak, label + "-weak");
+    bool matches = SameBinding(actual, directory.Binding, true) && SameBinding(weak, directory.Binding, true);
+    Observations.Add(new { caseName = CurrentCase, diagnosticOnly = CurrentDiagnostic, api = "ValidateSentinelPruneCandidate", name = label,
+      success = matches, actual = BindingDetail(actual), expected = BindingDetail(directory.Binding), weak = BindingDetail(weak),
+      pinHandle = pin.Value.ToInt64(), weakHandle = directory.Weak.Value.ToInt64(), removalMutationPerformed = false });
+    Require(label + "-same-original-directory", matches, null);
+    List<DirectoryEntry> entries = Entries(pin, label + "-only-sentinel-entries");
+    Require(label + "-only-owned-sentinel", entries.Count == 1 && EntryMatches(entries, directory.SentinelLeaf, directory.SentinelBinding),
+      new { entries = entries.Count, sentinelId = directory.SentinelBinding.FileId.ToString("x16") });
+    Require(label + "-close-weak-after-validation", directory.Weak.Close(), null);
+    return pin;
+  }
+  private static void RemoveSentinel(ProtectedDirectory directory, string label)
+  {
+    DirectoryBinding actual = ReadDirectoryBinding(directory.Sentinel, label + "-binding");
+    Require(label + "-same-original-sentinel", SameBinding(actual, directory.SentinelBinding, false), null);
+    Require(label + "-sentinel-disposition", Disposition(directory.Sentinel, true, label + "-sentinel-disposition"), null);
+    Require(label + "-sentinel-close", directory.Sentinel.Close(), null);
+  }
+  private static void PruneSentinelDirectory(ProtectedDirectory directory, string label)
+  {
+    OwnedHandle pin = AcquirePrune(directory, label);
+    RemoveSentinel(directory, label);
+    // After the last sentinel goes, no name-based open/rename/recursive action.
+    Require(label + "-same-handle-disposition", Disposition(pin, true, label + "-directory-disposition"), null);
+    Require(label + "-delete-pin-close", pin.Close(), null);
+    Require(label + "-directory-entry-gone", EntryAbsent(directory.Parent, directory.Leaf, label + "-parent-after"), null);
+  }
+  private static void LastSentinelDisposition(bool addChild)
+  {
+    ProtectedDirectory target = NewDirectory(FixtureBoundary, NewLeaf(addChild ? "late-child" : "last-sentinel"), true, "last-sentinel");
+    ReparseLease lease = addChild ? null : WriterFor(target, "last-sentinel-writer");
+    OwnedHandle pin = AcquirePrune(target, "last-sentinel");
+    RemoveSentinel(target, "last-sentinel");
+    if (addChild)
+    {
+      CreateResult child = CreateRelative(pin, "late-owned-child", 0x110080, ShareRead, false, "late-owned-child");
+      Require("late-owned-child-created", child.Success, null);
+      bool disposed = Disposition(pin, true, "late-child-directory-disposition");
+      int dispositionError = LastDispositionError;
+      // Authoritative failure is captured by Disposition; retained child is never force-pruned.
+      StandardInformation standard;
+      bool query = GetFileInformationByHandleEx(pin.Value, 1, out standard, (uint)Marshal.SizeOf(typeof(StandardInformation)));
+      int queryError = Marshal.GetLastWin32Error();
+      Observe("GetFileInformationByHandleEx(FileStandardInfo)", "late-child-retained", query, queryError, new { deletePending = standard.DeletePending });
+      Require("late-child-prevents-disposition-and-is-retained", !disposed && dispositionError == 145 && query && standard.DeletePending == 0 &&
+        EntryMatches(Entries(pin, "late-child-after"), "late-owned-child", ReadDirectoryBinding(child.Handle, "late-child-binding")),
+        new { dispositionError = dispositionError, removalRetried = false });
+      RequireOutsideUnchanged("late-child-final");
+      return;
+    }
+    int error;
+    Require("last-sentinel-real-set-succeeded", SetJunction(lease, "last-sentinel-set", out error), new { win32Error = error });
+    Require("last-sentinel-real-get-confirmed", QueryJunction(lease, "last-sentinel-get"), null);
+    RequireOutsideUnchanged("last-sentinel-before-disposition");
+    Require("last-sentinel-same-pin-disposition", Disposition(pin, true, "last-sentinel-directory-disposition"), null);
+    Require("last-sentinel-writer-close", lease.Writer.Close(), null);
+    Require("last-sentinel-delete-pin-close", pin.Close(), null);
+    bool gone = EntryAbsent(target.Parent, target.Leaf, "last-sentinel-parent-after");
+    if (gone) { lease.Active = false; lease.Unknown = false; }
+    Require("last-sentinel-original-link-gone", gone, null);
+    RequireOutsideUnchanged("last-sentinel-final");
+  }
+  private static OwnedHandle BoundAlias(ProtectedDirectory directory, string label)
+  {
+    ValidateProtected(directory, label + "-target");
+    OwnedHandle alias = ById(directory.Binding, 0xa0, ShareAll, label);
+    Require(label + "-independent-same-object", alias.Value != directory.Guard.Value &&
+      SameBinding(ReadDirectoryBinding(alias, label + "-binding"), directory.Binding, true),
+      new { duplicateHandle = false, guardAccess = directory.Guard.Access, guardShare = directory.Guard.Share });
+    return alias;
+  }
+  private static void SentinelRoundtrip()
+  {
+    ProtectedDirectory arena = NewDirectory(FixtureBoundary, "chosen-roundtrip", true, "chosen-root");
+    ProtectedDirectory parent = NewDirectory(arena, "source", true, "move-parent"),
+      child = NewDirectory(parent, "nested", true, "move-child"), stage = NewDirectory(arena, "stage", true, "move-stage");
+    byte[] bytes = Encoding.UTF8.GetBytes("owned complete forward/prune/relative-create/restore payload");
+    OwnedHandle file = NewFile(child, "payload.bin", bytes, "chosen-payload");
+    string identity = Identity(file);
+    OwnedHandle alias = BoundAlias(stage, "chosen-stage-alias");
+    ValidateProtected(arena, "forward-arena"); ValidateProtected(parent, "forward-parent"); ValidateProtected(child, "forward-child");
+    Require("relative-forward-existing-file-handle", RenameNt(file, alias, "payload.bin", "relative-forward"), null);
+    Require("rename-kept-source-object", Identity(file) == identity, null);
+    ValidateProtected(stage, "forward-stage-after");
+    PruneSentinelDirectory(child, "prune-child");
+    PruneSentinelDirectory(parent, "prune-parent");
+    ProtectedDirectory restoredParent = NewDirectory(arena, "source", true, "restore-parent"),
+      restoredChild = NewDirectory(restoredParent, "nested", true, "restore-child");
+    OwnedHandle restoreAlias = BoundAlias(restoredChild, "chosen-restore-alias");
+    ValidateProtected(arena, "restore-arena"); ValidateProtected(stage, "restore-stage");
+    Require("relative-restore-after-prune", RenameNt(file, restoreAlias, "payload.bin", "relative-restore"), null);
+    Require("restore-kept-source-object", Identity(file) == identity, null);
+    DirectoryBinding restoredFile = ReadDirectoryBinding(file, "restored-payload-binding");
+    Require("restore-preserved-owned-payload-bytes", SameBytes(bytes, ReadOwnedBytes(file, bytes.Length, "restored-payload")) &&
+      EntryMatches(Entries(restoredChild.Guard, "restore-child-entries"), "payload.bin", restoredFile) &&
+      EntryAbsent(stage, "payload.bin", "restore-stage-entries"), new { expectedBase64 = Convert.ToBase64String(bytes), identity = identity });
+    ValidateProtected(restoredParent, "restore-parent-after"); ValidateProtected(restoredChild, "restore-child-after");
+    RequireOutsideUnchanged("roundtrip-final");
+  }
+  private static void UnprotectedRenameDiagnostic()
+  {
+    ProtectedDirectory source = NewDirectory(FixtureBoundary, NewLeaf("diagnostic-source"), true, "diagnostic-source");
+    byte[] bytes = Encoding.UTF8.GetBytes("owned diagnostic only");
+    OwnedHandle payload = NewFile(source, "diagnostic.bin", bytes, "diagnostic-payload");
+    string identity = Identity(payload);
+    ProtectedDirectory target;
+    ReparseLease lease;
+    PrepareCalibrationTarget(out target, out lease, "diagnostic-junction");
+    bool safelyRestored = false;
+    try
+    {
+      OwnedHandle alias = ById(target.Binding, 0xa0, ShareAll, "diagnostic-junction-alias");
+      bool moved = RenameNt(payload, alias, "diagnostic.bin", "unprotected-relative-forward");
+      bool outsideEffect = Inventory(Outside) != OutsideInventory;
+      Observations.Add(new { caseName = CurrentCase, diagnosticOnly = true, api = "UnprotectedRenameOutcome", name = "no-sentinel-diagnostic",
+        success = moved, outsideEffectObserved = outsideEffect, capabilityCredit = false, checkedBeforeRestore = true });
+      if (moved)
+      {
+        OwnedHandle restore = BoundAlias(source, "diagnostic-source-alias");
+        Require("diagnostic-original-handle-restored", RenameNt(payload, restore, "diagnostic.bin", "diagnostic-original-handle-restore"), null);
+      }
+      DirectoryBinding original = ReadDirectoryBinding(payload, "diagnostic-restored-payload");
+      Require("diagnostic-restore-kept-original-id-bytes-and-entry", Identity(payload) == identity &&
+        SameBytes(bytes, ReadOwnedBytes(payload, bytes.Length, "diagnostic-restored-bytes")) &&
+        EntryMatches(Entries(source.Guard, "diagnostic-restored-source"), "diagnostic.bin", original), null);
+      ClearJunction(lease, "diagnostic-junction-clear");
+      RequireOutsideUnchanged("diagnostic-final");
+      safelyRestored = true;
+    }
+    finally { if (!safelyRestored) { UnsafeCleanup = true; Failed = true; } }
   }
 
   private static OwnedHandle TryPinForPrune(OwnedHandle guard, OwnedHandle weak, OwnedHandle volumeHint,
@@ -555,13 +1136,15 @@ internal static class RemovalPrimitiveProbe
     const string bytes = "owned by-id rejection sentinel";
     File.WriteAllText(Path.Combine(original, "sentinel.bin"), bytes);
     File.WriteAllText(Path.Combine(other, "sentinel.bin"), bytes);
-    OwnedHandle volumeHint = Open(root, ReadonlyDirectoryAccess, ShareRead, "move-guard-rejection-parent", true);
-    Open(fixtureRoot, ReadonlyDirectoryAccess, ShareRead, "move-guard-fixture-root", true);
+    // These independent negative fixtures intentionally permit the owned rename
+    // injection. An unrelated share1 parent must not turn error32 into a pass.
+    OwnedHandle volumeHint = Open(root, ReadonlyDirectoryAccess, ShareReadWrite, "move-guard-rejection-parent", true);
+    Open(fixtureRoot, ReadonlyDirectoryAccess, ShareReadWrite, "move-guard-fixture-root", true);
     uint volume = RequireNtfs(volumeHint);
     OwnedHandle weak = Open(original, ReadAttributes, ShareAll, "rejection-weak-original", true);
     OwnedHandle otherWeak = Open(other, ReadAttributes, ShareAll, "rejection-weak-other", true);
-    OwnedHandle guard = Open(original, ReadonlyDirectoryAccess, ShareRead, "move-guard-rejection-original", true);
-    OwnedHandle otherGuard = Open(other, ReadonlyDirectoryAccess, ShareRead, "move-guard-rejection-other", true);
+    OwnedHandle guard = Open(original, ReadonlyDirectoryAccess, ShareReadWrite, "move-guard-rejection-original", true);
+    OwnedHandle otherGuard = Open(other, ReadonlyDirectoryAccess, ShareReadWrite, "move-guard-rejection-other", true);
     DirectoryBinding expected = ReadDirectoryBinding(weak, "rejection-snapshot-original");
     DirectoryBinding otherBinding = ReadDirectoryBinding(otherWeak, "rejection-snapshot-other");
     Require("rejection-fixture-distinct-ntfs-objects", expected.Volume == volume && otherBinding.Volume == volume &&
@@ -628,14 +1211,29 @@ internal static class RemovalPrimitiveProbe
     CurrentDiagnostic = diagnostic;
     CurrentCaseFailed = false;
     int firstHandle = Handles.Count;
-    try { action(); }
+    int firstLease = ReparseLeases.Count;
+    try { Require(name + "-no-prior-pending-io", !PendingNativeIo, null); action(); }
     catch (Exception error)
     {
       CurrentCaseFailed = true;
       if (diagnostic) DiagnosticChecks.Add(new { caseName = name, name = "exception", status = "observed-incomplete", capabilityCredit = false, detail = error.ToString() });
       else { Failed = true; Checks.Add(new { caseName = name, name = name + "-exception", status = "failed", detail = error.ToString() }); }
     }
-    finally { for (int i = Handles.Count - 1; i >= firstHandle; i--) Handles[i].Close(); }
+    finally
+    {
+      // Known injected tags may only be removed through their bound original
+      // writer. Unknown state is retained, never traversed by recursive cleanup.
+      for (int i = ReparseLeases.Count - 1; i >= firstLease; i--)
+      {
+        ReparseLease lease = ReparseLeases[i];
+        if (lease.Active && !lease.Unknown && !PendingNativeIo && lease.Writer.Value != IntPtr.Zero)
+        {
+          try { ClearJunction(lease, "case-finally-owned-tag-clear"); }
+          catch (Exception) { UnsafeCleanup = true; CurrentCaseFailed = true; if (!diagnostic) Failed = true; }
+        }
+      }
+      if (!PendingNativeIo) for (int i = Handles.Count - 1; i >= firstHandle; i--) Handles[i].Close();
+    }
     bool completed = !CurrentCaseFailed;
     CaseResults.Add(new { name = name, role = diagnostic ? "diagnostic" : "required", completed = completed,
       capabilityCredit = !diagnostic && completed, fullRoundtrip = name.IndexOf("roundtrip", StringComparison.Ordinal) >= 0 && completed });
@@ -713,14 +1311,26 @@ internal static class RemovalPrimitiveProbe
         Marshal.OffsetOf(typeof(FileIdDescriptor), "Size").ToInt32() == 0 &&
         Marshal.OffsetOf(typeof(FileIdDescriptor), "Type").ToInt32() == 4 &&
         Marshal.OffsetOf(typeof(FileIdDescriptor), "FileId").ToInt32() == 8, null);
+      Require("directory-entry-sdk-layout", Marshal.OffsetOf(typeof(DirectoryEntryLayout), "Name").ToInt32() == 104 &&
+        Marshal.OffsetOf(typeof(DirectoryEntryLayout), "Id").ToInt32() == 96, null);
       Require("owned-empty-fixture-root", Directory.Exists(root) && Directory.GetFileSystemEntries(root).Length == 0 &&
         (File.GetAttributes(root) & FileAttributes.ReparsePoint) == 0, null);
+      EstablishBoundary(root, output);
       RunCase("sharing", false, delegate { Sharing(root); });
       RunCase("control-win32-strong-original-buffer", true, delegate { Win32ForwardControl(root, false); });
       RunCase("control-win32-metadata-original-buffer", true, delegate { Win32ForwardControl(root, true); });
       RunCase("control-win32-metadata-contract-roundtrip", true, delegate { Roundtrip(root, false, false); });
       RunCase("control-nt-strong-metadata-roundtrip", true, delegate { Roundtrip(root, true, false); });
-      ChosenRoundtripPassed = RunCase("chosen-nt-readonly-byid-roundtrip", false, delegate { Roundtrip(root, true, true); });
+      RunCase("control-nt-readonly-share1-roundtrip", true, delegate { Roundtrip(root, true, true); });
+      bool noEscape = RunCase("pre-junction-relative-create", false, PreJunctionCreate);
+      RunCase("control-nt-no-sentinel-pre-junction", true, UnprotectedRenameDiagnostic);
+      bool nonempty = RunCase("sentinel-blocks-junction", false, SentinelBlocksJunction);
+      bool disposition = RunCase("last-sentinel-junction-disposition", false, delegate { LastSentinelDisposition(false); });
+      bool lateChild = RunCase("last-sentinel-new-child-rejected", false, delegate { LastSentinelDisposition(true); });
+      ChosenRoundtripPassed = RunCase("chosen-sentinel-share3-roundtrip", false, delegate {
+        Require("controlled-reparse-prerequisites-passed", noEscape && nonempty && disposition && lateChild, null);
+        SentinelRoundtrip();
+      });
       RunCase("byid-reject-canonical-drift", false, delegate { RejectedByIdTransition(root, true); });
       RunCase("byid-reject-id-mismatch", false, delegate { RejectedByIdTransition(root, false); });
       RunCase("weak-lifetime", false, delegate { WeakLifetime(root, false); });
@@ -731,12 +1341,24 @@ internal static class RemovalPrimitiveProbe
       Failed = true;
       Checks.Add(new { name = "probe-exception", status = "failed", detail = error.ToString() });
     }
-    finally { for (int i = Handles.Count - 1; i >= 0; i--) Handles[i].Close(); }
+    finally { if (!PendingNativeIo) for (int i = Handles.Count - 1; i >= 0; i--) Handles[i].Close(); }
+    bool reparseUncertain = false, handlesClosed = true;
+    foreach (ReparseLease lease in ReparseLeases) if (lease.Active || lease.Unknown) reparseUncertain = true;
+    foreach (OwnedHandle handle in Handles) if (handle.Value != IntPtr.Zero && handle.Value != Invalid) handlesClosed = false;
+    bool safeCleanup = RootInitiallyVerified && !PendingNativeIo && !UnsafeCleanup && !reparseUncertain && handlesClosed;
+    if (!safeCleanup) Failed = true;
     var report = new {
-      version = 3, status = Failed ? "failed" : "passed", processPointerBytes = IntPtr.Size,
+      version = 4, status = Failed ? "failed" : "passed", processPointerBytes = IntPtr.Size,
       chosenPrimitive = ChosenPrimitive, chosenPrimitiveStatus = ChosenRoundtripPassed ? "passed" : "failed",
       oldWin32Scheme = "diagnostic only; 930 x86/x64 observed FALSE 87, not granted chosen capability",
       oldStrongNtScheme = "diagnostic only; fd452 x86/x64 observed c0000043 / derived DOS32, nonpending; not granted chosen capability",
+      oldReadonlyShare1Scheme = "diagnostic only; e5a7 x86/x64 observed c0000043 / derived DOS32; not granted chosen capability",
+      controlledThreatBoundary = "fresh private sandbox only; not installed ancestry to volume root",
+      sandboxBinding = SandboxBoundary == null ? null : BindingDetail(SandboxBoundary.Binding),
+      fixtureBinding = FixtureBoundary == null ? null : BindingDetail(FixtureBoundary.Binding),
+      outsideBinding = Outside == null ? null : BindingDetail(Outside.Binding),
+      safeForControllerCleanup = safeCleanup, cleanupState = new { rootInitiallyVerified = RootInitiallyVerified,
+        pendingNativeIo = PendingNativeIo, unsafeEffectObserved = UnsafeCleanup, reparseUncertain = reparseUncertain, allHandlesClosed = handlesClosed },
       ownedFixtureRoot = root, executable = System.Reflection.Assembly.GetExecutingAssembly().Location,
       renameNameOffset = Marshal.OffsetOf(typeof(RenameInformation), "FileName").ToInt32(),
       renameInformationBytes = Marshal.SizeOf(typeof(RenameInformation)), fileInformationBytes = Marshal.SizeOf(typeof(FileInformation)),
@@ -745,6 +1367,8 @@ internal static class RemovalPrimitiveProbe
       ioInformationOffset = Marshal.OffsetOf(typeof(IoStatusBlock), "Information").ToInt32(),
       fileIdDescriptorBytes = Marshal.SizeOf(typeof(FileIdDescriptor)),
       fileIdDescriptorUnionOffset = Marshal.OffsetOf(typeof(FileIdDescriptor), "FileId").ToInt32(),
+      directoryEntryNameOffset = Marshal.OffsetOf(typeof(DirectoryEntryLayout), "Name").ToInt32(),
+      directoryEntryIdOffset = Marshal.OffsetOf(typeof(DirectoryEntryLayout), "Id").ToInt32(),
       checks = Checks, diagnosticChecks = DiagnosticChecks, caseResults = CaseResults, observations = Observations,
       toolFileVersions = ToolVersions(args.Length == 3 ? args[2] : null),
       realAccountsCreated = 0, realProfilesCreated = 0, officialOldPeExecuted = false, productPeExecuted = false,
