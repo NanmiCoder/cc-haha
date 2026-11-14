@@ -86,15 +86,23 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
   let originalBytes = 0
   let readBytes = 0
   let readEncodedBytes = 0
+  const started = performance.now()
+  let fixtureMs = 0
+  let readMs = 0
+  let normalizationMs = 0
+  let verificationMs = 0
+  const readFormats: Record<string, number> = {}
   try {
     for (let index = 0; index < 59; index++) {
-      // Sparse noise lets Read use lossless PNG compression instead of doing
-      // costly WebP searches for every fixture. Low input compression keeps
-      // each source above the soft limit; the batch must still exceed its budget.
-      const source = await sharp(await createContextImage({ width: 1024, height: 576, seed: 1888 + index, noiseStride: 2 }))
-        .composite([{ input: { create: { width: 64, height: 64, channels: 3,
-          background: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
-        } }, left: 32, top: 32 }]).png({ compressionLevel: 1 }).toBuffer()
+      const fixtureStarted = performance.now()
+      // Sparse noise avoids costly WebP searches during Read. Encode the
+      // marker once with low PNG compression so inputs still exceed the soft
+      // limit and the combined Read results exercise request-budget reduction.
+      const source = await createContextImage({
+        width: 1024, height: 576, seed: 1888 + index,
+        noiseStride: 2, compressionLevel: 1,
+        marker: { r: index * 4, g: 200 - index * 2, b: 20 + index * 3 },
+      })
       expect(source.length).toBeGreaterThan(512 * 1024)
       expect(source.length).toBeLessThan(3.75 * 1024 * 1024)
       if (index === 0) {
@@ -104,11 +112,15 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
       await writeFile(path, source)
       originals.push({ path, hash: hash(source) })
       originalBytes += source.length
+      fixtureMs += performance.now() - fixtureStarted
+      const readStarted = performance.now()
       const { data } = await FileReadTool.call({ file_path: path }, toolContext)
       if (data.type !== 'image') throw new Error(`Read ${index} did not return an image`)
       const encoded = Buffer.from(data.file.base64, 'base64')
       expect(encoded.length).toBeLessThanOrEqual(512 * 1024)
       expect(await sharp(encoded).metadata()).toMatchObject({ width: 1024, height: 576 })
+      readMs += performance.now() - readStarted
+      readFormats[data.file.type] = (readFormats[data.file.type] ?? 0) + 1
       readBytes += encoded.length
       readEncodedBytes += data.file.base64.length
       readImages.add(hash(encoded))
@@ -120,7 +132,13 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
     expect(readImages.size).toBe(59)
     expect(readEncodedBytes).toBeGreaterThan(IMAGE_REQUEST_BASE64_BUDGET)
     const before = hash(JSON.stringify(messages))
+    console.info(JSON.stringify({ stage: 'before request normalization', fixtureMs, readMs,
+      images: originals.length, originalBytes, readBytes, readFormats, elapsedMs: performance.now() - started }))
+    const normalizationStarted = performance.now()
     const normalized = await normalizeImagesForAPI(messages)
+    normalizationMs = performance.now() - normalizationStarted
+    console.info(JSON.stringify({ stage: 'after request normalization', normalizationMs, elapsedMs: performance.now() - started }))
+    const verificationStarted = performance.now()
     expect(normalized).toHaveLength(59)
     let requestEncodedBytes = 0
     const sentImages = new Set<string>()
@@ -147,12 +165,17 @@ test('59 sequential Reads of distinct screenshots retain every image within the 
     expect(sentImages.size).toBe(59)
     expect(requestEncodedBytes).toBeLessThanOrEqual(IMAGE_REQUEST_BASE64_BUDGET)
     expect(hash(JSON.stringify(messages))).toBe(before)
+    verificationMs = performance.now() - verificationStarted
     console.info(JSON.stringify({ scenario: '59 sequential distinct Read screenshots',
       images: originals.length, originalBytes, readBytes, readEncodedBytes, requestEncodedBytes,
       requestJsonBytes: Buffer.byteLength(JSON.stringify(normalized)),
       originalFilesUnchanged: true, distinctImagesRetained: sentImages.size,
+      fixtureMs, readMs, normalizationMs, verificationMs, elapsedMs: performance.now() - started,
     }))
   } finally {
+    const cleanupStarted = performance.now()
     await rm(directory, { recursive: true, force: true })
+    console.info(JSON.stringify({ stage: 'cleanup', cleanupMs: performance.now() - cleanupStarted,
+      elapsedMs: performance.now() - started }))
   }
 }, 90_000)

@@ -169,6 +169,7 @@ export async function setRunningMemberRuntime(teamName: string, planId: string, 
       path = join(getTeamDir(teamName), `plan-${planId}.json`)
       try { plan = teamPlanRecordSchema.parse(JSON.parse(await readFile(path, 'utf8'))) } catch { throw new TeamPlanError('Team plan not found', 404) }
     }
+    if (await incarnation(teamName, plan.sessionId) !== plan.incarnationId) throw new TeamPlanError('Team identity changed; refresh before saving')
     if (plan.state !== 'running' || !plan.approvedSnapshot) throw new TeamPlanError('Only a member of a running team can change its model')
     if (!plan.approvedSnapshot.members.some(member => member.id === memberId)) throw new TeamPlanError('Member not found in this team', 404)
     const apply = (member: TeamPlanMember): TeamPlanMember => member.id === memberId

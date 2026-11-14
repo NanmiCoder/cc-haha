@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { TeamPlanRecord } from '../../shared/teamPlan.js'
+import type { TeamMemberRuntimeIdentity, TeamRuntimeControlAction } from '../../shared/teamRuntimeControl.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 
 let home: string
@@ -17,6 +19,7 @@ beforeEach(async () => {
   // runner. Assertions about members must not depend on when the lead speaks.
   process.env.FIXTURE_LEAD_MODEL_DELAY_MS = '300'
   process.env.CLAUDE_CLI_PATH = join(import.meta.dir, '__fixtures__', 'team-worker-cli.ts')
+  process.env.FIXTURE_TEAM_RUNTIME_CONTROL_EVENTS = join(home, 'fixture-runtime-controls.jsonl')
   resetTerminalShellEnvironmentCacheForTests()
 })
 afterEach(async () => {
@@ -62,10 +65,13 @@ async function startHarness(memberNames: string[], options: {
   instructedAtLaunch?: string[]
   /** Hold the initial member reply while an independently delayed lead speaks. */
   initialMemberReply?: Promise<void>
+  /** Real approved additions keep older members in an archived running plan. */
+  planGroups?: string[][]
 } = {}) {
   const { conversationService: service } = await import('./conversationService.js')
   const { ProviderService } = await import('./providerService.js')
-  const { launchTeamPlanRuntime } = await import('./teamPlanRuntime.js')
+  const { launchTeamPlanRuntime, teamRuntimeOwnerId } = await import('./teamPlanRuntime.js')
+  const { ensureTeamRuntimeControl } = await import('../../utils/swarm/teamRuntimeControlStore.js')
   const { writeTeamFileAsync, getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
   const { beginTaskListLifecycle, withTaskListLifecycleLock, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
   // Only members' model calls are recorded and answered from `replies`. The lead
@@ -110,12 +116,27 @@ async function startHarness(memberNames: string[], options: {
   await service.startSession(parentId, home, `ws://127.0.0.1:${bridge.port}/sdk/${parentId}?token=parent`, { providerId: provider.id, model: 'cheap', teamWorker: { parentSessionId: 'external', teamName: 'lead-fixture', memberId: 'lead', name: 'leader', systemPrompt: 'lead fixture' } })
   const members = memberNames.map(name => ({ id: name, name, agentType: 'research', prompt: `Work as ${name}`, runtime: { providerId: provider.id, modelId: 'cheap' }, agentSnapshot: { systemPrompt: 'Read only', tools: ['Read'] } }))
   const tasks = options.tasks ?? memberNames.map(name => ({ id: `task-${name}`, subject: `Task for ${name}`, ownerId: name, dependencies: [] }))
-  const planId = crypto.randomUUID()
-  const plan = { schemaVersion: 1, planId, sessionId: parentId, teamName, incarnationId: createHash('sha256').update(JSON.stringify([teamName, parentId, createdAt])).digest('hex'), revision: 2, state: 'launching', workDir: home, members, tasks, leaderRuntime: members[0]!.runtime, createdAt, updatedAt: createdAt, approvedSnapshot: { revision: 1, members, tasks, leaderRuntime: members[0]!.runtime, approvedAt: Date.now(), requestId: 'approve' } } as any
-  await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify(plan))
-  const { memberIds } = await launchTeamPlanRuntime(plan)
-  // The service records the running state the way TeamPlanService does after launch.
-  await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify({ ...plan, state: 'running', revision: 3, launch: { status: 'running', memberIds } }))
+  const incarnationId = createHash('sha256').update(JSON.stringify([teamName, parentId, createdAt])).digest('hex')
+  const planGroups = options.planGroups ?? [memberNames]
+  if (JSON.stringify(planGroups.flat().sort()) !== JSON.stringify([...memberNames].sort())) throw new Error('Fixture plan groups must include every member exactly once')
+  const memberIds: Record<string, string> = {}
+  const plans: TeamPlanRecord[] = []
+  for (const names of planGroups) {
+    const previous = plans.at(-1)
+    if (previous) await writeFile(join(getTeamDir(teamName), `plan-${previous.planId}.json`), JSON.stringify(previous))
+    const selectedMembers = members.filter(member => names.includes(member.name))
+    const selectedTasks = tasks.filter(task => names.includes(task.ownerId))
+    const plan: TeamPlanRecord = { schemaVersion: 1, planId: crypto.randomUUID(), sessionId: parentId, teamName, incarnationId, revision: 2, state: 'launching', workDir: home, members: selectedMembers, tasks: selectedTasks, leaderRuntime: members[0]!.runtime, createdAt, updatedAt: createdAt, ...(previous ? { parentPlanId: previous.planId } : {}), approvedSnapshot: { revision: 1, members: selectedMembers, tasks: selectedTasks, leaderRuntime: members[0]!.runtime, approvedAt: Date.now(), requestId: `approve-${plans.length}` } }
+    await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify(plan))
+    const launched = await launchTeamPlanRuntime(plan)
+    Object.assign(memberIds, launched.memberIds)
+    const running: TeamPlanRecord = { ...plan, state: 'running', revision: 3, launch: { status: 'running', memberIds: launched.memberIds } }
+    // Persist the same approval/launch boundary that TeamPlanService writes.
+    await writeFile(join(getTeamDir(teamName), 'plan.json'), JSON.stringify(running))
+    plans.push(running)
+  }
+  await ensureTeamRuntimeControl(teamName, { leadSessionId: parentId, incarnationId }, teamRuntimeOwnerId, { approvedLaunch: true })
+  const planId = plans[0]!.planId
   const waitFor = async (condition: () => boolean | Promise<boolean>, label: string, timeoutMs = 8000) => {
     const end = Date.now() + timeoutMs
     while (!(await condition()) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20))
@@ -124,7 +145,20 @@ async function startHarness(memberNames: string[], options: {
   const instructed = options.instructedAtLaunch ?? memberNames
   await waitFor(() => instructed.every(name => requests.some(request => request.prompt.includes(`Work as ${name}`))), 'initial member turns')
   return {
-    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor, providerId: provider.id, upstreamUrl: upstream.url.toString(),
+    service, teamName, parentId, planId, plans, incarnationId, createdAt, memberIds, requests, leadRequests, replies, waitFor, providerId: provider.id, upstreamUrl: upstream.url.toString(),
+    async startLeader(sessionId: string) {
+      if (sessionId !== parentId) throw new Error('Fixture refuses a foreign leader')
+      if (service.hasSession(parentId)) return
+      await service.startSession(parentId, home, `ws://127.0.0.1:${bridge.port}/sdk/${parentId}?token=resumed-parent`, { providerId: provider.id, model: 'cheap', teamWorker: { parentSessionId: 'external', teamName: 'lead-fixture', memberId: 'lead', name: 'leader', systemPrompt: 'lead fixture' } })
+    },
+    async runtimeEvents(): Promise<Array<{ type: string; pid: number; sessionId: string; agent: string; model?: string; resumed?: string | null; request?: Record<string, unknown>; acknowledgement?: Record<string, unknown>; error?: string }>> {
+      try {
+        return (await readFile(join(home, 'fixture-runtime-controls.jsonl'), 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+        throw error
+      }
+    },
     memberRequests(name: string) {
       return requests.filter(request => request.agent === name)
     },
@@ -146,7 +180,7 @@ async function startHarness(memberNames: string[], options: {
     },
     async cleanup() {
       const runtime = await import('./teamPlanRuntime.js')
-      await runtime.stopTeamPlanRuntime(planId)
+      for (const plan of plans) await runtime.stopTeamPlanRuntime(plan.planId)
       await service.stopAllSessionsAndWait(1000)
       ProviderService.setServerPort(oldPort)
       bridge.stop(true)
@@ -179,6 +213,78 @@ async function userMessagesLead(h: Harness, toLead: string[] = []) {
 async function messageMember(h: Harness, to: string, from: string, text: string) {
   const { writeToMailbox } = await import('../../utils/teammateMailbox.js')
   await writeToMailbox(to, { from, text, timestamp: new Date().toISOString() }, h.teamName)
+}
+
+async function runtimeControl(h: Harness) {
+  const { getTeamRuntimeControlView } = await import('./teamRuntimeControlService.js')
+  const view = await getTeamRuntimeControlView(h.teamName, { leadSessionId: h.parentId, incarnationId: h.incarnationId })
+  if (!view) throw new Error('Reviewed fixture team must have a runtime control view')
+  return view
+}
+
+async function memberRuntimeIdentity(h: Harness, name: string): Promise<TeamMemberRuntimeIdentity> {
+  const view = await runtimeControl(h)
+  return { leadSessionId: h.parentId, incarnationId: h.incarnationId, expectedRevision: view.revision, sessionId: h.memberIds[name]! }
+}
+
+async function saveMemberRuntime(h: Harness, name: string, change: { providerId: string | null; modelId: string; effortLevel?: string }, identity?: TeamMemberRuntimeIdentity) {
+  const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
+  return changeTeamMemberRuntime(h.teamName, `${name}@${h.teamName}`, change, identity ?? await memberRuntimeIdentity(h, name))
+}
+
+async function reviewedPlan(h: Harness, planId?: string): Promise<TeamPlanRecord> {
+  const { getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
+  return JSON.parse(await readFile(join(getTeamDir(h.teamName), planId ? `plan-${planId}.json` : 'plan.json'), 'utf8'))
+}
+
+async function waitForInitialReports(h: Harness, names = Object.keys(h.memberIds)) {
+  await h.waitFor(async () => {
+    const reports = await h.leadNotifications()
+    return names.every(name => reports.some(report => report.from === name && report.type === 'idle_notification'))
+  }, 'initial worker transcripts and result reports')
+  await h.waitFor(() => h.leadRequests.length >= h.plans.length, 'all delayed initial lead model requests')
+  try {
+    await h.waitFor(async () => (await Promise.all(names.map(name => h.teamMember(name)))).every(member => member?.isActive === false), 'initial members idle')
+  } catch (error) {
+    const { readTeamFile } = await import('../../utils/swarm/teamHelpers.js')
+    const { getTeamRuntimeLaunches } = await import('./teamPlanRuntime.js')
+    console.error('[Team supervisor fixture] Initial idle timeout', JSON.stringify({
+      teamName: h.teamName,
+      expectedNames: names,
+      roster: readTeamFile(h.teamName)?.members,
+      launches: getTeamRuntimeLaunches(h.parentId, h.teamName).map(owner => ({
+        planId: owner.plan.planId, running: owner.running, stopped: owner.stopped, controlSequence: owner.controlSequence,
+        workers: [...owner.workers.values()].map(worker => ({
+          name: worker.member.name, sessionId: worker.sessionId, released: worker.released, starting: Boolean(worker.starting),
+          processGeneration: worker.processGeneration, lastResultAt: worker.lastResultAt,
+          processPresent: h.service.hasSession(worker.sessionId),
+        })),
+      })),
+      requests: h.requests,
+      notifications: await h.leadNotifications(),
+      runtimeEvents: await h.runtimeEvents(),
+    }))
+    throw error
+  }
+}
+
+async function pauseReviewedTeam(h: Harness) {
+  h.service.sendInterrupt(h.parentId)
+  await h.service.waitForTeamWorkersStopped(h.parentId)
+  const view = await runtimeControl(h)
+  expect(view.status).toBe('paused')
+  for (const sessionId of Object.values(h.memberIds)) expect(h.service.hasSession(sessionId)).toBe(false)
+  return view
+}
+
+async function resumeAction(h: Harness, requestId = crypto.randomUUID()): Promise<TeamRuntimeControlAction> {
+  const view = await runtimeControl(h)
+  return { leadSessionId: h.parentId, incarnationId: h.incarnationId, expectedRevision: view.revision, requestId }
+}
+
+async function resumeReviewedTeam(h: Harness, action?: TeamRuntimeControlAction) {
+  const control = await import('./teamRuntimeControlService.js')
+  return control.resumeReviewedTeam(h.teamName, action ?? await resumeAction(h), h.startLeader)
 }
 
 test('a member whose process died restarts from its own transcript when the lead messages it', async () => {
@@ -574,18 +680,26 @@ test('a team whose owner was lost is rehydrated dormant and its members restart 
     ), 'initial reader transcript to be written before losing its owner')
     const runtime = await import('./teamPlanRuntime.js')
     // Simulate a server restart: the processes and the in-memory owner are gone.
-    await h.service.stopSessionAndWait(h.memberIds.reader!)
+    await h.service.stopSessionAndWait(h.memberIds.reader!, 1000, { requireExit: true })
     runtime.forgetTeamPlanRuntimesForTests()
     expect(runtime.isTeamPlanRuntimeActive(h.planId)).toBe(false)
     expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
     expect(runtime.isTeamPlanRuntimeActive(h.planId)).toBe(true)
     await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'dormant member state')
     const before = h.memberRequests('reader').length
-    await messageMember(h, 'reader', 'team-lead', 'Resume after restart')
+    await messageMember(h, 'reader', 'team-lead', 'Held lead instruction before the user resumed the recovered owner')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await runtimeControl(h)).status).toBe('paused')
+    await userMessagesLead(h)
+    await messageMember(h, 'reader', 'team-lead', 'The user now asks you to resume after losing your owner')
     const restartedTurn = () => h.memberRequests('reader').slice(before)
-      .find(request => request.prompt.includes('Resume after restart'))
+      .find(request => request.prompt.includes('The user now asks you to resume after losing your owner'))
     await h.waitFor(() => restartedTurn() !== undefined, 'reader restarted after losing its owner')
     expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
+    expect(restartedTurn()?.prompt).toContain('Held lead instruction before the user resumed the recovered owner')
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, terminated: false })
   } finally {
     releaseInitialMember()
     await h.cleanup()
@@ -637,7 +751,7 @@ test('after a server restart the next lead start re-owns the team and restores i
     ), 'initial reader turn to finish')
     const runtime = await import('./teamPlanRuntime.js')
     const { ProviderService } = await import('./providerService.js')
-    await h.service.stopSessionAndWait(h.memberIds.reader!)
+    await h.service.stopSessionAndWait(h.memberIds.reader!, 1000, { requireExit: true })
     h.service.stopSession(h.parentId, { keepTeamWorkers: true })
     runtime.forgetTeamPlanRuntimesForTests()
     const control = spyOn(h.service, 'requestControl')
@@ -647,13 +761,186 @@ test('after a server restart the next lead start re-owns the team and restores i
     await h.waitFor(() => control.mock.calls.some(([sessionId, request]) => sessionId === h.parentId && (request as { subtype?: string }).subtype === 'team_runtime_snapshot'), 'restored roster')
     control.mockRestore()
     const before = h.memberRequests('reader').length
-    await messageMember(h, 'reader', 'team-lead', 'Pick up where you left off')
+    await messageMember(h, 'reader', 'team-lead', 'Held lead instruction from before a new user intent')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await runtimeControl(h)).status).toBe('paused')
+    await userMessagesLead(h)
+    await messageMember(h, 'reader', 'team-lead', 'The user now asks you to pick up where you left off')
     const restartedTurn = () => h.memberRequests('reader').slice(before)
-      .find(request => request.prompt.includes('Pick up where you left off'))
+      .find(request => request.prompt.includes('The user now asks you to pick up where you left off'))
     await h.waitFor(() => restartedTurn() !== undefined, 'reader restarted after server restart')
     expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
+    expect(restartedTurn()?.prompt).toContain('Held lead instruction from before a new user intent')
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, terminated: false })
   } finally {
     releaseInitialMember()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls retain the first ordinary user intent while the lead startup restores its lost owner', async () => {
+  const h = await startHarness(['reader'])
+  const runtime = await import('./teamPlanRuntime.js')
+  const plans = await import('../../utils/swarm/teamPlanStore.js')
+  const findPlan = plans.findTeamPlanForSession
+  let releaseLookup!: () => void
+  const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve })
+  let lookupHeld = false
+  let snapshotRestored = false
+  let lookupSpy: { mockRestore(): void } | undefined
+  let noticeSpy: { mockRestore(): void } | undefined
+  let controlSpy: { mockRestore(): void } | undefined
+  let firstIntent: Promise<void> | undefined
+  try {
+    const { ProviderService } = await import('./providerService.js')
+    const { readUnreadMessages } = await import('../../utils/teammateMailbox.js')
+    await waitForInitialReports(h)
+    const before = h.memberRequests('reader').length
+    runtime.forgetTeamPlanRuntimesForTests()
+    await h.service.stopSessionAndWait(h.memberIds.reader!, 1000, { requireExit: true })
+    await h.service.stopSessionAndWait(h.parentId, 1000, { keepTeamWorkers: true, requireExit: true })
+    await messageMember(h, 'reader', 'team-lead', 'Held mail predating the first user input after reconnect')
+    const persisted = await findPlan(h.parentId)
+    expect(persisted?.planId).toBe(h.planId)
+    let firstLookupClaimed = false
+    let synchronousIntentLookup = false
+    lookupSpy = spyOn(plans, 'findTeamPlanForSession').mockImplementation(async sessionId => {
+      if (sessionId !== h.parentId) return findPlan(sessionId)
+      if (!firstLookupClaimed) {
+        firstLookupClaimed = true
+        const result = await findPlan(sessionId)
+        lookupHeld = true
+        await lookupGate
+        return result
+      }
+      // Only the note's synchronously initiated read gets the same actual,
+      // unchanged persisted fixture record immediately. This removes disk
+      // scheduling from the microtask checkpoint; other reads stay real.
+      if (synchronousIntentLookup) return structuredClone(persisted)
+      return findPlan(sessionId)
+    })
+    const requestControl = h.service.requestControl.bind(h.service)
+    controlSpy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof requestControl>) => {
+      const response = await requestControl(...args)
+      if (args[0] === h.parentId && args[1].subtype === 'team_runtime_snapshot') snapshotRestored = true
+      return response
+    })
+    // An ordinary lead start invokes the real sessionStarted restoration hook.
+    await h.service.startSession(h.parentId, home, `ws://127.0.0.1:${ProviderService.getServerPort()}/sdk/${h.parentId}?token=first-intent-parent`, { providerId: h.providerId, model: 'cheap' })
+    await h.waitFor(() => lookupHeld, 'startup hook lookup held before returning its plan')
+    expect(runtime.isTeamPlanRuntimeActive(h.planId)).toBe(false)
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+
+    const send = h.service.sendMessage.bind(h.service)
+    const notices: string[] = []
+    noticeSpy = spyOn(h.service, 'sendMessage').mockImplementation(async (...args: Parameters<typeof send>) => {
+      if (args[0] !== h.parentId) return send(...args)
+      notices.push(String(args[1]))
+      return true
+    })
+    let intentSettled = false
+    let intentError: unknown
+    synchronousIntentLookup = true
+    // This is the server fresh-intent API, not an SDK user frame. Intercepting
+    // its synthetic notice proves the host gate, not print.ts mailbox polling.
+    firstIntent = runtime.noteLeadUserMessage(h.parentId).then(() => { intentSettled = true }, error => { intentSettled = true; intentError = error })
+    synchronousIntentLookup = false
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const returnedBeforeRestoration = intentSettled
+    releaseLookup()
+    await firstIntent
+    expect(intentError).toBeUndefined()
+    await h.waitFor(() => runtime.isTeamPlanRuntimeActive(h.planId) && snapshotRestored, 'the same startup restoration and SDK snapshot complete')
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect((await readUnreadMessages('reader', h.teamName)).some(message => message.text === 'Held mail predating the first user input after reconnect')).toBe(true)
+
+    await messageMember(h, 'reader', 'team-lead', 'Fresh lead instruction for the first user input after reconnect')
+    const resumed = () => h.memberRequests('reader').slice(before).find(request => request.prompt.includes('Fresh lead instruction for the first user input after reconnect'))
+    await h.waitFor(() => resumed() !== undefined, 'first fresh user intent survives asynchronous owner restoration')
+    expect(resumed()?.resumed).toBe(h.memberIds.reader)
+    expect(resumed()?.prompt).toContain('Held mail predating the first user input after reconnect')
+    expect(h.memberRequests('reader')).toHaveLength(before + 1)
+    expect(returnedBeforeRestoration).toBe(false)
+    expect(notices).toHaveLength(1)
+  } finally {
+    releaseLookup()
+    await firstIntent
+    if (lookupHeld && !snapshotRestored) await h.waitFor(() => snapshotRestored, 'pending startup restoration drains before cleanup').catch(() => {})
+    lookupSpy?.mockRestore()
+    noticeSpy?.mockRestore()
+    controlSpy?.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls let a newer Stop supersede an ordinary user note still awaiting its plan lookup', async () => {
+  const h = await startHarness(['reader', 'writer'])
+  const plans = await import('../../utils/swarm/teamPlanStore.js')
+  const findPlan = plans.findTeamPlanForSession
+  let releaseLookup!: () => void
+  const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve })
+  let lookupSpy: { mockRestore(): void } | undefined
+  let staleIntent: Promise<string[]> | undefined
+  try {
+    const { readUnreadMessages } = await import('../../utils/teammateMailbox.js')
+    await waitForInitialReports(h)
+    const firstPause = await pauseReviewedTeam(h)
+    const before = Object.fromEntries(['reader', 'writer'].map(name => [name, h.memberRequests(name).length]))
+    let claimed = false
+    let lookupHeld = false
+    let lookupHeldAt = 0
+    lookupSpy = spyOn(plans, 'findTeamPlanForSession').mockImplementation(async sessionId => {
+      const result = await findPlan(sessionId)
+      if (sessionId === h.parentId && !claimed) {
+        claimed = true
+        lookupHeldAt = Date.now()
+        lookupHeld = true
+        await lookupGate
+      }
+      return result
+    })
+    let staleIntentError: unknown
+    // This helper exercises only noteLeadUserMessage's server admission gate
+    // and intercepts its synthetic notice; it does not send an SDK user frame.
+    staleIntent = userMessagesLead(h).catch(error => { staleIntentError = error; return [] })
+    await h.waitFor(() => lookupHeld, 'ordinary input is held inside its actual plan lookup')
+    // Establish strict timestamp ordering, not a guessed I/O/supervisor delay.
+    await h.waitFor(() => Date.now() > lookupHeldAt, 'clock advances past the older input before Main Stop')
+    const newerPause = await pauseReviewedTeam(h)
+    expect(newerPause.epoch).toBeGreaterThan(firstPause.epoch)
+    releaseLookup()
+    await staleIntent
+    expect(staleIntentError).toBeUndefined()
+    lookupSpy.mockRestore()
+    lookupSpy = undefined
+
+    for (const name of ['reader', 'writer']) await messageMember(h, name, 'team-lead', `Reply to the user note that predates the newer Stop for ${name}`)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    for (const name of ['reader', 'writer']) {
+      expect(h.memberRequests(name)).toHaveLength(before[name]!)
+      expect(h.service.hasSession(h.memberIds[name]!)).toBe(false)
+      expect(await h.teamMember(name)).toMatchObject({ sessionId: h.memberIds[name], terminated: true, isActive: false })
+      expect((await readUnreadMessages(name, h.teamName)).some(message => message.text === `Reply to the user note that predates the newer Stop for ${name}`)).toBe(true)
+    }
+    const stillPaused = await runtimeControl(h)
+    expect(stillPaused.status).toBe('paused')
+    expect(stillPaused.epoch).toBe(newerPause.epoch)
+
+    await userMessagesLead(h)
+    for (const name of ['reader', 'writer']) await messageMember(h, name, 'team-lead', `Fresh instruction after the newer Stop for ${name}`)
+    for (const name of ['reader', 'writer']) {
+      const resumed = () => h.memberRequests(name).slice(before[name]).find(request => request.prompt.includes(`Fresh instruction after the newer Stop for ${name}`))
+      await h.waitFor(() => resumed() !== undefined, `truly fresh user input resumes ${name}`)
+      expect(resumed()?.resumed).toBe(h.memberIds[name])
+      expect(await h.teamMember(name)).toMatchObject({ sessionId: h.memberIds[name], terminated: false })
+    }
+  } finally {
+    releaseLookup()
+    await staleIntent
+    lookupSpy?.mockRestore()
     await h.cleanup()
   }
 }, 30_000)
@@ -823,18 +1110,36 @@ test('a member still waiting after a server restart gets its approved instructio
   try {
     const runtime = await import('./teamPlanRuntime.js')
     const { updateTask } = await import('../../utils/tasks.js')
-    await h.service.stopSessionAndWait(h.memberIds.recon!)
-    await h.service.stopSessionAndWait(h.memberIds.analyst!)
+    await waitForInitialReports(h, ['recon'])
+    await h.service.stopSessionAndWait(h.memberIds.recon!, 1000, { requireExit: true })
+    await h.service.stopSessionAndWait(h.memberIds.analyst!, 1000, { requireExit: true })
     runtime.forgetTeamPlanRuntimesForTests()
     expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
     await new Promise(resolve => setTimeout(resolve, 600))
     expect(h.analystBriefs()).toHaveLength(0)
 
+    const reconBefore = h.memberRequests('recon').length
+    await messageMember(h, 'analyst', 'recon', 'Held result written before fresh user resume')
+    await messageMember(h, 'analyst', 'team-lead', 'Held lead instruction for the recovered analyst')
     await updateTask(h.taskListId, h.map, { status: 'completed' })
+    await new Promise(resolve => setTimeout(resolve, 700))
+    // Recovery, ready tasks and queued peer/lead mail are not new human intent.
+    expect(h.analystBriefs()).toHaveLength(0)
+    expect(h.service.hasSession(h.memberIds.analyst!)).toBe(false)
+    expect(h.memberRequests('recon')).toHaveLength(reconBefore)
+    expect((await runtimeControl(h)).status).toBe('paused')
+
+    expect((await resumeReviewedTeam(h)).status).toBe('running')
     await h.waitFor(() => h.analystBriefs().length > 0, 'instructions after the restart')
     expect(h.service.hasSession(h.memberIds.analyst!)).toBe(true)
     // The rebuilt instructions carry the live task ids.
     expect(h.analystBriefs()[0]!.prompt).toContain(`\\"id\\":\\"${h.review}\\"`)
+    expect(h.analystBriefs()[0]!.prompt).toContain('Held result written before fresh user resume')
+    expect(h.analystBriefs()[0]!.prompt).toContain('Held lead instruction for the recovered analyst')
+    expect(await h.teamMember('analyst')).toMatchObject({ sessionId: h.memberIds.analyst })
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.analystBriefs()).toHaveLength(1)
+    expect(h.memberRequests('recon')).toHaveLength(reconBefore)
   } finally {
     await h.cleanup()
   }
@@ -844,16 +1149,26 @@ test('members written before deferred instructions rehydrate as already instruct
   const h = await startHarness(['reader'])
   try {
     const runtime = await import('./teamPlanRuntime.js')
+    await waitForInitialReports(h)
     // An older team file never carries awaitingDependencies.
     expect(await h.teamMember('reader')).not.toHaveProperty('awaitingDependencies')
-    await h.service.stopSessionAndWait(h.memberIds.reader!)
+    await h.service.stopSessionAndWait(h.memberIds.reader!, 1000, { requireExit: true })
     runtime.forgetTeamPlanRuntimesForTests()
     expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
     const before = h.requests.length
-    await messageMember(h, 'reader', 'team-lead', 'Resume after restart')
+    await messageMember(h, 'reader', 'team-lead', 'Held lead request for an already-instructed member')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.requests).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await runtimeControl(h)).status).toBe('paused')
+    await userMessagesLead(h)
+    await messageMember(h, 'reader', 'team-lead', 'Fresh user intent: resume the already-instructed member')
     await h.waitFor(() => h.requests.length > before, 'restarted member turn')
-    expect(h.requests.at(-1)?.prompt).toContain('Resume after restart')
+    expect(h.requests.at(-1)?.resumed).toBe(h.memberIds.reader)
+    expect(h.requests.at(-1)?.prompt).toContain('Fresh user intent: resume the already-instructed member')
+    expect(h.requests.at(-1)?.prompt).toContain('Held lead request for an already-instructed member')
     expect(h.requests.at(-1)?.prompt).not.toContain('Work as reader')
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, terminated: false })
   } finally {
     await h.cleanup()
   }
@@ -1086,82 +1401,86 @@ test('a member that cannot even answer a shutdown request is stopped, so the lea
   }
 }, 30_000)
 
-test("switching a running member's model applies at once and survives its restart", async () => {
+test('paused runtime controls save a model without starting a CLI, then explicitly resume the same conversation', async () => {
   const h = await startHarness(['reader'])
   try {
-    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
-    const { getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
-    const controls: unknown[] = []
-    const control = h.service.requestControl.bind(h.service)
-    const spy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof control>) => {
-      if (args[0] === h.memberIds.reader) controls.push(args[1])
-      return control(...args)
-    })
-    try {
-      // "opus" on this provider maps to its capable model.
-      const member = await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'opus' })
-      expect(member.model).toBe('capable')
-    } finally {
-      spy.mockRestore()
-    }
-    // Same provider: switched in place, the process keeps running.
-    expect(controls).toEqual([{ subtype: 'set_model', model: 'capable' }])
-    expect(h.service.hasSession(h.memberIds.reader!)).toBe(true)
-    expect((await h.teamMember('reader'))?.model).toBe('capable')
-    const plan = JSON.parse(await readFile(join(getTeamDir(h.teamName), 'plan.json'), 'utf8'))
-    expect(plan.approvedSnapshot.members.find((item: any) => item.id === 'reader').runtime.modelId).toBe('capable')
-
-    // A restart rebuilds the member from the approved record with the new model.
-    h.replies.push('FIXTURE_CRASH')
-    await messageMember(h, 'reader', 'team-lead', 'Check one more file')
-    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'crash')
+    await waitForInitialReports(h)
+    const paused = await pauseReviewedTeam(h)
+    const approvedBefore = (await reviewedPlan(h)).approvedSnapshot!
     const before = h.memberRequests('reader').length
-    await messageMember(h, 'reader', 'team-lead', 'Please continue')
-    await h.waitFor(() => h.memberRequests('reader').length > before, 'restarted turn')
-    expect(h.memberRequests('reader').at(-1)?.resumed).toBe(h.memberIds.reader!)
-    expect(h.memberRequests('reader').at(-1)?.model).toBe('capable')
+    const leadBefore = h.leadRequests.length
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+    expect(await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })).toMatchObject({ model: 'capable' })
+    const saved = await reviewedPlan(h)
+    expect(saved.members.find(member => member.id === 'reader')?.runtime.modelId).toBe('capable')
+    expect(saved.approvedSnapshot?.members.find(member => member.id === 'reader')?.runtime.modelId).toBe('capable')
+    expect(saved.approvedSnapshot).toMatchObject({ tasks: approvedBefore.tasks, leaderRuntime: approvedBefore.leaderRuntime, revision: approvedBefore.revision, approvedAt: approvedBefore.approvedAt, requestId: approvedBefore.requestId })
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, model: 'capable', terminated: true, isActive: false })
+    expect((await runtimeControl(h)).revision).toBeGreaterThan(paused.revision)
+    await new Promise(resolve => setTimeout(resolve, 600))
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect(h.leadRequests).toHaveLength(leadBefore)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+
+    const action = await resumeAction(h)
+    const resumed = await resumeReviewedTeam(h, action)
+    expect(resumed.status).toBe('running')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'real resumed model request')
+    expect(h.memberRequests('reader').at(-1)).toMatchObject({ resumed: h.memberIds.reader, model: 'capable' })
+    expect(h.memberRequests('reader').at(-1)?.prompt).toContain('explicitly resumed this team')
+    const acknowledgement = (await h.runtimeEvents()).find(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)
+    expect(acknowledgement).toMatchObject({ sessionId: h.parentId, acknowledgement: { team_name: h.teamName, incarnation_id: h.incarnationId, epoch: resumed.epoch, request_id: action.requestId } })
   } finally {
     await h.cleanup()
   }
 }, 30_000)
 
-test("an idle member switched to another provider restarts from its own conversation on that provider", async () => {
-  const h = await startHarness(['reader'])
+test('paused runtime controls save an archived member provider without changing the current approval', async () => {
+  const h = await startHarness(['reader', 'writer'], { planGroups: [['reader'], ['writer']] })
   try {
-    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
     const { ProviderService } = await import('./providerService.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
-    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
-    // Same loopback upstream, different provider: its model name shows which one the member uses.
-    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
-    const member = await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })
-    expect(member).toMatchObject({ model: 'other-model', providerId: other.id, providerName: 'other' })
-    await h.waitFor(() => h.service.hasSession(h.memberIds.reader!), 'member restarted')
-    expect(await h.teamMember('reader')).toMatchObject({ model: 'other-model', providerId: other.id, terminated: false })
-
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const currentBefore = await reviewedPlan(h)
+    const archivedBefore = await reviewedPlan(h, h.planId)
     const before = h.memberRequests('reader').length
-    await messageMember(h, 'reader', 'team-lead', 'Please continue')
-    await h.waitFor(() => h.memberRequests('reader').length > before, 'turn on the new provider')
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
+    expect(await saveMemberRuntime(h, 'reader', { providerId: other.id, modelId: 'other-model' })).toMatchObject({ model: 'other-model', providerId: other.id, providerName: 'other' })
+    const archived = await reviewedPlan(h, h.planId)
+    expect(archived.members.find(member => member.id === 'reader')?.runtime).toMatchObject({ providerId: other.id, modelId: 'other-model' })
+    expect(archived.approvedSnapshot?.members.find(member => member.id === 'reader')?.runtime).toMatchObject({ providerId: other.id, modelId: 'other-model' })
+    expect(archived.approvedSnapshot).toMatchObject({ tasks: archivedBefore.approvedSnapshot!.tasks, leaderRuntime: archivedBefore.approvedSnapshot!.leaderRuntime, requestId: archivedBefore.approvedSnapshot!.requestId })
+    expect(await reviewedPlan(h)).toEqual(currentBefore)
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, model: 'other-model', providerId: other.id, terminated: true })
+
+    expect((await resumeReviewedTeam(h)).status).toBe('running')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'same archived conversation on its saved provider')
     expect(h.memberRequests('reader').at(-1)).toMatchObject({ resumed: h.memberIds.reader!, model: 'other-model' })
   } finally {
     await h.cleanup()
   }
 }, 30_000)
 
-test("a busy member's provider is not switched under it", async () => {
+test('paused runtime controls refuse model saves while an idle or busy team is still running', async () => {
   const h = await startHarness(['reader'])
   try {
-    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
     const { ProviderService } = await import('./providerService.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
-    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: 'http://127.0.0.1:9', apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
+    await waitForInitialReports(h)
+    expect((await runtimeControl(h)).status).toBe('running')
+    const planBefore = await reviewedPlan(h)
+    await expect(saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })).rejects.toThrow('Pause the team')
+    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
     const release = h.holdReplies()
     try {
       await messageMember(h, 'reader', 'team-lead', 'Review the runner')
       await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === true, 'busy turn')
-      await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })).rejects.toThrow('change its provider once it is idle')
+      await expect(saveMemberRuntime(h, 'reader', { providerId: other.id, modelId: 'other-model' })).rejects.toThrow('Pause the team')
       expect((await h.teamMember('reader'))?.model).toBe('cheap')
+      expect(await reviewedPlan(h)).toEqual(planBefore)
     } finally {
       release()
     }
@@ -1237,52 +1556,763 @@ test('nothing else reaches a member while a command it runs is under way', async
   }
 }, 30_000)
 
-test("a reasoning effort change reaches the roster the desktop reads", async () => {
+test('paused runtime controls cancel an in-flight member command before explicit resume', async () => {
+  const h = await startHarness(['reader'])
+  let releaseReplies: (() => void) | undefined
+  try {
+    const { listTasks, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
+    const { readUnreadMessages } = await import('../../utils/teammateMailbox.js')
+    await waitForInitialReports(h)
+    const sessionId = h.memberIds.reader!
+    const unfinished = (await listTasks(getCanonicalTeamTaskListId(h.teamName))).find(task => task.owner === 'reader' && task.status !== 'completed')!
+    const before = h.memberRequests('reader').length
+    releaseReplies = h.holdReplies()
+    await messageMember(h, 'reader', 'user', '/compact')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'slash command accepted by the real fixture CLI')
+    const commandPrompt = h.memberRequests('reader').at(-1)!.prompt
+    expect(JSON.parse(commandPrompt)).toEqual([{ type: 'text', text: '/compact' }])
+    await h.waitFor(async () => !(await readUnreadMessages('reader', h.teamName)).some(message => message.from === 'user' && message.text === '/compact'), 'accepted command consumed from the mailbox')
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId, isActive: true, terminated: false })
+
+    // Main Stop physically cancels the accepted command; no result can clear
+    // its old turn state because this CLI has exited with its control revoked.
+    expect((await pauseReviewedTeam(h)).status).toBe('paused')
+    expect(h.service.hasSession(sessionId)).toBe(false)
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId, isActive: false, terminated: true })
+    releaseReplies()
+    releaseReplies = undefined
+    const resumed = await resumeReviewedTeam(h)
+    expect(resumed.status).toBe('running')
+    expect(resumed.error).toBeUndefined()
+    await h.waitFor(() => h.memberRequests('reader').length === before + 2, 'unfinished work resumes after the canceled command')
+    const continued = h.memberRequests('reader').at(-1)!
+    expect(continued.resumed).toBe(sessionId)
+    expect(continued.prompt).toContain('Continue only your unfinished ready tasks')
+    expect(continued.prompt).toContain(`#${unfinished.id} ${unfinished.subject}`)
+    expect(continued.prompt).not.toContain('/compact')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'resumed work completes its turn')
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.memberRequests('reader')).toHaveLength(before + 2)
+    expect(h.memberRequests('reader').filter(request => request.prompt === commandPrompt)).toHaveLength(1)
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId, terminated: false })
+  } finally {
+    releaseReplies?.()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls save and clear effort in the roster and approved snapshot without restarting', async () => {
   const h = await startHarness(['reader'])
   try {
-    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
-    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
-    await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'cheap', effortLevel: 'high' })
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+    const requestsBefore = h.requests.length
+    await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'cheap', effortLevel: 'high' })
     expect(await h.teamMember('reader')).toMatchObject({ model: 'cheap', effortLevel: 'high' })
-    await changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'cheap' })
+    expect((await reviewedPlan(h)).approvedSnapshot!.members[0]!.runtime.effortLevel).toBe('high')
+    await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'cheap' })
     expect((await h.teamMember('reader') as any).effortLevel).toBeUndefined()
+    expect((await reviewedPlan(h)).approvedSnapshot!.members[0]!.runtime.effortLevel).toBeUndefined()
+    expect(h.requests).toHaveLength(requestsBefore)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
+    expect((await runtimeControl(h)).status).toBe('paused')
   } finally {
     await h.cleanup()
   }
 }, 30_000)
 
-test('a model switch the member cannot take changes nothing, and a failed restart keeps the previous provider', async () => {
+test('paused runtime controls reject an unavailable provider without changing approved work or starting a CLI', async () => {
   const h = await startHarness(['reader'])
   try {
-    const { changeTeamMemberRuntime } = await import('./teamPlanRuntime.js')
-    const { ProviderService } = await import('./providerService.js')
-    const { getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
-    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'idle member')
-    const planRuntime = async () => JSON.parse(await readFile(join(getTeamDir(h.teamName), 'plan.json'), 'utf8')).approvedSnapshot.members[0].runtime
-    // The live member refuses the switch.
-    const control = h.service.requestControl.bind(h.service)
-    const spy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof control>) => {
-      if (args[0] === h.memberIds.reader && (args[1] as { subtype?: string }).subtype === 'set_model') throw new Error('Control request timed out')
-      return control(...args)
-    })
-    try {
-      await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: h.providerId, modelId: 'opus' })).rejects.toThrow('Could not switch reader')
-    } finally {
-      spy.mockRestore()
-    }
-    expect((await h.teamMember('reader'))?.model).toBe('cheap')
-    expect((await planRuntime()).modelId).toBe('cheap')
-
-    // A restart on another provider that fails (the fixture member dies when a new process is told its model).
-    const other = await new ProviderService().addProvider({ presetId: 'custom', name: 'other', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'other-model', sonnet: 'other-model', opus: 'other-model', haiku: 'other-model' } })
-    process.env.FIXTURE_EXIT_ON_SET_MODEL = 'reader'
-    await expect(changeTeamMemberRuntime(h.teamName, `reader@${h.teamName}`, { providerId: other.id, modelId: 'other-model' })).rejects.toThrow('could not start on other')
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const planBefore = await reviewedPlan(h)
+    const controlBefore = await runtimeControl(h)
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+    const requestsBefore = h.requests.length
+    await expect(saveMemberRuntime(h, 'reader', { providerId: 'missing-provider-fixture', modelId: 'other-model' })).rejects.toThrow()
     expect(await h.teamMember('reader')).toMatchObject({ model: 'cheap', providerId: h.providerId })
-    expect(await planRuntime()).toMatchObject({ providerId: h.providerId, modelId: 'cheap' })
+    expect(await reviewedPlan(h)).toEqual(planBefore)
+    expect(await runtimeControl(h)).toEqual(controlBefore)
+    expect(h.requests).toHaveLength(requestsBefore)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
   } finally {
-    delete process.env.FIXTURE_EXIT_ON_SET_MODEL
     await h.cleanup()
   }
 }, 30_000)
+
+test('paused runtime controls stop idle workers even after the lead process is missing', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await waitForInitialReports(h)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(true)
+    await h.service.stopSessionAndWait(h.parentId, 1000, { keepTeamWorkers: true, requireExit: true })
+    expect(h.service.hasSession(h.parentId)).toBe(false)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(true)
+    const before = h.memberRequests('reader').length
+    // No SDK socket exists for the lead, but Stop still owns the worker exits.
+    expect(h.service.sendInterrupt(h.parentId)).toBe(false)
+    await h.service.waitForTeamWorkersStopped(h.parentId)
+    expect((await runtimeControl(h)).status).toBe('paused')
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect(await h.teamMember('reader')).toMatchObject({ sessionId: h.memberIds.reader, terminated: true, isActive: false })
+    expect(h.memberRequests('reader')).toHaveLength(before)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls reject a stale save revision and preserve the first saved model', async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const stale = await memberRuntimeIdentity(h, 'writer')
+    await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })
+    const firstSaved = await reviewedPlan(h)
+    const current = await runtimeControl(h)
+    await expect(saveMemberRuntime(h, 'writer', { providerId: h.providerId, modelId: 'opus' }, stale)).rejects.toThrow('Team control changed')
+    expect(await reviewedPlan(h)).toEqual(firstSaved)
+    expect((await reviewedPlan(h)).approvedSnapshot!.members.find(member => member.id === 'reader')!.runtime.modelId).toBe('capable')
+    expect((await reviewedPlan(h)).approvedSnapshot!.members.find(member => member.id === 'writer')!.runtime.modelId).toBe('cheap')
+    expect(await runtimeControl(h)).toEqual(current)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+for (const mismatch of ['lead session', 'member session'] as const) {
+  test(`paused runtime controls reject a mismatched ${mismatch} without mutating approvals`, async () => {
+    const h = await startHarness(['reader', 'writer'])
+    try {
+      await waitForInitialReports(h)
+      await pauseReviewedTeam(h)
+      const identity = await memberRuntimeIdentity(h, 'reader')
+      const stale = { ...identity, ...(mismatch === 'lead session' ? { leadSessionId: 'foreign-lead-session' } : { sessionId: h.memberIds.writer! }) }
+      const planBefore = await reviewedPlan(h)
+      const controlBefore = await runtimeControl(h)
+      const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+      await expect(saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' }, stale)).rejects.toThrow('identity changed')
+      expect(await reviewedPlan(h)).toEqual(planBefore)
+      expect(await runtimeControl(h)).toEqual(controlBefore)
+      expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
+    } finally {
+      await h.cleanup()
+    }
+  }, 30_000)
+}
+
+test('paused runtime controls reject an old incarnation after a same-name team is recreated', async () => {
+  const h = await startHarness(['reader'])
+  const { readTeamFile, writeTeamFileAsync } = await import('../../utils/swarm/teamHelpers.js')
+  let original: ReturnType<typeof readTeamFile> = null
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const stale = await memberRuntimeIdentity(h, 'reader')
+    const planBefore = await reviewedPlan(h)
+    original = readTeamFile(h.teamName)
+    if (!original) throw new Error('Fixture team missing')
+    // Same team name, lead and member session: createdAt makes this a new team.
+    await writeTeamFileAsync(h.teamName, { ...original, createdAt: original.createdAt + 1 })
+    await expect(saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' }, stale)).rejects.toThrow('Team identity changed')
+    expect(readTeamFile(h.teamName)?.createdAt).toBe(original.createdAt + 1)
+    expect(readTeamFile(h.teamName)?.members.find(member => member.name === 'reader')?.model).toBe('cheap')
+    expect(await reviewedPlan(h)).toEqual(planBefore)
+  } finally {
+    if (original) await writeTeamFileAsync(h.teamName, original)
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls resume every ready unfinished member once and skip completed or unassigned work', async () => {
+  const h = await startHarness(['reader', 'writer', 'done', 'unassigned'])
+  try {
+    const { listTasks, updateTask, deleteTask, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const listId = getCanonicalTeamTaskListId(h.teamName)
+    const tasks = await listTasks(listId)
+    await updateTask(listId, tasks.find(task => task.owner === 'done')!.id, { status: 'completed' })
+    await deleteTask(listId, tasks.find(task => task.owner === 'unassigned')!.id)
+    const before = Object.fromEntries(['reader', 'writer', 'done', 'unassigned'].map(name => [name, h.memberRequests(name).length]))
+    expect((await runtimeControl(h)).resumeEligibleCount).toBe(2)
+    const action = await resumeAction(h)
+    const [first, duplicate] = await Promise.all([resumeReviewedTeam(h, action), resumeReviewedTeam(h, action)])
+    expect(first.status).toBe('running')
+    expect(duplicate).toEqual(first)
+    await h.waitFor(() => ['reader', 'writer'].every(name => h.memberRequests(name).length === before[name]! + 1), 'both ready conversations resumed')
+    for (const name of ['reader', 'writer']) expect(h.memberRequests(name).at(-1)).toMatchObject({ resumed: h.memberIds[name], model: 'cheap' })
+    expect((await resumeReviewedTeam(h, action)).status).toBe('running')
+    await new Promise(resolve => setTimeout(resolve, 650))
+    for (const name of ['reader', 'writer']) expect(h.memberRequests(name)).toHaveLength(before[name]! + 1)
+    for (const name of ['done', 'unassigned']) {
+      expect(h.memberRequests(name)).toHaveLength(before[name]!)
+      expect(h.service.hasSession(h.memberIds[name]!)).toBe(false)
+    }
+    const acknowledgements = (await h.runtimeEvents()).filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)
+    expect(acknowledgements).toHaveLength(1)
+    expect((await listTasks(listId)).find(task => task.owner === 'done')?.status).toBe('completed')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls retry a failed leader snapshot before acknowledging explicit resume', async () => {
+  const h = await startHarness(['reader'])
+  let controlSpy: { mockRestore(): void } | undefined
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    await h.service.stopSessionAndWait(h.parentId, 1000, { keepTeamWorkers: true, requireExit: true })
+    expect(h.service.hasSession(h.parentId)).toBe(false)
+    const before = h.memberRequests('reader').length
+    const memberStartsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent === 'reader')
+    const action = await resumeAction(h)
+    const requestControl = h.service.requestControl.bind(h.service)
+    let snapshotCalls = 0
+    let realSnapshotAcks = 0
+    const protocolOrder: string[] = []
+    controlSpy = spyOn(h.service, 'requestControl').mockImplementation(async (...args: Parameters<typeof requestControl>) => {
+      if (args[0] === h.parentId && args[1].subtype === 'team_runtime_snapshot' && args[1].team_name === h.teamName) {
+        const attempt = ++snapshotCalls
+        protocolOrder.push(`snapshot-request-${attempt}`)
+        if (attempt === 1) {
+          // An async pre-send failure leaves the real fixture CLI without a
+          // snapshot. Let the caller observe the owned restoration promise.
+          await new Promise<void>(resolve => setImmediate(resolve))
+          throw new Error('Fixture snapshot rejected before team context installation')
+        }
+        const response = await requestControl(...args)
+        realSnapshotAcks++
+        protocolOrder.push(`snapshot-ack-${attempt}`)
+        return response
+      }
+      if (args[0] === h.parentId && args[1].subtype === 'team_runtime_resume') protocolOrder.push('resume-request')
+      const response = await requestControl(...args)
+      if (args[0] === h.parentId && args[1].subtype === 'team_runtime_resume') protocolOrder.push('resume-ack')
+      return response
+    })
+    const failed = await resumeReviewedTeam(h, action)
+    expect(failed.status).toBe('partial')
+    expect(failed.error).toContain('snapshot rejected')
+    expect(snapshotCalls).toBe(1)
+    expect(realSnapshotAcks).toBe(0)
+    expect(protocolOrder).toEqual(['snapshot-request-1'])
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent === 'reader')).toEqual(memberStartsBefore)
+    expect(h.service.hasSession(h.parentId)).toBe(true)
+    const leaderStartsAfterFailure = (await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.sessionId === h.parentId)
+    expect(leaderStartsAfterFailure).toHaveLength(2)
+
+    // Drain rejection/finally microtasks so an empty restoration map cannot be
+    // mistaken for a successfully installed roster on this same live lead.
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const retried = await resumeReviewedTeam(h, action)
+    expect(retried.status).toBe('running')
+    expect(snapshotCalls).toBe(2)
+    expect(realSnapshotAcks).toBe(1)
+    expect(protocolOrder).toEqual(['snapshot-request-1', 'snapshot-request-2', 'snapshot-ack-2', 'resume-request', 'resume-ack'])
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.sessionId === h.parentId)).toEqual(leaderStartsAfterFailure)
+    const acknowledgements = (await h.runtimeEvents()).filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)
+    expect(acknowledgements).toHaveLength(1)
+    expect(acknowledgements[0]?.acknowledgement).toEqual({ team_name: h.teamName, incarnation_id: h.incarnationId, epoch: retried.epoch, request_id: action.requestId })
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'worker resumes only after snapshot retry and matched resume ACK')
+    expect(h.memberRequests('reader').at(-1)?.resumed).toBe(h.memberIds.reader)
+    // This proves the host/fixture protocol order, not print.ts mail polling.
+  } finally {
+    controlSpy?.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls confirm the real lead resume handshake even when no worker is eligible', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    const { listTasks, updateTask, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const listId = getCanonicalTeamTaskListId(h.teamName)
+    for (const task of await listTasks(listId)) await updateTask(listId, task.id, { status: 'completed' })
+    await h.service.stopSessionAndWait(h.parentId, 1000, { keepTeamWorkers: true, requireExit: true })
+    const memberRequestsBefore = h.requests.length
+    const leadRequestsBefore = h.leadRequests.length
+    expect((await runtimeControl(h)).resumeEligibleCount).toBe(0)
+    const action = await resumeAction(h)
+    const resumed = await resumeReviewedTeam(h, action)
+    expect(resumed.status).toBe('running')
+    expect(h.service.hasSession(h.parentId)).toBe(true)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect(h.requests).toHaveLength(memberRequestsBefore)
+    expect(h.leadRequests).toHaveLength(leadRequestsBefore)
+    const events = await h.runtimeEvents()
+    expect(events.filter(event => event.type === 'process-start' && event.sessionId === h.parentId)).toHaveLength(2)
+    expect(events.filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)).toEqual([
+      expect.objectContaining({ sessionId: h.parentId, request: expect.objectContaining({ team_name: h.teamName, created_at: h.createdAt, incarnation_id: h.incarnationId, epoch: resumed.epoch, request_id: action.requestId }), acknowledgement: { team_name: h.teamName, incarnation_id: h.incarnationId, epoch: resumed.epoch, request_id: action.requestId } }),
+    ])
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls release a blocked member once its unfinished task becomes ready', async () => {
+  const h = await startDependentTeam()
+  try {
+    const { updateTask } = await import('../../utils/tasks.js')
+    await waitForInitialReports(h, ['recon'])
+    await pauseReviewedTeam(h)
+    expect((await runtimeControl(h)).resumeEligibleCount).toBe(1)
+    const before = h.memberRequests('recon').length
+    expect((await resumeReviewedTeam(h)).status).toBe('running')
+    await h.waitFor(() => h.memberRequests('recon').length === before + 1, 'ready recon resumed')
+    expect(h.analystBriefs()).toHaveLength(0)
+    expect(h.service.hasSession(h.memberIds.analyst!)).toBe(false)
+    await updateTask(h.taskListId, h.map, { status: 'completed' })
+    await h.waitFor(() => h.analystBriefs().length === 1, 'analyst resumes only after dependency completion')
+    expect(h.analystBriefs()[0]?.prompt).toContain(`#${h.review}`)
+    expect(h.service.hasSession(h.memberIds.analyst!)).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.analystBriefs()).toHaveLength(1)
+    expect(h.memberRequests('recon')).toHaveLength(before + 1)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls expose a failed provider and retry the same request without duplicating admitted members', async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    const { ProviderService } = await import('./providerService.js')
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const providers = new ProviderService()
+    const other = await providers.addProvider({ presetId: 'custom', name: 'temporary writer provider', baseUrl: h.upstreamUrl, apiKey: 'fake', models: { main: 'writer-model', sonnet: 'writer-model', opus: 'writer-model', haiku: 'writer-model' } })
+    await saveMemberRuntime(h, 'writer', { providerId: other.id, modelId: 'writer-model' })
+    await providers.deleteProvider(other.id)
+    const readerBefore = h.memberRequests('reader').length
+    const writerBefore = h.memberRequests('writer').length
+    const action = await resumeAction(h)
+    const first = await resumeReviewedTeam(h, action)
+    expect(first.status).toBe('partial')
+    expect(first.error).toContain('Some members could not resume')
+    expect(first.members.find(member => member.name === 'writer')).toMatchObject({ status: 'failed', sessionId: h.memberIds.writer, error: expect.any(String) })
+    await h.waitFor(() => h.memberRequests('reader').length === readerBefore + 1, 'valid reader admitted')
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'admitted reader finishes before retry')
+    const replay = await resumeReviewedTeam(h, action)
+    expect(replay.status).toBe('partial')
+    expect(replay.members.find(member => member.name === 'writer')?.error).toBeTruthy()
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.memberRequests('reader')).toHaveLength(readerBefore + 1)
+    expect(h.memberRequests('writer')).toHaveLength(writerBefore)
+    expect(h.service.hasSession(h.memberIds.writer!)).toBe(false)
+    expect(await h.teamMember('writer')).toMatchObject({ sessionId: h.memberIds.writer, terminated: true, isActive: false, lastError: expect.any(String) })
+    expect((await reviewedPlan(h)).approvedSnapshot!.members.find(member => member.id === 'writer')!.runtime).toMatchObject({ providerId: other.id, modelId: 'writer-model' })
+
+    // A reloaded client loses its in-memory request ID. The durable partial
+    // view still offers only the unadmitted writer, so a fresh ID must not
+    // purchase another reader turn in this same human resume epoch.
+    expect((await runtimeControl(h)).resumeEligibleCount).toBe(1)
+    const freshClientAction = await resumeAction(h)
+    expect(freshClientAction.requestId).not.toBe(action.requestId)
+    const freshClientRetry = await resumeReviewedTeam(h, freshClientAction)
+    expect(freshClientRetry.status).toBe('partial')
+    expect(freshClientRetry.members.filter(member => member.error).map(member => member.name)).toEqual(['writer'])
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.memberRequests('reader')).toHaveLength(readerBefore + 1)
+    expect(h.memberRequests('writer')).toHaveLength(writerBefore)
+    expect(freshClientRetry.epoch).toBe(first.epoch)
+    expect((await runtimeControl(h)).resumeEligibleCount).toBe(1)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls hold a newly ready member after provider failure until another confirmed human resume', async () => {
+  const h = await startHarness(['reader', 'writer'], {
+    tasks: [
+      { id: 'read', subject: 'Read the release', ownerId: 'reader', dependencies: [] },
+      { id: 'write', subject: 'Write the release review', ownerId: 'writer', dependencies: ['read'] },
+    ],
+    instructedAtLaunch: ['reader'],
+  })
+  let temporaryRequests = 0
+  const temporaryUpstream = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { temporaryRequests++; return new Response('temporary writer result') } })
+  let providerReads: { mockRestore(): void } | undefined
+  try {
+    const { ProviderService } = await import('./providerService.js')
+    const { listTasks, updateTask, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
+    const { readTeamRuntimeControl } = await import('../../utils/swarm/teamRuntimeControlStore.js')
+    await waitForInitialReports(h, ['reader'])
+    await pauseReviewedTeam(h)
+    const providers = new ProviderService()
+    const temporary = await providers.addProvider({ presetId: 'custom', name: 'deferred writer provider', baseUrl: temporaryUpstream.url.toString(), apiKey: 'fake-writer', models: { main: 'temporary-writer', sonnet: 'temporary-writer', opus: 'temporary-writer', haiku: 'temporary-writer' } })
+    await saveMemberRuntime(h, 'writer', { providerId: temporary.id, modelId: 'temporary-writer' })
+    const beforeReader = h.memberRequests('reader').length
+    const action = await resumeAction(h)
+    expect((await resumeReviewedTeam(h, action)).status).toBe('running')
+    await h.waitFor(() => h.memberRequests('reader').length === beforeReader + 1, 'only the unblocked reader resumes')
+    expect(h.memberRequests('writer')).toHaveLength(0)
+    expect(h.service.hasSession(h.memberIds.writer!)).toBe(false)
+    await providers.deleteProvider(temporary.id)
+    const getProvider = ProviderService.prototype.getProvider
+    let missingProviderReads = 0
+    providerReads = spyOn(ProviderService.prototype, 'getProvider').mockImplementation(async function(this: InstanceType<typeof ProviderService>, id) {
+      if (id === temporary.id) missingProviderReads++
+      return getProvider.call(this, id)
+    })
+    const listId = getCanonicalTeamTaskListId(h.teamName)
+    const tasks = await listTasks(listId)
+    const readerTask = tasks.find(task => task.owner === 'reader')!
+    const writerStartsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent === 'writer')
+    await updateTask(listId, readerTask.id, { status: 'completed' })
+    await h.waitFor(async () => {
+      const current = await runtimeControl(h)
+      return current.status === 'partial' && current.members.some(member => member.name === 'writer' && member.status === 'failed' && Boolean(member.error))
+    }, 'newly ready writer failure is durably visible')
+    const failed = await runtimeControl(h)
+    expect(failed.error).toBeTruthy()
+    const durable = await readTeamRuntimeControl(h.teamName, { leadSessionId: h.parentId, incarnationId: h.incarnationId })
+    expect(durable?.status).toBe('partial')
+    expect(durable?.resume?.requestId).toBe(action.requestId)
+    expect(durable?.resume?.eligibleSessionIds).toContain(h.memberIds.writer!)
+    expect(durable?.resume?.startedSessionIds).toContain(h.memberIds.reader!)
+    expect(durable?.resume?.startedSessionIds).not.toContain(h.memberIds.writer!)
+    expect(durable?.memberErrors?.[h.memberIds.writer!]).toBeTruthy()
+    expect(missingProviderReads).toBe(1)
+    await new Promise(resolve => setTimeout(resolve, 750))
+    expect(missingProviderReads).toBe(1)
+    expect((await runtimeControl(h)).revision).toBe(failed.revision)
+    expect(h.memberRequests('writer')).toHaveLength(0)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent === 'writer')).toEqual(writerStartsBefore)
+    expect(temporaryRequests).toBe(0)
+
+    expect((await resumeReviewedTeam(h, action)).status).toBe('partial')
+    expect(missingProviderReads).toBe(2)
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(missingProviderReads).toBe(2)
+    expect(h.memberRequests('reader')).toHaveLength(beforeReader + 1)
+    expect(h.memberRequests('writer')).toHaveLength(0)
+    providerReads.mockRestore()
+    providerReads = undefined
+
+    await pauseReviewedTeam(h)
+    await saveMemberRuntime(h, 'writer', { providerId: h.providerId, modelId: 'opus' })
+    expect((await resumeReviewedTeam(h)).status).toBe('running')
+    await h.waitFor(() => h.memberRequests('writer').length === 1, 'repaired writer resumes in its assigned conversation')
+    expect(h.memberRequests('writer')[0]?.model).toBe('capable')
+    expect(await h.teamMember('writer')).toMatchObject({ sessionId: h.memberIds.writer, terminated: false, providerId: h.providerId, model: 'capable' })
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent === 'writer').at(-1)).toMatchObject({ sessionId: h.memberIds.writer, model: 'capable' })
+    expect(h.memberRequests('reader')).toHaveLength(beforeReader + 1)
+    expect(temporaryRequests).toBe(0)
+  } finally {
+    providerReads?.mockRestore()
+    try { await h.cleanup() } finally { temporaryUpstream.stop(true) }
+  }
+}, 30_000)
+
+test('paused runtime controls restore a paused owner after restart without old mail waking its members', async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    const runtime = await import('./teamPlanRuntime.js')
+    const { readUnreadMessages } = await import('../../utils/teammateMailbox.js')
+    await waitForInitialReports(h)
+    const paused = await pauseReviewedTeam(h)
+    await messageMember(h, 'writer', 'reader', 'held peer result from before the server restart')
+    await messageMember(h, 'writer', 'team-lead', 'held lead instruction from before the server restart')
+    const requestsBefore = h.requests.length
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent !== 'leader')
+    const approvedBefore = (await reviewedPlan(h)).approvedSnapshot
+    await h.service.stopSessionAndWait(h.parentId, 1000, { keepTeamWorkers: true, requireExit: true })
+    runtime.forgetTeamPlanRuntimesForTests()
+    expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
+    await h.startLeader(h.parentId)
+    await new Promise(resolve => setTimeout(resolve, 700))
+    const restored = await runtimeControl(h)
+    expect(restored.status).toBe('paused')
+    expect(restored.epoch).toBeGreaterThanOrEqual(paused.epoch)
+    expect(h.requests).toHaveLength(requestsBefore)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start' && event.agent !== 'leader')).toEqual(startsBefore)
+    expect((await readUnreadMessages('writer', h.teamName)).map(message => message.text)).toEqual(expect.arrayContaining(['held peer result from before the server restart', 'held lead instruction from before the server restart']))
+    expect((await reviewedPlan(h)).approvedSnapshot).toEqual(approvedBefore)
+    for (const sessionId of Object.values(h.memberIds)) expect(h.service.hasSession(sessionId)).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls keep members stopped when the real lead refuses the resume handshake', async () => {
+  process.env.FIXTURE_TEAM_RUNTIME_RESUME_REJECT = '1'
+  const h = await startHarness(['reader'])
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const before = h.requests.length
+    const startsBefore = (await h.runtimeEvents()).filter(event => event.type === 'process-start')
+    const action = await resumeAction(h)
+    const rejected = await resumeReviewedTeam(h, action)
+    expect(rejected.status).toBe('partial')
+    expect(rejected.error).toContain('Fixture lead refused')
+    expect(h.requests).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'process-start')).toEqual(startsBefore)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'resume-rejected' && event.request?.request_id === action.requestId)).toHaveLength(1)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls let a later Stop supersede an in-flight lead resume acknowledgement', async () => {
+  process.env.FIXTURE_TEAM_RUNTIME_RESUME_DELAY_MS = '400'
+  const h = await startHarness(['reader'])
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const before = h.requests.length
+    const action = await resumeAction(h)
+    // Attach rejection handling before delivering the competing Stop.
+    const pending = resumeReviewedTeam(h, action).then(value => ({ value, error: undefined }), error => ({ value: undefined, error: error as Error }))
+    await h.waitFor(async () => (await h.runtimeEvents()).some(event => event.type === 'resume-received' && event.request?.request_id === action.requestId), 'resume reaches the real fixture lead')
+    const stopped = await pauseReviewedTeam(h)
+    const outcome = await pending
+    expect(outcome.error?.message).toContain('newer pause takes precedence')
+    const settled = await runtimeControl(h)
+    expect(settled.status).toBe('paused')
+    expect(settled.epoch).toBe(stopped.epoch)
+    expect(h.requests).toHaveLength(before)
+    expect(h.service.hasSession(h.memberIds.reader!)).toBe(false)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)).toHaveLength(0)
+    await expect(resumeReviewedTeam(h, action)).rejects.toThrow('superseded by a pause')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls repair a failed delivered receipt without resending the admitted model turn', async () => {
+  const h = await startHarness(['reader'])
+  const store = await import('../../utils/swarm/teamRuntimeControlStore.js')
+  const mutate = store.mutateTeamRuntimeControl
+  let releaseReplies: (() => void) | undefined
+  let write: { mockRestore(): void } | undefined
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const action = await resumeAction(h)
+    const before = h.memberRequests('reader').length
+    releaseReplies = h.holdReplies()
+    let receiptFailed = false
+    write = spyOn(store, 'mutateTeamRuntimeControl').mockImplementation((name, identity, update) => mutate(name, identity, async current => {
+      const next = await update(current)
+      if (!receiptFailed && name === h.teamName && next?.status === 'resuming' && next.resume?.requestId === action.requestId && next.resume.startedSessionIds.length > 0) {
+        receiptFailed = true
+        throw new Error('Fixture durable started-member receipt write failed')
+      }
+      return next
+    }))
+    const resumed = await resumeReviewedTeam(h, action)
+    expect(receiptFailed).toBe(true)
+    expect(resumed.status).toBe('running')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'first real admitted provider turn')
+    expect(await h.teamMember('reader')).toMatchObject({ isActive: true, terminated: false })
+    expect((await h.teamMember('reader') as { lastError?: string }).lastError).toBeUndefined()
+    const repaired = await store.readTeamRuntimeControl(h.teamName, { leadSessionId: h.parentId, incarnationId: h.incarnationId })
+    expect(repaired?.resume?.startedSessionIds).toContain(h.memberIds.reader!)
+    expect((await resumeReviewedTeam(h, action)).status).toBe('running')
+    releaseReplies()
+    releaseReplies = undefined
+    await h.waitFor(async () => (await h.teamMember('reader'))?.isActive === false, 'admitted turn finishes')
+    expect((await resumeReviewedTeam(h, action)).status).toBe('running')
+    await new Promise(resolve => setTimeout(resolve, 650))
+    expect(h.memberRequests('reader')).toHaveLength(before + 1)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'resume-acknowledged' && event.request?.request_id === action.requestId)).toHaveLength(1)
+  } finally {
+    releaseReplies?.()
+    write?.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls remain editable and resumable when Stop wins while the durable reservation returns', async () => {
+  const h = await startHarness(['reader'])
+  const store = await import('../../utils/swarm/teamRuntimeControlStore.js')
+  const mutate = store.mutateTeamRuntimeControl
+  let releaseReservation!: () => void
+  const reservationGate = new Promise<void>(resolve => { releaseReservation = resolve })
+  let write: { mockRestore(): void } | undefined
+  let pending: Promise<{ value: Awaited<ReturnType<typeof resumeReviewedTeam>> | undefined; error: Error | undefined }> | undefined
+  try {
+    await waitForInitialReports(h)
+    await pauseReviewedTeam(h)
+    const action = await resumeAction(h)
+    const before = h.memberRequests('reader').length
+    let reservationHeld = false
+    write = spyOn(store, 'mutateTeamRuntimeControl').mockImplementation(async (name, identity, update) => {
+      // The durable write and its lock really finish; only the API's return is
+      // held, so a concurrent Stop can persist its newer epoch normally.
+      const reserved = await mutate(name, identity, update)
+      if (!reservationHeld && name === h.teamName && reserved.status === 'resuming' && reserved.resume?.requestId === action.requestId && reserved.resume.startedSessionIds.length === 0) {
+        reservationHeld = true
+        await reservationGate
+      }
+      return reserved
+    })
+    pending = resumeReviewedTeam(h, action).then(value => ({ value, error: undefined }), error => ({ value: undefined, error: error as Error }))
+    await h.waitFor(() => reservationHeld, 'durable resuming reservation written, return held')
+    const stopped = await pauseReviewedTeam(h)
+    releaseReservation()
+    const superseded = await pending
+    expect(superseded.error?.message).toContain('newer pause takes precedence')
+    expect((await runtimeControl(h)).epoch).toBe(stopped.epoch)
+    expect((await h.runtimeEvents()).filter(event => event.type === 'resume-received' && event.request?.request_id === action.requestId)).toHaveLength(0)
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    write.mockRestore()
+    write = undefined
+
+    // No stale controlResuming latch may poison the newer paused generation.
+    expect(await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })).toMatchObject({ model: 'capable' })
+    expect((await resumeReviewedTeam(h)).status).toBe('running')
+    await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'new generation can really resume')
+    expect(h.memberRequests('reader').at(-1)).toMatchObject({ resumed: h.memberIds.reader, model: 'capable' })
+    const { getTeamRuntimeLaunches } = await import('./teamPlanRuntime.js')
+    expect(getTeamRuntimeLaunches(h.parentId, h.teamName).every(owner => owner.controlResuming !== true)).toBe(true)
+  } finally {
+    releaseReservation()
+    await pending
+    write?.mockRestore()
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('paused runtime controls report partial and retain a late spawned session until physical exit is confirmed', async () => {
+  const h = await startHarness(['reader'])
+  type OwnedCli = { pid: number; exitCode: number | null; exited: Promise<number>; kill(signal?: NodeJS.Signals): void }
+  const lifecycle = h.service as unknown as { stopProcessAndWait(id: string, session: { proc: OwnedCli }, timeoutMs: number, requireExit?: boolean): Promise<void> }
+  const stopProcess = lifecycle.stopProcessAndWait.bind(lifecycle)
+  const start = h.service.startSession.bind(h.service)
+  let releaseStart!: () => void
+  const startGate = new Promise<void>(resolve => { releaseStart = resolve })
+  let startSpy: { mockRestore(): void } | undefined
+  let stopSpy: { mockRestore(): void } | undefined
+  let stopWait: Promise<void> | undefined
+  let lateProcess: OwnedCli | undefined
+  let physicalExitConfirmed = false
+  let physicalExitCode: number | undefined
+  try {
+    await waitForInitialReports(h)
+    const sessionId = h.memberIds.reader!
+    await h.service.stopSessionAndWait(sessionId, 1000, { requireExit: true })
+    await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'original worker exit recorded')
+    const before = h.memberRequests('reader').length
+    let startHeld = false
+    const stopAttempts: Array<{ pid: number; requireExit: boolean | undefined }> = []
+    startSpy = spyOn(h.service, 'startSession').mockImplementation(async (...args: Parameters<typeof start>) => {
+      if (args[0] === sessionId) {
+        startHeld = true
+        await startGate
+      }
+      return start(...args)
+    })
+    stopSpy = spyOn(lifecycle, 'stopProcessAndWait').mockImplementation(async (id, session, timeoutMs, requireExit) => {
+      if (id !== sessionId) return stopProcess(id, session, timeoutMs, requireExit)
+      // Model the exact unconfirmed-kill boundary without signalling anything:
+      // this is the real newly spawned owned CLI, and it remains physically up.
+      if (lateProcess !== session.proc) {
+        lateProcess = session.proc
+        physicalExitConfirmed = false
+        const captured = session.proc
+        void captured.exited.then(code => {
+          if (lateProcess !== captured) return
+          physicalExitConfirmed = true
+          physicalExitCode = code
+        })
+      }
+      stopAttempts.push({ pid: session.proc.pid, requireExit })
+      if (requireExit) throw new Error('Fixture CLI process did not confirm exit')
+    })
+    await messageMember(h, 'reader', 'team-lead', 'restart requested before the competing Stop')
+    await h.waitFor(() => startHeld, 'restart held before its actual process exists')
+    expect(h.service.hasSession(sessionId)).toBe(false)
+    h.service.sendInterrupt(h.parentId)
+    stopWait = h.service.waitForTeamWorkersStopped(h.parentId)
+    releaseStart()
+    await stopWait
+    const partial = await runtimeControl(h)
+    expect(partial.status).toBe('partial')
+    expect(partial.error).toContain('have not confirmed')
+    expect(partial.members.find(member => member.sessionId === sessionId)).toMatchObject({ status: 'failed', error: 'Fixture CLI process did not confirm exit' })
+    expect(stopAttempts.length).toBeGreaterThan(0)
+    expect(stopAttempts.every(attempt => attempt.requireExit === true)).toBe(true)
+    expect(physicalExitConfirmed).toBe(false)
+    expect(h.service.hasSession(sessionId)).toBe(true)
+    expect(h.memberRequests('reader')).toHaveLength(before)
+    await expect(saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })).rejects.toThrow('Pause the team')
+
+    stopSpy.mockRestore()
+    stopSpy = undefined
+    startSpy.mockRestore()
+    startSpy = undefined
+    await h.service.stopSessionAndWait(sessionId, 1000, { requireExit: true })
+    expect(physicalExitConfirmed).toBe(true)
+    expect(physicalExitCode).toEqual(expect.any(Number))
+    expect(h.service.hasSession(sessionId)).toBe(false)
+    expect((await pauseReviewedTeam(h)).status).toBe('paused')
+  } finally {
+    releaseStart()
+    await stopWait
+    stopSpy?.mockRestore()
+    startSpy?.mockRestore()
+    // If a regression removed the map early, still reap only the exact process
+    // captured from this fixture's own session, never a discovered/global PID.
+    if (lateProcess && !physicalExitConfirmed) {
+      lateProcess.kill('SIGTERM')
+      await lateProcess.exited
+    }
+    await h.cleanup()
+  }
+}, 30_000)
+
+for (const failedStatus of ['pausing', 'paused'] as const) {
+  test(`paused runtime controls expose a ${failedStatus} write failure and recover through another confirmed Pause`, async () => {
+    const h = await startHarness(['reader'])
+    const store = await import('../../utils/swarm/teamRuntimeControlStore.js')
+    const mutate = store.mutateTeamRuntimeControl
+    let write: { mockRestore(): void } | undefined
+    try {
+      await waitForInitialReports(h)
+      let failedOnce = false
+      write = spyOn(store, 'mutateTeamRuntimeControl').mockImplementation((name, identity, update) => mutate(name, identity, async current => {
+        const next = await update(current)
+        if (!failedOnce && name === h.teamName && next?.status === failedStatus) {
+          failedOnce = true
+          throw new Error(`Fixture pause ${failedStatus} write failed`)
+        }
+        return next
+      }))
+      h.service.sendInterrupt(h.parentId)
+      await h.service.waitForTeamWorkersStopped(h.parentId)
+      expect(failedOnce).toBe(true)
+      const failed = await runtimeControl(h)
+      expect(failed.status).toBe('partial')
+      expect(failed.error).toContain(`Fixture pause ${failedStatus} write failed`)
+      const { getTeamRuntimeLaunches } = await import('./teamPlanRuntime.js')
+      expect(getTeamRuntimeLaunches(h.parentId, h.teamName).every(owner => owner.pausePending !== true)).toBe(true)
+      const before = h.requests.length
+      await expect(resumeReviewedTeam(h)).rejects.toThrow()
+      expect(h.requests).toHaveLength(before)
+      write.mockRestore()
+      write = undefined
+
+      const confirmed = await pauseReviewedTeam(h)
+      expect(confirmed.error).toBeUndefined()
+      expect(await saveMemberRuntime(h, 'reader', { providerId: h.providerId, modelId: 'opus' })).toMatchObject({ model: 'capable' })
+      expect((await resumeReviewedTeam(h)).status).toBe('running')
+      await h.waitFor(() => h.memberRequests('reader').length === before + 1, 'recovered pause can save and admit real work')
+      expect(h.memberRequests('reader').at(-1)).toMatchObject({ resumed: h.memberIds.reader, model: 'capable' })
+    } finally {
+      write?.mockRestore()
+      await h.cleanup()
+    }
+  }, 30_000)
+}

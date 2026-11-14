@@ -140,10 +140,10 @@
           var read = function (key) {
             try { return window.localStorage.getItem(key) } catch (_) { return null }
           }
-          // The six palettes, split by ground. Keep in step with
+          // The palettes, split by ground. Keep in step with
           // LIGHT_THEME_MODES / DARK_THEME_MODES in src/types/settings.ts.
           var LIGHT = ['white', 'paper', 'warm-classic', 'celadon']
-          var DARK = ['dark', 'ink-blue']
+          var DARK = ['dark', 'ink-blue', 'neutral-dark']
           var has = function (list, value) { return list.indexOf(value) !== -1 }
           var isDark = function (value) { return has(DARK, value) }
           // Mirrors THEME_BACKGROUNDS in src/theme/systemAppearance.ts; the
@@ -155,7 +155,8 @@
             'warm-classic': '#F6F0E1',
             celadon: '#F5F8F5',
             dark: '#201D17',
-            'ink-blue': '#1A1D24'
+            'ink-blue': '#1A1D24',
+            'neutral-dark': '#202020'
           }
           var paintBrowserChrome = function (value) {
             var meta = document.querySelector('meta[name="theme-color"]')
@@ -194,7 +195,7 @@
           // still applies the user's stored choice rather than flashing white.
           document.documentElement.setAttribute('data-theme', theme || 'white')
           document.documentElement.style.colorScheme =
-            (theme === 'dark' || theme === 'ink-blue') ? 'dark' : 'light'
+            (theme === 'dark' || theme === 'ink-blue' || theme === 'neutral-dark') ? 'dark' : 'light'
         }
       })()
     </script>
@@ -213,6 +214,7 @@
       html[data-theme="celadon"] { background: #F5F8F5; }
       html[data-theme="dark"] { background: #201D17; }
       html[data-theme="ink-blue"] { background: #1A1D24; }
+      html[data-theme="neutral-dark"] { background: #202020; }
       html[data-window-kind="pet"],
       html[data-window-kind="pet"] body,
       html[data-window-kind="pet"] #root { background: transparent !important; }

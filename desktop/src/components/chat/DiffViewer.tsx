@@ -4,6 +4,7 @@ import { CircleCheck, Copy, FileCode } from 'lucide-react'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
+import { isDarkTheme } from '../../types/settings'
 import { countDiffLines } from './toolCallPresentation'
 
 type Props = {
@@ -182,7 +183,7 @@ export function DiffViewer({ filePath, oldString, newString }: Props) {
           hideLineNumbers={false}
           hideSummary
           styles={diffStyles}
-          useDarkTheme={theme === 'dark'}
+          useDarkTheme={isDarkTheme(theme)}
         />
       </div>
     </div>

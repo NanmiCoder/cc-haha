@@ -334,6 +334,7 @@ describe('context usage across a session lifecycle', () => {
     vi.mocked(sessionsApi.getInspection)
       .mockResolvedValueOnce(inspection(SESSION_A, 21))
       .mockRejectedValueOnce(new Error('CLI context is settling after compaction'))
+      .mockRejectedValueOnce(new Error('CLI context is still settling on the active poll'))
       .mockResolvedValueOnce(inspection(SESSION_A, 5))
 
     render(<ActiveSession />)
@@ -353,10 +354,10 @@ describe('context usage across a session lifecycle', () => {
     act(() => useChatStore.getState().handleServerMessage(SESSION_A, { type: 'content_start', blockType: 'text' }))
     expect(useChatStore.getState().sessions[SESSION_A]?.chatState).toBe('streaming')
     await act(async () => { await vi.advanceTimersByTimeAsync(4_999) })
-    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(2)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(3)
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
     expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('5%')
-    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(3)
+    expect(sessionsApi.getInspection).toHaveBeenCalledTimes(4)
   })
 
   it('never shows a percentage that belongs to another model, session, or nothing at all', async () => {

@@ -305,13 +305,15 @@ const workspaceBrowserMessage: Validator = value =>
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const appliedAppearance: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['isDark', 'background', 'lightBackground', 'followSystem'])
+  && hasOnlyKeys(value, ['isDark', 'background', 'lightBackground', 'darkBackground', 'followSystem'])
   && typeof value.isDark === 'boolean'
   && typeof value.followSystem === 'boolean'
   && typeof value.background === 'string'
   && HEX_COLOR.test(value.background)
   && typeof value.lightBackground === 'string'
   && HEX_COLOR.test(value.lightBackground)
+  && (value.darkBackground === undefined
+    || (typeof value.darkBackground === 'string' && HEX_COLOR.test(value.darkBackground)))
 
 const updateCheckOptions: Validator = value => {
   if (value === undefined) return true

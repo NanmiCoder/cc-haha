@@ -455,13 +455,13 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Skip WebFetch domain preflight')).toBeInTheDocument()
   })
 
-  it('offers all six palettes, paper grounds before ink ones', () => {
+  it('offers all seven palettes, light grounds before dark ones', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
     // The picker order is load-bearing: the four paper grounds come first, then
-    // the two ink ones, so the list reads light-to-dark rather than shuffled.
-    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']
+    // the three dark ones, so the list reads light-to-dark rather than shuffled.
+    const order = ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']
       .map((name) => screen.getByRole('button', { name }))
 
     for (const [index, chip] of order.slice(0, -1).entries()) {
@@ -477,6 +477,18 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Ink Blue' }))
     expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('ink-blue')
+  })
+
+  it('offers a neutral dark palette and marks it selected after choosing it', () => {
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+
+    const neutralDark = screen.getByRole('button', { name: 'Neutral Dark' })
+    fireEvent.click(neutralDark)
+
+    expect(useSettingsStore.getState().setTheme).toHaveBeenCalledWith('neutral-dark')
+    expect(neutralDark).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('gives the settings rail the handoff width and a rounded selected item', () => {
@@ -542,7 +554,7 @@ describe('Settings > General tab', () => {
 
     expect(screen.getByText('Use in light mode')).toBeInTheDocument()
     expect(screen.getByText('Use in dark mode')).toBeInTheDocument()
-    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue']) {
+    for (const label of ['Pure White', 'Paper', 'Warm Classic', 'Celadon', 'Ink Night', 'Ink Blue', 'Neutral Dark']) {
       expect(screen.getByRole('button', { name: label }), label).toBeInTheDocument()
     }
   })
@@ -559,6 +571,16 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('selects neutral dark as the dark preference while following a light system', () => {
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'white', darkTheme: 'neutral-dark', theme: 'white' })
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+
+    expect(screen.getByRole('button', { name: 'Neutral Dark' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Ink Blue' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('keeps the theme swatches at preview size on a wide settings frame', () => {

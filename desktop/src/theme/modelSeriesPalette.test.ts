@@ -23,6 +23,7 @@ const themes = [
   '[data-theme="celadon"]',
   '[data-theme="dark"]',
   '[data-theme="ink-blue"]',
+  '[data-theme="neutral-dark"]',
 ] as const
 
 /** Every block written against `selector`: a theme can also be named in a shared rule elsewhere. */

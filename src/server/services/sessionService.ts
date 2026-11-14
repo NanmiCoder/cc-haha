@@ -61,6 +61,9 @@ import { cleanSessionTitleSource } from '../../utils/sessionTitleText.js'
 import {
   roughTokenCountEstimationForMessage,
 } from '../../services/tokenEstimation.js'
+import type { AssistantMessage } from '../../types/message.js'
+import { SYNTHETIC_MODEL } from '../../utils/messages.js'
+import { getTokenUsage, isUsableContextUsage } from '../../utils/tokens.js'
 import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
@@ -537,6 +540,9 @@ type TranscriptContextAccumulator = {
   } | null
   estimatedTokensFromMessages: number
   estimatedTokensAfterUsage: number
+  latestUsageResponseId: string | undefined
+  unreportedOutputTokens: number
+  currentResponse: { id: string; outputTokens: number; tailTokens: number } | null
   transcriptHasMediaInput: boolean
 }
 
@@ -580,6 +586,9 @@ function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
     latestUsage: null,
     estimatedTokensFromMessages: 0,
     estimatedTokensAfterUsage: 0,
+    latestUsageResponseId: undefined,
+    unreportedOutputTokens: 0,
+    currentResponse: null,
     transcriptHasMediaInput: false,
   }
 }
@@ -592,6 +601,9 @@ function accumulateTranscriptContext(
     state.latestUsage = null
     state.estimatedTokensFromMessages = 0
     state.estimatedTokensAfterUsage = 0
+    state.latestUsageResponseId = undefined
+    state.unreportedOutputTokens = 0
+    state.currentResponse = null
     state.transcriptHasMediaInput = false
   }
 
@@ -599,22 +611,45 @@ function accumulateTranscriptContext(
     state.latestModel = entry.message.model
   }
 
+  const assistant = entry.type === 'assistant' && entry.message
+    ? { ...entry, message: { ...entry.message, content: entry.message.content ?? [] } } as unknown as AssistantMessage
+    : undefined
+  const responseId = assistant?.message.model !== SYNTHETIC_MODEL
+    ? assistant?.message.id
+    : undefined
+  let tokens = 0
   if (
     entry.type === 'user' ||
     entry.type === 'assistant' ||
     entry.type === 'attachment'
   ) {
-    const tokens = roughTokenCountEstimationForMessage(entry)
+    tokens = roughTokenCountEstimationForMessage(entry)
     state.estimatedTokensFromMessages += tokens
-    state.estimatedTokensAfterUsage += tokens
     if (!state.transcriptHasMediaInput && hasMediaInput([entry])) {
       state.transcriptHasMediaInput = true
     }
   }
 
-  const usage = entry.message?.usage
+  // A streamed response has one assistant record per content block, sometimes
+  // interleaved with tool results. Keep only its counters, so later siblings
+  // neither erase earlier results nor charge the response's output twice.
+  if (responseId && state.currentResponse?.id !== responseId) {
+    state.currentResponse = { id: responseId, outputTokens: 0, tailTokens: 0 }
+  }
+  if (responseId && state.currentResponse) {
+    state.currentResponse.outputTokens += tokens
+  } else if (state.currentResponse) {
+    state.currentResponse.tailTokens += tokens
+  }
+  if (responseId && responseId === state.latestUsageResponseId) {
+    if (state.latestUsage?.outputTokens === 0) state.unreportedOutputTokens += tokens
+  } else {
+    state.estimatedTokensAfterUsage += tokens
+  }
+
+  const usage = assistant ? getTokenUsage(assistant) : undefined
   const model = entry.message?.model
-  if (!usage || typeof model !== 'string') return
+  if (!usage || typeof model !== 'string' || !isUsableContextUsage(usage)) return
 
   const inputTokens =
     typeof usage.input_tokens === 'number' ? usage.input_tokens : 0
@@ -629,15 +664,6 @@ function accumulateTranscriptContext(
       ? usage.cache_creation_input_tokens
       : 0
 
-  if (
-    inputTokens === 0 &&
-    outputTokens === 0 &&
-    cacheReadInputTokens === 0 &&
-    cacheCreationInputTokens === 0
-  ) {
-    return
-  }
-
   state.latestUsage = {
     model,
     inputTokens,
@@ -645,7 +671,11 @@ function accumulateTranscriptContext(
     cacheReadInputTokens,
     cacheCreationInputTokens,
   }
-  state.estimatedTokensAfterUsage = 0
+  state.latestUsageResponseId = responseId
+  state.estimatedTokensAfterUsage = responseId ? state.currentResponse!.tailTokens : 0
+  state.unreportedOutputTokens = outputTokens === 0
+    ? responseId ? state.currentResponse!.outputTokens : tokens
+    : 0
 }
 
 function resolveTranscriptContextUsage(
@@ -3389,7 +3419,7 @@ export class SessionService {
     const rawMaxTokens = await this.getSessionModelContextWindow(sessionId, latest.model, launchInfo)
     const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
     const providerTokens = promptTokens + latest.outputTokens
-    const hasProviderUsage = providerTokens > 0
+    const hasProviderUsage = promptTokens > 0
     const estimatedTokens = estimatedTokensFromMessages || promptTokens
     const contextBudget = calculateContextBudget({
       estimatedTokens,
@@ -3408,10 +3438,7 @@ export class SessionService {
     const totalTokens =
       hasProviderUsage && !contextBudget.ignoredUsageReason
         ? Math.min(
-            Math.max(
-              contextBudget.usedTokens,
-              providerTokens + estimatedTokensAfterUsage,
-            ),
+            providerTokens + estimatedTokensAfterUsage,
             rawMaxTokens,
           )
         : contextBudget.usedTokens
@@ -3771,7 +3798,7 @@ export class SessionService {
           sessionId,
           latestContextUsage,
           contextState.estimatedTokensFromMessages,
-          contextState.estimatedTokensAfterUsage,
+          contextState.estimatedTokensAfterUsage + contextState.unreportedOutputTokens,
           contextState.transcriptHasMediaInput,
           launchInfo,
         )
