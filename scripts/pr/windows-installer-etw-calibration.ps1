@@ -288,9 +288,9 @@ public static class CcHahaFreshCanary {
 '@ }
 function New-OwnedChildEnvironment([string]$Directory) {
   $windows = [CcHahaCiEtw]::WindowsRoot()
-  $home = Join-Path $Directory 'home'; $temp = Join-Path $Directory 'tmp'; $app = Join-Path $Directory 'appdata'; $local = Join-Path $Directory 'localappdata'
-  foreach ($p in @($home, $temp, $app, $local)) { [CcHahaCiEtw]::NewDirectory($p) }
-  return @{ SystemRoot = $windows; WINDIR = $windows; PATH = (Join-Path $windows 'System32'); HOME = $home; USERPROFILE = $home; APPDATA = $app; LOCALAPPDATA = $local; TEMP = $temp; TMP = $temp }
+  $canaryHome = Join-Path $Directory 'home'; $temp = Join-Path $Directory 'tmp'; $app = Join-Path $Directory 'appdata'; $local = Join-Path $Directory 'localappdata'
+  foreach ($p in @($canaryHome, $temp, $app, $local)) { [CcHahaCiEtw]::NewDirectory($p) }
+  return @{ SystemRoot = $windows; WINDIR = $windows; PATH = (Join-Path $windows 'System32'); HOME = $canaryHome; USERPROFILE = $canaryHome; APPDATA = $app; LOCALAPPDATA = $local; TEMP = $temp; TMP = $temp }
 }
 function Build-OwnedCanary([string]$Directory, $Environment) {
   $framework = Join-Path ([CcHahaCiEtw]::WindowsRoot()) 'Microsoft.NET/Framework64/v4.0.30319'; $compiler = Join-Path $framework 'csc.exe'; $source = Join-Path $Directory 'canary.cs'; $exe = Join-Path $Directory 'canary.exe'

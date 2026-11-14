@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve, win32 } from 'node:path'
 import { parse } from 'yaml'
 import { createSandboxedTestEnvironment } from './test-environment'
 
@@ -11,19 +11,38 @@ const powershell = process.platform === 'win32'
   ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
   : ['/opt/homebrew/bin/pwsh', '/usr/bin/pwsh'].find(existsSync)
 const ps = (value: string) => `'${value.replaceAll("'", "''")}'`
+function pureEnvironment(root: string, source = process.env, executable = powershell!, platform: NodeJS.Platform = process.platform) {
+  const moduleDirectory = platform === 'win32'
+    ? win32.join(win32.dirname(executable), 'Modules')
+    : join(dirname(realpathSync(executable)), 'Modules')
+  return createSandboxedTestEnvironment(join(root, 'home'), { GITHUB_ACTIONS: 'false', PSModulePath: moduleDirectory }, source)
+}
 function pure(code: string) {
   const root = mkdtempSync(join(tmpdir(), 'cc-haha-etw-pure-'))
   try {
     const file = join(root, 'pure.ps1')
-    writeFileSync(file, `$ErrorActionPreference='Stop'\n. ${ps(script)} -DefinitionsOnly\n${code}\n`)
+    // PowerShell can rebuild module paths at startup even with a supplied env.
+    // Reassert its own system modules before dot-sourcing or autoloaded cmdlets.
+    writeFileSync(file, `$env:PSModulePath=$PSHOME+[IO.Path]::DirectorySeparatorChar+'Modules'\n$ErrorActionPreference='Stop'\n. ${ps(script)} -DefinitionsOnly\n${code}\n`)
     const result = spawnSync(powershell!, ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', file], {
-      env: createSandboxedTestEnvironment(join(root, 'home'), { GITHUB_ACTIONS: 'false' }), encoding: 'utf8', timeout: 25_000, maxBuffer: 1024 * 1024,
+      env: pureEnvironment(root), encoding: 'utf8', timeout: 25_000, maxBuffer: 1024 * 1024,
     })
     expect(result.error).toBeUndefined()
     expect(result.status, result.stderr).toBe(0)
     return JSON.parse(result.stdout.trim())
   } finally { rmSync(root, { recursive: true, force: true }) }
 }
+
+test('pins pure WindowsPS5 module lookup instead of reconstructing foreign PS7 or Az paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cc-haha-etw-modules-'))
+  try {
+    const env = pureEnvironment(root, { ...process.env, PSModulePath: String.raw`C:\Program Files\PowerShell\7\Modules;C:\Modules\az;\\foreign\modules`, WinPSModulePath: String.raw`\\foreign\modules`, PSMODULEPATH: 'foreign-case-alias' }, String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, 'win32')
+    expect(env.PSModulePath).toBe(String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\Modules`)
+    expect(Object.keys(env).filter(key => key.toLowerCase() === 'psmodulepath')).toEqual(['PSModulePath'])
+    expect(env.WinPSModulePath).toBeUndefined()
+    expect(env.HOME).toBe(join(root, 'home'))
+  } finally { rmSync(root, { recursive: true, force: true }) }
+}, 30_000)
 
 // Replace only ETL I/O. Get-CalibrationFacts still parses, validates, decodes and
 // writes each real XML fixture; no EventLogReader or Windows API is invoked.
@@ -74,6 +93,30 @@ test('requires the deterministic contract while keeping OS observations advisory
 }, 30_000)
 
 describe.skipIf(!powershell)('pure PowerShell ETW boundaries; no Windows API or registry calls', () => {
+  test('builds the actual private canary environment while preserving the readonly HOME automatic variable', () => {
+    expect(pure(`Add-Type -TypeDefinition @'
+using System; using System.IO;
+public static class CcHahaCiEtw {
+  public static string WindowsRoot() { return "owned-system-root"; }
+  public static void NewDirectory(string path) { if(Directory.Exists(path)) throw new InvalidOperationException("already exists"); Directory.CreateDirectory(path); }
+}
+'@
+      $canaryArena=Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N')); [IO.Directory]::CreateDirectory($canaryArena)|Out-Null; $originalHome=$HOME
+      try { $environment=New-OwnedChildEnvironment $canaryArena
+        @{homeUnchanged=($HOME -eq $originalHome); redirected=($environment.HOME -eq (Join-Path $canaryArena 'home')); privateDirectories=(@('HOME','TEMP','APPDATA','LOCALAPPDATA')|Where-Object { [IO.Directory]::Exists($environment[$_]) }).Count}|ConvertTo-Json -Compress
+      } finally { [IO.Directory]::Delete($canaryArena,$true) }`)).toEqual({ homeUnchanged: true, redirected: true, privateDirectories: 4 })
+  }, 30_000)
+
+  test('loads DefinitionsOnly from the selected module directory without initializing native types', () => {
+    const value = pure(`$expected=Join-Path $PSHOME 'Modules'; $paths=@($env:PSModulePath -split [IO.Path]::PathSeparator)
+      $native=@([AppDomain]::CurrentDomain.GetAssemblies()|ForEach-Object {$_.GetType('CcHahaCiEtw',$false)}|Where-Object {$_})
+      @{systemOnly=($paths.Count -eq 1 -and $paths[0] -eq $expected); nativeTypes=$native.Count; runRequested=[bool]$RunCiCalibration; desktop=($PSVersionTable.PSEdition -eq 'Desktop')}|ConvertTo-Json -Compress`)
+    expect(value.systemOnly).toBe(true)
+    expect(value.nativeTypes).toBe(0)
+    expect(value.runRequested).toBe(false)
+    if (process.platform === 'win32') expect(value.desktop).toBe(true)
+  }, 30_000)
+
   test('quarantines opaque and nested XML bodies through the actual reader for other PIDs', () => {
     const result = pure(`${xmlReaderFixture}
       $marker='4E455645522D5055424C495348'; $out=@()
